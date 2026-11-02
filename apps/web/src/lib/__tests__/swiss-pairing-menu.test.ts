@@ -274,7 +274,7 @@ describe("swissPairingMenuFor — when the menu exists, and what it carries", ()
     expect(r1).toMatchObject({ round: 1, fieldSize: 4, seedsNumbered: true, unseededDrawn: false, seededAheadOfDraw: false });
     // The positive pair: with no stored first round, e5 is in round 1's field and draws it.
     expect(swissPairingMenuFor({ ...args, fixtures: shells(3, 5) })).toMatchObject({ round: 1, fieldSize: 5, unseededDrawn: true });
-    // A stamp written by ANOTHER Swiss stage counts nowhere here (V485): e5 plays this stage from round 1.
+    // A stamp written by ANOTHER Swiss stage counts nowhere here (V487): e5 plays this stage from round 1.
     const elsewhere = { e5: { swiss_first_round: 2, swiss_first_round_stage_id: "stage-2" } };
     expect(swissPairingMenuFor({ ...args, entrantFirstRounds: elsewhere, fixtures: shells(3, 5) })).toMatchObject({
       fieldSize: 5,

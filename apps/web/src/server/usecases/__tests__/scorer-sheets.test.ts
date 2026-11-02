@@ -368,7 +368,7 @@ describe.skipIf(!HAS_DB)("loadSheetCandidates / listSheetDays (scorer sheets §4
 
   it("X-SW-29 an unseated Swiss bye shell with a time does not print, in the loader or the day list", async () => {
     // W3 T3 (RB3-23): the bye shell (`sw-r{N}-bye`) is unseated AND unlabelled until Pair — the shape the case above
-    // prints. Only its ext_key says it is a bye. A time on one (placed before V483) gives it no sheet and no day; the
+    // prints. Only its ext_key says it is a bye. A time on one (placed before V485) gives it no sheet and no day; the
     // round's board shell beside it, with a time of its own, is the positive pair.
     const { auth } = await seedOrg("pro");
     const { competition, stage } = await seedStage(auth, "swiss", ["A", "B", "C", "D", "E"], { rounds: 2 });

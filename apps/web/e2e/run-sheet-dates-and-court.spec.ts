@@ -6,7 +6,7 @@ import { TAG, apiJson, activeOrg, seedVenueWithCourts, addEntrantsViaApi } from 
 // hand-typed: the assertions below must move when the format moves, and must
 // witness only the thing under test (WHICH locale formatted it). A typed
 // "mardi 15 septembre" would freeze one ICU version's output as the spec.
-import { dayLabel, dayLabelLong } from "../src/lib/day-label";
+import { dayLabel } from "../src/lib/day-label";
 
 // Competition Desk W2 — the browser proof for three items that shipped with
 // `tsc` + a node-environment vitest as their only gates. Each one is invisible
@@ -132,19 +132,19 @@ async function seedTimedLeague(
 }
 
 // ---------------------------------------------------------------------------
-// F13 — the day header speaks the APP's language, not the viewer's browser.
+// F13 - the day label speaks the APP's language, not the viewer's browser. Match Day E1 item 1 retired the day HEADING from a stage card;
+// the day a league round is played on is on the round's BAR (`data-run-sheet-round-dates`), formatted by the same `dayLabel`, so the browser
+// -vs-app locale proof moves there.
 //
-// The browser is pinned to ja-JP for the whole describe. That is the entire
-// design of this test: the retired implementation formatted with
-// `toLocaleDateString([], …)` inside a `useEffect`, i.e. the CLIENT's default
-// locale, so on this browser it produced "9月15日火曜日" underneath four
-// otherwise-localized consoles. `notToContain(ja)` is the assertion that
-// actually fails against that code; the per-locale `toContain` pins the value.
+// The browser is pinned to ja-JP for the whole describe. That is the entire design of this test: the retired implementation formatted with
+// `toLocaleDateString([], ...)` inside a `useEffect`, i.e. the CLIENT's default locale, so on this browser it produced "9月15日火曜日"
+// underneath four otherwise-localized consoles. `notToContain(ja)` is the assertion that actually fails against that code; the per-locale
+// `toContain` pins the value.
 // ---------------------------------------------------------------------------
-test.describe("the run sheet's day header is in the app's locale, not the browser's", () => {
+test.describe("the run sheet's round bar names its day in the app's locale, not the browser's", () => {
   test.use({ locale: "ja-JP" });
 
-  test("all four locales render their own long date, and never the browser's", async ({
+  test("all four locales render their own date, and never the browser's", async ({
     page,
     context,
     request,
@@ -168,24 +168,24 @@ test.describe("the run sheet's day header is in the app's locale, not the browse
 
     // What the DEFECT renders on this browser. Derived from the same helper the
     // component uses, so it is the real competing string and not an approximation.
-    const browserForm = dayLabelLong(dayKey, "ja-JP");
+    const browserForm = dayLabel(dayKey, "ja-JP");
 
     const seen = new Map<string, string>();
     for (const locale of LOCALES) {
       await context.addCookies([{ name: "seazn_locale", value: locale, url: origin }]);
       await page.goto(url);
-      const heading = page.locator(`[data-run-sheet-day="${dayKey}"]`);
+      // Every round of this league is played on the one day: each bar carries it.
+      const dates = page.locator("[data-run-sheet-round-dates]");
       // POSITIVE PAIR FIRST: the surface exists. Every assertion after this one
       // would pass on a blank page or a boundary.
-      await expect(heading).toBeVisible();
-      const text = (await heading.textContent()) ?? "";
-      expect(text, `${locale}: day header must carry the app-locale long date`).toContain(
-        dayLabelLong(dayKey, locale),
-      );
-      expect(text, `${locale}: day header must NOT use the ja-JP browser locale`).not.toContain(
-        browserForm,
-      );
-      seen.set(locale, dayLabelLong(dayKey, locale));
+      await expect(dates.first()).toBeVisible();
+      const texts = await dates.allTextContents();
+      expect(texts.length, `${locale}: a bar per round, each naming its day`).toBeGreaterThan(0);
+      for (const text of texts) {
+        expect(text, `${locale}: the bar must carry the app-locale date`).toContain(dayLabel(dayKey, locale));
+        expect(text, `${locale}: the bar must NOT use the ja-JP browser locale`).not.toContain(browserForm);
+      }
+      seen.set(locale, dayLabel(dayKey, locale));
     }
     // A locale-blind implementation renders one string four times. This is the
     // ordering-differential case: es/fr/nl each differ from en AND from each

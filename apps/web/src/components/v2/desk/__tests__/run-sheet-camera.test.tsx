@@ -249,7 +249,6 @@ describe("the sheet: a held online board owes its result", () => {
         filter={filter}
         onFilter={() => {}}
         stageId={null}
-        onStageFilter={() => {}}
         onlinePlay={onlinePlay}
         arbiterHrefFor={(id) => `/arbiter?fixture=${id}`}
       />,
@@ -301,7 +300,6 @@ describe("D12: a board of an online round nobody has opened owes nothing yet", (
         filter="needs_result"
         onFilter={() => {}}
         stageId={null}
-        onStageFilter={() => {}}
         onlinePlay={onlinePlay}
       />,
     );

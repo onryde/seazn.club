@@ -113,7 +113,6 @@ function sheetHtml(
       filter={filter}
       onFilter={() => {}}
       stageId={null}
-      onStageFilter={() => {}}
     />,
   );
 }
@@ -343,7 +342,6 @@ describe("a stream that is up keeps its row under Today (I-2, owner option a)", 
         filter={filter}
         onFilter={() => {}}
         stageId={null}
-        onStageFilter={() => {}}
         streamStates={streamStates}
       />,
     );
@@ -413,7 +411,6 @@ describe("'Today' is the venue's day, not the org's (venue zone ≠ org zone)", 
         filter="today"
         onFilter={() => {}}
         stageId={null}
-        onStageFilter={() => {}}
       />,
     );
 

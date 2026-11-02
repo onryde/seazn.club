@@ -11,7 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { hockey } from "@seazn/engine/sports/hockey";
 import { icehockey } from "@seazn/engine/sports/icehockey";
-import { buildRuleOverride, hydrateRuleValues } from "../match-rules";
+import { buildRuleOverride, hydrateRuleValues } from "@/components/v2/rules/match-format-editor";
 
 describe("buildRuleOverride — icehockey overtime, the values-param collapse", () => {
   it("assembles the nested override from the primary field plus its siblings", () => {

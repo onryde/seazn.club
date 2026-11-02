@@ -17,6 +17,7 @@
 // `AiConstraintDelta` is a partial of the engine's `SchedulingConstraints`.
 import { z } from "zod";
 import { SchedulingConstraints } from "@seazn/engine/scheduling";
+import { patchOf } from "@/lib/zod-patch";
 
 export const SYSTEM_PROMPT = `You are the schedule architect inside league-management software. You assign a start time
 and court to every movable fixture of a sports division, following the organiser's
@@ -236,7 +237,11 @@ export type AiAssignment = z.infer<typeof AiAssignment>;
 
 // Subset of the engine constraint family (restMin, noBackToBack, startWindows,
 // fieldFairness, parallelism, crossPersonClash) — reused, not redeclared.
-export const AiConstraintDelta = SchedulingConstraints.partial();
+// `patchOf`, not `.partial()`: the engine schema defaults five of these, and a
+// partial still FILLS them, so a plan suggesting one rule came back carrying the
+// other five at their defaults — each a ticked checklist row whose Apply
+// overwrote the division's saved rule (fix/patch-schema-partial-defaults).
+export const AiConstraintDelta = patchOf(SchedulingConstraints);
 export type AiConstraintDelta = z.infer<typeof AiConstraintDelta>;
 
 export const AiSchedulePlan = z.object({

@@ -54,7 +54,7 @@ export interface LateEntryInput {
 }
 
 /**
- * THE stage scope of an entrant's first Swiss round (V485; carry from T6): the stamp counts only in the Swiss stage
+ * THE stage scope of an entrant's first Swiss round (V487; carry from T6): the stamp counts only in the Swiss stage
  * that wrote it (`swiss_first_round_stage_id`). Anywhere else — a second root Swiss stage, a stage made after the
  * stamped one was deleted — the entrant plays from round 1 (null). The server's active-entrant read and the desk's
  * round-1 field both read it, so the two cannot disagree on who a round seats.
@@ -75,7 +75,7 @@ export function inSwissRoundField(firstRound: number | null | undefined, target:
   return (firstRound ?? 1) <= target;
 }
 
-/** Each entrant's stored first Swiss round and the stage it belongs to (V484/V485), by entrant id. */
+/** Each entrant's stored first Swiss round and the stage it belongs to (V486/V487), by entrant id. */
 export type EntrantSwissFirstRounds = Readonly<
   Record<string, { swiss_first_round?: number | null; swiss_first_round_stage_id?: string | null } | undefined>
 >;

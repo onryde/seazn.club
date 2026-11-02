@@ -39,7 +39,14 @@ export async function GET(req: Request, { params }: Ctx) {
       (overlay && (await fixtureOverlayEntitled(id)));
     if (!eligible) throw new HttpError(403, "realtime not available for this competition");
     const token = await mintPublicFixtureToken(id);
-    return reply(200, { token, channel: `fixture:${id}` });
+    // `url` and `apikey` are the PUBLIC project URL and anon key the browser already ships (lib/supabase-browser.ts), so a phone
+    // reads them here instead of baking them in (owner, 2026-11-01). The web's own client reads `token` and `channel` only.
+    return reply(200, {
+      token,
+      channel: `fixture:${id}`,
+      url: process.env.NEXT_PUBLIC_SUPABASE_URL || null,
+      apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || null,
+    });
   });
 }
 

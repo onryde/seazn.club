@@ -494,7 +494,7 @@ describe("swissStageLegend — a late player counts from their first round (W3 T
     expect(legend).toEqual({ rounds: 3, matches: 2, bye: true, fixtures: 6 });
   });
 
-  it("another stage's stamp does not narrow this stage's field (V485 stage scope)", () => {
+  it("another stage's stamp does not narrow this stage's field (V487 stage scope)", () => {
     const legend = swissStageLegend({ ...base, stageId: "s2", entrantFirstRounds: late, round: 1 });
     expect(legend).toEqual({ rounds: 3, matches: 2, bye: true, fixtures: 6 });
   });

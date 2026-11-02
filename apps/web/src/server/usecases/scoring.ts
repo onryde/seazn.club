@@ -708,6 +708,17 @@ async function isOwnSanctionEnding(orgId: string, fixtureId: string, sport: Fixt
 }
 
 /**
+ * The epoch a client must reach to be admitted to this sport's scoring writes: the EFFECTIVE floor `assertEngineEpoch` refuses
+ * below and reports as `required` in its 426 (`foldEpochOf`, lowered by `ENGINE_EPOCH_FLOOR_OVERRIDE` when that names the sport).
+ * The device-link bootstrap (`GET /api/v1/device-link`) answers it, so a phone learns the number before its first write and the
+ * two can never disagree. Resolves the sport first, for the reason `assertEngineEpoch` documents.
+ */
+export function requiredEngineEpoch(sportKey: string, moduleVersion: string): number {
+  const key = resolveModule(sportKey, moduleVersion).key;
+  return judgeEngineEpoch(0, foldEpochOf(key), epochFloorOverrideOrOff().get(key)).floor;
+}
+
+/**
  * The server minimum-epoch gate (engine-split D15, D26, D31; spec §5.6). Refuses a write carrying an `engine_epoch` LOWER than
  * `foldEpochOf(sport)` — 426 ENGINE_OUTDATED, `{ sport, required, got }` — and returns null when the write may proceed.
  * Higher is accepted on purpose (owner, 2026-10-15: a phone ahead of the server is a supported release-discipline state), and

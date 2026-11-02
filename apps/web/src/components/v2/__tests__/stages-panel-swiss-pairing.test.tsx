@@ -107,24 +107,38 @@ describe("StagesPanel — hands the Pair next split button its menu", () => {
   // Review ruling R3 — no round waiting ⇒ no menu. Positive pair first: the
   // rail must still be rendering its buttons, or the absence proves nothing.
   it("every round seated ⇒ no toggle", () => {
+    // Match Day C3 (review m5): the split button (and so its toggle) only renders where Generate / Pair next leads, which an
+    // ACTIVE stage never does - so the absence of the toggle there is the stage's state, not the guard under test. A PENDING stage
+    // keeps the Generate button on screen (the positive pair), and then only "a round is waiting to be paired" can put a toggle in
+    // it: every round seated, it must not.
     const html = renderToStaticMarkup(
-      <StagesPanel {...props} stages={[swissStage()]} fixtures={fixtures([1, 2])} />,
+      <StagesPanel {...props} stages={[swissStage({ rounds: 2 }, "pending")]} fixtures={fixtures([1, 2])} />,
     );
-    expect(html).toContain('data-testid="stage-generate"');
+    expect(html, "the rail is rendering its lead button, or the absence proves nothing").toContain('data-testid="stage-generate"');
+    expect(html).not.toContain(">Pair next round</button>");
     expect(html).not.toContain(TOGGLE);
+    // And the same stage with a round waiting DOES carry it - the toggle is a function of the unseated round, not of the status.
+    const waiting = renderToStaticMarkup(
+      <StagesPanel {...props} stages={[swissStage({ rounds: 2 }, "pending")]} fixtures={fixtures([1])} />,
+    );
+    expect(waiting).toContain(TOGGLE);
   });
 
   it("no shells yet (first Generate) ⇒ no toggle — the server refuses a pick there", () => {
-    const html = renderToStaticMarkup(<StagesPanel {...props} stages={[swissStage()]} fixtures={[]} />);
+    const html = renderToStaticMarkup(<StagesPanel {...props} stages={[swissStage({ rounds: 2 }, "pending")]} fixtures={[]} />);
     expect(html).toContain(">Generate fixtures</button>");
     expect(html).not.toContain(TOGGLE);
   });
 
   it("a non-Swiss stage never gets one, even with unseated rows", () => {
-    const league = { ...swissStage(), kind: "league", name: "League" };
+    // Pending, like the test above: the league's Generate button is on screen, so the toggle's absence is the KIND guard working
+    // (the same unseated shells on a Swiss stage carry the toggle - see "round 1 waiting"), not a hidden button.
+    const league = { ...swissStage({ rounds: 2 }, "pending"), kind: "league", name: "League" };
     const html = renderToStaticMarkup(<StagesPanel {...props} stages={[league]} fixtures={fixtures()} />);
-    expect(html).toContain('data-testid="stage-generate"');
+    expect(html, "the rail's lead button is on screen").toContain('data-testid="stage-generate"');
     expect(html).not.toContain(TOGGLE);
+    const swiss = renderToStaticMarkup(<StagesPanel {...props} stages={[swissStage({ rounds: 2 }, "pending")]} fixtures={fixtures()} />);
+    expect(swiss, "the positive pair: the same rows on a Swiss stage").toContain(TOGGLE);
   });
 
   it("a viewer who cannot edit sees no rail, so no toggle", () => {
@@ -438,10 +452,25 @@ describe("StagesPanel — Add late player and the pending-latecomer line (W3 T10
     expect(lines).toEqual([line("swiss.lateEntry.joinNextRound.one", 1), line("swiss.lateEntry.joinedAfterLast.one", 1)]);
     const legendAt = html.indexOf('data-testid="stage-swiss-legend"');
     const lineAt = html.indexOf('data-testid="stage-swiss-latecomer"');
+    // Match Day #1103 (E1 item 1) moved the rail INTO the header, ahead of the legend, so "not inside the rail's fold" is no longer
+    // "before the rail": it is "outside the rail's element". The rail wrapper is a <div>; its end is where its <div> depth returns to 0.
     const railAt = html.indexOf('data-testid="stage-rail"');
+    const railOpen = html.lastIndexOf("<div", railAt);
+    let depth = 0;
+    let railEnd = -1;
+    for (const m of html.slice(railOpen).matchAll(/<div\b|<\/div>/g)) {
+      depth += m[0] === "</div>" ? -1 : 1;
+      if (depth === 0) {
+        railEnd = railOpen + m.index! + m[0].length;
+        break;
+      }
+    }
+    expect(railAt, "premise: the rail renders").toBeGreaterThan(-1);
+    expect(railEnd, "premise: the rail's element closes").toBeGreaterThan(railAt);
+    expect(html.slice(railOpen, railEnd), "premise: the fold (the rail's sheet) is inside that element").toContain('data-testid="stage-rail-sheet"');
     expect(legendAt, "premise: the legend renders").toBeGreaterThan(-1);
     expect(lineAt, "under the legend").toBeGreaterThan(legendAt);
-    expect(lineAt, "in the header, not inside the rail's fold").toBeLessThan(railAt);
+    expect(lineAt < railOpen || lineAt > railEnd, "in the header, not inside the rail's fold").toBe(true);
     expect(html.slice(lineAt, html.indexOf("</header>", lineAt)).length, "before the header closes").toBeGreaterThan(0);
     expect(html.indexOf("</header>", legendAt)).toBeGreaterThan(lineAt);
   });

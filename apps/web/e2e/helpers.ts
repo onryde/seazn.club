@@ -2646,3 +2646,64 @@ export async function setDateTime(scope: Page | Locator, value: string): Promise
   // label happens to contain the word) and throws a strict-mode violation.
   await scope.getByLabel("Time", { exact: true }).selectOption(time);
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Match Day C3 - the stage card's three settings panels (Match rules / Points / Tie-breaks) open from buttons in the card's
+// header; closed, the card is a one-line summary. Below `md` an editor's header buttons are `max-md:hidden` and the same three are
+// the TOP rows of the card's one "Stage tools" sheet (`stage-sheet-tool-<panel>`, `md:hidden`), so a test that needs a panel opens
+// the sheet first - gated on the header button being VISIBLE, never on a width literal (AGENTS.md rule 22) - and waits on
+// `toBeAttached` for the hidden twin, not `toBeVisible`. A viewer has no sheet: their header buttons stay on screen at every width.
+// ---------------------------------------------------------------------------------------------------------------------
+// Match Day E1 item 3: the knockout stage's BRACKET tree opens the same way (`stage-tool-bracket` in the header, `stage-sheet-tool-bracket`
+// in the phone sheet), so it is one more panel here.
+export type StagePanel = "format" | "points" | "tiebreaks" | "bracket";
+
+/** The stage's card (`<section class="card" data-stage-id>`). */
+export const stageCardOf = (scope: Page | Locator, stageId: string): Locator => scope.locator(`section[data-stage-id="${stageId}"]`);
+
+/** The card a locator sits inside (a row, a section, a rail button). */
+export const enclosingStageCard = (inside: Locator): Locator => inside.locator("xpath=ancestor-or-self::section[@data-stage-id][1]");
+
+/** Press one panel's button (the header's, or - on a phone - the sheet's row) until the panel reads open / closed. A click before
+ *  hydration is a no-op, so the press is retried against what the header button says, and never doubled. */
+async function pressStageTool(card: Locator, panel: StagePanel, wantOpen: boolean): Promise<void> {
+  const header = card.getByTestId(`stage-tool-${panel}`);
+  await expect(header, `the card has a ${panel} button`).toBeAttached();
+  const reads = async (): Promise<boolean> => (await header.getAttribute("aria-expanded")) === "true";
+  await expect(async () => {
+    if ((await reads()) === wantOpen) return;
+    if (await header.isVisible()) {
+      await header.click();
+    } else {
+      const trigger = card.getByTestId("stage-rail-trigger");
+      await expect(trigger, "below md the card's one phone trigger is how the settings buttons are reached").toBeVisible({ timeout: 2_000 });
+      if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
+      const row = card.getByTestId(`stage-sheet-tool-${panel}`);
+      await expect(row, `the ${panel} row is on the open sheet`).toBeVisible({ timeout: 2_000 });
+      await row.click();
+    }
+    await expect(header, `the ${panel} panel did not ${wantOpen ? "open" : "close"}`).toHaveAttribute("aria-expanded", wantOpen ? "true" : "false", { timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
+}
+
+/** Open one panel of one stage card, and wait until it says it is open. A no-op when it is already open (a second call is safe). */
+export async function openStagePanel(card: Locator, panel: StagePanel): Promise<void> {
+  await pressStageTool(card, panel, true);
+}
+
+/** Match Day E1 item 3: open the bracket tree of a single-elimination knockout stage (the bracket no longer sits above the cards; it
+ *  opens inside its stage's card, closed by default) and return the tree. With no `stageId` it takes the one card that has a Bracket
+ *  button, so a division with a double-elimination stage (whose tree stays on the page) is not confused with it. */
+export async function openBracket(page: Page, stageId?: string): Promise<Locator> {
+  const card =
+    stageId === undefined
+      ? page.locator("section[data-stage-id]").filter({ has: page.getByTestId("stage-tool-bracket") }).first()
+      : stageCardOf(page, stageId);
+  await openStagePanel(card, "bracket");
+  return card.getByTestId("bracket-panel");
+}
+
+/** Close one panel through its own button (the toggle), and wait until it says it is closed. A no-op when it is already closed. */
+export async function closeStagePanel(card: Locator, panel: StagePanel): Promise<void> {
+  await pressStageTool(card, panel, false);
+}

@@ -1382,7 +1382,7 @@ export function swissFieldForRound(entrants: ActiveEntrant[], target: number): A
 }
 
 /**
- * W3 T9 (V485; carry from T6): the division's active entrants as a Swiss stage reads them — `generateStageFixturesTx`'s
+ * W3 T9 (V487; carry from T6): the division's active entrants as a Swiss stage reads them — `generateStageFixturesTx`'s
  * active select, with each first round scoped to `stageId` (`swissFirstRoundIn`: a stamp written by another Swiss stage
  * counts as from round 1 here). Late entry (`swiss-late-entry.ts`) re-pairs a round over the same list.
  */

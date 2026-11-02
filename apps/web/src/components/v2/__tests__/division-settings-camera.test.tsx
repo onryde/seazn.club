@@ -15,7 +15,9 @@
 // pass and e2e/division-settings.spec.ts.
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import {
   CAMERA_INHERIT,
   DivisionSettings,
@@ -29,7 +31,8 @@ import {
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
-import type { EffectiveEntrantModel } from "@seazn/engine/sport";
+import frUi from "@/dictionaries/fr/ui.json";
+import nlUi from "@/dictionaries/nl/ui.json";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -55,49 +58,44 @@ function msgFor(dict: Record<string, string>) {
 const EN = enUi as Record<string, string>;
 const ES = esUi as Record<string, string>;
 
-const INDIVIDUAL_ONLY: EffectiveEntrantModel = {
-  kinds: ["individual"],
-  defaultKind: "individual",
-  squadNumbers: false,
-  captain: false,
-  maxTeamMembers: null,
-};
+function chessProps(
+  own: CameraPolicy | null,
+  inherited: CameraPolicy,
+  config: Record<string, unknown> = { variant: "classical", onlinePlay: "lichess", clock: { base: 600, increment: 5 } },
+): ComponentProps<typeof DivisionSettings> {
+  return {
+    division: {
+      id: "d1",
+      name: "Open",
+      sport_key: "boardgame",
+      variant_key: "classical",
+      config,
+      logo_url: null,
+      logo_storage_path: null,
+      camera_policy: own,
+      inherited_camera_policy: inherited,
+    },
+    orgId: "org1",
+    structureLocked: false,
+    lockedFields: [],
+    stages: [],
+    canEdit: true,
+    divisionPathPrefix: "/o/org/c/comp/d/",
+    fixturesHref: "/o/org/c/comp/d/div/fixtures",
+    embed: <div />,
+    danger: <div />,
+    autoPosts: false,
+    canAutoPost: false,
+    showSeeds: true,
+    viewerPlan: "community",
+    // T20: the camera control renders only while the club is offered online chess.
+    onlineChessOffered: true,
+  } as ComponentProps<typeof DivisionSettings>;
+}
 
 function renderChess(own: CameraPolicy | null, inherited: CameraPolicy, dict = EN): string {
   activeDict.current = dict;
-  return renderToStaticMarkup(
-    <DivisionSettings
-      division={{
-        id: "d1",
-        name: "Open",
-        sport_key: "boardgame",
-        variant_key: "classical",
-        config: { variant: "classical", onlinePlay: "lichess", clock: { base: 600, increment: 5 } },
-        logo_url: null,
-        logo_storage_path: null,
-        camera_policy: own,
-        inherited_camera_policy: inherited,
-      }}
-      orgId="org1"
-      variants={[{ key: "classical", name: "Classical" }]}
-      structureLocked={false}
-      lockedFields={[]}
-      stages={[]}
-      canEdit
-      divisionPathPrefix="/o/org/c/comp/d/"
-      fixturesHref="/o/org/c/comp/d/div/fixtures"
-      embed={<div />}
-      danger={<div />}
-      entrantModel={INDIVIDUAL_ONLY}
-      entrantModelSource="sport"
-      autoPosts={false}
-      canAutoPost={false}
-      showSeeds
-      viewerPlan="community"
-      // T20: the camera control renders only while the club is offered online chess.
-      onlineChessOffered
-    />,
-  );
+  return renderToStaticMarkup(<DivisionSettings {...chessProps(own, inherited)} />);
 }
 
 /** The collapsed camera Group's header button, by its (typed) title. */
@@ -244,8 +242,62 @@ describe("contrast: no text-slate-400 on the Settings tab (axe: 2.63:1 at 11px f
   });
 
   it("…nor does any collapsed body the static render cannot open (source sweep)", () => {
-    const src = readFileSync(new URL("../division-settings.tsx", import.meta.url), "utf8");
-    expect(src.length, "premise: the component source was read").toBeGreaterThan(1000);
-    expect(src.match(/\btext-slate-400\b/g) ?? []).toEqual([]);
+    // Match Day C4: the entrant kinds block left for the Entrants tab; it and the shared group header are the same surface's source.
+    for (const file of ["../division-settings.tsx", "../entrant-kinds-settings.tsx", "../settings-group.tsx"]) {
+      const src = readFileSync(new URL(file, import.meta.url), "utf8");
+      expect(src.length, `premise: ${file} was read`).toBeGreaterThan(1000);
+      expect(src.match(/\btext-slate-400\b/g) ?? [], file).toEqual([]);
+    }
+  });
+});
+
+// Match Day C2 fix round 1, M3 (ruling: online play stays in the strip): Settings says where online play went, in both places
+// it is missed - the camera hint that waits on it, and the pointer that replaced the match rules.
+describe("online play lives on the Division rules strip, and Settings says where", () => {
+  const LOCALES: [string, Record<string, string>][] = [
+    ["en", EN],
+    ["es", esUi as Record<string, string>],
+    ["fr", frUi as Record<string, string>],
+    ["nl", nlUi as Record<string, string>],
+  ];
+  const OFF = { variant: "classical", clock: { base: 600, increment: 5 } };
+
+  it("online play not saved: the camera hint links to the Fixtures tab, by the strip's own name, in every locale (counted)", () => {
+    let checked = 0;
+    for (const [loc, dict] of LOCALES) {
+      activeDict.current = dict;
+      // The camera Group's body is folded in a static render, so the island's tree is read (the harness walks a Group's children).
+      const tree = renderIsland(DivisionSettings, chessProps(null, "off", OFF)).tree();
+      const hint = tree.find((e) => propsOf(e)["data-testid"] === "division-camera-needs-online");
+      expect(hint, `${loc}: premise, the hint is on the page`).toBeDefined();
+      expect(textOf(hint!), `${loc}: the sentence`).toContain(dict["divset.camera.needsOnlinePlay"]!);
+      const link = tree.find((e) => propsOf(e)["data-testid"] === "division-camera-online-link");
+      expect(link, `${loc}: the link`).toBeDefined();
+      expect(propsOf(link!).href, `${loc}: to the Fixtures tab`).toBe("/o/org/c/comp/d/div/fixtures");
+      expect(textOf(link!), `${loc}: named as the strip is`).toBe(dict["divset.rulesMovedLink"]!);
+      expect(textOf(hint!), `${loc}: inside the hint`).toContain(dict["divset.rulesMovedLink"]!);
+      checked++;
+    }
+    expect(checked, "locales").toBe(4);
+    // The contrast: online play saved, no hint and no link.
+    activeDict.current = EN;
+    const saved = renderIsland(DivisionSettings, chessProps(null, "off")).tree();
+    expect(saved.find((e) => propsOf(e)["data-testid"] === "division-camera-online-link")).toBeUndefined();
+  });
+
+  it("the pointer a chess division reads (online chess offered) names online play, in every locale (counted)", () => {
+    // Match Day C4: the pointer names online play only where the strip draws the control (the other sports read the plain
+    // sentence; division-settings-cleanup.test.tsx sweeps that across the registry).
+    let checked = 0;
+    for (const [loc, dict] of LOCALES) {
+      activeDict.current = dict;
+      const tree = renderIsland(DivisionSettings, chessProps(null, "off")).tree();
+      const pointer = tree.find((e) => propsOf(e)["data-testid"] === "division-rules-moved");
+      expect(pointer, `${loc}: premise, the pointer is on the page`).toBeDefined();
+      expect(textOf(pointer!).toLowerCase(), loc).toContain(dict["divset.onlinePlay.label"]!.toLowerCase());
+      expect(textOf(pointer!), `${loc}: the online sentence`).toContain(dict["divset.rulesMovedOnline"]!);
+      checked++;
+    }
+    expect(checked, "locales").toBe(4);
   });
 });

@@ -13,7 +13,7 @@ import "server-only";
 //       with the engine's own colours. Nothing else is written.
 //   (c) the newcomer's first round is the next one; nothing else is written.
 //
-// Each admission writes the entrant's first round (V484, scoped to the stage by V485) and one `swiss_late_entry` ledger
+// Each admission writes the entrant's first round (V486, scoped to the stage by V487) and one `swiss_late_entry` ledger
 // row. An organiser's row is an Undo barrier (history.ts `isUndoBarrier`, design §10.8); an automatic one is not. A board
 // (a)/(b) adds after a Pair is in no Pair's `seated_fixture_ids`, which is safe because that barrier refuses every Undo
 // that would invert that Pair (or a Redo past it) — no step can clear the Pair's seats and strand the new board.

@@ -22,7 +22,7 @@ The sport sets the starting shape, so most divisions need no thought here:
 - **Tennis, badminton, table tennis, carrom** — a player *or* a pair, so singles and doubles can live in the same division.
 - **Football, cricket, hockey, ice hockey, volleyball** — a squad, with shirt numbers and a captain.
 
-To change the shape for one division, open its **Settings → Entrants**. You can widen the kinds it accepts, or turn squad numbers and the captain marker on or off. These are entrant settings, not format — they **stay editable after fixtures exist**, so you can open a division up to teams mid-season. The one guard: you can't remove a kind while an entrant of that kind is still registered — withdraw it first.
+To change the shape for one division, open its **Entrants tab** and the **Entrant kinds** block. You can widen the kinds it accepts, or turn squad numbers and the captain marker on or off. These are entrant settings, not format — they **stay editable after fixtures exist**, so you can open a division up to teams mid-season. The one guard: you can't remove a kind while an entrant of that kind is still registered — withdraw it first.
 
 ## Clubs
 
@@ -30,4 +30,4 @@ Clubs group teams across divisions — "Riverside CC" can field a team in three 
 
 ## Common questions
 
-**Can one division take both singles and pairs?** For sports that allow it (tennis, carrom) — yes. Most sports fix a single shape; check **Settings → Entrants** to see or change what a division accepts.
+**Can one division take both singles and pairs?** For sports that allow it (tennis, carrom) — yes. Most sports fix a single shape; check the **Entrants tab** to see or change what a division accepts.

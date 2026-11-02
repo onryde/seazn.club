@@ -1,0 +1,390 @@
+// scoreLevels (task B3): the structured score reader behind Match Day's panel and rows and the public match page's large type.
+// Every summary here is the ENGINE's own fold of a recorded golden stream (the corpus Match Day's SSR sweep uses, `_golden.ts`),
+// and every expected value is read off a DIFFERENT engine field than the one the reader uses — never the headline, never the
+// reader's own path: sets won are counted from the closed sets, a set sport's live points are the match totals less the closed
+// sets, tennis's games are `detail.games` and its live line is `detail.game`.
+import { describe, expect, it } from "vitest";
+import publicEn from "@/dictionaries/en/public.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { courtSubLines, levelWords, liveLabel, scoreLevels, type LiveLevel, type ScoreLevels } from "@/lib/score/levels";
+import { CORPORA, SPORTS, courtSubLinesOracle, goldenMoments, liveSidesOf, tennisMatchTiebreak, type GoldenMoment } from "./_golden";
+
+type SetEntry = { home: number; away: number; closed: boolean; tb?: unknown; mtb?: unknown };
+/** The large type's reading of a headline before task F4 (`stripLiveSetPoints`, retired): kept here only as the witness that the
+ *  headline could not be read this way. */
+const retiredHeadlineCut = (headline: string): string => headline.replace(/\s*\([^)]*\)\s*$/, "");
+/** The English level words (task F5): with them a composed label is exactly the engine's own `detail.game` line, so each
+ *  expectation below that names the engine's string pins the composition too. */
+const EN_WORDS = levelWords(publicEn as Dict);
+const withLabel = (l: LiveLevel | null) => (l === null ? null : { label: liveLabel(l, EN_WORDS), ...l });
+const labelled = (l: ScoreLevels | null) => (l === null ? null : { ...l, live: withLabel(l.live) });
+const detailOf = (m: GoldenMoment): Record<string, unknown> => (m.summary.detail ?? {}) as Record<string, unknown>;
+const setsOf = (m: GoldenMoment): SetEntry[] | null => {
+  const sets = detailOf(m).sets;
+  return Array.isArray(sets) && sets.length > 0 ? (sets as SetEntry[]) : null;
+};
+/** Sets (or games) a side has won, counted off the CLOSED sets: the larger score takes the set. */
+const wonByCount = (sets: SetEntry[]): [number, number] => [
+  sets.filter((s) => s.closed && s.home > s.away).length,
+  sets.filter((s) => s.closed && s.away > s.home).length,
+];
+
+/** Every registered sport's moments, folded once. */
+const MOMENTS = new Map<string, GoldenMoment[]>(SPORTS.map((key) => [key, goldenMoments(key)]));
+const all = (pick: (key: string) => boolean = () => true): GoldenMoment[] =>
+  [...MOMENTS].filter(([k]) => pick(k)).flatMap(([, ms]) => ms);
+const SET_SPORTS = ["badminton", "tabletennis", "volleyball", "tennis"];
+
+describe("scoreLevels — every registered sport, over the engine's recorded golden streams", () => {
+  it("a sport with a set table reads as levels, every other sport (cricket included) reads null — at every moment of every stream", () => {
+    const withTable: string[] = [];
+    const without: string[] = [];
+    let checked = 0;
+    for (const key of SPORTS) {
+      const moments = MOMENTS.get(key)!;
+      // Only a sport with no recorded stream may sit out — never one whose streams yield no moment.
+      if (moments.length === 0) {
+        expect(CORPORA.some((c) => c.key === key), `${key} has a corpus but no moment`).toBe(false);
+        continue;
+      }
+      for (const m of moments) {
+        const levels = scoreLevels(m.summary);
+        const hasTable = setsOf(m) !== null;
+        expect(levels !== null, `${key} stream ${m.stream} @${m.events}: levels iff the engine carries a set table`).toBe(hasTable);
+        checked++;
+      }
+      (moments.some((m) => setsOf(m) !== null) ? withTable : without).push(key);
+    }
+    // Both ways (B3 review minor): every typed set sport carries a set table AND every sport the engine gives one is typed here
+    // — a new set sport added to the registry fails this until SET_SPORTS (and every sweep below it) covers it.
+    expect([...withTable].sort(), "the sports whose engine carries a set table are exactly SET_SPORTS").toEqual([...SET_SPORTS].sort());
+    expect(without, "the non-set sports swept").toContain("cricket");
+    expect(without.length).toBeGreaterThan(2);
+    expect(checked).toBe(all().length);
+    expect(checked).toBeGreaterThan(1000);
+  });
+
+  it("won: each side's sets (games) won — the engine's own count of its closed sets, at every moment of play, for every set sport", () => {
+    const perSport: Record<string, number> = {};
+    for (const key of SET_SPORTS) {
+      for (const m of MOMENTS.get(key)!) {
+        const sets = setsOf(m);
+        // A decided match may be a forfeit, whose credited sets are not a count of the closed ones: that is checked below.
+        if (sets === null || m.decided) continue;
+        expect(scoreLevels(m.summary)!.won, `${key} stream ${m.stream} @${m.events}`).toEqual(wonByCount(sets));
+        perSport[key] = (perSport[key] ?? 0) + 1;
+      }
+    }
+    for (const key of SET_SPORTS) expect(perSport[key], `${key} moments checked`).toBeGreaterThan(20);
+  });
+
+  it("won: a forfeit or award reads the sets the engine CREDITS (perSide), not a count of the closed ones", () => {
+    let checked = 0;
+    for (const key of SET_SPORTS) {
+      for (const m of MOMENTS.get(key)!) {
+        const sets = setsOf(m);
+        if (sets === null || !m.decided) continue;
+        const credited = m.summary.perSide!.map((p) => Number(p.line));
+        if (credited.join() === wonByCount(sets).join()) continue; // played out: the other test's case
+        expect(scoreLevels(m.summary)!.won, `${key} stream ${m.stream} @${m.events}`).toEqual(credited);
+        checked++;
+      }
+    }
+    expect(checked, "decided moments whose credit differs from the closed sets").toBeGreaterThan(0);
+  });
+
+  it("a set-based sport (badminton, table tennis, volleyball): no middle level; live is the open set's points — the match totals less the closed sets", () => {
+    const counts = { live: 0, between: 0, stopped: 0 };
+    for (const key of ["badminton", "tabletennis", "volleyball"]) {
+      for (const m of MOMENTS.get(key)!) {
+        const sets = setsOf(m);
+        if (sets === null) continue;
+        const levels = scoreLevels(m.summary)!;
+        const points = detailOf(m).points as { home: number; away: number };
+        const closed = sets.filter((s) => s.closed);
+        const liveHome = points.home - closed.reduce((n, s) => n + s.home, 0);
+        const liveAway = points.away - closed.reduce((n, s) => n + s.away, 0);
+        const where = `${key} stream ${m.stream} @${m.events}`;
+        expect(levels.mid, where).toBeNull();
+        if (sets.some((s) => !s.closed)) {
+          expect(withLabel(levels.live), where).toEqual({ label: `${liveHome}–${liveAway}`, sides: liveSidesOf(m), kind: "set" });
+          // The open set has points on the board, else the equality above would hold of a 0–0 for any reading.
+          expect(liveHome + liveAway, where).toBeGreaterThan(0);
+          counts[m.decided ? "stopped" : "live"]++;
+        } else {
+          // Between sets, or finished: every point is in a closed set, so there is no live level.
+          expect(liveHome + liveAway, where).toBe(0);
+          expect(levels.live, where).toBeNull();
+          counts.between++;
+        }
+      }
+    }
+    expect(counts.live, "badminton/table tennis/volleyball mid-set moments").toBeGreaterThan(100);
+    expect(counts.between, "between sets or finished").toBeGreaterThan(20);
+  });
+
+  it("a finished set-based match has no live level — every set closed", () => {
+    let checked = 0;
+    for (const key of ["badminton", "tabletennis", "volleyball"]) {
+      for (const m of MOMENTS.get(key)!) {
+        const sets = setsOf(m);
+        if (!m.decided || sets === null || sets.some((s) => !s.closed)) continue;
+        expect(scoreLevels(m.summary)!.live, `${key} stream ${m.stream} @${m.events}`).toBeNull();
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(10);
+  });
+
+  it("tennis mid-game: sets won · the set's games (detail.games) · the game's points (detail.game); each its own level", () => {
+    let checked = 0;
+    let distinct = 0;
+    let notStarted = 0;
+    for (const m of MOMENTS.get("tennis")!) {
+      const d = detailOf(m);
+      const games = d.games as { home: number; away: number };
+      const game = d.game as string;
+      // The engine says who serves only while play is live (`serving: null` otherwise: abandoned, suspended, not begun), and
+      // then drops the set's open entry though `games` and `game` still hold the last score. A decided match is the
+      // finished / stopped test's.
+      if (m.decided) continue;
+      const live = d.serving !== null;
+      const inProgress = live && (games.home + games.away > 0 || !/^(MTB |TB )?0–0$/.test(game));
+      const where = `tennis stream ${m.stream} @${m.events}`;
+      // Nothing played in the set yet (the match tie-break's first point included), or play not live: no open entry, and with
+      // no closed set either the table is empty — which reads as no set table at all, so the headline stands.
+      if (!inProgress) {
+        const levels = scoreLevels(m.summary);
+        if (setsOf(m) === null) expect(levels, where).toBeNull();
+        else expect(levels, where).toMatchObject({ mid: null, live: null });
+        notStarted++;
+        continue;
+      }
+      const levels = scoreLevels(m.summary)!;
+      if (d.gameKind === "matchTiebreak") {
+        // The open entry is the match tie-break's points: games are not a level then.
+        expect(levels.mid, where).toBeNull();
+      } else {
+        expect(levels.mid, where).toEqual([games.home, games.away]);
+      }
+      expect(withLabel(levels.live), where).toEqual({
+        label: game,
+        sides: liveSidesOf(m),
+        kind: d.gameKind === "standard" ? "game" : d.gameKind,
+      });
+      checked++;
+      // A moment where the three levels differ from each other, or a swap of two of them could not be seen.
+      if (levels.mid !== null && liveLabel(levels.live!, EN_WORDS) !== `${levels.mid[0]}–${levels.mid[1]}` && levels.won[0] !== levels.mid[0]) distinct++;
+    }
+    expect(checked, "tennis moments with a set in progress").toBeGreaterThan(500);
+    expect(notStarted, "tennis moments between sets / before the first point").toBeGreaterThan(20);
+    expect(distinct, "moments where won, mid and live all differ").toBeGreaterThan(100);
+  });
+
+  it("tennis in a per-set tie-break: the games are the mid level, the tie-break's points are live ('TB 3–2'); the tie-break is not a game", () => {
+    const seen = goldenTiebreaks();
+    expect(seen.length, "tennis moments inside a set tie-break").toBeGreaterThan(10);
+    for (const m of seen) {
+      const levels = scoreLevels(m.summary)!;
+      const games = detailOf(m).games as { home: number; away: number };
+      const where = `stream ${m.stream} @${m.events}`;
+      expect(levels.mid, where).toEqual([games.home, games.away]);
+      expect(liveLabel(levels.live!, EN_WORDS), where).toMatch(/^TB \d+–\d+$/);
+      expect(liveLabel(levels.live!, EN_WORDS), where).toBe(detailOf(m).game);
+      // Each side's own tie-break points, from the engine's folded state, not split off the label.
+      expect(levels.live!.sides, where).toEqual(liveSidesOf(m));
+      expect(levels.live!.kind, where).toBe("tiebreak");
+    }
+  });
+
+  it("a finished set's tie-break score ('7–6(5)') never leaks into live — the headline reading it replaced did", () => {
+    // A set that went to a tie-break is a closed entry carrying `tb`; the headline writes it "7–6(3)" and, on a decided match,
+    // ends with that "(3)". Read off the headline, the loser's tie-break points were the "live" score and the large type lost
+    // them (`stripLiveSetPoints`, retired in F4); read off the structure, there is no live level once every set is closed.
+    let checked = 0;
+    let headlineWouldMisread = 0;
+    for (const m of MOMENTS.get("tennis")!) {
+      const sets = setsOf(m);
+      if (sets === null || !m.decided || sets.some((s) => !s.closed) || !sets.some((s) => s.closed && s.tb !== undefined)) continue;
+      expect(scoreLevels(m.summary)!.live, `stream ${m.stream} @${m.events}`).toBeNull();
+      checked++;
+      if (/\(([^)]*)\)\s*$/.test(m.summary.headline!) && retiredHeadlineCut(m.summary.headline!) !== m.summary.headline) headlineWouldMisread++;
+    }
+    expect(checked, "finished tennis matches with a tie-break set").toBeGreaterThan(3);
+    expect(headlineWouldMisread, "…of which the headline reading would have misread the tie-break's points").toBeGreaterThan(0);
+  });
+
+  it("tennis match tie-break: no middle level, the tie-break's points are live ('MTB 3–2'), and the closed sets stay out of it", () => {
+    // The recorded streams stop as the match tie-break begins; the engine's own point events carry one into play.
+    const base = tennisMatchTiebreak([]);
+    expect((base.summary.detail as Record<string, unknown>).gameKind, "the recorded prefix ends in the match tie-break").toBe("matchTiebreak");
+    expect(scoreLevels(base.summary)!.live, "no point played yet: nothing live").toBeNull();
+    const played = tennisMatchTiebreak(["H", "H", "A", "H", "A"]);
+    const d = played.summary.detail as Record<string, unknown>;
+    expect(played.decided).toBe(false);
+    expect(d.gameKind).toBe("matchTiebreak");
+    expect(d.game).toBe("MTB 3–2");
+    const levels = scoreLevels(played.summary)!;
+    expect(levels.won, "a set each").toEqual([1, 1]);
+    expect(levels.mid).toBeNull();
+    // Home won three of the five points, away two — the script's own count.
+    expect(withLabel(levels.live)).toEqual({ label: "MTB 3–2", sides: ["3", "2"], kind: "matchTiebreak" });
+    expect(levels.live!.sides).toEqual(liveSidesOf(played));
+    // The closed sets' scores (7–6 with its tie-break, 1–6) are not the live level, nor part of it.
+    expect(liveLabel(levels.live!, EN_WORDS)).not.toContain("7");
+    expect(liveLabel(levels.live!, EN_WORDS)).not.toContain("6");
+  });
+
+  it("a finished tennis match has no live level, a stopped one keeps the engine's open entry (a caller shows live only in play)", () => {
+    let finished = 0;
+    let stopped = 0;
+    for (const m of MOMENTS.get("tennis")!) {
+      const sets = setsOf(m);
+      if (!m.decided || sets === null) continue;
+      const levels = scoreLevels(m.summary)!;
+      if (sets.some((s) => !s.closed)) {
+        expect(withLabel(levels.live), `stopped: stream ${m.stream} @${m.events}`).toMatchObject({ label: detailOf(m).game, sides: liveSidesOf(m) });
+        stopped++;
+      } else {
+        expect(levels.live, `finished: stream ${m.stream} @${m.events}`).toBeNull();
+        expect(levels.mid, `finished: stream ${m.stream} @${m.events}`).toBeNull();
+        finished++;
+      }
+    }
+    expect(finished).toBeGreaterThan(10);
+    expect(stopped, "a tennis match stopped mid-set (default / retirement)").toBeGreaterThan(0);
+  });
+
+  it("cricket: null at every moment — its innings keep their own scorebug", () => {
+    const moments = MOMENTS.get("cricket")!;
+    expect(moments.length).toBeGreaterThan(100);
+    for (const m of moments) expect(scoreLevels(m.summary), `stream ${m.stream} @${m.events}`).toBeNull();
+  });
+});
+
+describe("scoreLevels — shapes it refuses (a refusal reads the caller's own headline, never a guess)", () => {
+  const sets = [{ home: 21, away: 15, closed: true }, { home: 14, away: 11, closed: false }];
+  const summary = (over: Record<string, unknown> = {}) => ({
+    headline: "1 — 0 · 21–15 (14–11)",
+    perSide: [{ entrantId: "H", line: "1" }, { entrantId: "A", line: "0" }],
+    detail: { sets },
+    ...over,
+  });
+
+  it("the well-formed set-based shape is read (so each refusal below is the one change that matters)", () => {
+    expect(labelled(scoreLevels(summary()))).toEqual({ won: [1, 0], mid: null, live: { label: "14–11", sides: ["14", "11"], kind: "set" } });
+  });
+
+  it.each([
+    ["no summary", null],
+    ["not an object", "1 — 0"],
+    ["no detail", summary({ detail: undefined })],
+    ["no set table", summary({ detail: {} })],
+    ["an empty set table", summary({ detail: { sets: [] } })],
+    ["a malformed set entry", summary({ detail: { sets: [{ home: "21", away: 15, closed: true }] } })],
+    ["no sides", summary({ perSide: undefined })],
+    ["one side", summary({ perSide: [{ entrantId: "H", line: "1" }] })],
+    ["three sides", summary({ perSide: [{ entrantId: "H", line: "1" }, { entrantId: "A", line: "0" }, { entrantId: "B", line: "0" }] })],
+    ["a side line that is not a count (a score line)", summary({ perSide: [{ entrantId: "H", line: "6-4 3-6" }, { entrantId: "A", line: "0" }] })],
+    ["a side line that is a half-point", summary({ perSide: [{ entrantId: "H", line: "½" }, { entrantId: "A", line: "½" }] })],
+    ["a nested kernel with a game kind it does not know", summary({ detail: { sets, game: "40–30", gameKind: "superTiebreak" } })],
+    ["a nested kernel with no game kind", summary({ detail: { sets, game: "40–30" } })],
+    // A game line the engine's own formats do not produce cannot be split per side: refused, not guessed at.
+    ["a standard game whose line is a tie-break's", summary({ detail: { sets, game: "TB 3–2", gameKind: "standard" } })],
+    ["a tie-break whose line is a standard game's", summary({ detail: { sets, game: "40–30", gameKind: "tiebreak" } })],
+    ["a standard game with a call that is not 0, 15, 30, 40 or Ad", summary({ detail: { sets, game: "40–45", gameKind: "standard" } })],
+    ["a standard game line that is prose", summary({ detail: { sets, game: "forty-thirty", gameKind: "standard" } })],
+    ["a tie-break line with no points", summary({ detail: { sets, game: "TB –", gameKind: "tiebreak" } })],
+  ])("%s -> null", (_name, input) => {
+    expect(scoreLevels(input)).toBeNull();
+  });
+
+  it("a nested kernel's sides, mid and live are read from the structure the engine names", () => {
+    const nested = summary({
+      headline: "0 — 1 · 6–4 · 3–2 (40–30)",
+      perSide: [{ entrantId: "H", line: "0" }, { entrantId: "A", line: "1" }],
+      detail: { sets: [{ home: 4, away: 6, closed: true }, { home: 3, away: 2, closed: false }], games: { home: 3, away: 2 }, game: "40–30", gameKind: "standard" },
+    });
+    expect(labelled(scoreLevels(nested))).toEqual({ won: [0, 1], mid: [3, 2], live: { label: "40–30", sides: ["40", "30"], kind: "game" } });
+  });
+
+  it.each([
+    ["advantage home", "Ad–40", ["Ad", "40"]],
+    ["advantage away", "40–Ad", ["40", "Ad"]],
+    ["deuce", "40–40", ["40", "40"]],
+    ["love-all", "0–0", ["0", "0"]],
+    ["fifteen-love", "15–0", ["15", "0"]],
+  ])("a standard game at %s splits per side by the engine's own calls (%s)", (_name, game, sides) => {
+    const nested = summary({
+      perSide: [{ entrantId: "H", line: "0" }, { entrantId: "A", line: "1" }],
+      detail: { sets: [{ home: 4, away: 6, closed: true }, { home: 3, away: 2, closed: false }], games: { home: 3, away: 2 }, game, gameKind: "standard" },
+    });
+    expect(withLabel(scoreLevels(nested)!.live)).toEqual({ label: game, sides, kind: "game" });
+  });
+
+  it("a set tie-break splits per side in plain points, double digits included", () => {
+    const nested = summary({
+      perSide: [{ entrantId: "H", line: "0" }, { entrantId: "A", line: "1" }],
+      detail: { sets: [{ home: 4, away: 6, closed: true }, { home: 6, away: 6, closed: false }], games: { home: 6, away: 6 }, game: "TB 10–8", gameKind: "tiebreak" },
+    });
+    expect(withLabel(scoreLevels(nested)!.live)).toEqual({ label: "TB 10–8", sides: ["10", "8"], kind: "tiebreak" });
+  });
+});
+
+/** Tennis moments inside a per-set tie-break: the engine says so itself (`gameKind`), with its open entry carrying the games. */
+function goldenTiebreaks(): GoldenMoment[] {
+  return MOMENTS.get("tennis")!.filter((m) => detailOf(m).gameKind === "tiebreak" && setsOf(m)?.some((s) => !s.closed));
+}
+
+describe("courtSubLines — the small per-side figures beside a court card's big score", () => {
+  it("every moment of every registered sport: the format the engine's own fields give — a set sport's open set, tennis's games then points, a stopped match's games only", () => {
+    const seen = { setSport: 0, tennisInPlay: 0, tennisStopped: 0, mtb: 0, none: 0, notASetSport: 0 };
+    for (const key of SPORTS) {
+      for (const m of MOMENTS.get(key)!) {
+        const where = `${key} stream ${m.stream} @${m.events}`;
+        const levels = scoreLevels(m.summary);
+        // A match in play is `in_play`; a decided one has stopped (a stopped match can still hold its open entry).
+        const inPlay = !m.decided;
+        const got = courtSubLines(levels, inPlay);
+        expect(got, where).toEqual(setsOf(m) === null ? [null, null] : courtSubLinesOracle(m, inPlay));
+        if (setsOf(m) === null) seen.notASetSport++;
+        else if (got[0] === null) seen.none++;
+        else if (key !== "tennis") seen.setSport++;
+        else if (detailOf(m).gameKind === "matchTiebreak") seen.mtb++;
+        else seen[inPlay ? "tennisInPlay" : "tennisStopped"]++;
+      }
+    }
+    expect(seen.setSport, "badminton / table tennis / volleyball moments with a set open").toBeGreaterThan(100);
+    expect(seen.tennisInPlay, "tennis moments in play with a set open").toBeGreaterThan(500);
+    expect(seen.none, "set sport moments with nothing in progress").toBeGreaterThan(20);
+    expect(seen.notASetSport, "cricket, football and the rest").toBeGreaterThan(500);
+    expect(seen.tennisStopped, "a tennis match stopped mid-set: games only, no point is being played").toBeGreaterThan(0);
+  });
+
+  it("the same tennis moment reads with its points in play and without them once stopped — the figure appears only while a point can be played", () => {
+    let checked = 0;
+    for (const m of MOMENTS.get("tennis")!) {
+      const levels = scoreLevels(m.summary);
+      if (levels === null || levels.live === null || levels.live.kind === "matchTiebreak") continue;
+      const withPoints = courtSubLines(levels, true);
+      const without = courtSubLines(levels, false);
+      expect(withPoints[0], `stream ${m.stream} @${m.events}`).toBe(`${without[0]} ${levels.live.sides[0]}`);
+      expect(withPoints[1]).toBe(`${without[1]} ${levels.live.sides[1]}`);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(500);
+  });
+
+  it("a match tie-break: its points in parentheses, in play or not (they fill the open entry)", () => {
+    const base = tennisMatchTiebreak(["H", "H", "A", "H", "A"]);
+    expect(courtSubLines(scoreLevels(base.summary), true)).toEqual(["(3)", "(2)"]);
+    expect(courtSubLines(scoreLevels(base.summary), false)).toEqual(["(3)", "(2)"]);
+    expect(courtSubLines(scoreLevels(base.summary), true)).toEqual(courtSubLinesOracle(base, true));
+  });
+
+  it("nothing to read: no levels (cricket, an unreadable shape) and no live level (between sets, finished) are both [null, null]", () => {
+    expect(courtSubLines(null, true)).toEqual([null, null]);
+    expect(courtSubLines({ won: [1, 0], mid: null, live: null }, true)).toEqual([null, null]);
+    expect(courtSubLines({ won: [1, 0], mid: [3, 2], live: null }, true)).toEqual([null, null]);
+  });
+});

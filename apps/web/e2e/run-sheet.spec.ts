@@ -12,6 +12,7 @@ import {
   expectNoHorizontalScroll,
   addEntrantsViaApi,
   seedVenueWithCourts,
+  openBracket,
 } from "./helpers";
 // The repo's one cookie-banner dismissal — idempotent no-op under the authed
 // `page` fixture (consent is already pre-dismissed into AUTH_STATE), but
@@ -29,6 +30,7 @@ import { isoFromZonedDateTime, zonedDateTimeInput } from "../src/lib/zoned-datet
 // re-implemented with `toISOString().slice(0, 10)`, which is only the right
 // answer while the venue zone happens to be UTC (fix round 4).
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
+import { dayLabel } from "../src/lib/day-label";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -281,54 +283,97 @@ test("the run sheet groups by venue day and prints the day, the time and the pit
   // round 1, IMPORTANT 5a; fix round 4 re-derives it via `dayKeyInTz` rather
   // than a UTC-only string slice, since the venue zone is no longer UTC).
   const expectedDayKey = dayKeyInTz(now, tz);
-  // The exact fixture_no values the day block must show, IN CHRONOLOGICAL
-  // ORDER (fix round 1, IMPORTANT 5b) — a sheet that merely contains "at
-  // least 3 rows somewhere" passes even when it bucketed into the WRONG day
-  // or duplicated a row; `toEqual` on the real fixture numbers, fetched from
-  // the API rather than assumed, does not.
+
+  // Match Day E1 item 1 (owner 2026-11-01): the stage card groups its rows under a header bar PER ROUND - "Round 2 - 0 of 2 done - day -
+  // 21:10-21:50" - not under day headings, and an untimed row sits last in its round saying "No time yet" rather than under a "Not yet
+  // scheduled" group. So what this case pins is the DERIVED shape: the rounds come in earliest-kickoff order (untimed rounds last), the
+  // rows in a round in time order, each bar names its day and its clock span in the venue zone, and the NOW rule appears once.
+  const all = await apiJson<{ id: string; fixture_no: number; round_no: number; scheduled_at: string | null }[]>(
+    request,
+    `/api/v1/divisions/${divisionId}/fixtures`,
+  );
+  const rows = all.data!;
+  expect(rows.length, "the seed's six fixtures are all on the API").toBe(6);
+  const timed = (r: { scheduled_at: string | null }) => (r.scheduled_at === null ? Number.POSITIVE_INFINITY : Date.parse(r.scheduled_at));
+  const roundNos = [...new Set(rows.map((r) => r.round_no))];
+  const earliest = (n: number) => Math.min(...rows.filter((r) => r.round_no === n).map(timed));
+  const expectedRounds = [...roundNos].sort((a, b) => earliest(a) - earliest(b) || a - b);
+  const expectedOrder = new Map(
+    expectedRounds.map((n) => [
+      n,
+      rows
+        .filter((r) => r.round_no === n)
+        .sort((a, b) => timed(a) - timed(b) || a.fixture_no - b.fixture_no)
+        .map((r) => String(r.fixture_no)),
+    ]),
+  );
+  console.log("run sheet expected rounds:", expectedRounds, JSON.stringify([...expectedOrder]));
+  const clock = (iso: string) => new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: tz }).format(new Date(iso));
+
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  const sheet = page.getByTestId("run-sheet");
+  await expect(sheet).toBeVisible();
+  // The division opens on All (nothing started), so every round is on the sheet.
+  await sheet.locator('[data-filter="all"]').click();
+
+  // No day headings and no "Not yet scheduled" group in a stage card any more.
+  await expect(sheet.locator("[data-run-sheet-day]"), "no day headings in a stage card").toHaveCount(0);
+  await expect(sheet.locator('[data-run-sheet-block="unscheduled"]'), "no unscheduled group").toHaveCount(0);
+  await expect(sheet.getByText("Not yet scheduled")).toHaveCount(0);
+
+  // POSITIVE PAIR: the rounds are really on the page, in the derived order.
+  const rounds = sheet.locator("[data-run-sheet-round]");
+  await expect(rounds, "one section per round").toHaveCount(expectedRounds.length);
+  const seenRounds = await rounds.evaluateAll((els) => els.map((el) => Number(el.getAttribute("data-run-sheet-round"))));
+  console.log("run sheet rounds seen:", seenRounds, "expected:", expectedRounds);
+  expect(seenRounds, "rounds in earliest-kickoff order, untimed rounds last").toEqual(expectedRounds);
+
+  let barsChecked = 0;
+  for (const n of expectedRounds) {
+    const round = sheet.locator(`[data-run-sheet-round="${n}"]`);
+    const mine = rows.filter((r) => r.round_no === n);
+    const stamped = mine.filter((r) => r.scheduled_at !== null).map((r) => r.scheduled_at!).sort();
+    // Rows: in time order, untimed last - read off the page, compared to the order derived from the API.
+    const seenNos = await round.locator("[data-fixture-no]").evaluateAll((els) => els.map((el) => el.getAttribute("data-fixture-no")));
+    expect(seenNos, `round ${n}: rows in time order, untimed last`).toEqual(expectedOrder.get(n));
+    const bar = round.getByTestId("run-sheet-round-bar");
+    await expect(bar).toContainText(UI_EN["schedule.round"]!.replace("{n}", String(n)));
+    await expect(bar, `round ${n}: how many are done`).toContainText(
+      UI_EN[mine.length === 1 ? "runsheet.round.done.one" : "runsheet.round.done.other"]!.replace("{done}", "0").replace("{total}", String(mine.length)),
+    );
+    if (stamped.length === 0) {
+      await expect(bar.locator("[data-run-sheet-round-dates]"), `round ${n}: nothing timed, no date`).toHaveCount(0);
+      await expect(bar.locator("[data-run-sheet-round-span]")).toHaveCount(0);
+    } else {
+      await expect(bar.locator("[data-run-sheet-round-dates]")).toContainText(dayLabel(expectedDayKey, "en"));
+      const span = stamped.length === 1 || clock(stamped[0]!) === clock(stamped[stamped.length - 1]!) ? clock(stamped[0]!) : `${clock(stamped[0]!)}\u2013${clock(stamped[stamped.length - 1]!)}`;
+      await expect(bar.locator("[data-run-sheet-round-span]"), `round ${n}: the clock span in the venue zone`).toContainText(span);
+    }
+    // An untimed OPEN row says so on the row.
+    const untimed = mine.filter((r) => r.scheduled_at === null);
+    for (const r of untimed) {
+      await expect(round.locator(`[data-fixture-no="${r.fixture_no}"]`), `fixture ${r.fixture_no}: no time yet`).toContainText(UI_EN["runsheet.noTimeYet"]!);
+    }
+    // ...and a timed one does not.
+    for (const r of mine.filter((x) => x.scheduled_at !== null)) {
+      await expect(round.locator(`[data-fixture-no="${r.fixture_no}"]`)).not.toContainText(UI_EN["runsheet.noTimeYet"]!);
+    }
+    barsChecked++;
+  }
+  expect(barsChecked, "every round's bar was checked").toBe(expectedRounds.length);
+  expect(barsChecked).toBeGreaterThan(0);
+  // The per-row "Round N" label is gone: every "Round N" on the sheet is a bar's.
+  await expect(sheet.getByText(/Round \d/)).toHaveCount(expectedRounds.length);
+
+  // The NOW rule sits between the 30-minutes-ago row and the 90-minutes-hence row: exactly one rule in the whole sheet, AND at the right
+  // POSITION - a `nowIndex` pinned to 0 (every row read as "in the future") would still pass a bare `toHaveCount(1)`. The row immediately
+  // after the rule in DOM order must be the FUTURE fixture.
   const expectedFixtureNos = await Promise.all(
     [fixtureIds[0]!, fixtureIds[1]!, fixtureIds[2]!].map(async (id) => {
       const info = await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${id}`);
       return info.data!.fixture_no;
     }),
   );
-
-  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
-  const sheet = page.getByTestId("run-sheet");
-  await expect(sheet).toBeVisible();
-
-  // PRINT WHAT WAS SEEN beside the gate — `_RULES.md`: "A green gate on the
-  // wrong state is worse than a red one." A probe in W1 once reported "no
-  // horizontal scroll" at every width on a page that was never in the state
-  // under test, because its setup calls had silently failed.
-  const dayKeys = await sheet
-    .locator("[data-run-sheet-day]")
-    .evaluateAll((els) => els.map((el) => el.getAttribute("data-run-sheet-day")));
-  console.log("run sheet day keys:", dayKeys, "expected:", expectedDayKey);
-  expect(dayKeys, `expected one day group, saw ${JSON.stringify(dayKeys)}`).toHaveLength(1);
-  expect(dayKeys[0], `sheet bucketed into the WRONG day`).toBe(expectedDayKey);
-
-  // The three fixtures are printed on the sheet, in the DAY BLOCK
-  // specifically — the pitch is the venue clause (suppressed here, since no
-  // venue/court is set — "an empty cell is not information"), the time is
-  // the spine cell. `sheet` also contains the other 3 generated-but-never-
-  // scheduled fixtures, in the unscheduled block — scoping to the day
-  // block (found via the day header it contains) is what makes this
-  // assertion mean "these three, in this order", not "at least 3 rows
-  // somewhere on the page".
-  const dayBlock = page.locator("section", { has: page.locator("[data-run-sheet-day]") });
-  const fixtureNos = await dayBlock
-    .locator("[data-fixture-no]")
-    .evaluateAll((els) => els.map((el) => el.getAttribute("data-fixture-no")));
-  console.log("run sheet day-block fixture-no attributes:", fixtureNos, "expected:", expectedFixtureNos);
-  expect(fixtureNos).toEqual(expectedFixtureNos.map(String));
-
-  // The NOW rule sits between the 30-minutes-ago row and the 90-minutes-
-  // hence row: exactly one rule, present at most once in the whole sheet,
-  // AND at the right POSITION — a `nowIndex` pinned to 0 (every row read as
-  // "in the future") would still pass a bare `toHaveCount(1)` (fix round 1,
-  // IMPORTANT 5c). The row immediately after the rule in DOM order must be
-  // the FUTURE fixture.
   await expect(sheet.getByTestId("run-sheet-now")).toHaveCount(1);
   const afterNowFixtureNo = await sheet
     .getByTestId("run-sheet-now")
@@ -376,30 +421,21 @@ test("regression (finding 3): a decided fixture with no recorded time never read
   // exactly the "reachable" bar this whole regression class exists to clear.
   await expect(sheet).toBeVisible();
 
-  const unscheduledBlock = sheet.locator('[data-run-sheet-block="unscheduled"]');
-  const settledBlock = sheet.locator('[data-run-sheet-block="settled"]');
-
-  // PRINT WHAT WAS SEEN — both blocks' own text, so a failure shows exactly
-  // what an organiser would have read instead of a bare boolean.
-  const unscheduledText = (await unscheduledBlock.textContent().catch(() => null)) ?? "(no unscheduled block)";
-  const settledText = (await settledBlock.textContent().catch(() => null)) ?? "(no settled block)";
-  console.log(
-    `regression finding-3 fixture_no=${fixtureNo}, unscheduled block:`,
-    unscheduledText,
-    "| settled block:",
-    settledText,
-  );
-
-  // The decided fixture must not appear inside the "Not yet scheduled"
-  // group — it is not open work.
-  await expect(unscheduledBlock.locator(`[data-fixture-no="${fixtureNo}"]`)).toHaveCount(0);
-  // It DOES appear, in the settled tail, with the "Result" action — never
-  // "Set time" (the fix round 1 ruling: visible, not dropped, and never
-  // under a heading that implies scheduling is still owed).
-  const settledRow = settledBlock.locator(`[data-fixture-no="${fixtureNo}"]`);
+  // Match Day E1 item 1: a stage card has no "Not yet scheduled" group and no terminal "settled" block - the decided match sits in its
+  // own ROUND like every other row, with its Result action, and says nothing of "No time yet" (that is for OPEN work only).
+  await expect(sheet.locator('[data-run-sheet-block="unscheduled"]'), "no unscheduled group exists in a stage card").toHaveCount(0);
+  await expect(sheet.locator('[data-run-sheet-block="settled"]')).toHaveCount(0);
+  const settledRow = sheet.locator(`[data-fixture-no="${fixtureNo}"]`);
+  // POSITIVE PAIR: the row is on the sheet, once, inside a round section.
   await expect(settledRow).toHaveCount(1);
+  await expect(settledRow.locator("xpath=ancestor::*[@data-run-sheet-round][1]")).toHaveCount(1);
+  console.log(`regression finding-3 fixture_no=${fixtureNo}, row text:`, await settledRow.textContent());
+  await expect(settledRow, "a played match with no time is a result, not 'No time yet'").not.toContainText(UI_EN["runsheet.noTimeYet"]!);
   await expect(settledRow.locator('[data-row-action="result"]')).toHaveCount(1);
   await expect(settledRow.locator('[data-row-action="set_time"]')).toHaveCount(0);
+  // ...while an OPEN untimed neighbour does say it (the other side of the same rule).
+  const open = await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${fixtureIds[1]!}`);
+  await expect(sheet.locator(`[data-fixture-no="${open.data!.fixture_no}"]`)).toContainText(UI_EN["runsheet.noTimeYet"]!);
 });
 
 // CRITICAL 1 (fix round 1): the run sheet had no empty-filter state. The
@@ -441,7 +477,8 @@ test("empty-filter state: switching to a filter with no matching rows shows a me
   // present, but functional.
   await sheet.getByTestId("run-sheet-empty-show-all").click();
   await expect(empty).toHaveCount(0);
-  await expect(sheet.locator("[data-run-sheet-day]")).toHaveCount(1);
+  // A 4-entrant round robin is three rounds: the sheet is back, under a bar each.
+  await expect(sheet.locator("[data-run-sheet-round]")).toHaveCount(3);
 });
 
 // SERIAL, and only these two. Both write `organizations.timezone`, which
@@ -1196,123 +1233,88 @@ test("fix round 5: an in-play or settled row's time is not an affordance, but a 
   await expect(page.locator(`[data-fixture-no="${nos[2]}"]`).getByTestId("run-sheet-edit-time")).toHaveCount(1);
 });
 
-// Competition Desk W3 Task 5 gave the rail an actual desktop COLUMN
-// (`lg:grid`, later `md:grid`) — RETIRED by "Option B" (controller
-// measurement, owner sign-off session): the column forced the card to
-// whatever height the rail needed (equal-height grid-row stretch), and
-// measured 62% empty at 1280 (`body=262px rail=262px content=99px
-// VOID=163px`). `stages-panel.tsx` no longer wraps `[data-testid="stage-
-// sheet"]`/`[data-testid="stage-rail"]` in a grid — both are ordinary
-// STACKED blocks now, full card width at every size. This test used to be
-// named for the column it measured; it now measures the column's absence.
+// Match Day E1 item 1 (owner 2026-11-01) - the stage's actions moved INTO the card header. History: Competition Desk W3 Task 5 gave the
+// rail a desktop COLUMN, "Option B" stacked it BELOW the sheet, and now the actions group is the header's own: on one row with the title,
+// to the left of a thin divider and the settings buttons, above the rows. What this case still guards is the sweep that every action
+// control lives in the rail and ONLY the rail - never inside the rows (`stage-run-sheet`), and never a second copy elsewhere.
+// `roster-drift-banner`/`roster-drift-rebuild` stay out of the sweep: they are per-stage STATE about the fixtures below, not an action.
 //
-// The "no stage-chrome control leaks into the sheet" sweep is UNCHANGED and
-// still the load-bearing half of this test: every action control still
-// lives in the rail and only the rail, never inside `stage-sheet`, whether
-// the two sit side by side or stacked. `roster-drift-banner`/
-// `roster-drift-rebuild` are DELIBERATELY excluded from the sweep (same
-// ruling as Task 5's own): they are per-stage STATE about the fixtures
-// below, not an action on the stage, and stay in the sheet by design —
-// sweeping them up would fail correctly for the wrong reason.
+// The footer ("To schedule in this stage N ->", `stage-unscheduled-count`) is GONE - the counts line says it - so it is no longer a
+// stage-chrome testid; its absence is asserted in its own right below.
 //
-// Task 2 ("remove auto-schedule from the fixtures page") retired
-// `stage-auto-schedule` from `STAGE_CHROME_TESTIDS` below — the rail no
-// longer renders that testid at all, ever, so leaving it in the sweep would
-// only ever assert 0 === 0 (an entry no mutation could kill, AGENTS.md
-// rule 3). Five real testids remain, not six.
-//
-// Run as an EDITING viewer (also this dispatch's ruling): for a
-// non-editing viewer `<StageRail>` returns `null` outright and two of the
-// six controls legitimately render INLINE in the sheet instead (see
-// stages-panel.tsx's own `!canEdit && unscheduledBadge` / `!canEdit &&
-// courtTagsEditor` fallbacks) — asserting "none in the sheet" for that
-// viewer would be asserting the wrong thing. Every spec in this file
-// already runs as the org owner who created the division through the API
-// under `AUTH_STATE` (`seedRunSheetDivision`'s own `apiJson` calls), so this
-// is already an editing viewer's page with no extra login step needed.
-const STAGE_CHROME_TESTIDS = [
-  "stage-generate",
-  "stage-complete",
-  "stage-delete",
-  "stage-add-match",
-  "stage-unscheduled-count",
-] as const;
+// Run as an EDITING viewer: for a non-editing viewer `<StageRail>` returns `null` and the court-tags line is the only chrome left.
+const STAGE_CHROME_TESTIDS = ["stage-generate", "stage-complete", "stage-delete", "stage-add-match"] as const;
 
-test("desktop (Option B): the stage rail stacks BELOW the fixtures sheet — no column, no void — and no stage-chrome control leaks into the sheet", async ({
+test("desktop (E1): the stage's actions sit in the card HEADER - left of the divider and the settings buttons, above the rows - and none leaks into the rows", async ({
   page,
   request,
 }) => {
-  // The default league stage from `seedRunSheetDivision`: unscheduled
-  // fixtures (nothing scheduled yet), the sole stage (deletable), status
-  // not complete, an adhoc kind (league) — the state that makes every one
-  // of the six testids actually render, so the "none in the sheet" sweep
-  // below witnesses a real move rather than a vacuous scan over controls
-  // nothing ever built.
+  // The default league stage from `seedRunSheetDivision`: unscheduled fixtures (nothing scheduled yet), the sole stage (deletable), status
+  // not complete, an adhoc kind (league) - the state that makes the testids actually render, so the "none in the rows" sweep below
+  // witnesses a real move rather than a vacuous scan over controls nothing ever built.
   const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
-  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the layout").toBeGreaterThanOrEqual(1);
+  expect(fixtureIds.length, "seed produced no fixtures - setup failed, not the layout").toBeGreaterThanOrEqual(1);
 
-  // Fixed viewport, deliberately, rather than trusting the project's own
-  // default: the geometry assertion below has to mean "at 1280", not
-  // "whatever this project happens to be sized at today".
+  // Fixed viewport, deliberately: the geometry has to mean "at 1280", not "whatever this project happens to be sized at today".
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
 
-  const sheet = page.getByTestId("stage-sheet").first();
-  const rail = page.getByTestId("stage-rail").first();
-  await expect(sheet, "stage-sheet did not render — nothing was measured").toBeVisible();
-  await expect(rail, "stage-rail did not render — nothing was measured").toBeVisible();
+  const card = page.locator("section.card[data-stage-id]").first();
+  const header = card.locator("header").first();
+  const rail = card.getByTestId("stage-rail");
+  const rows = card.getByTestId("stage-run-sheet");
+  const tools = card.getByTestId("stage-tools");
+  const divider = card.getByTestId("stage-controls-divider");
+  await expect(header, "the card header did not render - nothing was measured").toBeVisible();
+  await expect(rail, "stage-rail did not render - nothing was measured").toBeVisible();
+  await expect(rows, "the stage's rows did not render - nothing was measured").toBeVisible();
 
-  const sheetBox = await sheet.boundingBox();
-  const railBox = await rail.boundingBox();
-  console.log("Option B geometry — stage-sheet box:", sheetBox, "| stage-rail box:", railBox);
-  expect(sheetBox, "stage-sheet has no box — not laid out").not.toBeNull();
-  expect(railBox, "stage-rail has no box — not laid out").not.toBeNull();
-  // STACKED, not side by side: the rail's top is at or below the sheet's
-  // bottom (a small negative tolerance covers sub-pixel/collapsed-margin
-  // rounding, never a margin big enough to hide a real two-column layout).
-  expect(
-    railBox!.y,
-    `rail y=${railBox!.y} is not at/below sheet y=${sheetBox!.y} + height=${sheetBox!.height} (still two-column, not stacked)`,
-  ).toBeGreaterThan(sheetBox!.y + sheetBox!.height - 4);
-  // No column: the rail spans (close to) the same width as the sheet —
-  // neither is squeezed into a narrow side track. A generous tolerance
-  // (40px) covers each box's own internal padding without accepting a
-  // genuine ~280px column back in.
-  expect(
-    Math.abs(railBox!.width - sheetBox!.width),
-    `rail width=${railBox!.width} and sheet width=${sheetBox!.width} disagree by more than 40px — looks like a column, not full-width stacking`,
-  ).toBeLessThan(40);
+  const headerBox = (await header.boundingBox())!;
+  const railBox = (await rail.boundingBox())!;
+  const rowsBox = (await rows.boundingBox())!;
+  const toolsBox = (await tools.boundingBox())!;
+  const dividerBox = (await divider.boundingBox())!;
+  const title = (await card.locator("header h3").first().boundingBox())!;
+  console.log("E1 geometry - header:", headerBox, "| rail:", railBox, "| divider:", dividerBox, "| tools:", toolsBox, "| rows:", rowsBox);
+  // The actions are INSIDE the header's box, and the header is above the rows.
+  expect(railBox.y, "the rail starts inside the header").toBeGreaterThanOrEqual(headerBox.y - 1);
+  expect(railBox.y + railBox.height, "and ends inside it").toBeLessThanOrEqual(headerBox.y + headerBox.height + 1);
+  expect(headerBox.y + headerBox.height, "the header is above the rows").toBeLessThanOrEqual(rowsBox.y + 1);
+  // One row at 1280: the title, then the actions, then the divider, then the settings buttons - left to right, on one line.
+  expect(railBox.x, "the actions are right of the title").toBeGreaterThan(title.x + title.width - 1);
+  expect(dividerBox.x, "the divider is right of the actions").toBeGreaterThanOrEqual(railBox.x + railBox.width - 1);
+  expect(toolsBox.x, "the settings buttons are right of the divider").toBeGreaterThanOrEqual(dividerBox.x + dividerBox.width - 1);
+  expect(Math.abs(railBox.y - toolsBox.y), "actions and settings share a line").toBeLessThan(24);
+  expect(dividerBox.width, "a thin rule").toBeLessThanOrEqual(2);
 
-  // PRINT WHAT WAS SEEN beside the gate (_RULES.md): where each of the five
-  // stage-chrome testids actually landed, so a pass here is legible as
-  // "found in the rail, absent from the sheet" and not just a bare boolean.
-  const presence: Record<string, { onPage: number; inRail: number; inSheet: number }> = {};
+  // PRINT WHAT WAS SEEN beside the gate (_RULES.md): where each stage-chrome testid landed.
+  const presence: Record<string, { onPage: number; inRail: number; inRows: number }> = {};
   for (const testid of STAGE_CHROME_TESTIDS) {
     presence[testid] = {
       onPage: await page.locator(`[data-testid="${testid}"]`).count(),
       inRail: await rail.locator(`[data-testid="${testid}"]`).count(),
-      inSheet: await sheet.locator(`[data-testid="${testid}"]`).count(),
+      inRows: await rows.locator(`[data-testid="${testid}"]`).count(),
     };
   }
-  console.log("Option B stage-chrome testid placement:", JSON.stringify(presence));
-
-  // Non-vacuous sweep: at least one of the five really rendered somewhere on
-  // the page — otherwise "none of them are in the sheet" would be trivially
-  // true of a page that built none of them at all.
+  console.log("E1 stage-chrome testid placement:", JSON.stringify(presence));
   const totalOnPage = Object.values(presence).reduce((n, p) => n + p.onPage, 0);
-  expect(
-    totalOnPage,
-    "none of the five stage-chrome testids rendered at all — the sweep below would be vacuous",
-  ).toBeGreaterThan(0);
-
+  expect(totalOnPage, "none of the stage-chrome testids rendered at all - the sweep below would be vacuous").toBeGreaterThan(0);
   for (const testid of STAGE_CHROME_TESTIDS) {
-    expect(presence[testid]!.inSheet, `${testid} leaked into the sheet subtree`).toBe(0);
-    // Whatever DID render is fully accounted for inside the rail — never a
-    // third copy sitting somewhere else on the page.
-    expect(presence[testid]!.inRail, `${testid}: rail count does not match page-wide count`).toBe(
-      presence[testid]!.onPage,
-    );
+    expect(presence[testid]!.inRows, `${testid} leaked into the rows`).toBe(0);
+    // Whatever DID render is fully accounted for inside the rail - never a second copy somewhere else on the page.
+    expect(presence[testid]!.inRail, `${testid}: rail count does not match page-wide count`).toBe(presence[testid]!.onPage);
   }
+  // The retired footer: not there at any width.
+  // Final review G6: `stage-unscheduled-count` is rendered by no source now, so asserting it absent could never fail. What took the
+  // footer's place is asserted instead: the counts line's clause is the one door to the Schedule page (exactly one on the page), it says
+  // the seed's own count - every fixture the seed made is still unscheduled - and it is a real link.
+  const toSchedule = page.getByTestId("stage-progress-to-schedule");
+  await expect(toSchedule, "exactly one 'to schedule' door on the page: the counts line's clause").toHaveCount(1);
+  await expect(toSchedule, "the clause says how many fixtures the seed left unscheduled").toHaveText(`${fixtureIds.length} to schedule`);
+  await expect(toSchedule, "and it is the link to the Schedule page").toHaveAttribute("href", /\/schedule$/);
+  await expect(page.getByText("To schedule in this stage")).toHaveCount(0);
+  // ...and the count it carried is still said, in the counts line.
+  await expect(card.getByTestId("stage-progress-counts")).toContainText(/\d+ to schedule/);
 });
 
 // W3 Task 8 — unify the phone breakpoint on `md:` (768), not `sm:` (640).
@@ -1416,6 +1418,13 @@ test("Task 9: the phone run-sheet row is two deliberate lines, and its control s
   expect(LONG_NAME.length, "fixture setup: this case needs the realistic 43-char name the brief calls for").toBe(43);
   const renamed = await apiJson(request, `/api/v1/entrants/${homeEntrantId}`, "PATCH", { display_name: LONG_NAME });
   expect(renamed.status, `renaming the entrant failed: ${JSON.stringify(renamed.error)}`).toBeLessThan(300);
+
+  // Match Day E1 item 1: a row under its round's bar no longer says "Round N", so the merge this case witnesses needs a meta part that
+  // is still there. A COURT is one (`courtLabel`): without it the meta line is empty, the phone has nothing to fold into line 2, and the
+  // phone and desktop sets are legitimately equal - the "differ" gate below would then be failing on the seed, not on the row.
+  const { venueId, courts } = await seedVenueWithCourts(request, ["Centre"]);
+  const placed = await apiJson(request, `/api/v1/fixtures/${target}`, "PATCH", { venue_id: venueId, court_id: courts[0]!.id });
+  expect(placed.status, `placing the fixture on a court failed: ${JSON.stringify(placed.error)}`).toBeLessThan(300);
 
   // Scheduled TODAY with no officials assigned — `fixtureRowAction`'s branch
   // 6, the ONE ladder state that populates the result-shaped sub-line
@@ -1547,7 +1556,7 @@ test("Task 9: the phone run-sheet row is two deliberate lines, and its control s
   // `p:visible`, not a bare `p`: the desktop-only copy of this text
   // (`hidden md:block`) is still IN THE DOM at 320px (one DOM, branched —
   // never a second phone tree) and its exact "No scorer yet" is a
-  // substring of the phone paragraph's combined "Round 1 · No scorer yet",
+  // substring of the phone paragraph's combined "<court> · No scorer yet",
   // so an unscoped `hasText` match is a strict-mode violation on two nodes.
   const line2Text = row320.locator("p:visible", { hasText: UI_EN["runsheet.sub.noScorer"]! });
   await expect(line2Text, "no phone line-2 text at 320px — the merge did not render").toBeVisible();
@@ -1660,7 +1669,9 @@ test("Task 10: the stage rail folds into a bottom sheet at 320, one stage's shee
   const rail1 = rails.nth(0);
   const rail2 = rails.nth(1);
 
-  const generate1 = rail1.getByTestId("stage-generate");
+  // Match Day C3: a stage that has fixtures has no Generate (it leads with Complete, waiting); a fresh stage leads with Generate.
+  // Each rail's own first control is what folds.
+  const generate1 = rail1.getByTestId("stage-complete");
   const generate2 = rail2.getByTestId("stage-generate");
   const trigger1 = rail1.getByTestId("stage-rail-trigger");
   const trigger2 = rail2.getByTestId("stage-rail-trigger");
@@ -1669,7 +1680,7 @@ test("Task 10: the stage rail folds into a bottom sheet at 320, one stage's shee
   // `toBeAttached`, not `toBeVisible`, on the folded controls (brief) —
   // visibility is exactly what the fold denies; the assertion has to prove
   // the control still EXISTS, hidden, not that it was never built.
-  await expect(generate1, "stage 1's stage-generate never rendered at all — nothing to fold").toBeAttached();
+  await expect(generate1, "stage 1's stage-complete never rendered at all — nothing to fold").toBeAttached();
   await expect(generate2, "stage 2's stage-generate never rendered at all — nothing to fold").toBeAttached();
   await expect(generate1, "stage 1's control is visible before any tap — the fold did not happen").not.toBeVisible();
   await expect(generate2, "stage 2's control is visible before any tap — the fold did not happen").not.toBeVisible();
@@ -1740,7 +1751,7 @@ test("Task 10: the stage rail folds into a bottom sheet at 320, one stage's shee
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
   await dismissCookieBanner(page);
   const rail1desktop = page.getByTestId("stage-rail").nth(0);
-  await expect(rail1desktop.getByTestId("stage-generate"), "stage 1's control is not visible at 1280 with no tap").toBeVisible();
+  await expect(rail1desktop.getByTestId("stage-complete"), "stage 1's control is not visible at 1280 with no tap").toBeVisible();
   const set1280 = await railControlSet(rail1desktop);
   console.log("Task 10 stage-rail control set at 320px (open):", JSON.stringify(set320));
   console.log("Task 10 stage-rail control set at 1280px:      ", JSON.stringify(set1280));
@@ -1760,11 +1771,10 @@ test("Task 10: the stage rail folds into a bottom sheet at 320, one stage's shee
 
 // W3 Task 10 — the other half of the same criterion: at `md` and up there is
 // no trigger and no tap. `768` (`md`'s own value, ruling 15) and `1280` both
-// gated here. "Option B" (controller measurement, owner sign-off session)
-// retired the two-column grid entirely — `stage-sheet`/`stage-rail` are now
-// stacked full-width blocks at every size, so the geometry check here is
-// "stacked, full width, no void", the same shape this file's own "desktop
-// (Option B)" test above measures at 1280.
+// gated here. Match Day E1 item 1 moved the actions group into the card
+// header, so the geometry check here is "the rail is inside the header, above
+// the rows", the same shape this file's own "desktop (E1)" test above
+// measures at 1280.
 test("Task 10: at md and up the Stage tools trigger is absent and the rail is visible with no tap", async ({
   page,
   request,
@@ -1781,22 +1791,23 @@ test("Task 10: at md and up the Stage tools trigger is absent and the rail is vi
     await expect(sheet, `stage-sheet did not render at ${width}px`).toBeVisible();
     await expect(rail, `stage-rail did not render at ${width}px`).toBeVisible();
     const trigger = rail.getByTestId("stage-rail-trigger");
-    const generate = rail.getByTestId("stage-generate");
+    const generate = rail.getByTestId("stage-complete"); // C3: the seeded stage has fixtures, so its first control is Complete
     await expect(trigger, `Stage tools trigger is visible at ${width}px — should be md:hidden`).not.toBeVisible();
-    await expect(generate, `stage-generate is not visible at ${width}px with no tap`).toBeVisible();
+    await expect(generate, `stage-complete is not visible at ${width}px with no tap`).toBeVisible();
 
-    // Option B: stacked (rail below sheet), never side by side, at both
-    // widths — the grid this used to check for is gone entirely, not just
-    // moved to a different breakpoint.
-    const sheetBox = await sheet.boundingBox();
+    // Match Day E1 item 1: the actions group is in the card HEADER at both widths - inside the header's box, above the rows.
+    const header = sheet.locator("header").first();
+    const rows = sheet.getByTestId("stage-run-sheet");
+    const headerBox = await header.boundingBox();
     const railBox = await rail.boundingBox();
-    console.log(`Task 10 geometry at ${width}px — stage-sheet box:`, sheetBox, "| stage-rail box:", railBox);
-    expect(sheetBox, `stage-sheet has no box at ${width}px`).not.toBeNull();
+    const rowsBox = await rows.boundingBox();
+    console.log(`E1 geometry at ${width}px - header:`, headerBox, "| stage-rail:", railBox, "| rows:", rowsBox);
+    expect(headerBox, `the header has no box at ${width}px`).not.toBeNull();
     expect(railBox, `stage-rail has no box at ${width}px`).not.toBeNull();
-    expect(
-      railBox!.y,
-      `at ${width}px rail y=${railBox!.y} is not at/below sheet y=${sheetBox!.y} + height=${sheetBox!.height} (still two-column, not stacked)`,
-    ).toBeGreaterThan(sheetBox!.y + sheetBox!.height - 4);
+    expect(rowsBox, `the rows have no box at ${width}px`).not.toBeNull();
+    expect(railBox!.y, `at ${width}px the rail starts inside the header`).toBeGreaterThanOrEqual(headerBox!.y - 1);
+    expect(railBox!.y + railBox!.height, `at ${width}px the rail ends inside the header`).toBeLessThanOrEqual(headerBox!.y + headerBox!.height + 1);
+    expect(headerBox!.y + headerBox!.height, `at ${width}px the header sits above the rows`).toBeLessThanOrEqual(rowsBox!.y + 1);
   }
   await expectNoHorizontalScroll(page);
 });
@@ -1832,159 +1843,93 @@ test("Task 10: axe — the open stage-tools sheet at 320 has no serious/critical
   ).toEqual([]);
 });
 
-// W3 Task 10, controller measurement round — D2 and D4, verified fixed and
-// KEPT under "Option B" (the two-column grid these were measured inside is
-// gone, but the rail's own internal alignment/tap-floor fixes still apply,
-// now at full card width instead of a 280px column):
+// W3 Task 10, controller measurement round - D4, kept through Match Day E1 item 1 (the actions moved from a block under the rows to the
+// card header): at 768/834 (device widths in the seven-width matrix) the rail's own buttons measured 28-30px tall - under the 44px tap
+// floor - so every control the header and the card foot offer carries `min-h-11`, unconditionally. E1 adds the controls it brought: the
+// settings buttons beside the divider and the Complete ⓘ.
 //
-//   D2 — the rail's own direct children disagreed on their LEFT edge (a
-//   16px step: action buttons at l855, "Required court tags"/"Auto-schedule
-//   remaining" at l871, both at 1280). Round 1's `md:p-4` on the sheet
-//   double-padded `courtTagsSlot`/`unscheduledBadgeSlot` (which already
-//   carry their own `px-4`) while the action-button row (no padding of its
-//   own) got only the sheet's. Fix: `md:py-4` on the sheet (vertical only),
-//   `md:px-4` moved onto the action-button row — every direct child now
-//   supplies its OWN 16px inset, none of them doubled.
-//
-//   D3 — RETRACTED (controller, same measurement round): the right-edge
-//   near-misses (4-6px) turned out to be flex slack (`123 + 8 + 113 = 244`
-//   in a 248px row), not a misalignment. Not chased here, and this test
-//   asserts no right-edge equality — left-edge (D2) and height (D4) only.
-//
-//   D4 — at 768/834 (device widths in the seven-width matrix) the rail's
-//   own buttons measured 28-30px tall — under the 44px tap floor; only
-//   `stage-auto-schedule` carried `min-h-11`. Fix: `min-h-11` on every rail
-//   button, unconditionally (not gated by the sheet or any breakpoint).
-//
-//   Task 2 ("remove auto-schedule from the fixtures page") retired the CTA
-//   this test's third witness used to be. The unscheduled-count row is its
-//   own separate direct-child group of the rail (same `px-4` row the CTA
-//   used to share — stage-rail.tsx's own `unscheduledBadgeSlot` comment),
-//   still real, still always-rendering for this seed, and still carries
-//   `min-h-11` — so it stands in as the third witness for BOTH D2 and D4
-//   without weakening either check.
-test("Task 10 controller round: the rail's direct children share one left edge, and every control clears the 44px floor, at 1280 and 768", async ({
+// D2 (the rail's children sharing one LEFT edge) was a property of the old stacked block and retired with it: the header is a wrapping row
+// now, so there is no column to align. D3 stays retracted (flex slack, not misalignment).
+test("Task 10 controller round / E1: every control the card header and foot offer clears the 44px floor, at 1280 and 768", async ({
   page,
   request,
 }) => {
   const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
-  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the layout").toBeGreaterThanOrEqual(1);
+  expect(fixtureIds.length, "seed produced no fixtures - setup failed, not the layout").toBeGreaterThanOrEqual(1);
 
+  let checked = 0;
   for (const width of [1280, 768]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
     await dismissCookieBanner(page);
 
-    const rail = page.getByTestId("stage-rail").first();
-    await expect(rail, `stage-rail did not render at ${width}px`).toBeVisible();
-
-    // The three direct-child groups the controller measured: the first
-    // action button, the court-tags trigger, and the unscheduled-count link
-    // (formerly the auto-schedule CTA's own row) — all real controls a
-    // fresh seeded league stage actually renders (no synthetic state
-    // needed: unscheduled fixtures by default -> the link renders;
-    // `StageCourtTagsEditor`'s trigger always renders).
-    const generate = rail.getByTestId("stage-generate");
-    const courtTagsTrigger = rail.getByTestId("stage-court-tags").getByRole("button").first();
-    // The testid sits on the inner count `<span>`; `..` climbs to the `<a>`
-    // itself — the actual flex item whose own left edge the row's `px-4`
-    // positions, matching how `generate`/`courtTagsTrigger` above are also
-    // measured on the interactive element itself, not an outer wrapper.
-    const unscheduledLink = rail.getByTestId("stage-unscheduled-count").locator("..");
-    await expect(generate, `stage-generate not visible at ${width}px`).toBeVisible();
-    await expect(courtTagsTrigger, `court-tags trigger not visible at ${width}px`).toBeVisible();
-    await expect(unscheduledLink, `stage-unscheduled-count link not visible at ${width}px`).toBeVisible();
-
-    const [generateBox, courtTagsBox, unscheduledBox] = await Promise.all([
-      generate.boundingBox(),
-      courtTagsTrigger.boundingBox(),
-      unscheduledLink.boundingBox(),
-    ]);
-    console.log(
-      `D2/D3 geometry at ${width}px — generate:`, generateBox,
-      "| court-tags trigger:", courtTagsBox,
-      "| unscheduled-count link:", unscheduledBox,
-    );
-    expect(generateBox, `generate has no box at ${width}px`).not.toBeNull();
-    expect(courtTagsBox, `court-tags trigger has no box at ${width}px`).not.toBeNull();
-    expect(unscheduledBox, `unscheduled-count link has no box at ${width}px`).not.toBeNull();
-
-    // D2 — ONE left edge across all three, within a small rounding
-    // tolerance (sub-pixel layout), never a margin big enough to hide a
-    // real 16px step.
-    const lefts = [generateBox!.x, courtTagsBox!.x, unscheduledBox!.x];
-    const maxLeftDelta = Math.max(...lefts) - Math.min(...lefts);
-    expect(
-      maxLeftDelta,
-      `rail children do not share a left edge at ${width}px — lefts were ${JSON.stringify(lefts)}`,
-    ).toBeLessThan(2);
-
-    // D4 — every one of the three clears the 44px floor.
-    for (const [name, box] of [
-      ["stage-generate", generateBox],
-      ["court-tags trigger", courtTagsBox],
-      ["stage-unscheduled-count link", unscheduledBox],
-    ] as const) {
-      expect(box!.height, `${name} is ${box!.height}px tall at ${width}px — under the 44px tap floor`).toBeGreaterThanOrEqual(44);
+    const card = page.locator("section.card[data-stage-id]").first();
+    // The seeded stage has fixtures but no result: Complete is there and WAITING (so its ⓘ is too), Delete and the settings buttons render.
+    const controls: [string, Locator][] = [
+      ["stage-complete", card.getByTestId("stage-complete")],
+      ["stage-complete-info (the ⓘ)", card.getByTestId("stage-complete-info")],
+      ["stage-delete", card.getByTestId("stage-delete")],
+      ["stage-add-match", card.getByTestId("stage-add-match")],
+      ["stage-tool-format", card.getByTestId("stage-tool-format")],
+      ["court-tags trigger", card.getByTestId("stage-court-tags").getByRole("button").first()],
+    ];
+    for (const [name, control] of controls) {
+      await expect(control, `${name} not visible at ${width}px`).toBeVisible();
+      const box = await control.boundingBox();
+      console.log(`D4 geometry at ${width}px - ${name}:`, box);
+      expect(box, `${name} has no box at ${width}px`).not.toBeNull();
+      expect(box!.height, `${name} is ${box!.height}px tall at ${width}px - under the 44px tap floor`).toBeGreaterThanOrEqual(44);
+      checked++;
     }
   }
-
+  expect(checked, "every control at both widths was measured").toBe(12);
   await expectNoHorizontalScroll(page);
 });
 
-// "Option B" (controller measurement, owner sign-off session) — the
-// headline defect that killed "Option A": a two-column grid forced the CARD
-// to whatever height the 280px RAIL column needed (CSS equal-height
-// grid-row stretch), measured `body=262px rail=262px content=99px
-// VOID=163px` — 62% of the card empty at 1280, and no amount of body
-// content could ever have closed it. The fix removed the grid entirely
-// (stages-panel.tsx); this measures the actual claim — "no column, no
-// void" — directly: the card's own height against the height its stacked
-// content (`stage-sheet` then `stage-rail`, DOM order) actually occupies.
-test("Option B: the card's content height closes the void (no more empty column) at 1280 and 768", async ({
+// "Option B" (controller measurement, owner sign-off session) - the headline defect that killed "Option A": a two-column grid forced the
+// CARD to whatever height the 280px RAIL column needed, measured `body=262px rail=262px content=99px VOID=163px` at 1280. The fix removed the
+// grid; this measures the actual claim - "no column, no void" - directly: the card's own height against the height its stacked content
+// actually occupies. Match Day E1 item 1 put the actions in the header, so the content now ends at the card's FOOT, the court-tags line.
+test("Option B (E1): the card's content height closes the void (no more empty column) at 1280 and 768", async ({
   page,
   request,
 }) => {
   const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
-  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the void check").toBeGreaterThanOrEqual(1);
+  expect(fixtureIds.length, "seed produced no fixtures - setup failed, not the void check").toBeGreaterThanOrEqual(1);
 
+  let checked = 0;
   for (const width of [1280, 768]) {
     await page.setViewportSize({ width, height: 1200 });
     await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
     await dismissCookieBanner(page);
 
     const sheet = page.getByTestId("stage-sheet").first();
-    const rail = page.getByTestId("stage-rail").first();
-    // The stage's own `<section className="card ...">` — no testid of its
-    // own, but `stage-sheet` is a direct child of it (stages-panel.tsx), so
-    // its immediate parent IS the card.
+    const foot = page.getByTestId("stage-court-tags").first();
+    // The stage's own `<section className="card ...">` - no testid of its own, but `stage-sheet` is a direct child of it
+    // (stages-panel.tsx), so its immediate parent IS the card.
     const card = sheet.locator("xpath=..");
     await expect(sheet, `stage-sheet not visible at ${width}px`).toBeVisible();
-    await expect(rail, `stage-rail not visible at ${width}px`).toBeVisible();
+    await expect(foot, `the card foot not visible at ${width}px`).toBeVisible();
     await expect(card, `card wrapper not found at ${width}px`).toBeVisible();
 
     const cardBox = await card.boundingBox();
     const sheetBox = await sheet.boundingBox();
-    const railBox = await rail.boundingBox();
+    const footBox = await foot.boundingBox();
     expect(cardBox, `card has no box at ${width}px`).not.toBeNull();
     expect(sheetBox, `stage-sheet has no box at ${width}px`).not.toBeNull();
-    expect(railBox, `stage-rail has no box at ${width}px`).not.toBeNull();
+    expect(footBox, `the card foot has no box at ${width}px`).not.toBeNull();
 
-    // Content bottom = the rail's own bottom edge — sheet then rail, DOM
-    // order, Option B's whole point (never a column, always a stack).
-    const contentBottom = railBox!.y + railBox!.height;
+    const contentBottom = footBox!.y + footBox!.height;
     const contentHeight = contentBottom - cardBox!.y;
     const voidPx = cardBox!.height - contentHeight;
     console.log(
-      `Option B void-check at ${width}px — card height=${cardBox!.height}px, content height=${contentHeight}px, void=${voidPx}px`,
-      "| sheet:", sheetBox, "| rail:", railBox,
+      `Option B void-check at ${width}px - card height=${cardBox!.height}px, content height=${contentHeight}px, void=${voidPx}px`,
+      "| sheet:", sheetBox, "| foot:", footBox,
     );
-    expect(
-      voidPx,
-      `card is ${voidPx}px taller than its own stacked content at ${width}px — the column's void is back`,
-    ).toBeLessThan(20);
+    expect(voidPx, `card is ${voidPx}px taller than its own stacked content at ${width}px - the column's void is back`).toBeLessThan(20);
+    checked++;
   }
-
+  expect(checked).toBe(2);
   await expectNoHorizontalScroll(page);
 });
 
@@ -2026,7 +1971,7 @@ test("Task 10 controller round: the stage card body carries the fixtures-progres
   const countsText = await counts.textContent();
   console.log("Task 10 controller round — progress counts text:", countsText);
   expect(countsText, "progress counts line is empty").toBeTruthy();
-  expect(countsText, "played clause missing").toContain(UI_EN["schedule.progress.played.one"]);
+  expect(countsText, "done clause missing").toContain(UI_EN["schedule.progress.done.one"]);
   expect(countsText, "to-schedule clause missing").toMatch(/to schedule/);
 
   // NOT a "taller than 234px" assertion. 234px was the height the RETIRED
@@ -2246,30 +2191,25 @@ test("court-tags trigger opens a modal containing the editor body, and clears th
 });
 
 // ---------------------------------------------------------------------------
-// Review finding M2 — "View N fixtures" must make its own label true.
+// Review finding M2 (rewritten for Match Day C3) - a stage's fixtures live IN its card, and the Today filter must not strand them.
 //
-// The control set ONLY the stage filter. The type filter is separate state and
-// initialises to "today" on a match-day division, and run-sheet.tsx's keep()
-// ANDs the two. So a stage whose fixtures are NOT today advertised "View 3
-// fixtures", the organiser tapped it, and the sheet said "No fixtures match
-// Today": promised 3, delivered 0. Sending someone somewhere empty is worse
-// than not offering the trip.
-//
-// This is invisible to the unit suite twice over: apps/web vitest is
-// environment:"node" so the onClick never runs, and the existing
-// run-sheet-stage-filter.test.tsx drives <RunSheet> directly with an explicit
-// `filter` prop, which is precisely the coupling the defect lives in.
+// Before C3 the stage card offered a "View N fixtures" trip to a division-wide sheet below; M2 was that label promising N rows and
+// the type filter (initialised to "today" on a match-day division) delivering fewer. The trip is gone - the rows are in the card -
+// but the same coupling stays: the sheet opens on Today, a stage's other fixtures are not today, and the organiser must (a) be told
+// the filter hides them and (b) reach every one of them, in THEIR stage's card, with one tap. Invisible to the unit suite twice
+// over: apps/web vitest is environment:"node" so the filter's onClick never runs, and the run-sheet unit tests drive <RunSheet>
+// with an explicit `filter` prop, which is precisely the coupling this lives in.
 // ---------------------------------------------------------------------------
-test("Review M2: tapping 'View N fixtures' shows N fixtures, even when the sheet opened on Today", async ({
+test("Review M2 (C3): the stage card holds its rows - no 'View N fixtures' - and 'All' brings every fixture into it, even when the sheet opened on Today", async ({
   page,
   request,
 }) => {
   const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
-  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the filter").toBeGreaterThanOrEqual(2);
+  expect(fixtureIds.length, "seed produced no fixtures - setup failed, not the filter").toBeGreaterThanOrEqual(2);
 
   // The division must be STARTED, or `resolvePhase`'s rung 1
-  // (`divisionStatus === "setup"` ⇒ setting_up, division-phase.ts) short-
-  // circuits every later rung and the sheet opens on "All" — which is
+  // (`divisionStatus === "setup"` => setting_up, division-phase.ts) short-
+  // circuits every later rung and the sheet opens on "All" - which is
   // exactly how the first run of this test failed, at its own guard below
   // rather than by passing vacuously.
   const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
@@ -2278,7 +2218,7 @@ test("Review M2: tapping 'View N fixtures' shows N fixtures, even when the sheet
   // One fixture TODAY: that is what puts the division in the match_day phase,
   // which is what makes the type filter initialise to "today". Every other
   // fixture is pushed to a date that filter excludes, so an un-cleared type
-  // filter can only ever show fewer than the label promises.
+  // filter can only ever show fewer than the stage holds.
   const today = new Date();
   today.setUTCHours(12, 0, 0, 0);
   await setFixtureScheduledAtSql(fixtureIds[0]!, today.toISOString());
@@ -2289,36 +2229,40 @@ test("Review M2: tapping 'View N fixtures' shows N fixtures, even when the sheet
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
   await dismissCookieBanner(page);
 
-  // The sheet really did open filtered — without this the test proves nothing,
+  // The sheet really did open filtered - without this the test proves nothing,
   // because a sheet that opened on "All" would pass the assertions below in
   // both the fixed and the broken build.
   const todayChip = page.getByTestId("run-sheet-filter").locator('[data-filter="today"]');
-  await expect(todayChip, "no Today chip — this division is not in the match-day phase").toBeVisible();
+  await expect(todayChip, "no Today chip - this division is not in the match-day phase").toBeVisible();
   await expect(
     todayChip,
     "the run sheet did not open on Today, so this test cannot witness the defect",
   ).toHaveAttribute("aria-pressed", "true");
 
-  const viewFixtures = page.getByTestId("stage-view-fixtures").first();
-  await expect(viewFixtures, "the View N fixtures control did not render").toBeVisible();
-  const label = (await viewFixtures.textContent()) ?? "";
-  const promised = Number(/(\d+)/.exec(label)?.[1]);
-  expect(promised, `could not read a count out of "${label}"`).toBeGreaterThanOrEqual(2);
-
-  await viewFixtures.click();
-
-  // The label's promise, kept: N rows, and not the empty state.
-  const runSheet = page.getByTestId("run-sheet");
+  // The retired trip is gone, and its words with it.
+  // Final review G6: `stage-view-fixtures` is rendered by no source now, so a count-0 check on it could never fail. What replaced the
+  // trip is asserted instead: the stage's rows are IN its card, the one place they are (the count checks further down say how many).
   await expect(
-    runSheet.getByTestId("run-sheet-empty"),
-    `"View ${promised} fixtures" landed the organiser on an empty run sheet`,
-  ).toHaveCount(0);
+    page.locator("section.card[data-stage-id]").getByTestId("stage-run-sheet"),
+    "the rows are in the stage's card, where the 'View N fixtures' trip used to lead",
+  ).toBeVisible();
+  await expect(page.getByText(/View \d+ fixtures?/)).toHaveCount(0);
+
+  // Today keeps exactly the one fixture that is today, and it sits in its stage's card.
+  const inCards = page.locator('[data-testid="stage-run-sheet"] li[data-fixture-no]');
+  await expect.poll(async () => inCards.count(), { message: "Today did not keep the one fixture that is today" }).toBe(1);
+
+  // 'All': every fixture the stage holds, in the card - not on a sheet elsewhere.
+  await page.getByTestId("run-sheet-filter").locator('[data-filter="all"]').click();
   await expect
-    .poll(
-      async () => runSheet.locator("li[data-fixture-no]").count(),
-      { message: `the sheet shows fewer rows than the "${label.trim()}" control promised` },
-    )
-    .toBe(promised);
+    .poll(async () => inCards.count(), { message: "'All' did not bring every fixture into its stage's card" })
+    .toBe(fixtureIds.length);
+  // Every row on the page is one of the cards' rows: there is no second, division-wide copy.
+  await expect(page.locator('[data-testid="run-sheet"] li[data-fixture-no]')).toHaveCount(fixtureIds.length);
+  await expect(
+    page.getByTestId("run-sheet-empty"),
+    "the 'no fixtures match' state outlived the filter that caused it",
+  ).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------
@@ -2343,7 +2287,7 @@ test("Review M4: the phone Stage tools sheet closes on Escape and gives focus ba
 
   const trigger = page.getByTestId("stage-rail-trigger").first();
   const sheet = page.getByTestId("stage-rail-sheet").first();
-  const generate = page.getByTestId("stage-generate").first();
+  const generate = page.getByTestId("stage-complete").first(); // C3: the seeded stage has fixtures, so its control is Complete
   await expect(trigger, "no Stage tools trigger at 320").toBeVisible();
 
   await trigger.click();
@@ -2404,7 +2348,7 @@ test("Review M4: the phone Stage tools sheet closes on Escape and gives focus ba
 // leaves one day block, no unscheduled pile, no settled-untimed pile, and
 // therefore a day block that is the last thing in the card.
 // ---------------------------------------------------------------------------
-test("Review m1: the NOW rule does not square off the run sheet's bottom corners", async ({ page, request }) => {
+test("Review m1 (C3): the NOW rule that ends a stage's sheet stays square while the stage's court-tags foot sits under it, and the card keeps its own corners", async ({ page, request }) => {
   // Same zone trick the day-grouping case uses: real "now" is local midday
   // there, so "an hour ago" is unambiguously the SAME local day and this
   // case behaves identically at every hour of the real clock.
@@ -2422,51 +2366,52 @@ test("Review m1: the NOW rule does not square off the run sheet's bottom corners
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
   await dismissCookieBanner(page);
 
-  const sheet = page.getByTestId("run-sheet");
-  const now = sheet.getByTestId("run-sheet-now");
+  // Match Day C3: the sheet is one stage's rows INSIDE that stage's card. E1 item 1 moved the stage rail up into the card's header, so
+  // what follows the sheet now is the card's foot, the stage's court-tags line (an editor's control, a viewer's read-only value). A NOW
+  // rule that ends the sheet is therefore mid-card, and (as with a NOW rule that ends a day block with later days to come) it must
+  // stay SQUARE: a rounded lime bar in the middle of a card is the defect. Nothing in a stage card ends on the sheet (`endsCard` is
+  // false for the panel's embedded sheets, review m3); the prop's `true` half is the division-wide sheet's, pinned by the unit suite.
+  const stageSheet = page.getByTestId("run-sheet").getByTestId("stage-run-sheet");
+  const now = stageSheet.getByTestId("run-sheet-now");
   await expect(now, "no NOW rule rendered — nothing was measured").toHaveCount(1);
 
-  // The state this test exists for, asserted rather than assumed: the rule
-  // really is the last element in the sheet. Without this the radius check
-  // below passes vacuously on a mid-sheet rule that was never supposed to
-  // be rounded.
-  const isLast = await now.evaluate((el) => {
-    const card = el.closest('[data-testid="run-sheet"]');
-    const all = card ? Array.from(card.querySelectorAll("li, section")) : [];
-    return all.length > 0 && all[all.length - 1] === el;
+  // The state this test exists for, asserted rather than assumed: the rule really is the last element in the stage's sheet, and the
+  // card's court-tags foot really does follow it inside the same card. Without both, the radius check below passes on a state that was never set up.
+  const placed = await now.evaluate((el) => {
+    const sheet = el.closest('[data-testid="stage-run-sheet"]');
+    const all = sheet ? Array.from(sheet.querySelectorAll("li, section")) : [];
+    const card = el.closest("section[data-stage-id]");
+    const foot = card?.querySelector('[data-testid="stage-court-tags"]') ?? null;
+    return {
+      isLast: all.length > 0 && all[all.length - 1] === el,
+      footFollows: foot !== null && (el.compareDocumentPosition(foot) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    };
   });
-  expect(isLast, "the NOW rule is not the last element in the sheet — this case did not set up").toBe(true);
+  expect(placed.isLast, "the NOW rule is not the last element in the sheet — this case did not set up").toBe(true);
+  expect(placed.footFollows, "the card's court-tags foot does not follow the sheet inside its card — this case did not set up").toBe(true);
 
   const radii = await now.evaluate((el) => {
-    const cs = getComputedStyle(el);
-    const card = el.closest('[data-testid="run-sheet"]') as HTMLElement;
+    const card = el.closest("section[data-stage-id]") as HTMLElement;
     return {
-      ruleLeft: cs.borderBottomLeftRadius,
-      ruleRight: cs.borderBottomRightRadius,
+      ruleLeft: getComputedStyle(el).borderBottomLeftRadius,
+      ruleRight: getComputedStyle(el).borderBottomRightRadius,
       cardLeft: getComputedStyle(card).borderBottomLeftRadius,
-      cardRight: getComputedStyle(card).borderBottomRightRadius,
     };
   });
   console.log("m1 NOW-rule corner radii:", JSON.stringify(radii));
-  // Held to the CARD's own radius, read live — not to a literal, so changing
-  // `.card` moves this expectation with it instead of leaving it pinning
-  // yesterday's 16px.
-  expect(parseFloat(radii.cardLeft), "the run-sheet card has no rounded corners to protect").toBeGreaterThan(0);
-  expect(radii.ruleLeft, "the NOW rule squares off the card's bottom-left corner").toBe(radii.cardLeft);
-  expect(radii.ruleRight, "the NOW rule squares off the card's bottom-right corner").toBe(radii.cardRight);
+  // The card has corners to protect (read live, never a literal) - and the rule, mid-card, takes none of them.
+  expect(parseFloat(radii.cardLeft), "the stage card has no rounded corners - the differential below proves nothing").toBeGreaterThan(0);
+  expect(parseFloat(radii.ruleLeft), "a mid-card NOW rule must not be rounded at the bottom-left").toBe(0);
+  expect(parseFloat(radii.ruleRight), "a mid-card NOW rule must not be rounded at the bottom-right").toBe(0);
 
-  // The DIFFERENTIAL half, and the reason this is a CSS descendant rule
-  // rather than a `last:` utility on `NowRule` itself: a row in the middle of
-  // the same list must stay SQUARE. Without this the assertions above would
-  // also pass on a blanket "round every row", which would put a rounded step
-  // into every day block on the sheet — and it is what proves the radius
-  // above comes from this rule rather than from something ambient.
-  const midRadius = await sheet
-    .locator("li[data-fixture-no]")
-    .first()
-    .evaluate((el) => getComputedStyle(el).borderBottomLeftRadius);
+  // The DIFFERENTIAL half (review m6; restored from the base test): a row in the middle of the same list stays SQUARE too. Without
+  // it the zero radii above would also pass on "nothing is ever rounded" (the `.rounded-b-2xl` rule deleted outright, or never
+  // applied), which says nothing about the scoped rule this case exists for. (Rounding is scoped to the last block of a sheet that
+  // ENDS its card - the unit suite pins that half, `run-sheet-spacing.test.tsx`.)
+  const midRadius = await stageSheet.locator("li[data-fixture-no]").first().evaluate((el) => getComputedStyle(el).borderBottomLeftRadius);
   console.log("m1 mid-list row radius:", midRadius);
-  expect(parseFloat(midRadius), "a mid-list row must stay square — the rounding is scoped to the last block").toBe(0);
+  expect(parseFloat(midRadius), "a mid-list row must stay square - the rounding is scoped to the last block of a sheet that ends the card").toBe(0);
+  expect(await stageSheet.locator("li[data-fixture-no]").count(), "anti-vacuity: the sheet has fixture rows beside the rule").toBeGreaterThanOrEqual(2);
 });
 
 // Competition desk W4, review finding m2 — the bracket round header's sticky
@@ -2486,7 +2431,7 @@ test("Review m1: the NOW rule does not square off the run sheet's bottom corners
 // `environment: "node"` — the unit suite pins the static half (the sheet
 // publishes `--desk-day-h`, the header derives its offset from it) and cannot
 // run the `ResizeObserver` that supplies the real number.
-test("a wrapped day header pushes the bracket round header down with it, at 320 (finding m2)", async ({
+test("a round bar (table stage) and a bracket round bar (knockout), each in its own stage card, each pin right under the nav, at 320 (finding m2, C3, E1)", async ({
   page,
   request,
 }) => {
@@ -2559,49 +2504,47 @@ test("a wrapped day header pushes the bracket round header down with it, at 320 
 
   const sheet = page.getByTestId("run-sheet");
   await expect(sheet, "run-sheet did not render").toBeVisible();
-  const dayHeader = sheet.locator("[data-run-sheet-day]").first();
+  // Match Day E1 item 1: a table stage's rows sit under a ROUND bar (the day heading is gone from a stage card), and a knockout's under its
+  // named-round bar - the same sticky `header` in both. Each is in its own stage's sheet; each pins right under the nav; neither sheet has a
+  // day heading, so neither publishes an offset for one.
+  const roundBar = sheet.locator('[data-run-sheet-round] header.sticky').first();
   const bracketHeader = sheet.locator('[data-run-sheet-block="bracket"] header.sticky').first();
-  await expect(dayHeader, "no day block — the mixed state this test needs never rendered").toBeVisible();
-  await expect(bracketHeader, "no bracket block — the mixed state this test needs never rendered").toBeVisible();
+  await expect(roundBar, "no round bar - the mixed state this test needs never rendered").toBeVisible();
+  await expect(bracketHeader, "no bracket block - the mixed state this test needs never rendered").toBeVisible();
+  await expect(sheet.locator("[data-run-sheet-day]"), "no day heading survives in a stage card").toHaveCount(0);
 
   const measured = await page.evaluate(() => {
-    const day = document.querySelector<HTMLElement>("[data-run-sheet-day]")!;
-    const bracket = document.querySelector<HTMLElement>(
-      '[data-run-sheet-block="bracket"] header',
-    )!;
+    const round = document.querySelector<HTMLElement>("[data-run-sheet-round] header")!;
+    const bracket = document.querySelector<HTMLElement>('[data-run-sheet-block="bracket"] header')!;
+    const sheetOf = (el: HTMLElement) => el.closest<HTMLElement>('[data-testid="stage-run-sheet"]')!;
+    const published = (el: HTMLElement) =>
+      getComputedStyle(sheetOf(el).querySelector<HTMLElement>(".space-y-6")!).getPropertyValue("--desk-day-h");
     return {
-      dayText: day.textContent ?? "",
-      dayHeight: day.getBoundingClientRect().height,
-      dayTop: getComputedStyle(day).top,
+      roundText: round.textContent ?? "",
+      roundTop: getComputedStyle(round).top,
       bracketTop: getComputedStyle(bracket).top,
-      published: getComputedStyle(
-        document.querySelector<HTMLElement>('[data-testid="run-sheet"] .space-y-6')!,
-      ).getPropertyValue("--desk-day-h"),
+      roundStage: sheetOf(round).getAttribute("data-stage-id"),
+      bracketStage: sheetOf(bracket).getAttribute("data-stage-id"),
+      roundPublished: published(round),
+      bracketPublished: published(bracket),
+      roundSticky: getComputedStyle(round).position,
+      bracketSticky: getComputedStyle(bracket).position,
     };
   });
-  // Print what was seen beside the gate (`_RULES.md`) — a green gate on the
-  // wrong state is worse than a red one.
   console.log("m2 sticky offsets at 320:", JSON.stringify(measured));
 
-  // The premise: the day header really did wrap past the 30px the old
-  // literal assumed. Without this the assertion below passes on a header
-  // that never needed a bigger offset in the first place.
-  expect(
-    measured.dayHeight,
-    `day header did not wrap at 320 — this test proves nothing (text: ${measured.dayText})`,
-  ).toBeGreaterThan(30);
-
-  const dayTopPx = Number.parseFloat(measured.dayTop);
-  const bracketTopPx = Number.parseFloat(measured.bracketTop);
-  expect(dayTopPx, "the day header still pins at 56px").toBeCloseTo(56, 0);
-  // The claim: the bracket header clears nav AND the whole day header.
-  expect(
-    bracketTopPx,
-    "bracket header would overlap the day header it stacks under",
-  ).toBeGreaterThanOrEqual(dayTopPx + measured.dayHeight - 1);
-  // …and the differential against the shipped constant, so this cannot pass
-  // against `top-[86px]` coming back.
-  expect(bracketTopPx, "offset is back to the assumed-height literal").toBeGreaterThan(86);
+  // The state: the two bars really are in two different stage sheets, the League's and the Cup's, and both are sticky.
+  expect(measured.roundStage, "the round bar is in the League's sheet").toBe(league.data!.id);
+  expect(measured.bracketStage, "the bracket bar is in the Cup's sheet").toBe(cup.data!.id);
+  expect(measured.roundSticky).toBe("sticky");
+  expect(measured.bracketSticky).toBe("sticky");
+  expect(Number.parseFloat(measured.roundTop), "the League's round bar pins right under the nav").toBeCloseTo(56, 0);
+  expect(Number.parseFloat(measured.bracketTop), "the Cup's bracket bar pins right under the nav").toBeCloseTo(56, 0);
+  // No day heading above either: both sheets publish a zero offset.
+  expect(Number.parseFloat(measured.roundPublished), "the League's sheet publishes no day-heading height").toBe(0);
+  expect(Number.parseFloat(measured.bracketPublished), "the Cup's sheet publishes no day-heading height").toBe(0);
+  // The bar's words wrap, they never push the page sideways.
+  await expectNoHorizontalScroll(page);
 });
 
 // ---------------------------------------------------------------------------
@@ -2715,8 +2658,9 @@ test("at 1280 the tree and the draw list under it name the same feeder for the s
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
 
   const sheet = page.getByTestId("run-sheet");
-  const tree = page.getByTestId("bracket-panel");
   await expect(sheet, "the draw list never rendered").toBeVisible({ timeout: 20_000 });
+  // Match Day E1 item 3: the tree opens inside the Cup's card from its Bracket button (closed by default).
+  const tree = await openBracket(page, koId);
   await expect(tree, "the bracket tree never rendered").toBeVisible({ timeout: 20_000 });
 
   const R1_1 = feederEn(1, 1);

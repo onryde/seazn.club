@@ -301,7 +301,7 @@ describe("swiss pending latecomers (the rail line)", () => {
       lines: [],
     },
     {
-      name: "another stage's stamp does not count here (V485 stage scope)",
+      name: "another stage's stamp does not count here (V487 stage scope)",
       active: [ANA, BEN, CAI],
       firstRounds: { [CAI]: stamp(2, "stage-2") },
       counts: { joinNext: 0, afterLast: 0 },

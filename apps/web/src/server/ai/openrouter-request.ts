@@ -44,7 +44,7 @@ function toWireMessage(turn: AiTurn): unknown {
  *      minimum are not supported` (request_id `req_011CdFjaCFxkqpqrJEH8BysU`)
  *      — from `restMin`/`restByGroup`'s `.nonnegative()` on
  *      `SchedulingConstraints` (packages/engine/src/scheduling/constraints.ts),
- *      reached via `AiConstraintDelta = SchedulingConstraints.partial()`.
+ *      reached via `AiConstraintDelta = patchOf(SchedulingConstraints)`.
  *    - `output_config.format.schema: For 'object' type, property
  *      'propertyNames' is not supported` (request_id
  *      `req_011CdFjiYZKZ5oumqKtT66w6`) — from `restByGroup`'s

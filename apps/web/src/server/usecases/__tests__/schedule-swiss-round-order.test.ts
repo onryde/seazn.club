@@ -399,7 +399,7 @@ describe.runIf(HAS_DB)("W3 T3b the board's own gates hold a Swiss stage to round
   }, 180_000);
 
   it("the board report flags a Swiss board ahead of an earlier round, and never a bye that holds a slot", async () => {
-    // A bye takes no slot since T3 (SWISS_BYE_NOT_PLACEABLE, V483), but a legacy row — or a history Undo of a
+    // A bye takes no slot since T3 (SWISS_BYE_NOT_PLACEABLE, V485), but a legacy row — or a history Undo of a
     // pre-deploy step — can still carry one. Round order is about boards: a bye is not play, so it is no round's
     // board, and it must not surface as "round 2 starts before round 1".
     const [players, rounds] = [5, 2];

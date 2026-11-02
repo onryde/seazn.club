@@ -27,10 +27,17 @@ import {
   setStageStatusSql,
   overflowingIn,
   matchRoomPathBySql,
+  enclosingStageCard,
+  openStagePanel,
+  openBracket,
+  stageCardOf,
 } from "./helpers";
 import { longName, roundGameSql, seedOnlineRound, uiEn } from "./match-room-kit";
 import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
 import { builtinModules } from "@seazn/engine/sports";
+import { stageDefaultsFor } from "@seazn/engine/sport";
+import { expectStageToolsSheet } from "./helpers/stage-tools-sheet";
+import { moduleOf, summaryFormatText } from "./helpers/stage-summary";
 import { RULEBOOK_SPLITS } from "../src/components/v2/stage-rules/__tests__/_points-split-rulebook";
 import {
   HIT_TARGET_FLOOR_PX,
@@ -42,7 +49,7 @@ import {
 } from "./scorepad-a11y-kit";
 import { V3_SKIN_CASES, type V3SkinRosterSlot } from "./v3-skin-catalog";
 import { WIDTH_MATRIX_CLOCK_SPORTS } from "./v3-width-matrix-coverage";
-import { SPORT_RULES } from "../src/lib/match-rules";
+import { openPanels } from "./helpers/rules-strip";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import { FLOOR_MS, ROUTE_CHECK_MS } from "./spectator-w2-kit";
 import { withDb } from "./rs007-money-kit";
@@ -640,6 +647,9 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     // by name, no matter how many other specs touch it.
     { path: `/o/${orgSlug}/c/${compSlug}/registration?tab=settings` },
     { path: `/o/${orgSlug}/c/${compSlug}/registration?tab=registrants` },
+    // Match Day (task A3) — the organiser's court list + focus. Page-level width at all seven projects; the court states
+    // themselves (playing, called, free + candidates, the call sheet) are driven at 320/768/1280 by e2e/match-day.spec.ts.
+    { path: `/o/${orgSlug}/c/${compSlug}/match-day` },
     // The /schedule console was absent from this inventory entirely, so the
     // three tabs that carry the portfolio's new panels (P1 capacity card on
     // Settings, P2 health panel on Health, both on the Board's chrome) shipped
@@ -991,7 +1001,9 @@ test("competition desk: the division row is a CARD below md and a grid at md, no
 });
 
 // F2 + F5 (round J). The desk's TOOL ROW below `sm`, and the Now line on the
-// phone card.
+// phone card — retired by Match Day B1 (spec 2026-10-31 §9): the ledger names no
+// live match at any width now, and a match day gives the row a new lead, Open
+// Match Day (the second half of this test).
 //
 // Before this the five tools were `hidden sm:inline` labels over 46x34 icon
 // tiles: unlabelled, under the 44px floor, on the width most likely to be in
@@ -1023,8 +1035,8 @@ test("competition desk: the tool row is a phone composition below md, not the de
   await addEntrantsViaApi(request, div.data!.id, ["Alpha", "Bravo", "Charlie", "Delta"]);
   const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "league", name: "League" });
   expect((await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status).toBeLessThan(400);
-  // One fixture LIVE, so the ledger row has a "Now: …" line to carry (F5).
-  await setFixtureStatusSql(fixtureIds[0]!, "in_play");
+  // Quiet first (no match has a time, none is in play): not a match day, so the schedule board is the phone primary. The
+  // match-day composition is checked at the end, once a fixture is live.
 
   await page.goto(await competitionPath(request, comp.data!.id), { waitUntil: "load" });
   await dismissCookieBanner(page);
@@ -1058,13 +1070,10 @@ test("competition desk: the tool row is a phone composition below md, not the de
       .map((i) => i.text);
   };
 
-  // F5: the Now line, at EVERY width. The phone card used to drop it — the
-  // one width where "a match is on right now" matters most was the only one
-  // that never said so.
-  const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Tools Cup" }).first();
-  const nowLine = row.locator("p:visible", { hasText: /^Now:/ });
-  await expect(nowLine, "the ledger row must name the live fixture at this width").toHaveCount(1);
-  await expect(nowLine).toContainText(/Alpha|Bravo|Charlie|Delta/);
+  // Not a match day: no filled Open Match Day BUTTON. (C5: the door is still offered, as the first item of the Open menu on a
+  // desktop and of the More fold on a phone - asserted below - so the day's button and the off-day item are never both.)
+  await expect(page.getByTestId("desk-ledger-row").filter({ hasText: "Tools Cup" }).first()).toBeVisible();
+  await expect(page.getByTestId("desk-tool-match-day")).toHaveCount(0);
 
   if (isPhone) {
     // 1. The primary action is labelled, full width, and clears the floor.
@@ -1119,6 +1128,11 @@ test("competition desk: the tool row is a phone composition below md, not the de
     expect(phoneSet.join(" | "), "a phone needs a labelled More control").toMatch(/More/);
     expect(phoneSet.join(" | "), "the inline Settings tile must not survive into the phone row").not.toMatch(/Settings/);
     expect(phoneSet.join(" | "), "the inline Slideshow tile must not survive into the phone row").not.toMatch(/Slideshow/);
+    // C5: the "Open" menu (Slideshow / View Public Page / QR behind one button) is the DESKTOP row's. A phone already folds the
+    // same destinations into More, and a second drop-down listing the same links beside it would be the duplication that fold
+    // exists to avoid.
+    expect(phoneSet, "the Open menu is not on a phone").not.toContain("Open");
+    await expect(page.getByTestId("desk-open-menu-toggle"), "present in the DOM, hidden below md").toBeHidden();
 
     // 4. The rest are FOLDED — attached, so a test can tell "behind the fold"
     //    from "never rendered", but not visible until the disclosure opens.
@@ -1158,14 +1172,83 @@ test("competition desk: the tool row is a phone composition below md, not the de
     const openedSet = await rowControlSet();
     expect(openedSet.join(" | "), "the fold restores the tools the row dropped").toMatch(/Settings/);
     expect(openedSet.join(" | ")).toMatch(/Slideshow/);
+    // C5 (owner addition): off a match day the fold LEADS with the Match Day door — same tab, no ↗ — since the filled Open Match
+    // Day button only exists on the day and the Open menu (which carries this item on a desktop) is not on a phone.
+    const doorRow = folded.first();
+    await expect(doorRow, "the first folded row is Match Day").toHaveText(/^\s*Match Day\s*$/);
+    await expect(doorRow).toHaveAttribute("href", /\/match-day$/);
+    expect(await doorRow.getAttribute("target"), "same tab").toBeNull();
   } else {
-    // 768 and up is UNCHANGED: the labelled row, and no disclosure at all.
+    // 768 and up: the labelled row, and no More disclosure at all. C5 (owner request 2026-11-01): Slideshow, View Public Page and
+    // QR are no longer three buttons in it — they are behind ONE "Open" button, where Slideshow sat.
     await expect(more, "the phone disclosure must not appear at tablet width").toBeHidden();
     await expect(schedule).toBeVisible();
-    const tabletSet = (await rowControlSet()).join(" | ");
-    expect(tabletSet, "the labelled row is unchanged at 768 and up").toMatch(/Settings/);
-    expect(tabletSet).toMatch(/Slideshow/);
-    expect(tabletSet, "no disclosure at this width").not.toMatch(/More/);
+    const openToggle = page.getByTestId("desk-open-menu-toggle");
+    const closedSet = (await rowControlSet()).join(" | ");
+    expect(closedSet, "the labelled row keeps Settings").toMatch(/Settings/);
+    expect(closedSet, "a single Open button").toMatch(/(^| \| )Open( \||$)/);
+    expect(closedSet, "closed: the three tools are behind Open, not buttons in the row").not.toMatch(/Slideshow|View Public Page|QR/);
+    expect(closedSet, "no disclosure at this width").not.toMatch(/More/);
+    await expect(openToggle).toBeVisible();
+    await expect(openToggle).toHaveAttribute("aria-haspopup", "menu");
+    await expect(openToggle).toHaveAttribute("aria-expanded", "false");
+    // Match Day E1 item 5 (owner, 2026-11-01): Open sits immediately before Settings - after the schedule board and Registration, on
+    // the same line, and left of Settings. (It used to lead the row, where Slideshow sat.) The unit test pins the DOM order; this
+    // reads the paint, so a CSS `order` that split the two would be seen here.
+    const openBox = await openToggle.boundingBox();
+    const scheduleBox = await schedule.boundingBox();
+    const registrationBox = await page.getByTestId("desk-tool-row").getByRole("link", { name: /Registration/ }).first().boundingBox();
+    const settingsBox = await page.getByTestId("desk-tool-row").getByRole("link", { name: "Settings", exact: true }).first().boundingBox();
+    expect(openBox && scheduleBox && registrationBox && settingsBox, "all four controls have a box").toBeTruthy();
+    expect(Math.abs(openBox!.y - scheduleBox!.y), "Open and the schedule board share a line").toBeLessThan(20);
+    expect(Math.abs(openBox!.y - settingsBox!.y), "Open and Settings share a line").toBeLessThan(20);
+    expect(openBox!.x, "Open follows the schedule board").toBeGreaterThan(scheduleBox!.x);
+    expect(openBox!.x, "Open follows Registration").toBeGreaterThan(registrationBox!.x);
+    expect(openBox!.x, "Open sits immediately before Settings").toBeLessThan(settingsBox!.x);
+    expect(registrationBox!.x, "Registration is between the schedule board and Open").toBeGreaterThan(scheduleBox!.x);
+
+    // Open it. Quiet day, public competition: Match Day first (same tab, no ↗), then the three tools (new tabs).
+    const openMenu = page.getByTestId("desk-open-menu");
+    const items = openMenu.getByRole("menuitem");
+    await expect(items, "folded away until it is opened").toHaveCount(0);
+    await openToggle.click();
+    await expect(openToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(items).toHaveCount(4);
+    await expect(items.nth(0)).toHaveText(/^\s*Match Day\s*$/);
+    await expect(items.nth(0)).toHaveAttribute("href", /\/match-day$/);
+    expect(await items.nth(0).getAttribute("target"), "Match Day opens in the same tab").toBeNull();
+    await expect(items.nth(1)).toHaveText("Slideshow ↗");
+    await expect(items.nth(2)).toHaveText("View Public Page ↗");
+    await expect(items.nth(3)).toHaveText("QR ↗");
+    for (let i = 1; i < 4; i++) await expect(items.nth(i)).toHaveAttribute("target", "_blank");
+    for (let i = 0; i < 4; i++) {
+      const item = items.nth(i);
+      await expect(item).toBeVisible();
+      const box = await item.boundingBox();
+      expect(box, `menu item ${i} has a box`).not.toBeNull();
+      expect(box!.height, `menu item ${i} clears the 44px floor`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+      expect(box!.x + box!.width, `menu item ${i} stays on screen`).toBeLessThanOrEqual(width);
+      // Not clipped, not covered: the point at the middle of the row belongs to the row.
+      const reachable = await item.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+        return !!hit && el.contains(hit);
+      });
+      expect(reachable, `menu item ${i} is on top of everything behind it`).toBe(true);
+    }
+    expect((await rowControlSet()).join(" | "), "opened, the tools are back in the row's control set").toMatch(/Slideshow/);
+    await expectNoHorizontalScroll(page);
+    // Escape closes it and hands focus back to the button.
+    await page.keyboard.press("Escape");
+    await expect(openToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(items).toHaveCount(0);
+    await expect(openToggle, "focus returns to the Open button").toBeFocused();
+    // So does a press outside it.
+    await openToggle.click();
+    await expect(items).toHaveCount(4);
+    await page.getByRole("heading", { level: 1 }).first().click();
+    await expect(openToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(items).toHaveCount(0);
   }
   await expectNoHorizontalScroll(page);
 
@@ -1192,6 +1275,151 @@ test("competition desk: the tool row is a phone composition below md, not the de
   expect(bandSet, "at 700 the row keeps a labelled More control").toMatch(/More/);
   expect(bandSet, "at 700 the inline Settings tile must not be back — that is the desktop row").not.toMatch(/Settings/);
   expect(bandSet, "at 700 the inline Slideshow tile must not be back").not.toMatch(/Slideshow/);
+  expect(bandSet, "at 700 the desktop Open button must not be back either").not.toMatch(/(^| \| )Open( \||$)/);
+  await expect(page.getByTestId("desk-open-menu-toggle")).toBeHidden();
+  await expectNoHorizontalScroll(page);
+
+  // Match Day B1 (spec §9). A match in play makes it a match day: Open Match Day joins the row and LEADS it — on a phone the
+  // one filled control, full width, at the floor, and still filled while pressed (the schedule board's own hover lesson,
+  // 1b above) — while the schedule board steps back to a plain row: one primary, never two. And the ledger names no live
+  // match at any width (F5's "Now:" line is gone; live state is Match Day's).
+  await setFixtureStatusSql(fixtureIds[0]!, "in_play");
+  const vp = projectViewport();
+  if (vp) await page.setViewportSize(vp);
+  await page.reload({ waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const openMatchDay = page.getByTestId("desk-tool-match-day");
+  await expect(openMatchDay, "a match day offers Open Match Day at every width").toBeVisible();
+  await expect(openMatchDay).toContainText("Open Match Day");
+  const liveRow = page.getByTestId("desk-ledger-row").filter({ hasText: "Tools Cup" }).first();
+  await expect(liveRow).toBeVisible();
+  await expect(liveRow, "the ledger no longer names the live match").not.toContainText("Now:");
+  if (isPhone) {
+    const daySet = await rowControlSet();
+    expect(daySet[0], `on a match day the phone row leads with Open Match Day; got ${daySet.join(" | ")}`).toMatch(/Open Match Day/);
+    expect(daySet.join(" | "), "the schedule board is still in the row").toMatch(/Schedule/);
+    const dayBox = await openMatchDay.boundingBox();
+    expect(dayBox, "Open Match Day must have a measurable box").not.toBeNull();
+    expect(dayBox!.height, "a phone action must clear the 44px touch floor").toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+    expect(dayBox!.width, "the phone primary is full-width, not an inline tile").toBeGreaterThan(width * 0.7);
+    const bg = (l: typeof schedule) => l.evaluate((el) => getComputedStyle(el).backgroundColor);
+    // One primary: the schedule board now wears the ghost fill the More toggle does, and not the primary's white text.
+    await expect(schedule).not.toHaveCSS("color", "rgb(255, 255, 255)");
+    expect(await bg(schedule), "the schedule board is a plain row on a match day").toBe(await bg(more));
+    await expect(openMatchDay).toHaveCSS("color", "rgb(255, 255, 255)");
+    await openMatchDay.hover();
+    expect(await bg(openMatchDay), "a pressed Open Match Day must not fall back to the ghost fill").not.toBe(await bg(more));
+    await expect(openMatchDay).toHaveCSS("color", "rgb(255, 255, 255)");
+  } else {
+    const daySet = (await rowControlSet()).join(" | ");
+    expect(daySet, "Open Match Day joins the labelled row at 768 and up").toMatch(/Open Match Day/);
+    expect(daySet, "and the row is otherwise unchanged").toMatch(/Settings/);
+    // C5: on the day the door is the filled button, so the Open menu loses its Match Day item (one door, never both).
+    const dayToggle = page.getByTestId("desk-open-menu-toggle");
+    await dayToggle.click();
+    await expect(dayToggle).toHaveAttribute("aria-expanded", "true");
+    const dayItems = page.getByTestId("desk-open-menu").getByRole("menuitem");
+    await expect(dayItems).toHaveCount(3);
+    await expect(dayItems.filter({ hasText: /^\s*Match Day\s*$/ })).toHaveCount(0);
+    await expect(dayItems.first()).toHaveText("Slideshow ↗");
+    await page.keyboard.press("Escape");
+    await expect(dayToggle).toHaveAttribute("aria-expanded", "false");
+  }
+  await expectNoHorizontalScroll(page);
+});
+
+// Match Day C5b (owner approved 2026-11-01): the DIVISION page's header carried the same three tools as the competition page -
+// Slideshow, View Public Page, the QR poster - as icon-only tiles under `sm`. They are ONE "Open" menu now (the competition
+// page's component). Unlike the competition page the division header has no phone fold, so the menu is on screen at EVERY width
+// and each destination is in the DOM exactly once; below `md` the panel opens as a full-width sheet under the header row, because
+// the trigger's x depends on how the title and chips wrap. A 43-character division name is what makes it wrap at 320.
+test("division header: Slideshow, View Public Page and QR are one Open menu at every width, once each, on screen, 44px (C5b)", async ({
+  page,
+  request,
+}) => {
+  const width = projectViewport()?.width ?? 0;
+  const isPhone = width < 768;
+  const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+    name: `Division Open ${TAG}`, visibility: "public", ends_on: "2030-12-31",
+  });
+  expect(comp.status).toBe(201);
+  const div = await apiJson<{ id: string; slug: string }>(
+    request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST",
+    { name: "Under-12 Girls Regional Championship Pool A", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false } },
+  );
+  expect(div.status).toBe(201);
+  await page.goto(await divisionPath(request, div.data!.id), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const m = /^\/o\/([^/]+)\/c\/([^/]+)\/d\/([^/?]+)/.exec(new URL(page.url()).pathname);
+  expect(m, `on the division page, got ${page.url()}`).not.toBeNull();
+  const [, orgSlug, , divSlug] = m!;
+
+  const toggle = page.getByTestId("desk-open-menu-toggle");
+  const items = page.getByTestId("desk-open-menu").getByRole("menuitem");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Under-12 Girls");
+  await expect(toggle, "Open is on screen at every width - this header has no phone fold").toBeVisible();
+  await expect(toggle).toHaveText("Open");
+  await expect(toggle).toHaveAttribute("aria-haspopup", "menu");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  if (isPhone) {
+    const tb = await toggle.boundingBox();
+    expect(tb, "the trigger has a box").not.toBeNull();
+    expect(tb!.height, "a phone trigger clears the 44px floor").toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+  }
+  await expect(items, "folded away until it is opened").toHaveCount(0);
+
+  // Each destination is in the DOM exactly ONCE at this width (a hidden copy beside a visible one is still a copy).
+  const slideshowHref = `/slideshow/divisions/${div.data!.id}`;
+  const publicHref = `/shared/${orgSlug}/${comp.data!.slug}?tab=matches&division=${divSlug}`;
+  const qrHref = `/shared/${orgSlug}/${comp.data!.slug}/poster.pdf?division=${divSlug}`;
+  for (const href of [slideshowHref, publicHref, qrHref]) {
+    await expect(page.locator(`a[href="${href}"]`), `${href} appears once`).toHaveCount(1);
+  }
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(items).toHaveCount(3);
+  await expect(items.nth(0)).toHaveText("Slideshow ↗");
+  await expect(items.nth(1)).toHaveText("View Public Page ↗");
+  await expect(items.nth(2)).toHaveText("QR ↗");
+  await expect(items.nth(0)).toHaveAttribute("href", slideshowHref);
+  await expect(items.nth(1)).toHaveAttribute("href", publicHref);
+  await expect(items.nth(2)).toHaveAttribute("href", qrHref);
+  for (let i = 0; i < 3; i++) await expect(items.nth(i)).toHaveAttribute("target", "_blank");
+  for (let i = 0; i < 3; i++) {
+    const item = items.nth(i);
+    await expect(item).toBeVisible();
+    const box = await item.boundingBox();
+    expect(box, `item ${i} has a box`).not.toBeNull();
+    expect(box!.height, `item ${i} clears the 44px floor`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+    expect(box!.x, `item ${i} starts on screen`).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width, `item ${i} ends on screen`).toBeLessThanOrEqual(width || 1280);
+    const reachable = await item.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return !!hit && el.contains(hit);
+    });
+    expect(reachable, `item ${i} is on top of everything behind it`).toBe(true);
+  }
+  if (isPhone) {
+    // The sheet: full width under the header row, wherever the trigger wrapped to.
+    const panel = page.getByTestId("desk-open-menu").getByRole("menu");
+    const pb = await panel.boundingBox();
+    const tb = await toggle.boundingBox();
+    expect(pb, "the panel has a box").not.toBeNull();
+    expect(pb!.width, "a phone panel is a full-width sheet").toBeGreaterThan(width * 0.8);
+    expect(pb!.y, "it opens below the trigger, not over it").toBeGreaterThanOrEqual(tb!.y + tb!.height - 1);
+  }
+  await expectNoHorizontalScroll(page);
+  // Escape closes it and returns focus; so does a press outside.
+  await page.keyboard.press("Escape");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(items).toHaveCount(0);
+  await expect(toggle, "focus returns to Open").toBeFocused();
+  await toggle.click();
+  await expect(items).toHaveCount(3);
+  await page.getByRole("heading", { level: 1 }).click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expectNoHorizontalScroll(page);
 });
 
@@ -3302,7 +3530,9 @@ test("draw list: the sibling-fed final reads 'Winner of R1·1 vs Winner of R1·2
   // other, which reads as broken rather than merely uninformative. Asserting
   // each surface on its own is what let them drift, so this asserts they
   // agree about the SAME match.
-  const tree = page.getByTestId("bracket-panel");
+  // Match Day E1 item 3: the tree is no longer "directly above this list" - it opens INSIDE the knockout stage's card from its Bracket
+  // button (header, or the phone sheet's row), closed on every load. The pair is the same one: both surfaces on one tab.
+  const tree = await openBracket(page);
   await expect(tree).toBeVisible({ timeout: 20_000 });
   await expect(tree.getByText(EN_R1_1, { exact: false }).first()).toBeVisible();
   await expect(tree.getByText(EN_R1_2, { exact: false }).first()).toBeVisible();
@@ -3318,6 +3548,7 @@ test("draw list: the sibling-fed final reads 'Winner of R1·1 vs Winner of R1·2
   const origin = new URL(page.url()).origin;
   await page.context().addCookies([{ name: "seazn_locale", value: "es", url: origin }]);
   await page.reload({ waitUntil: "load" });
+  await openBracket(page); // a reload closes the card's tree again
   await expect(sheet.getByText(ES_R1_1, { exact: false }).first()).toBeVisible({ timeout: 20_000 });
   await expect(sheet).not.toContainText(EN_R1_1);
   // The tree localizes with it — both surfaces read the dictionary, neither
@@ -3548,7 +3779,7 @@ test("P6 task B: panel resolves the tie, confirms, bracket shows real entrants, 
   await expectNoHorizontalScroll(page);
 });
 
-test("P6 task B fix round 3 (Critical 1): regenerating a stage that already has fixtures is a plain, unguarded click — no destructive-edit warning", async ({
+test("P6 task B fix round 3 (Critical 1), Match Day C3: a stage that already has fixtures offers no Generate - it is started; Complete waits for the matches and says why", async ({
   page,
 }) => {
   test.skip(p6bDivisionId === "", "P6 task B setup did not run/complete");
@@ -3579,34 +3810,24 @@ test("P6 task B fix round 3 (Critical 1): regenerating a stage that already has 
   await page.goto(await divisionPath(page.request, regenDivisionId, "?tab=fixtures"), { waitUntil: "load" });
 
   const groupCard = page.locator("section.card", { hasText: "Groups" }).first();
-  // Competition desk W3: below `md` the stage's edit controls fold into a
-  // bottom sheet behind `stage-rail-trigger`; at >= 768 the rail is inline and
-  // the trigger itself is `md:hidden`. OPEN the fold rather than weakening the
-  // assertion below — the control still exists and must still be reachable.
-  // Gate the open on the TOGGLE being visible, never on a width literal:
-  // clicking a hidden control throws.
+  // Competition desk W3: below `md` the stage's edit controls fold into a bottom sheet behind `stage-rail-trigger`; at >= 768 the
+  // rail is inline and the trigger itself is `md:hidden`. OPEN the fold rather than weakening the assertion below - gate the open
+  // on the TOGGLE being visible, never on a width literal: clicking a hidden control throws.
   const railTrigger = groupCard.getByTestId("stage-rail-trigger");
   if (await railTrigger.isVisible()) await railTrigger.click();
-  const generateBtn = groupCard.getByRole("button", { name: "Generate fixtures" });
-  await expect(generateBtn).toBeVisible();
 
-  // Regeneration is additive-only — generateStageFixtures never deletes, it
-  // only inserts fixtures missing from the stage's existing set (stages.ts)
-  // — so a re-click on a stage that ALREADY has fixtures (stageFixtures.length
-  // > 0) proceeds immediately: no "are you sure" gate, because there is
-  // nothing at stake to name. The old dialog claimed data loss that could
-  // never happen; it is gone, not replaced with different copy.
-  await generateBtn.click();
+  // Positive pair first: the rail IS rendering its actions (Complete is there, and disabled while the two matches are open),
+  // so the absence of Generate below is about the stage, not an unrendered rail.
+  const complete = groupCard.getByTestId("stage-complete");
+  await expect(complete, "the rail renders its actions").toBeVisible();
+  await expect(complete, "two open matches: Complete waits").toBeDisabled();
+  await expect(groupCard.getByTestId("stage-complete-hint"), "and says why, with the count").toHaveText(/unlocks when all 2 matches are played/);
+  // Owner ruling (Match Day, late entrant): once a stage has started, Generate is gone from the card. Adding to a started stage is
+  // Add match (ad-hoc kinds) or the Settings rebuild - never a second Generate, so there is no "destructive edit" to warn about.
+  await expect(groupCard.getByRole("button", { name: "Generate fixtures" }), "a started stage is not re-generated from the card").toHaveCount(0);
+  await expect(groupCard.getByTestId("stage-generate")).toHaveCount(0);
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
-  await expect(page.getByText(/error/i)).toHaveCount(0);
   await expectNoHorizontalScroll(page);
-
-  // Idempotent: rules didn't change since the API-driven generate above, so
-  // the real outcome is "nothing new" — proven via the notice text the
-  // component itself renders on a landed response (schedule.notice.nothingNew),
-  // which is only reachable once the request actually fired (no gate ate the
-  // click).
-  await expect(page.getByText("Nothing new to generate", { exact: false })).toBeVisible({ timeout: 10_000 });
 });
 
 // Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI — option
@@ -3779,6 +4000,14 @@ test("density-pair sweep: four more .select/.input controls hold the 44px floor 
   // and `.first()` on an empty locator fails as a tap-target defect rather
   // than as the selector fault it would be.
   await assertFloor(page.getByTestId("entrant-row-seed").first(), "entrant seed input");
+  await expectNoHorizontalScroll(page);
+  // Match Day C4: the entrant kinds block sits at the top of this tab (organiser). Folded, its header row holds the floor; opened,
+  // so do the three kind chips and the Save, and the page still has no horizontal scroll.
+  const kindsToggle = page.getByRole("button", { name: /^Entrant kinds/ });
+  await assertFloor(kindsToggle, "entrant kinds header");
+  await kindsToggle.click();
+  for (const kind of ["individual", "pair", "team"]) await assertFloor(page.getByTestId("entrant-kinds").locator(`[data-kind="${kind}"]`), `entrant kind chip ${kind}`);
+  await assertFloor(page.getByRole("button", { name: "Save entrant settings" }), "entrant kinds Save");
   await expectNoHorizontalScroll(page);
 
   // Registrations tab (the org-console "registrations panel" component) was
@@ -6191,20 +6420,54 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   await dismissCookieBanner(page);
   const row = page.getByTestId(`stage-format-row-${fb.stageId}`);
   await expect(row).toBeVisible({ timeout: 20_000 });
-  await assertTapFloor(row.getByTestId("stage-format-edit"), "Edit rules");
+  // Match Day C3: closed, the card is a one-line summary under a header of three buttons; below `md` an editor's header buttons are
+  // hidden and the same three are the TOP rows of the card's one "Stage tools" sheet (review round 1). Gate the open on the TRIGGER
+  // being visible, never on a width literal (AGENTS.md rule 22); the hidden twin is waited on with `toBeAttached`.
+  const card = enclosingStageCard(row);
+  const railTrigger = card.getByTestId("stage-rail-trigger");
+  const sheetFormat = card.getByTestId("stage-sheet-tool-format");
+  const folded = await railTrigger.isVisible();
+  await expect(card.getByTestId("stage-settings-trigger"), "the retired second phone trigger is gone").toHaveCount(0);
+  // A knockout stage has no table to rank: the one button it carries is Match rules (Points and Tie-breaks are table stages'
+  // buttons) - present once in the header and once as a sheet row (one DOM); the other two are absent, not hidden.
+  await expect(card.getByTestId("stage-tool-format")).toBeAttached();
+  await expect(sheetFormat).toBeAttached();
+  for (const id of ["points", "tiebreaks"]) {
+    await expect(card.getByTestId(`stage-tool-${id}`), `a bracket has no ${id} button`).toHaveCount(0);
+    await expect(card.getByTestId(`stage-sheet-tool-${id}`), `a bracket has no ${id} row`).toHaveCount(0);
+  }
+  if (folded) {
+    await assertTapFloor(railTrigger, "Stage tools");
+    await expect(card.getByTestId("stage-tool-format"), "below md the header button is hidden").toBeHidden();
+    await railTrigger.click();
+    await expect(railTrigger).toHaveAttribute("aria-expanded", "true");
+    await assertTapFloor(sheetFormat, "Match rules row in the Stage tools sheet");
+    // The open sheet is a modal dialog over the trigger: Escape puts it away (a second click would land on the sheet).
+    await page.keyboard.press("Escape");
+    await expect(railTrigger).toHaveAttribute("aria-expanded", "false");
+  } else {
+    await assertTapFloor(card.getByTestId("stage-tool-format"), "stage-tool-format");
+    await expect(sheetFormat, "the sheet's row is the phone's twin: not shown here").toBeHidden();
+  }
   await expectNoHorizontalScroll(page);
-  // Fix round 1 (I-1): the collapsed row says the stage's format as chips, they wrap inside the row, and none is clipped.
-  const chips = row.getByTestId("stage-format-chips");
-  await expect(chips, `the chips are on the collapsed row at ${projectWidth}`).toBeVisible();
-  expect(await chips.locator("li").count(), "the chips are a list of clauses").toBeGreaterThan(1);
+  // The collapsed row says the stage's format in ONE line (Match Day C3: the chips became the summary), it wraps inside the row, and
+  // nothing is clipped. Its words are the declared copy (review m6): the public line's clauses for the cfg this stage plays under -
+  // the division's, with the engine's own knockout preset laid over it.
+  const summary = row.getByTestId("stage-format-summary");
+  await expect(summary, `the summary is on the collapsed row at ${projectWidth}`).toBeVisible();
+  const football = moduleOf("football");
+  const divisionRead = await apiJson<{ config: Record<string, unknown> }>(request, `/api/v1/divisions/${fb.divisionId}`);
+  expect(divisionRead.status, "GET division").toBe(200);
+  const playedCfg = football.configSchema.parse({ ...divisionRead.data!.config, ...stageDefaultsFor(football, "knockout", null) });
+  await expect(summary, `the summary says the knockout's format at ${projectWidth}`).toHaveText(summaryFormatText("football", "knockout", playedCfg));
   const collapsedClip = await overflowingIn(page, `[data-testid="stage-format-row-${fb.stageId}"]`, "*", "the stage rules row is missing");
   expect(collapsedClip.clipped, `nothing in the collapsed row is clipped at ${projectWidth}`).toEqual([]);
   if (shots) await row.screenshot({ path: `${shots}/collapsed-${projectWidth}.png` });
-  await row.getByTestId("stage-format-edit").click();
+  await openStagePanel(card, "format");
   const editor = row.getByTestId("stage-format-editor");
   await expect(editor).toBeVisible();
-  // M-3: while editing, Cancel is the one way out and Edit is gone.
-  await expect(row.getByTestId("stage-format-edit")).toHaveCount(0);
+  // M-3: while editing, Cancel is the one way out and the Match rules button reads as pressed.
+  await expect(card.getByTestId("stage-tool-format")).toHaveAttribute("aria-expanded", "true");
   await assertTapFloor(row.getByTestId("stage-format-cancel"), "football Cancel");
   const interactive = editor.locator("select, input, button");
   const n = await interactive.count();
@@ -6239,7 +6502,7 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   await page.goto(await divisionPath(page.request, chess.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   const crow = page.getByTestId(`stage-format-row-${chess.stageId}`);
   await expect(crow).toBeVisible({ timeout: 20_000 });
-  await crow.getByTestId("stage-format-edit").click();
+  await openStagePanel(enclosingStageCard(crow), "format");
   const list = crow.getByTestId("stage-rule-sequence-tiebreakRungs");
   await expect(list).toBeVisible();
   const items = list.locator("li");
@@ -6266,7 +6529,8 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   expect(chessHere, `the chess editor's control set at ${projectWidth} vs 1280`).toEqual(await editorControls(crow));
   await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
 
-  // --- the DIVISION door: the same ordered list in the division's Settings (review I-2), phone-first too ---------------------
+  // --- the DIVISION door: the same ordered list on the division's rules strip (review I-2; Match Day C2 moved it out of
+  // Settings into the Fixtures tab's Division rules strip), phone-first too ----------------------------------------------
   const dcomp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `W2c T17 division-seq ${TAG}-${testInfo.project.name}`,
@@ -6280,9 +6544,11 @@ test("W2c stage format row at every width: sections, the deciders notice and the
     config: { tiebreakRungs: ["rapid", "blitz"] },
   });
   expect(ddiv.status, `division: ${JSON.stringify(ddiv.error)}`).toBeLessThan(300);
-  await page.goto(await divisionPath(page.request, ddiv.data!.id, "?tab=settings"), { waitUntil: "load" });
-  await page.getByRole("button", { name: /Format/ }).click();
-  const dlist = page.getByTestId("stage-rule-sequence-tiebreakRungs");
+  await page.goto(await divisionPath(page.request, ddiv.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+  const dstrip = page.getByTestId("division-rules-strip");
+  await expect(dstrip).toBeVisible({ timeout: 20_000 });
+  await openPanels(dstrip, "format");
+  const dlist = dstrip.getByTestId("stage-rule-sequence-tiebreakRungs");
   await expect(dlist).toBeVisible({ timeout: 20_000 });
   const ditems = dlist.locator("li");
   expect(await ditems.count(), "the division's stored list, two rungs").toBe(2);
@@ -6293,6 +6559,128 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   await assertTapFloor(page.getByTestId("stage-rule-sequence-tiebreakRungs-reset"), "division use default order");
   await expectNoHorizontalScroll(page);
   if (shots) await dlist.screenshot({ path: `${shots}/division-sequence-${projectWidth}.png` });
+});
+
+// Match Day C3 (review round 1, phone ruling): ONE phone trigger per stage card. The Match rules / Points / Tie-breaks buttons are the
+// header's from `md` up and the TOP rows of the "Stage tools" sheet below it - the same three, one DOM. The branch only a phone reaches
+// (header hidden, sheet rows, Escape, choose-a-row-closes-the-sheet, a second look) runs here at every width; the shared driver is
+// `helpers/stage-tools-sheet.ts` (also run at 1280 from `stage-card-c3.spec.ts`).
+test("Stage tools sheet at every width: the three settings buttons are its top rows below md and the header's from md up, one trigger, 44px floor, no scroll", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(150_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `C3 tools sheet ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Singles",
+    sport_key: "badminton",
+    variant_key: "bwf",
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  await addEntrantsViaApi(request, div.data!.id, ["Ana", "Ben", "Cy"].map((n) => `${n} ${TAG}`));
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+  expect(stage.status, `stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+  const gen = await apiJson(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
+  expect(gen.status, `generate: ${JSON.stringify(gen.error)}`).toBeLessThan(300);
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const card = stageCardOf(page, stage.data!.id);
+  await expect(card, "the stage card is on the Fixtures tab").toBeVisible({ timeout: 20_000 });
+  const branch = await expectStageToolsSheet(page, card, stage.data!.id);
+  // The width decides the branch, and the branch is the one the product's own breakpoint says: md (768) is the first width with the header.
+  expect(branch, `${page.viewportSize()!.width}px takes the ${branch} branch`).toBe(page.viewportSize()!.width < 768 ? "sheet" : "header");
+});
+
+// Match Day E1 item 4 (owner 2026-11-01: the Variant label and select "look messy"): every field in the Division rules strip's panels is
+// label-above and content-sized - full width below md, 20rem from md - and one line under the Variant select says what the variant
+// plays. The unit test pins the classes and the words; this one reads the PAINT at every width, which is where the original defect
+// lived (the label flipped from beside the select at 1280 to above it at 320).
+test("Division rules strip field layout at every width: labels above their controls, selects full width below md and 20rem from md, the variant's meaning under its select, no scroll", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(120_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `E1 rules layout ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Singles",
+    sport_key: "badminton",
+    variant_key: "bwf",
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+  expect(stage.status, `stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const strip = page.getByTestId("division-rules-strip");
+  await expect(strip).toBeVisible({ timeout: 20_000 });
+  await openPanels(strip, "format", "points", "tiebreaks");
+  // Below md the Tie-breaks list sits behind its own phone disclosure (a `max-md:hidden` body under a toggle that is `md:hidden`): the
+  // Add-a-step select is not on screen until it is opened, so open it - and prove it is the select that appeared, not a different one.
+  const foldToggle = strip.getByTestId("division-rules-panel-tiebreaks").locator('[data-role="phone-disclosure-toggle"]');
+  if (await foldToggle.isVisible()) {
+    if ((await foldToggle.getAttribute("aria-expanded")) !== "true") await foldToggle.click();
+    await expect(foldToggle).toHaveAttribute("aria-expanded", "true");
+  }
+  await expect(strip.getByTestId("stage-tiebreaks-add"), "the Add-a-step select is on screen at every width").toBeVisible();
+
+  const width = page.viewportSize()!.width;
+  const phone = width < 768; // md: the first width with the cap
+  const REM = 16;
+  const variant = strip.getByTestId("division-settings-variant");
+  await expect(variant).toBeVisible();
+  // Label above: the `.label` span's box ends where the select's begins - never to its left on the same line.
+  const label = variant.locator("xpath=preceding-sibling::span[1]");
+  await expect(label).toHaveText("Variant");
+  const [lb, sb] = [(await label.boundingBox())!, (await variant.boundingBox())!];
+  expect(lb.y + lb.height, "the Variant label ends above its select").toBeLessThanOrEqual(sb.y + 1);
+  expect(Math.abs(lb.x - sb.x), "and starts on the select's left edge").toBeLessThan(2);
+  // Width: the whole row below md; capped at 20rem from md.
+  const row = (await variant.locator("xpath=ancestor::label[1]").boundingBox())!;
+  if (phone) expect(Math.abs(sb.width - row.width), `${width}px: the select fills its row`).toBeLessThan(2);
+  else expect(sb.width, `${width}px: the select is capped at 20rem`).toBeLessThanOrEqual(20 * REM + 1);
+  expect(sb.height, "44px tap floor").toBeGreaterThanOrEqual(44);
+  // What the variant plays, in words: the engine's own preset numbers (read here, never typed).
+  const bwf = (builtinModules.find((m) => m.key === "badminton")!.variants as Record<string, { setTo: number; cap: number }>).bwf!;
+  const meaning = strip.getByTestId("division-variant-meaning");
+  await expect(meaning).toBeVisible();
+  await expect(meaning).toContainText(String(bwf.setTo));
+  await expect(meaning).toContainText(String(bwf.cap));
+  const mb = (await meaning.boundingBox())!;
+  expect(mb.y, "the line sits under the select").toBeGreaterThanOrEqual(sb.y + sb.height - 1);
+
+  // The grid's own selects and the Add-a-step menu follow the same width rule.
+  const selects = strip.locator("select");
+  const count = await selects.count();
+  expect(count, "anti-vacuity: the three panels draw selects").toBeGreaterThanOrEqual(3);
+  let measured = 0;
+  for (let i = 0; i < count; i++) {
+    const sel = selects.nth(i);
+    if (!(await sel.isVisible())) continue;
+    const box = (await sel.boundingBox())!;
+    if (!phone) expect(box.width, `${width}px: select ${i} is capped at 20rem`).toBeLessThanOrEqual(20 * REM + 1);
+    else {
+      // The row's CONTENT width: the Add-a-step row is `px-2`, so its box is 16px wider than what a select can fill.
+      const room = await sel.evaluate((el) => {
+        const p = el.parentElement!;
+        const cs = getComputedStyle(p);
+        return p.getBoundingClientRect().width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - parseFloat(cs.borderLeftWidth) - parseFloat(cs.borderRightWidth);
+      });
+      expect(Math.abs(box.width - room), `${width}px: select ${i} fills its row`).toBeLessThan(2);
+    }
+    measured++;
+  }
+  expect(measured, "every visible select measured").toBeGreaterThanOrEqual(3);
+  await expectNoHorizontalScroll(page);
 });
 
 test("W2c stage points section at every width: the sentence, More, the walkover row, the bonus menu and Save hold the 44px floor, nothing clips or scrolls, the visible control set matches 1280, and the refusal card fits", async ({
@@ -6340,6 +6728,8 @@ test("W2c stage points section at every width: the sentence, More, the walkover 
   const fb = await seed("football", footballVariant, "football", { points: { win: 4, draw: 2, loss: 1 } });
   await page.goto(await divisionPath(page.request, fb.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
+  // Match Day C3: the Points section opens from the card's header (a phone: from the Stage settings menu).
+  await openStagePanel(stageCardOf(page, fb.stageId), "points");
   const section = page.getByTestId(`stage-points-${fb.stageId}`);
   await expect(section).toBeVisible({ timeout: 20_000 });
   await expectNoHorizontalScroll(page);
@@ -6381,6 +6771,7 @@ test("W2c stage points section at every width: the sentence, More, the walkover 
   expect(splitVariant, "premise: the rulebooks split an ice-hockey variant (iihf)").toBeDefined();
   const ih = await seed("icehockey", splitVariant, "icehockey");
   await page.goto(await divisionPath(page.request, ih.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, ih.stageId), "points");
   const card = page.getByTestId(`stage-points-${ih.stageId}`);
   await expect(card).toHaveAttribute("data-stage-points-state", "editor", { timeout: 20_000 });
   await expect(card.getByTestId("stage-points-row-win-ot"), "the overtime row is on the card").toBeVisible();
@@ -6402,6 +6793,7 @@ test("W2c stage points section at every width: the sentence, More, the walkover 
     await sql`update stages set config = config || ${sql.json({ points: { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } } })} where id = ${ih.stageId}`;
   });
   await page.reload({ waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, ih.stageId), "points");
   const legacy = page.getByTestId(`stage-points-${ih.stageId}`);
   await expect(legacy).toHaveAttribute("data-stage-points-basis", "own", { timeout: 20_000 });
   await expect(legacy.getByTestId("stage-points-refusal"), "the refusal is on the card").toBeVisible();
@@ -6464,6 +6856,7 @@ test("W2d stage Tie-breaks section at every width: the fold opens, the arrows, r
 
   await page.goto(await divisionPath(page.request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
+  await openStagePanel(stageCardOf(page, stageId), "tiebreaks");
   const section = page.getByTestId(`stage-tiebreaks-${stageId}`);
   await expect(section).toBeAttached({ timeout: 20_000 });
   await expect(section).toHaveAttribute("data-state", "editor");
@@ -6505,9 +6898,12 @@ test("W2d stage Tie-breaks section at every width: the fold opens, the arrows, r
   const first = await apiJson(request, `/api/v1/fixtures/${gen.data!.fixtures[0]!.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
   expect(first.status, `start match: ${JSON.stringify(first.error)}`).toBe(201);
   await page.reload({ waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, stageId), "tiebreaks");
   const locked = page.getByTestId(`stage-tiebreaks-${stageId}`);
   await expect(locked).toHaveAttribute("data-state", "locked", { timeout: 20_000 });
-  await expect(locked.getByTestId("stage-tiebreaks-locked")).toBeVisible();
+  // Review I3: the card's one lock line is the summary's (visible at this width); the opened section repeats nothing.
+  await expect(stageCardOf(page, stageId).getByTestId("stage-locked")).toBeVisible();
+  await expect(locked.getByTestId("stage-tiebreaks-locked")).toHaveCount(0);
   await openFold(locked);
   await expect(locked.getByTestId("stage-tiebreaks-list")).toBeVisible();
   expect(await visibleControls(locked), "locked: no control").toEqual([]);
@@ -6655,8 +7051,128 @@ test("W2c match rules block at every width: the fold opens, the controls hold th
   await fits("locked");
 });
 
-// W2c Task 20 (S4): the division settings' lock lines at every width. A started stage makes the match-rule fields read-only and
-// puts one line under each ("Locked: Pool A has started and plays this format"). The lines are plain text in the existing
+// Match Day E1 fix round 1 (m7): the 44px tap floor holds for EVERY control of EVERY rules panel - the stage card's Match rules / Points /
+// Tie-breaks panels and the Division rules strip's three - not just the few controls each earlier test happened to name. The panels are
+// opened through the product's own buttons; every visible select, input, button and link inside each is hit-tested (`assertTapFloor`:
+// height, and `elementFromPoint` at both edges). Counted: a panel that yields no control, or a run that measures too few, is a FAILURE,
+// not a pass (TEST-STRATEGY anti-vacuity).
+test("E1 fix 1 m7: every control in every rules panel (the stage card's three, the Division rules strip's three) holds the 44px floor, counted", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `E1 rules floor ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Eleven",
+    // Football, not a set sport: a set sport keeps no win/draw/loss points, so the Division rules strip's Points panel is a read-only
+    // summary with nothing to tap. Football's is the editor (three number boxes + Save) - the panel this test exists to measure.
+    sport_key: "football",
+    variant_key: "11-a-side",
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+  expect(stage.status, `stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+  const stageId = stage.data!.id;
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+
+  const CONTROLS = 'select, input:not([type="hidden"]), textarea, button, a[href], [role="switch"]';
+  /** Open a phone fold inside `root` when its toggle is the visible kind (gated on visibility, never a width literal). */
+  const openFolds = async (root: Locator): Promise<void> => {
+    const toggles = root.locator('[data-role="phone-disclosure-toggle"]');
+    for (let i = 0; i < (await toggles.count()); i++) {
+      const t = toggles.nth(i);
+      if ((await t.isVisible()) && (await t.getAttribute("aria-expanded")) !== "true") await t.click();
+    }
+  };
+  /** Every visible control in `root` holds the floor; returns how many were measured. */
+  const measure = async (root: Locator, label: string): Promise<number> => {
+    await expect(root, `${label} is on screen`).toBeVisible({ timeout: 20_000 });
+    await openFolds(root);
+    const all = root.locator(CONTROLS);
+    const n = await all.count();
+    let measured = 0;
+    for (let i = 0; i < n; i++) {
+      const c = all.nth(i);
+      if (!(await c.isVisible())) continue;
+      // A checkbox / radio is drawn small on purpose and tapped through its <label> (the pattern the points editor uses: a 20px box inside
+      // a min-h-11 label): the label is the target, so it is what is measured. A bare one with no label is measured as itself, and fails.
+      const bare = await c.evaluate((el) => el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio"));
+      const wrapper = c.locator("xpath=ancestor::label[1]");
+      await assertTapFloor(bare && (await wrapper.count()) === 1 ? wrapper : c, `${label} control ${i}`);
+      measured++;
+    }
+    return measured;
+  };
+
+  const strip = page.getByTestId("division-rules-strip");
+  await expect(strip).toBeVisible({ timeout: 20_000 });
+  await openPanels(strip, "format", "points", "tiebreaks");
+  const card = stageCardOf(page, stageId);
+  for (const panel of ["format", "points", "tiebreaks"] as const) await openStagePanel(card, panel);
+
+  const counts: Record<string, number> = {};
+  for (const panel of ["format", "points", "tiebreaks"] as const) {
+    counts[`strip ${panel}`] = await measure(strip.getByTestId(`division-rules-panel-${panel}`), `strip ${panel} panel`);
+    counts[`card ${panel}`] = await measure(page.locator(`#stage-panel-${stageId}-${panel}`), `stage card ${panel} panel`);
+  }
+  for (const [panel, n] of Object.entries(counts)) expect(n, `${panel}: the panel yielded controls to measure`).toBeGreaterThan(0);
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  expect(total, `controls measured across the six panels (${JSON.stringify(counts)})`).toBeGreaterThan(20);
+  await expectNoHorizontalScroll(page);
+});
+
+// Match Day E1 fix round 2 (m3): the stage card's "N to schedule" clause is a link to the division schedule (fix round 1, m3), so on a phone
+// it is a control and owes the 44px tap floor - measured on the real card, hit-tested at both edges (`assertTapFloor`). Counted: a card
+// that offers no such link is a FAILURE (`toHaveCount(1)`), so the floor is never measured on nothing. From `md` up the link is an inline clause in a line of text and the
+// floor does not apply (the rule is phone-only), so there the test pins that the link is on the card and goes to the schedule.
+test("E1 fix 2 m3: the stage card's 'N to schedule' link holds the 44px floor below md, and goes to the division schedule at every width", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(120_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `E1 to-schedule ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "To schedule",
+    sport_key: "badminton",
+    variant_key: "bwf",
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const added = await addEntrantsViaApi(request, div.data!.id, ["Ms Alpha", "Ms Bravo", "Ms Charlie"].map((n) => `${n} ${TAG}-${testInfo.project.name}`));
+  expect(added.status, "entrants accepted (an individual-kind roster on a singles division)").toBeLessThan(300);
+  expect(added.ids).toHaveLength(3);
+  const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "league", name: "League" });
+  expect(fixtureIds.length, "a league of three plays three matches, none of them dated").toBe(3);
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+
+  const links = page.getByTestId("stage-progress-to-schedule");
+  await expect(links, "the card carries ONE 'N to schedule' link").toHaveCount(1, { timeout: 20_000 });
+  await expect(links.first()).toContainText("3");
+  const href = await links.first().getAttribute("href");
+  expect(href, "the link goes to the division's schedule").toMatch(/\/schedule(\?|$)/);
+  // Anti-vacuity is `toHaveCount(1)` above: a card with no such link fails there, so the floor is never measured on nothing.
+  if (page.viewportSize()!.width < 768) {
+    await assertTapFloor(links.first(), "the stage card's 'N to schedule' link");
+  } else {
+    await expect(links.first()).toBeVisible();
+  }
+  await expectNoHorizontalScroll(page);
+});
+
+// W2c Task 20 (S4): the division's rule lock lines at every width (Match Day C2: on the Division rules strip's Match rules
+// panel, on the Fixtures tab - they left Settings with the match rules). A started stage locks the match-rule fields, and the
+// section says so ONCE ("Locked: Pool A has started and plays this format"; C2 fix round 1, I1 - never a line per field). The lines are plain text in the existing
 // field grid - no second phone tree - so the evidence is that every line is on screen, readable (its text is not clipped by its
 // own box), inside the viewport, that nothing scrolls the page sideways, and that the SET of lines (membership, order, repeats)
 // is the one 1280 shows. Owner 2026-10-20: the settings tab is being redesigned, so no design bar here beyond "readable, no
@@ -6688,15 +7204,19 @@ test("W2c division lock lines at every width: each line is on screen and readabl
   const started = await apiJson(request, `/api/v1/fixtures/${fixtureIds[0]!}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
   expect(started.status, JSON.stringify(started.error)).toBe(201);
 
-  await page.goto(await divisionPath(request, div.data!.id, "?tab=settings"), { waitUntil: "load" });
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
-  await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: 20_000 });
-  await page.getByRole("button", { name: /^Format/ }).click();
+  const strip = page.getByTestId("division-rules-strip");
+  await expect(strip).toBeVisible({ timeout: 20_000 });
+  await openPanels(strip, "format");
 
   const lines = page.locator('[data-testid^="division-locked-"]');
-  // One per badminton field plus the variant (the fields are the form's own table, not a number typed here).
-  const expectedLines = SPORT_RULES.badminton!.length + 1;
-  await expect(lines, "every locked field says so").toHaveCount(expectedLines, { timeout: 20_000 });
+  // ONE for the section, however many of its fields the stage locks (every badminton field and the variant, here); the section
+  // then reads, with no Save over a form the server would refuse whole.
+  const expectedLines = 1;
+  await expect(lines, "the section says its lock once").toHaveCount(expectedLines, { timeout: 20_000 });
+  await expect(page.getByTestId("division-locked-format")).toBeVisible();
+  await expect(page.getByTestId("division-rules-format-save"), "no Save").toHaveCount(0);
   const ids = (): Promise<string[]> => lines.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")!));
   const here = await ids();
 

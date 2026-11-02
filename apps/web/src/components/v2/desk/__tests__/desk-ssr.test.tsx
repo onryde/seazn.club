@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/ui.json";
-import { plural } from "@/lib/i18n";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
+import { plural, t } from "@/lib/i18n";
 import { BansToReviewPill, PhasePill, RED_PILL_KEY } from "@/components/v2/desk/phase-pill";
 import { NeedsYou, needsYouItems } from "@/components/v2/desk/needs-you";
-import { DivisionLedger } from "@/components/v2/desk/division-ledger";
+import { DivisionLedger, type LedgerRow } from "@/components/v2/desk/division-ledger";
 import { resolvePhase, resolveAttention, ATTENTION_SEVERITY, type Attention, type PhaseInput } from "@/lib/division-phase";
 import { statusLine } from "@/lib/division-status-line";
 import { competitionPhase, type CompetitionDesk, type DeskDivision } from "@/server/usecases/competition-desk";
@@ -47,7 +50,7 @@ const inPlayFixtures = (n: number, divisionId = "d1"): DeskInPlayFixture[] =>
 const desk = (d: TestDivision, inPlay = 0, now = "2026-09-05T09:00:00Z"): CompetitionDesk => {
   const { division_id, ...rest } = d;
   return {
-    in_play: inPlay, in_play_fixtures: inPlayFixtures(inPlay, division_id), up_next: null,
+    in_play: inPlay, in_play_fixtures: inPlayFixtures(inPlay, division_id), up_next: null, fixtures_today: 0,
     divisions: new Map([[division_id, rest]]), now,
   };
 };
@@ -58,6 +61,7 @@ const deskOf = (divisions: TestDivision[], inPlay = 0, now = "2026-09-05T09:00:0
   in_play: inPlay,
   in_play_fixtures: inPlayFixtures(inPlay, divisions[0]?.division_id ?? "d1"),
   up_next: null,
+  fixtures_today: 0,
   divisions: new Map(divisions.map(({ division_id, ...rest }) => [division_id, rest])), now,
 });
 const names = [{ id: "d1", name: "Premier Division", slug: "premier-division" }];
@@ -432,10 +436,10 @@ describe("DivisionLedger", () => {
     });
     const row = { id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: blocked, statusLine: "0 of 4 played" };
     const editor = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[row]} />,
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[row]} />,
     );
     const viewer = renderToStaticMarkup(
-      <DivisionLedger canEdit={false} dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[row]} />,
+      <DivisionLedger page={1} showFinished canEdit={false} dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[row]} />,
     );
     // The editor IS offered the action — otherwise this test passes on a
     // ledger that never renders one, and proves nothing.
@@ -450,7 +454,7 @@ describe("DivisionLedger", () => {
   it("row carries the sport glyph, the status line, the phase and no monogram letter", () => {
     const d = div({ phase: "finished", played: 15, total: 15 });
     const html = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: d, statusLine: "15 of 15 played · complete" }]} />,
     );
     expect(html).toContain('data-testid="desk-ledger-row"');
@@ -499,7 +503,7 @@ describe("DivisionLedger", () => {
     });
     const d = div({ phase, played: 0, total: 6, unscheduled: 6, next: null, attention });
     const html = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: d, statusLine: line }]} />,
     );
     expect(phase).toBe("setting_up");
@@ -509,7 +513,7 @@ describe("DivisionLedger", () => {
   });
   it("renders a row without pill or next line when the desk summary is unavailable", () => {
     const html = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "X", slug: "x", sportKey: "football", logoUrl: null, desk: null, statusLine: "10 of 15 played" }]} />,
     );
     expect(html).toContain('data-testid="desk-ledger-row"');
@@ -519,7 +523,7 @@ describe("DivisionLedger", () => {
   });
   it("uses the uploaded logo instead of the glyph when present", () => {
     const html = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "X", slug: "x", sportKey: "football", logoUrl: "https://cdn/x.png", desk: div(), statusLine: "s" }]} />,
     );
     expect(html).toContain('src="https://cdn/x.png"');
@@ -531,7 +535,7 @@ describe("DivisionLedger", () => {
       attention: [{ kind: "needs_draw", door: "compute" as const, stageName: "Finals" }],
     });
     const html = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{
           id: "d1", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: d,
           statusLine: "28 of 28 played · Finals not drawn",
@@ -553,7 +557,7 @@ describe("DivisionLedger", () => {
   it("mobile action button: absent without a red attention, 'Compute proposal' with needs_draw", () => {
     const noAttention = div({ phase: "scheduled", attention: [] });
     const htmlNone = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: noAttention, statusLine: "s" }]} />,
     );
     expect(htmlNone).not.toContain("Compute proposal");
@@ -561,7 +565,7 @@ describe("DivisionLedger", () => {
 
     const needsDraw = div({ phase: "setting_up", attention: [{ kind: "needs_draw", door: "compute" as const, stageName: "Finals" }] });
     const htmlAction = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: needsDraw, statusLine: "s" }]} />,
     );
     expect(htmlAction).toContain("Compute proposal");
@@ -570,7 +574,7 @@ describe("DivisionLedger", () => {
   it("K1: mobile action button for needs_fixtures — the row carries the action, not just the pill", () => {
     const d = div({ phase: "scheduled", played: 6, total: 6, attention: [{ kind: "needs_fixtures", stageName: "Finals" }] });
     const html = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: d, statusLine: "6 of 6 played" }]} />,
     );
     expect(html).toContain("Open fixtures");
@@ -587,7 +591,7 @@ describe("DivisionLedger", () => {
       fixture_names: { f9: { home: "Riverside FC", away: "Summit CC", fixture_no: 9 } },
     });
     const htmlOne = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: oneScorerless, statusLine: "s" }]} />,
     );
     expect(htmlOne).toContain("Open scoring");
@@ -598,7 +602,7 @@ describe("DivisionLedger", () => {
       attention: [{ kind: "no_scorer", count: 2, fixtureIds: ["f9", "f10"], minutesSinceKickoff: 5 }],
     });
     const htmlMany = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: manyScorerless, statusLine: "s" }]} />,
     );
     expect(htmlMany).toContain("Open scoring");
@@ -608,7 +612,7 @@ describe("DivisionLedger", () => {
     const rowA = div({ phase: "finished", played: 15, total: 15, next: null });
     const rowB = div({ division_id: "d2", phase: "finished", played: 28, total: 28, next: null });
     const html = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[
           { id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: rowA, statusLine: "s1" },
           { id: "d2", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: rowB, statusLine: "s2" },
@@ -629,7 +633,7 @@ describe("DivisionLedger", () => {
       // `now` pinned before the fixture's 2026-09-12 kick-off — F5's fix
       // hides a past-kickoff "next", so this test's own passage of time
       // must not silently start relying on the real wall clock.
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[
           { id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: withNext, statusLine: "s1" },
           { id: "d2", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: withoutNext, statusLine: "s2" },
@@ -654,7 +658,7 @@ describe("DivisionLedger", () => {
       next: { home: "Riverside FC", away: "Harbour CC", scheduled_at: "2026-09-02T11:27:00Z", in_play: false },
     });
     const html = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
         rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: past, statusLine: "s" }]} />,
     );
     expect(html).not.toContain("Riverside FC");
@@ -666,7 +670,7 @@ describe("DivisionLedger", () => {
       next: { home: "Riverside FC", away: "Harbour CC", scheduled_at: null, in_play: false },
     });
     const html = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
         rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: undated, statusLine: "s" }]} />,
     );
     expect(html).not.toContain("Riverside FC");
@@ -677,21 +681,53 @@ describe("DivisionLedger", () => {
       next: { home: "Riverside FC", away: "Harbour CC", scheduled_at: "2026-09-02T12:30:00Z", in_play: false },
     });
     const html = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
         rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: future, statusLine: "s" }]} />,
     );
     expect(html).toContain("Riverside FC");
   });
-  it("F5: an in-play fixture always renders as Now, even with no scheduled_at", () => {
+  // Match Day B1 (spec 2026-10-31 §9, "remove the divisions list's Now: column"): this used to pin "Now: Riverside FC v
+  // Harbour CC". The live match is Match Day's now — the ledger names no in-play fixture at any width, and with no other row
+  // carrying a next fixture it reserves no Next track either.
+  it("B1: an in-play fixture is never named on the ledger — no Now cell, no Next track, the pill reads Today", () => {
     const live = div({
       phase: "match_day",
       next: { home: "Riverside FC", away: "Harbour CC", scheduled_at: null, in_play: true },
     });
     const html = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
         rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: live, statusLine: "s" }]} />,
     );
-    expect(html).toContain("Now: Riverside FC v Harbour CC");
+    // Positive pair: the row rendered, with its phase pill in the new word.
+    expect(html).toContain("Premier");
+    expect(html).toContain('data-pill="match_day"');
+    expect(html).toContain(`>${en["desk.phase.match_day"]}<`);
+    // Owner ruling Q2 (task B4): "Today", in every locale's own word.
+    expect([en, es, fr, nl].map((d) => d["desk.phase.match_day"])).toEqual(["Today", "Hoy", "Aujourd'hui", "Vandaag"]);
+    expect(html).not.toContain("Now:");
+    expect(html).not.toContain("Riverside FC");
+    expect(html).not.toContain("minmax(0,1.4fr)");
+  });
+  it("B1: an in-play division beside one with a future fixture: the track stays (ledger-wide), the live row's cell is empty", () => {
+    const live = div({
+      phase: "match_day",
+      next: { home: "Riverside FC", away: "Harbour CC", scheduled_at: null, in_play: true },
+    });
+    const future = div({
+      phase: "scheduled",
+      next: { home: "Lakeside FC", away: "Valley CC", scheduled_at: "2026-09-02T12:30:00Z", in_play: false },
+    });
+    const html = renderToStaticMarkup(
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
+        rows={[
+          { id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: live, statusLine: "s" },
+          { id: "d2", name: "Second", slug: "second", sportKey: "football", logoUrl: null, desk: future, statusLine: "s" },
+        ]} />,
+    );
+    expect(html).toContain("minmax(0,1.4fr)");
+    expect(html).toContain("Lakeside FC");
+    expect(html).not.toContain("Riverside FC");
+    expect(html).not.toContain("Now:");
   });
 });
 
@@ -711,7 +747,7 @@ describe("bans_waiting — the desk's discipline prompt", () => {
     const items = needsYouItems(en, deskOf([div(), div({ division_id: "d2" })]), two, "org", "comp", "en");
     expect(items.some((i) => i.kind === "bans_waiting")).toBe(false);
     const html = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[ledgerRow([])]} />,
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[ledgerRow([])]} />,
     );
     expect(html).not.toContain('data-attention-pill="bans_waiting"');
   });
@@ -750,7 +786,7 @@ describe("bans_waiting — the desk's discipline prompt", () => {
 
   it("the ledger row keeps its PHASE pill and gains a counted amber pill beside it — editors only", () => {
     const editor = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[ledgerRow([bans(2)])]} />,
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[ledgerRow([bans(2)])]} />,
     );
     expect(editor).toContain('data-attention-pill="bans_waiting"');
     expect(editor).toContain('data-count="2"');
@@ -760,7 +796,7 @@ describe("bans_waiting — the desk's discipline prompt", () => {
     expect(editor).not.toContain('data-pill="bans_waiting"');
     // A viewer cannot confirm a ban, so is not prompted to.
     const viewer = renderToStaticMarkup(
-      <DivisionLedger canEdit={false} dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[ledgerRow([bans(2)])]} />,
+      <DivisionLedger page={1} showFinished canEdit={false} dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[ledgerRow([bans(2)])]} />,
     );
     expect(viewer).not.toContain('data-attention-pill="bans_waiting"');
     expect(viewer).toContain('data-pill="scheduled"');
@@ -774,9 +810,207 @@ describe("bans_waiting — the desk's discipline prompt", () => {
 
   it("the pill reads singular at one", () => {
     const html = renderToStaticMarkup(
-      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[ledgerRow([bans(1)])]} />,
+      <DivisionLedger page={1} showFinished canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[ledgerRow([bans(1)])]} />,
     );
     expect(html).toContain("1 ban to review");
     expect(html).not.toContain("1 bans");
+  });
+});
+
+// Match Day B2 (spec 2026-10-31 §9, owner request): the divisions list shows five at a time and hides finished divisions until
+// asked. Every expected count below is read off the rows built here, and every label off the dictionary key the component
+// itself prints - never typed into the assertion.
+describe("DivisionLedger paging and the finished filter", () => {
+  const NOW = "2026-09-05T09:00:00Z";
+  const ledgerRowOf = (n: number, phase: DeskDivision["phase"] = "scheduled", attention: Attention[] = []) => ({
+    id: `d${n}`, name: `Division ${n}`, slug: `division-${n}`, sportKey: "football", logoUrl: null,
+    desk: div({ phase, attention }), statusLine: `row ${n}`,
+  });
+  const rowsOf = (count: number, phase: DeskDivision["phase"] = "scheduled", from = 1) =>
+    Array.from({ length: count }, (_, i) => ledgerRowOf(from + i, phase));
+  const render = (
+    rows: LedgerRow[],
+    o: { page?: number; showFinished?: boolean; query?: [string, string][] } = {},
+  ) =>
+    renderToStaticMarkup(
+      <DivisionLedger
+        canEdit dict={en} org="org" comp="comp" locale="en" now={NOW} rows={rows}
+        page={o.page ?? 1} showFinished={o.showFinished ?? false} query={o.query}
+      />,
+    );
+  const rowCount = (html: string) => html.match(/data-testid="desk-ledger-row"/g)?.length ?? 0;
+  const hrefOf = (html: string, testId: string) => html.match(new RegExp(`<a [^>]*href="([^"]*)"[^>]*data-testid="${testId}"|<a [^>]*data-testid="${testId}"[^>]*href="([^"]*)"`));
+  const link = (html: string, testId: string) => {
+    const m = hrefOf(html, testId);
+    return m ? (m[1] ?? m[2]) : null;
+  };
+
+  // The empty case first: no divisions at all draws no rows, no pager, no toggle, and does NOT claim they are all finished.
+  it("no rows prints no pager, no toggle, and no 'all finished' claim", () => {
+    for (const showFinished of [false, true]) {
+      const html = render([], { showFinished });
+      expect(rowCount(html)).toBe(0);
+      for (const id of ["desk-ledger-pager", "desk-ledger-finished-toggle", "desk-ledger-all-finished"]) {
+        expect(html, id).not.toContain(`data-testid="${id}"`);
+      }
+    }
+  });
+
+  it("shows five at a time: 16 rows are four pages of 5, 5, 5, 1, in order", () => {
+    const all = rowsOf(16);
+    const seen: string[] = [];
+    let checked = 0;
+    for (const [page, expected] of [[1, 5], [2, 5], [3, 5], [4, 1]] as const) {
+      const html = render(all, { page });
+      expect(rowCount(html), `page ${page}`).toBe(expected);
+      expect(html).toContain('data-testid="desk-ledger-pager"');
+      expect(html).toContain(`data-page="${page}"`);
+      expect(html).toContain('data-pages="4"');
+      expect(html).toContain(t(en, "desk.ledger.pager.page", { page, pages: 4 }));
+      // A row's status line prints twice (phone card + desktop row, one hidden per width): once each, first-seen order.
+      seen.push(...new Set([...html.matchAll(/>row (\d+)</g)].map((m) => m[1]!)));
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+    // The four pages tile the list: nothing dropped, nothing shown twice.
+    expect(seen).toEqual(all.map((_, i) => String(i + 1)));
+  });
+
+  it("five divisions or fewer is one page and no pager", () => {
+    const html = render(rowsOf(5));
+    expect(rowCount(html)).toBe(5);
+    expect(html).not.toContain('data-testid="desk-ledger-pager"');
+  });
+
+  it("previous and next are links that keep the page's other params; at either end the missing one is inert", () => {
+    const all = rowsOf(16);
+    const mid = render(all, { page: 2, query: [["tab", "x"]] });
+    expect(link(mid, "desk-ledger-prev")).toBe("/o/org/c/comp?tab=x");
+    expect(link(mid, "desk-ledger-next")).toBe("/o/org/c/comp?tab=x&amp;dpage=3");
+    const first = render(all, { page: 1 });
+    expect(link(first, "desk-ledger-prev"), "no link on page 1").toBeNull();
+    expect(first).toMatch(/aria-disabled="true"[^>]*data-testid="desk-ledger-prev"/);
+    expect(link(first, "desk-ledger-next")).toBe("/o/org/c/comp?dpage=2");
+    const last = render(all, { page: 4 });
+    expect(link(last, "desk-ledger-next"), "no link on the last page").toBeNull();
+    expect(link(last, "desk-ledger-prev")).toBe("/o/org/c/comp?dpage=3");
+  });
+
+  it("an out-of-range page lands on the last page, not on nothing", () => {
+    const html = render(rowsOf(16), { page: 99 });
+    expect(rowCount(html)).toBe(1);
+    expect(html).toContain('data-page="4"');
+  });
+
+  it("finished divisions are hidden by default, with the toggle carrying their count", () => {
+    const rows = [...rowsOf(3, "scheduled"), ...rowsOf(4, "finished", 4)];
+    const html = render(rows);
+    expect(rowCount(html)).toBe(3);
+    expect(html).not.toContain('data-phase="finished"');
+    expect(html).toContain('data-testid="desk-ledger-finished-toggle"');
+    expect(html).toContain('data-finished-count="4"');
+    expect(html).toContain(t(en, "desk.ledger.showFinished", { n: 4 }));
+    expect(link(html, "desk-ledger-finished-toggle")).toBe("/o/org/c/comp?finished=1");
+  });
+
+  // Match Day E1 item 6: "Show finished (N)" is a SWITCH. Still a link (the state is the URL), so the control keeps its href and gains the
+  // switch role, its state in aria-checked, and a track + thumb drawn from house tokens. The label never changes with the state - a
+  // switch says what it controls, aria-checked says where it is - so the old "Hide finished" wording is gone.
+  const toggleTag = (html: string): string => html.match(/<a [^>]*data-testid="desk-ledger-finished-toggle"[^>]*>/)![0];
+  it("the toggle is a switch: role, aria-checked, a track and a thumb, 44px, one label for both states", () => {
+    const rows = [...rowsOf(3, "scheduled"), ...rowsOf(4, "finished", 4)];
+    let checked = 0;
+    for (const showFinished of [false, true]) {
+      const html = render(rows, { showFinished });
+      const tag = toggleTag(html);
+      expect(tag, `showFinished=${showFinished}`).toContain('role="switch"');
+      expect(tag).toContain(`aria-checked="${showFinished}"`);
+      expect(tag).toMatch(/class="[^"]*\bmin-h-11\b/);
+      // The visual: a track (the pill) holding a thumb (the knob), both inside the link, both hidden from the accessibility tree.
+      const inner = html.slice(html.indexOf(tag) + tag.length, html.indexOf("</a>", html.indexOf(tag)));
+      expect(inner, "track").toMatch(/<span aria-hidden="true"[^>]*data-testid="desk-ledger-finished-track"/);
+      expect(inner, "thumb").toMatch(/<span aria-hidden="true"[^>]*data-testid="desk-ledger-finished-thumb"/);
+      // The label: the same words either way, with the count.
+      expect(inner).toContain(t(en, "desk.ledger.showFinished", { n: 4 }));
+      expect(inner).not.toContain("Hide finished");
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the switch's track and thumb move with the state (on = purple track, thumb to the end)", () => {
+    const rows = [...rowsOf(3, "scheduled"), ...rowsOf(4, "finished", 4)];
+    const off = render(rows, { showFinished: false });
+    const on = render(rows, { showFinished: true });
+    const cls = (html: string, id: string) => html.match(new RegExp(`data-testid="${id}"[^>]*class="([^"]*)"`))![1]!;
+    expect(cls(on, "desk-ledger-finished-track")).toMatch(/\bbg-purple-600\b/);
+    expect(cls(off, "desk-ledger-finished-track")).toMatch(/\bbg-slate-300\b/);
+    expect(cls(on, "desk-ledger-finished-thumb")).toMatch(/\btranslate-x-4\b/);
+    expect(cls(off, "desk-ledger-finished-thumb")).not.toMatch(/\btranslate-x-4\b/);
+  });
+
+  it("shown, the same switch leads back to the default view", () => {
+    const rows = [...rowsOf(3, "scheduled"), ...rowsOf(4, "finished", 4)];
+    const html = render(rows, { showFinished: true, query: [["tab", "x"]] });
+    // 7 rows, five a page: the first page holds the 3 live ones and the first 2 finished ones.
+    expect(rowCount(html)).toBe(5);
+    expect(html.match(/data-testid="desk-ledger-row" data-phase="finished"/g)?.length).toBe(2);
+    expect(rowCount(render(rows, { showFinished: true, page: 2 }))).toBe(2);
+    expect(toggleTag(html)).toContain('aria-checked="true"');
+    expect(link(html, "desk-ledger-finished-toggle")).toBe("/o/org/c/comp?tab=x");
+  });
+
+  it("toggling opens page 1 (the rows the pages are cut from changed); paging keeps the toggle", () => {
+    const rows = [...rowsOf(12, "scheduled"), ...rowsOf(3, "finished", 13)];
+    const onPage3 = render(rows, { page: 3 });
+    expect(link(onPage3, "desk-ledger-finished-toggle")).toBe("/o/org/c/comp?finished=1");
+    const shown = render(rows, { page: 2, showFinished: true });
+    expect(link(shown, "desk-ledger-prev")).toBe("/o/org/c/comp?finished=1");
+    expect(link(shown, "desk-ledger-next")).toBe("/o/org/c/comp?dpage=3&amp;finished=1");
+  });
+
+  it("pages after filtering: hidden finished rows leave no gap and no extra page", () => {
+    const rows = [...rowsOf(7, "scheduled"), ...rowsOf(4, "finished", 8)];
+    expect(render(rows)).toContain('data-pages="2"');
+    expect(render(rows, { showFinished: true })).toContain('data-pages="3"');
+  });
+
+  it("a finished division that still owes something is never hidden, and is not counted as hidden", () => {
+    // `bans_waiting` is raised in every status (`resolveAttention`: "not gated by divisionStatus ... a pending ban is owed its review
+    // in every status"), so it is an attention a truly finished division can really carry; a result missing or a red kind would
+    // have kept the phase from resolving to finished at all, which made the earlier fixture a row the desk cannot produce.
+    const owed: Attention[] = [{ kind: "bans_waiting", count: 1 }];
+    // Guard the assumption this test stands on: the fixture attention is a real kind of the engine's own list.
+    expect(Object.keys(ATTENTION_SEVERITY)).toContain(owed[0]!.kind);
+    const rows = [ledgerRowOf(1, "scheduled"), ledgerRowOf(2, "finished", owed), ledgerRowOf(3, "finished")];
+    const html = render(rows);
+    expect(rowCount(html)).toBe(2);
+    expect(html).toContain('data-phase="finished"');
+    expect(html).toContain('data-finished-count="1"');
+  });
+
+  it("every division finished and hidden says so, offers the way out, and has no pager", () => {
+    const html = render(rowsOf(8, "finished"), { page: 3 });
+    expect(rowCount(html)).toBe(0);
+    expect(html).toContain('data-testid="desk-ledger-all-finished"');
+    expect(html).toContain(t(en, "desk.ledger.allFinished"));
+    expect(link(html, "desk-ledger-finished-toggle")).toBe("/o/org/c/comp?finished=1");
+    expect(html).toContain('data-finished-count="8"');
+    expect(html).not.toContain('data-testid="desk-ledger-pager"');
+    // ...and shown, it is a list again, not that message.
+    const shown = render(rowsOf(8, "finished"), { showFinished: true });
+    expect(rowCount(shown)).toBe(5);
+    expect(shown).not.toContain('data-testid="desk-ledger-all-finished"');
+  });
+
+  it("with nothing finished there is nothing to toggle, even when asked to show them", () => {
+    for (const showFinished of [false, true]) {
+      expect(render(rowsOf(3), { showFinished }), String(showFinished)).not.toContain('data-testid="desk-ledger-finished-toggle"');
+    }
+  });
+
+  it("a division whose desk failed to load is listed, never filtered", () => {
+    const failed = { ...ledgerRowOf(1), desk: null };
+    expect(rowCount(render([failed]))).toBe(1);
   });
 });

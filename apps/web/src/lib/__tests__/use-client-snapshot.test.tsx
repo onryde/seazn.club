@@ -8,12 +8,15 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import {
   readLocalStorageItem,
+  readSessionStorageItem,
   useBrowserZone,
   useHydrated,
   useLocalStorageItem,
   useMediaQuery,
   useOrigin,
+  useSessionStorageItem,
   writeLocalStorageItem,
+  writeSessionStorageItem,
 } from "../use-client-snapshot";
 
 afterEach(() => {
@@ -183,5 +186,63 @@ describe("useMediaQuery", () => {
     w.mq.matches = false;
     w.mq.listeners.forEach((fn) => fn());
     expect(island.text()).toBe("false");
+  });
+});
+
+describe("useSessionStorageItem (Match Day E2 item 6: a court's Hide choice)", () => {
+  const Probe = probeOf(() => useSessionStorageItem("k"));
+  /** A window whose `sessionStorage` is the only storage: a `localStorage` read here would be a bug the stub exposes. */
+  function stubSession(opts: { store?: Map<string, string>; throws?: boolean } = {}) {
+    const store = opts.store ?? new Map<string, string>();
+    vi.stubGlobal("window", {
+      location: { origin: "https://seazn.club" },
+      get sessionStorage() {
+        if (opts.throws) throw new Error("SecurityError");
+        return {
+          // A real Storage coerces its key to a string: getItem(null) asks for the item named "null".
+          getItem: (k: unknown) => store.get(String(k)) ?? null,
+          setItem: (k: unknown, v: string) => void store.set(String(k), v),
+        };
+      },
+      get localStorage(): never {
+        throw new Error("these hooks must not touch localStorage");
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    });
+    return store;
+  }
+
+  it("null on the server even when the item exists — the server cannot see it", () => {
+    stubSession({ store: new Map([["k", "hidden"]]) });
+    expect(renderToStaticMarkup(<Probe />)).toBe("<span>null</span>");
+  });
+
+  it("the item after hydration; null when absent (the empty case)", () => {
+    stubSession({ store: new Map([["k", "hidden"]]) });
+    expect(renderIsland(Probe, {}, undefined, { hydrate: true }).text()).toBe("hidden");
+    stubSession();
+    expect(renderIsland(Probe, {}, undefined, { hydrate: true }).text()).toBe("null");
+  });
+
+  it("a null key reads null always (a host that sometimes remembers calls the hook unconditionally) — even where an item called \"null\" exists, which is what a real storage would answer a null key with", () => {
+    stubSession({ store: new Map([["k", "hidden"], ["null", "hidden"]]) });
+    const NullKey = probeOf(() => useSessionStorageItem(null));
+    expect(renderIsland(NullKey, {}, undefined, { hydrate: true }).text()).toBe("null");
+  });
+
+  it("write then read back; a throwing storage reads null and refuses the write, never throws", () => {
+    stubSession();
+    expect(writeSessionStorageItem("k", "open")).toBe(true);
+    expect(readSessionStorageItem("k")).toBe("open");
+    stubSession({ throws: true });
+    expect(readSessionStorageItem("k")).toBeNull();
+    expect(writeSessionStorageItem("k", "open")).toBe(false);
+    expect(renderIsland(Probe, {}, undefined, { hydrate: true }).text()).toBe("null");
+  });
+
+  it("is per key: one court's item does not answer for another's", () => {
+    stubSession({ store: new Map([["other", "hidden"]]) });
+    expect(renderIsland(Probe, {}, undefined, { hydrate: true }).text()).toBe("null");
   });
 });

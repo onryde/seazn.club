@@ -4,7 +4,20 @@
 // builder is proven by its REAL producer and consumer, not by a fixture on
 // both ends (_RULES.md, "the inert seam").
 import { describe, expect, it } from "vitest";
-import { buildRunSheet, isBye, type RunSheetInput } from "../run-sheet-groups";
+import { StageKind } from "@seazn/engine/core";
+import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES, SETTLED_FIXTURE_STATUSES } from "../fixture-status";
+import { stageCounts } from "../stage-card/summaries";
+import {
+  BRACKET_STAGE_KINDS,
+  ROUND_SEQUENCE_STAGE_KINDS,
+  buildRunSheet,
+  isBye,
+  roundDone,
+  roundWhen,
+  stageFlatSection,
+  stageRoundSections,
+  type RunSheetInput,
+} from "../run-sheet-groups";
 
 const TZ = "Europe/London";
 const NOW = Date.UTC(2026, 8, 3, 13, 0); // 14:00 London, Thu 3 Sep
@@ -580,5 +593,336 @@ describe("isBye — ruling 116's walkover is no bye", () => {
     }
     expect(checked).toBe(ROWS.length);
     expect(ROWS.filter((r) => r.bye).length, "both answers are reached").toBeGreaterThan(0);
+  });
+});
+
+// Match Day E1 item 1 (owner 2026-11-01): a stage card groups its rows under a bar per ROUND. The pure pieces, over the blocks
+// `buildRunSheet` hands the card - the empty case first, then the order inside a round, then the numbers on the bar.
+describe("stageRoundSections - one non-bracket stage's rows by round", () => {
+  const sections = (fixtures: ReturnType<typeof fx>[], stageId = "s1", stages: RunSheetInput["stages"] = [LEAGUE, CUP]) =>
+    stageRoundSections(buildRunSheet(input({ fixtures, stages })), stageId);
+
+  it("the empty case: no rows, no blocks, a stage with no rows of its own - none, never an empty round", () => {
+    expect(stageRoundSections([], "s1")).toEqual([]);
+    expect(sections([fx({ id: "other", stage_id: "s9" })]), "another stage's row is not this stage's").toEqual([]);
+  });
+
+  it("rounds read in the order they are PLAYED: a round that kicks off earlier comes first whatever its number (design/fix-ui/03), the untimed rounds after, by number", () => {
+    const out = sections([
+      fx({ id: "t1", round_no: 1, scheduled_at: "2026-07-21T19:28:00.000Z", fixture_no: 1 }),
+      fx({ id: "t2", round_no: 2, scheduled_at: "2026-07-22T19:28:00.000Z", fixture_no: 2 }),
+      fx({ id: "t3", round_no: 3, scheduled_at: "2026-07-20T21:28:00.000Z", fixture_no: 3 }),
+      fx({ id: "u5", round_no: 5, scheduled_at: null, fixture_no: 5 }),
+      fx({ id: "u4", round_no: 4, scheduled_at: null, fixture_no: 4 }),
+    ]);
+    expect(out.map((r) => r.round)).toEqual([3, 1, 2, 4, 5]);
+    expect(sections([fx({ id: "a", round_no: 2, scheduled_at: null, fixture_no: 1 }), fx({ id: "b", round_no: 1, scheduled_at: null, fixture_no: 2 })]).map((r) => r.round), "nothing timed: round number").toEqual([1, 2]);
+  });
+
+  it("rounds come in round order, whatever order the rows arrived in, and one round holds both timed and untimed rows", () => {
+    const out = sections([
+      fx({ id: "r2", round_no: 2, scheduled_at: null, seq_in_round: 1, fixture_no: 3 }),
+      fx({ id: "r1a", round_no: 1, scheduled_at: "2026-09-05T10:00:00.000Z", fixture_no: 1 }),
+      fx({ id: "r1b", round_no: 1, scheduled_at: null, seq_in_round: 2, fixture_no: 2 }),
+    ]);
+    expect(out.map((r) => r.round)).toEqual([1, 2]);
+    expect(out[0]!.fixtures.map((f) => f.id), "the untimed row of round 1 stays IN round 1 - the 'Not yet scheduled' group is gone").toEqual(["r1a", "r1b"]);
+    expect(out[1]!.fixtures.map((f) => f.id)).toEqual(["r2"]);
+  });
+
+  it("inside a round: time order, untimed LAST, ties and untimed rows in draw order - and an in-play row with no time is in its round, not in a group", () => {
+    const out = sections([
+      fx({ id: "untimed-1", scheduled_at: null, seq_in_round: 1, fixture_no: 1 }),
+      fx({ id: "late", scheduled_at: "2026-09-05T11:00:00.000Z", seq_in_round: 2, fixture_no: 2 }),
+      fx({ id: "inplay-untimed", scheduled_at: null, status: "in_play", seq_in_round: 3, fixture_no: 3 }),
+      fx({ id: "early", scheduled_at: "2026-09-05T09:00:00.000Z", seq_in_round: 4, fixture_no: 4 }),
+      fx({ id: "tie-b", scheduled_at: "2026-09-05T09:00:00.000Z", seq_in_round: 5, fixture_no: 5 }),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.fixtures.map((f) => f.id)).toEqual(["early", "tie-b", "late", "untimed-1", "inplay-untimed"]);
+  });
+
+  it("a bracket stage's rows are not regrouped here (the knockout keeps its named rounds), and a stage's rows never carry another stage's", () => {
+    const out = stageRoundSections(
+      buildRunSheet(input({ stages: [LEAGUE, CUP], fixtures: [fx({ id: "league", stage_id: "s1" }), fx({ id: "ko", stage_id: "s2", fixture_no: 2 })] })),
+      "s2",
+    );
+    expect(out, "a bracket stage asked for rounds gets none: its block is the bracket's").toEqual([]);
+    expect(sections([fx({ id: "league", stage_id: "s1" }), fx({ id: "ko", stage_id: "s2", fixture_no: 2 })]).flatMap((r) => r.fixtures.map((f) => f.id))).toEqual(["league"]);
+  });
+
+  it("a Swiss sit-out the grouping keeps rides in its round as an untimed row; an untimed league bye is not on the sheet at all", () => {
+    const swiss = { id: "sw", seq: 1, kind: "swiss" };
+    const award = { kind: "award", winner: "h1", loser: null, reason: "bye" };
+    const swissOut = stageRoundSections(
+      buildRunSheet(input({ stages: [swiss], fixtures: [fx({ id: "bye", stage_id: "sw", away_entrant_id: null, scheduled_at: null, status: "forfeited", outcome: award }), fx({ id: "m", stage_id: "sw", fixture_no: 2, seq_in_round: 2 })] })),
+      "sw",
+    );
+    expect(swissOut[0]!.fixtures.map((f) => f.id)).toEqual(["m", "bye"]);
+    expect(sections([fx({ id: "bye", away_entrant_id: null, scheduled_at: null, status: "forfeited", outcome: award })])).toEqual([]);
+  });
+});
+
+// Match Day E1 fix round 3 (supersedes fix round 1's m2 and fix round 2's section order): pools play at the same time on separate courts, so
+// no ORDER of per-pool sections is also time order. A group stage's round is ONE section holding every pool's matches of that round, in time
+// order; a tie in time reads by the page's pool order, then by the draw. The row's `pool_id` says which pool it is.
+describe("stageRoundSections - pools: one section per ROUND across the pools, rows in time order", () => {
+  const GROUP = { id: "g1", seq: 1, kind: "group" };
+  const pooled = (fixtures: ReturnType<typeof fx>[], order?: ReadonlyMap<string, number>) =>
+    stageRoundSections(buildRunSheet(input({ stages: [GROUP], fixtures })), "g1", order);
+  const row = (id: string, pool: string | null, round: number, extra: Partial<ReturnType<typeof fx>> = {}) =>
+    fx({ id, stage_id: "g1", pool_id: pool, round_no: round, fixture_no: Number(id.replace(/\D/g, "")) || 1, scheduled_at: null, ...extra } as never);
+  const ORDER = new Map([["pA", 0], ["pB", 1]]);
+  const REVERSED = new Map([["pB", 0], ["pA", 1]]);
+  const at = (hhmm: string) => `2026-09-05T${hhmm}:00.000Z`;
+  const ids = (s: { fixtures: { id: string }[] }) => s.fixtures.map((f) => f.id);
+
+  it("the empty case: no rows is no section", () => {
+    expect(pooled([], ORDER)).toEqual([]);
+  });
+
+  it("a round holds BOTH pools' matches: one section per round number, never one per pool, whatever order the rows arrived in", () => {
+    const out = pooled(
+      [row("b2", "pB", 2), row("a2", "pA", 2), row("b1", "pB", 1), row("a1", "pA", 1), row("a1b", "pA", 1, { seq_in_round: 2, fixture_no: 7 })],
+      ORDER,
+    );
+    expect(out.map((s) => s.round), "two rounds, not four").toEqual([1, 2]);
+    expect(out.map(ids), "nothing timed: pool A reads first inside a round, then the draw").toEqual([["a1", "a1b", "b1"], ["a2", "b2"]]);
+    expect(out.length, "anti-vacuity: both rounds are there").toBe(2);
+    expect(out.flatMap((s) => s.fixtures).length, "anti-vacuity: no row was lost").toBe(5);
+  });
+
+  // THE CASE THE RULING IS FOR: pools of four on separate courts, kicking off together. Group A and Group B each play two matches in Round 1,
+  // at 09:00 and 09:35. A per-pool section order cannot read this in time order; one round in time order does.
+  it("pools on separate courts at the same time: Round 1 reads A 09:00, B 09:00, A 09:35, B 09:35 - the page's first pool takes each tie", () => {
+    const rows = [
+      row("a1", "pA", 1, { scheduled_at: at("09:00"), court_name: "Court 1" }),
+      row("a2", "pA", 1, { scheduled_at: at("09:35"), court_name: "Court 1", seq_in_round: 2 }),
+      row("b1", "pB", 1, { scheduled_at: at("09:00"), court_name: "Court 2" }),
+      row("b2", "pB", 1, { scheduled_at: at("09:35"), court_name: "Court 2", seq_in_round: 2 }),
+    ];
+    const out = pooled(rows, ORDER);
+    expect(out).toHaveLength(1);
+    expect(ids(out[0]!)).toEqual(["a1", "b1", "a2", "b2"]);
+    expect(ids(pooled(rows, REVERSED)[0]!), "listed the other way round, B takes each tie - and the times still lead").toEqual(["b1", "a1", "b2", "a2"]);
+    // The expected order is the clock's, read off the rows' own times: every row is no earlier than the one above it.
+    const times = out[0]!.fixtures.map((f) => Date.parse(f.scheduled_at!));
+    expect([...times].sort((x, y) => x - y)).toEqual(times);
+    expect(times.length, "anti-vacuity: four rows read").toBe(4);
+  });
+
+  it("inside a round time leads and the pool only breaks a tie: B at 09:00 reads before A at 09:35", () => {
+    const out = pooled([row("a1", "pA", 1, { scheduled_at: at("09:35") }), row("b1", "pB", 1, { scheduled_at: at("09:00") })], ORDER);
+    expect(ids(out[0]!)).toEqual(["b1", "a1"]);
+  });
+
+  it("untimed rows sit last inside a round, among themselves by pool and then the draw; a round's timed rows are never interrupted by them", () => {
+    const out = pooled(
+      [
+        row("b0", "pB", 1), // untimed
+        row("a0", "pA", 1), // untimed
+        row("b1", "pB", 1, { scheduled_at: at("10:00") }),
+        row("a1", "pA", 1, { scheduled_at: at("11:00") }),
+        row("a0b", "pA", 1, { seq_in_round: 2, fixture_no: 9 }), // untimed, later in the draw
+      ],
+      ORDER,
+    );
+    expect(ids(out[0]!)).toEqual(["b1", "a1", "a0", "a0b", "b0"]);
+  });
+
+  it("a pool the order does not list reads after every listed one on a tie; rows of no pool read before them", () => {
+    const out = pooled(
+      [row("x1", "pX", 1, { scheduled_at: at("09:00") }), row("a1", "pA", 1, { scheduled_at: at("09:00") }), row("n1", null, 1, { scheduled_at: at("09:00") })],
+      ORDER,
+    );
+    expect(ids(out[0]!)).toEqual(["n1", "a1", "x1"]);
+  });
+
+  it("a pool is not required: with no order handed over, equal times fall to a stable id order, then the draw", () => {
+    const out = pooled([row("b1", "pB", 1, { scheduled_at: at("09:00") }), row("a1", "pA", 1, { scheduled_at: at("09:00") })]);
+    expect(ids(out[0]!)).toEqual(["a1", "b1"]);
+  });
+
+  describe("the sections themselves (E1 item 1's play order, unchanged)", () => {
+    it("sections read by earliest kickoff, the sections with nothing timed after them, the round number breaking every tie", () => {
+      const out = pooled(
+        [
+          row("a3", "pA", 3, { scheduled_at: at("08:00") }), // round 3 kicks off first
+          row("a1", "pA", 1, { scheduled_at: at("09:00") }),
+          row("b1", "pB", 1, { scheduled_at: at("09:00") }),
+          row("a2", "pA", 2, { scheduled_at: at("09:00") }), // ties R1 at 09:00: the round number
+          row("a4", "pA", 4), // untimed only
+          row("b5", "pB", 5), // untimed only
+        ],
+        ORDER,
+      );
+      expect(out.map((s) => s.round)).toEqual([3, 1, 2, 4, 5]);
+    });
+
+    // Mixed timed and untimed rows in one round, against another section: the untimed rows of a round do not hold the round back, and a
+    // round with nothing timed is last. (Round 1 is both the earlier number and the earlier kickoff here, so every reading of "the round's
+    // position" agrees; the next case is the one where they part.)
+    it("a round mixing timed and untimed rows: its timed rows first, the round placed by its timed rows, ahead of a round with nothing timed", () => {
+      const out = pooled(
+        [
+          row("a1u", "pA", 1, { seq_in_round: 1 }), // untimed, first in the draw
+          row("a1t", "pA", 1, { seq_in_round: 2, fixture_no: 8, scheduled_at: at("10:00") }),
+          row("b1t", "pB", 1, { seq_in_round: 3, fixture_no: 9, scheduled_at: at("09:00") }),
+          row("a2u", "pA", 2),
+          row("b2u", "pB", 2),
+        ],
+        ORDER,
+      );
+      expect(out.map((s) => s.round)).toEqual([1, 2]);
+      expect(ids(out[0]!), "timed rows in time order, the untimed one LAST though it came first in the draw").toEqual(["b1t", "a1t", "a1u"]);
+      expect(ids(out[1]!)).toEqual(["a2u", "b2u"]);
+    });
+
+    it("the same mixed round against an EARLIER-kicking later round: the order is the play order (E1 item 1), so the later round leads - an untimed row does not move that", () => {
+      const out = pooled(
+        [row("a1u", "pA", 1), row("a1t", "pA", 1, { scheduled_at: at("15:00"), fixture_no: 8 }), row("b2t", "pB", 2, { scheduled_at: at("09:00") })],
+        ORDER,
+      );
+      expect(out.map((s) => s.round), "Round 2 kicks off at 09:00, Round 1's first timed row at 15:00").toEqual([2, 1]);
+    });
+
+    it("the kinds with no pools read exactly as before: a league and a Swiss event by earliest kickoff, the untimed after, by round", () => {
+      let checked = 0;
+      for (const kind of ["league", "swiss", "americano"] as const) {
+        const stages = [{ id: "g1", seq: 1, kind }];
+        const out = stageRoundSections(
+          buildRunSheet(input({ stages, fixtures: [row("r1", null, 1, { scheduled_at: at("15:00") }), row("r2", null, 2, { scheduled_at: at("09:00") }), row("r3", null, 3), row("r4", null, 4)] })),
+          "g1",
+          ORDER,
+        );
+        expect(out.map((s) => s.round), kind).toEqual([2, 1, 3, 4]);
+        checked++;
+      }
+      expect(checked, "every pool-less kind swept").toBe(3);
+    });
+  });
+});
+
+// Match Day E1 fix round 1 (I1): the bar's number is the SHARED count. The stage card's Complete button reads `stageCounts`; a bar that
+// counts "played" differently can say "1 of 2 played" on a stage that can already be completed (a walkover, an abandonment and a cancellation
+// are settled to the stage). So the bar asks `stageCounts` itself, over the round's real matches.
+describe("roundDone - the 'N of M done' on a round bar (the stage card's own count)", () => {
+  const AWARD = { kind: "award", winner: "h1", loser: "a1", reason: "walkover" };
+  const BYE = fx({ id: "bye", fixture_no: 99, away_entrant_id: null, status: "forfeited", outcome: { kind: "award", winner: "h1", loser: null, reason: "bye" } });
+
+  it("the empty case: no rows is 0 of 0", () => {
+    expect(roundDone([], new Set())).toEqual({ done: 0, total: 0 });
+  });
+
+  it("every status the schema has, counted: done is exactly the settled + locked statuses the app already declares; a bye is no match", () => {
+    const rows = FIXTURE_STATUSES.map((status, i) => fx({ id: `f${i}`, status, fixture_no: i + 1 }));
+    // The expected number comes from the two declarations `stageCounts` documents itself against, not from a list typed here.
+    const settled = FIXTURE_STATUSES.filter((s) => SETTLED_FIXTURE_STATUSES.has(s) || LOCKED_FIXTURE_STATUSES.has(s));
+    expect(roundDone(rows, new Set())).toEqual({ done: settled.length, total: FIXTURE_STATUSES.length });
+    expect(roundDone([...rows, BYE], new Set()), "a bye adds to neither").toEqual({ done: settled.length, total: FIXTURE_STATUSES.length });
+    expect(rows.length, "anti-vacuity: every status was in the sweep").toBe(FIXTURE_STATUSES.length);
+    expect(settled.length, "anti-vacuity: both answers are reached").toBeGreaterThan(0);
+    expect(settled.length).toBeLessThan(FIXTURE_STATUSES.length);
+  });
+
+  it("a walkover and a cancellation are done (the stage card says so), though neither has a result", () => {
+    const rows = [
+      fx({ id: "w", fixture_no: 1, status: "forfeited", outcome: AWARD }),
+      fx({ id: "c", fixture_no: 2, status: "cancelled" }),
+      fx({ id: "open", fixture_no: 3 }),
+    ];
+    expect(roundDone(rows, new Set())).toEqual({ done: 2, total: 3 });
+  });
+
+  it("an abandonment awaiting its settle is NOT done, and is done once settled (it leaves the held set)", () => {
+    const rows = [fx({ id: "ab", fixture_no: 1, status: "abandoned" }), fx({ id: "ok", fixture_no: 2, status: "decided", outcome: { kind: "win", winner: "h1" } })];
+    expect(roundDone(rows, new Set(["ab"])), "held: the stage still owes its verdict").toEqual({ done: 1, total: 2 });
+    expect(roundDone(rows, new Set()), "settled: nothing is owed").toEqual({ done: 2, total: 2 });
+  });
+
+  it("parity with the stage card: the round counts add up to stageCounts over the stage's real matches, and open = total - done", () => {
+    const held = new Set(["ab"]);
+    const rows = [
+      fx({ id: "a1", round_no: 1, fixture_no: 1, status: "decided", outcome: { kind: "win", winner: "h1" } }),
+      fx({ id: "ab", round_no: 1, fixture_no: 2, status: "abandoned" }),
+      fx({ id: "w", round_no: 2, fixture_no: 3, status: "forfeited", outcome: AWARD }),
+      fx({ id: "n", round_no: 2, fixture_no: 4, status: "needs_decision" }),
+      fx({ id: "s", round_no: 3, fixture_no: 5 }),
+      fx({ id: "p", round_no: 3, fixture_no: 6, status: "in_play" }),
+    ];
+    const real = rows.filter((r) => !isBye(r));
+    const sections = stageRoundSections(buildRunSheet(input({ fixtures: [...rows, BYE] })), "s1");
+    expect(sections.length, "anti-vacuity: three rounds").toBe(3);
+    const sum = sections.reduce((acc, sec) => {
+      const r = roundDone(sec.fixtures, held);
+      return { done: acc.done + r.done, total: acc.total + r.total };
+    }, { done: 0, total: 0 });
+    const counts = stageCounts(real, held);
+    expect(sum.done).toBe(counts.played);
+    expect(sum.total).toBe(real.length);
+    expect(sum.total - sum.done, "what the bars leave open is what blocks Complete").toBe(counts.inPlay + counts.unplayed);
+  });
+});
+
+// Match Day E1 fix round 1 (I2): round bars belong to the kinds whose fixtures run in numbered rounds. The set is a partition of the
+// engine's StageKind: a kind added to the engine is in no set until someone decides, and this test says so.
+describe("ROUND_SEQUENCE_STAGE_KINDS - which kinds get round bars", () => {
+  it("partitions StageKind with the bracket kinds and the ladder: every kind in exactly one, none missing", () => {
+    const FLAT = new Set(["ladder"]);
+    let checked = 0;
+    for (const kind of StageKind.options) {
+      const homes = [ROUND_SEQUENCE_STAGE_KINDS.has(kind), BRACKET_STAGE_KINDS.has(kind), FLAT.has(kind)].filter(Boolean).length;
+      expect(homes, `${kind}: exactly one home`).toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(StageKind.options.length);
+    expect(checked, "anti-vacuity").toBeGreaterThan(0);
+    for (const kind of ROUND_SEQUENCE_STAGE_KINDS) expect(StageKind.options as readonly string[], `${kind} is a real kind`).toContain(kind);
+    expect([...ROUND_SEQUENCE_STAGE_KINDS].sort()).toEqual(["americano", "group", "league", "swiss"]);
+    expect(ROUND_SEQUENCE_STAGE_KINDS.has("ladder"), "a ladder stores each challenge as its own round: no bars").toBe(false);
+  });
+});
+
+describe("stageFlatSection - a stage that has no rounds worth a bar: one list, time order, untimed last", () => {
+  const ladder = { id: "ld", seq: 1, kind: "ladder" };
+  const flat = (fixtures: ReturnType<typeof fx>[]) => stageFlatSection(buildRunSheet(input({ stages: [ladder], fixtures })), "ld");
+
+  it("the empty case: no rows is no section, never an empty one", () => {
+    expect(stageFlatSection([], "ld")).toEqual([]);
+    expect(flat([fx({ id: "other", stage_id: "s9" })])).toEqual([]);
+  });
+
+  it("every challenge is its own round, yet the rows run as ONE list: by time, the untimed ones last in draw order", () => {
+    const out = flat([
+      fx({ id: "c1", stage_id: "ld", round_no: 1, fixture_no: 1, seq_in_round: 1, scheduled_at: null }),
+      fx({ id: "c2", stage_id: "ld", round_no: 2, fixture_no: 2, seq_in_round: 1, scheduled_at: "2026-09-05T16:00:00.000Z" }),
+      fx({ id: "c3", stage_id: "ld", round_no: 3, fixture_no: 3, seq_in_round: 1, scheduled_at: "2026-09-05T09:00:00.000Z" }),
+      fx({ id: "c4", stage_id: "ld", round_no: 4, fixture_no: 4, seq_in_round: 1, scheduled_at: null }),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.fixtures.map((f) => f.id)).toEqual(["c3", "c2", "c1", "c4"]);
+  });
+});
+
+describe("roundWhen - the 'when' on a round bar, in the VENUE zone", () => {
+  it("the empty case: no row with a time says nothing", () => {
+    expect(roundWhen([], TZ)).toBeNull();
+    expect(roundWhen([fx({ scheduled_at: null })], TZ)).toBeNull();
+  });
+
+  it("one day: the clock span of the timed rows (the untimed one adds nothing); one timed row: the span is that time twice", () => {
+    const span = roundWhen([fx({ scheduled_at: "2026-09-05T20:10:00.000Z" }), fx({ scheduled_at: null }), fx({ scheduled_at: "2026-09-05T20:50:00.000Z" })], TZ);
+    expect(span).toEqual({ firstDay: "2026-09-05", lastDay: "2026-09-05", from: "21:10", to: "21:50" });
+    expect(roundWhen([fx({ scheduled_at: "2026-09-05T20:10:00.000Z" })], TZ)).toMatchObject({ from: "21:10", to: "21:10" });
+  });
+
+  it("two days: the first and last day differ, so there is no one clock span to print", () => {
+    const span = roundWhen([fx({ scheduled_at: "2026-09-05T20:10:00.000Z" }), fx({ scheduled_at: "2026-09-06T09:00:00.000Z" })], TZ);
+    expect(span?.firstDay).toBe("2026-09-05");
+    expect(span?.lastDay).toBe("2026-09-06");
+  });
+
+  it("the venue zone decides the day: 23:30 UTC in London summer time is already the next day", () => {
+    expect(roundWhen([fx({ scheduled_at: "2026-09-05T23:30:00.000Z" })], TZ)).toMatchObject({ firstDay: "2026-09-06", from: "00:30" });
   });
 });

@@ -14,6 +14,7 @@ import { expect, test } from "@playwright/test";
 import { builtinModules } from "@seazn/engine/sports";
 import { BWF_3X15_FROM } from "../src/lib/variant-label-keys";
 import { TAG, apiJson, competitionPath, createCompetitionViaUi, divisionPath } from "./helpers";
+import { openPanels } from "./helpers/rules-strip";
 
 const L = JSON.parse(
   readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
@@ -90,13 +91,15 @@ test("D2 a new badminton division is bwf-3x15: the builder opens on it, says why
   expect(division.data!.config.finalSetTo).toBe(to15.finalSetTo);
 });
 
-test("D2 Settings switches the division to 3x21: the stored format is the target variant's, not the old one's", async ({ page, request }) => {
+// Match Day C2: the variant moved from Settings' Match rules block to the Division rules strip's Match rules panel.
+test("D2 the Division rules strip switches the division to 3x21: the stored format is the target variant's, not the old one's", async ({ page, request }) => {
   test.setTimeout(Math.max(120_000, 6 * STEP_MS));
   const to21 = preset("badminton", "bwf");
   const open = async () => {
-    await page.goto(await divisionPath(request, badmintonDivId, "?tab=settings"));
-    await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: STEP_MS });
-    await page.getByRole("button", { name: /Format/ }).click();
+    await page.goto(await divisionPath(request, badmintonDivId, "?tab=fixtures"));
+    const strip = page.getByTestId("division-rules-strip");
+    await expect(strip).toBeVisible({ timeout: STEP_MS });
+    await openPanels(strip, "format");
   };
   await open();
   const picker = page.getByTestId("division-settings-variant");
@@ -104,8 +107,17 @@ test("D2 Settings switches the division to 3x21: the stored format is the target
   if (HINT_LIVE) await expect(page.getByTestId("division-variant-hint")).toHaveText(HINT_TEXT);
   else await expect(page.getByTestId("division-variant-hint")).toHaveCount(0);
 
+  // Match Day E1 item 4: one line under the select says what the PICKED variant plays, in the public line's words, with the engine's own
+  // preset numbers (read here, never typed). It follows the picker before anything is saved: the select is state, not the stored row.
+  const meaning = page.getByTestId("division-variant-meaning");
+  const saved15 = preset("badminton", "bwf-3x15");
+  await expect(meaning, "the saved 3x15 variant's numbers").toContainText(String(saved15.setTo));
+  await expect(meaning).toContainText(String(saved15.cap));
   await picker.selectOption("bwf");
-  await page.getByRole("button", { name: L["divset.saveRules"], exact: true }).click();
+  await expect(meaning, "picking 3x21 re-words the line before any save").toContainText(String(to21.setTo));
+  await expect(meaning).toContainText(String(to21.cap));
+  await expect(meaning, "and the 3x15 target is gone from it").not.toContainText(new RegExp(`\\b${String(saved15.setTo)}\\b`));
+  await page.getByTestId("division-rules-format-save").click();
   await expect(page.getByText(L["divset.notice.rulesSaved"])).toBeVisible({ timeout: STEP_MS });
   await expect
     .poll(async () => (await apiJson<Division>(request, `/api/v1/divisions/${badmintonDivId}`)).data, { timeout: POLL_MS })
@@ -119,7 +131,7 @@ test("D2 Settings switches the division to 3x21: the stored format is the target
   await open();
   await expect(page.getByTestId("division-settings-variant")).toHaveValue("bwf");
   await page.getByTestId("division-settings-variant").selectOption("bwf-3x15");
-  await page.getByRole("button", { name: L["divset.saveRules"], exact: true }).click();
+  await page.getByTestId("division-rules-format-save").click();
   await expect(page.getByText(L["divset.notice.rulesSaved"])).toBeVisible({ timeout: STEP_MS });
   const to15 = preset("badminton", "bwf-3x15");
   await expect
@@ -142,9 +154,10 @@ test("TN-CF-1 tennis best of 1 with a match tie-break is refused in the editor, 
   const before = (await apiJson<Division>(request, `/api/v1/divisions/${tennisDivId}`)).data!;
   const sentence = L["rules.err.bo1MatchTiebreak"]!;
 
-  await page.goto(await divisionPath(request, tennisDivId, "?tab=settings"));
-  await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: STEP_MS });
-  await page.getByRole("button", { name: /Format/ }).click();
+  await page.goto(await divisionPath(request, tennisDivId, "?tab=fixtures"));
+  const strip = page.getByTestId("division-rules-strip");
+  await expect(strip).toBeVisible({ timeout: STEP_MS });
+  await openPanels(strip, "format");
   await page.getByLabel("Best of (sets)").selectOption("1");
   await page.getByLabel("Deciding set").selectOption("mtb10");
   // The sentence sits beside the fields it is about, before any Save...
@@ -159,7 +172,7 @@ test("TN-CF-1 tennis best of 1 with a match tie-break is refused in the editor, 
   });
   const banner = page.getByTestId("division-settings-error");
   await expect(banner, "no save banner before Save").toHaveCount(0);
-  await page.getByRole("button", { name: L["divset.saveRules"], exact: true }).click();
+  await page.getByTestId("division-rules-format-save").click();
   await expect(banner).toHaveText(sentence, { timeout: STEP_MS });
   await expect(page.getByText(L["divset.notice.rulesSaved"])).toHaveCount(0);
   expect(patches, "the refused format never left the browser").toEqual([]);
@@ -169,7 +182,7 @@ test("TN-CF-1 tennis best of 1 with a match tie-break is refused in the editor, 
   // Mended: the deciding set is an ordinary set, and best of 1 saves.
   await page.getByLabel("Deciding set").selectOption("same");
   await expect(page.getByTestId("rule-field-bestOf").getByRole("alert")).toHaveCount(0);
-  await page.getByRole("button", { name: L["divset.saveRules"], exact: true }).click();
+  await page.getByTestId("division-rules-format-save").click();
   await expect(page.getByText(L["divset.notice.rulesSaved"])).toBeVisible({ timeout: STEP_MS });
   await expect
     .poll(async () => (await apiJson<Division>(request, `/api/v1/divisions/${tennisDivId}`)).data?.config.bestOf, { timeout: POLL_MS })

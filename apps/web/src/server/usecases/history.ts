@@ -88,7 +88,7 @@ const unplayed = (tx: Tx) => tx`not ${fixtureHasResultSql(tx, "fixtures")}`;
 
 /** W3 T5 (X-SW-29; T3 review m3): a replayed PLACEMENT never lands on a Swiss bye shell. A bye is not played, so it
  *  holds no court and no time (`swissByeShellSql`, the SQL twin of the one bye-shell predicate), and no writer since
- *  W3 T3 records one — but a ledger row written before T3 can name a bye shell among its moves, and V483 cleared the
+ *  W3 T3 records one — but a ledger row written before T3 can name a bye shell among its moves, and V485 cleared the
  *  slot without touching the ledger. An Undo walking back past a Pair next reaches those rows, and a Redo replays them.
  *  On the target row itself, like `unplayed`, on every statement below that writes a slot. */
 const slotTaker = (tx: Tx) => tx`not ${swissByeShellSql(tx, "fixtures")}`;

@@ -239,18 +239,23 @@ describe("division page: the arbiter panel entry card", () => {
     expect((plain[0]!.props as { locale: string }).locale).toBe("en");
   });
 
-  it("every other cell renders no card - and the flag is not asked where an earlier, cheaper part already said no", async () => {
-    const cells: [string, () => void, string, boolean][] = [
-      ["a viewer", () => pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit: false }), "fixtures", false],
-      ["over the board", () => (division.config = { variant: "classical" }), "fixtures", false],
-      ["online play off", () => (division.config = { variant: "classical", onlinePlay: "off" }), "fixtures", false],
-      ["another sport", () => (division.sport_key = "generic"), "fixtures", false],
-      ["no fixtures yet (and the division already started)", () => (fx.rows = []), "fixtures", false],
-      ["the entrants tab", () => undefined, "entrants", false],
-      ["the standings tab", () => undefined, "standings", false],
+  it("every other cell renders no card - and the card's own parts never ask the flag where an earlier, cheaper part already said no", async () => {
+    // Match Day C2 moved the Online play select into the Division rules strip on this very tab, so an organiser who can act on a
+    // chess division's fixtures tab is asked the flag ONCE for the strip, whatever the card's own parts said (an over-the-board division
+    // is exactly the one that needs the select to switch online). The count is therefore per cell, exact: 0 where nothing reads the
+    // answer (a viewer gets a read-only strip; another sport has no select; the other tabs mount no strip) and 1 where only the strip
+    // does. Never 2: the card's predicate and the strip share the page's one answer (the test below pins that for the card-offered cell).
+    const cells: [string, () => void, string, number][] = [
+      ["a viewer", () => pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit: false }), "fixtures", 0],
+      ["over the board", () => (division.config = { variant: "classical" }), "fixtures", 1],
+      ["online play off", () => (division.config = { variant: "classical", onlinePlay: "off" }), "fixtures", 1],
+      ["another sport", () => (division.sport_key = "generic"), "fixtures", 0],
+      ["no fixtures yet (and the division already started)", () => (fx.rows = []), "fixtures", 1],
+      ["the entrants tab", () => undefined, "entrants", 0],
+      ["the standings tab", () => undefined, "standings", 0],
     ];
     let checked = 0;
-    for (const [label, arm, tab, wasAsked] of cells) {
+    for (const [label, arm, tab, askedTimes] of cells) {
       division.sport_key = "boardgame";
       division.status = "active";
       division.config = { variant: "classical", onlinePlay: "lichess" };
@@ -260,7 +265,7 @@ describe("division page: the arbiter panel entry card", () => {
       asked.offered.mockClear();
       arm();
       expect(await cards(tab), label).toHaveLength(0);
-      expect(asked.offered.mock.calls.length > 0, `${label}: flag asked?`).toBe(wasAsked);
+      expect(asked.offered.mock.calls.length, `${label}: times the flag was asked`).toBe(askedTimes);
       checked++;
     }
     expect(checked, "anti-vacuity: every cell ran").toBe(cells.length);

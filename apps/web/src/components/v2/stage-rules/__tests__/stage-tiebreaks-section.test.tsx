@@ -13,7 +13,8 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 import type { StageTableRules } from "@/server/api-v1/schemas";
-import { StageTiebreaksSection } from "../stage-tiebreaks-section";
+import { TiebreaksEditor } from "../../rules/tiebreaks-editor";
+import { foldTiebreaks, unitLabelKey } from "@/lib/stage-card/summaries";
 import { cfgOf, tableRulesOf } from "./_table-rules-fixture";
 
 const sport = (key: string): AnySportModule => builtinModules.find((m) => m.key === key)!;
@@ -27,18 +28,19 @@ function render(
   m: AnySportModule,
   kind: TableStageKind,
   tableRules: StageTableRules,
-  over: { locked?: boolean; canEdit?: boolean; pooled?: boolean; bestNth?: boolean; divisionConfig?: Record<string, unknown> } = {},
+  over: { locked?: boolean; canEdit?: boolean; pooled?: boolean; bestNth?: boolean; divisionConfig?: Record<string, unknown>; inheritedOrder?: readonly TiebreakerKey[] } = {},
 ): string {
   return renderToStaticMarkup(
     <DictProvider dict={enUi as Dict} locale="en">
-      <StageTiebreaksSection
+      <TiebreaksEditor
+        scope="stage"
+        mode={over.locked === true || over.canEdit === false ? "locked" : "edit"}
+        started={over.locked === true}
         stage={{ id: ID, kind, pooled: over.pooled ?? false, bestNth: over.bestNth ?? false, tableRules }}
-        stageName="Pool A"
         module={m}
         divisionConfig={over.divisionConfig ?? (cfgOf(m) as Record<string, unknown>)}
         stageConfig={{}}
-        formatLockedStageIds={over.locked === true ? [ID] : []}
-        canEdit={over.canEdit ?? true}
+        inheritedOrder={over.inheritedOrder}
         onSaved={() => undefined}
       />
     </DictProvider>,
@@ -56,7 +58,8 @@ const text = (html: string): string => html.replace(/<[^>]*>/g, " ").replace(/&#
 const listed = (html: string): string[] => [...html.matchAll(/data-testid="stage-tiebreaks-row-\d+" data-key="([a-z_0-9]+)"/g)].map((x) => x[1]!);
 const options = (html: string, testId: string): string[] =>
   [...html.slice(html.indexOf(`data-testid="${testId}"`)).split("</select>")[0]!.matchAll(/<option value="([a-z_0-9]+)"/g)].map((x) => x[1]!);
-const stepWord = (key: string) => UI[`div.detail.tiebreak.rule.${key}`]!;
+/** A step in the sport's own unit (Match Day C1 `unitLabelKey`, spec §12 Phase C item 7: badminton's "game difference"). */
+const stepWord = (key: string, sportKey: string) => UI[unitLabelKey(key, sportKey)]!;
 
 describe("the list (X-TB-3, D11, OC1)", () => {
   it("football league, inherited from the sport: the order as served, the primary measure 'always first' and lots 'always last' with no arrows; the middle steps move", () => {
@@ -101,7 +104,7 @@ describe("the list (X-TB-3, D11, OC1)", () => {
       if (want.length === 0) expect(has(html, "stage-tiebreaks-add"), m.key).toBe(false);
       else {
         expect(options(html, "stage-tiebreaks-add"), m.key).toEqual([...want]);
-        for (const k of want) expect(text(html), `${m.key}: ${k} said`).toContain(stepWord(k));
+        for (const k of want) expect(text(html), `${m.key}: ${k} said`).toContain(stepWord(k, m.key));
         offered += want.length;
       }
       checked++;
@@ -141,7 +144,7 @@ describe("Reset (PS-7b, D5)", () => {
 describe("the badge (X-TB-1)", () => {
   const DIV: TiebreakerKey[] = ["points", "diff", "for", "lots"];
 
-  it("Inherited from the sport default, from the division; Overridden for the stage's own; Pinned at start with its source", () => {
+  it("Inherited from the sport default, from the division; Overridden for the stage's own; a pin says the layer it was pinned from, never 'Pinned at start' (Match Day item 4)", () => {
     const sportRules = render(football, "league", tableRulesOf(football, "league"));
     expect(tagOf(sportRules, "stage-tiebreaks-badge")).toContain('data-badge="inherited"');
     expect(tagOf(sportRules, "stage-tiebreaks-badge")).toContain('data-source="sport"');
@@ -158,8 +161,31 @@ describe("the badge (X-TB-1)", () => {
     };
     const pinned = render(football, "league", tableRulesOf(football, "league", { division: DIV, pinned: pin }));
     expect(tagOf(pinned, "stage-tiebreaks-badge")).toContain('data-source="division"');
-    expect(tagOf(pinned, "stage-tiebreaks-badge")).toContain('data-badge="pinned"');
-    expect(text(pinned)).toContain(UI["stageTiebreaks.badge.pinned"]!);
+    expect(tagOf(pinned, "stage-tiebreaks-badge")).toContain('data-badge="inherited"');
+    expect(text(pinned)).toContain(UI["stageTiebreaks.source.division"]!);
+    expect(text(pinned), "internals copy is gone").not.toContain("Pinned at start");
+  });
+
+  it("Match Day C3 (C2's M4): a stage pinned from the division's order says it DIFFERS once the division's order has changed, and 'Inherited' while it still matches", () => {
+    const moved: TiebreakerKey[] = ["points", "for", "diff", "lots"];
+    const pin: TableRulesPin = {
+      tiebreakers: DIV,
+      crossGroup: DIV,
+      points: tableRulesOf(football, "league").points.rule,
+      sources: { tiebreakers: "division", points: "sport", crossGroup: "derived" },
+    };
+    const rules = tableRulesOf(football, "league", { division: DIV, pinned: pin });
+    const same = render(football, "league", rules, { inheritedOrder: DIV });
+    expect(tagOf(same, "stage-tiebreaks-badge"), "the division still ranks the same way").toContain('data-badge="inherited"');
+    const differs = render(football, "league", rules, { inheritedOrder: moved });
+    const badge = tagOf(differs, "stage-tiebreaks-badge");
+    expect(badge, "the division has moved on").toContain('data-badge="differs"');
+    expect(text(differs)).toContain(UI["stageTiebreaks.badge.differs"]!);
+    expect(badge, "it does not claim the division's order as its source").not.toContain('data-source="division"');
+    expect(text(differs), "nor say it is inherited").not.toContain(UI["stageTiebreaks.badge.inherited"]!);
+    expect(text(differs)).toContain(UI["stageTiebreaks.source.started"]!);
+    // Second call, same props: same answer (nothing the render keeps changes it).
+    expect(tagOf(render(football, "league", rules, { inheritedOrder: moved }), "stage-tiebreaks-badge")).toBe(badge);
   });
 
   it("'Use the division's order' only for a stage with its own", () => {
@@ -177,12 +203,13 @@ describe("the lock (X-TB-2, OC2, PF-9)", () => {
     expect(has(html, "stage-tiebreaks-add") || has(html, "stage-tiebreaks-reset")).toBe(true);
   });
 
-  it("listed by the server (a first score): the 🔒 line naming the stage, the order still listed, and no control at all", () => {
+  it("listed by the server (a first score): the ONE lock line in organiser words, the order still listed (folded), and no control at all", () => {
     const rules = tableRulesOf(football, "league", { pinnedAt: "2026-10-27T10:00:00.000Z" });
     const html = render(football, "league", rules, { locked: true });
     expect(html).toContain('data-state="locked"');
-    expect(text(html)).toContain(UI["stageTiebreaks.locked"]!.replace("{stage}", "Pool A"));
-    expect(listed(html)).toEqual(rules.tiebreakers.keys);
+    expect(text(html)).toContain(UI["stageCard.locked"]!);
+    expect(html.split('data-testid="stage-tiebreaks-locked"').length - 1, "said once").toBe(1);
+    expect(listed(html)).toEqual(foldTiebreaks(rules.tiebreakers.keys).steps);
     expect(html).not.toMatch(/<(select|button)[^>]*data-testid="stage-tiebreaks-/);
   });
 
@@ -199,7 +226,7 @@ describe("errors inline (spec §9 Errors)", () => {
     // Buchholz needs a Swiss stage (§5.5 rule 3): a chess division order carrying it is refused on a league stage.
     const rules = tableRulesOf(boardgame, "league", { division: ["points", "buchholz", "lots"] });
     const html = render(boardgame, "league", rules);
-    const why = UI["rules.err.tiebreakKeyInvalid"]!.replace("{step}", stepWord("buchholz")).replace("{reason}", UI["rules.err.tiebreak.reason.stage_format"]!);
+    const why = UI["rules.err.tiebreakKeyInvalid"]!.replace("{step}", stepWord("buchholz", boardgame.key)).replace("{reason}", UI["rules.err.tiebreak.reason.stage_format"]!);
     expect(text(tagOf(html, "stage-tiebreaks-refusal-1") + html.slice(html.indexOf('data-testid="stage-tiebreaks-refusal-1"')))).toContain(why);
     expect(has(html, "stage-tiebreaks-refusal-0") || has(html, "stage-tiebreaks-refusal-2"), "only the refused step").toBe(false);
     expect(text(html)).toContain(UI["stageTiebreaks.inheritedHint"]!);
@@ -211,15 +238,35 @@ describe("errors inline (spec §9 Errors)", () => {
 });
 
 describe("the cross-group line (§5.9)", () => {
-  it("a pooled stage a later stage takes a best-Nth from: 'Between groups: …' with no head-to-head step; otherwise none", () => {
+  it("a pooled stage a later stage takes a best-Nth from: 'Between groups: …' with no head-to-head step; otherwise none (sweep: every sport, group)", () => {
+    let checked = 0;
+    let withSteps = 0;
+    for (const m of builtinModules) {
+      const rules = tableRulesOf(m, "group");
+      const steps = rules.crossGroup.keys.filter((k) => !isHeadToHeadKey(k));
+      const pooledHtml = render(m, "group", rules, { pooled: true, bestNth: true });
+      if (steps.length > 0) {
+        const line = text(tagOf(pooledHtml, "stage-tiebreaks-cross-group") + pooledHtml.slice(pooledHtml.indexOf('data-testid="stage-tiebreaks-cross-group"')));
+        expect(line, m.key).toContain(UI["stageTiebreaks.crossGroup"]!.replace("{steps}", steps.map((k) => stepWord(k, m.key)).join(", ")));
+        withSteps++;
+      } else expect.unreachable(`${m.key}: every sport's cross-group order carries a non-head-to-head step (the empty case is pinned below)`);
+      expect(has(render(m, "group", rules, { pooled: true, bestNth: false }), "stage-tiebreaks-cross-group"), `${m.key}: no best-Nth`).toBe(false);
+      expect(has(render(m, "league", tableRulesOf(m, "league"), { pooled: false, bestNth: true }), "stage-tiebreaks-cross-group"), `${m.key}: not pooled`).toBe(false);
+      checked++;
+    }
+    expect(checked, "sports").toBe(builtinModules.length);
+    expect(withSteps, "sports whose cross-group order has steps").toBeGreaterThan(0);
+    expect(tableRulesOf(football, "group").crossGroup.keys.filter((k) => !isHeadToHeadKey(k)).length, "premise: football (the case this test began with) has cross-group steps, so the sweep covers it").toBeGreaterThan(0);
+  });
+
+  it("the empty case: a cross-group order of head-to-head steps only has no line to show, so none is drawn", () => {
     const rules = tableRulesOf(football, "group");
-    const html = render(football, "group", rules, { pooled: true, bestNth: true });
-    const line = text(tagOf(html, "stage-tiebreaks-cross-group") + html.slice(html.indexOf('data-testid="stage-tiebreaks-cross-group"')));
-    const steps = rules.crossGroup.keys.filter((k) => !isHeadToHeadKey(k));
-    expect(steps.length, "premise: football's cross-group order has steps").toBeGreaterThan(0);
-    expect(line).toContain(UI["stageTiebreaks.crossGroup"]!.replace("{steps}", steps.map(stepWord).join(", ")));
-    expect(has(render(football, "group", rules, { pooled: true, bestNth: false }), "stage-tiebreaks-cross-group")).toBe(false);
-    expect(has(render(football, "league", tableRulesOf(football, "league"), { pooled: false, bestNth: true }), "stage-tiebreaks-cross-group")).toBe(false);
+    const h2h = tableRulesOf(football, "league").tiebreakers.keys.find(isHeadToHeadKey);
+    expect(h2h, "premise: football's league order has a head-to-head step to build the empty case from").toBeDefined();
+    const onlyH2h: StageTableRules = { ...rules, crossGroup: { keys: [h2h!] } };
+    expect(has(render(football, "group", onlyH2h, { pooled: true, bestNth: true }), "stage-tiebreaks-cross-group")).toBe(false);
+    // The positive pair: the same stage with a real step shows the line.
+    expect(has(render(football, "group", rules, { pooled: true, bestNth: true }), "stage-tiebreaks-cross-group")).toBe(true);
   });
 });
 

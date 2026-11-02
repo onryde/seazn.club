@@ -23,11 +23,13 @@
 // row is the bug, wherever the seam is drawn (_RULES.md, "One zone per
 // fixture").
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
+import { zonedTimeInput } from "@/lib/zoned-datetime";
 import type { FixtureRow } from "@/server/usecases/stages";
 import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import { isUnseatedSwissByeShell } from "@/lib/swiss-shell";
 import type { CameraPolicy } from "@/lib/camera-policy";
 import type { NeedsReason } from "@/server/external-play/types";
+import { stageCounts } from "@/lib/stage-card/summaries";
 
 /** The fixture fields this builder (and Task 4's rendering of its rows) reads,
  *  derived from the wire row rather than retyped — a hand-written twin is how
@@ -70,7 +72,11 @@ export type RunSheetFixture = Pick<
   | "abandon_reason"
   // W2c Task 19 (S4): the match plays a format of its own - the "Format changed" chip (`desk/run-sheet-tags.ts`).
   | "format_changed"
->;
+> &
+  // Match Day E1 fix rounds 1 and 3: a group stage's row says which pool it is (the row's pool chip) and ties in time read by pool
+  // (`stageRoundSections`). OPTIONAL on purpose: the wire row always carries it (`toRunSheetFixture` spreads the whole row), but a hand-built
+  // fixture that predates it is a row with no pool, which is what absent means - the same posture `ext_key`/`lane` take on `FixtureRow` itself.
+  Partial<Pick<FixtureRow, "pool_id">>;
 
 export type RunSheetStage = { id: string; seq: number; kind: string };
 
@@ -147,6 +153,16 @@ export type RunSheetBlock =
  *  imports this instead), so the sheet and the panel can never disagree about
  *  which stage is a bracket. */
 export const BRACKET_STAGE_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
+
+/** Stage kinds whose fixtures run in numbered ROUNDS a person reads in turn - the kinds a stage card draws a bar per round for
+ *  (Match Day E1). Every other kind is a bracket (named rounds, `BRACKET_STAGE_KINDS`) or the ladder, which stores each
+ *  challenge as a round of its own (`stages.ts`, `issueChallenge`): a bar per challenge says nothing, so a ladder is one flat list.
+ *
+ *  A literal beside `BRACKET_STAGE_KINDS` because no client-safe set answers this question: the engine's `DRAW_KINDS` is the
+ *  kinds a level result may occur in (the same four today, a different fact), and the `TABLE_KINDS` copies are server-private and
+ *  not one membership. `run-sheet-groups.test.ts` holds the three homes (rounds, bracket, ladder) to a partition of the engine's
+ *  `StageKind`, so a kind the engine adds fails there until someone decides which it is. */
+export const ROUND_SEQUENCE_STAGE_KINDS: ReadonlySet<string> = new Set(["league", "group", "swiss", "americano"]);
 
 /** A bye: one side empty with an auto-advance award outcome (v3/04 §3 item 6).
  *  Copied verbatim from `stages-panel.tsx`'s module-private `isBye`, typed
@@ -340,4 +356,124 @@ export function buildRunSheet(input: RunSheetInput): RunSheetBlock[] {
     out.push({ kind: "settled", fixtures: settledUntimed });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Match Day E1 item 1 (owner 2026-11-01): a stage card groups its rows under a header bar PER ROUND, not per day. The division-wide
+// `buildRunSheet` above is unchanged (its day / unscheduled / settled blocks still feed the filter counts and the bracket blocks);
+// these pure functions regroup ONE non-bracket stage's rows from those same blocks.
+// ---------------------------------------------------------------------------
+
+/** One round of a non-bracket stage as the card shows it: its rows in the order they are read. A group stage's round holds EVERY pool's
+ *  matches of that round (Match Day E1 fix round 3): the rows say which pool they are (`pool_id`), the section does not. */
+export type StageRoundSection = { round: number; fixtures: RunSheetFixture[] };
+
+/**
+ * One NON-BRACKET stage's rows from the division's blocks, as round sections: ONE per round, whatever the stage's pools - a group stage's
+ * Round 1 holds Group A's and Group B's first matches together (E1 fix round 3: pools on separate courts play at the same time, so
+ * no order of per-pool sections is also time order). The sections read in the order they are PLAYED: earliest kickoff first, the ones with
+ * nothing timed last, the round number to break a tie. Within a round the rows run in time order and the ones with no time sit last: a
+ * tie goes to the pool `poolOrder` (the display order the page owns, pool id -> position) lists first - rows of no pool before a listed
+ * pool, a pool `poolOrder` does not list after every listed one - and then to the order the draw gave them. The rows a person plays first
+ * are read first, and "No time yet" never interrupts a timed run. Bracket blocks are skipped (a knockout keeps its own named rounds); a
+ * bye the grouping kept (a Swiss sit-out) rides in its round as an untimed row.
+ *
+ * Reads the blocks, never the raw fixture list, so a row `buildRunSheet` leaves off (an untimed league bye, R7c) is absent here too.
+ */
+export function stageRoundSections(
+  blocks: readonly RunSheetBlock[],
+  stageId: string,
+  poolOrder: ReadonlyMap<string, number> = NO_POOL_ORDER,
+): StageRoundSection[] {
+  const byRound = new Map<number, RunSheetFixture[]>();
+  for (const f of stageRowsOutsideBrackets(blocks, stageId)) {
+    const list = byRound.get(f.round_no) ?? [];
+    list.push(f);
+    byRound.set(f.round_no, list);
+  }
+  const inOrder = inReadingOrder(poolOrder);
+  const sorted = [...byRound.entries()].map(([round, fixtures]) => ({ round, fixtures: [...fixtures].sort(inOrder) }));
+  // Rounds read in the order they are PLAYED (design/fix-ui/03: a Tour 3 that kicked off a day before Tour 1 is not "last"): by the
+  // earliest kickoff in the round, the rounds with no time at all after them, and round number to break every tie - which is
+  // also the whole order while nothing is timed yet. Sorted rows put the earliest timed one first, so that is `fixtures[0]`.
+  const earliest = (r: StageRoundSection): number => (r.fixtures[0]?.scheduled_at != null ? Date.parse(r.fixtures[0].scheduled_at) : Number.POSITIVE_INFINITY);
+  return sorted.sort((a, b) => {
+    const ea = earliest(a);
+    const eb = earliest(b);
+    if (ea !== eb) return ea < eb ? -1 : 1;
+    return a.round - b.round;
+  });
+}
+
+const NO_POOL_ORDER: ReadonlyMap<string, number> = new Map();
+
+/**
+ * One NON-BRACKET stage's rows as a single list - for a kind whose rounds are not worth a bar (the ladder, which stores each challenge
+ * as a round of its own). The same reading order as inside a round: time order, the rows with no time last in the order the draw gave
+ * them. A one-element list (round 0, the stage as a whole) so the caller draws it with the code that draws a round, minus the bar;
+ * an empty list when the stage has no rows here.
+ */
+export function stageFlatSection(blocks: readonly RunSheetBlock[], stageId: string): StageRoundSection[] {
+  const fixtures = [...stageRowsOutsideBrackets(blocks, stageId)].sort(inReadingOrder(NO_POOL_ORDER));
+  return fixtures.length === 0 ? [] : [{ round: 0, fixtures }];
+}
+
+/** A stage's rows out of the division's non-bracket blocks, in no particular order. */
+function stageRowsOutsideBrackets(blocks: readonly RunSheetBlock[], stageId: string): RunSheetFixture[] {
+  const rows: RunSheetFixture[] = [];
+  for (const block of blocks) {
+    if (block.kind === "bracket") continue;
+    for (const f of block.fixtures) if (f.stage_id === stageId) rows.push(f);
+  }
+  return rows;
+}
+
+const drawRank = (a: RunSheetFixture, b: RunSheetFixture) => a.seq_in_round - b.seq_in_round || a.fixture_no - b.fixture_no;
+/**
+ * Time order, the rows with no time last. Rows that tie - the same minute, or no time at all - read by the pool `poolOrder` lists first
+ * (rows of no pool before a listed pool, an unlisted pool after every listed one, two unlisted pools by id so the order is stable) and then
+ * in the order the draw gave them. A stage with no pools has one pool (none), so for a league, a Swiss event or an americano the tie goes
+ * straight to the draw, as it always did.
+ */
+function inReadingOrder(poolOrder: ReadonlyMap<string, number>): (a: RunSheetFixture, b: RunSheetFixture) => number {
+  const poolRank = (f: RunSheetFixture): number => (f.pool_id == null ? -1 : (poolOrder.get(f.pool_id) ?? Number.POSITIVE_INFINITY));
+  const at = (f: RunSheetFixture): number => (f.scheduled_at === null ? Number.POSITIVE_INFINITY : Date.parse(f.scheduled_at));
+  return (a, b) => {
+    const ta = at(a);
+    const tb = at(b);
+    if (ta !== tb) return ta < tb ? -1 : 1;
+    const pa = poolRank(a);
+    const pb = poolRank(b);
+    if (pa !== pb) return pa < pb ? -1 : 1;
+    if ((a.pool_id ?? "") !== (b.pool_id ?? "")) return (a.pool_id ?? "") < (b.pool_id ?? "") ? -1 : 1;
+    return drawRank(a, b);
+  };
+}
+
+/**
+ * "N of M done" for one round: M is every real match in it (byes are no match), N what the stage card itself counts as finished -
+ * `stageCounts`' `played` bucket, the number the Complete button waits on. A walkover, an abandonment and a cancellation are
+ * done (nothing is left to play); a match held for its settle is not (`held` is the ids the page lists as awaiting it). The
+ * bars of a stage's rounds therefore add up to the stage's own counts line: a bar can never read "1 of 2" on a stage Complete
+ * is already enabled for.
+ */
+export function roundDone(fixtures: readonly RunSheetFixture[], held: ReadonlySet<string>): { done: number; total: number } {
+  const real = fixtures.filter((f) => !isBye(f));
+  return { done: stageCounts(real, held).played, total: real.length };
+}
+
+/**
+ * When a round is played, from the rows it is asked of: the first and last calendar day in the VENUE zone and, when they are one
+ * day, the clock span of its timed rows ("21:10" to "21:50", equal when only one row has a time). `null` when no row has a time:
+ * a bar with nothing to say about time says nothing (an empty cell is not information).
+ */
+export function roundWhen(
+  fixtures: readonly RunSheetFixture[],
+  tz: string,
+): { firstDay: string; lastDay: string; from: string; to: string } | null {
+  const instants = fixtures.filter((f) => f.scheduled_at !== null).map((f) => Date.parse(f.scheduled_at as string));
+  if (instants.length === 0) return null;
+  const first = Math.min(...instants);
+  const last = Math.max(...instants);
+  return { firstDay: dayKeyInTz(first, tz), lastDay: dayKeyInTz(last, tz), from: zonedTimeInput(first, tz), to: zonedTimeInput(last, tz) };
 }

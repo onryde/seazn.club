@@ -2,7 +2,7 @@
 
 // One curated rule field as a control: a number input, a Default/On/Off select for a boolean, a select for an option
 // list, or the ordered-list control for a `sequence`. Extracted verbatim from `MatchRuleFields` (the division builder's
-// and settings' grid) so the stage format row (`stage-rule-fields.tsx`) renders the same markup, the same D9 synthetic
+// and settings' grid) so the stage card's format editor (`rules/match-format-editor.tsx`, scope "stage") renders the same markup, the same D9 synthetic
 // option for a saved value the picker cannot offer, and the same inherited placeholder: two editors that cannot drift.
 //
 // Every field's label, help and option text is drawn from the dictionary in all four locales (W2e Task 33a: `labelKey` is
@@ -109,7 +109,9 @@ export function RuleFieldControl({
           placeholder={inheritedPlaceholder(msg("rules.default"), inherited?.[field.key])}
           aria-describedby={described}
           aria-invalid={invalidMark}
-          className="input"
+          // Match Day E1 fix round 1 (m7): the 44px tap floor is the control's own - the shared `.input` is 42px, and only one editor's
+          // wrapper used to lift it, so the strip, the builder and the fixture's rules block drew a 42px field under the same label.
+          className="input min-h-11"
         />
       ) : (
         <select
@@ -118,7 +120,8 @@ export function RuleFieldControl({
           onChange={(e) => onEdit(e.target.value)}
           aria-describedby={described}
           aria-invalid={invalidMark}
-          className="select"
+          // Match Day E1 item 4: full width below md, capped at 20rem from md (a choice list is not a 700px bar), always a block.
+          className="select block min-h-11 w-full md:max-w-xs"
         >
           <option value="">{msg("rules.default")}</option>
           {/* D9 (owner ruling 2026-09-18) - a SAVED value this select cannot offer must be shown, not swallowed.

@@ -221,7 +221,7 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
     expect(checked).toBe(FLAG_STATES.length);
   });
 
-  it("not offered: the queue stays, with no panel link - online play off now, a board held AND one flagged: the queue gets both lists and the run sheet the chips, whatever the flag says, and the flag is never asked", async () => {
+  it("not offered: the queue stays, with no panel link - online play off now, a board held AND one flagged: the queue gets both lists and the run sheet the chips, whatever the flag says; the flag is asked once, for the Division rules strip's Online play select only", async () => {
     queue.listNeedsOrganiserExternalPlay.mockResolvedValue([ROW]);
     const FLAGGED = { boards: [{ fixtureId: "f2" }], ownBoards: 1 };
     const SHEET = { f1: { cameraPolicy: "off", cameraFlagCount: 0, connectionProblemCount: 0, offSeaznFlagCount: 0, held: "aborted", live: false } };
@@ -246,7 +246,10 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
       for (const read of [queue.listNeedsOrganiserExternalPlay, queue.listFlaggedExternalPlay, queue.listRunSheetOnlinePlay]) {
         expect(read, s.label).toHaveBeenLastCalledWith(PAGE.auth, "div-1");
       }
-      expect(flags.isServerFeatureEnabled, `${s.label}: never asked, online play is off`).not.toHaveBeenCalled();
+      // Match Day C2: the Online play select moved with the match rules to the Division rules strip on this tab, so the flag
+      // is asked here - once - and its answer is the strip's; nothing else on the tab reads it while online play is off.
+      expect(flags.isServerFeatureEnabled, `${s.label}: asked once, for the strip`).toHaveBeenCalledTimes(1);
+      expect((panels[0]!.props as { rulesStrip: { onlineChessOffered: unknown } }).rulesStrip.onlineChessOffered, `${s.label}: the strip's answer`).toBe(s.offered);
       expect(queue.listOpenRounds, `${s.label}: no round to open off-line`).not.toHaveBeenCalled();
       expect("openRounds" in (panels[0]!.props as object), `${s.label}: the stage cards have no such prop`).toBe(false);
       checked++;
@@ -309,12 +312,12 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
     expect(findAll(tree, ExternalPlayNeedsResultQueue)).toHaveLength(0);
   });
 
-  it("T16 — the empty case: a chess fixtures tab with nothing held or flagged (online play off) still mounts the queue (it renders nothing), and asks nothing", async () => {
+  it("T16 — the empty case: a chess fixtures tab with nothing held or flagged (online play off) still mounts the queue (it renders nothing), and asks the flag only for the strip", async () => {
     flagIs(FLAG_STATES[0]!);
     const queues = findAll(await renderPage("fixtures"), ExternalPlayNeedsResultQueue);
     expect(queues).toHaveLength(1);
     expect((queues[0]!.props as { held: unknown }).held).toEqual([]);
-    expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
+    expect(flags.isServerFeatureEnabled, "once, for the Division rules strip's Online play select").toHaveBeenCalledTimes(1);
   });
 
   // Owner ruling 2026-10-25 (follow-up to the Arbiter Panel's D1): the queue reads its times in the VENUE's zone, so the page must hand it
@@ -374,14 +377,17 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
 // The online-switch warning (owner ruling 2026-10-25: switching to online with players who cannot be paired WARNS, never
 // blocks). The island's own suite (division-settings-online-link-gaps.test.tsx) proves what it prints from a summary; the
 // use-case's (lichess-link-gaps.test.ts) proves the two lists against a real database. This one proves the JOIN between them
-// - the page reads the lists for THIS division as THIS organiser, summarises BOTH, and hands them to DivisionSettings, and
-// only where the Online play select renders - which neither end can see on its own (a fixture on both ends proves the fixture).
-describe("division page: the link-gap summary reaches DivisionSettings", () => {
+// - the page reads the lists for THIS division as THIS organiser, summarises BOTH, and hands them to the island that renders
+// the Online play select, and only there - which neither end can see on its own (a fixture on both ends proves the fixture).
+// Match Day C2: that island is now the Division rules strip on the Fixtures tab (it was Settings' Match rules block).
+describe("division page: the link-gap summary reaches the Division rules strip", () => {
   type List = { count: number; names: string[] };
   const settingsProps = async () => {
-    const found = findAll(await renderPage("settings"), DivisionSettings);
-    expect(found, "DivisionSettings mounted once").toHaveLength(1);
-    return found[0]!.props as { lichessGaps?: { unlinked: List; reconnect: List; empty: List } };
+    const found = findAll(await renderPage("fixtures"), StagesPanel);
+    expect(found, "the stage cards (and the strip above them) mounted once").toHaveLength(1);
+    const strip = (found[0]!.props as { rulesStrip?: { lichessGaps?: { unlinked: List; reconnect: List; empty: List } } }).rulesStrip;
+    expect(strip, "the Division rules strip is handed its props").toBeDefined();
+    return strip!;
   };
   const person = (n: number, prefix = "Player") => ({ kind: "person", id: `p${n}`, name: `${prefix} ${n}` });
   const NONE: List = { count: 0, names: [] };
@@ -452,7 +458,7 @@ describe("division page: the link-gap summary reaches DivisionSettings", () => {
     expect(checked).toBe(2);
   });
 
-  it("not offered (flag off, PostHog down), not chess, or not the Settings tab: no summary, and the lists are never read", async () => {
+  it("not offered (flag off, PostHog down), not chess, or not the Fixtures tab: no summary, and the lists are never read", async () => {
     let checked = 0;
     for (const s of [FLAG_STATES[1]!, FLAG_STATES[2]!]) {
       flagIs(s);
@@ -471,20 +477,25 @@ describe("division page: the link-gap summary reaches DivisionSettings", () => {
     flagIs(FLAG_STATES[0]!);
     unlinked.read.mockClear();
     await renderPage("entrants");
-    expect(unlinked.read, "a tab that mounts no Settings").not.toHaveBeenCalled();
+    expect(unlinked.read, "a tab that mounts no strip").not.toHaveBeenCalled();
     checked++;
-    expect(checked).toBe(4);
+    flagIs(FLAG_STATES[0]!);
+    unlinked.read.mockClear();
+    await renderPage("settings");
+    expect(unlinked.read, "Settings: the Online play select is no longer there").not.toHaveBeenCalled();
+    checked++;
+    expect(checked).toBe(5);
   });
 
   // Fix round 2: the warning is a courtesy beside the form. A reader that throws (a database hiccup, a sealed table) must
-  // not take the whole Settings tab down with a 500: it logs, and the tab renders without the warning.
-  it("a reader that throws does not take the Settings tab down: it logs (English, once) and renders without the warning", async () => {
+  // not take the whole tab down with a 500: it logs, and the tab renders without the warning.
+  it("a reader that throws does not take the Fixtures tab down: it logs (English, once) and renders without the warning", async () => {
     flagIs(FLAG_STATES[0]!);
     const boom = new Error("link table unavailable");
     unlinked.read.mockRejectedValue(boom);
     const errorLog = vi.spyOn(log, "error").mockImplementation(() => undefined);
 
-    const props = await settingsProps(); // the page rendered: DivisionSettings is there
+    const props = await settingsProps(); // the page rendered: the strip is there
 
     expect(props.lichessGaps, "no summary, so the island prints no warning").toBeUndefined();
     expect(unlinked.read, "premise: the reader was reached and threw").toHaveBeenCalledTimes(1);
@@ -506,11 +517,15 @@ describe("division page: the link-gap summary reaches DivisionSettings", () => {
     expect(errorLog).not.toHaveBeenCalled();
   });
 
-  it("a viewer (not an editor) reads nothing: the Settings island is not mounted for them", async () => {
+  it("a viewer (not an editor) reads nothing: the strip is read-only for them, with no Online play select and no warning", async () => {
     pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit: false });
     flagIs(FLAG_STATES[0]!);
 
-    expect(findAll(await renderPage("settings"), DivisionSettings)).toHaveLength(0);
+    const strip = await settingsProps();
+    expect((strip as { canEdit?: unknown }).canEdit, "read-only").toBe(false);
+    expect((strip as { onlineChessOffered?: unknown }).onlineChessOffered, "no select to offer").toBe(false);
+    expect(strip.lichessGaps).toBeUndefined();
     expect(unlinked.read).not.toHaveBeenCalled();
+    expect(flags.isServerFeatureEnabled, "no flag asked for a reader").not.toHaveBeenCalled();
   });
 });

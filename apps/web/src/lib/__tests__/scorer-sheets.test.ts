@@ -79,7 +79,7 @@ describe("selectSheetFixtures (scorer sheets §4.4)", () => {
   it("X-SW-29 an unseated Swiss bye shell with a time does not print", () => {
     // W3 T3 (RB3-23): a Swiss stage mints its round's bye row as a shell before Pair — `sw-r{N}-bye`, no seats, NO
     // slot label (the label is written at seat time) — so the label rule above cannot see it. One that holds a time
-    // (placed before V483) is still not a match anyone plays.
+    // (placed before V485) is still not a match anyone plays.
     const byeShell = c({ ext_key: "sw-r2-bye", home: null, away: null });
     expect(selectSheetFixtures([byeShell], DAY), "a bye shell is not on the sheet").toEqual([]);
     expect(sheetDays([byeShell]), "… and lends the picker no day").toEqual([]);

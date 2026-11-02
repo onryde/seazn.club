@@ -20,7 +20,13 @@ import {
 } from "../stages";
 import { appendEvent } from "@/server/engine-db";
 import { getCompetitionDesk, competitionPhase } from "../competition-desk";
+import { NOT_RECORDING_GRACE_MINUTES } from "@/lib/division-phase";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import en from "@/dictionaries/en/ui.json";
+import { needsYouAt, needsYouItems } from "@/components/v2/desk/needs-you";
+import { getMatchDay } from "../match-day";
+import { listDivisions } from "../divisions";
+import { ORG_TZ, between, seedDay, setStatus, type Fx, type Pair } from "./_match-day-seed";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 const GENERIC_CONFIG = {
@@ -499,6 +505,64 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     const desk = await getCompetitionDesk(auth, competitionId);
     const d = desk.divisions.get(divisionId)!;
     expect(d.attention.some((a) => a.kind === "no_scorer")).toBe(true);
+  });
+
+  // Match Day A4 fix round 1, I1 (controller ruling): a device link IS a scorer. Spec 2026-10-31 §9 makes the scoring
+  // link THE scorer path, so an ACTIVE link (the same rule DeviceLinkPanel and the pad's token resolver use: not revoked,
+  // and no expiry or one still ahead) suppresses no_scorer exactly as an assigned official does. A revoked or expired link
+  // is no scorer. not_recording keeps its own rule (zero events past the grace), so a linked match quiet past the grace
+  // is not_recording, never no_scorer.
+  it("I1: an ACTIVE device link counts as a scorer; a revoked or expired one does not; none raises no_scorer — and a quiet linked match past the grace is not_recording", async () => {
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "League", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    const fx = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 5`;
+    expect(fx.length, "premise: five fixtures to put in play").toBe(5);
+    const [user] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified) values (${`desk-link-${randomUUID()}@test.local`}, 'Desk', true) returning id`;
+    // Five in-play fixtures, zero events, nobody assigned; minutes since kick-off chosen around the grace.
+    const minutes = [5, 30, 5, 5, 5];
+    for (const [i, f] of fx.entries()) {
+      await sql`update fixtures set status = 'in_play', scheduled_at = now() - make_interval(mins => ${minutes[i]!}) where id = ${f.id}`;
+    }
+    const links: { fixture: string; revoked_at: string | null; expires_at: string | null }[] = [
+      { fixture: fx[0]!.id, revoked_at: null, expires_at: null }, // sealed, live until the match is over
+      { fixture: fx[1]!.id, revoked_at: null, expires_at: new Date(Date.now() + 3_600_000).toISOString() }, // expiry ahead
+      { fixture: fx[2]!.id, revoked_at: new Date(Date.now() - 60_000).toISOString(), expires_at: null }, // revoked
+      { fixture: fx[3]!.id, revoked_at: null, expires_at: new Date(Date.now() - 60_000).toISOString() }, // expired
+      // fx[4]: no link at all
+    ];
+    for (const l of links) {
+      await sql`
+        insert into device_links (org_id, fixture_id, token_hash, issued_by, revoked_at, expires_at)
+        values (${auth.orgId}, ${l.fixture}, ${`h-${randomUUID()}`}, ${user!.id}, ${l.revoked_at}, ${l.expires_at})`;
+    }
+    const now = Date.now();
+    const active = (l: (typeof links)[number]) => l.revoked_at === null && (l.expires_at === null || Date.parse(l.expires_at) > now);
+    const linked = new Set(links.filter(active).map((l) => l.fixture));
+    expect(linked.size, "premise: two active links, two dead ones").toBe(2);
+
+    const desk = await getCompetitionDesk(auth, competitionId);
+    const d = desk.divisions.get(divisionId)!;
+    const ids = (kind: string) =>
+      [...(d.attention.find((a) => a.kind === kind) as { fixtureIds?: string[] } | undefined)?.fixtureIds ?? []].sort();
+    // no_scorer: every in-play fixture without an active link (no official anywhere here).
+    expect(ids("no_scorer")).toEqual(fx.map((f) => f.id).filter((id) => !linked.has(id)).sort());
+    // not_recording: the linked fixtures quiet for at least the grace — the 30-minute one, not the 5-minute one.
+    expect(ids("not_recording")).toEqual(
+      fx.filter((f, i) => linked.has(f.id) && minutes[i]! >= NOT_RECORDING_GRACE_MINUTES).map((f) => f.id).sort(),
+    );
+    expect(ids("not_recording")).toHaveLength(1);
+
+    // Revoking the sealed link puts its fixture back on no_scorer.
+    await sql`update device_links set revoked_at = now() where fixture_id = ${fx[0]!.id}`;
+    const after = await getCompetitionDesk(auth, competitionId);
+    const ad = after.divisions.get(divisionId)!;
+    expect((ad.attention.find((a) => a.kind === "no_scorer") as { fixtureIds: string[] }).fixtureIds).toContain(fx[0]!.id);
   });
 
   it("F4: an official on a DIFFERENT fixture does not suppress this one's no_scorer", async () => {
@@ -1307,6 +1371,233 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       const { competitionId } = await seedDivision(auth, 4);
       const desk = await getCompetitionDesk(auth, competitionId);
       expect(desk.up_next).toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------------------------------------------------------------
+  // Match Day B1 (spec 2026-10-31 §9): `fixtures_today` is the competition page's match-day gate — it shows Open Match Day and
+  // decides where the Needs-you list lives. It is A2's `countFixturesToday` (controller ruling R2: one count, two surfaces), so
+  // each match is today on its OWN division's day: the venue zone, else the organisation's. The expected values below come from
+  // the zone's own calendar (Intl), never from the SQL under test.
+  // -------------------------------------------------------------------------------------------------------------------------
+  // One sport (generic, `seedDay`'s): `countFixturesToday` reads a fixture's status, time and division zone only — no sport
+  // column is in its query, so another sport cannot change the count.
+  describe("B1: fixtures_today, the competition page's match-day gate", () => {
+    /** `instant`'s calendar date in `tz`, read from Intl — the zone's declaration, not the code under test. */
+    const dateIn = (instant: Date, tz: string): string =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(instant);
+
+    it("counts a multi-day event's matches on each match's own day — the day before, the day of, a middle day with none — and the competition page and Match Day agree every day", async () => {
+      // The organisation is on Europe/Amsterdam and the division declares no zone, so its matches are on Amsterdam's day.
+      const day = await seedDay();
+      const [p1, p2, p3, p4] = day.comp.pairs as [Pair, Pair, Pair, Pair];
+      const planned = [
+        { id: between(day.comp, p1, p2).id, at: "2026-11-07T10:00:00.000Z" }, // Sat 7 Nov, 11:00 in Amsterdam
+        { id: between(day.comp, p3, p4).id, at: "2026-11-07T22:30:00.000Z" }, // Sat 7 Nov, 23:30 in Amsterdam
+        { id: between(day.comp, p1, p3).id, at: "2026-11-09T23:30:00.000Z" }, // Monday in UTC; Tue 10 Nov, 00:30 in Amsterdam
+      ];
+      for (const p of planned) await sql`update fixtures set scheduled_at = ${p.at} where id = ${p.id}`;
+      const onDay = (now: Date, tz: string): number =>
+        planned.filter((p) => dateIn(new Date(p.at), tz) === dateIn(now, tz)).length;
+      const days: [string, string][] = [
+        ["the day before", "2026-11-06T12:00:00.000Z"],
+        ["the first day", "2026-11-07T12:00:00.000Z"],
+        ["a middle day with no matches", "2026-11-08T12:00:00.000Z"],
+        ["the late match's day in UTC, not in Amsterdam", "2026-11-09T12:00:00.000Z"],
+        ["the last day", "2026-11-10T12:00:00.000Z"],
+      ];
+      // Guard the guard: the derived expectations have the shape this test is about — none the day before, two on the day,
+      // none in the middle — and on the Monday the two zones disagree, so a count taken in UTC cannot pass.
+      expect(days.map(([, d]) => onDay(new Date(d), ORG_TZ))).toEqual([0, 2, 0, 0, 1]);
+      expect(onDay(new Date(days[3]![1]), "UTC")).toBe(1);
+      let checked = 0;
+      for (const [label, d] of days) {
+        const now = new Date(d);
+        const desk = await getCompetitionDesk(day.auth, day.comp.id, now);
+        expect(desk.fixtures_today, label).toBe(onDay(now, ORG_TZ));
+        // One count, two surfaces: Match Day reports the desk's own count (B4: it reads `desk.fixtures_today`, one count per
+        // poll) — a wiring check only. The non-tautological pin of the two agreeing is the phase implication test below.
+        expect((await getMatchDay(day.auth, day.comp.id, now)).fixtures_today, `${label}: Match Day reports it`).toBe(
+          desk.fixtures_today,
+        );
+        checked++;
+      }
+      expect(checked, "days checked").toBe(days.length);
+
+      // The division's own zone, once it declares one: in UTC the late match is Monday's, and Tuesday has none.
+      await sql`update schedule_settings set tz = 'UTC' where division_id = ${day.comp.divisionId}`;
+      const monday = new Date(days[3]![1]);
+      const tuesday = new Date(days[4]![1]);
+      expect((await getCompetitionDesk(day.auth, day.comp.id, monday)).fixtures_today).toBe(onDay(monday, "UTC"));
+      expect((await getCompetitionDesk(day.auth, day.comp.id, tuesday)).fixtures_today).toBe(onDay(tuesday, "UTC"));
+      expect((await getMatchDay(day.auth, day.comp.id, monday)).fixtures_today).toBe(1);
+
+      // A match in play is a match today whatever day it was planned for (ruling m5): the middle day becomes a match day.
+      const middle = new Date(days[2]![1]);
+      await setStatus(planned[0]!.id, "in_play");
+      expect((await getCompetitionDesk(day.auth, day.comp.id, middle)).fixtures_today).toBe(1);
+      // A cancelled match is no match: Monday stops being a match day.
+      await setStatus(planned[2]!.id, "cancelled");
+      expect((await getCompetitionDesk(day.auth, day.comp.id, monday)).fixtures_today).toBe(1); // only the one in play
+      await setStatus(planned[0]!.id, "decided");
+      expect((await getCompetitionDesk(day.auth, day.comp.id, monday)).fixtures_today).toBe(0);
+    });
+
+    // B1 review minor (task B4): the division pill's `match_day` phase (division-phase.ts rule 3: a match in play, or one planned
+    // on the division's day) and the competition page's gate (`fixtures_today`, countFixturesToday) are two derivations of "a
+    // match today". They must never disagree in the direction an organiser sees: a division reading "Today" on a page that
+    // offers no Match Day. Two independent readers, checked against each other at every instant of a sequence — not one number
+    // compared with itself.
+    it("a division in the match_day phase implies fixtures_today > 0 — on every day of a multi-day event, before, during and after its matches", async () => {
+      const day = await seedDay();
+      const [p1, p2, p3, p4] = day.comp.pairs as [Pair, Pair, Pair, Pair];
+      // Started, so the phase ladder reaches its match_day rung (a division in setup reads setting_up).
+      await sql`update divisions set status = 'active' where id = ${day.comp.divisionId}`;
+      const sat = between(day.comp, p1, p2).id;
+      const mon = between(day.comp, p3, p4).id;
+      await sql`update fixtures set scheduled_at = ${"2026-11-07T10:00:00.000Z"} where id = ${sat}`; // Sat 11:00, Amsterdam
+      await sql`update fixtures set scheduled_at = ${"2026-11-09T09:00:00.000Z"} where id = ${mon}`; // Mon 10:00, Amsterdam
+      const instants: [string, string, () => Promise<void>][] = [
+        ["the day before", "2026-11-06T12:00:00.000Z", async () => {}],
+        ["the first day", "2026-11-07T08:00:00.000Z", async () => {}],
+        ["a middle day with no matches", "2026-11-08T12:00:00.000Z", async () => {}],
+        ["the middle day, Saturday's match in play", "2026-11-08T12:00:00.000Z", () => setStatus(sat, "in_play")],
+        ["the middle day, Saturday's match decided", "2026-11-08T12:00:00.000Z", () => setStatus(sat, "decided")],
+        ["the last day", "2026-11-09T08:00:00.000Z", async () => {}],
+        ["the last day, its match cancelled", "2026-11-09T08:00:00.000Z", () => setStatus(mon, "cancelled")],
+      ];
+      let implied = 0;
+      let otherPhases = 0;
+      for (const [label, at, act] of instants) {
+        await act();
+        const desk = await getCompetitionDesk(day.auth, day.comp.id, new Date(at));
+        const division = desk.divisions.get(day.comp.divisionId);
+        expect(division, `${label}: the division is on the desk`).toBeDefined();
+        if (division!.phase === "match_day") {
+          expect(desk.fixtures_today, `${label}: a "Today" division on a page with no match today`).toBeGreaterThan(0);
+          implied++;
+        } else {
+          otherPhases++;
+        }
+      }
+      // Anti-vacuity: the implication was really exercised (the first day, the in-play middle day, the last day), and the
+      // sweep saw the other side too, so a ladder that always answered match_day could not pass silently.
+      expect(implied, "instants in the match_day phase").toBe(3);
+      expect(otherPhases, "instants in another phase").toBe(instants.length - 3);
+    });
+
+    it("the Needs-you list lives in one place: Match Day carries it only on a match day, the competition page before the day", async () => {
+      const day = await seedDay();
+      const [p1, p2] = day.comp.pairs as [Pair, Pair];
+      // Started, so the desk raises its live-activity rows (a division still in setup raises none).
+      await sql`update divisions set status = 'active' where id = ${day.comp.divisionId}`;
+      // One match on Sat 7 Nov at 11:00 in Amsterdam, 30 minutes long; the other five have no time.
+      await sql`update fixtures set scheduled_at = ${"2026-11-07T10:00:00.000Z"} where id = ${between(day.comp, p1, p2).id}`;
+      const names = (await listDivisions(day.auth, day.comp.id)).map((d) => ({ id: d.id, name: d.name, slug: d.slug }));
+      const itemsAt = async (now: Date) => {
+        const desk = await getCompetitionDesk(day.auth, day.comp.id, now);
+        return { desk, items: needsYouItems(en, desk, names, "org", "comp", "en") };
+      };
+
+      // The day before: the desk has a row to place, and it is the competition page's.
+      const before = new Date("2026-11-06T12:00:00.000Z");
+      const b = await itemsAt(before);
+      expect(b.items.map((i) => i.kind), "premise: the desk has a row").toEqual(["unscheduled"]);
+      expect(b.desk.fixtures_today).toBe(0);
+      expect(needsYouAt("competition", b.desk.fixtures_today, b.items)).toEqual(b.items);
+      const viewBefore = await getMatchDay(day.auth, day.comp.id, before);
+      expect(viewBefore.needs_you, "Match Day has no list the day before").toEqual([]);
+      expect(viewBefore.results_owed).toBe(0);
+
+      // The day of, an hour after the match's window closed: its result is owed, and the whole list is Match Day's.
+      const on = new Date("2026-11-07T12:00:00.000Z");
+      const o = await itemsAt(on);
+      expect(o.items.map((i) => i.kind).sort(), "premise: the desk has two rows").toEqual(["result_missing", "unscheduled"]);
+      expect(o.desk.fixtures_today).toBe(1);
+      expect(needsYouAt("competition", o.desk.fixtures_today, o.items), "the competition page lists nothing").toEqual([]);
+      const viewOn = await getMatchDay(day.auth, day.comp.id, on);
+      expect(viewOn.needs_you.map((i) => i.kind).sort()).toEqual(["result_missing", "unscheduled"]);
+      expect(viewOn.results_owed).toBe(1);
+
+      // The next day has no match: Saturday's result is still owed, and it is back on the competition page — Match Day carries
+      // neither the row nor its count (the owed count is part of the list, not a fact of its own).
+      const after = new Date("2026-11-08T12:00:00.000Z");
+      const a = await itemsAt(after);
+      expect(a.desk.fixtures_today).toBe(0);
+      expect(a.items.map((i) => i.kind).sort(), "premise: the owed result is still owed").toEqual(["result_missing", "unscheduled"]);
+      expect(needsYouAt("competition", a.desk.fixtures_today, a.items)).toEqual(a.items);
+      const viewAfter = await getMatchDay(day.auth, day.comp.id, after);
+      expect(viewAfter.needs_you).toEqual([]);
+      expect(viewAfter.results_owed).toBe(0);
+    });
+  });
+
+  // Match Day task F3 (owner ruling 10-31 (3); the engine session's answer to Q2): a match's kick-off is the LAST core.start
+  // still active once the ledger's voids are applied — the engine's own resolveVoids, read once (kickoffsOf) by BOTH Match Day
+  // and this desk. B and C are written through the real write path (appendEvent: the engine folds them and moves the status);
+  // D and E hold two starts, which every kernel refuses to write ("already started"), so they are raw ledgers of the kind an
+  // import leaves. Each case is chosen so a wrong rule answers differently: min(start) misses C and D, max(start) misses E.
+  // One sport (generic, seedDay's): kickoffsOf reads only core.start / core.void, which every sport shares (core.*).
+  describe("F3: the kick-off is the last active core.start — Match Day and the desk agree", () => {
+    it("no start, one start, a voided start then a new one, two active starts, and a voided LAST start", async () => {
+      const day = await seedDay();
+      const at = (m: number) => new Date(Date.parse("2026-11-07T10:00:00.000Z") + m * 60_000).toISOString();
+      const [fA, fB, fC, fD, fE] = day.comp.fixtures as [Fx, Fx, Fx, Fx, Fx];
+      const append = async (f: Fx, type: string, minute: number, voids?: string) => {
+        const seq = Number((await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${f.id}`)[0]!.n);
+        const r = await appendEvent(day.orgId, f.id, seq, { type, payload: {}, recordedAt: at(minute), ...(voids === undefined ? {} : { voids }) });
+        return r.event.id;
+      };
+      // A: in play with no core.start at all (a status forced by an import or raw SQL): no kick-off.
+      await setStatus(fA.id, "in_play");
+      // B: one start, the control.
+      await append(fB, "core.start", 5);
+      // C: started at 5, the start voided at 6 (a false start), started again at 10.
+      await append(fC, "core.void", 6, await append(fC, "core.start", 5));
+      await append(fC, "core.start", 10);
+      // D: two active starts — 3 and 12. Every kernel refuses a second start while one is active ("already started"), so the
+      // write path cannot author this ledger; it is one the write path did not author (an import, a raw write), inserted raw.
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+        values (${fD.id}, ${day.orgId}, 0, 'core.start', '{}', ${at(3)}), (${fD.id}, ${day.orgId}, 1, 'core.start', '{}', ${at(12)})`;
+      await setStatus(fD.id, "in_play");
+      // E: started at 4, again at 8, and the LATER start voided at 9: the last ACTIVE start is 4 (raw, as D: two starts).
+      const [, second] = await sql<{ id: string }[]>`
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+        values (${fE.id}, ${day.orgId}, 0, 'core.start', '{}', ${at(4)}), (${fE.id}, ${day.orgId}, 1, 'core.start', '{}', ${at(8)})
+        returning id`;
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at, voids_event_id)
+        values (${fE.id}, ${day.orgId}, 2, 'core.void', '{}', ${at(9)}, ${second!.id})`;
+      await setStatus(fE.id, "in_play");
+      // Match C is on a court, so Match Day's court path reads it; the rest play on no court (B4's list).
+      await sql`update fixtures set court_id = ${day.courts.c1} where id = ${fC.id}`;
+
+      const expected: [Fx, string | null][] = [[fA, null], [fB, at(5)], [fC, at(10)], [fD, at(12)], [fE, at(4)]];
+      const statuses = await sql<{ id: string; status: string }[]>`select id, status from fixtures where id in ${sql(expected.map(([f]) => f.id))}`;
+      expect(statuses.map((r) => r.status), "premise: the write path left every one of them in play").toEqual(expected.map(() => "in_play"));
+
+      const now = new Date(at(20));
+      const desk = await getCompetitionDesk(day.auth, day.comp.id, now);
+      const view = await getMatchDay(day.auth, day.comp.id, now);
+      const onBoard = new Map([
+        ...view.playing_no_court.map((f) => [f.id, f.started_at] as const),
+        ...view.courts.flatMap((c) => (c.current === null ? [] : [[c.current.id, c.current.started_at] as const])),
+      ]);
+      let checked = 0;
+      for (const [f, kickoff] of expected) {
+        const row = desk.in_play_fixtures.find((x) => x.id === f.id);
+        expect(row, `the desk lists ${f.id}`).toBeDefined();
+        expect(row!.started_at, "desk").toBe(kickoff);
+        expect(onBoard.has(f.id), `Match Day shows ${f.id}`).toBe(true);
+        expect(onBoard.get(f.id), "Match Day").toBe(kickoff);
+        checked++;
+      }
+      expect(checked).toBe(5);
+      // Match C on its court: the court reads playing, with the NEW kick-off.
+      expect(view.courts.find((c) => c.court_id === day.courts.c1)?.current).toMatchObject({ id: fC.id, started_at: at(10) });
+      // The desk's in-play order is by kick-off (nulls last): A has none; E (4), B (5), C (10), D (12).
+      expect(desk.in_play_fixtures.map((x) => x.id)).toEqual([fE.id, fB.id, fC.id, fD.id, fA.id]);
     });
   });
 });

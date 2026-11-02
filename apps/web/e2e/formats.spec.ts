@@ -6,6 +6,8 @@ import {
   divisionPath,
   addEntrantsViaApi,
   expectNoHorizontalScroll,
+  openBracket,
+  stageCardOf,
 } from "./helpers";
 
 // PROMPT-28 formats: the new stage presets are reachable from the division
@@ -23,7 +25,6 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
   await page.getByRole("button", { name: "Format", exact: true }).click();
 
   // The new presets are visible on the format picker.
-  await expect(page.getByText("Triple round robin")).toBeVisible();
   await expect(page.getByText("Americano (padel)")).toBeVisible();
   await expect(page.getByText("Mexicano (padel)")).toBeVisible();
   await expect(page.getByText("Ladder", { exact: true })).toBeVisible();
@@ -36,6 +37,11 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
   await expect(page.getByText("Swiss Playoff", { exact: true })).toBeVisible();
   await expect(page.getByText("Swiss Knockout", { exact: true })).toBeVisible();
   await expect(page.getByText("Swiss", { exact: true })).toBeVisible();
+  // Owner ruling 2026-11-01 (Match Day D1, legs Option A): the Triple round
+  // robin is offered to no sport any more. Asserted only now, with the
+  // picker's cards on screen, so an unrendered picker cannot pass it.
+  await expect(page.locator('input[name="template"]').first()).toBeAttached();
+  await expect(page.getByText("Triple round robin")).toHaveCount(0);
 
   await expectNoHorizontalScroll(page);
   await page.setViewportSize({ width: 375, height: 812 });
@@ -251,24 +257,35 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   // The knob: scoped by "Qualify to finals", NOT bare "Qualify" — the
   // "Qualifying + Main draw" picker card matches that too and the locator
   // goes strict-mode ambiguous.
-  const qualify = page.locator("label", { hasText: "Qualify to finals" }).locator("select");
-  // A reachability check would pass on any list, so pin the MEMBERSHIP: a
-  // generic bracket makes 3 and 6 real shapes, and the power-of-two list the
-  // other templates use cannot express the case this test then drives.
+  // Match Day D1: the knob is a number input over the range Settings takes
+  // (lib/format-bounds.ts), no longer a fixed list per template.
+  const qualify = page.locator("label", { hasText: "Qualify to finals" }).getByRole("spinbutton");
   await expect(qualify).toHaveValue("4");
-  expect(
-    await qualify.evaluate((e) => [...(e as HTMLSelectElement).options].map((o) => o.text)),
-  ).toEqual(["Top 2", "Top 3", "Top 4", "Top 6", "Top 8", "Top 12", "Top 16", "Top 24", "Top 32"]);
-  // And pin the ENDS on their own. `format.swiss_knockout.body.1` promises
-  // "anything from 2 to 32" in all four locales, and the Settings tab's own
-  // Top N input is min 2 / max 32 — a wizard that stopped short of either end
-  // made that copy false and put the biggest brackets out of reach until
-  // after the division already existed.
-  const span = await qualify.evaluate((e) =>
-    [...(e as HTMLSelectElement).options].map((o) => Number(o.value)),
-  );
-  expect([Math.min(...span), Math.max(...span)]).toEqual([2, 32]);
-  await qualify.selectOption({ label: "Top 3" });
+  // Pin the ENDS, from the copy rather than the code: `format.swiss_knockout.body.1`
+  // promises "anything from 2 to 32" in all four locales — a wizard that
+  // stopped short of either end made that copy false and put the biggest
+  // brackets out of reach until after the division already existed. Judged
+  // by the browser's own validity, so each end is in and one past it is out.
+  const valid = async (n: number) => {
+    await qualify.fill(String(n));
+    return qualify.evaluate((e) => (e as HTMLInputElement).checkValidity());
+  };
+  expect([await valid(1), await valid(2), await valid(32), await valid(33)]).toEqual([false, true, true, false]);
+  // Fix round 1 (M1): a value past either end is refused before any POST, by
+  // a sentence naming the field, never clamped into one the organiser did not
+  // type. 33 is still in the box from the check above.
+  await page.getByRole("button", { name: "Scheduling", exact: true }).click();
+  await expect(page.getByTestId("division-builder-error")).toHaveText("Qualify to finals: choose a whole number from 2 to 32.");
+  await expect(page.getByTestId("division-builder-create")).toHaveCount(0);
+  // A reachability check would pass on any value, so drive the case a
+  // power-of-two list cannot express: a generic bracket makes 3 a real shape.
+  // Match Day E1 item 8 (D1): mending the box takes the refusal off the screen at once - no further press needed - and the
+  // builder's number input and Next button hold the 44px tap floor (they measured 42 and 38).
+  await qualify.fill("3");
+  await expect(qualify).toHaveValue("3");
+  await expect(page.getByTestId("division-builder-error"), "the refusal goes when the knob it names changes").toHaveCount(0);
+  expect((await qualify.boundingBox())!.height, "the Top N box holds 44px").toBeGreaterThanOrEqual(44);
+  expect((await page.getByTestId("division-builder-next").boundingBox())!.height, "Next holds 44px").toBeGreaterThanOrEqual(44);
   // Three rounds is a full round robin for four entrants — the strict Ann >
   // Bo > Cy > Di table the knockout half reads below. Default wizard rounds
   // is 3 (W3 T11: the band for up to 8); pin the organiser-set budget here
@@ -369,14 +386,29 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
 
   // ── the shape, IN THE BROWSER ──
   await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
-  const bracket = page.getByTestId("bracket-panel");
+  // Match Day E1 item 3: the tree opens inside the Knockout stage's card from its Bracket button (closed by default).
+  const bracket = await openBracket(page, koId);
   await expect(bracket.getByText("Cy", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
   await expect(bracket.getByText("Bo", { exact: true }).first()).toBeVisible();
   // Two knockout round groups on the run sheet and no third: a Top 3 pads to
   // a 4-slot bracket, which is a semi-final round and a final. A quarter-final
   // here would mean the bracket was sized to 8.
-  await expect(page.getByText("Knockout — Semi-finals")).toBeVisible();
-  await expect(page.getByText("Knockout — Final", { exact: true })).toBeVisible();
+  //
+  // Match Day C3: each stage's rows live inside THAT stage's card, whose header names the stage, so the round header no longer
+  // repeats it ("Knockout - Semi-finals" is now "2. Knockout" over "Semi-finals"). The same fact is asserted scoped to the
+  // Knockout card: the card is the one the knockout stage's id names, its header says Knockout, and the two round headers sit in it.
+  const koCard = stageCardOf(page, koId);
+  // `.first()`: the open tree carries its own "Bracket" h3 inside the card; the stage's header is the first heading in it.
+  await expect(koCard.getByRole("heading", { level: 3 }).first(), "the card is the Knockout stage's").toContainText("Knockout");
+  const koRounds = koCard.getByRole("heading", { level: 4 });
+  await expect(koRounds.filter({ hasText: "Semi-finals" }), "the Knockout card has a Semi-finals round").toBeVisible();
+  // Match Day E1 item 1: the round header is a bar - the round's name, then its "N of M played" fact in the same heading - so the name
+  // is the heading's LEADING word, not its whole text. `Final` followed by a space or the end: "Semi-finals" and "Quarter-final"
+  // do not match it, and the count of two headers below is what keeps a third from slipping in.
+  await expect(koRounds.filter({ hasText: /^Final(\s|$)/ }), "the Knockout card has a Final round").toBeVisible();
+  // Exactly those two round headers: a third would be a quarter-final round (the bracket sized to 8), and a card with none
+  // would make the two checks above pass on a heading that is not a round header.
+  await expect(koRounds, "two round headers in the Knockout card, no third").toHaveCount(2);
   await expect(page.getByText("Quarter-final")).toHaveCount(0);
   // Di finished 4th and did not qualify: she is nowhere in the bracket.
   await expect(bracket.getByText("Di", { exact: true })).toHaveCount(0);

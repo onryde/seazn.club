@@ -10,9 +10,11 @@ import {
   setStageStatusSql, setZoneSplitSql,
   assignFixtureOfficialSql,
   backdateFixtureStartSql,
+  expectNoHorizontalScroll,
   scoreFixture } from "./helpers";
 import { findBucketSplit, findPrintSplit, sweepZoneSplitFinders } from "./zone-split";
 import { NOT_RECORDING_GRACE_MINUTES } from "../src/lib/division-phase";
+import { needsYouInMatchDay, needsYouOnCompetitionPage } from "./needs-you-home";
 
 /** "Sun 6 Sep" — matches division-status-line.ts's `nextDateLabel`/`whenLabel`
  *  day portion, so an assertion never hardcodes a calendar date that ages. */
@@ -55,7 +57,8 @@ test.describe("competition desk", () => {
     const org = await activeOrg(page);
     const rig = await seed(request);
     await page.goto(`/o/${org.slug}/c/${rig.compSlug}`);
-    const needs = page.getByTestId("desk-needs-you");
+    // Not a match day (no match has a time, none is in play): the list is this page's, and there is no Open Match Day (B1).
+    const needs = await needsYouOnCompetitionPage(page);
     await expect(needs.locator('[data-attention="unscheduled"]')).toHaveCount(1);
     await expect(needs).toContainText(`Premier · ${rig.fixtureIds.length} fixtures unscheduled`);
     const row = page.getByTestId("desk-ledger-row").first();
@@ -94,8 +97,6 @@ test.describe("competition desk", () => {
     const rig = await seed(request);
     await setFixtureStatusSql(rig.fixtureIds[0]!, "in_play");
     await page.goto(`/o/${org.slug}/c/${rig.compSlug}`);
-    const first = page.getByTestId("desk-needs-you").locator("[data-attention]").first();
-    await expect(first).toHaveAttribute("data-attention", "no_scorer");
     // The division ledger row renders its PhasePill twice (mobile card +
     // desktop row, one hidden by CSS per width, per division-ledger.tsx) — a
     // bare `.first()` resolves the mobile-hidden copy at this project's
@@ -114,6 +115,12 @@ test.describe("competition desk", () => {
     await expect(masthead, "the live count must survive a red attention").toContainText("1 in play");
     const chip = page.getByTestId("desk-masthead-attention");
     await expect(chip, "and the red attention is named beside it").toHaveAttribute("data-attention-chip", "no_scorer");
+    // B1: a match in play makes it a match day, so the Needs-you list is Match Day's — No scorer leads it there, and this page
+    // carries one line pointing at it instead (and no "Now:" line naming the match: live state is Match Day's).
+    await expect(page.getByTestId("desk-ledger-row").first()).not.toContainText("Now:");
+    const list = await needsYouInMatchDay(page);
+    await expect(list.locator('[data-attention="no_scorer"]')).toHaveCount(1);
+    await expect(list.locator("[data-attention]").filter({ visible: true }).first()).toHaveAttribute("data-attention", "no_scorer");
   });
 
   // H2 fix (final review round 3, Important — corrected ruling): G3's gate
@@ -155,7 +162,12 @@ test.describe("competition desk", () => {
     const rig = await seed(request);
     await setStageStatusSql(rig.stageId, "complete");
     for (const id of rig.fixtureIds) await setFixtureStatusSql(id, "decided");
+    // Match Day B2: a finished division is hidden from the divisions list until asked for, with the count on the toggle.
     await page.goto(`/o/${org.slug}/c/${rig.compSlug}`);
+    await expect(page.getByTestId("desk-ledger-row")).toHaveCount(0);
+    await expect(page.getByTestId("desk-ledger-all-finished")).toBeVisible();
+    await expect(page.getByTestId("desk-ledger-finished-toggle")).toContainText("Show finished (1)");
+    await page.goto(`/o/${org.slug}/c/${rig.compSlug}?finished=1`);
     await expect(page.getByTestId("desk-ledger-row").first()).toHaveAttribute("data-phase", "finished");
     await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
   });
@@ -311,7 +323,10 @@ test.describe("competition desk", () => {
       expected_seq: state.data!.last_seq, type: "generic.result", payload: { p1Score: 1, p2Score: 0 },
     });
     expect(scored.status).toBeLessThan(300);
+    // Match Day B2: the settled division is finished, so the list hides it by default - asked for here.
     await page.goto(`/o/${org.slug}/c/${comp.data!.slug}`);
+    await expect(page.getByTestId("desk-ledger-row").filter({ hasText: "Cup" })).toHaveCount(0);
+    await page.goto(`/o/${org.slug}/c/${comp.data!.slug}?finished=1`);
     const settled = page.getByTestId("desk-ledger-row").filter({ hasText: "Cup" }).first();
     await expect(settled).toHaveAttribute("data-phase", "finished");
     await expect(settled).toContainText("4 of 4 played");
@@ -468,7 +483,9 @@ test.describe("competition desk", () => {
     expect(started.status, "core.start must be accepted — this test is meaningless otherwise").toBeLessThan(400);
 
     await page.goto(`/o/${org.slug}/c/${rig.comp.slug}`);
-    const needs = page.getByTestId("desk-needs-you");
+    const compUrl = page.url();
+    // B1: the match in play makes it a match day, so the list is Match Day's (the competition page points there).
+    let needs = await needsYouInMatchDay(page);
     // Nobody assigned yet: the red row.
     await expect(
       needs.locator('[data-attention="no_scorer"]'),
@@ -483,7 +500,8 @@ test.describe("competition desk", () => {
     // Minor 8b, and is what this test caught on its first run. Age the start
     // event instead; the fixture still got in play through the real endpoint.
     await backdateFixtureStartSql(fixtureId, NOT_RECORDING_GRACE_MINUTES + 40);
-    await page.reload();
+    await page.goto(compUrl);
+    needs = await needsYouInMatchDay(page);
     await expect(needs.locator('[data-attention="not_recording"]')).toHaveCount(1);
     await expect(needs.locator('[data-attention="no_scorer"]')).toHaveCount(0);
 
@@ -493,8 +511,14 @@ test.describe("competition desk", () => {
       expected_seq: 1, type: "generic.result", payload: { p1Score: 1, p2Score: 0 },
     });
     expect(scored.status).toBeLessThan(400);
-    await page.reload();
-    await expect(needs.locator('[data-attention="not_recording"]')).toHaveCount(0);
+    // Nothing is in play and no match has a time: no longer a match day. The list is back on the competition page, and it
+    // has no recording row — nor does any surface (Match Day lists nothing off its day).
+    await page.goto(compUrl);
+    await expect(page.getByTestId("desk-ledger-row").first()).toBeVisible();
+    await expect(page.getByTestId("desk-tool-match-day")).toHaveCount(0);
+    await expect(page.getByTestId("desk-needs-you-in-match-day")).toHaveCount(0);
+    await expect(page.locator('[data-attention="not_recording"]')).toHaveCount(0);
+    await expect(page.locator('[data-attention="no_scorer"]')).toHaveCount(0);
   });
 
   // F4 (round J): the rows put a red attention on their pill and the masthead
@@ -764,7 +788,7 @@ test.describe("competition desk", () => {
     // they PRINT — it says nothing about which day BUCKETS the fixture into
     // `match_day` in the first place. Reproduced live before this fix (see
     // fix-round-e-report.md): a fixture genuinely dated TODAY at the venue
-    // (Kolkata) read "Scheduled", never "Match day", because the phase was
+    // (Kolkata) read "Scheduled", never match_day ("Today" since Match Day B4), because the phase was
     // bucketed in the ORG zone (London), which was still on the day before.
     test("match day is decided by the venue's calendar day, not the org's", async ({ page, request }) => {
       const org = await activeOrg(page);
@@ -786,9 +810,160 @@ test.describe("competition desk", () => {
         // even though this same instant is a different calendar day for the
         // org, which is the only reason this can tell the two zones apart.
         await expect(row).toHaveAttribute("data-phase", "match_day");
+        // B4 (owner ruling Q2): the organiser's word for it is "Today" (Match Day is the product's name), and the competition page's own
+        // match-day gate (`fixtures_today`, Match Day's count) reads the SAME venue day — Open Match Day is offered.
+        await expect(row.locator('[data-pill="match_day"]:visible').first()).toHaveText("Today");
+        await expect(page.getByTestId("desk-tool-match-day")).toBeVisible();
       } finally {
         await restore?.();
       }
     });
+  });
+});
+
+// Match Day B2 (spec 2026-10-31 §9, owner request): the divisions list shows five at a time and hides finished divisions until
+// asked for, with the page and the switch in the URL. Eight divisions: six that are not finished and two that are, so the default
+// view is 5 + 1 across two pages, and showing the finished ones makes it 5 + 3 - the numbers below are those, derived from the seed.
+test.describe("competition desk - divisions list paging (Match Day B2)", () => {
+  const LIVE = 6;
+  const DONE = 2;
+
+  async function seedEight(request: APIRequestContext) {
+    const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+      name: `Pager ${TAG} ${Math.random().toString(36).slice(2, 6)}`, visibility: "public", ends_on: "2030-12-31",
+    });
+    expect(comp.status).toBe(201);
+    // Not finished: a division with nothing in it is still being set up.
+    for (let i = 1; i <= LIVE; i++) {
+      const d = await apiJson(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+        name: `Live ${i}`, sport_key: "generic", variant_key: "score",
+      });
+      expect(d.status).toBe(201);
+    }
+    // Finished: every fixture decided and the stage complete, the same way the "all decided" case above reaches it.
+    for (let i = 1; i <= DONE; i++) {
+      const d = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+        name: `Done ${i}`, sport_key: "generic", variant_key: "score",
+      });
+      expect(d.status).toBe(201);
+      await addEntrantsViaApi(request, d.data!.id, ["Alpha", "Bravo", "Charlie", "Delta"], "team");
+      const { stageId, fixtureIds } = await createStageAndGenerate(request, d.data!.id);
+      await apiJson(request, `/api/v1/divisions/${d.data!.id}/start`, "POST");
+      await setStageStatusSql(stageId, "complete");
+      for (const id of fixtureIds) await setFixtureStatusSql(id, "decided");
+    }
+    return comp.data!.slug;
+  }
+
+  test("five at a time, finished hidden by default, the state in the URL, at 1280 and 768 and 320", async ({ page, request }) => {
+    test.setTimeout(120_000);
+    const org = await activeOrg(page);
+    const slug = await seedEight(request);
+    const base = `/o/${org.slug}/c/${slug}`;
+    const rows = page.getByTestId("desk-ledger-row");
+    const pager = page.getByTestId("desk-ledger-pager");
+    const toggle = page.getByTestId("desk-ledger-finished-toggle");
+
+    // Default view: the finished two are hidden, the toggle counts them, six rows make two pages of 5 and 1.
+    await page.goto(base);
+    await expect(rows).toHaveCount(5);
+    await expect(rows.and(page.locator('[data-phase="finished"]'))).toHaveCount(0);
+    await expect(pager).toHaveAttribute("data-page", "1");
+    await expect(pager).toHaveAttribute("data-pages", "2");
+    await expect(toggle).toHaveText(`Show finished (${DONE})`);
+    // Match Day E1 item 6: it is a switch (still a link), off here, with the same words on and off.
+    await expect(toggle).toHaveAttribute("role", "switch");
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(page.getByRole("switch", { name: `Show finished (${DONE})` })).toHaveCount(1);
+    await expect(page.getByTestId("desk-ledger-prev")).toHaveAttribute("aria-disabled", "true");
+
+    // Next: a link, the URL carries the page, and the last page has the one remaining row and no Next.
+    await page.getByTestId("desk-ledger-next").click();
+    await expect(page).toHaveURL(/[?&]dpage=2(&|$)/);
+    await expect(rows).toHaveCount(LIVE - 5);
+    await expect(pager).toHaveAttribute("data-page", "2");
+    await expect(page.getByTestId("desk-ledger-next")).toHaveAttribute("aria-disabled", "true");
+    // A reload and the back button keep the page - it is the URL, not component state.
+    await page.reload();
+    await expect(pager).toHaveAttribute("data-page", "2");
+    await page.goBack();
+    await expect(pager).toHaveAttribute("data-page", "1");
+    await expect(rows).toHaveCount(5);
+
+    // Show finished: back to page 1 (the rows the pages are cut from changed); eight rows, 5 + 3, the finished ones last.
+    await page.getByTestId("desk-ledger-next").click();
+    await expect(pager).toHaveAttribute("data-page", "2");
+    await toggle.click();
+    await expect(page).toHaveURL(/[?&]finished=1(&|$)/);
+    await expect(page).not.toHaveURL(/dpage=/);
+    await expect(toggle).toHaveText(`Show finished (${DONE})`);
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await expect(pager).toHaveAttribute("data-page", "1");
+    await expect(pager).toHaveAttribute("data-pages", "2");
+    await expect(rows).toHaveCount(5);
+    await page.getByTestId("desk-ledger-next").click();
+    await expect(page).toHaveURL(/finished=1/);
+    await expect(rows).toHaveCount(LIVE + DONE - 5);
+    await expect(rows.and(page.locator('[data-phase="finished"]'))).toHaveCount(DONE);
+
+    // The same state, loaded cold from the address: the toggle and the page survive a reload.
+    await page.reload();
+    await expect(toggle).toHaveText(`Show finished (${DONE})`);
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await expect(pager).toHaveAttribute("data-page", "2");
+
+    // Match Day E1 fix round 1 (m5): a switch toggles on Space as well as Enter. Driven from the keyboard on the switch itself: Space turns
+    // it off (the URL loses ?finished=1, the finished rows leave), Space again turns it on, and Enter - the link's own key - still works.
+    await toggle.focus();
+    await page.keyboard.press("Space");
+    await expect(page, "Space turned the switch off").not.toHaveURL(/finished=1/);
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(rows.and(page.locator('[data-phase="finished"]'))).toHaveCount(0);
+    await toggle.focus();
+    await page.keyboard.press("Space");
+    await expect(page, "Space turned it back on").toHaveURL(/[?&]finished=1(&|$)/);
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+    await expect(page, "Enter still toggles").not.toHaveURL(/finished=1/);
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/[?&]finished=1(&|$)/);
+
+    // Phone and tablet: no sideways scroll, and the pager's links are tappable (44px) where it is a phone.
+    for (const width of [768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${base}?finished=1`);
+      await expect(rows).toHaveCount(5);
+      await expectNoHorizontalScroll(page);
+      for (const id of ["desk-ledger-next", "desk-ledger-finished-toggle"]) {
+        const box = await page.getByTestId(id).boundingBox();
+        expect(box, `${id} at ${width}`).not.toBeNull();
+        // The pager's link is the tap floor on a phone only; the switch (Match Day E1 item 6) is 44px at every width.
+        if (width === 320 || id === "desk-ledger-finished-toggle") expect(box!.height, `${id} tap height at ${width}`).toBeGreaterThanOrEqual(44);
+      }
+    }
+
+    // Out of range lands on the last page, and the way out of "all finished and hidden" is the toggle (page 99 of a 2-page list).
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`${base}?dpage=99`);
+    await expect(pager).toHaveAttribute("data-page", "2");
+    await expect(rows).toHaveCount(LIVE - 5);
+  });
+});
+
+// Match Day B2 (spec 2026-10-31 §9: "Unscheduled fixtures link to the free-court candidate list"): the division's run sheet gives an
+// unscheduled match a "Find a court" link beside "Set time" - on a match day only. This is the NOT-a-match-day half (the unscheduled
+// league rig above has no match today and none in play); the match-day half is in match-day.spec.ts, which owns that rig.
+test.describe("competition desk - Find a court on the run sheet (Match Day B2)", () => {
+  test("not a match day: an unscheduled match offers Set time and no Find a court", async ({ page, request }) => {
+    const org = await activeOrg(page);
+    const rig = await seed(request);
+    await page.goto(`/o/${org.slug}/c/${rig.compSlug}/d/${rig.divSlug}?tab=fixtures`);
+    const setTime = page.locator('[data-row-action="set_time"]');
+    // The positive pair: the unscheduled rows ARE there, so the absence below is the day's, not an empty sheet's.
+    await expect(setTime.first()).toBeVisible();
+    expect(await setTime.count()).toBe(rig.fixtureIds.length);
+    await expect(page.getByTestId("run-sheet-find-court")).toHaveCount(0);
   });
 });

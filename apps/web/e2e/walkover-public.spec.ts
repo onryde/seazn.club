@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { builtinModules } from "@seazn/engine/sports";
-import { TAG, activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, divisionPath, expectNoHorizontalScroll, seedVenueWithCourts } from "./helpers";
+import { TAG, activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, divisionPath, expectNoHorizontalScroll, openBracket, seedVenueWithCourts } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 
 // W2b Task 13 (spec §5.5, UI-2 option A; X-RS-2, X-DW-1) — a credited result says which one, on every public surface:
@@ -706,6 +706,7 @@ test.describe("W2b R116-3 — the organiser's run sheet and bracket read ruling 
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(fixtures);
     await dismissCookieBanner(page);
+    await openBracket(page); // Match Day E1 item 3: the tree opens inside the knockout stage's card, closed on every load
     await expect(s.row, "before: her dead seat reads the bye word on the run sheet").toContainText(BYE, { timeout: STEP_MS, useInnerText: true });
     await expect(s.node, "before: and on the bracket panel").toContainText(BYE, { useInnerText: true });
     const final = await arrive(w.ko, w.sf2);
@@ -718,6 +719,7 @@ test.describe("W2b R116-3 — the organiser's run sheet and bracket read ruling 
       await page.setViewportSize({ width, height: 900 });
       await page.goto(fixtures);
       await dismissCookieBanner(page);
+      await openBracket(page);
       await expect(s.row, `${width}: the final is an ordinary run-sheet row`).toBeVisible({ timeout: STEP_MS });
       await expect(s.byeRows, `${width}: no bye row on this draw`).toHaveCount(0);
       for (const [where, at] of [["run sheet row", s.row], ["bracket node", s.node]] as const) {
@@ -781,6 +783,7 @@ test.describe("W2b R116-3 — the organiser's run sheet and bracket read ruling 
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(await divisionPath(request, dq.ko.divId, "?tab=fixtures"));
     await dismissCookieBanner(page);
+    await openBracket(page);
     const dqBye = d.byeRows.filter({ hasText: hasBye.replace("{name}", dqArrivingName) });
     await expect(dqBye, "the run sheet keeps the bye row").toHaveCount(1, { timeout: STEP_MS });
     await expect(d.byeRows, "and it is the only bye row").toHaveCount(1);

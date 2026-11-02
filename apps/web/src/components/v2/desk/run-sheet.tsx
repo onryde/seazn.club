@@ -17,11 +17,23 @@ import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { dayLabel, dayLabelLong } from "@/lib/day-label";
 import { isResultMissing, isUnscheduledFixture } from "@/lib/division-phase";
-import { isBye, type RunSheetBlock, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
+import {
+  ROUND_SEQUENCE_STAGE_KINDS,
+  BRACKET_STAGE_KINDS,
+  isBye,
+  roundDone,
+  roundWhen,
+  stageFlatSection,
+  stageRoundSections,
+  type RunSheetBlock,
+  type RunSheetFixture,
+  type RunSheetOnlinePlay,
+} from "@/lib/run-sheet-groups";
 import type { FeedLabelPair } from "@/lib/schedule-board";
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { bracketRoundLabel } from "@/components/v2/stages-panel";
 import type { MessageKey } from "@/lib/messages";
+import type { VenueNoun } from "@/lib/venue";
 import { RunSheetRow } from "./run-sheet-row";
 import type { HoldState } from "@/server/relay/domain/session";
 import type { ForfeitEntrantStatuses } from "@/lib/forfeit-tag";
@@ -118,7 +130,6 @@ export function RunSheet({
   filter,
   onFilter,
   stageId,
-  onStageFilter,
   boardSlotOptions,
   onRescheduled,
   streamStates,
@@ -127,6 +138,12 @@ export function RunSheet({
   onlinePlay,
   arbiterHrefFor,
   entrantStatuses,
+  matchDayHref,
+  venueNoun,
+  embedded = false,
+  quietEmpty = false,
+  endsCard = true,
+  pools,
 }: {
   blocks: RunSheetBlock[];
   stages: RunSheetStageInfo[];
@@ -162,19 +179,12 @@ export function RunSheet({
   hrefFor: (fixture: RunSheetFixture) => string;
   filter: RunSheetFilter;
   onFilter: (filter: RunSheetFilter) => void;
-  /** Owner-approved "Option 2" (competition desk W3, on top of Option B) —
-   *  a SECOND, ORTHOGONAL filter dimension: which stage's fixtures to show,
-   *  or `null` for every stage. Deliberately not folded into
-   *  `RunSheetFilter` (that union stays exactly `"today" | "needs_result" |
-   *  "unscheduled" | "all"`) — a stage id is not one more value of "what
-   *  kind of row", it is a second axis a row must ALSO satisfy, and a
-   *  fixture can be BOTH "needs_result" and "in stage X" at once. Set from
-   *  each stage card's "View N fixtures" control (stages-panel.tsx); its
-   *  own clear affordance lives in the chip row below (`run-sheet-stage-
-   *  filter`), per owner ruling — the chip row is where a person looks to
-   *  clear a filter, not a separate, easier-to-miss control. */
+  /** A SECOND, ORTHOGONAL axis beside `filter`: which stage's fixtures to show, or `null` for every stage. Deliberately not folded
+   *  into `RunSheetFilter` (that union stays exactly `"today" | "needs_result" | "unscheduled" | "all"`) - a stage id is not one more
+   *  value of "what kind of row", it is a second axis a row must ALSO satisfy. Match Day C3: it names the stage an `embedded` sheet
+   *  lists (each stage card mounts one); nothing sets it as a user-facing filter any more (the stage chip and its clear control went
+   *  with "View N fixtures"), so it is a plain prop, with no setter. */
   stageId: string | null;
-  onStageFilter: (stageId: string | null) => void;
   boardSlotOptions?: string[];
   onRescheduled?: () => void;
   /** Spec 2026-09-30 §2 (T6) — each fixture's stream hold state (`openStreamStates`), keyed by fixture id; every row
@@ -188,6 +198,15 @@ export function RunSheet({
   onlinePlay?: Record<string, RunSheetOnlinePlay>;
   /** T16 — the arbiter panel opened on one board: where a row's camera / off-Seazn chip leads. */
   arbiterHrefFor?: (fixtureId: string) => string;
+  /** Match Day B2 - set ONLY on a match day, for an organiser: where an unscheduled match's "Find a court" leads (the division
+   *  page decides; read nowhere here, like `arbiterHrefFor`). Threaded to the two blocks that can hold an untimed, open match - the
+   *  unscheduled pile and a knockout's bracket block (`buildRunSheet`); a day block holds only dated matches and the settled
+   *  block only played ones, neither of which is ever asked for a court, so neither is handed it. Absent = no link. */
+  matchDayHref?: string;
+  /** Match Day B2, fix round 1 (I1): the sport's playing-area noun, chosen by the stage panel from the division's sport and
+   *  handed to the same two blocks as `matchDayHref`, so "Find a court" says pitch / table / board / rink where it should.
+   *  Absent = court. */
+  venueNoun?: VenueNoun;
   /** Feeder labels for unfilled bracket seats, keyed by fixture id —
    *  `feedLabels()`'s output (lib/schedule-board.ts). Threaded straight
    *  through to every `RunSheetRow` below and never read here, exactly as
@@ -199,6 +218,25 @@ export function RunSheet({
    *  bye from the sheet entirely). Deriving it from `blocks` would make a
    *  seat's label depend on whether its feeder happened to survive grouping. */
   feedLabels?: Record<string, FeedLabelPair>;
+  /** Match Day C3 (spec §12 Phase C item 9): this sheet is ONE STAGE's fixtures, mounted inside that stage's card (`stageId`
+   *  names the stage). It carries no card chrome of its own, no filter bar (the panel mounts ONE `RunSheetFilterBar` above the
+   *  stage cards, over the whole division) and no stage names (the card already names its stage). Its rows are the same
+   *  `RunSheetRow`s through the same `buildRunSheet` blocks and the same `runSheetKeeps`; only the frame differs. Absent = the
+   *  division-wide sheet, as before. */
+  embedded?: boolean;
+  /** Embedded only: the panel already says "nothing matches" once for the whole division (no stage has a row under the filter),
+   *  so this stage's sheet stays silent instead of repeating it. */
+  quietEmpty?: boolean;
+  /** Embedded only: this sheet is the LAST thing in its stage's card (the card has no rail under it - a viewer's), so a NOW rule
+   *  that ends the sheet carries the card's own bottom radius. With the stage's rail below (an editor's) the rule is mid-card and
+   *  stays square, like a NOW rule that ends a day block with later days to come (review m1). The division-wide sheet is its own
+   *  card and always ends it. */
+  endsCard?: boolean;
+  /** Embedded only (Match Day E1 fix rounds 1 and 3): the division's pools in DISPLAY order, each with its label in the viewer's words -
+   *  `poolLabelsInOrder`, which the page builds from the pool-label and pool-order authorities. A group stage's card has ONE bar per
+   *  round across its pools; each row carries a chip with its pool's label, and rows that kick off together read in this order. Absent, or
+   *  a pool it does not list: the row has no chip (no label to say), and its place among equal times falls after every listed pool. */
+  pools?: readonly { id: string; label: string }[];
 }) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -267,7 +305,9 @@ export function RunSheet({
   // keeps its round headers at the ordinary `top-14` — there is no day
   // header for them to stack under, and reserving the extra height
   // unconditionally would open an empty band under nav for no reason.
-  const hasDayBlock = blocks.some((b) => b.kind === "day");
+  // E1 item 1: a stage card's sheet (`embedded`) has no day headers any more - its rows sit under round bars - so there is no day
+  // header for a bar to stack under, whatever day blocks the division's blocks hold for other cards.
+  const hasDayBlock = !embedded && blocks.some((b) => b.kind === "day");
 
 
   // F3 (W2 walkthrough gate 1): only the unscheduled/settled groups need a
@@ -276,7 +316,7 @@ export function RunSheet({
   // counter-argument ("show it only when the division has more than one
   // stage... single-stage divisions gain no noise").
   const stageNameFor = (f: RunSheetFixture): string | null =>
-    stages.length > 1 ? (stageById.get(f.stage_id)?.name ?? null) : null;
+    !embedded && stages.length > 1 ? (stageById.get(f.stage_id)?.name ?? null) : null;
 
   // The two counted filters are FACTS about a fixture, asked of the one
   // module that owns them (`division-phase.ts`, W1's ledger) rather than
@@ -296,10 +336,6 @@ export function RunSheet({
   // `fixtureRowAction` is still the ONE authority for what a ROW OFFERS; it
   // is simply not the authority for what a fixture IS. Each row asks it for
   // itself (`RunSheetRow`), and this component no longer restates it at all.
-  const isUnscheduled = (f: RunSheetFixture) =>
-    isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at });
-  const needsResult = (f: RunSheetFixture) => owesResult(f, { nowMs, matchMinutes, onlinePlay });
-
   // The row test lives at module scope (`runSheetKeeps`, above) — its filter semantics and ORDER are documented there.
   const keep = (f: RunSheetFixture): boolean =>
     runSheetKeeps(f, filter, { stageId, tz, today, nowMs, matchMinutes, streamStates, onlinePlay });
@@ -311,24 +347,6 @@ export function RunSheet({
   // result" while filtered to one stage should be that stage's own count,
   // matching what clicking it would actually show, not the whole
   // division's.
-  let needsResultCount = 0;
-  let unscheduledCount = 0;
-  for (const block of blocks) {
-    for (const f of fixturesOf(block)) {
-      if (stageId !== null && f.stage_id !== stageId) continue;
-      if (isBye(f)) continue;
-      if (needsResult(f)) needsResultCount++;
-      if (isUnscheduled(f)) unscheduledCount++;
-    }
-  }
-
-  const filters: { value: RunSheetFilter; label: string; count?: number }[] = [
-    { value: "today", label: msg("runsheet.filter.today") },
-    { value: "needs_result", label: msg("runsheet.filter.needsResult"), count: needsResultCount },
-    { value: "unscheduled", label: msg("runsheet.filter.unscheduled"), count: unscheduledCount },
-    { value: "all", label: msg("runsheet.filter.all") },
-  ];
-
   function renderBlock(block: RunSheetBlock): React.ReactElement | null {
     if (block.kind === "day") {
       const rows = block.fixtures.filter(keep);
@@ -393,7 +411,7 @@ export function RunSheet({
       const stage = stageById.get(block.stageId);
       const allStageFixtures = block.rounds.flatMap((r) => r.fixtures);
       const roundsWithRows = block.rounds
-        .map((r) => ({ round: r.round, fixtures: r.fixtures.filter(keep) }))
+        .map((r) => ({ round: r.round, allFixtures: r.fixtures, fixtures: r.fixtures.filter(keep) }))
         .filter((r) => r.fixtures.length > 0);
       if (roundsWithRows.length === 0) return null;
       return (
@@ -412,7 +430,7 @@ export function RunSheet({
         // rounded top corner — moves onto that header directly, below
         // (`rounded-t-2xl`, first round only — every other round header
         // sits well inside the section's flat area and was never at risk).
-        <section key={block.stageId} data-run-sheet-block="bracket" className="card">
+        <section key={block.stageId} data-run-sheet-block="bracket" className={embedded ? undefined : "card"}>
           {roundsWithRows.map((r, i) => {
             // R34 — the round's calendar date, the one thing a bracket row's
             // `HH:mm`-only time cell cannot say. `null` on an untimed round, so
@@ -433,20 +451,13 @@ export function RunSheet({
                   both cases and there is no class to keep in Tailwind's
                   scanner. Review finding m2 is what retired the old
                   `top-[86px]` literal — see the effect's comment. */}
-              <header
-                style={{ top: "calc(3.5rem + var(--desk-day-h, 0px))" }}
-                className={`sticky z-10 border-b border-slate-100 bg-slate-50 px-4 py-2 ${i === 0 ? "rounded-t-2xl" : ""}`}
+              <RoundBar
+                title={`${stage && !embedded ? `${stage.name} — ` : ""}${bracketRoundLabel(msg, stage?.kind ?? "knockout", r.round, allStageFixtures)}`}
+                done={roundDoneText(msgPlural, r.allFixtures, settleIds)}
+                roundedTop={i === 0 && !embedded}
               >
-                <h4 className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  {stage ? `${stage.name} — ` : ""}
-                  {bracketRoundLabel(msg, stage?.kind ?? "knockout", r.round, allStageFixtures)}
-                  {dates !== null && (
-                    <span data-run-sheet-round-dates className="ml-1.5 font-normal normal-case text-slate-500">
-                      · {dates}
-                    </span>
-                  )}
-                </h4>
-              </header>
+                {dates !== null && <span data-run-sheet-round-dates>{" · "}{dates}</span>}
+              </RoundBar>
               <ul className="divide-y divide-slate-50">
                 {r.fixtures.map((f) => (
                   <RunSheetRow
@@ -466,8 +477,11 @@ export function RunSheet({
                     streamState={streamStates?.[f.id]}
                     onlinePlay={onlinePlay?.[f.id]}
                     arbiterHref={arbiterHrefFor?.(f.id)}
+                    matchDayHref={matchDayHref}
+                    venueNoun={venueNoun}
                     awaitsSettle={settleIds.has(f.id)}
                     feedLabels={feedLabels}
+                    inRound={embedded}
                   />
                 ))}
               </ul>
@@ -507,6 +521,8 @@ export function RunSheet({
                 streamState={streamStates?.[f.id]}
                 onlinePlay={onlinePlay?.[f.id]}
                 arbiterHref={arbiterHrefFor?.(f.id)}
+                matchDayHref={matchDayHref}
+                venueNoun={venueNoun}
                 awaitsSettle={settleIds.has(f.id)}
                 feedLabels={feedLabels}
                 stageName={stageNameFor(f)}
@@ -573,7 +589,96 @@ export function RunSheet({
     return null;
   }
 
-  const renderedBlocks = blocks.map(renderBlock).filter((node): node is React.ReactElement => node !== null);
+  // Match Day E1 item 1 (owner 2026-11-01): a NON-bracket stage's card groups its rows under a bar per ROUND - league, round robin,
+  // groups and Swiss alike. The stage's rows come out of the same division-wide blocks (`stageRoundSections`), under the same
+  // `keep`; what the bar says about the round (how many are done, when) is read off the whole round / the rows shown (below).
+  // A bracket stage keeps `renderBlock`'s own named rounds, in the same bar. A ladder (fix round 1, I2) stores each challenge as a round of
+  // its own, so a bar per round would be a bar per challenge: it gets the same rows as ONE list in time order, with no bar.
+  const roundsStage = embedded && stageId !== null ? stageById.get(stageId) : undefined;
+  const poolOrder = new Map((pools ?? []).map((p, i) => [p.id, i] as const));
+  const poolLabelOf = new Map((pools ?? []).map((p) => [p.id, p.label] as const));
+  const renderRounds = (withBars: boolean): React.ReactElement | null => {
+    if (stageId === null) return null;
+    const sections = (withBars ? stageRoundSections(blocks, stageId, poolOrder) : stageFlatSection(blocks, stageId))
+      .map((section) => ({ ...section, all: section.fixtures, rows: section.fixtures.filter(keep) }))
+      .filter((section) => section.rows.length > 0);
+    if (sections.length === 0) return null;
+    // ONE NOW rule per card: before the first row of today still to come, else after the last row of today (a stage with nothing
+    // timed today carries none). Rows read round by round, so "the first still to come" is the first in that order. A group stage's
+    // round holds every pool's matches (E1 fix round 3), in time order, so two pools playing at once read as the clock reads them.
+    let nowAt: { round: number; index: number } | null = null;
+    let lastToday: { round: number; index: number } | null = null;
+    for (const section of sections) {
+      for (let index = 0; index < section.rows.length; index++) {
+        const at = section.rows[index]!.scheduled_at;
+        if (at === null || dayKeyInTz(Date.parse(at), tz) !== today) continue;
+        lastToday = { round: section.round, index: index + 1 };
+        if (nowAt === null && Date.parse(at) > nowMs) nowAt = { round: section.round, index };
+      }
+    }
+    const nowPlace: { round: number; index: number } | null = nowAt ?? lastToday;
+    return (
+      <section key={`rounds-${stageId}`} data-run-sheet-block={withBars ? "rounds" : "flat"}>
+        {sections.map((section) => {
+          const when = roundWhen(section.rows, tz);
+          const sameDay = when !== null && when.firstDay === when.lastDay;
+          const dates = roundDateLabel(section.rows, tz, locale);
+          return (
+            <div key={section.round} data-run-sheet-round={withBars ? section.round : undefined}>
+              {withBars && (
+                <RoundBar title={msg("schedule.round", { n: section.round })} done={roundDoneText(msgPlural, section.all, settleIds)}>
+                  {dates !== null && <span data-run-sheet-round-dates>{" · "}{dates}</span>}
+                  {sameDay && when !== null && (
+                    <span data-run-sheet-round-span>
+                      {" · "}
+                      {when.from === when.to ? when.from : `${when.from}\u2013${when.to}`}
+                    </span>
+                  )}
+                </RoundBar>
+              )}
+              <ul className="divide-y divide-slate-50">
+                {section.rows.map((f, i) => (
+                  <RowWithNow
+                    key={f.id}
+                    fixture={f}
+                    showNow={nowPlace !== null && nowPlace.round === section.round && nowPlace.index === i}
+                    msg={msg}
+                    hrefFor={hrefFor}
+                    tz={tz}
+                    orgTz={orgTz}
+                    nowMs={nowMs}
+                    canEdit={canEdit}
+                    entrantNames={entrantNames}
+                    entrantStatuses={entrantStatuses}
+                    courtNames={courtNames}
+                    venues={venues}
+                    boardSlotOptions={boardSlotOptions}
+                    onRescheduled={onRescheduled}
+                    streamState={streamStates?.[f.id]}
+                    onlinePlay={onlinePlay?.[f.id]}
+                    arbiterHref={arbiterHrefFor?.(f.id)}
+                    matchDayHref={matchDayHref}
+                    venueNoun={venueNoun}
+                    awaitsSettle={settleIds.has(f.id)}
+                    feedLabels={feedLabels}
+                    poolLabel={f.pool_id == null ? undefined : poolLabelOf.get(f.pool_id)}
+                    inRound
+                  />
+                ))}
+                {nowPlace !== null && nowPlace.round === section.round && nowPlace.index === section.rows.length && <NowRule msg={msg} />}
+              </ul>
+            </div>
+          );
+        })}
+      </section>
+    );
+  };
+
+  const renderedBlocks = (
+    roundsStage === undefined || BRACKET_STAGE_KINDS.has(roundsStage.kind)
+      ? blocks.map(renderBlock)
+      : [renderRounds(ROUND_SEQUENCE_STAGE_KINDS.has(roundsStage.kind))]
+  ).filter((node): node is React.ReactElement => node !== null);
 
   return (
     // Fix (competition desk W3, controller ruling C-1) — `overflow-hidden`
@@ -606,55 +711,23 @@ export function RunSheet({
     // render actually produces. See the bracket `<section>` below for the
     // one place that DID need a replacement (`rounded-t-2xl` on the first
     // round header specifically, not blanket clipping).
-    <div data-testid="run-sheet" className="card">
-      <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-4 py-3">
-        <div data-testid="run-sheet-filter" className="flex flex-wrap gap-1.5">
-          {filters.map((f) => (
-            <button
-              key={f.value}
-              type="button"
-              data-filter={f.value}
-              aria-pressed={filter === f.value}
-              onClick={() => onFilter(f.value)}
-              className={`min-h-11 rounded-full px-3 text-xs font-medium ${
-                filter === f.value ? "bg-purple-100 text-purple-800" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-              }`}
-            >
-              {f.label}
-              {f.count !== undefined && <span className="ml-1 text-slate-500">{f.count}</span>}
-            </button>
-          ))}
-          {/* Owner-approved "Option 2" — the stage filter's own clear
-              affordance, in the SAME chip row the four type filters live
-              in (owner ruling: "the existing chip row is where a person
-              will look to clear it, so make the active stage filter
-              legible there rather than hidden"). Mounted only while a
-              stage filter is active — never a permanent, mostly-inert chip.
-              Its own visible text carries the accessible name (stage name,
-              user-typed — never grammatically combined with a verb that
-              would need to agree with it, R13/W3's own standing rule); the
-              `sr-only` span appends "Clear filter" so a screen reader's
-              announcement reads as an action, not just a label. */}
-          {stageId !== null && (
-            <button
-              type="button"
-              data-testid="run-sheet-stage-filter"
-              onClick={() => onStageFilter(null)}
-              className="flex min-h-11 items-center gap-1.5 rounded-full bg-purple-100 px-3 text-xs font-medium text-purple-800 hover:bg-purple-200"
-            >
-              <span>
-                {msg("runsheet.stageFilter.label")}: {stageById.get(stageId)?.name ?? stageId}
-              </span>
-              <span aria-hidden="true">✕</span>
-              <span className="sr-only">{msg("runsheet.stageFilter.clearAria")}</span>
-            </button>
-          )}
-        </div>
-        <div className="flex-1" />
-        <p className="text-xs text-slate-500" data-testid="tz-caption">
-          {msg("schedule.tz.caption", { tz })}
-        </p>
-      </div>
+    <div
+      data-testid={embedded ? "stage-run-sheet" : "run-sheet"}
+      data-stage-id={embedded ? (stageId ?? undefined) : undefined}
+      className={embedded ? undefined : "card"}
+    >
+      {!embedded && (
+        <RunSheetFilterBar
+          blocks={blocks}
+          tz={tz}
+          nowMs={nowMs}
+          matchMinutes={matchMinutes}
+          onlinePlay={onlinePlay}
+          filter={filter}
+          onFilter={onFilter}
+          className="border-b border-slate-100"
+        />
+      )}
 
       {renderedBlocks.length > 0 ? (
         // Owner request — the sheet's internal blocks (day groups, bracket
@@ -689,7 +762,7 @@ export function RunSheet({
         <div
           ref={sheetRef}
           style={{ "--desk-day-h": hasDayBlock ? "30px" : "0px" } as React.CSSProperties}
-          className="space-y-6 [&>section:last-child>ul>li:last-child]:rounded-b-2xl"
+          className={endsCard ? "space-y-6 [&>section:last-child>ul>li:last-child]:rounded-b-2xl" : "space-y-6"}
         >
           {renderedBlocks}
         </div>
@@ -707,35 +780,131 @@ export function RunSheet({
         // above this function and never reaches here — that case renders
         // nothing at all, by spec ("the stage rail alone... no run sheet
         // header").
+        embedded ? (
+          quietEmpty ? null : (
+          // Match Day C3: one stage's sheet under the panel's filter. The panel owns the way back ("Show all", once, when NO stage
+          // has a row), so a stage with none under "Today" says so in a line and offers nothing.
+          <p data-testid="stage-run-sheet-empty" className="px-4 py-3 text-xs text-slate-500">
+            {msg("runsheet.emptyFilter.message", {
+              filter: filtersLabel(filter, msg),
+            })}
+          </p>
+          )
+        ) : (
         <div data-testid="run-sheet-empty" className="px-4 py-10 text-center">
           <p className="text-sm text-slate-500">
             {msg("runsheet.emptyFilter.message", {
-              filter: filters.find((f) => f.value === filter)?.label ?? filter,
+              filter: filtersLabel(filter, msg),
             })}
           </p>
-          {/* Owner-approved "Option 2" — also clears the STAGE filter, not
-              just the type filter: gated on either being active, so a page
-              filtered to one stage with `filter === "all"` (an empty
-              combination — that stage genuinely has no fixtures matching
-              nothing else, edge case) still gets a working way back, and
-              clicking it clears both dimensions at once rather than
-              leaving the organiser one tap short of the unfiltered
-              sheet. */}
-          {(filter !== "all" || stageId !== null) && (
+          {filter !== "all" && (
             <button
               type="button"
               data-testid="run-sheet-empty-show-all"
-              onClick={() => {
-                onFilter("all");
-                onStageFilter(null);
-              }}
+              onClick={() => onFilter("all")}
               className="btn btn-ghost mt-3 min-h-11 px-3 text-xs"
             >
               {msg("runsheet.filter.all")}
             </button>
           )}
         </div>
+        )
       )}
+    </div>
+  );
+}
+
+/** The filter chips' labels, by value - one table for the bar and the empty line. */
+export const RUN_SHEET_FILTER_LABEL = {
+  today: "runsheet.filter.today",
+  needs_result: "runsheet.filter.needsResult",
+  unscheduled: "runsheet.filter.unscheduled",
+  all: "runsheet.filter.all",
+} as const satisfies Record<RunSheetFilter, MessageKey>;
+const filtersLabel = (filter: RunSheetFilter, msg: Msg): string => msg(RUN_SHEET_FILTER_LABEL[filter]);
+
+/** The two counted filters' numbers, read over EVERY block's fixtures, unfiltered - a filter's own count must not shrink just
+ *  because it is the one currently selected. They DO narrow to `stageId` when a stage filter is active (the count on "Needs
+ *  result" while filtered to one stage is that stage's own, matching what clicking it would show). Byes are never counted
+ *  (ruling R7a). */
+export function runSheetCounts(
+  blocks: readonly RunSheetBlock[],
+  ctx: Pick<RunSheetKeepContext, "stageId" | "nowMs" | "matchMinutes" | "onlinePlay">,
+): { needsResult: number; unscheduled: number } {
+  let needsResult = 0;
+  let unscheduled = 0;
+  for (const block of blocks) {
+    for (const f of fixturesOf(block)) {
+      if (ctx.stageId !== null && f.stage_id !== ctx.stageId) continue;
+      if (isBye(f)) continue;
+      if (owesResult(f, ctx)) needsResult++;
+      if (isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at })) unscheduled++;
+    }
+  }
+  return { needsResult, unscheduled };
+}
+
+/** Does the filter leave ANY row, in any block? The panel asks it once to know whether to say "nothing matches" for the whole
+ *  division (the per-stage sheets each say it in a line, but only the panel offers the way back). */
+export function runSheetHasRows(blocks: readonly RunSheetBlock[], filter: RunSheetFilter, ctx: RunSheetKeepContext): boolean {
+  return blocks.some((b) => fixturesOf(b).some((f) => runSheetKeeps(f, filter, ctx)));
+}
+
+/**
+ * The division's fixture filter: the four chips (Today / Needs result / Unscheduled / All) and the time-zone caption. Match Day C3 took it out of `<RunSheet>` so the panel can mount it ONCE above the stage
+ * cards while each card carries its own stage's rows (`RunSheet embedded`); the division-wide `<RunSheet>` still mounts it
+ * itself. Same testids, same chips, same counts.
+ */
+export function RunSheetFilterBar({
+  blocks,
+  tz,
+  nowMs,
+  matchMinutes,
+  onlinePlay,
+  filter,
+  onFilter,
+  className,
+}: {
+  blocks: readonly RunSheetBlock[];
+  tz: string;
+  nowMs: number;
+  matchMinutes: number;
+  onlinePlay?: Record<string, RunSheetOnlinePlay>;
+  filter: RunSheetFilter;
+  onFilter: (filter: RunSheetFilter) => void;
+  className?: string;
+}) {
+  const msg = useMsg();
+  const { needsResult, unscheduled } = runSheetCounts(blocks, { stageId: null, nowMs, matchMinutes, onlinePlay });
+  const filters: { value: RunSheetFilter; label: string; count?: number }[] = [
+    { value: "today", label: msg("runsheet.filter.today") },
+    { value: "needs_result", label: msg("runsheet.filter.needsResult"), count: needsResult },
+    { value: "unscheduled", label: msg("runsheet.filter.unscheduled"), count: unscheduled },
+    { value: "all", label: msg("runsheet.filter.all") },
+  ];
+  return (
+    <div className={`flex flex-wrap items-center gap-3 px-4 py-3 ${className ?? ""}`}>
+      <div data-testid="run-sheet-filter" className="flex flex-wrap gap-1.5">
+        {filters.map((f) => (
+          <button
+            key={f.value}
+            type="button"
+            data-filter={f.value}
+            aria-pressed={filter === f.value}
+            onClick={() => onFilter(f.value)}
+            className={`min-h-11 rounded-full px-3 text-xs font-medium ${
+              filter === f.value ? "bg-purple-100 text-purple-800" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            }`}
+          >
+            {f.label}
+            {f.count !== undefined && <span className="ml-1 text-slate-500">{f.count}</span>}
+          </button>
+        ))}
+      </div>
+      <div className="flex-1" />
+      <p className="text-xs text-slate-500" data-testid="tz-caption">
+        {msg("schedule.tz.caption", { tz })}
+      </p>
     </div>
   );
 }
@@ -791,15 +960,76 @@ function RowWithNow({
   /** T16 — survive `...rest` into `RunSheetRow`, like `streamState`. */
   onlinePlay?: RunSheetOnlinePlay;
   arbiterHref?: string;
+  /** Match Day B2 - survive `...rest` into `RunSheetRow`, like `arbiterHref`. */
+  matchDayHref?: string;
+  venueNoun?: VenueNoun;
   /** Declared here only so it survives `...rest` into `RunSheetRow` — this
    *  wrapper reads nothing off it (same posture as `streamState`/`venues`). */
   feedLabels?: Record<string, FeedLabelPair>;
+  /** E1 item 1 - survives `...rest` into `RunSheetRow`: the row sits under its round's bar. */
+  inRound?: boolean;
+  /** E1 fix round 3 - survives `...rest` into `RunSheetRow`: the pool chip's words. */
+  poolLabel?: string;
 }) {
   return (
     <>
       {showNow && <NowRule msg={msg} />}
       <RunSheetRow fixture={fixture} href={hrefFor(fixture)} {...rest} />
     </>
+  );
+}
+
+/** "0 of 2 done": the round's own fact, `roundDone` (the stage card's own count of the real matches in it, held settles open), in the
+ *  plural the locale picks for the total. */
+function roundDoneText(
+  msgPlural: (key: string, count: number, vars?: Record<string, string | number>) => string,
+  fixtures: readonly RunSheetFixture[],
+  held: ReadonlySet<string>,
+): string {
+  const { done, total } = roundDone(fixtures, held);
+  return msgPlural("runsheet.round.done", total, { done, total });
+}
+
+/**
+ * The bar over a round's rows - one look for a league's "Round 2" and a knockout's "Semi-finals" (Match Day E1 item 1). The name
+ * leads, the round's facts follow on the same line (how many are done, then whatever `children` add: the day, the clock span),
+ * and it wraps at a phone's width rather than clipping. Sticks under the page's nav as the day heading and the bracket header
+ * before it did (`--desk-day-h` is 0px when no day heading is on the sheet, which is every stage card now).
+ */
+function RoundBar({
+  title,
+  done,
+  roundedTop = false,
+  children,
+}: {
+  title: string;
+  done: string;
+  /** The first bar of a division-wide sheet, which has a rounded top of its own to follow. */
+  roundedTop?: boolean;
+  children?: React.ReactNode;
+}) {
+  return (
+    <header
+      style={{ top: "calc(3.5rem + var(--desk-day-h, 0px))" }}
+      className={`sticky z-10 border-y border-slate-200 bg-slate-100 px-4 py-2 ${roundedTop ? "rounded-t-2xl" : ""}`}
+      data-testid="run-sheet-round-bar"
+    >
+      {/* ONE heading: the name and its facts read as one sentence ("Round 2 · 0 of 1 done · Sat 5 Sep · 21:10-21:50") to a
+          screen reader and to a locator, and wrap together at a phone's width. */}
+      <h4 className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+        <span className="min-w-0 text-sm font-semibold text-slate-800">{title}</span>
+        {/* A real space between the two spans (a flex container paints none, so it costs no layout): the heading's text reads "Final
+            · 0 of 1 done" to a screen reader and to a locator instead of "Final· 0 of 1 done". */}
+        {" "}
+        {/* The facts take their own line on a phone (a deliberate second line, never a dot stranded at the start of a wrap) and sit
+            beside the name from `md`, led by a dot. The dot is part of the sentence for a screen reader and a locator either way. */}
+        <span className="min-w-0 text-xs font-normal text-slate-600 max-md:basis-full">
+          <span className="max-md:hidden">{"\u00b7 "}</span>
+          {done}
+          {children}
+        </span>
+      </h4>
+    </header>
   );
 }
 

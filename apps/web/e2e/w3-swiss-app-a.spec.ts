@@ -510,7 +510,7 @@ test.describe("X-SW-29 a bye has no court and no sheet", () => {
     for (const b of byes) await expect(page.locator(`[data-fixture-id="${b.id}"]`)).toHaveCount(0);
 
     // The print control offers the boards' day and no other: a bye holds no time, so it adds no print day. This step
-    // proves only that. That a bye prints no SHEET even when it holds a time (a pre-V483 row, which only SQL can seed)
+    // proves only that. That a bye prints no SHEET even when it holds a time (a pre-V485 row, which only SQL can seed)
     // is proven by the server scorer-sheets test's X-SW-29 case: neither `listSheetDays` nor the sheet loader
     // (`isPrintable`) offers it.
     await page.goto(await competitionPath(request, comp.data!.id, "/schedule"));

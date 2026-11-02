@@ -36,6 +36,7 @@ import { forfeitLedgerOfReason, unseatedForfeitLoser, unseatedWithdrew, type For
 import { OutcomeTagText } from "@/components/v2/outcome-tag-text";
 import { formatChangedTag } from "./run-sheet-tags";
 import type { PatchFixture } from "@/server/api-v1/schemas";
+import type { VenueNoun } from "@/lib/venue";
 // Both halves of the round trip resolve in `orgTz` (#448): `zonedDateTimeInput`
 // seeds the field from an existing instant, `isoFromZonedDateTime` turns the
 // typed wall clock back into one. Never `tz` — that is display-only.
@@ -158,6 +159,10 @@ export function RunSheetRow({
   onlinePlay,
   arbiterHref,
   entrantStatuses,
+  matchDayHref,
+  venueNoun = "court",
+  inRound = false,
+  poolLabel,
 }: {
   fixture: RunSheetFixture;
   href: string;
@@ -213,6 +218,25 @@ export function RunSheetRow({
    *  is worded as the disqualification where the row states the reason (its tag's expansion), never as a withdrawal.
    *  Absent, a walkover is worded by its reason alone, as before. */
   entrantStatuses?: ForfeitEntrantStatuses;
+  /** Match Day E1 item 1: the row sits under its round's header bar (a stage card's sheet), so the bar says the round and the row
+   *  does not: no "Round N" in its meta line, and an open match with no time says so in words ("No time yet") where the
+   *  "Not yet scheduled" group used to say it for it. Absent = the row names its own round, as every other mount reads it. */
+  inRound?: boolean;
+  /** Match Day E1 fix round 3: the pool this match belongs to, in the viewer's words ("Group A"), for a group stage's card - which has ONE
+   *  bar per round across its pools, so the row has to say which pool it is. Drawn as a small chip (a label, not a control: no tap
+   *  floor owed). Absent = the match belongs to no pool the page can name: no chip. */
+  poolLabel?: string;
+  /** Match Day B2 (spec 2026-10-31 §9: "Unscheduled fixtures link to the free-court candidate list"). Present ONLY on a match
+   *  day, for an organiser (the division page decides both: it is the same `needsYouHome` rule that puts Open Match Day on the
+   *  competition page, read for `editable`), and then it is where the "Find a court" link on an unscheduled match leads:
+   *  Match Day opened on the first free court the division's ready matches may use (`?court=`), or the page itself when none
+   *  is free (B4 fix round 1, R2: `findCourtForDivision`, the helper Match Day's Needs you reads). Absent = not a match day,
+   *  or the division has no ready match with no court: the row is exactly what it was. */
+  matchDayHref?: string;
+  /** Match Day B2, fix round 1 (I1): the sport's playing-area noun (`lib/venue.ts`'s `venueNoun`; the stage panel knows the
+   *  division's sport and chooses it), so the link asks for a "pitch" in football and a "board" in chess rather than a court
+   *  everywhere. Absent = the court, `venueNoun`'s own default. One whole string per noun per locale (`runsheet.action.findCourt.<noun>`). */
+  venueNoun?: VenueNoun;
   /** W2a fix round 1 (M10) — this fixture is a recorded abandon awaiting its settle (stored `abandoned`): held, like
    *  a `needs_decision` one — the chip and Settle. From the division page's `listFixturesAwaitingSettle`. */
   awaitsSettle?: boolean;
@@ -287,7 +311,8 @@ export function RunSheetRow({
     const awarded = outcomeText(msg, fixture.outcome, entrantNames);
     return (
       <li className="px-4 py-2 text-sm text-slate-500 italic" data-testid="run-sheet-bye">
-        {msg("schedule.round", { n: fixture.round_no })} · {msg("schedule.bye", { name })}
+        {inRound ? null : `${msg("schedule.round", { n: fixture.round_no })} · `}
+        {msg("schedule.bye", { name })}
         {awarded ? ` · ${awarded}` : null}
       </li>
     );
@@ -433,7 +458,18 @@ export function RunSheetRow({
   // the desktop meta line and the phone line-2 text below read the SAME
   // value instead of restating the interpolation twice. Always non-empty:
   // `schedule.round` has no guard, unlike the two optional prefixes.
-  const metaLine = `${stageName ? `${stageName} · ` : ""}${courtLabel ? `${courtLabel} · ` : ""}${msg("schedule.round", { n: fixture.round_no })}`;
+  // E1 item 1: under a round's bar the row drops its own "Round N" and says "No time yet" for a match nobody has timed. Only a SCHEDULED
+  // one is waiting for a time (fix round 1, m1): a match in play is being played, and shows that (the amber dot by its time cell, its
+  // score action) rather than a promise of a time to come; a played match with no time is a RESULT and says nothing.
+  const noTimeYet = inRound && fixture.scheduled_at === null && fixture.status === "scheduled";
+  const metaLine = [
+    stageName ? stageName : null,
+    courtLabel ? courtLabel : null,
+    inRound ? null : msg("schedule.round", { n: fixture.round_no }),
+    noTimeYet ? msg("runsheet.noTimeYet") : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
   // Below `md`, W2's gate photographed THREE reflowed lines at 320 (meta,
   // name, then either the result sub-line or the action pill on its own —
   // four when a fixture actually carried one). Two deliberate lines instead:
@@ -443,7 +479,7 @@ export function RunSheetRow({
   // untouched: `metaLine` and `subLine` keep rendering as their own separate
   // paragraphs there (see the `hidden md:block` pair below); this combined
   // string is read ONLY by the `md:hidden` line-2 paragraph further down.
-  const phoneLineTwo = subLine !== null && subLine !== "" ? `${metaLine} · ${subLine}` : metaLine;
+  const phoneLineTwo = subLine !== null && subLine !== "" ? (metaLine === "" ? subLine : `${metaLine} · ${subLine}`) : metaLine;
   // W2b loop H F1 (controller ruling: the result tag never truncates). As ONE truncating string, line 2 lost its END
   // first — at 320 "Round 2 · forfeited · Bears of Brockley won (w/o)" read "… Bears of Br…", so the result said
   // nothing. The line ends with the result's tail whenever it carries one (the sub-line's precedence above puts the
@@ -515,6 +551,14 @@ export function RunSheetRow({
       setBusy(false);
     }
   }
+
+  // Match Day B2: an unscheduled match may be asked for a court on a match day. Exactly the matches Match Day lists as "no court
+  // yet" (match-day.ts `noCourt`: a movable - `scheduled` - match with no court and both sides seated), and the row's own
+  // `set_time` action already says it is scheduled, untimed, and the viewer may edit it - so a viewer, a settled match and a
+  // timed one fall out here without a second copy of those rules. A court it already holds, or a side still to be drawn, is not
+  // a candidate there, so the link would lead to a list this match is not on.
+  const findCourtHref =
+    matchDayHref !== undefined && action.kind === "set_time" && fixture.court_id === null && !awaitingDraw ? matchDayHref : null;
 
   const actionLabel =
     action.kind === "open_pad"
@@ -597,7 +641,7 @@ export function RunSheetRow({
             {/* Task 9: desktop-only now — `phoneLineTwo` below carries this
                 same text (combined with the result sub-line) on phone, so
                 printing it here too would be the row's THIRD line again. */}
-            <p className="hidden min-w-0 truncate text-xs text-slate-500 md:block">{metaLine}</p>
+            {metaLine !== "" && <p className="hidden min-w-0 truncate text-xs text-slate-500 md:block">{metaLine}</p>}
             {/* IMPORTANT 2 (fix round 1): the ONE-action rule governs the
                 action CONTROL, not the row's own identity link — `FixtureLine`
                 had both. An unscheduled row's single action is "Set time" (a
@@ -643,6 +687,17 @@ export function RunSheetRow({
         {/* B3 re-review N-1: `max-md:flex-wrap` — at 320 the French waiting chip ("En attente du téléphone") plus the
             action pass line 2 by 16 px; the action wraps under the chip instead of squeezing past the row's edge. */}
         <div data-row-line="2" className="flex min-w-0 items-center justify-between gap-2 max-md:flex-wrap md:contents">
+          {/* E1 fix round 3: a group stage's round holds every pool's matches, so the row names its pool. On a phone it leads line 2
+              (the meta text truncates beside it, `min-w-0` down the chain); from md `md:order-first` puts it between the time and the
+              names, like the chips below. A label, not a control. `normal-case`: the label is the organiser's own words. */}
+          {poolLabel !== undefined && poolLabel !== "" && (
+            <span
+              data-testid="run-sheet-pool-chip"
+              className="chip min-w-0 max-w-[10rem] shrink-0 truncate normal-case md:order-first"
+            >
+              {poolLabel}
+            </span>
+          )}
           {/* Loop R M7(d): a HELD row also carries the held chip and Settle on this line, and at 320 they took the room —
               the meta truncated to "Round 1 · …" and hid the reason ("abandoned"). A held row's meta takes the whole
               line (`max-md:basis-full`) and the chip and Settle wrap below it; every other row keeps two lines. */}
@@ -802,6 +857,22 @@ export function RunSheetRow({
               </Link>
             )}
           </div>
+          {/* Match Day B2: the quieter sibling of Set time (which stays THE action, filled) - a ghost link, 44px on a phone.
+              B4 fix round 1b: OUTSIDE the action's group, and below md a line of its own (`max-md:basis-full`), trailing
+              under Set time at the right edge. Inside the group it widened it, and at 320 a stream chip + Set time + this
+              wrapped the whole group under the chip - Set time left the chip's line (stream-relay A12 @320). From md the
+              wrapper is `contents`: the desktop row is unchanged, Set time then this, in source order. */}
+          {findCourtHref !== null && (
+            <div className="flex justify-end max-md:basis-full md:contents">
+              <Link
+                href={findCourtHref}
+                data-testid="run-sheet-find-court"
+                className="btn btn-ghost min-h-11 shrink-0 px-3 text-xs"
+              >
+                {msg(`runsheet.action.findCourt.${venueNoun}`)}
+              </Link>
+            </div>
+          )}
         </div>
       </div>
       {editing && (

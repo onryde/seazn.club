@@ -138,7 +138,7 @@ export interface SwissLatecomerCounts {
 
 /**
  * The rail's pending latecomers on one Swiss stage (spec §4: the desk shows "N late players join next round"; ruling
- * C4: derived from the entrants' stored first round, V484/V485). An unknown roster or a stage with no usable declared
+ * C4: derived from the entrants' stored first round, V486/V487). An unknown roster or a stage with no usable declared
  * round count has no line — never a zero dressed up as a fact.
  *
  * "Next round" is the round the next Pair seats (`nextUnseatedSwissRound`). A stamp for a LATER round (round 1 unpaired

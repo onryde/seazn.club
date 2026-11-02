@@ -83,7 +83,6 @@ function sheetHtml(fixtures: RunSheetFixture[], stages: { id: string; seq: numbe
       filter="all"
       onFilter={() => {}}
       stageId={null}
-      onStageFilter={() => {}}
     />,
   );
 }

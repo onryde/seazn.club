@@ -21,6 +21,10 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
+
+// The builder offers every template but the Triple round robin, retired from every sport's offer (owner ruling
+// 2026-11-01, Match Day D1); its copy still renders in Settings for a division stored as one.
+const PICKER_TEMPLATES = STAGE_TEMPLATES.filter((t) => t.key !== "triple_rr");
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
@@ -95,7 +99,7 @@ describe("division builder's format picker renders dictionary copy, not the old 
       const grid = pickerSection(renderBuilder(dict, locale));
       const record = dict as unknown as Record<string, string>;
 
-      for (const t of STAGE_TEMPLATES) {
+      for (const t of PICKER_TEMPLATES) {
         const labelKey = `format.template.${t.key}.label`;
         const helpKey = `format.template.${t.key}.help`;
         const translatedLabel = record[labelKey];
@@ -130,7 +134,7 @@ describe("division builder's format picker renders dictionary copy, not the old 
 
   it("en renders its own copy (harness sanity check)", () => {
     const grid = pickerSection(renderBuilder(enUi as Dict, "en"));
-    for (const t of STAGE_TEMPLATES) {
+    for (const t of PICKER_TEMPLATES) {
       expect(grid).toContain(escapeHtml(en[`format.template.${t.key}.label`]!));
       expect(grid).toContain(escapeHtml(en[`format.template.${t.key}.help`]!));
     }

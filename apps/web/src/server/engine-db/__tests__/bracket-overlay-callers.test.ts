@@ -28,6 +28,11 @@
 // W2c Task 19 (fix round 1, review I1): the 17th site, `usecases/fixtures.ts` `loadFixtureMatchRules` - the fixture console's
 // "Match rules" block reads the cfg the match plays NOW (the stage's format under the override, or the frozen snapshot) through
 // the same resolver. Its row is the second in fixtures.ts; its case drives the real entry on a fixture with an override.
+//
+// Match Day C2: the 18th site, `usecases/fixtures.ts` `fixtureFormatLines` - the read-only Match format line (the fixture page
+// for a non-organiser, the Match Day court focus) for many fixtures at once, through the same resolver as the block's line.
+// Its row is the third in fixtures.ts; its case drives the real entry on a fixture with an override and holds its line to the
+// block's own `effectiveLine` for the same match.
 import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -60,7 +65,7 @@ import type { PublicFixture } from "@/server/public-site/data";
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
 import { importEvents } from "@/server/usecases/event-import";
 import { getDictionary } from "@/lib/i18n";
-import { loadFixtureMatchRules, loadFixturePadCfg } from "@/server/usecases/fixtures";
+import { fixtureFormatLines, loadFixtureMatchRules, loadFixturePadCfg } from "@/server/usecases/fixtures";
 import { draftPostsForDecidedFixture } from "@/server/usecases/org-posts";
 import { computePlayerStats } from "@/server/usecases/player-stats";
 import { fixtureConfigPanel, resnapshotFixtureConfig } from "@/server/usecases/admin-fixture-config";
@@ -162,7 +167,8 @@ const SITES: readonly { file: string; count: number; case: string; override?: fa
   { file: "apps/web/src/server/engine-db/competition.ts", count: 2, case: "competition.ts loadStageInputs" },
   { file: "apps/web/src/server/public-site/match-centre-load.ts", count: 1, case: "match-centre-load.ts loadMatchCentre" },
   // W2c Task 19: the second is `loadFixtureMatchRules` - the console block's "what this match plays now" (its `effective`).
-  { file: "apps/web/src/server/usecases/fixtures.ts", count: 2, case: "fixtures.ts loadFixturePadCfg and loadFixtureMatchRules" },
+  // Match Day C2: the third is `fixtureFormatLines` - that block's line, read-only, for many fixtures at once.
+  { file: "apps/web/src/server/usecases/fixtures.ts", count: 3, case: "fixtures.ts loadFixturePadCfg, loadFixtureMatchRules and fixtureFormatLines" },
   { file: "apps/web/src/server/usecases/player-stats.ts", count: 1, case: "player-stats.ts computePlayerStats" },
   { file: "apps/web/src/server/usecases/event-import.ts", count: 1, case: "event-import.ts importEvents" },
   { file: "apps/web/src/server/usecases/admin-fixture-config.ts", count: 2, case: "admin-fixture-config.ts panel and resnapshot" },
@@ -316,6 +322,22 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     expectOverlay("knockout");
     expectOverrideOut("knockout");
     expectOverrideArg();
+  });
+
+  it.skipIf(!HAS_DB)("fixtures.ts fixtureFormatLines (Match Day C2: the read-only Match format line): the bracket overlay and the match override reach it, and it says what the console block says", async () => {
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    const id = s.fixtureIds[0]!;
+    await seedOverride({ fixtureId: id });
+    const dict = await getDictionary("en", "public");
+    const lines = await fixtureFormatLines(s.auth, [id], dict);
+    expectOverlay("knockout");
+    expectOverrideOut("knockout");
+    expectOverrideArg();
+    // The block's own line for the same match (its resolver call is the block case's, above): the same words, not a copy.
+    const block = await loadFixtureMatchRules(s.auth, id, dict);
+    expect(block.effectiveLine, "premise: the block says a line").not.toBe("");
+    expect(lines.get(id)).toBe(block.effectiveLine);
+    expect(lines.size, "one line per fixture asked").toBe(1);
   });
 
   it.skipIf(!HAS_DB)("player-stats.ts computePlayerStats", async () => {

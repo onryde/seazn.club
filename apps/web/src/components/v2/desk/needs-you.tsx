@@ -1,5 +1,8 @@
 import Link from "@/components/ui/console-link";
-import { t, plural } from "@/lib/i18n";
+import { ChevronRight } from "lucide-react";
+// The pure runtime, not `@/lib/i18n` (server-only): Match Day's client shell renders this same list (task A4) — reused, never
+// copied. Only `t`/`plural` were ever read from there, and `@/lib/i18n` re-exports them from this module.
+import { t, plural } from "@/lib/i18n-runtime";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { ATTENTION_SEVERITY, type Attention, type DrawDoor, type Severity } from "@/lib/division-phase";
@@ -13,6 +16,16 @@ export interface NeedsYouItem {
   title: string;
   sub: string;
   action: { label: string; href: string };
+  /** A second, quieter way in, beside `action` (task B4): Match Day's "Find a court" on an unscheduled row (`withFindCourt`,
+   *  lib/match-day/view.ts, set by the server). `court_id` is the court it opens (null: the page's list). The desk never sets
+   *  one, so the competition page's rows are unchanged. */
+  alt?: { label: string; href: string; court_id: string | null };
+}
+
+/** A Needs-you row's key: one row per division and kind. The ONE spelling, so a reader that adds to a division's row (Match Day's
+ *  "Find a court", `withFindCourt`) finds it by the same function that named it, never by parsing the key. */
+export function needsYouKey(divisionId: string, kind: Attention["kind"]): string {
+  return `${divisionId}:${kind}`;
 }
 
 /**
@@ -86,7 +99,7 @@ export function needsYouItems(
           break;
         case "unscheduled":
           items.push({
-            key: `${d.id}:unscheduled`, severity: sev, kind: a.kind,
+            key: needsYouKey(d.id, "unscheduled"), severity: sev, kind: a.kind,
             // C2 fix (review round 3): was a bare `{n} fixtures unscheduled`
             // — "1 fixtures unscheduled" on the common end-of-scheduling
             // case. `plural()` picks the `.one`/`.other` form.
@@ -244,8 +257,72 @@ export function needsYouItems(
   return items.sort((a, b) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity));
 }
 
-export function NeedsYou({ dict, items }: { dict: Dict; items: NeedsYouItem[] }) {
+// ---- Where the list lives (Match Day B1, spec 2026-10-31 §9: "Needs you lives in one place at a time") ----------------------
+
+/** The two surfaces that can carry the Needs-you list. */
+export type NeedsYouHome = "competition" | "match_day";
+
+/**
+ * Where the WHOLE Needs-you list lives, from the competition desk's `fixtures_today` (A2's `countFixturesToday`): in Match Day
+ * on a match day — the same condition that puts Open Match Day on the competition page — and on the competition page before
+ * the day. Never split, never in both: the competition page and Match Day each ask this one function.
+ *
+ * The empty case first: no match today is the competition page's. A count that is not one (negative, fractional, NaN) is a
+ * broken read, not a day — refused, rather than silently landing the list on either surface.
+ */
+export function needsYouHome(fixturesToday: number): NeedsYouHome {
+  if (!Number.isInteger(fixturesToday) || fixturesToday < 0) {
+    throw new RangeError(`needsYouHome: fixtures_today must be a whole count, got ${fixturesToday}`);
+  }
+  if (fixturesToday === 0) return "competition";
+  return "match_day";
+}
+
+/** The Needs-you rows `surface` shows: all of them when it is their home (`needsYouHome`), none otherwise. */
+export function needsYouAt(surface: NeedsYouHome, fixturesToday: number, items: readonly NeedsYouItem[]): NeedsYouItem[] {
+  return needsYouHome(fixturesToday) === surface ? [...items] : [];
+}
+
+/** How many matches owe a result: the desk's `result_missing` attentions, summed across divisions. One sum for Match Day's
+ *  `results_owed` (match-day.ts) and the competition page's line into Match Day, so the line's count is the one Match Day's
+ *  header opens with (`needsYouCount`). */
+export function resultsOwedOf(desk: Pick<CompetitionDesk, "divisions">): number {
+  let owed = 0;
+  for (const d of desk.divisions.values()) for (const a of d.attention) if (a.kind === "result_missing") owed += a.count;
+  return owed;
+}
+
+export function NeedsYou({
+  dict,
+  items,
+  onAlt,
+}: {
+  dict: Dict;
+  items: NeedsYouItem[];
+  /** A client island's own handling of a row's `alt` (Match Day opens the court in place); the link's `href` still works
+   *  without it — opened in a new tab, or before the island hydrates. */
+  onAlt?: (item: NeedsYouItem) => void;
+}) {
   if (items.length === 0) return null;
+  const altLink = (it: NeedsYouItem, className: string) =>
+    it.alt === undefined ? null : (
+      <Link
+        href={it.alt.href}
+        data-needs-you-alt
+        onClick={
+          onAlt === undefined
+            ? undefined
+            : (e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                e.preventDefault();
+                onAlt(it);
+              }
+        }
+        className={className}
+      >
+        {it.alt.label}
+      </Link>
+    );
   return (
     <section data-testid="desk-needs-you" className="mb-6">
       <h2 className="mb-2 font-mono text-[11px] uppercase tracking-[0.08em] text-slate-600">
@@ -271,6 +348,10 @@ export function NeedsYou({ dict, items }: { dict: Dict; items: NeedsYouItem[] })
               >
                 {it.action.label}
               </Link>
+              {altLink(
+                it,
+                "mt-1 flex min-h-11 w-full items-center justify-center rounded-lg text-sm font-medium text-purple-700 underline-offset-2 hover:underline",
+              )}
             </div>
             {/* Desktop, `md` and up — unchanged three-column layout. */}
             <div className="hidden items-center gap-3 px-4 py-3 md:flex">
@@ -281,6 +362,10 @@ export function NeedsYou({ dict, items }: { dict: Dict; items: NeedsYouItem[] })
               </div>
               {/* Loop R M7(e): this row shows from md (768), and 768 and 834 are touch widths — 44px there; the compact
                   28px button only from lg, a mouse width. */}
+              {altLink(
+                it,
+                "inline-flex min-h-11 shrink-0 items-center rounded-lg px-2 text-xs font-medium text-purple-700 underline-offset-2 hover:underline lg:min-h-0 lg:py-1.5",
+              )}
               <Link href={it.action.href} className={`btn ${it.severity === "red" ? "btn-primary" : "btn-ghost"} min-h-11 shrink-0 px-3 py-1.5 text-xs lg:min-h-0`}>
                 {it.action.label}
               </Link>
@@ -289,5 +374,26 @@ export function NeedsYou({ dict, items }: { dict: Dict; items: NeedsYouItem[] })
         ))}
       </div>
     </section>
+  );
+}
+
+/**
+ * The competition page's one line on a match day (B1, spec §9: "N things need you, in Match Day"), in place of the list it
+ * would otherwise show: the whole list lives in Match Day then. One full-width row, the most urgent row's colour on its dot,
+ * at the tap floor at every width. The arrow is an icon, not a character in the copy, so no locale carries punctuation that
+ * only reads left to right.
+ */
+export function NeedsYouInMatchDay({ href, label, severity }: { href: string; label: string; severity: Severity }) {
+  return (
+    <Link
+      href={href}
+      data-testid="desk-needs-you-in-match-day"
+      data-severity={severity}
+      className="card mb-6 flex min-h-11 items-center gap-3 px-4 py-3 text-sm text-slate-900 transition-colors hover:bg-purple-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600"
+    >
+      <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${DOT[severity]}`} />
+      <span className="min-w-0 flex-1">{label}</span>
+      <ChevronRight aria-hidden className="h-4 w-4 shrink-0 text-slate-500" strokeWidth={1.75} />
+    </Link>
   );
 }

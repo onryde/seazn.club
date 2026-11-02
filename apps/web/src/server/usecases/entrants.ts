@@ -164,7 +164,7 @@ export interface EntrantRow {
   created_at: string;
   /** PROMPT-60: crest/badge/flag — external URL or assets-bucket path. */
   badge_url: string | null;
-  /** W3 T9 (ruling C4): a late player's first Swiss round, in the stage `swiss_first_round_stage_id` names (V484/V485);
+  /** W3 T9 (ruling C4): a late player's first Swiss round, in the stage `swiss_first_round_stage_id` names (V486/V487);
    *  null = from round 1. Written only by `admitSwissLateEntrant`. */
   swiss_first_round: number | null;
   swiss_first_round_stage_id: string | null;

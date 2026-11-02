@@ -69,7 +69,7 @@ export type SwissPairingT = (key: SwissPairingMessageKey, vars?: Record<string, 
 export const SWISS_PAIRING_HINT_PAIRS = 3;
 
 type EntrantSeeds = Readonly<Record<string, number | null | undefined>>;
-/** W3 T9 (T8 review m8): each entrant's stored first Swiss round and the stage it belongs to (V484/V485), by id. The
+/** W3 T9 (T8 review m8): each entrant's stored first Swiss round and the stage it belongs to (V486/V487), by id. The
  *  type lives beside the field helper both desk readers use (`swissRoundField`, lib/swiss-late-entry.ts). */
 export type { EntrantSwissFirstRounds };
 

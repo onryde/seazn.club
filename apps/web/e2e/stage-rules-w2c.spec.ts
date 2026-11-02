@@ -16,16 +16,36 @@ import { PointsRule, pointsRuleAwardReachesTable, reachableOutcomes } from "@sea
 import { BRACKET_KINDS } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
-import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, seedScoredDivision } from "./helpers";
+import {
+  TAG,
+  addEntrantsViaApi,
+  apiJson,
+  divisionPath,
+  enclosingStageCard,
+  expectNoHorizontalScroll,
+  openStagePanel,
+  seedScoredDivision,
+  stageCardOf,
+} from "./helpers";
 import { withDb } from "./rs007-money-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { SPORT_RULES, type RuleField } from "../src/lib/match-rules";
 import { stageFieldsFor } from "../src/lib/rule-scope";
 import { pointsLine } from "../src/lib/points-line";
-import { rulesChipText, rulesLineText } from "../src/lib/rules-line";
+import { RULES_LINE_JOINER, rulesChipText, rulesLineText } from "../src/lib/rules-line";
+import { describeAbandon, describeDeciders, describeMatchRules } from "../src/server/public-site/describe-rules";
 import { RULEBOOK_SPLITS } from "../src/components/v2/stage-rules/__tests__/_points-split-rulebook";
+import { openPanels } from "./helpers/rules-strip";
 
 const L = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
+
+/** How many lock lines a stage card says: the summary's `stage-locked` plus any section's own (Match rules, Points, Tie-breaks).
+ *  Match Day C3 review I3: exactly one, whatever panels are open. */
+async function lockLinesOn(card: Locator): Promise<number> {
+  let n = 0;
+  for (const id of ["stage-locked", "stage-format-locked", "stage-points-locked", "stage-tiebreaks-locked"]) n += await card.getByTestId(id).count();
+  return n;
+}
 
 /** The PUBLIC dictionary: the stage row's chips are worded from its `format.rules.*` clauses, the public rules line's own. */
 const PUB = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/public.json", import.meta.url)), "utf8")) as Record<string, string>;
@@ -89,7 +109,8 @@ async function openRow(page: Page, request: APIRequestContext, divisionId: strin
 }
 
 async function openEditor(row: Locator): Promise<void> {
-  await row.getByTestId("stage-format-edit").click();
+  // Match Day C3: the editor opens from the "Match rules" button in the card's header, not from an Edit button in the row.
+  await openStagePanel(enclosingStageCard(row), "format");
   await expect(row.getByTestId("stage-format-editor")).toBeVisible({ timeout: STEP_MS });
 }
 
@@ -154,10 +175,16 @@ for (const m of builtinModules) {
       expect(stored === false && v === null ? null : stored, `${m.key}.${k} stored`).toEqual(v === undefined ? undefined : v);
     }
 
-    // 4. Use division rules: the stage stores nothing and the row says it is the division's.
+    // 4. Use division rules: the stage stores nothing and the row says it is the division's. The reset lives in the open
+    // Match rules panel (Save closed it), so the organiser opens it again first - as a person would.
+    await openEditor(row);
     await expect(row.getByTestId("stage-format-clear")).toBeVisible({ timeout: STEP_MS });
+    await expect(row.getByTestId("stage-format"), "the saved stage is its own").toHaveAttribute("data-stage-format-state", "overridden");
+    await expect(row.getByTestId("stage-differs"), "and says it differs from the division").toBeVisible();
     await row.getByTestId("stage-format-clear").click();
-    await expect(row).toHaveText(new RegExp(L["schedule.stageFormat.inherited"]!), { timeout: STEP_MS });
+    // The card no longer prints "Same as division": it says nothing of differing, and its state is inherited again.
+    await expect(row.getByTestId("stage-format"), "cleared: the stage follows the division again").toHaveAttribute("data-stage-format-state", "inherited", { timeout: STEP_MS });
+    await expect(row.getByTestId("stage-differs"), "cleared: nothing differs from the division").toHaveCount(0);
     expect(await storedRules(request, divisionId, stageId), `${m.key}: cleared`).toBeNull();
   });
 }
@@ -337,27 +364,49 @@ test("generic: 'share the points' is offered only where draws are allowed, and a
 // S4: a started stage says so before anyone tries, reads its rules without being able to change them, and the server still
 // refuses a write (the 16b rule stands).
 // ---------------------------------------------------------------------------------------------------------------------
-test("a stage whose first match is scored: the lock line, a read-only view, a link to the fixtures; the API still refuses with STAGE_FORMAT_LOCKED", async ({ page, request }) => {
+// Match Day C2: the locked stage's Match rules is the shared editor's locked mode - one lock line ("Locked: the stage has
+// started") and the format as chips, read-only. No "View" form of disabled inputs and no link (the row is on the Fixtures tab).
+test("a stage whose first match is scored: the lock line, the format read-only as chips, no control; the API still refuses with STAGE_FORMAT_LOCKED", async ({ page, request }) => {
   test.setTimeout(150_000);
   const { divisionId, stageId } = await seedScoredDivision(request);
   const row = await openRow(page, request, divisionId, stageId);
-  const line = row.getByTestId("stage-format-locked");
+  // Closed, the card's summary already says the stage has started - once.
+  await expect(row.getByTestId("stage-locked"), "the summary says it before anyone tries").toBeVisible();
+  // The Match rules button opens a READ-ONLY panel on a started stage.
+  await openStagePanel(enclosingStageCard(row), "format");
+  // Review I3: the ONE lock line on the card is the summary's; the opened panel is the read-only kind and repeats nothing.
+  const line = row.getByTestId("stage-locked");
   await expect(line).toBeVisible();
-  await expect(line).toContainText(L["stageRules.locked"]!);
-  await expect(row.getByTestId("stage-format-edit"), "no way to start an edit").toHaveCount(0);
+  await expect(line).toContainText(L["stageCard.locked"]!);
+  await expect(row.getByTestId("stage-format-locked"), "the opened panel repeats no lock line").toHaveCount(0);
+  await expect(row.getByTestId("stage-format-save"), "no way to start an edit").toHaveCount(0);
   await expect(row.getByTestId("stage-format-clear")).toHaveCount(0);
-  // The read-only view: the fields show the stage's rules and none of them can be changed; there is no Save.
-  await row.getByTestId("stage-format-view").click();
-  const editor = row.getByTestId("stage-format-editor");
-  await expect(editor).toBeVisible();
-  const controls = editor.locator("input, select");
-  const n = await controls.count();
-  expect(n, "the read-only view shows controls to be read").toBeGreaterThan(0);
-  for (let i = 0; i < n; i++) await expect(controls.nth(i), `control ${i} is disabled`).toBeDisabled();
-  await expect(editor.getByTestId("stage-format-save")).toHaveCount(0);
-  // The link takes the organiser to this stage's fixtures.
-  await line.getByRole("button", { name: L["stageRules.lockedLink"]! }).click();
-  await expect(page.getByTestId("run-sheet")).toBeVisible();
+  // Read-only: the format is said as chips, and the row holds no control and no editor - nothing to change, no Save.
+  const chips = row.getByTestId("stage-format-chips");
+  await expect(chips).toBeVisible();
+  // The chips say the format the stage's matches fold under, in the public line's words (C2 fix round 1, M2): the cfg the server
+  // folds one of its fixtures under (`GET /fixtures/{id}/rules`, no override on it - the stage's stored format), described by
+  // the public site's own describers (the stage line: its match rules, its deciders, its abandon policy), clause for clause.
+  // A chip stands alone, so each is capitalised; the line capitalises only its first - compared case-blind.
+  const fixtures = await apiJson<{ id: string; stage_id: string }[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
+  const fixtureId = fixtures.data!.find((f) => f.stage_id === stageId)!.id;
+  const read = await apiJson<{ cfg: Record<string, unknown> }>(request, `/api/v1/fixtures/${fixtureId}/rules`);
+  expect(read.status, `GET rules: ${JSON.stringify(read.error)}`).toBe(200);
+  const generic = builtinModules.find((m) => m.key === "generic")!;
+  const clauses = [
+    ...(describeMatchRules("generic", generic, read.data!.cfg) ?? []),
+    ...describeDeciders(generic, "league", read.data!.cfg),
+    ...describeAbandon(generic, read.data!.cfg),
+  ];
+  expect(clauses.length, "premise: the stored format has words").toBeGreaterThan(0);
+  const said = await chips.locator("li").allInnerTexts();
+  expect(said.length, "one chip per clause").toBe(clauses.length);
+  expect(said.join(RULES_LINE_JOINER).toLowerCase(), "the chips are the stored format's own line").toBe(rulesLineText(PUB, clauses).toLowerCase());
+  // The panel on a started stage is the read-only view (data-mode "locked"), not an editor: no field, no Save.
+  await expect(row.getByTestId("stage-format-editor")).toHaveAttribute("data-mode", "locked");
+  await expect(row.locator("input, select, textarea")).toHaveCount(0);
+  await expect(row.getByTestId("stage-format-save")).toHaveCount(0);
+  await expect(line.getByRole("button"), "the lock line is words, not a link").toHaveCount(0);
   // The server says no regardless of what the page showed (a stale tab, the API).
   const put = await apiJson(request, `/api/v1/stages/${stageId}/rules`, "PUT", { rules: { allowDraws: false } });
   expect(put.status, "a started stage's rules are refused").toBe(409);
@@ -366,7 +415,11 @@ test("a stage whose first match is scored: the lock line, a read-only view, a li
   const fresh = await seedStage(request, "generic", { label: "unlocked", kind: "league", variant: "score" });
   const row2 = await openRow(page, request, fresh.divisionId, fresh.stageId);
   await expect(row2.getByTestId("stage-format-locked")).toHaveCount(0);
-  await expect(row2.getByTestId("stage-format-edit")).toBeVisible();
+  await expect(row2.getByTestId("stage-locked")).toHaveCount(0);
+  expect(await lockLinesOn(enclosingStageCard(row2)), "an unlocked stage's card says no lock line, panel open or not").toBe(0);
+  await openEditor(row2);
+  await expect(row2.getByTestId("stage-format-save"), "an unstarted stage opens an editor with a Save").toBeVisible();
+  await expect(row2.getByTestId("stage-format-editor"), "and its panel is an editor, not the read-only view").toHaveAttribute("data-mode", "edit");
 });
 
 // The stage kinds a bracket sport reaches: the row is the same row on every bracket kind (no kind falls out of the page).
@@ -376,17 +429,17 @@ test("the row is on the page for every bracket kind of a bracket sport", async (
   for (const kind of BRACKET_KINDS) {
     const { divisionId, stageId } = await seedStage(request, "football", { label: `kind-${kind}`, kind });
     const row = await openRow(page, request, divisionId, stageId);
-    await expect(row.getByTestId("stage-format-edit"), kind).toBeVisible();
+    await expect(enclosingStageCard(row).getByTestId("stage-tool-format"), kind).toBeAttached();
     seen++;
   }
   expect(seen).toBe(BRACKET_KINDS.size);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Fix round 1 (review I-1, M-4): the collapsed row says the stage's EFFECTIVE format as chips, and the kicks of a shoot-out
+// Fix round 1 (review I-1, M-4): the card's summary line says the stage's EFFECTIVE format (Match Day C3: the chips became one line), and the kicks of a shoot-out
 // are held, with the reason, while the shoot-out is off.
 // ---------------------------------------------------------------------------------------------------------------------
-test("football knockout: the chips say what the stage plays after each save, and the kicks are held while the shoot-out is off", async ({ page, request }) => {
+test("football knockout: the summary says what the stage plays after each save, and the kicks are held while the shoot-out is off", async ({ page, request }) => {
   test.setTimeout(150_000);
   const { divisionId, stageId } = await seedStage(request, "football", { label: "chips" });
   // The kicks the new stage starts with are the engine's knockout preset, read back from what the API stored.
@@ -397,10 +450,11 @@ test("football knockout: the chips say what the stage plays after each save, and
   const shootoutLabel = SPORT_RULES.football!.find((f) => f.key === "shootout")!.label;
 
   const row = await openRow(page, request, divisionId, stageId);
-  const chips = row.getByTestId("stage-format-chips");
-  await expect(chips, "the collapsed row carries the chips").toBeVisible({ timeout: STEP_MS });
-  await expect(chips).toContainText(chipText("format.rules.decider.penalties", { n: presetKicks as number }));
-  await expect(chips, "the abandon policy is always said").toContainText(chipText("format.rules.abandon.replay"));
+  // The summary line words the format with the public line's clauses (case differs from a chip: the line capitalises only its first).
+  const line = (text: string): RegExp => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  const summary = row.getByTestId("stage-format-summary");
+  await expect(summary, "the closed card carries the format").toBeVisible({ timeout: STEP_MS });
+  await expect(summary).toContainText(line(chipText("format.rules.decider.penalties", { n: presetKicks as number })));
 
   await openEditor(row);
   const kicks = row.getByTestId("stage-rule-field-shootoutAttempts").locator("input");
@@ -410,30 +464,29 @@ test("football knockout: the chips say what the stage plays after each save, and
   await expect(kicks).toBeEnabled();
   await expect(held).toHaveCount(0);
   await shootout.selectOption("off");
-  // Round 2: the chips are the SAME preview as the notice and the held kicks - they follow the edit before anything is saved.
-  await expect(chips, "while editing, the chips preview what Save stores: no penalties").not.toContainText(chipText("format.rules.decider.penalties", { n: presetKicks as number }), { timeout: STEP_MS });
+  // The summary speaks the SAVED stage, not the draft: the held kicks and the notice are the live preview, the line moves on Save.
+  await expect(summary, "an unsaved edit leaves the summary on the stored format").toContainText(line(chipText("format.rules.decider.penalties", { n: presetKicks as number })));
   await expect(kicks, "the kicks mean nothing with no shoot-out").toBeDisabled();
   await expect(held).toHaveText(L["stageRules.detail.off"]!.replace("{decider}", shootoutLabel));
   await expect(row.getByTestId("stage-rule-field-halfMinutes").locator("input"), "a field that is not a detail stays editable").toBeEnabled();
   await shootout.selectOption("on");
   await expect(kicks).toBeEnabled();
   await expect(held).toHaveCount(0);
-  await expect(chips, "and back on: the penalties chip returns with it").toContainText(chipText("format.rules.decider.penalties", { n: presetKicks as number }), { timeout: STEP_MS });
 
-  // A save moves the chips to the stage's own value, and the division's / old value is gone from them.
+  // A save moves the summary to the stage's own value, and the old value is gone from it.
   await kicks.fill(String(newKicks));
   await row.getByTestId("stage-format-save").click();
   await expect(row.getByTestId("stage-format-editor")).toHaveCount(0, { timeout: STEP_MS });
-  await expect(chips).toContainText(chipText("format.rules.decider.penalties", { n: newKicks }), { timeout: STEP_MS });
-  await expect(chips).not.toContainText(chipText("format.rules.decider.penalties", { n: presetKicks as number }));
+  await expect(summary).toContainText(line(chipText("format.rules.decider.penalties", { n: newKicks })), { timeout: STEP_MS });
+  await expect(summary).not.toContainText(line(chipText("format.rules.decider.penalties", { n: presetKicks as number })));
   expect((await storedRules(request, divisionId, stageId))?.shootoutAttempts).toBe(newKicks);
 
-  // Switch the shoot-out off and save: the penalties chip is gone with it.
+  // Switch the shoot-out off and save: the penalties clause is gone with it.
   await openEditor(row);
   await row.getByTestId("stage-rule-field-shootout").locator("select").selectOption("off");
   await row.getByTestId("stage-format-save").click();
   await expect(row.getByTestId("stage-format-editor")).toHaveCount(0, { timeout: STEP_MS });
-  await expect(chips).not.toContainText(chipText("format.rules.decider.penalties", { n: newKicks }), { timeout: STEP_MS });
+  await expect(summary).not.toContainText(line(chipText("format.rules.decider.penalties", { n: newKicks })), { timeout: STEP_MS });
   expect((await storedRules(request, divisionId, stageId))?.shootout).toBe(false);
 });
 
@@ -444,26 +497,48 @@ test("a locked stage says it is locked once; an open editor has one Cancel and f
   test.setTimeout(150_000);
   const { divisionId, stageId } = await seedScoredDivision(request);
   const row = await openRow(page, request, divisionId, stageId);
-  const sentence = L["stageRules.locked"]!;
+  const sentence = L["stageCard.locked"]!;
   const said = (await row.innerText()).split(sentence).length - 1;
-  expect(said, "the lock sentence appears once in the row").toBe(1);
-  for (const text of await row.getByTestId("stage-format-summary").allInnerTexts()) expect(text, "the header carries the format alone").not.toMatch(/locked/i);
+  expect(said, "closed: the lock sentence appears once in the row").toBe(1);
+  for (const text of await row.getByTestId("stage-format-summary").allInnerTexts()) expect(text, "the summary carries the format alone").not.toMatch(/locked/i);
+  // Review I3 (controller ruling): exactly ONE lock line on the card, panels closed AND with every panel open. The closed count is
+  // taken BEFORE any panel opens (a count taken after the format panel is open is a one-panel-open count, not an all-closed one).
+  const card = enclosingStageCard(row);
+  expect(await lockLinesOn(card), "all panels closed: one lock line on the card").toBe(1);
+  await openStagePanel(card, "format");
   await expect(row.getByTestId("stage-format-chips"), "a locked stage still reads its format as chips").toBeVisible();
+  let opened = 0;
+  for (const panel of ["format", "points", "tiebreaks"] as const) {
+    if ((await card.getByTestId(`stage-tool-${panel}`).count()) === 0) continue;
+    await openStagePanel(card, panel);
+    opened++;
+  }
+  expect(opened, "anti-vacuity: at least Match rules and one more panel were opened").toBeGreaterThanOrEqual(2);
+  expect(await lockLinesOn(card), "every panel open: still exactly one lock line on the card").toBe(1);
+  expect((await row.innerText()).split(sentence).length - 1, "and the sentence is said once with the panels open").toBe(1);
 
-  // An editable stage: closed, the row offers Edit and no Cancel; open, Edit is gone and Cancel is the one way out.
+  // An editable stage: closed, the card offers the Match rules button and no Cancel; open, the button is the toggle (pressed)
+  // and Cancel is the one way out.
   const fresh = await seedStage(request, "generic", { label: "cancel", kind: "league", variant: "score" });
   const row2 = await openRow(page, request, fresh.divisionId, fresh.stageId);
+  const card2 = enclosingStageCard(row2);
+  const tool = card2.getByTestId("stage-tool-format");
   const cancels = row2.getByRole("button", { name: L["schedule.cancel"]!, exact: true });
   await expect(cancels).toHaveCount(0);
-  await expect(row2.getByTestId("stage-format-edit")).toBeVisible();
+  await expect(tool).toBeAttached();
+  await expect(tool, "closed: the toggle is not pressed").toHaveAttribute("aria-expanded", "false");
   await openEditor(row2);
-  await expect.soft(row2.getByTestId("stage-format-edit"), "Edit is gone while editing").toHaveCount(0);
+  await expect.soft(tool, "open: the toggle says so").toHaveAttribute("aria-expanded", "true");
   await expect(cancels, "one Cancel, not two").toHaveCount(1);
   await expect(row2.getByTestId("stage-format-cancel")).toBeVisible();
   await expect.soft(row2.getByTestId("stage-format-editor"), "focus lands on the editor it opened").toBeFocused();
   await row2.getByTestId("stage-format-cancel").click();
   await expect(row2.getByTestId("stage-format-editor")).toHaveCount(0, { timeout: STEP_MS });
-  await expect.soft(row2.getByTestId("stage-format-edit"), "focus returns to the Edit button").toBeFocused();
+  await expect.soft(tool, "closed again: the toggle says so").toHaveAttribute("aria-expanded", "false");
+  // Focus goes back to the control that opened the panel: the header's button, or - below md, where an editor's header buttons are
+  // hidden and the three live in the "Stage tools" sheet - that sheet's one trigger.
+  const opener = (await tool.isVisible()) ? tool : card2.getByTestId("stage-rail-trigger");
+  await expect.soft(opener, "focus returns to the control that opened the panel").toBeFocused();
   expect(await storedRules(request, fresh.divisionId, fresh.stageId), "Cancel saved nothing").toBeNull();
 });
 
@@ -495,14 +570,17 @@ test("chess division Settings: 'Use the default order' removes the stored tie-br
   };
   expect((await configOf()).tiebreakRungs, "premise: the division stores its own list").toEqual(stored);
 
-  await page.goto(await divisionPath(request, div.data!.id, "?tab=settings"), { waitUntil: "load" });
+  // Match Day C2: the division's door is the Division rules strip's Match rules panel (it left Settings).
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
-  await page.getByRole("button", { name: /Format/ }).click();
-  const list = page.getByTestId(`stage-rule-sequence-${seq.key}`);
+  const strip = page.getByTestId("division-rules-strip");
+  await expect(strip).toBeVisible({ timeout: STEP_MS });
+  await openPanels(strip, "format");
+  const list = strip.getByTestId(`stage-rule-sequence-${seq.key}`);
   await expect(list, "the division door shows the ordered list").toBeVisible({ timeout: STEP_MS });
   await expect(page.getByTestId(`stage-rule-sequence-${seq.key}-item-0`)).toContainText(seq.options!.find((o) => o.value === stored[0])!.label);
   await page.getByTestId(`stage-rule-sequence-${seq.key}-reset`).click();
-  await page.getByRole("button", { name: L["divset.saveRules"]!, exact: true }).click();
+  await strip.getByTestId("division-rules-format-save").click();
   await expect.poll(async () => Object.hasOwn(await configOf(), "tiebreakRungs"), { timeout: STEP_MS, message: "the saved list is gone from the division" }).toBe(false);
   // The positive pair: nothing else was lost by the save.
   const after = await configOf();
@@ -563,6 +641,12 @@ test("chess stage under a division that holds a tie-break list: the blank stage 
 // what the section says is the stage's STANDINGS, read after a real walkover - not the stored JSON alone.
 // ---------------------------------------------------------------------------------------------------------------------
 const sectionOf = (page: Page, stageId: string): Locator => page.getByTestId(`stage-points-${stageId}`);
+
+/** The stage's Points section, OPENED from the card's header button (Match Day C3: closed, the card is a one-line summary). */
+async function openedPointsSection(page: Page, stageId: string): Promise<Locator> {
+  await openStagePanel(stageCardOf(page, stageId), "points");
+  return sectionOf(page, stageId);
+}
 /** Phones fold the walkover row and the bonuses behind "More" (`md:hidden` toggle); open it only where the toggle is shown and
  *  closed (AGENTS.md class 22: gate on the toggle, never on a width literal). */
 async function openMore(section: Locator): Promise<void> {
@@ -680,7 +764,7 @@ test("football league: the section prefills the DIVISION's points, saves a walko
   const divisionCfg = { ...(m.variants[rig.variant] as Record<string, unknown>), points: DIVISION_BASE };
   await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
-  const section = sectionOf(page, rig.stageId);
+  const section = await openedPointsSection(page, rig.stageId);
   await expect(section, "the points section is on a table stage").toBeVisible({ timeout: STEP_MS });
   await expect(section).toHaveAttribute("data-stage-points-state", "editor");
   // Nothing stored: it inherits, says so, shows the division's sentence, offers no inputs and nothing to save.
@@ -718,7 +802,7 @@ test("football league: the section prefills the DIVISION's points, saves a walko
 
   // Reload: the stored rule comes back, and the form is the same as before the reload (the sequence test).
   await page.reload({ waitUntil: "load" });
-  const again = sectionOf(page, rig.stageId);
+  const again = await openedPointsSection(page, rig.stageId);
   await expect(again.getByTestId("stage-points-use-division")).not.toBeChecked({ timeout: STEP_MS });
   await openMore(again);
   await expect(again.getByTestId("stage-points-walkover-w")).toHaveValue("7");
@@ -754,7 +838,7 @@ test("football league: the section prefills the DIVISION's points, saves a walko
     await hold.release();
   }
   await page.reload({ waitUntil: "load" });
-  const third = sectionOf(page, rig.stageId);
+  const third = await openedPointsSection(page, rig.stageId);
   await expect(third.getByTestId("stage-points-use-division")).not.toBeChecked({ timeout: STEP_MS });
   await openMore(third);
   await expect(third.getByTestId("stage-points-win")).toHaveValue("5");
@@ -779,10 +863,13 @@ test("football league: the section prefills the DIVISION's points, saves a walko
 
   // A started stage is read-only: the same lock as the format row, said in words, with no control (and the API agrees).
   await page.reload({ waitUntil: "load" });
-  const locked = sectionOf(page, rig.stageId);
+  const locked = await openedPointsSection(page, rig.stageId);
   await expect(locked).toHaveAttribute("data-stage-points-state", "readonly", { timeout: STEP_MS });
   await expect(locked.locator("input, select, button:not([data-role='phone-disclosure-toggle'])")).toHaveCount(0);
-  await expect(locked.getByTestId("stage-points-readonly")).toHaveText(L["stagePoints.ownPoints"]!);
+  // Review I3: the lock is said ONCE, on the card's summary line - the opened panel repeats nothing.
+  await expect(stageCardOf(page, rig.stageId).getByTestId("stage-locked")).toContainText(L["stageCard.locked"]!);
+  await expect(locked.getByTestId("stage-points-locked"), "the opened panel repeats no lock line").toHaveCount(0);
+  await expect(locked.getByTestId("stage-points-source")).toHaveText(L["stagePoints.ownPoints"]!);
   await expect(locked.getByTestId("stage-points-preview")).toHaveText(words2);
   const refused = await apiJson(request, `/api/v1/stages/${rig.stageId}/rules`, "PUT", { points: null });
   expect(refused.status, "the server holds the same lock").toBe(409);
@@ -802,7 +889,7 @@ test("badminton league: a set sport shows the walkover points and NO score box, 
   expect(scores.length, "premise: a badminton league reaches final set scores").toBeGreaterThan(0);
   await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
-  const section = sectionOf(page, rig.stageId);
+  const section = await openedPointsSection(page, rig.stageId);
   await expect(section).toBeVisible({ timeout: STEP_MS });
   await section.getByTestId("stage-points-use-division").uncheck();
   await expect(section.getByTestId("stage-points-draw"), "a sport that cannot draw has no draw box").toHaveCount(0);
@@ -847,7 +934,7 @@ test("use the division's points: unchecking and saving removes the stage's rule,
   expect(await storedPoints(request, divisionId, stageId), "premise: the stage holds its own points").not.toBeNull();
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
-  const section = sectionOf(page, stageId);
+  const section = await openedPointsSection(page, stageId);
   await expect(section.getByTestId("stage-points-use-division")).not.toBeChecked({ timeout: STEP_MS });
   await expect(section.getByTestId("stage-points-win")).toHaveValue("5");
   await section.getByTestId("stage-points-use-division").check();
@@ -858,7 +945,7 @@ test("use the division's points: unchecking and saving removes the stage's rule,
   expect(sent, "the removal is {points: null}, nothing else").toEqual({ points: null });
   await expect.poll(() => storedPoints(request, divisionId, stageId), { timeout: STEP_MS }).toBeNull();
   await page.reload({ waitUntil: "load" });
-  const again = sectionOf(page, stageId);
+  const again = await openedPointsSection(page, stageId);
   await expect(again.getByTestId("stage-points-use-division"), "a reload inherits").toBeChecked({ timeout: STEP_MS });
   await expect(again.getByTestId("stage-points-save"), "nothing stored, nothing to save").toHaveCount(0);
 });
@@ -868,7 +955,7 @@ test("generic bonus editor: the margin bonuses are offered where the sport feeds
   const { divisionId, stageId } = await seedStage(request, "generic", { kind: "league", label: "points-bonus", variant: "score" });
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
-  const section = sectionOf(page, stageId);
+  const section = await openedPointsSection(page, stageId);
   await expect(section).toBeVisible({ timeout: STEP_MS });
   await section.getByTestId("stage-points-use-division").uncheck();
   await openMore(section);
@@ -923,7 +1010,7 @@ test("ice hockey (IIHF): the editor states the overtime split - its boxes open a
   const a = await seedStage(request, "icehockey", { kind: "league", label: "points-split", variant: split });
   await page.goto(await divisionPath(request, a.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
-  const section = sectionOf(page, a.stageId);
+  const section = await openedPointsSection(page, a.stageId);
   await expect(section).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
   await expect(section.getByTestId("stage-points-inexpressible"), "the not-yet state is gone").toHaveCount(0);
   // Inheriting: what the stage plays, row by row - the overtime rows are there.
@@ -976,7 +1063,7 @@ test("ice hockey (IIHF): the editor states the overtime split - its boxes open a
     await sql`update stages set config = config || ${sql.json({ points: own })} where id = ${a.stageId}`;
   });
   await page.reload({ waitUntil: "load" });
-  const stored = sectionOf(page, a.stageId);
+  const stored = await openedPointsSection(page, a.stageId);
   await expect(stored).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
   await expect(stored).toHaveAttribute("data-stage-points-basis", "own");
   await expect(stored.getByTestId("stage-points-use-division")).not.toBeChecked();
@@ -991,8 +1078,8 @@ test("ice hockey (IIHF): the editor states the overtime split - its boxes open a
   await expect.poll(() => storedPoints(request, a.divisionId, a.stageId), { timeout: STEP_MS }).toBeNull();
   const b = await seedStage(request, "icehockey", { kind: "league", label: "points-plain", variant: plain });
   await page.goto(await divisionPath(request, b.divisionId, "?tab=fixtures"), { waitUntil: "load" });
-  await expect(sectionOf(page, b.stageId), "the plain variant: the editor").toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
-  await expect(sectionOf(page, b.stageId).getByTestId("stage-points-row-win-ot"), "and no overtime row of its own").toHaveCount(0);
+  await expect(await openedPointsSection(page, b.stageId), "the plain variant: the editor").toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+  await expect((await openedPointsSection(page, b.stageId)).getByTestId("stage-points-row-win-ot"), "and no overtime row of its own").toHaveCount(0);
 });
 
 test("a knockout stage has no points section (no table to rank), a league of the same division does", async ({ page, request }) => {
@@ -1004,5 +1091,5 @@ test("a knockout stage has no points section (no table to rank), a league of the
   await expect(page.locator('[data-testid^="stage-points-"]'), "and carries no points section").toHaveCount(0);
   const b = await seedStage(request, "football", { kind: "league", label: "points-league" });
   await page.goto(await divisionPath(request, b.divisionId, "?tab=fixtures"), { waitUntil: "load" });
-  await expect(sectionOf(page, b.stageId)).toBeVisible({ timeout: STEP_MS });
+  await expect(await openedPointsSection(page, b.stageId)).toBeVisible({ timeout: STEP_MS });
 });

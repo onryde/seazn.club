@@ -983,7 +983,7 @@ describe.runIf(HAS_DB)("W3 T9 the locks a late entry takes (badminton)", () => {
 });
 
 describe.runIf(HAS_DB)("W3 T9 a division with two root Swiss stages (badminton)", () => {
-  // single-sport: badminton — the stage scope (V485) is a column read; no sport field is read.
+  // single-sport: badminton — the stage scope (V487) is a column read; no sport field is read.
   it("X-SW-13 a late player stamped by stage 1 plays stage 2 from its round 1 (review m6)", async () => {
     const { auth } = await seedOrg("pro");
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Two Swiss " + randomUUID().slice(0, 6), visibility: "private", branding: {} });

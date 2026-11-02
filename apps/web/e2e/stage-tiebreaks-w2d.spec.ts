@@ -12,6 +12,11 @@
 // The sequence (TEST-STRATEGY: test the sequence, not the feature): inherit → override (move a step, add a step, save) →
 // an invalid step's reason inline → reset to a named order → clear back to inheriting → generate (Pinned at start, still
 // editable) → first score (locked: no arrows, the lock line) → a division save that cannot reach the pinned stage says so.
+//
+// Match Day C2: the division's points are saved from the Division rules strip's Points panel on the Fixtures tab (they left
+// Settings); the stage card's Tie-breaks is the shared editor - a pin is not a badge of its own (a stage pinned from the
+// sport's order reads "inherited", from its own "overridden"), and a started stage says the one lock line "Locked: the stage
+// has started" and lists its order read-only, the two-way head-to-head rung said once as a sentence, not numbered.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
@@ -19,8 +24,9 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from "@
 import { offerableKeys, reachableOutcomes, validateCascade, type CascadeContext } from "@seazn/engine/competition";
 import type { TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll } from "./helpers";
+import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, openStagePanel, stageCardOf } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { openPanels } from "./helpers/rules-strip";
 
 const L = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
 const say = (key: string, vars: Record<string, string | number> = {}): string =>
@@ -94,6 +100,7 @@ test("football league: the order is inherited, overridden (a move, an added step
   // --- inherit -----------------------------------------------------------------------------------------------------------
   await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
+  await openStagePanel(stageCardOf(page, rig.stageId), "tiebreaks");
   const section = page.getByTestId(`stage-tiebreaks-${rig.stageId}`);
   await expect(section).toBeAttached({ timeout: STEP_MS });
   await expect(section).toHaveAttribute("data-state", "editor");
@@ -109,6 +116,9 @@ test("football league: the order is inherited, overridden (a move, an added step
   await expect(section.getByTestId("stage-tiebreaks-up-0"), "the primary measure is pinned").toHaveCount(0);
   await expect(section.getByTestId("stage-tiebreaks-save"), "nothing changed: nothing to save").toHaveCount(0);
   await axeClean(page, `[data-testid="stage-tiebreaks-${rig.stageId}"]`);
+  // The Points panel is closed until its header button opens it: open it, so the axe pass sees both sections of the card.
+  await openStagePanel(stageCardOf(page, rig.stageId), "points");
+  await expect(page.getByTestId(`stage-points-${rig.stageId}`), "the Points panel opened").toBeAttached({ timeout: STEP_MS });
   await axeClean(page, `[data-testid="stage-points-${rig.stageId}"]`);
   await expectNoHorizontalScroll(page);
 
@@ -137,6 +147,7 @@ test("football league: the order is inherited, overridden (a move, an added step
   await expect.poll(async () => (await servedOrder(request, rig.stageId)).keys, { timeout: STEP_MS }).toEqual(own);
   expect((await servedOrder(request, rig.stageId)).source).toBe("stage");
   await page.reload({ waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, rig.stageId), "tiebreaks");
   await openFold(section);
   await expect(section.getByTestId("stage-tiebreaks-badge")).toHaveAttribute("data-badge", "overridden", { timeout: STEP_MS });
   expect(await listed(section), "a reload reads the stored order").toEqual(own);
@@ -173,6 +184,7 @@ test("football league: the order is inherited, overridden (a move, an added step
   expect((await clearPut).postDataJSON(), "clear sends the strict body, the order null").toEqual({ tiebreakers: null });
   await expect.poll(async () => (await servedOrder(request, rig.stageId)).source, { timeout: STEP_MS }).toBe("sport");
   await page.reload({ waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, rig.stageId), "tiebreaks");
   await openFold(section);
   await expect(section.getByTestId("stage-tiebreaks-badge")).toHaveAttribute("data-badge", "inherited", { timeout: STEP_MS });
   await expect(section.getByTestId("stage-tiebreaks-clear"), "nothing of its own to clear").toHaveCount(0);
@@ -181,10 +193,10 @@ test("football league: the order is inherited, overridden (a move, an added step
   await openFormat(page, request, rig.divisionId);
   // `exact`: the name match is a case-insensitive substring, and football's Format form also carries "Substitution
   // WINdows allowed" (lib/match-rules/football.ts).
-  const win = page.getByRole("spinbutton", { name: L["divset.win"]!, exact: true });
+  const win = page.getByTestId("division-rules-panel-points").getByRole("spinbutton", { name: L["divset.win"]!, exact: true });
   const before = Number(await win.inputValue());
   await win.fill(String(before + 1));
-  await page.getByRole("button", { name: L["divset.saveRules"]! }).click();
+  await page.getByTestId("division-points-save").click();
   await expect(page.getByText(L["divset.notice.rulesSaved"]!)).toBeVisible({ timeout: STEP_MS });
   await expect(page.getByTestId("division-kept-pinned"), "nothing pinned: no kept-pinned line").toHaveCount(0);
 
@@ -193,10 +205,13 @@ test("football league: the order is inherited, overridden (a move, an added step
   expect(gen.status, `generate: ${JSON.stringify(gen.error)}`).toBeLessThan(300);
   expect((await servedOrder(request, rig.stageId)).pinnedAt, "generating pins the stage").not.toBeNull();
   await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, rig.stageId), "tiebreaks");
   await expect(section).toHaveAttribute("data-state", "editor", { timeout: STEP_MS });
   await openFold(section);
-  await expect(section.getByTestId("stage-tiebreaks-badge")).toHaveAttribute("data-badge", "pinned");
-  await expect(section.getByTestId("stage-tiebreaks-badge")).toHaveText(L["stageTiebreaks.badge.pinned"]!);
+  // Pinned from the sport's order (the stage and the division hold none): it still reads as inheriting the sport's.
+  await expect(section.getByTestId("stage-tiebreaks-badge")).toHaveAttribute("data-badge", "inherited");
+  await expect(section.getByTestId("stage-tiebreaks-badge")).toHaveAttribute("data-source", "sport");
+  await expect(section.getByTestId("stage-tiebreaks-badge")).toHaveText(L["stageTiebreaks.badge.inherited"]!);
   await expect(section.getByTestId("stage-tiebreaks-down-1"), "pinned, not scored: the arrows are still there").toBeEnabled();
   await expect(section.getByTestId("stage-tiebreaks-locked")).toHaveCount(0);
 
@@ -215,8 +230,10 @@ test("football league: the order is inherited, overridden (a move, an added step
   expect(afterPinSave.source, "the stage's own order").toBe("stage");
   expect(afterPinSave.pinnedAt, "re-pinned, the pin's date kept").toBe(pinnedAt);
   await page.reload({ waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, rig.stageId), "tiebreaks");
   await openFold(section);
-  await expect(section.getByTestId("stage-tiebreaks-badge")).toHaveAttribute("data-badge", "pinned", { timeout: STEP_MS });
+  // Its own order now (re-pinned): overridden.
+  await expect(section.getByTestId("stage-tiebreaks-badge")).toHaveAttribute("data-badge", "overridden", { timeout: STEP_MS });
   await expect.poll(() => listed(section), { timeout: STEP_MS }).toEqual(repinned);
 
   // --- a first score: locked. The order is still listed; no arrow, no remove, no add, no reset; the lock line names it -------
@@ -225,10 +242,17 @@ test("football league: the order is inherited, overridden (a move, an added step
   const first = await apiJson(request, `/api/v1/fixtures/${gen.data!.fixtures[0]!.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
   expect(first.status, `start match: ${JSON.stringify(first.error)}`).toBe(201);
   await page.reload({ waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, rig.stageId), "tiebreaks");
   await expect(section).toHaveAttribute("data-state", "locked", { timeout: STEP_MS });
-  await expect(section.getByTestId("stage-tiebreaks-locked")).toContainText(say("stageTiebreaks.locked", { stage: "Pool A" }));
+  // Review I3: the card's one lock line is the summary's; the opened section is locked and repeats nothing.
+  await expect(stageCardOf(page, rig.stageId).getByTestId("stage-locked")).toContainText(L["stageCard.locked"]!);
+  await expect(section.getByTestId("stage-tiebreaks-locked")).toHaveCount(0);
   await openFold(section);
-  expect(await listed(section), "the pinned order is still listed").toEqual(repinned);
+  // Read-only, every real criterion in its order; the engine's one repeatable rung (the two-way head-to-head, `h2h_two`:
+  // the `duplicate` refusal exempts exactly it) is said once as a sentence instead of numbered.
+  const TWO_WAY = "h2h_two";
+  expect(await listed(section), "the pinned order is still listed").toEqual(repinned.filter((k) => k !== TWO_WAY));
+  await expect(section.getByTestId("stage-tiebreaks-h2h")).toHaveCount(repinned.includes(TWO_WAY as TiebreakerKey) ? 1 : 0);
   await expect(section.locator("button:not([data-role='phone-disclosure-toggle']), select"), "locked: no control").toHaveCount(0);
   // The lock is the server's, not the missing controls: a save sent anyway is refused in its words, and nothing moves.
   const lockedPut = await apiJson(request, `/api/v1/stages/${rig.stageId}/rules`, "PUT", { tiebreakers: [...sportDefault] });
@@ -241,9 +265,9 @@ test("football league: the order is inherited, overridden (a move, an added step
 
   // --- a division points save after the pin lands, and says the pinned stage keeps what it started with (PR B carry I3) -----
   await openFormat(page, request, rig.divisionId);
-  const win2 = page.getByRole("spinbutton", { name: L["divset.win"]!, exact: true });
+  const win2 = page.getByTestId("division-rules-panel-points").getByRole("spinbutton", { name: L["divset.win"]!, exact: true });
   await win2.fill(String(Number(await win2.inputValue()) + 1));
-  await page.getByRole("button", { name: L["divset.saveRules"]! }).click();
+  await page.getByTestId("division-points-save").click();
   await expect(page.getByText(L["divset.notice.rulesSaved"]!)).toBeVisible({ timeout: STEP_MS });
   await expect(page.getByTestId(`division-kept-pinned-${rig.stageId}`)).toHaveText(say("divset.keptPinned", { stage: "Pool A" }));
   await expectNoHorizontalScroll(page);
@@ -259,6 +283,7 @@ test("football group stage with a shoot-out: the points rows are exactly the out
   const expected = reach.filter((k) => k !== "loss.so").map((k) => `stage-points-row-${k.replace(/[.:]/g, "-")}`);
   await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
+  await openStagePanel(stageCardOf(page, rig.stageId), "points");
   const section = page.getByTestId(`stage-points-${rig.stageId}`);
   await expect(section).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
   const rows = await section
@@ -272,9 +297,11 @@ test("football group stage with a shoot-out: the points rows are exactly the out
   await expectNoHorizontalScroll(page);
 });
 
+/** The Division rules strip on the Fixtures tab, its Points panel open (the division's points left Settings: Match Day C2). */
 async function openFormat(page: Page, request: APIRequestContext, divisionId: string): Promise<void> {
-  await page.goto(await divisionPath(request, divisionId, "?tab=settings"), { waitUntil: "load" });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
-  await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: STEP_MS });
-  await page.getByRole("button", { name: /^Format/ }).click();
+  const strip = page.getByTestId("division-rules-strip");
+  await expect(strip).toBeVisible({ timeout: STEP_MS });
+  await openPanels(strip, "points");
 }

@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 // Competition overview: divisions as match-day cards (v3/03 §2); settings
 // live on their own page.
 import Link from "@/components/ui/console-link";
-import { CalendarRange, Globe, MonitorPlay, Printer, Settings } from "lucide-react";
+import { CalendarRange, Radio, Settings } from "lucide-react";
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getCompetition } from "@/server/usecases/competitions";
 import { listDivisions } from "@/server/usecases/divisions";
@@ -25,19 +25,33 @@ import { checkoutTrialDays } from "@/lib/billing";
 import { getCompetitionDesk, competitionPhase } from "@/server/usecases/competition-desk";
 import { statusLine, nextDateLabel } from "@/lib/division-status-line";
 import { ledgerRank, leadingAttention } from "@/lib/division-phase";
+import { ledgerQueryOf } from "@/lib/ledger-page";
 import { PhasePill, AttentionChip } from "@/components/v2/desk/phase-pill";
 import { DeskToolsMore } from "@/components/v2/desk/desk-tools-more";
-import { NeedsYou, needsYouItems } from "@/components/v2/desk/needs-you";
-import { InPlayBand } from "@/components/v2/desk/in-play-band";
+import { DeskOpenMenu, type DeskOpenItem } from "@/components/v2/desk/desk-open-menu";
+import {
+  NeedsYou,
+  NeedsYouInMatchDay,
+  needsYouAt,
+  needsYouHome,
+  needsYouItems,
+  resultsOwedOf,
+} from "@/components/v2/desk/needs-you";
+import { needsYouCount, needsYouTone } from "@/lib/match-day/view";
 import { DivisionLedger, type LedgerRow } from "@/components/v2/desk/division-ledger";
 import { log } from "@/server/logger";
 
 export default async function CompetitionPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { orgSlug, compSlug } = await params;
+  // Match Day B2: the divisions list's page and its "show finished" switch live in the URL (`?dpage=`, `?finished=1`), so a
+  // reload or the back button keeps them. Total - a malformed value is the default - and every other param is carried through.
+  const ledgerQuery = ledgerQueryOf(await searchParams);
   const page = await requireCompetitionPage(orgSlug, compSlug);
   const { auth, canEdit } = page;
   const id = page.competition.id;
@@ -75,6 +89,14 @@ export default async function CompetitionPage({
   const now = desk?.now ?? new Date().toISOString();
   const divisionNames = divisions.map((d) => ({ id: d.id, name: d.name, slug: d.slug }));
   const needs = desk && canEdit ? needsYouItems(dict, desk, divisionNames, orgSlug, compSlug, locale) : [];
+  // Match Day B1 (spec 2026-10-31 §9). A match day is the desk's `fixtures_today` (A2's `countFixturesToday`, Match Day's own
+  // count) above zero; `needsYouHome` is the one rule, so Open Match Day and the place the Needs-you list lives can never
+  // disagree. A desk that failed to load (`null`) is no match day: the page degrades to what it showed before.
+  const onMatchDay = desk !== null && needsYouHome(desk.fixtures_today) === "match_day";
+  const needsHere = desk ? needsYouAt("competition", desk.fixtures_today, needs) : [];
+  // The line into Match Day carries the number Match Day's own header button opens with (`needsYouCount`), for the same rows.
+  const needsInMatchDay = onMatchDay && needs.length > 0 && desk ? needsYouCount({ needs_you: needs, results_owed: resultsOwedOf(desk) }) : 0;
+  const needsInMatchDayTone = needsYouTone(needs);
   const ledgerRows: LedgerRow[] = divisions.map((d) => {
     const dd = desk?.divisions.get(d.id) ?? null;
     const s = stats.get(d.id);
@@ -134,6 +156,48 @@ export default async function CompetitionPage({
   const mastheadAttention = leadingAttention(ledgerRows.map((r) => r.desk));
   const publicPath =
     competition.visibility !== "private" ? routes.shared(orgSlug, competition.slug) : null;
+  // Match Day C5 (owner request 2026-11-01): the "Open" menu in the tool row. Gated exactly as the three buttons it replaced were
+  // — Slideshow always; View Public Page and the QR poster only with a public page (a private competition has none) — and none
+  // of it on `canEdit`, so a view-only member sees what they always saw. The QR poster is v3/10 #3: an A4 PDF with a big QR to
+  // the dashboard, to print and tape to the venue door.
+  //
+  // Owner addition (same day): OFF a match day the menu LEADS with "Match Day", the door that is the filled Open Match Day
+  // button on the day (`onMatchDay`, B1). One door in two shapes, never both; offered to everyone who is offered the button
+  // (B4, owner ruling Q1b: a view-only member opens it read-only), so it is not gated on `canEdit` either. Same tab, no ↗.
+  const openItems: DeskOpenItem[] = [
+    ...(onMatchDay
+      ? []
+      : [{ id: "matchday" as const, label: t(dict, "desk.tools.matchDay"), href: routes.competitionMatchDay(orgSlug, compSlug), newTab: false }]),
+    {
+      id: "slideshow",
+      label: t(dict, "action.slideshow"),
+      ariaLabel: t(dict, "aria.slideshowNewTab"),
+      href: routes.slideshowCompetition(competition.id),
+      newTab: true,
+      arrow: true,
+    },
+    ...(publicPath
+      ? [
+          {
+            id: "public" as const,
+            label: t(dict, "action.viewPublic"),
+            ariaLabel: t(dict, "aria.viewPublicNewTab"),
+            href: publicPath,
+            newTab: true,
+            arrow: true,
+          },
+          {
+            id: "qr" as const,
+            label: t(dict, "action.qr"),
+            ariaLabel: t(dict, "aria.qrPoster"),
+            href: `${publicPath}/poster.pdf`,
+            newTab: true,
+            arrow: true,
+            plainAnchor: true,
+          },
+        ]
+      : []),
+  ];
   // RS004 W2 scope item 2: the Registration hub's nav entry carries live
   // counts, computed from the SAME card-stats query this page already runs
   // above — no second query, no client fetch, no N+1 per division.
@@ -225,7 +289,9 @@ export default async function CompetitionPage({
             </div>
           </div>
           {/* Header actions.
-              `md` and up: unchanged — icon + label, wrapped in a row.
+              `md` and up: a wrapped row of labelled buttons — Schedule board,
+              Registration, the "Open" menu (Slideshow, View Public Page, QR;
+              C5) and Settings, in that order (E1 item 5), each labelled.
               Below `md` (F2, round J): NOT the same row shrunk. It stacks,
               full width, and the set itself changes — one primary action
               (Schedule board), the one tool that carries status
@@ -284,17 +350,33 @@ export default async function CompetitionPage({
               canBuy={canEdit}
             />
             </div>
-            <Link
-              href={routes.slideshowCompetition(competition.id)}
-              target="_blank"
-              aria-label={t(dict, "aria.slideshowNewTab")}
-              className="btn btn-ghost gap-1.5 max-md:hidden"
-            >
-              <MonitorPlay className="h-4 w-4" strokeWidth={1.75} />
-              <span className="hidden md:inline">{t(dict, "action.slideshow")} ↗</span>
-            </Link>
+            {/* Match Day B1 (spec §9): on a match day the venue board is the organiser's place to be, so it is THE action — the
+                one filled control at every width, and first on a phone (the schedule board steps back to a plain row below).
+                After the pass entry in source, not before it: that wrapper renders empty for a paid org yet still takes a flex
+                gap, and here it stays the row's leading edge, as it always was, instead of opening a double gap after the
+                primary.
+                B4 (owner ruling Q1b): a view-only member opens Match Day read-only, so the door is theirs too — a SECONDARY
+                one, after the schedule board on a phone, which keeps its fill for them: a viewer runs nothing. */}
+            {onMatchDay && (
+              <Link
+                href={routes.competitionMatchDay(orgSlug, compSlug)}
+                data-testid="desk-tool-match-day"
+                // The phone fill is spelled out, not left to `btn-primary`: the hover reset and the tap floor are the same
+                // ones the schedule board needed (see its comment below), and the e2e phone composition reads this fill.
+                className={
+                  canEdit
+                    ? "btn btn-primary gap-1.5 max-md:order-first max-md:min-h-11 max-md:w-full max-md:justify-start max-md:border-purple-600 max-md:bg-purple-600 max-md:px-4 max-md:text-white max-md:hover:border-purple-700 max-md:hover:bg-purple-700 max-md:hover:text-white"
+                    : "btn btn-ghost gap-1.5 max-md:order-2 max-md:min-h-11 max-md:w-full max-md:justify-start max-md:px-4"
+                }
+              >
+                <Radio aria-hidden className="h-4 w-4" strokeWidth={1.75} />
+                <span>{t(dict, "desk.tools.openMatchDay")}</span>
+              </Link>
+            )}
             {/* The organiser's most likely action at a venue, so on a phone it
-                is THE action: first, full width, filled, and labelled. */}
+                is THE action: first, full width, filled, and labelled — except
+                on a match day (B1), when Open Match Day above is, and this
+                keeps its place as a plain full-width row: one primary. */}
             <Link
               href={routes.competitionSchedule(orgSlug, compSlug)}
               aria-label={t(dict, "aria.scheduleBoard")}
@@ -311,35 +393,15 @@ export default async function CompetitionPage({
               // full-width controls with one of them centred read as three
               // unrelated things. The fill is what marks the primary now, not
               // a different alignment.
-              className="btn btn-ghost gap-1.5 max-md:order-1 max-md:min-h-11 max-md:w-full max-md:justify-start max-md:border-purple-600 max-md:bg-purple-600 max-md:px-4 max-md:text-white max-md:hover:border-purple-700 max-md:hover:bg-purple-700 max-md:hover:text-white"
+              className={`btn btn-ghost gap-1.5 max-md:order-1 max-md:min-h-11 max-md:w-full max-md:justify-start max-md:px-4 ${
+                canEdit && onMatchDay
+                  ? ""
+                  : "max-md:border-purple-600 max-md:bg-purple-600 max-md:text-white max-md:hover:border-purple-700 max-md:hover:bg-purple-700 max-md:hover:text-white"
+              }`}
             >
               <CalendarRange className="h-4 w-4" strokeWidth={1.75} />
               <span className="md:inline">{t(dict, "action.scheduleBoard")}</span>
             </Link>
-            {publicPath && (
-              <Link
-                href={publicPath}
-                target="_blank"
-                aria-label={t(dict, "aria.viewPublicNewTab")}
-                className="btn btn-ghost gap-1.5 max-md:hidden"
-              >
-                <Globe className="h-4 w-4" strokeWidth={1.75} />
-                <span className="hidden md:inline">{t(dict, "action.viewPublic")} ↗</span>
-              </Link>
-            )}
-            {publicPath && (
-              // v3/10 #3: A4 PDF with a big QR to the dashboard — print it,
-              // tape it to the venue door.
-              <a
-                href={`${publicPath}/poster.pdf`}
-                target="_blank"
-                aria-label={t(dict, "aria.qrPoster")}
-                className="btn btn-ghost gap-1.5 max-md:hidden"
-              >
-                <Printer className="h-4 w-4" strokeWidth={1.75} />
-                <span className="hidden md:inline">{t(dict, "action.qr")}</span>
-              </a>
-            )}
             {(
               // NOT gated on canEdit. RS004 shipped this as owner/admin-only
               // to match the hub page's own `if (!canEdit) notFound()`; the
@@ -373,6 +435,14 @@ export default async function CompetitionPage({
                 awaiting={awaitingConfirmation > 0}
               />
             )}
+            {/* Match Day C5 (owner request 2026-11-01): Slideshow, View Public Page and QR were three buttons; they are ONE "Open"
+                menu. Same labels, icons, hrefs, new tabs and ↗ marks as the buttons - see `openItems` above. Desktop only: below
+                `md` the More fold below already carries these same destinations.
+                Match Day E1 item 5 (owner, 2026-11-01): it sits immediately BEFORE Settings - the Match Day door, the schedule board
+                and registration (the organiser's working tools) lead, then the places to look at the competition, then Settings. The
+                DOM node moved, not a CSS `order`: the row's Tab order is its paint order at 768 and up (the order test pins that no
+                `order-*` class reaches it), and the phone stack never shows this control, so its own `max-md:order-*` rules are untouched. */}
+            <DeskOpenMenu className="max-md:hidden" label={t(dict, "desk.tools.open")} items={openItems} />
             <Link
               href={routes.competitionSettings(orgSlug, compSlug)}
               aria-label={t(dict, "aria.settings")}
@@ -381,16 +451,21 @@ export default async function CompetitionPage({
               <Settings className="h-4 w-4" strokeWidth={1.75} />
               <span className="hidden md:inline">{t(dict, "action.settings")}</span>
             </Link>
-            {/* Phone only, and the counterpart of the four `max-md:hidden`
-                tools above: the same destinations, as labelled full-width
-                rows at the tap floor instead of unreadable glyphs. Its own
-                `md:hidden` is what keeps 768-and-up literally unchanged.
+            {/* Phone only, and the counterpart of the two `max-md:hidden`
+                controls above - the Open menu (C5: Slideshow, View Public
+                Page, QR) and Settings: the same destinations, as labelled
+                full-width rows at the tap floor instead of unreadable
+                glyphs. Its own `md:hidden` is what keeps 768-and-up free of
+                a second copy of them.
                 W3 Task 8 (ruling 15): unified from `sm:` (640) to `md:` (768)
                 with the rest of the desk. */}
             <DeskToolsMore
               className="max-md:order-3 md:hidden"
               label={t(dict, "desk.tools.more")}
               items={[
+                // C5 (owner addition): the off-day Match Day door, here because the Open menu is not on a phone. On the day
+                // it is the filled button above instead (never both).
+                ...(onMatchDay ? [] : [{ label: t(dict, "desk.tools.matchDay"), href: routes.competitionMatchDay(orgSlug, compSlug) }]),
                 { label: t(dict, "action.slideshow"), href: routes.slideshowCompetition(competition.id), external: true },
                 ...(publicPath
                   ? [
@@ -404,19 +479,17 @@ export default async function CompetitionPage({
           </div>
         </div>
 
-          {/* W3 Task 7: the live in-play band. `desk === null` (a summary
-              failure — see the `.catch` above) renders nothing here too; the
-              band's own `inPlay.length === 0` guard covers the far more
-              common "nothing live right now" case. */}
-          {desk && (
-            <InPlayBand
-              competitionId={id}
-              initial={{ inPlay: desk.in_play_fixtures, upNext: desk.up_next }}
-              dict={dict}
+          {/* Match Day B1 (spec §9): the live strip that sat here (W3's InPlayBand) is gone — live state is Match Day's — and
+              the Needs-you list lives in one place at a time: here before the day, in Match Day on a match day, where this
+              page keeps one line pointing at it. */}
+          <NeedsYou dict={dict} items={needsHere} />
+          {needsInMatchDay > 0 && needsInMatchDayTone !== null && (
+            <NeedsYouInMatchDay
+              href={routes.competitionMatchDay(orgSlug, compSlug)}
+              label={plural(dict, "desk.needsYou.inMatchDay", needsInMatchDay, locale)}
+              severity={needsInMatchDayTone}
             />
           )}
-
-          <NeedsYou dict={dict} items={needs} />
 
           {/* v17 gap #362 — nothing retires a competition past its end date, so
               the product asks instead of sweeping. Editors only: the two
@@ -472,6 +545,7 @@ export default async function CompetitionPage({
               <DivisionLedger
                 dict={dict} rows={ledgerRows} org={orgSlug} comp={compSlug} locale={locale} now={now}
                 canEdit={canEdit}
+                page={ledgerQuery.page} showFinished={ledgerQuery.showFinished} query={ledgerQuery.rest}
               />
             )}
           </section>

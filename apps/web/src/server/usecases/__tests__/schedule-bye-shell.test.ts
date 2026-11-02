@@ -273,7 +273,7 @@ describe.runIf(HAS_DB)("W3 T3 X-SW-29 a Swiss bye shell never takes a court", ()
     await expect(moveFixture(rig.auth, seated.id, { scheduled_at: at, court_id: rig.courts[0]! }), "seated bye").rejects.toMatchObject(refusal);
     expect((await split(rig.stageId)).byes.filter(holdsSlot), "nothing written by a refused move").toEqual([]);
 
-    // Taking a slot AWAY is not placing one: a legacy bye holding a time (pre-V483) can be cleared by hand.
+    // Taking a slot AWAY is not placing one: a legacy bye holding a time (pre-V485) can be cleared by hand.
     const unseated = (await split(rig.stageId)).byes.find((b) => b.round_no === 2)!;
     await sql`update fixtures set scheduled_at = ${at}, court_id = ${rig.courts[0]!} where id = ${unseated.id}`;
     await expect(moveFixture(rig.auth, unseated.id, { scheduled_at: null, court_id: null }), "clearing a bye's legacy slot").resolves.toBeDefined();

@@ -93,6 +93,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
+import { suggestionKeysOf } from "@/components/v2/board/ai-apply";
 import { aiPlanForDivision } from "../schedule-ai";
 import { maybeAlertExpensiveRun as maybeAlertExpensiveRunSpy } from "../ai-runs-admin";
 import { GENERIC_CONFIG, seedCourts, seedOrg } from "./_seed";
@@ -858,6 +859,26 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision coverage + telemetry (v4/03 §2, 00 
     expect(cs.noBackToBack).toBe(true);
     // Europe/London is +01:00 in August: epoch → ISO-with-offset in the division tz.
     expect(cs.startWindows![0]!.notBefore).toBe("2026-08-01T14:00:00+01:00");
+  });
+
+  // fix/patch-schema-partial-defaults (2026-11-01): `AiConstraintDelta` was the engine constraints' `.partial()`, and
+  // zod 4 fills an omitted `.default()` field, so the provider's own `safeParse` of the model's output added the five
+  // defaulted keys to whatever the model suggested. Each became a row of the console's checklist, ticked on open, whose
+  // Apply overwrote the division's saved rule with the default. Through the real provider adapter and orchestrator.
+  it("constraint_suggestions carries only the keys the model sent: one suggested, then none", async () => {
+    const auth = await seedPaidOrg();
+    const { divisionId, fixtureIds, courts } = await seedPlannable(auth);
+
+    parse.mockResolvedValueOnce(planResponse(legalPlan(fixtureIds, courts, { constraint_suggestions: { restMin: 45 } })));
+    const one = await aiPlanForDivision(auth, divisionId, { instruction: "more rest", mode: "generate" });
+    expect(one.constraint_suggestions).toEqual({ restMin: 45 });
+    expect(suggestionKeysOf(one.constraint_suggestions)).toEqual(["restMin"]); // the console's checklist: one row
+
+    // The empty case, on a second call: a delta naming no key offers no checklist at all.
+    parse.mockResolvedValueOnce(planResponse(legalPlan(fixtureIds, courts, { constraint_suggestions: {} })));
+    const none = await aiPlanForDivision(auth, divisionId, { instruction: "same again", mode: "generate" });
+    expect(none.constraint_suggestions).toEqual({});
+    expect(suggestionKeysOf(none.constraint_suggestions)).toEqual([]);
   });
 
   it("telemetry: ai_plan_run fires on success with usage + blocking count", async () => {

@@ -84,6 +84,9 @@ const RULES: RouteRule[] = [
   // W3 Task 6 — the in-play band's poll. Report-only, same scope as the
   // competition GET it's a sibling of.
   { method: "GET", path: "/competitions/:id/desk", scope: "read", pin: "competition" },
+  // Match Day (spec 2026-10-31, task A2): the court board and a free court's candidates. Reads only, the desk's terms.
+  { method: "GET", path: "/competitions/:id/match-day", scope: "read", pin: "competition" },
+  { method: "GET", path: "/competitions/:id/match-day/candidates", scope: "read", pin: "competition" },
   { method: "GET", path: "/competitions/:id/exports/timetable", scope: "read", pin: "competition" },
   { method: "GET", path: "/competitions/:id/exports/tickets", scope: "read", pin: "competition" },
   // RS005 W1b — competition-wide Registrants tab, the cross-division twin of
@@ -182,6 +185,10 @@ const RULES: RouteRule[] = [
   // fixtures — events + state are the scoreboard surface
   { method: "GET", path: "/fixtures/:id", scope: "read", pin: "fixture" },
   { method: "PATCH", path: "/fixtures/:id", scope: "manage", pin: "fixture" },
+  // Match Day: calling a match onto a court is a schedule write, on the same terms as PATCH /fixtures/:id above
+  { method: "POST", path: "/fixtures/:id/call", scope: "manage", pin: "fixture" },
+  { method: "DELETE", path: "/fixtures/:id/call", scope: "manage", pin: "fixture" },
+  { method: "POST", path: "/fixtures/:id/call/preview", scope: "manage", pin: "fixture" },
   { method: "PUT", path: "/fixtures/:id/stream", scope: "manage", pin: "fixture" },
   { method: "PUT", path: "/fixtures/:id/rules", scope: "manage", pin: "fixture" },
   // the rules a match plays by now: read-only, the same fixture door as GET /fixtures/:id/state (organiser or the match's device link)
@@ -363,6 +370,9 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /capture/codes/:code/scoring-link",
   // Capture record upload (spec 2026-10-12, P1): the operator's Send record — the phone's tok, never a key.
   "POST /capture/codes/:code/records",
+  // S2-1 (capture design §7.1): the phone's Remote Scoring bootstrap. Its Bearer is a device link `dl_…` that the route resolves itself —
+  // never a key, and a key is refused by it (LINK_INVALID); the one v1 route a `dl_` token opens beyond the fixture surface.
+  "GET /device-link",
   // Chess in-page board (2026-10-09 design §6): the room read names a player's
   // seat, the POSTs seat them, submit moves with that player's own stored
   // Lichess OAuth token, report their clock at zero, and stamp a camera gap

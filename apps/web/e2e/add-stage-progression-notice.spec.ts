@@ -183,8 +183,8 @@ test.describe("Add stage: a stage waiting on its source says so", () => {
     expect(done.data?.next_stage_fixtures, "the finals were drawn on completion").toBe(3);
 
     await page.reload();
-    // Positive pair first: the finals card now offers its fixtures…
-    await expect(finals.getByTestId("stage-view-fixtures")).toBeVisible();
+    // Positive pair first: the finals card now holds its fixtures (Match Day C3: in the card, no "View N fixtures" trip)…
+    await expect(finals.getByTestId("stage-run-sheet")).toBeVisible();
     // …so the absences below are about the copy, not an unrendered card.
     await expect(page.getByTestId("stage-no-fixtures")).toHaveCount(0);
     await expect(page.getByText(awaiting, { exact: true })).toHaveCount(0);

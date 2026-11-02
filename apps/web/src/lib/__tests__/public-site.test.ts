@@ -12,7 +12,6 @@ import {
   standingsColumns,
   formatMetric,
   setBreakdown,
-  stripLiveSetPoints,
   teamShortOf,
   teamShortCandidates,
   personShortCandidates,
@@ -330,11 +329,6 @@ describe("setBreakdown (public per-set scoreboard)", () => {
     // cricket-style detail with a different shape must not leak through
     expect(setBreakdown({ detail: { innings: [{ runs: 120 }] } }, "cricket")).toBeNull();
     expect(setBreakdown({ detail: { sets: [{ home: "21", away: 15 }] } }, "badminton")).toBeNull();
-  });
-
-  it("strips the live-points suffix from the headline (shown in the card instead)", () => {
-    expect(stripLiveSetPoints("1 — 0 (14–11)")).toBe("1 — 0");
-    expect(stripLiveSetPoints("2 — 1")).toBe("2 — 1");
   });
 });
 

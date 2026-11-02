@@ -12,7 +12,7 @@
 // The latecomer arrives through a real producer. `createEntrants` refuses once the division has started (the roster lock,
 // entrants.ts "the entrant list is locked"), so the post-Start door the app has today is the registration confirm
 // (`confirmRegistration` -> `materialise`: spec §4's "automatic arrival"). Since Task 9 that confirm stamps the first
-// round itself (case (c): the next round, scoped to the stage by `swiss_first_round_stage_id`, V485); these cases then
+// round itself (case (c): the next round, scoped to the stage by `swiss_first_round_stage_id`, V487); these cases then
 // set the round each one needs with the same UPDATE that writer makes — or clear it, for an entrant admitted before the
 // writer shipped (a legacy null). Everything after the stamp is the product: the active select, the field filter, the
 // history, the engine call.

@@ -2,7 +2,7 @@
 // follow-up) — the stage card's BODY used to render nothing beyond its own
 // header (measured: 814x234px of "1. Group Stage · Group · Active" and a
 // rule). This suite pins the fixtures-progress summary that fills it: a
-// suppressible counts line (`stage-progress-counts`, played / in play / to
+// suppressible counts line (`stage-progress-counts`, done / in play / to
 // schedule).
 //
 // Owner ruling (this round, "remove the progress bar, keep the counts
@@ -30,6 +30,7 @@ import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
 import type { Dict, Locale } from "@/lib/i18n-constants";
+import { routes } from "@/lib/routes";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
@@ -108,13 +109,21 @@ const PROPS = {
   viewerPlan: "community" as const,
 };
 
+/** The counts line's TEXT: tags stripped, because the "N to schedule" clause is a link (Match Day E1 fix round 1, m3). */
 function progressCounts(html: string): string | null {
-  const m = /data-testid="stage-progress-counts"[^>]*>([^<]*)</.exec(html);
-  return m ? m[1]! : null;
+  const m = /data-testid="stage-progress-counts"[^>]*>(.*?)<\/p>/s.exec(html);
+  return m ? m[1]!.replace(/<[^>]*>/g, "") : null;
+}
+
+/** The "N to schedule" link inside the counts line: its href and its words, or null when the line carries none. */
+function toScheduleLink(html: string): { href: string; text: string } | null {
+  const line = /data-testid="stage-progress-counts"[^>]*>(.*?)<\/p>/s.exec(html)?.[1];
+  const m = line === undefined ? null : /<a [^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/s.exec(line);
+  return m ? { href: m[1]!, text: m[2]!.replace(/<[^>]*>/g, "") } : null;
 }
 
 describe("stage card body — fixtures progress (owner-approved 'Option A')", () => {
-  it.each(DICTS)("%s: the counts line names played (2), in play (1) and to schedule (2), real translations", (locale, dict) => {
+  it.each(DICTS)("%s: the counts line names done (2), in play (1) and to schedule (2), real translations", (locale, dict) => {
     const d = dict as unknown as Record<string, string>;
     const html = renderToStaticMarkup(
       <DictProvider dict={dict} locale={locale}>
@@ -123,7 +132,7 @@ describe("stage card body — fixtures progress (owner-approved 'Option A')", ()
     );
     const counts = progressCounts(html);
     expect(counts, `no stage-progress-counts rendered (${locale})`).not.toBeNull();
-    expect(counts, `${locale} played clause`).toContain(d["schedule.progress.played.other"]!.replace("{count}", "2"));
+    expect(counts, `${locale} done clause`).toContain(d["schedule.progress.done.other"]!.replace("{count}", "2"));
     expect(counts, `${locale} in-play clause`).toContain(d["schedule.progress.inPlay.one"]!);
     expect(counts, `${locale} to-schedule clause`).toContain(d["schedule.progress.toSchedule.other"]!.replace("{count}", "2"));
   });
@@ -166,6 +175,30 @@ describe("stage card body — fixtures progress (owner-approved 'Option A')", ()
     expect(bare).not.toContain("0 not opened");
   });
 
+  // Match Day E1 fix round 1 (m3): the card's footer link to the division schedule was removed with the unscheduled footer, so the
+  // "N to schedule" clause is the way there - a link to the same page, in the viewer's own words.
+  it.each(DICTS)("%s: the 'N to schedule' clause is a link to the division schedule, and only that clause is", (locale, dict) => {
+    const d = dict as unknown as Record<string, string>;
+    const html = renderToStaticMarkup(
+      <DictProvider dict={dict} locale={locale}>
+        <StagesPanel {...PROPS} />
+      </DictProvider>,
+    );
+    const link = toScheduleLink(html);
+    expect(link, `${locale}: the to-schedule clause is not a link`).not.toBeNull();
+    expect(link!.href).toBe(routes.divisionSchedule("org", "comp", "div"));
+    expect(link!.text).toBe(d["schedule.progress.toSchedule.other"]!.replace("{count}", "2"));
+    const anchors = (/data-testid="stage-progress-counts"[^>]*>(.*?)<\/p>/s.exec(html)![1]!.match(/<a /g) ?? []).length;
+    expect(anchors, `${locale}: the done / in-play clauses stay plain text`).toBe(1);
+  });
+
+  it("a stage with nothing to schedule has no link - the clause is absent, so is the way to the schedule", () => {
+    const scheduled = MIXED_FIXTURES.map((f) => ({ ...f, scheduled_at: f.scheduled_at ?? "2026-09-06T10:00:00.000Z" }));
+    const html = renderToStaticMarkup(<StagesPanel {...PROPS} fixtures={scheduled} />);
+    expect(progressCounts(html), "premise: the counts line still renders (done / in play)").toContain(en["schedule.progress.inPlay.one"]!);
+    expect(toScheduleLink(html)).toBeNull();
+  });
+
   it("stage-progress-bar no longer renders at all — the bar was removed, not merely emptied", () => {
     const html = renderToStaticMarkup(<StagesPanel {...PROPS} />);
     // Review m5: the positive half. Without it a StagesPanel that rendered
@@ -185,18 +218,26 @@ describe("stage card body — fixtures progress (owner-approved 'Option A')", ()
     expect(counts, "in-play clause leaked in with a zero count").not.toContain("0 in play");
     // The other two clauses are unaffected — this is a suppression of ONE
     // clause, not the whole line going missing.
-    expect(counts).toContain(en["schedule.progress.played.other"]!.replace("{count}", "2"));
+    expect(counts).toContain(en["schedule.progress.done.other"]!.replace("{count}", "2"));
     expect(counts).toContain(en["schedule.progress.toSchedule.other"]!.replace("{count}", "2"));
   });
 
-  it("suppresses the whole counts line — never an empty <p> — when all three counts are zero", () => {
-    // Every fixture cancelled: not played (no result), not in play, not
-    // unscheduled (isUnscheduledFixture requires status === 'scheduled').
-    const allVoid = MIXED_FIXTURES.map((f) => ({ ...f, status: "cancelled" }));
-    const html = renderToStaticMarkup(<StagesPanel {...PROPS} fixtures={allVoid} />);
-    expect(html, "an empty counts <p> rendered — the empty-cell-is-not-information rule was not applied").not.toContain(
+  it("suppresses the whole counts line - never an empty <p> - when all three counts are zero", () => {
+    // Every match dated and waiting: not done (no result), not in play, nothing to schedule (it has a time). The line has nothing to say.
+    const allWaiting = MIXED_FIXTURES.map((f) => ({ ...f, status: "scheduled", outcome: null, scheduled_at: "2026-09-06T10:00:00.000Z" }));
+    const html = renderToStaticMarkup(<StagesPanel {...PROPS} fixtures={allWaiting} />);
+    expect(html, "premise: the stage's matches are on the page").toContain('data-testid="stage-run-sheet"');
+    expect(html, "an empty counts <p> rendered - the empty-cell-is-not-information rule was not applied").not.toContain(
       'data-testid="stage-progress-counts"',
     );
+  });
+
+  it("a stage whose every match was cancelled reads 'N done' - cancelled is settled for the card, the Complete button and the bars alike", () => {
+    // Was "not played" under the old strict rule (decided / finalized only); the shared count (`stageCounts`) settles it.
+    const allVoid = MIXED_FIXTURES.map((f) => ({ ...f, status: "cancelled" }));
+    const counts = progressCounts(renderToStaticMarkup(<StagesPanel {...PROPS} fixtures={allVoid} />));
+    expect(counts, "the counts line rendered").not.toBeNull();
+    expect(counts).toContain(en["schedule.progress.done.other"]!.replace("{count}", String(allVoid.length)));
   });
 
   it("renders no progress section, and keeps the existing 'no fixtures' message, for a stage with zero fixtures", () => {
@@ -205,83 +246,77 @@ describe("stage card body — fixtures progress (owner-approved 'Option A')", ()
     expect(html).toContain(en["schedule.noFixtures.can"]!);
   });
 
+  // Match Day E1 fix round 1 (controller ruling): the counts line says "N done" with the SAME number the stage's round bars add up to
+  // (`stageCounts`' settled bucket, byes out, a held match open). It used to say "1 played" (decided / finalized only) beside a bar's
+  // "2 of 3 done" as soon as a walkover existed. Driven through the real panel: the line and the bars are both read out of ONE render.
+  describe("parity: the counts line and the sum of the round bars (E1 fix 1)", () => {
+    const WIN = { kind: "win", winner: "e1" };
+    const BYE_AWARD = { kind: "award", winner: "e1", loser: null, reason: "bye" };
+    // Expected counts are read off the case list below (the statuses a match can end in), never off the code under test.
+    // Round 1: a decided match, a walkover (forfeited), a settled abandonment, a bye (no match). Round 2: a held abandonment (its settle
+    // is still owed), a cancellation, an in-play match, one waiting.
+    const rows = [
+      fixture("s1", 1, { status: "decided", outcome: WIN, scheduled_at: "2026-09-01T09:00:00.000Z" }),
+      fixture("s1", 2, { status: "forfeited", outcome: { kind: "forfeit", winner: "e1", by: "e2", reason: "walkover" }, scheduled_at: "2026-09-01T10:00:00.000Z" }),
+      fixture("s1", 3, { status: "abandoned", scheduled_at: "2026-09-01T11:00:00.000Z" }),
+      { ...fixture("s1", 4, { status: "forfeited", outcome: BYE_AWARD }), away_entrant_id: null },
+      { ...fixture("s1", 5, { status: "abandoned", scheduled_at: "2026-09-02T09:00:00.000Z" }), round_no: 2 },
+      { ...fixture("s1", 6, { status: "cancelled", scheduled_at: "2026-09-02T10:00:00.000Z" }), round_no: 2 },
+      { ...fixture("s1", 7, { status: "in_play", scheduled_at: "2026-09-02T11:00:00.000Z" }), round_no: 2 },
+      { ...fixture("s1", 8, { scheduled_at: "2026-09-02T12:00:00.000Z" }), round_no: 2 },
+    ];
+    const DONE = 4; // decided, forfeited, abandoned (settled), cancelled - the bye is no match, the held abandonment is still open
+    const TOTAL = 7; // eight rows, one bye
+    const barsOf = (html: string): { done: number; total: number }[] =>
+      [...html.matchAll(/<header[^>]*data-testid="run-sheet-round-bar"[^>]*>([\s\S]*?)<\/header>/g)].map((m) => {
+        const t = /(\d+) of (\d+) done/.exec(m[1]!.replace(/<[^>]*>/g, ""));
+        if (t === null) throw new Error(`a round bar carries no "N of M done": ${m[1]!.slice(0, 160)}`);
+        return { done: Number(t[1]), total: Number(t[2]) };
+      });
+    const lineDone = (html: string): number | null => {
+      const m = /(\d+) done/.exec(progressCounts(html) ?? "");
+      return m ? Number(m[1]) : null;
+    };
+
+    it("walkover + settled abandonment + cancellation are done, the held abandonment is not: the line and the bars agree", () => {
+      const html = renderToStaticMarkup(<StagesPanel {...PROPS} fixtures={rows} awaitingSettle={["f5"]} />);
+      const bars = barsOf(html);
+      expect(bars.length, "anti-vacuity: the stage's two round bars were read").toBe(2);
+      const sum = bars.reduce((a, b) => ({ done: a.done + b.done, total: a.total + b.total }), { done: 0, total: 0 });
+      expect(sum, "the bars add up to the cases above").toEqual({ done: DONE, total: TOTAL });
+      expect(lineDone(html), "the counts line says the number the bars add up to").toBe(sum.done);
+      expect(progressCounts(html)).toContain(en["schedule.progress.done.other"]!.replace("{count}", String(DONE)));
+      expect(progressCounts(html), "the old strict word is gone").not.toContain("played");
+    });
+
+    it("settling the held abandonment moves the line and the bars together (a second render, after the settle)", () => {
+      const before = renderToStaticMarkup(<StagesPanel {...PROPS} fixtures={rows} awaitingSettle={["f5"]} />);
+      const after = renderToStaticMarkup(<StagesPanel {...PROPS} fixtures={rows} awaitingSettle={[]} />);
+      expect(lineDone(before)).toBe(DONE);
+      expect(lineDone(after), "the settled abandonment is done on the line ...").toBe(DONE + 1);
+      expect(barsOf(after).reduce((a, b) => a + b.done, 0), "... and on the bars").toBe(DONE + 1);
+    });
+
+    it("no match done: the line carries no 'done' clause (and so does not say '0 done')", () => {
+      const open = rows.map((r) => ({ ...r, status: "scheduled", outcome: null }));
+      const html = renderToStaticMarkup(<StagesPanel {...PROPS} fixtures={open} />);
+      expect(progressCounts(html), "premise: the line still renders").not.toBeNull();
+      expect(lineDone(html)).toBeNull();
+      expect(progressCounts(html)).not.toContain("0 done");
+    });
+  });
+
   it("does not render a 'Next: ...' line — the brief's own explicit exclusion", () => {
     const html = renderToStaticMarkup(<StagesPanel {...PROPS} />);
-    // Review m5: the positive half — the destination control the brief kept
-    // IS on the page, so an empty render cannot satisfy the exclusion below.
+    // Review m5: the positive half — the stage's own fixtures ARE on the page (Match Day C3 put them in the card), so an empty
+    // render cannot satisfy the exclusion below.
     expect(html, "the panel rendered no stage controls at all — nothing was measured").toContain(
-      'data-testid="stage-view-fixtures"',
+      'data-testid="stage-run-sheet"',
     );
     expect(html.toLowerCase()).not.toMatch(/\bnext:/);
   });
 });
 
-// Owner-approved "Option 2" (on top of Option B) — "why are we not showing
-// the fixtures in each stage?" answered with a destination control, not a
-// second copy of the rows: `stage-view-fixtures`, reading as "View N
-// fixtures" (`plural()`, this programme's own repeat "1 fixtures" offender),
-// using `stageFixtures.length` — the count the brief names explicitly,
-// never re-derived from `stagePlayed`/`stageInPlay`/`unscheduled`.
-function viewFixturesTag(html: string): string | null {
-  const m = /<button[^>]*data-testid="stage-view-fixtures"[^>]*>/.exec(html);
-  return m ? m[0] : null;
-}
-function viewFixturesText(html: string): string | null {
-  const m = /data-testid="stage-view-fixtures"[^>]*>([\s\S]*?)<\/button>/.exec(html);
-  if (m === null) return null;
-  // Strip tags AND the trailing decorative arrow (`aria-hidden`, not part
-  // of the translated copy this test actually pins).
-  return m[1]!.replace(/<[^>]*>/g, "").replace(/→$/, "").trim();
-}
-
-describe("stage card — 'View N fixtures' destination control (owner-approved 'Option 2')", () => {
-  it.each(DICTS)("%s: reads 'View N fixtures' with stageFixtures.length (6), real translations", (locale, dict) => {
-    const d = dict as unknown as Record<string, string>;
-    const html = renderToStaticMarkup(
-      <DictProvider dict={dict} locale={locale}>
-        <StagesPanel {...PROPS} />
-      </DictProvider>,
-    );
-    const text = viewFixturesText(html);
-    expect(text, `no stage-view-fixtures control rendered (${locale})`).not.toBeNull();
-    expect(text, `${locale} view-fixtures copy`).toBe(d["schedule.stage.viewFixtures.other"]!.replace("{count}", "6"));
-  });
-
-  it("the four locales are not the same English string copied four times", () => {
-    const rendered = DICTS.map(([locale, dict]) =>
-      viewFixturesText(
-        renderToStaticMarkup(
-          <DictProvider dict={dict} locale={locale}>
-            <StagesPanel {...PROPS} />
-          </DictProvider>,
-        ),
-      ),
-    );
-    expect(rendered.every((s) => s !== null)).toBe(true);
-    for (const s of rendered.slice(1)) {
-      expect(s).not.toBe(rendered[0]);
-    }
-  });
-
-  it("uses the singular form for exactly one fixture — never 'View 1 fixtures'", () => {
-    const html = renderToStaticMarkup(<StagesPanel {...PROPS} fixtures={[MIXED_FIXTURES[0]!]} />);
-    expect(viewFixturesText(html)).toBe(en["schedule.stage.viewFixtures.one"]!);
-  });
-
-  it("is absent for a stage with zero fixtures — nothing to view", () => {
-    const html = renderToStaticMarkup(<StagesPanel {...PROPS} fixtures={[]} />);
-    expect(html).not.toContain('data-testid="stage-view-fixtures"');
-  });
-
-  it("stays >= 44px tall (min-h-11)", () => {
-    const html = renderToStaticMarkup(<StagesPanel {...PROPS} />);
-    const tag = viewFixturesTag(html);
-    expect(tag, "stage-view-fixtures control not found").not.toBeNull();
-    expect(tag!).toContain("min-h-11");
-  });
-
-  it("renders for a non-editing viewer too — this is navigation, not an edit action gated behind StageRail", () => {
-    const html = renderToStaticMarkup(<StagesPanel {...PROPS} canEdit={false} />);
-    expect(html).toContain('data-testid="stage-view-fixtures"');
-  });
-});
+// Match Day C3 (spec §12 item 9) retired the "View N fixtures" destination control that stood here (owner-approved "Option 2",
+// 2026-09-xx): a stage's fixtures now render IN its card (`stage-run-sheet`), so there is nowhere to "view" them from. What replaces
+// its tests - the fixtures in the card, the absent control and its absent words - is `stages-panel-stage-card.test.tsx`.

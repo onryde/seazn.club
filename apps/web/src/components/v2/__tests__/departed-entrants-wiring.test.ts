@@ -121,16 +121,25 @@ describe("the organiser pages hand the entrants' statuses to the readers that wo
     expect(page).toMatch(/const entrantStatuses = Object\.fromEntries\(entrants\.map\(\(e\) => \[e\.id, e\.status\]\)\)/);
 
     const panel = read("components/v2/stages-panel.tsx");
-    const sheet = panel.match(/<RunSheet\s[\s\S]*?\/>/); // `\s`, not `\b`: the file mentions "`<RunSheet>`" in comments
-    expect(sheet, "the StagesPanel mounts the RunSheet").not.toBeNull();
-    expect(sheet![0]).toContain("entrantStatuses={entrantStatuses}");
+    // Match Day #1103 (E1/C3) retired the division-wide `<RunSheet>` that carried the prop by name: each stage card mounts its own
+    // sheet from ONE shared object, `runSheetProps`. So the link is now two halves, both pinned: every RunSheet mount spreads that
+    // object, and the object carries the statuses.
+    const sheets = [...panel.matchAll(/<RunSheet\s[\s\S]*?\/>/g)].map((m) => m[0]); // `\s`, not `\b`: comments mention "`<RunSheet>`"
+    expect(sheets.length, "the StagesPanel mounts the RunSheet").toBeGreaterThan(0);
+    for (const sheet of sheets) {
+      expect(sheet, "every RunSheet mount takes the shared props").toContain("{...runSheetProps}");
+    }
+    const shared = panel.match(/const runSheetProps = \{[\s\S]*?\n  \};\n/);
+    expect(shared, "the StagesPanel builds the shared run-sheet props").not.toBeNull();
+    // Shorthand (`entrantStatuses,`): the destructured prop itself, never a literal map.
+    expect(shared![0]).toMatch(/\n\s+entrantStatuses,\n/);
 
-    // Every site that hands a row its names hands it the statuses too: the three direct mounts and the day wrapper
-    // (whose `...rest` reaches the row).
+    // Every site that hands a row its names hands it the statuses too: the four direct mounts (Match Day added the round-bar
+    // `RowWithNow`) and the day wrapper (whose `...rest` reaches the row).
     const runSheet = read("components/v2/desk/run-sheet.tsx");
     const names = [...runSheet.matchAll(/entrantNames=\{entrantNames\}/g)].length;
     const statuses = [...runSheet.matchAll(/entrantStatuses=\{entrantStatuses\}/g)].length;
-    expect(names, "premise: the sheet hands rows their names").toBeGreaterThanOrEqual(4);
+    expect(names, "premise: the sheet hands rows their names").toBeGreaterThanOrEqual(5);
     expect(statuses, `rows handed statuses: ${statuses} of ${names}`).toBe(names);
   });
 

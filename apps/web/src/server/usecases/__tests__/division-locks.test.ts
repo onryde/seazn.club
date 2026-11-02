@@ -420,7 +420,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
     expect(err).toMatchObject({
       status: 409,
       code: "DIVISION_FORMAT_LOCKED",
-      message: "Pool A has started; its match format is locked. Change individual unstarted matches instead.",
+      message: "Pool A has started; its match rules are locked. Change individual unstarted matches instead.",
       extra: { refused: [{ field: "setTo", stageName: "Pool A" }] },
     });
     expect(((await getDivision(r.auth, r.divisionId)).config as { setTo: number }).setTo, "the refused value was not written").toBe(13);
@@ -1188,7 +1188,7 @@ describe("X-SR-4 rule-errors: the W2c code table", () => {
     expect(checked, "anti-vacuity: every declared code was checked").toBe(codes.length);
     expect(ruleErrorMessage("STAGE_FORMAT_LOCKED", { stage: "Pool A" })).toBe("Pool A has started — its rules are locked.");
     expect(ruleErrorMessage("DIVISION_TABLE_RULES_LOCKED", { stage: "Pool A" })).toBe("Pool A has started — table rules are locked.");
-    expect(ruleErrorMessage("DIVISION_FORMAT_LOCKED", { stage: "Pool A" })).toBe("Pool A has started; its match format is locked. Change individual unstarted matches instead.");
+    expect(ruleErrorMessage("DIVISION_FORMAT_LOCKED", { stage: "Pool A" })).toBe("Pool A has started; its match rules are locked. Change individual unstarted matches instead.");
     expect(ruleErrorMessage("FIXTURE_FORMAT_LOCKED", {})).toBe("This match is finished — its format is locked.");
     expect(ruleErrorMessage("FORMAT_DOES_NOT_FIT_PLAY", { reason: "set 2 has 30 points" })).toBe("set 2 has 30 points");
     expect(ruleErrorMessage("FORMAT_DOES_NOT_FIT_PLAY", {})).toBe("The recorded play does not fit this format.");

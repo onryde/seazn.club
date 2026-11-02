@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import { renderIsland, propsOf, walk } from "@/components/__tests__/_hook-harness";
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { buildTemplateStages } from "@/lib/format-templates";
-import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 import enUi from "@/dictionaries/en/ui.json";
 
 vi.mock("next/navigation", () => ({
@@ -28,14 +27,6 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
     },
   };
 });
-
-const INDIVIDUAL_ONLY: EffectiveEntrantModel = {
-  kinds: ["individual"],
-  defaultKind: "individual",
-  squadNumbers: false,
-  captain: false,
-  maxTeamMembers: null,
-};
 
 // The builder's default round count (division-builder.tsx `useState(3)` — W3 T11: the band for a field of up to 8,
 // rulebook-W3-swiss.md §3.2; it was 5 before, which dead-ends a field of 6 in 15.5% of events, §3.1).
@@ -81,7 +72,6 @@ function mount(stages: StageProp[], locked: boolean, swissField?: number) {
       logo_storage_path: null,
     },
     orgId: "org1",
-    variants: [{ key: "bwf", name: "BWF" }],
     structureLocked: locked,
     lockedFields: [],
     stages,
@@ -90,8 +80,6 @@ function mount(stages: StageProp[], locked: boolean, swissField?: number) {
     fixturesHref: "/o/org/c/comp/d/div/fixtures",
     embed: <div />,
     danger: <div />,
-    entrantModel: INDIVIDUAL_ONLY,
-    entrantModelSource: "sport",
     autoPosts: false,
     canAutoPost: false,
     showSeeds: true,
