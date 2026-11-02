@@ -80,39 +80,96 @@ describe("closureOf — what the card says", () => {
   });
 });
 
-describe("closureOf — a sweep over a whole day against the windows themselves", () => {
-  it("every minute: closed now iff no window holds it; a break is announced iff a later window follows the holding one", () => {
-    const rigs: [string, UsableWindow[]][] = [
-      ["one break", BREAK],
-      ["two breaks", [win([8], [10]), win([11], [13]), win([14], [18])]],
-      ["a single window", [win([9], [17])]],
-      ["a one-minute window", [win([12], [12, 1])]],
-      ["none", []],
-      ["all day", ALL_DAY],
-    ];
+describe("closureOf — a sweep over a whole day against a table written from the DECLARED hours", () => {
+  // The oracle is a hand-written table of minute segments per rig, read off the hours each rig declares (court_hours rows: open and
+  // close minutes of the day) - NOT a second loop over the windows with the same [from, to) rule the reader itself applies. Each
+  // table is checked to tile the whole day (no gap, no overlap, 0..1440) before it is believed, and the sweep counts every minute.
+  type Seg = { from: number; to: number; closure: "open" | { kind: "now"; until: number | null } | { kind: "later"; from: number; until: number } };
+  const H = (h: number, m = 0) => h * 60 + m;
+  const iso = (min: number) => new Date(DAY0 + min * MIN).toISOString();
+  const expected = (c: Seg["closure"]) =>
+    c === "open" ? null : c.kind === "now" ? { kind: "now", until: c.until === null ? null : iso(c.until) } : { kind: "later", from: iso(c.from), until: iso(c.until) };
+
+  const RIGS: { name: string; windows: UsableWindow[]; table: Seg[] }[] = [
+    {
+      // Declared hours: 09:00-14:00 and 15:00-22:00.
+      name: "one break",
+      windows: BREAK,
+      table: [
+        { from: 0, to: H(9), closure: { kind: "now", until: H(9) } },
+        { from: H(9), to: H(14), closure: { kind: "later", from: H(14), until: H(15) } },
+        { from: H(14), to: H(15), closure: { kind: "now", until: H(15) } },
+        { from: H(15), to: H(22), closure: "open" },
+        { from: H(22), to: 1440, closure: { kind: "now", until: null } },
+      ],
+    },
+    {
+      // Declared hours: 08:00-10:00, 11:00-13:00 and 14:00-18:00.
+      name: "two breaks",
+      windows: [win([8], [10]), win([11], [13]), win([14], [18])],
+      table: [
+        { from: 0, to: H(8), closure: { kind: "now", until: H(8) } },
+        { from: H(8), to: H(10), closure: { kind: "later", from: H(10), until: H(11) } },
+        { from: H(10), to: H(11), closure: { kind: "now", until: H(11) } },
+        { from: H(11), to: H(13), closure: { kind: "later", from: H(13), until: H(14) } },
+        { from: H(13), to: H(14), closure: { kind: "now", until: H(14) } },
+        { from: H(14), to: H(18), closure: "open" },
+        { from: H(18), to: 1440, closure: { kind: "now", until: null } },
+      ],
+    },
+    {
+      // Declared hours: 09:00-17:00.
+      name: "a single window",
+      windows: [win([9], [17])],
+      table: [
+        { from: 0, to: H(9), closure: { kind: "now", until: H(9) } },
+        { from: H(9), to: H(17), closure: "open" },
+        { from: H(17), to: 1440, closure: { kind: "now", until: null } },
+      ],
+    },
+    {
+      // Declared hours: 12:00-12:01 - one minute.
+      name: "a one-minute window",
+      windows: [win([12], [12, 1])],
+      table: [
+        { from: 0, to: H(12), closure: { kind: "now", until: H(12) } },
+        { from: H(12), to: H(12, 1), closure: "open" },
+        { from: H(12, 1), to: 1440, closure: { kind: "now", until: null } },
+      ],
+    },
+    // Declared: no hours on this date at all (an exception that closes it) - shut all day, never reopening.
+    { name: "none", windows: [], table: [{ from: 0, to: 1440, closure: { kind: "now", until: null } }] },
+    // Declared hours: 00:00-24:00.
+    { name: "all day", windows: ALL_DAY, table: [{ from: 0, to: 1440, closure: "open" }] },
+  ];
+
+  it("every table tiles the day exactly: contiguous from 00:00 to 24:00, no gap and no overlap (the oracle is itself checked)", () => {
     let checked = 0;
-    for (const [name, windows] of rigs) {
-      for (let m = 0; m < 24 * 60; m++) {
-        const now = DAY0 + m * MIN;
-        // The oracle: straight from the windows' declared [from, to).
-        const holding = windows.findIndex((w) => w.from <= now && now < w.to);
-        const result = closureOf(windows, now);
-        if (holding < 0) {
-          const next = windows.find((w) => w.from > now);
-          expect(result, `${name} @${m}`).toEqual({ kind: "now", until: next === undefined ? null : new Date(next.from).toISOString() });
-        } else if (windows[holding + 1] === undefined) {
-          expect(result, `${name} @${m}`).toBeNull();
-        } else {
-          expect(result, `${name} @${m}`).toEqual({
-            kind: "later",
-            from: new Date(windows[holding]!.to).toISOString(),
-            until: new Date(windows[holding + 1]!.from).toISOString(),
-          });
-        }
+    for (const rig of RIGS) {
+      let cursor = 0;
+      for (const seg of rig.table) {
+        expect(seg.from, `${rig.name}: starts where the last ended`).toBe(cursor);
+        expect(seg.to, `${rig.name}: a segment has length`).toBeGreaterThan(seg.from);
+        cursor = seg.to;
         checked++;
       }
+      expect(cursor, `${rig.name}: ends at midnight`).toBe(1440);
     }
-    expect(checked).toBe(rigs.length * 24 * 60);
+    expect(checked).toBe(RIGS.reduce((n, r) => n + r.table.length, 0));
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("every minute of every rig: the reader answers what the declared hours' table says", () => {
+    let checked = 0;
+    for (const rig of RIGS) {
+      for (const seg of rig.table) {
+        for (let m = seg.from; m < seg.to; m++) {
+          expect(closureOf(rig.windows, DAY0 + m * MIN), `${rig.name} @${m}`).toEqual(expected(seg.closure));
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(RIGS.length * 24 * 60);
   });
 
   it("the SEQUENCE through a day: open, a break announced, closed, reopened, closed for the night", () => {

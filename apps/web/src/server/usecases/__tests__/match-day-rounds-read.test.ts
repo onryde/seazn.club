@@ -77,6 +77,41 @@ async function seedWithKnockout(day: Day) {
   };
 }
 
+/** Another division in the day's competition with ONE generated stage of `kind` over `n` seeded entrants (a Swiss stage is
+ *  generated twice: the first call mints the round's shells, the second seats them - PR #803's split), returning its fixtures. */
+async function seedStageDivision(day: Day, o: { slug: string; kind: "swiss" | "page_playoff"; n: number; config: Record<string, unknown> }) {
+  const division = await createDivision(day.auth, day.comp.id, {
+    name: o.slug,
+    slug: o.slug,
+    sport_key: "generic",
+    variant_key: "score",
+    config: GENERIC_CONFIG,
+  });
+  await createEntrants(
+    day.auth,
+    division.id,
+    Array.from({ length: o.n }, (_, i) => ({ kind: "individual" as const, display_name: `${o.slug} ${i + 1}`, seed: i + 1, members: [] })),
+  );
+  await putScheduleSettings(day.auth, division.id, {
+    config: {
+      startAt: "2026-11-01T00:00:00.000Z",
+      matchMinutes: 30,
+      gapMinutes: 0,
+      courts: [day.courts.c1, day.courts.c2, day.courts.c3],
+      perEntrantMinRest: 0,
+      blackouts: [],
+      sessionWindows: [],
+    },
+  });
+  const [stage] = await createStages(day.auth, division.id, { seq: 1, kind: o.kind, name: o.slug, config: o.config, progression: null });
+  await generateStageFixtures(day.auth, stage!.id);
+  if (o.kind === "swiss") await generateStageFixtures(day.auth, stage!.id);
+  const rows = await sql<{ id: string; round_no: number; seq_in_round: number; ext_key: string | null; is_final: boolean; home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+    select id, round_no, seq_in_round, ext_key, is_final, home_entrant_id, away_entrant_id
+      from fixtures where stage_id = ${stage!.id} order by round_no, seq_in_round`;
+  return { divisionId: division.id, stageId: stage!.id, rows };
+}
+
 /** What the board itself says each fixture of `divisionId` is: its code and name, else the board's own R{n} fallback. */
 async function boardsRounds(day: Day, divisionId: string, locale: Locale): Promise<Map<string, MatchDayRound>> {
   const msg = msgIn(locale);
@@ -232,6 +267,92 @@ describe.skipIf(!HAS_DB)("Match Day E2-7 — round codes on the real reads", () 
     await place(day, ko.sf[1]!, 660, day.courts.c1);
     await place(day, league, 720, day.courts.c1);
     expect((await previewCall(day.auth, called, day.courts.c1, now)).shifts).toEqual([]);
+  });
+
+  it("m7 — a SWISS stage keeps the plain R{n} on the real read (a coded bracket role would be wrong for it), and says so in the reader's language", async () => {
+    const day = await seedDay();
+    const swiss = await seedStageDivision(day, { slug: "swiss", kind: "swiss", n: 4, config: { rounds: 2 } });
+    const seated = swiss.rows.filter((r) => r.home_entrant_id !== null && r.away_entrant_id !== null);
+    expect(seated.length, "premise: the round's two pairings are seated").toBe(2);
+    await place(day, seated[0]!.id, 60, day.courts.c1);
+    await place(day, seated[1]!.id, 60, day.courts.c2);
+    let checked = 0;
+    for (const locale of ["en", "fr"] as Locale[]) {
+      const view = await getMatchDay(day.auth, day.comp.id, new Date(Date.parse("2026-11-07T10:00:00.000Z")), { locale });
+      const board = await boardsRounds(day, swiss.divisionId, locale);
+      const shown = shownOf(view).filter((f) => seated.some((r) => r.id === f.id));
+      expect(shown.length, `${locale}: both Swiss matches are on the board`).toBe(2);
+      for (const f of shown) {
+        expect(f.round, `${locale} ${f.id}`).toEqual(board.get(f.id));
+        // The design's words: a Swiss round is "R{n}", uncoded - never QF / SF / F.
+        expect(f.round.coded, `${locale} ${f.id}`).toBe(false);
+        expect(f.round.code, `${locale} ${f.id}`).toBe(`R${seated[0]!.round_no}`);
+        expect(f.round.label, `${locale} ${f.id}`).toBe(msgFor(locale, "schedule.round", { n: seated[0]!.round_no }));
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("m7 — a PAGE PLAYOFF is named Q1 / E by the fixtures' ext_key, which the real read must carry (without it Q1 and the Eliminator read as quarter-finals)", async () => {
+    const day = await seedDay();
+    const pp = await seedStageDivision(day, { slug: "playoff", kind: "page_playoff", n: 4, config: {} });
+    const byKey = new Map(pp.rows.map((r) => [r.ext_key, r]));
+    expect([...byKey.keys()].sort(), "premise: the stage carries the page playoff's own keys").toEqual(["pp-elim", "pp-final", "pp-q1", "pp-q2"]);
+    const q1 = byKey.get("pp-q1")!;
+    const elim = byKey.get("pp-elim")!;
+    expect(q1.home_entrant_id && q1.away_entrant_id && elim.home_entrant_id && elim.away_entrant_id, "premise: both opening matches are seated").toBeTruthy();
+    await place(day, q1.id, 60, day.courts.c1);
+    await place(day, elim.id, 60, day.courts.c2);
+    let checked = 0;
+    for (const locale of ["en", "nl"] as Locale[]) {
+      const view = await getMatchDay(day.auth, day.comp.id, new Date(Date.parse("2026-11-07T10:00:00.000Z")), { locale });
+      const board = await boardsRounds(day, pp.divisionId, locale);
+      const shown = new Map(shownOf(view).map((f) => [f.id, f.round]));
+      expect([...shown.keys()].sort(), `${locale}: the two opening matches are on the board`).toEqual([q1.id, elim.id].sort());
+      for (const r of [q1, elim]) {
+        expect(shown.get(r.id), `${locale} ${r.ext_key}`).toEqual(board.get(r.id));
+        checked++;
+      }
+      // The design's words, not read back from the board: Qualifier 1 and the Eliminator, which share a round and every flag.
+      expect(shown.get(q1.id)!.code, locale).toBe(msgFor(locale, "bracket.roundShort.qualifier1"));
+      expect(shown.get(elim.id)!.code, locale).toBe(msgFor(locale, "bracket.roundShort.eliminator"));
+      expect(shown.get(q1.id)!.code, `${locale}: two different codes for two matches of one round`).not.toBe(shown.get(elim.id)!.code);
+    }
+    expect(checked).toBe(4);
+    const en = await getMatchDay(day.auth, day.comp.id, new Date(Date.parse("2026-11-07T10:00:00.000Z")), { locale: "en" });
+    expect(shownOf(en).find((f) => f.id === q1.id)!.round).toEqual({ code: "Q1", label: "Qualifier 1", coded: true });
+    expect(shownOf(en).find((f) => f.id === elim.id)!.round).toEqual({ code: "E", label: "Eliminator", coded: true });
+  });
+
+  it("m7 — the FINAL itself, on today's board and read for real, is F (and the bronze match beside it 3rd): both told apart by their flags, not by a tomorrow that hides them", async () => {
+    const day = await seedDay();
+    const ko = await seedWithKnockout(day);
+    // The final and the bronze match are seated (their feeders are not played here) and planned today on two courts.
+    await sql`update fixtures set home_entrant_id = e1.id, away_entrant_id = e2.id
+                from (select id from entrants where division_id = ${ko.divisionId} order by seed limit 1) e1,
+                     (select id from entrants where division_id = ${ko.divisionId} order by seed offset 1 limit 1) e2
+               where fixtures.id = any(${[ko.final, ko.bronze]})`;
+    await place(day, ko.final, 60, day.courts.c1);
+    await place(day, ko.bronze, 60, day.courts.c2);
+    let checked = 0;
+    for (const locale of ["en", "fr"] as Locale[]) {
+      const view = await getMatchDay(day.auth, day.comp.id, new Date(Date.parse("2026-11-07T10:00:00.000Z")), { locale });
+      const board = await boardsRounds(day, ko.divisionId, locale);
+      const shown = new Map(shownOf(view).map((f) => [f.id, f.round]));
+      expect([...shown.keys()].sort(), `${locale}: exactly the final and the bronze match are on the board`).toEqual([ko.final, ko.bronze].sort());
+      for (const id of [ko.final, ko.bronze]) {
+        expect(shown.get(id), `${locale} ${id}`).toEqual(board.get(id));
+        checked++;
+      }
+      expect(shown.get(ko.final)!.label, locale).toBe(msgFor(locale, "bracket.round.final"));
+      expect(shown.get(ko.bronze)!.label, locale).toBe(msgFor(locale, "bracket.round.thirdPlace"));
+    }
+    expect(checked).toBe(4);
+    const en = await getMatchDay(day.auth, day.comp.id, new Date(Date.parse("2026-11-07T10:00:00.000Z")), { locale: "en" });
+    const rounds = new Map(shownOf(en).map((f) => [f.id, f.round]));
+    expect(rounds.get(ko.final)).toEqual({ code: "F", label: "Final", coded: true });
+    expect(rounds.get(ko.bronze)).toEqual({ code: "3rd", label: "Third place", coded: true });
   });
 
   it("an empty board names nobody (the empty case)", async () => {
