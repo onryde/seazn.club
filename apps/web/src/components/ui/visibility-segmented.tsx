@@ -64,7 +64,11 @@ export function VisibilitySegmented({
               {/* Hidden at the tightest widths: three words and three icons do
                   not fit a 320px card, and the word is the control. */}
               <Icon aria-hidden className="h-4 w-4 shrink-0 max-[359px]:hidden" strokeWidth={2} />
-              <span className="min-w-0 truncate">{msg(opt.label)}</span>
+              {/* Wraps rather than truncating: "Lien uniquement" needs 104-126px and
+                  the segment's text box is ~99px beside the icon in the lg column
+                  (and ~78px at 320). A word cut by an ellipsis is a control nobody
+                  can name; two short lines inside the 44px target are fine. */}
+              <span className="min-w-0 break-words text-center leading-tight">{msg(opt.label)}</span>
             </label>
           );
         })}

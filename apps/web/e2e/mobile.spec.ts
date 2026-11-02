@@ -3173,7 +3173,7 @@ test("Match Day C8: the New competition form and the first-division screen hold 
     const clipped = await form
       .locator("label")
       .filter({ has: radio })
-      .locator("span.truncate")
+      .locator("> span:last-of-type")
       .evaluate((el) => el.scrollWidth - el.clientWidth);
     expect(clipped, `the "${vis(k)}" segment truncates its own word at ${w}px`).toBeLessThanOrEqual(0);
   }

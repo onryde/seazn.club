@@ -59,14 +59,18 @@ export default async function NewCompetitionPage({
   const viewerPlan = viewerPlanFrom(await orgPlanKey(auth.orgId));
 
   return (
-    // The template gallery is a centred 4xl column. The blank form (and the two
-    // screens it turns into after Create) is a two-column card as wide as the
-    // header above it (6xl), so from `lg` the page widens to match WHILE one of
-    // them is mounted. CSS `:has()` rather than a prop because the choice lives in
-    // the gallery's client state; keeping the same width across all three screens
-    // means the title does not jump sideways when Create lands.
+    // The template gallery is a centred 4xl column. The blank form, and the two
+    // screens it turns into (the degraded-create card, "Add your first division"),
+    // sit in a card as wide as the header above it (6xl), so from `lg` the page
+    // widens WHILE one of them is mounted. CSS `:has()` rather than a prop because
+    // the choice lives in the gallery's client state, keyed on a dedicated
+    // `data-wide-page` attribute those three roots carry (and the gallery's own
+    // degrade card, inside its modal, does not). The title therefore moves once,
+    // when "Start from blank" swaps the gallery for the form at `lg`, and stays put
+    // from the form to whatever Create lands on. Pinned by
+    // __tests__/new-competition-page-width.test.tsx.
     <main
-      className="mx-auto max-w-4xl px-4 py-8 lg:has-[[data-testid=new-competition-form],[data-testid=first-division-prompt],[data-testid=public-quota-degraded]]:max-w-6xl"
+      className="mx-auto max-w-4xl px-4 py-8 lg:has-[[data-wide-page]]:max-w-6xl"
       data-tour="competition-wizard"
     >
       <h1 className="mb-6 text-xl font-semibold tracking-tight text-slate-900">
