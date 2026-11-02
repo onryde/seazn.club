@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
@@ -21,8 +22,10 @@ import { routes } from "../../src/lib/routes";
  *      competitions with a match today, each with Open Match Day; the one with nothing scheduled is a quiet card ending in B's
  *      stub; there is no Directory button on the page (the nav keeps it); the finished one is hidden.
  *   3. Flip "Show finished": the finished competition appears.
- *   4. Tap Open Match Day: Match Day for that competition, with its court list.
- * Every step asserts what a person sees, and the page holds without sideways scroll, at 1280 and at 320.
+ *   4. Tap Open Match Day: Match Day for that competition, with its court list. Back through the nav, and the Draft one's Open
+ *      Match Day lands on ITS Match Day too.
+ * Every step asserts what a person sees, and the page holds without sideways scroll, at 1280 and at 320. Every control a thumb
+ * needs is a 44px target that a tap at its centre actually reaches, and axe finds nothing serious with the deck on the page.
  *
  * `mode: "default"` for the reason `draft-unlisted-org-home.spec.ts` gives: `beforeAll` seeds an org against a Pro user capped
  * at five owned orgs, so the two widths share one org (both only READ it — the switch's state is the URL).
@@ -107,6 +110,22 @@ test.afterAll(async ({ browser }) => {
   }
 });
 
+/** A 44px target (WCAG 2.5.5), scrolled to the middle of the screen, that a tap at its centre lands on — not on a card's
+ *  stretched link, a sticky header or a neighbour above it. */
+async function expectTapTarget(target: Locator, label: string): Promise<void> {
+  await target.evaluate((el) => el.scrollIntoView({ block: "center" }));
+  const box = await target.boundingBox();
+  expect(box, `${label}: has a layout box`).not.toBeNull();
+  expect(box!.height, `${label}: 44px tall`).toBeGreaterThanOrEqual(44);
+  expect(box!.width, `${label}: 44px wide`).toBeGreaterThanOrEqual(44);
+  const hit = await target.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return top !== null && (top === el || el.contains(top));
+  });
+  expect(hit, `${label}: a tap at its centre reaches it`).toBe(true);
+}
+
 const deckRow = (page: Page, c: SeededCompetition): Locator => page.getByTestId("org-home-today-row").filter({ hasText: c.name });
 const card = (page: Page, c: SeededCompetition): Locator => page.getByTestId("org-home-card").filter({ hasText: c.name });
 
@@ -164,6 +183,30 @@ for (const width of [1280, 320] as const) {
     await expect(card(page, done)).toHaveCount(0);
     await expectNoHorizontalScroll(page);
 
+    // The thumb's targets on this screen: the deck's Open Match Day and ⋯, the stub's action and the card's ⋯, the switch.
+    const actions = (name: string) => `${UI["card.actions"]}: ${name}`;
+    const targets: Array<[Locator, string]> = [
+      [deckRow(page, today).getByRole("link", { name: ui("org.home.today.openFor", { name: today.name }) }), "Open Match Day"],
+      [deckRow(page, today).getByRole("button", { name: actions(today.name) }), "deck row ⋯"],
+      [stub.getByRole("link", { name: ui("org.home.stub.setUpFor", { name: quiet.name }) }), "stub action"],
+      [quietCard.getByRole("button", { name: actions(quiet.name) }), "quiet card ⋯"],
+      [page.getByRole("switch", { name: ui("org.home.showFinished", { n: 1 }) }), "Show finished"],
+    ];
+    let tapChecked = 0;
+    for (const [target, label] of targets) {
+      await expectTapTarget(target, `${label} @${width}`);
+      tapChecked++;
+    }
+    expect(tapChecked).toBe(5);
+
+    // axe, with the night deck and a stubbed card on the page: nothing serious or critical, and it checked something.
+    const axe = await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa"]).analyze();
+    const serious = axe.violations
+      .filter((v) => v.impact === "serious" || v.impact === "critical")
+      .map((v) => `${v.id} (${v.impact}): ${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(", ")}`);
+    expect(serious, `axe @${width}`).toEqual([]);
+    expect(axe.passes.reduce((n, r) => n + r.nodes.length, 0), "axe checked the page (zero is a vacuous pass)").toBeGreaterThan(0);
+
     // 3. Show finished: the switch is off, says how many, and flipping it shows the finished competition.
     const toggle = page.getByRole("switch", { name: ui("org.home.showFinished", { n: 1 }) });
     await expect(toggle).toHaveAttribute("aria-checked", "false");
@@ -188,6 +231,22 @@ for (const width of [1280, 320] as const) {
       courtsSeen++;
     }
     expect(courtsSeen).toBe(2);
+    await expectNoHorizontalScroll(page);
+
+    // Back to Competitions through the nav, and the Draft one's Open Match Day lands on ITS Match Day (a Draft has no status
+    // gate there), with its courts.
+    await page.getByRole("navigation").getByRole("link", { name: CONSOLE["nav.dashboard"], exact: true }).click();
+    await page.waitForURL((u) => u.pathname === routes.orgHome(org.slug), { timeout: NAV_MS });
+    await deckRow(page, draft).getByRole("link", { name: ui("org.home.today.openFor", { name: draft.name }) }).click();
+    await page.waitForURL((u) => u.pathname === routes.competitionMatchDay(org.slug, draft.slug), { timeout: NAV_MS });
+    await expect(page.getByRole("heading", { level: 1, name: /^Match Day · / })).toBeVisible({ timeout: NAV_MS });
+    await expect(page.getByTestId("md-list")).toBeVisible();
+    let draftCourts = 0;
+    for (const c of courts) {
+      await expect(page.getByTestId("md-court-row").filter({ hasText: c.name }), `${draft.name}: ${c.name}`).toBeVisible();
+      draftCourts++;
+    }
+    expect(draftCourts).toBe(2);
     await expectNoHorizontalScroll(page);
   });
 }
