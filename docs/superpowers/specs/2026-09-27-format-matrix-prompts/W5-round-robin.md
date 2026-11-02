@@ -60,6 +60,14 @@ one action, and brainstorm only the format-specific rule:
 - Prove it per format × entrant kind × case, counted, through the real usecases (W3 Task 10c is the template).
 Rule to settle with the owner here: how a late player catches up in a league (all missed matches added as catch-up fixtures, or missed matches scored as losses) and which group a late player joins.
 
+## Carry from W3 (cut eligibility, 2026-11-02)
+
+W3 T15 ruled, for SWISS stages only: a withdrawn or disqualified entrant leaves the knockout cut on any completion and the
+next eligible entrant backfills (the table keeps them, marked). Found on the group/league cut today (W3 T15 report):
+setup seeding drops a departed qualifier but leaves her seat dead (confirm stamps a bye); on_complete keeps her in
+`config.qualified` and her opponent gets a walkover; the public league view still names her as a cut rival. W5 owes an
+owner ruling on whether groups/leagues adopt the Swiss rule.
+
 ## Lifecycle (design §10)
 
 1. Rulebook `rulebook-W5-round-robin.md` (drafted when the wave starts; FIFA/UEFA
