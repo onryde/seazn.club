@@ -15,7 +15,7 @@ import "server-only";
 //        - `timing: "setup"` (swiss_knockout and swiss_playoff, the shapes RB3-19 is about): no `config.qualified`
 //          exists. The confirmed proposal's `computed.qualifiers` is the table's cut as it stood when the draft was
 //          computed; `confirmSeedProposal` applies picks and edits to the SEATS only and leaves `computed` as it was,
-//          and only a draft is ever re-staled. A bracket with no confirmed proposal has no recorded cut: no drift;
+//          and only a draft is ever re-staled. A BEGUN bracket with no confirmed proposal is an invariant breach (thrown by name);
 //   2. TODAY'S top q — the Swiss stage's live ranking (`rankedStageStandings`, the cascade the standings tab renders),
 //      read through the SAME eligibility the cut itself uses (`cutEligiblePools`, T15 Carry A): a withdrawn or
 //      disqualified entrant leaves the cut and the next eligible entrant backfills, so a departed entrant is never
@@ -44,9 +44,9 @@ export type { SwissCutDrift };
 /**
  * Who a correction moved across the Swiss cut after the knockout began, or null (no warning). Null for: a stage that is
  * not a complete Swiss, a Swiss with no stage after it (the commonest shape: a Swiss on its own) or one that draws from
- * nothing, a bracket with no recorded cut (no `config.qualified`, no confirmed proposal), a knockout that has not begun,
- * and a cut that today's table still makes. 404 for an unknown stage or another
- * organisation's (RLS).
+ * nothing, a knockout that has not begun (which also covers an unseated or unconfirmed bracket),
+ * and a cut that today's table still makes. 404 for an unknown stage or another organisation's (RLS). Throws (a 500, loud
+ * on purpose) when the knockout HAS begun yet no cut was ever recorded for it: see `frozenCutOf`.
  */
 export async function getSwissCutDrift(auth: AuthCtx, swissStageId: string): Promise<SwissCutDrift | null> {
   return withTenant(auth.orgId, async (tx) => {
@@ -66,7 +66,7 @@ export async function getSwissCutDrift(auth: AuthCtx, swissStageId: string): Pro
     const knockoutStarted = began !== undefined;
     if (!knockoutStarted) return null;
 
-    const frozen = await frozenCutOf(tx, next);
+    const frozen = await frozenCutOf(tx, next, swiss.id);
     const departed = await departedEntrantIds(tx, swiss.division_id);
     const ranked = [...(await rankedStageStandings(tx, swiss.id))].sort(
       (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),
@@ -84,9 +84,15 @@ export async function getSwissCutDrift(auth: AuthCtx, swissStageId: string): Pro
 
 type Tx = postgres.TransactionSql;
 
-/** The table's cut the stage after the Swiss was seeded from (see the header). Distinct ids, in a stable order; empty when
- *  none is recorded (which `swissCutDrift` reads as "nothing to drift from"). */
-async function frozenCutOf(tx: Tx, next: { id: string; config: Record<string, unknown> }): Promise<string[]> {
+/** The table's cut the stage after the Swiss was seeded from (see the header). Distinct ids, in a stable order.
+ *
+ *  Only called once the knockout HAS BEGUN (a fixture of the stage holds a result), so the bracket is seated and its seating
+ *  recorded a cut: an `on_complete` stage by `seedNextStage` (`config.qualified`), a `setup` stage by `confirmSeedProposal`
+ *  (a confirmed proposal whose `computed.qualifiers` stays the table's cut). A begun bracket with neither is an invariant
+ *  breach - something seated and played it without the recorded cut - and is refused by name rather than read as "no drift"
+ *  (a silent null would hide the very warning this read exists to give). An unseated or not-yet-confirmed bracket never
+ *  reaches here: it has no result, so `getSwissCutDrift` has already answered null. */
+async function frozenCutOf(tx: Tx, next: { id: string; config: Record<string, unknown> }, swissStageId: string): Promise<string[]> {
   const stored = next.config.qualified;
   const ids = (list: unknown[]) => [...new Set(list.filter((id): id is string => typeof id === "string"))];
   if (Array.isArray(stored)) return ids(stored);
@@ -95,5 +101,11 @@ async function frozenCutOf(tx: Tx, next: { id: string; config: Record<string, un
     where stage_id = ${next.id} and status = 'confirmed'
     order by confirmed_at desc nulls last, id limit 1`;
   const qualifiers = confirmed?.computed?.qualifiers;
-  return Array.isArray(qualifiers) ? ids(qualifiers.map((q) => q.entrantId)) : [];
+  if (!Array.isArray(qualifiers)) {
+    throw new Error(
+      `getSwissCutDrift: stage ${next.id} (after Swiss ${swissStageId}) has a result but no recorded cut - ` +
+        `no config.qualified array and ${confirmed ? "a confirmed proposal without a computed.qualifiers array" : "no confirmed proposal"}`,
+    );
+  }
+  return ids(qualifiers.map((q) => q.entrantId));
 }

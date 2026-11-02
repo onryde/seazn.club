@@ -704,6 +704,38 @@ describe.runIf(HAS_DB)("X-SW-25 getSwissCutDrift (RB3-19)", () => {
     }, 300_000);
   }
 
+  it("X-SW-25 getSwissCutDrift: a BEGUN bracket with no recorded cut is an invariant breach, thrown by name — an unbegun one is still null (badminton)", async () => {
+    // Badminton only: the recorded cut is a stage/proposal row, with no sport input.
+    // Unbegun first (the path order): a seated, unplayed bracket whose proposal is gone reaches no throw — it answers null
+    // through the knockout-started check, before any cut is read.
+    const unbegun = await startedBracket(SPORTS[0], { begun: false });
+    await sql`delete from stage_seed_proposals where stage_id = ${unbegun.koStageId!}`;
+    expect(await getSwissCutDrift(unbegun.auth, unbegun.stageId), "unbegun, no proposal: null, not a throw").toBeNull();
+
+    // Begun, with the cut flipped so the warning is the answer when a cut IS recorded (the positive pair).
+    const rig = await startedBracket(SPORTS[0]);
+    await flipCut(rig);
+    const [, , p3, p4] = rig.entrants as [string, string, string, string];
+    expect(await getSwissCutDrift(rig.auth, rig.stageId), "premise: with the proposal, the flip warns").toEqual({ out: [p3], in: [p4] });
+    const [saved] = await sql<{ id: string; status: string; computed: unknown }[]>`
+      select id, status, computed from stage_seed_proposals where stage_id = ${rig.koStageId!} and status = 'confirmed'`;
+    expect(saved, "premise: one confirmed proposal").toBeTruthy();
+    const breach = { message: expect.stringContaining(`stage ${rig.koStageId!}`) };
+
+    // Each way the recorded cut can be missing, one at a time, restored before the next.
+    await sql`update stage_seed_proposals set status = 'stale' where id = ${saved!.id}`;
+    await expect(getSwissCutDrift(rig.auth, rig.stageId), "the proposal is stale, not confirmed").rejects.toMatchObject(breach);
+    await sql`update stage_seed_proposals set status = 'confirmed' where id = ${saved!.id}`;
+
+    await sql`update stage_seed_proposals set computed = computed - 'qualifiers' where id = ${saved!.id}`;
+    await expect(getSwissCutDrift(rig.auth, rig.stageId), "a confirmed proposal without a qualifiers array").rejects.toMatchObject(breach);
+    await sql`update stage_seed_proposals set computed = ${sql.json(saved!.computed as never)} where id = ${saved!.id}`;
+
+    await sql`delete from stage_seed_proposals where id = ${saved!.id}`;
+    await expect(getSwissCutDrift(rig.auth, rig.stageId), "no proposal at all").rejects.toMatchObject(breach);
+    await expect(getSwissCutDrift(rig.auth, rig.stageId)).rejects.toMatchObject({ message: expect.stringContaining(`Swiss ${rig.stageId}`) });
+  }, 300_000);
+
   it("X-SW-25 getSwissCutDrift: a knockout whose only result is taken back has still begun — the warning stays (badminton)", async () => {
     // Badminton only: the evidence predicate is sport-blind; only the result event type below is the sport's.
     // `fixtureHasResultSql` is monotonic: a recorded event is evidence for good (fixture-results-sql.ts: "a start taken back
