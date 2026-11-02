@@ -1322,6 +1322,13 @@ for (const sport of LATE_SPORTS) {
       // Follow it: Unpair puts round 1 back on its shells, and round 1 is the choosable round again — no guidance there.
       await page.getByTestId("stage-unpair").click();
       await expect.poll(async () => (await r.boards(1)).length, { timeout: 30_000 }).toBe(0);
+      // The server has written; wait for the DESK to re-read it before opening the menu. The rail keys the menu's open
+      // state to the round it was opened for (stage-rail.tsx, `pairingState`), so round 2's open menu stays on screen
+      // until the refresh lands and then reads closed for round 1. Opening it before that finds the stale round-2 menu
+      // already open, skips the toggle, and is closed under the assertion. With nothing seated, Unpair leaves the rail.
+      await expect(page.getByTestId("stage-unpair"), "the desk re-read: nothing is seated, so nothing to unpair").toHaveCount(0, {
+        timeout: 30_000,
+      });
       await openMenu();
       await expect(page.getByTestId("stage-pairing-fold"), "round 1 is choosable again").toBeVisible();
       await expect(page.getByTestId("stage-pairing-readonly")).toHaveCount(0);
@@ -1332,6 +1339,9 @@ for (const sport of LATE_SPORTS) {
       await expect.poll(async () => (await r.boards(1)).length, { timeout: 30_000 }).toBe(3);
       // The rules decide the pairing and nothing was corrected, so the same pairing comes back — which is what the line says.
       expect(await pairsOf(), "Unpair then Pair next with no change re-derives the same pairing").toEqual(paired);
+      // As above: the desk re-reads before the menu is opened (round 1 seated again puts Unpair back on the rail), or the
+      // toggle opens round 1's menu and the refresh closes it.
+      await expect(page.getByTestId("stage-unpair"), "the desk re-read: round 1 is seated again").toBeVisible({ timeout: 30_000 });
       await openMenu();
       await expect(hint).toHaveText(uiEn["schedule.pairing.changeHint"]!);
     });
@@ -1559,7 +1569,8 @@ test.describe("X-SW-26 finish a 5-round Swiss after round 3 into the knockout", 
         `/api/v1/stages/${koId}/seed-proposal`,
         "POST",
       );
-      expect(proposal.status, JSON.stringify(proposal.error)).toBe(200);
+      // 201: the route creates a DRAFT proposal (`reply(201, …)`; openapi documents 201 for this POST, 200 for /confirm).
+      expect(proposal.status, JSON.stringify(proposal.error)).toBe(201);
       expect([...proposal.data!.computed.qualifiers].sort((a, b) => a.rank - b.rank).map((q) => q.entrantId)).toEqual(top);
 
       // Finished stays finished: the item is gone from More, a second Finish is SWISS_OVER, and Undo is refused by name.
