@@ -180,7 +180,7 @@ const REBUILD = en["progression.rosterDrift.rebuildCta"];
 /** "stops working" / "stop working" / "no longer works" — how these pages say a link is dead. */
 const DIES = /\bstops? working\b|\bno longer works?\b/i;
 
-describe("every way a device link ends is on the page, and no plan it lacks is claimed", () => {
+describe("every way a device link ends is on the page", () => {
   it("reads the Rebuild label (the premise below)", () => {
     expect(REBUILD).toMatch(/\w/);
   });

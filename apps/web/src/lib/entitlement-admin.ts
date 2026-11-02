@@ -1,4 +1,4 @@
-import { ENTITLEMENT_DOMAINS } from "@/lib/entitlement-domains";
+import { ADMIN_HIDDEN_FEATURES, ENTITLEMENT_DOMAINS } from "@/lib/entitlement-domains";
 import { ALL_PLAN_KEYS } from "@/lib/currency";
 
 export interface AdminEntRow {
@@ -76,7 +76,10 @@ function render(cell: AdminEntRow | undefined): string {
 
 /** Pivot plan_entitlements rows into domain-grouped admin sections. Keys not
  *  in ENTITLEMENT_DOMAINS land in a trailing "other" section (vestigial +
- *  spec-2 keys stay visible to staff even while unadvertised). */
+ *  spec-2 keys stay visible to staff even while unadvertised). A key in
+ *  ADMIN_HIDDEN_FEATURES is dropped from its domain section; it must stay LISTED
+ *  in ENTITLEMENT_DOMAINS (the /pricing row), which is also what keeps it out of
+ *  "other". */
 export function groupForAdmin(rows: AdminEntRow[]): AdminEntSection[] {
   const byKey = new Map<string, Map<string, AdminEntRow>>();
   for (const r of rows) {
@@ -109,7 +112,7 @@ export function groupForAdmin(rows: AdminEntRow[]): AdminEntSection[] {
   const listed = new Set(ENTITLEMENT_DOMAINS.flatMap((d) => d.features));
   const sections: AdminEntSection[] = ENTITLEMENT_DOMAINS.map((d) => ({
     slug: d.slug,
-    features: d.features.filter((f) => byKey.has(f)).map(toFeature),
+    features: d.features.filter((f) => byKey.has(f) && !ADMIN_HIDDEN_FEATURES.has(f)).map(toFeature),
   }));
   const other = [...byKey.keys()].filter((k) => !listed.has(k)).sort().map(toFeature);
   if (other.length > 0) sections.push({ slug: "other", features: other });

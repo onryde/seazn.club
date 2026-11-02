@@ -4,6 +4,15 @@
 // /admin still shows them under "other". `domains.custom` used to be named
 // here as "unadvertised until Spec 2 ships"; V393 deleted the key entirely, so
 // there is no longer a row to advertise later.
+
+/** Keys that stay in `plan_entitlements` and on the /pricing comparison (an all-true row still tells the "included on
+ *  every plan" story, the `stats.player` precedent) but that NO code asks any more, so a staff edit of their cell
+ *  or an override on them would silently do nothing. /admin drops them from their domain section; they must stay
+ *  listed below (that is also what keeps them out of /admin's "other").
+ *  `scoring.device_links`: V490 (owner, 2026-11-02, "make it free") — the gate calls are gone from
+ *  `usecases/device-links.ts`, so the row only feeds the pricing tick. */
+export const ADMIN_HIDDEN_FEATURES: ReadonlySet<string> = new Set(["scoring.device_links"]);
+
 export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
   // scorers.max is not listed here because the KEY no longer exists: V395
   // (entitlements v18 W2 T12, owner ruling 2026-09-03) deleted it from

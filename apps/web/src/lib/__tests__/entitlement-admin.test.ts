@@ -61,6 +61,25 @@ describe("groupForAdmin", () => {
     expect(sections[sections.length - 1].slug).toBe("other");
   });
 
+  // V490: scoring.device_links is true on every plan and gates nothing, so an
+  // /admin cell or override for it would be a control that silently does nothing.
+  it("does not offer a key that gates nothing any more, and still offers its domain's other keys", () => {
+    const withInert: AdminEntRow[] = [
+      ...rows,
+      { feature_key: "scoring.device_links", plan_key: "community", bool_value: true, int_value: null },
+      { feature_key: "scoring.device_links", plan_key: "pro", bool_value: true, int_value: null },
+      // its sibling in the same domain stays, so the section is not just empty
+      { feature_key: "cricket.dls", plan_key: "community", bool_value: true, int_value: null },
+    ];
+    const sections = groupForAdmin(withInert);
+    const everyKey = sections.flatMap((s) => s.features.map((f) => f.feature_key));
+    expect(everyKey, "the sibling is still offered").toContain("cricket.dls");
+    expect(everyKey, "the key that gates nothing is not").not.toContain("scoring.device_links");
+    expect(everyKey.length, "the other rows are all still offered").toBe(
+      new Set(withInert.map((r) => r.feature_key)).size - 1,
+    );
+  });
+
   it("renders a plain bool feature as true/false per plan", () => {
     const sections = groupForAdmin(rows);
     const scale = sections.find((s) => s.slug === "scale")!;

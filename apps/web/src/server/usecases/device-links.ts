@@ -269,8 +269,7 @@ export async function ensureDeviceLink(
 }
 
 /**
- * The print path: one gate for the competition, one transaction, every
- * fixture's link. Ids are locked in SORTED order so two overlapping prints
+ * The print path: one transaction, every fixture's link. Ids are locked in SORTED order so two overlapping prints
  * cannot deadlock on each other's advisory locks. A fixture outside
  * `competitionId` is a 404, never a silent mint. A fixture finished (or
  * cancelled) since the sheet chose it is LEFT OUT of the map rather than

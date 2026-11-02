@@ -80,8 +80,13 @@ test("a Community organiser opens Remote scoring, hands out the QR, and a signed
   test.setTimeout(BUDGET_MS);
 
   // ---- REACH: a fresh Community org, and a live match in it.
-  await freshOrg(page, "dlfree");
+  const { orgId } = await freshOrg(page, "dlfree");
   await dismissConsent(page);
+  // The premise this whole story stands on: a Community org, no subscription, no Event Pass. Read from the server's
+  // own resolution rather than assumed from freshOrg's docblock.
+  const resolved = await apiJson<{ plan_key: string }>(page.request, `/api/orgs/${orgId}/entitlements`, "GET");
+  expect(resolved.status, `entitlements read: ${JSON.stringify(resolved.error)}`).toBe(200);
+  expect(resolved.data?.plan_key, "premise: a fresh org is on the Community plan").toBe("community");
   const fx = await seedRosteredFixture(page.request, {
     label: `Free Remote ${TAG}`,
     sportKey: "boardgame",

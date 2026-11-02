@@ -402,7 +402,6 @@ describe("device-link panel — a server with no DEVICE_LINK_KEK (owner ruling Q
       await flush();
       expect(island.text()).toContain(t("dlink.failed"));
       expect(island.text(), "the server's sentence is not shown").not.toContain("upgrade required");
-      expect(island.tree().some((el) => propsOf(el).feature !== undefined), "no upgrade gate").toBe(false);
     },
   );
 
