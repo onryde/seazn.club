@@ -19,6 +19,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { listDivisionFixturesForBoard } from "../fixtures";
 import { getMatchDay, matchDayCandidates } from "../match-day";
+import { previewCall } from "../match-day-call";
 import { putScheduleSettings } from "../schedule";
 import { createStages, generateStageFixtures, listStages } from "../stages";
 import { GENERIC_CONFIG } from "./_seed";
@@ -195,6 +196,42 @@ describe.skipIf(!HAS_DB)("Match Day E2-7 — round codes on the real reads", () 
     const nl = await matchDayCandidates(day.auth, day.comp.id, day.courts.c2, now, { locale: "nl" });
     const en = await matchDayCandidates(day.auth, day.comp.id, day.courts.c2, now);
     expect(nl.find((c) => c.fixture.id === ko.sf[0]!)!.fixture.round.label).not.toBe(en.find((c) => c.fixture.id === ko.sf[0]!)!.fixture.round.label);
+  });
+
+  it("the call preview's pushed matches carry the board's round too, in the reader's language", async () => {
+    const day = await seedDay();
+    const ko = await seedWithKnockout(day);
+    const [p1, p2] = day.comp.pairs;
+    const called = between(day.comp, p1!, p2!).id;
+    // Court 1 holds the cup's two semi-finals and a league match at +45, +60 and +75; calling Ann & Bob's match there at +31 (30
+    // minutes) pushes all three past their plan. The cup's FINAL is on no court at all: the semi-finals are still semi-finals.
+    const [p3, p4] = [day.comp.pairs[2]!, day.comp.pairs[3]!];
+    const league = between(day.comp, p3, p4).id;
+    await place(day, ko.sf[0]!, 45, day.courts.c1);
+    await place(day, ko.sf[1]!, 60, day.courts.c1);
+    await place(day, league, 75, day.courts.c1);
+    const now = new Date(Date.parse("2026-11-07T10:31:00.000Z"));
+    let checked = 0;
+    for (const locale of ["en", "fr"] as Locale[]) {
+      const board = new Map([...(await boardsRounds(day, ko.divisionId, locale)), ...(await boardsRounds(day, day.comp.divisionId, locale))]);
+      const out = await previewCall(day.auth, called, day.courts.c1, now, { locale });
+      expect(out.shifts.map((s) => s.fixture_id), `${locale}: all three pushed, in planned order`).toEqual([ko.sf[0]!, ko.sf[1]!, league]);
+      for (const shift of out.shifts) {
+        expect(shift.round, `${locale} ${shift.fixture_id}`).toEqual(board.get(shift.fixture_id));
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
+    const en = await previewCall(day.auth, called, day.courts.c1, now);
+    expect(en.shifts[0]!.round).toEqual({ code: "SF", label: "Semi-finals", coded: true });
+    const fr = await previewCall(day.auth, called, day.courts.c1, now, { locale: "fr" });
+    expect(fr.shifts[0]!.round.label).toBe(msgFor("fr", "bracket.round.semi"));
+    expect(fr.shifts[0]!.round.label).not.toBe(en.shifts[0]!.round.label);
+    // The empty case: a call that pushes nothing names nobody.
+    await place(day, ko.sf[0]!, 600, day.courts.c1);
+    await place(day, ko.sf[1]!, 660, day.courts.c1);
+    await place(day, league, 720, day.courts.c1);
+    expect((await previewCall(day.auth, called, day.courts.c1, now)).shifts).toEqual([]);
   });
 
   it("an empty board names nobody (the empty case)", async () => {

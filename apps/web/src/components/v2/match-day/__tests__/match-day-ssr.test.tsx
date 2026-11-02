@@ -52,6 +52,7 @@ import { CourtList, NoCourtList } from "@/components/v2/match-day/court-list";
 import { CourtFocus, NoCourtFocus, type MatchDayCtx } from "@/components/v2/match-day/court-focus";
 import { CandidateRows, FreeCourtBody } from "@/components/v2/match-day/candidate-list";
 import { CallSheetBody } from "@/components/v2/match-day/call-sheet";
+import { MatchRoundChip } from "@/components/v2/match-day/round-chip";
 import { DotLine, MatchDayShell } from "@/components/v2/match-day/match-day-shell";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
@@ -590,7 +591,15 @@ describe("the call sheet", () => {
 
   it("shows the knock-on before anything changes: each pushed match, planned → ~estimate, and the warnings", () => {
     const preview: CallPreview = {
-      shifts: [{ fixture_id: "s1", label: "Das v Gill", planned_at: "2026-10-31T11:45:00.000Z", estimated_at: "2026-10-31T12:10:00.000Z" }],
+      shifts: [
+        {
+          fixture_id: "s1",
+          label: "Das v Gill",
+          round: { code: "SF", label: "Semi-finals", coded: true },
+          planned_at: "2026-10-31T11:45:00.000Z",
+          estimated_at: "2026-10-31T12:10:00.000Z",
+        },
+      ],
       warnings: [
         { kind: "pushes_later", count: 1 },
         { kind: "rest_gap", person_name: "Zara Khan", minutes: 5, min_rest: 20 },
@@ -599,6 +608,8 @@ describe("the call sheet", () => {
     };
     const html = sheet({ kind: "ready", preview });
     expect(html).toContain(t(dict, "matchDay.sheet.shift", { match: "Das v Gill", from: "11:45", to: "12:10" }));
+    // E2 item 7: the pushed match wears the board's round chip, in front of its line.
+    expect(html).toContain(`${renderToStaticMarkup(<MatchRoundChip round={{ code: "SF", label: "Semi-finals", coded: true }} />)} ${t(dict, "matchDay.sheet.shift", { match: "Das v Gill", from: "11:45", to: "12:10" })}`);
     expect(html).toContain(plural(dict, "matchDay.sheet.warn.pushesLater", 1, "en"));
     expect(html).toContain(t(dict, "matchDay.sheet.warn.restGap", { person: "Zara Khan", minutes: 5, min: 20 }));
     expect(html).toContain(t(dict, "matchDay.sheet.warn.pastDayEnd", { court: "Court 5", time: "18:00" }).replace(/'/g, "&#x27;"));

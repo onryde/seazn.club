@@ -29,6 +29,7 @@ import "server-only";
 import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { DEFAULT_LOCALE, getDictionary, type Locale } from "@/lib/i18n";
 import { appendDivisionEvent } from "@/server/engine-db";
 import { estimateQueue } from "@/lib/match-day/estimate";
 import { closureWarning, type UsableWindow } from "@/lib/match-day/closure";
@@ -44,6 +45,7 @@ import {
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { dayKeyInTz, usableWindows, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling";
 import { candidateCourtsByFixture, requiredCourtTagsByFixture, resolveCourtCalendars } from "./court-candidates";
+import { readRounds, roundOf } from "./match-day-rounds";
 import {
   afterScheduleWrite,
   courtNamesById,
@@ -500,13 +502,17 @@ export async function undoCall(
  *    org's zone; a court with no hours is open to midnight).
  *  - crosses_closure / court_closed (E2 item 3): the called match's span, now to now + its division's `matchMinutes`, meets a
  *    closed window of the court (a break mid-day, or the court is shut already). Warnings: the organiser may confirm past them.
+ * Each shift carries its match's round as the schedule board names it, in the reader's `opts.locale` (E2 item 7).
  */
 export async function previewCall(
   auth: AuthCtx,
   fixtureId: string,
   courtId: string,
   now: Date = new Date(),
+  opts: { locale?: Locale } = {},
 ): Promise<CallPreview> {
+  // Read before the transaction (a file, not a connection): the round names printed inside it are in the reader's language.
+  const dict = await getDictionary(opts.locale ?? DEFAULT_LOCALE, "ui");
   return withTenant(auth.orgId, async (tx) => {
     const f = await readFixture(tx, auth.orgId, fixtureId, false);
     const court = await targetCourt(tx, courtId);
@@ -530,10 +536,21 @@ export async function previewCall(
     const calledEnd = start + settings.config.matchMinutes * MS_PER_MIN;
 
     const queue = await tx<
-      { id: string; division_id: string; scheduled_at: Date; home_name: string | null; away_name: string | null }[]
+      {
+        id: string;
+        division_id: string;
+        scheduled_at: Date;
+        home_name: string | null;
+        away_name: string | null;
+        stage_id: string;
+        stage_kind: string;
+        round_no: number;
+      }[]
     >`
-      select f.id, f.division_id, f.scheduled_at, h.display_name as home_name, a.display_name as away_name
+      select f.id, f.division_id, f.scheduled_at, h.display_name as home_name, a.display_name as away_name,
+             f.stage_id, s.kind as stage_kind, f.round_no
         from fixtures f
+        join stages s on s.id = f.stage_id
         join ${dayTable(tx, days)} on w.division_id = f.division_id
         left join entrants h on h.id = f.home_entrant_id
         left join entrants a on a.id = f.away_entrant_id
@@ -551,6 +568,7 @@ export async function previewCall(
       if (e === undefined) throw new Error(`previewCall: no estimate for queued match ${id}`);
       return e.getTime();
     };
+    const rounds = await readRounds(tx, queue, dict);
     const shifts: CallShift[] = [];
     for (const q of queue) {
       const plannedAt = new Date(q.scheduled_at).getTime();
@@ -560,6 +578,7 @@ export async function previewCall(
           fixture_id: q.id,
           // A side still to be decided has no name yet: the em dash, never an English placeholder.
           label: `${q.home_name ?? "—"} v ${q.away_name ?? "—"}`,
+          round: roundOf(rounds, q.id),
           planned_at: iso(plannedAt),
           estimated_at: iso(estimated),
         });

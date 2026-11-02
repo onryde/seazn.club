@@ -22,10 +22,7 @@ import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { DEFAULT_LOCALE, getDictionary, type Locale } from "@/lib/i18n";
-import type { Dict } from "@/lib/i18n-constants";
-import { t } from "@/lib/i18n-runtime";
 import { estimateQueue, rankCandidates } from "@/lib/match-day/estimate";
-import { matchDayRounds } from "@/lib/match-day/rounds";
 import { withFindCourt } from "@/lib/match-day/view";
 import { routes } from "@/lib/routes";
 import { closureOf } from "@/lib/match-day/closure";
@@ -44,7 +41,6 @@ import type {
 import { resolveVenueTz } from "@/lib/tz";
 import { venueNoun } from "@/lib/venue";
 import { needsYouAt, needsYouHome, needsYouItems, resultsOwedOf } from "@/components/v2/desk/needs-you";
-import type { RoundCodeFixture } from "@/components/v2/board/round-codes";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { defaultMatchMinutes, getCompetitionDesk } from "./competition-desk";
 import { resolveCandidateCourts } from "./court-candidates";
@@ -62,6 +58,7 @@ import {
 } from "./match-day-call";
 import { courtNamesById, loadSettings, MOVABLE_STATUS } from "./schedule";
 import { fixtureFormatLines } from "./fixtures";
+import { readRounds, roundOf } from "./match-day-rounds";
 import { openStreamStates } from "./stream-sessions";
 import { servingSideOf, sportReadsServe } from "@/server/engine-db/serving";
 import { log } from "@/server/logger";
@@ -489,28 +486,6 @@ interface PlayingExtras {
   format_line: MatchDayFixture["format_line"];
 }
 const NO_EXTRAS: PlayingExtras = { serving: null, scorer_attention: null, live_video: null, format_line: null };
-
-/**
- * Each of `rows`' round, named by the SCHEDULE BOARD's own `boardRoundCodes` (Match Day E2 item 7; `lib/match-day/rounds.ts`) in the
- * reader's language. The board ranks a round against its whole stage, so this reads every fixture of every stage a shown match is
- * in — the columns the board reads, as `fed-seats.ts`'s `boardRef` does for a refusal — not just today's.
- */
-async function readRounds(tx: Tx, rows: readonly FixtureRow[], dict: Dict): Promise<Map<string, MatchDayRound>> {
-  const stages = [...new Map(rows.map((r) => [r.stage_id, { id: r.stage_id, kind: r.stage_kind }])).values()];
-  if (stages.length === 0) return new Map();
-  const stageRows = await tx<RoundCodeFixture[]>`
-    select id, stage_id, round_no, seq_in_round, ext_key, lane, is_final, third_place, conditional
-      from fixtures where stage_id in ${tx(stages.map((s) => s.id))}`;
-  return matchDayRounds(rows, stageRows, stages, (key, vars) => t(dict, key, vars));
-}
-
-/** A shown match's round: `readRounds` names every match it is handed, so one missing is a wiring fault, never a match to show
- *  without its code. */
-function roundOf(rounds: ReadonlyMap<string, MatchDayRound>, id: string): MatchDayRound {
-  const round = rounds.get(id);
-  if (round === undefined) throw new Error(`match-day: no round was read for match ${id}`);
-  return round;
-}
 
 function fixtureView(
   r: FixtureRow,

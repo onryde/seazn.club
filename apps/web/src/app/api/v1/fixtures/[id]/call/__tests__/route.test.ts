@@ -4,16 +4,30 @@
 // parses with the schema the OpenAPI document publishes for it.
 //
 // Real Postgres required; skipped without DATABASE_URL (CI runs them).
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { FixtureCallPreview, FixtureCallUndone, FixtureCalled } from "@/server/api-v1/schemas";
 import { createApiKey } from "@/server/usecases/api-keys";
-import { between, callRows, person, place, seedCompetition, slotOf, type Day, seedDay } from "@/server/usecases/__tests__/_match-day-seed";
+import { at, between, callRows, person, place, seedCompetition, slotOf, type Day, seedDay } from "@/server/usecases/__tests__/_match-day-seed";
+import { msgFor } from "@/lib/messages-i18n";
 import { DELETE as undoRoute, POST as callRoute } from "@/app/api/v1/fixtures/[id]/call/route";
 import { POST as previewRoute } from "@/app/api/v1/fixtures/[id]/call/preview/route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// The preview names each pushed match's round in the reader's language, read from the `seazn_locale` cookie (E2 item 7): the one
+// test that needs a language sets it here; everything else reads no cookie, as an API-key caller does.
+const reader = vi.hoisted(() => ({ locale: undefined as string | undefined }));
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: (name: string) => (name === "seazn_locale" && reader.locale ? { name, value: reader.locale } : undefined) }),
+  headers: async () => new Headers(),
+}));
+
+afterEach(() => {
+  reader.locale = undefined;
+  vi.useRealTimers();
+});
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -87,6 +101,33 @@ describe.skipIf(!HAS_DB)("/api/v1/fixtures/{id}/call", () => {
     const again = await read(await undoRoute(req("DELETE", `/fixtures/${a.id}/call`), ctx(a.id)));
     expect(again.status).toBe(409);
     expect(again.body.error).toEqual({ code: "NOT_CALLED", message: expect.any(String) });
+  });
+
+  it("the preview's pushed matches carry the round in the reader's language: the seazn_locale cookie reaches the answer (E2 item 7)", async () => {
+    const [p1, p2, p3, p4] = day.comp.pairs;
+    const called = between(day.comp, p1!, p2!);
+    const pushed = between(day.comp, p3!, p4!);
+    // The pushed league match is planned at +45 on Court 2; calling another match there at +31 runs it to +61, past its plan.
+    await place(day, pushed.id, 45, day.courts.c2);
+    const [{ round_no }] = await sql<{ round_no: number }[]>`select round_no from fixtures where id = ${pushed.id}`;
+    // `new Date()` is what the route calls with; only Date is faked (no timers), so the database client is untouched.
+    vi.setSystemTime(at(31));
+    const askedIn = async (locale: string | undefined) => {
+      reader.locale = locale;
+      const res = await read(await previewRoute(req("POST", `/fixtures/${called.id}/call/preview`, { court_id: day.courts.c2 }), ctx(called.id)));
+      expect(res.status, String(locale)).toBe(200);
+      const shifts = FixtureCallPreview.parse(res.body.data).shifts;
+      expect(shifts.map((x) => x.fixture_id), `${locale}: the pushed match`).toEqual([pushed.id]);
+      return shifts[0]!.round;
+    };
+    const en = await askedIn(undefined);
+    const fr = await askedIn("fr");
+    const nl = await askedIn("nl");
+    expect(en).toEqual({ code: `R${round_no}`, label: msgFor("en", "schedule.round", { n: round_no }), coded: false });
+    expect(fr.label).toBe(msgFor("fr", "schedule.round", { n: round_no }));
+    expect(nl.label).toBe(msgFor("nl", "schedule.round", { n: round_no }));
+    // The three languages differ, so the cookie is what moved the label (not a constant).
+    expect(new Set([en.label, fr.label, nl.label]).size).toBe(3);
   });
 
   it("PLAYER_BUSY and NOT_CALLABLE reach the wire with their details", async () => {

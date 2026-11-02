@@ -139,7 +139,7 @@ export function CallSheetBody({
               <ul className="grid gap-1">
                 {state.preview.shifts.map((s) => (
                   <li key={s.fixture_id} data-testid="md-shift" className="[overflow-wrap:anywhere]">
-                    {t(dict, "matchDay.sheet.shift", { match: s.label, from: time(s.planned_at), to: time(s.estimated_at) })}
+                    <MatchRoundChip round={s.round} /> {t(dict, "matchDay.sheet.shift", { match: s.label, from: time(s.planned_at), to: time(s.estimated_at) })}
                   </li>
                 ))}
               </ul>

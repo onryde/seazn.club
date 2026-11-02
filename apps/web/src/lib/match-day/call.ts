@@ -1,6 +1,7 @@
 // Match Day — calling a match onto a court (spec 2026-10-31-match-day-design.md §7). Client-safe: the refusal codes and the
 // preview's wire shape, shared by the server use case (server/usecases/match-day-call.ts) and the Match Day UI, which must not
 // import from server/**.
+import type { MatchDayRound } from "./types";
 
 /** The 409 refusals of POST/DELETE /api/v1/fixtures/{id}/call and POST …/call/preview. Each rides the v1 error envelope
  *  as `error.code`, with its details as sibling fields of `error`:
@@ -42,6 +43,8 @@ export type CallWarning =
 export interface CallShift {
   fixture_id: string;
   label: string;
+  /** The pushed match's round, as the schedule board names it (E2 item 7): the sheet's chip before `label`. */
+  round: MatchDayRound;
   planned_at: string;
   estimated_at: string;
 }

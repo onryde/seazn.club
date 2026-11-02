@@ -37279,6 +37279,28 @@
                               "label": {
                                 "type": "string"
                               },
+                              "round": {
+                                "type": "object",
+                                "properties": {
+                                  "code": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "label": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "coded": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "label",
+                                  "coded"
+                                ],
+                                "additionalProperties": false
+                              },
                               "planned_at": {
                                 "type": "string",
                                 "format": "date-time",
@@ -37293,6 +37315,7 @@
                             "required": [
                               "fixture_id",
                               "label",
+                              "round",
                               "planned_at",
                               "estimated_at"
                             ],
@@ -37456,6 +37479,11 @@
                       {
                         "fixture_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                         "label": "example",
+                        "round": {
+                          "code": "example",
+                          "label": "example",
+                          "coded": true
+                        },
                         "planned_at": "2026-08-01T09:00:00Z",
                         "estimated_at": "2026-08-01T09:00:00Z"
                       }

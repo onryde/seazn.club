@@ -670,10 +670,15 @@ describe.skipIf(!HAS_DB)("previewCall", () => {
 
     // §7.1: estimate = max(planned, end of the match before). f runs +31..+61 (30 min); x1 → +61, ends +91; y → +91, ends
     // +136 (ITS division plays 45); x3 planned +125 → +136. At 30 minutes for y, x3 would not move at all.
+    // Each is a league match: its round is the board's plain R{n}, read off the row's own round_no (E2 item 7).
+    const leagueRound = async (id: string) => {
+      const [r] = await sql<{ round_no: number }[]>`select round_no from fixtures where id = ${id}`;
+      return { code: `R${r!.round_no}`, label: `Round ${r!.round_no}`, coded: false };
+    };
     expect(out.shifts).toEqual([
-      { fixture_id: x1.id, label: labelOf(day.comp, x1), planned_at: iso(45), estimated_at: iso(61) },
-      { fixture_id: y.id, label: labelOf(other, y), planned_at: iso(75), estimated_at: iso(91) },
-      { fixture_id: x3.id, label: labelOf(day.comp, x3), planned_at: iso(125), estimated_at: iso(136) },
+      { fixture_id: x1.id, label: labelOf(day.comp, x1), round: await leagueRound(x1.id), planned_at: iso(45), estimated_at: iso(61) },
+      { fixture_id: y.id, label: labelOf(other, y), round: await leagueRound(y.id), planned_at: iso(75), estimated_at: iso(91) },
+      { fixture_id: x3.id, label: labelOf(day.comp, x3), round: await leagueRound(x3.id), planned_at: iso(125), estimated_at: iso(136) },
     ]);
     expect(out.warnings).toEqual([{ kind: "pushes_later", count: 3 }]);
 
@@ -734,7 +739,16 @@ describe.skipIf(!HAS_DB)("previewCall", () => {
 
     const out = await previewCall(day.auth, f.id, day.courts.c1, at(5)); // f 10:05–10:35Z, x then 10:35–11:05Z
 
-    expect(out.shifts).toEqual([{ fixture_id: x.id, label: labelOf(day.comp, x), planned_at: iso(30), estimated_at: iso(35) }]);
+    const [xr] = await sql<{ round_no: number }[]>`select round_no from fixtures where id = ${x.id}`;
+    expect(out.shifts).toEqual([
+      {
+        fixture_id: x.id,
+        label: labelOf(day.comp, x),
+        round: { code: `R${xr!.round_no}`, label: `Round ${xr!.round_no}`, coded: false },
+        planned_at: iso(30),
+        estimated_at: iso(35),
+      },
+    ]);
     const sorted = [...out.warnings].sort((a, b) => a.kind.localeCompare(b.kind));
     expect(sorted).toEqual([
       { kind: "past_day_end", court_name: "Court 1", until: "2026-11-07T11:00:00.000Z" },

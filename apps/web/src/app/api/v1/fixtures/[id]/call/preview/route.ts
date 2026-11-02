@@ -1,6 +1,7 @@
 import { v1, parseBody } from "@/server/api-v1/http";
 import { requireResourceAuth } from "@/server/api-v1/auth";
 import { CallFixtureInput } from "@/server/api-v1/schemas";
+import { resolveLocale } from "@/lib/resolve-locale";
 import { previewCall } from "@/server/usecases/match-day-call";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -12,6 +13,6 @@ export async function POST(req: Request, { params }: Ctx) {
     const { id } = await params;
     const auth = await requireResourceAuth(req, "fixture", id, "write");
     const body = await parseBody(req, CallFixtureInput);
-    return previewCall(auth, id, body.court_id);
+    return previewCall(auth, id, body.court_id, new Date(), { locale: await resolveLocale() });
   });
 }

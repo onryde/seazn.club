@@ -1612,6 +1612,14 @@ export const FixtureCallUndone = z.object({
   scheduled_at: z.iso.datetime({ offset: true }).nullable(),
 });
 
+export const MatchDayRound = z.object({
+  // The schedule board's chip text for the match's round ("QF", "SF", "F", "3rd", or its fallback "R2"), its full name ("Semi-finals",
+  // "Round 2") in the reader's language, and whether the board codes it (a bracket role).
+  code: z.string().min(1),
+  label: z.string().min(1),
+  coded: z.boolean(),
+});
+
 /** POST /fixtures/{id}/call/preview's answer (spec §7.1): the target court's matches the call pushes past their planned time
  *  (planned times are never written: `estimated_at` is an estimate), and the warnings the organiser confirms past (§7.2). The
  *  shape is `CallPreview` in lib/match-day/call.ts; the route test parses the real answer with this schema. */
@@ -1620,6 +1628,7 @@ export const FixtureCallPreview = z.object({
     z.object({
       fixture_id: Uuid,
       label: z.string(),
+      round: MatchDayRound,
       planned_at: z.iso.datetime({ offset: true }),
       estimated_at: z.iso.datetime({ offset: true }),
     }),
@@ -1648,14 +1657,6 @@ export const FixtureCallPreview = z.object({
 
 /** Match Day's read model (spec 2026-10-31 §6.2, §7, §7.1, task A2). The shapes are lib/match-day/types.ts's; the route test
  *  parses each real answer with these. A match as Match Day shows it. */
-export const MatchDayRound = z.object({
-  // The schedule board's chip text for the match's round ("QF", "SF", "F", "3rd", or its fallback "R2"), its full name ("Semi-finals",
-  // "Round 2") in the reader's language, and whether the board codes it (a bracket role).
-  code: z.string().min(1),
-  label: z.string().min(1),
-  coded: z.boolean(),
-});
-
 export const MatchDayFixture = z.object({
   id: Uuid,
   division_id: Uuid,
