@@ -306,7 +306,7 @@ describe("hidden: one row — heading · state · [Show QR] [Copy link]", () => 
     expect(dlinkQr(island.tree())).toBeDefined();
   });
 
-  it("a refused copy (the plan has no device links) puts the paywall in the row, not an exception", async () => {
+  it("a refused copy puts the localised failure in the row, not an exception, and copies nothing", async () => {
     api.refuse = { message: "Payment required", status: 402, code: "PAYMENT_REQUIRED" };
     const island = renderIsland(DeviceLinkPanel, { ...PROPS, hide: hidden() });
     await flush();
@@ -315,6 +315,7 @@ describe("hidden: one row — heading · state · [Show QR] [Copy link]", () => 
     expect(clipboard).toEqual([]);
     expect(state(island.tree())).toBe("hidden");
     expect(island.text()).not.toContain(t("dlink.copied"));
+    expect(island.text()).toContain(t("dlink.failed"));
   });
 
   it("the SEQUENCE: hide, copy, show, hide again — the link is the same one throughout and the choice follows the last press", async () => {

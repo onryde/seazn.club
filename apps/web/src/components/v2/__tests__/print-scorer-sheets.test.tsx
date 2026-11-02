@@ -6,18 +6,12 @@
 // the v1 envelope `{ ok:false, error:{ code, message } }`).
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
-import { DictProvider } from "@/components/i18n/dict-provider";
 import en from "@/dictionaries/en/ui.json";
-import fr from "@/dictionaries/fr/ui.json";
 
-vi.mock("@/components/upgrade-gate", () => ({ UpgradeGate: vi.fn(() => null) }));
-import { UpgradeGate } from "@/components/upgrade-gate";
 import { PrintScorerSheets } from "@/components/v2/print-scorer-sheets";
 
 const EN = en as Record<string, string>;
-const FR = fr as Record<string, string>;
 
 const byTestId = (tree: ReactElement[], id: string) => tree.find((e) => propsOf(e)["data-testid"] === id);
 const base: Parameters<typeof PrintScorerSheets>[0] = {
@@ -26,8 +20,6 @@ const base: Parameters<typeof PrintScorerSheets>[0] = {
   // Deliberately NOT the first option: a picker that opens at days[0] must
   // fail the "opens at" case rather than pass it by coincidence.
   defaultDay: "2026-09-24",
-  allowed: true,
-  viewerPlan: "pro",
 };
 const flush = async () => {
   for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
@@ -59,12 +51,6 @@ describe("PrintScorerSheets (scorer sheets §4.4)", () => {
     const island = renderIsland(PrintScorerSheets, { ...base, days: [], defaultDay: null });
     expect(island.tree()).toEqual([]);
     expect(byTestId(island.tree(), "print-sheets")).toBeUndefined();
-  });
-
-  it("the empty case outranks the paywall: no days on a plan without the feature renders nothing, not the gate", () => {
-    const island = renderIsland(PrintScorerSheets, { ...base, days: [], defaultDay: null, allowed: false });
-    expect(island.tree()).toEqual([]);
-    expect(island.tree().find((e) => e.type === UpgradeGate)).toBeUndefined();
   });
 
   it("each half of the empty case stands alone: no days, or no default day, renders nothing", () => {
@@ -244,33 +230,5 @@ describe("PrintScorerSheets (scorer sheets §4.4)", () => {
     await flush();
     expect(byTestId(island.tree(), "print-sheets-error")).toBeUndefined();
     expect(download).toHaveBeenCalledTimes(1);
-  });
-
-  it("not allowed → the device-links upgrade gate instead of the button", () => {
-    const island = renderIsland(PrintScorerSheets, { ...base, allowed: false, viewerPlan: "community" });
-    const gate = island.tree().find((e) => e.type === UpgradeGate);
-    expect(gate).toBeDefined();
-    expect(propsOf(gate!)).toMatchObject({
-      feature: "scoring.device_links",
-      viewerPlan: "community",
-      // The feature's own sentence is about hand-over scoring links; this gate
-      // sells PRINTING, so it says so.
-      reason: EN["sheets.gate.reason"],
-    });
-    expect(EN["sheets.gate.reason"]).toBeTruthy();
-    expect(byTestId(island.tree(), "print-sheets-submit")).toBeUndefined();
-    expect(byTestId(island.tree(), "print-sheets-day")).toBeUndefined();
-  });
-
-  it("the gate's reason is in the organiser's language", () => {
-    vi.mocked(UpgradeGate).mockImplementationOnce(({ reason }) => <span data-reason="">{reason}</span>);
-    const html = renderToStaticMarkup(
-      <DictProvider dict={fr} locale="fr">
-        <PrintScorerSheets {...base} allowed={false} viewerPlan="community" />
-      </DictProvider>,
-    );
-    expect(FR["sheets.gate.reason"]).toBeTruthy();
-    expect(FR["sheets.gate.reason"]).not.toBe(EN["sheets.gate.reason"]);
-    expect(html).toContain(`<span data-reason="">${FR["sheets.gate.reason"]!.replaceAll("'", "&#x27;")}</span>`);
   });
 });

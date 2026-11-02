@@ -174,15 +174,12 @@ export default async function CompetitionSchedulePage({
 
   // Scorer sheets §4.4. Printing MINTS scoring links, so it is an editor's
   // action on a competition that is not billing-frozen (D8) — the day list is
-  // not even read for anyone else. The device-links gate is asked for THIS
-  // competition: an Event Pass lifts one competition (pass-scoping-guard).
+  // not even read for anyone else. Free on every plan: no entitlement is asked.
   // "Today" is on the ORG clock, the clock the sheet's own day is on
   // (usecases/scorer-sheets.ts) — never this server's or the viewer's device.
   // The upgrade-gated branch above shows no board and gets no print control.
   const printable = canEdit && !billingFrozen;
-  const [sheetsAllowed, sheetDayList] = printable
-    ? await Promise.all([hasFeature(auth.orgId, "scoring.device_links", id), listSheetDays(auth, id)])
-    : [false, [] as string[]];
+  const sheetDayList = printable ? await listSheetDays(auth, id) : ([] as string[]);
   const defaultDay = defaultSheetDay(sheetDayList, localDateOf(new Date().toISOString(), orgTz));
 
   return (
@@ -201,8 +198,6 @@ export default async function CompetitionSchedulePage({
               action={`/api/v1/competitions/${id}/exports/scorer-sheets`}
               days={sheetDayList}
               defaultDay={defaultDay}
-              allowed={sheetsAllowed}
-              viewerPlan={viewerPlan}
             />
           )}
         </div>

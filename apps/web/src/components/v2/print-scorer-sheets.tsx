@@ -4,11 +4,10 @@
 // stacking under it on phones). fetch, not a <form>: the response is a file,
 // and an error must stay on this page as localised copy rather than navigating
 // to a JSON body (the documents menu's rule, board/documents-menu.tsx).
-// Hidden (by the page) for viewers and billing-frozen competitions; gated here
-// for plans without device links, since printing mints them.
+// Hidden (by the page) for viewers and billing-frozen competitions. No plan
+// gate: remote scoring, and so printing the links, is free on every plan.
 import { useState } from "react";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
-import { UpgradeGate } from "@/components/upgrade-gate";
 import { dayLabel } from "@/lib/day-label";
 import { downloadBlob } from "@/lib/download-blob";
 import type { MessageKey } from "@/lib/messages";
@@ -36,8 +35,6 @@ export function PrintScorerSheets({
   action,
   days,
   defaultDay,
-  allowed,
-  viewerPlan,
   download = downloadBlob,
 }: {
   /** `POST /api/v1/competitions/{id}/exports/scorer-sheets` (Task 8). */
@@ -47,9 +44,6 @@ export function PrintScorerSheets({
   /** Today on the org clock if it has fixtures, else the next day that does
    *  (`defaultSheetDay`). Computed by the page, never on this device. */
   defaultDay: string | null;
-  /** `scoring.device_links` for this competition — printing mints links. */
-  allowed: boolean;
-  viewerPlan: Parameters<typeof UpgradeGate>[0]["viewerPlan"];
   download?: (blob: Blob, filename: string) => void;
 }) {
   const msg = useMsg();
@@ -58,25 +52,6 @@ export function PrintScorerSheets({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (days.length === 0 || defaultDay === null) return null;
-  // The empty case first: with nothing to print there is nothing to sell.
-  if (!allowed) {
-    return (
-      // Capped from md until xl: at its natural width the French pill took
-      // three quarters of a 768 header and left the title six lines tall, and
-      // released at lg the Spanish one still left the title 37% at 1024.
-      <div className="md:max-w-sm xl:max-w-none">
-        <UpgradeGate
-          feature="scoring.device_links"
-          // The feature's own sentence is about hand-over scoring links; this
-          // gate is selling printing.
-          reason={msg("sheets.gate.reason")}
-          viewerPlan={viewerPlan}
-          compact
-        />
-      </div>
-    );
-  }
-
   // The page re-renders the list when the board changes. A picked day that is
   // no longer on it would leave the select SHOWING one day (the browser falls
   // back to an option) while the POST sent another — so the pick only stands

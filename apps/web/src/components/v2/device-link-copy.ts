@@ -39,8 +39,9 @@ const FAILURE_BY_STATUS: Partial<Record<number, MessageKey>> = {
 /**
  * A device-link refusal as the organiser reads it: a localised key chosen by
  * code, then status, with a generic localised line for anything else (a 500, a
- * dropped connection). Never the server's English (T3 review finding 3). A 402
- * never reaches here — the panel routes it to the upgrade gate first.
+ * dropped connection). Never the server's English (T3 review finding 3). Remote
+ * scoring has no plan gate, so a 402 here is only a billing-frozen admin seat
+ * and gets the generic line.
  */
 export function failureKey(err: unknown): MessageKey {
   if (err instanceof ApiV1Error) {
