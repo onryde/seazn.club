@@ -27,6 +27,7 @@ import {
 } from "@/lib/division-phase";
 import { seedingSourceReady } from "@/lib/seeding-source-ready";
 import { rowAwaitsSettle, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { kickoffsOf } from "@/server/engine-db/kickoff";
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { listDivisionCardStats, type NextFixture } from "./card-stats";
 import { listDivisions } from "./divisions";
@@ -226,7 +227,9 @@ type FixtureRaw = {
    *  state yet, or its engine publishes no headline. */
   headline: string | null;
   /** When core.start was recorded — the fixture's REAL kick-off. `fixtures`
-   *  has no such column (V214), and `scheduled_at` is a plan, not an event. */
+   *  has no such column (V214), and `scheduled_at` is a plan, not an event.
+   *  The LAST active core.start, voids applied (`kickoffsOf`, task F3); set
+   *  after the query, in play only. */
   started_at: string | Date | null;
   /** The SAME instant as `started_at`, rendered by Postgres at MICROSECOND
    *  precision. It exists purely to sort by: `started_at` reaches JS as a
@@ -421,16 +424,15 @@ export async function getCompetitionDesk(
               -- started_at also removes the shape where an in-play fixture
               -- with no scheduled_at could answer nothing about its own clock:
               -- a fixture cannot be in play without a core.start.
+              --
+              -- Match Day task F3 (owner ruling 10-31 (3)): the kick-off is
+              -- no longer min(recorded_at) here. It is the LAST active
+              -- core.start, voids applied by the engine (kickoffsOf, read
+              -- after this query), the one reader Match Day shares.
               select fixture_id,
                      count(*) filter (where type <> 'core.start') as n,
-                     min(recorded_at) filter (where type = 'core.start') as started_at,
-                     -- Sort key, microsecond precision. See FixtureRaw.started_at_key:
-                     -- the Date this column becomes in JS has already lost the
-                     -- microseconds by the time the comparator runs.
-                     to_char(
-                       min(recorded_at) filter (where type = 'core.start') at time zone 'UTC',
-                       'YYYY-MM-DD"T"HH24:MI:SS.US'
-                     ) as started_at_key
+                     null::timestamptz as started_at,
+                     null::text as started_at_key
                 from score_events
                where fixture_id = any(
                  select id from fixtures where division_id = any(${ids}) and status = 'in_play'
@@ -439,6 +441,16 @@ export async function getCompetitionDesk(
             ) e on e.fixture_id = f.id
            where f.division_id = any(${ids})`
       : [];
+    // The kick-off of each match in play, and its microsecond sort key: kickoffsOf (task F3), shared with Match Day.
+    const kickoffs = await kickoffsOf(
+      tx,
+      fixtures.filter((f) => f.status === "in_play").map((f) => f.id),
+    );
+    for (const f of fixtures) {
+      const k = f.status === "in_play" ? kickoffs.get(f.id) : undefined;
+      f.started_at = k?.at ?? null;
+      f.started_at_key = k?.key ?? null;
+    }
     const settings = ids.length
       ? await tx<SettingsRaw[]>`
           select division_id, tz, (config ->> 'matchMinutes')::int as match_minutes

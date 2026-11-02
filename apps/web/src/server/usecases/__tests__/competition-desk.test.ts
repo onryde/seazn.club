@@ -26,7 +26,7 @@ import en from "@/dictionaries/en/ui.json";
 import { needsYouAt, needsYouItems } from "@/components/v2/desk/needs-you";
 import { getMatchDay } from "../match-day";
 import { listDivisions } from "../divisions";
-import { ORG_TZ, between, seedDay, setStatus, type Pair } from "./_match-day-seed";
+import { ORG_TZ, between, seedDay, setStatus, type Fx, type Pair } from "./_match-day-seed";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 const GENERIC_CONFIG = {
@@ -1529,6 +1529,75 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       const viewAfter = await getMatchDay(day.auth, day.comp.id, after);
       expect(viewAfter.needs_you).toEqual([]);
       expect(viewAfter.results_owed).toBe(0);
+    });
+  });
+
+  // Match Day task F3 (owner ruling 10-31 (3); the engine session's answer to Q2): a match's kick-off is the LAST core.start
+  // still active once the ledger's voids are applied — the engine's own resolveVoids, read once (kickoffsOf) by BOTH Match Day
+  // and this desk. B and C are written through the real write path (appendEvent: the engine folds them and moves the status);
+  // D and E hold two starts, which every kernel refuses to write ("already started"), so they are raw ledgers of the kind an
+  // import leaves. Each case is chosen so a wrong rule answers differently: min(start) misses C and D, max(start) misses E.
+  // One sport (generic, seedDay's): kickoffsOf reads only core.start / core.void, which every sport shares (core.*).
+  describe("F3: the kick-off is the last active core.start — Match Day and the desk agree", () => {
+    it("no start, one start, a voided start then a new one, two active starts, and a voided LAST start", async () => {
+      const day = await seedDay();
+      const at = (m: number) => new Date(Date.parse("2026-11-07T10:00:00.000Z") + m * 60_000).toISOString();
+      const [fA, fB, fC, fD, fE] = day.comp.fixtures as [Fx, Fx, Fx, Fx, Fx];
+      const append = async (f: Fx, type: string, minute: number, voids?: string) => {
+        const seq = Number((await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${f.id}`)[0]!.n);
+        const r = await appendEvent(day.orgId, f.id, seq, { type, payload: {}, recordedAt: at(minute), ...(voids === undefined ? {} : { voids }) });
+        return r.event.id;
+      };
+      // A: in play with no core.start at all (a status forced by an import or raw SQL): no kick-off.
+      await setStatus(fA.id, "in_play");
+      // B: one start, the control.
+      await append(fB, "core.start", 5);
+      // C: started at 5, the start voided at 6 (a false start), started again at 10.
+      await append(fC, "core.void", 6, await append(fC, "core.start", 5));
+      await append(fC, "core.start", 10);
+      // D: two active starts — 3 and 12. Every kernel refuses a second start while one is active ("already started"), so the
+      // write path cannot author this ledger; it is one the write path did not author (an import, a raw write), inserted raw.
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+        values (${fD.id}, ${day.orgId}, 0, 'core.start', '{}', ${at(3)}), (${fD.id}, ${day.orgId}, 1, 'core.start', '{}', ${at(12)})`;
+      await setStatus(fD.id, "in_play");
+      // E: started at 4, again at 8, and the LATER start voided at 9: the last ACTIVE start is 4 (raw, as D: two starts).
+      const [, second] = await sql<{ id: string }[]>`
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+        values (${fE.id}, ${day.orgId}, 0, 'core.start', '{}', ${at(4)}), (${fE.id}, ${day.orgId}, 1, 'core.start', '{}', ${at(8)})
+        returning id`;
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at, voids_event_id)
+        values (${fE.id}, ${day.orgId}, 2, 'core.void', '{}', ${at(9)}, ${second!.id})`;
+      await setStatus(fE.id, "in_play");
+      // Match C is on a court, so Match Day's court path reads it; the rest play on no court (B4's list).
+      await sql`update fixtures set court_id = ${day.courts.c1} where id = ${fC.id}`;
+
+      const expected: [Fx, string | null][] = [[fA, null], [fB, at(5)], [fC, at(10)], [fD, at(12)], [fE, at(4)]];
+      const statuses = await sql<{ id: string; status: string }[]>`select id, status from fixtures where id in ${sql(expected.map(([f]) => f.id))}`;
+      expect(statuses.map((r) => r.status), "premise: the write path left every one of them in play").toEqual(expected.map(() => "in_play"));
+
+      const now = new Date(at(20));
+      const desk = await getCompetitionDesk(day.auth, day.comp.id, now);
+      const view = await getMatchDay(day.auth, day.comp.id, now);
+      const onBoard = new Map([
+        ...view.playing_no_court.map((f) => [f.id, f.started_at] as const),
+        ...view.courts.flatMap((c) => (c.current === null ? [] : [[c.current.id, c.current.started_at] as const])),
+      ]);
+      let checked = 0;
+      for (const [f, kickoff] of expected) {
+        const row = desk.in_play_fixtures.find((x) => x.id === f.id);
+        expect(row, `the desk lists ${f.id}`).toBeDefined();
+        expect(row!.started_at, "desk").toBe(kickoff);
+        expect(onBoard.has(f.id), `Match Day shows ${f.id}`).toBe(true);
+        expect(onBoard.get(f.id), "Match Day").toBe(kickoff);
+        checked++;
+      }
+      expect(checked).toBe(5);
+      // Match C on its court: the court reads playing, with the NEW kick-off.
+      expect(view.courts.find((c) => c.court_id === day.courts.c1)?.current).toMatchObject({ id: fC.id, started_at: at(10) });
+      // The desk's in-play order is by kick-off (nulls last): A has none; E (4), B (5), C (10), D (12).
+      expect(desk.in_play_fixtures.map((x) => x.id)).toEqual([fE.id, fB.id, fC.id, fD.id, fA.id]);
     });
   });
 });

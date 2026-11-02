@@ -60,6 +60,7 @@ import { courtNamesById, loadSettings, MOVABLE_STATUS } from "./schedule";
 import { fixtureFormatLines } from "./fixtures";
 import { readRounds, roundOf } from "./match-day-rounds";
 import { openStreamStates } from "./stream-sessions";
+import { kickoffsOf } from "@/server/engine-db/kickoff";
 import { servingSideOf, sportReadsServe } from "@/server/engine-db/serving";
 import { log } from "@/server/logger";
 import { liveSessionVideos } from "@/server/youtube/parts";
@@ -279,7 +280,7 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
            f.status, f.court_id, f.scheduled_at, f.home_entrant_id, f.away_entrant_id,
            h.display_name as home, a.display_name as away, f.round_no, f.fixture_no,
            ms.summary->>'headline' as headline, ms.summary,
-           (select min(se.recorded_at) from score_events se where se.fixture_id = f.id and se.type = 'core.start') as started_at,
+           null::timestamptz as started_at,
            ${liveCallOf(tx`f.id`)} as called_at
       from fixtures f
       join divisions d on d.id = f.division_id
@@ -318,7 +319,7 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
   const holders = courtIds.length
     ? await tx<HolderRow[]>`
         select g.id, g.court_id, d.competition_id, c.name as competition_name, g.division_id, 0 as rank,
-               (select min(se.recorded_at) from score_events se where se.fixture_id = g.id and se.type = 'core.start') as started_at
+               null::timestamptz as started_at
           from fixtures g join divisions d on d.id = g.division_id join competitions c on c.id = d.competition_id
          where g.status = ${IN_PLAY} and g.court_id in ${tx(courtIds)}
         union all
@@ -339,6 +340,14 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
     }
   }
   const held = holders.filter((h) => h.competition_id !== competitionId || rowsById.has(h.id));
+  // Kick-offs (task F3, owner ruling 10-31 (3)): the LAST active `core.start` of each match in play, voids applied by the
+  // engine's own `resolveVoids` — one reader (`kickoffsOf`), shared with the competition desk. Read once, after the matches.
+  const kickoffs = await kickoffsOf(tx, [
+    ...rows.filter((r) => r.status === IN_PLAY).map((r) => r.id),
+    ...held.filter((h) => Number(h.rank) === 0).map((h) => h.id),
+  ]);
+  for (const r of rows) r.started_at = r.status === IN_PLAY ? (kickoffs.get(r.id)?.at ?? null) : null;
+  for (const h of held) h.started_at = Number(h.rank) === 0 ? (kickoffs.get(h.id)?.at ?? null) : null;
   const planned = courtIds.length
     ? await tx<PlannedRow[]>`
         select f.id, f.court_id, f.division_id, f.scheduled_at
