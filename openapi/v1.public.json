@@ -47002,7 +47002,7 @@
     },
     "/api/v1/public/fixtures/{id}/realtime-token": {
       "get": {
-        "summary": "Realtime subscriber token (403 unless the org has the realtime entitlement; ?purpose=overlay is also granted when ?key= is the fixture's signed overlay key from the organiser's OBS URL and the org has streaming.overlay)",
+        "summary": "Realtime subscriber token with the public `url` and `apikey` a phone configures its client from (403 unless the org has the realtime entitlement; ?purpose=overlay is also granted when ?key= is the fixture's signed overlay key from the organiser's OBS URL and the org has streaming.overlay)",
         "tags": [
           "public"
         ],
@@ -47052,7 +47052,44 @@
                     "ok": {
                       "const": true
                     },
-                    "data": {},
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "token": {
+                          "type": "string"
+                        },
+                        "channel": {
+                          "type": "string"
+                        },
+                        "url": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "apikey": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "token",
+                        "channel",
+                        "url",
+                        "apikey"
+                      ],
+                      "additionalProperties": false
+                    },
                     "requestId": {
                       "type": "string",
                       "format": "uuid"
@@ -47061,7 +47098,12 @@
                 },
                 "example": {
                   "ok": true,
-                  "data": {},
+                  "data": {
+                    "token": "example",
+                    "channel": "example",
+                    "url": "example",
+                    "apikey": "example"
+                  },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
               }

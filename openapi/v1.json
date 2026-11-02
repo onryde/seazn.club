@@ -41841,6 +41841,575 @@
         ]
       }
     },
+    "/api/v1/device-link": {
+      "get": {
+        "summary": "The phone's Remote Scoring bootstrap: what the /score/{token} page resolves for a scan, as JSON — the fixture, sport, cfg, `rules_version`, `engine_epoch_required` (the epoch a write must carry, the effective floor a 426 reports), the `screen` the scan opens on, the match's names, both sides (null while a seat has no entrant) and the ledger's `last_seq`. Authenticated by `Authorization: Bearer dl_…` ONLY (the one v1 route that resolves a device link itself; every other v1 route refuses it 403). 401 LINK_INVALID / LINK_REVOKED / LINK_EXPIRED",
+        "tags": [
+          "scoring"
+        ],
+        "x-required-scope": "none",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "fixture_id": {
+                          "type": "string"
+                        },
+                        "link_id": {
+                          "type": "string"
+                        },
+                        "sport_key": {
+                          "type": "string"
+                        },
+                        "module_version": {
+                          "type": "string"
+                        },
+                        "cfg": {},
+                        "rules_version": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "engine_epoch_required": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "screen": {
+                          "type": "string",
+                          "enum": [
+                            "view_only",
+                            "division_not_started",
+                            "waiting",
+                            "confirm",
+                            "pad"
+                          ]
+                        },
+                        "view_only_reason": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "names": {
+                          "type": "object",
+                          "properties": {
+                            "competition": {
+                              "type": "string"
+                            },
+                            "division": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "round_label": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "ref": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "competition",
+                            "division",
+                            "round_label",
+                            "ref"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "sides": {
+                          "type": "object",
+                          "properties": {
+                            "home": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "entrant_id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "kind": {
+                                      "type": "string"
+                                    },
+                                    "members": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "person_id": {
+                                            "type": "string"
+                                          },
+                                          "full_name": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "person_id",
+                                          "full_name"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "lineup": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "person_id": {
+                                            "type": "string"
+                                          },
+                                          "pair_order": {
+                                            "anyOf": [
+                                              {
+                                                "type": "integer",
+                                                "minimum": -9007199254740991,
+                                                "maximum": 9007199254740991
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "person_id",
+                                          "pair_order"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "entrant_id",
+                                    "name",
+                                    "kind",
+                                    "members",
+                                    "lineup"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "away": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "entrant_id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "kind": {
+                                      "type": "string"
+                                    },
+                                    "members": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "person_id": {
+                                            "type": "string"
+                                          },
+                                          "full_name": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "person_id",
+                                          "full_name"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "lineup": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "person_id": {
+                                            "type": "string"
+                                          },
+                                          "pair_order": {
+                                            "anyOf": [
+                                              {
+                                                "type": "integer",
+                                                "minimum": -9007199254740991,
+                                                "maximum": 9007199254740991
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "person_id",
+                                          "pair_order"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "entrant_id",
+                                    "name",
+                                    "kind",
+                                    "members",
+                                    "lineup"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "home",
+                            "away"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "state": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string"
+                            },
+                            "last_seq": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "status",
+                            "last_seq"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "fixture_id",
+                        "link_id",
+                        "sport_key",
+                        "module_version",
+                        "cfg",
+                        "rules_version",
+                        "engine_epoch_required",
+                        "screen",
+                        "view_only_reason",
+                        "names",
+                        "sides",
+                        "state"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "fixture_id": "example",
+                    "link_id": "example",
+                    "sport_key": "example",
+                    "module_version": "example",
+                    "cfg": null,
+                    "rules_version": 0,
+                    "engine_epoch_required": 1,
+                    "screen": "view_only",
+                    "view_only_reason": "example",
+                    "names": {
+                      "competition": "example",
+                      "division": "example",
+                      "round_label": "example",
+                      "ref": "example"
+                    },
+                    "sides": {
+                      "home": {
+                        "entrant_id": "example",
+                        "name": "example",
+                        "kind": "example",
+                        "members": [
+                          {
+                            "person_id": "example",
+                            "full_name": "example"
+                          }
+                        ],
+                        "lineup": [
+                          {
+                            "person_id": "example",
+                            "pair_order": null
+                          }
+                        ]
+                      },
+                      "away": {
+                        "entrant_id": "example",
+                        "name": "example",
+                        "kind": "example",
+                        "members": [
+                          {
+                            "person_id": "example",
+                            "full_name": "example"
+                          }
+                        ],
+                        "lineup": [
+                          {
+                            "person_id": "example",
+                            "pair_order": null
+                          }
+                        ]
+                      }
+                    },
+                    "state": {
+                      "status": "example",
+                      "last_seq": 0
+                    }
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
     "/api/v1/fixtures/{id}/stream-sessions": {
       "post": {
         "summary": "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 phone_not_paired (no phone is paired on the fixture's stream code — scan it first; asked after active_session and before credits, so no row is written and no credit spent), 409 phone_not_responding (a phone IS paired but has sent no beat within its liveness window — wake it, no rescan needed; asked at the same point, same guarantees), 409 target_in_use (the destination is live or waiting on another match, named in `holder`), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 422 TARGET_UNREADABLE (the saved stream key can no longer be read: replace the key, or for a legacy destination remove it, since only YouTube and Twitch can be added; refused before any provider call, no row is written, no credit spent), 503 composed_unavailable (mode composed where the compositor cannot run: the relay is unavailable, no compositor image is configured, or, on a live deployment, FLY_API_TOKEN or ENV_NAME is unset or FLY_RELAY_APP is unset or still the retired shared default; asked before every admission refusal, after the deployment's ingest_unavailable, so no session row, input, credit or runner is created — start passthrough instead), 503 storage_exhausted (no row is written). A destination that is a connected YouTube channel is refused with a YouTube code and `connectionId` in the error extras (nothing is written or spent, and a broadcast made at YouTube is deleted again) — after every admission refusal above except 503 storage_exhausted, which is weighed after the YouTube step, so a channel that cannot go live answers its YouTube code even when storage is exhausted, and a channel that can answers storage_exhausted: 409 youtube_reconnect_needed (the channel's grant is dead: reconnect it), 409 youtube_live_not_enabled (live streaming is not enabled on the channel), 409 youtube_live_blocked (YouTube has blocked the channel from streaming), 409 youtube_channel_busy (the channel already has its ten live streams in use), 429 youtube_limit_reached (YouTube's quota is used up; try again later), 503 youtube_unavailable (YouTube did not answer, or the channel's stream key could not be read)",
@@ -79886,7 +80455,7 @@
     },
     "/api/v1/public/fixtures/{id}/realtime-token": {
       "get": {
-        "summary": "Realtime subscriber token (403 unless the org has the realtime entitlement; ?purpose=overlay is also granted when ?key= is the fixture's signed overlay key from the organiser's OBS URL and the org has streaming.overlay)",
+        "summary": "Realtime subscriber token with the public `url` and `apikey` a phone configures its client from (403 unless the org has the realtime entitlement; ?purpose=overlay is also granted when ?key= is the fixture's signed overlay key from the organiser's OBS URL and the org has streaming.overlay)",
         "tags": [
           "public"
         ],
@@ -79936,7 +80505,44 @@
                     "ok": {
                       "const": true
                     },
-                    "data": {},
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "token": {
+                          "type": "string"
+                        },
+                        "channel": {
+                          "type": "string"
+                        },
+                        "url": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "apikey": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "token",
+                        "channel",
+                        "url",
+                        "apikey"
+                      ],
+                      "additionalProperties": false
+                    },
                     "requestId": {
                       "type": "string",
                       "format": "uuid"
@@ -79945,7 +80551,12 @@
                 },
                 "example": {
                   "ok": true,
-                  "data": {},
+                  "data": {
+                    "token": "example",
+                    "channel": "example",
+                    "url": "example",
+                    "apikey": "example"
+                  },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
               }
