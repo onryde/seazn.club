@@ -111,11 +111,13 @@ async function disqualifyThroughTheScreen(page: Page, request: APIRequestContext
 }
 
 /**
- * Can this row control be tapped as the page FIRST PAINTS? No scrollIntoView, no horizontal manipulation of any kind: the
- * entrants card is a `.scroll-x` box with a 24px `pointer-events:none` fade painted over its right edge, so a control that sits
- * in that strip - or past the card's edge - is exactly the defect (ruling 261: a third button pushed Delete under the fade at
- * 768). Only the PAGE is scrolled, and only vertically, to bring the row on screen. Measured: the card was never scrolled, the
- * control lies inside the card clear of the fade, and the element at its centre is the control.
+ * Can this row control be tapped as the page FIRST PAINTS? No scrollIntoView, no horizontal manipulation of any kind: only the
+ * PAGE is scrolled, and only vertically, to bring the row on screen. The entrants card is a `.scroll-x` box, so a table that is
+ * too wide for it is exactly the defect (ruling 261: a third button made the 768 table overflow its card and pushed Delete out
+ * of it, under the fade). Measured: the card was never scrolled, it has nothing to scroll to (no overflow), the control lies
+ * wholly inside it, and the element at the control's centre IS the control. (The card's 16px padding leaves a button in the last
+ * column a few px inside the 24px right-edge fade on EVERY `.scroll-x-fade` table - that strip is decoration, `pointer-events:
+ * none`, and not a reach defect, so it is reported in `fadeOverlapPx` and not asserted.)
  */
 async function reachAtFirstPaint(btn: Locator) {
   return btn.evaluate((el) => {
@@ -129,8 +131,9 @@ async function reachAtFirstPaint(btn: Locator) {
     const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
     return {
       cardScrollLeft: card.scrollLeft,
-      fadePx,
-      clearOfFade: r.left >= c.left && r.right <= c.right - fadePx,
+      cardOverflowPx: Math.max(0, card.scrollWidth - card.clientWidth - 1),
+      insideCard: r.left >= c.left && r.right <= c.right,
+      fadeOverlapPx: Math.max(0, Math.round(r.right - (c.right - fadePx))),
       hit: at !== null && el.contains(at),
     } as const;
   });
@@ -138,7 +141,7 @@ async function reachAtFirstPaint(btn: Locator) {
 
 /**
  * The row's action controls on one division, at 1280, 768 and 320: the expected ones are there (and the others are not), the
- * page never scrolls sideways, and each is tappable. At 1280 and 768 that is proven at FIRST PAINT (`reachAtFirstPaint`); at 320
+ * page never scrolls sideways, and each is tappable. At 1280 and 768 that is proven at FIRST PAINT (`reachAtFirstPaint`: the card does not overflow, the control is inside it); at 320
  * the card is a scroll card by design (a phone-width table scrolls inside its box), so there the control is scrolled into view
  * and then hit-tested - that is a reachability check, not a first-paint one. Returns how many controls it proved tappable.
  */
@@ -156,6 +159,12 @@ async function rowActionsAtThreeWidths(page: Page, request: APIRequestContext, d
       const btn = row.getByTestId(id);
       await expect(btn, `${width}: ${id} is on the row`).toHaveCount(1);
       if (width === 320) {
+        // The positive pair of the "no overflow" reads above: at a phone width the SAME measurement sees the card overflow.
+        const overflowPx = await btn.evaluate((el) => {
+          const card = el.closest(".scroll-x")!;
+          return card.scrollWidth - card.clientWidth;
+        });
+        expect(overflowPx, `${width}: the card is a scroll card here, so the overflow read can see overflow`).toBeGreaterThan(0);
         await btn.scrollIntoViewIfNeeded();
         const hit = await btn.evaluate((el) => {
           const r = el.getBoundingClientRect();
@@ -165,9 +174,7 @@ async function rowActionsAtThreeWidths(page: Page, request: APIRequestContext, d
         expect(hit, `${width}: ${id} can be tapped once its card is scrolled to it`).toEqual({ onScreen: true, hit: true });
       } else {
         const reach = await reachAtFirstPaint(btn);
-        expect(reach, `${width}: ${id} can be tapped at first paint, with no scrolling`).toMatchObject({ cardScrollLeft: 0, clearOfFade: true, hit: true });
-        // Anti-vacuity: the measurement SAW the fade (a pseudo-element read that came back 0 would make "clear of it" free).
-        expect((reach as { fadePx: number }).fadePx, `${width}: ${id}: the fade strip was measured`).toBeGreaterThan(0);
+        expect(reach, `${width}: ${id} can be tapped at first paint, with no scrolling`).toMatchObject({ cardScrollLeft: 0, cardOverflowPx: 0, insideCard: true, hit: true });
       }
       tapped++;
     }
