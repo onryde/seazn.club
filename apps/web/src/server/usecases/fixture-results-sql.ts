@@ -27,6 +27,9 @@
 //       Swiss "a board has started" predicate (late entry's case decision and
 //       the rounds lock, X-SW-17), and the "Swiss is over" read (a later
 //       stage under way) that late entry and Add a round share
+//     - swiss-cut-drift.ts (W3 T17, RB3-19): `getSwissCutDrift`'s "the knockout has begun" read - a fixture of the stage after
+//       a complete Swiss that holds a result, on every Fixtures-tab render for an organiser and on GET /stages/{id}/swiss-cut.
+//       The evidence half is monotonic, so taking a knockout result back does not un-begin the bracket (the warning stays)
 //   `fixtureEvidenceSql` alone, beside the caller's own status clause
 //     - stages.ts: the Swiss shell reconcile, unseat and Unpair
 //   `systemByeSql` (W3 T3; defined in engine-db/system-bye-sql.ts, below every

@@ -3,16 +3,19 @@ import "server-only";
 //
 // A correction to a decided Swiss board is NOT refused once the Swiss is complete or the knockout is under way
 // (`LOCKED_FIXTURE_STATUSES` is {finalized, cancelled}; `onDecided` re-ranks the stage and re-stales the dependent
-// proposal, which a confirmed one ignores). So the table can move under a bracket that is already seated — and the
-// bracket STANDS: nothing here, or in the correction, touches a seat. What the organiser is owed is the fact, with the
-// names. This reads three things:
+// DRAFT proposals, which a confirmed one ignores). So the table can move under a bracket that is already seated — and
+// the bracket STANDS: nothing here, or in the correction, touches a seat. What the organiser is owed is the fact, with
+// the names. This reads three things:
 //
-//   1. the FROZEN cut — who the bracket was seeded from:
-//        - `config.qualified` of the stage after the Swiss, when it is an array. Only a `timing: "on_complete"` next stage
-//          writes it (`seedNextStage`, at completion);
-//        - otherwise the entrants SEATED in that stage's fixtures. A `timing: "setup"` next stage — swiss_knockout and
-//          swiss_playoff, the shapes RB3-19 is about — is filled by the confirmed proposal and never writes
-//          `config.qualified` at all, so the seats ARE its frozen cut (an unconfirmed bracket has none: no cut, no drift);
+//   1. the FROZEN cut — the TABLE's cut when the bracket was seeded, never the seats (an organiser's tie pick or
+//      `edits[]` override seats someone the table did not put in, which is a choice, not a correction: RB3-19 warns about
+//      CORRECTIONS). Where it is read from depends on the next stage's timing:
+//        - `timing: "on_complete"`: `config.qualified`, written once by `seedNextStage` at completion from
+//          `resolveProgression` over the completed tables — the table's cut, no organiser step in between;
+//        - `timing: "setup"` (swiss_knockout and swiss_playoff, the shapes RB3-19 is about): no `config.qualified`
+//          exists. The confirmed proposal's `computed.qualifiers` is the table's cut as it stood when the draft was
+//          computed; `confirmSeedProposal` applies picks and edits to the SEATS only and leaves `computed` as it was,
+//          and only a draft is ever re-staled. A bracket with no confirmed proposal has no recorded cut: no drift;
 //   2. TODAY'S top q — the Swiss stage's live ranking (`rankedStageStandings`, the cascade the standings tab renders),
 //      read through the SAME eligibility the cut itself uses (`cutEligiblePools`, T15 Carry A): a withdrawn or
 //      disqualified entrant leaves the cut and the next eligible entrant backfills, so a departed entrant is never
@@ -21,9 +24,11 @@ import "server-only";
 //   3. whether the knockout has BEGUN — a fixture of that stage holding a result (`fixtureHasResultSql`: a generated
 //      bye is no start, the same reading `swissIsOver` takes).
 //
-// A display read: no locks, nothing written by the read itself. The ranking is the stage's own; a lots draw it may have
-// to make is stored exactly as the correction's own recompute stores it (`on conflict do nothing`, a racing writer's
-// draw wins for both), so the table this names is the table the standings tab shows.
+// A display read, taking no lock. It writes nothing of its own, with one exception it shares with every reader of the
+// ranking: `rankedStageStandings` stores a lots draw the first time a level class has to be drawn (`persistLotsDraws`,
+// `on conflict do nothing` — a racing writer's draw wins for both), exactly as the correction's own recompute and the
+// standings tab do. So a GET of the route or a render of the Fixtures tab can persist a draw; it is the one the table
+// shows, never a second one.
 import type postgres from "postgres";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { withTenant } from "@/lib/db";
@@ -38,8 +43,9 @@ export type { SwissCutDrift };
 
 /**
  * Who a correction moved across the Swiss cut after the knockout began, or null (no warning). Null for: a stage that is
- * not a complete Swiss, a Swiss with no stage after it or one that draws from nothing, a bracket not yet seated, a
- * knockout that has not begun, and a cut that today's table still makes. 404 for an unknown stage or another
+ * not a complete Swiss, a Swiss with no stage after it (the commonest shape: a Swiss on its own) or one that draws from
+ * nothing, a bracket with no recorded cut (no `config.qualified`, no confirmed proposal), a knockout that has not begun,
+ * and a cut that today's table still makes. 404 for an unknown stage or another
  * organisation's (RLS).
  */
 export async function getSwissCutDrift(auth: AuthCtx, swissStageId: string): Promise<SwissCutDrift | null> {
@@ -78,12 +84,16 @@ export async function getSwissCutDrift(auth: AuthCtx, swissStageId: string): Pro
 
 type Tx = postgres.TransactionSql;
 
-/** The cut the stage after the Swiss was seeded from (see the header). Distinct ids, in a stable order. */
+/** The table's cut the stage after the Swiss was seeded from (see the header). Distinct ids, in a stable order; empty when
+ *  none is recorded (which `swissCutDrift` reads as "nothing to drift from"). */
 async function frozenCutOf(tx: Tx, next: { id: string; config: Record<string, unknown> }): Promise<string[]> {
   const stored = next.config.qualified;
-  if (Array.isArray(stored)) return [...new Set(stored.filter((id): id is string => typeof id === "string"))];
-  const seats = await tx<{ home: string | null; away: string | null }[]>`
-    select home_entrant_id as home, away_entrant_id as away from fixtures
-    where stage_id = ${next.id} order by round_no, seq_in_round, id`;
-  return [...new Set(seats.flatMap((seat) => [seat.home, seat.away]).filter((id): id is string => id !== null))];
+  const ids = (list: unknown[]) => [...new Set(list.filter((id): id is string => typeof id === "string"))];
+  if (Array.isArray(stored)) return ids(stored);
+  const [confirmed] = await tx<{ computed: { qualifiers?: { entrantId?: unknown }[] } | null }[]>`
+    select computed from stage_seed_proposals
+    where stage_id = ${next.id} and status = 'confirmed'
+    order by confirmed_at desc nulls last, id limit 1`;
+  const qualifiers = confirmed?.computed?.qualifiers;
+  return Array.isArray(qualifiers) ? ids(qualifiers.map((q) => q.entrantId)) : [];
 }
