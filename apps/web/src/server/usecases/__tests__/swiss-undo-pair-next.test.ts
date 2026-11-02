@@ -50,11 +50,13 @@ import {
   undoBarrierRefusal,
   undoDivision,
 } from "../history";
+import { callFixtureToCourt } from "../match-day-call";
 import { moveFixture, startDivision } from "../schedule";
 import { shiftDivisionSchedule } from "../schedule-plus";
 import { scoreEvent } from "../scoring";
 import { putStageRules } from "../stage-rules";
 import { createStages, generateStageFixtures, unpairSwissRound } from "../stages";
+import { createCourt, createVenue } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
 import { movingFragment } from "./_stage-probe";
@@ -374,6 +376,33 @@ for (const s of SPORTS) {
       await expect(undoDivision(rig.auth, rig.divisionId)).rejects.toMatchObject(refusal("SWISS_UNDO_ROUND_STARTED"));
       expect(seatState(await rowsOf(rig.stageId)), "a refused Undo clears nothing").toEqual(seatState(voided));
       expect(await ledgerState(rig.divisionId)).toEqual(before);
+    }, 120_000);
+
+    it(`ruling 257 Undo of Pair next ends the call of a board it empties; a Redo carries none (${s.sport})`, async () => {
+      // The ledger after a Pair and a call is [Pair, the call's schedule edit]: the first Undo takes the call's edit back
+      // (the board returns to its slot), the second takes the Pair back and clears the seats. An emptied board cannot be
+      // called, so no `fixture_calls` row survives the clear — a stale one would come back to life if the board were ever
+      // moved onto that court and time again, and a live one would keep the round "started" for ever (ruling 257).
+      const rig = await swissRig(s, 5, 2, true);
+      await generateStageFixtures(rig.auth, rig.stageId); // Pair round 1: two boards and a bye
+      const paired = await rowsOf(rig.stageId);
+      const boards = roundOf(paired, 1).filter((f) => !isBye(f));
+      expect(boards.length, "premise: two boards").toBe(2);
+      const venue = await createVenue(rig.auth, { name: "Hall " + randomUUID().slice(0, 4), sort: 0 });
+      const court = await createCourt(rig.auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+      await callFixtureToCourt(rig.auth, boards[0]!.id, court.id);
+      const callRows = () => sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id in ${sql(boards.map((f) => f.id))}`;
+      expect((await callRows())[0]!.n, "premise: the board is called").toBe(1);
+
+      await undoDivision(rig.auth, rig.divisionId); // the call's schedule edit
+      expectRoundSeated(roundOf(await rowsOf(rig.stageId), 1), "the first Undo took back only the call");
+      await undoDivision(rig.auth, rig.divisionId); // the Pair
+      expectRoundCleared(roundOf(await rowsOf(rig.stageId), 1), "after the second Undo");
+      expect((await callRows())[0]!.n, "no call row survives on an emptied board").toBe(0);
+
+      await redoDivision(rig.auth, rig.divisionId); // the Pair, again
+      expectRoundSeated(roundOf(await rowsOf(rig.stageId), 1), "after Redo");
+      expect((await callRows())[0]!.n, "a Redo carries no call").toBe(0);
     }, 120_000);
 
     it(`X-SW-28 Redo after Undo seats round 1 again (${s.sport})`, async () => {

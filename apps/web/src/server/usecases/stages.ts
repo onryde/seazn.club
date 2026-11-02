@@ -109,6 +109,7 @@ import { log } from "@/server/logger";
 import { msg } from "@/lib/messages";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
+import { endCallsOn } from "./match-day-call";
 // #14: `courtNamesById` is the venue-qualified label map (via
 // `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
 // venues that legally share one court name.
@@ -2762,6 +2763,11 @@ export async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Pr
   // game stands behind refuses the whole clear (lockBoardsRefusingOnlineGames),
   // so past it every row here is one to go.
   await lockBoardsRefusingOnlineGames(tx, ids);
+  // Ruling 257 (a live Match Day call is a started board): an emptied board cannot be called, and a call left on it would
+  // keep its round "started" — the rounds lock, Finish and the next Pair would all treat it as under way. So the clear ENDS
+  // the calls of the boards it empties, the way Undo call does, before the status below is rewritten (a call's liveness reads
+  // it). The slot goes back to what it held before the call (the plan, ruling B).
+  await endCallsOn(tx, ids);
   // The void (spec §7, plan T6): the round's invites that are still queued name boards whose seats are about to go, so they end
   // `round_voided` in THIS transaction (an Unpair that is refused above ends nothing). Only after the refusal, and before the bridge
   // rows they are judged by are deleted. A row already `sending` is left to finish; a seat that was never invited has no row.

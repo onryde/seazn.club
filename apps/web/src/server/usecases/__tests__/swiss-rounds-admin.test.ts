@@ -25,11 +25,11 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { undoDivision } from "../history";
-import { callFixtureToCourt, undoCall } from "../match-day-call";
+import { LIVE_CALL_ALIASES, callFixtureToCourt, undoCall } from "../match-day-call";
 import { confirmRegistration } from "../registrations";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { completeStage, createStages, generateStageFixtures, replaceStages } from "../stages";
+import { completeStage, createStages, generateStageFixtures, replaceStages, unpairSwissRound } from "../stages";
 import { addSwissRound, listSwissRoundControls, patchSwissStage, swissBoardStartedSql } from "../swiss-rounds-admin";
 import { createCourt, createVenue } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
@@ -412,6 +412,76 @@ describe.runIf(HAS_DB)("X-SW-17 the round count is editable until the first fixt
 
       await undoCall(rig.auth, board.id);
       expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.started, "a cleared call is no start").toBe(false);
+      expect(await patchSwissStage(rig.auth, rig.stageId, { rounds: 2 })).toMatchObject({ rounds: 2 });
+    });
+
+    it(`ruling 257 Unpair ends the call of the board it empties: the lock lifts, the slot is the plan again, a re-Pair carries no call; with no call Unpair is as before (${s.sport})`, async () => {
+      // An emptied board cannot be called, and a call left on it would keep the round "started" for ever (the rounds lock,
+      // Finish and the next Pair all read the one predicate). Unpair ends the call as Undo call does: the board goes back on
+      // the slot it held before the call (the plan, ruling B). The control runs the same Unpair with no call.
+      const run = async (called: boolean) => {
+        const rig = await swissRig(s, 4, 3);
+        await startDivision(rig.auth, rig.divisionId);
+        await pair(rig);
+        const venue = await createVenue(rig.auth, { name: "Hall " + randomUUID().slice(0, 4), sort: 0 });
+        const planned = await createCourt(rig.auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+        const free = await createCourt(rig.auth, venue.id, { name: "Court 2", sort: 1, tags: [] });
+        const plannedAt = "2030-06-01T10:00:00.000Z";
+        const [board, other] = boardsOf(await rowsOf(rig.stageId), 1);
+        await sql`update fixtures set scheduled_at = ${plannedAt}, court_id = ${planned.id}, venue_id = ${venue.id} where id = ${board!.id}`;
+        if (called) {
+          await callFixtureToCourt(rig.auth, board!.id, free.id);
+          const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id = ${board!.id}`;
+          expect(n, "premise: the board is called").toBe(1);
+          expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.started, "premise: the call locks the round").toBe(true);
+          expect((await rowsOf(rig.stageId)).find((f) => f.id === board!.id)!.court_id, "premise: the call moved the board").toBe(free.id);
+        }
+        const ids = boardsOf(await rowsOf(rig.stageId), 1).map((f) => f.id);
+        expect(ids.length, "premise: two boards in round 1").toBe(2);
+
+        expect(await unpairSwissRound(rig.auth, rig.stageId)).toMatchObject({ cleared: 2, round: 1 });
+        const after = await rowsOf(rig.stageId);
+        const r1 = roundOf(after, 1);
+        expect(seatedIn(r1), "the round is back on its shells").toEqual([]);
+        const [{ n: callRows }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id in ${sql(ids)}`;
+        expect(callRows, "no call stands on an emptied board").toBe(0);
+        const back = after.find((f) => f.id === board!.id)!;
+        expect({ court: back.court_id, at: back.scheduled_at?.toISOString() }, "the plan, as Undo call puts it back").toEqual({ court: planned.id, at: plannedAt });
+        expect(after.find((f) => f.id === other!.id)!.court_id, "the other board's slot is not touched").toBe(other!.court_id);
+        expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.started, "the round is unstarted").toBe(false);
+        expect(await patchSwissStage(rig.auth, rig.stageId, { rounds: 2 }), "the rounds edit goes through").toMatchObject({ rounds: 2 });
+
+        await pair(rig); // a re-Pair seats the same shells again — and carries no call
+        expect(seatedIn(roundOf(await rowsOf(rig.stageId), 1)).length, "re-paired: four seated").toBe(4);
+        const [{ n: afterPair }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id in ${sql(ids)}`;
+        expect(afterPair, "the re-Pair carries no call").toBe(0);
+        expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.started, "still unstarted").toBe(false);
+        return { slot: { court: back.court_id, at: back.scheduled_at?.toISOString() }, planned: planned.id };
+      };
+      const noCall = await run(false);
+      const withCall = await run(true);
+      // The positive pair: Unpair with no call keeps the planned slot, and the called round ends on the same slot.
+      expect(noCall.slot).toEqual({ court: noCall.planned, at: "2030-06-01T10:00:00.000Z" });
+      expect(withCall.slot).toEqual({ court: withCall.planned, at: "2030-06-01T10:00:00.000Z" });
+    }, 120_000);
+
+    it(`ruling 257 a live call on ANOTHER division's fixture leaves this Swiss round unstarted (${s.sport})`, async () => {
+      // Pins the correlation of the call arm to THIS board (`fc.fixture_id = f.id`): without it, any live call in the
+      // organisation would start every Swiss board in it.
+      const rig = await swissRig(s, 4, 3);
+      await startDivision(rig.auth, rig.divisionId);
+      await pair(rig);
+      const neighbour = await swissRig(s, 4, 3, rig.auth); // the same organisation, another division
+      await startDivision(neighbour.auth, neighbour.divisionId);
+      await pair(neighbour);
+      const venue = await createVenue(rig.auth, { name: "Hall " + randomUUID().slice(0, 4), sort: 0 });
+      const court = await createCourt(rig.auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+      await callFixtureToCourt(neighbour.auth, boardsOf(await rowsOf(neighbour.stageId), 1)[0]!.id, court.id);
+      expect(
+        (await listSwissRoundControls(neighbour.auth, neighbour.divisionId))[neighbour.stageId]!.started,
+        "premise: the neighbour's call is live and starts its own round",
+      ).toBe(true);
+      expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.started, "this division is untouched").toBe(false);
       expect(await patchSwissStage(rig.auth, rig.stageId, { rounds: 2 })).toMatchObject({ rounds: 2 });
     });
 
@@ -1014,8 +1084,10 @@ describe.runIf(HAS_DB)("listSwissRoundControls (the desk's view of the rounds lo
 // aliasing the fixtures row `g` or `fc` would collide with them and silently read "any live call in the organisation" — so
 // the predicate refuses those two aliases by name (an assumption made a guard, with the test that reaches it). Sport-free.
 describe.runIf(HAS_DB)("swissBoardStartedSql refuses the aliases liveCallSql owns", () => {
-  it("`g` and `fc` throw; the aliases the callers use (`f`, default) build", () => {
-    const refused = ["g", "fc"].map((alias) => {
+  it("both of `LIVE_CALL_ALIASES` throw; the aliases the callers use (`f`, default) build", () => {
+    const owned = Object.values(LIVE_CALL_ALIASES);
+    expect(owned, "anti-vacuity: the call row's alias and its fixture's").toHaveLength(2);
+    const refused = owned.map((alias) => {
       try {
         swissBoardStartedSql(sql as never, alias);
         return null;
@@ -1023,7 +1095,7 @@ describe.runIf(HAS_DB)("swissBoardStartedSql refuses the aliases liveCallSql own
         return (e as Error).message;
       }
     });
-    expect(refused.length, "anti-vacuity: both aliases tried").toBe(2);
+    expect(refused.length, "anti-vacuity: every owned alias tried").toBe(owned.length);
     for (const m of refused) expect(m, "refused by name").toEqual(expect.stringMatching(/liveCallSql/));
     expect(() => swissBoardStartedSql(sql as never, "f")).not.toThrow();
     expect(() => swissBoardStartedSql(sql as never)).not.toThrow();

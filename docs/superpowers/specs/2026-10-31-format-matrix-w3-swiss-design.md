@@ -103,7 +103,7 @@ reopened (my call).
 
 | Case | Condition | What happens |
 |---|---|---|
-| **(a) Re-pair** | No board in the current round has started (no score event, not live, not decided other than the bye) | The round is re-paired with the newcomer included. **Every slot keeps its time and court**; only the names on the boards change. An odd field moves the bye; an even field adds one board in the next free slot (unscheduled if there is none, flagged to the desk). Players whose opponent changed see "pairing updated". |
+| **(a) Re-pair** | No board in the current round has started (no score event, not live, not decided other than the bye, and no board called to a court on Match Day — ruling 257; Undo call, or an Unpair, ends a call) | The round is re-paired with the newcomer included. **Every slot keeps its time and court**; only the names on the boards change. An odd field moves the bye; an even field adds one board in the next free slot (unscheduled if there is none, flagged to the desk). Players whose opponent changed see "pairing updated". |
 | **(b) Take the bye** | Some board has started, and the round has a pairing-allocated bye | The newcomer plays the bye holder on a new board. Nothing else moves. The bye holder's award is reversed and their bye eligibility restored (P-A4). This is legal only if the two have not met. If they have (impossible in round 1, rare later), fall through to (c). |
 | **(c) Next round** | Otherwise | The current round is untouched. The newcomer is seated from the next round. |
 

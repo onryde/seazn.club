@@ -26,7 +26,12 @@
 //     - swiss-rounds-admin.ts (W3 T12): inside `swissBoardStartedSql`, the
 //       Swiss "a board has started" predicate (late entry's case decision and
 //       the rounds lock, X-SW-17), and the "Swiss is over" read (a later
-//       stage under way) that late entry and Add a round share
+//       stage under way) that late entry and Add a round share. That
+//       predicate has one arm this file does not own: a Match Day call that
+//       still holds (`liveCallSql`, match-day-call.ts; ruling 257, a called
+//       board is a started board). A call writes no status and no event, so
+//       `fixtureHasResultSql` cannot see it; `clearSwissFixtureSeats` ends
+//       the calls of the boards it empties (`endCallsOn`)
 //     - swiss-cut-drift.ts (W3 T17, RB3-19): `getSwissCutDrift`'s "the knockout has begun" read - a fixture of the stage after
 //       a complete Swiss that holds a result, on every Fixtures-tab render for an organiser and on GET /stages/{id}/swiss-cut.
 //       The evidence half is monotonic, so taking a knockout result back does not un-begin the bracket (the warning stays)

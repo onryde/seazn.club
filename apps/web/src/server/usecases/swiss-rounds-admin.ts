@@ -56,7 +56,7 @@ import type { PatchSwissStage } from "@/server/api-v1/schemas";
 import { tableStageCompletable } from "@/server/engine-db/competition";
 import { firstOwnFormat, ownFormatLoss } from "./fixture-override-guards";
 import { fixtureHasResultSql, swissByeShellSql } from "./fixture-results-sql";
-import { liveCallSql } from "./match-day-call";
+import { LIVE_CALL_ALIASES, liveCallSql } from "./match-day-call";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
 import { swissRefusal } from "./swiss-refusal";
 import {
@@ -107,14 +107,18 @@ export interface SwissStageRow {
 export function swissBoardStartedSql(tx: Tx, on = "f") {
   // `liveCallSql` owns the aliases `fc` and `g` inside its subquery; the outer row under either name would be shadowed by
   // them and the arm would read "any live call in the organisation". A guard, not a comment (TEST-STRATEGY rule 4).
-  if (on === "g" || on === "fc") throw new Error(`swissBoardStartedSql: "${on}" is an alias liveCallSql owns`);
+  if (on === LIVE_CALL_ALIASES.call || on === LIVE_CALL_ALIASES.fixture) {
+    throw new Error(`swissBoardStartedSql: "${on}" is an alias liveCallSql owns`);
+  }
   const f = tx(on);
+  const fc = tx(LIVE_CALL_ALIASES.call);
+  const g = tx(LIVE_CALL_ALIASES.fixture);
   return tx`(
     ${fixtureHasResultSql(tx, on)}
     or exists (select 1 from fixture_external_play x where x.fixture_id = ${f}.id)
     or exists (
-      select 1 from fixture_calls fc join fixtures g on g.id = fc.fixture_id
-      where fc.fixture_id = ${f}.id and ${liveCallSql(tx)}
+      select 1 from fixture_calls ${fc} join fixtures ${g} on ${g}.id = ${fc}.fixture_id
+      where ${fc}.fixture_id = ${f}.id and ${liveCallSql(tx)}
     )
     or (${f}.status in ${tx([...DECIDED])} and not ${swissByeShellSql(tx, on)})
   )`;

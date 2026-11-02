@@ -88,6 +88,12 @@ function refuse(code: CallRefusalCode, message: string, details?: Record<string,
   throw new HttpError(409, message, code, details);
 }
 
+/** The two table aliases `liveCallSql` is written over: the `fixture_calls` row and its fixture. Its caller's query must
+ *  bind them (`from fixture_calls fc join fixtures g on g.id = fc.fixture_id`), and so must not use either name for any
+ *  OTHER row in scope: a clash would silently read as another row (ruling 257's `swissBoardStartedSql` refuses them by
+ *  name). Exported so the SQL below and every guard read one spelling. */
+export const LIVE_CALL_ALIASES = { call: "fc", fixture: "g" } as const;
+
 /**
  * The ONE test of whether a call still holds, over `fixture_calls fc` joined to its fixture as `g`: the match is unstarted and
  * still exactly where the call put it, on the called court at the called time (a call writes `fixtures.scheduled_at` and
@@ -95,7 +101,9 @@ function refuse(code: CallRefusalCode, message: string, details?: Record<string,
  * the call. Match Day's read model asks this same question (spec §7, task A2).
  */
 export function liveCallSql(tx: Tx) {
-  return tx`(g.status = ${MOVABLE_STATUS} and g.court_id = fc.court_id and g.scheduled_at = fc.called_at)`;
+  const fc = tx(LIVE_CALL_ALIASES.call);
+  const g = tx(LIVE_CALL_ALIASES.fixture);
+  return tx`(${g}.status = ${MOVABLE_STATUS} and ${g}.court_id = ${fc}.court_id and ${g}.scheduled_at = ${fc}.called_at)`;
 }
 
 /** The fixture, with its competition. `lock` takes the locks a call or an Undo writes under, in the board's own order: the
@@ -143,6 +151,51 @@ async function readCall(
       from fixture_calls fc join fixtures g on g.id = fc.fixture_id
      where fc.fixture_id = ${fixtureId}`;
   return row;
+}
+
+/** The fixture's slot a live call is ended into: the court, venue and time it held before it was called (nulls included),
+ *  then the call row goes. The ONE way a call ends: Undo call and `endCallsOn` (an Unpair, an Undo of Pair next) both run it.
+ *  A call that no longer holds (`live` false: a board edit has since moved the match) is a stale row only — the slot is the
+ *  board's now and is not written over. */
+async function endCall(
+  tx: Tx,
+  fixtureId: string,
+  call: { live: boolean; prev_court_id: string | null; prev_venue_id: string | null; prev_scheduled_at: Date | null },
+): Promise<void> {
+  if (call.live) {
+    await tx`
+      update fixtures
+         set court_id = ${call.prev_court_id}, venue_id = ${call.prev_venue_id}, scheduled_at = ${call.prev_scheduled_at}
+       where id = ${fixtureId}`;
+  }
+  await tx`delete from fixture_calls where fixture_id = ${fixtureId}`;
+}
+
+/**
+ * End every call on `fixtureIds`, in the caller's transaction: a Swiss board whose seats are being cleared (Unpair, Undo of
+ * Pair next, the pre-Start entrant delete, a case-(a) re-pair; `clearSwissFixtureSeats`) is an empty board, and an empty
+ * board cannot be called. Ruling 257 counts a live call as a started board, so a call left on a cleared board would keep its
+ * round "started" for ever: the rounds lock, Finish and the next Pair would all answer as if the round were under way.
+ * A live call puts the board back on the slot it held before it was called, as Undo call does; a stale row is only deleted.
+ *
+ * No `schedule_edited` ledger row and no `divisions.seq` bump, unlike Undo call: the callers write none for their own clear
+ * (an Unpair is not a ledger event), and a ledger row inside a history step would sit between the step and the row it
+ * inverts. The callers already fire `afterScheduleWrite` after commit. Returns the fixtures whose call ended, for them to
+ * name in it. Runs under the division lock every caller holds, which every call and Undo call also takes first.
+ */
+export async function endCallsOn(tx: Tx, fixtureIds: readonly string[]): Promise<string[]> {
+  if (fixtureIds.length === 0) return [];
+  const fc = tx(LIVE_CALL_ALIASES.call);
+  const g = tx(LIVE_CALL_ALIASES.fixture);
+  const calls = await tx<
+    { fixture_id: string; live: boolean; prev_court_id: string | null; prev_venue_id: string | null; prev_scheduled_at: Date | null }[]
+  >`
+    select ${fc}.fixture_id, ${liveCallSql(tx)} as live, ${fc}.prev_court_id, ${fc}.prev_venue_id, ${fc}.prev_scheduled_at
+      from fixture_calls ${fc} join fixtures ${g} on ${g}.id = ${fc}.fixture_id
+     where ${fc}.fixture_id in ${tx(fixtureIds)}
+     order by ${fc}.fixture_id`;
+  for (const c of calls) await endCall(tx, c.fixture_id, c);
+  return calls.map((c) => c.fixture_id);
 }
 
 /** A call or its Undo on the division's ledger, as moveFixture records a board move: one `schedule_edited` (from/to with the
@@ -489,11 +542,7 @@ export async function undoCall(
     if (!call) refuse(CALL_REFUSAL.NOT_CALLED, "this match is not called");
     assertUnstarted(f);
     if (!call.live) refuse(CALL_REFUSAL.NOT_CALLED, "this match has been moved since it was called");
-    await tx`
-      update fixtures
-         set court_id = ${call.prev_court_id}, venue_id = ${call.prev_venue_id}, scheduled_at = ${call.prev_scheduled_at}
-       where id = ${f.id}`;
-    await tx`delete from fixture_calls where fixture_id = ${f.id}`;
+    await endCall(tx, f.id, call);
     await recordScheduleEdit(tx, f, { at: call.prev_scheduled_at, court: call.prev_court_id, venue: call.prev_venue_id });
     return {
       divisionId: f.division_id,

@@ -34,7 +34,7 @@ import { undoDivision } from "../history";
 import { callFixtureToCourt, undoCall } from "../match-day-call";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { completeStage, computeSeedProposal, confirmSeedProposal, createStages, generateStageFixtures, type SwissExistingFixture } from "../stages";
+import { completeStage, computeSeedProposal, confirmSeedProposal, createStages, generateStageFixtures, unpairSwissRound, type SwissExistingFixture } from "../stages";
 import { addSwissRound, finishSwissNow, judgeSwissFinish, listSwissRoundControls, patchSwissStage } from "../swiss-rounds-admin";
 import { createCourt, createVenue } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
@@ -861,6 +861,33 @@ describe.runIf(HAS_DB)("finishSwissNow guards", () => {
     expect(await finishSwissNow(rig.auth, rig.stageId)).toMatchObject({ finished_after: 1, completed: true });
     expect(roundsIn(await rowsOf(rig.stageId))).toEqual([1]);
   });
+
+  it("Unpair ends the call (ruling 257, review fix): a called round that is Unpaired is unstarted again — Finish offers and takes the stage as for an uncalled round", async () => {
+    // The empty boards cannot stay called: a call left on one would keep the round "started" and Finish would name the
+    // empty boards as undecided. The positive pair is the case above (the call undone by hand) and the device-link one.
+    const rig = await finishRig(BADMINTON, 4, 3);
+    await playThrough(rig, 1);
+    await pair(rig);
+    const venue = await createVenue(rig.auth, { name: "Hall " + randomUUID().slice(0, 4), sort: 0 });
+    const court = await createCourt(rig.auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    const r2 = boardsOf(await rowsOf(rig.stageId), 2);
+    await callFixtureToCourt(rig.auth, r2[0]!.id, court.id);
+    expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.finish, "premise: the call blocks Finish").toMatchObject({
+      canFinish: false,
+      refusal: "round_undecided",
+    });
+
+    expect(await unpairSwissRound(rig.auth, rig.stageId)).toMatchObject({ cleared: 2, round: 2 });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id in ${sql(r2.map((f) => f.id))}`;
+    expect(n, "no call stands on an emptied board").toBe(0);
+    expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.finish, "the desk offers Finish again").toMatchObject({
+      canFinish: true,
+      refusal: null,
+      finishedAfter: 1,
+    });
+    expect(await finishSwissNow(rig.auth, rig.stageId)).toMatchObject({ finished_after: 1, completed: true });
+    expect(roundsIn(await rowsOf(rig.stageId))).toEqual([1]);
+  }, 120_000);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------

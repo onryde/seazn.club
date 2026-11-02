@@ -121,7 +121,7 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
   // the one(s) actually offered (Phase 2 fix, controller ruling).
   SWISS_ROUNDS_LOCKED: {
     status: 409,
-    message: "A match has started, so the number of rounds is fixed.",
+    message: "A match has started or been called to a court, so the number of rounds is fixed. If it was only called, use Undo call on Match Day.",
     key: "swiss.refusal.SWISS_ROUNDS_LOCKED",
   },
   // W3 T12 Phase 2 (BG-SW-1; controller ruling): the chess colours switch after the first match started. Its OWN code, so
@@ -129,7 +129,7 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
   // 422 by the rule above: a started stage never un-starts, so the same switch re-sent can never succeed.
   SWISS_CHESS_LOCKED: {
     status: 422,
-    message: "Chess colours are fixed once play starts.",
+    message: "Chess colours are fixed once play starts or a match is called to a court. If it was only called, use Undo call on Match Day.",
     key: "swiss.refusal.SWISS_CHESS_LOCKED",
   },
   // W3 T12 (RB3-5): a round count below a round already paired. 409 by the rule above (batch-1 review): a state of the
@@ -142,7 +142,7 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
   // W3 T13 (RB3-20): Finish now while the next round has a started board.
   SWISS_FINISH_ROUND_UNDECIDED: {
     status: 409,
-    message: "A match in the round in progress has started, so that round stays. Decide its matches before finishing the Swiss.",
+    message: "A match in the round in progress has started or been called to a court, so that round stays. Decide its matches before finishing the Swiss, or use Undo call on Match Day if it was only called.",
     key: "swiss.refusal.SWISS_FINISH_ROUND_UNDECIDED",
   },
   // W3 T13 (RB3-20): Finish now before any round is complete.
