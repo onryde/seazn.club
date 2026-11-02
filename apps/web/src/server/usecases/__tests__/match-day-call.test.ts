@@ -28,6 +28,7 @@ import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { frozenCompetitionIds } from "../entitlement-freeze";
+import { appendEvent } from "@/server/engine-db/append-event";
 import { FixtureCallPreview } from "@/server/api-v1/schemas";
 import { moveFixture } from "../schedule";
 import { callFixtureToCourt, previewCall, undoCall } from "../match-day-call";
@@ -764,8 +765,10 @@ describe.skipIf(!HAS_DB)("previewCall", () => {
     await place(day, f.id, 300, day.courts.c3);
     await place(day, between(day.comp, p1, p3).id, 70, day.courts.c2); // P1 next: 9 minutes after f ends
     await place(day, between(day.comp, p2, p3).id, 120, day.courts.c2); // P2 next: 59 minutes after — enough
-    const prev = between(day.comp, p2, p4); // P2 finished 6 minutes before the call
+    const prev = between(day.comp, p2, p4); // P2 finished 6 minutes before the call — a match PLAYED (task F6: its ledger says so)
     await place(day, prev.id, -10, day.courts.c2);
+    await appendEvent(day.orgId, prev.id, 0, { type: "core.start", payload: {} });
+    await appendEvent(day.orgId, prev.id, 1, { type: "generic.score", payload: { by: prev.home, points: 1 } });
     await setStatus(prev.id, "decided");
     await sql`update fixtures set finished_at = ${iso(25)} where id = ${prev.id}`;
     // P1's match against P4 was CANCELLED two minutes before the call: never played, so it gives P1 no rest to count from.
@@ -792,6 +795,82 @@ describe.skipIf(!HAS_DB)("previewCall", () => {
       update schedule_settings set config = jsonb_set(config, '{perEntrantMinRest}', '0'::jsonb)
        where division_id = ${day.comp.divisionId}`;
     expect(await previewCall(day.auth, f.id, day.courts.c1, at(31))).toEqual({ shifts: [], warnings: [] });
+  });
+
+  // Task F6 (owner ruling 10-31 (5), engine Q1): a previous match gives a player rest to count from only if it was PLAYED —
+  // an active sport event after an active core.start, the engine's own `playRecorded` over the match's ledger. Each case is the
+  // same day: P2 (Cat Cole, Dan Dorn) finished a match against P4 six minutes before the call, and P2 has nothing after it, so
+  // a warning, when owed, is exactly "6 minutes" for both — from the ruling, not the code. Every ledger goes through the real
+  // write path. One sport (generic, seedDay's): the module a ledger is read under is its OWN division's (`resolveModule`); a
+  // start-only ledger, played under a `startIsPlay` module and not under generic's, is the case that sees which module is used.
+  describe("F6 — the previous match counts only if it was played", () => {
+    const WARNED = [
+      { kind: "rest_gap", person_name: "Cat Cole", minutes: 6, min_rest: 20 },
+      { kind: "rest_gap", person_name: "Dan Dorn", minutes: 6, min_rest: 20 },
+    ];
+    type Ledger = (prev: { id: string; home: string; away: string }, append: (type: string, payload: object, voids?: string) => Promise<string>) => Promise<void>;
+    const cases: [string, Ledger, object[]][] = [
+      ["EMPTY CASE: no ledger at all (a result with no events) — nothing played", async () => {}, []],
+      ["a walkover — nothing played", async (prev, append) => void (await append("core.forfeit", { by: prev.away, reason: "walkover" })), []],
+      ["a start and nothing after it — not play under generic's module", async (_prev, append) => void (await append("core.start", {})), []],
+      [
+        "an abandon before play (a start, then the abandon) — nothing played",
+        async (_prev, append) => {
+          await append("core.start", {});
+          await append("core.abandon", { reason: "weather" });
+        },
+        [],
+      ],
+      [
+        "a point that was voided — nothing played",
+        async (prev, append) => {
+          await append("core.start", {});
+          await append("core.void", {}, await append("generic.score", { by: prev.home, points: 1 }));
+        },
+        [],
+      ],
+      [
+        "an abandon AFTER play — played, so it counts",
+        async (prev, append) => {
+          await append("core.start", {});
+          await append("generic.score", { by: prev.home, points: 1 });
+          await append("core.abandon", { reason: "weather" });
+        },
+        WARNED,
+      ],
+      [
+        "a played match — counts",
+        async (prev, append) => {
+          await append("core.start", {});
+          await append("generic.score", { by: prev.home, points: 2 });
+          await append("generic.score", { by: prev.away, points: 1 });
+        },
+        WARNED,
+      ],
+    ];
+    it.each(cases)("%s", async (_name, write, expected) => {
+      const day = await seedDay({ minRest: 20 });
+      const { p1, p2, p4 } = pairs(day);
+      const f = between(day.comp, p1, p2);
+      await place(day, f.id, 300, day.courts.c3);
+      const prev = between(day.comp, p2, p4);
+      await place(day, prev.id, -10, day.courts.c2);
+      let seq = 0;
+      await write(prev, async (type, payload, voids) => {
+        const r = await appendEvent(day.orgId, prev.id, seq++, { type, payload, ...(voids === undefined ? {} : { voids }) });
+        return r.event.id;
+      });
+      // Finished six minutes before the call, whatever the ledger left as its status (a walkover's own, else decided).
+      const [{ status }] = await sql<{ status: string }[]>`select status from fixtures where id = ${prev.id}`;
+      if (status === "scheduled" || status === "in_play") await setStatus(prev.id, "decided");
+      await sql`update fixtures set finished_at = ${iso(25)} where id = ${prev.id}`;
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${prev.id}`;
+      expect(n, "premise: the ledger the case names was written").toBe(seq);
+
+      const out = await previewCall(day.auth, f.id, day.courts.c1, at(31));
+      const byName = (w: readonly object[]) => [...w].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+      expect(byName(out.warnings)).toEqual(byName(expected));
+    });
   });
 
   it("gives past_day_end when the court's queue would run past its declared hours, read in the org's zone", async () => {

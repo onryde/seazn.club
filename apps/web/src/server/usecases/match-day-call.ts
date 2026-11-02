@@ -36,6 +36,8 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { DEFAULT_LOCALE, getDictionary, type Locale } from "@/lib/i18n";
 import { appendDivisionEvent } from "@/server/engine-db";
+import { playedFactsOf } from "@/server/engine-db/forfeit-played";
+import { resolveModule } from "@/server/engine-db/registry";
 import { estimateQueue } from "@/lib/match-day/estimate";
 import { closureWarning, type UsableWindow } from "@/lib/match-day/closure";
 import { resolveVenueTz } from "@/lib/tz";
@@ -624,8 +626,9 @@ export async function previewCall(
 }
 
 /** §7.2's rest warning, per player of the called match (person-level, every competition of the org). The gap before is from
- *  the player's last finished match (`finished_at`; a cancelled match was not played, so it gives no rest to count from); the
- *  gap after is to their next unstarted match's PLANNED start (ruling B: planned times are what players are told). */
+ *  the player's last finished match that was PLAYED (`finished_at`; a cancelled match, a walkover and an abandon before any
+ *  play were not, so they give no rest to count from — task F6); the gap after is to their next unstarted match's PLANNED
+ *  start (ruling B: planned times are what players are told). */
 async function restGaps(
   tx: Tx,
   f: CallTarget,
@@ -640,29 +643,59 @@ async function restGaps(
   );
   const mine = peopleOf(f, people);
   if (mine.length === 0) return [];
-  const rows = await tx<{ person_id: string; full_name: string; last_finish: Date | null; next_start: Date | null }[]>`
-    select p.id as person_id, p.full_name,
-           max(g.finished_at) filter (where g.finished_at is not null and g.finished_at <= ${new Date(start)}
-                                        and g.status <> 'cancelled') as last_finish,
-           min(g.scheduled_at) filter (where g.status = ${MOVABLE_STATUS} and g.scheduled_at >= ${new Date(start)}) as next_start
+  // Task F6 (owner ruling 10-31 (5), engine Q1): a previous match gives rest to count from only if it was PLAYED — its own
+  // ledger says so (`playRecorded`, under its division's module: `playedFactsOf`). A walkover, or an abandon before the first
+  // sport event, was not; an abandon after play was. So the previous matches are read one by one, not as a max(): only those
+  // finished inside the minimum rest before the call can warn (one finished earlier leaves a gap of at least the minimum), and
+  // the latest PLAYED one of those is the person's last finish.
+  const windowFrom = new Date(start - minRest * MS_PER_MIN);
+  const rows = await tx<
+    {
+      person_id: string;
+      full_name: string;
+      fixture_id: string | null;
+      finished_at: Date | null;
+      scheduled_at: Date | null;
+      status: string | null;
+      sport_key: string | null;
+      module_version: string | null;
+    }[]
+  >`
+    select p.id as person_id, p.full_name, g.id as fixture_id, g.finished_at, g.scheduled_at, g.status,
+           d.sport_key, d.module_version
       from persons p
       left join entrant_members em on em.person_id = p.id
       left join fixtures g on (g.home_entrant_id = em.entrant_id or g.away_entrant_id = em.entrant_id) and g.id <> ${f.id}
-     where p.id in ${tx(mine)}
-     group by p.id, p.full_name`;
-  const byId = new Map(rows.map((r) => [r.person_id, r]));
+            and ((g.finished_at is not null and g.finished_at <= ${new Date(start)} and g.finished_at > ${windowFrom}
+                  and g.status <> 'cancelled')
+                 or (g.status = ${MOVABLE_STATUS} and g.scheduled_at >= ${new Date(start)}))
+      left join divisions d on d.id = g.division_id
+     where p.id in ${tx(mine)}`;
+  const previous = rows.filter((r) => r.fixture_id !== null && r.status !== MOVABLE_STATUS && r.finished_at !== null);
+  const played = await playedFactsOf(
+    tx,
+    previous.map((r) => {
+      // The join above names a division for every fixture; a fixture without one is a broken row, refused rather than guessed.
+      if (r.sport_key === null || r.module_version === null) throw new Error(`restGaps: fixture ${r.fixture_id} has no division`);
+      return { id: r.fixture_id!, module: resolveModule(r.sport_key, r.module_version) };
+    }),
+  );
   const out: CallWarning[] = [];
+  const names = new Map(rows.map((r) => [r.person_id, r.full_name]));
   for (const personId of mine) {
-    const r = byId.get(personId);
-    if (!r) continue;
+    const name = names.get(personId);
+    if (name === undefined) continue;
+    const own = rows.filter((r) => r.person_id === personId && r.fixture_id !== null);
+    const finishes = own.filter((r) => played.get(r.fixture_id!) === true).map((r) => new Date(r.finished_at!).getTime());
+    const starts = own.filter((r) => r.status === MOVABLE_STATUS && r.scheduled_at !== null).map((r) => new Date(r.scheduled_at!).getTime());
     const gaps = [
-      ...(r.last_finish !== null ? [start - new Date(r.last_finish).getTime()] : []),
-      ...(r.next_start !== null ? [new Date(r.next_start).getTime() - end] : []),
+      ...(finishes.length > 0 ? [start - Math.max(...finishes)] : []),
+      ...(starts.length > 0 ? [Math.min(...starts) - end] : []),
     ];
     if (gaps.length === 0) continue;
     const gap = Math.max(0, Math.min(...gaps));
     if (gap < minRest * MS_PER_MIN) {
-      out.push({ kind: "rest_gap", person_name: r.full_name, minutes: Math.floor(gap / MS_PER_MIN), min_rest: minRest });
+      out.push({ kind: "rest_gap", person_name: name, minutes: Math.floor(gap / MS_PER_MIN), min_rest: minRest });
     }
   }
   return out;
