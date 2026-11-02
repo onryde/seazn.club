@@ -1135,7 +1135,11 @@ test.describe("Match Day — B4: playing with no court, no courts at all, a view
     await expectNoHorizontalScroll(page);
     // Fix round 1, R4: the row's match is its whole name, so at 320 it wraps — the away side is never cut to an ellipsis.
     const name = page.locator(`[data-testid="md-no-court-row"][data-fixture-id="${nc.fixtureId}"] [data-md-match]`);
-    await expect(name).toHaveText(`${nc.home} v ${nc.away}`);
+    // E2 item 7: the round's chip leads the names inside this span (its code, and its full name for a screen reader), so the span
+    // holds the chip THEN the match - the match still reads whole, and wraps with the chip as one word.
+    await expect(name.getByTestId("md-round-chip")).toHaveAttribute("data-round-code", /^R\d+$/);
+    await expect(name).toContainText(`${nc.home} v ${nc.away}`);
+    await expect(name).toHaveText(new RegExp(`${nc.home} v ${nc.away}$`));
     const fit = await name.evaluate((e) => ({
       sw: e.scrollWidth,
       cw: e.clientWidth,
@@ -1314,5 +1318,406 @@ test.describe("Match Day — B4: playing with no court, no courts at all, a view
     await expect(page.getByTestId("md-focus")).toContainText(`${seed.court2} is free`);
     await expect(page.getByTestId("md-list")).toBeHidden();
     await expectNoHorizontalScroll(page);
+  });
+});
+
+/**
+ * Match Day E2 (owner 2026-11-01): items 1, 2, 3, 4, 5 and 7, in a real browser. What the node suite cannot see: that the fold
+ * opens in place and keeps the list's order, that the venue filter's popover / bottom sheet is operable and its choice survives a
+ * reload through the address, that a closure shows on a card and PAUSES the Call buttons of a court closed now (while a break still
+ * to come is only a warning in the call sheet), that the candidate rows print the planned time, and that every match wears the
+ * schedule board's round chip.
+ *
+ * The seed is one competition on SIX courts in TWO venues (Hall A: A1-A4, Hall B: B1-B2) with a league of four and a
+ * knockout cup of four (two semi-finals and a final):
+ *   - A1: Ana v Ben IN PLAY (a real core.start), Ana v Cal and the cup's semi-final 2 queued behind it;
+ *   - A2: Ben v Cal queued;   B1: the cup's semi-final 1 queued;   A3, A4, B2: free with nothing queued - the fold;
+ *   - Ben v Dee: planned later today, NO court;   Cal v Dee and Ana v Dee: no time, no court;
+ *   - A3 has a break coming (hours either side of it); A4 is closed all of today (an exception).
+ * Every expectation is read from the rows or from the dictionary, never typed from the page: the planned times from
+ * `scheduled_at` in the view's own zone, the rounds from `fixtures.round_no` (a league's R{n}) and the design's words (a semi-final).
+ */
+interface E2Seed {
+  competitionId: string;
+  tz: string;
+  courts: Record<"a1" | "a2" | "a3" | "a4" | "b1" | "b2", { id: string; name: string }>;
+  venues: { a: { id: string; name: string }; b: { id: string; name: string } };
+  fx: { anaBen: string; anaCal: string; benCal: string; benDee: string; calDee: string; sf1: string; sf2: string };
+  /** Minutes (in the view's zone) of the break on A3: it closes at `breakFrom` and reopens at `breakTo`; null when too late in the
+   *  day for a break still to come (the last 50 minutes). */
+  breakWindow: { from: number; to: number } | null;
+}
+
+const hhmm = (instant: Date | string, tz: string): string =>
+  new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(instant));
+const minToClock = (m: number): string => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+/** The weekday (0 = Sunday, as court_hours), the date and the minute of the day of an instant in a zone. */
+function zonedParts(instant: Date, tz: string): { weekday: number; date: string; minute: number } {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      weekday: "short",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(instant)
+      .map((x) => [x.type, x.value]),
+  ) as Record<string, string>;
+  return { weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(p.weekday!), date: `${p.year}-${p.month}-${p.day}`, minute: Number(p.hour) * 60 + Number(p.minute) };
+}
+
+async function seedE2(request: APIRequestContext, label: string): Promise<E2Seed> {
+  const nonce = Math.random().toString(36).slice(2, 7);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Match Day E2 ${label} ${TAG}`,
+    visibility: "public",
+  });
+  if (comp.status >= 300 || !comp.data) throw new Error(`competition → ${comp.status} ${JSON.stringify(comp.error)}`);
+  const competitionId = comp.data.id;
+  const hallA = await seedVenueWithCourts(request, [`E2A1 ${nonce}`, `E2A2 ${nonce}`, `E2A3 ${nonce}`, `E2A4 ${nonce}`], { venueName: `Hall A ${nonce} ${TAG}` });
+  const hallB = await seedVenueWithCourts(request, [`E2B1 ${nonce}`, `E2B2 ${nonce}`], { venueName: `Hall B ${nonce} ${TAG}` });
+  const [a1, a2, a3, a4] = hallA.courts as [E2Seed["courts"]["a1"], E2Seed["courts"]["a2"], E2Seed["courts"]["a3"], E2Seed["courts"]["a4"]];
+  const [b1, b2] = hallB.courts as [E2Seed["courts"]["b1"], E2Seed["courts"]["b2"]];
+  const allCourts = [a1, a2, a3, a4, b1, b2].map((c) => c.id);
+
+  const division = async (name: string, entrants: string[], stage?: { kind: string; name: string; config?: Record<string, unknown> }) => {
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${competitionId}/divisions`, "POST", { name, sport_key: "generic", variant_key: "score" });
+    if (div.status >= 300 || !div.data) throw new Error(`division → ${div.status} ${JSON.stringify(div.error)}`);
+    const ents = await addEntrantsViaApi(request, div.data.id, entrants);
+    if (ents.status >= 300 || ents.ids.length !== entrants.length) throw new Error(`entrants → ${ents.status}`);
+    await createStageAndGenerate(request, div.data.id, stage);
+    const started = await apiJson(request, `/api/v1/divisions/${div.data.id}/start`, "POST");
+    expect(started.status, `division start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+    const settings = await apiJson(request, `/api/v1/divisions/${div.data.id}/schedule-settings`, "PUT", { tz: "UTC", config: { matchMinutes: 30, courts: allCourts } });
+    expect(settings.status, `schedule settings: ${JSON.stringify(settings.error)}`).toBeLessThan(300);
+    return { id: div.data.id, ents: ents.ids };
+  };
+  const names = { ana: `Ana ${nonce}`, ben: `Ben ${nonce}`, cal: `Cal ${nonce}`, dee: `Dee ${nonce}` };
+  const league = await division("E2 League", [names.ana, names.ben, names.cal, names.dee]);
+  const cup = await division("E2 Cup", [`Wil ${nonce}`, `Xan ${nonce}`, `Yun ${nonce}`, `Zed ${nonce}`], { kind: "knockout", name: "Cup", config: {} });
+
+  const now = Date.now();
+  const dayStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
+  const within = (offsetMin: number) =>
+    new Date(Math.min(dayStart + 86_400_000 - 60_000, Math.max(dayStart + 60_000, now + offsetMin * 60_000))).toISOString();
+  const [ana, ben, cal, dee] = league.ents as [string, string, string, string];
+  const rows = await withDb((sql) => sql<{ id: string; division_id: string; home_entrant_id: string | null; away_entrant_id: string | null; round_no: number }[]>`
+    select id, division_id, home_entrant_id, away_entrant_id, round_no from fixtures where division_id in ${sql([league.id, cup.id])} order by round_no, seq_in_round`);
+  const pair = (x: string, y: string) => {
+    const f = rows.find((r) => r.division_id === league.id && ((r.home_entrant_id === x && r.away_entrant_id === y) || (r.home_entrant_id === y && r.away_entrant_id === x)));
+    if (!f) throw new Error(`no league fixture between ${x} and ${y}`);
+    return f.id;
+  };
+  const semis = rows.filter((r) => r.division_id === cup.id && r.round_no === 1);
+  expect(semis, "premise: a four-entrant knockout opens with two semi-finals").toHaveLength(2);
+  const fx = { anaBen: pair(ana, ben), anaCal: pair(ana, cal), benCal: pair(ben, cal), benDee: pair(ben, dee), calDee: pair(cal, dee), sf1: semis[0]!.id, sf2: semis[1]!.id };
+  await withDb(async (sql) => {
+    await sql`update fixtures set court_id = ${a1.id}, scheduled_at = ${within(-20)} where id = ${fx.anaBen}`;
+    await sql`update fixtures set court_id = ${a1.id}, scheduled_at = ${within(60)} where id = ${fx.anaCal}`;
+    await sql`update fixtures set court_id = ${a1.id}, scheduled_at = ${within(75)} where id = ${fx.sf2}`;
+    await sql`update fixtures set court_id = ${a2.id}, scheduled_at = ${within(50)} where id = ${fx.benCal}`;
+    await sql`update fixtures set court_id = null, scheduled_at = ${within(120)} where id = ${fx.benDee}`;
+    await sql`update fixtures set court_id = ${b1.id}, scheduled_at = ${within(45)} where id = ${fx.sf1}`;
+  });
+  await startFixture(request, fx.anaBen);
+
+  // The view's own zone and clock, then A3's break and A4's closed day, in that zone.
+  const view = await apiJson<{ tz: string; now: string }>(request, `/api/v1/competitions/${competitionId}/match-day`);
+  expect(view.status).toBe(200);
+  const tz = view.data!.tz;
+  const z = zonedParts(new Date(view.data!.now), tz);
+  const from = z.minute + 15;
+  const to = from + 30;
+  const breakWindow = to <= 1439 ? { from, to } : null;
+  await withDb(async (sql) => {
+    const [c] = await sql<{ org_id: string }[]>`select org_id from courts where id = ${a3.id}`;
+    const org = c!.org_id;
+    if (breakWindow !== null) {
+      await sql`insert into court_hours (court_id, org_id, weekday, open_min, close_min) values
+        (${a3.id}, ${org}, ${z.weekday}, 0, ${breakWindow.from}), (${a3.id}, ${org}, ${z.weekday}, ${breakWindow.to}, 1440)`;
+    }
+    await sql`insert into court_exceptions (court_id, org_id, date, closed) values (${a4.id}, ${org}, ${z.date}, true)`;
+  });
+  return { competitionId, tz, courts: { a1, a2, a3, a4, b1, b2 }, venues: { a: { id: hallA.venueId, name: `Hall A ${nonce} ${TAG}` }, b: { id: hallB.venueId, name: `Hall B ${nonce} ${TAG}` } }, fx, breakWindow };
+}
+
+const courtIdsInList = (page: Page): Promise<string[]> =>
+  page.getByTestId("md-court-row").evaluateAll((els) => els.map((e) => e.getAttribute("data-court-id") ?? ""));
+/** The en template with its placeholders filled. */
+const fill = (template: string, vars: Record<string, string | number>): string =>
+  Object.entries(vars).reduce((acc, [k, v]) => acc.replaceAll(`{${k}}`, String(v)), template);
+
+/** Round-trips the desk list: what the E2 list/fold/closure/venue/chip items look like at a width. */
+async function e2ListChecks(page: Page, request: APIRequestContext, seed: E2Seed): Promise<void> {
+  const { courts } = seed;
+  await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+  await expect(page.getByTestId("md-court-row").first()).toBeVisible();
+
+  // ITEM 2: playing -> up next (courts with a match queued, in list order); the three free, empty courts are one fold row.
+  expect(await courtIdsInList(page), "playing first, then the courts with something waiting, in list order").toEqual([courts.a1.id, courts.a2.id, courts.b1.id]);
+  const fold = page.getByTestId("md-court-fold");
+  await expect(fold).toBeVisible();
+  const foldText = fill(UI_EN["matchDay.list.freeFold.court.other"]!.replace(/ \(\{names\}\)$/, ""), { count: 3 });
+  await expect(page.getByTestId("md-court-fold-toggle")).toContainText(foldText);
+  await expect(page.getByTestId("md-court-fold-toggle")).toHaveAttribute("aria-expanded", "false");
+  for (const c of [courts.a3, courts.a4, courts.b2]) await expect(row(page, c.name), `${c.name} is folded away`).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+
+  // It opens in place - the live rows stay where they were, and the three courts appear after them, in list order.
+  await page.getByTestId("md-court-fold-toggle").click();
+  await expect(page.getByTestId("md-court-fold-toggle")).toHaveAttribute("aria-expanded", "true");
+  expect(await courtIdsInList(page)).toEqual([courts.a1.id, courts.a2.id, courts.b1.id, courts.a3.id, courts.a4.id, courts.b2.id]);
+
+  // ITEM 3: a break still to come on A3 (a card, not a stop), the whole day closed on A4, nothing on B2.
+  if (seed.breakWindow !== null) {
+    const later = row(page, courts.a3.name).getByTestId("md-closure");
+    await expect(later).toHaveAttribute("data-kind", "later");
+    await expect(later).toHaveText(fill(UI_EN["matchDay.closure.later"]!, { from: minToClock(seed.breakWindow.from), until: minToClock(seed.breakWindow.to) }));
+  }
+  const now = row(page, courts.a4.name).getByTestId("md-closure");
+  await expect(now).toHaveAttribute("data-kind", "now");
+  await expect(now).toHaveText(UI_EN["matchDay.closure.rest"]!);
+  await expect(row(page, courts.b2.name).getByTestId("md-closure")).toHaveCount(0);
+  await expect(row(page, courts.a1.name).getByTestId("md-closure")).toHaveCount(0);
+
+  // ITEM 7: the board's chip in front of the names - a league round is R{n} (its row's round_no), a semi-final is SF.
+  const anaBenRound = await withDb((sql) => sql<{ round_no: number }[]>`select round_no from fixtures where id = ${seed.fx.anaBen}`);
+  const a1Chip = row(page, courts.a1.name).getByTestId("md-round-chip");
+  await expect(a1Chip).toHaveAttribute("data-round-code", `R${anaBenRound[0]!.round_no}`);
+  await expect(a1Chip).toHaveAttribute("data-round-coded", "false");
+  const b1Chip = row(page, courts.b1.name).getByTestId("md-round-chip");
+  await expect(b1Chip).toHaveAttribute("data-round-code", "SF");
+  await expect(b1Chip).toHaveAttribute("data-round-coded", "true");
+  await expect(b1Chip).toHaveAttribute("title", UI_EN["bracket.round.semi"]!);
+  await expect(b1Chip.locator(".sr-only")).toHaveText(UI_EN["bracket.round.semi"]!);
+  await expect(b1Chip.locator('[aria-hidden="true"]')).toHaveText("SF");
+  await expectNoHorizontalScroll(page);
+}
+
+test.describe("Match Day — E2 items 1, 2, 3, 5, 7 (desktop)", () => {
+  test("the list: order and fold, closures on cards, the board's round chips, the venue filter and its address; then A4 pauses Call, A3 warns, and the candidates print their planned time", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(180_000);
+    const seed = await seedE2(request, "Desk");
+    const { courts, fx } = seed;
+    await e2ListChecks(page, request, seed);
+
+    // ITEM 3, the stop: A4 is closed for the rest of today, so no match can be called to it - the buttons are off and say why.
+    await row(page, courts.a4.name).click();
+    const focus = page.getByTestId("md-focus");
+    await expect(focus).toContainText(`${courts.a4.name} is free`);
+    await expect(focus.getByTestId("md-closure")).toHaveAttribute("data-kind", "now");
+    const paused = focus.getByTestId("md-call-paused");
+    await expect(paused).toBeVisible();
+    await expect(paused).toHaveText(fill(UI_EN["matchDay.closure.callPaused.rest"]!, { court: courts.a4.name }));
+    const calls = focus.getByRole("button", { name: /^Call to / });
+    await expect.poll(() => calls.count(), { message: "premise: there is a match that could be called" }).toBeGreaterThanOrEqual(1);
+    for (const b of await calls.all()) await expect(b).toBeDisabled();
+
+    // ITEM 1 + 7 on A3 (free, a break coming): each candidate prints its planned time, then where it waits.
+    await row(page, courts.a3.name).click();
+    await expect(focus).toContainText(`${courts.a3.name} is free`);
+    const planned = await withDb((sql) => sql<{ id: string; scheduled_at: Date | null; round_no: number }[]>`
+      select id, scheduled_at, round_no from fixtures where id in ${sql([fx.anaCal, fx.benCal, fx.benDee, fx.calDee, fx.sf1, fx.sf2])}`);
+    const of = (id: string) => planned.find((p) => p.id === id)!;
+    const cand = (id: string) => focus.locator(`[data-testid="md-candidate"][data-fixture-id="${id}"]`);
+    // The NEXT match of each other court (its queue's head), with the plan that court holds it to.
+    await expect(cand(fx.anaCal)).toContainText(`${hhmm(of(fx.anaCal).scheduled_at!, seed.tz)} · ${fill(UI_EN["matchDay.candidate.where.nextOn"]!, { court: courts.a1.name })}`);
+    await expect(cand(fx.benCal)).toContainText(`${hhmm(of(fx.benCal).scheduled_at!, seed.tz)} · ${fill(UI_EN["matchDay.candidate.where.nextOn"]!, { court: courts.a2.name })}`);
+    await expect(cand(fx.sf1)).toContainText(`${hhmm(of(fx.sf1).scheduled_at!, seed.tz)} · ${fill(UI_EN["matchDay.candidate.where.nextOn"]!, { court: courts.b1.name })}`);
+    // Behind another match on its court, a match is not "next" anywhere: it is not offered.
+    await expect(cand(fx.sf2)).toHaveCount(0);
+    // Planned, no court: the plan leads, then "no court".
+    await expect(cand(fx.benDee)).toContainText(`${hhmm(of(fx.benDee).scheduled_at!, seed.tz)} · ${UI_EN["matchDay.candidate.where.noCourt"]}`);
+    // No time at all is the only "Not scheduled".
+    await expect(cand(fx.calDee)).toContainText(UI_EN["matchDay.candidate.where.unscheduled"]!);
+    await expect(cand(fx.calDee)).not.toContainText(/\d\d:\d\d/);
+    // Every candidate wears its round: R{n} for the league (the row's round_no), SF for the cup's semi-finals.
+    await expect(cand(fx.calDee).getByTestId("md-round-chip")).toHaveAttribute("data-round-code", `R${of(fx.calDee).round_no}`);
+    await expect(cand(fx.anaCal).getByTestId("md-round-chip")).toHaveAttribute("data-round-code", `R${of(fx.anaCal).round_no}`);
+    await expect(cand(fx.sf1).getByTestId("md-round-chip")).toHaveAttribute("data-round-code", "SF");
+    await expectNoHorizontalScroll(page);
+
+    // ITEM 3, the warning: calling Cal v Dee to A3 would still be on when the break starts - warned, never refused.
+    if (seed.breakWindow !== null) {
+      await expect(focus.getByTestId("md-closure")).toHaveAttribute("data-kind", "later");
+      await expect(focus.getByTestId("md-call-paused")).toBeHidden();
+      await cand(fx.calDee).getByRole("button", { name: `Call to ${courts.a3.name}` }).click();
+      const sheet = page.getByRole("dialog");
+      await expect(sheet.getByTestId("md-call-confirm")).toBeEnabled();
+      const warning = sheet.locator('[data-testid="md-warning"][data-kind="crosses_closure"]');
+      await expect(warning).toHaveText(fill(UI_EN["matchDay.sheet.warn.crossesClosure"]!, { court: courts.a3.name, from: minToClock(seed.breakWindow.from), until: minToClock(seed.breakWindow.to) }));
+      // The sheet's heading carries the match's chip.
+      await expect(sheet.getByTestId("md-round-chip")).toHaveAttribute("data-round-code", `R${of(fx.calDee).round_no}`);
+      await sheet.getByRole("button", { name: UI_EN["matchDay.sheet.cancel"]! }).click();
+      await expect(sheet).toHaveCount(0);
+      const calledRows = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id = ${fx.calDee}`);
+      expect(calledRows[0]!.n, "cancelling the preview called nothing").toBe(0);
+    }
+
+    // The focus panel names the rounds too: the match on court (A1) and, under it, "Up next here" - a league match and the cup's
+    // semi-final, each with its own chip, in planned order.
+    await row(page, courts.a1.name).click();
+    await expect(focus.getByTestId("md-scoreboard")).toBeVisible();
+    const anaBenRound = await withDb((sql) => sql<{ round_no: number }[]>`select round_no from fixtures where id = ${fx.anaBen}`);
+    await expect(focus.getByTestId("md-round-chip").first()).toHaveAttribute("data-round-code", `R${anaBenRound[0]!.round_no}`);
+    const queue = focus.getByTestId("md-queue-row");
+    await expect(queue).toHaveCount(2);
+    await expect(queue.nth(0).getByTestId("md-round-chip")).toHaveAttribute("data-round-code", `R${of(fx.anaCal).round_no}`);
+    await expect(queue.nth(1).getByTestId("md-round-chip")).toHaveAttribute("data-round-code", "SF");
+    // A free court's own next match is a candidate "Next here", with its chip.
+    await row(page, courts.b1.name).click();
+    await expect(cand(fx.sf1)).toContainText(UI_EN["matchDay.candidate.where.here"]!);
+    await expect(cand(fx.sf1).getByTestId("md-round-chip")).toHaveAttribute("data-round-code", "SF");
+    await expectNoHorizontalScroll(page);
+
+    // ITEM 5: the venue filter. Both venues have a match today, so it opens on all of them.
+    const trigger = page.getByTestId("md-venue-trigger");
+    await expect(trigger).toBeVisible();
+    await expect(page.getByTestId("md-venue-summary")).toHaveText(UI_EN["matchDay.venue.triggerAll"]!);
+    await trigger.click();
+    const panel = page.getByTestId("md-venue-panel");
+    await expect(panel).toBeVisible();
+    await expect(page.getByTestId("md-venue-all")).toBeChecked();
+    await expect(page.getByTestId("md-venue-option")).toHaveCount(2);
+    // Hall A off: only Hall B's courts are listed, the summary names the one venue, and the address carries the choice.
+    await panel.locator(`[data-testid="md-venue-option"][data-venue-id="${seed.venues.a.id}"]`).uncheck();
+    await expect(page.getByTestId("md-venue-summary")).toHaveText(seed.venues.b.name);
+    await expect(page.getByTestId("md-venue-all")).not.toBeChecked();
+    await page.keyboard.press("Escape");
+    await expect(panel).toHaveCount(0);
+    await expect(trigger, "Esc hands focus back to the button").toBeFocused();
+    // Hall B alone: its queued court, then its one free court - a single free court is a row of its own, not a fold (a fold hides two).
+    expect(await courtIdsInList(page)).toEqual([courts.b1.id, courts.b2.id]);
+    await expect(page.getByTestId("md-court-fold")).toHaveCount(0);
+    await expect(row(page, courts.a1.name)).toHaveCount(0);
+    expect(new URL(page.url()).searchParams.get("venue")).toBe(seed.venues.b.id);
+    // It is DISPLAY ONLY: a court of the hidden venue is still named in the guard's words (A1 holds Ana, so Ana's other matches say so).
+    await expect(page.getByTestId("md-counts")).toBeVisible();
+    // A reload brings the same selection back from the address.
+    await page.reload({ waitUntil: "load" });
+    await expect(page.getByTestId("md-venue-summary")).toHaveText(seed.venues.b.name);
+    expect(await courtIdsInList(page)).toEqual([courts.b1.id, courts.b2.id]);
+    // "Show all venues" is back to everything, and the address says so.
+    await page.getByTestId("md-venue-trigger").click();
+    await page.getByTestId("md-venue-all").check();
+    await expect(page.getByTestId("md-venue-summary")).toHaveText(UI_EN["matchDay.venue.triggerAll"]!);
+    await page.keyboard.press("Escape");
+    expect(new URL(page.url()).searchParams.get("venue")).toBe("all");
+    expect(await courtIdsInList(page)).toEqual([courts.a1.id, courts.a2.id, courts.b1.id]);
+    await expectNoHorizontalScroll(page);
+
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await expect(page.getByTestId("md-list")).toBeVisible();
+    await expectNoHorizontalScroll(page);
+  });
+});
+
+test.describe("Match Day — E2 items 2, 3, 5, 7 (phone 320)", () => {
+  test.use({ viewport: { width: 320, height: 568 } });
+
+  test("the same list at 320: fold opens in place, closures and chips fit, the venue filter is a bottom sheet of 44px rows with a Done button; no sideways scroll", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(180_000);
+    const seed = await seedE2(request, "Phone");
+    const { courts } = seed;
+    await e2ListChecks(page, request, seed);
+
+    // The venue filter on a phone: a sheet from the bottom edge, a real checklist, every row a 44px target, Done to leave.
+    const trigger = page.getByTestId("md-venue-trigger");
+    await expect(trigger).toBeVisible();
+    const tBox = await trigger.boundingBox();
+    expect(tBox!.height, "the trigger is a 44px target on a phone").toBeGreaterThanOrEqual(44);
+    await trigger.click();
+    const panel = page.getByTestId("md-venue-panel");
+    await expect(panel).toBeVisible();
+    await expect(page.getByTestId("md-venue-backdrop")).toBeVisible();
+    const box = await panel.boundingBox();
+    expect(box!.y + box!.height, "the sheet sits on the bottom edge").toBeGreaterThanOrEqual(568 - 1);
+    expect(box!.x, "full width").toBeLessThanOrEqual(1);
+    for (const input of await panel.locator("input[type=checkbox]").all()) {
+      const rowBox = await input.locator("xpath=ancestor::label[1]").boundingBox();
+      expect(rowBox!.height, "each venue row is a 44px target").toBeGreaterThanOrEqual(44);
+    }
+    await panel.locator(`[data-testid="md-venue-option"][data-venue-id="${seed.venues.b.id}"]`).uncheck();
+    await expect(page.getByTestId("md-venue-summary")).toHaveText(seed.venues.a.name);
+    await panel.getByRole("button", { name: UI_EN["matchDay.venue.done"]! }).click();
+    await expect(panel).toHaveCount(0);
+    expect(await courtIdsInList(page)).toEqual([courts.a1.id, courts.a2.id, courts.a3.id, courts.a4.id]);
+    await expectNoHorizontalScroll(page);
+
+    // A court opens full-screen with its chip; back to the list.
+    await row(page, courts.a1.name).click();
+    await expect(page.getByTestId("md-focus").getByTestId("md-round-chip").first()).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    await page.getByTestId("md-back").click();
+    await expect(page.getByTestId("md-list")).toBeVisible();
+  });
+});
+
+/** A competition of one division and two courts in one venue: `n` players in a league, the first two playing on Court 1 (a real
+ *  core.start), the rest unplaced. Court 2 is free. */
+async function seedTiny(request: APIRequestContext, label: string, n: number): Promise<{ competitionId: string; court2: string }> {
+  const nonce = Math.random().toString(36).slice(2, 7);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Match Day E2 ${label} ${TAG}`, visibility: "public" });
+  if (comp.status >= 300 || !comp.data) throw new Error(`competition → ${comp.status} ${JSON.stringify(comp.error)}`);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data.id}/divisions`, "POST", { name: "E2 Tiny", sport_key: "generic", variant_key: "score" });
+  const ents = await addEntrantsViaApi(request, div.data!.id, Array.from({ length: n }, (_, i) => `P${i + 1} ${label} ${nonce}`));
+  if (ents.status >= 300 || ents.ids.length !== n) throw new Error(`entrants → ${ents.status}`);
+  await createStageAndGenerate(request, div.data!.id);
+  const started = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+  expect(started.status, `division start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+  const { courts } = await seedVenueWithCourts(request, [`E2T1 ${nonce}`, `E2T2 ${nonce}`]);
+  const settings = await apiJson(request, `/api/v1/divisions/${div.data!.id}/schedule-settings`, "PUT", { tz: "UTC", config: { matchMinutes: 30, courts: courts.map((c) => c.id) } });
+  expect(settings.status, `schedule settings: ${JSON.stringify(settings.error)}`).toBeLessThan(300);
+  const [p1, p2] = ents.ids as [string, string];
+  const first = await withDb((sql) => sql<{ id: string }[]>`
+    select id from fixtures where division_id = ${div.data!.id}
+       and ((home_entrant_id = ${p1} and away_entrant_id = ${p2}) or (home_entrant_id = ${p2} and away_entrant_id = ${p1}))`);
+  const now = Date.now();
+  const dayStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
+  const at = new Date(Math.min(dayStart + 86_400_000 - 60_000, Math.max(dayStart + 60_000, now - 10 * 60_000))).toISOString();
+  await withDb((sql) => sql`update fixtures set court_id = ${courts[0]!.id}, scheduled_at = ${at} where id = ${first[0]!.id}`);
+  await startFixture(request, first[0]!.id);
+  return { competitionId: comp.data.id, court2: courts[1]!.name };
+}
+
+test.describe("Match Day — E2 item 4: two different 'no match' messages", () => {
+  test("nothing waiting says so; matches waiting but all blocked say that, with the count and each reason - at 1280 and 320", async ({ page, request }) => {
+    test.setTimeout(120_000);
+    // Two players, one match, in play: Court 2 has nothing to offer at all.
+    const none = await seedTiny(request, "None", 2);
+    await page.goto(await competitionPath(request, none.competitionId, "/match-day"), { waitUntil: "load" });
+    await row(page, none.court2).click();
+    const panel = page.getByTestId("md-free-panel");
+    await expect(panel).toContainText(UI_EN["matchDay.free.nothingWaiting"]!);
+    await expect(panel).not.toContainText("can't start yet");
+    await expect(page.getByTestId("md-focus").getByTestId("md-candidate")).toHaveCount(0);
+
+    // Three players, the first two playing: the other two matches are waiting, and both involve a player on court.
+    const blocked = await seedTiny(request, "Blocked", 3);
+    for (const width of [1280, 320]) {
+      await page.setViewportSize({ width, height: width === 320 ? 568 : 900 });
+      await page.goto(await competitionPath(request, blocked.competitionId, "/match-day"), { waitUntil: "load" });
+      await row(page, blocked.court2).click();
+      const focus = page.getByTestId("md-focus");
+      const rows = focus.getByTestId("md-candidate");
+      await expect(rows).toHaveCount(2);
+      for (const r of await rows.all()) await expect(r).toHaveAttribute("data-blocked", "true");
+      const free = page.getByTestId("md-free-panel");
+      await expect(free).toContainText(fill(UI_EN["matchDay.free.allBlocked.other"]!, { count: 2 }));
+      await expect(free).not.toContainText(UI_EN["matchDay.free.nothingWaiting"]!);
+      await expect(free).not.toContainText(/could start here now/);
+      await expectNoHorizontalScroll(page);
+    }
   });
 });
