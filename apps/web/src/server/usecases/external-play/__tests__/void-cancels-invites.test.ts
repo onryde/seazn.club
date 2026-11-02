@@ -99,6 +99,7 @@ import { startDivision } from "../../schedule";
 import { scoreEvent } from "../../scoring";
 import { createStages, deleteStage, generateStageFixtures, rebuildStageFixtures, replaceStages, unpairSwissRound } from "../../stages";
 import { withdrawEntrantCascade } from "../../withdrawal";
+import { finishSwissNow } from "../../swiss-rounds-admin";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -926,5 +927,44 @@ describe.skipIf(!HAS_DB)("the paths that would delete an opened, invited round's
     await deleteDivision(s.owner, s.divisionId);
     const [gone] = await sql<{ n: number }[]>`select count(*)::int as n from divisions where id = ${s.divisionId}`;
     expect(gone!.n, "archived 31 days: the division is purged").toBe(0);
+  });
+});
+
+// W3 T13 Fix round 1 (review m2): "Finish the Swiss now" deletes the rounds past k, and its seat-clear
+// (`clearSwissFixtureSeats`) is what ends a dropped board's queued invites — the outbox holds text seat refs, never a foreign
+// key, so the delete alone would leave them to be sent. Through the REAL open, Pair, scoring and `finishSwissNow`.
+describe.skipIf(!HAS_DB)("Finish the Swiss now and a round's queued invites (W3 T13)", () => {
+  it("an opened round is a start, so Finish keeps it and ends nothing; a queued invite on a round Finish drops ends round_voided", async () => {
+    const s = await openedSwiss(4); // 4 players: 2 boards a round, 3 rounds; round 1 opened, its invites queued
+    const r1 = await sql<{ id: string; home_entrant_id: string }[]>`
+      select id, home_entrant_id from fixtures where stage_id = ${s.stageId} and round_no = 1 and away_entrant_id is not null order by seq_in_round`;
+    for (const b of r1) {
+      await scoreEvent(s.owner, b.id, { expected_seq: 0, type: "core.start", payload: {} });
+      await scoreEvent(s.owner, b.id, { expected_seq: 1, type: "boardgame.result", payload: { winner: b.home_entrant_id, method: "resign" } });
+    }
+    await generateStageFixtures(s.owner, s.stageId); // Pair next: round 2
+    const r2 = (await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${s.stageId} and round_no = 2 and away_entrant_id is not null order by seq_in_round`).map((f) => f.id);
+    expect(r2, "premise: round 2 is paired").toHaveLength(2);
+    expect(await openRound({ stageId: s.stageId, roundNo: 2, actorUserId: s.ownerUserId }), "premise: the real open invited round 2").toMatchObject({ opened: true });
+    const refs = new Set(r2.flatMap((id) => [chessSeatRef(id, "white"), chessSeatRef(id, "black")]));
+    const round2Rows = async () => (await rowsOf(s.orgId)).filter((r) => refs.has(r.ref_id));
+    const queued = await round2Rows();
+    expect(queued.length, "premise: round 2's invites are queued").toBeGreaterThanOrEqual(4);
+    expect(queued.map((r) => r.status), "premise: every one queued").toEqual(queued.map(() => "queued"));
+
+    // T9: a bridge row is a start, so the opened round stays — Finish names its boards and ends nothing.
+    await expect(finishSwissNow(s.owner, s.stageId)).rejects.toMatchObject({ status: 409, code: "SWISS_FINISH_ROUND_UNDECIDED" });
+    expect((await round2Rows()).map((r) => `${r.id}|${r.status}`), "refused: no invite moved").toEqual(queued.map((r) => `${r.id}|${r.status}`));
+
+    // Planted: the bridge rows gone while the invites stand — the one shape in which Finish meets a queued invite on a board
+    // it drops (nothing ties the two rows together but the seat ref).
+    await sql`delete from fixture_external_play where fixture_id = any(${r2}::uuid[])`;
+    expect(await finishSwissNow(s.owner, s.stageId)).toMatchObject({ finished_after: 1 });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where id = any(${r2}::uuid[])`;
+    expect(n, "round 2's boards are gone").toBe(0);
+    const after = await round2Rows();
+    expect(after.map((r) => r.id), "the same rows, none added and none lost").toEqual(queued.map((r) => r.id));
+    expect(expectVoided(after, ROUND_VOIDED), "anti-vacuity: every round-2 invite was checked").toBe(queued.length);
   });
 });

@@ -672,8 +672,8 @@ describe("StageRail — the rounds chip and Add a round (W3 T12 Phase 2)", () =>
       addRound: { canAddRound: true, refusal: null, field: 6, hardMax: 5 },
       // W3 T13: round 2 complete once started (the Finish predicate's k), nothing before.
       finish: started
-        ? { canFinish: true, refusal: null, finishedAfter: 2 }
-        : { canFinish: false, refusal: "nothing_played" as const, finishedAfter: 0 },
+        ? { canFinish: true, refusal: null, finishedAfter: 2, inProgress: false }
+        : { canFinish: false, refusal: "nothing_played" as const, finishedAfter: 0, inProgress: false },
     },
     fixtures: [],
     onSave: async () => null,

@@ -889,7 +889,7 @@ describe.runIf(HAS_DB)("listSwissRoundControls (the desk's view of the rounds lo
         field: 5,
         addRound: { canAddRound: true, refusal: null, field: 5, hardMax: HARD_MAX(5) },
         // T13: nothing is played, so there is nothing to finish with (the predicate's k = 0).
-        finish: { canFinish: false, refusal: "nothing_played", finishedAfter: 0 },
+        finish: { canFinish: false, refusal: "nothing_played", finishedAfter: 0, inProgress: false },
       });
       await startDivision(rig.auth, rig.divisionId);
       await pair(rig);

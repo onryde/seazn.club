@@ -22,7 +22,14 @@ import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import { swissRoundsWarnNotice, type SwissRoundsNotice } from "@/lib/swiss-rounds";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
-import { swissFinishConfirm, swissFinishPlanOf, type SwissFinishPlan } from "@/lib/swiss-finish-plan";
+import {
+  swissFinishConfirm,
+  swissFinishedNotice,
+  swissFinishNotReadyText,
+  swissFinishPlanOf,
+  type SwissFinishAnswer,
+  type SwissFinishPlan,
+} from "@/lib/swiss-finish-plan";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import type { HoldState } from "@/server/relay/domain/session";
@@ -696,6 +703,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     stageId: string,
     write: () => Promise<string>,
     report: boolean,
+    refusalOf: (err: unknown) => SwissRoundsRefusal = (err) => swissStageRefusal(err, msg, msgPlural, locale),
   ): Promise<SwissRoundsRefusal | null> {
     setError(null);
     setPaywallFeature(null);
@@ -707,10 +715,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       router.refresh();
       return null;
     } catch (err) {
-      const refusal = swissStageRefusal(err, msg, msgPlural, locale);
+      const refusal = refusalOf(err);
       if (report) setError(refusal.text);
       const plan = report ? swissFinishPlanOf(refusal.extra) : null;
       setFinishOffer(plan ? { stageId, plan, text: refusal.text } : null);
+      // T13 Fix round 1 (review I1): on a phone the line is said under the Stage-tools sheet; close it so the refusal and
+      // its recovery show. (`open` drives the phone sheet only; at md and up the rail is inline either way.)
+      if (report) setOpenRailFor(null);
       if (err instanceof ApiV1Error) router.refresh();
       return refusal;
     } finally {
@@ -757,14 +768,12 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     return swissStageWrite(
       stageId,
       async () => {
-        const out = await apiV1<{ finished_after: number; slots_freed: number }>(`/api/v1/stages/${stageId}/swiss/finish`, {
-          method: "POST",
-          json: {},
-        });
-        const finished = msg("schedule.notice.swissFinished", { round: out.finished_after });
-        return out.slots_freed > 0 ? `${finished} ${msgPlural("schedule.notice.roundsSlotsFreed", out.slots_freed)}` : finished;
+        const out = await apiV1<SwissFinishAnswer>(`/api/v1/stages/${stageId}/swiss/finish`, { method: "POST", json: {} });
+        // Fix round 1 (review m5): `completed: false` is not "finished" — said as such.
+        return swissFinishedNotice(out, msg, msgPlural);
       },
       true,
+      (err) => swissFinishRefusal(err, msg, msgPlural, locale),
     );
   };
 
@@ -851,6 +860,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           setError(text);
           const plan = swissFinishPlanOf(err.extra);
           setFinishOffer(plan ? { stageId, plan, text } : null);
+          // T13 Fix round 1 (review I1): Pair next is pressed inside the phone's Stage-tools sheet, and this line — with the
+          // Finish it may offer — is said outside it. Close the sheet so the refusal and its recovery are what shows.
+          setOpenRailFor(null);
         } else {
           // The stage list lets an early Generate on a waiting stage name
           // both stages (generatePreconditionMessage).
@@ -2239,6 +2251,14 @@ export function swissStageRefusal(err: unknown, msg: Msg, msgPlural: MsgPlural, 
       ? msg("stage.error.scheduleFrozen")
       : classifyActError(err, msg, locale).text;
   return { code: err.code, extra: err.extra, text };
+}
+
+/** W3 T13 Fix round 1 (review I2): a refused Finish, as `swissStageRefusal` says it — except the R3 backstop
+ *  (STAGE_NOT_READY: the stage could not complete on rounds 1..k), whose wire sentence is English, said here. */
+export function swissFinishRefusal(err: unknown, msg: Msg, msgPlural: MsgPlural, locale: Locale): SwissRoundsRefusal {
+  const refusal = swissStageRefusal(err, msg, msgPlural, locale);
+  const notReady = swissFinishNotReadyText(refusal.code, msg);
+  return notReady === null ? refusal : { ...refusal, text: notReady };
 }
 
 /** W2c batch-3 M1: a rule-lock refusal (`FIXTURE_HAS_OWN_FORMAT` from a rebuild, an Undo or a Swiss reshape, and the

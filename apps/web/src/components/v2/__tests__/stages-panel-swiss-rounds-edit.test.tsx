@@ -71,7 +71,7 @@ const control = (over: Partial<SwissRoundControl> = {}): SwissRoundControl => ({
   chess: true,
   field: 6,
   addRound: { canAddRound: true, refusal: null, field: 6, hardMax: 5 },
-  finish: { canFinish: false, refusal: "nothing_played", finishedAfter: 0 },
+  finish: { canFinish: false, refusal: "nothing_played", finishedAfter: 0, inProgress: false },
   ...over,
 });
 const base = {
@@ -401,6 +401,55 @@ describe.each(LOCALES)("StagesPanel — Swiss rounds and chess colours (X-SW-17,
     await flush();
     expect(errors(withheld.tree()), "premise: refused").toHaveLength(1);
     expect(finishBtn(withheld.tree()), "canFinish false: no button that would only be refused").toBeUndefined();
+  });
+
+  it("W3 T13 Fix round 1 (review I1): a Swiss refusal said in the panel closes the phone's Stage-tools sheet, so its line and Finish show", async () => {
+    const isOpen = (island: Awaited<ReturnType<typeof mount>>) => propsOf(railOf(island.tree(), "s1")).open as boolean;
+    const openSheet = async (island: Awaited<ReturnType<typeof mount>>) => {
+      (propsOf(railOf(island.tree(), "s1")).onToggleOpen as (id: string) => void)("s1");
+      await flush();
+      expect(isOpen(island), "premise: the sheet is open").toBe(true);
+    };
+    // Pair next pressed inside the sheet, refused with Finish offered.
+    const paired = await mount({ swissRoundControls: { s1: control({ started: true, rounds: 5 }) } }, async () => {
+      throw new ApiV1Error("server English", 409, "SWISS_ROUNDS_ABOVE_MAX", { rounds: 5, field: 4, hardMax: 3, canFinish: true, finish: { after: 3, rounds: 5 } });
+    });
+    await openSheet(paired);
+    await (propsOf(railOf(paired.tree(), "s1")).onAct as (id: string, a: string) => Promise<boolean>)("s1", "generate");
+    await flush();
+    expect(paired.tree().some((e) => propsOf(e)["data-testid"] === "schedule-finish-swiss"), "premise: Finish offered").toBe(true);
+    expect(isOpen(paired), "the sheet closed over the refusal").toBe(false);
+    // Add a round pressed from More (the panel says its refusal): the same.
+    const added = await mount({ swissRoundControls: { s1: control({ started: true, rounds: 3 }) } }, async () => {
+      throw new ApiV1Error("server English", 409, "SWISS_ROUNDS_ABOVE_MAX", { rounds: 4, field: 4, hardMax: 3, canFinish: true, finish: { after: 3, rounds: 3 } });
+    });
+    await openSheet(added);
+    await (propsOf(railOf(added.tree(), "s1")).swissRounds as SwissRoundsRail).onAddRound("s1", "more");
+    await flush();
+    expect(errors(added.tree()), "premise: refused in the panel").toHaveLength(1);
+    expect(isOpen(added), "the sheet closed over the refusal").toBe(false);
+  });
+
+  it("W3 T13 Fix round 1: a Finish that did not complete the stage says so (m5); the backstop's STAGE_NOT_READY is said in this locale (I2)", async () => {
+    const open = await mount({ swissRoundControls: { s1: control({ started: true, rounds: 5 }) } }, async () => ({
+      completed: false,
+      events: [],
+      finished_after: 3,
+      shells_removed: 4,
+      slots_freed: 0,
+    }));
+    confirmMock.mockResolvedValueOnce(true);
+    await (propsOf(railOf(open.tree(), "s1")).swissRounds as SwissRoundsRail).onFinish("s1", { after: 3, rounds: 5 });
+    await flush();
+    expect(notices(open.tree())).toEqual([fill(D["schedule.notice.swissFinishedOpen"]!, { round: 3 })]);
+
+    const backstop = await mount({ swissRoundControls: { s1: control({ started: true, rounds: 5 }) } }, async () => {
+      throw new ApiV1Error("swiss: rounds 1..3 do not complete the stage", 422, "STAGE_NOT_READY", { stageId: "s1" });
+    });
+    confirmMock.mockResolvedValueOnce(true);
+    await (propsOf(railOf(backstop.tree(), "s1")).swissRounds as SwissRoundsRail).onFinish("s1", { after: 3, rounds: 5 });
+    await flush();
+    expect(errors(backstop.tree())).toEqual([D["stage.finish.notReady"]]);
   });
 
   it("W3 T13 Add a round at the hard maximum from More, with canFinish: Finish under the panel's line; the next write's line drops it", async () => {

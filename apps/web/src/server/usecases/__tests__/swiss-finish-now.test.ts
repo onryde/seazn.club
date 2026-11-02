@@ -33,8 +33,8 @@ import { createEntrants } from "../entrants";
 import { undoDivision } from "../history";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { confirmSeedProposal, createStages, generateStageFixtures } from "../stages";
-import { addSwissRound, finishSwissNow, listSwissRoundControls, patchSwissStage } from "../swiss-rounds-admin";
+import { completeStage, confirmSeedProposal, createStages, generateStageFixtures, type SwissExistingFixture } from "../stages";
+import { addSwissRound, finishSwissNow, judgeSwissFinish, listSwissRoundControls, patchSwissStage } from "../swiss-rounds-admin";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
 
@@ -477,21 +477,65 @@ describe.runIf(HAS_DB)("X-SW-26 Finish in sequence", () => {
       );
     }, 300_000);
 
-    it(`finish after a withdrawal: the withdrawn entrant is not seeded; the cut is the table read before (${s.sport})`, async () => {
+    it(`finish after the LEADER withdraws: the cut is the table read before less the departed — his seat goes dead, not backfilled (the departed-qualifier rule; open question for T15) (${s.sport})`, async () => {
+      // Fix round 1 (review m1): the last-placed entrant's withdrawal proved nothing (below the cut either way). The leader
+      // leaves between rounds 2 and 3. What Finish seeds is the table read BEFORE it, through the house's departed-qualifier
+      // rule (F14 / W2b dead seat): the withdrawn leader keeps his place in the ranked table, and the cut drops his seat
+      // without moving rank 5 up — 3 qualifiers for a knockout of 4. That rule is the CUT's, not Finish's: the plain
+      // completion below ("OPEN QUESTION … plain completion") does the same. Whether a departed qualifier should be
+      // backfilled is T15's question (withdrawal and disqualification cascades); this pins today's answer.
       const rig = await finishRig(s, 6, 5, { q: 4 });
       await playThrough(rig, 2);
-      // The last-placed entrant leaves between rounds (the field shrinks to 5: rounds 3–5 reshape at their Pair).
-      const last = (await standingsNow(rig)).at(-1)!.entrantId;
-      await withdrawEntrantCascade(rig.auth, last);
+      const leader = (await standingsNow(rig))[0]!.entrantId;
+      await withdrawEntrantCascade(rig.auth, leader);
       const table = await standingsNow(rig);
+      expect(table[0]!.entrantId, "open question (T15): a withdrawn leader keeps his place in the ranked table").toBe(leader);
       const top = table.slice(0, 4).map((r) => r.entrantId);
-      expect(top, "premise: the withdrawn entrant is below the cut").not.toContain(last);
       const out = await finishSwissNow(rig.auth, rig.stageId);
       expect(out).toMatchObject({ finished_after: 2, completed: true });
       const proposal = await draftProposal(rig.koStageId!);
-      const qualified = [...proposal.computed.qualifiers].sort((a, b) => a.rank - b.rank).map((q) => q.entrantId);
-      expect(qualified).toEqual(top);
-      expect(qualified).not.toContain(last);
+      const qualifiers = [...proposal.computed.qualifiers].sort((a, b) => a.rank - b.rank);
+      expect(qualifiers.map((q) => q.entrantId), "the table's top 4 less the departed — no backfill").toEqual(top.filter((id) => id !== leader));
+      expect(qualifiers.map((q) => q.rank), "ranks 2–4 qualify; rank 1's seat is dead").toEqual([2, 3, 4]);
+    }, 300_000);
+
+    it(`a scorer's take-back of an earlier round's result refuses Finish naming that board (the desk agrees); decided again, Finish goes through (${s.sport})`, async () => {
+      // Review I2: the predicate's second arm is reachable in production. Rounds 1–2 decided, then a scorer voids the
+      // deciding event of a round-1 board (`core.void`): that board is open again while round 2 stays decided, so k is
+      // still 2 — and standings after round 2 cannot become final with a round-1 result missing. Without the arm the desk
+      // offered Finish and Finish answered the R3 backstop's STAGE_NOT_READY.
+      const rig = await finishRig(s, 4, 3);
+      await playThrough(rig, 2);
+      const r1 = boardsOf(await rowsOf(rig.stageId), 1)[0]!;
+      const [last] = await sql<{ id: string; seq: number }[]>`
+        select id, seq from score_events where fixture_id = ${r1.id} order by seq desc limit 1`;
+      await scoreEvent(rig.auth, r1.id, { expected_seq: last!.seq, type: "core.void", payload: { event_id: last!.id } });
+      const reopened = boardsOf(await rowsOf(rig.stageId), 1).find((f) => f.id === r1.id)!;
+      expect(["decided", "finalized", "forfeited"], "premise: the take-back reopened the board").not.toContain(reopened.status);
+      expect(boardsOf(await rowsOf(rig.stageId), 2).map((f) => f.status), "premise: round 2 is still decided").toEqual(["decided", "decided"]);
+
+      const desk = (await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.finish;
+      expect(desk, "the desk does not offer it").toMatchObject({ canFinish: false, refusal: "round_undecided", finishedAfter: 2 });
+      const rows = await rowsOf(rig.stageId);
+      const ledger = await ledgerState(rig.divisionId);
+      await expect(finishSwissNow(rig.auth, rig.stageId)).rejects.toMatchObject({
+        ...refusal("SWISS_FINISH_ROUND_UNDECIDED"),
+        extra: { canFinish: false, inProgress: false, boards: [{ fixtureId: r1.id, round: 1, board: r1.seq_in_round }] },
+      });
+      expect(await rowsOf(rig.stageId), "nothing written: rows").toEqual(rows);
+      expect(await ledgerState(rig.divisionId), "nothing written: ledger").toEqual(ledger);
+      expect(await stageState(rig.stageId)).toEqual({ status: "active", rounds: 3 });
+
+      // The positive pair: the scorer decides it again, and the same Finish goes through after round 2.
+      const [{ tip }] = await sql<{ tip: number }[]>`select max(seq)::int as tip from score_events where fixture_id = ${r1.id}`;
+      if (rig.sport.sport === "boardgame") {
+        await scoreEvent(rig.auth, r1.id, { expected_seq: tip, type: "boardgame.result", payload: { winner: r1.home_entrant_id, method: "resign" } });
+      } else {
+        await scoreEvent(rig.auth, r1.id, { expected_seq: tip, type: "badminton.game.summary", payload: { home: 21, away: 12 } });
+      }
+      expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.finish).toMatchObject({ canFinish: true, finishedAfter: 2 });
+      expect(await finishSwissNow(rig.auth, rig.stageId)).toMatchObject({ finished_after: 2, completed: true });
+      expect(roundsIn(await rowsOf(rig.stageId))).toEqual([1, 2]);
     }, 300_000);
 
     it(`finish after Add a round: the added round goes with the finish; two barrier rows (${s.sport})`, async () => {
@@ -605,22 +649,89 @@ describe.runIf(HAS_DB)("finishSwissNow guards", () => {
     expect(await rowsOf(rig.stageId)).toEqual(rows);
   });
 
-  it("R3 backstop: a finish the stage could not complete on is refused before anything commits (a planted vacant board in round k); nothing written", async () => {
-    // Planted: a played round never holds a vacant board (every Pair seats its whole round). Finish reads the completion
-    // predicate (`completeStageIfReady`'s own) inside its transaction, so it never commits rounds := k on a stage that
-    // `completeStage` would then leave open — the half-finished Swiss reviewer flag R3 names.
+  it("a vacant row in a round ≤ k is part of the verdict (review m4): refused ROUND_UNDECIDED naming it, the desk agreeing; nothing written", async () => {
+    // Planted: a played round never holds a vacant board (every Pair seats its whole round). The completion predicate
+    // (`isTableStageComplete`) counts it as unsettled, so the Finish predicate does too — the backstop stays a backstop,
+    // never a second authority the desk cannot read.
     const rig = await finishRig(BADMINTON, 4, 3);
     await playThrough(rig, 1);
-    await sql`
+    const [vacant] = await sql<{ id: string }[]>`
       insert into fixtures (stage_id, division_id, round_no, seq_in_round, ext_key, status)
-      values (${rig.stageId}, ${rig.divisionId}, 1, 9, 'sw-r1-b9', 'scheduled')`;
+      values (${rig.stageId}, ${rig.divisionId}, 1, 9, 'sw-r1-b9', 'scheduled') returning id`;
     const rows = await rowsOf(rig.stageId);
     const ledger = await ledgerState(rig.divisionId);
+    expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.finish).toMatchObject({ canFinish: false, refusal: "round_undecided" });
+    await expect(finishSwissNow(rig.auth, rig.stageId)).rejects.toMatchObject({
+      ...refusal("SWISS_FINISH_ROUND_UNDECIDED"),
+      extra: { inProgress: false, boards: [{ fixtureId: vacant!.id, round: 1, board: 9 }] },
+    });
+    expect(await rowsOf(rig.stageId)).toEqual(rows);
+    expect(await ledgerState(rig.divisionId)).toEqual(ledger);
+    expect(await stageState(rig.stageId)).toEqual({ status: "active", rounds: 3 });
+  });
+
+  it("R3 backstop: a finish the stage could not complete on is refused before anything commits (a planted round ≤ k with no rows at all); nothing written", async () => {
+    // Planted: Start mints every round's shells and Finish deletes only past k, so a round ≤ k is never empty. A round
+    // with no rows has no row for the Finish predicate to read; the completion predicate (`completeStageIfReady`'s own,
+    // read inside the finish's transaction) refuses it, so rounds := k is never committed on a stage `completeStage`
+    // would then leave open — the half-finished Swiss reviewer flag R3 names.
+    const rig = await finishRig(BADMINTON, 4, 3);
+    await playThrough(rig, 2);
+    await sql`delete from fixtures where stage_id = ${rig.stageId} and round_no = 1`;
+    const rows = await rowsOf(rig.stageId);
+    const ledger = await ledgerState(rig.divisionId);
+    expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.finish, "premise: the predicate reads no row to refuse").toMatchObject({
+      canFinish: true,
+      finishedAfter: 2,
+    });
     await expect(finishSwissNow(rig.auth, rig.stageId)).rejects.toMatchObject({ code: "STAGE_NOT_READY" });
     expect(await rowsOf(rig.stageId)).toEqual(rows);
     expect(await ledgerState(rig.divisionId)).toEqual(ledger);
     expect(await stageState(rig.stageId)).toEqual({ status: "active", rounds: 3 });
   });
+
+  it("a withdrawal with the next round paired: the walkover is a start (T9), so that round stays — refused naming its other boards; played, Finish goes through", async () => {
+    // Review m1 / probe P2. Rounds 1–2 decided, round 3 paired, then a player withdraws: the cascade walks their round-3
+    // board over (forfeited), and a decided board is T9's start. Round 3 cannot be unpaired, so the organiser decides it.
+    const rig = await finishRig(BADMINTON, 6, 3, { q: 4 });
+    await playThrough(rig, 2);
+    await pair(rig);
+    const leaver = (await standingsNow(rig))[0]!.entrantId;
+    await withdrawEntrantCascade(rig.auth, leaver);
+    const r3 = boardsOf(await rowsOf(rig.stageId), 3);
+    const walked = r3.filter((f) => f.home_entrant_id === leaver || f.away_entrant_id === leaver);
+    expect(walked.map((f) => f.status), "premise: the leaver's board walked over").toEqual(["forfeited"]);
+    const open = r3.filter((f) => !walked.includes(f));
+    expect(open.length, "premise: the round's other boards are open").toBe(2);
+    const rows = await rowsOf(rig.stageId);
+    await expect(finishSwissNow(rig.auth, rig.stageId)).rejects.toMatchObject({
+      ...refusal("SWISS_FINISH_ROUND_UNDECIDED"),
+      extra: { inProgress: true, boards: open.map((f) => ({ fixtureId: f.id, round: 3, board: f.seq_in_round })) },
+    });
+    expect(await rowsOf(rig.stageId), "nothing written").toEqual(rows);
+    for (const f of open) await homeWins(rig, f);
+    expect(await finishSwissNow(rig.auth, rig.stageId)).toMatchObject({ finished_after: 3, shells_removed: 0, completed: true });
+  }, 300_000);
+
+  it("OPEN QUESTION (T15) control — a plain completion, no Finish: a withdrawn leader keeps his place and the cut drops his seat without backfill, as Finish's does", async () => {
+    // Review m1, first step: is the 3-qualifier cut Finish's or the cut's? Reproduced without Finish — the same rule.
+    // Badminton only: the cut reads the ranked table, never the sport.
+    const rig = await finishRig(BADMINTON, 6, 3, { q: 4 });
+    await playThrough(rig, 2);
+    const leader = (await standingsNow(rig))[0]!.entrantId;
+    await withdrawEntrantCascade(rig.auth, leader);
+    await pair(rig);
+    for (const f of boardsOf(await rowsOf(rig.stageId), 3).filter((x) => x.home_entrant_id && x.away_entrant_id && x.status === "scheduled")) {
+      await homeWins(rig, f);
+    }
+    const table = await standingsNow(rig);
+    const top = table.slice(0, 4).map((r) => r.entrantId);
+    expect(top, "premise: the withdrawn leader is still above the cut after round 3").toContain(leader);
+    expect(await completeStage(rig.auth, rig.stageId, { publish: false })).toMatchObject({ completed: true });
+    const qualifiers = [...(await draftProposal(rig.koStageId!)).computed.qualifiers].sort((a, b) => a.rank - b.rank);
+    expect(qualifiers.map((q) => q.entrantId), "the top 4 less the departed — no backfill").toEqual(top.filter((id) => id !== leader));
+    expect(qualifiers).toHaveLength(3);
+  }, 300_000);
 
   it("a later stage under way is SWISS_OVER (422) — its knockout has started (ruling 250's definition, T9's)", async () => {
     const rig = await finishRig(BADMINTON, 4, 2);
@@ -800,4 +911,91 @@ describe.runIf(HAS_DB)("C11 for Finish: an offered Finish never leads to a Finis
     expect(err, "round 4 is refused").toMatchObject({ status: 409, code: "SWISS_ROUNDS_ABOVE_MAX", extra: { canFinish: true } });
     expect(await finishSwissNow(rig.auth, rig.stageId)).toMatchObject({ finished_after: 3, completed: true });
   }, 300_000);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The pure verdict (review I2): `judgeSwissFinish` over rows and a started set — no database, so each arm has a cheap
+// killer. Expected values are the rule's own words (k = the latest round whose seated boards are all decided; refused
+// over → nothing played → a board kept undecided), written as literals per case, never read off the function.
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("judgeSwissFinish — the Finish verdict over rows (pure)", () => {
+  type Spec = { round: number; board: number; status?: string; seated?: boolean; bye?: boolean; started?: boolean };
+  const fixture = (r: Spec): SwissExistingFixture => ({
+    id: `r${r.round}b${r.board}`,
+    ext_key: r.bye ? `sw-r${r.round}-bye` : `sw-r${r.round}-b${r.board}`,
+    round_no: r.round,
+    seq_in_round: r.board,
+    status: r.status ?? "scheduled",
+    home_entrant_id: r.seated === false ? null : `h${r.round}${r.board}`,
+    away_entrant_id: r.seated === false ? null : `a${r.round}${r.board}`,
+    outcome: null,
+    scheduled_at: null,
+    court_id: null,
+    venue_id: null,
+    schedule_locked: false,
+  });
+  const decided = (round: number, board: number): Spec => ({ round, board, status: "decided", started: true });
+  const shell = (round: number, board: number): Spec => ({ round, board, seated: false });
+  const judge = (specs: Spec[], over = false, rounds = 3) =>
+    judgeSwissFinish(specs.map(fixture), new Set(specs.filter((r) => r.started).map((r) => `r${r.round}b${r.board}`)), over, rounds);
+  const named = (...ids: [number, number][]) => ids.map(([round, board]) => ({ fixtureId: `r${round}b${board}`, round, board }));
+
+  const cases: { name: string; rows: Spec[]; over?: boolean; expected: Partial<ReturnType<typeof judgeSwissFinish>> }[] = [
+    {
+      name: "a take-back reopened a round-1 board after round 2 was decided (I2): k stays 2, refused naming it, not in progress",
+      rows: [{ round: 1, board: 1, status: "in_play", started: true }, decided(1, 2), decided(2, 1), decided(2, 2), shell(3, 1), shell(3, 2)],
+      expected: { finishedAfter: 2, refusal: "round_undecided", canFinish: false, inProgress: false, boards: named([1, 1]) },
+    },
+    {
+      name: "…the positive pair: decided again, Finish after round 2",
+      rows: [decided(1, 1), decided(1, 2), decided(2, 1), decided(2, 2), shell(3, 1), shell(3, 2)],
+      expected: { finishedAfter: 2, refusal: null, canFinish: true, inProgress: false, boards: [] },
+    },
+    {
+      name: "a vacant row in round 1 ≤ k (m4): refused naming it",
+      rows: [decided(1, 1), decided(1, 2), shell(1, 3), shell(2, 1), shell(2, 2)],
+      expected: { finishedAfter: 1, refusal: "round_undecided", canFinish: false, inProgress: false, boards: named([1, 3]) },
+    },
+    {
+      name: "a started board past k: that round stays — refused naming its undecided boards, in progress",
+      rows: [decided(1, 1), decided(1, 2), { round: 2, board: 1, status: "in_play", started: true }, { round: 2, board: 2 }, shell(3, 1)],
+      expected: { finishedAfter: 1, refusal: "round_undecided", canFinish: false, inProgress: true, boards: named([2, 1], [2, 2]) },
+    },
+    {
+      name: "both: a reopened round-1 board and a started round 3 — every board kept undecided is named, in progress",
+      rows: [{ round: 1, board: 1, status: "in_play", started: true }, decided(1, 2), decided(2, 1), decided(2, 2), { round: 3, board: 1, status: "in_play", started: true }, { round: 3, board: 2 }],
+      expected: { finishedAfter: 2, refusal: "round_undecided", canFinish: false, inProgress: true, boards: named([1, 1], [3, 1], [3, 2]) },
+    },
+    {
+      name: "a paired round past k that nothing has started is dropped: Finish after round 1",
+      rows: [decided(1, 1), decided(1, 2), { round: 2, board: 1 }, { round: 2, board: 2 }, { round: 2, board: 3, bye: true, seated: false }],
+      expected: { finishedAfter: 1, refusal: null, canFinish: true, inProgress: false, boards: [] },
+    },
+    {
+      name: "no round complete: nothing played",
+      rows: [{ round: 1, board: 1, status: "in_play", started: true }, { round: 1, board: 2 }, shell(2, 1)],
+      expected: { finishedAfter: 0, refusal: "nothing_played", canFinish: false, boards: [] },
+    },
+    {
+      name: "over outranks everything",
+      rows: [decided(1, 1), decided(1, 2)],
+      over: true,
+      expected: { refusal: "over", canFinish: false },
+    },
+  ];
+
+  it("each case answers as the rule says, and both answers are reached", () => {
+    const answers = new Set<boolean>();
+    let checked = 0;
+    for (const c of cases) {
+      const got = judge(c.rows, c.over);
+      expect(got, c.name).toMatchObject(c.expected);
+      answers.add(got.canFinish);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every case was judged").toBe(cases.length);
+    expect(checked).toBeGreaterThanOrEqual(8);
+    expect([...answers].sort(), "anti-vacuity: both canFinish answers reached").toEqual([false, true]);
+  });
 });

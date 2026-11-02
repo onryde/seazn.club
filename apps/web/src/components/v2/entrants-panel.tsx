@@ -36,7 +36,14 @@ import {
 import { requiresDob, requiresGender, type EligibilityIssue } from "@/lib/registration-rules";
 import { EligibilityOverrideDialog } from "@/components/v2/eligibility-override-dialog";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
-import { swissFinishConfirm, swissFinishPlanOf, type SwissFinishPlan } from "@/lib/swiss-finish-plan";
+import {
+  swissFinishConfirm,
+  swissFinishedNotice,
+  swissFinishNotReadyText,
+  swissFinishPlanOf,
+  type SwissFinishAnswer,
+  type SwissFinishPlan,
+} from "@/lib/swiss-finish-plan";
 import { isSwissRefusalCode } from "@/lib/swiss-refusals";
 import { lateEntryNotice, lateEntryNoticeText, type LateEntryNoticeLine } from "@/lib/swiss-late-entry-notice";
 import type { LateEntryResult } from "@/server/api-v1/schemas";
@@ -249,7 +256,8 @@ export function EntrantsPanel({
   // W3 T13 — and "Finish the Swiss now", the other recovery it offers while the server says Finish goes through there
   // (`canFinish`, THE Finish predicate, with its plan); the round it finished after, said until the next add.
   const [finishFor, setFinishFor] = useState<{ stageId: string; plan: SwissFinishPlan } | null>(null);
-  const [swissFinished, setSwissFinished] = useState<number | null>(null);
+  // W3 T13: what the Finish answered, said (Fix round 1, reviews m5, m6: whether the stage completed, and the slots freed).
+  const [swissFinished, setSwissFinished] = useState<string | null>(null);
   // Club facet (Jul3/01 §8): filter entrants by parent club. Hidden when the
   // org has no clubs (or the clubs list is not readable on this plan).
   const [clubs, setClubs] = useState<{ id: string; name: string }[]>([]);
@@ -694,12 +702,18 @@ export function EntrantsPanel({
             const offer = finishFor;
             if (!(await confirmDialog(swissFinishConfirm(offer.plan, msg)))) return;
             const out = await run(() =>
-              apiV1<{ finished_after: number }>(`/api/v1/stages/${offer.stageId}/swiss/finish`, { method: "POST", json: {} }),
+              apiV1<SwissFinishAnswer>(`/api/v1/stages/${offer.stageId}/swiss/finish`, { method: "POST", json: {} }).catch(
+                (err: unknown) => {
+                  // Fix round 1 (review I2): the R3 backstop's STAGE_NOT_READY is English on the wire — said here instead.
+                  const text = err instanceof ApiV1Error ? swissFinishNotReadyText(err.code, msg) : null;
+                  throw text === null ? err : new Error(text);
+                },
+              ),
             );
             if (!out) return;
             setFinishFor(null);
             setAddRoundFor(null);
-            setSwissFinished(out.finished_after);
+            setSwissFinished(swissFinishedNotice(out, msg, msgPlural));
           }}
           className="btn btn-ghost min-h-11 px-3 py-1.5 text-sm"
         >
@@ -708,7 +722,7 @@ export function EntrantsPanel({
       )}
       {swissFinished !== null && (
         <p role="status" data-testid="entrants-swiss-finished" className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-          {msg("schedule.notice.swissFinished", { round: swissFinished })}
+          {swissFinished}
         </p>
       )}
       {roundAdded !== null && (

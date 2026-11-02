@@ -193,7 +193,13 @@ export function SwissFinishMenuItem({
   if (!rail.control.started || finish.refusal === "over") return null;
   const hint = finish.canFinish
     ? msg("stage.more.finishSwiss.hint", { round: finish.finishedAfter })
-    : msg(finish.refusal === "nothing_played" ? "stage.more.finishSwiss.nothingPlayed" : "stage.more.finishSwiss.undecided");
+    : msg(
+        finish.refusal === "nothing_played"
+          ? "stage.more.finishSwiss.nothingPlayed"
+          : finish.inProgress
+            ? "stage.more.finishSwiss.undecided"
+            : "stage.more.finishSwiss.reopened",
+      );
   return (
     <button
       type="button"

@@ -54,3 +54,33 @@ export function swissFinishConfirm(plan: SwissFinishPlan, msg: SwissFinishMsg) {
     size: "touch" as const,
   };
 }
+
+/** `useMsgPlural()` satisfies it. */
+export type SwissFinishPlural = (key: string, count: number, vars?: Record<string, string | number>) => string;
+
+/** What `POST /stages/{id}/swiss/finish` answers that the panels say. */
+export interface SwissFinishAnswer {
+  finished_after: number;
+  slots_freed: number;
+  completed: boolean;
+}
+
+/**
+ * The notice after a Finish lands, the same in the stages panel and the entrants panel (Fix round 1, reviews m5, m6):
+ * "The Swiss finished after round {k}." — or, when the completion behind it did not complete the stage (a round-k result
+ * was taken back between the finish and the completion), that the Swiss now ends after round k but is not complete yet —
+ * then, when removed rounds held a time or court, the slots freed (as Save and a Rebuild say them).
+ */
+export function swissFinishedNotice(out: SwissFinishAnswer, msg: SwissFinishMsg, plural: SwissFinishPlural): string {
+  const said = msg(out.completed ? "schedule.notice.swissFinished" : "schedule.notice.swissFinishedOpen", { round: out.finished_after });
+  return out.slots_freed > 0 ? `${said} ${plural("schedule.notice.roundsSlotsFreed", out.slots_freed)}` : said;
+}
+
+/**
+ * The Finish door's one refusal that is not a Swiss code: STAGE_NOT_READY, the R3 backstop (the stage could not complete
+ * on rounds 1..k — a round k keeps holds no rows). Its wire sentence is English, so it is said here; null for any other
+ * code, which keeps its own copy (review I2).
+ */
+export function swissFinishNotReadyText(code: string | undefined, msg: SwissFinishMsg): string | null {
+  return code === "STAGE_NOT_READY" ? msg("stage.finish.notReady") : null;
+}

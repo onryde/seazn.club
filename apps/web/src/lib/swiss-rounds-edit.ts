@@ -32,11 +32,14 @@ export interface SwissAddRoundControl {
  *  `canFinish` reads, so the desk offers "Finish the Swiss now" exactly when it goes through (C11, applied to Finish). */
 export interface SwissFinishControl {
   canFinish: boolean;
-  /** Why it would be refused, or null when it goes through: the Swiss is over, no round is complete yet, or a round past
-   *  the last complete one is under way. */
+  /** Why it would be refused, or null when it goes through: the Swiss is over, no round is complete yet, or a round it
+   *  keeps is short a result (one past the last complete round is under way, or a finished round was reopened). */
   refusal: "over" | "nothing_played" | "round_undecided" | null;
   /** k: the round whose standings become final (0: none complete). */
   finishedAfter: number;
+  /** `round_undecided` because a round past k has started ("the round in progress"); false when a finished round is
+   *  short a result again (a take-back), or for any other answer. The desk's hint branches on it (review m3). */
+  inProgress: boolean;
 }
 
 /** One Swiss stage as the desk reads it (`listSwissRoundControls`, read by the division page for an organiser). */

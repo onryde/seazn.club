@@ -76,7 +76,7 @@ function control(over: Partial<SwissRoundControl> & { field: number | null }): S
     chess: false,
     addRound: { canAddRound: true, refusal: null, field, hardMax: field === null ? null : HARD_MAX(field) },
     // W3 T13: nothing played (the Finish predicate's k = 0) unless a case says otherwise.
-    finish: { canFinish: false, refusal: "nothing_played", finishedAfter: 0 },
+    finish: { canFinish: false, refusal: "nothing_played", finishedAfter: 0, inProgress: false },
     ...over,
   };
 }
@@ -409,27 +409,35 @@ describe.each(LOCALES)("the rail's rounds chip and the More menu's Add a round [
     const ROWS: Row[] = [
       {
         name: "round 3 complete, nothing past it started",
-        c: started({ canFinish: true, refusal: null, finishedAfter: 3 }),
+        c: started({ canFinish: true, refusal: null, finishedAfter: 3, inProgress: false }),
         shown: true,
         enabled: true,
         hint: fill(D["stage.more.finishSwiss.hint"]!, { round: 3 }),
       },
       {
         name: "no round complete yet",
-        c: started({ canFinish: false, refusal: "nothing_played", finishedAfter: 0 }),
+        c: started({ canFinish: false, refusal: "nothing_played", finishedAfter: 0, inProgress: false }),
         shown: true,
         enabled: false,
         hint: D["stage.more.finishSwiss.nothingPlayed"]!,
       },
       {
         name: "the round in progress is under way",
-        c: started({ canFinish: false, refusal: "round_undecided", finishedAfter: 3 }),
+        c: started({ canFinish: false, refusal: "round_undecided", finishedAfter: 3, inProgress: true }),
         shown: true,
         enabled: false,
         hint: D["stage.more.finishSwiss.undecided"]!,
       },
+      {
+        // Fix round 1 (review m3): a take-back reopened a finished round — nothing is "in progress".
+        name: "a finished round was reopened",
+        c: started({ canFinish: false, refusal: "round_undecided", finishedAfter: 3, inProgress: false }),
+        shown: true,
+        enabled: false,
+        hint: D["stage.more.finishSwiss.reopened"]!,
+      },
       { name: "before the first start", c: control({ field: 6, rounds: 5 }), shown: false },
-      { name: "over", c: started({ canFinish: false, refusal: "over", finishedAfter: 3 }), shown: false },
+      { name: "over", c: started({ canFinish: false, refusal: "over", finishedAfter: 3, inProgress: false }), shown: false },
     ];
     let checked = 0;
     for (const r of ROWS) {
@@ -459,7 +467,7 @@ describe.each(LOCALES)("the rail's rounds chip and the More menu's Add a round [
       stageId: "s1",
       busy: null,
       rail: {
-        ...rail(control({ field: 6, rounds: 5, started: true, finish: { canFinish: true, refusal: null, finishedAfter: 3 } })),
+        ...rail(control({ field: 6, rounds: 5, started: true, finish: { canFinish: true, refusal: null, finishedAfter: 3, inProgress: false } })),
         onFinish: async (_id: string, plan: SwissFinishPlan) => {
           expect(opened, "the sheet closed before the confirm").toBe(1);
           plans.push(plan);

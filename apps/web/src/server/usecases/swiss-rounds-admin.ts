@@ -166,8 +166,13 @@ export interface SwissFinishState {
   finishedAfter: number;
   /** Why Finish would be refused, or null when it goes through. */
   refusal: SwissFinishRefusal | null;
-  /** `round_undecided`: the boards to decide first — every undecided board that is seated or started; else []. */
+  /** `round_undecided`: the boards to decide first — every undecided row of a round ≤ k, and every undecided seated or
+   *  started board of a round past k that has started; else []. */
   boards: SwissFinishBoard[];
+  /** `round_undecided` because a board past k has STARTED (that round stays: "the round in progress"); false when only a
+   *  round ≤ k is short a result — a scorer's take-back reopened a finished round — or for any other answer. The copy
+   *  branches on it (review m3). */
+  inProgress: boolean;
   /** `refusal === null`: what every emitter of `canFinish` sends (controller ruling C11, applied to Finish). */
   canFinish: boolean;
 }
@@ -175,10 +180,13 @@ export interface SwissFinishState {
 /**
  * THE "Finish the Swiss now" verdict over the stage's rows (W3 T13, X-SW-26), pure. `k` is the latest round whose seated
  * boards are all decided. Refused, in this order: the Swiss is over (`over`, SWISS_OVER); k = 0, no round complete
- * (`nothing_played`); a board past k has STARTED (`started`, T9's predicate) — it cannot be unpaired — or, planted only,
- * a seated board of a round ≤ k is undecided (`round_undecided`, naming every undecided seated or started board: what
- * the organiser decides before Finish goes through). Otherwise Finish ends the Swiss after round k: a paired round past
- * k that nothing in has started is unpaired and dropped with the shells.
+ * (`nothing_played`); else a round Finish would keep is short a result (`round_undecided`): a board past k has STARTED
+ * (`started`, T9's predicate — it cannot be unpaired, so its round stays: `inProgress`), or a row of a round ≤ k is not
+ * decided. The second is reachable in production — a scorer's take-back (`core.void`) reopens a finished round's board
+ * while a later round stays decided, so k does not move (Fix round 1, review I2) — and it reads EVERY row ≤ k, seated or
+ * not, as the completion predicate (`isTableStageComplete`) does, so the R3 backstop never refuses what this offered
+ * (review m4). The refusal names what the organiser decides first. Otherwise Finish ends the Swiss after round k: a
+ * paired round past k that nothing in has started is unpaired and dropped with the shells.
  */
 export function judgeSwissFinish(
   rows: readonly SwissExistingFixture[],
@@ -195,22 +203,26 @@ export function judgeSwissFinish(
   for (const [round, seated] of seatedByRound) {
     if (round > k && seated.every((f) => DECIDED.has(f.status))) k = round;
   }
-  const state = (refusal: SwissFinishRefusal | null, boards: SwissFinishBoard[] = []): SwissFinishState => ({
+  const state = (refusal: SwissFinishRefusal | null, boards: SwissFinishBoard[] = [], inProgress = false): SwissFinishState => ({
     over,
     rounds,
     finishedAfter: k,
     refusal,
     boards,
+    inProgress,
     canFinish: refusal === null,
   });
   if (over) return state("over");
   if (k === 0) return state("nothing_played");
-  const blocked =
-    rows.some((f) => f.round_no > k && started.has(f.id)) ||
-    rows.some((f) => f.round_no <= k && isSwissBoardSeated(f) && !DECIDED.has(f.status));
-  if (!blocked) return state(null);
+  // The latest round past k with a started board: it and every round before it stay.
+  const kept = rows.reduce((m, f) => (f.round_no > k && started.has(f.id) ? Math.max(m, f.round_no) : m), k);
+  const shortOfResult = rows.some((f) => f.round_no <= k && !DECIDED.has(f.status));
+  if (kept === k && !shortOfResult) return state(null);
   const owed = rows.filter(
-    (f) => !isSwissByeShellExtKey(f.ext_key) && !DECIDED.has(f.status) && (isSwissBoardSeated(f) || started.has(f.id)),
+    (f) =>
+      !DECIDED.has(f.status) &&
+      (f.round_no <= k ||
+        (f.round_no <= kept && !isSwissByeShellExtKey(f.ext_key) && (isSwissBoardSeated(f) || started.has(f.id)))),
   );
   // A refusal that names nothing is a sentence the organiser cannot act on: past k only a decided board can be what
   // blocked (planted — a decided round past k makes k larger), and then it is the one named.
@@ -220,6 +232,7 @@ export function judgeSwissFinish(
     [...named]
       .sort((x, y) => x.round_no - y.round_no || x.seq_in_round - y.seq_in_round)
       .map((f) => ({ fixtureId: f.id, round: f.round_no, board: f.seq_in_round })),
+    kept > k,
   );
 }
 
@@ -585,7 +598,7 @@ export async function finishSwissNow(auth: AuthCtx, stageId: string): Promise<Fi
     if (state.refusal === "over") throw swissRefusal("SWISS_OVER", { canFinish: false });
     if (state.refusal === "nothing_played") throw swissRefusal("SWISS_FINISH_NOTHING_PLAYED", { canFinish: false });
     if (state.refusal === "round_undecided") {
-      throw swissRefusal("SWISS_FINISH_ROUND_UNDECIDED", { canFinish: false, boards: state.boards });
+      throw swissRefusal("SWISS_FINISH_ROUND_UNDECIDED", { canFinish: false, inProgress: state.inProgress, boards: state.boards });
     }
     const k = state.finishedAfter;
     const removed = rows.filter((f) => f.round_no > k);
@@ -594,7 +607,10 @@ export async function finishSwissNow(auth: AuthCtx, stageId: string): Promise<Fi
       const ids = removed.map((f) => f.id);
       const own = await firstOwnFormat(tx, tx`id in ${tx(ids)}`);
       if (own) throw ownFormatLoss(own);
-      await clearSwissFixtureSeats(tx, removed.filter(isSwissBoardSeated).map((f) => f.id));
+      // The seat-clear runs on EVERY row going (review m2), before the delete: it ends the queued chess invites that name
+      // them (`round_voided`). The outbox holds text seat refs, not foreign keys, so a delete alone would leave an invite
+      // to a board that no longer exists to be sent.
+      await clearSwissFixtureSeats(tx, ids);
       const iso = (v: Date | string | null) => (v === null ? null : new Date(v).toISOString());
       slotsFreed = carrySlots(
         removed.map((f) => ({
@@ -663,7 +679,7 @@ export async function listSwissRoundControls(auth: AuthCtx, divisionId: string):
         chess: stage.config.chess === true,
         field: await nextPairField(tx, stage, rows),
         addRound: { canAddRound: add.canAddRound, refusal: add.refusal, field: add.field, hardMax: add.hardMax },
-        finish: { canFinish: finish.canFinish, refusal: finish.refusal, finishedAfter: finish.finishedAfter },
+        finish: { canFinish: finish.canFinish, refusal: finish.refusal, finishedAfter: finish.finishedAfter, inProgress: finish.inProgress },
       };
     }
     return out;

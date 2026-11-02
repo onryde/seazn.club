@@ -19,8 +19,9 @@ export type SwissRefusalMsg = (key: MessageKey, vars?: Record<string, string | n
  * both, or (neither) that the Swiss keeps its rounds; with neither detail sent, the sentence alone (W3 T12 Phase 2 fix).
  * `SWISS_NO_ROUND_LEFT` (`{ canAddRound, canFinish, stageId }`) the same way: Add a round named only when it goes through,
  * Finish now only when it does (W3 T13, THE Finish predicate), else that no more rounds fit (T12 Fix round 1, review I1).
- * `SWISS_FINISH_ROUND_UNDECIDED` (`{ boards }`, T13) names the boards still to decide, as the abandoned-board refusal
- * names its boards ("round {round} board {board}").
+ * `SWISS_FINISH_ROUND_UNDECIDED` (`{ boards, inProgress }`, T13) names the boards still to decide, as the abandoned-board
+ * refusal names its boards ("round {round} board {board}"), after the round-in-progress sentence — or, with `inProgress:
+ * false`, the reopened-round one (Fix round 1, review m3).
  */
 export function swissRefusalText(
   code: SwissRefusalCode,
@@ -61,7 +62,10 @@ export function swissRefusalText(
     const named = boards
       .filter((b) => typeof b.round === "number" && typeof b.board === "number")
       .map((b) => msg("schedule.error.swissAbandonedRef", { round: b.round as number, board: b.board as number }));
-    return named.length === 0 ? sentence : `${sentence} ${msg("swiss.finish.owed", { boards: named.join(", ") })}`;
+    // Fix round 1 (review m3): "the round in progress" only when a round past k has started; a finished round that a
+    // take-back reopened (`inProgress: false`) is said as that.
+    const lead = details?.inProgress === false ? msg("swiss.finish.reopened") : sentence;
+    return named.length === 0 ? lead : `${lead} ${msg("swiss.finish.owed", { boards: named.join(", ") })}`;
   }
   if (code !== "SWISS_ROUNDS_ABOVE_MAX") return sentence;
   const field = details?.field;

@@ -528,4 +528,41 @@ describe("EntrantsPanel — Finish the Swiss now on SWISS_NO_ROUND_LEFT (W3 T13)
     await p.submit(created());
     expect(finished(p)).toBeNull();
   });
+
+  it("says what the answer says (Fix round 1, reviews m5, m6): the slots freed, a stage not completed, and the backstop in this language", async () => {
+    const freed = (n: number) => fill(n === 1 ? "schedule.notice.roundsSlotsFreed.one" : "schedule.notice.roundsSlotsFreed.other", { count: n });
+    const ROWS: { answer: () => unknown; notice: string | null; error: string | null }[] = [
+      {
+        answer: () => ({ completed: true, events: [], finished_after: 2, shells_removed: 4, slots_freed: 3 }),
+        notice: `${fill("schedule.notice.swissFinished", { round: 2 })} ${freed(3)}`,
+        error: null,
+      },
+      {
+        answer: () => ({ completed: false, events: [], finished_after: 3, shells_removed: 0, slots_freed: 0 }),
+        notice: fill("schedule.notice.swissFinishedOpen", { round: 3 }),
+        error: null,
+      },
+      {
+        answer: () => {
+          throw new ApiV1Error("swiss: rounds 1..2 do not complete the stage", 422, "STAGE_NOT_READY", { stageId: "s1" });
+        },
+        notice: null,
+        error: EN["stage.finish.notReady"]!,
+      },
+    ];
+    let checked = 0;
+    for (const r of ROWS) {
+      confirmMock.mockReset();
+      confirmMock.mockResolvedValue(true);
+      const p = mount();
+      await p.submit(noRoundLeft({ canAddRound: false, ...PLAN, stageId: "s1" }));
+      api.finish = r.answer;
+      (propsOf(finishBtn(p)!).onClick as () => void)();
+      await flush();
+      expect(finished(p), `notice ${checked}`).toBe(r.notice);
+      expect(p.error(), `error ${checked}`).toBe(r.error);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: rows").toBe(ROWS.length);
+  });
 });
