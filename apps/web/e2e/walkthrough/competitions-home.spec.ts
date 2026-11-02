@@ -191,6 +191,13 @@ for (const width of [1280, 320] as const) {
     await expect(quietCard.getByRole("link", { name: ui("org.home.today.openFor", { name: quiet.name }) })).toHaveCount(0);
     // Three to a row on a desktop, one on a phone.
     await expectColumns(quietCard, width === 1280 ? 3 : 1, `quiet card @${width}`);
+    if (width === 1280) {
+      // The md band between them (C7 re-review M1): two to a row at 768, then back to the desktop for the rest of the run.
+      await page.setViewportSize({ width: 768, height: 1024 });
+      await expectColumns(quietCard, 2, "quiet card @768");
+      await page.setViewportSize({ width, height: 900 });
+      await expectColumns(quietCard, 3, `quiet card @${width}, back from 768`);
+    }
 
     // No Directory button on the page; the nav keeps Directory (the positive pair).
     await expect(page.getByRole("main").getByRole("link", { name: CONSOLE["nav.directory"] })).toHaveCount(0);

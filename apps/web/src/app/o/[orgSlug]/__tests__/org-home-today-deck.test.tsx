@@ -312,6 +312,19 @@ describe("the quiet card's Next: line — read as the deck beside it reads", () 
     expect(next).not.toContain(`>${en["card.next.live"]}<`);
   });
 
+  it("reads 'Now:' for a match in play, never 'Next:' beside it, and prints no time for it", async () => {
+    // The other half of the carried label test (C7 re-review M2). A quiet card with a match in play is the finished
+    // competition under Show finished: in play counts as today, but finished is decided first.
+    seed([[comp("done", "completed"), stats("done", { next: { home: "Ann", away: "Bob", court_label: "Court 2", scheduled_at: "2026-11-09T14:10:00.000Z", in_play: true } }), 0]]);
+    const next = blocks(blocks(await render({ finished: "1" }), "org-home-card")[0]!, "org-home-card-next")[0]!;
+    expect(en["card.next.live"]).not.toBe(en["card.next.upcoming"]); // the case can tell the two apart
+    expect(next).toContain(`>${en["card.next.live"]}<`);
+    expect(next).not.toContain(`>${en["card.next.upcoming"]}<`);
+    expect(next).not.toContain("15:10"); // in play: its planned time is no longer the news
+    expect(next).toContain("Court 2");
+    expect(next).toMatch(/Ann.*vs.*Bob/);
+  });
+
   it("speaks the viewer's language: French reads 'contre', and the day and month in French", async () => {
     h.locale = "fr";
     seed([[comp("q", "published"), stats("q", { next: { home: "Ann", away: "Bob", court_label: null, scheduled_at: "2026-11-09T14:10:00.000Z", in_play: false } }), 0]]);
