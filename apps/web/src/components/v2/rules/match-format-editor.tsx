@@ -47,8 +47,9 @@ export type { RulesMode } from "./lock-line";
 export type { RuleField } from "@/lib/match-rules";
 export { buildRuleOverride, hydrateRuleValues, rulesFor } from "@/lib/match-rules";
 
-const SECTION_TITLE: Record<StageSectionId, MessageKey> = {
-  format: "stageRules.section.format",
+// The format section has NO title of its own (Match Day E1 fix round 1, m6): it opens under the "Match rules" button, whose name is the
+// panel's, so a second "Match rules" heading in it said the same thing twice. Deciders and "If abandoned" are the sections that need telling apart.
+const SECTION_TITLE: Record<Exclude<StageSectionId, "format">, MessageKey> = {
   deciders: "stageRules.section.deciders",
   abandon: "stageRules.section.abandon",
 };
@@ -117,10 +118,12 @@ export function StageRuleFields({
       {visible
         .filter((s) => s.fields.length > 0)
         .map((s) => (
-          <section key={s.id} aria-labelledby={`${reasonId}-${s.id}`} data-testid={`stage-rules-section-${s.id}`}>
-            <h4 id={`${reasonId}-${s.id}`} className="mb-2 text-xs font-semibold text-slate-800">
-              {msg(SECTION_TITLE[s.id])}
-            </h4>
+          <section key={s.id} aria-labelledby={s.id === "format" ? undefined : `${reasonId}-${s.id}`} data-testid={`stage-rules-section-${s.id}`}>
+            {s.id !== "format" && (
+              <h4 id={`${reasonId}-${s.id}`} className="mb-2 text-xs font-semibold text-slate-800">
+                {msg(SECTION_TITLE[s.id])}
+              </h4>
+            )}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {s.fields.map((field) => {
                 const set = (values[field.key] ?? "") !== "";

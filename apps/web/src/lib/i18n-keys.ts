@@ -7423,7 +7423,6 @@ export type DictionaryKey =
   | "stageRules.preset.knockout"
   | "stageRules.section.abandon"
   | "stageRules.section.deciders"
-  | "stageRules.section.format"
   | "stageRules.section.points"
   | "stageRules.sequence.add"
   | "stageRules.sequence.default"

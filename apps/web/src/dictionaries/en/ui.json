@@ -2228,7 +2228,6 @@
   "stageRules.detail.off": "Only used when {decider} is on",
   "stageRules.source.division": "Division",
   "stageRules.source.stage": "This stage",
-  "stageRules.section.format": "Match rules",
   "stageRules.section.deciders": "Deciders",
   "stageRules.section.abandon": "If abandoned",
   "stageRules.section.points": "Points",

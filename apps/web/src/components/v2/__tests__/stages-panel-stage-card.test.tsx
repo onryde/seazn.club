@@ -122,7 +122,7 @@ describe("E1 item 2: the stage card says Match rules, in every locale", () => {
       expect(sheetAt, `${loc}: the sheet row is there`).toBeGreaterThan(-1);
       expect(text(html.slice(sheetAt, html.indexOf("</button>", sheetAt))), `${loc}: the sheet row`).toContain(MATCH_RULES[loc]);
       expect((dict as Record<string, string>)["rulesStrip.format"], `${loc}: strip + card button`).toBe(MATCH_RULES[loc]);
-      expect((dict as Record<string, string>)["stageRules.section.format"], `${loc}: the panel's own section title`).toBe(MATCH_RULES[loc]);
+      expect((dict as Record<string, string>)["stageRules.section.format"], `${loc}: the panel's section title key is retired (m6: the panel is already called Match rules)`).toBeUndefined();
       let checked = 0;
       for (const [key, value] of Object.entries(dict as Record<string, string>)) {
         checked++;
@@ -132,6 +132,56 @@ describe("E1 item 2: the stage card says Match rules, in every locale", () => {
       locales++;
     }
     expect(locales, "all four locales").toBe(4);
+  });
+});
+
+// Match Day E1 fix round 1 (m6): the Match rules panel opens under a button already called "Match rules"; a second "Match rules" title
+// inside it said the same thing twice. And each locale has ONE term for it: French had "règles du match", "règles de match" and
+// "règles de la rencontre"; Spanish "reglas del partido", "reglas de partido" and "reglas de juego".
+describe("E1 fix 1 m6: the Match rules panel names itself once, and every locale uses one term for it", () => {
+  it("the panel's format section has no title of its own; the other sections keep theirs", () => {
+    const html = panel({ initialOpenPanels: ["format"] });
+    const at = html.indexOf('data-testid="stage-rules-section-format"');
+    expect(at, "premise: the format section is on the page").toBeGreaterThan(-1);
+    const section = html.slice(at, html.indexOf("</section>", at));
+    expect(section, "premise: it holds fields").toContain("stage-rule-field-");
+    expect(section, "no second 'Match rules' title").not.toMatch(/<h4/);
+
+    expect(text(section)).not.toContain(MATCH_RULES.en);
+    // The sections beside it still read as sections.
+    const deciders = html.indexOf('data-testid="stage-rules-section-deciders"');
+    if (deciders > -1) expect(text(html.slice(deciders, deciders + 400))).toContain("Deciders");
+  });
+
+  it("every English string that says 'match rules' is worded with the locale's one term in es, fr and nl (the owner's words, typed here)", () => {
+    let checked = 0;
+    for (const [loc, dict] of DICTS) {
+      if (loc === "en") continue;
+      const own = dict as Record<string, string>;
+      for (const [key, english] of Object.entries(enUi as Record<string, string>)) {
+        if (!/match rules/i.test(english)) continue;
+        expect(own[key]?.toLowerCase(), `${loc} ${key}: says "${MATCH_RULES[loc]}"`).toContain(MATCH_RULES[loc].toLowerCase());
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: strings checked across es / fr / nl").toBeGreaterThan(20);
+  });
+
+  it("the drifted spellings are gone from every string", () => {
+    const DRIFT: Record<string, string[]> = {
+      fr: ["règles de match", "règles de la rencontre", "règles de rencontre"],
+      es: ["reglas de partido", "reglas de juego", "reglas del encuentro"],
+    };
+    let checked = 0;
+    for (const [loc, dict] of DICTS) {
+      for (const bad of DRIFT[loc] ?? []) {
+        for (const [key, value] of Object.entries(dict as Record<string, string>)) {
+          expect(value.toLowerCase(), `${loc} ${key}: "${bad}"`).not.toContain(bad);
+          checked++;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity: every string of fr and es read").toBeGreaterThan(10000);
   });
 });
 
