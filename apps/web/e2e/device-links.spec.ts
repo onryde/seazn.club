@@ -10,7 +10,8 @@ import {
 } from "./realtime-propagation-kit";
 
 // Courtside device-link scoring: an editor mints a one-per-fixture dl_ token;
-// the token alone opens the score pad and authorises event writes. Pro-only.
+// the token alone opens the score pad and authorises event writes. Free on
+// every plan (owner ruling 2026-11-02).
 
 const BASE = process.env.PLAYWRIGHT_BASE ?? "http://localhost:3000";
 
@@ -211,7 +212,7 @@ test("the device-link pad sends its dl_ token to the realtime-token door", async
   }
 });
 
-test("device links are Pro-only", async ({ browser }) => {
+test("device links are free: a Community org mints one and its token opens the state door", async ({ browser, playwright }) => {
   // A fresh user auto-provisions their own community org, so this test never
   // competes with journey-community for the SHARED community org's single
   // active-competition slot (a real race under parallel workers).
@@ -258,8 +259,22 @@ test("device links are Pro-only", async ({ browser }) => {
       "POST",
       { label: "Court 1" },
     );
-    expect(minted.status).toBe(402);
-    expect(minted.error?.code).toBe("PAYMENT_REQUIRED");
+    expect(minted.status).toBe(201);
+    const secret = (minted.data as { secret?: string } | undefined)?.secret ?? "";
+    expect(secret.startsWith("dl_")).toBe(true);
+
+    // The token alone (no cookie) reads the fixture it was minted for.
+    const dlApi = await playwright.request.newContext({
+      baseURL: BASE,
+      storageState: { cookies: [], origins: [] },
+      extraHTTPHeaders: { Authorization: `Bearer ${secret}` },
+    });
+    try {
+      const state = await dlApi.get(`/api/v1/fixtures/${gen.data!.fixtures[0]!.id}/state`);
+      expect(state.status()).toBe(200);
+    } finally {
+      await dlApi.dispose();
+    }
 
     // Tidy up the throwaway org's slot (not strictly needed — the org is
     // private to this test).

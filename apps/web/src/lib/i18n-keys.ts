@@ -7231,7 +7231,6 @@ export type DictionaryKey =
   | "sheets.error.linksIncomplete"
   | "sheets.error.noFixtures"
   | "sheets.error.notAllowed"
-  | "sheets.gate.reason"
   | "sheets.pdf.checkNames"
   | "sheets.pdf.courtPage"
   | "sheets.pdf.eyebrow"

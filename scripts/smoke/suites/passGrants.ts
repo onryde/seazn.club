@@ -457,9 +457,11 @@ export async function passGrantsSuite(): Promise<void> {
     careerRead.status === 200,
   );
 
-  // === scoring.device_links — community false, pass true (V393) ============
-  // Minted against the board fixtures generated above; both are still
-  // scheduled, so the only difference between the two calls is the pass.
+  // === scoring.device_links — free on every plan (V488) ===================
+  // Was community false, pass true (V393): the sibling was refused 402. Owner
+  // ruling 2026-11-02 made remote scoring free, so BOTH competitions mint — the
+  // sibling's 201 is the witness that the gate is gone, not leaked. Minted
+  // against the board fixtures generated above; both are still scheduled.
   const passLink = await v1(s, `/api/v1/fixtures/${board.pass.fixtureId}/device-links`, "POST", {
     label: "Pitch 1",
   });
@@ -471,8 +473,8 @@ export async function passGrantsSuite(): Promise<void> {
     passLink.status === 201,
   );
   check(
-    "pass grants/device links: the sibling refuses it (402 scoring.device_links) — no leak",
-    plainLink.status === 402 && featureKey(plainLink) === "scoring.device_links",
+    "pass grants/device links: the sibling mints too (201) — free on every plan, no pass needed",
+    plainLink.status === 201,
   );
 
   // === stages.per_division.max — free on every plan (V471) =================
@@ -578,7 +580,6 @@ export async function passGrantsSuite(): Promise<void> {
       // split-off leverage half, took its place — it is what is still
       // genuinely denied org-wide here.
       flagOff("stats.player.career") &&
-      flagOff("scoring.device_links") &&
       flagOff("discipline.enforced") &&
       flagOff("officials.auto"),
   );

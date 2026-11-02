@@ -13,7 +13,7 @@ On the competition's **Schedule** page, pick the **Day** beside the page title a
 The control shows up once at least one match still to play has a time. The **Day** list offers only the days that have matches to print.
 
 - **Who can print:** owners and admins.
-- **Plans:** scorer sheets are made of device links, so they come with **Pro**, or with an [Event Pass](/help/billing/event-pass) for that competition. On Community you see an upgrade prompt in its place, once a match has a time.
+- **Plans:** scorer sheets are free on every plan, like the device links they are made of. The print control appears once a match has a time.
 - **Which matches:** every match that day that has a time and is still to play or already in play. Matches with no time yet, byes, and matches that are already over are left off.
 - **Which day:** days and times on the sheet follow [your organisation's time zone](/help/scheduling/timezones), whatever the clock on the computer you print from.
 - **Start the division first.** A division that hasn't been [started](/help/divisions/lifecycle) can't be scored yet. An umpire who scans a card before then sees **Not started yet**, and the screen moves on by itself once you start the division.

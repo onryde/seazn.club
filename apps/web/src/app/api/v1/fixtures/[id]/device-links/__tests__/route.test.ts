@@ -44,10 +44,12 @@ import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
+import { startDivision } from "@/server/usecases/schedule";
 import { resolveDeviceLinkToken } from "@/server/usecases/device-links";
 import { seedOrg, GENERIC_CONFIG } from "@/server/usecases/__tests__/_seed";
 import { POST as ensurePost } from "../route";
 import { POST as reissuePost } from "../reissue/route";
+import { POST as eventsPost } from "../../events/route";
 
 // Every mint seals now (scorer sheets §4.1). A throwaway key of this file's own,
 // never the developer's .env.local one: CI's unit job has no DEVICE_LINK_KEK at
@@ -84,8 +86,8 @@ function req(body: Record<string, unknown> = {}): Request {
 
 const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
 
-async function seedFixture(): Promise<string> {
-  const { auth } = await seedOrg("pro");
+async function seedFixture(plan: "community" | "pro" = "pro", started = false): Promise<string> {
+  const { auth } = await seedOrg(plan);
   authState.userId = auth.userId!;
   const competition = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -106,6 +108,8 @@ async function seedFixture(): Promise<string> {
   );
   const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
   const { fixtures } = await generateStageFixtures(auth, stage!.id);
+  // Scoring is closed until the division starts; the mint doors do not care.
+  if (started) await startDivision(auth, division.id);
   return fixtures[0]!.id;
 }
 
@@ -153,6 +157,38 @@ describe.skipIf(!HAS_DB)("POST /fixtures/{id}/device-links[/reissue] (scorer she
       [`dlmint:${IP}`, DEVICE_LINK_MINT_LIMIT],
       [`dlmint:${IP}`, DEVICE_LINK_MINT_LIMIT],
     ]);
+  });
+
+  it("a Community org mints over the route and the link scores over the events route — remote scoring is free on every plan", async () => {
+    const fixtureId = await seedFixture("community", true);
+
+    const minted = await read(await ensurePost(req({ label: "Court 1 phone" }), ctx(fixtureId)));
+    expect(minted.status, JSON.stringify(minted.body.error)).toBe(201);
+    const secret = minted.body.data!.secret;
+    expect(secret).toMatch(/^dl_/);
+
+    // The holder of the link (no session at all) scores through the real events route.
+    const score = async (expectedSeq: number, type: string, payload: Record<string, unknown>) => {
+      const res = await eventsPost(
+        new Request(`https://test.local/api/v1/fixtures/${fixtureId}/events`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${secret}` },
+          body: JSON.stringify({ expected_seq: expectedSeq, type, payload }),
+        }),
+        ctx(fixtureId),
+      );
+      return { status: res.status, body: (await res.json()) as { ok: boolean; data?: { seq: number }; error?: unknown } };
+    };
+    const started = await score(0, "core.start", {});
+    expect(started.status, JSON.stringify(started.body)).toBe(201);
+    const result = await score(1, "generic.result", { p1Score: 2, p2Score: 1 });
+    expect(result.status, JSON.stringify(result.body)).toBe(201);
+    expect(result.body.data!.seq).toBe(2);
+
+    // And asking again re-shows the same link (200), still without a plan.
+    const again = await read(await ensurePost(req(), ctx(fixtureId)));
+    expect(again.status).toBe(200);
+    expect(again.body.data!.secret).toBe(secret);
   });
 
   it("POST …/reissue: 201 with a fresh secret, the printed QR dies, and ensure then re-shows the reissued one", async () => {

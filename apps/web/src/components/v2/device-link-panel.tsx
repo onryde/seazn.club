@@ -11,8 +11,7 @@
 // asks first too, with the same on-screen question (owner ruling, T3 fix
 // round 2). One question at a time.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { apiV1, ApiV1Error } from "@/lib/client-v1";
-import { UpgradeGate } from "@/components/upgrade-gate";
+import { apiV1 } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { failureKey, liveCopy } from "@/components/v2/device-link-copy";
 import { SeaznQrImage } from "@/components/v2/seazn-qr-image";
@@ -71,7 +70,6 @@ export function DeviceLinkPanel({
   embedded = false,
   compact = false,
   onChanged,
-  viewerPlan,
   hide,
 }: {
   fixtureId: string;
@@ -97,7 +95,9 @@ export function DeviceLinkPanel({
   /** Called after any change this panel made to the fixture's link (created or re-shown, reissued, revoked) succeeded,
    *  so a host that reads the link elsewhere (Match Day's "No scorer" mark: a live link IS a scorer) can re-read. */
   onChanged?: () => void;
-  viewerPlan: ViewerPlan;
+  /** No longer read: remote scoring is free on every plan, so this panel has no paywall to word. Optional only so the
+   *  Match Day mount (another lane's file) keeps compiling; delete it from both mounts when that lane lands. */
+  viewerPlan?: ViewerPlan;
   /** Opt-in (Match Day, `compact` only): the organiser can Hide the panel to one row. Absent = the panel as it always was. */
   hide?: DeviceLinkHide;
 }) {
@@ -105,7 +105,6 @@ export function DeviceLinkPanel({
   const [active, setActive] = useState<ActiveLink | null>(null);
   const [minted, setMinted] = useState<{ secret: string; qr: SeaznQr; expires_at: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [paywall, setPaywall] = useState(false);
   const [busy, setBusy] = useState(false);
   /** The open "this kills the QR" question, if any. */
   const [confirm, setConfirm] = useState<"reissue" | "revoke" | null>(null);
@@ -205,7 +204,6 @@ export function DeviceLinkPanel({
   async function show() {
     setBusy(true);
     setError(null);
-    setPaywall(false);
     setConfirm(null);
     try {
       const link = await apiV1<ActiveLink & { secret: string }>(
@@ -216,8 +214,7 @@ export function DeviceLinkPanel({
       await refresh();
       onChanged?.();
     } catch (err) {
-      if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(true);
-      else refused(err);
+      refused(err);
     } finally {
       setBusy(false);
     }
@@ -257,7 +254,6 @@ export function DeviceLinkPanel({
   async function copyFromRow() {
     setBusy(true);
     setError(null);
-    setPaywall(false);
     setCopied(false);
     setSelectUrl(null);
     try {
@@ -270,8 +266,7 @@ export function DeviceLinkPanel({
       if (await copyToClipboard(url)) setCopied(true);
       else setSelectUrl(url);
     } catch (err) {
-      if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(true);
-      else refused(err);
+      refused(err);
     } finally {
       setBusy(false);
     }
@@ -295,8 +290,7 @@ export function DeviceLinkPanel({
       // Same rule as a refused revoke: never leave "Yes, reissue" on screen
       // after the server said no. Close the question and re-read what is live.
       setConfirm(null);
-      if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(true);
-      else refused(err);
+      refused(err);
       await refresh();
     } finally {
       setBusy(false);
@@ -456,11 +450,6 @@ export function DeviceLinkPanel({
             {copied ? msg("dlink.copied") : ""}
           </span>
           {selectBlock}
-          {paywall && (
-            <div className="mb-2">
-              <UpgradeGate feature="scoring.device_links" viewerPlan={viewerPlan} />
-            </div>
-          )}
           {error && <p className="mb-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
         </section>
       );
@@ -488,11 +477,6 @@ export function DeviceLinkPanel({
                 <path d="M3.5 3.5 12.5 12.5M12.5 3.5 3.5 12.5" strokeLinecap="round" />
               </svg>
             </button>
-          </div>
-        )}
-        {paywall && (
-          <div className="mb-3">
-            <UpgradeGate feature="scoring.device_links" viewerPlan={viewerPlan} />
           </div>
         )}
         {error && <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
@@ -605,11 +589,6 @@ export function DeviceLinkPanel({
         {msg("dlink.desc", { scorer: msg(officialLabelKey(sportKey)).toLowerCase() })}
       </p>
 
-      {paywall && (
-        <div className="mt-3">
-          <UpgradeGate feature="scoring.device_links" viewerPlan={viewerPlan} />
-        </div>
-      )}
       {error && <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
 
       {minted ? (

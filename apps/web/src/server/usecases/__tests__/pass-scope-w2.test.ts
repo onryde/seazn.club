@@ -6,7 +6,7 @@
 //
 //   stats.player                true  vs false
 //   discipline.enforced         true  vs false
-//   scoring.device_links        true  vs false
+//   scoring.device_links        (V488: true on every plan, no longer pass-scoped)
 //   stages.per_division.max     4     vs 2
 //   schedule.checkpoints.max    5     vs 2
 //
@@ -18,6 +18,10 @@
 // cross-division CAREER ROLLUP (`personCareerStats`), kept the row's old
 // shape on its own new key, `stats.player.career` — the table above is
 // otherwise unchanged, it is `stats.player`'s ROLE in it that moved.
+//
+// V488 (remote scoring is free, owner ruling 2026-11-02) did the same to
+// `scoring.device_links`: true on every plan, so it left the pass-scoped set and
+// its case below proves the sibling competition mints too.
 //
 // V471 ("all stages are free", owner ruling 2026-10-20) did the same to
 // `stages.per_division.max`: unlimited on every plan, so it left the
@@ -211,7 +215,7 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("Event Pass grants resolve against the competition (W2 T13)", () => {
-  it("scoring.device_links: mints on the passed competition, 402s on the sibling", async () => {
+  it("scoring.device_links: free on every plan, so the passed competition AND the sibling both mint (V488 took it out of the pass-scoped set)", async () => {
     const ctx = await seedCommunityOrg();
     const passed = await seedCompetition(ctx, "DL Passed " + uniq());
     await buyPass(ctx.orgId, passed.competitionId);
@@ -219,20 +223,16 @@ describe.skipIf(!HAS_DB)("Event Pass grants resolve against the competition (W2 
 
     const link = await createDeviceLink(ctx.auth, await makeFixture(ctx, passed), "Pitch 1");
     expect(link.secret).toMatch(/^dl_/);
+    const siblingLink = await createDeviceLink(ctx.auth, await makeFixture(ctx, plain), "Pitch 1");
+    expect(siblingLink.secret).toMatch(/^dl_/);
 
-    await expectPaywall(
-      createDeviceLink(ctx.auth, await makeFixture(ctx, plain), "Pitch 1"),
-      "scoring.device_links",
-    );
-
-    // Scorer sheets: the print path gates on the SAME competition.
+    // Scorer sheets: the print path mints on both too.
     const sheetFixture = await makeFixture(ctx, passed);
     const sheet = await ensureDeviceLinks(ctx.auth, passed.competitionId, [sheetFixture]);
     expect(sheet.get(sheetFixture)!.secret).toMatch(/^dl_/);
-    await expectPaywall(
-      ensureDeviceLinks(ctx.auth, plain.competitionId, [await makeFixture(ctx, plain)]),
-      "scoring.device_links",
-    );
+    const plainFixture = await makeFixture(ctx, plain);
+    const plainSheet = await ensureDeviceLinks(ctx.auth, plain.competitionId, [plainFixture]);
+    expect(plainSheet.get(plainFixture)!.secret).toMatch(/^dl_/);
   });
 
   it("schedule.checkpoints.max: five save points on the passed competition, two on the sibling", async () => {

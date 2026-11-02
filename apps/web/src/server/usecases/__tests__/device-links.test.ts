@@ -2,11 +2,10 @@
 // door (fixture-scoped only), device-link scoring with issuer attribution,
 // undo-own-only, finalize 403, expiry/revocation → 401 with distinct codes,
 // hash-chain integrity with device_link_id riding outside the canonical,
-// and the Community 402. Real Postgres required; skipped without DATABASE_URL.
+// and a Community org minting and scoring too. Real Postgres required; skipped without DATABASE_URL.
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomBytes as kekBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
-import { PaymentRequiredError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { requireFixtureActor, requireOrgAuth } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -391,21 +390,35 @@ describe.skipIf(!HAS_DB)("device links (doc 13 §7, PROMPT-21)", () => {
     expect(after).toBeNull();
   });
 
-  it("Community org: mint → 402 scoring.device_links; account-scorer flow unaffected", async () => {
+  it("Community org: mints a device link, scores through it, and the account-scorer flow is unaffected (remote scoring is free on every plan)", async () => {
     const { orgId, ownerId } = await seedOrg("community");
     const owner = asOwner(orgId, ownerId);
     const { fixtures } = await rig(owner);
 
-    await expect(createDeviceLink(owner, fixtures[0].id, null)).rejects.toThrowError(
-      PaymentRequiredError,
-    );
-    // PROMPT-18 path untouched: the owner still scores by session.
-    const scored = await scoreEvent(owner, fixtures[0].id, {
+    const link = await createDeviceLink(owner, fixtures[0].id, "Court 1 phone");
+    expect(link.secret.startsWith("dl_")).toBe(true);
+
+    // The link scores, without a session: start, then a result, both attributed to the link.
+    const deviceAuth = await requireFixtureActor(dlRequest(link.secret), fixtures[0].id, "score");
+    expect(deviceAuth.deviceLinkId).toBe(link.id);
+    await scoreEvent(deviceAuth, fixtures[0].id, { expected_seq: 0, type: "core.start", payload: {} });
+    const scored = await scoreEvent(deviceAuth, fixtures[0].id, {
+      expected_seq: 1,
+      type: "generic.result",
+      payload: { p1Score: 3, p2Score: 1 },
+    });
+    expect(scored.seq).toBe(2);
+    const riders = await sql<{ device_link_id: string | null }[]>`
+      select device_link_id from score_events where fixture_id = ${fixtures[0].id} order by seq`;
+    expect(riders.map((r) => r.device_link_id)).toEqual([link.id, link.id]);
+
+    // PROMPT-18 path untouched: the owner still scores a different match by session.
+    const bySession = await scoreEvent(owner, fixtures[1].id, {
       expected_seq: 0,
       type: "core.start",
       payload: {},
     });
-    expect(scored.seq).toBe(1);
+    expect(bySession.seq).toBe(1);
   });
 });
 
@@ -552,11 +565,20 @@ describe.skipIf(!HAS_DB)("ensureDeviceLink (scorer sheets §4.2)", () => {
     await expect(ensureDeviceLink(owner, fixtures[0].id)).resolves.toMatchObject({ minted: true });
   });
 
-  it("Community without a pass: 402 scoring.device_links", async () => {
+  it("Community without a pass: the console ensure and the print path both mint, and a second call re-shows the same link", async () => {
     const { orgId, ownerId } = await seedOrg("community");
     const owner = asOwner(orgId, ownerId);
-    const { fixtures } = await rig(owner);
-    await expect(ensureDeviceLink(owner, fixtures[0].id)).rejects.toBeInstanceOf(PaymentRequiredError);
+    const { competition, fixtures } = await rig(owner);
+
+    const first = await ensureDeviceLink(owner, fixtures[0].id);
+    expect(first).toMatchObject({ minted: true });
+    const again = await ensureDeviceLink(owner, fixtures[0].id);
+    expect(again).toMatchObject({ minted: false });
+    expect(again.secret).toBe(first.secret);
+
+    const sheets = await ensureDeviceLinks(owner, competition.id, [fixtures[0].id, fixtures[1].id]);
+    expect(sheets.get(fixtures[0].id)!.secret).toBe(first.secret);
+    expect(sheets.get(fixtures[1].id)!.secret).toMatch(/^dl_/);
   });
 
   it("concurrent ensures on one fixture agree on ONE secret (Review Focus 1)", async () => {

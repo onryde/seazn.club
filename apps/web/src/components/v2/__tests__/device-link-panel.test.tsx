@@ -389,20 +389,18 @@ describe("device-link panel — a server with no DEVICE_LINK_KEK (owner ruling Q
   // shared loop let the first path's side effects (a DELETE nulling the live
   // link) leak into the second and red it for the wrong reason.
   it.each(["show", "reissue"] as const)(
-    "a 402 on the %s POST opens the upgrade gate, not an error line",
+    "a 402 on the %s POST (only a billing-frozen admin seat can still raise one) is the generic localised line: no upgrade gate, no server sentence",
     async (path) => {
       api.refuse = { message: "upgrade required", status: 402, code: "PAYMENT_REQUIRED" };
-      const gate = (tree: ReactElement[]) => tree.some((el) => propsOf(el).feature === "scoring.device_links");
       const island = renderIsland(DeviceLinkPanel, PROPS);
       await flush();
-      expect(gate(island.tree()), "no gate before the tap").toBe(false);
       if (path === "show") click(byTestId(island.tree(), "device-link-show"));
       else {
         click(byTestId(island.tree(), "device-link-reissue"));
         click(byTestId(island.tree(), "device-link-reissue-confirm"));
       }
       await flush();
-      expect(gate(island.tree()), "the upgrade gate opens").toBe(true);
+      expect(island.text()).toContain(t("dlink.failed"));
       expect(island.text(), "the server's sentence is not shown").not.toContain("upgrade required");
     },
   );

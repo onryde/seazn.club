@@ -241,8 +241,6 @@ export const FEATURE_REASONS: Record<string, string> = {
   "schedule.versioning": "Multi-site scope locks are a Pro feature — undo/redo always works.",
   "schedule.checkpoints.max":
     "You've reached your plan's save points — Community keeps 2 per division and Pro keeps 10. Undo/redo always works.",
-  "scoring.device_links":
-    "Hand-this-device-over scoring links are on Pro and the Event Pass — your scorer seat still works.",
   // Registration & entry fees (doc 16 §1.1)
   "registration.enabled": "Online registration is switched off for this organisation.",
   // V309 seeds registration.paid TRUE on every plan, so no PLAN can deny this

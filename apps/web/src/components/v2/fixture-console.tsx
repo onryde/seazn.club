@@ -1382,7 +1382,6 @@ export function FixtureConsole({
                 fixtureId={fixture.id}
                 sportKey={sport.key}
                 embedded
-                viewerPlan={viewerPlan}
               />
             </div>
           )}
