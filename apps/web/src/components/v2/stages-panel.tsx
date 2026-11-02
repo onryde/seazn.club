@@ -14,7 +14,8 @@
 // Delete) on the left, the Match rules / Points / Tie-breaks buttons on the right -
 // and its rows sit under one bar per round (the round's name, "N of M played", and
 // its time span), not under day headings.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
@@ -1517,13 +1518,17 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                         shipped "1 fixtures" five times; never a bare
                         `${n} played`. */}
                     {(() => {
-                      const clauses = [
-                        stagePlayed.length > 0 ? msgPlural("schedule.progress.played", stagePlayed.length) : null,
-                        stageInPlay.length > 0 ? msgPlural("schedule.progress.inPlay", stageInPlay.length) : null,
-                        stageHeld.length > 0 ? msgPlural("schedule.progress.held", stageHeld.length) : null,
-                        unscheduled.length > 0 ? msgPlural("schedule.progress.toSchedule", unscheduled.length) : null,
-                        stageNotOpened.length > 0 ? msgPlural("schedule.progress.notOpened", stageNotOpened.length) : null,
-                      ].filter((s): s is string => s !== null);
+                      // Match Day E1 fix round 1 (m3): "N to schedule" is the way to the division schedule - it replaces the card's
+                      // removed footer link, so the one clause that names unscheduled matches is also where an organiser goes to place them.
+                      const clauses: { text: string; href?: string }[] = [
+                        stagePlayed.length > 0 ? { text: msgPlural("schedule.progress.played", stagePlayed.length) } : null,
+                        stageInPlay.length > 0 ? { text: msgPlural("schedule.progress.inPlay", stageInPlay.length) } : null,
+                        stageHeld.length > 0 ? { text: msgPlural("schedule.progress.held", stageHeld.length) } : null,
+                        unscheduled.length > 0
+                          ? { text: msgPlural("schedule.progress.toSchedule", unscheduled.length), href: routes.divisionSchedule(orgSlug, compSlug, divSlug) }
+                          : null,
+                        stageNotOpened.length > 0 ? { text: msgPlural("schedule.progress.notOpened", stageNotOpened.length) } : null,
+                      ].filter((c): c is { text: string; href?: string } => c !== null);
                       return clauses.length > 0 ? (
                         // `mt-1.5` retired with the bar above it — this
                         // line is now the wrapper's only child, and the
@@ -1531,7 +1536,22 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                         // spacing; keeping the margin would just add an
                         // unintended extra 6px nobody asked for.
                         <p className="text-xs text-slate-500" data-testid="stage-progress-counts">
-                          {clauses.join(" · ")}
+                          {clauses.map((c, i) => (
+                            <Fragment key={c.text}>
+                              {i > 0 && " · "}
+                              {c.href === undefined ? (
+                                c.text
+                              ) : (
+                                <Link
+                                  href={c.href}
+                                  data-testid="stage-progress-to-schedule"
+                                  className="font-medium text-slate-700 underline underline-offset-2 hover:text-purple-700 max-md:inline-flex max-md:min-h-11 max-md:items-center"
+                                >
+                                  {c.text}
+                                </Link>
+                              )}
+                            </Fragment>
+                          ))}
                         </p>
                       ) : null;
                     })()}

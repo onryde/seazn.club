@@ -30,6 +30,7 @@ import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
 import type { Dict, Locale } from "@/lib/i18n-constants";
+import { routes } from "@/lib/routes";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
@@ -108,9 +109,17 @@ const PROPS = {
   viewerPlan: "community" as const,
 };
 
+/** The counts line's TEXT: tags stripped, because the "N to schedule" clause is a link (Match Day E1 fix round 1, m3). */
 function progressCounts(html: string): string | null {
-  const m = /data-testid="stage-progress-counts"[^>]*>([^<]*)</.exec(html);
-  return m ? m[1]! : null;
+  const m = /data-testid="stage-progress-counts"[^>]*>(.*?)<\/p>/s.exec(html);
+  return m ? m[1]!.replace(/<[^>]*>/g, "") : null;
+}
+
+/** The "N to schedule" link inside the counts line: its href and its words, or null when the line carries none. */
+function toScheduleLink(html: string): { href: string; text: string } | null {
+  const line = /data-testid="stage-progress-counts"[^>]*>(.*?)<\/p>/s.exec(html)?.[1];
+  const m = line === undefined ? null : /<a [^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/s.exec(line);
+  return m ? { href: m[1]!, text: m[2]!.replace(/<[^>]*>/g, "") } : null;
 }
 
 describe("stage card body — fixtures progress (owner-approved 'Option A')", () => {
@@ -164,6 +173,30 @@ describe("stage card body — fixtures progress (owner-approved 'Option A')", ()
     expect(bare, "the positive pair: the same line renders").toContain(en["schedule.progress.inPlay.one"]!);
     expect(bare).not.toContain(en["schedule.progress.notOpened.one"]!.replace("{count}", "1"));
     expect(bare).not.toContain("0 not opened");
+  });
+
+  // Match Day E1 fix round 1 (m3): the card's footer link to the division schedule was removed with the unscheduled footer, so the
+  // "N to schedule" clause is the way there - a link to the same page, in the viewer's own words.
+  it.each(DICTS)("%s: the 'N to schedule' clause is a link to the division schedule, and only that clause is", (locale, dict) => {
+    const d = dict as unknown as Record<string, string>;
+    const html = renderToStaticMarkup(
+      <DictProvider dict={dict} locale={locale}>
+        <StagesPanel {...PROPS} />
+      </DictProvider>,
+    );
+    const link = toScheduleLink(html);
+    expect(link, `${locale}: the to-schedule clause is not a link`).not.toBeNull();
+    expect(link!.href).toBe(routes.divisionSchedule("org", "comp", "div"));
+    expect(link!.text).toBe(d["schedule.progress.toSchedule.other"]!.replace("{count}", "2"));
+    const anchors = (/data-testid="stage-progress-counts"[^>]*>(.*?)<\/p>/s.exec(html)![1]!.match(/<a /g) ?? []).length;
+    expect(anchors, `${locale}: the played / in-play clauses stay plain text`).toBe(1);
+  });
+
+  it("a stage with nothing to schedule has no link - the clause is absent, so is the way to the schedule", () => {
+    const scheduled = MIXED_FIXTURES.map((f) => ({ ...f, scheduled_at: f.scheduled_at ?? "2026-09-06T10:00:00.000Z" }));
+    const html = renderToStaticMarkup(<StagesPanel {...PROPS} fixtures={scheduled} />);
+    expect(progressCounts(html), "premise: the counts line still renders (played / in play)").toContain(en["schedule.progress.inPlay.one"]!);
+    expect(toScheduleLink(html)).toBeNull();
   });
 
   it("stage-progress-bar no longer renders at all — the bar was removed, not merely emptied", () => {

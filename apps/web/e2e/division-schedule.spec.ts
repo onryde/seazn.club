@@ -106,6 +106,10 @@ test("the run sheet groups fixtures by day and prints them in the competition tz
   // The unscheduled leftover (item 3). Match Day E1 item 1 removed the "To schedule in this stage N ->" footer and the "Not yet scheduled"
   // group: the count is in the card's counts line, and the leftover row is in its round saying "No time yet".
   await expect(page.getByTestId("stage-progress-counts")).toContainText("1 to schedule");
+  // E1 fix round 1 (m3): that clause is the way to the schedule page the removed footer used to be - a real link, not just words.
+  const toScheduleLink = page.getByTestId("stage-progress-to-schedule");
+  await expect(toScheduleLink, "the clause is the link").toHaveText("1 to schedule");
+  await expect(toScheduleLink).toHaveAttribute("href", /\/schedule$/);
   const leftover = gen.data!.fixtures.find((f) => f.id === ids[ids.length - 1]!)!;
   await expect(page.locator(`[data-fixture-no="${leftover.fixture_no}"]`)).toContainText("No time yet");
   await expect(page.getByText("Not yet scheduled"), "the group is gone").toHaveCount(0);

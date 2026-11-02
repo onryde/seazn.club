@@ -95,8 +95,8 @@ const PROPS = {
 function stageCounts(html: string): number[] {
   const [pre, post] = (enUi as Record<string, string>)["schedule.progress.toSchedule.other"]!.split("{count}") as [string, string];
   const out: number[] = [];
-  for (const m of html.matchAll(/data-testid="stage-progress-counts"[^>]*>([^<]*)</g)) {
-    for (const clause of m[1]!.split(" \u00b7 ").map((c) => c.trim())) {
+  for (const m of html.matchAll(/data-testid="stage-progress-counts"[^>]*>(.*?)<\/p>/gs)) {
+    for (const clause of m[1]!.replace(/<[^>]*>/g, "").split(" \u00b7 ").map((c) => c.trim())) {
       if (!clause.startsWith(pre) || !clause.endsWith(post)) continue;
       const n = Number(clause.slice(pre.length, clause.length - post.length));
       if (Number.isInteger(n)) out.push(n);

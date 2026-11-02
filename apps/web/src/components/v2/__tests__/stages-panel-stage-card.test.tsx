@@ -650,7 +650,7 @@ describe("the buttons follow the stage's state (item 8) - through the real panel
     const fixtures = [fixture(A, 1, { status: "decided", outcome: DECIDED }), fixture(A, 2, { status: "needs_decision" })];
     const html = panel({ fixtures });
     expect(disabled(html, "stage-complete")).toBe(true);
-    const counts = text(/data-testid="stage-progress-counts"[^>]*>([^<]*)</.exec(html)![1]!);
+    const counts = text(/data-testid="stage-progress-counts"[^>]*>(.*?)<\/p>/s.exec(html)![1]!.replace(/<[^>]*>/g, ""));
     expect(counts).toContain(UI["schedule.progress.held.one"]!);
     expect(counts).not.toContain(UI["schedule.progress.inPlay.one"]!);
   });
@@ -668,7 +668,7 @@ describe("the buttons follow the stage's state (item 8) - through the real panel
     expect(disabled(html, "stage-complete")).toBe(true);
     expect(tag(html, "stage-complete")).not.toMatch(/\bbtn-primary\b/);
     expect(html).toContain("stage-complete-hint");
-    const counts = text(/data-testid="stage-progress-counts"[^>]*>([^<]*)</.exec(html)![1]!);
+    const counts = text(/data-testid="stage-progress-counts"[^>]*>(.*?)<\/p>/s.exec(html)![1]!.replace(/<[^>]*>/g, ""));
     expect(counts).toContain(UI["schedule.progress.held.one"]!);
     expect(counts).not.toContain(UI["schedule.progress.inPlay.one"]!);
   });
