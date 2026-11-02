@@ -2491,10 +2491,21 @@ export async function createCompetitionViaUi(
   // that want anything else must be explicit, and this helper always selects
   // explicitly rather than depending on either default. The input hides behind
   // the styled card, so click the wrapping label and verify the radio took.
-  const radio = page.getByRole("radio", { name: new RegExp(`^${visibility}`, "i") });
+  // The radio is named by its label, and "unlisted" is labelled "Link only"
+  // (visibility.unlisted.label) — `^unlisted` has never matched a radio.
+  const radio = page.getByRole("radio", {
+    name: new RegExp(`^${visibility === "unlisted" ? "link only" : visibility}`, "i"),
+  });
   await page.locator("label").filter({ has: radio }).click();
   await expect(radio).toBeChecked();
   await page.getByRole("button", { name: /create/i }).click();
+  // Match Day C8: Create no longer navigates. It lands on the "Add your first
+  // division" screen at the same URL, with the competition's own page one tap
+  // away ("Later"). This helper wants the competition page, so it takes that
+  // tap — and waits for the screen first, because a Create that failed would
+  // otherwise surface as a missing link rather than a refusal.
+  await expect(page.getByTestId("first-division-prompt")).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId("first-division-later").click();
   // PROMPT-30: the wizard lands on the slug URL — resolve the id via the API.
   await page.waitForURL(/\/o\/[^/]+\/c\/(?!new$)[^/?]+$/, { timeout: 20_000 });
   const slug = page.url().match(/\/c\/([^/?]+)$/)![1]!;

@@ -20,9 +20,51 @@ test("create a competition via the wizard", async ({ page }) => {
   await page.getByLabel(/^Ends on/i).fill("2030-12-31");
   await page.getByRole("button", { name: /create/i }).click();
 
-  // Lands on the competition page (add-division CTA present).
+  // Match Day C8: Create lands on "Add your first division", not on the
+  // competition page. "Later" is the way onward to the competition page.
+  await expect(page.getByTestId("first-division-prompt")).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId("first-division-later").click();
+
+  // Lands on the competition page (add-division CTA present). The URL first:
+  // the first-division screen carries its OWN "Add division" link, so the link
+  // assertion alone is satisfied before "Later" has navigated anywhere.
+  await page.waitForURL(/\/o\/[^/]+\/c\/(?!new$)[^/?]+$/, { timeout: 20_000 });
   await expect(page.getByRole("link", { name: /add division/i })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole("heading", { name })).toBeVisible();
+});
+
+/**
+ * Match Day C8 — the screen after Create. The organiser's next job is a first
+ * division, so the primary action goes straight to the division builder of THE
+ * competition just made (not the competition page, not a list), and the prompt
+ * names what was created so a double-tapped Create is visible as such.
+ */
+test("create a competition, then Add your first division opens the builder", async ({ page }) => {
+  const name = `First Division ${TAG}`;
+  await page.goto("/competitions/new");
+  await startBlankCompetition(page);
+  await page.getByPlaceholder("Summer Championship 2026").fill(name);
+  await page.getByLabel(/^Ends on/i).fill("2030-12-31");
+  await page.getByRole("button", { name: /create/i }).click();
+
+  const prompt = page.getByTestId("first-division-prompt");
+  await expect(prompt).toBeVisible({ timeout: 20_000 });
+  await expect(prompt).toContainText(name);
+  await expect(prompt.getByRole("heading", { name: "Add your first division" })).toBeVisible();
+  // Still the create route: the screen is client state, and the form is gone so
+  // a second press of Create cannot make a second competition.
+  expect(new URL(page.url()).pathname.endsWith("/c/new")).toBe(true);
+  await expect(page.getByRole("button", { name: /^create competition$/i })).toHaveCount(0);
+
+  await page.getByTestId("first-division-add").click();
+  await page.waitForURL(/\/o\/[^/]+\/c\/[^/?]+\/d\/new$/, { timeout: 20_000 });
+  // The builder itself, not merely its URL — and for THIS competition: the
+  // page prints "in <competition name>" under its heading.
+  await expect(page.getByRole("heading", { name: "New division", level: 1 })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByTestId("division-builder-name")).toBeVisible();
+  await expect(page.getByRole("main")).toContainText(name);
 });
 
 /**
@@ -53,6 +95,18 @@ test("a second competition of the same name creates cleanly with its own slug", 
     await page.getByLabel(/^Ends on/i).fill("2030-12-31");
     await page.getByRole("button", { name: /create/i }).click();
 
+    // Match Day C8: Create lands on "Add your first division"; "Later" opens
+    // the competition page whose URL carries the slug under test.
+    await expect(page.getByTestId("first-division-prompt")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("first-division-later")).toHaveAttribute(
+      "href",
+      new RegExp(`/c/${expectedSlug}$`),
+    );
+    await page.getByTestId("first-division-later").click();
+
+    // The URL before the link: the first-division screen has its own "Add
+    // division" link, so the link alone would pass on the screen being left.
+    await page.waitForURL(new RegExp(`/c/${expectedSlug}$`), { timeout: 20_000 });
     await expect(page.getByRole("link", { name: /add division/i })).toBeVisible({
       timeout: 20_000,
     });

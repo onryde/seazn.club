@@ -3093,6 +3093,128 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
 });
 
 // ---------------------------------------------------------------------------
+// Match Day C8 — the New competition form (blank path) and the "Add your first
+// division" screen it ends on, at every width. The gallery test above only
+// reaches step 0; the form behind "Start from blank" is the part that was
+// rebuilt as one column, and the part with three things that break at 320:
+// the segmented visibility control (three words in a ~85px segment), the
+// Starts/Ends pair (stacked below 360, side by side from it) and the editor
+// toolbar (wraps, 44px buttons). One test, one pass over the states the owner's
+// shots show: empty, Public + showcase + "What this allows" open, Private with
+// the showcase reason, and the screen after Create.
+// ---------------------------------------------------------------------------
+
+test("Match Day C8: the New competition form and the first-division screen hold at this width", async ({
+  page,
+}) => {
+  // 1 nav + 1 gallery swap + 3 form passes + 1 create + 1 prompt pass.
+  test.setTimeout(Math.max(90_000, 2 * 30_000 + 6 * 10_000 + 20_000));
+  const w = page.viewportSize()!.width;
+  const vis = (k: "private" | "unlisted" | "public") => uiEn[`visibility.${k}.label`]!;
+  const name = `C8 Form ${TAG}-${Math.random().toString(36).slice(2, 6)}`;
+
+  await page.goto(`/o/${orgSlug}/c/new`, { waitUntil: "load" });
+  await expect(page.getByTestId("template-gallery")).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId("template-start-blank").click();
+  const form = page.getByTestId("new-competition-form");
+  await expect(form).toBeVisible({ timeout: 10_000 });
+
+  /** Nothing in the form's card may sit outside it (sr-only radios are 1px and skipped), and the page must not scroll sideways. */
+  const holds = async (label: string) => {
+    await expectNoHorizontalScroll(page);
+    const spill = await page.evaluate(() => {
+      const root = document.querySelector<HTMLElement>('[data-testid="new-competition-form"]');
+      if (!root) return ["new-competition-form was not in the DOM"];
+      const box = root.getBoundingClientRect();
+      const out: string[] = [];
+      for (const el of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
+        const r = el.getBoundingClientRect();
+        if (r.width <= 1 || r.height <= 1) continue;
+        if (r.left < box.left - 1 || r.right > box.right + 1) {
+          out.push(`${el.tagName.toLowerCase()} ${Math.round(r.left)}..${Math.round(r.right)} outside ${Math.round(box.left)}..${Math.round(box.right)}`);
+        }
+      }
+      return out;
+    });
+    expect(spill, `${label}: something sits outside the form's card at ${w}px`).toEqual([]);
+  };
+
+  /** A box whose text is cut by its own container is a defect; `overflowingIn` keeps sr-only and ellipsis-by-design apart from it. */
+  const notClipped = async (selector: string, label: string) => {
+    const { clipped } = await overflowingIn(
+      page,
+      selector,
+      "p,li,span,button,a,label,summary,h2,h3",
+      `${selector} was not in the DOM`,
+    );
+    expect(clipped, `${label} is clipped at ${w}px`).toEqual([]);
+  };
+
+  // --- empty form -----------------------------------------------------------
+  await holds("empty form");
+  await assertTapFloor(page.getByPlaceholder(uiEn["comp.wizard.name.placeholder"]!), "name input");
+  await assertTapFloor(form.getByLabel(uiEn["comp.wizard.startsOn"]!), "Starts on");
+  await assertTapFloor(form.getByLabel(new RegExp(`^${uiEn["comp.wizard.endsOn"]}`)), "Ends on");
+  for (const k of ["private", "unlisted", "public"] as const) {
+    // `has:` is matched inside each label: page-rooted, not form-rooted.
+    const radio = page.getByRole("radio", { name: vis(k), exact: true });
+    await assertTapFloor(form.locator("label").filter({ has: radio }), `${k} segment`);
+    // The word is the control: three words in three segments must not truncate.
+    const clipped = await form
+      .locator("label")
+      .filter({ has: radio })
+      .locator("span.truncate")
+      .evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(clipped, `the "${vis(k)}" segment truncates its own word at ${w}px`).toBeLessThanOrEqual(0);
+  }
+  // The editor: 44px toolbar buttons and tabs below lg (every project here is < 1024).
+  await assertTapFloor(form.getByRole("tab", { name: uiEn["editor.write"]!, exact: true }), "Write tab");
+  const bold = form.getByRole("button", { name: uiEn["editor.bold"]!, exact: true });
+  await assertTapFloor(bold, "Bold");
+  const boldBox = await bold.boundingBox();
+  expect(boldBox!.width, `Bold is ${boldBox!.width}px wide`).toBeGreaterThanOrEqual(44);
+  // Create is disabled with its reason shown, and the reason is reachable.
+  const create = form.getByRole("button", { name: uiEn["comp.wizard.create"]!, exact: true });
+  await expect(create).toBeDisabled();
+  await expect(form.getByTestId("create-blocker")).toBeVisible();
+  await notClipped('[data-testid="create-blocker"]', "the Create reason");
+
+  // --- Public + showcase + "What this allows" --------------------------------
+  await page.getByPlaceholder(uiEn["comp.wizard.name.placeholder"]!).fill(name);
+  await form.getByLabel(new RegExp(`^${uiEn["comp.wizard.endsOn"]}`)).fill("2030-12-31");
+  const publicSegment = form.locator("label").filter({ has: page.getByRole("radio", { name: vis("public"), exact: true }) });
+  await publicSegment.click();
+  const showcase = form.getByRole("switch", { name: uiEn["showcase.label"]!, exact: true });
+  await expect(showcase).toBeEnabled();
+  await assertTapFloor(form.getByTestId("showcase-optin").locator("label").first(), "Showcase row");
+  await showcase.check();
+  const allows = form.getByText(uiEn["comp.wizard.showcase.allows"]!, { exact: true });
+  await assertTapFloor(allows, "What this allows");
+  await allows.click();
+  await expect(form.getByText(uiEn["showcase.consent"]!)).toBeVisible();
+  await expect(form.getByTestId("competition-reach").locator("li[data-audience]")).toHaveCount(5);
+  await holds("Public + showcase + consent open");
+
+  // --- Private: showcase off, with the reason --------------------------------
+  await form.locator("label").filter({ has: page.getByRole("radio", { name: vis("private"), exact: true }) }).click();
+  await expect(showcase).toBeDisabled();
+  await expect(showcase).not.toBeChecked();
+  await expect(form.getByText(uiEn["showcase.needsPublic"]!)).toBeVisible();
+  await holds("Private + showcase reason");
+
+  // --- Create, then the first-division screen --------------------------------
+  await expect(create).toBeEnabled();
+  await create.click();
+  const prompt = page.getByTestId("first-division-prompt");
+  await expect(prompt).toBeVisible({ timeout: 20_000 });
+  await expect(prompt).toContainText(name);
+  await expectNoHorizontalScroll(page);
+  await assertTapFloor(page.getByTestId("first-division-add"), "Add division");
+  await assertTapFloor(page.getByTestId("first-division-later"), "Later");
+  await notClipped('[data-testid="first-division-prompt"]', "the first-division screen");
+});
+
+// ---------------------------------------------------------------------------
 // P7 (D1b task T5) — the t20-super8 catalog template: THREE stages at
 // instantiation (group -> Super 8 -> knockout), the first template in the
 // catalog where TWO stages carry `progression` (timing: "setup") in the same

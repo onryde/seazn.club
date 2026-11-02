@@ -222,7 +222,7 @@ export function CompetitionWizard({
 
   return (
     <div className="max-w-2xl">
-      <form onSubmit={submit} className="card space-y-5 p-5 sm:p-6">
+      <form onSubmit={submit} data-testid="new-competition-form" className="card space-y-5 p-5 sm:p-6">
         <label className="block">
           <span className="label">{msg("comp.wizard.name.label")}</span>
           <input
