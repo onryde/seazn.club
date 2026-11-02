@@ -520,6 +520,58 @@ async function wordLines(els: Locator) {
   );
 }
 
+/** The least room any segment's widest word may have to spare. CI's Linux Chromium paints this font a few percent wider
+ *  than macOS (French "uniquement" came out ~1px wider than its 71px box there while it fitted here), so a fit that
+ *  depends on the font is a red waiting for a machine: every word keeps this much headroom, measured, on every machine. */
+const MIN_SLACK_PX = 6;
+
+/**
+ * Per segment (a `<label>`): the ROOM its text may take — the label's content box, less any other in-flow child beside
+ * the text (the icon from `sm` up) and the gap before it — and the painted width of the label's widest word (a DOM
+ * Range over exactly that word). `slack` = room − widest word: how much wider the word could paint before it no
+ * longer fits its segment. A word wider than the room is clipped or split, so this is the margin, not the fit.
+ */
+async function segmentSlack(labels: Locator) {
+  return labels.evaluateAll((nodes) =>
+    nodes.map((label) => {
+      const px = (v: string) => Number.parseFloat(v) || 0;
+      const text = label.querySelector(":scope > span:last-of-type");
+      if (!text) throw new Error("segmentSlack: a segment without its label span");
+      const cs = getComputedStyle(label);
+      const content =
+        label.getBoundingClientRect().width -
+        px(cs.paddingLeft) -
+        px(cs.paddingRight) -
+        px(cs.borderLeftWidth) -
+        px(cs.borderRightWidth);
+      // The radio is `sr-only` (absolute: out of flow), the icon `max-sm:hidden` (display none below sm).
+      const beside = [...label.children].filter((c) => {
+        if (c === text) return false;
+        const s = getComputedStyle(c);
+        return s.display !== "none" && s.position !== "absolute" && s.position !== "fixed";
+      });
+      const room = beside.reduce((left, c) => left - c.getBoundingClientRect().width - px(cs.columnGap), content);
+      let word = "";
+      let width = 0;
+      const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT);
+      for (let t = walker.nextNode() as Text | null; t; t = walker.nextNode() as Text | null) {
+        for (const m of t.data.matchAll(/\S+/g)) {
+          const range = document.createRange();
+          const at = m.index ?? 0;
+          range.setStart(t, at);
+          range.setEnd(t, at + m[0].length);
+          const w = range.getBoundingClientRect().width;
+          if (w > width) {
+            word = m[0];
+            width = w;
+          }
+        }
+      }
+      return { label: (text.textContent ?? "").trim(), room, word, width, slack: room - width };
+    }),
+  );
+}
+
 test.describe("New competition form: the visibility segments", () => {
   test("no word of a segment label is broken across lines, in any language, at any width", async ({ page }) => {
     // One navigation pair per language (the form page, then Start blank), then a resize and a few reads per width.
@@ -528,6 +580,7 @@ test.describe("New competition form: the visibility segments", () => {
     const origin = new URL((test.info().project.use.baseURL as string | undefined) ?? process.env.PLAYWRIGHT_BASE ?? "http://localhost:3000").origin;
     let checked = 0;
     let owed = 0;
+    let slackChecked = 0;
     for (const locale of LOCALES as readonly W2Locale[]) {
       // `seazn_locale` is the explicit switcher pick and outranks everything else.
       await page.context().addCookies([{ name: "seazn_locale", value: locale, url: origin }]);
@@ -566,6 +619,24 @@ test.describe("New competition form: the visibility segments", () => {
         for (const c of clipped) {
           expect(c.over, `${locale} "${c.word}" at ${width}px: ${c.over}px of it is hidden`).toBeLessThanOrEqual(0);
         }
+        // The margin, pinned rather than lucky: the clip check above passes on a word that fits by a pixel, and a pixel is
+        // what one machine's font differs from another's by.
+        const slack = await segmentSlack(form.locator("fieldset label"));
+        expect(slack.map((s) => s.label), `${locale} at ${width}px: every segment's slack was measured`).toEqual(dictionary);
+        // Reported before it is judged, so a red run still prints every language's margin at 320.
+        if (width === SEGMENT_WIDTHS[0]) {
+          const least = slack.reduce((a, b) => (b.slack < a.slack ? b : a));
+          const line = `${locale} at ${width}px: least slack ${least.slack.toFixed(1)}px ("${least.word}" ${least.width.toFixed(1)}px in ${least.room.toFixed(1)}px); ${slack.map((s) => `"${s.label}" ${s.slack.toFixed(1)}`).join(", ")}`;
+          test.info().annotations.push({ type: "segment slack", description: line });
+          console.log(`[segment slack] ${line}`);
+        }
+        for (const s of slack) {
+          expect(
+            s.slack,
+            `${locale} "${s.label}" at ${width}px: its widest word "${s.word}" (${s.width.toFixed(1)}px) has ${s.slack.toFixed(1)}px to spare in a ${s.room.toFixed(1)}px text box`,
+          ).toBeGreaterThanOrEqual(MIN_SLACK_PX);
+          slackChecked += 1;
+        }
         for (const segment of await form.locator("fieldset label").all()) {
           await expectTapTarget(segment, `${locale} segment at ${width}px`);
         }
@@ -575,5 +646,7 @@ test.describe("New competition form: the visibility segments", () => {
     // Anti-vacuity: every language x every width x every dictionary word was measured, and there were words to measure.
     expect(owed).toBeGreaterThan(0);
     expect(checked).toBe(owed);
+    // …and every segment's slack, in every language at every width.
+    expect(slackChecked).toBe(LOCALES.length * SEGMENT_WIDTHS.length * 3);
   });
 });

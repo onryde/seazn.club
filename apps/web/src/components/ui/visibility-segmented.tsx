@@ -40,7 +40,13 @@ export function VisibilitySegmented({
     // bursts out of a narrow card instead of shrinking.
     <fieldset className="min-w-0 [min-inline-size:0]">
       <legend className="label">{msg("visibility.legend")}</legend>
-      <div className="grid grid-cols-3 gap-0.5 rounded-xl border border-purple-200 bg-purple-50 p-[3px]">
+      {/* Below `sm` the three columns are `auto`, not equal thirds: each starts at
+          its label's own width and the space left over is shared out evenly, so
+          the long label takes the width the short "Privé" and "Public" do not
+          need. Equal thirds left French "uniquement" (~67px at 12px) 3px of a
+          70px box at 320, and CI's Linux font paints it ~1px wider than that box;
+          sized to content it has ~40px. From `sm` up: equal thirds, unchanged. */}
+      <div className="grid grid-cols-3 gap-0.5 rounded-xl border border-purple-200 bg-purple-50 p-[3px] max-sm:grid-cols-[auto_auto_auto]">
         {VISIBILITY_OPTIONS.map((opt) => {
           const active = opt.value === value;
           const Icon = ICON[opt.value];
@@ -67,13 +73,14 @@ export function VisibilitySegmented({
               {/* Wraps at spaces only (`break-normal`, never `break-words`: that
                   splits "uniquement" into "uniquemen / t"), and never truncates.
                   The tightest label is French "Lien uniquement", whose longest
-                  word is ~72px at 13px and ~67px at 12px. Beside no icon the text
-                  box is ~71px at 320 (the 78px segment less its padding), hence
-                  `text-xs` below `sm`. In the lg column (26.5rem = 424px) it is
+                  word is ~72px at 13px and ~67px at 12px, hence `text-xs` below
+                  `sm`, where the content-sized columns above give it its whole
+                  width on one line at 320. In the lg column (26.5rem = 424px) it is
                   ~99px beside the icon, and the label sits on two lines. A word cut
                   by an ellipsis or in the middle is a control nobody can name; two
                   short lines inside the 44px target are fine. The walkthrough
-                  measures every word's line count in all four languages. */}
+                  measures every word's line count in all four languages, and the
+                  room each widest word has to spare (at least 6px). */}
               <span className="min-w-0 break-normal text-center leading-tight">{msg(opt.label)}</span>
             </label>
           );
