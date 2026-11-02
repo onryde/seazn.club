@@ -2753,8 +2753,8 @@ export async function lockSwissBoardAppends(tx: Tx, ids: readonly string[]): Pro
   for (const id of [...ids].sort()) await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + id}))`;
 }
 
-export async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<void> {
-  if (ids.length === 0) return;
+export async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<string[]> {
+  if (ids.length === 0) return [];
   // Online play (T19, controller rulings Q1 + pre-review 2026-10-10). A
   // board's bridge row records who was INVITED to it, per seat; those seats
   // are about to go, so the row goes with them — a game-less one, or one whose
@@ -2767,7 +2767,7 @@ export async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Pr
   // keep its round "started" — the rounds lock, Finish and the next Pair would all treat it as under way. So the clear ENDS
   // the calls of the boards it empties, the way Undo call does, before the status below is rewritten (a call's liveness reads
   // it). The slot goes back to what it held before the call (the plan, ruling B).
-  await endCallsOn(tx, ids);
+  const restored = await endCallsOn(tx, ids);
   // The void (spec §7, plan T6): the round's invites that are still queued name boards whose seats are about to go, so they end
   // `round_voided` in THIS transaction (an Unpair that is refused above ends nothing). Only after the refusal, and before the bridge
   // rows they are judged by are deleted. A row already `sending` is left to finish; a seat that was never invited has no row.
@@ -2788,6 +2788,8 @@ export async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Pr
       config_snapshot = null,
       config_snapshot_at = null
     where id in ${tx(ids)}`;
+  // The boards whose slot a call-end put back (`endCallsOn`): their cached public documents need naming after commit.
+  return restored;
 }
 
 /**
@@ -2947,7 +2949,7 @@ export async function unpairSwissRound(
       );
     }
 
-    await clearSwissFixtureSeats(tx, ids);
+    const restored = await clearSwissFixtureSeats(tx, ids);
 
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${stage.division_id}`;
@@ -2956,6 +2958,7 @@ export async function unpairSwissRound(
       round,
       divisionId: stage.division_id,
       competitionId: division!.competition_id,
+      restored,
     };
   });
 
@@ -2969,7 +2972,9 @@ export async function unpairSwissRound(
   await recomputeStandings(auth.orgId, stageId, undefined, { emptyFold: "drop" });
 
   await fireStageRevalidate(auth.orgId, stageId);
-  afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
+  // Ruling 257: a call ended on an emptied board put the board back on its pre-call court and time - name those, so the
+  // public fixture document (`pub:v1:fixture:{id}`) does not serve the called slot for its 30s TTL.
+  afterScheduleWrite(write.divisionId, write.competitionId, "schedule", write.restored);
   return { cleared: write.cleared, round: write.round };
 }
 

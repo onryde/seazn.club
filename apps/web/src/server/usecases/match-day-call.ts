@@ -52,6 +52,7 @@ import {
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { dayKeyInTz, usableWindows, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling";
 import { candidateCourtsByFixture, requiredCourtTagsByFixture, resolveCourtCalendars } from "./court-candidates";
+import { liveCourt, venueBack } from "./court-restore-sql";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { readRounds, roundOf } from "./match-day-rounds";
 import {
@@ -163,9 +164,15 @@ async function endCall(
   call: { live: boolean; prev_court_id: string | null; prev_venue_id: string | null; prev_scheduled_at: Date | null },
 ): Promise<void> {
   if (call.live) {
+    // The court and venue go back only if they still exist: `prev_court_id` and `prev_venue_id` carry no FK on purpose (a
+    // record of what was), and a court deleted while the match was called (nothing references it once the call moved the
+    // match off) would otherwise be written back dangling - the court FK is deferred, so it failed at COMMIT and Undo call,
+    // an Unpair and an Undo of Pair next all stayed stuck on it. history.ts's own rule (`liveCourt`, `venueBack`): none.
     await tx`
       update fixtures
-         set court_id = ${call.prev_court_id}, venue_id = ${call.prev_venue_id}, scheduled_at = ${call.prev_scheduled_at}
+         set court_id = ${liveCourt(tx, call.prev_court_id)},
+             venue_id = ${venueBack(tx, call.prev_court_id, { venue: call.prev_venue_id })},
+             scheduled_at = ${call.prev_scheduled_at}
        where id = ${fixtureId}`;
   }
   await tx`delete from fixture_calls where fixture_id = ${fixtureId}`;
@@ -180,8 +187,10 @@ async function endCall(
  *
  * No `schedule_edited` ledger row and no `divisions.seq` bump, unlike Undo call: the callers write none for their own clear
  * (an Unpair is not a ledger event), and a ledger row inside a history step would sit between the step and the row it
- * inverts. The callers already fire `afterScheduleWrite` after commit. Returns the fixtures whose call ended, for them to
- * name in it. Runs under the division lock every caller holds, which every call and Undo call also takes first.
+ * inverts. Returns the fixtures whose SLOT was put back (a live call), which is what a cached public fixture document
+ * (`pub:v1:fixture:{id}`: court and time) goes stale on; a stale row only deleted changes no slot and is not named. The
+ * caller names them in its post-commit `afterScheduleWrite`: Unpair does, and Undo of Pair next already names every board
+ * it clears. Runs under the division lock every caller holds, which every call and Undo call also takes first.
  */
 export async function endCallsOn(tx: Tx, fixtureIds: readonly string[]): Promise<string[]> {
   if (fixtureIds.length === 0) return [];
@@ -195,7 +204,7 @@ export async function endCallsOn(tx: Tx, fixtureIds: readonly string[]): Promise
      where ${fc}.fixture_id in ${tx(fixtureIds)}
      order by ${fc}.fixture_id`;
   for (const c of calls) await endCall(tx, c.fixture_id, c);
-  return calls.map((c) => c.fixture_id);
+  return calls.filter((c) => c.live).map((c) => c.fixture_id);
 }
 
 /** A call or its Undo on the division's ledger, as moveFixture records a board move: one `schedule_edited` (from/to with the

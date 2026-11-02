@@ -13,7 +13,7 @@
 // Sports: the edit itself is swept over every sport the registry offers a Swiss. The sequences run for badminton (the
 // house racket sport) and boardgame (chess: the one sport whose Pair differs, and the one the colour toggle is for).
 // Single-sport cases carry their reason inline.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { builtinModules } from "@seazn/engine/sports";
@@ -31,12 +31,27 @@ import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { completeStage, createStages, generateStageFixtures, replaceStages, unpairSwissRound } from "../stages";
 import { addSwissRound, listSwissRoundControls, patchSwissStage, swissBoardStartedSql } from "../swiss-rounds-admin";
-import { createCourt, createVenue } from "../venues";
+import { createCourt, createVenue, deleteCourt } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedRegistration } from "./_registration-fixtures";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// A RECORDING passthrough on `afterScheduleWrite` (the pattern competition-schedule-apply.test.ts uses): the real invalidation
+// still runs, and each call's division and fixture ids are kept, so a test can say which fixtures a write named for the
+// public-document cache (`pub:v1:fixture:{id}`).
+const sched = vi.hoisted(() => ({ named: [] as { divisionId: string; fixtureIds: string[] }[] }));
+vi.mock("../schedule", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../schedule")>();
+  return {
+    ...actual,
+    afterScheduleWrite: (divisionId: string, competitionId: string, reason: "schedule" | "publish" | "start", fixtureIds: readonly string[]) => {
+      sched.named.push({ divisionId, fixtureIds: [...fixtureIds] });
+      return actual.afterScheduleWrite(divisionId, competitionId, reason, fixtureIds);
+    },
+  };
+});
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -439,7 +454,13 @@ describe.runIf(HAS_DB)("X-SW-17 the round count is editable until the first fixt
         const ids = boardsOf(await rowsOf(rig.stageId), 1).map((f) => f.id);
         expect(ids.length, "premise: two boards in round 1").toBe(2);
 
+        sched.named.length = 0;
         expect(await unpairSwissRound(rig.auth, rig.stageId)).toMatchObject({ cleared: 2, round: 1 });
+        // The post-commit cache write names the board a call-end put back on its plan (its public document carried the called
+        // court), and nothing when no call stood: Unpair's own `[]` is unchanged.
+        expect(sched.named.filter((n) => n.divisionId === rig.divisionId), "one write, for this division").toEqual([
+          { divisionId: rig.divisionId, fixtureIds: called ? [board!.id] : [] },
+        ]);
         const after = await rowsOf(rig.stageId);
         const r1 = roundOf(after, 1);
         expect(seatedIn(r1), "the round is back on its shells").toEqual([]);
@@ -463,6 +484,39 @@ describe.runIf(HAS_DB)("X-SW-17 the round count is editable until the first fixt
       // The positive pair: Unpair with no call keeps the planned slot, and the called round ends on the same slot.
       expect(noCall.slot).toEqual({ court: noCall.planned, at: "2030-06-01T10:00:00.000Z" });
       expect(withCall.slot).toEqual({ court: withCall.planned, at: "2030-06-01T10:00:00.000Z" });
+    }, 120_000);
+
+    it(`ruling 257 ending a call survives a deleted pre-call court: Unpair and Undo call put the board on no court, never a dangling one (${s.sport})`, async () => {
+      // `deleteCourt` refuses only while a fixture is ON the court, and the call moved the board off its planned court - so
+      // that court can go while the board is called. The call's record of it carries no FK, and writing it back used to fail
+      // at COMMIT (the court FK is deferred), leaving the Unpair / Undo call stuck for good (history.ts's `liveCourt` rule).
+      const plannedAt = "2030-06-01T10:00:00.000Z";
+      let ended = 0;
+      for (const how of ["Unpair", "Undo call"] as const) {
+        const rig = await swissRig(s, 4, 3);
+        await startDivision(rig.auth, rig.divisionId);
+        await pair(rig);
+        const venue = await createVenue(rig.auth, { name: "Hall " + randomUUID().slice(0, 4), sort: 0 });
+        const planned = await createCourt(rig.auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+        const free = await createCourt(rig.auth, venue.id, { name: "Court 2", sort: 1, tags: [] });
+        const board = boardsOf(await rowsOf(rig.stageId), 1)[0]!;
+        await sql`update fixtures set scheduled_at = ${plannedAt}, court_id = ${planned.id}, venue_id = ${venue.id} where id = ${board.id}`;
+        await callFixtureToCourt(rig.auth, board.id, free.id);
+        await deleteCourt(rig.auth, planned.id);
+        const [{ n: gone }] = await sql<{ n: number }[]>`select count(*)::int as n from courts where id = ${planned.id}`;
+        expect(gone, "premise: the pre-call court is deleted while the board is called").toBe(0);
+
+        if (how === "Unpair") await unpairSwissRound(rig.auth, rig.stageId);
+        else await undoCall(rig.auth, board.id);
+
+        const [back] = await sql<{ court_id: string | null; scheduled_at: Date | null }[]>`
+          select court_id, scheduled_at from fixtures where id = ${board.id}`;
+        expect({ court: back!.court_id, at: back!.scheduled_at?.toISOString() }, `${how}: no court, the planned time`).toEqual({ court: null, at: plannedAt });
+        const [{ n: calls }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id = ${board.id}`;
+        expect(calls, `${how}: the call is gone`).toBe(0);
+        ended++;
+      }
+      expect(ended, "anti-vacuity: both ways of ending a call ran").toBe(2);
     }, 120_000);
 
     it(`ruling 257 a live call on ANOTHER division's fixture leaves this Swiss round unstarted (${s.sport})`, async () => {
