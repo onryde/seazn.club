@@ -103,11 +103,16 @@ export function MatchCentre({ fixtureId, initial, realtime, dict, tabParam, repl
     const entrantNames = doc
       ? { [doc.header.sides[0].entrantId]: doc.header.sides[0].name, [doc.header.sides[1].entrantId]: doc.header.sides[1].name }
       : {};
+    // W3 T15 review I4: each side's departure, so a disqualified entrant's walkover is never worded as a withdrawal.
+    const entrantStatuses: Record<string, string> = Object.fromEntries(
+      (doc?.header.sides ?? []).flatMap((s) => (s.departed === undefined ? [] : [[s.entrantId, s.departed]])),
+    );
     return (
       <div data-testid="mc-fallback">
         <LiveScoreBody
           data={data}
           entrantNames={entrantNames}
+          entrantStatuses={entrantStatuses}
           sportKey={doc?.sportKey ?? ""}
           decidedTemplates={EMPTY_DECIDED_TEMPLATES}
           dict={dict}

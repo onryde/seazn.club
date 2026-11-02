@@ -12,6 +12,7 @@ import {
   forfeitTag,
   forfeitWords,
   type ForfeitCopy,
+  type ForfeitEntrantStatuses,
   type ForfeitWords,
 } from "@/lib/forfeit-tag";
 
@@ -25,6 +26,8 @@ export function bracketForfeitWords(
   fixtures: readonly PublicFixture[],
   entrantNames: Readonly<Record<string, string>>,
   copy: ForfeitCopy | undefined,
+  /** W3 T15 review I4: entrant id → status — a cascade walkover over a DISQUALIFIED entrant is worded as a plain one. */
+  statuses?: ForfeitEntrantStatuses,
 ): ReadonlyMap<string, ForfeitWords> {
   const out = new Map<string, ForfeitWords>();
   if (copy === undefined) return out;
@@ -32,7 +35,7 @@ export function bracketForfeitWords(
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const nameOf = (id: string) => entrantNames[id] ?? "?";
   for (const f of fixtures) {
-    const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);
+    const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f, statuses);
     if (tag === null) continue;
     const next =
       tag.kind === "double_walkover"

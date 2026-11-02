@@ -42,6 +42,9 @@ import { bracketForfeitWords } from "@/lib/bracket-forfeit-words";
 interface Props {
   fixtures: PublicFixture[];
   entrantNames: Record<string, string>;
+  /** W3 T15 review I4: entrant id → status (the page's `entrantStatuses`) — a withdrawal cascade's walkover over a
+   *  DISQUALIFIED entrant reads as a plain walkover, never "withdrew". Absent, the words follow the outcome alone. */
+  entrantStatuses?: Readonly<Record<string, string>>;
   divisionPath: string; // /{org}/{comp}/{div}
   /** Venue zone (schedule_settings.tz) — times + day grouping are venue-local,
    *  the same for every viewer (spec 2026-07-14 two-lane, venue authoritative). */
@@ -422,6 +425,7 @@ function ScorebugRow({
 export function Schedule({
   fixtures,
   entrantNames,
+  entrantStatuses,
   divisionPath,
   tz,
   slotLabels,
@@ -444,7 +448,7 @@ export function Schedule({
   const dateTag = intlLocaleFor(locale);
   // W2b Task 13 (review I-2): every row's forfeit words, built once from the WHOLE division (a double walkover's
   // next-round clause reads the fixture its line feeds), exactly as the bracket builds its own.
-  const forfeitWords = bracketForfeitWords(fixtures, entrantNames, copy.forfeit);
+  const forfeitWords = bracketForfeitWords(fixtures, entrantNames, copy.forfeit, entrantStatuses);
 
   // Only offer the day view when at least one fixture actually has a date.
   const anyScheduled = fixtures.some((f) => f.scheduled_at);

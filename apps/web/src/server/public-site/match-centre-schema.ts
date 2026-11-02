@@ -8,7 +8,17 @@ import { z } from "zod";
 export const MatchCentreTabId = z.enum(["summary", "scorecard", "commentary", "timeline", "sets", "info"]);
 export const Msg = z.object({ key: z.string(), params: z.record(z.string(), z.union([z.string(), z.number()])).optional() }); // a dictionary key + params, resolved client-side with t()
 
-export const Side = z.object({ entrantId: z.string(), name: z.string(), short: z.string(), colour: z.string().nullable(), badgeUrl: z.string().nullable() });
+export const Side = z.object({
+  entrantId: z.string(),
+  name: z.string(),
+  short: z.string(),
+  colour: z.string().nullable(),
+  badgeUrl: z.string().nullable(),
+  /** W3 T15 review I4: how the side's entrant left, when she has (`public_entrants_v` publishes it, V412) — so a client
+   *  re-wording the result (`LiveScoreBody`) never calls a disqualified entrant's walkover a withdrawal. Absent while
+   *  she is in the field. */
+  departed: z.enum(["withdrawn", "disqualified"]).optional(),
+});
 export const Person = z.object({ personId: z.string(), name: z.string(), masked: z.boolean() });
 
 export const MatchCentreHeader = z.object({

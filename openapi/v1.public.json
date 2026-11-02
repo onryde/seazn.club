@@ -43926,6 +43926,13 @@
                                                 "type": "null"
                                               }
                                             ]
+                                          },
+                                          "departed": {
+                                            "type": "string",
+                                            "enum": [
+                                              "withdrawn",
+                                              "disqualified"
+                                            ]
                                           }
                                         },
                                         "required": [
@@ -43967,6 +43974,13 @@
                                               {
                                                 "type": "null"
                                               }
+                                            ]
+                                          },
+                                          "departed": {
+                                            "type": "string",
+                                            "enum": [
+                                              "withdrawn",
+                                              "disqualified"
                                             ]
                                           }
                                         },
@@ -46644,6 +46658,13 @@
                                               "type": "null"
                                             }
                                           ]
+                                        },
+                                        "departed": {
+                                          "type": "string",
+                                          "enum": [
+                                            "withdrawn",
+                                            "disqualified"
+                                          ]
                                         }
                                       },
                                       "required": [
@@ -46685,6 +46706,13 @@
                                             {
                                               "type": "null"
                                             }
+                                          ]
+                                        },
+                                        "departed": {
+                                          "type": "string",
+                                          "enum": [
+                                            "withdrawn",
+                                            "disqualified"
                                           ]
                                         }
                                       },
@@ -47046,6 +47074,13 @@
                                                   {
                                                     "type": "null"
                                                   }
+                                                ]
+                                              },
+                                              "departed": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "withdrawn",
+                                                  "disqualified"
                                                 ]
                                               }
                                             },
@@ -47962,6 +47997,13 @@
                                                   {
                                                     "type": "null"
                                                   }
+                                                ]
+                                              },
+                                              "departed": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "withdrawn",
+                                                  "disqualified"
                                                 ]
                                               }
                                             },

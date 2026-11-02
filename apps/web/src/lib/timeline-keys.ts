@@ -96,6 +96,10 @@ export const TIMELINE_OVERRIDE_KEYS: readonly string[] = [
   "timeline.core.forfeit.withdrew",
   "timeline.core.forfeit.doubleWalkover",
   "timeline.core.abandon.expunge",
+  // W3 T15 review I4: the cascade's lines over a DISQUALIFIED side never say "withdrew" (ruling 116 words only a
+  // withdrawal): a plain walkover, and a plain removal from the table.
+  "timeline.core.forfeit.walkoverPlain",
+  "timeline.core.abandon.expungePlain",
 ];
 
 /** W2b Task 12: a forfeit line's key per kind. No bye: `CoreForfeit` refuses reason "bye" (a bye is written with no
@@ -108,6 +112,10 @@ export const TIMELINE_FORFEIT_KEY: Readonly<Record<Exclude<ForfeitCopyKind, "bye
   double_walkover: "timeline.core.forfeit.doubleWalkover",
 };
 export const TIMELINE_EXPUNGE_KEY = "timeline.core.abandon.expunge";
+/** I4: the cascade's `withdrew` forfeit by a side that was DISQUALIFIED, and its expunge over a fixture with a
+ *  disqualified side — worded with no "withdrew". */
+export const TIMELINE_WALKOVER_PLAIN_KEY = "timeline.core.forfeit.walkoverPlain";
+export const TIMELINE_EXPUNGE_PLAIN_KEY = "timeline.core.abandon.expungePlain";
 
 /** The template table: recorded event type -> dictionary key. */
 export const TIMELINE_KEY_FOR: Readonly<Record<string, string>> = {

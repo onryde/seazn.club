@@ -97,7 +97,7 @@ import {
 // dropped — one authority per fact, never a second parse of the same jsonb.
 import { matchPhase, matchStrength } from "@/lib/public-site";
 import { intlLocaleFor } from "@/lib/public-date-locale";
-import { forfeitLedgerOf, forfeitSentence, forfeitTag } from "@/lib/forfeit-tag";
+import { forfeitLedgerOf, forfeitSentence, forfeitTag, type ForfeitEntrantStatuses } from "@/lib/forfeit-tag";
 import type { PublicFixture } from "./data";
 import type { PublicPerson } from "./public-lineups";
 import { buildSets, buildTimeline } from "./timeline";
@@ -157,6 +157,10 @@ export interface MatchCentreInput {
    *  seated, so the loader reads her name (masked as it masks a side) and the sentence names her. Absent or null for
    *  every other fixture: a seated loser is named by the sides. */
   unseatedForfeitLoser?: { readonly id: string; readonly name: string } | null;
+  /** W3 T15 review I4: entrant id → status for the sides (and an unseated forfeit loser), read with them from
+   *  `public_entrants_v`. A withdrawal cascade's walkover over a DISQUALIFIED entrant reads as a plain walkover — in
+   *  the status line and the timeline — never "withdrew". Absent, both read by the outcome alone. */
+  entrantStatuses?: ForfeitEntrantStatuses;
   /** R3 (T16 fix round 1): an online game is being played on this board (`loadOnlineGameInPlay` — the Fixtures
    *  list's "Watch live"). Nothing marks such a fixture in play, so without this the header said "Scheduled" over a
    *  game being watched. Lifts ONLY a `scheduled` fixture to the live state; absent is false. */
@@ -953,6 +957,7 @@ function buildHeader(
     resolveMsg?: (msg: MsgT) => string;
     doubleWalkoverNext?: string | null;
     unseatedForfeitLoser?: { readonly id: string; readonly name: string } | null;
+    entrantStatuses?: ForfeitEntrantStatuses;
   },
   onlineGameInPlay: boolean,
   onlineGameStarting: boolean,
@@ -961,7 +966,10 @@ function buildHeader(
   const status = onlineGameInPlay && fixture.status === "scheduled" ? "in_play" : statusOf(fixture.status);
   // W2b Task 13 (spec §5.5, UI-2): a credited result says WHICH one (the status line, below) — `forfeitTag` is the one
   // reader, answering only for a decided outcome, so a live or scheduled match is untouched.
-  const tag = status === "scheduled" || status === "in_play" ? null : forfeitTag(fixture.outcome, forfeitLedgerOf(events), fixture);
+  const tag =
+    status === "scheduled" || status === "in_play"
+      ? null
+      : forfeitTag(fixture.outcome, forfeitLedgerOf(events), fixture, forfeitExtra.entrantStatuses);
 
   // Audit 3.1: a double walkover credits nobody — its summary's 0 / 0 is not a score, so the court card carries no
   // score lines (the schedule's rule, `schedule.tsx`, read through the same tag), and its sentence says what happened.
@@ -1396,7 +1404,17 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
     // to pin at all (see `MatchCentreInput.moduleVersion`'s own doc).
     const sportModule =
       moduleVersion !== null ? resolveModule(sportKey, moduleVersion) : resolveLatestModule(sportKey);
-    const timelineResult = buildTimeline({ sportKey, events, module: sportModule, cfg, lineups: lineupPair, sides, personOf });
+    const statuses = input.entrantStatuses;
+    const timelineResult = buildTimeline({
+      sportKey,
+      events,
+      module: sportModule,
+      cfg,
+      lineups: lineupPair,
+      sides,
+      personOf,
+      ...(statuses === undefined ? {} : { sideStatuses: [statuses[sides[0].entrantId], statuses[sides[1].entrantId]] as const }),
+    });
     timelineLines = timelineResult.lines;
     derivedComplete = timelineResult.derivedComplete;
     const summary: ScoreSummary = {
@@ -1422,7 +1440,12 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
     input.formatLabel,
     input.stage,
     input.events,
-    { resolveMsg: input.resolveMsg, doubleWalkoverNext: input.doubleWalkoverNext, unseatedForfeitLoser: input.unseatedForfeitLoser },
+    {
+      resolveMsg: input.resolveMsg,
+      doubleWalkoverNext: input.doubleWalkoverNext,
+      unseatedForfeitLoser: input.unseatedForfeitLoser,
+      entrantStatuses: input.entrantStatuses,
+    },
     input.onlineGameInPlay === true,
     input.onlineGameStarting === true,
   );

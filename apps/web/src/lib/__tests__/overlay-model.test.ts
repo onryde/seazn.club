@@ -1113,6 +1113,38 @@ describe("overlayModel — a credited result reads its forfeit sentence (W2b T13
     expect(legacy.header.period).toBe(onAir({ kind: "award", winner: "H", loser: "A", reason: "walkover" } as never).header.period);
   });
 
+  // W3 T15 review I4: a disqualification runs the withdrawal cascade (reason `withdrew`); a DISQUALIFIED side is never
+  // said on air to have withdrawn — the plain walkover (ruling 116 prescribes no DQ copy). The side's departure is
+  // what each page door reads (`page-facts.ts`: the match centre's `Side.departed`, the relay's `entrants.status`).
+  it("W3 T15 I4: the cascade's walkover over a DISQUALIFIED side reads the plain walkover on air; a withdrawn side's says she withdrew", () => {
+    const award = { kind: "award", winner: "H", loser: "A", reason: "withdrew" } as never;
+    const withSides = (departed: "withdrawn" | "disqualified" | undefined) =>
+      overlayModel({
+        sportKey: "football",
+        data: { lastSeq: null, venueTz: "UTC", ...payload("football", [], "forfeited", award) } as OverlayLiveData,
+        sides: [SIDES[0], { ...SIDES[1], ...(departed === undefined ? {} : { departed }) }],
+        startLabel: null,
+        clockLabel: null,
+        msg: keyMsg,
+        decidedTemplates: TEMPLATES,
+        forfeitCopy: COPY,
+      });
+    const CASES: [name: string, departed: "withdrawn" | "disqualified" | undefined, key: string][] = [
+      ["in the field (no departure read)", undefined, "forfeit.sentence.withdrew"],
+      ["withdrawn", "withdrawn", "forfeit.sentence.withdrew"],
+      ["disqualified", "disqualified", "forfeit.sentence.walkoverPlain"],
+    ];
+    let checked = 0;
+    for (const [name, departed, key] of CASES) {
+      const model = withSides(departed);
+      expect(model.result, name).toBe(t(UI, key, { loser: "Northbridge Athletic" }));
+      expect(model.header.period, name).toBe(t(UI, key, { loser: "NOR" }));
+      checked++;
+    }
+    expect(checked).toBe(CASES.length);
+    expect(withSides("disqualified").result, "the two reasons read differently").not.toBe(withSides("withdrawn").result);
+  });
+
   it("a double walkover says so (it said nothing)", () => {
     const model = onAir({ kind: "double_walkover" } as never);
     expect(model.result).toBe(t(UI, "forfeit.sentence.doubleWalkover"));

@@ -148,6 +148,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
       <Schedule
         fixtures={fixtures}
         entrantNames={entrantNames}
+        entrantStatuses={entrantStatuses}
         divisionPath={publicPath}
         tz={tz}
         slotLabels={slotLabels}
@@ -174,6 +175,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
             away_slot_label: namer.seatLabelOf(f.id, "away", f.away_slot_label),
           }))}
         entrantNames={entrantNames}
+        entrantStatuses={entrantStatuses}
         entrantLogos={entrantLogos}
         fixtureHref={(fixtureId) => `${publicPath}/fixtures/${fixtureId}`}
         lookup={lookup}

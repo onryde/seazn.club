@@ -2,7 +2,14 @@
 // console read it from here, so the two cannot word one result two ways (W2b loop H F2). Moved verbatim from
 // `components/v2/stages-panel.tsx`, which re-exports it for its existing importers. Client-safe: no `server-only`.
 import type { MessageKey } from "@/lib/messages";
-import { NO_LEDGER, forfeitTag, type ForfeitLedger, type ForfeitSeats, type ForfeitTagKind } from "@/lib/forfeit-tag";
+import {
+  NO_LEDGER,
+  forfeitTag,
+  type ForfeitEntrantStatuses,
+  type ForfeitLedger,
+  type ForfeitSeats,
+  type ForfeitTagKind,
+} from "@/lib/forfeit-tag";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -96,6 +103,8 @@ export function splitResultTail(line: string, tail: string | null | undefined): 
 export const FORFEIT_TAG_FULL_KEY = {
   walkover: "forfeit.tagFull.walkover",
   withdrew: "forfeit.tagFull.withdrew",
+  // I4: a DQ'd loser's walkover is expanded as the plain walkover it reads as, never "withdrew".
+  walkover_plain: "forfeit.tagFull.walkover",
   retired: "forfeit.tagFull.retired",
   disqualified: "forfeit.tagFull.disqualified",
   double_walkover: "forfeit.tagFull.doubleWalkover",
@@ -111,7 +120,10 @@ export function outcomeTagWords(
   outcome: unknown,
   ledger: ForfeitLedger = NO_LEDGER,
   seats?: ForfeitSeats,
+  /** W3 T15 review I4: entrant id → status — a public surface's cascade walkover over a DISQUALIFIED entrant expands
+   *  as the plain walkover, never "withdrew". */
+  statuses?: ForfeitEntrantStatuses,
 ): { word: string; full: string } | null {
-  const tag = forfeitTag(outcome, ledger, seats);
+  const tag = forfeitTag(outcome, ledger, seats, statuses);
   return tag === null ? null : { word: msg(tag.tagKey), full: msg(FORFEIT_TAG_FULL_KEY[tag.kind]) };
 }

@@ -75,7 +75,9 @@ import { matchPhase, periodBreakdown, servingSide, setBreakdown, type PeriodScor
 import { log } from "@/server/logger";
 import {
   TIMELINE_EXPUNGE_KEY,
+  TIMELINE_EXPUNGE_PLAIN_KEY,
   TIMELINE_FORFEIT_KEY,
+  TIMELINE_WALKOVER_PLAIN_KEY,
   TIMELINE_GAME_BROKEN_KEY,
   TIMELINE_GAME_HELD_KEY,
   TIMELINE_KEY_FOR,
@@ -98,7 +100,14 @@ export interface TimelineArgs {
   sides: [SideT, SideT];
   /** Consent-resolved by the caller (`public-lineups.ts`); never resolved here. */
   personOf: (personId: string) => PersonT;
+  /** W3 T15 review I4: each side's entrant status (`public_entrants_v`), home then away — a cascade line over a
+   *  DISQUALIFIED side is worded with no "withdrew". Absent, every line reads by its payload alone, as before. */
+  sideStatuses?: SideStatuses;
 }
+
+/** Home's and away's entrant status, or undefined where unknown. */
+export type SideStatuses = readonly [string | undefined, string | undefined];
+const NO_SIDE_STATUSES: SideStatuses = [undefined, undefined];
 
 export interface SetsArgs {
   sportKey: string;
@@ -455,7 +464,7 @@ const lineupOverride = (_payload: Payload, sideIndex: 0 | 1 | null): string | nu
   sideIndex === null ? "timeline.core.lineup.unknownSide" : null;
 
 const KEY_OVERRIDE: Readonly<
-  Record<string, (payload: Payload, sideIndex: 0 | 1 | null) => string | null>
+  Record<string, (payload: Payload, sideIndex: 0 | 1 | null, statuses: SideStatuses) => string | null>
 > = {
   // Keyed on the RESOLVED side, not on `payload.winner` being a non-empty
   // string. A winner id that matches NEITHER entrant — a stale fixture, an
@@ -490,12 +499,18 @@ const KEY_OVERRIDE: Readonly<
       : null,
   // W2b Task 12: the forfeit's reason (or a double walkover) is the sentence; a pre-D3 row with no reason the engine
   // declares keeps the table's reason-free line. A bye is never a core.forfeit (`CoreForfeit` refuses it).
-  "core.forfeit": (payload) => {
+  // W3 T15 review I4: the cascade's `withdrew` by a side that was DISQUALIFIED (a DQ runs the cascade since T15) is a
+  // plain walkover — ruling 116 words only a withdrawal.
+  "core.forfeit": (payload, sideIndex, statuses) => {
     const kind = forfeitCopyKind(payload);
-    return kind === null || kind === "bye" ? null : TIMELINE_FORFEIT_KEY[kind];
+    if (kind === null || kind === "bye") return null;
+    if (kind === "withdrew" && sideIndex !== null && statuses[sideIndex] === "disqualified") return TIMELINE_WALKOVER_PLAIN_KEY;
+    return TIMELINE_FORFEIT_KEY[kind];
   },
-  // W2b D5: the withdrawal cascade's expunge is not a plain abandon — the match left the table.
-  "core.abandon": (payload) => (isExpungeAbandon(payload) ? TIMELINE_EXPUNGE_KEY : null),
+  // W2b D5: the withdrawal cascade's expunge is not a plain abandon — the match left the table. It names no side, so
+  // over a fixture with a DISQUALIFIED side it says only that (I4), never "an entrant withdrew".
+  "core.abandon": (payload, sideIndex, statuses) =>
+    isExpungeAbandon(payload) ? (statuses.includes("disqualified") ? TIMELINE_EXPUNGE_PLAIN_KEY : TIMELINE_EXPUNGE_KEY) : null,
 };
 
 /** Internal only: the ledger order a line was produced in. Two lines can share
@@ -510,11 +525,12 @@ function recordedLine(
   event: EventEnvelope,
   sides: readonly [SideT, SideT],
   personOf: (personId: string) => PersonT,
+  statuses: SideStatuses = NO_SIDE_STATUSES,
 ): TimelineLineT {
   const payload = asPayload(event.payload);
   const sideIndex = sideIndexOf(payload, sides);
   const key =
-    KEY_OVERRIDE[event.type]?.(payload, sideIndex) ??
+    KEY_OVERRIDE[event.type]?.(payload, sideIndex, statuses) ??
     TIMELINE_KEY_FOR[event.type] ??
     TIMELINE_NEUTRAL_KEY;
   const build = PARAMS_FOR[event.type];
@@ -701,7 +717,7 @@ export interface TimelineResult {
 }
 
 export function buildTimeline(args: TimelineArgs): TimelineResult {
-  const { events, module, cfg, lineups, sides, personOf, sportKey } = args;
+  const { events, module, cfg, lineups, sides, personOf, sportKey, sideStatuses } = args;
   const active = resolveVoids(events);
   if (active.length === 0) return { lines: [], derivedComplete: true };
 
@@ -726,7 +742,7 @@ export function buildTimeline(args: TimelineArgs): TimelineResult {
   const recorded = active.map((event) =>
     sportKey === "tennis" && event.type === "tennis.point"
       ? null
-      : recordedLine(event, sides, personOf),
+      : recordedLine(event, sides, personOf, sideStatuses),
   );
   const derivedAfter = new Map<number, TimelineLineT[]>();
 

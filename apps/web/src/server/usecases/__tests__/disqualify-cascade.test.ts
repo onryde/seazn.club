@@ -15,9 +15,23 @@
 //
 // Sports: every Swiss case runs for badminton (the house racket sport) and boardgame (chess); the first case also runs on
 // a badminton LEAGUE, where the table policy (spec 05 §5: under half played expunges, otherwise walks over) decides.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { isValidElement, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { sql } from "@/lib/db";
+import enPublic from "@/dictionaries/en/public.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
+import type { MessageKey } from "@/lib/messages";
+import { msgFor } from "@/lib/messages-i18n";
+import { Schedule } from "@/components/public-site/schedule";
+import DivisionHomePage from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
+import { loadCompetitionHub } from "@/server/public-site/competition-hub";
+import { getPublicDivision, type PublicFixture } from "@/server/public-site/data";
+import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
+import { publicOverlayPageFacts, relayOverlayPageFacts } from "@/server/overlay/page-facts";
+import { buildPublicDivisionSlides } from "@/server/slideshow-data";
 import { builtinModules } from "@seazn/engine/sports";
 import { entrantKindCap } from "@seazn/engine/sport";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -29,6 +43,14 @@ import { scoreEvent } from "../scoring";
 import { createStages, generateStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
+
+// The public reads (T15 review I4) go through `unstable_cache`, which has no incrementalCache outside a real request: a
+// passthrough, never a memoising double (competition-hub-db.test.ts's own reason).
+vi.mock("next/cache", () => ({
+  unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
+  revalidateTag: vi.fn(),
+  revalidatePath: vi.fn(),
+}));
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -320,4 +342,146 @@ describe.runIf(HAS_DB)("X-SW-23 a disqualification cascades like a withdrawal (R
       played.map((f) => [f.id, f.status, f.outcome]),
     );
   }, 120_000);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W3 T15 review I4 (controller ruling 2026-11-02, under ruling 116's scope note at stages.ts `awardSeededByes`): the DQ
+// cascade's award carries reason `withdrew` (the engine has no unplayed `disqualified` forfeit: PF-2). A DISQUALIFIED
+// entrant is never shown publicly as having withdrawn; ruling 116 prescribes no DQ copy, so every public surface words
+// her walkover as the plain walkover, read from her published status (`public_entrants_v`, V412). Driven through the
+// real producers: the PATCH and the withdrawal cascade write the boards; each surface reads them through its own loader.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const EN = enPublic as unknown as Dict;
+const en = (key: string, vars?: Record<string, string>) => t(EN, key, vars);
+/** Escape for a search inside rendered markup: React writes `'` as `&#x27;`. */
+const escaped = (s: string) => s.replace(/&/g, "&amp;").replace(/'/g, "&#x27;").replace(/"/g, "&quot;");
+
+/** Every element of `type` anywhere in a server component's returned tree (withdrawn-winner-walkover.test.ts). */
+function findElements(node: unknown, type: unknown, out: ReactElement[] = []): ReactElement[] {
+  if (Array.isArray(node)) {
+    for (const child of node) findElements(child, type, out);
+  } else if (isValidElement(node)) {
+    if (node.type === type) out.push(node);
+    for (const value of Object.values((node.props ?? {}) as Record<string, unknown>)) findElements(value, type, out);
+  }
+  return out;
+}
+/** The markup of the ONE link to a fixture (a schedule row). */
+function linkTo(html: string, fixtureId: string): string {
+  const all = [...html.matchAll(new RegExp(`<a[^>]*href="[^"]*/fixtures/${fixtureId}"[^>]*>([\\s\\S]*?)</a>`, "g"))];
+  if (all.length !== 1) throw new Error(`schedule: ${all.length} links to ${fixtureId}, wanted exactly one`);
+  return all[0]![0];
+}
+/** Every object in a JSON-shaped tree that carries `key` (the kiosk's slides hold their rows at varying depths). */
+function objectsWith(node: unknown, key: string, out: Record<string, unknown>[] = []): Record<string, unknown>[] {
+  if (Array.isArray(node)) for (const x of node) objectsWith(x, key, out);
+  else if (node !== null && typeof node === "object") {
+    if (key in node) out.push(node as Record<string, unknown>);
+    for (const v of Object.values(node)) objectsWith(v, key, out);
+  }
+  return out;
+}
+/** The page's own read of one fixture (`public_fixtures_v`, the columns `getPublicFixture` selects). */
+async function publicRow(id: string): Promise<PublicFixture> {
+  const [row] = await sql<PublicFixture[]>`
+    select id, division_id, stage_id, pool_id, round_no, seq_in_round,
+           home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
+           scheduled_at, venue, court_label, status, outcome, summary, last_seq,
+           lane, is_final, third_place, conditional, stream_url
+      from public_fixtures_v where id = ${id}`;
+  if (!row) throw new Error(`rig: ${id} is not public`);
+  return row;
+}
+async function matchCentreCtx(divisionId: string): Promise<MatchCentreLoadCtx> {
+  const [div] = await sql<{ sport_key: string; module_version: string }[]>`
+    select sport_key, module_version from divisions where id = ${divisionId}`;
+  return {
+    orgTz: null,
+    division: { sportKey: div!.sport_key, moduleVersion: div!.module_version, formatLabel: "x", tz: null, youth: false, playerNameDisplay: null },
+    locale: "en",
+    hrefs: { division: "/d", competition: "/c", calendar: null },
+    stage: { name: "Swiss", roundLabel: null },
+    slotLabelLookup: (key: MessageKey, vars?: Record<string, string | number>) => msgFor("en", key, vars),
+  };
+}
+
+describe.runIf(HAS_DB)("W3 T15 I4: a disqualified entrant's walkover reads as a plain walkover on every public surface; a withdrawn one's says she withdrew", () => {
+  for (const s of SPORTS) {
+    it(`the division page's schedule, the hub card, the match page (status line, timeline, side), the kiosk and both overlay doors (${s.sport})`, async () => {
+      const { r, dq, owed, opponent } = await midSwiss(s);
+      const other = boardsOf(await rowsOf(r.stageId), 2).find((f) => f.id !== owed.id && f.status === "scheduled");
+      expect(other, "premise: a second open round-2 board, for the withdrawn twin").toBeDefined();
+      const wd = other!.away_entrant_id!;
+      const wdOpponent = other!.home_entrant_id!;
+
+      // The real producers: the DQ through the PATCH (it routes to the cascade), the twin through the withdrawal.
+      await patchEntrant(r.auth, dq, { status: "disqualified" });
+      await withdrawEntrantCascade(r.auth, wd);
+      const after = await rowsOf(r.stageId);
+      expect(after.find((f) => f.id === owed.id)?.outcome, "premise: the DQ's walkover").toEqual({ kind: "award", winner: opponent, loser: dq, reason: WITHDREW });
+      expect(after.find((f) => f.id === other!.id)?.outcome, "premise: the withdrawal's").toEqual({ kind: "award", winner: wdOpponent, loser: wd, reason: WITHDREW });
+
+      const [comp] = await sql<{ id: string }[]>`select competition_id as id from divisions where id = ${r.divisionId}`;
+      await sql`update competitions set visibility = 'public' where id = ${comp!.id}`;
+      const [slugs] = await sql<{ org: string; comp: string; div: string }[]>`
+        select o.slug as org, c.slug as comp, d.slug as div from divisions d
+        join competitions c on c.id = d.competition_id join organizations o on o.id = c.org_id where d.id = ${r.divisionId}`;
+      const detail = (await getPublicDivision(slugs!.org, slugs!.comp, slugs!.div))!;
+      const names = Object.fromEntries(detail.entrants.map((e) => [e.id, e.display_name]));
+      expect([detail.entrants.find((e) => e.id === dq)?.status, detail.entrants.find((e) => e.id === wd)?.status], "premise: both published, with their status").toEqual([
+        "disqualified",
+        "withdrawn",
+      ]);
+
+      // What each board must read: the DQ's the plain walkover; the withdrawal's the withdrawal walkover, as before.
+      const BOARDS = [
+        { id: owed.id, loser: dq, status: "disqualified", sentenceKey: "forfeit.sentence.walkoverPlain", timelineKey: "timeline.core.forfeit.walkoverPlain", fullKey: "forfeit.tagFull.walkover", opponent },
+        { id: other!.id, loser: wd, status: "withdrawn", sentenceKey: "forfeit.sentence.withdrew", timelineKey: "timeline.core.forfeit.withdrew", fullKey: "forfeit.tagFull.withdrew", opponent: wdOpponent },
+      ] as const;
+      expect(en(BOARDS[0].sentenceKey, { loser: names[dq]! }), "premise: the plain sentence says no withdrawal").not.toMatch(/withdr/i);
+      expect(en(BOARDS[1].sentenceKey, { loser: names[wd]! }), "premise: the withdrawal sentence says so").toMatch(/withdr/i);
+
+      const root = await DivisionHomePage({
+        params: Promise.resolve({ orgSlug: slugs!.org, competitionSlug: slugs!.comp, divisionSlug: slugs!.div }),
+      });
+      const schedules = findElements(root, Schedule);
+      expect(schedules.length, "rig: the division page builds a Schedule").toBeGreaterThan(0);
+      const scheduleHtml = schedules.map((el) => renderToStaticMarkup(el)).join("");
+      const hub = (await loadCompetitionHub(slugs!.org, slugs!.comp))!;
+      const kiosk = await buildPublicDivisionSlides({ ...detail, orgLocale: "en" });
+      const kioskRows = objectsWith(kiosk, "statusTag");
+
+      let surfaces = 0;
+      for (const b of BOARDS) {
+        const sentence = en(b.sentenceKey, { loser: names[b.loser]! });
+        const tag = `${b.status}`;
+        // The division page's schedule row: the tag's accessible name is the sentence.
+        expect(linkTo(scheduleHtml, b.id), `schedule/${tag}`).toContain(`aria-label="${escaped(sentence)}"`);
+        surfaces++;
+        // The hub card.
+        expect(hub.matches.find((m) => m.fixtureId === b.id)?.forfeit?.sentence, `hub/${tag}`).toBe(sentence);
+        surfaces++;
+        // The match page: the court card's line, the timeline's forfeit line, and the loser's side carries her departure.
+        const doc = await loadMatchCentre(sql, await publicRow(b.id), await matchCentreCtx(r.divisionId));
+        expect(doc.header.statusLine, `match page/${tag}`).toEqual({ key: b.sentenceKey, params: { loser: names[b.loser] } });
+        expect((doc.timeline ?? []).filter((l) => l.text.key.startsWith("timeline.core.forfeit.")).map((l) => l.text.key), `timeline/${tag}`).toEqual([b.timelineKey]);
+        expect(doc.header.sides.find((x) => x.entrantId === b.loser)?.departed, `match page side/${tag}`).toBe(b.status);
+        expect(doc.header.sides.find((x) => x.entrantId === b.opponent)?.departed, `the opponent is in the field/${tag}`).toBeUndefined();
+        surfaces += 3;
+        // The kiosk: the results row naming both sides, its tag's expansion.
+        const row = kioskRows.filter((x) => [x.home, x.away].includes(names[b.loser]) && [x.home, x.away].includes(names[b.opponent]));
+        expect(row.length, `kiosk/${tag}: one results row`).toBeGreaterThan(0);
+        for (const x of row) expect((x.statusTag as { full: string }).full, `kiosk/${tag}`).toBe(msgFor("en", b.fullKey as MessageKey));
+        surfaces++;
+        // Both overlay doors: the loser's side carries her departure (the overlay model words it, overlay-model.test.ts).
+        for (const [door, facts] of [["public", await publicOverlayPageFacts(b.id)], ["relay", await relayOverlayPageFacts(b.id)]] as const) {
+          expect(facts?.sides.find((x) => x.id === b.loser)?.departed, `${door} overlay/${tag}`).toBe(b.status);
+          expect(facts?.sides.find((x) => x.id === b.opponent)?.departed, `${door} overlay opponent/${tag}`).toBeUndefined();
+          surfaces++;
+        }
+      }
+      expect(surfaces, "every surface, both reasons").toBe(BOARDS.length * 8);
+    }, 120_000);
+  }
 });

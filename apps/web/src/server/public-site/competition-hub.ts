@@ -41,7 +41,15 @@ import { renderProse } from "@/lib/prose";
 import { formatPublicInstant } from "@/lib/public-date-locale";
 import { publicRoundNamer } from "./feeder-slot-label";
 import { decidedOutcomeText, playerStatLabel, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
-import { doubleWalkoverNextWinner, forfeitLedgerOfReason, forfeitTag, forfeitWords, unseatedForfeitLoser, type ForfeitWords } from "@/lib/forfeit-tag";
+import {
+  doubleWalkoverNextWinner,
+  forfeitLedgerOfReason,
+  forfeitTag,
+  forfeitWords,
+  unseatedForfeitLoser,
+  type ForfeitEntrantStatuses,
+  type ForfeitWords,
+} from "@/lib/forfeit-tag";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
 import {
   bucketFixture,
@@ -177,6 +185,9 @@ export function hubForfeit(
   ctx: {
     byId: ReadonlyMap<string, PublicFixture>;
     names: Readonly<Record<string, string>>;
+    /** W3 T15 review I4: entrant id → status (the division's `entrants`, departed included since V412) — a withdrawal
+     *  cascade's walkover over a DISQUALIFIED entrant reads as a plain walkover, never "withdrew". */
+    statuses?: ForfeitEntrantStatuses;
     msg: (key: TKey, vars?: Record<string, string | number>) => string;
     resultSentence: () => string | null;
     /** Loop R M-10: fixture id → was anything played before its forfeit (`forfeitPlayedById`, which asks of forfeit
@@ -184,7 +195,7 @@ export function hubForfeit(
     played?: ReadonlyMap<string, boolean>;
   },
 ): (ForfeitWords & { played?: boolean }) | null {
-  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);
+  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f, ctx.statuses);
   if (tag === null) return null;
   const played = ctx.played?.get(f.id);
   const nameOf = (id: string) => ctx.names[id] ?? "?";
@@ -762,6 +773,7 @@ export async function loadCompetitionHub(
     modules.set(d.id, module_);
 
     const names: Record<string, string> = {};
+    const statuses: Record<string, string> = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
     const kinds: Record<string, string> = {};
     const badges: Record<string, string | null> = {};
     const colours: Record<string, string | null> = {};
@@ -888,6 +900,7 @@ export async function loadCompetitionHub(
         forfeit: hubForfeit(f, {
           byId: fixtureById,
           names,
+          statuses,
           msg,
           played: forfeitPlayed,
           resultSentence: () =>

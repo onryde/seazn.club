@@ -52,8 +52,14 @@ export function forfeitLedgerOf(events: readonly { readonly type: string; readon
 
 /** The abandon tags, by what the abandon left behind (UI-2 / public-copy.html). */
 type AbandonTagKind = "abandoned_dls" | "abandoned_no_result" | "abandoned";
+/** W3 T15 review I4 (controller ruling 2026-11-02, under owner ruling 116's scope note): the withdrawal cascade's award
+ *  (reason `withdrew`) over an entrant who was DISQUALIFIED — a DQ runs the withdrawal cascade since T15 (RB3-17) — is
+ *  never worded as a withdrawal. Ruling 116 words only a withdrawal ("a DISQUALIFIED winner is no 'withdrew'",
+ *  stages.ts `awardSeededByes`) and prescribes no DQ copy, so it reads as a plain walkover: the walkover's tag, and a
+ *  sentence that names her and says nothing about why she left. */
+type PlainWalkoverKind = "walkover_plain";
 /** Every tag the reader can answer. A bye is not one: it keeps today's copy. */
-export type ForfeitTagKind = Exclude<ForfeitCopyKind, "bye"> | AbandonTagKind;
+export type ForfeitTagKind = Exclude<ForfeitCopyKind, "bye"> | AbandonTagKind | PlainWalkoverKind;
 
 /** The outcome kinds an abandon can leave behind that the reader tags from the ledger — the played-result kinds
  *  (an award and a double walkover are forfeits, tagged by their own kind). Exported for the SQL ledger read, which
@@ -68,6 +74,7 @@ export const ABANDON_WIN_METHODS = ["dls", "abandoned"] as const;
 export const FORFEIT_TAG_KEY = {
   walkover: "forfeit.tag.walkover",
   withdrew: "forfeit.tag.walkover",
+  walkover_plain: "forfeit.tag.walkover",
   retired: "forfeit.tag.retired",
   disqualified: "forfeit.tag.disqualified",
   double_walkover: "forfeit.tag.doubleWalkover",
@@ -81,6 +88,7 @@ export const FORFEIT_TAG_KEY = {
 export const FORFEIT_SENTENCE_KEY = {
   walkover: "forfeit.sentence.walkover",
   withdrew: "forfeit.sentence.withdrew",
+  walkover_plain: "forfeit.sentence.walkoverPlain",
   retired: "forfeit.sentence.retired",
   disqualified: "forfeit.sentence.disqualified",
   double_walkover: "forfeit.sentence.doubleWalkover",
@@ -131,6 +139,11 @@ export interface ForfeitTag {
   readonly params: { readonly winner?: string; readonly loser?: string; readonly reason?: string };
 }
 
+/** Entrant id → status (`entrants.status`), as a surface already holds it: `public_entrants_v` publishes a departed
+ *  entrant with her status (V412). Handed to `forfeitTag` so a withdrawal's award over a disqualified loser is worded
+ *  as a plain walkover (I4). Absent, the reader words the award by its reason alone, as before. */
+export type ForfeitEntrantStatuses = Readonly<Record<string, string | undefined>>;
+
 const ABANDON_KINDS: ReadonlySet<string> = new Set(ABANDON_RESULT_KINDS);
 const ABANDON_METHODS: ReadonlySet<string> = new Set(ABANDON_WIN_METHODS);
 
@@ -162,7 +175,12 @@ function abandonKindOf(o: { kind?: unknown; method?: unknown }): AbandonTagKind 
  * "abandoned" with its reason, as a level one does. Before, it read nothing, so R16-3 took the public "Abandoned
  * (reason)" off a no-draw cfg's bracket abandon, which had been a (tagged) draw.
  */
-export function forfeitTag(outcome: unknown, ledger: ForfeitLedger, seats?: ForfeitSeats): ForfeitTag | null {
+export function forfeitTag(
+  outcome: unknown,
+  ledger: ForfeitLedger,
+  seats?: ForfeitSeats,
+  statuses?: ForfeitEntrantStatuses,
+): ForfeitTag | null {
   if (outcome === null || outcome === undefined) return ledger.abandon === null ? null : tagOf("abandoned", { reason: ledger.abandon.reason });
   if (typeof outcome !== "object") return null;
   const o = outcome as { kind?: unknown; winner?: unknown; loser?: unknown; reason?: unknown; method?: unknown };
@@ -182,6 +200,8 @@ export function forfeitTag(outcome: unknown, ledger: ForfeitLedger, seats?: Forf
     // Every forfeit award the engine writes names its loser (D9); one that does not is not a forfeit we can word —
     // the sentence names the offending side, and there is none to name.
     if (ids.loser === undefined) return null;
+    // I4: the cascade's award over a disqualified loser is no "withdrew" — the plain walkover (ruling 116 words none).
+    if (kind === "withdrew" && statuses?.[ids.loser] === "disqualified") return tagOf("walkover_plain", ids);
     return tagOf(kind, ids);
   }
   if (o.kind === "double_walkover") {

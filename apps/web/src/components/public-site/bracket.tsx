@@ -34,6 +34,9 @@ interface Props {
   kind: "knockout" | "double_elim" | "stepladder" | "page_playoff";
   fixtures: PublicFixture[];
   entrantNames: Record<string, string>;
+  /** W3 T15 review I4: entrant id → status (the page's `entrantStatuses`) — a withdrawal cascade's walkover over a
+   *  DISQUALIFIED entrant reads as a plain walkover, never "withdrew". Absent, the words follow the outcome alone. */
+  entrantStatuses?: Readonly<Record<string, string>>;
   /** Resolved badge/crest URLs (entrant badge → team logo) — same map the
    *  standings table takes; nodes render a crest chip before the name. */
   entrantLogos?: Record<string, string | null>;
@@ -559,10 +562,10 @@ function DoubleElim({
   );
 }
 
-export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHref, lookup, slotText, copy: callerCopy, tz, locale }: Props) {
+export function Bracket({ kind, fixtures, entrantNames, entrantStatuses, entrantLogos, fixtureHref, lookup, slotText, copy: callerCopy, tz, locale }: Props) {
   // W2b Task 13: every card's forfeit words, built once for the whole stage (a double walkover's clause reads its
   // next fixture), then carried down with the rest of the copy.
-  const copy: BracketCopy = { ...callerCopy, forfeitWords: bracketForfeitWords(fixtures, entrantNames, callerCopy.forfeit) };
+  const copy: BracketCopy = { ...callerCopy, forfeitWords: bracketForfeitWords(fixtures, entrantNames, callerCopy.forfeit, entrantStatuses) };
   // PROMPT-62: the connected two-sided tree, when the shape allows it.
   if (kind === "knockout") {
     const result = twoSidedBracket(fixtures);
