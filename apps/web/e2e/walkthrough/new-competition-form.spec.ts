@@ -379,6 +379,10 @@ for (const width of WIDTHS) {
         expect(body.starts_on).toBe(startC);
         expect(body.ends_on).toBe(longEnd);
         expect(String(body.description)).toContain(`**${description.bold}**`);
+        // The hint is a drawing, never content: it is not on the wire either.
+        expect(String(body.description), "the placeholder sentence is not sent as the description").not.toContain(
+          uiEn["comp.wizard.description.placeholder"]!,
+        );
 
         // 8. "Add your first division" — read it, tap it, land in the builder.
         const prompt = page.getByTestId("first-division-prompt");
@@ -418,6 +422,10 @@ for (const width of WIDTHS) {
           ends_on: longEnd,
         });
         expect(row.data!.description).toContain(`**${description.bold}**`);
+        // ...and not stored: the saved description is what was typed, and the hint sentence is nowhere in it.
+        expect(row.data!.description, "the placeholder sentence is not in the saved description").not.toContain(
+          uiEn["comp.wizard.description.placeholder"]!,
+        );
       } finally {
         // A showcased competition must not outlive the test on a shared org.
         if (createdId) {
@@ -462,6 +470,9 @@ for (const width of WIDTHS) {
         const main = page.getByRole("main");
         await expect(main).toContainText(description.plain.trim());
         await expect(main.locator("strong", { hasText: description.bold })).toBeVisible();
+        await expect(main, "the public page never shows the hint sentence").not.toContainText(
+          uiEn["comp.wizard.description.placeholder"]!,
+        );
         await expectNoHorizontalScroll(page);
       } finally {
         // This one opens on Public (the default) and is a draft on a shared org:
@@ -472,41 +483,97 @@ for (const width of WIDTHS) {
         }
       }
     });
+  });
+}
 
-    test("the visibility segments clip no word in any language", async ({ page }) => {
-      // One navigation pair per language (the form page, then Start blank) and a few reads each.
-      test.setTimeout(budget(LOCALES.length * 2, LOCALES.length * 10));
-      const org = await activeOrg(page);
-      let measured = 0;
-      for (const locale of LOCALES as readonly W2Locale[]) {
-        // `seazn_locale` is the explicit switcher pick and outranks everything else.
-        const origin = new URL((test.info().project.use.baseURL as string | undefined) ?? process.env.PLAYWRIGHT_BASE ?? "http://localhost:3000").origin;
-        await page.context().addCookies([{ name: "seazn_locale", value: locale, url: origin }]);
-        await page.goto(`/o/${org.slug}/c/new`);
-        await expect(page.getByTestId("template-gallery")).toBeVisible({ timeout: 20_000 });
-        await page.getByTestId("template-start-blank").click();
-        const form = page.getByTestId("new-competition-form");
-        await expect(form).toBeVisible({ timeout: 10_000 });
-        // The word of each segment is its label's last span (icon and radio come first).
-        const words = form.locator("fieldset label > span:last-of-type");
-        await expect(words, `${locale}: three visibility segments`).toHaveCount(3);
-        const expected = (["private", "unlisted", "public"] as const).map((v) => uiString(locale, `visibility.${v}.label`));
-        expect(await words.allInnerTexts(), `${locale}: the segments read the ${locale} dictionary`).toEqual(expected);
-        const cut = await words.evaluateAll((els) =>
-          els.map((el) => ({ word: el.textContent ?? "", over: el.scrollWidth - el.clientWidth })),
-        );
-        for (const c of cut) {
-          expect(c.over, `${locale} "${c.word}" is clipped at ${width}px (${c.over}px of it is hidden)`).toBeLessThanOrEqual(0);
-          measured += 1;
+// The visibility segments are the narrowest labelled control on the form, and
+// the longest word in any of them is French ("uniquement", ~72px at 13px). The
+// widths: the four narrow phones (320/360/375/390, where a segment is
+// narrowest) and the two lg widths (1024/1280, the fixed 26.5rem column).
+const SEGMENT_WIDTHS = [320, 360, 375, 390, 1024, 1280] as const;
+
+/**
+ * Every whitespace-delimited word of each element's text, with how many LINES
+ * a DOM Range over exactly that word occupies: `getClientRects().length` is one
+ * rect per line box the word touches, so 1 means the word sits whole on one
+ * line. A clip check (`scrollWidth - clientWidth`) cannot see this: with
+ * `overflow-wrap: break-word` a word too long for its box is split mid-word,
+ * never overflowed, so `scrollWidth` equals `clientWidth` while the reader sees
+ * "uniquemen / t".
+ */
+async function wordLines(els: Locator) {
+  return els.evaluateAll((nodes) =>
+    nodes.map((el) => {
+      const out: { word: string; lines: number }[] = [];
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let t = walker.nextNode() as Text | null; t; t = walker.nextNode() as Text | null) {
+        for (const m of t.data.matchAll(/\S+/g)) {
+          const range = document.createRange();
+          const at = m.index ?? 0;
+          range.setStart(t, at);
+          range.setEnd(t, at + m[0].length);
+          out.push({ word: m[0], lines: range.getClientRects().length });
         }
-        // Wrapping is the fallback, not a way to lose the 44px target.
+      }
+      return out;
+    }),
+  );
+}
+
+test.describe("New competition form: the visibility segments", () => {
+  test("no word of a segment label is broken across lines, in any language, at any width", async ({ page }) => {
+    // One navigation pair per language (the form page, then Start blank), then a resize and a few reads per width.
+    test.setTimeout(budget(LOCALES.length * 2, LOCALES.length * SEGMENT_WIDTHS.length * 6));
+    const org = await activeOrg(page);
+    const origin = new URL((test.info().project.use.baseURL as string | undefined) ?? process.env.PLAYWRIGHT_BASE ?? "http://localhost:3000").origin;
+    let checked = 0;
+    let owed = 0;
+    for (const locale of LOCALES as readonly W2Locale[]) {
+      // `seazn_locale` is the explicit switcher pick and outranks everything else.
+      await page.context().addCookies([{ name: "seazn_locale", value: locale, url: origin }]);
+      await page.setViewportSize({ width: SEGMENT_WIDTHS[0], height: 640 });
+      await page.goto(`/o/${org.slug}/c/new`);
+      await expect(page.getByTestId("template-gallery")).toBeVisible({ timeout: 20_000 });
+      await page.getByTestId("template-start-blank").click();
+      const form = page.getByTestId("new-competition-form");
+      await expect(form).toBeVisible({ timeout: 10_000 });
+      // The word of each segment is its label's last span (icon and radio come first).
+      const words = form.locator("fieldset label > span:last-of-type");
+      await expect(words, `${locale}: three visibility segments`).toHaveCount(3);
+      // The words that MUST be found are the dictionary's, not the DOM's: a probe that finds fewer is vacuous.
+      const dictionary = (["private", "unlisted", "public"] as const).map((v) => uiString(locale, `visibility.${v}.label`));
+      expect(await words.allInnerTexts(), `${locale}: the segments read the ${locale} dictionary`).toEqual(dictionary);
+      const expectedWords = dictionary.map((label) => label.split(/\s+/).filter(Boolean));
+      // A one-word-per-segment probe could never see a wrap: each language must own a multi-word label.
+      expect(expectedWords.flat().length, `${locale}: a segment label has more than one word`).toBeGreaterThan(expectedWords.length);
+      await page.evaluate(() => document.fonts.ready);
+      for (const width of SEGMENT_WIDTHS) {
+        await page.setViewportSize({ width, height: width <= 390 ? 640 : 800 });
+        const perSegment = await wordLines(words);
+        expect(
+          perSegment.map((segment) => segment.map((w) => w.word)),
+          `${locale} at ${width}px: every word of every segment was measured`,
+        ).toEqual(expectedWords);
+        for (const [i, segment] of perSegment.entries()) {
+          for (const w of segment) {
+            expect(w.lines, `${locale} segment ${i + 1} "${dictionary[i]}" at ${width}px: the word "${w.word}" is broken across ${w.lines} lines`).toBe(1);
+            checked += 1;
+          }
+        }
+        owed += expectedWords.flat().length;
+        // Wrapping at a space is the fallback, not a way to lose the 44px target or to clip a line.
+        const clipped = await words.evaluateAll((els) => els.map((el) => ({ word: el.textContent ?? "", over: el.scrollWidth - el.clientWidth })));
+        for (const c of clipped) {
+          expect(c.over, `${locale} "${c.word}" at ${width}px: ${c.over}px of it is hidden`).toBeLessThanOrEqual(0);
+        }
         for (const segment of await form.locator("fieldset label").all()) {
-          await expectTapTarget(segment, `${locale} segment`);
+          await expectTapTarget(segment, `${locale} segment at ${width}px`);
         }
         await expectNoHorizontalScroll(page);
       }
-      // Anti-vacuity: every language x three segments was actually measured.
-      expect(measured).toBe(LOCALES.length * 3);
-    });
+    }
+    // Anti-vacuity: every language x every width x every dictionary word was measured, and there were words to measure.
+    expect(owed).toBeGreaterThan(0);
+    expect(checked).toBe(owed);
   });
-}
+});

@@ -68,7 +68,8 @@ export default async function NewCompetitionPage({
     // degrade card, inside its modal, does not). The title therefore moves once,
     // when "Start from blank" swaps the gallery for the form at `lg`, and stays put
     // from the form to whatever Create lands on. Pinned by
-    // __tests__/new-competition-page-width.test.tsx.
+    // __tests__/new-competition-page.test.tsx ("the page's wide-page selector is
+    // held to the components that carry it").
     <main
       className="mx-auto max-w-4xl px-4 py-8 lg:has-[[data-wide-page]]:max-w-6xl"
       data-tour="competition-wizard"

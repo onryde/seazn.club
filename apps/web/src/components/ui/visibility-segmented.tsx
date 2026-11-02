@@ -47,7 +47,7 @@ export function VisibilitySegmented({
           return (
             <label
               key={opt.value}
-              className={`relative flex min-h-11 min-w-0 cursor-pointer items-center justify-center gap-1.5 rounded-[7px] px-1 text-[13px] font-medium transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 sm:px-2 sm:text-sm ${
+              className={`relative flex min-h-11 min-w-0 cursor-pointer items-center justify-center gap-1.5 rounded-[7px] px-1 text-xs font-medium transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 sm:px-2 sm:text-sm ${
                 active
                   ? "bg-purple-600 text-white shadow-sm"
                   : "text-slate-700 hover:bg-white hover:text-purple-700"
@@ -61,14 +61,20 @@ export function VisibilitySegmented({
                 onChange={() => onChange(opt.value)}
                 className="sr-only"
               />
-              {/* Hidden at the tightest widths: three words and three icons do
-                  not fit a 320px card, and the word is the control. */}
-              <Icon aria-hidden className="h-4 w-4 shrink-0 max-[359px]:hidden" strokeWidth={2} />
-              {/* Wraps rather than truncating: "Lien uniquement" needs 104-126px and
-                  the segment's text box is ~99px beside the icon in the lg column
-                  (and ~78px at 320). A word cut by an ellipsis is a control nobody
-                  can name; two short lines inside the 44px target are fine. */}
-              <span className="min-w-0 break-words text-center leading-tight">{msg(opt.label)}</span>
+              {/* Hidden below `sm`: three icons and three words do not fit a phone
+                  card, and the word is the control. */}
+              <Icon aria-hidden className="h-4 w-4 shrink-0 max-sm:hidden" strokeWidth={2} />
+              {/* Wraps at spaces only (`break-normal`, never `break-words`: that
+                  splits "uniquement" into "uniquemen / t"), and never truncates.
+                  The tightest label is French "Lien uniquement", whose longest
+                  word is ~72px at 13px and ~67px at 12px. Beside no icon the text
+                  box is ~71px at 320 (the 78px segment less its padding), hence
+                  `text-xs` below `sm`. In the lg column (26.5rem = 424px) it is
+                  ~99px beside the icon, and the label sits on two lines. A word cut
+                  by an ellipsis or in the middle is a control nobody can name; two
+                  short lines inside the 44px target are fine. The walkthrough
+                  measures every word's line count in all four languages. */}
+              <span className="min-w-0 break-normal text-center leading-tight">{msg(opt.label)}</span>
             </label>
           );
         })}
