@@ -895,8 +895,9 @@ export async function w3SwissASuite(): Promise<void> {
     // `PATCH /entrants/{id}` `{status: "disqualified"}` runs the withdrawal cascade. On check 13's division, after check 19
     // (every competition of this owner is at the community plan's division cap, and the owner at its three active
     // competitions): five players, round 1 decided, round 2 paired, check 19's board still unplayed. Its home player is
-    // disqualified. That board walks over to its other side (the cascade's walkover, reason "withdrew"), round 1 reads back
-    // as it was, and a second identical PATCH is a 200 that rewrites nothing.
+    // disqualified. That board walks over to its other side (the cascade's walkover, reason "withdrew"), the reply carries
+    // the cascade's report (one walkover, T15 review m3), round 1 and every OTHER round-2 board read back as they were
+    // (T15 review m7: the cascade touches only her board), and a second identical PATCH is a 200 that rewrites nothing.
     {
       const board = roundTwoBoard;
       const divRows = async () => v1data<Seat[] | undefined>(await v1(owner, `/api/v1/divisions/${board?.divId}/fixtures`)) ?? [];
@@ -913,18 +914,24 @@ export async function w3SwissASuite(): Promise<void> {
       const afterSecond = await divRows();
       const roundOne = before.filter((f) => f.round_no === 1);
       const r1Kept = roundOne.length > 0 && roundOne.every((f) => sameRow(f, afterFirst.find((x) => x.id === f.id)));
+      // m7: every other round-2 row (the other board, the bye) — at least one, so the comparison is not vacuous.
+      const otherR2 = before.filter((f) => f.round_no === 2 && f.id !== board?.id);
+      const othersKept = otherR2.some((f) => !isBye(f)) && otherR2.every((f) => sameRow(f, afterFirst.find((x) => x.id === f.id)));
+      const report = v1data<{ cascade?: { status?: string; walkovers?: number; left_to_organiser?: string[] } } | undefined>(first)?.cascade;
       const unchanged =
         afterFirst.length > 0 && afterFirst.length === afterSecond.length && afterFirst.every((f) => sameRow(f, afterSecond.find((x) => x.id === f.id)));
       const ok =
         board !== undefined && premise !== undefined && premise.status === "scheduled" &&
         premise.home_entrant_id === dq && premise.away_entrant_id === opponent &&
         first.status === 200 && v1data<{ status?: string } | undefined>(first)?.status === "disqualified" &&
+        report?.status === "disqualified" && report.walkovers === 1 && report.left_to_organiser?.length === 0 && othersKept &&
         walked?.status === "forfeited" && walked.outcome?.kind === "award" && walked.outcome.winner === opponent &&
         walked.outcome.loser === dq && walked.outcome.reason === "withdrew" &&
-        r1Kept && second.status === 200 && v1data<{ status?: string } | undefined>(second)?.status === "disqualified" && unchanged;
+        r1Kept && second.status === 200 && v1data<{ status?: string; cascade?: unknown } | undefined>(second)?.status === "disqualified" &&
+        v1data<{ cascade?: unknown } | undefined>(second)?.cascade === undefined && unchanged;
       w3Check(
-        "w3a X-SW-23: PATCH status disqualified mid-Swiss walks her round-2 board over to its other side (reason withdrew), round 1 stands, and a second PATCH is a 200 that rewrites nothing" +
-          (ok ? "" : ` — board ${board ? `${board.id} ${dq} v ${opponent}` : "none (check 13 left no round-2 board)"}, before ${premise ? `${premise.status} ${premise.home_entrant_id} v ${premise.away_entrant_id}` : "missing"}, first ${first.status} ${JSON.stringify(first.json).slice(0, 160)}, walked ${JSON.stringify(walked ?? null).slice(0, 200)} (read ${walkedRes.status} ${JSON.stringify(walkedRes.json).slice(0, 160)}), round 1 kept ${r1Kept} (${roundOne.length}), second ${second.status} ${JSON.stringify(second.json).slice(0, 160)}, unchanged ${unchanged}`),
+        "w3a X-SW-23: PATCH status disqualified mid-Swiss walks her round-2 board over to its other side (reason withdrew) and answers the cascade's report, round 1 and the other round-2 board stand, and a second PATCH is a 200 that rewrites nothing" +
+          (ok ? "" : ` — board ${board ? `${board.id} ${dq} v ${opponent}` : "none (check 13 left no round-2 board)"}, before ${premise ? `${premise.status} ${premise.home_entrant_id} v ${premise.away_entrant_id}` : "missing"}, first ${first.status} ${JSON.stringify(first.json).slice(0, 160)}, walked ${JSON.stringify(walked ?? null).slice(0, 200)} (read ${walkedRes.status} ${JSON.stringify(walkedRes.json).slice(0, 160)}), round 1 kept ${r1Kept} (${roundOne.length}), other round-2 rows kept ${othersKept} (${otherR2.length}), report ${JSON.stringify(report ?? null)}, second ${second.status} ${JSON.stringify(second.json).slice(0, 160)}, unchanged ${unchanged}`),
         ok,
       );
     }
