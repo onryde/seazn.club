@@ -1713,10 +1713,30 @@ test.describe("Match Day — E2 items 2, 3, 5, 7 (phone 320)", () => {
       const rowBox = await input.locator("xpath=ancestor::label[1]").boundingBox();
       expect(rowBox!.height, "each venue row is a 44px target").toBeGreaterThanOrEqual(44);
     }
+    // Fix round 1, m6: the button says what it opens (expanded + controls, no haspopup), opening moves focus INTO the sheet, and
+    // Esc, a tap on the backdrop and Done each close it and hand focus back to the button.
+    await expect(trigger).not.toHaveAttribute("aria-haspopup");
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(await trigger.getAttribute("aria-controls"), "the button controls the sheet it opened").toBe(await panel.getAttribute("id"));
+    await expect(panel.locator(":focus"), "opening moved focus into the sheet").toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await expect(panel).toHaveCount(0);
+    await expect(trigger, "Esc hands focus back to the button").toBeFocused();
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await trigger.click();
+    await expect(panel).toBeVisible();
+    await expect(panel.locator(":focus")).toHaveCount(1);
+    // The backdrop is the part of the page the sheet does not cover: a tap near the top edge.
+    await page.getByTestId("md-venue-backdrop").click({ position: { x: 160, y: 20 } });
+    await expect(panel).toHaveCount(0);
+    await expect(trigger, "the backdrop tap hands focus back to the button").toBeFocused();
+    await trigger.click();
+    await expect(panel).toBeVisible();
     await panel.locator(`[data-testid="md-venue-option"][data-venue-id="${seed.venues.b.id}"]`).uncheck();
     await expect(page.getByTestId("md-venue-summary")).toHaveText(seed.venues.a.name);
     await panel.getByRole("button", { name: UI_EN["matchDay.venue.done"]! }).click();
     await expect(panel).toHaveCount(0);
+    await expect(trigger, "Done hands focus back to the button").toBeFocused();
     expect(await courtIdsInList(page)).toEqual([courts.a1.id, courts.a2.id, courts.a3.id, courts.a4.id]);
     await expectNoHorizontalScroll(page);
 

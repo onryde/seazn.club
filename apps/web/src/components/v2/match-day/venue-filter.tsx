@@ -4,6 +4,12 @@
 // full-width sheet from the bottom edge, every row a 44px target, with a backdrop tap and a Done button to leave it. Esc closes
 // either and hands focus back to the button.
 //
+// Keyboard and screen-reader contract (fix round 1, m6): the button is a disclosure (`aria-expanded` + `aria-controls`, no
+// `aria-haspopup` - a checklist is not a menu, listbox or dialog, and a haspopup would promise one); opening moves focus INTO the
+// panel, to its first checkbox, so the sheet on a phone is not left behind a backdrop with focus still on the button; Esc, Done and
+// a tap on the backdrop all close it and return focus to the button (a tap outside the popover from md leaves focus where the tap
+// put it).
+//
 // It is DISPLAY ONLY. It reports the venues the organiser wants listed; the call guards never read it.
 //
 // The checklist is a set of real checkboxes: "Show all venues" is checked while every venue is, checking it selects every venue,
@@ -30,14 +36,26 @@ export function VenueFilter({
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const panelId = useId();
+
+  /** Close and hand focus back to the button: the way out of the sheet or the popover by the keyboard, Done or the backdrop. */
+  const closeToTrigger = () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  // Opening moves focus into the panel (its first checkbox), where the keyboard and a screen reader should be.
+  useEffect(() => {
+    if (!open) return;
+    panelRef.current?.querySelector<HTMLInputElement>("input[type=checkbox]")?.focus();
+  }, [open]);
 
   useEffect(() => {
     if (!open || typeof document === "undefined") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      setOpen(false);
-      triggerRef.current?.focus();
+      closeToTrigger();
     };
     // From md the popover closes on a tap outside it (a phone has the backdrop for that).
     const onPointer = (e: PointerEvent) => {
@@ -74,7 +92,6 @@ export function VenueFilter({
         type="button"
         data-testid="md-venue-trigger"
         data-all={everyVenue ? "true" : "false"}
-        aria-haspopup="true"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
         aria-label={`${t(dict, "matchDay.venue.label")}: ${summary}`}
@@ -103,8 +120,9 @@ export function VenueFilter({
       </button>
       {open && (
         <>
-          <div aria-hidden data-testid="md-venue-backdrop" onClick={() => setOpen(false)} className="fixed inset-0 z-40 bg-slate-900/40 md:hidden" />
+          <div aria-hidden data-testid="md-venue-backdrop" onClick={closeToTrigger} className="fixed inset-0 z-40 bg-slate-900/40 md:hidden" />
           <div
+            ref={panelRef}
             id={panelId}
             role="group"
             aria-label={t(dict, "matchDay.venue.label")}
@@ -143,7 +161,7 @@ export function VenueFilter({
               ))}
             </ul>
             <div className="mt-2 border-t border-purple-50 pt-2 md:hidden">
-              <button type="button" onClick={() => setOpen(false)} className="btn btn-primary min-h-11 w-full">
+              <button type="button" onClick={closeToTrigger} className="btn btn-primary min-h-11 w-full">
                 {t(dict, "matchDay.venue.done")}
               </button>
             </div>

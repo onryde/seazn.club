@@ -353,6 +353,26 @@ describe("the filter itself — a checklist, 44px rows, a sheet on a phone", () 
     expect(textOf(done)).toBe(t(dict, "matchDay.venue.done"));
   });
 
+  it("m6 — the trigger tells the truth about what it opens: expanded + controls, and NO haspopup (a checklist panel is not a menu, listbox or dialog)", () => {
+    const island = mount(["v-a"]);
+    const closed = propsOf(byId(island.tree(), "md-venue-trigger")!);
+    expect(closed).not.toHaveProperty("aria-haspopup");
+    expect(closed["aria-expanded"]).toBe(false);
+    expect(closed["aria-controls"], "nothing to control while it is closed").toBeUndefined();
+    openIt(island);
+    const tree = island.tree();
+    const open = propsOf(byId(tree, "md-venue-trigger")!);
+    expect(open).not.toHaveProperty("aria-haspopup");
+    expect(open["aria-expanded"]).toBe(true);
+    const panel = propsOf(byId(tree, "md-venue-panel")!);
+    expect(typeof panel.id).toBe("string");
+    expect(String(panel.id).length).toBeGreaterThan(0);
+    expect(open["aria-controls"], "the id of the panel it opened").toBe(panel.id);
+    // The panel is a named group of real checkboxes - the role its contents earn.
+    expect(panel.role).toBe("group");
+    expect(panel["aria-label"]).toBe(t(dict, "matchDay.venue.label"));
+  });
+
   it("a tap on the backdrop and Done both close it", () => {
     const island = mount(["v-a"]);
     openIt(island);
