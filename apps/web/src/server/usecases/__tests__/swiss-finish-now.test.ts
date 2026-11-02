@@ -515,7 +515,12 @@ describe.runIf(HAS_DB)("X-SW-26 Finish in sequence", () => {
       expect(boardsOf(await rowsOf(rig.stageId), 2).map((f) => f.status), "premise: round 2 is still decided").toEqual(["decided", "decided"]);
 
       const desk = (await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.finish;
-      expect(desk, "the desk does not offer it").toMatchObject({ canFinish: false, refusal: "round_undecided", finishedAfter: 2 });
+      expect(desk, "the desk does not offer it, and says no round is in progress (a finished round reopened)").toMatchObject({
+        canFinish: false,
+        refusal: "round_undecided",
+        finishedAfter: 2,
+        inProgress: false,
+      });
       const rows = await rowsOf(rig.stageId);
       const ledger = await ledgerState(rig.divisionId);
       await expect(finishSwissNow(rig.auth, rig.stageId)).rejects.toMatchObject({
@@ -703,6 +708,13 @@ describe.runIf(HAS_DB)("finishSwissNow guards", () => {
     expect(walked.map((f) => f.status), "premise: the leaver's board walked over").toEqual(["forfeited"]);
     const open = r3.filter((f) => !walked.includes(f));
     expect(open.length, "premise: the round's other boards are open").toBe(2);
+    // Review m7: the desk's row says the round is in progress (its hint is the round-in-progress one, not the reopened one).
+    expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.finish, "the desk agrees").toMatchObject({
+      canFinish: false,
+      refusal: "round_undecided",
+      finishedAfter: 2,
+      inProgress: true,
+    });
     const rows = await rowsOf(rig.stageId);
     await expect(finishSwissNow(rig.auth, rig.stageId)).rejects.toMatchObject({
       ...refusal("SWISS_FINISH_ROUND_UNDECIDED"),
