@@ -133,7 +133,7 @@ describe("scorer-sheets.md says what the sheet is and who can print it", () => {
   it("says the control appears only once a match has a time", () => {
     // print-scorer-sheets.tsx returns null with no printable day, so an
     // organiser with nothing timed sees no button. (There is no plan gate: remote
-    // scoring, and so the sheets, are free on every plan since V485.)
+    // scoring, and so the sheets, are free on every plan since V488.)
     const HAS_TIME = /\bhas a time\b/i;
     expect(sentences().some((s) => /\bcontrol\b/i.test(s) && /\bshows? up\b|\bappears?\b/i.test(s) && HAS_TIME.test(s))).toBe(true);
   });

@@ -22,7 +22,7 @@ Old `/api/**` BFF routes are deleted at cutover (PROMPT-15). Rules:
 |------|-----|-----|
 | Session cookie | our web UI | existing `seazn_session` JWT |
 | **API key** | Pro orgs' integrations | `Authorization: Bearer sk_live_…`; sha256 lookup in `api_keys`; scopes `read`/`write`; entitlement `api.access`; rate limit per key |
-| **Device link** | day-of courtside volunteers (doc 13 §7) | `Authorization: Bearer dl_…`; sha256 lookup in `device_links`; accepted ONLY by its fixture's scoring surface (append, void-own pre-finalize, state/events, realtime token — everything else 403); expired/revoked → 401 `LINK_EXPIRED`/`LINK_REVOKED`; per-link rate limit at scoring cadence (§6); no plan gate since V485 (2026-11-02): remote scoring is free on every plan; `scoring.device_links` gated the MINT, not the use, until then |
+| **Device link** | day-of courtside volunteers (doc 13 §7) | `Authorization: Bearer dl_…`; sha256 lookup in `device_links`; accepted ONLY by its fixture's scoring surface (append, void-own pre-finalize, state/events, realtime token — everything else 403); expired/revoked → 401 `LINK_EXPIRED`/`LINK_REVOKED`; per-link rate limit at scoring cadence (§6); no plan gate since V488 (2026-11-02): remote scoring is free on every plan; `scoring.device_links` gated the MINT, not the use, until then |
 | None | public reads | only `visibility='public'` resources, via the consent-filtered views (doc 07 note 4) |
 
 ## 3. Resource map

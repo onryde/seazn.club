@@ -168,7 +168,7 @@ describe("the device's undo window ends when the result moves the competition on
 //    cascades off `fixtures` (V222), so every QR on that stage stops working —
 //    the rebuild dialog itself says so (progression.rosterDrift.sheetsStop).
 //  - scorer-role.md said device links are for mass scoring "on any plan" while
-//    the Community row denied the key. V485 (2026-11-02) made remote scoring
+//    the Community row denied the key. V488 (2026-11-02) made remote scoring
 //    free on every plan, so that sentence is true now and the tests that held
 //    the page to the paid wording are gone with the gate.
 //  - conflicts.md told a reader to "give each court its own device link". A

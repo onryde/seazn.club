@@ -310,7 +310,7 @@ export type PhoneScoringLink =
  * revokes and never calls `mintInTx` (which revokes every live link first): a printed sheet, a console hand-over and a
  * legacy or unreadable link all stay exactly as they were.
  *
- * No plan gate: remote scoring is free on every plan (V485). Under the fixture's link lock — the one the console's
+ * No plan gate: remote scoring is free on every plan (V488). Under the fixture's link lock — the one the console's
  * ensure and the sheet print take, so a phone and a printer racing on a fixture with no link agree on ONE — in one
  * transaction:
  *  - a finalized or cancelled match → `{kind: "finished"}`, nothing written;

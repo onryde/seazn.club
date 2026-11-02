@@ -1,4 +1,4 @@
--- V485 -- Remote scoring (device links) is free on EVERY plan (owner ruling 2026-11-02, "Q2 OK make it free";
+-- V488 -- Remote scoring (device links) is free on EVERY plan (owner ruling 2026-11-02, "Q2 OK make it free";
 -- in line with the standing rule "all scoring is free").
 --
 -- `scoring.device_links` was false on `community` since V117 (and its V240 re-seed) and true on pro, enterprise and both

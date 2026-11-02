@@ -6,7 +6,7 @@
 //
 //   stats.player                true  vs false
 //   discipline.enforced         true  vs false
-//   scoring.device_links        (V485: true on every plan, no longer pass-scoped)
+//   scoring.device_links        (V488: true on every plan, no longer pass-scoped)
 //   stages.per_division.max     4     vs 2
 //   schedule.checkpoints.max    5     vs 2
 //
@@ -19,7 +19,7 @@
 // shape on its own new key, `stats.player.career` — the table above is
 // otherwise unchanged, it is `stats.player`'s ROLE in it that moved.
 //
-// V485 (remote scoring is free, owner ruling 2026-11-02) did the same to
+// V488 (remote scoring is free, owner ruling 2026-11-02) did the same to
 // `scoring.device_links`: true on every plan, so it left the pass-scoped set and
 // its case below proves the sibling competition mints too.
 //
@@ -215,7 +215,7 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("Event Pass grants resolve against the competition (W2 T13)", () => {
-  it("scoring.device_links: free on every plan, so the passed competition AND the sibling both mint (V485 took it out of the pass-scoped set)", async () => {
+  it("scoring.device_links: free on every plan, so the passed competition AND the sibling both mint (V488 took it out of the pass-scoped set)", async () => {
     const ctx = await seedCommunityOrg();
     const passed = await seedCompetition(ctx, "DL Passed " + uniq());
     await buyPass(ctx.orgId, passed.competitionId);

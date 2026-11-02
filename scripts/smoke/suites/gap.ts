@@ -5,7 +5,7 @@ import {
 } from "../harness.ts";
 import { scorerSheetsSuite } from "./scorerSheets.ts";
 
-/** Printing ensures a device link per match. Remote scoring is free on every plan (V485), so a Community org
+/** Printing ensures a device link per match. Remote scoring is free on every plan (V488), so a Community org
  *  prints: a PDF, not a paywall. The match is timed first: an empty day is refused 422 before anything else is
  *  asked, which would pass a bare "not 402" for the wrong reason. */
 async function scorerSheetsCommunityCheck(free: Session, competitionId: string, fixtureId: string): Promise<void> {
