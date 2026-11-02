@@ -335,8 +335,9 @@ test("E1: a started Swiss stage groups its rows under a bar per round, with the 
   await expectNoHorizontalScroll(page);
 });
 
-// Match Day E1 fix round 1 (m2): a group stage's rounds are played per POOL, so its card has one bar per pool per round, "Group A . Round 1".
-test("E1 fix 1: a group stage with two pools has a bar per pool per round, Group A first, each counting its own matches", async ({ page, request }) => {
+// Match Day E1 fix round 3 (supersedes fix round 1's m2): pools play at the same time on separate courts, so no order of per-pool sections is
+// also time order - a group stage's card has ONE bar per round across its pools, and each row carries a chip naming its pool.
+test("E1 fix 3: a group stage with two pools has one bar per round across both pools, and every row carries its pool's chip", async ({ page, request }) => {
   test.setTimeout(150_000);
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `E1 pool bars ${TAG}`, visibility: "private" });
   const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
@@ -354,18 +355,15 @@ test("E1 fix 1: a group stage with two pools has a bar per pool per round, Group
   const card = await openCard(page, request, divisionId, stage.data!.id);
   await page.getByTestId("run-sheet-filter").locator('[data-filter="all"]').click();
   const bars = card.getByTestId("run-sheet-round-bar");
-  // Two pools of three: each pool plays three rounds of one match (and a bye).
-  const count = await bars.count();
-  expect(count, "a bar per pool per round: two pools, at least two rounds each").toBeGreaterThanOrEqual(4);
-  expect(count % 2, "both pools have the same number of rounds").toBe(0);
-  const half = count / 2;
+  // Two pools of three: each pool plays three rounds of one match (and a bye), so the card has three bars, each over BOTH pools' match.
   const titles = await bars.evaluateAll((els) => els.map((el) => el.querySelector("span")?.textContent ?? ""));
-  for (let i = 0; i < half; i++) {
-    expect(titles[i], `Group A's round ${i + 1} comes first`).toBe(`Group A \u00b7 Round ${i + 1}`);
-    expect(titles[half + i], `then Group B's round ${i + 1}`).toBe(`Group B \u00b7 Round ${i + 1}`);
-  }
-  await expect(bars.first(), "each bar counts its own pool's matches").toContainText("0 of 1 done");
-  await expect(card.locator("[data-run-sheet-pool]"), "a section per bar").toHaveCount(count);
+  expect(titles, "one bar per round, with no pool word on it").toEqual(["Round 1", "Round 2", "Round 3"]);
+  await expect(bars.first(), "the bar counts both pools' matches of the round").toContainText("0 of 2 done");
+  await expect(card.locator("[data-run-sheet-round]"), "a section per bar").toHaveCount(3);
+  // Every row names its pool: nothing is timed yet, so within a round the page's first pool reads first.
+  const chips = card.getByTestId("run-sheet-pool-chip");
+  expect(await chips.count(), "a chip on every one of the six matches").toBe(6);
+  expect(await chips.allTextContents()).toEqual(["Group A", "Group B", "Group A", "Group B", "Group A", "Group B"]);
   await expectNoHorizontalScroll(page);
 });
 

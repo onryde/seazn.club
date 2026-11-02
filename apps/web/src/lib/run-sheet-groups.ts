@@ -72,9 +72,9 @@ export type RunSheetFixture = Pick<
   // W2c Task 19 (S4): the match plays a format of its own - the "Format changed" chip (`desk/run-sheet-tags.ts`).
   | "format_changed"
 > &
-  // Match Day E1 fix round 1 (m2): a group stage's rounds are per POOL, so a stage card's round bars need the pool a row belongs to. OPTIONAL
-  // on purpose: the wire row always carries it (`toRunSheetFixture` spreads the whole row), but a hand-built fixture that predates it is a
-  // row with no pool, which is what absent means - the same posture `ext_key`/`lane` take on `FixtureRow` itself.
+  // Match Day E1 fix rounds 1 and 3: a group stage's row says which pool it is (the row's pool chip) and ties in time read by pool
+  // (`stageRoundSections`). OPTIONAL on purpose: the wire row always carries it (`toRunSheetFixture` spreads the whole row), but a hand-built
+  // fixture that predates it is a row with no pool, which is what absent means - the same posture `ext_key`/`lane` take on `FixtureRow` itself.
   Partial<Pick<FixtureRow, "pool_id">>;
 
 export type RunSheetStage = { id: string; seq: number; kind: string };
@@ -356,17 +356,19 @@ export function buildRunSheet(input: RunSheetInput): RunSheetBlock[] {
 // these pure functions regroup ONE non-bracket stage's rows from those same blocks.
 // ---------------------------------------------------------------------------
 
-/** One round of a non-bracket stage as the card shows it: its rows in the order they are read. `poolId` is the pool the round belongs to
- *  (a group stage plays each pool's rounds on its own), or null for a stage with no pools. */
-export type StageRoundSection = { poolId: string | null; round: number; fixtures: RunSheetFixture[] };
+/** One round of a non-bracket stage as the card shows it: its rows in the order they are read. A group stage's round holds EVERY pool's
+ *  matches of that round (Match Day E1 fix round 3): the rows say which pool they are (`pool_id`), the section does not. */
+export type StageRoundSection = { round: number; fixtures: RunSheetFixture[] };
 
 /**
- * One NON-BRACKET stage's rows from the division's blocks, as round sections: one per ROUND, and per POOL within a group stage
- * (Group A's Round 1 and Group B's Round 1 are two sections). The sections read in the order they are PLAYED: earliest kickoff first, the
- * ones with nothing timed last; a tie goes to the pool `poolOrder` (the display order the page owns, pool id -> position) lists first -
- * rows of no pool before a listed pool, a pool `poolOrder` does not list after every listed one - and then to the round number. Within a round the rows run in time order and the ones with no time sit last, in the order the draw gave them:
- * the rows a person plays first are read first, and "No time yet" never interrupts a timed run. Bracket blocks are skipped (a knockout
- * keeps its own named rounds); a bye the grouping kept (a Swiss sit-out) rides in its round as an untimed row.
+ * One NON-BRACKET stage's rows from the division's blocks, as round sections: ONE per round, whatever the stage's pools - a group stage's
+ * Round 1 holds Group A's and Group B's first matches together (E1 fix round 3: pools on separate courts play at the same time, so
+ * no order of per-pool sections is also time order). The sections read in the order they are PLAYED: earliest kickoff first, the ones with
+ * nothing timed last, the round number to break a tie. Within a round the rows run in time order and the ones with no time sit last: a
+ * tie goes to the pool `poolOrder` (the display order the page owns, pool id -> position) lists first - rows of no pool before a listed
+ * pool, a pool `poolOrder` does not list after every listed one - and then to the order the draw gave them. The rows a person plays first
+ * are read first, and "No time yet" never interrupts a timed run. Bracket blocks are skipped (a knockout keeps its own named rounds); a
+ * bye the grouping kept (a Swiss sit-out) rides in its round as an untimed row.
  *
  * Reads the blocks, never the raw fixture list, so a row `buildRunSheet` leaves off (an untimed league bye, R7c) is absent here too.
  */
@@ -375,32 +377,22 @@ export function stageRoundSections(
   stageId: string,
   poolOrder: ReadonlyMap<string, number> = NO_POOL_ORDER,
 ): StageRoundSection[] {
-  const sections = new Map<string, StageRoundSection>();
+  const byRound = new Map<number, RunSheetFixture[]>();
   for (const f of stageRowsOutsideBrackets(blocks, stageId)) {
-    const poolId = f.pool_id ?? null;
-    const key = `${poolId ?? ""}\u0000${f.round_no}`;
-    const section = sections.get(key) ?? { poolId, round: f.round_no, fixtures: [] };
-    section.fixtures.push(f);
-    sections.set(key, section);
+    const list = byRound.get(f.round_no) ?? [];
+    list.push(f);
+    byRound.set(f.round_no, list);
   }
-  const sorted = [...sections.values()].map((s) => ({ ...s, fixtures: [...s.fixtures].sort(inReadingOrder) }));
-  // Sections read in the order they are PLAYED (design/fix-ui/03: a Tour 3 that kicked off a day before Tour 1 is not "last"): by the
-  // earliest kickoff in the section, the sections with no time at all after them. A tie goes to the pool that comes first in the page's
-  // order (`comparePools`' order, handed over as `poolOrder`), then to the round number - which is also the whole order while nothing
-  // is timed yet. Pool-first (E1 fix round 1) read "A 09:00, 10:10, 11:20, then B 09:35" on a card with one NOW line: the line, which
-  // asks for "the first row still to come" in reading order, landed in the wrong place. A stage with no pools has one pool (none), so
-  // for a league, a Swiss event or an americano this is the order it always was.
+  const inOrder = inReadingOrder(poolOrder);
+  const sorted = [...byRound.entries()].map(([round, fixtures]) => ({ round, fixtures: [...fixtures].sort(inOrder) }));
+  // Rounds read in the order they are PLAYED (design/fix-ui/03: a Tour 3 that kicked off a day before Tour 1 is not "last"): by the
+  // earliest kickoff in the round, the rounds with no time at all after them, and round number to break every tie - which is
+  // also the whole order while nothing is timed yet. Sorted rows put the earliest timed one first, so that is `fixtures[0]`.
   const earliest = (r: StageRoundSection): number => (r.fixtures[0]?.scheduled_at != null ? Date.parse(r.fixtures[0].scheduled_at) : Number.POSITIVE_INFINITY);
-  const poolRank = (poolId: string | null): number => (poolId === null ? -1 : (poolOrder.get(poolId) ?? Number.POSITIVE_INFINITY));
   return sorted.sort((a, b) => {
     const ea = earliest(a);
     const eb = earliest(b);
     if (ea !== eb) return ea < eb ? -1 : 1;
-    const pa = poolRank(a.poolId);
-    const pb = poolRank(b.poolId);
-    if (pa !== pb) return pa < pb ? -1 : 1;
-    // Two pools the order does not list: id, only so the order is stable.
-    if (a.poolId !== b.poolId) return (a.poolId ?? "") < (b.poolId ?? "") ? -1 : 1;
     return a.round - b.round;
   });
 }
@@ -414,8 +406,8 @@ const NO_POOL_ORDER: ReadonlyMap<string, number> = new Map();
  * an empty list when the stage has no rows here.
  */
 export function stageFlatSection(blocks: readonly RunSheetBlock[], stageId: string): StageRoundSection[] {
-  const fixtures = [...stageRowsOutsideBrackets(blocks, stageId)].sort(inReadingOrder);
-  return fixtures.length === 0 ? [] : [{ poolId: null, round: 0, fixtures }];
+  const fixtures = [...stageRowsOutsideBrackets(blocks, stageId)].sort(inReadingOrder(NO_POOL_ORDER));
+  return fixtures.length === 0 ? [] : [{ round: 0, fixtures }];
 }
 
 /** A stage's rows out of the division's non-bracket blocks, in no particular order. */
@@ -429,14 +421,25 @@ function stageRowsOutsideBrackets(blocks: readonly RunSheetBlock[], stageId: str
 }
 
 const drawRank = (a: RunSheetFixture, b: RunSheetFixture) => a.seq_in_round - b.seq_in_round || a.fixture_no - b.fixture_no;
-/** Time order, the rows with no time last, ties (and every untimed row) in the order the draw gave them. */
-function inReadingOrder(a: RunSheetFixture, b: RunSheetFixture): number {
-  if (a.scheduled_at !== null && b.scheduled_at !== null) {
-    return Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at) || drawRank(a, b);
-  }
-  if (a.scheduled_at !== null) return -1;
-  if (b.scheduled_at !== null) return 1;
-  return drawRank(a, b);
+/**
+ * Time order, the rows with no time last. Rows that tie - the same minute, or no time at all - read by the pool `poolOrder` lists first
+ * (rows of no pool before a listed pool, an unlisted pool after every listed one, two unlisted pools by id so the order is stable) and then
+ * in the order the draw gave them. A stage with no pools has one pool (none), so for a league, a Swiss event or an americano the tie goes
+ * straight to the draw, as it always did.
+ */
+function inReadingOrder(poolOrder: ReadonlyMap<string, number>): (a: RunSheetFixture, b: RunSheetFixture) => number {
+  const poolRank = (f: RunSheetFixture): number => (f.pool_id == null ? -1 : (poolOrder.get(f.pool_id) ?? Number.POSITIVE_INFINITY));
+  const at = (f: RunSheetFixture): number => (f.scheduled_at === null ? Number.POSITIVE_INFINITY : Date.parse(f.scheduled_at));
+  return (a, b) => {
+    const ta = at(a);
+    const tb = at(b);
+    if (ta !== tb) return ta < tb ? -1 : 1;
+    const pa = poolRank(a);
+    const pb = poolRank(b);
+    if (pa !== pb) return pa < pb ? -1 : 1;
+    if ((a.pool_id ?? "") !== (b.pool_id ?? "")) return (a.pool_id ?? "") < (b.pool_id ?? "") ? -1 : 1;
+    return drawRank(a, b);
+  };
 }
 
 /**

@@ -611,104 +611,131 @@ describe("stageRoundSections - one non-bracket stage's rows by round", () => {
   });
 });
 
-// Match Day E1 fix round 1 (m2): a group stage's rounds are PER POOL - Group A's Round 1 and Group B's Round 1 are two sections, not one.
-describe("stageRoundSections - pools: one section per pool per round", () => {
+// Match Day E1 fix round 3 (supersedes fix round 1's m2 and fix round 2's section order): pools play at the same time on separate courts, so
+// no ORDER of per-pool sections is also time order. A group stage's round is ONE section holding every pool's matches of that round, in time
+// order; a tie in time reads by the page's pool order, then by the draw. The row's `pool_id` says which pool it is.
+describe("stageRoundSections - pools: one section per ROUND across the pools, rows in time order", () => {
   const GROUP = { id: "g1", seq: 1, kind: "group" };
   const pooled = (fixtures: ReturnType<typeof fx>[], order?: ReadonlyMap<string, number>) =>
     stageRoundSections(buildRunSheet(input({ stages: [GROUP], fixtures })), "g1", order);
   const row = (id: string, pool: string | null, round: number, extra: Partial<ReturnType<typeof fx>> = {}) =>
     fx({ id, stage_id: "g1", pool_id: pool, round_no: round, fixture_no: Number(id.replace(/\D/g, "")) || 1, scheduled_at: null, ...extra } as never);
   const ORDER = new Map([["pA", 0], ["pB", 1]]);
+  const REVERSED = new Map([["pB", 0], ["pA", 1]]);
+  const at = (hhmm: string) => `2026-09-05T${hhmm}:00.000Z`;
+  const ids = (s: { fixtures: { id: string }[] }) => s.fixtures.map((f) => f.id);
 
   it("the empty case: no rows is no section", () => {
     expect(pooled([], ORDER)).toEqual([]);
   });
 
-  it("pool by pool in the order given, each pool's rounds in play order; a section holds only its own pool's rows", () => {
+  it("a round holds BOTH pools' matches: one section per round number, never one per pool, whatever order the rows arrived in", () => {
     const out = pooled(
-      [row("b1", "pB", 1), row("a2", "pA", 2), row("b2", "pB", 2), row("a1", "pA", 1), row("a1b", "pA", 1, { seq_in_round: 2, fixture_no: 7 })],
+      [row("b2", "pB", 2), row("a2", "pA", 2), row("b1", "pB", 1), row("a1", "pA", 1), row("a1b", "pA", 1, { seq_in_round: 2, fixture_no: 7 })],
       ORDER,
     );
-    expect(out.map((s) => [s.poolId, s.round])).toEqual([["pA", 1], ["pA", 2], ["pB", 1], ["pB", 2]]);
-    expect(out.map((s) => s.fixtures.map((f) => f.id))).toEqual([["a1", "a1b"], ["a2"], ["b1"], ["b2"]]);
-    expect(out.length, "anti-vacuity: four sections").toBe(4);
+    expect(out.map((s) => s.round), "two rounds, not four").toEqual([1, 2]);
+    expect(out.map(ids), "nothing timed: pool A reads first inside a round, then the draw").toEqual([["a1", "a1b", "b1"], ["a2", "b2"]]);
+    expect(out.length, "anti-vacuity: both rounds are there").toBe(2);
+    expect(out.flatMap((s) => s.fixtures).length, "anti-vacuity: no row was lost").toBe(5);
   });
 
-  it("the order is the caller's, not the id's: B first when B is listed first", () => {
-    const out = pooled([row("a1", "pA", 1), row("b1", "pB", 1)], new Map([["pB", 0], ["pA", 1]]));
-    expect(out.map((s) => s.poolId)).toEqual(["pB", "pA"]);
+  // THE CASE THE RULING IS FOR: pools of four on separate courts, kicking off together. Group A and Group B each play two matches in Round 1,
+  // at 09:00 and 09:35. A per-pool section order cannot read this in time order; one round in time order does.
+  it("pools on separate courts at the same time: Round 1 reads A 09:00, B 09:00, A 09:35, B 09:35 - the page's first pool takes each tie", () => {
+    const rows = [
+      row("a1", "pA", 1, { scheduled_at: at("09:00"), court_name: "Court 1" }),
+      row("a2", "pA", 1, { scheduled_at: at("09:35"), court_name: "Court 1", seq_in_round: 2 }),
+      row("b1", "pB", 1, { scheduled_at: at("09:00"), court_name: "Court 2" }),
+      row("b2", "pB", 1, { scheduled_at: at("09:35"), court_name: "Court 2", seq_in_round: 2 }),
+    ];
+    const out = pooled(rows, ORDER);
+    expect(out).toHaveLength(1);
+    expect(ids(out[0]!)).toEqual(["a1", "b1", "a2", "b2"]);
+    expect(ids(pooled(rows, REVERSED)[0]!), "listed the other way round, B takes each tie - and the times still lead").toEqual(["b1", "a1", "b2", "a2"]);
+    // The expected order is the clock's, read off the rows' own times: every row is no earlier than the one above it.
+    const times = out[0]!.fixtures.map((f) => Date.parse(f.scheduled_at!));
+    expect([...times].sort((x, y) => x - y)).toEqual(times);
+    expect(times.length, "anti-vacuity: four rows read").toBe(4);
   });
 
-  it("a pool the order does not list reads after every listed one; rows with no pool at all read first and are one section per round", () => {
-    const out = pooled([row("x1", "pX", 1), row("a1", "pA", 1), row("n1", null, 1), row("n2", null, 1, { fixture_no: 9 })], ORDER);
-    expect(out.map((s) => s.poolId)).toEqual([null, "pA", "pX"]);
-    expect(out[0]!.fixtures.map((f) => f.id)).toEqual(["n1", "n2"]);
+  it("inside a round time leads and the pool only breaks a tie: B at 09:00 reads before A at 09:35", () => {
+    const out = pooled([row("a1", "pA", 1, { scheduled_at: at("09:35") }), row("b1", "pB", 1, { scheduled_at: at("09:00") })], ORDER);
+    expect(ids(out[0]!)).toEqual(["b1", "a1"]);
   });
 
-  it("a stage with no pools at all is sectioned by round exactly as before (the league path)", () => {
-    const out = pooled([row("r2", null, 2), row("r1", null, 1)]);
-    expect(out.map((s) => [s.poolId, s.round])).toEqual([[null, 1], [null, 2]]);
+  it("untimed rows sit last inside a round, among themselves by pool and then the draw; a round's timed rows are never interrupted by them", () => {
+    const out = pooled(
+      [
+        row("b0", "pB", 1), // untimed
+        row("a0", "pA", 1), // untimed
+        row("b1", "pB", 1, { scheduled_at: at("10:00") }),
+        row("a1", "pA", 1, { scheduled_at: at("11:00") }),
+        row("a0b", "pA", 1, { seq_in_round: 2, fixture_no: 9 }), // untimed, later in the draw
+      ],
+      ORDER,
+    );
+    expect(ids(out[0]!)).toEqual(["b1", "a1", "a0", "a0b", "b0"]);
   });
 
-  // Match Day E1 fix round 2 (Important): the sections read in the order they are PLAYED - earliest kickoff first, a tie broken by the pool's
-  // place in the page's order, then by round number, and a section with nothing timed after every timed one. Pool-first (the m2 build) read
-  // "A 09:00, 10:10, 11:20, then B 09:35", which put the card's one NOW line in the wrong place.
-  describe("in the order they are played (E1 fix 2)", () => {
-    const at = (hhmm: string) => `2026-09-05T${hhmm}:00.000Z`;
-    const ids = (out: ReturnType<typeof pooled>) => out.map((s) => `${s.poolId === "pA" ? "A" : s.poolId === "pB" ? "B" : s.poolId}${s.round}`);
+  it("a pool the order does not list reads after every listed one on a tie; rows of no pool read before them", () => {
+    const out = pooled(
+      [row("x1", "pX", 1, { scheduled_at: at("09:00") }), row("a1", "pA", 1, { scheduled_at: at("09:00") }), row("n1", null, 1, { scheduled_at: at("09:00") })],
+      ORDER,
+    );
+    expect(ids(out[0]!)).toEqual(["n1", "a1", "x1"]);
+  });
 
-    it("two pools interleaved in time: A R1 09:00, B R1 09:35, A R2 10:10, B R2 10:45, A R3 11:20, B R3 11:55", () => {
+  it("a pool is not required: with no order handed over, equal times fall to a stable id order, then the draw", () => {
+    const out = pooled([row("b1", "pB", 1, { scheduled_at: at("09:00") }), row("a1", "pA", 1, { scheduled_at: at("09:00") })]);
+    expect(ids(out[0]!)).toEqual(["a1", "b1"]);
+  });
+
+  describe("the sections themselves (E1 item 1's play order, unchanged)", () => {
+    it("sections read by earliest kickoff, the sections with nothing timed after them, the round number breaking every tie", () => {
       const out = pooled(
         [
+          row("a3", "pA", 3, { scheduled_at: at("08:00") }), // round 3 kicks off first
           row("a1", "pA", 1, { scheduled_at: at("09:00") }),
-          row("a2", "pA", 2, { scheduled_at: at("10:10") }),
-          row("a3", "pA", 3, { scheduled_at: at("11:20") }),
-          row("b1", "pB", 1, { scheduled_at: at("09:35") }),
-          row("b2", "pB", 2, { scheduled_at: at("10:45") }),
-          row("b3", "pB", 3, { scheduled_at: at("11:55") }),
+          row("b1", "pB", 1, { scheduled_at: at("09:00") }),
+          row("a2", "pA", 2, { scheduled_at: at("09:00") }), // ties R1 at 09:00: the round number
+          row("a4", "pA", 4), // untimed only
+          row("b5", "pB", 5), // untimed only
         ],
         ORDER,
       );
-      expect(ids(out)).toEqual(["A1", "B1", "A2", "B2", "A3", "B3"]);
-      expect(out.length, "anti-vacuity: six sections").toBe(6);
-      // The same rows with the pools listed the other way round: the pool order only breaks ties, so the time order stands.
-      expect(ids(pooled(out.flatMap((s) => s.fixtures), new Map([["pB", 0], ["pA", 1]])))).toEqual(["A1", "B1", "A2", "B2", "A3", "B3"]);
+      expect(out.map((s) => s.round)).toEqual([3, 1, 2, 4, 5]);
     });
 
-    it("an equal first kickoff is broken by the pool's place in the page's order, then by round number", () => {
-      const rows = [
-        row("a1", "pA", 1, { scheduled_at: at("09:00") }),
-        row("b1", "pB", 1, { scheduled_at: at("09:00") }),
-        row("a2", "pA", 2, { scheduled_at: at("09:00") }),
-      ];
-      expect(ids(pooled(rows, ORDER)), "pool A first, and A's own rounds by number").toEqual(["A1", "A2", "B1"]);
-      expect(ids(pooled(rows, new Map([["pB", 0], ["pA", 1]]))), "listed the other way, B takes the tie").toEqual(["B1", "A1", "A2"]);
-    });
-
-    it("a section with nothing timed reads after every timed one, whatever its pool or round; the untimed ones among themselves by pool, then round", () => {
+    // Mixed timed and untimed rows in one round, against another section: the untimed rows of a round do not hold the round back, and a
+    // round with nothing timed is last. (Round 1 is both the earlier number and the earlier kickoff here, so every reading of "the round's
+    // position" agrees; the next case is the one where they part.)
+    it("a round mixing timed and untimed rows: its timed rows first, the round placed by its timed rows, ahead of a round with nothing timed", () => {
       const out = pooled(
         [
-          row("a1", "pA", 1), // untimed, pool A - would be first pool-first
-          row("a2", "pA", 2),
-          row("b1", "pB", 1, { scheduled_at: at("13:00") }),
-          row("b2", "pB", 2, { scheduled_at: at("14:00") }),
-          row("b3", "pB", 3),
+          row("a1u", "pA", 1, { seq_in_round: 1 }), // untimed, first in the draw
+          row("a1t", "pA", 1, { seq_in_round: 2, fixture_no: 8, scheduled_at: at("10:00") }),
+          row("b1t", "pB", 1, { seq_in_round: 3, fixture_no: 9, scheduled_at: at("09:00") }),
+          row("a2u", "pA", 2),
+          row("b2u", "pB", 2),
         ],
         ORDER,
       );
-      expect(ids(out)).toEqual(["B1", "B2", "A1", "A2", "B3"]);
+      expect(out.map((s) => s.round)).toEqual([1, 2]);
+      expect(ids(out[0]!), "timed rows in time order, the untimed one LAST though it came first in the draw").toEqual(["b1t", "a1t", "a1u"]);
+      expect(ids(out[1]!)).toEqual(["a2u", "b2u"]);
     });
 
-    it("a section's time is its EARLIEST row: a late first row of one pool does not hold back its earlier sibling", () => {
+    it("the same mixed round against an EARLIER-kicking later round: the order is the play order (E1 item 1), so the later round leads - an untimed row does not move that", () => {
       const out = pooled(
-        [row("a1late", "pA", 1, { scheduled_at: at("12:00") }), row("a1early", "pA", 1, { scheduled_at: at("08:00"), seq_in_round: 2, fixture_no: 8 }), row("b1", "pB", 1, { scheduled_at: at("10:00") })],
+        [row("a1u", "pA", 1), row("a1t", "pA", 1, { scheduled_at: at("15:00"), fixture_no: 8 }), row("b2t", "pB", 2, { scheduled_at: at("09:00") })],
         ORDER,
       );
-      expect(ids(out)).toEqual(["A1", "B1"]);
-      expect(out[0]!.fixtures.map((f) => f.id)).toEqual(["a1early", "a1late"]);
+      expect(out.map((s) => s.round), "Round 2 kicks off at 09:00, Round 1's first timed row at 15:00").toEqual([2, 1]);
     });
 
     it("the kinds with no pools read exactly as before: a league and a Swiss event by earliest kickoff, the untimed after, by round", () => {
+      let checked = 0;
       for (const kind of ["league", "swiss", "americano"] as const) {
         const stages = [{ id: "g1", seq: 1, kind }];
         const out = stageRoundSections(
@@ -717,7 +744,9 @@ describe("stageRoundSections - pools: one section per pool per round", () => {
           ORDER,
         );
         expect(out.map((s) => s.round), kind).toEqual([2, 1, 3, 4]);
+        checked++;
       }
+      expect(checked, "every pool-less kind swept").toBe(3);
     });
   });
 });

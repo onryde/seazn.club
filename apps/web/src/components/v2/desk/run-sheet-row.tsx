@@ -161,6 +161,7 @@ export function RunSheetRow({
   matchDayHref,
   venueNoun = "court",
   inRound = false,
+  poolLabel,
 }: {
   fixture: RunSheetFixture;
   href: string;
@@ -216,6 +217,10 @@ export function RunSheetRow({
    *  does not: no "Round N" in its meta line, and an open match with no time says so in words ("No time yet") where the
    *  "Not yet scheduled" group used to say it for it. Absent = the row names its own round, as every other mount reads it. */
   inRound?: boolean;
+  /** Match Day E1 fix round 3: the pool this match belongs to, in the viewer's words ("Group A"), for a group stage's card - which has ONE
+   *  bar per round across its pools, so the row has to say which pool it is. Drawn as a small chip (a label, not a control: no tap
+   *  floor owed). Absent = the match belongs to no pool the page can name: no chip. */
+  poolLabel?: string;
   /** Match Day B2 (spec 2026-10-31 §9: "Unscheduled fixtures link to the free-court candidate list"). Present ONLY on a match
    *  day, for an organiser (the division page decides both: it is the same `needsYouHome` rule that puts Open Match Day on the
    *  competition page, read for `editable`), and then it is where the "Find a court" link on an unscheduled match leads:
@@ -670,6 +675,17 @@ export function RunSheetRow({
         {/* B3 re-review N-1: `max-md:flex-wrap` — at 320 the French waiting chip ("En attente du téléphone") plus the
             action pass line 2 by 16 px; the action wraps under the chip instead of squeezing past the row's edge. */}
         <div data-row-line="2" className="flex min-w-0 items-center justify-between gap-2 max-md:flex-wrap md:contents">
+          {/* E1 fix round 3: a group stage's round holds every pool's matches, so the row names its pool. On a phone it leads line 2
+              (the meta text truncates beside it, `min-w-0` down the chain); from md `md:order-first` puts it between the time and the
+              names, like the chips below. A label, not a control. `normal-case`: the label is the organiser's own words. */}
+          {poolLabel !== undefined && poolLabel !== "" && (
+            <span
+              data-testid="run-sheet-pool-chip"
+              className="chip min-w-0 max-w-[10rem] shrink-0 truncate normal-case md:order-first"
+            >
+              {poolLabel}
+            </span>
+          )}
           {/* Loop R M7(d): a HELD row also carries the held chip and Settle on this line, and at 320 they took the room —
               the meta truncated to "Round 1 · …" and hid the reason ("abandoned"). A held row's meta takes the whole
               line (`max-md:basis-full`) and the chip and Settle wrap below it; every other row keeps two lines. */}

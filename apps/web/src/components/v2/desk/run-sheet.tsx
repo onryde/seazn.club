@@ -227,10 +227,10 @@ export function RunSheet({
    *  stays square, like a NOW rule that ends a day block with later days to come (review m1). The division-wide sheet is its own
    *  card and always ends it. */
   endsCard?: boolean;
-  /** Embedded only (Match Day E1 fix round 1, m2): the division's pools in DISPLAY order, each with its label in the viewer's words -
-   *  `poolLabelsInOrder`, which the page builds from the pool-label and pool-order authorities. A group stage's card draws one bar per
-   *  pool per round ("Group A - Round 1") and reads its pools in this order. Absent, or a pool it does not list: the round's plain
-   *  bar, still its own (never merged into another pool's). */
+  /** Embedded only (Match Day E1 fix rounds 1 and 3): the division's pools in DISPLAY order, each with its label in the viewer's words -
+   *  `poolLabelsInOrder`, which the page builds from the pool-label and pool-order authorities. A group stage's card has ONE bar per
+   *  round across its pools; each row carries a chip with its pool's label, and rows that kick off together read in this order. Absent, or
+   *  a pool it does not list: the row has no chip (no label to say), and its place among equal times falls after every listed pool. */
   pools?: readonly { id: string; label: string }[];
 }) {
   const msg = useMsg();
@@ -595,31 +595,29 @@ export function RunSheet({
       .filter((section) => section.rows.length > 0);
     if (sections.length === 0) return null;
     // ONE NOW rule per card: before the first row of today still to come, else after the last row of today (a stage with nothing
-    // timed today carries none). Rows read section by section, so "the first still to come" is the first in that order. A section is
-    // named by its position, not its round number: two pools of a group stage both have a Round 1.
-    let nowAt: { section: number; index: number } | null = null;
-    let lastToday: { section: number; index: number } | null = null;
-    for (const [si, section] of sections.entries()) {
+    // timed today carries none). Rows read round by round, so "the first still to come" is the first in that order. A group stage's
+    // round holds every pool's matches (E1 fix round 3), in time order, so two pools playing at once read as the clock reads them.
+    let nowAt: { round: number; index: number } | null = null;
+    let lastToday: { round: number; index: number } | null = null;
+    for (const section of sections) {
       for (let index = 0; index < section.rows.length; index++) {
         const at = section.rows[index]!.scheduled_at;
         if (at === null || dayKeyInTz(Date.parse(at), tz) !== today) continue;
-        lastToday = { section: si, index: index + 1 };
-        if (nowAt === null && Date.parse(at) > nowMs) nowAt = { section: si, index };
+        lastToday = { round: section.round, index: index + 1 };
+        if (nowAt === null && Date.parse(at) > nowMs) nowAt = { round: section.round, index };
       }
     }
-    const nowPlace: { section: number; index: number } | null = nowAt ?? lastToday;
+    const nowPlace: { round: number; index: number } | null = nowAt ?? lastToday;
     return (
       <section key={`rounds-${stageId}`} data-run-sheet-block={withBars ? "rounds" : "flat"}>
-        {sections.map((section, si) => {
+        {sections.map((section) => {
           const when = roundWhen(section.rows, tz);
           const sameDay = when !== null && when.firstDay === when.lastDay;
           const dates = roundDateLabel(section.rows, tz, locale);
-          const poolLabel = section.poolId === null ? undefined : poolLabelOf.get(section.poolId);
-          const roundName = msg("schedule.round", { n: section.round });
           return (
-            <div key={`${section.poolId ?? ""}:${section.round}`} data-run-sheet-round={withBars ? section.round : undefined} data-run-sheet-pool={section.poolId ?? undefined}>
+            <div key={section.round} data-run-sheet-round={withBars ? section.round : undefined}>
               {withBars && (
-                <RoundBar title={poolLabel === undefined ? roundName : `${poolLabel} \u00b7 ${roundName}`} done={roundDoneText(msgPlural, section.all, settleIds)}>
+                <RoundBar title={msg("schedule.round", { n: section.round })} done={roundDoneText(msgPlural, section.all, settleIds)}>
                   {dates !== null && <span data-run-sheet-round-dates>{" · "}{dates}</span>}
                   {sameDay && when !== null && (
                     <span data-run-sheet-round-span>
@@ -634,7 +632,7 @@ export function RunSheet({
                   <RowWithNow
                     key={f.id}
                     fixture={f}
-                    showNow={nowPlace !== null && nowPlace.section === si && nowPlace.index === i}
+                    showNow={nowPlace !== null && nowPlace.round === section.round && nowPlace.index === i}
                     msg={msg}
                     hrefFor={hrefFor}
                     tz={tz}
@@ -653,10 +651,11 @@ export function RunSheet({
                     venueNoun={venueNoun}
                     awaitsSettle={settleIds.has(f.id)}
                     feedLabels={feedLabels}
+                    poolLabel={f.pool_id == null ? undefined : poolLabelOf.get(f.pool_id)}
                     inRound
                   />
                 ))}
-                {nowPlace !== null && nowPlace.section === si && nowPlace.index === section.rows.length && <NowRule msg={msg} />}
+                {nowPlace !== null && nowPlace.round === section.round && nowPlace.index === section.rows.length && <NowRule msg={msg} />}
               </ul>
             </div>
           );
@@ -957,6 +956,8 @@ function RowWithNow({
   feedLabels?: Record<string, FeedLabelPair>;
   /** E1 item 1 - survives `...rest` into `RunSheetRow`: the row sits under its round's bar. */
   inRound?: boolean;
+  /** E1 fix round 3 - survives `...rest` into `RunSheetRow`: the pool chip's words. */
+  poolLabel?: string;
 }) {
   return (
     <>
