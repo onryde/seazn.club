@@ -375,6 +375,11 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     await page.goto(`${division}?tab=fixtures`);
     await page.getByRole("button", { name: "All", exact: true }).first().click();
     const settledRow = page.locator(`li[data-fixture-no="${path.split("/f/")[1]!}"]`);
+    // PB1 (owner 2026-11-02): a round whose every match is settled starts folded to its bar, and the settle just finished this one -
+    // open the folded rounds to see the row (the row is in the DOM either way; folded, it is hidden).
+    for (const bar of await page.getByTestId("run-sheet-round-toggle").all()) {
+      if ((await bar.getAttribute("aria-expanded")) === "false") await bar.click();
+    }
     await expect(settledRow, "rig: the row is on the sheet under All").toBeVisible();
     await expect(settledRow.getByTestId("run-sheet-held-chip")).toHaveCount(0);
   });

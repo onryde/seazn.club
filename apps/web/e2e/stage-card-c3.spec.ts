@@ -147,7 +147,7 @@ test("PB1 item 3: a completed stage is one line - its toggle opens and closes th
   await expect(toggle).toHaveAttribute("aria-controls", `stage-body-${stageId}`);
   await expect(card.getByTestId("stage-collapsed-summary")).toHaveText("3 of 3 done");
   await expect(card.locator("h3")).toContainText("1. League");
-  await expect(card.locator("h3 ~ .badge"), "the status pill").toHaveText(/Completed/i);
+  await expect(card.locator("h3 ~ .badge"), "the status pill").toHaveText(/^Complete/i);
   await expect(body, "the body it controls is hidden").toBeHidden();
   await expect(card.locator("li[data-fixture-no]:visible"), "no row is on screen").toHaveCount(0);
   await expect(card.getByTestId("stage-controls"), "its buttons are away with it").toHaveCount(0);

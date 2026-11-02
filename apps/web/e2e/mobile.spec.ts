@@ -3759,8 +3759,10 @@ test("P6 task B: panel resolves the tie, confirms, bracket shows real entrants, 
 
   // The bracket/fixture line now shows the CHOSEN entrants, never a raw TBD
   // or slot.* key — the panel's edit-in-place actually reached the fixture.
-  await expect(page.getByText(pick0.label, { exact: false }).first()).toBeVisible();
-  await expect(page.getByText(pick1.label, { exact: false }).first()).toBeVisible();
+  // `visible=true`: the league above is COMPLETE, so its card is folded to one line (PB1, owner 2026-11-02) and the same names sit,
+  // hidden, in its rows - the first DOM match. What this proves is the names a person can SEE.
+  await expect(page.getByText(pick0.label, { exact: false }).locator("visible=true").first()).toBeVisible();
+  await expect(page.getByText(pick1.label, { exact: false }).locator("visible=true").first()).toBeVisible();
   await expect(page.getByText(/^TBD$/)).toHaveCount(0);
 
   // Non-destructive guarantee, on screen: the court pinned before anyone
