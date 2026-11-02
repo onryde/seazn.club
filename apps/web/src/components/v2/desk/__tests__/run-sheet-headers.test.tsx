@@ -181,9 +181,9 @@ describe("a bracket round section carries its calendar date", () => {
     expect(html).not.toContain("data-run-sheet-round-dates");
     // E1 item 1: the bar now also says how many of the round are played ("2 of 2 played"). That fact is the dictionary's sentence with
     // its two numbers filled in; with it cut out, no digit - no day, no clock - may remain.
-    const playedFact = (enUi as Record<string, string>)["runsheet.round.played.other"]!.replace("{played}", "2").replace("{total}", "2");
-    expect(headers[0], "the played fact is there").toContain(playedFact);
-    expect(headers[0]!.replace(playedFact, "")).not.toMatch(/\d/);
+    const doneFact = (enUi as Record<string, string>)["runsheet.round.done.other"]!.replace("{done}", "2").replace("{total}", "2");
+    expect(headers[0], "the done fact is there").toContain(doneFact);
+    expect(headers[0]!.replace(doneFact, "")).not.toMatch(/\d/);
   });
 
   // A round that is PART timed still names the days it does know — dropping the

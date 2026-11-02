@@ -4,7 +4,20 @@
 // builder is proven by its REAL producer and consumer, not by a fixture on
 // both ends (_RULES.md, "the inert seam").
 import { describe, expect, it } from "vitest";
-import { buildRunSheet, isBye, roundPlayed, roundWhen, stageRoundSections, type RunSheetInput } from "../run-sheet-groups";
+import { StageKind } from "@seazn/engine/core";
+import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES, SETTLED_FIXTURE_STATUSES } from "../fixture-status";
+import { stageCounts } from "../stage-card/summaries";
+import {
+  BRACKET_STAGE_KINDS,
+  ROUND_SEQUENCE_STAGE_KINDS,
+  buildRunSheet,
+  isBye,
+  roundDone,
+  roundWhen,
+  stageFlatSection,
+  stageRoundSections,
+  type RunSheetInput,
+} from "../run-sheet-groups";
 
 const TZ = "Europe/London";
 const NOW = Date.UTC(2026, 8, 3, 13, 0); // 14:00 London, Thu 3 Sep
@@ -598,18 +611,104 @@ describe("stageRoundSections - one non-bracket stage's rows by round", () => {
   });
 });
 
-describe("roundPlayed - the 'N of M played' on a round bar", () => {
+// Match Day E1 fix round 1 (I1): the bar's number is the SHARED count. The stage card's Complete button reads `stageCounts`; a bar that
+// counts "played" differently can say "1 of 2 played" on a stage that can already be completed (a walkover, an abandonment and a cancellation
+// are settled to the stage). So the bar asks `stageCounts` itself, over the round's real matches.
+describe("roundDone - the 'N of M done' on a round bar (the stage card's own count)", () => {
+  const AWARD = { kind: "award", winner: "h1", loser: "a1", reason: "walkover" };
+  const BYE = fx({ id: "bye", fixture_no: 99, away_entrant_id: null, status: "forfeited", outcome: { kind: "award", winner: "h1", loser: null, reason: "bye" } });
+
   it("the empty case: no rows is 0 of 0", () => {
-    expect(roundPlayed([])).toEqual({ played: 0, total: 0 });
+    expect(roundDone([], new Set())).toEqual({ done: 0, total: 0 });
   });
 
-  it("every status, counted: only decided and finalized are played; a bye is no match; the void statuses are in the total and not in the played", () => {
-    const statuses = ["scheduled", "in_play", "needs_decision", "decided", "finalized", "cancelled", "abandoned", "forfeited"];
-    const rows = statuses.map((status, i) => fx({ id: `f${i}`, status, fixture_no: i + 1 }));
-    const bye = fx({ id: "bye", fixture_no: 99, away_entrant_id: null, status: "forfeited", outcome: { kind: "award", winner: "h1", loser: null, reason: "bye" } });
-    expect(roundPlayed(rows)).toEqual({ played: 2, total: statuses.length });
-    expect(roundPlayed([...rows, bye]), "a bye adds to neither").toEqual({ played: 2, total: statuses.length });
-    expect(statuses.length, "anti-vacuity: every status was in the sweep").toBe(8);
+  it("every status the schema has, counted: done is exactly the settled + locked statuses the app already declares; a bye is no match", () => {
+    const rows = FIXTURE_STATUSES.map((status, i) => fx({ id: `f${i}`, status, fixture_no: i + 1 }));
+    // The expected number comes from the two declarations `stageCounts` documents itself against, not from a list typed here.
+    const settled = FIXTURE_STATUSES.filter((s) => SETTLED_FIXTURE_STATUSES.has(s) || LOCKED_FIXTURE_STATUSES.has(s));
+    expect(roundDone(rows, new Set())).toEqual({ done: settled.length, total: FIXTURE_STATUSES.length });
+    expect(roundDone([...rows, BYE], new Set()), "a bye adds to neither").toEqual({ done: settled.length, total: FIXTURE_STATUSES.length });
+    expect(rows.length, "anti-vacuity: every status was in the sweep").toBe(FIXTURE_STATUSES.length);
+    expect(settled.length, "anti-vacuity: both answers are reached").toBeGreaterThan(0);
+    expect(settled.length).toBeLessThan(FIXTURE_STATUSES.length);
+  });
+
+  it("a walkover and a cancellation are done (the stage card says so), though neither has a result", () => {
+    const rows = [
+      fx({ id: "w", fixture_no: 1, status: "forfeited", outcome: AWARD }),
+      fx({ id: "c", fixture_no: 2, status: "cancelled" }),
+      fx({ id: "open", fixture_no: 3 }),
+    ];
+    expect(roundDone(rows, new Set())).toEqual({ done: 2, total: 3 });
+  });
+
+  it("an abandonment awaiting its settle is NOT done, and is done once settled (it leaves the held set)", () => {
+    const rows = [fx({ id: "ab", fixture_no: 1, status: "abandoned" }), fx({ id: "ok", fixture_no: 2, status: "decided", outcome: { kind: "win", winner: "h1" } })];
+    expect(roundDone(rows, new Set(["ab"])), "held: the stage still owes its verdict").toEqual({ done: 1, total: 2 });
+    expect(roundDone(rows, new Set()), "settled: nothing is owed").toEqual({ done: 2, total: 2 });
+  });
+
+  it("parity with the stage card: the round counts add up to stageCounts over the stage's real matches, and open = total - done", () => {
+    const held = new Set(["ab"]);
+    const rows = [
+      fx({ id: "a1", round_no: 1, fixture_no: 1, status: "decided", outcome: { kind: "win", winner: "h1" } }),
+      fx({ id: "ab", round_no: 1, fixture_no: 2, status: "abandoned" }),
+      fx({ id: "w", round_no: 2, fixture_no: 3, status: "forfeited", outcome: AWARD }),
+      fx({ id: "n", round_no: 2, fixture_no: 4, status: "needs_decision" }),
+      fx({ id: "s", round_no: 3, fixture_no: 5 }),
+      fx({ id: "p", round_no: 3, fixture_no: 6, status: "in_play" }),
+    ];
+    const real = rows.filter((r) => !isBye(r));
+    const sections = stageRoundSections(buildRunSheet(input({ fixtures: [...rows, BYE] })), "s1");
+    expect(sections.length, "anti-vacuity: three rounds").toBe(3);
+    const sum = sections.reduce((acc, sec) => {
+      const r = roundDone(sec.fixtures, held);
+      return { done: acc.done + r.done, total: acc.total + r.total };
+    }, { done: 0, total: 0 });
+    const counts = stageCounts(real, held);
+    expect(sum.done).toBe(counts.played);
+    expect(sum.total).toBe(real.length);
+    expect(sum.total - sum.done, "what the bars leave open is what blocks Complete").toBe(counts.inPlay + counts.unplayed);
+  });
+});
+
+// Match Day E1 fix round 1 (I2): round bars belong to the kinds whose fixtures run in numbered rounds. The set is a partition of the
+// engine's StageKind: a kind added to the engine is in no set until someone decides, and this test says so.
+describe("ROUND_SEQUENCE_STAGE_KINDS - which kinds get round bars", () => {
+  it("partitions StageKind with the bracket kinds and the ladder: every kind in exactly one, none missing", () => {
+    const FLAT = new Set(["ladder"]);
+    let checked = 0;
+    for (const kind of StageKind.options) {
+      const homes = [ROUND_SEQUENCE_STAGE_KINDS.has(kind), BRACKET_STAGE_KINDS.has(kind), FLAT.has(kind)].filter(Boolean).length;
+      expect(homes, `${kind}: exactly one home`).toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(StageKind.options.length);
+    expect(checked, "anti-vacuity").toBeGreaterThan(0);
+    for (const kind of ROUND_SEQUENCE_STAGE_KINDS) expect(StageKind.options as readonly string[], `${kind} is a real kind`).toContain(kind);
+    expect([...ROUND_SEQUENCE_STAGE_KINDS].sort()).toEqual(["americano", "group", "league", "swiss"]);
+    expect(ROUND_SEQUENCE_STAGE_KINDS.has("ladder"), "a ladder stores each challenge as its own round: no bars").toBe(false);
+  });
+});
+
+describe("stageFlatSection - a stage that has no rounds worth a bar: one list, time order, untimed last", () => {
+  const ladder = { id: "ld", seq: 1, kind: "ladder" };
+  const flat = (fixtures: ReturnType<typeof fx>[]) => stageFlatSection(buildRunSheet(input({ stages: [ladder], fixtures })), "ld");
+
+  it("the empty case: no rows is no section, never an empty one", () => {
+    expect(stageFlatSection([], "ld")).toEqual([]);
+    expect(flat([fx({ id: "other", stage_id: "s9" })])).toEqual([]);
+  });
+
+  it("every challenge is its own round, yet the rows run as ONE list: by time, the untimed ones last in draw order", () => {
+    const out = flat([
+      fx({ id: "c1", stage_id: "ld", round_no: 1, fixture_no: 1, seq_in_round: 1, scheduled_at: null }),
+      fx({ id: "c2", stage_id: "ld", round_no: 2, fixture_no: 2, seq_in_round: 1, scheduled_at: "2026-09-05T16:00:00.000Z" }),
+      fx({ id: "c3", stage_id: "ld", round_no: 3, fixture_no: 3, seq_in_round: 1, scheduled_at: "2026-09-05T09:00:00.000Z" }),
+      fx({ id: "c4", stage_id: "ld", round_no: 4, fixture_no: 4, seq_in_round: 1, scheduled_at: null }),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.fixtures.map((f) => f.id)).toEqual(["c3", "c2", "c1", "c4"]);
   });
 });
 

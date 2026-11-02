@@ -304,7 +304,7 @@ test("E1: a started Swiss stage groups its rows under a bar per round, with the 
   await expect(bars, "a bar per round").toHaveCount(2);
   await expect(bars.nth(0)).toContainText("Round 1");
   await expect(bars.nth(1)).toContainText("Round 2");
-  await expect(bars.nth(0)).toContainText("0 of 2 played");
+  await expect(bars.nth(0)).toContainText("0 of 2 done");
   await expect(card.getByText("Not yet scheduled")).toHaveCount(0);
   // Nothing is timed: every row says so on the row, and the bars carry no clock span.
   const rows = card.locator("li[data-fixture-no]");

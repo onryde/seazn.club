@@ -284,7 +284,7 @@ test("the run sheet groups by venue day and prints the day, the time and the pit
   // than a UTC-only string slice, since the venue zone is no longer UTC).
   const expectedDayKey = dayKeyInTz(now, tz);
 
-  // Match Day E1 item 1 (owner 2026-11-01): the stage card groups its rows under a header bar PER ROUND - "Round 2 - 0 of 2 played - day -
+  // Match Day E1 item 1 (owner 2026-11-01): the stage card groups its rows under a header bar PER ROUND - "Round 2 - 0 of 2 done - day -
   // 21:10-21:50" - not under day headings, and an untimed row sits last in its round saying "No time yet" rather than under a "Not yet
   // scheduled" group. So what this case pins is the DERIVED shape: the rounds come in earliest-kickoff order (untimed rounds last), the
   // rows in a round in time order, each bar names its day and its clock span in the venue zone, and the NOW rule appears once.
@@ -338,8 +338,8 @@ test("the run sheet groups by venue day and prints the day, the time and the pit
     expect(seenNos, `round ${n}: rows in time order, untimed last`).toEqual(expectedOrder.get(n));
     const bar = round.getByTestId("run-sheet-round-bar");
     await expect(bar).toContainText(UI_EN["schedule.round"]!.replace("{n}", String(n)));
-    await expect(bar, `round ${n}: how many are played`).toContainText(
-      UI_EN[mine.length === 1 ? "runsheet.round.played.one" : "runsheet.round.played.other"]!.replace("{played}", "0").replace("{total}", String(mine.length)),
+    await expect(bar, `round ${n}: how many are done`).toContainText(
+      UI_EN[mine.length === 1 ? "runsheet.round.done.one" : "runsheet.round.done.other"]!.replace("{done}", "0").replace("{total}", String(mine.length)),
     );
     if (stamped.length === 0) {
       await expect(bar.locator("[data-run-sheet-round-dates]"), `round ${n}: nothing timed, no date`).toHaveCount(0);

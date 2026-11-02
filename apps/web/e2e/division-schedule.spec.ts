@@ -85,7 +85,7 @@ test("the run sheet groups fixtures by day and prints them in the competition tz
   const url = `/o/${org.slug}/c/${comp.data!.slug}/d/${div.data!.slug}?tab=fixtures`;
   await page.goto(url);
 
-  // Round grouping (item 1) - Match Day E1 item 1: the stage card groups its rows under a header BAR per round ("Round 1 - 0 of 2 played - Tue 15
+  // Round grouping (item 1) - Match Day E1 item 1: the stage card groups its rows under a header BAR per round ("Round 1 - 0 of 2 done - Tue 15
   // Sep - 09:00-10:00"). The bar names the round and, since the day headings left the stage card, the day the round is played on.
   const bars = page.getByTestId("run-sheet-round-bar");
   await expect(bars.first()).toBeVisible();

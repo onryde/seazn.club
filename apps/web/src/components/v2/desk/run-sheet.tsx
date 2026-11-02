@@ -18,10 +18,12 @@ import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict
 import { dayLabel, dayLabelLong } from "@/lib/day-label";
 import { isResultMissing, isUnscheduledFixture } from "@/lib/division-phase";
 import {
+  ROUND_SEQUENCE_STAGE_KINDS,
   BRACKET_STAGE_KINDS,
   isBye,
-  roundPlayed,
+  roundDone,
   roundWhen,
+  stageFlatSection,
   stageRoundSections,
   type RunSheetBlock,
   type RunSheetFixture,
@@ -439,7 +441,7 @@ export function RunSheet({
                   `top-[86px]` literal — see the effect's comment. */}
               <RoundBar
                 title={`${stage && !embedded ? `${stage.name} — ` : ""}${bracketRoundLabel(msg, stage?.kind ?? "knockout", r.round, allStageFixtures)}`}
-                played={roundPlayedText(msgPlural, r.allFixtures)}
+                done={roundDoneText(msgPlural, r.allFixtures, settleIds)}
                 roundedTop={i === 0 && !embedded}
               >
                 {dates !== null && <span data-run-sheet-round-dates>{" · "}{dates}</span>}
@@ -574,12 +576,13 @@ export function RunSheet({
 
   // Match Day E1 item 1 (owner 2026-11-01): a NON-bracket stage's card groups its rows under a bar per ROUND - league, round robin,
   // groups and Swiss alike. The stage's rows come out of the same division-wide blocks (`stageRoundSections`), under the same
-  // `keep`; what the bar says about the round (how many are played, when) is read off the whole round / the rows shown (below).
-  // A bracket stage keeps `renderBlock`'s own named rounds, in the same bar.
+  // `keep`; what the bar says about the round (how many are done, when) is read off the whole round / the rows shown (below).
+  // A bracket stage keeps `renderBlock`'s own named rounds, in the same bar. A ladder (fix round 1, I2) stores each challenge as a round of
+  // its own, so a bar per round would be a bar per challenge: it gets the same rows as ONE list in time order, with no bar.
   const roundsStage = embedded && stageId !== null ? stageById.get(stageId) : undefined;
-  const renderRounds = (): React.ReactElement | null => {
+  const renderRounds = (withBars: boolean): React.ReactElement | null => {
     if (stageId === null) return null;
-    const sections = stageRoundSections(blocks, stageId)
+    const sections = (withBars ? stageRoundSections : stageFlatSection)(blocks, stageId)
       .map((section) => ({ round: section.round, all: section.fixtures, rows: section.fixtures.filter(keep) }))
       .filter((section) => section.rows.length > 0);
     if (sections.length === 0) return null;
@@ -597,22 +600,24 @@ export function RunSheet({
     }
     const nowPlace: { round: number; index: number } | null = nowAt ?? lastToday;
     return (
-      <section key={`rounds-${stageId}`} data-run-sheet-block="rounds">
+      <section key={`rounds-${stageId}`} data-run-sheet-block={withBars ? "rounds" : "flat"}>
         {sections.map((section) => {
           const when = roundWhen(section.rows, tz);
           const sameDay = when !== null && when.firstDay === when.lastDay;
           const dates = roundDateLabel(section.rows, tz, locale);
           return (
-            <div key={section.round} data-run-sheet-round={section.round}>
-              <RoundBar title={msg("schedule.round", { n: section.round })} played={roundPlayedText(msgPlural, section.all)}>
-                {dates !== null && <span data-run-sheet-round-dates>{" · "}{dates}</span>}
-                {sameDay && when !== null && (
-                  <span data-run-sheet-round-span>
-                    {" · "}
-                    {when.from === when.to ? when.from : `${when.from}\u2013${when.to}`}
-                  </span>
-                )}
-              </RoundBar>
+            <div key={section.round} data-run-sheet-round={withBars ? section.round : undefined}>
+              {withBars && (
+                <RoundBar title={msg("schedule.round", { n: section.round })} done={roundDoneText(msgPlural, section.all, settleIds)}>
+                  {dates !== null && <span data-run-sheet-round-dates>{" · "}{dates}</span>}
+                  {sameDay && when !== null && (
+                    <span data-run-sheet-round-span>
+                      {" · "}
+                      {when.from === when.to ? when.from : `${when.from}\u2013${when.to}`}
+                    </span>
+                  )}
+                </RoundBar>
+              )}
               <ul className="divide-y divide-slate-50">
                 {section.rows.map((f, i) => (
                   <RowWithNow
@@ -650,9 +655,9 @@ export function RunSheet({
   };
 
   const renderedBlocks = (
-    roundsStage !== undefined && !BRACKET_STAGE_KINDS.has(roundsStage.kind)
-      ? [renderRounds()]
-      : blocks.map(renderBlock)
+    roundsStage === undefined || BRACKET_STAGE_KINDS.has(roundsStage.kind)
+      ? blocks.map(renderBlock)
+      : [renderRounds(ROUND_SEQUENCE_STAGE_KINDS.has(roundsStage.kind))]
   ).filter((node): node is React.ReactElement => node !== null);
 
   return (
@@ -950,29 +955,31 @@ function RowWithNow({
   );
 }
 
-/** "0 of 2 played": the round's own fact, from every real match in it (`roundPlayed`), in the plural the locale picks for the total. */
-function roundPlayedText(
+/** "0 of 2 done": the round's own fact, `roundDone` (the stage card's own count of the real matches in it, held settles open), in the
+ *  plural the locale picks for the total. */
+function roundDoneText(
   msgPlural: (key: string, count: number, vars?: Record<string, string | number>) => string,
   fixtures: readonly RunSheetFixture[],
+  held: ReadonlySet<string>,
 ): string {
-  const { played, total } = roundPlayed(fixtures);
-  return msgPlural("runsheet.round.played", total, { played, total });
+  const { done, total } = roundDone(fixtures, held);
+  return msgPlural("runsheet.round.done", total, { done, total });
 }
 
 /**
  * The bar over a round's rows - one look for a league's "Round 2" and a knockout's "Semi-finals" (Match Day E1 item 1). The name
- * leads, the round's facts follow on the same line (how many are played, then whatever `children` add: the day, the clock span),
+ * leads, the round's facts follow on the same line (how many are done, then whatever `children` add: the day, the clock span),
  * and it wraps at a phone's width rather than clipping. Sticks under the page's nav as the day heading and the bracket header
  * before it did (`--desk-day-h` is 0px when no day heading is on the sheet, which is every stage card now).
  */
 function RoundBar({
   title,
-  played,
+  done,
   roundedTop = false,
   children,
 }: {
   title: string;
-  played: string;
+  done: string;
   /** The first bar of a division-wide sheet, which has a rounded top of its own to follow. */
   roundedTop?: boolean;
   children?: React.ReactNode;
@@ -983,18 +990,18 @@ function RoundBar({
       className={`sticky z-10 border-y border-slate-200 bg-slate-100 px-4 py-2 ${roundedTop ? "rounded-t-2xl" : ""}`}
       data-testid="run-sheet-round-bar"
     >
-      {/* ONE heading: the name and its facts read as one sentence ("Round 2 · 0 of 1 played · Sat 5 Sep · 21:10-21:50") to a
+      {/* ONE heading: the name and its facts read as one sentence ("Round 2 · 0 of 1 done · Sat 5 Sep · 21:10-21:50") to a
           screen reader and to a locator, and wrap together at a phone's width. */}
       <h4 className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
         <span className="min-w-0 text-sm font-semibold text-slate-800">{title}</span>
         {/* A real space between the two spans (a flex container paints none, so it costs no layout): the heading's text reads "Final
-            · 0 of 1 played" to a screen reader and to a locator instead of "Final· 0 of 1 played". */}
+            · 0 of 1 done" to a screen reader and to a locator instead of "Final· 0 of 1 done". */}
         {" "}
         {/* The facts take their own line on a phone (a deliberate second line, never a dot stranded at the start of a wrap) and sit
             beside the name from `md`, led by a dot. The dot is part of the sentence for a screen reader and a locator either way. */}
         <span className="min-w-0 text-xs font-normal text-slate-600 max-md:basis-full">
           <span className="max-md:hidden">{"\u00b7 "}</span>
-          {played}
+          {done}
           {children}
         </span>
       </h4>

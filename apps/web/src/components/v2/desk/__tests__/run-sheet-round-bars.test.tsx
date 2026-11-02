@@ -1,4 +1,4 @@
-// Match Day E1 item 1 (owner 2026-11-01): a stage card groups its rows under a header bar PER ROUND ("Round 2 · 0 of 1 played · 21:10-21:50"),
+// Match Day E1 item 1 (owner 2026-11-01): a stage card groups its rows under a header bar PER ROUND ("Round 2 · 0 of 1 done · 21:10-21:50"),
 // rows inside a round in time order with the untimed ones last, "No time yet" on the row instead of a "Not yet scheduled" GROUP, and no
 // "Round N" label on the row. A knockout keeps its NAMED rounds in the same bar. Node env, no DOM (AGENTS.md class 2): what the bar says
 // and where each row sits is read off the real `RunSheet` the stage card mounts (`embedded`, `stageId`), fed by `buildRunSheet`'s own
@@ -6,9 +6,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StageKind } from "@seazn/engine/core";
+import { stageActions, stageCounts } from "@/lib/stage-card/summaries";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
-import { BRACKET_STAGE_KINDS, buildRunSheet, type RunSheetFixture } from "@/lib/run-sheet-groups";
+import { BRACKET_STAGE_KINDS, ROUND_SEQUENCE_STAGE_KINDS, buildRunSheet, isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import { dayLabel } from "@/lib/day-label";
 import { LOCALES, type Dict, type Locale } from "@/lib/i18n-constants";
 import enUi from "@/dictionaries/en/ui.json";
@@ -61,7 +62,7 @@ const stage = (kind: string): Stage[] => [{ id: "s1", seq: 1, kind, name: "Stage
 function sheet(
   fixtures: RunSheetFixture[],
   stages: Stage[],
-  o: { embedded?: boolean; locale?: Locale; filter?: RunSheetFilter; nowMs?: number } = {},
+  o: { embedded?: boolean; locale?: Locale; filter?: RunSheetFilter; nowMs?: number; awaitingSettle?: string[] } = {},
 ): string {
   const locale = o.locale ?? "en";
   const nowMs = o.nowMs ?? NOW_MS;
@@ -81,6 +82,7 @@ function sheet(
         onFilter={() => {}}
         stageId={(o.embedded ?? true) ? "s1" : null}
         embedded={o.embedded ?? true}
+        awaitingSettle={o.awaitingSettle}
       />
     </DictProvider>,
   );
@@ -92,7 +94,7 @@ const bars = (html: string): string[] =>
   [...html.matchAll(/<header[^>]*data-testid="run-sheet-round-bar"[^>]*>([\s\S]*?)<\/header>/g)].map((m) => text(m[1]!).replace(/\s+·/g, " ·"));
 /** Fixture numbers in the order their rows are drawn. */
 const rowNos = (html: string): number[] => [...html.matchAll(/data-fixture-no="(\d+)"/g)].map((m) => Number(m[1]));
-const played = (n: number, total: number, dict: Record<string, string> = UI) => dict[total === 1 ? "runsheet.round.played.one" : "runsheet.round.played.other"]!.replace("{played}", String(n)).replace("{total}", String(total));
+const done = (n: number, total: number, dict: Record<string, string> = UI) => dict[total === 1 ? "runsheet.round.done.one" : "runsheet.round.done.other"]!.replace("{done}", String(n)).replace("{total}", String(total));
 
 describe("E1 item 1: a table stage's card groups its rows under a bar per round", () => {
   it("the empty case: a stage with no rows draws no bar and no row; a filter that keeps none says so in a line, with no bar", () => {
@@ -103,7 +105,7 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
     expect(rowNos(html)).toEqual([]);
   });
 
-  it("two rounds: a bar each, 'Round N · x of y played · day · time span', the rows under their own bar - and no 'Not yet scheduled' group, and no 'Round N' on a row", () => {
+  it("two rounds: a bar each, 'Round N · x of y done · day · time span', the rows under their own bar - and no 'Not yet scheduled' group, and no 'Round N' on a row", () => {
     const html = sheet(
       [
         fx(1, { round_no: 1, status: "decided", outcome: { kind: "win", winner: "e1" }, scheduled_at: `${DAY}T10:00:00.000Z` }),
@@ -113,8 +115,8 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
       stage("league"),
     );
     expect(bars(html)).toEqual([
-      `Round 1 · ${played(1, 2)} · ${dayLabel(DAY, "en")} · 10:00–10:40`,
-      `Round 2 · ${played(0, 1)} · ${dayLabel(DAY, "en")} · 21:10`,
+      `Round 1 · ${done(1, 2)} · ${dayLabel(DAY, "en")} · 10:00–10:40`,
+      `Round 2 · ${done(0, 1)} · ${dayLabel(DAY, "en")} · 21:10`,
     ]);
     expect(rowNos(html)).toEqual([1, 2, 3]);
     expect(html, "the group is gone").not.toContain(UI["runsheet.unscheduled.title"]!);
@@ -133,7 +135,7 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
       ],
       stage("league"),
     );
-    expect(bars(html)).toEqual([`Round 3 · ${played(1, 3)}`]);
+    expect(bars(html)).toEqual([`Round 3 · ${done(1, 3)}`]);
     expect(html).not.toContain("data-run-sheet-round-span");
     expect(html).not.toContain("data-run-sheet-round-dates");
     // Fixtures 1 and 2 are open with no time; 3 is a RESULT with no time and says nothing of the kind.
@@ -151,15 +153,15 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
         fx(2, { scheduled_at: `${DAY}T16:00:00.000Z`, seq_in_round: 2 }),
         fx(3, { scheduled_at: `${DAY}T15:00:00.000Z`, seq_in_round: 3 }),
       ],
-      stage("round_robin"),
+      stage("league"),
     );
     expect(rowNos(html)).toEqual([3, 2, 1]);
-    expect(bars(html)).toEqual([`Round 1 · ${played(0, 3)} · ${dayLabel(DAY, "en")} · 15:00–16:00`]);
+    expect(bars(html)).toEqual([`Round 1 · ${done(0, 3)} · ${dayLabel(DAY, "en")} · 15:00–16:00`]);
   });
 
   it("a round spanning two days names both days and prints no one clock span", () => {
     const html = sheet([fx(1, { scheduled_at: `${DAY}T10:00:00.000Z` }), fx(2, { scheduled_at: "2026-09-06T10:00:00.000Z" })], stage("league"));
-    expect(bars(html)).toEqual([`Round 1 · ${played(0, 2)} · ${dayLabel(DAY, "en")} – ${dayLabel("2026-09-06", "en")}`]);
+    expect(bars(html)).toEqual([`Round 1 · ${done(0, 2)} · ${dayLabel(DAY, "en")} – ${dayLabel("2026-09-06", "en")}`]);
   });
 
   it("rounds read in the order they are played; the NOW rule appears once, in the round it falls in", () => {
@@ -182,27 +184,56 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
     expect(late.indexOf('data-testid="run-sheet-now"')).toBeGreaterThan(late.indexOf('data-fixture-no="1"'));
   });
 
-  it("every stage kind the engine declares, counted: a bracket kind keeps its NAMED rounds in the same bar, every other kind gets 'Round N'", () => {
+  it("every stage kind the engine declares, counted: a bracket kind keeps its NAMED rounds in the same bar, a round-sequence kind gets 'Round N', the ladder gets NO bar", () => {
     let bracket = 0;
     let table = 0;
+    let flat = 0;
     for (const kind of StageKind.options) {
       const html = sheet([fx(1), fx(2, { round_no: 2 })], stage(kind));
       const b = bars(html);
-      expect(b.length, `${kind}: a bar per round`).toBeGreaterThan(0);
       if (BRACKET_STAGE_KINDS.has(kind)) {
+        expect(b.length, `${kind}: a bar per round`).toBeGreaterThan(0);
         expect(html, `${kind}: the bracket block`).toContain('data-run-sheet-block="bracket"');
         expect(b.every((line) => /^(Round \d|[A-Z])/.test(line)), `${kind}: named`).toBe(true);
         bracket++;
-      } else {
+      } else if (ROUND_SEQUENCE_STAGE_KINDS.has(kind)) {
         expect(html, `${kind}: round sections`).toContain('data-run-sheet-block="rounds"');
         expect(b.map((line) => line.split(" · ")[0]), `${kind}: Round N`).toEqual(["Round 1", "Round 2"]);
         table++;
+      } else {
+        // The ladder stores each challenge as a round of its own: two challenges are two rounds in the data and ONE list on the card.
+        expect(b, `${kind}: no bar at all`).toEqual([]);
+        expect(html, `${kind}: a flat list`).toContain('data-run-sheet-block="flat"');
+        expect(html, `${kind}: not the day/unscheduled groups`).not.toContain("data-run-sheet-day");
+        expect(rowNos(html), `${kind}: both rows are there`).toEqual([1, 2]);
+        expect(text(html), `${kind}: and neither says which round it is`).not.toMatch(/Round \d/);
+        flat++;
       }
-      expect(b.every((line) => line.includes(" of ") || line.includes(" de ")), `${kind}: every bar says how many are played`).toBe(true);
+      expect(b.every((line) => line.includes(" of ") || line.includes(" de ")), `${kind}: every bar says how many are done`).toBe(true);
     }
-    expect(table, "table kinds swept").toBeGreaterThan(0);
+    expect(table, "round-sequence kinds swept").toBe(ROUND_SEQUENCE_STAGE_KINDS.size);
     expect(bracket, "bracket kinds swept").toBe(BRACKET_STAGE_KINDS.size);
-    expect(table + bracket).toBe(StageKind.options.length);
+    expect(flat, "the ladder swept").toBe(1);
+    expect(table + bracket + flat).toBe(StageKind.options.length);
+  });
+
+  it("a ladder's flat list runs in time order, the untimed challenge last, with 'No time yet' on it - and its challenges' rounds never become bars", () => {
+    const html = sheet(
+      [
+        fx(1, { round_no: 1, scheduled_at: null }),
+        fx(2, { round_no: 2, scheduled_at: `${DAY}T16:00:00.000Z` }),
+        fx(3, { round_no: 3, scheduled_at: `${DAY}T09:00:00.000Z`, status: "decided", outcome: { kind: "win", winner: "e1" } }),
+      ],
+      stage("ladder"),
+    );
+    expect(bars(html)).toEqual([]);
+    expect(rowNos(html)).toEqual([3, 2, 1]);
+    const rowOf = (no: number) => html.slice(html.indexOf(`data-fixture-no="${no}"`), html.indexOf("</li>", html.indexOf(`data-fixture-no="${no}"`)));
+    expect(rowOf(1)).toContain(UI["runsheet.noTimeYet"]!);
+    expect(rowOf(2)).not.toContain(UI["runsheet.noTimeYet"]!);
+    // The empty case, and a filter that keeps none: no list, no bar.
+    expect(sheet([], stage("ladder"))).toBe("");
+    expect(rowNos(sheet([fx(1)], stage("ladder"), { filter: "unscheduled" }))).toEqual([]);
   });
 
   it("a knockout's bar and its rows: the named round leads, the row drops its own 'Round N', an untimed row says No time yet", () => {
@@ -212,13 +243,87 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
     expect(text(html)).not.toContain("Round 1");
   });
 
-  it("all four locales: the played fact is the locale's own sentence (plural by the total), the round is its own word", () => {
+  // Match Day E1 fix round 1 (I1): the bars add up to the stage card's own counts. The card's Complete button reads `stageCounts` over the
+  // stage's fixtures (and the page's awaiting-settle ids); a bar that counted "played" its own way said "1 of 2" on a stage Complete was
+  // already enabled for. Driven through the real RunSheet, the real `stageCounts` and the real `stageActions`.
+  describe("the bars add up to the stage's own counts (the shared count)", () => {
+    const AWARD = { kind: "award", winner: "e1", loser: "e2", reason: "walkover" };
+    const WIN = { kind: "win", winner: "e1" };
+    const BYE_AWARD = { kind: "award", winner: "e1", loser: null, reason: "bye" };
+    const parse = (line: string): { done: number; total: number } => {
+      for (const key of ["runsheet.round.done.one", "runsheet.round.done.other"]) {
+        const rx = new RegExp(UI[key]!.replace("{done}", "(\\d+)").replace("{total}", "(\\d+)"));
+        const m = rx.exec(line);
+        if (m) return { done: Number(m[1]), total: Number(m[2]) };
+      }
+      throw new Error(`no done fact in "${line}"`);
+    };
+    type Case = { what: string; rows: RunSheetFixture[]; held?: string[]; complete: boolean };
+    const CASES: Case[] = [
+      {
+        what: "a walkover and a cancellation settle their round: nothing is open, Complete is enabled",
+        rows: [fx(1, { status: "forfeited", outcome: AWARD }), fx(2, { status: "cancelled" }), fx(3, { round_no: 2, status: "decided", outcome: WIN })],
+        complete: true,
+      },
+      {
+        what: "an abandonment awaiting its settle is open: the bar does not count it and Complete is disabled",
+        rows: [fx(1, { status: "abandoned" }), fx(2, { status: "decided", outcome: WIN })],
+        held: ["f1"],
+        complete: false,
+      },
+      {
+        what: "the same abandonment once settled (no longer awaiting): done, and Complete is enabled",
+        rows: [fx(1, { status: "abandoned" }), fx(2, { status: "decided", outcome: WIN })],
+        held: [],
+        complete: true,
+      },
+      {
+        what: "an in-play match and a held decision keep their rounds open",
+        rows: [fx(1, { status: "in_play" }), fx(2, { round_no: 2, status: "needs_decision" }), fx(3, { round_no: 3, status: "decided", outcome: WIN })],
+        complete: false,
+      },
+      {
+        what: "a bye is no match: it adds to neither side of any bar, and does not hold Complete shut",
+        rows: [fx(1, { status: "decided", outcome: WIN }), fx(2, { round_no: 2, away_entrant_id: null, status: "forfeited", outcome: BYE_AWARD })],
+        complete: true,
+      },
+    ];
+
+    it.each(["swiss", "league", "group", "americano"] as const)("%s: every case, the bars summed equal stageCounts, and Complete is enabled exactly when the bars are all full", (kind) => {
+      let checked = 0;
+      let enabled = 0;
+      for (const c of CASES) {
+        const held = new Set(c.held ?? []);
+        const html = sheet(c.rows, stage(kind), { awaitingSettle: c.held });
+        const sum = bars(html).map(parse).reduce((acc, r) => ({ done: acc.done + r.done, total: acc.total + r.total }), { done: 0, total: 0 });
+        const real = c.rows.filter((r) => !isBye(r));
+        const counts = stageCounts(c.rows, held);
+        const realCounts = stageCounts(real, held);
+        expect(sum.done, `${kind}/${c.what}: done`).toBe(realCounts.played);
+        expect(sum.total, `${kind}/${c.what}: total`).toBe(real.length);
+        // What the bars leave open is exactly what the card's counts line leaves open - byes, which a card settles, never open anything.
+        expect(sum.total - sum.done, `${kind}/${c.what}: open`).toBe(counts.inPlay + counts.unplayed);
+        const complete = [stageActions({ status: "active", ...counts, hasFixtures: true, adhoc: true, pairNext: false, canUnpair: false })]
+          .flatMap((a) => [a.primary, ...a.secondary])
+          .find((b) => b?.action === "complete");
+        expect(complete?.enabled, `${kind}/${c.what}: Complete`).toBe(c.complete);
+        expect(sum.done === sum.total, `${kind}/${c.what}: bars full <=> Complete enabled`).toBe(c.complete);
+        if (c.complete) enabled++;
+        checked++;
+      }
+      expect(checked, "every case checked").toBe(CASES.length);
+      expect(enabled, "both Complete states are reached").toBeGreaterThan(0);
+      expect(enabled).toBeLessThan(CASES.length);
+    });
+  });
+
+  it("all four locales: the done fact is the locale's own sentence (plural by the total), the round is its own word", () => {
     let checked = 0;
     for (const locale of LOCALES) {
       const dict = DICTS[locale] as Record<string, string>;
       const html = sheet([fx(1, { round_no: 2 }), fx(2, { round_no: 2 })], stage("league"), { locale });
       const bar = bars(html)[0]!;
-      expect(bar, `${locale}: the played fact`).toContain(played(0, 2, dict));
+      expect(bar, `${locale}: the done fact`).toContain(done(0, 2, dict));
       expect(bar, `${locale}: the round word`).toContain(dict["schedule.round"]!.replace("{n}", "2"));
       checked++;
     }
@@ -238,7 +343,7 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
   });
 
   it("the bar's heading reads as ONE sentence by its raw text (what a screen reader and a locator see): the name, a space, then the facts", () => {
-    // `bars()` above turns every tag into a space, so a name and a fact that touch in the markup ("Final· 0 of 1 played") read as
+    // `bars()` above turns every tag into a space, so a name and a fact that touch in the markup ("Final· 0 of 1 done") read as
     // separated there. A locator's `^Final(\s|$)` and a screen reader work from the text WITHOUT that padding: the space must be real.
     let checked = 0;
     for (const [kind, name] of [["league", "Round 1"], ["knockout", "Final"]] as const) {
