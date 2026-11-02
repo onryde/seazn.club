@@ -638,13 +638,28 @@ test.describe("W2b — a credited result says which one, on every public surface
   });
 });
 
-/** A knockout whose final waits on SF2 with SF1's winner gone from it: `depart` empties her seat (R116-3, R116-4). */
-async function deadSeatKnockout(request: APIRequestContext, depart: (her: string) => Promise<void>) {
+/** A knockout whose final waits on SF2 with SF1's winner gone from it: `depart` empties her seat (R116-3, R116-4).
+ *  `when` is when `depart` runs: "before" SF1 is decided (the withdrawn callers pass a no-op and withdraw her once she
+ *  is in the final), or "after" she has won SF1 and reached the final — a disqualification's, because since W3 T15
+ *  (RB3-17) the DQ PATCH runs the withdrawal cascade, which on an open SF1 would walk it over to her opponent and the
+ *  forfeit below would be refused (ALREADY_DECIDED). */
+async function deadSeatKnockout(
+  request: APIRequestContext,
+  depart: (her: string) => Promise<void>,
+  when: "before" | "after" = "before",
+) {
   const ko = await publicKnockout(request);
   const [sf1, sf2] = ko.semis;
   const her = sf1!.home_entrant_id!;
-  await depart(her);
+  if (when === "before") await depart(her);
   await post(request, sf1!.id, "core.forfeit", { by: sf1!.away_entrant_id, reason: "walkover" });
+  if (when === "after") {
+    // As ruling 116's withdrawn twin does: she has reached the final (its other seat TBD) before she leaves.
+    await expect
+      .poll(async () => { const f = await read(request, ko.final.id); return [f.home_entrant_id, f.away_entrant_id].includes(her); }, { timeout: STEP_MS })
+      .toBe(true);
+    await depart(her);
+  }
   return { ko, sf2: sf2!, her };
 }
 /** SF2's winner arrives in the final, walking it over. */
@@ -657,7 +672,8 @@ async function arriveInFinal(request: APIRequestContext, ko: Awaited<ReturnType<
 // R116-3 (W2b Task 16; owner ruling 116): the ORGANISER's surfaces — the division's run sheet (`?tab=fixtures`) and the
 // bracket panel above it — read the same tie as a walkover naming her in her seat, never "{name} has a bye" and never
 // the bye label. The positive pair is the same locator before the arrival, where her dead seat reads the bye word; and a
-// DQ'd winner's dead seat (a bare status write: the award names nobody) stays a bye on both, after the arrival too.
+// DQ'd winner's dead seat (disqualified after she won SF1: the award names nobody) stays a bye on both, after the
+// arrival too.
 test.describe("W2b R116-3 — the organiser's run sheet and bracket read ruling 116's walkover as a walkover", () => {
   test("her name in her seat on the run sheet and the bracket panel at 1280/768/320; a DQ'd winner's dead seat stays a bye", async ({ page, request }) => {
     test.setTimeout(4 * 60_000);
@@ -670,7 +686,7 @@ test.describe("W2b R116-3 — the organiser's run sheet and bracket read ruling 
     // of this draw's names holds the letters, so the bare word is the probe.
     const BYE = new RegExp(bye, "i");
 
-    const deadSeatFinal = (depart: (her: string) => Promise<void>) => deadSeatKnockout(request, depart);
+    const deadSeatFinal = (depart: (her: string) => Promise<void>, when?: "before" | "after") => deadSeatKnockout(request, depart, when);
     const arrive = (ko: Awaited<ReturnType<typeof publicKnockout>>, sf2: Fx) => arriveInFinal(request, ko, sf2);
     const surfaces = (no: number) => ({
       row: page.getByTestId("run-sheet").locator(`li[data-fixture-no="${no}"]`),
@@ -749,12 +765,13 @@ test.describe("W2b R116-3 — the organiser's run sheet and bracket read ruling 
     }
     expect(screens).toBe(WIDTHS.length * 2);
 
-    // The pair: a DQ'd winner's dead seat. Her disqualification is the bare status write v1's entrant patch makes, so the
-    // award names no loser — a bye on both surfaces, and never her name.
+    // The pair: a DQ'd winner's dead seat. She is disqualified through v1's entrant PATCH AFTER winning SF1 (the PATCH
+    // runs the withdrawal cascade since W3 T15, so before SF1 it would walk SF1 over instead). Ruling 116 is a withdrawal's
+    // alone: the arrival's award names no loser — a bye on both surfaces, and never her name.
     const dq = await deadSeatFinal(async (her) => {
       const left = await apiJson(request, `/api/v1/entrants/${her}`, "PATCH", { status: "disqualified" });
       expect(left.status, JSON.stringify(left.error)).toBeLessThan(300);
-    });
+    }, "after");
     const dqFinal = await arrive(dq.ko, dq.sf2);
     const dqArriving = dq.sf2.home_entrant_id!;
     expect(dqFinal.outcome, "a walkover by bye, naming nobody").toEqual({ kind: "award", winner: dqArriving, loser: null, reason: "bye" });
@@ -971,12 +988,13 @@ test.describe("W2b R116-4 — the organiser's console, board card and officials 
     }
     expect(screens).toBe(WIDTHS.length * 3);
 
-    // The pair: a DQ'd winner's dead seat (the bare status write v1's entrant patch makes): a walkover by bye naming
-    // nobody — the console and the officials list keep the bye word, the board card its feeder, and none prints her.
+    // The pair: a DQ'd winner's dead seat (v1's entrant PATCH, AFTER she won SF1 — since W3 T15 the PATCH runs the
+    // withdrawal cascade, which on an open SF1 would walk it over instead): a walkover by bye naming nobody — the console
+    // and the officials list keep the bye word, the board card its feeder, and none prints her.
     const dq = await deadSeatKnockout(request, async (her) => {
       const left = await apiJson(request, `/api/v1/entrants/${her}`, "PATCH", { status: "disqualified" });
       expect(left.status, JSON.stringify(left.error)).toBeLessThan(300);
-    });
+    }, "after");
     await placeFinal(dq.ko.divId, dq.ko.final.id);
     const dqFinal = await arriveInFinal(request, dq.ko, dq.sf2);
     const dqArriving = dq.sf2.home_entrant_id!;
