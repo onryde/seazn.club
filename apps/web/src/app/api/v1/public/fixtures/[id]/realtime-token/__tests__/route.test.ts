@@ -109,7 +109,8 @@ async function ask(fixtureId: string, purpose?: string, key?: string): Promise<{
   const minted = seams.mint.mock.calls.length === 1;
   if (res.status === 200) {
     const body = (await res.json()) as { data?: { token: string; channel: string } };
-    expect(body.data, "a 200 carries the minted token for THIS fixture").toEqual({ token: `token:${fixtureId}`, channel: `fixture:${fixtureId}` });
+    // `url` and `apikey` ride beside them (device-link-fields.test.ts pins those); this table is about WHO may mint.
+    expect(body.data, "a 200 carries the minted token for THIS fixture").toMatchObject({ token: `token:${fixtureId}`, channel: `fixture:${fixtureId}` });
   }
   return { status: res.status, minted };
 }

@@ -1372,6 +1372,46 @@ export const FixtureCurrentRules = z.object({
 });
 export type FixtureCurrentRules = z.infer<typeof FixtureCurrentRules>;
 
+/** `GET /api/v1/device-link` — the bootstrap a phone's Remote Scoring reads with its `dl_` link (capture design §7.1). The server
+ *  usecase (`device-link-bootstrap.ts`) types the same shape; a seat with no entrant yet is null. */
+const DeviceLinkSide = z.object({
+  entrant_id: z.string(),
+  name: z.string(),
+  kind: z.string(),
+  members: z.array(z.object({ person_id: z.string(), full_name: z.string() })),
+  lineup: z.array(z.object({ person_id: z.string(), pair_order: z.number().int().nullable() })),
+});
+export const DeviceLinkBootstrap = z.object({
+  fixture_id: z.string(),
+  link_id: z.string(),
+  sport_key: z.string(),
+  module_version: z.string(),
+  cfg: z.unknown(),
+  rules_version: z.number().int().min(0),
+  engine_epoch_required: z.number().int().min(1),
+  screen: z.enum(["view_only", "division_not_started", "waiting", "confirm", "pad"]),
+  view_only_reason: z.string().nullable(),
+  names: z.object({
+    competition: z.string(),
+    division: z.string().nullable(),
+    round_label: z.string().nullable(),
+    ref: z.string().nullable(),
+  }),
+  sides: z.object({ home: DeviceLinkSide.nullable(), away: DeviceLinkSide.nullable() }),
+  state: z.object({ status: z.string(), last_seq: z.number().int().min(0) }),
+});
+export type DeviceLinkBootstrap = z.infer<typeof DeviceLinkBootstrap>;
+
+/** `GET /api/v1/public/fixtures/{id}/realtime-token`. `url` and `apikey` are the public project URL and anon key (null where the
+ *  deployment has none), so a phone configures its Realtime client from the server. */
+export const RealtimeTokenOut = z.object({
+  token: z.string(),
+  channel: z.string(),
+  url: z.string().nullable(),
+  apikey: z.string().nullable(),
+});
+export type RealtimeTokenOut = z.infer<typeof RealtimeTokenOut>;
+
 export const AddFixture = z
   .object({
     home_entrant_id: Uuid,
