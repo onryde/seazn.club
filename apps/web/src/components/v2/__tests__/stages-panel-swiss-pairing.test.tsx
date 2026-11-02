@@ -272,6 +272,45 @@ describe("StagesPanel — rounds >= 2 explain how to change a pairing (X-SW-30)"
     expect(html).not.toContain(HINT);
   });
 
+  // Batch-4 m2: with every round seated there is no Pair next menu to carry the line, yet Unpair is on the rail for the
+  // final round — the line goes beside it, on the SAME gate (a running root Swiss whose Unpair is offered), for a round
+  // from 2 on, and in exactly one place.
+  it("batch-4 m2: the FINAL round paired says the line beside Unpair; one place only, on the same gate", () => {
+    const UNPAIR_HINT = /data-testid="stage-unpair-hint"[^>]*>([^<]*)<\/p>/;
+    const html = (stage: Stage, rows: ReturnType<typeof fixtures>) => renderToStaticMarkup(<StagesPanel {...props} stages={[stage]} fixtures={rows} />);
+    const lastPaired = fixtures([1, 2]).map((f) => (f.round_no === 1 ? { ...f, status: "decided" } : f));
+    const roundOneOnly = fixtures([1]).filter((f) => f.round_no === 1);
+    // Round 3 waiting behind a paired round 2: the round Unpair clears is from 2 on, yet the menu carries the line.
+    const round3Waiting = [
+      ...lastPaired,
+      ...fixtures()
+        .slice(0, 4)
+        .map((f, i) => ({ ...f, id: `g${i}`, round_no: 3, fixture_no: 9 + i, ext_key: `sw-r3-b${i + 1}` })),
+    ];
+    type Row = { name: string; stage: Stage; rows: ReturnType<typeof fixtures>; unpair: boolean; line: boolean; menu: boolean };
+    const ROWS: Row[] = [
+      { name: "round 2 of 2 paired, unplayed: no menu, the line beside Unpair", stage: swissStage(), rows: lastPaired, unpair: true, line: true, menu: false },
+      { name: "round 2 waiting: the menu carries the line, not Unpair too", stage: swissStage(), rows: fixtures([1]), unpair: true, line: false, menu: true },
+      { name: "round 3 waiting, round 2 paired: the menu carries it, not Unpair too", stage: swissStage({ rounds: 3 }), rows: round3Waiting, unpair: true, line: false, menu: true },
+      { name: "a fed Swiss, its final round paired: not a running root Swiss", stage: { ...swissStage(), progression: { from: "s0" } }, rows: lastPaired, unpair: true, line: false, menu: false },
+      { name: "a one-round Swiss paired: round 1's pairing is a choice, not the rules'", stage: swissStage({ rounds: 1 }), rows: roundOneOnly, unpair: true, line: false, menu: false },
+      { name: "the final round played: no Unpair, no line", stage: swissStage(), rows: lastPaired.map((f) => (f.round_no === 2 ? { ...f, status: "decided" } : f)), unpair: false, line: false, menu: false },
+    ];
+    let checked = 0;
+    for (const r of ROWS) {
+      const out = html(r.stage, r.rows);
+      expect(out, `${r.name}: positive control, the rail rendered`).toContain('data-testid="stage-complete"');
+      expect(out.includes('data-testid="stage-unpair"'), `${r.name}: Unpair`).toBe(r.unpair);
+      expect(menuFor(r.stage, r.rows) !== null, `${r.name}: a Pair next menu`).toBe(r.menu);
+      const said = UNPAIR_HINT.exec(out);
+      expect(said?.[1] ?? null, `${r.name}: the line beside Unpair`).toBe(r.line ? COPY : null);
+      if (r.line) expect(out.indexOf("stage-unpair-hint"), `${r.name}: after Unpair`).toBeGreaterThan(out.indexOf('data-testid="stage-unpair"'));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: rows").toBe(ROWS.length);
+    expect(ROWS.filter((r) => r.line).length, "both answers reached").toBeGreaterThan(0);
+  });
+
   it("in Spanish, the line is the Spanish catalog's", () => {
     const html = panelHtml(menuFor(swissStage(), fixtures([1])), { dict: es, locale: "es" });
     expect(html).toContain(`${HINT}>${es["schedule.pairing.changeHint"]}</p>`);

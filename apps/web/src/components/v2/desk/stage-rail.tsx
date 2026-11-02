@@ -93,6 +93,7 @@ import { swissLateEntryOffered } from "@/lib/open-entry-stages";
 // rail only mounts them.
 import { SwissAddRoundMenuItem, SwissRoundsChip, type SwissRoundsRail } from "./swiss-rounds-dialog";
 import { SwissFinishMenuItem } from "./swiss-rounds-dialog";
+import { SwissMoreMenu } from "./swiss-rounds-dialog";
 
 interface StageRow {
   id: string;
@@ -187,6 +188,9 @@ export interface StageRailProps {
    *  (`listSwissRoundControls`), its rows and the two writes, held by the panel: the "Rounds: N · Edit" chip and the
    *  More menu's "Add a round" (swiss-rounds-dialog.tsx). Absent ⇒ neither (any other kind of stage). */
   swissRounds?: SwissRoundsRail;
+  /** Batch-4 m2 — T14's "Unpair, then Pair next" line, said beside Unpair when no Pair next menu carries it
+   *  (`swissUnpairChangeHint`, lib/swiss-pairing-menu.ts). Absent ⇒ no line. */
+  unpairChangeHint?: boolean;
 }
 
 export function StageRail({
@@ -209,6 +213,7 @@ export function StageRail({
   swissPairingMenu,
   lateEntry,
   swissRounds,
+  unpairChangeHint,
 }: StageRailProps) {
   const msg = useMsg();
   // W3 T10 — the "More" menu (owner pick: option A). Its open state is local
@@ -632,6 +637,11 @@ export function StageRail({
                   {busy === stage.id ? msg("schedule.working") : msg("schedule.unpair")}
                 </button>
               )}
+              {stage.kind === "swiss" && canUnpairSwiss && unpairChangeHint && (
+                <p data-testid="stage-unpair-hint" className="min-w-0 text-xs leading-snug text-slate-500 md:max-w-[60ch]">
+                  {msg("schedule.pairing.changeHint")}
+                </p>
+              )}
               {fixtureCount > 0 && (
                 <button
                   type="button"
@@ -696,6 +706,18 @@ export function StageRail({
                 </div>
               </div>
             </>
+          )}
+          {/* Batch-4 ruling 3: a running Swiss with no late-add More above (a fed Swiss) still gets Add a round and Finish
+              the Swiss now — its own More, the same toggle and testids, holding just those two. */}
+          {!(lateEntry && lateEntryOffered) && swissRounds && (
+            <SwissMoreMenu
+              stageId={stage.id}
+              busy={busy}
+              rail={swissRounds}
+              open={moreOpen}
+              onToggle={() => setMoreOpen((v) => !v)}
+              onFinishOpen={() => open && onToggleOpen(stage.id)}
+            />
           )}
           {stage.status !== "complete" && fixtureCount > 0 && stage.kind === "swiss" && (
             // W3 RB3-15 A (X-SW-21, ruling 252): no Add match on a Swiss stage,

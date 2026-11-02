@@ -14,7 +14,6 @@ import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ruleRefusalText } from "@/lib/rule-errors";
-import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
 import { SWISS_ABANDONED_BOARDS_REASON, abandonedBoardsOf } from "@/lib/swiss-abandoned-refusal";
 import { ABANDONED_MATCHES_REASON, heldMatchesOf } from "@/lib/abandoned-matches-refusal";
 import { rulesWriteErrorText } from "@/lib/config-issue-copy";
@@ -110,7 +109,8 @@ import {
   SWISS_PAIRING_ROUND_ONE_ONLY_CODE,
   type SwissPairingMode,
 } from "@/lib/swiss-pairing";
-import { swissPairingMenuFor, type EntrantSwissFirstRounds } from "@/lib/swiss-pairing-menu";
+import { swissPairingMenuFor, swissUnpairChangeHint, type EntrantSwissFirstRounds } from "@/lib/swiss-pairing-menu";
+import { swissDoorRefusalText } from "@/lib/swiss-door-refusal";
 import { isRunningRootSwiss } from "@/lib/open-entry-stages";
 // Competition Desk W2 (Task 4) — the run sheet's grouping builder + the
 // component that renders it. `isBye` (and, inside `buildRunSheet` itself,
@@ -1201,6 +1201,12 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           // the late-add rail) whose Unpair button is on offer on this same card.
           changeByUnpair: isRunningRootSwiss(stage) && canUnpairSwiss,
         });
+        // Batch-4 m2: the same line beside Unpair when no Pair next menu carries it (every round seated).
+        const unpairChangeHint = swissUnpairChangeHint({
+          kind: stage.kind,
+          fixtures: swissShellFixtures,
+          changeByUnpair: isRunningRootSwiss(stage) && canUnpairSwiss,
+        });
         // The swiss shape legend (owner-approved 2026-09-22, option B) — the
         // one line under this stage's title. `null` for every non-swiss kind,
         // which is why nothing else on this card changes shape.
@@ -1737,6 +1743,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                         }
                       : undefined
                   }
+                  unpairChangeHint={unpairChangeHint}
                   // #622 — court tags editor moves onto the rail (Task 3). Stays
                   // constructed HERE, not inside StageRail: it reads
                   // `courtTagSuggestions` off this panel's own `venues` prop, and
@@ -2242,19 +2249,15 @@ export function undoRefusalMessage(err: unknown, msg: Msg): string {
 }
 
 /** W3 T12 Fix round 1 (review m1): a refused Swiss stage write — the rounds dialog's Save, Add a round, the chess switch
- *  — in the reader's language, never the server's English sentence: a Swiss refusal with what to do next
- *  (`swissRefusalText`), a frozen timetable (SCHEDULE_LOCKED — the freeze lives on the division's Schedule page), and
- *  anything else through this panel's own classifier (a rule lock such as FIXTURE_HAS_OWN_FORMAT, STAGE_NOT_READY).
- *  Exported pure for `classifyActError`'s reason. */
+ *  — in the reader's language, never the server's English sentence: a Swiss refusal with what to do next, a frozen
+ *  timetable and a rule lock such as FIXTURE_HAS_OWN_FORMAT through `swissDoorRefusalText` — the ONE mapping the Entrants
+ *  tab's recovery doors read too (batch-4 review I1) — and anything else (STAGE_NOT_READY) through this panel's own
+ *  classifier. Exported pure for `classifyActError`'s reason. */
 export function swissStageRefusal(err: unknown, msg: Msg, msgPlural: MsgPlural, locale: Locale): SwissRoundsRefusal {
   if (!(err instanceof ApiV1Error)) {
     return { code: "", extra: {}, text: err instanceof Error ? err.message : msg("schedule.error.failed") };
   }
-  const text = isSwissRefusalCode(err.code)
-    ? swissRefusalText(err.code, err.extra, msg, msgPlural)
-    : err.code === SCHEDULE_LOCKED_CODE
-      ? msg("stage.error.scheduleFrozen")
-      : classifyActError(err, msg, locale).text;
+  const text = swissDoorRefusalText(err.code, err.extra, msg, msgPlural) ?? classifyActError(err, msg, locale).text;
   return { code: err.code, extra: err.extra, text };
 }
 

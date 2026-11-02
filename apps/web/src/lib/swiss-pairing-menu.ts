@@ -17,7 +17,7 @@ import {
   SWISS_PAIRINGS,
   type SwissPairingMode,
 } from "@/lib/swiss-pairing";
-import { nextUnseatedSwissRound } from "@/lib/swiss-shell";
+import { latestSwissRoundWithAnySeat, nextUnseatedSwissRound } from "@/lib/swiss-shell";
 import { swissActiveFieldSize } from "@/lib/swiss-legend";
 import { swissRoundField, type EntrantSwissFirstRounds } from "@/lib/swiss-late-entry";
 
@@ -195,6 +195,23 @@ export function swissPairingChangeNote(
   t: SwissPairingT,
 ): string | null {
   return !menu.choosable && menu.changeHint === true ? t("schedule.pairing.changeHint") : null;
+}
+
+/** X-SW-30 (W3 T14) carried past the menu (batch-4 review m2): the same line — "Round pairings follow the Swiss rules.
+ *  After correcting a result or the entrants, Unpair, then Pair next." — said beside Unpair when there is NO Pair next
+ *  menu to carry it: every round is seated, so the round Unpair would clear is the final one. The same gate as the menu's
+ *  line (`changeByUnpair`: a running root Swiss whose Unpair is on offer) and the same round rule (a round from 2 on —
+ *  round 1's pairing is a choice, not the rules'), so the line shows in exactly one place. False whenever a round waits
+ *  to be paired: the menu says it there. */
+export function swissUnpairChangeHint(args: {
+  kind: string;
+  fixtures: Parameters<typeof nextUnseatedSwissRound>[0];
+  changeByUnpair?: boolean;
+}): boolean {
+  if (args.kind !== "swiss" || args.changeByUnpair !== true) return false;
+  if (nextUnseatedSwissRound(args.fixtures) !== null) return false;
+  const round = latestSwissRoundWithAnySeat(args.fixtures);
+  return round !== null && round >= 2;
 }
 
 /** The hint under one option: "1v6, 2v7, 3v8…" when R1 allows numbers,

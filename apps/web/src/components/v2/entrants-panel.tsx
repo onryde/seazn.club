@@ -35,7 +35,7 @@ import {
 // violation shape.
 import { requiresDob, requiresGender, type EligibilityIssue } from "@/lib/registration-rules";
 import { EligibilityOverrideDialog } from "@/components/v2/eligibility-override-dialog";
-import { swissRefusalText } from "@/lib/swiss-refusal-text";
+import { swissDoorRefusalText } from "@/lib/swiss-door-refusal";
 import {
   swissFinishConfirm,
   swissFinishedNotice,
@@ -44,7 +44,6 @@ import {
   type SwissFinishAnswer,
   type SwissFinishPlan,
 } from "@/lib/swiss-finish-plan";
-import { isSwissRefusalCode } from "@/lib/swiss-refusals";
 import { lateEntryNotice, lateEntryNoticeText, type LateEntryNoticeLine } from "@/lib/swiss-late-entry-notice";
 import type { LateEntryResult } from "@/server/api-v1/schemas";
 
@@ -356,9 +355,12 @@ export function EntrantsPanel({
       }
       // W3 T10 — a late add refused (no round left, the Swiss is over): said by its code in the organiser's language.
       // SWISS_NO_ROUND_LEFT names "Add a round" only when `canAddRound` says it goes through — the button under the
-      // error (T12 Phase 2) — and otherwise says no more rounds fit (T12 Fix round 1, review I1).
-      if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) {
-        setError(swissRefusalText(err.code, err.extra, msg, msgPlural));
+      // error (T12 Phase 2) — and otherwise says no more rounds fit (T12 Fix round 1, review I1). Batch-4 review I1: the
+      // recovery doors below (Add a round, Finish the Swiss now) can also meet a frozen timetable or a removed match's
+      // own format — said through the stage rail's ONE mapping for those writes, never the server's English.
+      const door = err instanceof ApiV1Error ? swissDoorRefusalText(err.code, err.extra, msg, msgPlural) : null;
+      if (door !== null) {
+        setError(door);
         return;
       }
       // An online-play division refuses a player without a Lichess link that can play: the server's words are English

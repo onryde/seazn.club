@@ -173,13 +173,20 @@ export interface SwissFinishState {
    *  round ≤ k is short a result — a scorer's take-back reopened a finished round — or for any other answer. The copy
    *  branches on it (review m3). */
   inProgress: boolean;
-  /** `refusal === null`: what every emitter of `canFinish` sends (controller ruling C11, applied to Finish). */
+  /** Batch-4 ruling m3: every round is decided and Finish would remove nothing nor move the count, so it is exactly
+   *  Complete — the action the desk already shows. Nothing offers Finish then (`canFinish` false); the call itself still
+   *  goes through (`refusal` stays null), completing the stage as Complete does. False for every other answer. */
+  completeInstead: boolean;
+  /** `refusal === null` and not `completeInstead`: what every emitter of `canFinish` sends (controller ruling C11,
+   *  applied to Finish) — so an offered Finish always goes through. */
   canFinish: boolean;
 }
 
 /**
  * THE "Finish the Swiss now" verdict over the stage's rows (W3 T13, X-SW-26), pure. `k` is the latest round whose seated
- * boards are all decided. Refused, in this order: the Swiss is over (`over`, SWISS_OVER); k = 0, no round complete
+ * boards are all decided and hold a board that is not the bye (batch-4 ruling 4: a round whose only seated row is the
+ * bye — engine 1.x's "empty success", SW-H1, which seats the bye and leaves every board vacant — was never played, so
+ * it is not decided; Finish drops it with the rounds after it, and never asks for its empty boards). Refused, in this order: the Swiss is over (`over`, SWISS_OVER); k = 0, no round complete
  * (`nothing_played`); else a round Finish would keep is short a result (`round_undecided`): a board past k has STARTED
  * (`started`, T9's predicate — it cannot be unpaired, so its round stays: `inProgress`), or a row of a round ≤ k is not
  * decided. The second is reachable in production — a scorer's take-back (`core.void`) reopens a finished round's board
@@ -201,23 +208,30 @@ export function judgeSwissFinish(
   }
   let k = 0;
   for (const [round, seated] of seatedByRound) {
-    if (round > k && seated.every((f) => DECIDED.has(f.status))) k = round;
+    const played = seated.some((f) => !isSwissByeShellExtKey(f.ext_key));
+    if (round > k && played && seated.every((f) => DECIDED.has(f.status))) k = round;
   }
-  const state = (refusal: SwissFinishRefusal | null, boards: SwissFinishBoard[] = [], inProgress = false): SwissFinishState => ({
+  const state = (
+    refusal: SwissFinishRefusal | null,
+    boards: SwissFinishBoard[] = [],
+    inProgress = false,
+    completeInstead = false,
+  ): SwissFinishState => ({
     over,
     rounds,
     finishedAfter: k,
     refusal,
     boards,
     inProgress,
-    canFinish: refusal === null,
+    completeInstead,
+    canFinish: refusal === null && !completeInstead,
   });
   if (over) return state("over");
   if (k === 0) return state("nothing_played");
   // The latest round past k with a started board: it and every round before it stay.
   const kept = rows.reduce((m, f) => (f.round_no > k && started.has(f.id) ? Math.max(m, f.round_no) : m), k);
   const shortOfResult = rows.some((f) => f.round_no <= k && !DECIDED.has(f.status));
-  if (kept === k && !shortOfResult) return state(null);
+  if (kept === k && !shortOfResult) return state(null, [], false, k >= rounds && !rows.some((f) => f.round_no > k));
   const owed = rows.filter(
     (f) =>
       !DECIDED.has(f.status) &&
@@ -418,7 +432,9 @@ export interface PatchSwissStageResult {
  *
  * Refused, nothing written: 404 (not this organisation's stage); STAGE_NOT_SWISS 422; SCHEDULE_LOCKED 422 (a frozen
  * timetable, as Unpair); SWISS_ROUNDS_LOCKED 409 `{ canFinish, canAddRound }` once any board of the stage has started
- * (`swissBoardStartedSql`, read over EVERY row — so a shell this edit would delete never holds data); for `rounds`,
+ * (`swissBoardStartedSql`, read over EVERY row — so a shell this edit would delete never holds data), and SWISS_OVER 422
+ * `{ canFinish: false, canAddRound: false }` instead once the stage is complete or a later stage is under way (batch-4
+ * ruling m1); for `rounds`,
  * SWISS_ROUNDS_ABOVE_MAX 422 as sent (rulebook §3.2, the field the next Pair seats — `judgeSwissRoundsAt`) and
  * SWISS_ROUNDS_BELOW_SEATED 409 below a paired round (Unpair it first); FIXTURE_HAS_OWN_FORMAT for a deleted shell
  * carrying its own format.
@@ -446,6 +462,9 @@ export async function patchSwissStage(auth: AuthCtx, stageId: string, body: Patc
       if (body.rounds === undefined) throw swissRefusal("SWISS_CHESS_LOCKED");
       const add = await swissAddRoundState(tx, stage);
       const finish = await swissFinishState(tx, stage, rows);
+      // Batch-4 ruling m1: a finished Swiss's count can never move — 422 SWISS_OVER, as Add a round and Finish answer —
+      // never the 409 LOCKED, whose status says another way resolves it.
+      if (finish.over) throw swissRefusal("SWISS_OVER", { canFinish: false, canAddRound: false });
       throw swissRefusal("SWISS_ROUNDS_LOCKED", { ...swissFinishDetails(finish), canAddRound: add.canAddRound });
     }
 
@@ -679,7 +698,13 @@ export async function listSwissRoundControls(auth: AuthCtx, divisionId: string):
         chess: stage.config.chess === true,
         field: await nextPairField(tx, stage, rows),
         addRound: { canAddRound: add.canAddRound, refusal: add.refusal, field: add.field, hardMax: add.hardMax },
-        finish: { canFinish: finish.canFinish, refusal: finish.refusal, finishedAfter: finish.finishedAfter, inProgress: finish.inProgress },
+        finish: {
+          canFinish: finish.canFinish,
+          refusal: finish.refusal,
+          finishedAfter: finish.finishedAfter,
+          inProgress: finish.inProgress,
+          completeInstead: finish.completeInstead,
+        },
       };
     }
     return out;

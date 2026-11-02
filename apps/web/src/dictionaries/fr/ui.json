@@ -2459,7 +2459,7 @@
   "stage.chess.hint": "Équilibre les Blancs et les Noirs pour chaque joueur ; les couleurs du tour 1 sont tirées au sort. Désactivez-le pour les dames ou tout jeu où la couleur ne compte pas.",
   "schedule.notice.roundAdded": "Tour {round} ajouté.",
   "schedule.notice.swissFinished": "La phase suisse s'est terminée après le tour {round}.",
-  "schedule.notice.swissFinishedOpen": "La phase suisse se termine désormais après le tour {round}, mais un de ses matchs attend encore un résultat, donc la phase n'est pas complète. Décidez-le, puis terminez de nouveau la phase suisse.",
+  "schedule.notice.swissFinishedOpen": "La phase suisse se termine désormais après le tour {round}, mais un de ses matchs attend encore un résultat, donc la phase n'est pas complète. Décidez-le, puis terminez la phase.",
   "schedule.notice.chessOn": "Couleurs aux échecs activées.",
   "schedule.notice.chessOff": "Couleurs aux échecs désactivées.",
   "schedule.notice.roundsSaved.one": "Cette phase suisse se joue désormais en {count} tour.",

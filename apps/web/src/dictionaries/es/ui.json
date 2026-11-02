@@ -2459,7 +2459,7 @@
   "stage.chess.hint": "Equilibra blancas y negras para cada jugador; los colores de la ronda 1 se sortean. Desactívalo para damas o cualquier juego en el que el color no importe.",
   "schedule.notice.roundAdded": "Ronda {round} añadida.",
   "schedule.notice.swissFinished": "La fase suiza terminó tras la ronda {round}.",
-  "schedule.notice.swissFinishedOpen": "La fase suiza termina ahora tras la ronda {round}, pero a un partido de ella aún le falta el resultado, así que la fase no está completa. Decídelo y vuelve a terminar la fase suiza.",
+  "schedule.notice.swissFinishedOpen": "La fase suiza termina ahora tras la ronda {round}, pero a un partido de ella aún le falta el resultado, así que la fase no está completa. Decídelo y luego completa la fase.",
   "schedule.notice.chessOn": "Colores de ajedrez activados.",
   "schedule.notice.chessOff": "Colores de ajedrez desactivados.",
   "schedule.notice.roundsSaved.one": "Esta fase suiza tiene ahora {count} ronda.",

@@ -359,14 +359,15 @@ describe.runIf(HAS_DB)("X-SW-17 the round count is editable until the first fixt
         ...refusal("SWISS_ROUNDS_LOCKED"),
         extra: { canFinish: true, canAddRound: true },
       });
-      // Complete: over — neither recovery is offered.
+      // Complete: over — the count can never move again, so 422 SWISS_OVER (batch-4 ruling m1), as Add a round and Finish
+      // answer — not the 409 LOCKED, whose status says another way resolves it. Neither recovery is offered.
       await pair(rig);
       await playRound(rig, 2);
       await pair(rig);
       await playRound(rig, 3);
       await completeStage(rig.auth, rig.stageId);
       await expect(patchSwissStage(rig.auth, rig.stageId, { rounds: 4 })).rejects.toMatchObject({
-        ...refusal("SWISS_ROUNDS_LOCKED"),
+        ...refusal("SWISS_OVER"),
         extra: { canFinish: false, canAddRound: false },
       });
     }, 120_000);
@@ -722,6 +723,13 @@ describe.runIf(HAS_DB)("C11 the offered Add a round never leads to SWISS_ROUNDS_
     await playRound(four, 1);
     await pair(four);
     await playRound(four, 2);
+    // Mid-Swiss (round 3 not yet paired): Finish after round 2 resolves an add above the hard max — the ruled 409 (review
+    // I2 MA), its plan riding with it. Refused, nothing written.
+    await expect(addSwissRound(four.auth, four.stageId), "mid-Swiss: Finish is offered").rejects.toMatchObject({
+      status: 409,
+      code: "SWISS_ROUNDS_ABOVE_MAX",
+      extra: { rounds: 4, field: 4, hardMax: 3, canFinish: true, finish: { after: 2, rounds: 3 } },
+    });
     await pair(four);
     await startBoard(four, boardsOf(await rowsOf(four.stageId), 3)[0]!);
     await expect(createEntrants(four.auth, four.divisionId, [entrantInput(four.kind, "Late")])).rejects.toMatchObject({
@@ -737,12 +745,14 @@ describe.runIf(HAS_DB)("C11 the offered Add a round never leads to SWISS_ROUNDS_
       code: "SWISS_ROUNDS_ABOVE_MAX",
       extra: { rounds: 4, field: 4, hardMax: 3, canFinish: false },
     });
-    // Round 3 decided: Finish now resolves it — the controller's ruled 409 (review I2 MA), Finish offered after round 3.
+    // Round 3 decided: every round is, so Finish would only do what Complete does — not offered (batch-4 ruling m3:
+    // Complete is the action), and the add can never succeed as sent: 422, canFinish false. (Before that ruling this was
+    // the 409 offering "Finish after round 3"; the 409 with Finish offered is pinned above, mid-Swiss.)
     await playRound(four, 3);
-    await expect(addSwissRound(four.auth, four.stageId), "and Finish is offered").rejects.toMatchObject({
-      status: 409,
+    await expect(addSwissRound(four.auth, four.stageId), "every round decided: Finish is not offered").rejects.toMatchObject({
+      status: 422,
       code: "SWISS_ROUNDS_ABOVE_MAX",
-      extra: { rounds: 4, field: 4, hardMax: 3, canFinish: true, finish: { after: 3, rounds: 3 } },
+      extra: { rounds: 4, field: 4, hardMax: 3, canFinish: false },
     });
 
     // The positive pair: 6 players × 3 rounds (hard max 5) — offered, and Add a round goes through; the late player then
@@ -889,7 +899,7 @@ describe.runIf(HAS_DB)("listSwissRoundControls (the desk's view of the rounds lo
         field: 5,
         addRound: { canAddRound: true, refusal: null, field: 5, hardMax: HARD_MAX(5) },
         // T13: nothing is played, so there is nothing to finish with (the predicate's k = 0).
-        finish: { canFinish: false, refusal: "nothing_played", finishedAfter: 0, inProgress: false },
+        finish: { canFinish: false, refusal: "nothing_played", finishedAfter: 0, inProgress: false, completeInstead: false },
       });
       await startDivision(rig.auth, rig.divisionId);
       await pair(rig);

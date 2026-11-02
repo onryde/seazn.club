@@ -561,6 +561,45 @@ describe.runIf(HAS_DB)("X-SW-26 Finish in sequence", () => {
         table.slice(0, 4).map((r) => r.entrantId),
       );
     }, 300_000);
+
+    it(`finish after an "empty success" round (engine 1.x, SW-H1): a round whose only seated row is the bye is not decided — Finish drops it and asks for none of its empty boards (batch-4 ruling 4) (${s.sport})`, async () => {
+      // The T11 finding's sequence. 6 × 5 (hard max 5): round 1 played, two withdraw — a field of 4 (hard max 3); rounds
+      // 2 and 3 pair (shrunk) and are played; round 4 is beyond the field. ONE late player makes round 4's field 5 (hard
+      // max 5), but the four left have met each other and the newcomer can only take the bye: engine 1.x "succeeds",
+      // seating the bye alone with every board vacant (SW-H1 — engine T1 and app-B T4 own the refusal; this guard keeps
+      // Finish honest meanwhile).
+      const rig = await finishRig(s, 6, 5);
+      await playThrough(rig, 1);
+      await withdrawEntrantCascade(rig.auth, rig.entrants[4]!);
+      await withdrawEntrantCascade(rig.auth, rig.entrants[5]!);
+      for (const r of [2, 3]) {
+        await pair(rig);
+        await playRound(rig, r);
+      }
+      const [late] = await createEntrants(rig.auth, rig.divisionId, [entrantInput(rig.kind, "Late")]);
+      expect(late!.late_entry, "premise: the late player joins round 4").toMatchObject({ case: "c", round: 4 });
+      await pair(rig);
+      const r4 = roundOf(await rowsOf(rig.stageId), 4);
+      const seated = r4.filter((f) => f.home_entrant_id !== null || f.away_entrant_id !== null);
+      expect(seated.length, "premise (SW-H1): round 4 seats one row").toBe(1);
+      expect(isBye(seated[0]!), "premise (SW-H1): …the bye").toBe(true);
+      expect(boardsOf(r4, 4).length, "premise (SW-H1): round 4 has boards").toBeGreaterThan(0);
+      expect(boardsOf(r4, 4).every((f) => f.home_entrant_id === null && f.away_entrant_id === null), "premise (SW-H1): every board vacant").toBe(true);
+
+      // The desk offers Finish after round 3 — not "a finished round was reopened", naming boards nobody sits at.
+      expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.finish).toEqual({
+        canFinish: true,
+        refusal: null,
+        finishedAfter: 3,
+        inProgress: false,
+        completeInstead: false,
+      });
+      const going = (await rowsOf(rig.stageId)).filter((f) => f.round_no > 3).length;
+      const out = await finishSwissNow(rig.auth, rig.stageId);
+      expect(out, "round 4 (the bye and its empty boards) and round 5 go").toMatchObject({ finished_after: 3, shells_removed: going, completed: true });
+      expect(roundsIn(await rowsOf(rig.stageId))).toEqual([1, 2, 3]);
+      expect(await stageState(rig.stageId)).toEqual({ status: "complete", rounds: 3 });
+    }, 300_000);
   }
 
   it("finish over a tied cut (reviewer flag R3): the stage completes; the tie is flagged and SEEDING_TIE_UNRESOLVED until picked (badminton — its cascade ends on the seed, so the tie stays unbroken)", async () => {
@@ -585,10 +624,26 @@ describe.runIf(HAS_DB)("X-SW-26 Finish in sequence", () => {
     expect((await koRoundOne(rig.koStageId!)).flat().sort(), "the pick seats the top 3").toEqual(table.slice(0, 3).map((r) => r.entrantId).sort());
   }, 300_000);
 
-  it("a round count already at k: Finish completes with no barrier row and no shell to remove (badminton — the count is arithmetic)", async () => {
+  it("every round decided (the count already at k): the desk hides Finish — Complete is the action (batch-4 ruling m3); the call itself is Complete, with no barrier row and no shell to remove (badminton — the count is arithmetic)", async () => {
     // Every round decided, the stage not yet completed (no auto-progress): Finish is Complete stage, the count unmoved.
     const rig = await finishRig(SPORTS[0], 4, 2, { q: 2 });
-    await playThrough(rig, 2);
+    await playThrough(rig, 1);
+    // The sequence: one round left to play, Finish is offered; every round decided, it is not.
+    expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.finish, "round 2 left: offered").toMatchObject({
+      canFinish: true,
+      refusal: null,
+      finishedAfter: 1,
+      completeInstead: false,
+    });
+    await pair(rig);
+    await playRound(rig, 2);
+    expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.finish, "every round decided: not offered").toEqual({
+      canFinish: false,
+      refusal: null,
+      finishedAfter: 2,
+      inProgress: false,
+      completeInstead: true,
+    });
     const ledger = await ledgerState(rig.divisionId);
     const out = await finishSwissNow(rig.auth, rig.stageId);
     expect(out).toMatchObject({ finished_after: 2, shells_removed: 0, slots_freed: 0, completed: true });
@@ -781,7 +836,7 @@ type Probe = { source: string; canFinish: unknown };
 /** Every `canFinish` the server would send in the rig's current state, read without writing: the desk's read, the
  *  rounds lock (a PATCH after the first start is refused, so it writes nothing), Add a round only when it is refused
  *  (at the hard max), and a late player's refusal only when the last round leaves none (refused, rolled back). */
-async function emitters(rig: Rig, opts: { atHardMax: boolean; lastRoundLeft: boolean }): Promise<Probe[]> {
+async function emitters(rig: Rig, opts: { atHardMax: boolean; lastRoundLeft: boolean; over?: true }): Promise<Probe[]> {
   const out: Probe[] = [];
   const control = (await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!;
   out.push({ source: "desk", canFinish: control.finish.canFinish });
@@ -792,8 +847,9 @@ async function emitters(rig: Rig, opts: { atHardMax: boolean; lastRoundLeft: boo
       },
       (e: { code?: string; extra?: { canFinish?: unknown } }) => e,
     );
-    expect(locked.code, "rig: the PATCH is refused as locked").toBe("SWISS_ROUNDS_LOCKED");
-    out.push({ source: "SWISS_ROUNDS_LOCKED", canFinish: locked.extra?.canFinish });
+    // Batch-4 ruling m1: a finished Swiss's PATCH is SWISS_OVER (422, it can never succeed), not the 409 LOCKED.
+    expect(locked.code, "rig: the PATCH is refused as locked, or over once finished").toBe(opts.over ? "SWISS_OVER" : "SWISS_ROUNDS_LOCKED");
+    out.push({ source: `PATCH ${locked.code}`, canFinish: locked.extra?.canFinish });
   }
   if (opts.atHardMax) {
     const above = await addSwissRound(rig.auth, rig.stageId).then(
@@ -820,7 +876,17 @@ describe.runIf(HAS_DB)("C11 for Finish: an offered Finish never leads to a Finis
   it("every canFinish emitter agrees with finishSwissNow across the Swiss's states (badminton — the predicate reads rows, never the sport)", async () => {
     const { auth } = await seedOrg("pro");
     // Each state is a fresh rig (a Finish ends the stage); n = 4 is at the hard max on 3 rounds (§3.2: n − 1).
-    const states: { name: string; build: () => Promise<Rig>; atHardMax: boolean; lastRoundLeft: boolean; expected: boolean }[] = [
+    // `completeInstead` (batch-4 ruling m3): every round decided — nothing offers Finish, Complete is the action, and the
+    // call itself goes through as Complete would. `over`: the PATCH answers SWISS_OVER there, not LOCKED (ruling m1).
+    const states: {
+      name: string;
+      build: () => Promise<Rig>;
+      atHardMax: boolean;
+      lastRoundLeft: boolean;
+      expected: boolean;
+      completeInstead?: true;
+      over?: true;
+    }[] = [
       { name: "round 1 paired, nothing started", atHardMax: true, lastRoundLeft: false, expected: false, build: async () => {
         const rig = await finishRig(SPORTS[0], 4, 3, { auth });
         await pair(rig);
@@ -864,12 +930,12 @@ describe.runIf(HAS_DB)("C11 for Finish: an offered Finish never leads to a Finis
         await startBoard(rig, boardsOf(await rowsOf(rig.stageId), 3)[0]!);
         return rig;
       } },
-      { name: "every round decided, not completed (no round left for a late player)", atHardMax: true, lastRoundLeft: true, expected: true, build: async () => {
+      { name: "every round decided, not completed (no round left for a late player)", atHardMax: true, lastRoundLeft: true, expected: false, completeInstead: true, build: async () => {
         const rig = await finishRig(SPORTS[0], 4, 3, { auth });
         await playThrough(rig, 3);
         return rig;
       } },
-      { name: "complete", atHardMax: false, lastRoundLeft: false, expected: false, build: async () => {
+      { name: "complete", atHardMax: false, lastRoundLeft: false, expected: false, over: true, build: async () => {
         const rig = await finishRig(SPORTS[0], 4, 3, { auth });
         await playThrough(rig, 1);
         await finishSwissNow(rig.auth, rig.stageId);
@@ -878,6 +944,7 @@ describe.runIf(HAS_DB)("C11 for Finish: an offered Finish never leads to a Finis
     ];
     let checked = 0;
     let offered = 0;
+    let completeInstead = 0;
     let probes = 0;
     for (const state of states) {
       const rig = await state.build();
@@ -893,6 +960,10 @@ describe.runIf(HAS_DB)("C11 for Finish: an offered Finish never leads to a Finis
       if (state.expected) {
         expect(finish, `${state.name}: offered → Finish goes through`).toMatchObject({ ok: true });
         offered++;
+      } else if (state.completeInstead) {
+        // Not offered, and harmless: the call is Complete — it ends the Swiss after its last round, removing nothing.
+        expect(finish, `${state.name}: not offered, the call is Complete`).toEqual({ ok: true, finishedAfter: 3 });
+        completeInstead++;
       } else {
         expect(finish.ok, `${state.name}: not offered → Finish is refused (${JSON.stringify(finish)})`).toBe(false);
         expect(["SWISS_FINISH_NOTHING_PLAYED", "SWISS_FINISH_ROUND_UNDECIDED", "SWISS_OVER"], state.name).toContain(
@@ -902,7 +973,8 @@ describe.runIf(HAS_DB)("C11 for Finish: an offered Finish never leads to a Finis
       checked++;
     }
     expect(checked, "anti-vacuity: states").toBe(states.length);
-    expect(offered, "both answers reached").toBe(3);
+    expect(offered, "both answers reached").toBe(2);
+    expect(completeInstead, "the Complete-instead state was reached").toBe(1);
     expect(probes, "anti-vacuity: emitter reads").toBeGreaterThanOrEqual(states.length * 2);
   }, 600_000);
 
@@ -953,7 +1025,39 @@ describe("judgeSwissFinish — the Finish verdict over rows (pure)", () => {
     judgeSwissFinish(specs.map(fixture), new Set(specs.filter((r) => r.started).map((r) => `r${r.round}b${r.board}`)), over, rounds);
   const named = (...ids: [number, number][]) => ids.map(([round, board]) => ({ fixtureId: `r${round}b${board}`, round, board }));
 
-  const cases: { name: string; rows: Spec[]; over?: boolean; expected: Partial<ReturnType<typeof judgeSwissFinish>> }[] = [
+  const cases: { name: string; rows: Spec[]; over?: boolean; rounds?: number; expected: Partial<ReturnType<typeof judgeSwissFinish>> }[] = [
+    {
+      // Batch-4 ruling 4 (SW-H1, engine 1.x): Pair "succeeded" seating only the bye; both boards are vacant. That round
+      // was never played, so it is not decided: k stays 3 and Finish drops it, never asking for its empty boards.
+      name: "a round whose only seated row is the bye (empty success): not decided — Finish after round 3 drops it",
+      rows: [
+        decided(1, 1), decided(1, 2), decided(2, 1), decided(2, 2), decided(3, 1), decided(3, 2),
+        { round: 4, board: 3, status: "decided", bye: true }, shell(4, 1), shell(4, 2), shell(5, 1), shell(5, 2),
+      ],
+      rounds: 5,
+      expected: { finishedAfter: 3, refusal: null, canFinish: true, inProgress: false, completeInstead: false, boards: [] },
+    },
+    {
+      // …and a bye beside a decided board still counts: the round was played (the bye is the odd one out).
+      name: "…a decided round holding a bye beside its boards counts as decided",
+      rows: [decided(1, 1), decided(1, 2), { round: 1, board: 3, status: "decided", bye: true }, shell(2, 1), shell(2, 2)],
+      rounds: 2,
+      expected: { finishedAfter: 1, refusal: null, canFinish: true, completeInstead: false, boards: [] },
+    },
+    {
+      // Batch-4 ruling m3: every round decided, nothing past k — Finish would only Complete, so it is not offered.
+      name: "every round decided: Complete instead — not offered, though nothing refuses it",
+      rows: [decided(1, 1), decided(1, 2), decided(2, 1), decided(2, 2), decided(3, 1), decided(3, 2)],
+      rounds: 3,
+      expected: { finishedAfter: 3, refusal: null, canFinish: false, completeInstead: true, inProgress: false, boards: [] },
+    },
+    {
+      // …the count above the rows (a planted shape): Finish would still move the count, so it is not Complete.
+      name: "…every row decided but the count is above them: Finish still moves the count, so it is offered",
+      rows: [decided(1, 1), decided(1, 2), decided(2, 1), decided(2, 2)],
+      rounds: 3,
+      expected: { finishedAfter: 2, refusal: null, canFinish: true, completeInstead: false },
+    },
     {
       name: "a take-back reopened a round-1 board after round 2 was decided (I2): k stays 2, refused naming it, not in progress",
       rows: [{ round: 1, board: 1, status: "in_play", started: true }, decided(1, 2), decided(2, 1), decided(2, 2), shell(3, 1), shell(3, 2)],
@@ -1001,13 +1105,13 @@ describe("judgeSwissFinish — the Finish verdict over rows (pure)", () => {
     const answers = new Set<boolean>();
     let checked = 0;
     for (const c of cases) {
-      const got = judge(c.rows, c.over);
+      const got = judge(c.rows, c.over, c.rounds);
       expect(got, c.name).toMatchObject(c.expected);
       answers.add(got.canFinish);
       checked++;
     }
     expect(checked, "anti-vacuity: every case was judged").toBe(cases.length);
-    expect(checked).toBeGreaterThanOrEqual(8);
+    expect(checked).toBeGreaterThanOrEqual(12);
     expect([...answers].sort(), "anti-vacuity: both canFinish answers reached").toEqual([false, true]);
   });
 });

@@ -672,8 +672,8 @@ describe("StageRail — the rounds chip and Add a round (W3 T12 Phase 2)", () =>
       addRound: { canAddRound: true, refusal: null, field: 6, hardMax: 5 },
       // W3 T13: round 2 complete once started (the Finish predicate's k), nothing before.
       finish: started
-        ? { canFinish: true, refusal: null, finishedAfter: 2, inProgress: false }
-        : { canFinish: false, refusal: "nothing_played" as const, finishedAfter: 0, inProgress: false },
+        ? { canFinish: true, refusal: null, finishedAfter: 2, inProgress: false, completeInstead: false }
+        : { canFinish: false, refusal: "nothing_played" as const, finishedAfter: 0, inProgress: false, completeInstead: false },
     },
     fixtures: [],
     onSave: async () => null,
@@ -725,5 +725,78 @@ describe("StageRail — the rounds chip and Add a round (W3 T12 Phase 2)", () =>
     expect(html).toContain(en["stage.more.finishSwiss"]);
     expect(render(rounds(false)), "before the first start nothing is played").not.toContain("stage-finish-swiss");
     expect(render(undefined), "no swissRounds, no Finish").not.toContain("stage-finish-swiss");
+  });
+
+  // Batch-4 ruling 3: the premise behind "a fed Swiss reaches Add a round only through the LOCKED recovery" was false
+  // (after the first start the rounds chip is a fixed span, nothing opens LOCKED), so Add a round and Finish the Swiss
+  // now are offered in More on ANY running Swiss — root or fed. "Add late player" stays root-only.
+  it("batch-4 ruling 3: a running FED Swiss gets More with Add a round and Finish (no Add late player); a root Swiss keeps ONE More; none with nothing to show", () => {
+    const fed = { ...swiss, progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 6 }] }] } };
+    const renderStage = (stage: typeof swiss | typeof fed, swissRounds: NonNullable<Parameters<typeof StageRail>[0]["swissRounds"]>) =>
+      renderToStaticMarkup(
+        <StageRail stage={stage as never} canEdit busy={null} fixtureCount={9} deletable={false}
+          onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+          adhoc={false} courtTagsSlot={null} {...NEUTRAL} swissHasUnseated
+          lateEntry={{ divisionStatus: "active", roundSeated: true, href: HREF }}
+          swissRounds={swissRounds} />,
+      );
+    const toggles = (html: string) => html.split('data-testid="stage-more"').length - 1;
+    const over = (r: ReturnType<typeof rounds>) => ({
+      ...r,
+      control: {
+        ...r.control,
+        addRound: { canAddRound: false, refusal: "over" as const, field: null, hardMax: null },
+        finish: { canFinish: false, refusal: "over" as const, finishedAfter: 3, inProgress: false, completeInstead: false },
+      },
+    });
+    const nothingToShow = (r: ReturnType<typeof rounds>) => ({
+      ...r,
+      control: {
+        ...r.control,
+        addRound: { canAddRound: false, refusal: "field" as const, field: 1, hardMax: null },
+        finish: { canFinish: false, refusal: null, finishedAfter: 3, inProgress: false, completeInstead: true },
+      },
+    });
+    type Row = { name: string; html: string; more: number; late: boolean; add: boolean; finish: boolean };
+    const ROWS: Row[] = [
+      { name: "fed, started", html: renderStage(fed, rounds(true)), more: 1, late: false, add: true, finish: true },
+      { name: "root, started (the late-add More, not a second one)", html: renderStage(swiss, rounds(true)), more: 1, late: true, add: true, finish: true },
+      { name: "fed, before the first start", html: renderStage(fed, rounds(false)), more: 0, late: false, add: false, finish: false },
+      { name: "fed, over", html: renderStage(fed, over(rounds(true))), more: 0, late: false, add: false, finish: false },
+      { name: "fed, neither item applies (no pairable field; Complete instead)", html: renderStage(fed, nothingToShow(rounds(true))), more: 0, late: false, add: false, finish: false },
+    ];
+    let checked = 0;
+    for (const r of ROWS) {
+      expect(r.html, `${r.name}: positive control, the rail rendered`).toContain('data-testid="stage-generate"');
+      expect(toggles(r.html), `${r.name}: More toggles`).toBe(r.more);
+      expect(r.html.includes('data-testid="stage-add-late-player"'), `${r.name}: Add late player`).toBe(r.late);
+      expect(r.html.includes('data-testid="stage-add-round"'), `${r.name}: Add a round`).toBe(r.add);
+      expect(r.html.includes('data-testid="stage-finish-swiss"'), `${r.name}: Finish`).toBe(r.finish);
+      if (r.more === 1) {
+        const menu = r.html.indexOf('data-testid="stage-more-menu"');
+        expect(r.html.indexOf('data-testid="stage-add-round"'), `${r.name}: inside More`).toBeGreaterThan(menu);
+      }
+      checked++;
+    }
+    expect(checked, "anti-vacuity: rows").toBe(ROWS.length);
+  });
+
+  // Batch-4 m2: T14's line, beside Unpair, when no Pair next menu carries it (the panel decides when, through
+  // `swissUnpairChangeHint`; stages-panel-swiss-pairing.test.tsx pins that seam).
+  it("batch-4 m2: unpairChangeHint puts T14's line after Unpair; never without Unpair, never unasked", () => {
+    const at = (props: { canUnpairSwiss: boolean; unpairChangeHint?: boolean }) =>
+      renderToStaticMarkup(
+        <StageRail stage={swiss as never} canEdit busy={null} fixtureCount={9} deletable={false}
+          onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+          adhoc={false} courtTagsSlot={null} {...NEUTRAL} {...props} />,
+      );
+    const HINT = 'data-testid="stage-unpair-hint"';
+    const on = at({ canUnpairSwiss: true, unpairChangeHint: true });
+    expect(on, "positive control: Unpair rendered").toContain('data-testid="stage-unpair"');
+    expect(on).toContain(HINT);
+    expect(on).toContain(en["schedule.pairing.changeHint"]);
+    expect(on.indexOf(HINT), "after Unpair").toBeGreaterThan(on.indexOf('data-testid="stage-unpair"'));
+    expect(at({ canUnpairSwiss: true }), "unasked").not.toContain(HINT);
+    expect(at({ canUnpairSwiss: false, unpairChangeHint: true }), "no Unpair, no line naming it").not.toContain(HINT);
   });
 });

@@ -2459,7 +2459,7 @@
   "stage.chess.hint": "Verdeelt wit en zwart eerlijk over elke speler; de kleuren van ronde 1 worden geloot. Zet dit uit voor dammen of elk spel waarin kleur niet uitmaakt.",
   "schedule.notice.roundAdded": "Ronde {round} toegevoegd.",
   "schedule.notice.swissFinished": "De Zwitserse fase is afgerond na ronde {round}.",
-  "schedule.notice.swissFinishedOpen": "De Zwitserse fase eindigt nu na ronde {round}, maar een wedstrijd daarin heeft nog een uitslag nodig, dus de fase is niet compleet. Beslis die en rond de Zwitserse fase daarna opnieuw af.",
+  "schedule.notice.swissFinishedOpen": "De Zwitserse fase eindigt nu na ronde {round}, maar een wedstrijd daarin heeft nog een uitslag nodig, dus de fase is niet compleet. Beslis die en rond de fase daarna af.",
   "schedule.notice.chessOn": "Schaakkleuren aangezet.",
   "schedule.notice.chessOff": "Schaakkleuren uitgezet.",
   "schedule.notice.roundsSaved.one": "Deze Zwitserse fase telt nu {count} ronde.",

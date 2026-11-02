@@ -17,6 +17,9 @@ import {
 } from "@/components/v2/entrants-panel";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 import en from "@/dictionaries/en/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
+import type { Dict } from "@/lib/i18n-constants";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -27,6 +30,26 @@ vi.mock("@/components/ui/confirm-provider", () => ({
   useConfirm: () => confirmMock,
 }));
 vi.mock("@/lib/entrant-badge", () => ({ resolveEntrantBadge: () => null }));
+// Batch-4 review I1: the recovery doors are also read in French — a non-English locale is the only way the server's
+// English and the localised sentence differ. English (the default) keeps the real hooks, so every other test reads as it
+// always did; French swaps in the fr catalog.
+const active = vi.hoisted(() => ({ locale: "en" as "en" | "fr" }));
+vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/i18n/dict-provider")>();
+  return {
+    ...actual,
+    useMsg: () => {
+      const real = actual.useMsg();
+      return active.locale === "fr" ? (key: string, vars?: Record<string, string | number>) => tRuntime(fr as unknown as Dict, key, vars) : real;
+    },
+    useMsgPlural: () => {
+      const real = actual.useMsgPlural();
+      return active.locale === "fr"
+        ? (key: string, count: number, vars?: Record<string, string | number>) => pluralRuntime(fr as unknown as Dict, key, count, "fr", vars)
+        : real;
+    },
+  };
+});
 
 const api = vi.hoisted(() => ({
   next: null as null | (() => unknown),
@@ -564,5 +587,71 @@ describe("EntrantsPanel — Finish the Swiss now on SWISS_NO_ROUND_LEFT (W3 T13)
       checked++;
     }
     expect(checked, "anti-vacuity: rows").toBe(ROWS.length);
+  });
+});
+
+describe("EntrantsPanel — the recovery doors say a frozen timetable and a match's own format in the reader's language (batch-4 review I1)", () => {
+  // The late add does not check the timetable freeze, so on a frozen division the last round's refusal offers Add a round
+  // and Finish (the freeze sits outside both predicates, by ruling), and pressing either answers 422 SCHEDULE_LOCKED; a
+  // removed shell carrying its own format answers FIXTURE_HAS_OWN_FORMAT. Said as the stage rail says the same write
+  // (`swissDoorRefusalText`, the one mapping — pinned there in stages-panel-swiss-rounds-edit.test.tsx), never the
+  // server's English. Expected copy is each catalog's own, filled by hand.
+  const DICTS: Record<"en" | "fr", Record<string, string>> = {
+    en: en as unknown as Record<string, string>,
+    fr: fr as unknown as Record<string, string>,
+  };
+  const fillIn = (text: string, vars: Record<string, string | number>) => text.replace(/\{(\w+)\}/g, (_m, k: string) => String(vars[k]));
+  const both = () => {
+    throw new ApiV1Error("English from the server", 409, "SWISS_NO_ROUND_LEFT", {
+      canAddRound: true,
+      canFinish: true,
+      finish: { after: 3, rounds: 4 },
+      stageId: "s1",
+    });
+  };
+  const door = (p: ReturnType<typeof mount>, testid: string) => p.island.tree().find((e) => propsOf(e)["data-testid"] === testid);
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("Add a round and Finish the Swiss now, each refused SCHEDULE_LOCKED or FIXTURE_HAS_OWN_FORMAT, in English and in French", async () => {
+    let checked = 0;
+    try {
+      for (const locale of ["en", "fr"] as const) {
+        active.locale = locale;
+        const D = DICTS[locale];
+        const CODES = [
+          { code: "SCHEDULE_LOCKED", status: 422, extra: {}, said: D["stage.error.scheduleFrozen"]! },
+          {
+            code: "FIXTURE_HAS_OWN_FORMAT",
+            status: 409,
+            extra: { fixture_id: "f7", fixture_no: 7 },
+            said: fillIn(D["rules.err.fixtureHasOwnFormat"]!, { match: fillIn(D["rules.err.match"]!, { n: 7 }) }),
+          },
+        ];
+        for (const c of CODES) {
+          const refuse = () => {
+            throw new ApiV1Error("server English", c.status, c.code, { ...c.extra });
+          };
+          for (const testid of ["entrants-add-round", "entrants-finish-swiss"]) {
+            confirmMock.mockReset();
+            confirmMock.mockResolvedValue(true);
+            api.addRound = refuse;
+            api.finish = refuse;
+            const p = mount();
+            await p.submit(both);
+            const button = door(p, testid);
+            expect(button, `${locale} ${c.code}: premise — ${testid} is offered`).toBeDefined();
+            (propsOf(button!).onClick as () => void)();
+            await flush();
+            expect(p.error(), `${locale} ${c.code} ${testid}`).toBe(c.said);
+            expect(c.said, "premise: not the server's words").not.toContain("server English");
+            checked++;
+          }
+        }
+      }
+    } finally {
+      active.locale = "en";
+    }
+    expect(checked, "anti-vacuity: 2 locales × 2 codes × 2 doors").toBe(8);
+    expect(DICTS.fr["stage.error.scheduleFrozen"], "premise: French differs from English").not.toBe(DICTS.en["stage.error.scheduleFrozen"]);
   });
 });

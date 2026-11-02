@@ -19,7 +19,9 @@
 // `SwissFinishMenuItem`, the More menu's "Finish the Swiss now" beside it — offered on THE Finish predicate (`finish`,
 // `swissFinishState`), disabled with the reason while no round is complete or the round in progress is undecided — and
 // the same Finish as the dialog's recovery when a SWISS_ROUNDS_LOCKED refusal says `canFinish: true`. Either way the
-// panel confirms first ("Standings after round {k} become final…", `swissFinishConfirm`), then posts.
+// panel confirms first ("Standings after round {k} become final…", `swissFinishConfirm`), then posts. Batch 4 (ruling 3):
+// both items show on ANY running Swiss, root or fed (`swissMoreItemsOf`, the one rule) — a fed Swiss, which has no "Add
+// late player", gets its own More holding just these two (`SwissMoreMenu`), so the rail's late-add block stays as it is.
 //
 // Save and Cancel sit at the end of the BODY, not in `Modal`'s `footer` slot: the body is short at every width, and
 // keeping them in the children keeps the whole dialog visible to `renderIsland`'s walk (its tests drive the stepper and
@@ -31,7 +33,7 @@ import { Modal } from "@/components/modal";
 import { swissFinishPlanOf, type SwissFinishPlan } from "@/lib/swiss-finish-plan";
 import { swissRefusalKey } from "@/lib/swiss-refusals";
 import { swissRoundsGuidanceLine, swissRoundsWarnNotice } from "@/lib/swiss-rounds";
-import { swissRoundsEditPreview, type SwissRoundControl, type SwissRoundsEditFixture } from "@/lib/swiss-rounds-edit";
+import { swissMoreItemsOf, swissRoundsEditPreview, type SwissRoundControl, type SwissRoundsEditFixture } from "@/lib/swiss-rounds-edit";
 
 /** What a refused write answered: `ApiV1Error`'s code and details, and `text`, the refusal in the reader's language as
  *  the panel says it (`swissStageRefusal`) — never the server's English sentence (T12 Fix round 1, review m1). */
@@ -149,7 +151,7 @@ export function SwissAddRoundMenuItem({ stageId, busy, rail }: { stageId: string
   const msg = useMsg();
   const plural = useMsgPlural();
   const add = rail.control.addRound;
-  if (!rail.control.started || add.refusal === "over" || add.refusal === "field") return null;
+  if (!swissMoreItemsOf(rail.control).addRound) return null;
   return (
     <button
       type="button"
@@ -190,7 +192,8 @@ export function SwissFinishMenuItem({
 }) {
   const msg = useMsg();
   const finish = rail.control.finish;
-  if (!rail.control.started || finish.refusal === "over") return null;
+  // Nothing once the Swiss is over, nor when every round is decided — Complete is the action then (batch-4 ruling m3).
+  if (!swissMoreItemsOf(rail.control).finish) return null;
   const hint = finish.canFinish
     ? msg("stage.more.finishSwiss.hint", { round: finish.finishedAfter })
     : msg(
@@ -216,6 +219,54 @@ export function SwissFinishMenuItem({
         {hint}
       </span>
     </button>
+  );
+}
+
+/**
+ * The rail's More for a running Swiss that has no "Add late player" — a fed Swiss (batch-4 ruling 3: Add a round and
+ * Finish the Swiss now are offered on ANY running Swiss; only the late add is root-only). The same toggle, panel and
+ * testids as the late-add More in stage-rail.tsx, which keeps its own block unchanged; the rail mounts exactly one of the
+ * two. Nothing at all when neither item shows (`swissMoreItemsOf`), so the toggle never opens an empty panel. The open
+ * state is the rail's (`open`/`onToggle`); `onFinishOpen` closes the phone sheet before Finish's confirm.
+ */
+export function SwissMoreMenu({
+  stageId,
+  busy,
+  rail,
+  open,
+  onToggle,
+  onFinishOpen,
+}: {
+  stageId: string;
+  busy: string | null;
+  rail: SwissRoundsRail;
+  open: boolean;
+  onToggle: () => void;
+  onFinishOpen: () => void;
+}) {
+  const msg = useMsg();
+  const items = swissMoreItemsOf(rail.control);
+  if (!items.addRound && !items.finish) return null;
+  return (
+    <>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={`stage-more-menu-${stageId}`}
+        onClick={onToggle}
+        data-testid="stage-more"
+        className="btn btn-ghost min-h-11 justify-between gap-1.5 px-3 py-1.5 text-xs"
+      >
+        {msg("desk.tools.more")}
+        <span aria-hidden="true">{open ? "▴" : "▾"}</span>
+      </button>
+      <div id={`stage-more-menu-${stageId}`} hidden={!open} data-testid="stage-more-menu" className="min-w-0 md:basis-full">
+        <div className="flex flex-col overflow-hidden rounded-xl border border-purple-200 bg-white md:max-w-md">
+          <SwissAddRoundMenuItem stageId={stageId} busy={busy} rail={rail} />
+          <SwissFinishMenuItem stageId={stageId} busy={busy} rail={rail} onOpen={onFinishOpen} />
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -259,8 +310,10 @@ export function SwissRoundsDialog({ stageId, control, fixtures, onSave, onAddRou
     : null;
   const refusalText = refusal?.text ?? null;
   const offerAddRound = refusal?.code === "SWISS_ROUNDS_LOCKED" && refusal.extra.canAddRound === true;
-  // W3 T13: the refusal's `canFinish` is THE Finish predicate's answer, and its plan rides with it.
-  const finishPlan = refusal?.code === "SWISS_ROUNDS_LOCKED" ? swissFinishPlanOf(refusal.extra) : null;
+  // W3 T13: the refusal's `canFinish` is THE Finish predicate's answer, and its plan rides with it — on ANY refusal that
+  // carries one (batch-4 m5): the LOCKED's Add a round can come back SWISS_ROUNDS_ABOVE_MAX 409 `canFinish: true` when the
+  // field shrank meanwhile, and its sentence then names Finish.
+  const finishPlan = refusal ? swissFinishPlanOf(refusal.extra) : null;
 
   const stepClass =
     "grid h-11 w-11 place-items-center text-xl leading-none text-purple-700 hover:bg-purple-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent";

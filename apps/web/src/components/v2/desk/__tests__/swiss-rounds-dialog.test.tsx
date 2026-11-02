@@ -76,7 +76,7 @@ function control(over: Partial<SwissRoundControl> & { field: number | null }): S
     chess: false,
     addRound: { canAddRound: true, refusal: null, field, hardMax: field === null ? null : HARD_MAX(field) },
     // W3 T13: nothing played (the Finish predicate's k = 0) unless a case says otherwise.
-    finish: { canFinish: false, refusal: "nothing_played", finishedAfter: 0, inProgress: false },
+    finish: { canFinish: false, refusal: "nothing_played", finishedAfter: 0, inProgress: false, completeInstead: false },
     ...over,
   };
 }
@@ -252,6 +252,46 @@ describe.each(LOCALES)("SwissRoundsDialog (X-SW-17, owner pick B) [%s]", (locale
     expect(checked, "anti-vacuity: rows").toBe(ROWS.length);
   });
 
+  it("batch-4 m5: LOCKED's Add a round answered SWISS_ROUNDS_ABOVE_MAX 409 with canFinish (the field shrank meanwhile) — Finish stands beside that sentence too", async () => {
+    const locked: SwissRoundsRefusal = { code: "SWISS_ROUNDS_LOCKED", extra: { canFinish: false, canAddRound: true }, text: "locked" };
+    const ROWS: { name: string; answer: SwissRoundsRefusal; finish: boolean }[] = [
+      {
+        name: "ABOVE_MAX offering Finish (409, its plan sent)",
+        answer: { code: "SWISS_ROUNDS_ABOVE_MAX", extra: { rounds: 4, field: 4, hardMax: 3, canFinish: true, finish: { after: 2, rounds: 3 } }, text: "the panel's ABOVE_MAX sentence, naming Finish" },
+        finish: true,
+      },
+      {
+        name: "ABOVE_MAX not offering it (422)",
+        answer: { code: "SWISS_ROUNDS_ABOVE_MAX", extra: { rounds: 4, field: 4, hardMax: 3, canFinish: false }, text: "the panel's ABOVE_MAX sentence" },
+        finish: false,
+      },
+    ];
+    let checked = 0;
+    for (const r of ROWS) {
+      const d = open({
+        control: control({ field: 6, rounds: 3 }),
+        fixtures: shells(6, 3),
+        onSave: async () => locked,
+        onAddRound: async () => r.answer,
+      });
+      d.press("stage-rounds-fewer");
+      d.press("stage-rounds-save");
+      await flush();
+      expect(d.find("stage-rounds-finish"), `${r.name}: premise — LOCKED alone offers no Finish`).toBeUndefined();
+      d.press("stage-rounds-add-round");
+      await flush();
+      expect(textOf(d.get("stage-rounds-error")), r.name).toContain(r.answer.text);
+      expect(d.find("stage-rounds-add-round"), `${r.name}: the Add a round that was refused goes`).toBeUndefined();
+      expect(d.find("stage-rounds-finish") !== undefined, `${r.name}: Finish`).toBe(r.finish);
+      if (r.finish) {
+        d.press("stage-rounds-finish");
+        expect(d.calls.finish, `${r.name}: the plan the refusal sent`).toEqual([{ after: 2, rounds: 3 }]);
+      }
+      checked++;
+    }
+    expect(checked, "anti-vacuity: rows").toBe(ROWS.length);
+  });
+
   it("another refusal (a frozen timetable) says its text and leaves the count editable — only LOCKED fixes it", async () => {
     const d = open({
       control: control({ field: 6, rounds: 3 }),
@@ -409,21 +449,21 @@ describe.each(LOCALES)("the rail's rounds chip and the More menu's Add a round [
     const ROWS: Row[] = [
       {
         name: "round 3 complete, nothing past it started",
-        c: started({ canFinish: true, refusal: null, finishedAfter: 3, inProgress: false }),
+        c: started({ canFinish: true, refusal: null, finishedAfter: 3, inProgress: false, completeInstead: false }),
         shown: true,
         enabled: true,
         hint: fill(D["stage.more.finishSwiss.hint"]!, { round: 3 }),
       },
       {
         name: "no round complete yet",
-        c: started({ canFinish: false, refusal: "nothing_played", finishedAfter: 0, inProgress: false }),
+        c: started({ canFinish: false, refusal: "nothing_played", finishedAfter: 0, inProgress: false, completeInstead: false }),
         shown: true,
         enabled: false,
         hint: D["stage.more.finishSwiss.nothingPlayed"]!,
       },
       {
         name: "the round in progress is under way",
-        c: started({ canFinish: false, refusal: "round_undecided", finishedAfter: 3, inProgress: true }),
+        c: started({ canFinish: false, refusal: "round_undecided", finishedAfter: 3, inProgress: true, completeInstead: false }),
         shown: true,
         enabled: false,
         hint: D["stage.more.finishSwiss.undecided"]!,
@@ -431,13 +471,19 @@ describe.each(LOCALES)("the rail's rounds chip and the More menu's Add a round [
       {
         // Fix round 1 (review m3): a take-back reopened a finished round — nothing is "in progress".
         name: "a finished round was reopened",
-        c: started({ canFinish: false, refusal: "round_undecided", finishedAfter: 3, inProgress: false }),
+        c: started({ canFinish: false, refusal: "round_undecided", finishedAfter: 3, inProgress: false, completeInstead: false }),
         shown: true,
         enabled: false,
         hint: D["stage.more.finishSwiss.reopened"]!,
       },
       { name: "before the first start", c: control({ field: 6, rounds: 5 }), shown: false },
-      { name: "over", c: started({ canFinish: false, refusal: "over", finishedAfter: 3, inProgress: false }), shown: false },
+      { name: "over", c: started({ canFinish: false, refusal: "over", finishedAfter: 3, inProgress: false, completeInstead: false }), shown: false },
+      // Batch-4 ruling m3: every round decided — Finish would only do what Complete does, and Complete is on the rail.
+      {
+        name: "every round decided (Complete is the action)",
+        c: started({ canFinish: false, refusal: null, finishedAfter: 5, inProgress: false, completeInstead: true }),
+        shown: false,
+      },
     ];
     let checked = 0;
     for (const r of ROWS) {
@@ -467,7 +513,7 @@ describe.each(LOCALES)("the rail's rounds chip and the More menu's Add a round [
       stageId: "s1",
       busy: null,
       rail: {
-        ...rail(control({ field: 6, rounds: 5, started: true, finish: { canFinish: true, refusal: null, finishedAfter: 3, inProgress: false } })),
+        ...rail(control({ field: 6, rounds: 5, started: true, finish: { canFinish: true, refusal: null, finishedAfter: 3, inProgress: false, completeInstead: false } })),
         onFinish: async (_id: string, plan: SwissFinishPlan) => {
           expect(opened, "the sheet closed before the confirm").toBe(1);
           plans.push(plan);

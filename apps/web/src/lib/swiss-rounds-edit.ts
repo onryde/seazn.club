@@ -40,6 +40,22 @@ export interface SwissFinishControl {
   /** `round_undecided` because a round past k has started ("the round in progress"); false when a finished round is
    *  short a result again (a take-back), or for any other answer. The desk's hint branches on it (review m3). */
   inProgress: boolean;
+  /** Batch-4 ruling m3: every round is decided and Finish would remove nothing — it is exactly Complete, the action the
+   *  rail already shows — so the desk hides Finish (`canFinish` is false; the call itself would still go through). */
+  completeInstead: boolean;
+}
+
+/** Which of the More menu's two Swiss items a stage shows (W3 T12/T13; batch-4 ruling 3): "Add a round" and "Finish the
+ *  Swiss now" appear once the stage has started, on ANY running Swiss — root or fed (only "Add late player" is
+ *  root-only). Add a round goes once the Swiss is over or has no pairable field; Finish once it is over, or when it would
+ *  only do what Complete does (`completeInstead`, ruling m3). The ONE rule both items and the rail's More read, so the
+ *  menu never opens on nothing. */
+export function swissMoreItemsOf(control: Pick<SwissRoundControl, "started" | "addRound" | "finish">): { addRound: boolean; finish: boolean } {
+  if (!control.started) return { addRound: false, finish: false };
+  return {
+    addRound: control.addRound.refusal !== "over" && control.addRound.refusal !== "field",
+    finish: control.finish.refusal !== "over" && !control.finish.completeInstead,
+  };
 }
 
 /** One Swiss stage as the desk reads it (`listSwissRoundControls`, read by the division page for an organiser). */

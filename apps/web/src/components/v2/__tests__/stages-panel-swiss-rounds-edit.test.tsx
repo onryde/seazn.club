@@ -71,7 +71,7 @@ const control = (over: Partial<SwissRoundControl> = {}): SwissRoundControl => ({
   chess: true,
   field: 6,
   addRound: { canAddRound: true, refusal: null, field: 6, hardMax: 5 },
-  finish: { canFinish: false, refusal: "nothing_played", finishedAfter: 0, inProgress: false },
+  finish: { canFinish: false, refusal: "nothing_played", finishedAfter: 0, inProgress: false, completeInstead: false },
   ...over,
 });
 const base = {

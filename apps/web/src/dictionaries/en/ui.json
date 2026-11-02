@@ -2459,7 +2459,7 @@
   "stage.chess.hint": "Balances White and Black for every player; round 1 colours are drawn by lot. Switch off for draughts or any game where colour doesn't matter.",
   "schedule.notice.roundAdded": "Round {round} added.",
   "schedule.notice.swissFinished": "The Swiss finished after round {round}.",
-  "schedule.notice.swissFinishedOpen": "The Swiss now ends after round {round}, but a match in it still needs a result, so the stage is not complete. Decide it, then finish the Swiss again.",
+  "schedule.notice.swissFinishedOpen": "The Swiss now ends after round {round}, but a match in it still needs a result, so the stage is not complete. Decide it, then complete the stage.",
   "schedule.notice.chessOn": "Chess colours switched on.",
   "schedule.notice.chessOff": "Chess colours switched off.",
   "schedule.notice.roundsSaved.one": "This Swiss now plays {count} round.",
