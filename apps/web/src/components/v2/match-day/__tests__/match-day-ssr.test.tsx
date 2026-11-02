@@ -379,7 +379,8 @@ describe("focused court: called, free, in use elsewhere", () => {
     const html = renderToStaticMarkup(
       <FreeCourtBody ctx={ctx} court={c} load={{ status: "ready", candidates: [] }} onCall={() => {}} onRetry={() => {}} />,
     );
-    expect(html).toContain(t(dict, "matchDay.free.countNone"));
+    expect(html).toContain("Nothing is waiting to be played here today.");
+    expect(html).not.toContain("none can start yet");
     expect(html).not.toContain('data-testid="md-candidate"');
   });
 
@@ -396,7 +397,7 @@ describe("focused court: called, free, in use elsewhere", () => {
     expect(rowsOf(html, "md-candidate")).toHaveLength(4);
   });
 
-  it("I2 — every candidate blocked: 'No match can start here right now', and the blocked rows still say why", () => {
+  it("I2 — every candidate blocked: says they are waiting but none can start, and the blocked rows still say why", () => {
     const c = court({ court_name: "Court 5", state: "free", current: null });
     const busy = { kind: "player_busy" as const, person_name: "Zara Khan", court_name: "Court 3" };
     const candidates = [cand({ blocked: busy }, { id: "busy-1" }), cand({ blocked: busy }, { id: "busy-2" })];
@@ -404,7 +405,8 @@ describe("focused court: called, free, in use elsewhere", () => {
     const html = renderToStaticMarkup(
       <FreeCourtBody ctx={ctx} court={c} load={{ status: "ready", candidates }} onCall={() => {}} onRetry={() => {}} />,
     );
-    expect(html).toContain(t(dict, "matchDay.free.countNone"));
+    expect(html).toContain("2 matches are waiting, but none can start yet. Each one shows why below.");
+    expect(html).not.toContain("Nothing is waiting");
     expect(html).not.toMatch(new RegExp(plural(dict, "matchDay.free.count", 2, "en")));
     expect(rowsOf(html, "md-candidate")).toHaveLength(2);
     expect(html).toContain(t(dict, "matchDay.candidate.blocked", { person: "Zara Khan", court: "Court 3" }));
@@ -2009,5 +2011,62 @@ describe("E2-3 — a court's closure", () => {
     expect(closedToday).toContain("Court 5 is closed for the rest of today.");
     // A warning, not a stop: the confirm button is the sheet's own, and the sheet body never disables it.
     expect(crosses).not.toContain("disabled");
+  });
+});
+
+// ---- E2 item 4: "no match can start here" says WHY ------------------------------------------------------------------------
+describe("E2-4 — the free court's empty line is two different truths", () => {
+  const free5 = court({ court_name: "Court 5", state: "free", current: null });
+  const busy = { kind: "player_busy" as const, person_name: "Zara Khan", court_name: "Court 3" };
+  const bodyOf = (candidates: MatchDayCandidate[], d: Dict = dict, locale: "en" | "es" | "fr" | "nl" = "en") =>
+    renderToStaticMarkup(
+      <FreeCourtBody ctx={{ ...ctx, dict: d, locale }} court={free5} load={{ status: "ready", candidates }} onCall={() => {}} onRetry={() => {}} />,
+    );
+  const blocked = (n: number): MatchDayCandidate[] => Array.from({ length: n }, (_, i) => cand({ blocked: busy }, { id: `b-${i}` }));
+
+  it("the brief's words: nothing waiting; and n waiting but none can start (plural: 1, 2, 5)", () => {
+    expect(bodyOf([])).toContain("Nothing is waiting to be played here today.");
+    expect(bodyOf(blocked(1))).toContain("1 match is waiting, but it can&#x27;t start yet. It shows why below.");
+    expect(bodyOf(blocked(2))).toContain("2 matches are waiting, but none can start yet. Each one shows why below.");
+    expect(bodyOf(blocked(5))).toContain("5 matches are waiting, but none can start yet. Each one shows why below.");
+  });
+
+  it("the two never share a screen, and the retired single line is gone", () => {
+    const empty = bodyOf([]);
+    const all = bodyOf(blocked(3));
+    expect(empty).not.toContain("none can start yet");
+    expect(all).not.toContain("Nothing is waiting");
+    for (const html of [empty, all]) expect(html).not.toContain("No match can start here");
+    expect(Object.keys(en)).not.toContain("matchDay.free.countNone");
+  });
+
+  it("with something callable it counts as before — neither empty line appears", () => {
+    const html = bodyOf([cand({}, { id: "ok" }), ...blocked(2)]);
+    expect(html).toContain(plural(dict, "matchDay.free.count", 1, "en"));
+    expect(html).not.toContain("Nothing is waiting");
+    expect(html).not.toContain("none can start yet");
+  });
+
+  it("every locale: both lines, every plural form the locale selects, no raw key or placeholder (counted)", () => {
+    let checked = 0;
+    for (const [locale, d] of Object.entries(DICTS) as ["en" | "es" | "fr" | "nl", Dict][]) {
+      const empty = bodyOf([], d, locale);
+      expect(empty, locale).toContain(esc(t(d, "matchDay.free.nothingWaiting")));
+      for (const n of [1, 2, 5]) {
+        const html = bodyOf(blocked(n), d, locale);
+        const line = plural(d, "matchDay.free.allBlocked", n, locale);
+        expect(line, `${locale} ${n}`).toContain(String(n));
+        expect(line, `${locale} ${n}`).not.toMatch(/matchDay\.|[{}]/);
+        expect(html, `${locale} ${n}`).toContain(esc(line));
+        expect(html, `${locale} ${n}`).not.toContain(esc(t(d, "matchDay.free.nothingWaiting")));
+        checked++;
+      }
+      checked++;
+    }
+    expect(checked).toBe(4 * 4);
+    // The two lines differ in every locale (a copy-paste of one into the other would pass the loop above).
+    for (const [locale, d] of Object.entries(DICTS)) {
+      expect(t(d, "matchDay.free.nothingWaiting"), locale).not.toBe(plural(d, "matchDay.free.allBlocked", 2, locale as "en"));
+    }
   });
 });

@@ -286,6 +286,14 @@ export function callableCount(candidates: readonly MatchDayCandidate[]): number 
   return candidates.filter((c) => c.blocked === null).length;
 }
 
+/** What a free court says when NOTHING could start on it now (Match Day E2 item 4): two different truths, so two messages.
+ *  `listed` is how many candidates the court lists — all of them blocked, since none is callable.
+ *  - none listed: nothing is waiting to be played here today;
+ *  - some listed: they are waiting, but none can start yet, and each row says why. */
+export function emptyCountText(dict: Dict, listed: number, locale: Locale): string {
+  return listed === 0 ? t(dict, "matchDay.free.nothingWaiting") : plural(dict, "matchDay.free.allBlocked", listed, locale);
+}
+
 /** The one candidate whose call is the primary action (review V2): the top-ranked one that is not blocked. The list arrives in
  *  rank order (estimate.ts `rankCandidates`: unblocked first, then this court, other courts, no court), so it is the first
  *  unblocked; null when every one is blocked. */

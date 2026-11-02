@@ -15,6 +15,7 @@ import {
   callPausedReason,
   callableCount,
   candidateWhere,
+  emptyCountText,
   filterCandidates,
   isCandidateList,
   matchLabel,
@@ -129,7 +130,7 @@ export function FreeCourtBody({
             : load.status === "failed"
               ? t(dict, "matchDay.free.failed")
               : callableCount(load.candidates) === 0
-                ? t(dict, "matchDay.free.countNone")
+                ? emptyCountText(dict, load.candidates.length, ctx.locale)
                 : plural(dict, "matchDay.free.count", callableCount(load.candidates), ctx.locale)}
         </p>
         {/* Always mounted, so a court that closes between two polls is ANNOUNCED when the words arrive, not only rendered. */}
