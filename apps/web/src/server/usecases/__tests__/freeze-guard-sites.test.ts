@@ -90,6 +90,11 @@ const LEDGER: Record<string, [file: string, words: string]> = {
   ],
   "stages.ts#deleteStage": [SWEEP, '"stages.ts#deleteStage"'],
   "stages.ts#insertStageBatch": [SWEEP, '"stages.ts#insertStageBatch"'],
+  // PB2 item 2: the organiser's Go live — a NEW stream — not its reads or its Stop.
+  "stream-sessions.ts#createSession": [
+    "app/api/v1/fixtures/[id]/stream-sessions/__tests__/routes.test.ts",
+    "PB2 over HTTP: on a FROZEN competition a Go live is 402 competitions.max_active",
+  ],
 };
 
 describe("the billing freeze's guard sites (PB2: every write but scoring)", () => {

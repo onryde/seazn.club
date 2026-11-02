@@ -67,6 +67,7 @@ import { DestinationNotAllowedError, TargetUnreadableError } from "./stream-targ
 import { holderHref, holderRows, wireHolder, type TargetHolder } from "./stream-target-holders";
 import { setFixtureStreamUrl } from "./fixtures";
 import { markAutoStartBlocked, writeStreamSettings } from "./stream-codes";
+import { assertCompetitionNotFrozen } from "./entitlement-freeze";
 
 export { ACTIVE_STATES, TERMINAL_STATES };
 
@@ -1594,8 +1595,13 @@ async function currentPhoneOf(fixtureId: string, now: Date): Promise<{ pairingId
 export async function createSession(
   auth: AuthCtx, fixtureId: string, body: CreateStreamSession, deps: SessionDeps,
 ): Promise<{ sessionId: string }> {
-  const { orgId } = await fixtureContext(fixtureId);
+  const { orgId, competitionId } = await fixtureContext(fixtureId);
   if (orgId !== auth.orgId) throw new HttpError(404, "fixture not found");
+  // Match Day PB2 (owner 2026-11-02, "hide"): a billing-frozen competition starts no NEW stream — the freeze's own 402,
+  // asked before the phone, the credits and any provider call, so nothing is written or spent. Only this door: reading a
+  // session and stopping one are not guarded (a frozen page's panel is Stop-only, fixture-stream-mount.ts). Outside any
+  // transaction, as `frozenCompetitionIds` requires (entitlement-freeze.ts).
+  await assertCompetitionNotFrozen(orgId, competitionId);
   // The ACTOR is a guard, not a fallback. `created_by` is `uuid not null` with no FK, and `fillReplayUrl` later acts AS
   // that user when it writes the replay link. The plan wrote `auth.userId ?? orgId`, which for a caller with no user (an
   // API key: AuthCtx.userId is null) stores an ORG id in a users column and then impersonates it — a plausible lie in

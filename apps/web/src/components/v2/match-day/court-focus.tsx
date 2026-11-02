@@ -26,6 +26,7 @@
 //    every one of those writes on its own (read-only-staff.test.ts); hiding them is the page being honest, not the guard.
 //  - a billing-frozen competition (`ctx.frozen`, task F1) offers no Undo call and no Call: the server refuses both (402). It
 //    still SCORES (Match Day PB2, owner 2026-11-02, option A — scoring.ts asks no freeze), so the scorer QR and "Open pad" stay.
+//    It offers no "+ Connect a stream" (PB2, "hide": a new stream 402s); a stream already up still shows, with its settings.
 import { useState } from "react";
 import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
@@ -65,8 +66,8 @@ export interface MatchDayCtx {
   /** A view-only reader (B4, owner ruling Q1b): every panel shows, nothing that writes does. */
   readOnly: boolean;
   /** The competition is BILLING-frozen (over its organisation's `competitions.max_active`; task F1): the server refuses a call
-   *  and its Undo with a 402, so neither is offered. The fact the competition page reads (`getCompetition(…).frozen`). Only the
-   *  call path: the scorer QR, the pad and the stream links are not Match Day's to withhold. */
+   *  and its Undo with a 402, so neither is offered, nor "+ Connect a stream" (a new stream 402s, PB2). The fact the competition
+   *  page reads (`getCompetition(…).frozen`). The scorer QR, the pad and a stream already up stay: a frozen competition scores. */
   frozen: boolean;
 }
 
@@ -170,6 +171,7 @@ export function CourtFocus({
               dict={dict}
               scoreDict={ctx.scoreDict}
               readOnly={ctx.readOnly}
+              frozen={ctx.frozen}
             />
           )}
         </>
@@ -269,6 +271,7 @@ export function NoCourtFocus({
           dict={dict}
           scoreDict={ctx.scoreDict}
           readOnly={ctx.readOnly}
+          frozen={ctx.frozen}
         />
       )}
       {!ctx.readOnly && (

@@ -2031,7 +2031,9 @@ describe("F1 — a billing-frozen competition: no Call, no Undo call", () => {
     expect(html).toMatch(new RegExp(`data-testid="md-open-pad"[^>]*>${t(dict, "matchDay.focus.openPad")}<`));
     const playing = focusWith(court(), frozenCtx);
     expect(playing).toContain('data-testid="md-scorer"');
-    expect(playing).toContain(`>${esc(t(dict, "matchDay.stream.connect"))}<`);
+    // PB2 item 2: a NEW stream is not offered on a frozen competition (the create route 402s).
+    expect(playing).not.toContain('data-testid="md-stream-connect"');
+    expect(playing).not.toContain(`>${esc(t(dict, "matchDay.stream.connect"))}<`);
   });
 
   it("frozen: a free court still lists its candidates, with no call button at all", () => {
@@ -2136,6 +2138,74 @@ describe("PB2 — a billing-frozen competition keeps the scorer QR / device link
     expect(frozen).toContain('data-testid="md-scorer"');
     // …while the banner still says why Call and Undo are gone.
     expect(frozen).toContain('data-testid="md-frozen"');
+  });
+});
+
+// Match Day PB2 item 2 (owner 2026-11-02, "hide"): "+ Connect a stream" is not offered on a billing-frozen competition — the
+// stream-session create route answers the freeze's 402 (stream-sessions routes.test.ts) — while a stream that is already up
+// (waiting for its phone, live, or live with a preview) still shows, with its way to the stream panel (Stop is the one write
+// a frozen page keeps there, F1). Every (shape x stream state) cell, the unfrozen editor first.
+describe("PB2 — '+ Connect a stream' is hidden on a frozen competition; a stream that is up still shows", () => {
+  const frozenCtx: MatchDayCtx = { ...ctx, frozen: true };
+  const VIDEO = "dQw4w9WgXcQ";
+  const STATES: Array<[string, Partial<MatchDayFixture>]> = [
+    ["no stream", { stream: null }],
+    ["waiting for the phone", { stream: "waiting" }],
+    ["live, nothing to embed", { stream: "live", live_video: null }],
+    ["live, with a preview", { stream: "live", live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: false } }],
+  ];
+  const SHAPES: Array<[string, (x: MatchDayCtx, o: Partial<MatchDayFixture>) => string]> = [
+    [
+      "a playing court",
+      (x, o) =>
+        renderToStaticMarkup(
+          <CourtFocus ctx={x} court={goldenCourt("badminton", BADMINTON!, o)} backLabel="All courts" onBack={() => {}} onChanged={() => {}} onRefused={() => {}} refreshKey="k" divisions={null} />,
+        ),
+    ],
+    ["a match on no court", (x, o) => noCourtFocus(goldenMatch("badminton", BADMINTON!, { id: "nc-1", ...o }), x)],
+  ];
+  const CONNECT = 'data-testid="md-stream-connect"';
+  /** What the corner shows for a stream that is up, read off the markup: the waiting word, the live badge, the preview. */
+  const upShows = (html: string, state: string) =>
+    state === "waiting for the phone"
+      ? html.includes(`>${esc(t(dict, "matchDay.stream.waiting"))}<`)
+      : state.startsWith("live, with")
+        ? html.includes('data-testid="md-stream-preview"') && html.includes(`>${esc(t(dict, "matchDay.stream.settings"))}<`)
+        : html.includes('data-md-stream="live"');
+
+  it("EMPTY CASE FIRST (an unfrozen editor): no stream offers '+ Connect a stream'; a stream that is up shows instead", () => {
+    expect(BADMINTON, "a badminton golden stream mid-game").not.toBeNull();
+    let checked = 0;
+    for (const [shape, render] of SHAPES) {
+      for (const [state, o] of STATES) {
+        const html = render(ctx, o);
+        if (state === "no stream") {
+          expect(html, `${shape}, ${state}`).toContain(CONNECT);
+          expect(html, `${shape}, ${state}`).toContain(`>${esc(t(dict, "matchDay.stream.connect"))}<`);
+        } else {
+          expect(html, `${shape}, ${state}`).not.toContain(CONNECT);
+          expect(upShows(html, state), `${shape}, ${state}`).toBe(true);
+        }
+        checked++;
+      }
+    }
+    expect(checked).toBe(SHAPES.length * STATES.length);
+  });
+
+  it("frozen: never '+ Connect a stream', in any shape or state; a stream that is up shows exactly as unfrozen", () => {
+    let checked = 0;
+    for (const [shape, render] of SHAPES) {
+      for (const [state, o] of STATES) {
+        const html = render(frozenCtx, o);
+        expect(html, `${shape}, ${state}`).not.toContain(CONNECT);
+        expect(html, `${shape}, ${state}`).not.toContain(`>${esc(t(dict, "matchDay.stream.connect"))}<`);
+        if (state !== "no stream") expect(upShows(html, state), `${shape}, ${state}`).toBe(true);
+        // The rest of the court is untouched: the score and the scorer QR (item 1).
+        expect(html, `${shape}, ${state}`).toContain('data-testid="md-scorer"');
+        checked++;
+      }
+    }
+    expect(checked).toBe(SHAPES.length * STATES.length);
   });
 });
 
