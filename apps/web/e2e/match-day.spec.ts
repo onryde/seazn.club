@@ -1709,8 +1709,8 @@ test.describe("Match Day — fix round 1, I3 (the venue filter and Back)", () =>
     await page.waitForURL((u) => u.pathname === chosenUrl.pathname);
     await backOnTheList("after the match page");
 
-    // Trip 2: the competition, by the header's link.
-    await page.getByRole("link", { name: /^Back to / }).click();
+    // Trip 2: the competition, by the page header's own link (the site bar carries a second "Back to" chevron: not that one).
+    await page.getByTestId("md-header").getByRole("link", { name: /^Back to / }).click();
     await page.waitForURL((u) => u.pathname !== chosenUrl.pathname, { timeout: 30_000 });
     expect(await stillSameDocument(), "the link navigated client-side").toBe(true);
     await page.goBack();
