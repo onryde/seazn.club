@@ -2136,6 +2136,7 @@
   "schedule.pairing.laterFold": "Boven tegen onder binnen elke puntengroep",
   "schedule.pairing.roundOneOnly": "De modus kies je alleen in ronde 1.",
   "schedule.pairing.drawnAtRandom": "Deelnemers zonder plaatsing worden willekeurig geloot.",
+  "schedule.pairing.changeHint": "Om te wijzigen wie tegen wie speelt: ontkoppel en koppel daarna de volgende ronde.",
   "schedule.pairing.error.roundOneOnly": "De koppelingsmodus kies je alleen in ronde 1.",
   "schedule.generate": "Wedstrijden genereren",
   "schedule.complete": "Fase afronden",

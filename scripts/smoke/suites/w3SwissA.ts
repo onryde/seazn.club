@@ -22,6 +22,9 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * T13 (X-SW-26; RB3-20): "Finish the Swiss now" is refused 409 SWISS_FINISH_NOTHING_PLAYED until a round is decided,
  * then ends the Swiss after the last decided round (its later shells deleted), completes the stage, and is an undo
  * barrier; a second Finish is 422 SWISS_OVER.
+ * T14 (X-SW-30; SW-L12, RB3-25): a board's seats cannot be edited in round 2 or later — `PATCH /fixtures/{id}` naming
+ * `home_entrant_id` / `away_entrant_id` (alone, swapped, or beside a good schedule edit) is a 400 and the row reads back
+ * unchanged, which is what lets the Pair next menu say "Unpair, then Pair next" as the way to change a pairing.
  * T9 (X-SW-12, X-SW-13; ruling 250): "Add late player" after Start —
  * through the entrants POST, an unstarted round re-pairs with the newcomer (a), a started round with a bye seats the
  * newcomer against its holder (b), any other started round leaves the newcomer to the next round (c); and a public
@@ -41,8 +44,9 @@ export async function w3SwissASuite(): Promise<void> {
   // Swiss above its field's hard maximum is refused at Generate and writes nothing) + T12: 2 (the round count edited
   // before play, an undo barrier; after the first start the count and the chess colours are locked by their own codes,
   // and Add a round mints the next round within the hard maximum) + T13: 1 (Finish the Swiss now: refused until a round is
-  // decided, then ends the Swiss after the last decided round, completes the stage, an undo barrier).
-  const EXPECTED_CHECKS = 18;
+  // decided, then ends the Swiss after the last decided round, completes the stage, an undo barrier) + T14: 1 (a PATCH
+  // naming a seat on a round-2 board is refused 400 and the row reads back unchanged).
+  const EXPECTED_CHECKS = 19;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -620,6 +624,8 @@ export async function w3SwissASuite(): Promise<void> {
       })).status;
     });
     let lateA: string | undefined;
+    /** Check 13's stage once round 2 is paired: one seated board, kept for check 19 (X-SW-30) to try to re-seat. */
+    let roundTwoBoard: { id: string; divId: string | undefined; home: string; away: string } | undefined;
 
     // Check 11 (X-SW-12 (a)): five players, round 1 two boards and a bye, both boards laid out, nothing started. The add
     // re-pairs round 1 over six: three boards, no bye, the newcomer seated, and both laid-out boards keep their slot.
@@ -695,6 +701,8 @@ export async function w3SwissASuite(): Promise<void> {
       for (const b of r1) forfeits.push((await appendScoreEvent(owner, b.id, "core.forfeit", { by: b.away_entrant_id, reason: "walkover" })).status);
       const pair2 = await v1(owner, `/api/v1/stages/${sw.stageId}/generate`, "POST");
       const r2 = (await sw.rows()).filter((f) => f.round_no === 2);
+      const board2 = r2.find((f) => !isBye(f) && f.home_entrant_id !== null && f.away_entrant_id !== null);
+      if (board2) roundTwoBoard = { id: board2.id, divId: sw.divId, home: board2.home_entrant_id!, away: board2.away_entrant_id! };
       const ok =
         sw.ready && r1.length === 2 && begun < 300 && res.status < 300 && row?.late_entry?.case === "c" && row.late_entry.round === 2 &&
         row.swiss_first_round === 2 && row.swiss_first_round_stage_id === sw.stageId && frozen &&
@@ -837,6 +845,44 @@ export async function w3SwissASuite(): Promise<void> {
       w3Check(
         "w3a X-SW-26: Finish refuses 409 SWISS_FINISH_NOTHING_PLAYED while no round is decided; round 1 decided, it ends the Swiss after round 1 — 4 shells gone, the stage complete; again 422 SWISS_OVER; Undo refuses by name" +
           (ok ? "" : ` — rounds ${roundsOf(before)}, early ${early.status} ${JSON.stringify(early.json).slice(0, 200)} rows ${before.length} -> ${afterEarly.length}, decided ${decided.join(",")}, finish ${finished.status} ${JSON.stringify(finished.json).slice(0, 200)} rounds ${roundsOf(afterFinish)} rows ${afterFinish.length}, again ${again.status} ${JSON.stringify(again.json).slice(0, 120)}, undo ${undo.status} ${JSON.stringify(undo.json).slice(0, 120)}`),
+        ok,
+      );
+    }
+
+    // Check 19 (T14, X-SW-30; SW-L12, RB3-25): a board's seats are not editable in round 2 or later — the Pair next menu says
+    // "Unpair, then Pair next" is how a pairing changes, so this is the door that must stay shut. On check 13's stage (round
+    // 2 paired): a PATCH naming `home_entrant_id`, `away_entrant_id`, both crossed (a swap), or a seat beside a good
+    // schedule edit is 400 VALIDATION, and the row read back from the division's fixtures is as it was — the same seats,
+    // the same time, so the good edit beside the seat did not land either. The positive pair: the same board takes a plain
+    // schedule edit (200), so the 400s are the seat keys' and not a board that refuses everything.
+    {
+      const board = roundTwoBoard;
+      const at = "2030-06-19T09:00:00.000Z";
+      const read = async () => {
+        const rows = v1data<Seat[] | undefined>(await v1(owner, `/api/v1/divisions/${board?.divId}/fixtures`)) ?? [];
+        const f = rows.find((x) => x.id === board?.id);
+        return f ? { home: f.home_entrant_id, away: f.away_entrant_id, at: f.scheduled_at } : undefined;
+      };
+      const before = await read();
+      const patch = (body: Record<string, unknown>) => v1(owner, `/api/v1/fixtures/${board?.id}`, "PATCH", body);
+      const refusals = [
+        await patch({ home_entrant_id: board?.away }),
+        await patch({ away_entrant_id: board?.home }),
+        await patch({ home_entrant_id: board?.away, away_entrant_id: board?.home }),
+        await patch({ scheduled_at: at, home_entrant_id: board?.away }),
+      ];
+      const afterRefusals = await read();
+      const good = await patch({ scheduled_at: at });
+      const afterGood = await read();
+      const sameSeats = (a: typeof before, b: typeof before) => a !== undefined && b !== undefined && a.home === b.home && a.away === b.away;
+      const ok =
+        board !== undefined && before !== undefined && before.home === board.home && before.away === board.away && before.at === null &&
+        refusals.every((r) => r.status === 400 && r.json.error?.code === "VALIDATION") &&
+        sameSeats(before, afterRefusals) && afterRefusals?.at === null &&
+        good.status === 200 && sameSeats(before, afterGood) && afterGood?.at !== null && afterGood?.at !== undefined && new Date(afterGood.at).toISOString() === at;
+      w3Check(
+        "w3a X-SW-30: a PATCH naming home_entrant_id / away_entrant_id (alone, swapped, or beside a good edit) on a round-2 board is 400 and the row reads back unchanged; a plain schedule edit still lands" +
+          (ok ? "" : ` — board ${board ? `${board.id} ${board.home} v ${board.away}` : "none (check 13 left no round-2 board)"}, before ${JSON.stringify(before)}, refusals ${refusals.map((r) => `${r.status} ${r.json.error?.code ?? ""}`).join(" | ")}, after refusals ${JSON.stringify(afterRefusals)}, good ${good.status} ${JSON.stringify(good.json).slice(0, 160)}, after good ${JSON.stringify(afterGood)}`),
         ok,
       );
     }

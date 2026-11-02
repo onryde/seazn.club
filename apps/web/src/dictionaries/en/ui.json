@@ -2136,6 +2136,7 @@
   "schedule.pairing.laterFold": "Top vs bottom within each score group",
   "schedule.pairing.roundOneOnly": "Mode is chosen in round 1 only.",
   "schedule.pairing.drawnAtRandom": "Unseeded entrants are drawn at random.",
+  "schedule.pairing.changeHint": "To change who plays whom: Unpair, then Pair next.",
   "schedule.pairing.error.roundOneOnly": "Pairing mode can only be chosen for round 1.",
   "schedule.generate": "Generate fixtures",
   "schedule.complete": "Complete stage",

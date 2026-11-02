@@ -2136,6 +2136,7 @@
   "schedule.pairing.laterFold": "Arriba contra abajo dentro de cada grupo de puntos",
   "schedule.pairing.roundOneOnly": "El modo solo se elige en la ronda 1.",
   "schedule.pairing.drawnAtRandom": "Los participantes sin cabeza de serie se sortean al azar.",
+  "schedule.pairing.changeHint": "Para cambiar quién juega contra quién: desemparejar y luego emparejar la siguiente ronda.",
   "schedule.pairing.error.roundOneOnly": "El modo de emparejamiento solo se elige en la ronda 1.",
   "schedule.generate": "Generar enfrentamientos",
   "schedule.complete": "Completar fase",

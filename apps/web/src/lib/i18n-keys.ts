@@ -6511,6 +6511,7 @@ export type DictionaryKey =
   | "schedule.outcome.wonWo"
   | "schedule.pairNext"
   | "schedule.pairing.adjacent"
+  | "schedule.pairing.changeHint"
   | "schedule.pairing.default"
   | "schedule.pairing.drawnAtRandom"
   | "schedule.pairing.error.roundOneOnly"

@@ -1289,6 +1289,46 @@ for (const sport of LATE_SPORTS) {
         await expect(row).toContainText(r.nameOf.get(f.away_entrant_id!)!);
       }
     });
+
+    // X-SW-30 (W3 T14, SW-L12, RB3-25): a board's seats cannot be edited in round 2 or later (PATCH /fixtures/{id} refuses
+    // them: fixtures/[id]/__tests__/route.test.ts, smoke check 19), so the Pair next menu's read-only line says what does
+    // work — Unpair, then Pair next — and the organiser can follow it. Round 1 paired and unplayed, so round 2 is the one
+    // waiting and Unpair is on the rail; the line is read off the real menu, the way the organiser reads it. Following it
+    // brings round 1 back as the choosable round, which carries no such line; Pair next seats round 1 again and round 2
+    // waits with the line.
+    test(`X-SW-30 round 2 waiting: the Pair next menu says Unpair then Pair next, and following it works (${sport.key})`, async ({ page, request }) => {
+      test.setTimeout(180_000);
+      const r = await startedSwiss(request, sport, 6, 3, "Hint30");
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"));
+      const menu = page.getByTestId("stage-pairing-menu");
+      const hint = page.getByTestId("stage-pairing-change-hint");
+      const openMenu = () =>
+        expect(async () => {
+          if ((await menu.count()) === 0) await page.getByTestId("stage-pairing-toggle").click();
+          await expect(menu).toBeVisible({ timeout: 5_000 });
+        }).toPass({ timeout: 30_000 });
+
+      // Round 2 waiting: the read-only line, then the guidance, and the button it names beside Pair next.
+      await openMenu();
+      await expect(page.getByTestId("stage-pairing-readonly"), "round 2 is the read-only round").toBeVisible();
+      await expect(hint).toHaveText(uiEn["schedule.pairing.changeHint"]!);
+      await expect(page.getByTestId("stage-unpair"), "the button the line names").toBeVisible();
+
+      // Follow it: Unpair puts round 1 back on its shells, and round 1 is the choosable round again — no guidance there.
+      await page.getByTestId("stage-unpair").click();
+      await expect.poll(async () => (await r.boards(1)).length, { timeout: 30_000 }).toBe(0);
+      await openMenu();
+      await expect(page.getByTestId("stage-pairing-fold"), "round 1 is choosable again").toBeVisible();
+      await expect(page.getByTestId("stage-pairing-readonly")).toHaveCount(0);
+      await expect(hint).toHaveCount(0);
+
+      // Then Pair next: round 1 is seated again (three boards for six), and round 2 waits with the line.
+      await page.getByTestId("stage-generate").click();
+      await expect.poll(async () => (await r.boards(1)).length, { timeout: 30_000 }).toBe(3);
+      await openMenu();
+      await expect(hint).toHaveText(uiEn["schedule.pairing.changeHint"]!);
+    });
   });
 }
 

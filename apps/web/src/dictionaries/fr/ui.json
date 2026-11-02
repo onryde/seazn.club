@@ -2136,6 +2136,7 @@
   "schedule.pairing.laterFold": "Haut contre bas dans chaque groupe de points",
   "schedule.pairing.roundOneOnly": "Le mode se choisit uniquement à la ronde 1.",
   "schedule.pairing.drawnAtRandom": "Les participants sans tête de série sont tirés au sort.",
+  "schedule.pairing.changeHint": "Pour changer qui joue contre qui : désapparier, puis apparier le tour suivant.",
   "schedule.pairing.error.roundOneOnly": "Le mode d'appariement ne se choisit qu'à la ronde 1.",
   "schedule.generate": "Générer les matchs",
   "schedule.complete": "Terminer la phase",

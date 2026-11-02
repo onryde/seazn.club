@@ -23,6 +23,7 @@ import { planSwissShells } from "@/lib/swiss-shell";
 import {
   swissFieldDrawn,
   swissFieldSeedsNumbered,
+  swissPairingChangeNote,
   swissPairingDrawNote,
   swissPairingForKey,
   swissPairingHint,
@@ -188,6 +189,7 @@ describe("swissPairingMenuFor — when the menu exists, and what it carries", ()
       seedsNumbered: true,
       unseededDrawn: false,
       seededAheadOfDraw: false,
+      changeHint: false,
     });
   });
 
@@ -232,6 +234,30 @@ describe("swissPairingMenuFor — when the menu exists, and what it carries", ()
     expect(menu?.fieldSize).toBe(4);
     // One authority: the same figure the swiss legend prints.
     expect(menu?.fieldSize).toBe(swissActiveFieldSize(config, base.activeEntrantIds));
+  });
+
+  // X-SW-30 (W3 T14, SW-L12): the change hint is the caller's verdict (a running root Swiss with Unpair offered) AND a
+  // round >= 2. The rule lives in the menu so the panel and the rail cannot disagree about it.
+  it("X-SW-30 the change hint is carried from round 2 on, only when the caller says Unpair can change the pairing", () => {
+    const wants = { ...base, changeByUnpair: true };
+    // Empty case first: nothing said ⇒ no hint, whatever the round.
+    expect(swissPairingMenuFor({ ...base, fixtures: seatRound(shells(3, 10), 1) })?.changeHint).toBe(false);
+    // Round 1 is the choosable round: the organiser picks the mode there, so it never carries the hint.
+    expect(swissPairingMenuFor({ ...wants, fixtures: shells(3, 10) })).toMatchObject({ round: 1, choosable: true, changeHint: false });
+    // Rounds 2 and 3 waiting: read-only, and the hint.
+    let checked = 0;
+    for (const seatedRounds of [[1], [1, 2]]) {
+      const rows = seatedRounds.reduce((acc, r) => seatRound(acc, r), shells(3, 10));
+      const menu = swissPairingMenuFor({ ...wants, fixtures: rows });
+      expect(menu, `rounds ${seatedRounds.join(",")} seated`).toMatchObject({ round: seatedRounds.length + 1, choosable: false, changeHint: true });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: rounds 2 and 3 both driven").toBe(2);
+    // A false verdict (a finished or non-root Swiss, or no Unpair on offer) withdraws it in the same round.
+    expect(swissPairingMenuFor({ ...base, changeByUnpair: false, fixtures: seatRound(shells(3, 10), 1) })).toMatchObject({
+      round: 2,
+      changeHint: false,
+    });
   });
 
   // W3 T9 (T8 review m8): the menu's round field is the server's — an entrant whose first Swiss round in THIS stage is
@@ -360,6 +386,33 @@ describe("swissPairingDrawNote — the round-1 line when the field is drawn (X-S
       expect(line, locale).toBeTruthy();
       expect(line, `${locale}: not English`).not.toBe(en["schedule.pairing.drawnAtRandom"]);
       expect(line, `${locale}: the desk's noun, not "players"`).not.toMatch(/jugador|joueur|speler/i);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
+describe("swissPairingChangeNote — the read-only line's guidance in round 2+ (X-SW-30)", () => {
+  const readOnly = { choosable: false, changeHint: true };
+  // Empty case FIRST: no hint ⇒ no line; round 1 (choosable) ⇒ no line even with the flag.
+  it("no hint, an absent field, or the choosable round ⇒ no line", () => {
+    expect(swissPairingChangeNote({ choosable: false, changeHint: false }, t)).toBeNull();
+    expect(swissPairingChangeNote({ choosable: false }, t)).toBeNull();
+    expect(swissPairingChangeNote({ choosable: true, changeHint: true }, t)).toBeNull();
+  });
+
+  it("a read-only round with the hint ⇒ the catalog's own line, as the brief wrote it", () => {
+    expect(swissPairingChangeNote(readOnly, t)).toBe(en["schedule.pairing.changeHint"]);
+    expect(en["schedule.pairing.changeHint"]).toBe("To change who plays whom: Unpair, then Pair next.");
+  });
+
+  it("every locale says it in its own words, never the English fallback", () => {
+    let checked = 0;
+    for (const locale of ["es", "fr", "nl"] as const) {
+      const line = swissPairingChangeNote(readOnly, tFor(locale));
+      expect(line, locale).toBeTruthy();
+      expect(line, `${locale}: a string, not the key`).not.toBe("schedule.pairing.changeHint");
+      expect(line, `${locale}: not English`).not.toBe(en["schedule.pairing.changeHint"]);
       checked++;
     }
     expect(checked).toBe(3);

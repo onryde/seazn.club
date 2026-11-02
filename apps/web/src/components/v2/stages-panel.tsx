@@ -111,6 +111,7 @@ import {
   type SwissPairingMode,
 } from "@/lib/swiss-pairing";
 import { swissPairingMenuFor, type EntrantSwissFirstRounds } from "@/lib/swiss-pairing-menu";
+import { isRunningRootSwiss } from "@/lib/open-entry-stages";
 // Competition Desk W2 (Task 4) — the run sheet's grouping builder + the
 // component that renders it. `isBye` (and, inside `buildRunSheet` itself,
 // `BRACKET_STAGE_KINDS`) are the SINGLE authorities now (R2a/R10,
@@ -1195,6 +1196,10 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           entrantSeeds,
           stageId: stage.id,
           entrantFirstRounds: entrantSwissFirstRounds,
+          // X-SW-30 (W3 T14, SW-L12): from round 2 the menu's read-only line adds "Unpair, then Pair next" — said only
+          // while that is true: a running root Swiss (the ONE predicate behind the late-add rail) whose Unpair button
+          // is on offer on this same card.
+          changeByUnpair: isRunningRootSwiss(stage) && canUnpairSwiss,
         });
         // The swiss shape legend (owner-approved 2026-09-22, option B) — the
         // one line under this stage's title. `null` for every non-swiss kind,

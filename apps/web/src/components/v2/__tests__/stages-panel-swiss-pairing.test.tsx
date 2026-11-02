@@ -194,6 +194,91 @@ describe("StagesPanel — the round-1 menu says an unseeded field is drawn at ra
   });
 });
 
+// W3 T14 (X-SW-30, SW-L12, RB3-25): from round 2 on, the read-only mode line also says how to change a pairing — Unpair,
+// then Pair next — because a board's seats cannot be edited (PATCH /fixtures/{id} refuses them: fixtures/[id]/__tests__/
+// route.test.ts). The verdict is the PANEL's: a running root Swiss (isRunningRootSwiss) whose Unpair button is on offer
+// (canUnpairSwiss), so the line never points at a button the rail is not showing. Driven through the panel's own menu
+// and the rail's real panel component, as the X-SW-22 block above does.
+describe("StagesPanel — rounds >= 2 explain how to change a pairing (X-SW-30)", () => {
+  type Stage = Omit<ReturnType<typeof swissStage>, "progression"> & { progression: Record<string, unknown> | null };
+  const menuFor = (stage: Stage, rows: ReturnType<typeof fixtures>) => {
+    apiV1Mock.mockReset();
+    apiV1Mock.mockImplementation(() => Promise.resolve({}));
+    const island = renderIsland(StagesPanel, { ...props, stages: [stage], fixtures: rows });
+    const rails = island.tree().filter((el) => el.type === StageRail);
+    expect(rails).toHaveLength(1);
+    return propsOf(rails[0]!).swissPairingMenu as Parameters<typeof SwissPairingMenuPanel>[0]["menu"];
+  };
+  const panelHtml = (menu: Parameters<typeof SwissPairingMenuPanel>[0]["menu"], dict?: { dict: typeof es; locale: "es" }) => {
+    const panel = <SwissPairingMenuPanel stageId="s1" menu={menu} pick={null} onPick={() => {}} onClose={() => {}} />;
+    return renderToStaticMarkup(dict ? <DictProvider {...dict}>{panel}</DictProvider> : panel);
+  };
+  const HINT = 'data-testid="stage-pairing-change-hint"';
+  const COPY = "To change who plays whom: Unpair, then Pair next.";
+  /** Round 1 seated and PLAYED: a decided row, which `swissRoundHasPlayedResult` reads as a result. */
+  const playedRound1 = () => fixtures([1]).map((f) => (f.round_no === 1 ? { ...f, status: "decided" } : f));
+
+  it("X-SW-30 the round-2 menu shows the Unpair-then-Pair guidance; round 1 does not", () => {
+    // Round 2 waiting (round 1 seated, unplayed): the read-only line, the guidance under it, and the Unpair button the
+    // guidance names is really on the rail beside it (the sentence is only true while the button is).
+    const r2 = menuFor(swissStage(), fixtures([1]));
+    expect(r2).toMatchObject({ round: 2, choosable: false });
+    const html2 = panelHtml(r2);
+    expect(html2, "positive control: the read-only line rendered").toContain('data-testid="stage-pairing-readonly"');
+    expect(html2).toContain(`${HINT}>${COPY}</p>`);
+    expect(html2.indexOf(HINT), "under the read-only line").toBeGreaterThan(html2.indexOf('data-testid="stage-pairing-hint"'));
+    const rail = renderToStaticMarkup(<StagesPanel {...props} stages={[swissStage()]} fixtures={fixtures([1])} />);
+    expect(rail, "the button the line names is on the rail").toContain('data-testid="stage-unpair"');
+    expect(enDict["schedule.pairing.changeHint"]).toBe(COPY);
+
+    // Round 1 waiting: the choosable round. Its options rendered (positive control), and no guidance.
+    const r1 = menuFor(swissStage(), fixtures());
+    expect(r1).toMatchObject({ round: 1, choosable: true });
+    const html1 = panelHtml(r1);
+    expect(html1, "positive control: the round-1 options rendered").toContain('data-testid="stage-pairing-fold"');
+    expect(html1).not.toContain(HINT);
+    expect(html1).not.toContain(COPY);
+  });
+
+  it("round 3 waiting says it too (every read-only round, not only round 2)", () => {
+    const round3 = fixtures()
+      .slice(0, 4)
+      .map((f, i) => ({ ...f, id: `g${i}`, round_no: 3, fixture_no: 9 + i, ext_key: `sw-r3-b${i + 1}` }));
+    const menu = menuFor(swissStage({ rounds: 3 }), [...fixtures([1, 2]), ...round3]);
+    expect(menu).toMatchObject({ round: 3, choosable: false });
+    expect(panelHtml(menu)).toContain(`${HINT}>${COPY}</p>`);
+  });
+
+  it("round 2 waiting but round 1 is played: Unpair is not offered, so the line is not either", () => {
+    const rail = renderToStaticMarkup(<StagesPanel {...props} stages={[swissStage()]} fixtures={playedRound1()} />);
+    expect(rail, "positive control: the rail rendered its Pair next").toContain('data-testid="stage-generate"');
+    expect(rail).not.toContain('data-testid="stage-unpair"');
+    const menu = menuFor(swissStage(), playedRound1());
+    expect(menu).toMatchObject({ round: 2, choosable: false });
+    const html = panelHtml(menu);
+    expect(html, "positive control: the read-only line rendered").toContain('data-testid="stage-pairing-readonly"');
+    expect(html).not.toContain(HINT);
+  });
+
+  it.each([
+    ["a finished Swiss", swissStage({ rounds: 2 }, "complete")],
+    ["a Swiss fed by an earlier stage (config.qualified)", swissStage({ rounds: 2, qualified: ["e1", "e2", "e3", "e4"] })],
+    ["a Swiss with a progression source", { ...swissStage(), progression: { from: "s0" } }],
+  ])("%s: not a running root Swiss, so no line even in round 2", (_label, stage) => {
+    const menu = menuFor(stage, fixtures([1]));
+    expect(menu).toMatchObject({ round: 2, choosable: false });
+    const html = panelHtml(menu);
+    expect(html, "positive control: the read-only line rendered").toContain('data-testid="stage-pairing-readonly"');
+    expect(html).not.toContain(HINT);
+  });
+
+  it("in Spanish, the line is the Spanish catalog's", () => {
+    const html = panelHtml(menuFor(swissStage(), fixtures([1])), { dict: es, locale: "es" });
+    expect(html).toContain(`${HINT}>${es["schedule.pairing.changeHint"]}</p>`);
+    expect(es["schedule.pairing.changeHint"]).not.toBe(COPY);
+  });
+});
+
 // W3 RB3-15 A (X-SW-21, ruling 252): the panel's half of "no Add match on a Swiss stage". The rail refuses on the kind
 // whatever it is handed (stage-rail.test.tsx); this pins that the PANEL no longer calls Swiss an ad-hoc kind either,
 // so the two guards are each killable on their own.

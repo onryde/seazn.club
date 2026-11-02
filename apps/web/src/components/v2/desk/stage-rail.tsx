@@ -74,6 +74,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
 import { swissRefusalKey } from "@/lib/swiss-refusals";
 import {
+  swissPairingChangeNote,
   swissPairingDrawNote,
   swissPairingForKey,
   swissPairingHint,
@@ -782,6 +783,8 @@ export function SwissPairingMenuPanel({
   // in the read-only hint's own quiet style, and tied to the group so a screen reader hears it with the choice.
   const drawNote = swissPairingDrawNote(menu, msg);
   const drawNoteId = `pairing-draw-note-${stageId}`;
+  // X-SW-30 (W3 T14, SW-L12): round 2+ also says how to change a pairing — Unpair, then Pair next.
+  const changeNote = swissPairingChangeNote(menu, msg);
   return (
     // The outer box claims the desktop row's whole line (`md:basis-full`),
     // so the buttons after it wrap below; the group inside keeps a reading
@@ -874,6 +877,11 @@ export function SwissPairingMenuPanel({
             <p className="px-2 pb-1.5 text-slate-500" data-testid="stage-pairing-hint">
               {msg("schedule.pairing.roundOneOnly")}
             </p>
+            {changeNote === null ? null : (
+              <p className="px-2 pb-1.5 text-slate-500" data-testid="stage-pairing-change-hint">
+                {changeNote}
+              </p>
+            )}
           </>
         )}
       </div>

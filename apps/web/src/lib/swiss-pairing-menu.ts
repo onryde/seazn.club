@@ -42,6 +42,10 @@ export type SwissPairingMenu = {
   /** Review m1 — a drawn round 1 whose field also holds a seeded entrant: the seeds go first, then the draw. False
    *  whenever `unseededDrawn` is. */
   seededAheadOfDraw: boolean;
+  /** X-SW-30 (W3 T14, SW-L12): from round 2 on, the read-only mode line also says how to change a pairing — Unpair, then
+   *  Pair next. True only when the caller said Unpair is the way (`swissPairingMenuFor`'s `changeByUnpair`) and the
+   *  round is read-only. Optional so a hand-built menu (a test's literal) reads as no line; the producer always sets it. */
+  changeHint?: boolean;
 };
 
 /** The keys this module reads — the whole surface in one place, typed as a
@@ -57,7 +61,8 @@ export type SwissPairingMessageKey =
   | "schedule.pairing.fold"
   | "schedule.pairing.adjacent"
   | "schedule.pairing.default"
-  | "schedule.pairing.drawnAtRandom";
+  | "schedule.pairing.drawnAtRandom"
+  | "schedule.pairing.changeHint";
 export type SwissPairingT = (key: SwissPairingMessageKey, vars?: Record<string, string | number>) => string;
 
 /** How many pairs the hint names before it trails off. */
@@ -141,6 +146,11 @@ export function swissPairingMenuFor(args: {
    *  it. Absent: everyone plays from round 1, as before any late entry. */
   stageId?: string;
   entrantFirstRounds?: EntrantSwissFirstRounds;
+  /** X-SW-30 (W3 T14, SW-L12): the caller's verdict that Unpair is how this stage's pairing is changed right now — a
+   *  running root Swiss (`isRunningRootSwiss`, lib/open-entry-stages.ts) whose Unpair button is on offer
+   *  (`canUnpairSwiss`, stages-panel.tsx). The menu adds the round: round 1 is choosable, so it never carries the line.
+   *  Absent: no line. */
+  changeByUnpair?: boolean;
 }): SwissPairingMenu | null {
   if (args.kind !== "swiss" || args.fixtures.length === 0) return null;
   const round = nextUnseatedSwissRound(args.fixtures);
@@ -162,6 +172,7 @@ export function swissPairingMenuFor(args: {
     seedsNumbered: swissFieldSeedsNumbered(args.config, field, args.entrantSeeds),
     unseededDrawn,
     seededAheadOfDraw: unseededDrawn && (field ?? []).some((id) => (args.entrantSeeds?.[id] ?? null) !== null),
+    changeHint: round >= 2 && args.changeByUnpair === true,
   };
 }
 
@@ -172,6 +183,16 @@ export function swissPairingDrawNote(
   t: SwissPairingT,
 ): string | null {
   return menu.choosable && menu.unseededDrawn ? t("schedule.pairing.drawnAtRandom") : null;
+}
+
+/** X-SW-30 (W3 T14, SW-L12) — the line under the read-only mode line in round 2 and later: "To change who plays whom:
+ *  Unpair, then Pair next." A board's seats cannot be edited (`PATCH /fixtures/{id}` refuses them), so the rail says the
+ *  way that works. `null` in the choosable round 1 and whenever the menu was not given the hint. */
+export function swissPairingChangeNote(
+  menu: Pick<SwissPairingMenu, "choosable" | "changeHint">,
+  t: SwissPairingT,
+): string | null {
+  return !menu.choosable && menu.changeHint === true ? t("schedule.pairing.changeHint") : null;
 }
 
 /** The hint under one option: "1v6, 2v7, 3v8…" when R1 allows numbers,
