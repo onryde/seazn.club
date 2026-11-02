@@ -1595,13 +1595,8 @@ async function currentPhoneOf(fixtureId: string, now: Date): Promise<{ pairingId
 export async function createSession(
   auth: AuthCtx, fixtureId: string, body: CreateStreamSession, deps: SessionDeps,
 ): Promise<{ sessionId: string }> {
-  const { orgId, competitionId } = await fixtureContext(fixtureId);
+  const { orgId } = await fixtureContext(fixtureId);
   if (orgId !== auth.orgId) throw new HttpError(404, "fixture not found");
-  // Match Day PB2 (owner 2026-11-02, "hide"): a billing-frozen competition starts no NEW stream — the freeze's own 402,
-  // asked before the phone, the credits and any provider call, so nothing is written or spent. Only this door: reading a
-  // session and stopping one are not guarded (a frozen page's panel is Stop-only, fixture-stream-mount.ts). Outside any
-  // transaction, as `frozenCompetitionIds` requires (entitlement-freeze.ts).
-  await assertCompetitionNotFrozen(orgId, competitionId);
   // The ACTOR is a guard, not a fallback. `created_by` is `uuid not null` with no FK, and `fillReplayUrl` later acts AS
   // that user when it writes the replay link. The plan wrote `auth.userId ?? orgId`, which for a caller with no user (an
   // API key: AuthCtx.userId is null) stores an ORG id in a users column and then impersonates it — a plausible lie in
@@ -1691,6 +1686,14 @@ export async function startBroadcast(
   if ((actor.source === "auto") !== (opts.autoStartedAt !== undefined)) {
     throw new Error(`startBroadcast: auto_started_at is stamped by an auto start and only by one (a ${actor.source} start ${opts.autoStartedAt === undefined ? "brought none" : "brought one"}) on fixture ${fixtureId}`);
   }
+  // Match Day PB2 (owner 2026-11-02, "hide"; fix round 1 (a), controller ruling): a billing-frozen competition starts no
+  // NEW stream by ANY path — the organiser's Go live (402 on the wire), the phone operator's start (`phoneStartRefusal`:
+  // not_entitled) and the automatic start (`autoStartRefusalOf`: not_entitled, retried after the spacing) — because a stream
+  // costs money. Asked HERE, the one start seam, after the caller-bug guards and before the relay, the credits, the storage
+  // read and any provider call, so a refusal writes and spends nothing. Reading a session and stopping one never come
+  // through here, so a stream already running keeps running (a frozen page's panel is Stop-only, fixture-stream-mount.ts).
+  // Outside any transaction, as `frozenCompetitionIds` requires (entitlement-freeze.ts): no caller holds one here.
+  await assertCompetitionNotFrozen(orgId, competitionId);
   // R5 (Task 14b): a production deployment with no RELAY_DRIVERS has no relay (drivers.ts `disabledRelayDrivers`).
   // Refused with the ingest's own 503 BEFORE anything else — no expiry, no provider call, no monthly grant, no row —
   // so nothing is faked and no credit moves. The Phone tab already reads this code.

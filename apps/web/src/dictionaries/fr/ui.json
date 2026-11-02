@@ -6119,6 +6119,7 @@
   "stream.error.destination_not_allowed": "Cette destination n'est plus prise en charge. Choisissez-en une autre.",
   "stream.error.target_unreadable": "La clé de diffusion enregistrée pour cette destination est illisible. Remplacez la clé, puis passez en direct ; si ce n'est pas une destination YouTube ou Twitch, supprimez-la et choisissez-en une autre.",
   "stream.error.plan_lacks_relay": "La diffusion depuis le téléphone est désactivée pour cette organisation.",
+  "stream.error.competition_frozen": "Cette compétition dépasse la limite de compétitions actives de votre offre : elle ne peut pas lancer de nouvelle diffusion. Une diffusion déjà en cours continue. Archivez une compétition ou passez à une offre supérieure.",
   "stream.error.target_removed": "Cette destination a été supprimée sur la page Diffusion. Choisissez-en une autre.",
   "stream.error.youtube_reconnect_needed": "YouTube n’autorise plus Seazn à utiliser cette chaîne.",
   "stream.error.youtube_live_not_enabled": "Les directs ne sont pas encore activés sur cette chaîne. YouTube peut mettre jusqu’à 24 heures.",

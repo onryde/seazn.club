@@ -6119,6 +6119,7 @@
   "stream.error.destination_not_allowed": "Deze bestemming wordt niet meer ondersteund. Kies een andere.",
   "stream.error.target_unreadable": "De opgeslagen streamsleutel van deze bestemming kan niet worden gelezen. Vervang de sleutel en ga dan live; is het geen YouTube- of Twitch-bestemming, verwijder deze dan en kies een andere.",
   "stream.error.plan_lacks_relay": "Streamen vanaf de telefoon is uitgeschakeld voor deze organisatie.",
+  "stream.error.competition_frozen": "Deze competitie zit boven de limiet van actieve competities van je abonnement, dus er kan geen nieuwe stream starten. Een stream die al loopt, gaat door. Archiveer een competitie of upgrade je abonnement.",
   "stream.error.target_removed": "Deze bestemming is verwijderd op de Streaming-pagina. Kies een andere.",
   "stream.error.youtube_reconnect_needed": "YouTube staat niet meer toe dat Seazn dit kanaal gebruikt.",
   "stream.error.youtube_live_not_enabled": "Livestreamen is voor dit kanaal nog niet ingeschakeld. YouTube kan tot 24 uur nodig hebben.",

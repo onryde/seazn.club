@@ -6119,6 +6119,7 @@
   "stream.error.destination_not_allowed": "Este destino ya no se admite. Elige otro destino.",
   "stream.error.target_unreadable": "No se puede leer la clave de emisión guardada de este destino. Sustituye la clave y emite de nuevo; si no es un destino de YouTube o Twitch, elimínalo y elige otro.",
   "stream.error.plan_lacks_relay": "La transmisión desde el móvil está desactivada para esta organización.",
+  "stream.error.competition_frozen": "Esta competición supera el límite de competiciones activas de tu plan, así que no puede iniciar una nueva retransmisión. Una retransmisión que ya está en marcha continúa. Archiva una competición o mejora tu plan.",
   "stream.error.target_removed": "Ese destino se eliminó en la página Emisión. Elige otro.",
   "stream.error.youtube_reconnect_needed": "YouTube ya no permite que Seazn use este canal.",
   "stream.error.youtube_live_not_enabled": "Este canal aún no tiene activadas las emisiones en directo. YouTube puede tardar hasta 24 horas.",

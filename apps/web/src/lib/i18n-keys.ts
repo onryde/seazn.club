@@ -7807,6 +7807,7 @@ export type DictionaryKey =
   | "stream.details"
   | "stream.error.active_session"
   | "stream.error.cancel"
+  | "stream.error.competition_frozen"
   | "stream.error.composed_unavailable"
   | "stream.error.destination_not_allowed"
   | "stream.error.failed"

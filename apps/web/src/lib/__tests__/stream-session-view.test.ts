@@ -219,6 +219,8 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     ["TARGET_UNREADABLE 422 (remove it)", new TargetUnreadableError("remove"), "target_unreadable"],
     ["PAYMENT_REQUIRED streaming.relay", new PaymentRequiredError(RELAY_PLAN_GATES.relay), "plan_lacks_relay"],
     ["PAYMENT_REQUIRED streaming.overlay", new PaymentRequiredError(RELAY_PLAN_GATES.overlay), "plan_lacks_relay"],
+    // Match Day PB2 fix round 1 (m5): the billing freeze at the one start seam — a tab opened before the competition froze.
+    ["PAYMENT_REQUIRED competitions.max_active (the freeze)", new PaymentRequiredError("competitions.max_active"), "competition_frozen"],
     ["PAYMENT_REQUIRED, an unrelated feature", new PaymentRequiredError("formats.double_elim"), "unknown"],
     // YouTube Connect T12 (spec §6.2): the six refusals the prepare step throws, each with the status the route's own documentation
     // gives it (openapi.ts POST /fixtures/{id}/stream-sessions) and the connection in the extras.
