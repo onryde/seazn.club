@@ -34,9 +34,17 @@ import { dismissConsent, freshOrg } from "../directory-kit";
  *      scorer QR that mints and shows.
  *   3. The organiser taps Open pad and scores a point by tapping the pad; the point is in the ledger, on Match Day (Court 1's
  *      row and scoreboard) and on the fixture page opened again from Match Day.
- *   4. A view-only member signs in, opens Match Day by tapping the same door, and sees the board — the scored point too — but
- *      no Needs you.
+ *   4. The TERMINAL state (fix round 1, I2): on that same pad the organiser taps "Finish from tally" (the result is the 1–0 on
+ *      the board), then "Finalize result". The match is finalized in the record; the fixture page says so (status, the 1 — 0
+ *      headline, no pad left to tap); and Match Day, opened again by tapping its door, has let Court 1 go — free, nothing
+ *      playing, and the finished match is no longer one of the court's candidates.
+ *   5. A view-only member signs in, opens Match Day by tapping the same door, and sees the board — Court 1 free after the
+ *      finish — but no Needs you.
  * At 1280 and at 320, with no sideways scroll at any step.
+ *
+ * The freeze is PINNED (`competitions.max_active` = 0), not reached organically by going over a real plan's limit: scoring a
+ * frozen competition currently re-ranks the freeze (review C1, held for the owner's fix shape), so an organic freeze would move
+ * off this competition mid-walk. Once C1 lands, the seed can freeze by a real downgrade instead.
  */
 
 const UI_EN = JSON.parse(
@@ -54,6 +62,8 @@ interface FrozenSeed {
   courts: { playing: string; called: string; free: string };
   /** Ana v Ben, in play on the playing court. */
   playingFixture: string;
+  /** Ana's and Ben's names, as seeded. */
+  playingNames: [string, string];
 }
 
 /** Steps 1's seed, through the organiser's own session (so every row is the organisation's). Not frozen yet: the caller
@@ -74,7 +84,8 @@ async function seedFrozenDay(request: APIRequestContext, orgId: string, label: s
   expect(div.status, `division: ${JSON.stringify(div.error)}`).toBe(201);
   const divisionId = div.data!.id;
   const nonce = Math.random().toString(36).slice(2, 7);
-  const ents = await addEntrantsViaApi(request, divisionId, ["Ana", "Ben", "Cal", "Dee", "Eve", "Fay"].map((n) => `${n} ${label} ${nonce}`));
+  const names = ["Ana", "Ben", "Cal", "Dee", "Eve", "Fay"].map((n) => `${n} ${label} ${nonce}`);
+  const ents = await addEntrantsViaApi(request, divisionId, names);
   expect(ents.ids.length, `entrants -> ${ents.status}`).toBe(6);
   const [ana, ben, cal, dee, eve, fay] = ents.ids as [string, string, string, string, string, string];
   await createStageAndGenerate(request, divisionId);
@@ -124,7 +135,13 @@ async function seedFrozenDay(request: APIRequestContext, orgId: string, label: s
   const call = await apiJson(request, `/api/v1/fixtures/${calDee}/call`, "POST", { court_id: c2.id });
   expect(call.status, `call (before the freeze): ${JSON.stringify(call.error)}`).toBeLessThan(300);
 
-  return { orgId, competitionId, courts: { playing: c1.name, called: c2.name, free: c3.name }, playingFixture: anaBen };
+  return {
+    orgId,
+    competitionId,
+    courts: { playing: c1.name, called: c2.name, free: c3.name },
+    playingFixture: anaBen,
+    playingNames: [names[0]!, names[1]!],
+  };
 }
 
 const courtRow = (page: Page, name: string): Locator => page.getByTestId("md-court-row").filter({ hasText: name });
@@ -138,6 +155,15 @@ async function openCourt(page: Page, name: string, state: "playing" | "called" |
   await expect(focus).toHaveAttribute("data-state", state);
   await expect(focus).toBeVisible();
   return focus;
+}
+
+/** Once the finish leaves two courts free beside a busy one, the list folds them under one row: tap it open (it must be there). */
+async function openFreeFold(page: Page): Promise<void> {
+  const toggle = page.getByTestId("md-court-fold-toggle");
+  await expect(toggle, "the free courts sit under the fold row").toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
 }
 
 /** The competition page's Match Day door, TAPPED — the way the organiser (and the viewer) arrive. */
@@ -180,7 +206,7 @@ async function viewerPage(browser: Browser, orgId: string, viewport: { width: nu
 }
 
 for (const vp of WIDTHS) {
-  test(`a frozen competition at ${vp.width}: the organiser taps into Match Day (no Call, no Undo, no new stream; Open pad and the scorer QR), scores a point on the pad that lands on Match Day and the fixture page; a viewer sees no Needs you`, async ({
+  test(`a frozen competition at ${vp.width}: the organiser taps into Match Day (no Call, no Undo, no new stream; Open pad and the scorer QR), scores a point on the pad that lands on Match Day and the fixture page, finishes and finalizes the match on the pad (finalized on the fixture page, Court 1 freed on Match Day); a viewer sees no Needs you`, async ({
     browser,
   }) => {
     test.setTimeout(300_000);
@@ -256,7 +282,10 @@ for (const vp of WIDTHS) {
       await openMatchDayByTapping(page, compPath);
       await expect(courtRow(page, seed.courts.playing).locator("[data-md-row-score]"), "Court 1's row reads the point").toHaveText(/^1\D+0$/);
       playing = await openCourt(page, seed.courts.playing, "playing");
-      await expect(playing.getByTestId("md-scoreboard"), "Court 1's scoreboard reads the point").toContainText("1");
+      // Anchored on the scoreboard's own headline figure (fix round 1, m1): a bare "1" is in the court's name and the clock.
+      await expect(playing.getByTestId("md-scoreboard").getByTestId("ls-score-large"), "Court 1's scoreboard reads the point").toHaveText(
+        /^1\D+0$/,
+      );
       await expectNoHorizontalScroll(page);
 
       // ...and on the fixture page, opened again from Match Day: the pad loads with the point already on it.
@@ -266,14 +295,65 @@ for (const vp of WIDTHS) {
       await expect(halfFigure(homeAgain), "the fixture page reloads the point from the record").toHaveText("1");
       expect(await ledgerPoints(), "one tap, one point").toBe(1);
 
-      // 4. A view-only member opens Match Day by tapping the same door: the board (with the point), and no Needs you.
+      // 4. The terminal state, by tapping: "Finish from tally" records the 1–0 on the board as the result, then "Finalize result".
+      const fixtureStatus = () =>
+        withDb(async (sql) => (await sql<{ status: string }[]>`select status from fixtures where id = ${seed.playingFixture}`)[0]!.status);
+      expect(await fixtureStatus(), "premise: still in play before the finish").toBe("in_play");
+      const settle = page.locator('[data-tile-id="settle"]');
+      await expect(settle, "the pad offers the tally's own finish").toBeVisible();
+      await expect(settle, "the finish names the score it records").toContainText(/1\D+0/);
+      await expectNoHorizontalScroll(page);
+      await settle.click();
+      await expect.poll(fixtureStatus, { timeout: 30_000, message: "Finish from tally decides the frozen match" }).toBe("decided");
+      const finalize = page.getByTestId("score-finalize");
+      await expect(finalize).toHaveText(UI_EN["score.finalize"]!);
+      await expectNoHorizontalScroll(page);
+      await finalize.click();
+      await expect.poll(fixtureStatus, { timeout: 30_000, message: "Finalize result finalizes the frozen match" }).toBe("finalized");
+      expect(
+        await withDb(async (sql) =>
+          (await sql<{ type: string }[]>`
+            select type from score_events where fixture_id = ${seed.playingFixture} and type in ('generic.result', 'core.finalize') order by seq`).map(
+            (r) => r.type,
+          ),
+        ),
+        "the finish and the finalize are in the record, once each",
+      ).toEqual(["generic.result", "core.finalize"]);
+      // ...on the fixture page: finalized, the 1 — 0 headline, and no pad left to tap.
+      await expect(page.locator("main h1 + span.badge"), "the fixture page says finalized").toHaveText(UI_EN["score.status.finalized"]!);
+      await expect(page.locator("main p.font-mono").first(), "the fixture page's headline is the result").toHaveText(/^1\D+0$/);
+      await expect(page.locator('[data-role="v3-scorebug"]'), "a finalized match has no pad").toHaveCount(0);
+      await expect(page.getByTestId("score-finalize")).toHaveCount(0);
+      await expectNoHorizontalScroll(page);
+
+      // ...and on Match Day, opened again by tapping its door: Court 1 is let go — free, nothing playing, and the finished match
+      // is no longer among the court's candidates. With Court 2 the only court busy, the two free ones now sit under the list's
+      // one "more courts free" row (`foldFreeCourts`), which the organiser taps open.
+      await openMatchDayByTapping(page, compPath);
+      await expect(page.getByTestId("md-counts")).toContainText(UI_EN["matchDay.header.playing"]!.replace("{count}", "0"));
+      await openFreeFold(page);
+      const court1Row = courtRow(page, seed.courts.playing);
+      await expect(court1Row, "the finished match freed Court 1").toHaveAttribute("data-state", "free");
+      await expect(court1Row.locator("[data-md-row-score]"), "a free court carries no score").toHaveCount(0);
+      const freed = await openCourt(page, seed.courts.playing, "free");
+      await expect(freed.getByTestId("md-candidate").first(), "Court 1 lists what could go on next").toBeVisible();
+      // The PAIR, not either name: Ana and Ben each still have other matches in this league to offer.
+      const [ana, ben] = seed.playingNames;
+      await expect(
+        freed.getByTestId("md-candidate").filter({ hasText: ana }).filter({ hasText: ben }),
+        "the finished Ana v Ben is not offered again",
+      ).toHaveCount(0);
+      await expectNoHorizontalScroll(page);
+
+      // 5. A view-only member opens Match Day by tapping the same door: the board (Court 1 free after the finish), and no Needs you.
       const viewer = await viewerPage(browser, orgId, vp);
       try {
         const v = viewer.page;
         await openMatchDayByTapping(v, compPath);
         await expect(v.getByTestId("md-read-only")).toBeVisible();
+        await openFreeFold(v);
         await expect(v.getByTestId("md-court-row"), "the viewer reads the same board").toHaveCount(3);
-        await expect(courtRow(v, seed.courts.playing).locator("[data-md-row-score]")).toHaveText(/^1\D+0$/);
+        await expect(courtRow(v, seed.courts.playing), "the viewer sees Court 1 freed too").toHaveAttribute("data-state", "free");
         await expect(v.getByTestId("md-needs-you-toggle"), "no Needs-you list for a viewer").toHaveCount(0);
         await expect(v.getByTestId("md-needs-you")).toHaveCount(0);
         await expectNoHorizontalScroll(v);

@@ -226,6 +226,10 @@ const WALKTHROUGH_SPECS: string[] = [
   // The organiser desks.
   "competition-desk-organiser.spec.ts",
   "settings-admin.spec.ts",
+  // Match Day PB2 — a billing-frozen competition run by hand: Match Day with no
+  // Call, Undo or new stream; the match scored and finalized on the pad; a
+  // viewer with no Needs you.
+  "frozen-competition.spec.ts",
 
   // Settings W2 — the organisation and news panels, the four people-facing
   // tabs (team, api, preferences, account), and the five-org support cap.
