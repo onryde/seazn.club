@@ -1965,7 +1965,7 @@ test("Task 10 controller round: the stage card body carries the fixtures-progres
   const countsText = await counts.textContent();
   console.log("Task 10 controller round — progress counts text:", countsText);
   expect(countsText, "progress counts line is empty").toBeTruthy();
-  expect(countsText, "played clause missing").toContain(UI_EN["schedule.progress.played.one"]);
+  expect(countsText, "done clause missing").toContain(UI_EN["schedule.progress.done.one"]);
   expect(countsText, "to-schedule clause missing").toMatch(/to schedule/);
 
   // NOT a "taller than 234px" assertion. 234px was the height the RETIRED

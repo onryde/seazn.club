@@ -117,7 +117,7 @@ import { swissPairingMenuFor } from "@/lib/swiss-pairing-menu";
 // `BRACKET_STAGE_KINDS`) are the SINGLE authorities now (R2a/R10,
 // docs/superpowers/specs/2026-09-02-competition-desk-prompts/_INDEX.md) —
 // this file's own former copies are deleted below.
-import { buildRunSheet, isBye, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
+import { buildRunSheet, isBye, roundDone, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
 import { RUN_SHEET_FILTER_LABEL, RunSheet, RunSheetFilterBar, runSheetHasRows, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { isOnlineGameExists } from "@/lib/open-round";
@@ -1056,13 +1056,10 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // text below did not say better, on a card whose real job is the
         // actions beneath it. The void Option A was built to fill is closed
         // by Option B's stacking, not by the bar, so removing it does not
-        // reopen that gap. `stagePlayed`/`stageInPlay` below now feed ONLY
+        // reopen that gap. `stageInPlay` below now feeds ONLY
         // the counts line; `stageNonByeCount` also still gates the whole
         // block below (an all-bye stage renders neither the counts nor,
         // formerly, the bar).
-        const stagePlayed = stageFixtures.filter(
-          (f) => ["decided", "finalized"].includes(f.status) && !isBye(toRunSheetFixture(f)),
-        );
         const stageInPlay = stageFixtures.filter(
           (f) => f.status === "in_play" && !isBye(toRunSheetFixture(f)),
         );
@@ -1077,6 +1074,10 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // list the run sheet's own rows read - not re-derived here), which keeps `status = 'abandoned'` while the verdict is owed.
         const awaitingIds = new Set(awaitingSettle ?? []);
         const counts = stageCounts(stageFixtures, awaitingIds);
+        // Match Day E1 fix round 1 (controller ruling): the counts line's "N done" is the SAME number the stage's round bars add up to -
+        // `roundDone` over the stage's real matches (byes out), i.e. `stageCounts`' settled bucket with a held match open. It used to be a
+        // strict "decided / finalized" filter of its own, which read "1 played" beside the bar's "2 of 3 done" once a walkover existed.
+        const stageDone = roundDone(stageFixtures.map(toRunSheetFixture), awaitingIds).done;
         // The stage's three settings buttons, built ONCE: the header row (from `md`) and the "Stage tools" sheet's top rows (below `md`,
         // an editor only) are the same list. Points and Tie-breaks only on a table stage whose rules read.
         const takesPoints = stageTakesPoints(stage.kind);
@@ -1521,7 +1522,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       // Match Day E1 fix round 1 (m3): "N to schedule" is the way to the division schedule - it replaces the card's
                       // removed footer link, so the one clause that names unscheduled matches is also where an organiser goes to place them.
                       const clauses: { text: string; href?: string }[] = [
-                        stagePlayed.length > 0 ? { text: msgPlural("schedule.progress.played", stagePlayed.length) } : null,
+                        stageDone > 0 ? { text: msgPlural("schedule.progress.done", stageDone) } : null,
                         stageInPlay.length > 0 ? { text: msgPlural("schedule.progress.inPlay", stageInPlay.length) } : null,
                         stageHeld.length > 0 ? { text: msgPlural("schedule.progress.held", stageHeld.length) } : null,
                         unscheduled.length > 0
