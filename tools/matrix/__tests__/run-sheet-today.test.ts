@@ -1,9 +1,10 @@
 // W1d Task 14 (item 15c, D17): the run sheet's DEFAULT filter on a match day.
-// stages-panel.tsx opens the sheet on "today" when the division's phase is
-// match_day and on "all" otherwise (read once at mount), and a page object that
-// widens the filter first never sees it. readDefaultFilter reads the default
-// BEFORE the page object's own widening; judgeTodayDefault judges it against
-// the phase and the fixtures the product dates today.
+// stages-panel.tsx opens the sheet on "all" in EVERY phase since Match Day PB1
+// (owner 2026-11-02; it used to open on "today" on a match day), and a page
+// object that widens the filter first never sees the default. readDefaultFilter
+// reads it BEFORE the page object's own widening; judgeTodayDefault judges it.
+// PB1 also folds a completed stage's card and a finished round: openFoldsAround
+// opens them around a row before openFixtureUi clicks it.
 //
 // Expected values come from the product's text (stages-panel.tsx, run-sheet.tsx,
 // division-phase.ts), read here, never from the code under test.
@@ -13,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
 import { type PageCtx } from "../lib/browser/pages/ctx.ts";
-import { ALL_FILTER, TODAY_FILTER, judgeTodayDefault, readDefaultFilter, readThenShowAll } from "../lib/browser/pages/run-sheet.ts";
+import { ALL_FILTER, ROUND_LIST_PREFIX, TODAY_FILTER, judgeTodayDefault, openFoldsAround, readDefaultFilter, readThenShowAll } from "../lib/browser/pages/run-sheet.ts";
 import { DATA, TESTID } from "../lib/browser/selectors.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -112,32 +113,24 @@ describe("readThenShowAll: the default is read BEFORE the sheet is widened (D17)
   });
 });
 
-describe("judgeTodayDefault: 'today' on a match day, 'all' otherwise (D17)", () => {
+describe("judgeTodayDefault: 'all' in every phase, a match day included (D17, Match Day PB1)", () => {
   const seen = (filter: string, rows: number[]) => ({ filter, rows });
-
-  it("match day: pass only when the sheet opened on today AND its rows are exactly the fixtures dated today", () => {
-    expect(judgeTodayDefault({ phase: "match_day", seen: seen("today", [1, 3]), datedToday: [1, 3] })).toMatchObject({ verdict: "pass", checked: 1 });
-    // The rows may arrive in any order and the dated list too.
-    expect(judgeTodayDefault({ phase: "match_day", seen: seen("today", [1, 3]), datedToday: [3, 1] }).verdict).toBe("pass");
-  });
-
-  it("match day: a sheet opened on 'all' fails, and so does a 'today' sheet missing or adding a row", () => {
-    expect(judgeTodayDefault({ phase: "match_day", seen: seen("all", [1, 2, 3]), datedToday: [1, 3] }).verdict).toBe("fail");
-    expect(judgeTodayDefault({ phase: "match_day", seen: seen("today", [1]), datedToday: [1, 3] }).verdict).toBe("fail");
-    expect(judgeTodayDefault({ phase: "match_day", seen: seen("today", [1, 2, 3]), datedToday: [1, 3] }).verdict).toBe("fail");
-  });
-
-  it("any other phase: the default is 'all'; 'today' there fails", () => {
-    for (const phase of ["setting_up", "scheduled", "finished"]) {
-      expect(judgeTodayDefault({ phase, seen: seen("all", [1, 2, 3]), datedToday: [1, 3] }), phase).toMatchObject({ verdict: "pass", checked: 1 });
-      expect(judgeTodayDefault({ phase, seen: seen("today", [1, 3]), datedToday: [1, 3] }).verdict, phase).toBe("fail");
-    }
-  });
+  const PHASES = ["setting_up", "scheduled", "match_day", "finished"];
 
   it("the empty case first: no fixture dated today abstains, counted 0, and says why", () => {
     expect(judgeTodayDefault({ phase: "scheduled", seen: seen("all", [1, 2, 3]), datedToday: [] })).toEqual({ verdict: "abstain", checked: 0, note: expect.stringContaining("no fixture dated today") });
-    // …even when the sheet opened on 'today': nothing was dated to prove it by.
+    // ...whatever the sheet opened on: nothing was dated to prove it by.
     expect(judgeTodayDefault({ phase: "match_day", seen: seen("today", []), datedToday: [] }).verdict).toBe("abstain");
+  });
+
+  it("every phase: a sheet opened on 'all' passes, one opened on 'today' fails - the match day is no exception now", () => {
+    let checked = 0;
+    for (const phase of PHASES) {
+      expect(judgeTodayDefault({ phase, seen: seen("all", [1, 2, 3, 4]), datedToday: [1, 3] }), phase).toMatchObject({ verdict: "pass", checked: 1 });
+      expect(judgeTodayDefault({ phase, seen: seen("today", [1, 3]), datedToday: [1, 3] }), phase).toMatchObject({ verdict: "fail", checked: 1 });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every phase division-phase.ts declares (pinned below)").toBe(4);
   });
 
   it("a sheet that offered no filter is a failure of its own, not an abstain", () => {
@@ -145,15 +138,106 @@ describe("judgeTodayDefault: 'today' on a match day, 'all' otherwise (D17)", () 
   });
 
   it("the failure note says what the sheet showed and what it should have", () => {
-    const j = judgeTodayDefault({ phase: "match_day", seen: seen("all", [1, 2, 3]), datedToday: [1, 3] });
-    expect(j.note).toContain("all");
+    const j = judgeTodayDefault({ phase: "match_day", seen: seen("today", [1, 3]), datedToday: [1, 3] });
     expect(j.note).toContain(TODAY_FILTER);
+    expect(j.note).toContain(ALL_FILTER);
+  });
+});
+
+/** A run-sheet row inside a stage card and a round list, whose card and round can each be folded; clicks are logged. */
+function foldedRow(o: { card: "folded" | "open" | "none"; listId: string | null; round: "folded" | "open" | "none" }) {
+  const log: string[] = [];
+  let card = o.card;
+  let round = o.round;
+  const cardToggle = `[data-testid="${TESTID.stageCollapseToggle.id}"]`;
+  const bar = o.listId === null ? "" : `[data-testid="${TESTID.runSheetRoundToggle.id}"][aria-controls="${o.listId}"]`;
+  const loc = (s: string) => ({
+    count: async () => {
+      if (s === `${cardToggle}[aria-expanded="false"]`) return card === "folded" ? 1 : 0;
+      if (bar !== "" && s === `${bar}[aria-expanded="false"]`) return round === "folded" ? 1 : 0;
+      throw new Error(`unexpected count of ${s}`);
+    },
+    click: async () => {
+      if (s === cardToggle) { log.push("open card"); card = "open"; return; }
+      if (s === bar) { log.push("open round"); round = "open"; return; }
+      throw new Error(`unexpected click on ${s}`);
+    },
+    waitFor: async () => {
+      const ok = s === `${cardToggle}[aria-expanded="true"]` ? card === "open" : s === `${bar}[aria-expanded="true"]` ? round === "open" : false;
+      if (!ok) throw Object.assign(new Error(`never: ${s}`), { name: "TimeoutError" });
+    },
+    getAttribute: async (a: string) => (a === "id" ? o.listId : null),
+  });
+  const row = {
+    locator: (s: string) => {
+      if (s === "xpath=ancestor::section[@data-stage-id][1]") return { locator: (inner: string) => loc(inner) };
+      if (s === "xpath=ancestor::ul[1]") return loc("ul");
+      throw new Error(`unexpected row.locator(${s})`);
+    },
+  };
+  const ctx = { page: { locator: loc } as unknown as PageCtx["page"], base: "http://localhost:3999", orgSlug: "org", holdMs: 3000, evidence: new Evidence("/r", "case-1", { mkdir: () => undefined, writeFile: () => undefined, readFile: () => new Uint8Array() }) } as PageCtx;
+  return { ctx, row: row as unknown as Parameters<typeof openFoldsAround>[1], log };
+}
+const ROUND_LIST = `${ROUND_LIST_PREFIX}11111111-1111-4111-8111-111111111111-2`;
+
+describe("openFoldsAround: openFixtureUi opens the folds around a settled row before it clicks (Match Day PB1)", () => {
+  it("the empty case first: a row already on screen (open card, open round) - nothing is clicked", async () => {
+    const r = foldedRow({ card: "open", listId: ROUND_LIST, round: "open" });
+    await openFoldsAround(r.ctx, r.row);
+    expect(r.log).toEqual([]);
+  });
+
+  it("a completed card and a finished round: the card first, then the round", async () => {
+    const r = foldedRow({ card: "folded", listId: ROUND_LIST, round: "folded" });
+    await openFoldsAround(r.ctx, r.row);
+    expect(r.log).toEqual(["open card", "open round"]);
+  });
+
+  it("each fold on its own: only the folded one is opened", async () => {
+    const cardOnly = foldedRow({ card: "folded", listId: ROUND_LIST, round: "open" });
+    await openFoldsAround(cardOnly.ctx, cardOnly.row);
+    expect(cardOnly.log).toEqual(["open card"]);
+    const roundOnly = foldedRow({ card: "none", listId: ROUND_LIST, round: "folded" });
+    await openFoldsAround(roundOnly.ctx, roundOnly.row);
+    expect(roundOnly.log).toEqual(["open round"]);
+  });
+
+  it("a bracket's or a ladder's row (its list is no round list): no bar is looked for", async () => {
+    for (const listId of [null, "bracket-r1"]) {
+      const r = foldedRow({ card: "folded", listId, round: "none" });
+      await openFoldsAround(r.ctx, r.row);
+      expect(r.log, String(listId)).toEqual(["open card"]);
+    }
+  });
+
+  it("a round list id that could break out of the selector is refused by name", async () => {
+    const r = foldedRow({ card: "open", listId: `${ROUND_LIST_PREFIX}x"],a[href`, round: "folded" });
+    await expect(openFoldsAround(r.ctx, r.row)).rejects.toThrow(/round list id/);
+  });
+
+  it("a toggle that never opens is a named screen failure, not a silent pass", async () => {
+    const r = foldedRow({ card: "folded", listId: ROUND_LIST, round: "folded" });
+    const stuck = { ...r.row, locator: (s: string) => {
+      const l = (r.row as unknown as { locator: (s: string) => { locator: (i: string) => Record<string, unknown> } }).locator(s);
+      if (s !== "xpath=ancestor::section[@data-stage-id][1]") return l;
+      return { locator: (inner: string) => ({ ...l.locator(inner), click: async () => undefined }) };
+    } };
+    await expect(openFoldsAround(r.ctx, stuck as unknown as Parameters<typeof openFoldsAround>[1])).rejects.toThrow(/card opened/);
   });
 });
 
 describe("the rule judged is the product's: stages-panel.tsx and run-sheet.tsx say it", () => {
-  it("the sheet opens on today on a match day and on all otherwise (stages-panel.tsx, read once at mount)", () => {
-    expect(src(`${V2}/stages-panel.tsx`)).toContain(`useState<RunSheetFilter>(phase === "match_day" ? "${TODAY_FILTER}" : "${ALL_FILTER}")`);
+  it("the sheet opens on all in every phase (stages-panel.tsx, Match Day PB1) - and the old match-day initializer is gone", () => {
+    const sp = src(`${V2}/stages-panel.tsx`);
+    expect(sp).toContain(`useState<RunSheetFilter>("${ALL_FILTER}")`);
+    expect(sp).not.toMatch(/useState<RunSheetFilter>\(phase/);
+  });
+
+  it("a round's list carries the id its bar's aria-controls names, under the prefix openFoldsAround reads (run-sheet.tsx)", () => {
+    const rs = src(`${V2}/desk/run-sheet.tsx`);
+    expect(rs).toContain("const listId = `" + ROUND_LIST_PREFIX + "${stageId}-${section.round}`;");
+    expect(rs).toContain("<ul id={listId} hidden={!open}");
+    expect(rs).toContain("aria-controls={toggle.controls}");
   });
 
   it("'today' keeps a TIMED fixture landing on today's venue-zone day (and a fixture with a stream up): run-sheet.tsx", () => {

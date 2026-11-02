@@ -2,8 +2,14 @@
 // to its fixture console (Task 5). Product facts, read at Step 0:
 //  - desk/run-sheet.tsx:276 the filter `{ value: "all", … }`; its buttons are
 //    `data-filter={f.value}` + `aria-pressed={filter === f.value}` (:547-548)
-//    inside data-testid run-sheet-filter. stages-panel.tsx:556 opens it on
-//    "today" on match day, which hides rows — so a page object asks for "all".
+//    inside data-testid run-sheet-filter. stages-panel.tsx opens it on "all"
+//    in every phase (Match Day PB1, owner 2026-11-02; it used to open on
+//    "today" on a match day) — a page object still asks for "all", a no-op.
+//  - Match Day PB1: a COMPLETED stage's card loads folded to one line
+//    (`stage-collapse-toggle`) and a FINISHED round to its bar
+//    (`run-sheet-round-toggle`, `aria-controls` = the round's list id), so a
+//    settled fixture's row is attached but hidden. openFixtureUi opens the
+//    folds around the row before it clicks (openFoldsAround).
 //  - desk/run-sheet-row.tsx: every row is `<li data-fixture-no={…}>`; its ONE
 //    action is a Link `data-row-action={action.kind}` to `href` — except
 //    `set_time`, a <button> (:550-553) — and its identity Link (:511) goes to
@@ -16,15 +22,17 @@
 //    the match starts, then the pad (`score-pad`) and — for an organiser —
 //    Forfeit (:1294) or, once decided, Finalize (:1274); a HELD match (W2a: a bracket match that ended level or was
 //    abandoned) mounts the Needs a decision block instead of any of them.
+import type { Locator } from "playwright";
 import { FINALIZE_TESTID, FORFEIT_TESTID, START_MATCH_TESTID } from "../../../../bench/lib/drivers/scorer.ts";
 import { DATA, TESTID } from "../selectors.ts";
 import { NEEDS_DECISION } from "./needs-decision.ts";
 import { UnsafeSelectorValue, actBudget, attrEquals, awaitScreen, navBudget, selectorValue, shoot, visit, type DivisionWhere, type PageCtx } from "./ctx.ts";
 import { paths } from "./paths.ts";
 
+/** The filter the sheet opens on in EVERY phase, a match day included (stages-panel.tsx: `useState<RunSheetFilter>("all")`
+ *  since Match Day PB1, owner 2026-11-02; text-pinned by run-sheet-today.test.ts). */
 export const ALL_FILTER = "all";
-/** The filter the sheet opens on during a match day (stages-panel.tsx:
- *  `useState<RunSheetFilter>(phase === "match_day" ? "today" : "all")`; text-pinned by run-sheet-today.test.ts). */
+/** The filter the sheet USED to open on during a match day; a chip an organiser chooses now. */
 export const TODAY_FILTER = "today";
 
 /** A run-sheet row: DATA.fixtureRow (`li[data-fixture-no]`) for one fixture number. */
@@ -102,21 +110,16 @@ export async function readThenShowAll(c: PageCtx, read: boolean): Promise<Defaul
   return seen;
 }
 
-/** `runsheet-today-default`'s verdict: the sheet opens on "today" on a match day and on "all" otherwise (stages-panel.tsx),
- *  and "today" draws exactly the fixtures dated today (run-sheet.tsx runSheetKeeps). `phase` is the division's derived
- *  phase as the competition desk shows it; `datedToday` the fixture numbers the product dates today. Nothing dated today
- *  proves nothing, so it abstains, counted 0 (the empty case first). */
+/** `runsheet-today-default`'s verdict (D17): the sheet opens on "all" in EVERY phase, a match day included (stages-panel.tsx,
+ *  Match Day PB1, owner 2026-11-02 - it used to open on "today" on a match day, hiding every other round). `phase` is the
+ *  division's derived phase as the competition desk shows it; `datedToday` the fixture numbers the product dates today. A
+ *  division with nothing dated today is never a match day, where the old default lived, so it abstains, counted 0 (the empty
+ *  case first). */
 export function judgeTodayDefault(a: { phase: string; seen: DefaultFilterSeen | null; datedToday: readonly number[] }): { verdict: "pass" | "fail" | "abstain"; checked: number; note: string } {
   if (a.datedToday.length === 0) return { verdict: "abstain", checked: 0, note: `no fixture dated today, so the default filter has nothing to be proven by (phase ${a.phase})` };
   if (a.seen === null) return { verdict: "fail", checked: 0, note: `the run sheet offered no filter, so its default (phase ${a.phase}) could not be read` };
-  const want = a.phase === "match_day" ? TODAY_FILTER : ALL_FILTER;
-  if (a.seen.filter !== want) return { verdict: "fail", checked: 1, note: `phase ${a.phase}: the sheet opened on '${a.seen.filter}', it should open on '${want}'` };
-  if (want === TODAY_FILTER) {
-    const dated = [...a.datedToday].sort((x, y) => x - y).join(", ");
-    const rows = a.seen.rows.join(", ");
-    if (rows !== dated) return { verdict: "fail", checked: 1, note: `phase ${a.phase}: the '${TODAY_FILTER}' sheet drew fixtures [${rows}], the product dates [${dated}] today` };
-  }
-  return { verdict: "pass", checked: 1, note: `phase ${a.phase}: the sheet opened on '${a.seen.filter}'${want === TODAY_FILTER ? `, drawing exactly the ${a.datedToday.length} fixture(s) dated today` : ""}` };
+  if (a.seen.filter !== ALL_FILTER) return { verdict: "fail", checked: 1, note: `phase ${a.phase}: the sheet opened on '${a.seen.filter}', it should open on '${ALL_FILTER}' whatever the phase` };
+  return { verdict: "pass", checked: 1, note: `phase ${a.phase}: the sheet opened on '${ALL_FILTER}'` };
 }
 
 /** The controls a console mounts for an organiser, one set per state it can be in: Start (scheduled), the pad and
@@ -125,6 +128,31 @@ export function judgeTodayDefault(a: { phase: string; seen: DefaultFilterSeen | 
 export const CONSOLE_MOUNTED_TESTIDS: readonly string[] = Object.freeze([START_MATCH_TESTID, TESTID.scorePad.id, FORFEIT_TESTID, FINALIZE_TESTID, NEEDS_DECISION.block]);
 /** Any control the console mounts for an organiser, whatever the match's state. */
 const CONSOLE_MOUNTED = CONSOLE_MOUNTED_TESTIDS.map((id) => `[data-testid="${id}"]`).join(", ");
+
+/** The id the run sheet gives a round's list (desk/run-sheet.tsx: `run-sheet-rounds-${stageId}-${section.round}`), which its
+ *  bar's `aria-controls` names. */
+export const ROUND_LIST_PREFIX = "run-sheet-rounds-";
+
+/** Match Day PB1 (owner 2026-11-02): a COMPLETED stage's card loads folded to one line and a FINISHED round (every real match
+ *  settled) to its bar, so a settled fixture's row is attached but HIDDEN, and a click on its link would wait for a visibility
+ *  that never comes. Opens the row's card (`stage-collapse-toggle`), then its round (the `run-sheet-round-toggle` whose
+ *  `aria-controls` is the row's list), each only when it reads folded - the way an organiser would. A row in a bracket or a
+ *  ladder has no round bar (its list carries no round id): only its card is opened. */
+export async function openFoldsAround(c: PageCtx, row: Locator): Promise<void> {
+  const t = actBudget(c, 1);
+  const card = row.locator("xpath=ancestor::section[@data-stage-id][1]");
+  const cardToggle = `[data-testid="${TESTID.stageCollapseToggle.id}"]`;
+  if ((await card.locator(`${cardToggle}[aria-expanded="false"]`).count()) > 0) {
+    await card.locator(cardToggle).click({ timeout: t });
+    await awaitScreen(() => card.locator(`${cardToggle}[aria-expanded="true"]`).waitFor({ state: "attached", timeout: t }), "the completed stage's card opened", t);
+  }
+  const list = await row.locator("xpath=ancestor::ul[1]").getAttribute("id", { timeout: t });
+  if (list === null || !list.startsWith(ROUND_LIST_PREFIX)) return;
+  const bar = `[data-testid="${TESTID.runSheetRoundToggle.id}"][aria-controls="${selectorValue("round list id", list)}"]`;
+  if ((await c.page.locator(`${bar}[aria-expanded="false"]`).count()) === 0) return;
+  await c.page.locator(bar).click({ timeout: t });
+  await awaitScreen(() => c.page.locator(`${bar}[aria-expanded="true"]`).waitFor({ state: "attached", timeout: t }), "the finished round's bar opened", t);
+}
 
 /** From the division's fixtures tab to fixture `fixtureNo`'s console, through
  *  its run-sheet row. */
@@ -136,6 +164,7 @@ export async function openFixtureUi(c: PageCtx, where: DivisionWhere, fixtureNo:
   await showAllFixtures(c);
   const t = navBudget(c);
   await awaitScreen(() => row.waitFor({ state: "attached", timeout: t }), `run-sheet row #${fixtureNo}`, t);
+  await openFoldsAround(c, row);
   const href = paths.fixture(c.orgSlug, where.compSlug, where.divSlug, fixtureNo);
   const toConsole = fixtureLinkSelector(c.orgSlug, where.compSlug, where.divSlug, fixtureNo);
   const action = row.locator(`a${DATA.rowAction.selector}${toConsole}`);
