@@ -514,19 +514,6 @@ body {
   }
 }
 
-/* Compact list mode (v3/03 §2 toggle): same card DOM, quieter rendering —
-   secondary lines collapse, the card reads as a row. */
-.ecard-list .ecard {
-  @apply px-4 py-2.5;
-}
-.ecard-list .ecard .ecard-meta,
-.ecard-list .ecard .ecard-progress {
-  display: none;
-}
-.ecard-list .ecard .ecard-next {
-  @apply mt-0.5;
-}
-
 /* ── "Stadium night" system (design/v3/12) ────────────────────────────────
    Born on marketing; since the floodlit-console pass (docs/superpowers/specs/
    2026-07-12) the --mk-* palette is the shared night source of truth — the

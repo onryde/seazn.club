@@ -307,6 +307,9 @@ describe("the quiet card's Next: line — read as the deck beside it reads", () 
     expect(next.indexOf("15:10")).toBeLessThan(next.indexOf("Ann")); // time first: a phone's truncation never eats it
     expect(next).toContain("Court 2");
     expect(next).toMatch(/Ann.*vs.*Bob/);
+    // One label, chosen once: "Next:", never "Now:" beside it (the deleted EntityCard's own test, carried here).
+    expect(next).toContain(`>${en["card.next.upcoming"]}<`);
+    expect(next).not.toContain(`>${en["card.next.live"]}<`);
   });
 
   it("speaks the viewer's language: French reads 'contre', and the day and month in French", async () => {

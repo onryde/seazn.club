@@ -1,5 +1,5 @@
 import "server-only";
-// Card-grid aggregates (v3/03 §1–2): the EntityCard's meta / "Next:" /
+// Card-grid aggregates (v3/03 §1–2): a card's meta / "Next:" /
 // progress lines in one query per list — no N+1 across a 3-column grid.
 // Read-only; RLS scopes everything through withTenant.
 import { withTenant } from "@/lib/db";
