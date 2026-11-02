@@ -2398,6 +2398,7 @@
   "swiss.refusal.SWISS_FINISH_ROUND_UNDECIDED": "Un match du tour en cours a commencé, ce tour est donc maintenu. Décidez ses matchs avant de terminer la phase suisse.",
   "swiss.refusal.SWISS_FINISH_NOTHING_PLAYED": "Aucun tour n'est encore terminé : il n'y a donc rien à terminer.",
   "swiss.refusal.STAGE_NOT_SWISS": "Ce n'est pas une phase suisse.",
+  "swiss.refusal.SWISS_REQUESTED_BYES_DEFERRED": "Les exemptions demandées à un demi-point ou à zéro point ne sont pas encore proposées. Si un joueur doit manquer un tour, enregistrez un forfait sur son match.",
   "swiss.rounds.guidance.one": "Pour {n} participants : {count} tour recommandé, au plus {hardMax}.",
   "swiss.rounds.guidance.other": "Pour {n} participants : {count} tours recommandés, au plus {hardMax}.",
   "swiss.rounds.shrunk.one": "Il reste {field} participants, de quoi jouer au plus {count} tour. Vous pouvez terminer la phase suisse avec les tours déjà joués.",

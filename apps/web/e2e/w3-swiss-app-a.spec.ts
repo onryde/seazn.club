@@ -1940,3 +1940,83 @@ test.describe("X-SW-25 the desk warns after a cut-changing correction", () => {
     });
   }
 });
+
+// X-SW-18 (W3 T18, RB3-7(c), signed 252): a requested half-point or zero-point bye is DEFERRED. There is no door that takes
+// one, and the key a client would reach for — `requestedByes` on a stage config — is refused by name with the way out
+// (record a walkover on the player's board). API only: the desk never sends the key, so there is nothing to click.
+// Driven on the real server: the three doors that read a stage config (create, replace, PATCH), a refusal that writes
+// nothing, and the guidance's own walkover as a path that works.
+test.describe("X-SW-18 requested half/zero byes have no path and refuse with guidance", () => {
+  test("create, replace and PATCH refuse requestedByes 400 SWISS_REQUESTED_BYES_DEFERRED and write nothing; the walkover the sentence names goes through", async ({
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    // The sentence the task's brief signs, typed here (never read back from the product).
+    const GUIDANCE =
+      "Requested half-point or zero-point byes aren't offered yet. If a player must miss a round, record a walkover on their board.";
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `No requested byes ${TAG}`,
+      visibility: "private",
+    });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const added = await apiJson<{ id: string }[]>(
+      request,
+      `/api/v1/divisions/${divisionId}/entrants`,
+      "POST",
+      Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `NoBye P${i + 1} ${TAG}`, seed: i + 1 })),
+    );
+    expect(added.status, JSON.stringify(added.error)).toBe(201);
+    const requested = [{ entrantId: added.data![0]!.id, round: 2, value: 0.5 }];
+    const named = (res: { status: number; error?: { code?: string; message?: string } }, where: string) => {
+      expect(res.status, `${where}: ${JSON.stringify(res.error)}`).toBe(400);
+      expect(res.error?.code, where).toBe("SWISS_REQUESTED_BYES_DEFERRED");
+      expect(res.error?.message, where).toBe(GUIDANCE);
+    };
+    const stagesOf = async () => {
+      const list = await apiJson<{ id: string; config: { rounds?: number } }[]>(request, `/api/v1/divisions/${divisionId}/stages`);
+      expect(list.status, JSON.stringify(list.error)).toBe(200);
+      return list.data!;
+    };
+
+    // Create: refused by name; the division still has no stage.
+    const body = (config: Record<string, unknown>) => ({ seq: 1, kind: "swiss", name: "Swiss", config });
+    named(await apiJson(request, `/api/v1/divisions/${divisionId}/stages`, "POST", body({ rounds: 2, requestedByes: requested })), "POST one stage");
+    named(await apiJson(request, `/api/v1/divisions/${divisionId}/stages`, "POST", [body({ rounds: 2, requestedByes: true })]), "POST a list");
+    expect((await stagesOf()).length, "nothing written by a refused create").toBe(0);
+
+    // The same config without the key creates the stage (the refusal is the key, not the stage).
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", body({ rounds: 2 }));
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    const stageId = stage.data!.id;
+
+    // Replace and PATCH: refused by name; the stage keeps its two rounds.
+    named(await apiJson(request, `/api/v1/divisions/${divisionId}/stages`, "PUT", body({ rounds: 3, requestedByes: requested })), "PUT");
+    named(await apiJson(request, `/api/v1/stages/${stageId}`, "PATCH", { requestedByes: requested }), "PATCH the key alone");
+    named(await apiJson(request, `/api/v1/stages/${stageId}`, "PATCH", { rounds: 3, requestedByes: requested }), "PATCH beside a real edit");
+    const after = await stagesOf();
+    expect(after.map((s) => s.id), "the PUT replaced nothing").toEqual([stageId]);
+    expect(after[0]!.config.rounds, "neither the PUT nor a PATCH moved the round count").toBe(2);
+    expect(JSON.stringify(after[0]!.config), "no requested bye was stored").not.toContain("requestedByes");
+
+    // The way out the sentence names: a walkover on the player's board is a real, working path.
+    const paired = await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST");
+    expect(paired.status, JSON.stringify(paired.error)).toBe(200);
+    const boards = await apiJson<Seated[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
+    expect(boards.status, JSON.stringify(boards.error)).toBe(200);
+    const board = boards.data!.find((f) => f.stage_id === stageId && f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null);
+    expect(board, "premise: round 1 seats a real board").toBeDefined();
+    await scoreAt(request, board!.id, "core.forfeit", { by: board!.home_entrant_id, reason: "walkover" });
+    const decided = await apiJson<{ status: string }>(request, `/api/v1/fixtures/${board!.id}`);
+    expect(decided.status, JSON.stringify(decided.error)).toBe(200);
+    expect(decided.data!.status, "the walkover decided the board").toBe("forfeited");
+  });
+});

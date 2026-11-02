@@ -29,6 +29,9 @@ import { PointsRule } from "@seazn/engine/competition";
 // though it resolves fine under tsc/Next.js/vitest.
 import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../lib/registration-rules.ts";
 import { FIXTURE_STATUSES } from "../../lib/fixture-status.ts";
+// W3 T18 (RB3-7(c)): the sentence a requested half/zero bye is refused with — the table's own constant (client-safe and
+// strip-types-safe: its only import is `import type`), so this schema, `http.ts`'s reader and the table row say one thing.
+import { SWISS_REQUESTED_BYES_DEFERRED_MESSAGE } from "../../lib/swiss-refusals.ts";
 // The entrant name limit, shared with the console's Name field (entrants-panel.tsx).
 import { ENTRANT_NAME_MAX } from "../../lib/entrant-roster-name.ts";
 // The player name limit, shared with the directory's rename field (persons-panel.tsx).
@@ -1235,6 +1238,10 @@ export const StageConfig = z
     // Swiss (also `rounds`).
     rounds: z.number().int().min(1).optional(),
     chess: z.boolean().optional(),
+    // W3 T18 (RB3-7(c), signed 252; X-SW-18): a requested half-point or zero-point bye is DEFERRED — no path, and the one
+    // key a client would reach for refuses by name (`http.ts` answers 400 SWISS_REQUESTED_BYES_DEFERRED with the guidance).
+    // Any value fails: the key accepts nothing, and the spec documents it as the never-schema it is.
+    requestedByes: z.never({ error: SWISS_REQUESTED_BYES_DEFERRED_MESSAGE }).optional(),
     // Which pairing model the swiss generator uses. Mirrors the engine's
     // `SwissConstraints.pairing` (packages/engine/src/scheduling/swiss.ts) —
     // spelled out rather than imported because this file may not reach into
@@ -2825,7 +2832,8 @@ export const UnpairResult = z.object({
 /** PATCH /stages/{id} (W3 T12, SW-M10 / #838, X-SW-17 and BG-SW-1) — a Swiss stage's round count and chess colours,
  *  editable until the stage's first start. At least one key; an unknown key is refused (strict). */
 export const PatchSwissStage = z
-  .object({ rounds: z.number().int().min(1), chess: z.boolean() })
+  // `requestedByes` (W3 T18, RB3-7(c)): deferred — refused by name on this door as on `StageConfig`.
+  .object({ rounds: z.number().int().min(1), chess: z.boolean(), requestedByes: z.never({ error: SWISS_REQUESTED_BYES_DEFERRED_MESSAGE }) })
   .partial()
   .strict()
   .refine((p) => Object.keys(p).length > 0, "empty patch");

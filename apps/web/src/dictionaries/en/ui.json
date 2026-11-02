@@ -2398,6 +2398,7 @@
   "swiss.refusal.SWISS_FINISH_ROUND_UNDECIDED": "A match in the round in progress has started, so that round stays. Decide its matches before finishing the Swiss.",
   "swiss.refusal.SWISS_FINISH_NOTHING_PLAYED": "No round has been completed yet, so there is nothing to finish.",
   "swiss.refusal.STAGE_NOT_SWISS": "This is not a Swiss stage.",
+  "swiss.refusal.SWISS_REQUESTED_BYES_DEFERRED": "Requested half-point or zero-point byes aren't offered yet. If a player must miss a round, record a walkover on their board.",
   "swiss.rounds.guidance.one": "For {n} entrants: {count} round recommended, at most {hardMax}.",
   "swiss.rounds.guidance.other": "For {n} entrants: {count} rounds recommended, at most {hardMax}.",
   "swiss.rounds.shrunk.one": "{field} entrants remain, enough for at most {count} round. You can finish the Swiss with the rounds already played.",

@@ -7,13 +7,18 @@
 // Status: 422 when the request can never succeed as sent (re-sending it changes nothing), 409 when it is a state of the
 // stage the organiser resolves another way (the copy says which) — the split `usecases/stages.ts` already makes:
 // `assertFormatUnlocked`'s FORMAT_LOCKED is a 409, and a refusal of the stage's KIND is a 422 (`unpairSwissRound`'s
-// "unpair only exists on swiss stages", SWISS_PAIRING_NOT_SWISS).
+// "unpair only exists on swiss stages", SWISS_PAIRING_NOT_SWISS). 400 for a refusal raised at the BODY door, from a zod
+// issue, before any usecase runs (W3 T18's SWISS_REQUESTED_BYES_DEFERRED: `api-v1/http.ts` reads the key's never-schema
+// message and answers the named code) — the status every other body validation answers, and the one the same key got
+// before it had a name (a strict object's unknown-key 400).
 //
 // Client-safe AND strip-types-safe: no runtime import at all, and only `import type` for `MessageKey`, so
 // `api-v1/schemas.ts` (loaded by `scripts/openapi-gen.ts` under bare `node --experimental-strip-types`) may import it
 // by relative path. `lib/__tests__/swiss-refusals.test.ts` pins the table against the plan's code list and the four
 // dictionaries; the English here must equal `en/ui.json` for the same key.
-import type { MessageKey } from "./messages";
+// `@/lib/messages`, not `./messages`: schemas.ts (W3 T18) reaches this file from the scripts program (tsconfig.scripts.json,
+// nodenext), where a bare relative specifier is TS2835 and `@/lib/messages` is redirected to the MessageKey stub.
+import type { MessageKey } from "@/lib/messages";
 
 export type SwissRefusalCode =
   | "SWISS_ADHOC_REFUSED"
@@ -29,10 +34,17 @@ export type SwissRefusalCode =
   | "SWISS_ROUNDS_BELOW_SEATED"
   | "SWISS_FINISH_ROUND_UNDECIDED"
   | "SWISS_FINISH_NOTHING_PLAYED"
-  | "STAGE_NOT_SWISS";
+  | "STAGE_NOT_SWISS"
+  | "SWISS_REQUESTED_BYES_DEFERRED";
+
+/** W3 T18 (RB3-7(c), X-SW-18): the sentence a stage config naming `requestedByes` is refused with. A constant of its own
+ *  because `api-v1/schemas.ts` puts it on the key's `z.never({ error })` and `api-v1/http.ts` recognises the zod issue by
+ *  it: the schema, the reader and the table row below cannot say different sentences. */
+export const SWISS_REQUESTED_BYES_DEFERRED_MESSAGE =
+  "Requested half-point or zero-point byes aren't offered yet. If a player must miss a round, record a walkover on their board.";
 
 export interface SwissRefusalRow {
-  status: 409 | 422;
+  status: 400 | 409 | 422;
   /** The server's English sentence (the `message` of the error body); `en/ui.json[key]` says the same. */
   message: string;
   key: MessageKey;
@@ -144,6 +156,14 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
     status: 422,
     message: "This is not a Swiss stage.",
     key: "swiss.refusal.STAGE_NOT_SWISS",
+  },
+  // W3 T18 (RB3-7(c), signed 252; X-SW-18): a requested half-point or zero-point bye has no path — deferred, with guidance.
+  // The one door a client would reach for is a stage config naming `requestedByes` (create, replace, PATCH): the key is
+  // a never-schema on `StageConfig` and `PatchSwissStage`, so it is refused at the body, 400 (see the status note above).
+  SWISS_REQUESTED_BYES_DEFERRED: {
+    status: 400,
+    message: SWISS_REQUESTED_BYES_DEFERRED_MESSAGE,
+    key: "swiss.refusal.SWISS_REQUESTED_BYES_DEFERRED",
   },
 };
 

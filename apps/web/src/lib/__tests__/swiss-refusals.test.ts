@@ -31,7 +31,13 @@ const PLAN_CODES = [
   "SWISS_FINISH_ROUND_UNDECIDED",
   "SWISS_FINISH_NOTHING_PLAYED",
   "STAGE_NOT_SWISS",
+  // T18 (RB3-7(c), X-SW-18): requested half/zero byes are deferred. A BODY refusal raised from the zod issue by `http.ts`
+  // (the stage-decider precedent), so a 400 like every other body validation, not the 409/422 of a usecase refusal.
+  "SWISS_REQUESTED_BYES_DEFERRED",
 ] as const;
+
+/** Codes raised at the body door, from a zod issue (`api-v1/http.ts`), not by a usecase: they answer 400. */
+const BODY_REFUSALS: readonly string[] = ["SWISS_REQUESTED_BYES_DEFERRED"];
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
 const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
@@ -47,7 +53,11 @@ describe("SWISS_REFUSALS (W3 app-A)", () => {
       // The plan's Global "Locale" convention: one `swiss.refusal.<CODE>` key per code.
       expect(row.key, code).toBe(`swiss.refusal.${code}`);
       expect(swissRefusalKey(code), code).toBe(row.key);
-      expect([409, 422], `${code}: a refusal is a 409 (a state the organiser resolves) or a 422 (never succeeds as sent)`).toContain(row.status);
+      if (BODY_REFUSALS.includes(code)) {
+        expect(row.status, `${code}: a body refusal is a 400, as every other body validation`).toBe(400);
+      } else {
+        expect([409, 422], `${code}: a refusal is a 409 (a state the organiser resolves) or a 422 (never succeeds as sent)`).toContain(row.status);
+      }
       expect(row.message.trim(), `${code}: the server's English sentence`).not.toBe("");
       for (const [locale, dict] of Object.entries(LOCALES)) {
         const text = dict[row.key];
@@ -61,7 +71,7 @@ describe("SWISS_REFUSALS (W3 app-A)", () => {
       // One English sentence, not two: the desk's English is the server's English.
       expect(en[row.key as keyof typeof en], `${code}: en/ui.json says what the server says`).toBe(row.message);
     }
-    // Anti-vacuity: 14 codes × 4 locales. Zero checked is a failure, not a pass.
+    // Anti-vacuity: 15 codes × 4 locales. Zero checked is a failure, not a pass.
     expect(checked, "anti-vacuity: (code, locale) pairs checked").toBe(PLAN_CODES.length * 4);
     expect(checked).toBeGreaterThan(0);
   });
@@ -75,7 +85,7 @@ describe("SWISS_REFUSALS (W3 app-A)", () => {
       expect(isSwissRefusalCode(code), code).toBe(true);
       yes++;
     }
-    expect(yes, "anti-vacuity: every plan code judged").toBe(14);
+    expect(yes, "anti-vacuity: every plan code judged").toBe(15);
     const others = ["SEQ_CONFLICT", "SCHEDULE_LOCKED", "FORMAT_LOCKED", "swiss_undo_round_started", "", "toString", "__proto__", "constructor", undefined, null, 409];
     for (const other of others) expect(isSwissRefusalCode(other), String(other)).toBe(false);
     expect(others.length).toBe(11);
@@ -85,6 +95,14 @@ describe("SWISS_REFUSALS (W3 app-A)", () => {
     expect(SWISS_REFUSALS.SWISS_ADHOC_REFUSED).toMatchObject({
       status: 422,
       message: "Swiss rounds are paired by the system. Add friendlies in another stage.",
+    });
+  });
+
+  it("SWISS_REQUESTED_BYES_DEFERRED carries the RB3-7(c) guidance (spec §8 Q5, ruling 252): a walkover is the way out", () => {
+    expect(SWISS_REFUSALS.SWISS_REQUESTED_BYES_DEFERRED).toMatchObject({
+      status: 400,
+      message:
+        "Requested half-point or zero-point byes aren't offered yet. If a player must miss a round, record a walkover on their board.",
     });
   });
 });

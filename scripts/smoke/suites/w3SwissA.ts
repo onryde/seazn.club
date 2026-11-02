@@ -32,6 +32,8 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * anonymously.
  * T17 (X-SW-25; RB3-19): a correction after the knockout began never moves a bracket seat, and `GET /stages/{id}/swiss-cut`
  * names who today's table would have cut instead (`drift: {out, in}`), null before the correction.
+ * T18 (X-SW-18; RB3-7(c)): a requested half-point or zero-point bye has no path — a stage config naming `requestedByes` is
+ * refused 400 SWISS_REQUESTED_BYES_DEFERRED, with the guidance, on create, replace and PATCH, and nothing changes.
  * T9 (X-SW-12, X-SW-13; ruling 250): "Add late player" after Start —
  * through the entrants POST, an unstarted round re-pairs with the newcomer (a), a started round with a bye seats the
  * newcomer against its holder (b), any other started round leaves the newcomer to the next round (c); and a public
@@ -56,8 +58,9 @@ export async function w3SwissASuite(): Promise<void> {
   // mid-Swiss walks her open board over, round 1 stands, and a second PATCH rewrites nothing) + T16: 1 (the public hub
   // names a Swiss table's round: round 2 of 3, in play, in its document, read anonymously) + T17: 1 (a correction that
   // moves the Swiss cut after the knockout began leaves every bracket seat, and the swiss-cut route names who is out and
-  // who is in — null before the correction).
-  const EXPECTED_CHECKS = 22;
+  // who is in — null before the correction) + T18: 1 (a stage config naming requestedByes is refused 400
+  // SWISS_REQUESTED_BYES_DEFERRED with the guidance on create, replace and PATCH, and the stages read back unchanged).
+  const EXPECTED_CHECKS = 23;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -1063,6 +1066,41 @@ export async function w3SwissASuite(): Promise<void> {
       w3Check(
         "w3a X-SW-25: a correction after the knockout began leaves every bracket seat, and GET swiss-cut names who is out and who is in — drift null before it" +
           (ok ? "" : ` — ko stage ${koStageRes.status} ${koId ?? JSON.stringify(koStageRes.json).slice(0, 200)}, generate ${koGen.status}, proposal ${proposalRes.status} ${JSON.stringify(proposalRes.json).slice(0, 160)}, confirm ${confirmRes.status} ${JSON.stringify(confirmRes.json).slice(0, 200)}, final ${final?.id ?? "none"} ${decidedFinal?.status ?? "-"}, boards ${boards.length}, void ${voided?.status ?? "none"} ${JSON.stringify(voided?.json).slice(0, 160)}, regiven ${regiven.status} ${JSON.stringify(regiven.json).slice(0, 160)}, drift ${drift0.status}/${JSON.stringify(drift0.json).slice(0, 80)} ${drift1.status}/${JSON.stringify(drift1.json).slice(0, 80)} ${drift2.status}/${JSON.stringify(drift2.json).slice(0, 200)}, seats same ${seatsAfter === seatsBefore}`),
+        ok,
+      );
+    }
+
+    // Check 23 (T18, X-SW-18; RB3-7(c)): a requested half-point or zero-point bye has no path. On check 18's division, a
+    // stage config naming `requestedByes` is refused 400 SWISS_REQUESTED_BYES_DEFERRED, with the guidance, at the three
+    // doors that read one — create (POST), replace (PUT) and PATCH /stages/{id}, alone and beside a real edit — and the
+    // division's stages read back byte for byte as they were (the refusal is at the body, before anything is written).
+    // The guidance's own way out is the walkover check 22 already decided a board with. The sentence is the brief's.
+    {
+      const divId = fourFieldDivId;
+      const swissId = swissFiveStageId;
+      const GUIDANCE =
+        "Requested half-point or zero-point byes aren't offered yet. If a player must miss a round, record a walkover on their board.";
+      const stagesOf = async () => v1data<{ id: string; config: unknown }[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/stages`)) ?? [];
+      const before = await stagesOf();
+      const requested = [{ entrantId: "00000000-0000-4000-8000-000000000000", round: 2, value: 0.5 }];
+      const stage = { seq: 99, kind: "swiss", name: "Swiss with a requested bye", config: { rounds: 2, requestedByes: requested } };
+      const created = await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", stage);
+      const replaced = await v1(owner, `/api/v1/divisions/${divId}/stages`, "PUT", stage);
+      const patched = await v1(owner, `/api/v1/stages/${swissId}`, "PATCH", { requestedByes: requested });
+      const beside = await v1(owner, `/api/v1/stages/${swissId}`, "PATCH", { rounds: 3, requestedByes: requested });
+      const after = await stagesOf();
+      const named = (r: { status: number; json: { error?: { code?: string; message?: string } } }) =>
+        r.status === 400 && r.json.error?.code === "SWISS_REQUESTED_BYES_DEFERRED" && r.json.error?.message === GUIDANCE;
+      const ok =
+        divId !== undefined && swissId !== undefined &&
+        // the premise: the division holds the stages checks 4, 17 and 22 built, and the Swiss under test is one of them
+        before.length >= 3 && before.some((s) => s.id === swissId) &&
+        named(created) && named(replaced) && named(patched) && named(beside) &&
+        // nothing written: the same stages, the same configs
+        JSON.stringify(after) === JSON.stringify(before);
+      w3Check(
+        "w3a X-SW-18: a stage config naming requestedByes is refused 400 SWISS_REQUESTED_BYES_DEFERRED with the guidance on create, replace and PATCH, and the stages read back unchanged" +
+          (ok ? "" : ` — division ${divId ?? "none"}, swiss ${swissId ?? "none"}, stages ${before.length}, POST ${created.status} ${JSON.stringify(created.json).slice(0, 140)}, PUT ${replaced.status} ${JSON.stringify(replaced.json).slice(0, 140)}, PATCH ${patched.status} ${JSON.stringify(patched.json).slice(0, 140)}, PATCH+rounds ${beside.status} ${JSON.stringify(beside.json).slice(0, 140)}, unchanged ${JSON.stringify(after) === JSON.stringify(before)}`),
         ok,
       );
     }

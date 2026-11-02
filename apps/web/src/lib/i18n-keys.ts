@@ -8091,6 +8091,7 @@ export type DictionaryKey =
   | "swiss.refusal.SWISS_LATE_ENTRY_NOT_UNDOABLE"
   | "swiss.refusal.SWISS_NO_ROUND_LEFT"
   | "swiss.refusal.SWISS_OVER"
+  | "swiss.refusal.SWISS_REQUESTED_BYES_DEFERRED"
   | "swiss.refusal.SWISS_ROUNDS_ABOVE_MAX"
   | "swiss.refusal.SWISS_ROUNDS_BELOW_SEATED"
   | "swiss.refusal.SWISS_ROUNDS_CHANGE_NOT_UNDOABLE"

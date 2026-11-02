@@ -2398,6 +2398,7 @@
   "swiss.refusal.SWISS_FINISH_ROUND_UNDECIDED": "Een wedstrijd van de lopende ronde is begonnen, dus die ronde blijft staan. Beslis de wedstrijden ervan voordat je de Zwitserse fase afrondt.",
   "swiss.refusal.SWISS_FINISH_NOTHING_PLAYED": "Er is nog geen ronde voltooid, dus er valt niets af te ronden.",
   "swiss.refusal.STAGE_NOT_SWISS": "Dit is geen Zwitserse fase.",
+  "swiss.refusal.SWISS_REQUESTED_BYES_DEFERRED": "Aangevraagde byes van een half punt of nul punten worden nog niet aangeboden. Moet een speler een ronde missen, leg dan een walk-over vast op zijn wedstrijd.",
   "swiss.rounds.guidance.one": "Voor {n} deelnemers: {count} ronde aanbevolen, hoogstens {hardMax}.",
   "swiss.rounds.guidance.other": "Voor {n} deelnemers: {count} rondes aanbevolen, hoogstens {hardMax}.",
   "swiss.rounds.shrunk.one": "Er zijn nog {field} deelnemers, genoeg voor hoogstens {count} ronde. Je kunt de Zwitserse fase afronden met de al gespeelde rondes.",
