@@ -9,7 +9,7 @@ import { completeStageIfReady } from "@/server/engine-db/competition";
 import { scoreEvent, onDecided } from "@/server/usecases/scoring";
 import { loadBracketFixtures } from "@/server/usecases/stages";
 import { withdrawEntrantCascade } from "@/server/usecases/withdrawal";
-import { DEPARTED_STATUSES } from "@/server/usecases/entrants";
+import { DEPARTED_STATUSES, patchEntrant } from "@/server/usecases/entrants";
 import { assertNoLevelSeat, SEATING_STATUSES } from "../level-seat";
 import { declaredVariant, seedBracket } from "./helpers/seed-bracket";
 
@@ -269,13 +269,15 @@ describe.skipIf(!HAS_DB)("X-BR-2 / X-ST-1: held, never seated; the settle seats 
   it("C17 over the ONE departed vocabulary (loop-F tidy) on a LEGACY row: a DISQUALIFIED winner whose held line was never cascaded is refused like a withdrawn one", async () => {
     // single-sport: chess, the held-line rig above; the guard reads the entrant's status, not the sport. Every
     // DEPARTED_STATUSES member, so a narrowed set reds here.
-    // W3 T15 (RB3-17): a disqualification through `patchEntrant` now cascades like a withdrawal and walks this line over
-    // (the X-WD-1 case above), so a departed winner on a HELD line is a legacy shape — a status written without the
-    // cascade — planted as the X-ST-1 legacy twin plants it: the raw status flip.
+    // `withdrawn` is still written by the real door: `patchEntrant({status: "withdrawn"})` is ruling 111's bare flip, which
+    // leaves the held line as it was. `disqualified` is not any more — since W3 T15 (RB3-17) a DQ through `patchEntrant`
+    // cascades like a withdrawal and walks this line over (the next case) — so a disqualified winner on a HELD line is a
+    // legacy shape, planted as the X-ST-1 legacy twin plants it: the raw status flip.
     let checked = 0;
     for (const departed of [...DEPARTED_STATUSES]) {
       const t = await heldChess();
-      await sql`update entrants set status = ${departed} where id = ${t.away}`;
+      if (departed === "withdrawn") await patchEntrant(t.auth, t.away, { status: departed });
+      else await sql`update entrants set status = ${departed} where id = ${t.away}`;
       expect([(await row(t.sf)).status, (await row(t.sf)).outcome], `${departed}: rig — her line is still held`).toEqual(["needs_decision", { kind: "draw" }]);
       const before = await seq(t.sf);
       await expect(post(t.auth, t.sf, "core.settle", { winner: t.away, method: "organiser" }), departed).rejects.toMatchObject({
@@ -289,6 +291,34 @@ describe.skipIf(!HAS_DB)("X-BR-2 / X-ST-1: held, never seated; the settle seats 
       checked++;
     }
     expect(checked).toBe(DEPARTED_STATUSES.size);
+  });
+
+  it("W3 T15 (RB3-17): a DQ through the real PATCH while a held line waits on the settle dialog walks it over to the other side; the dialog's settle, sent after, is refused (stale: SEQ_CONFLICT; refreshed: SETTLE_NOT_APPLICABLE) and changes nothing", async () => {
+    // single-sport: chess, the held-line rig above (the only sport whose draw HOLDS a bracket line); the cascade's
+    // walkover reads the entrant's status, not the sport.
+    const t = await heldChess();
+    const opened = await seq(t.sf); // what the open dialog holds as its expected_seq
+    expect((await patchEntrant(t.auth, t.away, { status: "disqualified" })).status).toBe("disqualified");
+    const walked = await row(t.sf);
+    expect([walked.status, walked.outcome], "the cascade's walkover, as a withdrawal writes it (X-WD-1)").toEqual([
+      "forfeited",
+      { kind: "award", winner: t.home, loser: t.away, reason: "withdrew" },
+    ]);
+    expect(await seated(t.final), "the remaining side is seated").toEqual([t.home]);
+    const after = await seq(t.sf);
+    expect(after, "premise: the cascade wrote one event").toBe(opened + 1);
+    // The stale dialog: its settle carries the seq it opened with, so the ledger's own guard refuses it first.
+    await expect(
+      scoreEvent(t.auth, t.sf, { expected_seq: opened, type: "core.settle", payload: { winner: t.home, method: "organiser" } } as never),
+      "the stale dialog's settle",
+    ).rejects.toMatchObject({ code: "SEQ_CONFLICT" });
+    // Refreshed, it is still refused: the line is no longer level, so there is nothing to settle.
+    await expect(post(t.auth, t.sf, "core.settle", { winner: t.home, method: "organiser" }), "a refreshed settle").rejects.toMatchObject({
+      code: "SETTLE_NOT_APPLICABLE",
+    });
+    expect(await seq(t.sf), "neither refusal wrote anything").toBe(after);
+    expect([(await row(t.sf)).status, (await row(t.sf)).outcome]).toEqual([walked.status, walked.outcome]);
+    expect(await seated(t.final)).toEqual([t.home]);
   });
 
   it("X-ST-1 (Review Focus 2): a second settle is refused SETTLE_NOT_APPLICABLE and seats nobody twice", async () => {
