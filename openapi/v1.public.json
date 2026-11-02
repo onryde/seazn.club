@@ -1920,7 +1920,7 @@
         ]
       },
       "patch": {
-        "summary": "Update a competition",
+        "summary": "Update a competition. 402 when the patch brings the competition back into the `competitions.max_active` count from outside it — a status into draft/published/live from archived or completed, or an end date (alone or with a status) that ends an Event Pass's exemption — while the organisation is at its limit, as a create would be; also 402 when the competition is billing-frozen (anything but archiving or completing it) and at `dashboard.public.max` when it becomes publicly readable. 409 slug in use",
         "tags": [
           "competitions"
         ],
@@ -2318,6 +2318,50 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
             "content": {
               "application/json": {
                 "schema": {
