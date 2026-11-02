@@ -24,7 +24,9 @@
 //    no Undo call, no Call (candidate-list.tsx), no scorer QR (showing it mints a link), no "+ Connect a stream" and no stream
 //    settings; "Open pad" reads "Open match", since the console decides what that reader may do there. The server refuses
 //    every one of those writes on its own (read-only-staff.test.ts); hiding them is the page being honest, not the guard.
-//  - a billing-frozen competition (`ctx.frozen`, task F1) offers no Undo call and no Call: the server refuses both (402).
+//  - a billing-frozen competition (`ctx.frozen`, task F1) offers no Undo call and no Call: the server refuses both (402). Task G1:
+//    it offers no scorer QR / device link either (the server refuses every score write from it, scoring.ts, 402) and "Open pad"
+//    reads "Open match" - the fixture page's own frozen behaviour (its console is read-only there).
 import { useState } from "react";
 import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
@@ -174,7 +176,7 @@ export function CourtFocus({
         </>
       )}
       {court.state === "called" && f !== null && <CalledPanel ctx={ctx} fixture={f} onChanged={onChanged} onRefused={onRefused} />}
-      {f !== null && (court.state === "playing" || court.state === "called") && !ctx.readOnly && (
+      {f !== null && (court.state === "playing" || court.state === "called") && !ctx.readOnly && !ctx.frozen && (
         <ScorerPanel
           ctx={ctx}
           fixture={f}
@@ -270,7 +272,7 @@ export function NoCourtFocus({
           readOnly={ctx.readOnly}
         />
       )}
-      {!ctx.readOnly && (
+      {!ctx.readOnly && !ctx.frozen && (
         <ScorerPanel ctx={ctx} fixture={f} attention={f.scorer_attention} memoryKey={`fixture-${f.id}`} onChanged={onChanged} />
       )}
     </section>
@@ -293,7 +295,8 @@ function BackButton({ label, onBack }: { label: string; onBack: () => void }) {
 }
 
 /** The match's console page: "Open pad" for an organiser, "Open match" for a view-only reader (the console decides what they
- *  may do there — an accepted official among them still scores). */
+ *  may do there — an accepted official among them still scores) and for anyone on a billing-frozen competition (task G1: the
+ *  fixture page draws no pad there, as every score write is refused with a 402). */
 function OpenPadLink({ ctx, fixture }: { ctx: MatchDayCtx; fixture: MatchDayFixture }) {
   return (
     <Link
@@ -301,7 +304,7 @@ function OpenPadLink({ ctx, fixture }: { ctx: MatchDayCtx; fixture: MatchDayFixt
       data-testid="md-open-pad"
       className="btn btn-ghost min-h-11 shrink-0 text-sm lg:min-h-0 lg:py-1.5"
     >
-      {t(ctx.dict, ctx.readOnly ? "matchDay.focus.openMatch" : "matchDay.focus.openPad")}
+      {t(ctx.dict, ctx.readOnly || ctx.frozen ? "matchDay.focus.openMatch" : "matchDay.focus.openPad")}
     </Link>
   );
 }
