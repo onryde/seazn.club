@@ -117,6 +117,10 @@ export interface MatchDayCandidate {
   /** Whole minutes its estimated start where it waits is past its planned time ("25 min behind Court 1"); for no_court, how
    *  long its planned time (if it has one) has passed. */
   behind_minutes: number;
+  /** The match's planned time (Match Day E2): the next match's planned time on its own court, or a no-court match's own
+   *  `scheduled_at`. Null when it has none — and for a match CALLED elsewhere, whose planned time the call replaced. The row
+   *  prints it ("18:00 · no court"); "Not scheduled" is the row of a match with no time at all. */
+  planned_at: string | null;
   /** A hard stop (§7.2): a player of the match — a doubles partner counts; for a side with no roster, the side itself — is
    *  in a match playing, or called, elsewhere. `court_name` is null when that match has no court. */
   blocked: null | { kind: "player_busy"; person_name: string; court_name: string | null };

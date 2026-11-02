@@ -22,6 +22,7 @@ import { CALL_REFUSAL, TBD_ENTRANT, type CallPreview } from "@/lib/match-day/cal
 import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDaySummary, MatchDayView, VenueNoun } from "@/lib/match-day/types";
 import {
   callableCount,
+  candidateWhere,
   compactScore,
   courtCounts,
   filterCandidates,
@@ -159,6 +160,7 @@ const cand = (o: Partial<MatchDayCandidate> = {}, f: Partial<MatchDayFixture> = 
   from_court_name: "Court 1",
   waiting_minutes: 15,
   behind_minutes: 0,
+  planned_at: null,
   blocked: null,
   ...o,
 });
@@ -466,7 +468,72 @@ describe("candidates", () => {
     expect([...groups].sort((a, b) => a - b)).toEqual(groups);
     expect(html).toContain(`${t(dict, "matchDay.candidate.where.nextOn", { court: "Court 1" })} · ${t(dict, "matchDay.candidate.when.behind", { minutes: 25 })}`);
     expect(html).toContain(`${t(dict, "matchDay.candidate.where.nextOn", { court: "Court 1" })} · ${t(dict, "matchDay.candidate.when.in", { minutes: 15 })}`);
-    expect(html).toContain(t(dict, "matchDay.candidate.where.noCourt"));
+    // No planned time on any of these rows: the no-court one is the row of a match with no time at all.
+    expect(html).toContain(t(dict, "matchDay.candidate.where.unscheduled"));
+    expect(html).not.toContain(t(dict, "matchDay.candidate.where.noCourt"));
+  });
+
+  // Match Day E2 item 1. A planned time is printed in the page's zone through fmtPublicTime; the expected clock times are worked
+  // by hand from the zone (Europe/London is on GMT on 2026-10-31; Asia/Tokyo is UTC+9, so the same instant reads 03:00 there).
+  describe("E2-1 — a candidate row shows its planned time", () => {
+    const whereOf = (c: MatchDayCandidate, withCtx: MatchDayCtx = ctx): string => {
+      const html = renderToStaticMarkup(<CandidateRows ctx={withCtx} court={court({ court_name: "Court 5" })} candidates={[c]} onCall={() => {}} />);
+      const at = html.indexOf('<p class="text-xs text-slate-600">');
+      return html.slice(at, html.indexOf("</p>", at)).replace(/<[^>]+>/g, "");
+    };
+    const PLANNED = "2026-10-31T18:00:00.000Z";
+
+    it("a no-court match with a time reads '18:00 · no court' — never 'Not scheduled'", () => {
+      const row = whereOf(cand({ source: "no_court", from_court_name: null, planned_at: PLANNED, waiting_minutes: 0 }));
+      expect(row).toBe(`18:00 · ${t(dict, "matchDay.candidate.where.noCourt")}`);
+      expect(row).toBe("18:00 · no court");
+      expect(row).not.toContain(t(dict, "matchDay.candidate.where.unscheduled"));
+    });
+
+    it("a no-court match with NO time reads 'Not scheduled', and only that", () => {
+      expect(whereOf(cand({ source: "no_court", from_court_name: null, planned_at: null, waiting_minutes: 0 }))).toBe("Not scheduled");
+    });
+
+    it("a match waiting on another court leads with its planned time, then where and how late", () => {
+      expect(whereOf(cand({ planned_at: PLANNED, behind_minutes: 25, waiting_minutes: 0 }))).toBe("18:00 · Next on Court 1 · 25 min behind");
+      expect(whereOf(cand({ planned_at: PLANNED, waiting_minutes: 15 }))).toBe("18:00 · Next on Court 1 · in ~15 min");
+    });
+
+    it("this court's own next match leads with its planned time too", () => {
+      expect(whereOf(cand({ source: "this_court", from_court_name: null, planned_at: PLANNED, waiting_minutes: 0 }))).toBe("18:00 · Next here");
+    });
+
+    it("a match called elsewhere says so and prints no planned time (the call replaced it), even if one is handed in", () => {
+      const row = whereOf(cand({ planned_at: PLANNED, waiting_minutes: 0 }, { called_at: "2026-10-31T17:50:00.000Z" }));
+      expect(row).toBe("Called to Court 1, not started");
+    });
+
+    it("prints in the PAGE's zone, not UTC: the same instant reads 03:00 on a Tokyo page", () => {
+      const tokyo: MatchDayCtx = { ...ctx, tz: "Asia/Tokyo" };
+      expect(whereOf(cand({ source: "no_court", from_court_name: null, planned_at: PLANNED, waiting_minutes: 0 }), tokyo)).toBe("03:00 · no court");
+    });
+
+    it("sweep: 'Not scheduled' is printed exactly when a no-court match has no time — every source x time x locale", () => {
+      let checked = 0;
+      for (const [locale, d] of Object.entries(DICTS)) {
+        for (const source of ["this_court", "other_court", "no_court"] as const) {
+          for (const planned_at of [PLANNED, null]) {
+            for (const called of [false, true]) {
+              const c = cand({ source, planned_at, from_court_name: source === "this_court" ? null : "Court 1", waiting_minutes: 0 }, { called_at: called ? PLANNED : null });
+              const text = candidateWhere(d, c, () => "TIME");
+              const unscheduled = t(d, "matchDay.candidate.where.unscheduled");
+              expect(text.includes(unscheduled), `${locale} ${source} planned=${planned_at !== null} called=${called}`).toBe(source === "no_court" && planned_at === null);
+              // The time leads exactly when the match has one and is not a call.
+              expect(text.startsWith("TIME · "), `${locale} ${source} planned=${planned_at !== null} called=${called}`).toBe(
+                planned_at !== null && !(source === "other_court" && called),
+              );
+              checked++;
+            }
+          }
+        }
+      }
+      expect(checked).toBe(4 * 3 * 2 * 2);
+    });
   });
 });
 

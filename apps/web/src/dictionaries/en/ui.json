@@ -7126,7 +7126,7 @@
   "matchDay.candidate.where.here": "Next here",
   "matchDay.candidate.where.nextOn": "Next on {court}",
   "matchDay.candidate.where.calledOn": "Called to {court}, not started",
-  "matchDay.candidate.where.noCourt": "Not scheduled",
+  "matchDay.candidate.where.noCourt": "no court",
   "matchDay.candidate.when.behind": "{minutes} min behind",
   "matchDay.candidate.when.in": "in ~{minutes} min",
   "matchDay.candidate.blocked": "{person} is on {court}",
@@ -7220,5 +7220,6 @@
   "rulesStrip.tiebreaks.useSport": "Use the sport's order",
   "divset.rulesMoved": "Match rules, points and tie-breaks are set on the Fixtures tab, under Division rules.",
   "divset.rulesMovedOnline": "Match rules, online play, points and tie-breaks are set on the Fixtures tab, under Division rules.",
-  "divset.rulesMovedLink": "Open Division rules"
+  "divset.rulesMovedLink": "Open Division rules",
+  "matchDay.candidate.where.unscheduled": "Not scheduled"
 }

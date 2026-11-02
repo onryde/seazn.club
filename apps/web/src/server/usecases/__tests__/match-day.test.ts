@@ -1186,6 +1186,39 @@ describe.skipIf(!HAS_DB)("matchDayCandidates", () => {
     expect(f13?.blocked).toEqual({ kind: "player_busy", person_name: "Eve Ellis", court_name: "Court 1" });
   });
 
+  // Match Day E2 item 1. The planned time each source prints is the match's OWN plan (its queue slot on its court, or its
+  // `scheduled_at` with no court), set by hand here and read back — not a value the read model computes. A call replaced the plan.
+  it("E2-1 — a candidate carries its planned time: the queue slot on its court, a no-court match's own time, null with none or once called", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const f14 = between(day.comp, p1, p4);
+    const f23 = between(day.comp, p2, p3);
+    const f34 = between(day.comp, p3, p4);
+    const f13 = between(day.comp, p1, p3);
+    await place(day, f14.id, 30, day.courts.c3); // this court's own next match, planned 30
+    await place(day, f23.id, 10, day.courts.c1); // Court 1's next, planned 10
+    await place(day, f34.id, 5, null); // a time, no court yet
+    // f13 and the rest keep no time and no court.
+    const ranked = await matchDayCandidates(day.auth, day.comp.id, day.courts.c3, at(20));
+    const plannedOf = (id: string) => ranked.find((c) => c.fixture.id === id)?.planned_at;
+    expect(plannedOf(f14.id)).toBe(iso(30));
+    expect(plannedOf(f23.id)).toBe(iso(10));
+    expect(plannedOf(f34.id)).toBe(iso(5));
+    expect(plannedOf(f13.id)).toBeNull();
+    // Every source was checked, and each source has an answer with a time and one without (a sweep that checks nothing fails).
+    expect(new Set(ranked.map((c) => c.source))).toEqual(new Set(["this_court", "other_court", "no_court"]));
+    expect(ranked.filter((c) => c.planned_at !== null).length).toBeGreaterThanOrEqual(3);
+    expect(ranked.filter((c) => c.planned_at === null).length).toBeGreaterThanOrEqual(1);
+
+    // After a call onto Court 1 the call REPLACED the plan: the called match, now offered on another court, has none.
+    await callFixtureToCourt(day.auth, f34.id, day.courts.c1, at(21));
+    const after = await matchDayCandidates(day.auth, day.comp.id, day.courts.c2, at(22));
+    const called = after.find((c) => c.fixture.id === f34.id)!;
+    expect(called.source).toBe("other_court");
+    expect(called.fixture.called_at).toBe(iso(21));
+    expect(called.planned_at).toBeNull();
+  });
+
   it("no-court matches only from active stages, none planned for a later day, none with a TBD side; nothing ready → an empty list", async () => {
     const day = await seedDay();
     const { p1, p2, p3, p4 } = pairs(day);

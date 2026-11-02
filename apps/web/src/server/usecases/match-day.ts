@@ -647,11 +647,13 @@ export async function matchDayCandidates(
       from: string | null;
       waiting: number;
       behind: number;
+      /** The planned time the row prints (E2 item 1); null for a call, which replaced the plan. */
+      planned: Date | null;
     }[] = [];
     for (const c of board.courts) {
       const mine = c.court_id === courtId;
       if (!mine && c.state === "called" && c.current !== null && ready(c.current)) {
-        picked.push({ row: c.current, source: "other_court", from: c.court_name, waiting: 0, behind: 0 });
+        picked.push({ row: c.current, source: "other_court", from: c.court_name, waiting: 0, behind: 0, planned: null });
       }
       const next = c.queue.find((q) => ready(q.row));
       if (next === undefined) continue;
@@ -661,6 +663,7 @@ export async function matchDayCandidates(
         from: mine ? null : c.court_name,
         waiting: wholeMinutes(next.estimated_at.getTime() - nowMs),
         behind: wholeMinutes(next.estimated_at.getTime() - next.planned_at.getTime()),
+        planned: next.planned_at,
       });
     }
     for (const r of board.noCourt) {
@@ -670,6 +673,7 @@ export async function matchDayCandidates(
         from: null,
         waiting: 0,
         behind: r.scheduled_at === null ? 0 : wholeMinutes(nowMs - new Date(r.scheduled_at).getTime()),
+        planned: r.scheduled_at === null ? null : new Date(r.scheduled_at),
       });
     }
     const allowed = await callableCourtsByFixture(tx, picked.map((p) => p.row));
@@ -687,6 +691,7 @@ export async function matchDayCandidates(
         from_court_name: p.from,
         waiting_minutes: p.waiting,
         behind_minutes: p.behind,
+        planned_at: iso(p.planned),
         blocked:
           holder === undefined
             ? null

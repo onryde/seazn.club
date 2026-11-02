@@ -1722,6 +1722,8 @@ export const MatchDayCandidate = z.object({
   from_court_name: z.string().nullable(),
   waiting_minutes: z.number().int().nonnegative(),
   behind_minutes: z.number().int().nonnegative(),
+  // The match's planned time, when it has one (a match called elsewhere has none: the call replaced it).
+  planned_at: z.iso.datetime({ offset: true }).nullable(),
   blocked: z
     .object({ kind: z.literal("player_busy"), person_name: z.string(), court_name: z.string().nullable() })
     .nullable(),

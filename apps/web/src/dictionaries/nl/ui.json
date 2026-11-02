@@ -7126,7 +7126,7 @@
   "matchDay.candidate.where.here": "Volgende hier",
   "matchDay.candidate.where.nextOn": "Volgende op {court}",
   "matchDay.candidate.where.calledOn": "Opgeroepen naar {court}, niet begonnen",
-  "matchDay.candidate.where.noCourt": "Niet gepland",
+  "matchDay.candidate.where.noCourt": "geen baan",
   "matchDay.candidate.when.behind": "{minutes} min achter",
   "matchDay.candidate.when.in": "over ~{minutes} min",
   "matchDay.candidate.blocked": "{person} staat op {court}",
@@ -7220,5 +7220,6 @@
   "rulesStrip.tiebreaks.useSport": "Volgorde van de sport gebruiken",
   "divset.rulesMoved": "Wedstrijdregels, punten en tiebreaks stel je in op het tabblad Wedstrijden, onder Divisieregels.",
   "divset.rulesMovedOnline": "Wedstrijdregels, online spelen, punten en tiebreaks stel je in op het tabblad Wedstrijden, onder Divisieregels.",
-  "divset.rulesMovedLink": "Divisieregels openen"
+  "divset.rulesMovedLink": "Divisieregels openen",
+  "matchDay.candidate.where.unscheduled": "Niet gepland"
 }

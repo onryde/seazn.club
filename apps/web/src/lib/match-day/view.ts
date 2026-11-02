@@ -235,16 +235,23 @@ export function matchLabel(dict: Dict, f: Pick<MatchDayFixture, "home" | "away">
   return t(dict, "matchDay.match", { home: f.home ?? tbd, away: f.away ?? tbd });
 }
 
-/** Where a candidate waits and how late it is (§7: "next on Court 2 · ~15 min", "25 min behind Court 1", "Not scheduled").
- *  The place first, then the timing when there is one: how far behind its plan, else how long until it would start. A match
- *  called onto another court and not started says so — calling it here moves it. */
-export function candidateWhere(dict: Dict, c: MatchDayCandidate): string {
+/** Where a candidate waits, when it was planned and how late it is (§7: "18:00 · next on Court 2 · ~15 min", "25 min behind
+ *  Court 1"). Its planned time leads when it has one (E2 item 1; `time` prints an ISO instant in the page's zone, the one
+ *  formatter every Match Day time goes through), then the place, then the timing: how far behind its plan, else how long until
+ *  it would start. "Not scheduled" is the row of a match with NO time at all — never of one that has a time and no court yet
+ *  ("18:00 · no court"). A match called onto another court and not started says so — calling it here moves it — and carries no
+ *  planned time: the call replaced it. */
+export function candidateWhere(dict: Dict, c: MatchDayCandidate, time: (iso: string) => string): string {
+  const planned = c.planned_at === null ? null : time(c.planned_at);
+  const called = c.source === "other_court" && c.fixture.called_at !== null;
   const place =
     c.source === "this_court"
       ? t(dict, "matchDay.candidate.where.here")
       : c.source === "no_court"
-        ? t(dict, "matchDay.candidate.where.noCourt")
-        : c.fixture.called_at !== null
+        ? planned === null
+          ? t(dict, "matchDay.candidate.where.unscheduled")
+          : t(dict, "matchDay.candidate.where.noCourt")
+        : called
           ? t(dict, "matchDay.candidate.where.calledOn", { court: c.from_court_name ?? "" })
           : t(dict, "matchDay.candidate.where.nextOn", { court: c.from_court_name ?? "" });
   const timing =
@@ -253,7 +260,7 @@ export function candidateWhere(dict: Dict, c: MatchDayCandidate): string {
       : c.waiting_minutes > 0
         ? t(dict, "matchDay.candidate.when.in", { minutes: c.waiting_minutes })
         : null;
-  return timing === null ? place : `${place} · ${timing}`;
+  return [...(planned === null || called ? [] : [planned]), place, ...(timing === null ? [] : [timing])].join(" · ");
 }
 
 /** A blocked candidate's reason (§7.2): "Zara Khan is on Court 3"; a busy match with no court says the person is in another

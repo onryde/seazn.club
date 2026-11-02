@@ -7126,7 +7126,7 @@
   "matchDay.candidate.where.here": "Prochain ici",
   "matchDay.candidate.where.nextOn": "Prochain sur {court}",
   "matchDay.candidate.where.calledOn": "Appelé sur {court}, pas commencé",
-  "matchDay.candidate.where.noCourt": "Non programmé",
+  "matchDay.candidate.where.noCourt": "sans terrain",
   "matchDay.candidate.when.behind": "{minutes} min de retard",
   "matchDay.candidate.when.in": "dans ~{minutes} min",
   "matchDay.candidate.blocked": "{person} est sur {court}",
@@ -7220,5 +7220,6 @@
   "rulesStrip.tiebreaks.useSport": "Utiliser l'ordre du sport",
   "divset.rulesMoved": "Les règles du match, les points et les départages se règlent dans l'onglet Rencontres, sous Règles de la division.",
   "divset.rulesMovedOnline": "Les règles du match, le jeu en ligne, les points et les départages se règlent dans l'onglet Rencontres, sous Règles de la division.",
-  "divset.rulesMovedLink": "Ouvrir Règles de la division"
+  "divset.rulesMovedLink": "Ouvrir Règles de la division",
+  "matchDay.candidate.where.unscheduled": "Non programmé"
 }

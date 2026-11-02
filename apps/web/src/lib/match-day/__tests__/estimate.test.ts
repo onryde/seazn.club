@@ -150,6 +150,7 @@ const cand = (
   from_court_name: source === "other_court" ? "Court 2" : null,
   waiting_minutes: o.waiting ?? 0,
   behind_minutes: o.behind ?? 0,
+  planned_at: null,
   blocked: o.blocked ? { kind: "player_busy", person_name: "Zara Khan", court_name: "Court 3" } : null,
 });
 const ids = (c: MatchDayCandidate[]) => c.map((x) => x.fixture.id);

@@ -180,7 +180,7 @@ export function CandidateRows({
                       {matchLabel(dict, c.fixture)}{" "}
                       <span className="font-normal text-slate-500">· {c.fixture.division_name}</span>
                     </p>
-                    <p className="text-xs text-slate-600">{candidateWhere(dict, c)}</p>
+                    <p className="text-xs text-slate-600">{candidateWhere(dict, c, (iso) => fmtPublicTime(ctx.locale, ctx.tz, iso))}</p>
                   </div>
                   {c.blocked !== null ? (
                     <p className="text-xs font-medium text-slate-700 md:text-right">{blockedReason(dict, c.blocked)}</p>
