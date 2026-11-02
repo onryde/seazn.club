@@ -18,7 +18,10 @@ import { useOrigin } from "@/lib/use-client-snapshot";
 
 export type VisibilityKey = "private" | "unlisted" | "public";
 
-const OPTIONS: { value: VisibilityKey; label: MessageKey; consequence: MessageKey }[] = [
+/** The three options, their names and the one-line consequence of each — read by
+ *  this picker (settings) and by the New competition form's segmented control, so
+ *  the wording has one home. */
+export const VISIBILITY_OPTIONS: { value: VisibilityKey; label: MessageKey; consequence: MessageKey }[] = [
   { value: "private", label: "visibility.private.label", consequence: "visibility.private.consequence" },
   { value: "unlisted", label: "visibility.unlisted.label", consequence: "visibility.unlisted.consequence" },
   { value: "public", label: "visibility.public.label", consequence: "visibility.public.consequence" },
@@ -71,7 +74,7 @@ export function VisibilityPicker({
     // which makes it burst out of narrow cards instead of shrinking.
     <fieldset className="min-w-0 space-y-2 [min-inline-size:0]">
       <legend className="label">{msg("visibility.legend")}</legend>
-      {OPTIONS.map((opt) => {
+      {VISIBILITY_OPTIONS.map((opt) => {
         const active = value === opt.value;
         return (
           <label

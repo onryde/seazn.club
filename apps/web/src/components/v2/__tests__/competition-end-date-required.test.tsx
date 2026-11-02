@@ -63,6 +63,14 @@ const expandFields = (node: ReactNode): ReactElement[] =>
       : [el],
   );
 
+/** Match Day C8: Create needs a name too (its button is disabled without one, and a
+ *  submit that gets past it is refused), so a journey that is about the DATES has
+ *  to give the competition one, as an organiser would. */
+function typeName(tree: ReactElement[], value: string): void {
+  const input = tree.find((el) => el.type === "input" && propsOf(el).maxLength === 200)!;
+  (propsOf(input).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
+}
+
 function typeDate(tree: ReactElement[], which: 0 | 1, value: string): void {
   const input = dateInputs(tree)[which]!;
   (propsOf(input).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
@@ -86,7 +94,7 @@ const mountWizard = () =>
     CompetitionWizard,
     // The public-dashboard upgrade figure is required (see the component)
     // but irrelevant here — these tests never reach the degrade card.
-    { orgSlug: "riverside", publicDashboardUpgrade: null, viewerPlan: "community" },
+    { orgSlug: "riverside", orgId: "org-1", publicDashboardUpgrade: null, viewerPlan: "community" },
     expandFields,
   );
 
@@ -101,7 +109,11 @@ describe("CompetitionWizard — create requires an end date (#376)", () => {
 
   it("refuses to POST at all when the end date is blank, and says why", async () => {
     const island = mount();
-    typeDate(island.tree(), 0, "2026-06-01"); // a start date alone is not enough
+    typeName(island.tree(), "Summer Cup");
+    // A start date alone is not enough — and since C8 it no longer FILLS the end
+    // date in for you when one is already there; here none is typed after it.
+    typeDate(island.tree(), 0, "2026-06-01");
+    typeDate(island.tree(), 1, "");
     await submitForm(island.tree());
 
     expect(vi.mocked(apiV1)).not.toHaveBeenCalled();
@@ -110,6 +122,7 @@ describe("CompetitionWizard — create requires an end date (#376)", () => {
 
   it("refuses an end date before the start date, without a round trip", async () => {
     const island = mount();
+    typeName(island.tree(), "Summer Cup");
     typeDate(island.tree(), 0, "2026-06-01");
     typeDate(island.tree(), 1, "2026-05-31");
     await submitForm(island.tree());
@@ -120,6 +133,7 @@ describe("CompetitionWizard — create requires an end date (#376)", () => {
 
   it("POSTs the typed date itself — never `|| null`", async () => {
     const island = mount();
+    typeName(island.tree(), "Summer Cup");
     typeDate(island.tree(), 0, "2026-06-01");
     typeDate(island.tree(), 1, "2026-08-31");
     await submitForm(island.tree());
@@ -176,6 +190,7 @@ describe("CompetitionWizard — shared date/time control (date/time UX prompt 03
     // The join the swap could break invisibly: DateTimeField hands its parent
     // the VALUE, not the event, so a mis-wired onChange would post undefined.
     const island = mountWizard();
+    typeName(island.tree(), "Summer Cup");
     typeDate(island.tree(), 0, "2026-06-01");
     typeDate(island.tree(), 1, "2026-08-31");
     await submitForm(island.tree());

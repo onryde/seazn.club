@@ -1,7 +1,8 @@
 "use client";
 
-// Competition wizard (PROMPT-15 task 1): description, visibility, branding.
-// POSTs /api/v1/competitions and lands on the competition page to add divisions.
+// Competition wizard (PROMPT-15 task 1; reshaped by Match Day C8): one column —
+// Name, Dates, Visibility, Who will find it, Showcase, Description, Create.
+// POSTs /api/v1/competitions, then shows "Add your first division".
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
@@ -12,18 +13,34 @@ import {
   PUBLIC_DASHBOARD_FEATURE,
   type PublicDashboardUpgrade,
 } from "@/lib/public-dashboard-upgrade";
-import { VisibilityPicker } from "@/components/ui/visibility-picker";
+import { VisibilitySegmented } from "@/components/ui/visibility-segmented";
+import { ProseEditor } from "@/components/prose-editor";
+import { CompetitionReach } from "@/components/v2/competition-reach";
+import { ShowcaseOptIn } from "@/components/v2/showcase-optin";
+import { FirstDivisionPrompt, type CreatedCompetition } from "@/components/v2/first-division-prompt";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
+import { createBlocker, endsOnAfterStartChange, type CreateBlocker } from "@/lib/new-competition-form";
 import { routes } from "@/lib/routes";
 import { useMsg } from "@/components/i18n/dict-provider";
+import type { MessageKey } from "@/lib/messages";
 
+/** The sentence beside a disabled Create, one per thing that can be missing. */
+const BLOCKER_KEY: Record<CreateBlocker, MessageKey> = {
+  name: "comp.wizard.missing.name",
+  endsOn: "comp.wizard.missing.endsOn",
+  both: "comp.wizard.missing.both",
+  order: "comp.validation.endsBeforeStarts",
+};
 
 export function CompetitionWizard({
   orgSlug,
+  orgId,
   publicDashboardUpgrade,
   viewerPlan,
 }: {
   orgSlug: string;
+  /** The org the description editor uploads images to. */
+  orgId: string;
   /**
    * What the next plan up hosts for `dashboard.public.max`, read out of
    * `plan_entitlements` by the Server Component page.
@@ -60,31 +77,53 @@ export function CompetitionWizard({
   const [degraded, setDegraded] = useState<
     { name: string; slug: string; limit: number | null } | null
   >(null);
+  // Set when the create succeeded and the competition has no division yet: the
+  // form is replaced by "Add your first division".
+  const [created, setCreated] = useState<CreatedCompetition | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Showcase is only real on Public; elsewhere it can never be on. Leaving
+  // Public switches it off (consent is given again on the way back).
+  const showcaseOn = visibility === "public" && discoverable;
+  const blocker = createBlocker({ name, startsOn, endsOn });
+
+  function pickVisibility(next: string) {
+    setVisibility(next);
+    if (next !== "public") setDiscoverable(false);
+  }
+
+  /** Ends follows Starts (see `endsOnAfterStartChange`). */
+  function pickStart(next: string) {
+    setEndsOn(endsOnAfterStartChange({ prevStart: startsOn, nextStart: next, endsOn }));
+    setStartsOn(next);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setPaywall(null);
+    // The Create button is disabled for each of these, and says why beside it;
+    // this is the same answer for a submit that gets past it (Enter in a field).
     // #376: the end date is mandatory server-side, so a missing or backwards
     // one would come back as a bare 400 "Invalid input". Say it in the
     // customer's language, before the round trip. Deliberately NOT the native
     // `required` attribute: that fires the browser's own English tooltip and
     // preempts this message entirely.
-    if (!endsOn) {
+    if (blocker === "endsOn" || blocker === "both") {
       setError(msg("comp.wizard.endsOn.required"));
       return;
     }
-    if (startsOn && endsOn < startsOn) {
-      setError(msg("comp.validation.endsBeforeStarts"));
+    if (blocker) {
+      setError(msg(BLOCKER_KEY[blocker]));
       return;
     }
     setBusy(true);
     try {
-      const created = await apiV1<{
+      const made = await apiV1<{
         id: string;
         slug: string;
         visibility: string;
+        discoverable: boolean;
         public_quota_degraded?: { feature_key: string; limit: number | null };
       }>("/api/v1/competitions", {
         method: "POST",
@@ -93,7 +132,7 @@ export function CompetitionWizard({
           description: description.trim() || null,
           visibility,
           // Same hard coupling as settings (doc 15 §1): showcase only public.
-          discoverable: visibility === "public" && discoverable,
+          discoverable: showcaseOn,
           starts_on: startsOn || null,
           ends_on: endsOn,
           // Branding (accent, logo, sponsors) lives in Settings post-create (F7).
@@ -103,18 +142,26 @@ export function CompetitionWizard({
       // The server is the authority on what was actually created, and since T20
       // it SAYS so rather than leaving every consumer to diff the row against
       // its own request. Read off the explicit note, not a re-derivation of it:
-      // `created.visibility` is still the truthful value on the resource (and
+      // `made.visibility` is still the truthful value on the resource (and
       // is what a caller ignoring the note reads), but making this component
       // check both would be two guards covering for each other, each untested.
-      if (created.public_quota_degraded) {
+      if (made.public_quota_degraded) {
         setDegraded({
           name: name.trim(),
-          slug: created.slug,
-          limit: created.public_quota_degraded.limit,
+          slug: made.slug,
+          limit: made.public_quota_degraded.limit,
         });
         return;
       }
-      router.push(routes.competition(orgSlug, created.slug));
+      setCreated({
+        name: name.trim(),
+        slug: made.slug,
+        // The server's answer, not the request: it is the truthful one.
+        visibility: made.visibility,
+        discoverable: made.discoverable,
+        startsOn,
+        endsOn,
+      });
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywall({
@@ -171,101 +218,110 @@ export function CompetitionWizard({
     );
   }
 
+  if (created) return <FirstDivisionPrompt orgSlug={orgSlug} created={created} />;
+
   return (
-    <form onSubmit={submit} className="card space-y-5 p-6">
-      <label className="block">
-        <span className="label">{msg("comp.wizard.name.label")}</span>
-        <input
-          autoFocus
-          required
-          maxLength={200}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={msg("comp.wizard.name.placeholder")}
-          className="input"
-        />
-      </label>
-
-      <label className="block">
-        <span className="label">{msg("comp.wizard.description.label")}</span>
-        <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          rows={4}
-          maxLength={5000}
-          placeholder={msg("comp.wizard.description.placeholder")}
-          className="textarea"
-        />
-      </label>
-
-      {/* v3/03 §7: the one visibility component everywhere. No share URL at
-          create time (the competition has no public page yet). */}
-      <VisibilityPicker value={visibility} onChange={setVisibility} />
-
-      {/* Showcase opt-in (doc 15 §1) — same checkbox + consent copy as
-          settings, gated on public visibility. */}
-      <fieldset className="space-y-2 rounded-lg border border-purple-100 bg-purple-50/50 p-3">
-        <label className="flex items-start gap-2">
+    <div className="max-w-2xl">
+      <form onSubmit={submit} className="card space-y-5 p-5 sm:p-6">
+        <label className="block">
+          <span className="label">{msg("comp.wizard.name.label")}</span>
           <input
-            type="checkbox"
-            disabled={visibility !== "public"}
-            checked={discoverable && visibility === "public"}
-            onChange={(e) => setDiscoverable(e.target.checked)}
-            className="mt-0.5"
+            autoFocus
+            required
+            maxLength={200}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={msg("comp.wizard.name.placeholder")}
+            className="input min-h-11"
           />
-          <span>
-            <span className="text-sm font-semibold text-slate-700">
-              {msg("showcase.label")}
-            </span>
-            <span className="mt-1 block text-xs leading-relaxed text-slate-500">
-              {msg("showcase.consent")}
-            </span>
-          </span>
         </label>
-        {visibility !== "public" && (
-          <p className="text-xs text-amber-600">{msg("showcase.needsPublic")}</p>
+
+        {/* Side by side from 360px; at 320 they stack, because two native date
+            inputs at ~124px each clip their own text. `[&_input]:min-h-11` is
+            the phone tap floor for the shared date control. */}
+        <div className="grid gap-5 min-[360px]:grid-cols-2 [&_input]:min-h-11">
+          <DateTimeField
+            kind="date"
+            label={msg("comp.wizard.startsOn")}
+            value={startsOn}
+            onChange={pickStart}
+          />
+          <div>
+            {/* #376: mandatory — see submit() for why the message is ours and not
+                the browser's native `required` tooltip. `required` here is exactly
+                that policy: DateTimeField emits `aria-required` and never the
+                native attribute, so the screen-reader signal survives without the
+                tooltip that would preempt our localized message. */}
+            <DateTimeField
+              kind="date"
+              label={`${msg("comp.wizard.endsOn")} *`}
+              required
+              min={startsOn || undefined}
+              value={endsOn}
+              onChange={setEndsOn}
+            />
+            {!endsOn && (
+              <p className="mt-1 text-xs text-slate-500">{msg("comp.wizard.endsOn.help")}</p>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-5 border-y border-purple-100 py-5">
+          <VisibilitySegmented value={visibility} onChange={pickVisibility} />
+          <CompetitionReach visibility={visibility} discoverable={showcaseOn} />
+          <div className="border-t border-dashed border-purple-200 pt-4">
+            <ShowcaseOptIn visibility={visibility} checked={showcaseOn} onChange={setDiscoverable} />
+          </div>
+        </div>
+
+        <div>
+          <span className="label">{msg("comp.wizard.description.label")}</span>
+          {/* The editor competition settings uses after creation: TipTap,
+              Markdown in and out, Preview through the public pipeline. 10rem
+              minimum (its `min-h-40`), then it grows with the text. */}
+          <ProseEditor
+            value={description}
+            onChange={setDescription}
+            orgId={orgId}
+            placeholder={msg("comp.wizard.description.placeholder")}
+            touch
+          />
+        </div>
+
+        {paywall && <UpgradeGate feature={paywall.feature} viewerPlan={viewerPlan} />}
+        {error && (
+          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
         )}
-      </fieldset>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <DateTimeField
-          kind="date"
-          label={msg("comp.wizard.startsOn")}
-          value={startsOn}
-          onChange={setStartsOn}
-        />
-        {/* #376: mandatory — see submit() for why the message is ours and not
-            the browser's native `required` tooltip. `required` here is exactly
-            that policy: DateTimeField emits `aria-required` and never the
-            native attribute, so the screen-reader signal survives without the
-            tooltip that would preempt our localized message. */}
-        <DateTimeField
-          kind="date"
-          label={`${msg("comp.wizard.endsOn")} *`}
-          required
-          min={startsOn || undefined}
-          value={endsOn}
-          onChange={setEndsOn}
-        />
-      </div>
-
-      {paywall && <UpgradeGate feature={paywall.feature} viewerPlan={viewerPlan} />}
-      {error && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
-      )}
-
-      <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => router.push(routes.orgHome(orgSlug))}
-          className="btn btn-ghost"
-        >
-          {msg("comp.wizard.cancel")}
-        </button>
-        <button type="submit" disabled={busy || !name.trim()} className="btn btn-primary">
-          {busy ? msg("comp.wizard.creating") : msg("comp.wizard.create")}
-        </button>
-      </div>
-    </form>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <p
+            id="create-blocker"
+            data-testid="create-blocker"
+            aria-live="polite"
+            className="min-w-0 flex-1 text-sm text-slate-700 max-sm:text-center"
+          >
+            {blocker ? msg(BLOCKER_KEY[blocker]) : ""}
+          </p>
+          <div className="flex flex-col-reverse gap-2 sm:ml-auto sm:flex-row">
+            <button
+              type="button"
+              onClick={() => router.push(routes.orgHome(orgSlug))}
+              className="btn btn-ghost min-h-11"
+            >
+              {msg("comp.wizard.cancel")}
+            </button>
+            <button
+              type="submit"
+              disabled={busy || blocker !== null}
+              aria-describedby="create-blocker"
+              className="btn btn-primary min-h-11"
+            >
+              {busy ? msg("comp.wizard.creating") : msg("comp.wizard.create")}
+            </button>
+          </div>
+        </div>
+      </form>
+      <p className="mt-3.5 px-1 text-[13px] text-slate-600">{msg("comp.wizard.nextNote")}</p>
+    </div>
   );
 }

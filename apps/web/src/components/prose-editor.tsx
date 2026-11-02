@@ -30,16 +30,22 @@ interface Props {
   /** Inline style vars for the preview (publicThemeStyle output) so the
    *  organiser previews with their real branding. */
   previewStyle?: React.CSSProperties;
+  /** Opt-in phone tap floor: toolbar buttons and the Write/Preview tabs are 44px
+   *  below `lg` (they wrap rather than scroll). Off by default, so the other
+   *  four editors (org about, payment instructions, news, competition settings)
+   *  keep the compact toolbar they were laid out around. */
+  touch?: boolean;
 }
 
-function ToolbarButton({
-  onClick, active, label, children, disabled,
+export function ToolbarButton({
+  onClick, active, label, children, disabled, touch = false,
 }: {
   onClick: () => void;
   active?: boolean;
   label: string;
   children: React.ReactNode;
   disabled?: boolean;
+  touch?: boolean;
 }) {
   return (
     <button
@@ -49,7 +55,7 @@ function ToolbarButton({
       disabled={disabled}
       onMouseDown={(e) => e.preventDefault()} // keep editor selection
       onClick={onClick}
-      className={`grid h-8 w-8 place-items-center rounded-md transition disabled:opacity-40 ${
+      className={`grid ${touch ? "h-11 w-11 lg:h-8 lg:w-8" : "h-8 w-8"} place-items-center rounded-md transition disabled:opacity-40 ${
         active ? "bg-purple-100 text-purple-700" : "text-slate-500 hover:bg-purple-50 hover:text-purple-700"
       }`}
     >
@@ -105,7 +111,7 @@ function EditorDialog({
   );
 }
 
-export function ProseEditor({ value, onChange, orgId, placeholder, previewStyle }: Props) {
+export function ProseEditor({ value, onChange, orgId, placeholder, previewStyle, touch = false }: Props) {
   const msg = useMsg();
   const [tab, setTab] = useState<"write" | "preview">("write");
   const [previewHtml, setPreviewHtml] = useState("");
@@ -252,6 +258,8 @@ export function ProseEditor({ value, onChange, orgId, placeholder, previewStyle 
               aria-selected={tab === key}
               onClick={() => setTab(key)}
               className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                touch ? "min-h-11 lg:min-h-0" : ""
+              } ${
                 tab === key ? "bg-purple-100 text-purple-800" : "text-slate-500 hover:text-purple-700"
               }`}
             >
@@ -271,40 +279,40 @@ export function ProseEditor({ value, onChange, orgId, placeholder, previewStyle 
         <>
           {editor && (
             <div className="flex flex-wrap items-center gap-0.5 border-b border-purple-50 px-2 py-1">
-              <ToolbarButton label={msg("editor.heading")} active={editor.isActive("heading", { level: 2 })} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>
+              <ToolbarButton touch={touch} label={msg("editor.heading")} active={editor.isActive("heading", { level: 2 })} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>
                 <Heading2 className="h-4 w-4" />
               </ToolbarButton>
-              <ToolbarButton label={msg("editor.subheading")} active={editor.isActive("heading", { level: 3 })} onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}>
+              <ToolbarButton touch={touch} label={msg("editor.subheading")} active={editor.isActive("heading", { level: 3 })} onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}>
                 <Heading3 className="h-4 w-4" />
               </ToolbarButton>
               <span aria-hidden className="mx-1 h-4 w-px bg-purple-100" />
-              <ToolbarButton label={msg("editor.bold")} active={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()}>
+              <ToolbarButton touch={touch} label={msg("editor.bold")} active={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()}>
                 <Bold className="h-4 w-4" />
               </ToolbarButton>
-              <ToolbarButton label={msg("editor.italic")} active={editor.isActive("italic")} onClick={() => editor.chain().focus().toggleItalic().run()}>
+              <ToolbarButton touch={touch} label={msg("editor.italic")} active={editor.isActive("italic")} onClick={() => editor.chain().focus().toggleItalic().run()}>
                 <Italic className="h-4 w-4" />
               </ToolbarButton>
-              <ToolbarButton label={msg("editor.link")} active={editor.isActive("link")} onClick={() => openLinkDialog(editor)}>
+              <ToolbarButton touch={touch} label={msg("editor.link")} active={editor.isActive("link")} onClick={() => openLinkDialog(editor)}>
                 <Link2 className="h-4 w-4" />
               </ToolbarButton>
               <span aria-hidden className="mx-1 h-4 w-px bg-purple-100" />
-              <ToolbarButton label={msg("editor.bulletList")} active={editor.isActive("bulletList")} onClick={() => editor.chain().focus().toggleBulletList().run()}>
+              <ToolbarButton touch={touch} label={msg("editor.bulletList")} active={editor.isActive("bulletList")} onClick={() => editor.chain().focus().toggleBulletList().run()}>
                 <List className="h-4 w-4" />
               </ToolbarButton>
-              <ToolbarButton label={msg("editor.numberedList")} active={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()}>
+              <ToolbarButton touch={touch} label={msg("editor.numberedList")} active={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()}>
                 <ListOrdered className="h-4 w-4" />
               </ToolbarButton>
-              <ToolbarButton label={msg("editor.quote")} active={editor.isActive("blockquote")} onClick={() => editor.chain().focus().toggleBlockquote().run()}>
+              <ToolbarButton touch={touch} label={msg("editor.quote")} active={editor.isActive("blockquote")} onClick={() => editor.chain().focus().toggleBlockquote().run()}>
                 <Quote className="h-4 w-4" />
               </ToolbarButton>
-              <ToolbarButton label={msg("editor.divider")} onClick={() => editor.chain().focus().setHorizontalRule().run()}>
+              <ToolbarButton touch={touch} label={msg("editor.divider")} onClick={() => editor.chain().focus().setHorizontalRule().run()}>
                 <Minus className="h-4 w-4" />
               </ToolbarButton>
               <span aria-hidden className="mx-1 h-4 w-px bg-purple-100" />
-              <ToolbarButton label={msg("editor.image")} onClick={() => fileRef.current?.click()}>
+              <ToolbarButton touch={touch} label={msg("editor.image")} onClick={() => fileRef.current?.click()}>
                 <ImagePlus className="h-4 w-4" />
               </ToolbarButton>
-              <ToolbarButton label={msg("editor.cta")} onClick={openCtaDialog}>
+              <ToolbarButton touch={touch} label={msg("editor.cta")} onClick={openCtaDialog}>
                 <Megaphone className="h-4 w-4" />
               </ToolbarButton>
             </div>

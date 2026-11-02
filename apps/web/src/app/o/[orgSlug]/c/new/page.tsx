@@ -65,6 +65,7 @@ export default async function NewCompetitionPage({
       </h1>
       <TemplateGallery
         orgSlug={orgSlug}
+        orgId={auth.orgId}
         templates={TEMPLATE_CATALOG}
         publicDashboardUpgrade={upgrade}
         viewerPlan={viewerPlan}
