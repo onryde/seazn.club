@@ -7194,7 +7194,7 @@
   "matchDay.focus.openMatch": "Open match",
   "matchDay.back.list": "Back to the list",
   "matchDay.readOnly": "View only. Calling matches and scorer links are for the competition's organisers.",
-  "matchDay.frozen": "Read-only: your organization is over its plan's limit on active competitions, so matches can't be called or uncalled here. Archive a competition or upgrade your plan to run the day from this page.",
+  "matchDay.frozen": "Your organization is over its plan's limit on active competitions. Matches still score, but you can't call or uncall them here or connect a new stream. Archive a competition or upgrade your plan to run the whole day from this page.",
   "matchDay.needsYou.findCourt.court": "Find a court",
   "matchDay.needsYou.findCourt.pitch": "Find a pitch",
   "matchDay.needsYou.findCourt.table": "Find a table",

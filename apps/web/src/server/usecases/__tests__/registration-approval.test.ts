@@ -79,6 +79,9 @@ import {
   promoteWaitlistedRow,
   getRegistrationSettings,
   refundRegistration,
+  confirmRegistration,
+  markRegistrationPaidOffline,
+  confirmRegistrationWaived,
 } from "../registrations";
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -1285,5 +1288,46 @@ describe.skipIf(!HAS_DB)("RS005 review: frozen entitlements block reject and pro
     const [after] = await sql<{ status: string }[]>`
       select status from registrations where id = ${registration.id}`;
     expect(after!.status).toBe("waitlisted");
+  });
+
+  // Match Day PB2 (owner 2026-11-02): scoring is the ONE write a billing-frozen competition keeps; every other freeze site keeps
+  // its 402 (freeze-guard-sites.test.ts is the ledger). These four seat or charge an entrant and had no frozen witness of their
+  // own. One fee-taking manual division, so each row is in the one state that reaches its guard: approve and confirm a PAID row
+  // (the fee is met), mark paid and waive a PENDING one. Frozen: each 402, nothing moves. Then the freeze lifts and the same four
+  // calls on the same rows go through — so the 402 was the freeze, not the row.
+  it("refuses approve, confirm, mark-paid and confirm-waived on a frozen competition; the same calls pass once it thaws", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 500, approval: "manual" });
+    const reg = async (status: "paid" | "pending", displayName: string) =>
+      (
+        await seedRegistration(competition.id, division.id, { fee_cents: 500, currency: "gbp", payment_method: "offline" }, { status, displayName })
+      ).registration.id;
+    const writes: Array<[string, string, string, (id: string) => Promise<unknown>]> = [
+      ["approve", await reg("paid", "Frozen Approve"), "confirmed", (id) => approveRegistration(owner, id)],
+      ["confirm", await reg("paid", "Frozen Confirm"), "confirmed", (id) => confirmRegistration(owner, id)],
+      ["mark paid", await reg("pending", "Frozen MarkPaid"), "confirmed", (id) => markRegistrationPaidOffline(owner, id)],
+      ["confirm waived", await reg("pending", "Frozen Waived"), "confirmed", (id) => confirmRegistrationWaived(owner, id)],
+    ];
+    const statusOf = async (id: string) =>
+      (await sql<{ status: string }[]>`select status from registrations where id = ${id}`)[0]!.status;
+    const before = await Promise.all(writes.map(([, id]) => statusOf(id)));
+    expect(before).toEqual(["paid", "paid", "pending", "pending"]);
+
+    await freezeCompetitions(orgId);
+    let refused = 0;
+    for (const [what, id, , write] of writes) {
+      await expect(write(id), what).rejects.toMatchObject({ status: 402, featureKey: "competitions.max_active" });
+      refused++;
+    }
+    expect(refused, "anti-vacuity: frozen refusals checked").toBe(4);
+    expect(await Promise.all(writes.map(([, id]) => statusOf(id))), "a refused transition must not have half-run").toEqual(before);
+
+    // The pair: the freeze lifts (the override goes), and the same calls on the same rows go through.
+    await sql`delete from org_entitlement_overrides where org_id = ${orgId} and feature_key = 'competitions.max_active'`;
+    await invalidateOrgEntitlements(orgId);
+    for (const [what, id, , write] of writes) await expect(write(id), what).resolves.toBeDefined();
+    expect(await Promise.all(writes.map(([, id]) => statusOf(id)))).toEqual(writes.map(([, , after]) => after));
   });
 });

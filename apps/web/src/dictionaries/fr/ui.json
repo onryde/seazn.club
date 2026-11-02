@@ -7194,7 +7194,7 @@
   "matchDay.focus.openMatch": "Ouvrir le match",
   "matchDay.back.list": "Retour à la liste",
   "matchDay.readOnly": "Lecture seule. L'appel des matchs et les liens de marqueur sont réservés aux organisateurs de la compétition.",
-  "matchDay.frozen": "Lecture seule : votre organisation dépasse la limite de compétitions actives de son offre, donc les matchs ne peuvent pas être appelés ni rappelés ici. Archivez une compétition ou passez à une offre supérieure pour piloter la journée depuis cette page.",
+  "matchDay.frozen": "Votre organisation dépasse la limite de compétitions actives de son offre. Les matchs se marquent toujours, mais vous ne pouvez ni les appeler ni annuler un appel ici, ni connecter une nouvelle diffusion. Archivez une compétition ou passez à une offre supérieure pour piloter toute la journée depuis cette page.",
   "matchDay.needsYou.findCourt.court": "Trouver un terrain",
   "matchDay.needsYou.findCourt.pitch": "Trouver un terrain",
   "matchDay.needsYou.findCourt.table": "Trouver une table",

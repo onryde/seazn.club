@@ -35,6 +35,6 @@ On a playing or called court, **Remote scoring** shows a QR code and link for th
 
 ## Common questions
 
-**Why can't I call or score from Match Day?** Either you can only view the competition (the page says **View only**), or your organisation is over its plan's limit on active competitions: the page says it is read-only, the scorer link is not offered, and **Open pad** reads **Open match**. Archive a competition or upgrade your plan ([plans](/help/billing/plans)).
+**Why can't I call a match from Match Day?** Either you can only view the competition (the page says **View only**), or your organisation is over its plan's limit on active competitions. Over the limit, matches still score: **Open pad** works as usual, and so does the scorer link if your plan includes scorer links. What stops is calling or uncalling a match and connecting a new stream (a stream already running keeps going, and you can still stop it). Archive a competition or upgrade your plan to get those back ([plans](/help/billing/plans)).
 
 **Where did "Needs you" go on a match day?** It moved here: Match Day has the list, behind a button in its header. The competition page keeps one line that links to it with the count, instead of listing the same rows twice.

@@ -366,7 +366,7 @@ export function MatchDayShell({
               dict={dict}
               words={words}
               hrefOf={(f) => fixtureHref(ctx, f)}
-              openLabel={t(dict, readOnly || frozen ? "matchDay.focus.openMatch" : "matchDay.focus.openPad")}
+              openLabel={t(dict, readOnly ? "matchDay.focus.openMatch" : "matchDay.focus.openPad")}
               onSelect={openMatch}
             />
           </div>

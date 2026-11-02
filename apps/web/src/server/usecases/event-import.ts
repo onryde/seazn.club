@@ -700,9 +700,9 @@ async function runImport(
   const startedAt = performance.now();
   assertWithinCaps(input);
   const division = await loadDivision(auth, divisionId);
-  // Over-quota freeze (doc 10 §2.4), the same gate `scoreEvent` applies at the
-  // live scoring door (scoring.ts:195 + :214): a downgraded org's frozen
-  // competitions are READ-ONLY, and a bulk write is still a write.
+  // Over-quota freeze (doc 10 §2.4): a downgraded org's frozen competitions are READ-ONLY, and a bulk write is still a write.
+  // The live scoring door no longer asks it (Match Day PB2, owner 2026-11-02: a match under way keeps scoring); a bulk
+  // import of results is not that, so it keeps the 402 (the ledger: __tests__/freeze-guard-sites.test.ts).
   //
   // Call-level, resolved ONCE (owner ruling R-A): an import addresses exactly
   // one division, therefore exactly one competition, so the verdict is

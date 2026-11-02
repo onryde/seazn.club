@@ -14,6 +14,8 @@ If a renewal payment fails, nothing changes straight away. Stripe retries the ca
 
 Anything over a Community limit becomes **read-only**: your most recently active competitions stay fully editable up to the limit; the rest freeze. A frozen competition's dashboards, standings and history all remain visible — you just can't change it until there's room.
 
+**Matches still score.** A frozen competition's matches can still be scored and finished on the pad, so a match already under way is never stranded. Everything else waits for room: the schedule, entrants, registrations, match formats, calling matches on Match Day and connecting a new stream.
+
 ## Making room
 
 - **Archive** or complete competitions until you're inside the limits — frozen ones thaw automatically.

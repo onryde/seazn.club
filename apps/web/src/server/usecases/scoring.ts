@@ -34,7 +34,6 @@ import {
 } from "@/server/public-site/revalidate";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { AppendEventRequest } from "@/server/api-v1/schemas";
-import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { subjectToScorerCapabilityGates } from "./scorers";
 import { isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
 import { DEPARTED_STATUSES } from "./entrants";
@@ -511,8 +510,14 @@ export const __assertUndoTargetForTests = assertUndoTarget;
 // Entitlement gates at THE scoring door:
 //  - cricket.dls: a `cricket.revise` WITHOUT a manual target under a
 //    dls-enabled config makes the fold compute a DLS target — Pro only. A
-//    manual umpire target is always allowed;
-//  - freeze: fixtures of an over-quota (frozen) competition are read-only.
+//    manual umpire target is always allowed.
+// NOT the billing freeze (Match Day PB2, owner 2026-11-02, "apply rec", option
+// A): a competition over its organisation's `competitions.max_active` still
+// SCORES — the pad, the scorer QR's device link and the organiser alike — so a
+// day under way can finish. Every other write the freeze guards (a Match Day
+// call and its Undo, schedule edits, structure) keeps its 402
+// (`assertNotFrozen`, entitlement-freeze.ts; the ledger of those sites is
+// freeze-guard-sites.test.ts). Witness: scoring-frozen-competition.test.ts.
 // W1 (entitlements v18, owner ruling 2026-08-30): the fidelity-band gate that
 // used to live here (event-type → feature, derived from the pinned module's
 // `fidelityTiers`) is deleted — scoring detail is free on every plan, for
@@ -529,31 +534,23 @@ async function assertEntitledToScore(
   fixtureId: string,
   input: AppendEventRequest,
 ): Promise<{ replay: ScoreOutcome | null; sport: FixtureSport | null }> {
-  // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
-  // (`getLimit`), and `withTenant` pins a pooled connection for its whole
-  // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
-  // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
-  const frozen = await frozenCompetitionIds(auth.orgId);
   const ctx = await withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<
       {
         sport_key: string;
         module_version: string;
         config: unknown;
-        competition_id: string;
         division_status: string;
         fixture_status: string;
         scorer_can_finalize: boolean;
       }[]
     >`
-      select d.sport_key, d.module_version, d.config, d.competition_id,
+      select d.sport_key, d.module_version, d.config,
              d.status as division_status, f.status as fixture_status,
              d.scorer_can_finalize
       from fixtures f join divisions d on d.id = f.division_id
       where f.id = ${fixtureId}`;
-    if (!row) return null;
-    assertNotFrozen(frozen, row.competition_id);
-    return row;
+    return row ?? null;
   });
   if (!ctx) return { replay: null, sport: null };
   const sport: FixtureSport = { key: ctx.sport_key, moduleVersion: ctx.module_version };
