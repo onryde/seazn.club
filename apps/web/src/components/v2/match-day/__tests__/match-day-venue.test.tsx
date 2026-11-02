@@ -20,6 +20,12 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
     },
   };
 });
+/** The address as Next's `useSearchParams` reads it: null outside the app router (the static suites), else a live query string. */
+const nav = vi.hoisted(() => ({ search: null as null | URLSearchParams }));
+vi.mock("next/navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/navigation")>();
+  return { ...actual, useSearchParams: () => nav.search };
+});
 const poll = vi.hoisted(() => ({ tick: null as null | (() => void) }));
 vi.mock("@/components/v2/desk/band-poll", () => ({
   browserBandPollDeps: () => ({}),
@@ -126,6 +132,7 @@ beforeEach(() => {
   net.calls = [];
   net.next = null;
   poll.tick = null;
+  nav.search = null;
   replaceState.mockClear();
   vi.stubGlobal("window", {
     history: { replaceState },
@@ -375,5 +382,65 @@ describe("the filter itself — a checklist, 44px rows, a sheet on a phone", () 
       }
     }
     expect(checked).toBe(4 * 7);
+  });
+});
+
+describe("I3 (fix round 1) — the venue filter survives Back: the ADDRESS is the authority, not the props the page was first rendered with", () => {
+  // Why: Next restores a page on Back from its router cache, with the server props it was first rendered with - the venue the
+  // address carried THEN (none). The address itself is right (the filter writes it with replaceState), so the shell reads that.
+  const board = () => view([A1, A2, B1, B2, B3], ["v-b"]);
+  const selectedOf = (tree: ReactElement[]) => [...(propsOf(filterOf(tree)!).selected as ReadonlySet<string>)].sort();
+
+  it("stale props (no venue), an address that names one: the address wins, in every form it can take", () => {
+    const rows: [string, string[]][] = [
+      ["venue=v-a", ["c-a1", "c-a2"]],
+      ["venue=all", ["c-a1", "c-a2", "c-b1", "c-b2", "c-b3"]],
+      ["venue=v-a,v-b", ["c-a1", "c-a2", "c-b1", "c-b2", "c-b3"]],
+      ["venue=v-a&venue=v-b", ["c-a1", "c-a2", "c-b1", "c-b2", "c-b3"]],
+      ["court=zzz&venue=v-b", ["c-b1", "c-b2", "c-b3"]],
+    ];
+    let checked = 0;
+    for (const [qs, expected] of rows) {
+      nav.search = new URLSearchParams(qs);
+      const island = renderIsland(MatchDayShell, props(board(), { venueParam: null }));
+      expect(listed(island.tree()).sort(), qs).toEqual(expected);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("an address with NO venue is the default again, whatever the stale props said", () => {
+    nav.search = new URLSearchParams("");
+    const island = renderIsland(MatchDayShell, props(board(), { venueParam: "v-a" }));
+    expect(listed(island.tree()).sort()).toEqual(["c-b1", "c-b2", "c-b3"]);
+  });
+
+  it("outside the app router (no search params at all) the props still speak - the static render and the first server paint", () => {
+    nav.search = null;
+    expect(listed(renderIsland(MatchDayShell, props(board(), { venueParam: "v-a" })).tree()).sort()).toEqual(["c-a1", "c-a2"]);
+  });
+
+  it("the SEQUENCE: choose a venue, leave the page, come Back to a page rendered from its cache - the choice and the address both hold", () => {
+    // First visit: the page is rendered by the server with no ?venue= at all.
+    const first = renderIsland(MatchDayShell, props(board(), { venueParam: null }));
+    expect(listed(first.tree()).sort()).toEqual(["c-b1", "c-b2", "c-b3"]);
+    choose(first, ["v-a"]);
+    expect(replaceState).toHaveBeenLastCalledWith(null, "", "/o/acme/c/westway-open/match-day?venue=v-a");
+    first.unmount();
+    // Back: the router rebuilds the shell from the SAME stale props, while the address is what the filter wrote.
+    nav.search = new URLSearchParams("venue=v-a");
+    const back = renderIsland(MatchDayShell, props(board(), { venueParam: null }));
+    expect(listed(back.tree()).sort()).toEqual(["c-a1", "c-a2"]);
+    expect(selectedOf(back.tree()), "the filter control itself shows the choice").toEqual(["v-a"]);
+    // And the next choice writes the address from there (it is not stuck on the props).
+    choose(back, ["v-b"]);
+    expect(replaceState).toHaveBeenLastCalledWith(null, "", "/o/acme/c/westway-open/match-day?venue=v-b");
+    expect(listed(back.tree()).sort()).toEqual(["c-b1", "c-b2", "c-b3"]);
+    expect(selectedOf(back.tree())).toEqual(["v-b"]);
+  });
+
+  it("a venue the address names that is no longer on the board falls through to the default (a stale link opens a page, never an empty one)", () => {
+    nav.search = new URLSearchParams("venue=v-gone");
+    expect(listed(renderIsland(MatchDayShell, props(board(), { venueParam: null })).tree()).sort()).toEqual(["c-b1", "c-b2", "c-b3"]);
   });
 });

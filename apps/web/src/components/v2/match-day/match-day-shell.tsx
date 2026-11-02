@@ -25,6 +25,7 @@
 //  - Needs you's unscheduled row carries "Find a court": the first free court's candidates, opened in place (`?court=` when
 //    the link is opened another way), or back to the list when no court is free.
 import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
 import { fmtPublicDate } from "@/lib/format";
@@ -115,10 +116,15 @@ export function MatchDayShell({
    *  court on the list opens it full-screen, as tapping it would. */
   const [phoneOpen, setPhoneOpen] = useState(() => opened !== null);
   const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
-  /** The venues listed (E2 item 5): the URL's choice, else the venues with a match today, else all. Display only. A court the page
-   *  was asked to open (`?court=`) is never hidden by it: its venue is added. */
+  /** The address as the browser has it NOW (fix round 1, I3). On Back, Next rebuilds this page from its router cache with the server
+   *  props it was first rendered with - the `?venue=` the address carried then, which is none if the filter was set afterwards - so
+   *  `venueParam` goes stale while the address itself is right (the filter writes it). The address wins whenever the router gives
+   *  one; the prop speaks outside the app router (the static suites) and is what the server painted the first time. */
+  const address = useSearchParams();
+  /** The venues listed (E2 item 5): the address's choice, else the venues with a match today, else all. Display only. A court the
+   *  page was asked to open (`?court=`) is never hidden by it: its venue is added. */
   const [venues, setVenues] = useState<ReadonlySet<string>>(() => {
-    const picked = initialVenueSelection(initial.courts, initial.venues_today, parseVenueParam(venueParam));
+    const picked = initialVenueSelection(initial.courts, initial.venues_today, parseVenueParam(address === null ? venueParam : address.getAll("venue")));
     const asked = focusCourtId === null ? undefined : initial.courts.find((c) => c.court_id === focusCourtId);
     return asked === undefined || picked.has(asked.venue_id) ? picked : new Set([...picked, asked.venue_id]);
   });

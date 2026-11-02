@@ -1620,6 +1620,71 @@ test.describe("Match Day — E2 items 1, 2, 3, 5, 7 (desktop)", () => {
   });
 });
 
+test.describe("Match Day — fix round 1, I3 (the venue filter and Back)", () => {
+  test("a venue chosen on the page is still chosen after a client-side trip to a match page or the competition and the browser's Back - the selection AND the address", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(180_000);
+    const seed = await seedE2(request, "Back");
+    const { courts, venues } = seed;
+    await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+    await expect(page.getByTestId("md-court-row").first()).toBeVisible();
+    // Both venues have a match today: the page opens on all of them and the address carries no choice yet - which is exactly
+    // what Next keeps as the page's props, and hands back on Back.
+    expect(new URL(page.url()).searchParams.get("venue")).toBeNull();
+    await expect(page.getByTestId("md-venue-summary")).toHaveText(UI_EN["matchDay.venue.triggerAll"]!);
+
+    await page.getByTestId("md-venue-trigger").click();
+    await page.getByTestId("md-venue-panel").locator(`[data-testid="md-venue-option"][data-venue-id="${venues.b.id}"]`).uncheck();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("md-venue-summary")).toHaveText(venues.a.name);
+    const chosenUrl = new URL(page.url());
+    expect(chosenUrl.searchParams.get("venue")).toBe(venues.a.id);
+    const hallA = await courtIdsInList(page);
+    expect(hallA, "premise: Hall A's courts are listed, none of Hall B's").toEqual(expect.arrayContaining([courts.a1.id, courts.a2.id]));
+    expect(hallA).not.toContain(courts.b1.id);
+
+    // A mark on this document: it survives a client-side navigation and dies with a full page load, so the trip below is proven to
+    // be the router's (the case that rebuilds the page from its cache) and not a reload that would read the address afresh.
+    await page.evaluate(() => ((window as unknown as { __mdTrip: number }).__mdTrip = 1));
+    const stillSameDocument = () => page.evaluate(() => (window as unknown as { __mdTrip?: number }).__mdTrip === 1);
+    const backOnTheList = async (label: string) => {
+      await expect(page.getByTestId("md-court-row").first(), label).toBeVisible();
+      expect(await stillSameDocument(), `${label}: the trip never reloaded the document`).toBe(true);
+      expect(new URL(page.url()).searchParams.get("venue"), `${label}: the address still carries the choice`).toBe(venues.a.id);
+      await expect(page.getByTestId("md-venue-summary"), `${label}: the filter still names Hall A`).toHaveText(venues.a.name);
+      expect(await courtIdsInList(page), `${label}: the same courts are listed`).toEqual(hallA);
+      await expect(row(page, courts.b1.name), `${label}: Hall B stays off the list`).toHaveCount(0);
+    };
+
+    // Trip 1: the playing court's match page, by the app's own link.
+    await row(page, courts.a1.name).click();
+    await page.getByTestId("md-focus").getByTestId("md-open-pad").click();
+    await page.waitForURL((u) => u.pathname !== chosenUrl.pathname, { timeout: 30_000 });
+    expect(await stillSameDocument(), "the link navigated client-side").toBe(true);
+    await page.goBack();
+    await page.waitForURL((u) => u.pathname === chosenUrl.pathname);
+    await backOnTheList("after the match page");
+
+    // Trip 2: the competition, by the header's link.
+    await page.getByRole("link", { name: /^Back to / }).click();
+    await page.waitForURL((u) => u.pathname !== chosenUrl.pathname, { timeout: 30_000 });
+    expect(await stillSameDocument(), "the link navigated client-side").toBe(true);
+    await page.goBack();
+    await page.waitForURL((u) => u.pathname === chosenUrl.pathname);
+    await backOnTheList("after the competition");
+
+    // And the choice is still live: Hall B back on, the address says all.
+    await page.getByTestId("md-venue-trigger").click();
+    await page.getByTestId("md-venue-all").check();
+    await page.keyboard.press("Escape");
+    expect(new URL(page.url()).searchParams.get("venue")).toBe("all");
+    await expect(page.getByTestId("md-venue-summary")).toHaveText(UI_EN["matchDay.venue.triggerAll"]!);
+    await expectNoHorizontalScroll(page);
+  });
+});
+
 test.describe("Match Day — E2 items 2, 3, 5, 7 (phone 320)", () => {
   test.use({ viewport: { width: 320, height: 568 } });
 

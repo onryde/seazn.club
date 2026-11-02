@@ -18,6 +18,10 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
   };
 });
 
+/** `useSearchParams` reads a router context the node-env harness has no hook dispatcher for (it calls `use`): outside the app
+ *  router it is null, which is what the shell treats as "no address to read" (I3), so the props speak. */
+vi.mock("next/navigation", async (importOriginal) => ({ ...(await importOriginal<typeof import("next/navigation")>()), useSearchParams: () => null }));
+
 /** The band poll's schedule is a browser's (visibility, timers): stubbed, and its tick kept so a test can fire it. */
 const poll = vi.hoisted(() => ({ tick: null as null | (() => void) }));
 vi.mock("@/components/v2/desk/band-poll", () => ({
