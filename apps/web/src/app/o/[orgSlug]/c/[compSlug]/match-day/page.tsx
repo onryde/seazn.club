@@ -46,6 +46,10 @@ export default async function MatchDayPage({
     orgPlanKey(page.auth.orgId),
     getCompetition(page.auth, id),
   ]);
+  // Task G5: a viewer's first paint carries no Needs-you rows. The shell draws none for a view-only reader, but the `initial` prop
+  // is serialised into the response, so the rows would still reach a browser that never shows them. The competition page strips
+  // them the same way (`desk && canEdit ? needsYouItems(…) : []`).
+  const initial = page.canEdit ? view : { ...view, needs_you: [] };
   return (
     <main className="mx-auto max-w-6xl px-4 py-6 md:py-8">
       <MatchDayShell
@@ -55,7 +59,7 @@ export default async function MatchDayPage({
         compSlug={page.competition.slug}
         locale={locale}
         divisions={divisions.map((d) => ({ id: d.id, name: d.name }))}
-        initial={view}
+        initial={initial}
         // Only the keys the island renders cross to the client, never the whole dictionary: its own, the Needs-you list's title
         // (`NeedsYou`, reused; its rows arrive translated), the scorer QR's heading (the console's own "Remote scoring") and the
         // preview's "Live on YouTube" (the fixture page's words for the same stream).
