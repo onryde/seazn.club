@@ -7,7 +7,7 @@
 //
 // Anti-vacuity: every absence is paired with the presence beside it; the sweep reports how many panels it opened.
 import { expect, test, type Page } from "@playwright/test";
-import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, openStagePanel, closeStagePanel, stageCardOf, type StagePanel } from "./helpers";
+import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, openStagePanel, closeStagePanel, seedCompletedLeague, stageCardOf, type StagePanel } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { expectStageToolsSheet } from "./helpers/stage-tools-sheet";
 import { escapeRe, moduleOf, summaryFormatText, summaryPointsText, summaryTiesPrefix } from "./helpers/stage-summary";
@@ -84,10 +84,11 @@ test("the stage card: header buttons, a one-line summary, the stage's own fixtur
   await expect(card.getByTestId(`stage-points-${stageId}`), "no inline Points section").toHaveCount(0);
   await expect(card.getByTestId(`stage-tiebreaks-${stageId}`), "no inline Tie-breaks section").toHaveCount(0);
 
-  // The stage's fixtures are IN the card; there is no "View N fixtures" trip and no "See the fixtures" link. A started division opens
-  // its sheet on Today, which keeps none of these unscheduled matches (the page says so, once): "All" shows the stage's rows.
-  await expect(page.getByTestId("run-sheet-empty"), "Today keeps none of them: the page says so once").toHaveCount(1);
-  await page.getByTestId("run-sheet-filter").locator('[data-filter="all"]').click();
+  // The stage's fixtures are IN the card; there is no "View N fixtures" trip and no "See the fixtures" link. The sheet opens on All
+  // whatever the division's phase (PB1, owner 2026-11-02: it used to open on Today once a division started, which kept none of these
+  // unscheduled matches and said so), so the stage's rows are there with no tap, and the page has no "nothing matches" sentence.
+  await expect(page.getByTestId("run-sheet-filter").locator('[data-filter="all"]'), "the sheet opens on All").toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("run-sheet-empty"), "All keeps every row: nothing to apologise for").toHaveCount(0);
   await expect(card.getByTestId("stage-run-sheet"), "the stage's rows are in its card").toBeVisible();
   await expect(card.locator("li[data-fixture-no]"), "all three matches are in the card").toHaveCount(3);
   // Final review G6: `stage-view-fixtures` is rendered by no source now, so a count-0 check on it could never fail. What replaced the
@@ -128,6 +129,71 @@ test("the stage card: header buttons, a one-line summary, the stage's own fixtur
   await expect(card.getByTestId("stage-format-editor")).toBeVisible();
   await expect(card.getByTestId(`stage-points-${stageId}`)).toBeVisible();
   await expectNoHorizontalScroll(page);
+});
+
+// Match Day PB1 item 3 (owner 2026-11-02): a COMPLETED stage's card is one line until its toggle opens it, and inside it a FINISHED round is one
+// bar until its bar opens it. Driven at the desktop width here (the phone widths are `mobile.spec.ts`, whose projects run the phone
+// branches; this spec's do not). Anti-vacuity: every "folded" is paired with the "open" beside it, and the rows are counted.
+test("PB1 item 3: a completed stage is one line - its toggle opens and closes the card, and a finished round inside is a bar that opens and closes", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  const { divisionId, stageId } = await seedCompletedLeague(request, "fold");
+  const card = await openCard(page, request, divisionId, stageId);
+  const toggle = card.getByTestId("stage-collapse-toggle");
+  const body = card.locator(`#stage-body-${stageId}`);
+
+  // Folded on arrival: the one line says "1. League", Completed and "3 of 3 done"; nothing else of the card is on screen.
+  await expect(toggle, "one toggle on the card").toHaveCount(1);
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(toggle).toHaveAttribute("aria-controls", `stage-body-${stageId}`);
+  await expect(card.getByTestId("stage-collapsed-summary")).toHaveText("3 of 3 done");
+  await expect(card.locator("h3")).toContainText("1. League");
+  await expect(card.locator("h3 ~ .badge"), "the status pill").toHaveText(/Completed/i);
+  await expect(body, "the body it controls is hidden").toBeHidden();
+  await expect(card.locator("li[data-fixture-no]:visible"), "no row is on screen").toHaveCount(0);
+  await expect(card.getByTestId("stage-controls"), "its buttons are away with it").toHaveCount(0);
+  expect((await toggle.boundingBox())!.height, "a 44px target").toBeGreaterThanOrEqual(43.5);
+  await expectNoHorizontalScroll(page);
+
+  // Open: the card is back (positive pair), and every round - all finished - is itself one bar.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(body).toBeVisible();
+  await expect(card.getByTestId("stage-collapsed-summary"), "the folded line is gone").toHaveCount(0);
+  await expect(card.getByTestId("stage-controls"), "the header's controls are back").toBeVisible();
+  const roundToggles = card.getByTestId("run-sheet-round-toggle");
+  await expect(roundToggles, "three rounds, a bar each").toHaveCount(3);
+  for (let i = 0; i < 3; i++) {
+    await expect(roundToggles.nth(i), `round ${i + 1}: finished, so folded`).toHaveAttribute("aria-expanded", "false");
+    expect((await roundToggles.nth(i).boundingBox())!.height, `round ${i + 1}: a 44px bar`).toBeGreaterThanOrEqual(43.5);
+  }
+  await expect(card.locator("li[data-fixture-no]:visible"), "every round is folded: no row yet").toHaveCount(0);
+
+  // A round's bar opens its rows and closes them again - twice (the sequence, not the click).
+  for (let pass = 0; pass < 2; pass++) {
+    await roundToggles.nth(0).click();
+    await expect(roundToggles.nth(0)).toHaveAttribute("aria-expanded", "true");
+    await expect(card.locator("li[data-fixture-no]:visible"), `pass ${pass + 1}: the opened round shows its one match`).toHaveCount(1);
+    await roundToggles.nth(0).click();
+    await expect(roundToggles.nth(0)).toHaveAttribute("aria-expanded", "false");
+    await expect(card.locator("li[data-fixture-no]:visible")).toHaveCount(0);
+  }
+
+  // The card folds and opens again; a round left open stays open (same page visit).
+  await roundToggles.nth(1).click();
+  await expect(card.locator("li[data-fixture-no]:visible")).toHaveCount(1);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(body).toBeHidden();
+  await expect(card.locator("li[data-fixture-no]:visible"), "folded: nothing on screen").toHaveCount(0);
+  await toggle.click();
+  await expect(body).toBeVisible();
+  await expect(roundToggles.nth(1), "the round opened by hand is still open").toHaveAttribute("aria-expanded", "true");
+  await expect(card.locator("li[data-fixture-no]:visible")).toHaveCount(1);
+  await expectNoHorizontalScroll(page);
+
+  // A reload starts from the defaults again: nothing is remembered (no persistence).
+  await page.reload({ waitUntil: "load" });
+  await expect(stageCardOf(page, stageId).getByTestId("stage-collapse-toggle")).toHaveAttribute("aria-expanded", "false");
 });
 
 test("the phone: the three buttons are the top rows of the ONE Stage tools sheet; choosing one closes the sheet and opens its panel", async ({ page, request }) => {

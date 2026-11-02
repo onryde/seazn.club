@@ -455,6 +455,17 @@ export function roundDone(fixtures: readonly RunSheetFixture[], held: ReadonlySe
 }
 
 /**
+ * Does a round's bar start collapsed (Match Day PB1, owner 2026-11-02)? Only a round with real matches, every one of them settled
+ * (`roundDone`: `done === total`, a held settle still open): a finished round is one line, the current and the upcoming ones are
+ * open. A round with no real match at all (only byes) is NOT finished - the empty set is not "everything done", and a bar that
+ * folded away nothing would be a toggle over no rows.
+ */
+export function roundStartsCollapsed(fixtures: readonly RunSheetFixture[], held: ReadonlySet<string>): boolean {
+  const { done, total } = roundDone(fixtures, held);
+  return total > 0 && done === total;
+}
+
+/**
  * When a round is played, from the rows it is asked of: the first and last calendar day in the VENUE zone and, when they are one
  * day, the clock span of its timed rows ("21:10" to "21:50", equal when only one row has a time). `null` when no row has a time:
  * a bar with nothing to say about time says nothing (an empty cell is not information).

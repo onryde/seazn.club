@@ -30,6 +30,7 @@ import {
   enclosingStageCard,
   openStagePanel,
   openBracket,
+  seedCompletedLeague,
   stageCardOf,
 } from "./helpers";
 import { longName, roundGameSql, seedOnlineRound, uiEn } from "./match-room-kit";
@@ -3822,12 +3823,83 @@ test("P6 task B fix round 3 (Critical 1), Match Day C3: a stage that already has
   await expect(complete, "the rail renders its actions").toBeVisible();
   await expect(complete, "two open matches: Complete waits").toBeDisabled();
   await expect(groupCard.getByTestId("stage-complete-hint"), "and says why, with the count").toHaveText(/unlocks when all 2 matches are played/);
+  // Match Day PB1 item 4 (owner 2026-11-02): the reason is a bubble on the greyed button itself - there is no ⓘ beside it. A tap (on a
+  // phone, the sheet's row) shows it, does NOT complete the stage, and Escape puts it away (the sheet around it stays). Every width owes
+  // this: the bubble opens IN FLOW under the button in the sheet below md and floats from md.
+  await expect(groupCard.getByTestId("stage-complete-info"), "the ⓘ is retired").toHaveCount(0);
+  const reason = groupCard.getByTestId("stage-complete-hint");
+  await complete.click({ force: true }); // a tap on an aria-disabled button: Playwright's click() would wait for it to be enabled
+  await expect(reason, "the tap shows the reason").toBeVisible();
+  await expect(reason).toHaveAttribute("data-open", "true");
+  await expect(complete, "the tap did not complete the stage").toBeDisabled();
+  await expect(complete).toHaveAttribute("aria-describedby", await reason.getAttribute("id") ?? "missing");
+  await expectNoHorizontalScroll(page);
+  await page.keyboard.press("Escape");
+  await expect(reason, "Escape puts the reason away").toBeHidden();
+  await expect(complete, "and the greyed button is still there, still waiting").toBeVisible();
   // Owner ruling (Match Day, late entrant): once a stage has started, Generate is gone from the card. Adding to a started stage is
   // Add match (ad-hoc kinds) or the Settings rebuild - never a second Generate, so there is no "destructive edit" to warn about.
   await expect(groupCard.getByRole("button", { name: "Generate fixtures" }), "a started stage is not re-generated from the card").toHaveCount(0);
   await expect(groupCard.getByTestId("stage-generate")).toHaveCount(0);
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
+});
+
+// Match Day PB1 item 3 (owner 2026-11-02): a COMPLETED stage's card is one line until its toggle opens it, and a FINISHED round inside is one bar
+// until its bar opens it. Every phone width owes it: the 44px toggle and bars, the opened card and rows, no horizontal scroll in any state.
+// (The desktop pass is `stage-card-c3.spec.ts`; this spec's projects are the phone widths.)
+test("PB1 item 3: a completed stage is one line and a finished round is one bar - the toggles open and close them, 44px, no horizontal scroll", async ({
+  page,
+}) => {
+  test.skip(p6bDivisionId === "", "P6 task B setup did not run/complete");
+  test.setTimeout(150_000);
+  await loginUi(page, P6B_EMAIL());
+  const { divisionId, stageId } = await seedCompletedLeague(page.request, "phone-fold");
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  const card = stageCardOf(page, stageId);
+  const toggle = card.getByTestId("stage-collapse-toggle");
+  const body = card.locator(`#stage-body-${stageId}`);
+  const rows = card.locator("li[data-fixture-no]:visible");
+  const tall = async (loc: ReturnType<typeof card.locator>, what: string) =>
+    expect((await loc.boundingBox())!.height, `${what}: a 44px target`).toBeGreaterThanOrEqual(43.5);
+
+  // Folded on arrival.
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(card.getByTestId("stage-collapsed-summary")).toHaveText("3 of 3 done");
+  await expect(body).toBeHidden();
+  await expect(rows).toHaveCount(0);
+  await tall(toggle, "the stage toggle");
+  await expectNoHorizontalScroll(page);
+
+  // Open: the card is back and every finished round is a folded bar.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(body).toBeVisible();
+  const bars = card.getByTestId("run-sheet-round-toggle");
+  await expect(bars).toHaveCount(3);
+  for (let i = 0; i < 3; i++) {
+    await expect(bars.nth(i), `round ${i + 1}: folded`).toHaveAttribute("aria-expanded", "false");
+    await tall(bars.nth(i), `round ${i + 1}'s bar`);
+  }
+  await expect(rows).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+
+  // A bar opens its round's row and closes it again; the page never scrolls sideways with a row open.
+  await bars.nth(0).click();
+  await expect(bars.nth(0)).toHaveAttribute("aria-expanded", "true");
+  await expect(rows).toHaveCount(1);
+  await expectNoHorizontalScroll(page);
+  await bars.nth(0).click();
+  await expect(bars.nth(0)).toHaveAttribute("aria-expanded", "false");
+  await expect(rows).toHaveCount(0);
+
+  // Fold the card again: nothing of it is on screen; open it: it is back.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(body).toBeHidden();
+  await expectNoHorizontalScroll(page);
+  await toggle.click();
+  await expect(body).toBeVisible();
 });
 
 // Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI — option

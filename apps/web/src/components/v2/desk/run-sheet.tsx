@@ -12,7 +12,8 @@
 // panel is built from) for the FACT, permission-blind, instead of reading a
 // row's offered action. See the block above `keep` for the two defects that
 // coupling produced.
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { dayLabel, dayLabelLong } from "@/lib/day-label";
@@ -22,6 +23,7 @@ import {
   BRACKET_STAGE_KINDS,
   isBye,
   roundDone,
+  roundStartsCollapsed,
   roundWhen,
   stageFlatSection,
   stageRoundSections,
@@ -272,6 +274,10 @@ export function RunSheet({
     for (const el of heads()) ro.observe(el);
     return () => ro.disconnect();
   }, [blocks]);
+
+  // Match Day PB1 (owner 2026-11-02): which round bars the person has toggled, by round number - their tap over the default (a finished
+  // round starts folded, `roundStartsCollapsed`). Kept for the page visit and nothing longer; a round nobody tapped follows its default.
+  const [roundToggled, setRoundToggled] = useState<ReadonlyMap<number, boolean>>(() => new Map());
 
   // Empty division (spec, "Error and empty states"): no header, nothing —
   // the stage rail (Task 5) is the whole story until then.
@@ -614,10 +620,20 @@ export function RunSheet({
           const when = roundWhen(section.rows, tz);
           const sameDay = when !== null && when.firstDay === when.lastDay;
           const dates = roundDateLabel(section.rows, tz, locale);
+          // PB1: a bar is a toggle. Open unless the round is finished (every real match settled) - or the person said otherwise. The
+          // flat list (a ladder) has no bars, so nothing to fold. The NOW rule is never lost to a fold: it is computed over EVERY
+          // section above, whatever is open, and a folded round that holds it draws it under its bar instead of inside the hidden list.
+          const open = !withBars || (roundToggled.get(section.round) ?? !roundStartsCollapsed(section.all, settleIds));
+          const listId = `run-sheet-rounds-${stageId}-${section.round}`;
+          const holdsNow = nowPlace !== null && nowPlace.round === section.round;
           return (
             <div key={section.round} data-run-sheet-round={withBars ? section.round : undefined}>
               {withBars && (
-                <RoundBar title={msg("schedule.round", { n: section.round })} done={roundDoneText(msgPlural, section.all, settleIds)}>
+                <RoundBar
+                  title={msg("schedule.round", { n: section.round })}
+                  done={roundDoneText(msgPlural, section.all, settleIds)}
+                  toggle={{ open, controls: listId, onToggle: () => setRoundToggled((prev) => new Map(prev).set(section.round, !open)) }}
+                >
                   {dates !== null && <span data-run-sheet-round-dates>{" · "}{dates}</span>}
                   {sameDay && when !== null && (
                     <span data-run-sheet-round-span>
@@ -627,12 +643,17 @@ export function RunSheet({
                   )}
                 </RoundBar>
               )}
-              <ul className="divide-y divide-slate-50">
+              {!open && holdsNow && (
+                <ul>
+                  <NowRule msg={msg} />
+                </ul>
+              )}
+              <ul id={listId} hidden={!open} className="divide-y divide-slate-50">
                 {section.rows.map((f, i) => (
                   <RowWithNow
                     key={f.id}
                     fixture={f}
-                    showNow={nowPlace !== null && nowPlace.round === section.round && nowPlace.index === i}
+                    showNow={open && holdsNow && nowPlace.index === i}
                     msg={msg}
                     hrefFor={hrefFor}
                     tz={tz}
@@ -655,7 +676,7 @@ export function RunSheet({
                     inRound
                   />
                 ))}
-                {nowPlace !== null && nowPlace.round === section.round && nowPlace.index === section.rows.length && <NowRule msg={msg} />}
+                {open && holdsNow && nowPlace.index === section.rows.length && <NowRule msg={msg} />}
               </ul>
             </div>
           );
@@ -988,35 +1009,64 @@ function RoundBar({
   title,
   done,
   roundedTop = false,
+  toggle,
   children,
 }: {
   title: string;
   done: string;
   /** The first bar of a division-wide sheet, which has a rounded top of its own to follow. */
   roundedTop?: boolean;
+  /** Match Day PB1: the bar IS the toggle of the round's list (a league / group / Swiss / Americano stage's). `controls` is the list's id. A
+   *  bracket's bar has none: its rounds are named stages of one tree, not a sequence to put away. */
+  toggle?: { open: boolean; controls: string; onToggle: () => void };
   children?: React.ReactNode;
 }) {
+  const label = (
+    <>
+      <span className="min-w-0 text-sm font-semibold text-slate-800">{title}</span>
+      {/* A real space between the two spans (a flex container paints none, so it costs no layout): the heading's text reads "Final
+          · 0 of 1 done" to a screen reader and to a locator instead of "Final· 0 of 1 done". */}
+      {" "}
+      {/* The facts take their own line on a phone (a deliberate second line, never a dot stranded at the start of a wrap) and sit
+          beside the name from `md`, led by a dot. The dot is part of the sentence for a screen reader and a locator either way. */}
+      <span className="min-w-0 text-xs font-normal text-slate-600 max-md:basis-full">
+        <span className="max-md:hidden">{"\u00b7 "}</span>
+        {done}
+        {children}
+      </span>
+    </>
+  );
+  const flexLine = "flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5";
   return (
     <header
       style={{ top: "calc(3.5rem + var(--desk-day-h, 0px))" }}
-      className={`sticky z-10 border-y border-slate-200 bg-slate-100 px-4 py-2 ${roundedTop ? "rounded-t-2xl" : ""}`}
+      className={`sticky z-10 border-y border-slate-200 bg-slate-100 ${toggle ? "" : "px-4 py-2"} ${roundedTop ? "rounded-t-2xl" : ""}`}
       data-testid="run-sheet-round-bar"
     >
       {/* ONE heading: the name and its facts read as one sentence ("Round 2 · 0 of 1 done · Sat 5 Sep · 21:10-21:50") to a
-          screen reader and to a locator, and wrap together at a phone's width. */}
-      <h4 className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
-        <span className="min-w-0 text-sm font-semibold text-slate-800">{title}</span>
-        {/* A real space between the two spans (a flex container paints none, so it costs no layout): the heading's text reads "Final
-            · 0 of 1 done" to a screen reader and to a locator instead of "Final· 0 of 1 done". */}
-        {" "}
-        {/* The facts take their own line on a phone (a deliberate second line, never a dot stranded at the start of a wrap) and sit
-            beside the name from `md`, led by a dot. The dot is part of the sentence for a screen reader and a locator either way. */}
-        <span className="min-w-0 text-xs font-normal text-slate-600 max-md:basis-full">
-          <span className="max-md:hidden">{"\u00b7 "}</span>
-          {done}
-          {children}
-        </span>
-      </h4>
+          screen reader and to a locator, and wrap together at a phone's width. A toggling bar is a heading holding one button, the
+          accordion pattern: the button's name is that whole sentence, its state is `aria-expanded`, and its target is the round's list. */}
+      {toggle ? (
+        <h4 className="min-w-0">
+          <button
+            type="button"
+            data-testid="run-sheet-round-toggle"
+            aria-expanded={toggle.open}
+            aria-controls={toggle.controls}
+            onClick={toggle.onToggle}
+            className={`${flexLine} min-h-11 w-full px-4 py-2 text-left hover:bg-slate-200/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-purple-600`}
+          >
+            <ChevronRight
+              aria-hidden="true"
+              strokeWidth={2}
+              className={`h-4 w-4 shrink-0 self-center text-slate-500 motion-safe:transition-transform ${toggle.open ? "rotate-90" : ""}`}
+            />
+            {label}
+          </button>
+        </h4>
+      ) : (
+        <h4 className={flexLine}>{label}</h4>
+      )}
     </header>
   );
 }

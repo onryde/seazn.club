@@ -331,9 +331,9 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     const path = await fixturePath(request, held.id);
     const division = path.split("/f/")[0]!;
     await page.goto(`${division}?tab=fixtures`);
-    // The sibling in play makes the division "Live", whose default run-sheet filter is "Today" - and an untimed abandoned
-    // match is not "today" (nor "needs result": that filter has never counted a held row, in a bracket either). "All" shows
-    // every row, which is what this test is about: the HOLD on the row.
+    // The run sheet opens on "All" whatever the phase (PB1, owner 2026-11-02; it used to open on "Today" once a sibling was in play,
+    // and an untimed abandoned match is not "today", nor "needs result" - that filter has never counted a held row). The click is kept
+    // as a no-op guard: "All" shows every row, which is what this test is about: the HOLD on the row.
     await page.getByRole("button", { name: "All", exact: true }).first().click();
     const row = page.locator(`li[data-fixture-no="${path.split("/f/")[1]!}"]`);
     await expect(row.getByTestId("run-sheet-held-chip"), "the run sheet holds the abandoned league match").toHaveText("Needs a decision");
@@ -1620,8 +1620,8 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
       widths++;
     }
     expect(widths).toBe(3);
-    // M3 (fix round 1): the DIVISION page agrees. It renders no phase pill (its phase gates only the start-locks tip and
-    // the run sheet's default filter — finding, fix round 1), so what it shows of the hold is the run sheet's row: the
+    // M3 (fix round 1): the DIVISION page agrees. It renders no phase pill (its phase gates only the start-locks tip; the
+    // run sheet's default filter stopped following it in PB1 — finding, fix round 1), so what it shows of the hold is the run sheet's row: the
     // held chip and the Settle action on the abandoned final, never a plain abandoned row.
     await page.setViewportSize({ width: 1280, height: 900 });
     const path = await fixturePath(request, ko.sf.id);

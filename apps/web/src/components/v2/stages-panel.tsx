@@ -30,6 +30,7 @@ import type { ViewerPlan } from "@/lib/viewer-plan";
 import type { HoldState } from "@/server/relay/domain/session";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { TipCallout } from "@/components/ui/tip";
+import { ChevronRight } from "lucide-react";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { useNow } from "@/components/public-site/match-centre/use-now";
 import { seedingErrorMessage } from "@/lib/seeding-error";
@@ -62,7 +63,7 @@ import { LockLine } from "@/components/v2/rules/lock-line";
 import { describeDeciders, describeMatchRules } from "@/server/public-site/describe-rules";
 import { rulesLineText } from "@/lib/rules-line";
 import { showKindPill, tiesSummary } from "@/lib/stage-card/layout";
-import { stageCounts, unitLabelKey } from "@/lib/stage-card/summaries";
+import { stageCardCollapse, stageCounts, unitLabelKey } from "@/lib/stage-card/summaries";
 import { pointsDiffer, stageTakesPoints } from "@/components/v2/stage-rules/stage-points-model";
 import { TiebreaksEditor, stageLikeOf } from "@/components/v2/rules/tiebreaks-editor";
 import { DivisionRulesStrip, TOGGLE_OFF, TOGGLE_ON, type DivisionRulesStripProps, type RulesPanel } from "@/components/v2/rules/division-rules-strip";
@@ -362,6 +363,10 @@ interface Props {
   /** Match Day C3: the settings panels every stage card opens with (a test hook, like `DivisionRulesStrip`'s `initialOpen`; the page
    *  never sets it - the cards open closed). */
   initialOpenPanels?: readonly StagePanelKey[];
+  /** Match Day PB1: the ids of stages whose card has something on it a person must see. A COMPLETED card starts folded to one line
+   *  (owner 2026-11-02) - unless its id is in here, in which case it starts open. The seam for a warning that lives on a finished
+   *  stage (W3's Swiss cut-drift notice feeds it). Optional: absent, nothing asks for attention and every completed card folds. */
+  attentionStageIds?: readonly string[];
   /** Match Day E1 item 3: entrant id -> resolved crest URL, for the bracket tree a knockout card opens (the page's own
    *  `entrantLogos`, the same map it hands every other panel). Optional: absent, the tree draws no crests. */
   entrantBadges?: Record<string, string | null>;
@@ -544,7 +549,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -651,6 +656,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     () => new Set(stages.flatMap((st) => (initialOpenPanels ?? []).map((panel) => `${st.id}:${panel}`))),
   );
   const panelOpen = (stageId: string, panel: StagePanelKey): boolean => openPanels.has(`${stageId}:${panel}`);
+  // Match Day PB1: which completed cards the person has folded / opened by hand, by stage id - their tap over the card's default
+  // (`stageCardCollapse`). Kept for the page visit and nothing longer: no storage, a reload starts every card from its default again.
+  const [stageToggled, setStageToggled] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   const togglePanel = (stageId: string, panel: StagePanelKey) =>
     setOpenPanels((prev) => {
       const next = new Set(prev);
@@ -1097,6 +1105,21 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         const stageHeld = stageFixtures.filter(
           (f) => (f.status === "needs_decision" || awaitingIds.has(f.id)) && !isBye(toRunSheetFixture(f)),
         );
+        // Match Day PB1 (owner 2026-11-02): a completed stage is one line - number and name, the Completed pill and "N of M done" - until
+        // someone opens it. Its settings buttons and actions fold away with the body (their panels render in the body, so a button that
+        // opened an unseen panel would be a lie); they come back on open. Open by default when something on the card wants a person.
+        const collapse = stageCardCollapse({
+          status: stage.status,
+          realMatches: stageNonByeCount,
+          openMatches: counts.inPlay + counts.unplayed,
+          attention: attentionStageIds?.includes(stage.id) === true,
+          panelOpen: [...openPanels].some((key) => key.startsWith(`${stage.id}:`)),
+        });
+        // The person's tap over the default - and only while the card has a toggle: a stage that stops being complete is never folded
+        // behind a choice made when it was (`folded` asks `collapsible` first).
+        const cardOpen = stageToggled.get(stage.id) ?? collapse.startsOpen;
+        const folded = collapse.collapsible && !cardOpen;
+        const stageBodyId = `stage-body-${stage.id}`;
         // Match Day E1 item 1: the card's old footer row ("To schedule in this stage N ->", a link to the Schedule page) is gone - the
         // counts line above the rows already says "N to schedule" in the card's own words (`stage-progress-counts`).
         // Mirrors the server guard (deleteStage) EXACTLY: only the last stage
@@ -1251,19 +1274,46 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
               <div data-testid="stage-sheet" className="min-w-0">
                 <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-100 px-4 py-3">
                   <h3 className="min-w-0 text-sm font-semibold text-slate-800">
-                    {stage.seq}. {stage.name}
+                    {collapse.collapsible ? (
+                      <button
+                        type="button"
+                        data-testid="stage-collapse-toggle"
+                        aria-expanded={cardOpen}
+                        aria-controls={stageBodyId}
+                        onClick={() => setStageToggled((prev) => new Map(prev).set(stage.id, !cardOpen))}
+                        className="-my-1 flex min-h-11 min-w-0 items-center gap-2 rounded-lg pr-2 text-left hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600"
+                      >
+                        <ChevronRight
+                          aria-hidden="true"
+                          strokeWidth={2}
+                          className={`h-4 w-4 shrink-0 text-slate-500 motion-safe:transition-transform ${cardOpen ? "rotate-90" : ""}`}
+                        />
+                        <span className="min-w-0">
+                          {stage.seq}. {stage.name}
+                        </span>
+                      </button>
+                    ) : (
+                      <>
+                        {stage.seq}. {stage.name}
+                      </>
+                    )}
                   </h3>
                   {/* Item 1: the kind pill only when the name does not already say the kind ("1. League" next to a "league"
                       pill said the word twice). */}
                   {showKindPill(stage.name, stage.kind) && <span className="chip">{stage.kind.replace(/_/g, " ")}</span>}
                   <span className={`badge ${stageStatusStyle(stage.status)}`}>{stageStatusLabel(msg, stage.status)}</span>
+                  {folded && (
+                    <span data-testid="stage-collapsed-summary" className="min-w-0 text-xs text-slate-600">
+                      {msgPlural("runsheet.round.done", stageNonByeCount, { done: stageDone, total: stageNonByeCount })}
+                    </span>
+                  )}
                   {/* Match Day C3 (owner-approved mock, option 2): the stage's three settings open from here, inline under the
                       header. From `md` up the buttons sit in the header's row. Below `md` an editor finds the same three as the
                       TOP ROWS of the "Stage tools" sheet (controller ruling, review round 1: one phone trigger per card, not a
                       second "Stage settings" one), so the header row is `max-md:hidden` for an editor; a viewer has no sheet
                       (the rail renders nothing for them), so theirs stays on screen at every width. Points and Tie-breaks only
                       for a table stage; a viewer gets the same buttons and reads each panel. */}
-                  {(railEl !== null || settingsTools.length > 0) && (
+                  {!folded && (railEl !== null || settingsTools.length > 0) && (
                     <div
                       data-testid="stage-controls"
                       className={`flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 ${canEdit ? "max-md:w-full md:ml-auto" : "ml-auto"}`}
@@ -1308,7 +1358,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       component's render (see stage-rail.tsx's header for the
                       full investigation), so a `<SwissLegend>` here would be
                       invisible to them. */}
-                  {swissLegend && (
+                  {!folded && swissLegend && (
                     <p
                       data-testid="stage-swiss-legend"
                       className="w-full min-w-0 text-xs text-slate-500"
@@ -1318,6 +1368,10 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   )}
                 </header>
 
+                {/* Match Day PB1: the card's body, one element so the toggle has something to control. `hidden` (not unmounted) while the
+                    card is folded: the run sheet inside keeps its filter and its round toggles, and the panels keep their drafts. Not indented
+                    with the blocks it holds, to keep this change to two lines of a file other branches are editing. */}
+                <div id={stageBodyId} hidden={folded}>
                 {/* F3 Task 5 (5a/5b) — the board no longer matches the roster:
                     a withdrawn entrant is still named on a fixture, an added
                     entrant has none yet, or both. Reuses the house "needs
@@ -1601,6 +1655,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
 
                 {/* The stage's required court tags, at the foot of the card for everyone (an editor edits them, a viewer reads them). */}
                 {courtTagsEditor}
+                </div>
               </div>
 
           </section>
