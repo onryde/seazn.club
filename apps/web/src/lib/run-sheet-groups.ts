@@ -362,9 +362,9 @@ export type StageRoundSection = { poolId: string | null; round: number; fixtures
 
 /**
  * One NON-BRACKET stage's rows from the division's blocks, as round sections: one per ROUND, and per POOL within a group stage
- * (Group A's Round 1 and Group B's Round 1 are two sections). Pools read in `poolOrder` (the display order the page owns, pool id ->
- * position) with rows of no pool first and a pool `poolOrder` does not list after every listed one; within a pool the rounds read in the
- * order they are played. Within a round the rows run in time order and the ones with no time sit last, in the order the draw gave them:
+ * (Group A's Round 1 and Group B's Round 1 are two sections). The sections read in the order they are PLAYED: earliest kickoff first, the
+ * ones with nothing timed last; a tie goes to the pool `poolOrder` (the display order the page owns, pool id -> position) lists first -
+ * rows of no pool before a listed pool, a pool `poolOrder` does not list after every listed one - and then to the round number. Within a round the rows run in time order and the ones with no time sit last, in the order the draw gave them:
  * the rows a person plays first are read first, and "No time yet" never interrupts a timed run. Bracket blocks are skipped (a knockout
  * keeps its own named rounds); a bye the grouping kept (a Swiss sit-out) rides in its round as an untimed row.
  *
@@ -384,20 +384,23 @@ export function stageRoundSections(
     sections.set(key, section);
   }
   const sorted = [...sections.values()].map((s) => ({ ...s, fixtures: [...s.fixtures].sort(inReadingOrder) }));
-  // Rounds read in the order they are PLAYED (design/fix-ui/03: a Tour 3 that kicked off a day before Tour 1 is not "last"): by the
-  // earliest kickoff in the round, the rounds with no time at all after them, and round number to break every tie - which is
-  // also the whole order while nothing is timed yet.
+  // Sections read in the order they are PLAYED (design/fix-ui/03: a Tour 3 that kicked off a day before Tour 1 is not "last"): by the
+  // earliest kickoff in the section, the sections with no time at all after them. A tie goes to the pool that comes first in the page's
+  // order (`comparePools`' order, handed over as `poolOrder`), then to the round number - which is also the whole order while nothing
+  // is timed yet. Pool-first (E1 fix round 1) read "A 09:00, 10:10, 11:20, then B 09:35" on a card with one NOW line: the line, which
+  // asks for "the first row still to come" in reading order, landed in the wrong place. A stage with no pools has one pool (none), so
+  // for a league, a Swiss event or an americano this is the order it always was.
   const earliest = (r: StageRoundSection): number => (r.fixtures[0]?.scheduled_at != null ? Date.parse(r.fixtures[0].scheduled_at) : Number.POSITIVE_INFINITY);
   const poolRank = (poolId: string | null): number => (poolId === null ? -1 : (poolOrder.get(poolId) ?? Number.POSITIVE_INFINITY));
   return sorted.sort((a, b) => {
+    const ea = earliest(a);
+    const eb = earliest(b);
+    if (ea !== eb) return ea < eb ? -1 : 1;
     const pa = poolRank(a.poolId);
     const pb = poolRank(b.poolId);
     if (pa !== pb) return pa < pb ? -1 : 1;
     // Two pools the order does not list: id, only so the order is stable.
     if (a.poolId !== b.poolId) return (a.poolId ?? "") < (b.poolId ?? "") ? -1 : 1;
-    const ea = earliest(a);
-    const eb = earliest(b);
-    if (ea !== eb) return ea < eb ? -1 : 1;
     return a.round - b.round;
   });
 }

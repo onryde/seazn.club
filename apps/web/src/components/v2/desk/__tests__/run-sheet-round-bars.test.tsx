@@ -266,7 +266,7 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
       fx(5, { pool_id: "pB", round_no: 2, scheduled_at: `${DAY}T14:40:00.000Z` }),
     ];
 
-    it("every locale: four bars, 'Group A - Round 1' in the locale's own words, Group A's rounds first (the order the page hands over)", () => {
+    it("every locale: four bars, 'Group A - Round 1' in the locale's own words, in the order they kick off (10:00 A, 10:00 B - the tie to the page's first pool - 14:00 A, 14:40 B)", () => {
       let checked = 0;
       for (const locale of LOCALES) {
         const pub = PUBLIC[locale];
@@ -276,16 +276,16 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
         const label = (key: string) => pub["table.poolLabel"]!.replace("{key}", key);
         const round = (n: number) => ui["schedule.round"]!.replace("{n}", String(n));
         const heads = bars(html).map((line) => line.split(" · ").slice(0, 2).join(" · "));
-        expect(heads, `${locale}: bars, pool then round`).toEqual([
+        expect(heads, `${locale}: bars in play order, a tie to the first pool`).toEqual([
           `${label("A")} · ${round(1)}`,
-          `${label("A")} · ${round(2)}`,
           `${label("B")} · ${round(1)}`,
+          `${label("A")} · ${round(2)}`,
           `${label("B")} · ${round(2)}`,
         ]);
-        // Each bar counts ITS pool's matches only: A1 1 of 2 done, A2 0 of 1, B1 1 of 1, B2 0 of 1.
+        // Each bar counts ITS pool's matches only: A1 1 of 2 done, B1 1 of 1, A2 0 of 1, B2 0 of 1.
         const facts = bars(html).map((line) => line.split(" · ")[2]);
-        expect(facts, `${locale}: each pool's own count`).toEqual([done(1, 2, ui), done(0, 1, ui), done(1, 1, ui), done(0, 1, ui)]);
-        expect(rowNos(html), `${locale}: rows under their own bar`).toEqual([1, 2, 3, 4, 5]);
+        expect(facts, `${locale}: each pool's own count`).toEqual([done(1, 2, ui), done(1, 1, ui), done(0, 1, ui), done(0, 1, ui)]);
+        expect(rowNos(html), `${locale}: rows under their own bar`).toEqual([1, 2, 4, 3, 5]);
         checked++;
       }
       expect(checked).toBe(LOCALES.length);
@@ -301,7 +301,56 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
 
     it("a pool the panel was not told about is still its own bar, plainly 'Round N' - never merged into another pool's", () => {
       const html = sheet(rows(), stage("group"), { pools: poolLabelsInOrder(enPublic as never, [poolRows[1]!]) });
-      expect(bars(html).map((line) => /^(.*?) · \d+ of \d+ done/.exec(line)?.[1])).toEqual(["Group A · Round 1", "Group A · Round 2", "Round 1", "Round 2"]);
+      expect(bars(html).map((line) => /^(.*?) · \d+ of \d+ done/.exec(line)?.[1])).toEqual(["Group A · Round 1", "Round 1", "Group A · Round 2", "Round 2"]);
+    });
+
+    // Match Day E1 fix round 2 (Important): the card's sections read in the order they are PLAYED, so its ONE NOW line sits where the clock is.
+    // Group A plays 09:00 / 10:10 / 11:20 and Group B 09:35 / 10:45 / 11:55; pool-first read all of A, then all of B, and a NOW at 10:30 landed
+    // before A's 11:20 with B's 09:35 and 10:45 both after it. Expected positions are read off the matches' own times, not off the order.
+    describe("the NOW line on interleaved pools (E1 fix 2)", () => {
+      const at = (hhmm: string) => `${DAY}T${hhmm}:00.000Z`;
+      const interleaved = (): RunSheetFixture[] => [
+        fx(1, { pool_id: "pA", round_no: 1, status: "decided", outcome: WIN, scheduled_at: at("09:00") }),
+        fx(2, { pool_id: "pA", round_no: 2, status: "decided", outcome: WIN, scheduled_at: at("10:10") }),
+        fx(3, { pool_id: "pA", round_no: 3, scheduled_at: at("11:20") }),
+        fx(4, { pool_id: "pB", round_no: 1, status: "decided", outcome: WIN, scheduled_at: at("09:35") }),
+        fx(5, { pool_id: "pB", round_no: 2, scheduled_at: at("10:45") }),
+        fx(6, { pool_id: "pB", round_no: 3, scheduled_at: at("11:55") }),
+      ];
+      const timeOf = (no: number): number => Date.parse(interleaved().find((f) => f.fixture_no === no)!.scheduled_at!);
+      /** The page in reading order: each row's fixture number, with the NOW rule as "NOW" where it sits. */
+      const reading = (html: string): (number | "NOW")[] =>
+        [...html.matchAll(/data-fixture-no="(\d+)"|data-testid="run-sheet-now"/g)].map((m) => (m[1] === undefined ? "NOW" : Number(m[1])));
+
+      it("the bars read A R1, B R1, A R2, B R2, A R3, B R3 - the order they kick off", () => {
+        const html = sheet(interleaved(), stage("group"), { pools: poolLabelsInOrder(enPublic as never, poolRows), nowMs: Date.parse(at("10:30")) });
+        expect(bars(html).map((line) => /^(.*?) · \d+ of \d+ done/.exec(line)![1])).toEqual([
+          "Group A · Round 1", "Group B · Round 1", "Group A · Round 2", "Group B · Round 2", "Group A · Round 3", "Group B · Round 3",
+        ]);
+      });
+
+      it("NOW at 10:30 sits after every row that has started and before every row still to come, and before B R2 (10:45)", () => {
+        const html = sheet(interleaved(), stage("group"), { pools: poolLabelsInOrder(enPublic as never, poolRows), nowMs: Date.parse(at("10:30")) });
+        const seq = reading(html);
+        const at_ = seq.indexOf("NOW");
+        expect(seq.filter((x) => x === "NOW").length, "exactly one NOW line").toBe(1);
+        const before = seq.slice(0, at_) as number[];
+        const after = seq.slice(at_ + 1) as number[];
+        expect(before.length + after.length, "anti-vacuity: all six rows were read").toBe(6);
+        expect(before.length, "premise: some rows are behind the clock").toBeGreaterThan(0);
+        expect(after.length, "premise: some rows are ahead of it").toBeGreaterThan(0);
+        for (const no of before) expect(timeOf(no), `row ${no} above the NOW line has already started`).toBeLessThan(Date.parse(at("10:30")));
+        for (const no of after) expect(timeOf(no), `row ${no} below the NOW line is still to come`).toBeGreaterThan(Date.parse(at("10:30")));
+        expect(seq[at_ + 1], "the line sits directly above B R2's 10:45 row").toBe(5);
+      });
+
+      it("the same card at 09:10 and at 12:30: the line follows the clock (above the first row to come; after the last of the day)", () => {
+        const early = reading(sheet(interleaved(), stage("group"), { pools: poolLabelsInOrder(enPublic as never, poolRows), nowMs: Date.parse(at("09:10")) }));
+        expect(early.indexOf("NOW"), "09:10: above the 09:35 row, which is the second row read").toBe(1);
+        expect(early[2]).toBe(4);
+        const late = reading(sheet(interleaved(), stage("group"), { pools: poolLabelsInOrder(enPublic as never, poolRows), nowMs: Date.parse(at("12:30")) }));
+        expect(late.indexOf("NOW"), "12:30: nothing is still to come, so the line closes the day").toBe(late.length - 1);
+      });
     });
 
     it("a league (no pools) is unchanged: 'Round N' bars with no pool word, whether or not pools are handed over", () => {

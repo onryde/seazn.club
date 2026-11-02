@@ -649,6 +649,77 @@ describe("stageRoundSections - pools: one section per pool per round", () => {
     const out = pooled([row("r2", null, 2), row("r1", null, 1)]);
     expect(out.map((s) => [s.poolId, s.round])).toEqual([[null, 1], [null, 2]]);
   });
+
+  // Match Day E1 fix round 2 (Important): the sections read in the order they are PLAYED - earliest kickoff first, a tie broken by the pool's
+  // place in the page's order, then by round number, and a section with nothing timed after every timed one. Pool-first (the m2 build) read
+  // "A 09:00, 10:10, 11:20, then B 09:35", which put the card's one NOW line in the wrong place.
+  describe("in the order they are played (E1 fix 2)", () => {
+    const at = (hhmm: string) => `2026-09-05T${hhmm}:00.000Z`;
+    const ids = (out: ReturnType<typeof pooled>) => out.map((s) => `${s.poolId === "pA" ? "A" : s.poolId === "pB" ? "B" : s.poolId}${s.round}`);
+
+    it("two pools interleaved in time: A R1 09:00, B R1 09:35, A R2 10:10, B R2 10:45, A R3 11:20, B R3 11:55", () => {
+      const out = pooled(
+        [
+          row("a1", "pA", 1, { scheduled_at: at("09:00") }),
+          row("a2", "pA", 2, { scheduled_at: at("10:10") }),
+          row("a3", "pA", 3, { scheduled_at: at("11:20") }),
+          row("b1", "pB", 1, { scheduled_at: at("09:35") }),
+          row("b2", "pB", 2, { scheduled_at: at("10:45") }),
+          row("b3", "pB", 3, { scheduled_at: at("11:55") }),
+        ],
+        ORDER,
+      );
+      expect(ids(out)).toEqual(["A1", "B1", "A2", "B2", "A3", "B3"]);
+      expect(out.length, "anti-vacuity: six sections").toBe(6);
+      // The same rows with the pools listed the other way round: the pool order only breaks ties, so the time order stands.
+      expect(ids(pooled(out.flatMap((s) => s.fixtures), new Map([["pB", 0], ["pA", 1]])))).toEqual(["A1", "B1", "A2", "B2", "A3", "B3"]);
+    });
+
+    it("an equal first kickoff is broken by the pool's place in the page's order, then by round number", () => {
+      const rows = [
+        row("a1", "pA", 1, { scheduled_at: at("09:00") }),
+        row("b1", "pB", 1, { scheduled_at: at("09:00") }),
+        row("a2", "pA", 2, { scheduled_at: at("09:00") }),
+      ];
+      expect(ids(pooled(rows, ORDER)), "pool A first, and A's own rounds by number").toEqual(["A1", "A2", "B1"]);
+      expect(ids(pooled(rows, new Map([["pB", 0], ["pA", 1]]))), "listed the other way, B takes the tie").toEqual(["B1", "A1", "A2"]);
+    });
+
+    it("a section with nothing timed reads after every timed one, whatever its pool or round; the untimed ones among themselves by pool, then round", () => {
+      const out = pooled(
+        [
+          row("a1", "pA", 1), // untimed, pool A - would be first pool-first
+          row("a2", "pA", 2),
+          row("b1", "pB", 1, { scheduled_at: at("13:00") }),
+          row("b2", "pB", 2, { scheduled_at: at("14:00") }),
+          row("b3", "pB", 3),
+        ],
+        ORDER,
+      );
+      expect(ids(out)).toEqual(["B1", "B2", "A1", "A2", "B3"]);
+    });
+
+    it("a section's time is its EARLIEST row: a late first row of one pool does not hold back its earlier sibling", () => {
+      const out = pooled(
+        [row("a1late", "pA", 1, { scheduled_at: at("12:00") }), row("a1early", "pA", 1, { scheduled_at: at("08:00"), seq_in_round: 2, fixture_no: 8 }), row("b1", "pB", 1, { scheduled_at: at("10:00") })],
+        ORDER,
+      );
+      expect(ids(out)).toEqual(["A1", "B1"]);
+      expect(out[0]!.fixtures.map((f) => f.id)).toEqual(["a1early", "a1late"]);
+    });
+
+    it("the kinds with no pools read exactly as before: a league and a Swiss event by earliest kickoff, the untimed after, by round", () => {
+      for (const kind of ["league", "swiss", "americano"] as const) {
+        const stages = [{ id: "g1", seq: 1, kind }];
+        const out = stageRoundSections(
+          buildRunSheet(input({ stages, fixtures: [row("r1", null, 1, { scheduled_at: at("15:00") }), row("r2", null, 2, { scheduled_at: at("09:00") }), row("r3", null, 3), row("r4", null, 4)] })),
+          "g1",
+          ORDER,
+        );
+        expect(out.map((s) => s.round), kind).toEqual([2, 1, 3, 4]);
+      }
+    });
+  });
 });
 
 // Match Day E1 fix round 1 (I1): the bar's number is the SHARED count. The stage card's Complete button reads `stageCounts`; a bar that
