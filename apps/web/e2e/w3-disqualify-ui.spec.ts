@@ -293,16 +293,19 @@ test.describe("W3 ruling 258 - Disqualify from the Entrants tab", () => {
   // Ruling 261: Disqualify is offered only once the division has STARTED (the flag that hides Delete). Before the start a
   // disqualification is a bare flip that Delete and Withdraw already cover, and the third button pushed Delete under the scroll
   // fade at 768. So a setup division's row is Withdraw + Delete, a started one's is Withdraw + Disqualify.
+  // The label carries ONE unbreakable 24-letter word (a real surname shape): a name with spaces wraps and lets the table fit at 768
+  // even with a third button, so the probe would be blind to the overflow it exists to catch (mutation-checked: with Disqualify
+  // shown in setup the 768 first-paint read goes red on card overflow only with a long unbreakable word in the name).
   test("a division still in setup: the row offers Withdraw and Delete and NO Disqualify; both tappable at first paint at 1280 and 768, by scrolling the card at 320", async ({ page, request }) => {
     test.setTimeout(180_000);
-    const d = await division(request, "DQ Setup Konstantinopoulou", 4);
+    const d = await division(request, "DQ Setup Wolfeschlegelsteinhausen", 4);
     const tapped = await rowActionsAtThreeWidths(page, request, d.divisionId, d.names[0]!, ["entrant-row-withdraw", "entrant-row-delete"], ["entrant-row-disqualify"]);
     expect(tapped, "controls proven tappable (2 per width x 3 widths)").toBe(6);
   });
 
   test("a started division: the row offers Withdraw and Disqualify and NO Delete; both tappable at first paint at 1280 and 768, by scrolling the card at 320", async ({ page, request }) => {
     test.setTimeout(240_000);
-    const sw = await startedSwiss(request, "DQ Started Konstantinopoulou", 4, 2);
+    const sw = await startedSwiss(request, "DQ Started Wolfeschlegelsteinhausen", 4, 2);
     const tapped = await rowActionsAtThreeWidths(page, request, sw.divisionId, sw.names[0]!, ["entrant-row-withdraw", "entrant-row-disqualify"], ["entrant-row-delete"]);
     expect(tapped, "controls proven tappable (2 per width x 3 widths)").toBe(6);
   });
