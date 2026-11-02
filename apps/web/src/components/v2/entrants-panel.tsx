@@ -819,6 +819,22 @@ export function EntrantsPanel({
                     apiV1(`/api/v1/entrants/${e.id}/withdraw`, { method: "POST", json: {} }),
                   );
                 }}
+                onDisqualify={async () => {
+                  // Ruling 258 (RB3-17 / X-SW-23): a disqualification cascades like a withdrawal, but it is a
+                  // DIFFERENT door - `PATCH /entrants/{id}` with `status: "disqualified"` (`patchEntrant`), not
+                  // `POST .../withdraw`. Ruling 259: no reason or notes field. Before Start the server does the bare
+                  // status flip, so there is no started-ness branch here.
+                  const ok = await confirmDialog({
+                    title: msg("confirm.disqualifyEntrant.title", { name: e.display_name }),
+                    body: msg("confirm.disqualifyEntrant.body"),
+                    confirmLabel: msg("confirm.disqualifyEntrant.label"),
+                    tone: "danger",
+                  });
+                  if (!ok) return;
+                  await run(() =>
+                    apiV1(`/api/v1/entrants/${e.id}`, { method: "PATCH", json: { status: "disqualified" } }),
+                  );
+                }}
                 onBadge={(file) => void run(() => badgeRequest(e.id, file))}
                 onDelete={async () => {
                   // Only offered pre-setup (deletable prop) — nothing downstream
@@ -1782,6 +1798,7 @@ export function EntrantTableRow({
   onRename,
   onPatch,
   onWithdraw,
+  onDisqualify,
   onBadge,
   onSyncSquad,
   onDelete,
@@ -1807,6 +1824,8 @@ export function EntrantTableRow({
   onPatch: (patch: Record<string, unknown>) => void;
   /** Withdraw with fixture surgery (spec 05 §5) — confirm handled upstream. */
   onWithdraw: () => void;
+  /** Disqualify (ruling 258) - confirm handled upstream; sends `PATCH /entrants/{id}` `{ status: "disqualified" }`. */
+  onDisqualify: () => void;
   onBadge: (file: File | null) => void;
   /** Replace the roster with the team's current squad (team entrants only —
    *  confirm handled upstream; returns the fresh members on success). */
@@ -1923,18 +1942,31 @@ export function EntrantTableRow({
                   {msg("entrants.row.reinstate")}
                 </button>
               ) : (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={onWithdraw}
-                  // `withdrawn-entrant-organiser.spec.ts` used to find this by
-                  // the English word, and said so in a comment. On the testid
-                  // now — see the Delete sibling below.
-                  data-testid="entrant-row-withdraw"
-                  className="btn btn-danger px-2 py-1 text-xs"
-                >
-                  {msg("entrants.row.withdraw")}
-                </button>
+                <>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={onWithdraw}
+                    // `withdrawn-entrant-organiser.spec.ts` used to find this by
+                    // the English word, and said so in a comment. On the testid
+                    // now — see the Delete sibling below.
+                    data-testid="entrant-row-withdraw"
+                    className="btn btn-danger px-2 py-1 text-xs"
+                  >
+                    {msg("entrants.row.withdraw")}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={onDisqualify}
+                    // Ruling 258: the cascade existed server-side (T15) with no control that sent it; the match
+                    // forfeit dialog's "disqualified" reason decides ONE match only.
+                    data-testid="entrant-row-disqualify"
+                    className="btn btn-danger px-2 py-1 text-xs"
+                  >
+                    {msg("entrants.row.disqualify")}
+                  </button>
+                </>
               )}
               {deletable && (
                 <button

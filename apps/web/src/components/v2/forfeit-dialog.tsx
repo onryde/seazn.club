@@ -357,6 +357,13 @@ export function ForfeitDialog(props: DialogProps) {
                 </label>
               ))}
             </div>
+            {/* Ruling 258: the owner picked "disqualified" here and the player was paired again in round 2 - this reason
+                is an award on THIS match; the event-wide removal is Entrants' Disqualify (the withdrawal cascade). */}
+            {sel.reason === "disqualified" && (
+              <p data-testid="forfeit-dq-scope-hint" className="mt-2 text-sm text-slate-600">
+                {msg("forfeitDialog.dqScopeHint")}
+              </p>
+            )}
           </fieldset>
         )}
         {chosen && (

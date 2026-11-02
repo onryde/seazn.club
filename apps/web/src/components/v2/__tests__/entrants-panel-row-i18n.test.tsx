@@ -8,7 +8,7 @@
 // English row did not have. So the whole set moves together.
 //
 // This file covers the controls a customer meets on the COLLAPSED row —
-// Withdraw / Reinstate / Delete and the seed field's accessible name.
+// Withdraw / Disqualify (ruling 258) / Reinstate / Delete and the seed field's accessible name.
 // `entrants-panel-row-expanded-i18n.test.tsx` covers the two behind the
 // disclosure, which `renderToStaticMarkup` cannot press.
 //
@@ -56,6 +56,7 @@ const DICTS: Record<Locale, Dict> = { en, fr, es, nl };
 const TESTID = {
   delete: "entrant-row-delete",
   withdraw: "entrant-row-withdraw",
+  disqualify: "entrant-row-disqualify",
   reinstate: "entrant-row-reinstate",
   seed: "entrant-row-seed",
 } as const;
@@ -89,6 +90,7 @@ const ENTRANT = {
 };
 
 const WITHDRAWN = { ...ENTRANT, status: "withdrawn" };
+const DISQUALIFIED = { ...ENTRANT, status: "disqualified" };
 
 function panelHtml(locale: Locale, over: Record<string, unknown> = {}): string {
   return renderToStaticMarkup(
@@ -174,6 +176,12 @@ describe("the entrants row's controls read from the dictionary, not hardcoded wo
     );
   });
 
+  it.each(LOCALES)("%s paints the locale's own Disqualify label", (locale) => {
+    expect(control(panelHtml(locale), TESTID.disqualify).label).toBe(
+      value(DICTS[locale], "entrants.row.disqualify"),
+    );
+  });
+
   it.each(LOCALES)("%s paints the locale's own Reinstate label on a withdrawn entrant", (locale) => {
     const html = panelHtml(locale, { entrants: [WITHDRAWN] });
     // Positive pair: the withdrawn row rendered, and it swapped the control —
@@ -181,6 +189,9 @@ describe("the entrants row's controls read from the dictionary, not hardcoded wo
     expect(html).toContain(WITHDRAWN.display_name);
     expect(html, "a withdrawn entrant is still being offered Withdraw").not.toContain(
       `data-testid="${TESTID.withdraw}"`,
+    );
+    expect(html, "a withdrawn entrant is still being offered Disqualify").not.toContain(
+      `data-testid="${TESTID.disqualify}"`,
     );
     expect(control(html, TESTID.reinstate).label).toBe(value(DICTS[locale], "entrants.row.reinstate"));
   });
@@ -205,9 +216,19 @@ describe("the entrants row's controls read from the dictionary, not hardcoded wo
     ["entrants.row.delete", TESTID.delete, "label"],
     ["entrants.row.deleteHint", TESTID.delete, "title"],
     ["entrants.row.withdraw", TESTID.withdraw, "label"],
+    ["entrants.row.disqualify", TESTID.disqualify, "label"],
   ] as const)("%s renders four different strings across the four locales", (_key, testid, field) => {
     const seen = LOCALES.map((l) => control(panelHtml(l), testid)[field]);
     expect(new Set(seen).size, `rendered ${JSON.stringify(seen)}`).toBe(LOCALES.length);
+  });
+
+  // A disqualified entrant is departed like a withdrawn one: the way back, nothing to disqualify again (ruling 258).
+  it("a disqualified entrant is offered Reinstate and neither Withdraw nor Disqualify", () => {
+    const html = panelHtml("en", { entrants: [DISQUALIFIED] });
+    expect(html, "the roster row did not render at all").toContain(DISQUALIFIED.display_name);
+    expect(control(html, TESTID.reinstate).label).toBe(value(DICTS.en, "entrants.row.reinstate"));
+    expect(html).not.toContain(`data-testid="${TESTID.disqualify}"`);
+    expect(html).not.toContain(`data-testid="${TESTID.withdraw}"`);
   });
 
   it("Reinstate renders four different strings across the four locales", () => {
@@ -228,10 +249,15 @@ describe("the entrants row's controls read from the dictionary, not hardcoded wo
       "entrants.row.delete",
       "entrants.row.deleteHint",
       "entrants.row.withdraw",
+      "entrants.row.disqualify",
       "entrants.row.reinstate",
     ]) {
       expectFourDistinct(key);
     }
+    // The confirm that guards Disqualify (ruling 258): its title interpolates the entrant, its body and label do not.
+    expectFourDistinct("confirm.disqualifyEntrant.title", { name: ENTRANT.display_name });
+    expectFourDistinct("confirm.disqualifyEntrant.body");
+    expectFourDistinct("confirm.disqualifyEntrant.label");
     expectFourDistinct("entrants.row.seedLabel", { name: ENTRANT.display_name });
   });
 
@@ -245,6 +271,8 @@ describe("the entrants row's controls read from the dictionary, not hardcoded wo
     // and a test that only checked Delete's absence would pass on a row that
     // had lost both.
     expect(started).toContain(`data-testid="${TESTID.withdraw}"`);
+    // Disqualify sits beside Withdraw on a started division too - the cascade it sends is the point of it.
+    expect(started).toContain(`data-testid="${TESTID.disqualify}"`);
   });
 
   it("offers no row controls to a viewer who cannot edit", () => {
