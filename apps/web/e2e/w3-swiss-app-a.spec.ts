@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import { test, expect, type APIRequestContext, type TestInfo } from "@playwright/test";
 import {
   TAG,
   addEntrantsViaApi,
@@ -767,8 +767,11 @@ type LateSport = {
   key: "badminton" | "boardgame";
   variant: string;
   config: Record<string, unknown>;
-  /** A PLAYED win for `winner`, through the scorer's events. */
+  /** A PLAYED win for `winner`, through the scorer's events: starts the board, then records the result. */
   win(request: APIRequestContext, f: Seated, winner: string): Promise<void>;
+  /** The result events alone, for a board that is ALREADY started. A correction voids a result and re-scores the board it
+   *  stands on; voiding does not un-start it, so re-sending `core.start` is refused 422 WRONG_PHASE "already started". */
+  result(request: APIRequestContext, f: Seated, winner: string): Promise<void>;
 };
 type Seated = Fx & { home_entrant_id: string | null; away_entrant_id: string | null };
 type LateEntryAnswer = {
@@ -798,8 +801,11 @@ const LATE_SPORTS: LateSport[] = [
     variant: "bwf",
     config: {},
     async win(request, f, winner) {
-      const homeWins = winner === f.home_entrant_id;
       await scoreAt(request, f.id, "core.start");
+      await this.result(request, f, winner);
+    },
+    async result(request, f, winner) {
+      const homeWins = winner === f.home_entrant_id;
       for (let g = 0; g < 2; g++) {
         await scoreAt(request, f.id, "badminton.game.summary", homeWins ? { home: 21, away: 10 } : { home: 10, away: 21 });
       }
@@ -811,6 +817,9 @@ const LATE_SPORTS: LateSport[] = [
     config: { chess: true },
     async win(request, f, winner) {
       await scoreAt(request, f.id, "core.start");
+      await this.result(request, f, winner);
+    },
+    async result(request, f, winner) {
       await scoreAt(request, f.id, "boardgame.result", { winner, method: "resign" });
     },
   },
@@ -1006,6 +1015,12 @@ async function noticeLines(page: Page) {
 
 for (const sport of LATE_SPORTS) {
   test.describe(`X-SW-12 add a late player in each case (${sport.key})`, () => {
+    /** A name for a PERSON a test creates. Players is the org's whole list and outlives a test, and `TAG` is minted once
+     *  per worker process, so a name built from `TAG` alone is shared by the same test of the other sport when one worker
+     *  runs both (the premise "not in Players" then fails), and by a rerun of the same test in one process (--repeat-each).
+     *  Sport and attempt are part of the name: no two runs of any test ask for the same person. */
+    const personName = (stem: string, testInfo: TestInfo) => `${stem} ${TAG} ${sport.key} r${testInfo.retry}`;
+
     test(`(a) before any board starts: the round is re-paired with the newcomer (${sport.key})`, async ({ page, request }) => {
       test.setTimeout(180_000);
       const r = await startedSwiss(request, sport, 6, 3, "LateA");
@@ -1095,11 +1110,11 @@ for (const sport of LATE_SPORTS) {
     // field of six pairs, round 1 paired and nothing started — (a). The pair is built in the form: the Pair kind, one
     // player picked from Players, the partner created with New player. Only where the engine declares a pair.
     if (takesPairs(sport.key)) {
-      test(`a late doubles PAIR through the form, one player picked and one created: (a) seats it in round 1 (${sport.key})`, async ({ page, request }) => {
+      test(`a late doubles PAIR through the form, one player picked and one created: (a) seats it in round 1 (${sport.key})`, async ({ page, request }, testInfo) => {
         test.setTimeout(180_000);
         const r = await startedSwiss(request, sport, 6, 3, "LateP", "pair");
-        const existing = `LateP Ann ${TAG}`;
-        const created = `LateP Bea ${TAG}`;
+        const existing = personName("LateP Ann", testInfo);
+        const created = personName("LateP Bea", testInfo);
         const person = await apiJson<{ id: string }>(request, "/api/v1/persons", "POST", { full_name: existing });
         expect(person.status, JSON.stringify(person.error)).toBe(201);
         const { status, body } = await addLatePlayer(page, request, r.divisionId, created, { pair: { existing, created } });
@@ -1133,10 +1148,10 @@ for (const sport of LATE_SPORTS) {
     const membersOf = (entrantId: string) =>
       withDb(async (sql) => (await sql<{ person_id: string }[]>`select person_id from entrant_members where entrant_id = ${entrantId}`).map((r) => r.person_id));
 
-    test(`New player (a): someone not in Players is created, picked, and seated in round 1 (${sport.key})`, async ({ page, request }) => {
+    test(`New player (a): someone not in Players is created, picked, and seated in round 1 (${sport.key})`, async ({ page, request }, testInfo) => {
       test.setTimeout(180_000);
       const r = await startedSwiss(request, sport, 6, 3, "LateNA");
-      const late = `LateNA Yara ${TAG}`;
+      const late = personName("LateNA Yara", testInfo);
       expect(await personIdsNamed(late), "premise: not in Players").toEqual([]);
       const { status, body } = await addLatePlayer(page, request, r.divisionId, late, { viaNewPlayer: true });
       expect(status, JSON.stringify(body.error)).toBe(201);
@@ -1151,11 +1166,11 @@ for (const sport of LATE_SPORTS) {
       expect(seated, "seated in round 1").toBeDefined();
     });
 
-    test(`New player (c): someone not in Players is created and queued for round 2 (${sport.key})`, async ({ page, request }) => {
+    test(`New player (c): someone not in Players is created and queued for round 2 (${sport.key})`, async ({ page, request }, testInfo) => {
       test.setTimeout(180_000);
       const r = await startedSwiss(request, sport, 6, 3, "LateNC");
       await scoreAt(request, (await r.boards(1))[0]!.id, "core.start");
-      const late = `LateNC Yara ${TAG}`;
+      const late = personName("LateNC Yara", testInfo);
       const { status, body } = await addLatePlayer(page, request, r.divisionId, late, { viaNewPlayer: true });
       expect(status, JSON.stringify(body.error)).toBe(201);
       const people = await personIdsNamed(late);
@@ -1917,7 +1932,8 @@ test.describe("X-SW-25 the desk warns after a cut-changing correction", () => {
       const live = (ledger.data ?? []).filter((e) => e.type === resultType && !taken.has(e.id));
       expect(live.length, "premise: the board holds a result to take back").toBeGreaterThan(0);
       for (const e of live.reverse()) await scoreAt(request, board.id, "core.void", { event_id: e.id });
-      await sport.win(request, board, p4);
+      // The board is still started: re-score it, never re-start it (core.start would be refused WRONG_PHASE).
+      await sport.result(request, board, p4);
 
       const drift2 = await apiJson<{ drift: { out: string[]; in: string[] } | null }>(request, `/api/v1/stages/${swissId}/swiss-cut`);
       expect([drift2.status, drift2.data?.drift], JSON.stringify(drift2.error)).toEqual([200, { out: [p3], in: [p4] }]);
@@ -2007,9 +2023,17 @@ test.describe("X-SW-18 requested half/zero byes have no path and refuse with gui
     expect(after[0]!.config.rounds, "neither the PUT nor a PATCH moved the round count").toBe(2);
     expect(JSON.stringify(after[0]!.config), "no requested bye was stored").not.toContain("requestedByes");
 
-    // The way out the sentence names: a walkover on the player's board is a real, working path.
+    // The way out the sentence names: a walkover on the player's board is a real, working path. A Swiss stage's FIRST
+    // Generate only mints the empty shells for every round and seats nobody; the SECOND (Pair next) seats round 1 on them.
+    const minted = await apiJson<{ created: number; fixtures: Seated[] }>(request, `/api/v1/stages/${stageId}/generate`, "POST");
+    expect(minted.status, JSON.stringify(minted.error)).toBe(200);
+    expect(minted.data!.created, "premise: the first Generate mints the two rounds' shells").toBeGreaterThan(0);
+    expect(
+      minted.data!.fixtures.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null),
+      "premise: the mint seats nobody, so Pair is a second press",
+    ).toHaveLength(0);
     const paired = await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST");
-    expect(paired.status, JSON.stringify(paired.error)).toBe(200);
+    expect(paired.status, `pair round 1 → ${JSON.stringify(paired.error)}`).toBe(200);
     const boards = await apiJson<Seated[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
     expect(boards.status, JSON.stringify(boards.error)).toBe(200);
     const board = boards.data!.find((f) => f.stage_id === stageId && f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null);
