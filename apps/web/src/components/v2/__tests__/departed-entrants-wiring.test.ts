@@ -22,6 +22,63 @@ import { join } from "node:path";
 const SRC = join(process.cwd(), "src");
 const read = (rel: string) => readFileSync(join(SRC, rel), "utf8");
 
+/**
+ * The source text of every JSX mount of `names` in `source`, from `<Name` to its OWN closing `/>`, found by brace depth and not by
+ * the first `/>` (a prop's value may hold one, and an `entrantStatuses=` hiding after it must still be inside the span). A mount
+ * that never closes, or one that swallows the next mount, is a scanner defect and fails loudly rather than shrinking the span.
+ */
+function mounts(source: string, names: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const m of source.matchAll(new RegExp(`<(?:${names.join("|")})\\s`, "g"))) {
+    let depth = 0;
+    let end = -1;
+    for (let i = m.index; i < source.length; i += 1) {
+      const c = source[i];
+      if (c === "{") depth += 1;
+      else if (c === "}") depth -= 1;
+      else if (c === "/" && source[i + 1] === ">" && depth === 0) {
+        end = i + 2;
+        break;
+      }
+    }
+    expect(end, `scanner: the <${m[0].slice(1).trim()}> mount at offset ${m.index} never closes`).toBeGreaterThan(-1);
+    const span = source.slice(m.index, end);
+    expect(
+      countMounts(span, names),
+      `scanner: the mount at offset ${m.index} swallowed another mount`,
+    ).toBe(1);
+    out.push(span);
+  }
+  return out;
+}
+const countMounts = (span: string, names: readonly string[]): number =>
+  [...span.matchAll(new RegExp(`<(?:${names.join("|")})\\s`, "g"))].length;
+
+/**
+ * What is wrong with how ONE mount receives the entrants' statuses (W3 T15 ruling 2); [] = nothing. Three kinds of mount:
+ *  - "sheet": the StagesPanel's `<RunSheet>`. The statuses reach it ONLY through the shared `{...runSheetProps}` spread, so it
+ *    names the prop nowhere. An `entrantStatuses=` after the spread overrides it (`={{}}`, `={undefined}`), one before is dead
+ *    weight that reads as a second source: both are refused (review m1).
+ *  - "row": a direct `<RunSheetRow>` / `<RowWithNow>` in run-sheet.tsx. It names the prop EXACTLY once, as `{entrantStatuses}`.
+ *    Zero occurrences is the dropped hand-over; two is an override; one with another value is a literal.
+ *  - "wrapper": `RowWithNow`'s own `<RunSheetRow … {...rest} />`. The prop rides `...rest`, so it names it nowhere.
+ */
+function statusProblems(mount: string, kind: "sheet" | "row" | "wrapper"): string[] {
+  const named = (mount.match(/\bentrantStatuses=/g) ?? []).length;
+  const problems: string[] = [];
+  if (kind === "sheet") {
+    if (!mount.includes("{...runSheetProps}")) problems.push("does not spread {...runSheetProps}");
+    if (named > 0) problems.push(`names entrantStatuses= ${named}x beside the spread (an override or a second source)`);
+  } else if (kind === "wrapper") {
+    if (!mount.includes("{...rest}")) problems.push("does not spread {...rest}");
+    if (named > 0) problems.push(`names entrantStatuses= ${named}x beside the spread (an override or a second source)`);
+  } else {
+    if (named !== 1) problems.push(`names entrantStatuses= ${named}x, expected exactly once`);
+    if (!mount.includes("entrantStatuses={entrantStatuses}")) problems.push("does not hand over {entrantStatuses} (a literal or another value)");
+  }
+  return problems;
+}
+
 describe("the ladder panel localises a challenge refusal (N21)", () => {
   const source = read("components/v2/ladder-panel.tsx");
 
@@ -123,24 +180,70 @@ describe("the organiser pages hand the entrants' statuses to the readers that wo
     const panel = read("components/v2/stages-panel.tsx");
     // Match Day #1103 (E1/C3) retired the division-wide `<RunSheet>` that carried the prop by name: each stage card mounts its own
     // sheet from ONE shared object, `runSheetProps`. So the link is now two halves, both pinned: every RunSheet mount spreads that
-    // object, and the object carries the statuses.
-    const sheets = [...panel.matchAll(/<RunSheet\s[\s\S]*?\/>/g)].map((m) => m[0]); // `\s`, not `\b`: comments mention "`<RunSheet>`"
+    // object and names the prop nowhere else (so nothing overrides it), and the object carries the statuses.
+    const sheets = mounts(panel, ["RunSheet"]); // the opening tag is `<RunSheet` + whitespace: comments mention "`<RunSheet>`"
     expect(sheets.length, "the StagesPanel mounts the RunSheet").toBeGreaterThan(0);
     for (const sheet of sheets) {
-      expect(sheet, "every RunSheet mount takes the shared props").toContain("{...runSheetProps}");
+      expect(statusProblems(sheet, "sheet"), `a RunSheet mount in stages-panel.tsx:\n${sheet}`).toEqual([]);
     }
     const shared = panel.match(/const runSheetProps = \{[\s\S]*?\n  \};\n/);
     expect(shared, "the StagesPanel builds the shared run-sheet props").not.toBeNull();
-    // Shorthand (`entrantStatuses,`): the destructured prop itself, never a literal map.
+    // Shorthand (`entrantStatuses,`): the destructured prop itself, never a literal map (`entrantStatuses: {}` type-checks and
+    // renders every DQ walkover as a withdrawal).
     expect(shared![0]).toMatch(/\n\s+entrantStatuses,\n/);
+    expect(shared![0], "the shared props never restate the statuses as a key: value").not.toMatch(/\bentrantStatuses\s*:/);
 
-    // Every site that hands a row its names hands it the statuses too: the four direct mounts (Match Day added the round-bar
-    // `RowWithNow`) and the day wrapper (whose `...rest` reaches the row).
+    // Every site that hands a row its names hands it the statuses too, MOUNT BY MOUNT (a count of `entrantStatuses={entrantStatuses}`
+    // could not see a second, overriding `entrantStatuses=` on a mount that also carries the right one - review m1): the direct
+    // mounts (Match Day added the round-bar `RowWithNow`), each naming the prop once as the destructured value, and the day
+    // wrapper (whose `...rest` reaches the row), which must neither pull the prop out of `rest` nor restate it.
     const runSheet = read("components/v2/desk/run-sheet.tsx");
-    const names = [...runSheet.matchAll(/entrantNames=\{entrantNames\}/g)].length;
-    const statuses = [...runSheet.matchAll(/entrantStatuses=\{entrantStatuses\}/g)].length;
-    expect(names, "premise: the sheet hands rows their names").toBeGreaterThanOrEqual(5);
-    expect(statuses, `rows handed statuses: ${statuses} of ${names}`).toBe(names);
+    const rowMounts = mounts(runSheet, ["RowWithNow", "RunSheetRow"]);
+    const wrappers = rowMounts.filter((m) => m.includes("{...rest}"));
+    const direct = rowMounts.filter((m) => !m.includes("{...rest}"));
+    expect(direct.length, "premise: the sheet mounts a row five ways").toBeGreaterThanOrEqual(5);
+    expect(wrappers.length, "premise: RowWithNow forwards its props to the row through ...rest").toBeGreaterThanOrEqual(1);
+    for (const row of direct) {
+      expect(row, "premise: this mount is one that hands the row its names").toContain("entrantNames={entrantNames}");
+      expect(statusProblems(row, "row"), `a row mount in run-sheet.tsx:\n${row}`).toEqual([]);
+    }
+    for (const wrapper of wrappers) {
+      expect(statusProblems(wrapper, "wrapper"), `a wrapper mount in run-sheet.tsx:\n${wrapper}`).toEqual([]);
+    }
+    const fn = runSheet.match(/function RowWithNow\(\{([\s\S]*?)\}: \{([\s\S]*?)\n\}\) \{/);
+    expect(fn, "RowWithNow keeps its destructure-and-type shape").not.toBeNull();
+    expect(fn![1], "RowWithNow must not pull the statuses out of ...rest").not.toContain("entrantStatuses");
+    expect(fn![2], "RowWithNow's props declare the statuses so they survive into ...rest").toContain("entrantStatuses?: ForfeitEntrantStatuses");
+  });
+
+  it("the scan sees the overrides it exists for: an override after the spread, one hiding past a `/>`, a literal, a dropped hand-over (review m1)", () => {
+    // The scanner's own mutants, each against a clean control: a scan nothing kills is decoration.
+    const cleanSheet = '<RunSheet {...runSheetProps} embedded stageId={stage.id} />';
+    const cleanRow = '<RunSheetRow key={f.id} entrantNames={entrantNames} entrantStatuses={entrantStatuses} courtNames={courtNames} />';
+    const cleanWrapper = '<RunSheetRow fixture={fixture} href={hrefFor(fixture)} {...rest} />';
+    expect(statusProblems(cleanSheet, "sheet"), "control: a clean sheet mount").toEqual([]);
+    expect(statusProblems(cleanRow, "row"), "control: a clean row mount").toEqual([]);
+    expect(statusProblems(cleanWrapper, "wrapper"), "control: a clean wrapper mount").toEqual([]);
+
+    const killed: Array<[string, string, "sheet" | "row" | "wrapper"]> = [
+      ["override after the spread", '<RunSheet {...runSheetProps} entrantStatuses={{}} embedded />', "sheet"],
+      ["undefined after the spread", '<RunSheet {...runSheetProps} entrantStatuses={undefined} />', "sheet"],
+      ["spread dropped", '<RunSheet embedded stageId={stage.id} />', "sheet"],
+      ["second source before the spread", '<RunSheet entrantStatuses={entrantStatuses} {...runSheetProps} />', "sheet"],
+      ["row: override after the right value", cleanRow.replace(" courtNames", " entrantStatuses={{}} courtNames"), "row"],
+      ["row: literal in place of the value", cleanRow.replace("entrantStatuses={entrantStatuses}", "entrantStatuses={{}}"), "row"],
+      ["row: hand-over dropped", cleanRow.replace(" entrantStatuses={entrantStatuses}", ""), "row"],
+      ["wrapper: restated beside ...rest", '<RunSheetRow fixture={fixture} {...rest} entrantStatuses={{}} />', "wrapper"],
+    ];
+    for (const [name, mount, kind] of killed) {
+      expect(statusProblems(mount, kind), name).not.toEqual([]);
+    }
+
+    // The span finder follows braces, not the first `/>`: an override AFTER a prop value that holds a `/>` is still inside it.
+    const hidden = '<RunSheetRow a={<i />} entrantNames={entrantNames} entrantStatuses={entrantStatuses} entrantStatuses={{}} />\n<RunSheetRow b={1} />';
+    const spans = mounts(hidden, ["RunSheetRow"]);
+    expect(spans.length, "anti-vacuity: both mounts found").toBe(2);
+    expect(statusProblems(spans[0]!, "row"), "the override past the inner `/>` is seen").not.toEqual([]);
   });
 
   it("the fixture page hands each side its status", () => {

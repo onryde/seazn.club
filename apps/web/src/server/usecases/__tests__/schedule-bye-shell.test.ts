@@ -6,10 +6,15 @@
 // "Holds a slot" is ONE predicate in this branch (`holdsSlot`, lib/rebuild-slots.ts — time, court, venue or pin), so
 // every assertion below reads it rather than a column of its own choosing.
 //
+// Match Day's call (V484 fixture_calls) is the one court write that does NOT go through `moveFixture`
+// (match-day-call.ts, header), so SWISS_BYE_NOT_PLACEABLE is not on its path: a bye shell is kept off a court there by the call's
+// own two generic guards (not `scheduled`; a side still TBD). The last test pins the OUTCOME so neither guard can be loosened alone.
+//
 // single-sport: badminton — every predicate under test reads `ext_key` and the slot columns, no sport field.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
 import { holdsSlot } from "@/lib/rebuild-slots";
 import { isSwissByeShellExtKey } from "@/lib/swiss-shell";
 import { SWISS_REFUSALS } from "@/lib/swiss-refusals";
@@ -23,8 +28,10 @@ import { listDivisionFixtures, listDivisionFixturesForBoard } from "../fixtures"
 import { buildRunSheet } from "@/lib/run-sheet-groups";
 import { getCompetitionDesk } from "../competition-desk";
 import { createStages, generateStageFixtures } from "../stages";
+import { callFixtureToCourt, previewCall } from "../match-day-call";
 import { boardMovable, inBoardTray } from "@/components/v2/board/types";
 import { createCourt, createVenue } from "../venues";
+import { callRows, slotOf } from "./_match-day-seed";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -310,6 +317,66 @@ describe.runIf(HAS_DB)("W3 T3 X-SW-29 a Swiss bye shell never takes a court", ()
     ).toEqual({ scheduled_at: null, court_id: null, venue_id: null, schedule_locked: false });
     const placedBoards = after.boards.filter((b) => b.round_no === 1 && holdsSlot(b));
     expect(placedBoards.length, "positive pair: the round's board slot survives Pair").toBe(1);
+  }, 120_000);
+
+  it("X-SW-29 Match Day's call and its preview refuse a Swiss bye shell, unseated or seated, and write no call", async () => {
+    // `callFixtureToCourt` writes court/venue/time itself (match-day-call.ts), bypassing `moveFixture`, so the refusal above is
+    // not on its path. Sequence: shells minted (both byes unseated) -> Pair round 1 (round 1's bye seated and settled, round 2's
+    // still a shell) -> a board of the same stage is called (the positive pair).
+    const rig = await shells();
+    const now = new Date("2030-08-01T09:30:00.000Z");
+    const court = rig.courts[0]!;
+    const refusedWith = async (p: Promise<unknown>) => {
+      const err = await p.then(
+        () => null,
+        (e: unknown) => e,
+      );
+      if (!(err instanceof HttpError)) throw new Error(`expected an HttpError refusal, got ${err === null ? "success" : String(err)}`);
+      return { status: err.status, code: err.code, extra: err.extra };
+    };
+    let refused = 0;
+    const expectRefused = async (byeId: string, label: string, extra: Record<string, unknown>) => {
+      const want = { status: 409, code: "NOT_CALLABLE", extra };
+      expect(await refusedWith(callFixtureToCourt(rig.auth, byeId, court, now)), `${label}: call`).toEqual(want);
+      expect(await refusedWith(previewCall(rig.auth, byeId, court, now)), `${label}: preview`).toEqual(want);
+      expect(await callRows(byeId), `${label}: no fixture_calls row`).toEqual([]);
+      expect(await slotOf(byeId), `${label}: no slot written`).toMatchObject({ court_id: null, venue_id: null, scheduled_at: null });
+      refused += 2;
+    };
+
+    // 1. Minted, nothing paired: both bye shells are `scheduled` with no seat, so only the TBD-side guard stands between them
+    //    and a court.
+    const minted = (await split(rig.stageId)).byes;
+    expect(minted.map((b) => [b.status, b.home_entrant_id]), "premise: both byes are unseated shells").toEqual([
+      ["scheduled", null],
+      ["scheduled", null],
+    ]);
+    for (const bye of minted) await expectRefused(bye.id, `round ${bye.round_no} unseated shell`, { status: "tbd_entrant" });
+
+    // 2. Pair round 1: its bye is seated and settled (`forfeited`), so the status guard names it; round 2's shell is untouched.
+    await generateStageFixtures(rig.auth, rig.stageId);
+    const paired = (await split(rig.stageId)).byes;
+    const seated = paired.find((b) => b.round_no === 1)!;
+    const stillShell = paired.find((b) => b.round_no === 2)!;
+    expect([seated.status, seated.home_entrant_id !== null], "premise: round 1's bye is seated and settled").toEqual(["forfeited", true]);
+    expect([stillShell.status, stillShell.home_entrant_id], "premise: round 2's bye is still an unseated shell").toEqual(["scheduled", null]);
+    await expectRefused(seated.id, "round 1 seated bye", { status: seated.status });
+    await expectRefused(stillShell.id, "round 2 unseated shell, after Pair", { status: "tbd_entrant" });
+    expect(refused, "anti-vacuity: four bye-shell states (two minted, then the seated one and the remaining shell) x (call + preview)").toBe(8);
+
+    // 3. Positive pair: a seated round-1 board of the same stage, on the same court, IS callable - so the refusals above are the
+    //    bye's, not a stage-wide or court-wide one.
+    const board = (await split(rig.stageId)).boards.find((b) => b.round_no === 1 && b.home_entrant_id !== null)!;
+    expect(board, "premise: Pair seated a round-1 board").toBeDefined();
+    await expect(previewCall(rig.auth, board.id, court, now), "a seated board previews").resolves.toBeDefined();
+    await expect(callFixtureToCourt(rig.auth, board.id, court, now), "a seated board is called").resolves.toMatchObject({
+      fixture_id: board.id,
+      court_id: court,
+    });
+    expect((await callRows(board.id)).map((r) => r.court_id), "the board's call is recorded").toEqual([court]);
+    expect(await slotOf(board.id), "the board holds the called slot").toMatchObject({ court_id: court, scheduled_at: now.toISOString() });
+    // ... and the board's call did not carry a bye with it.
+    expect((await split(rig.stageId)).byes.filter(holdsSlot), "still no bye shell holds a slot").toEqual([]);
   }, 120_000);
 
   it("X-SW-29 a quick Start's rolling times skip the bye shells", async () => {
