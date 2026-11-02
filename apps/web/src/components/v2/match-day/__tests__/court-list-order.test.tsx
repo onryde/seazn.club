@@ -1,8 +1,9 @@
 // Match Day E2 item 2 (owner 2026-11-01): the court list's order and its fold.
 //
 // The rules, from the brief and not from the code:
-//  - groups run playing -> called -> up next (a FREE court with a queue: nothing on it, something waiting) -> free; within a group
-//    the courts keep the order they came in;
+//  - groups run playing -> called -> up next (a FREE court with a queue: nothing on it, something waiting) -> free -> closed (fix
+//    round 1, m2: a court shut by its hours right now is not "free": it has its own group after free, outside the fold); within a
+//    group the courts keep the order they came in;
 //  - a court that is free with an EMPTY queue folds into one row, "N more courts free (Courts 5–10)", which expands in place;
 //  - if EVERY court is free and empty the list is shown whole (nothing to rank them against).
 // Two decisions the brief left open, pinned here so they are decisions and not accidents: another competition's court is not free,
@@ -23,8 +24,10 @@ import type { MatchDayCourt, MatchDayFixture, MatchDayQueued } from "@/lib/match
 import {
   COURT_GROUPS,
   MIN_FOLDED,
+  courtCounts,
   courtGroup,
   foldFreeCourts,
+  headerCountParts,
   foldedNames,
   orderCourts,
   type CourtGroup,
@@ -84,6 +87,8 @@ const upNext = (n: number) => court(n, { queue: [queued(`q-${n}`)] });
 const elsewhere = (n: number, withQueue = false) =>
   court(n, { state: "in_use_elsewhere", in_use_by: "Winter Open", queue: withQueue ? [queued(`q-${n}`)] : [] });
 const free = (n: number) => court(n);
+/** Shut by its hours right now (a free court: nothing is on it, but it cannot be called onto without a "Call anyway"). */
+const closed = (n: number, o: Partial<MatchDayCourt> = {}) => court(n, { closure: { kind: "now", until: "2026-10-31T15:00:00.000Z" }, ...o });
 
 const ids = (cs: readonly MatchDayCourt[]) => cs.map((c) => c.court_id);
 
@@ -98,15 +103,25 @@ describe("courtGroup — every state, with and without a queue", () => {
       [{ state: "free", queue: [queued("q")] }, "up_next"],
       [{ state: "in_use_elsewhere" }, "elsewhere"],
       [{ state: "in_use_elsewhere", queue: [queued("q")] }, "elsewhere"],
+      // m2: closed NOW is a group of its own — only for a court with nothing on it and nothing shared; whatever its queue.
+      [{ state: "free", closure: { kind: "now", until: null } }, "closed"],
+      [{ state: "free", closure: { kind: "now", until: "2026-10-31T15:00:00.000Z" } }, "closed"],
+      [{ state: "free", queue: [queued("q")], closure: { kind: "now", until: null } }, "closed"],
+      // A break still to come is not closed now; and a match already on the court (or another competition's hold) keeps its state.
+      [{ state: "free", closure: { kind: "later", from: "2026-10-31T14:00:00.000Z", until: "2026-10-31T15:00:00.000Z" } }, "free"],
+      [{ state: "free", queue: [queued("q")], closure: { kind: "later", from: "2026-10-31T14:00:00.000Z", until: "2026-10-31T15:00:00.000Z" } }, "up_next"],
+      [{ state: "playing", closure: { kind: "now", until: null } }, "playing"],
+      [{ state: "called", closure: { kind: "now", until: null } }, "called"],
+      [{ state: "in_use_elsewhere", closure: { kind: "now", until: null } }, "elsewhere"],
     ];
     for (const [o, group] of table) expect(courtGroup(court(1, o)), JSON.stringify(o)).toBe(group);
-    expect(table).toHaveLength(8);
+    expect(table).toHaveLength(16);
     // The four states the model declares, each answered above (a new state is a compile error in courtGroup; this pins the count).
     expect(new Set(table.map(([o]) => o.state))).toEqual(new Set(["playing", "called", "free", "in_use_elsewhere"]));
   });
 
-  it("the group list is the brief's order, with the not-free group between up next and free", () => {
-    expect([...COURT_GROUPS]).toEqual(["playing", "called", "up_next", "elsewhere", "free"]);
+  it("the group list is the brief's order, with the not-free group between up next and free and the closed group last (m2)", () => {
+    expect([...COURT_GROUPS]).toEqual(["playing", "called", "up_next", "elsewhere", "free", "closed"]);
   });
 });
 
@@ -114,6 +129,11 @@ describe("orderCourts", () => {
   it("lists playing, called, up next, then free — the brief's worked example", () => {
     const ordered = orderCourts([free(5), playing(1), upNext(3), called(2), free(6), playing(4)]);
     expect(ids(ordered)).toEqual(["c-1", "c-4", "c-2", "c-3", "c-5", "c-6"]);
+  });
+
+  it("m2: a closed court sorts after the free ones, whatever its place in the day", () => {
+    const ordered = orderCourts([closed(2), free(5), playing(1), closed(3, { queue: [queued("q-3")] }), upNext(4), free(6), elsewhere(7)]);
+    expect(ids(ordered)).toEqual(["c-1", "c-4", "c-7", "c-5", "c-6", "c-2", "c-3"]);
   });
 
   it("an empty list is an empty list", () => {
@@ -128,7 +148,7 @@ describe("orderCourts", () => {
   });
 
   it("sweep: any arrangement of courts of every group comes out grouped, stable, and the same courts", () => {
-    const base = [playing(1), playing(2), called(3), called(4), upNext(5), upNext(6), elsewhere(7), elsewhere(8, true), free(9), free(10)];
+    const base = [playing(1), playing(2), called(3), called(4), upNext(5), upNext(6), elsewhere(7), elsewhere(8, true), free(9), free(10), closed(11), closed(12)];
     // A seeded shuffle (no Math.random: a failure must replay).
     let seed = 20261101;
     const rand = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
@@ -147,6 +167,7 @@ describe("orderCourts", () => {
         const inOut = out.filter((c) => courtGroup(c) === g).map((c) => c.court_id);
         const inIn = input.filter((c) => courtGroup(c) === g).map((c) => c.court_id);
         expect(inOut, `${g} keeps its relative order`).toEqual(inIn);
+        expect(inOut.length, `${g} is not an empty group in this sweep`).toBeGreaterThan(0);
       }
       checked++;
     }
@@ -173,6 +194,24 @@ describe("foldFreeCourts", () => {
     const r = foldFreeCourts(ordered, null);
     expect(ids(r.shown)).toEqual(["c-1", "c-2", "c-3", "c-7"]);
     expect(ids(r.folded)).toEqual(["c-5", "c-6", "c-8"]);
+  });
+
+  it("m2: a closed court is never folded into 'free' — it stays shown, after the others, outside the fold", () => {
+    const ordered = orderCourts([free(5), playing(1), closed(2), free(6), free(7)]);
+    const r = foldFreeCourts(ordered, null);
+    expect(ids(r.folded)).toEqual(["c-5", "c-6", "c-7"]);
+    expect(ids(r.shown)).toEqual(["c-1", "c-2"]);
+    // Closed courts with ONE free one: no fold (a fold hides at least two), everything shown in list order, closed last.
+    const one = orderCourts([closed(2), free(5), playing(1)]);
+    expect(ids(foldFreeCourts(one, null).shown)).toEqual(["c-1", "c-5", "c-2"]);
+    expect(foldFreeCourts(one, null).folded).toEqual([]);
+  });
+
+  it("m2: with nothing happening anywhere — every court free or closed — the list is shown whole, closed last", () => {
+    const idle = orderCourts([closed(1), free(2), free(3), closed(4)]);
+    const r = foldFreeCourts(idle, null);
+    expect(ids(r.shown)).toEqual(["c-2", "c-3", "c-1", "c-4"]);
+    expect(r.folded).toEqual([]);
   });
 
   it("a single free court is not worth a fold row", () => {
@@ -249,6 +288,66 @@ describe("the fold row in every locale and every noun (counted)", () => {
       }
     }
     expect(checked).toBe(VENUE_NOUNS.length * 4 * 3);
+  });
+});
+
+describe("m2 — a closed court is not counted free", () => {
+  it("the header's free count leaves closed courts out; courts and playing are unchanged", () => {
+    const day = [playing(1), called(2), free(3), upNext(4), closed(5), closed(6, { queue: [queued("q-6")] }), elsewhere(7)];
+    expect(courtCounts(day)).toEqual({ courts: 7, playing: 1, free: 2 });
+    // Without the closed ones the free count is the same: they were never in it.
+    expect(courtCounts(day.filter((c) => courtGroup(c) !== "closed")).free).toBe(2);
+    // The empty case: every court shut — none is free.
+    expect(courtCounts([closed(1), closed(2)])).toEqual({ courts: 2, playing: 0, free: 0 });
+    expect(courtCounts([])).toEqual({ courts: 0, playing: 0, free: 0 });
+  });
+
+  it("the header line follows: '7 courts · 1 playing · 2 free' for that day, in the reader's words", () => {
+    const day = [playing(1), called(2), free(3), upNext(4), closed(5), closed(6), elsewhere(7)];
+    const parts = headerCountParts(dict, "en", "court", day, []);
+    expect(parts).toEqual(["7 courts", "1 playing", "2 free"]);
+  });
+
+  it("the row says 'Closed', not 'Free'; the dot is its own; a free court still says 'Free'", () => {
+    const render = (courts: MatchDayCourt[]) =>
+      renderToStaticMarkup(<CourtList courts={courts} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
+    const html = render(orderCourts([playing(1), free(2), closed(3)]));
+    const rowOf = (id: string) => new RegExp(`<button[^>]*data-court-id="${id}"[\\s\\S]*?</button>`).exec(html)![0];
+    expect(rowOf("c-3")).toContain(">Closed</span>");
+    expect(rowOf("c-3")).not.toContain(">Free</span>");
+    expect(rowOf("c-3")).toContain('data-closed="true"');
+    expect(rowOf("c-2")).toContain(">Free</span>");
+    expect(rowOf("c-2")).not.toContain("data-closed");
+    // The closure line stays on the card.
+    expect(rowOf("c-3")).toContain("Closed until 15:00");
+  });
+
+  it("closed courts list AFTER the fold row, outside it; opening the fold does not move them", () => {
+    const day = orderCourts([free(5), free(6), free(7), playing(1), closed(2), closed(3)]);
+    const html = renderToStaticMarkup(<CourtList courts={day} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
+    const at = (needle: string) => html.indexOf(needle);
+    expect(at('data-court-id="c-1"')).toBeGreaterThan(-1);
+    expect(at('data-testid="md-court-fold"')).toBeGreaterThan(at('data-court-id="c-1"'));
+    expect(at('data-court-id="c-2"')).toBeGreaterThan(at('data-testid="md-court-fold"'));
+    expect(at('data-court-id="c-3"')).toBeGreaterThan(at('data-court-id="c-2"'));
+    expect(html).toContain("3 more courts free");
+    // The fold's count does not include the closed courts.
+    expect(html).not.toContain("5 more courts free");
+  });
+
+  it("every locale has the words: the row's 'Closed' and the panel's closed title, none a raw key (counted)", () => {
+    let checked = 0;
+    for (const [locale, d] of Object.entries(DICTS) as [Locale, Dict][]) {
+      for (const key of ["matchDay.state.closed", "matchDay.free.closedTitle"] as const) {
+        const text = t(d, key, { court: "Court 5" });
+        expect(text, `${locale} ${key}`).not.toMatch(/^matchDay\.|[{}]/);
+        expect(text.length, `${locale} ${key}`).toBeGreaterThan(3);
+        checked++;
+      }
+      expect(t(d, "matchDay.free.closedTitle", { court: "Court 5" }), locale).toContain("Court 5");
+      expect(t(d, "matchDay.state.closed"), locale).not.toBe(t(d, "matchDay.state.free"));
+    }
+    expect(checked).toBe(8);
   });
 });
 

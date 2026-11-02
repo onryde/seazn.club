@@ -13,6 +13,7 @@ import type { MatchDayCandidate, MatchDayCandidateSource, MatchDayCourt } from "
 import {
   blockedReason,
   candidateWhere,
+  courtGroup,
   filterCandidates,
   freeCourtLine,
   isCandidateList,
@@ -114,12 +115,14 @@ export function FreeCourtBody({
   onRetry: () => void;
 }) {
   const { dict } = ctx;
+  // A court shut right now is not "free" (fix round 1, m2): the panel says so, and has no "free since".
+  const shut = courtGroup(court) === "closed";
   return (
     <div className="grid gap-4">
-      <div data-testid="md-free-panel" className="rounded-2xl bg-court p-5 text-court-ink shadow-lg sm:p-6">
-        <p className="font-display text-2xl font-semibold sm:text-3xl">{t(dict, "matchDay.free.title", { court: court.court_name })}</p>
+      <div data-testid="md-free-panel" data-closed={shut ? "true" : undefined} className="rounded-2xl bg-court p-5 text-court-ink shadow-lg sm:p-6">
+        <p className="font-display text-2xl font-semibold sm:text-3xl">{t(dict, shut ? "matchDay.free.closedTitle" : "matchDay.free.title", { court: court.court_name })}</p>
         <p className="mt-1 text-sm text-court-muted" aria-live="polite">
-          {court.free_since !== null && <>{t(dict, "matchDay.free.since", { time: fmtPublicTime(ctx.locale, ctx.tz, court.free_since) })} </>}
+          {!shut && court.free_since !== null && <>{t(dict, "matchDay.free.since", { time: fmtPublicTime(ctx.locale, ctx.tz, court.free_since) })} </>}
           {load.status === "loading"
             ? t(dict, "matchDay.free.loading")
             : load.status === "failed"

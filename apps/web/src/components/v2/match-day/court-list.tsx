@@ -20,6 +20,7 @@ import type { MatchDayCourt, MatchDayFixture, VenueNoun } from "@/lib/match-day/
 import {
   closureText,
   compactScore,
+  courtGroup,
   courtScorerAttention,
   foldFreeCourts,
   foldedNames,
@@ -31,11 +32,13 @@ import {
 import { MatchRoundChip } from "./round-chip";
 import { ScorerMark } from "./scorer-mark";
 
-/** The state dot: green while playing, amber while called, an open ring while free, grey while another competition has it. */
-const DOT: Record<MatchDayCourt["state"], string> = {
+/** The state dot: green while playing, amber while called, an open ring while free (an amber ring while shut by its hours, m2),
+ *  grey while another competition has it. */
+const DOT: Record<MatchDayCourt["state"] | "closed", string> = {
   playing: "bg-emerald-500",
   called: "bg-amber-500",
   free: "border-2 border-purple-400 bg-white",
+  closed: "border-2 border-amber-500 bg-white",
   in_use_elsewhere: "bg-slate-300",
 };
 
@@ -60,9 +63,12 @@ export function CourtList({
   const foldId = useId();
   const { shown, folded } = foldFreeCourts(courts, selectedId);
   const noun = sharedNoun(folded);
+  // The closed courts are the list's tail (m2): after the free ones, so after the fold row too.
+  const live = shown.filter((c) => courtGroup(c) !== "closed");
+  const shut = shown.filter((c) => courtGroup(c) === "closed");
   return (
     <ul aria-label={t(dict, "matchDay.list.label")} className="card divide-y divide-purple-50 overflow-hidden">
-      {shown.map((c) => (
+      {live.map((c) => (
         <CourtRow key={c.court_id} court={c} selected={c.court_id === selectedId} dict={dict} locale={locale} tz={tz} onSelect={onSelect} />
       ))}
       {folded.length > 0 && (
@@ -102,6 +108,9 @@ export function CourtList({
           )}
         </li>
       )}
+      {shut.map((c) => (
+        <CourtRow key={c.court_id} court={c} selected={c.court_id === selectedId} dict={dict} locale={locale} tz={tz} onSelect={onSelect} />
+      ))}
     </ul>
   );
 }
@@ -143,6 +152,7 @@ function CourtRow({
   const score = c.state === "playing" && c.current !== null ? scoreLine(c.current) : null;
   const closure = closureText(dict, c.closure, locale, tz);
   const scorer = courtScorerAttention(c);
+  const shut = courtGroup(c) === "closed";
   return (
     <li>
       <button
@@ -150,6 +160,7 @@ function CourtRow({
         data-testid="md-court-row"
         data-court-id={c.court_id}
         data-state={c.state}
+        data-closed={shut ? "true" : undefined}
         data-scorer={scorer ?? undefined}
         aria-current={selected ? "true" : undefined}
         onClick={() => onSelect(c.court_id)}
@@ -157,7 +168,7 @@ function CourtRow({
           selected ? "md:bg-purple-50 md:shadow-[inset_3px_0_0_var(--color-purple-600)]" : ""
         } ${c.state === "in_use_elsewhere" ? "text-slate-500" : "text-slate-900"}`}
       >
-        <span aria-hidden className={`h-2.5 w-2.5 shrink-0 rounded-full ${DOT[c.state]}`} />
+        <span aria-hidden className={`h-2.5 w-2.5 shrink-0 rounded-full ${DOT[shut ? "closed" : c.state]}`} />
         <span className="min-w-0">
           <span className="flex min-w-0 items-center gap-2">
             <span className="truncate text-sm font-semibold">{c.court_name}</span>
@@ -184,6 +195,8 @@ function CourtRow({
         <span className="shrink-0 text-right">
           {c.state === "called" ? (
             <span className="text-xs font-semibold text-amber-700">{t(dict, "matchDay.state.called")}</span>
+          ) : shut ? (
+            <span className="text-xs font-semibold text-amber-800">{t(dict, "matchDay.state.closed")}</span>
           ) : c.state === "free" ? (
             <span className="text-xs font-semibold text-purple-700">{t(dict, "matchDay.state.free")}</span>
           ) : null}

@@ -10,6 +10,7 @@ import type { Attention, Severity } from "@/lib/division-phase";
 import { mayEmbedReplay, youtubeVideoId, type PublicReplayPart } from "@/lib/youtube";
 import { needsYouKey } from "@/components/v2/desk/needs-you";
 import { CALL_REFUSAL, TBD_ENTRANT, type CallPreview, type CallWarning } from "./call";
+import { closedNow } from "./closure";
 import type {
   CourtClosure,
   MatchDayCandidate,
@@ -65,13 +66,14 @@ export interface CourtCounts {
   free: number;
 }
 
-/** "N courts · N playing · N free" (§6.3). Called and in-use courts count as courts, neither playing nor free. */
-export function courtCounts(courts: readonly Pick<MatchDayCourt, "state">[]): CourtCounts {
+/** "N courts · N playing · N free" (§6.3). Called and in-use courts count as courts, neither playing nor free — and so does a court
+ *  shut by its hours right now (fix round 1, m2): nobody can be sent to it without a "Call anyway", so it is not "free". */
+export function courtCounts(courts: readonly Pick<MatchDayCourt, "state" | "closure">[]): CourtCounts {
   let playing = 0;
   let free = 0;
   for (const c of courts) {
     if (c.state === "playing") playing++;
-    else if (c.state === "free") free++;
+    else if (c.state === "free" && !closedNow(c)) free++;
   }
   return { courts: courts.length, playing, free };
 }
@@ -98,7 +100,7 @@ export function headerCountParts(
   dict: Dict,
   locale: Locale,
   noun: VenueNoun,
-  courts: readonly Pick<MatchDayCourt, "state">[],
+  courts: readonly Pick<MatchDayCourt, "state" | "closure">[],
   noCourt: readonly Pick<MatchDayFixture, "sport_key">[],
 ): string[] {
   const counts = courtCounts(courts);
@@ -135,11 +137,14 @@ export function filterCourts(courts: readonly MatchDayCourt[], divisions: Readon
  *  - playing, then called: the court's state;
  *  - up_next: a FREE court with a queue of this competition's matches — nothing on it, something waiting for it;
  *  - elsewhere: another competition has it (not free, so never folded into "free"; spec §7 "Which courts" — courts are shared);
- *  - free: a free court with an empty queue. */
-export const COURT_GROUPS = ["playing", "called", "up_next", "elsewhere", "free"] as const;
+ *  - free: a free court with an empty queue;
+ *  - closed (fix round 1, m2): a court with nothing on it that its hours have shut right now. Not free — Call onto it asks for a
+ *    "Call anyway" — so it is last, after free and outside the free fold, whatever its queue. A court with a match on it, or held
+ *    by another competition, keeps its own group: the closure is a line on its card, not its state. */
+export const COURT_GROUPS = ["playing", "called", "up_next", "elsewhere", "free", "closed"] as const;
 export type CourtGroup = (typeof COURT_GROUPS)[number];
 
-export function courtGroup(c: Pick<MatchDayCourt, "state" | "queue">): CourtGroup {
+export function courtGroup(c: Pick<MatchDayCourt, "state" | "queue" | "closure">): CourtGroup {
   switch (c.state) {
     case "playing":
       return "playing";
@@ -148,6 +153,7 @@ export function courtGroup(c: Pick<MatchDayCourt, "state" | "queue">): CourtGrou
     case "in_use_elsewhere":
       return "elsewhere";
     case "free":
+      if (closedNow(c)) return "closed";
       return c.queue.length > 0 ? "up_next" : "free";
   }
 }
@@ -167,7 +173,8 @@ export const MIN_FOLDED = 2;
 /**
  * The list as drawn: `shown` (everything but the folded courts, in list order) and `folded` — the free courts with an empty
  * queue, in list order, which sit under ONE row ("5 more courts free (Courts 5–10)") that expands in place.
- *  - when EVERY court is free and empty there is nothing to rank them against: the list is shown whole (empty `folded`);
+ *  - when EVERY court is free and empty (or shut, m2) there is nothing to rank them against: the list is shown whole (empty `folded`);
+ *  - a closed court is never folded: it stays in `shown`, after the free ones (`CourtList` draws it below the fold row);
  *  - the court the organiser has open (`selectedId`) is never folded away from under them: it stays in `shown`;
  *  - fewer than `MIN_FOLDED` folded courts is no fold.
  * `courts` is already in list order (`orderCourts`).
@@ -178,7 +185,8 @@ export function foldFreeCourts(
 ): { shown: MatchDayCourt[]; folded: MatchDayCourt[] } {
   const foldable = (c: MatchDayCourt) => courtGroup(c) === "free";
   const whole = { shown: [...courts], folded: [] as MatchDayCourt[] };
-  if (courts.every(foldable)) return whole;
+  // Nothing is happening anywhere — every court is free or shut — so there is nothing to rank them against.
+  if (courts.every((c) => foldable(c) || courtGroup(c) === "closed")) return whole;
   const folded = courts.filter((c) => foldable(c) && c.court_id !== selectedId);
   if (folded.length < MIN_FOLDED) return whole;
   const gone = new Set(folded.map((c) => c.court_id));

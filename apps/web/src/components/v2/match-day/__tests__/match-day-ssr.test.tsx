@@ -2044,6 +2044,23 @@ describe("E2-3 — a court's closure", () => {
     expect(body(free5(LATER), [cand({}, { id: "c-1" })])).not.toContain("Closed");
   });
 
+  it("m2: a shut court's panel is titled 'closed', not 'free', and has no 'Free since'; a break still to come keeps 'free'", () => {
+    const since = "2026-10-31T11:00:00.000Z";
+    const shut = { ...free5(NOW_UNTIL), free_since: since };
+    const html = body(shut, two());
+    expect(html).toContain("Court 5 is closed");
+    expect(html).not.toContain("Court 5 is free");
+    expect(html).not.toContain("Free since");
+    expect(html).toContain('data-closed="true"');
+    // The same court, open (or with only a later break): free, with its 'Free since'.
+    for (const open of [null, LATER]) {
+      const h = body({ ...free5(open), free_since: since }, two());
+      expect(h).toContain("Court 5 is free");
+      expect(h).toContain("Free since 11:00");
+      expect(h).not.toContain("data-closed");
+    }
+  });
+
   it("I1: every locale reads the closed-court line in its own words, none a raw key, and none says the court 'could start now' (counted)", () => {
     let checked = 0;
     for (const [locale, d] of Object.entries(DICTS) as [ "en" | "es" | "fr" | "nl", Dict ][]) {
