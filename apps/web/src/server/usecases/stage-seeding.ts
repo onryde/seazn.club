@@ -71,35 +71,46 @@ export interface PoolTableRows {
   rows: readonly StandingsRow[];
 }
 
-/** The tables a progression's CUT reads from one source (W3 T15 Carry A, controller ruling 2026-11-02): for a source
- *  kind in `CUT_SKIPS_DEPARTED_KINDS` (lib/table-withdrawal.ts — Swiss alone; the scope guard), every
- *  departed row is dropped and the rest renumbered 1..m in their table order — the table with the ineligible entrants
- *  removed — and a tie that named a departed entrant names only the ones left; a tie with nobody left is no tie, so
- *  its flag goes too (the engine flags a seat from `tieUnbroken` and `tieBreak.with`, progression.ts). Any other kind,
- *  or a table with no departed row, is returned as it was. The stored standings are never touched: the public table
- *  keeps her row, marked as departed; only the cut skips it. */
+/** The tables a progression's CUT reads from one source (W3 T15 Carry A, controller rulings 2026-11-02, fix round 1 I3):
+ *  for a source kind in `CUT_SKIPS_DEPARTED_KINDS` (lib/table-withdrawal.ts — Swiss alone; the scope guard), every
+ *  departed row moves to the BOTTOM of its table: the eligible rows first, renumbered 1..m in their table order, then
+ *  the departed ones, renumbered m+1..n in theirs. So the cut takes every eligible entrant before any departed one —
+ *  the next eligible entrant backfills a departed qualifier's place — and only a true shortfall (fewer eligible
+ *  entrants than the cut) reaches a departed row, whose seat then resolves as any departed qualifier's does today
+ *  (setup: the proposal leaves her seat vacant; on_complete: generation's `walkoverDepartedQualifiers`). Never DROPPED:
+ *  a table shorter than the cut is the engine's STAGE_NOT_READY, which completion's on_complete branch reads as
+ *  "another source is not ready yet" and swallows — a shortfall would seed nothing and say nothing (review I3).
+ *  A tie that named a departed entrant names only the eligible ones left, and a tie with nobody left is no tie, so its
+ *  flag goes too (the engine flags a seat from `tieUnbroken` and `tieBreak.with`, progression.ts); a departed row
+ *  carries no tie at all — her place below every eligible entrant is the rule's, not a tie to break. Any other kind, or
+ *  a table with no departed row, is returned as it was. The stored standings are never touched: the public table keeps
+ *  her row in her place, marked as departed; only the cut moves her. */
 export function cutEligiblePools<P extends PoolTableRows>(
   sourceKind: string,
   pools: readonly P[],
   departed: ReadonlySet<string>,
 ): P[] {
   if (!CUT_SKIPS_DEPARTED_KINDS.has(sourceKind)) return [...pools];
+  const byRank = (a: StandingsRow, b: StandingsRow) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER);
   return pools.map((p) => {
     if (!p.rows.some((r) => departed.has(r.entrantId))) return p;
-    const kept = p.rows
-      .filter((r) => !departed.has(r.entrantId))
-      .sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER));
-    return {
-      ...p,
-      rows: kept.map((r, i): StandingsRow => {
-        const { tieBreak, tieUnbroken, ...rest } = r;
-        const row: StandingsRow = { ...rest, rank: i + 1 };
-        if (tieBreak === undefined) return tieUnbroken === undefined ? row : { ...row, tieUnbroken };
-        const others = tieBreak.with.filter((id) => !departed.has(id));
-        if (others.length === 0) return row;
-        return { ...row, tieBreak: { ...tieBreak, with: others }, ...(tieUnbroken === undefined ? {} : { tieUnbroken }) };
-      }),
-    };
+    const kept = p.rows.filter((r) => !departed.has(r.entrantId)).sort(byRank);
+    const gone = p.rows.filter((r) => departed.has(r.entrantId)).sort(byRank);
+    const eligibleRows = kept.map((r, i): StandingsRow => {
+      const { tieBreak, tieUnbroken, ...rest } = r;
+      const row: StandingsRow = { ...rest, rank: i + 1 };
+      if (tieBreak === undefined) return tieUnbroken === undefined ? row : { ...row, tieUnbroken };
+      const others = tieBreak.with.filter((id) => !departed.has(id));
+      if (others.length === 0) return row;
+      return { ...row, tieBreak: { ...tieBreak, with: others }, ...(tieUnbroken === undefined ? {} : { tieUnbroken }) };
+    });
+    const departedRows = gone.map((r, i): StandingsRow => {
+      const row: StandingsRow = { ...r, rank: kept.length + i + 1 };
+      delete row.tieBreak;
+      delete row.tieUnbroken;
+      return row;
+    });
+    return { ...p, rows: [...eligibleRows, ...departedRows] };
   });
 }
 

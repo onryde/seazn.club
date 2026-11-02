@@ -920,6 +920,59 @@ describe.runIf(HAS_DB)("T15 Carry A: a departed entrant leaves the Swiss cut; th
       const koRows = await sql<{ status: string }[]>`select status from fixtures where stage_id = ${rig.koStageId!} and round_no = 1`;
       expect(koRows.map((f) => f.status), "no departed qualifier is walked over: every first-round line is open").toEqual(koRows.map(() => "scheduled"));
     }, 300_000);
+
+    // Review I3 (controller ruling, fix round 1): departed entrants move to the BOTTOM of the cut order, never out of it.
+    // When fewer eligible entrants remain than the cut, the cut still seeds N — the eligible first, then the departed in
+    // table order — and a departed qualifier's seat resolves as it always has. Before, the cut DROPPED her row, the engine
+    // refused a table shorter than the cut (STAGE_NOT_READY), and completion's on_complete branch swallowed that as
+    // "another source is not ready": the stage completed and seeded nobody, silently. Five players, two leave, cut of 4.
+    const shortfall = (table: Table, gone: readonly string[]) =>
+      [...cutLess(table, gone, table.length), ...idsOf(table).filter((id) => gone.includes(id))].slice(0, 4);
+
+    it(`a shortfall on the on_complete knockout (3 eligible under a cut of 4): config.qualified still seeds 4 — the eligible three, then the first departed — and her line walks over to seed 1 (${s.sport})`, async () => {
+      const rig = await finishRig(s, 5, 3, { onCompleteTop: 4 });
+      await playThrough(rig, 3);
+      const table = await standingsNow(rig);
+      const gone = [table[0]!.entrantId, table[2]!.entrantId];
+      await withdrawEntrantCascade(rig.auth, gone[0]!);
+      await patchEntrant(rig.auth, gone[1]!, { status: "disqualified" });
+      const expected = shortfall(table, gone);
+      expect(expected.filter((id) => gone.includes(id)), "premise: the cut reaches exactly one departed entrant, the higher-ranked").toEqual([gone[0]]);
+      expect(await completeStage(rig.auth, rig.stageId, { publish: false })).toMatchObject({ completed: true });
+      const [ko] = await sql<{ config: { qualified?: string[] } }[]>`select config from stages where id = ${rig.koStageId!}`;
+      expect(ko!.config.qualified, "four seeds, never none: the eligible three in table order, then her").toEqual(expected);
+      expect((await koRoundOne(rig.koStageId!)).sort(), "1 v 4 and 2 v 3, her seat held").toEqual(fourDraw(expected));
+      // Her line: the F14 rule (owner ruling 2026-09-21) — a qualifier who departed before the draw keeps her seat and her
+      // pairing is a walkover for the side that remains. The other line is open.
+      const koRows = await sql<{ home_entrant_id: string | null; away_entrant_id: string | null; status: string; outcome: unknown }[]>`
+        select home_entrant_id, away_entrant_id, status, outcome from fixtures where stage_id = ${rig.koStageId!} and round_no = 1`;
+      const hers = koRows.filter((f) => f.home_entrant_id === gone[0] || f.away_entrant_id === gone[0]);
+      expect(hers, "premise: she is seated on one line").toHaveLength(1);
+      expect(hers[0]).toMatchObject({ status: "forfeited", outcome: { kind: "award", winner: expected[0], loser: gone[0], reason: "withdrew" } });
+      expect(koRows.filter((f) => f !== hers[0]).map((f) => f.status)).toEqual(["scheduled"]);
+    }, 300_000);
+
+    it(`a shortfall at Finish (3 eligible under a cut of 4): Finish completes, the proposal offers the eligible three, and the departed qualifier's fourth seat stays empty (${s.sport})`, async () => {
+      const rig = await finishRig(s, 5, 3, { q: 4 });
+      await playThrough(rig, 2);
+      const leaving = await standingsNow(rig);
+      const gone = [leaving[0]!.entrantId, leaving[2]!.entrantId];
+      await withdrawEntrantCascade(rig.auth, gone[0]!);
+      await patchEntrant(rig.auth, gone[1]!, { status: "disqualified" });
+      const table = await standingsNow(rig);
+      expect(idsOf(table), "the Swiss table keeps them both, in their places").toEqual(idsOf(leaving));
+      const expected = shortfall(table, gone);
+      expect(expected[3], "premise: the fourth seat is a departed entrant's").toBe(gone[0]);
+      const out = await finishSwissNow(rig.auth, rig.stageId);
+      expect(out, "Finish completes — no STAGE_COMPLETED_SEEDING_FAILED").toMatchObject({ finished_after: 2, completed: true });
+      const proposal = await draftProposal(rig.koStageId!);
+      // The setup proposal never offers a departed qualifier (her seat is vacant, nobody promoted into it): the three.
+      expect(qualifierIds(proposal), "the eligible three, in table order").toEqual(expected.slice(0, 3));
+      await confirmAsRanked(rig, proposal);
+      expect((await koRoundOne(rig.koStageId!)).sort(), "seed 1 alone on the vacant seat's line, 2 v 3").toEqual(
+        [[expected[0]!], [expected[1]!, expected[2]!].sort()].sort(),
+      );
+    }, 300_000);
   }
 
   it("a tie at the cut boundary AFTER the backfill takes the SEEDING_TIE_UNRESOLVED path, never a silent pick (badminton — its cascade ends on the seed, so a level class stays unbroken, as the R3 tied-cut test above)", async () => {
