@@ -7256,5 +7256,6 @@
   "dlink.hideLabel": "Masquer le score à distance",
   "dlink.linkReady": "Lien de score prêt",
   "dlink.noLink": "Pas encore de lien de score",
-  "dlink.copied": "Lien copié"
+  "dlink.copied": "Lien copié",
+  "dlink.selectCopy": "Sélectionnez et copiez"
 }

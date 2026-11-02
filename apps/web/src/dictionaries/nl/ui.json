@@ -7256,5 +7256,6 @@
   "dlink.hideLabel": "Scoren op afstand verbergen",
   "dlink.linkReady": "Scorelink klaar",
   "dlink.noLink": "Nog geen scorelink",
-  "dlink.copied": "Link gekopieerd"
+  "dlink.copied": "Link gekopieerd",
+  "dlink.selectCopy": "Selecteer en kopieer"
 }

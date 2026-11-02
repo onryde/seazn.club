@@ -7256,5 +7256,6 @@
   "dlink.hideLabel": "Ocultar la puntuación remota",
   "dlink.linkReady": "Enlace de anotación listo",
   "dlink.noLink": "Aún no hay enlace de anotación",
-  "dlink.copied": "Enlace copiado"
+  "dlink.copied": "Enlace copiado",
+  "dlink.selectCopy": "Selecciona y copia"
 }

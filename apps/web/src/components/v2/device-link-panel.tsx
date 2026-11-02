@@ -35,12 +35,13 @@ export interface DeviceLinkHide {
   storageKey: string;
   /** The host's heading content (title, scorer mark): shown in both shapes, so the panel does not own the court's wording. */
   heading: ReactNode;
-  /** Open before anything is remembered or read? Match Day's rule: a PLAYING court opens only while the desk says nobody is
-   *  scoring it; a CALLED one opens (a hand-over is its next step). */
+  /** Open before anything is remembered or read? For a host that KNOWS (`followLink` false). With `followLink`, it is only what
+   *  shows if the first read of the link FAILS, so the panel is never left blank. */
   initiallyOpen: boolean;
-  /** The host cannot know whether a link is live (a called court: the desk raises no scorer attention before play). Decide from
-   *  the panel's FIRST read of the fixture's link instead — open iff none is live — until the organiser chooses. Latched at that
-   *  first read, so making a link under the organiser's hands does not close the panel they are looking at. */
+  /** The host cannot know whether a link is live (Match Day: the desk's score events say nothing about one). Decide from the
+   *  panel's FIRST read of the fixture's link instead — open iff none is live — until the organiser chooses. Until that read lands
+   *  the panel is the hidden row, so a live link is never opened and then collapsed under the organiser's eyes (fix round 1, m8).
+   *  Latched at the first read, so making a link under the organiser's hands does not close the panel they are looking at. */
   followLink: boolean;
 }
 
@@ -50,6 +51,18 @@ interface ActiveLink {
   /** `null` for a sealed link: it lives until the fixture is over. */
   expires_at: string | null;
   created_at: string;
+}
+
+/** Put `url` on the clipboard: true when it took it; false when there is no clipboard (an insecure page, an old browser) or it refused
+ *  (no permission), so the caller offers the link to select instead of claiming "Copied" (m8). */
+async function copyToClipboard(url: string): Promise<boolean> {
+  try {
+    // A missing clipboard throws (a TypeError on `undefined`), the same as a refusal does: both land on "offer it to select".
+    await navigator.clipboard.writeText(url);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function DeviceLinkPanel({
@@ -101,11 +114,14 @@ export function DeviceLinkPanel({
   /** Hide (opt-in): this tab's own choice, the remembered one, and what the FIRST read of the link said (`true` = none live). */
   const [picked, setPicked] = useState<"open" | "hidden" | null>(null);
   const remembered = useSessionStorageItem(hide?.storageKey ?? null);
-  const [noLinkAtFirstRead, setNoLinkAtFirstRead] = useState<boolean | null>(null);
+  const [firstRead, setFirstRead] = useState<"pending" | "none" | "found" | "failed">("pending");
   // The default is decided ONCE, at mount: a link made under the organiser's hands clears the desk's "No scorer" and flips the
   // host's `initiallyOpen`, and the panel they are looking at must not close because of it.
   const [defaults] = useState(() => ({ open: hide?.initiallyOpen ?? true, followLink: hide?.followLink ?? false }));
   const [copied, setCopied] = useState(false);
+  /** The link offered to be selected and copied by hand, when the clipboard is missing or refuses (m8). */
+  const [selectUrl, setSelectUrl] = useState<string | null>(null);
+  const selectField = useRef<HTMLInputElement>(null);
   const rowButton = useRef<HTMLButtonElement>(null);
   const hideButton = useRef<HTMLButtonElement>(null);
   /** Where focus goes once the panel changes shape (the control that was pressed is gone): the row's button, or Hide. */
@@ -116,8 +132,12 @@ export function DeviceLinkPanel({
       ? true
       : choice !== null
         ? choice === "open"
-        : defaults.followLink && noLinkAtFirstRead !== null
-          ? noLinkAtFirstRead
+        : defaults.followLink
+          ? firstRead === "pending"
+            ? false
+            : firstRead === "failed"
+              ? defaults.open
+              : firstRead === "none"
           : defaults.open;
   const fmtDate = (iso: string) => new Date(iso).toLocaleString();
 
@@ -162,10 +182,11 @@ export function DeviceLinkPanel({
       (link) => {
         if (ignore) return;
         setActive(link);
-        setNoLinkAtFirstRead(link === null);
+        setFirstRead(link === null ? "none" : "found");
       },
       () => {
         // non-editor or transient — panel just shows the create button
+        if (!ignore) setFirstRead("failed");
       },
     );
     return () => {
@@ -206,6 +227,7 @@ export function DeviceLinkPanel({
   function choose(next: "open" | "hidden") {
     setPicked(next);
     setCopied(false);
+    setSelectUrl(null);
     if (hide !== undefined) writeSessionStorageItem(hide.storageKey, next);
     focusNext.current = next === "hidden" ? "row" : "hide";
   }
@@ -217,6 +239,13 @@ export function DeviceLinkPanel({
     focusNext.current = null;
     (want === "row" ? rowButton : hideButton).current?.focus();
   }, [bodyShown]);
+
+  // The fallback field arrives selected, so Ctrl/Cmd-C (or the system's Copy) is the only step left (m8).
+  useEffect(() => {
+    if (selectUrl === null) return;
+    selectField.current?.focus();
+    selectField.current?.select();
+  }, [selectUrl]);
 
   /** The hidden row's Show QR (and Create): open the panel, then make or re-show the link in it, where the QR will be. */
   async function showFromRow() {
@@ -230,13 +259,16 @@ export function DeviceLinkPanel({
     setError(null);
     setPaywall(false);
     setCopied(false);
+    setSelectUrl(null);
     try {
       const link = await apiV1<ActiveLink & { secret: string }>(
         `/api/v1/fixtures/${fixtureId}/device-links`,
         { method: "POST", json: {} },
       );
-      await navigator.clipboard?.writeText(`${window.location.origin}/score/${link.secret}`);
-      setCopied(true);
+      const url = `${window.location.origin}/score/${link.secret}`;
+      // "Copied" only when the clipboard really took it; otherwise the link is offered to select (m8).
+      if (await copyToClipboard(url)) setCopied(true);
+      else setSelectUrl(url);
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(true);
       else refused(err);
@@ -327,6 +359,25 @@ export function DeviceLinkPanel({
       </div>
     ) : null;
 
+  /** The link, selected, for a browser whose clipboard is missing or refuses (m8): the one honest thing to say is "Select and copy". */
+  const selectBlock =
+    selectUrl === null ? null : (
+      <div data-testid="device-link-select" className="mt-2 min-w-0 space-y-1 text-left">
+        <input
+          ref={selectField}
+          data-testid="device-link-select-input"
+          readOnly
+          value={selectUrl}
+          aria-label={msg("dlink.selectCopy")}
+          onFocus={(e) => e.currentTarget.select()}
+          className="input ph-no-capture min-h-11 w-full min-w-0 font-mono text-xs"
+        />
+        <p role="status" className="text-xs text-slate-600">
+          {msg("dlink.selectCopy")}
+        </p>
+      </div>
+    );
+
   if (over) {
     return (
       <section
@@ -361,7 +412,7 @@ export function DeviceLinkPanel({
       </details>
     );
     if (hide !== undefined && !bodyShown) {
-      const ready = noLinkAtFirstRead === null ? null : active !== null;
+      const ready = firstRead === "none" || firstRead === "found" ? active !== null : null;
       return (
         <section
           className="rounded-xl border border-purple-100 bg-purple-50/40 px-3 py-1"
@@ -404,6 +455,7 @@ export function DeviceLinkPanel({
           <span role="status" className="sr-only">
             {copied ? msg("dlink.copied") : ""}
           </span>
+          {selectBlock}
           {paywall && (
             <div className="mb-2">
               <UpgradeGate feature="scoring.device_links" viewerPlan={viewerPlan} />
@@ -453,10 +505,13 @@ export function DeviceLinkPanel({
                 type="button"
                 data-testid="device-link-copy"
                 className="btn btn-ghost min-h-11 text-xs"
-                onClick={() => padUrl && navigator.clipboard?.writeText(padUrl)}
+                onClick={() => {
+                  if (padUrl !== null) void copyToClipboard(padUrl).then((ok) => setSelectUrl(ok ? null : padUrl));
+                }}
               >
                 {msg("dlink.copy")}
               </button>
+              {selectBlock}
             </div>
             {more(
               <>

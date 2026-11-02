@@ -7256,5 +7256,6 @@
   "dlink.hideLabel": "Hide remote scoring",
   "dlink.linkReady": "Scorer link ready",
   "dlink.noLink": "No scorer link yet",
-  "dlink.copied": "Link copied"
+  "dlink.copied": "Link copied",
+  "dlink.selectCopy": "Select and copy"
 }

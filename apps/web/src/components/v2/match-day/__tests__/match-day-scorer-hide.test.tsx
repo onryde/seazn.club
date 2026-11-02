@@ -101,12 +101,14 @@ const hideOf = (props: Parameters<typeof CourtFocus>[0]) => hideOfPanels(panelsO
 const hideOfNoCourt = (props: Parameters<typeof NoCourtFocus>[0]) => hideOfPanels(panelsOf(renderIsland(NoCourtFocus, props, expandScorer)));
 
 describe("the host's rule for when the panel starts open", () => {
-  // [label, court, expected initiallyOpen, expected followLink] — from the brief's wording.
+  // [label, court, expected initiallyOpen, expected followLink]. Fix round 1 (m4): the panel's default is the MATCH'S LINK, never the
+  // desk's score events - open when the match has no device link, hidden only while a live one exists - so every row follows the link.
+  // `initiallyOpen` is what shows only if the first read of the link FAILS.
   const TABLE: [string, MatchDayCourt, boolean, boolean][] = [
     ["called: the hand-over is next (it checks for a live link at its first read)", called(), true, true],
-    ["playing, the desk says nobody is scoring", scored("no_scorer"), true, false],
-    ["playing, a scorer is on but not recording", scored("not_recording"), false, false],
-    ["playing, nothing the desk complains of", scored(null), false, false],
+    ["playing, the desk says nobody is scoring", scored("no_scorer"), true, true],
+    ["playing, a scorer is on but not recording (events say nothing about a link)", scored("not_recording"), true, true],
+    ["playing, nothing the desk complains of (a match scored with no device link still opens)", scored(null), true, true],
   ];
 
   it("the table, row by row (count reported; zero fails)", () => {
@@ -132,10 +134,10 @@ describe("the host's rule for when the panel starts open", () => {
     expect(text(plain.heading)).not.toContain("no_scorer");
   });
 
-  it("a match on NO court: open only while nobody scores it, remembered per match", () => {
-    expect(hideOfNoCourt(noCourt(fx({ scorer_attention: "no_scorer" })))).toMatchObject({ initiallyOpen: true, followLink: false });
-    expect(hideOfNoCourt(noCourt(fx({ scorer_attention: "not_recording" })))).toMatchObject({ initiallyOpen: false, followLink: false });
-    expect(hideOfNoCourt(noCourt(fx({ scorer_attention: null })))).toMatchObject({ initiallyOpen: false, followLink: false });
+  it("a match on NO court follows its link the same way, remembered per match", () => {
+    for (const attention of ["no_scorer", "not_recording", null] as const) {
+      expect(hideOfNoCourt(noCourt(fx({ scorer_attention: attention }))), String(attention)).toMatchObject({ initiallyOpen: true, followLink: true });
+    }
   });
 });
 

@@ -11,9 +11,10 @@
 //
 // The scorer's QR (spec §2, §9: "Match Day … now shows the scorer QR for a called or live match"; task A4) is the console's own
 // Remote scoring panel (`DeviceLinkPanel`, embedded and COMPACT — fix round 1, V5): the same per-match link, ENSURE'd — showing
-// it never kills a printed sheet. The organiser can Hide it to one row (E2 item 6): open by default on a called court with no link
-// live (the hand-over is next) and on a playing court the desk says nobody is scoring, hidden otherwise (the scoreboard comes first),
-// the No-scorer mark staying on the heading in both shapes; the choice is remembered per court in this tab. Keyed by the match, so
+// it never kills a printed sheet. The organiser can Hide it to one row (E2 item 6): open by default whenever the match has no device
+// link (a called court's hand-over is next, and a playing match scored without one still wants it - fix round 1, m4: the link decides,
+// never the desk's score events), hidden only while a live link exists (the scoreboard comes first), the No-scorer mark staying on
+// the heading in both shapes; the choice is remembered per court in this tab. Keyed by the match, so
 // another court's match never shows the last one's link.
 //
 // Task B4 (owner ruling Q1):
@@ -174,7 +175,6 @@ export function CourtFocus({
           fixture={f}
           attention={courtScorerAttention(court)}
           memoryKey={court.court_id}
-          called={court.state === "called"}
           onChanged={onChanged}
         />
       )}
@@ -266,7 +266,7 @@ export function NoCourtFocus({
         />
       )}
       {!ctx.readOnly && (
-        <ScorerPanel ctx={ctx} fixture={f} attention={f.scorer_attention} memoryKey={`fixture-${f.id}`} called={false} onChanged={onChanged} />
+        <ScorerPanel ctx={ctx} fixture={f} attention={f.scorer_attention} memoryKey={`fixture-${f.id}`} onChanged={onChanged} />
       )}
     </section>
   );
@@ -382,14 +382,13 @@ function CalledPanel({
 
 /** The match's scorer link as a QR (the console's Remote scoring panel, embedded), under the court's own heading for it — with the
  *  court's scorer mark beside the heading while the desk says nobody is scoring (§9). The organiser can Hide it to one row
- *  (E2 item 6): open by default only where a hand-over is the next step — a CALLED court with no link live, or a PLAYING one the
- *  desk says nobody is scoring — and the choice is remembered for this tab, per court. */
+ *  (E2 item 6): open by default only where the match has no device link, hidden while a live one exists (the panel's own first
+ *  read decides, fix round 1, m4) — and the choice is remembered for this tab, per court. */
 function ScorerPanel({
   ctx,
   fixture,
   attention,
   memoryKey,
-  called,
   onChanged,
 }: {
   ctx: MatchDayCtx;
@@ -397,8 +396,6 @@ function ScorerPanel({
   attention: ReturnType<typeof courtScorerAttention>;
   /** What the choice is remembered under: the court (the next match on it inherits the choice) or, with no court, the match. */
   memoryKey: string;
-  /** A CALLED court: the scorer is not on yet, so the panel opens unless a link is already live (it decides at its first read). */
-  called: boolean;
   /** A link made, re-shown or revoked here re-reads the board: a live link IS a scorer (the desk, I1), so "No scorer" goes. */
   onChanged: () => void;
 }) {
@@ -422,7 +419,9 @@ function ScorerPanel({
         compact
         onChanged={onChanged}
         viewerPlan={ctx.viewerPlan}
-        hide={{ storageKey: scorerMemoryKey(memoryKey), heading, initiallyOpen: called || attention === "no_scorer", followLink: called }}
+        // The default is the match's LINK, not the desk's score events (fix round 1, m4): open when the match has no device link,
+        // hidden only while a live one exists - decided by the panel's first read. `initiallyOpen` shows only if that read fails.
+        hide={{ storageKey: scorerMemoryKey(memoryKey), heading, initiallyOpen: true, followLink: true }}
       />
     </section>
   );

@@ -21,6 +21,8 @@ const api = vi.hoisted(() => ({
   deletes: [] as string[],
   active: null as Link | null,
   refuse: null as { message: string; status: number; code: string } | null,
+  /** The FIRST read (a GET) fails, as a transient error or a non-editor's 403 would. */
+  failRead: false,
 }));
 
 vi.mock("@/lib/client-v1", async (importOriginal) => {
@@ -39,7 +41,10 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
         api.deletes.push(url);
         return {};
       }
-      if (options?.method === undefined) return api.active;
+      if (options?.method === undefined) {
+        if (api.failRead) throw new Error("read failed");
+        return api.active;
+      }
       throw new Error(`device-link-panel-hide.test.tsx's apiV1 double has no case for ${options.method} ${url}`);
     }),
   };
@@ -75,7 +80,7 @@ const dlinkQr = (tree: ReactElement[]) => tree.find((el) => el.type === SeaznQrI
 /** A `sessionStorage` the test can read back, and the `window` pieces the storage hook touches. */
 let store: Map<string, string>;
 let clipboard: string[];
-function stubBrowser(opts: { throws?: boolean } = {}) {
+function stubBrowser(opts: { throws?: boolean; clipboard?: "ok" | "missing" | "denied" } = {}) {
   store = new Map();
   clipboard = [];
   const storage = {
@@ -97,7 +102,13 @@ function stubBrowser(opts: { throws?: boolean } = {}) {
     addEventListener: () => {},
     removeEventListener: () => {},
   });
-  vi.stubGlobal("navigator", { clipboard: { writeText: async (text: string) => void clipboard.push(text) } });
+  const mode = opts.clipboard ?? "ok";
+  vi.stubGlobal(
+    "navigator",
+    mode === "missing"
+      ? {}
+      : { clipboard: { writeText: async (text: string) => (mode === "denied" ? Promise.reject(new Error("NotAllowedError")) : void clipboard.push(text)) } },
+  );
 }
 
 beforeEach(() => {
@@ -105,6 +116,7 @@ beforeEach(() => {
   api.deletes = [];
   api.active = SEALED;
   api.refuse = null;
+  api.failRead = false;
   stubBrowser();
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -209,6 +221,66 @@ describe("hidden: one row — heading · state · [Show QR] [Copy link]", () => 
     expect(island.text()).toContain(t("dlink.copied")); // the sr-only status line
   });
 
+  it("m8: with NO clipboard the row never says Copied - it offers the link selected, and says Select and copy", async () => {
+    stubBrowser({ clipboard: "missing" });
+    const island = renderIsland(DeviceLinkPanel, { ...PROPS, hide: hidden() });
+    await flush();
+    click(byTestId(island.tree(), "device-link-row-copy"));
+    await flush();
+    const tree = island.tree();
+    expect(api.posts).toEqual(["/api/v1/fixtures/f1/device-links"]);
+    expect(api.deletes).toEqual([]);
+    expect(textOf(byTestId(tree, "device-link-row-copy")!), "the button did not turn into 'Link copied'").toBe(t("dlink.copy"));
+    expect(island.text()).not.toContain(t("dlink.copied"));
+    const field = byTestId(tree, "device-link-select-input")!;
+    expect(propsOf(field).value).toBe(`${ORIGIN}/score/dl_sealed_secret`);
+    expect(propsOf(field).readOnly).toBe(true);
+    expect(textOf(byTestId(tree, "device-link-select")!)).toContain(t("dlink.selectCopy"));
+    expect(state(tree), "the panel stays as it was").toBe("hidden");
+  });
+
+  it("m8: a clipboard that REFUSES (a page without permission) falls back the same way - the link is still offered, never 'Copied', never a raw error", async () => {
+    stubBrowser({ clipboard: "denied" });
+    const island = renderIsland(DeviceLinkPanel, { ...PROPS, hide: hidden() });
+    await flush();
+    click(byTestId(island.tree(), "device-link-row-copy"));
+    await flush();
+    const tree = island.tree();
+    expect(propsOf(byTestId(tree, "device-link-select-input")!).value).toBe(`${ORIGIN}/score/dl_sealed_secret`);
+    expect(island.text()).not.toContain(t("dlink.copied"));
+    expect(island.text()).not.toContain("NotAllowedError");
+  });
+
+  it("m8: with a clipboard, nothing to select - it copies, says Copied, and the fallback field never appears (the opposite branch)", async () => {
+    const island = renderIsland(DeviceLinkPanel, { ...PROPS, hide: hidden() });
+    await flush();
+    click(byTestId(island.tree(), "device-link-row-copy"));
+    await flush();
+    expect(byTestId(island.tree(), "device-link-select-input")).toBeUndefined();
+    expect(clipboard).toEqual([`${ORIGIN}/score/dl_sealed_secret`]);
+  });
+
+  it("m8: the open panel's own Copy link takes the same fallback when there is no clipboard, and copies when there is one", async () => {
+    stubBrowser({ clipboard: "missing" });
+    const island = renderIsland(DeviceLinkPanel, { ...PROPS, hide: hide({ initiallyOpen: true }) });
+    await flush();
+    click(byTestId(island.tree(), "device-link-show"));
+    await flush();
+    click(byTestId(island.tree(), "device-link-copy"));
+    await flush();
+    expect(propsOf(byTestId(island.tree(), "device-link-select-input")!).value).toBe(`${ORIGIN}/score/dl_sealed_secret`);
+
+    stubBrowser();
+    const ok = renderIsland(DeviceLinkPanel, { ...PROPS, hide: hide({ initiallyOpen: true }) });
+    await flush();
+    click(byTestId(ok.tree(), "device-link-show"));
+    await flush();
+    click(byTestId(ok.tree(), "device-link-copy"));
+    await flush();
+    expect(clipboard).toEqual([`${ORIGIN}/score/dl_sealed_secret`]);
+    expect(byTestId(ok.tree(), "device-link-select-input")).toBeUndefined();
+  });
+
   it("Show QR opens the panel, remembers it open, and shows the SAME link's QR (ensure, never /reissue)", async () => {
     const island = renderIsland(DeviceLinkPanel, { ...PROPS, hide: hidden() });
     await flush();
@@ -280,18 +352,32 @@ describe("the default, before anything is remembered", () => {
     expect(checked).toBe(4);
   });
 
-  it("followLink (a called court): no link live -> open; a link already live -> collapses at the first read", async () => {
+  it("followLink (m4/m8): the first paint claims nothing - the hidden row - then no link live -> open at the first read; a link already live -> it STAYS hidden, it never opens and collapses", async () => {
     api.active = null;
     const noLink = renderIsland(DeviceLinkPanel, { ...PROPS, hide: hide({ followLink: true }) });
-    expect(state(noLink.tree()), "first paint: open, as a called court always was").toBe("open");
+    expect(state(noLink.tree()), "first paint: nobody knows yet, so nothing is opened for the read to take back").toBe("hidden");
     await flush();
-    expect(state(noLink.tree())).toBe("open");
+    expect(state(noLink.tree()), "no hand-over made: the next step is to make one, so it opens").toBe("open");
 
     api.active = SEALED;
     const linked = renderIsland(DeviceLinkPanel, { ...PROPS, hide: hide({ followLink: true }) });
-    expect(state(linked.tree())).toBe("open");
+    expect(state(linked.tree())).toBe("hidden");
     await flush();
-    expect(state(linked.tree()), "a hand-over already made: out of the way").toBe("hidden");
+    expect(state(linked.tree()), "a hand-over already made: out of the way - and never open in between").toBe("hidden");
+    expect(byTestId(linked.tree(), "device-link-row-show"), "with its Show QR one press away").toBeDefined();
+  });
+
+  it("followLink, the first read FAILS: the host's initiallyOpen speaks (the panel is not left blank), both ways", async () => {
+    api.failRead = true;
+    let checked = 0;
+    for (const initiallyOpen of [true, false]) {
+      const island = renderIsland(DeviceLinkPanel, { ...PROPS, hide: hide({ followLink: true, initiallyOpen }) });
+      expect(state(island.tree())).toBe("hidden");
+      await flush();
+      expect(state(island.tree()), `initiallyOpen=${initiallyOpen}`).toBe(initiallyOpen ? "open" : "hidden");
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("followLink is LATCHED at the first read: making the link under the organiser's hands does not close the panel they are using", async () => {
@@ -321,12 +407,24 @@ describe("the default, before anything is remembered", () => {
     expect(state(hiddenIsland.tree())).toBe("hidden");
   });
 
-  it("an organiser's choice beats followLink, even if it arrives before the first read", async () => {
+  it("an organiser's choice beats followLink, even if it arrives before the first read: Show QR before the read lands keeps the panel open on a live link", async () => {
     api.active = SEALED;
     const island = renderIsland(DeviceLinkPanel, { ...PROPS, hide: hide({ followLink: true }) });
-    click(byTestId(island.tree(), "device-link-hide")); // before the read lands
+    click(byTestId(island.tree(), "device-link-row-create")); // the first paint's only door, before the read lands
+    await flush();
+    expect(state(island.tree()), "followLink would have kept a live link hidden").toBe("open");
+    expect(store.get(KEY)).toBe("open");
+  });
+
+  it("a hide AFTER the panel opened on 'no link' holds - and a live link's panel the organiser opened is not collapsed by the read", async () => {
+    api.active = null;
+    const island = renderIsland(DeviceLinkPanel, { ...PROPS, hide: hide({ followLink: true }) });
+    await flush();
+    expect(state(island.tree())).toBe("open");
+    click(byTestId(island.tree(), "device-link-hide"));
     await flush();
     expect(state(island.tree())).toBe("hidden");
+    expect(store.get(KEY)).toBe("hidden");
   });
 });
 

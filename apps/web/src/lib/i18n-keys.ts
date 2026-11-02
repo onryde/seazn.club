@@ -2198,6 +2198,7 @@ export type DictionaryKey =
   | "dlink.revokeNow"
   | "dlink.revokeWarn"
   | "dlink.sameQr"
+  | "dlink.selectCopy"
   | "dlink.showQr"
   | "dlink.title"
   | "documents.bracket"

@@ -1223,6 +1223,20 @@ describe("A4 — Needs you, behind the header's attention button", () => {
   });
 });
 
+/** The shape a Match Day host gives the console's panel, open: what it draws once the first read finds no link (m4). */
+const OPEN_PANEL = () =>
+  renderToStaticMarkup(
+    <DeviceLinkPanel
+      fixtureId="f-1"
+      sportKey="badminton"
+      embedded
+      compact
+      onChanged={() => {}}
+      viewerPlan="pro"
+      hide={{ storageKey: "k", heading: <h3 id="md-scorer-f-1">{t(dict, "dlink.title")}</h3>, initiallyOpen: true, followLink: false }}
+    />,
+  );
+
 describe("A4 — the scorer's QR on a called or playing court", () => {
   /** The panel's explainer, as the dictionary words it up to its `{scorer}` slot (the slot is the sport's official's name). */
   const DESC_HEAD = esc(String(dict["dlink.desc"]).split("{scorer}")[0]!);
@@ -1230,7 +1244,7 @@ describe("A4 — the scorer's QR on a called or playing court", () => {
   /** A playing court the desk says nobody is scoring: the case where the hand-over panel opens (E2 item 6). */
   const UNSCORED = () => court({ current: fx({ scorer_attention: "no_scorer" }) });
 
-  it("playing (nobody scoring) and called: the console's Remote scoring panel, embedded AND compact, under the court's own heading for it", () => {
+  it("playing (nobody scoring) and called: the console's Remote scoring panel, embedded AND compact, under the court's own heading for it - the hidden row on the first paint (m4: nobody knows the link yet)", () => {
     let checked = 0;
     for (const c of [UNSCORED(), CALLED()]) {
       const html = focus(c);
@@ -1240,17 +1254,25 @@ describe("A4 — the scorer's QR on a called or playing court", () => {
       expect(section, c.state).toContain(`>${t(dict, "dlink.title")}<`);
       expect(section, c.state).toContain('data-role="device-link-panel"');
       expect(section, c.state).toContain('data-compact="true"');
+      expect(section, c.state).toContain('data-hide-state="hidden"');
       // Embedded: no card of its own and no second "Remote scoring" heading inside it.
       expect(section.split(`>${t(dict, "dlink.title")}<`).length - 1, c.state).toBe(1);
-      expect(section, c.state).toContain('data-testid="device-link-mint"');
-      // Compact: the explainer is in the panel's "More" fold, closed, after the button — never above it.
-      const more = section.indexOf('data-testid="device-link-more"');
-      expect(more, c.state).toBeGreaterThan(section.indexOf('data-testid="device-link-mint"'));
-      expect(section.slice(section.lastIndexOf("<", more), section.indexOf(">", more)), c.state).not.toMatch(/\sopen=""/);
-      expect(section.indexOf(DESC_HEAD), c.state).toBeGreaterThan(more);
+      expect(section, c.state).toContain('data-testid="device-link-row-create"');
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  it("the OPEN panel a read of 'no link' lands on: the hand-over button first, the More fold closed after it, the explainer inside the fold", () => {
+    const section = OPEN_PANEL();
+    expect(section).toContain('data-hide-state="open"');
+    expect(section).toContain('data-compact="true"');
+    expect(section).toContain('data-testid="device-link-mint"');
+    expect(section.split(`>${t(dict, "dlink.title")}<`).length - 1).toBe(1);
+    const more = section.indexOf('data-testid="device-link-more"');
+    expect(more).toBeGreaterThan(section.indexOf('data-testid="device-link-mint"'));
+    expect(section.slice(section.lastIndexOf("<", more), section.indexOf(">", more))).not.toMatch(/\sopen=""/);
+    expect(section.indexOf(DESC_HEAD)).toBeGreaterThan(more);
   });
 
   it("E2-6 — PLAYING with a scorer (or nothing the desk complains of): the panel is HIDDEN to one row, after the scoreboard, at every width", () => {
@@ -1276,11 +1298,16 @@ describe("A4 — the scorer's QR on a called or playing court", () => {
     expect(checked).toBe(2);
   });
 
-  it("E2-6 — PLAYING and the desk says nobody is scoring: the panel is OPEN, with Hide in its heading row", () => {
-    const html = focus(UNSCORED());
-    expect(html).toContain('data-hide-state="open"');
-    expect(html).toContain('data-testid="device-link-hide"');
-    expect(html).toContain('data-testid="device-link-mint"');
+  it("m4 — the FIRST PAINT is the same hidden row for every playing court and a called one, whatever the desk says: the link decides, and nobody knows it yet (counted)", () => {
+    let checked = 0;
+    for (const c of [UNSCORED(), court({ current: fx({ scorer_attention: "not_recording" }) }), court({ current: fx({ scorer_attention: null }) }), CALLED()]) {
+      const html = focus(c);
+      expect(html, c.state).toContain('data-hide-state="hidden"');
+      expect(html, c.state).not.toContain('data-hide-state="open"');
+      expect(html, c.state).not.toContain('data-testid="device-link-hide"');
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("a link made, re-shown or revoked on Match Day re-reads the board: the panel gets the focus's own onChanged (I1: a live link IS a scorer)", () => {
@@ -1307,13 +1334,14 @@ describe("A4 — the scorer's QR on a called or playing court", () => {
     expect(checked).toBe(2);
   });
 
-  it("V5 / E2-6 — CALLED: open (no fold around it, Hide in its heading row); the hand-over button comes first", () => {
+  it("V5 / E2-6 — CALLED: no fold around the panel (the old native disclosure is gone), and the open shape puts Hide in its heading row before the hand-over button", () => {
     const html = focus(CALLED());
     expect(html).toMatch(/<section[^>]*data-testid="md-scorer"/);
     expect(html).not.toMatch(/<details[^>]*data-testid="md-scorer"/);
     expect(html).not.toContain('data-folded="true"');
-    expect(html).toContain('data-hide-state="open"');
-    expect(html.indexOf('data-testid="device-link-hide"')).toBeLessThan(html.indexOf('data-testid="device-link-mint"'));
+    const open = OPEN_PANEL();
+    expect(open.indexOf('data-testid="device-link-hide"')).toBeGreaterThan(-1);
+    expect(open.indexOf('data-testid="device-link-hide"')).toBeLessThan(open.indexOf('data-testid="device-link-mint"'));
   });
 
   it("free and in use elsewhere: no scorer QR (nothing to score here) — decided by the court's STATE, not by whether a match rode along", () => {
@@ -1370,12 +1398,12 @@ describe("A4 — no_scorer / not_recording mark the affected court's row", () =>
     expect(courtScorerAttention(court({ current: fx({ scorer_attention: "not_recording" }) }))).toBe("not_recording");
   });
 
-  it("the focused court's QR heading carries the same mark in BOTH shapes — open (Hide beside it) and hidden (in the row), so it shows either way", () => {
+  it("the focused court's QR heading carries the mark for BOTH kinds on the first paint (the hidden row), whatever the link turns out to be", () => {
     let checked = 0;
-    for (const [kind, shape] of [["no_scorer", "open"], ["not_recording", "hidden"]] as const) {
+    for (const kind of ["no_scorer", "not_recording"] as const) {
       const html = focus(court({ current: fx({ scorer_attention: kind }) }));
       const scorer = html.slice(html.indexOf('data-testid="md-scorer"'), html.indexOf("</section>", html.indexOf('data-role="device-link-panel"')));
-      expect(scorer, kind).toContain(`data-hide-state="${shape}"`);
+      expect(scorer, kind).toContain('data-hide-state="hidden"');
       expect(scorer, kind).toContain(`data-md-scorer="${kind}"`);
       expect(scorer, kind).toContain(`>${esc(t(dict, `matchDay.scorer.${kind}`))}<`);
       checked++;
@@ -1909,18 +1937,20 @@ describe("B4 — §9 carried (fix round 1, R2/R3): Needs you's unscheduled row f
 
 describe("B4 — A4 n1/n2: the panel's More fold is a NAMED group (the scorer's own fold is gone: Hide replaced it, E2 item 6)", () => {
   it("More's chevron turns on More's own open only; no unnamed group-open anywhere in the court's panel, and no scorer fold group left", () => {
-    // An open panel (called) is the one that has a More fold in the markup.
+    // Only the OPEN panel has a More fold in the markup (the first paint is the hidden row), so the fold is read off the open shape
+    // inside the court's own focus: the open panel's markup spliced where the host puts it must keep every rule below.
     const html = focus(court({ state: "called", current: fx({ started_at: null, headline: null, called_at: "2026-10-31T11:31:00.000Z" }) }));
+    const open = OPEN_PANEL();
     const scorer = tagWith(html, "md-scorer");
     expect(scorer).not.toMatch(/\bgroup\/scorer\b/);
     expect(scorer).not.toMatch(/class="group\s|\sgroup\s|\sgroup"/);
-    const panel = html.slice(html.indexOf('data-testid="md-scorer"'));
+    const panel = html.slice(html.indexOf('data-testid="md-scorer"')) + open;
     expect(panel).not.toContain("group-open/scorer");
-    const more = tagWith(html, "device-link-more");
+    const more = tagWith(open, "device-link-more");
     expect(more).toMatch(/class="[^"]*\bgroup\/more\b/);
     expect(panel).toContain("group-open/more:rotate-90");
     // No unnamed variant left anywhere in the court's panel: an unnamed `group-open:` would turn on ANY open ancestor group.
-    expect(html).not.toMatch(/[\s"]group-open:/);
+    expect(html + open).not.toMatch(/[\s"]group-open:/);
   });
 });
 
