@@ -2664,9 +2664,35 @@ export const stageCardOf = (scope: Page | Locator, stageId: string): Locator => 
 /** The card a locator sits inside (a row, a section, a rail button). */
 export const enclosingStageCard = (inside: Locator): Locator => inside.locator("xpath=ancestor-or-self::section[@data-stage-id][1]");
 
+/** Match Day PB1 (owner 2026-11-02): a COMPLETED stage's card is one folded line (its header buttons and its body are away) until its
+ *  `stage-collapse-toggle` opens it. Open every folded card the toggle locator names; a no-op for a card with no toggle (a running or
+ *  not-started stage) and for one already open. Retried against what the toggle says - a click before hydration is a no-op. */
+async function expandToggles(toggles: Locator): Promise<void> {
+  const n = await toggles.count();
+  for (let i = 0; i < n; i++) {
+    const toggle = toggles.nth(i);
+    await expect(async () => {
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+      await expect(toggle, "the folded card / round did not open").toHaveAttribute("aria-expanded", "true", { timeout: 2_000 });
+    }).toPass({ timeout: 15_000 });
+  }
+}
+export const expandStageCard = (card: Locator): Promise<void> => expandToggles(card.getByTestId("stage-collapse-toggle"));
+
+/** Match Day PB1: open every fold in `scope` the way a person would before reading what is in it - each COMPLETED stage card first
+ *  (its rounds are inside its body), then each FINISHED round's bar (`run-sheet-round-toggle`: a league / group / Swiss / Americano
+ *  round whose every real match is settled loads folded). A no-op where nothing is folded. It opens what is on the page when it is
+ *  called, so call it after a positive anchor says the content rendered (a row count, a card header). Never a weaker assertion: the
+ *  read that follows still asks for VISIBLE. */
+export async function expandAllFolds(scope: Page | Locator): Promise<void> {
+  await expandToggles(scope.getByTestId("stage-collapse-toggle"));
+  await expandToggles(scope.getByTestId("run-sheet-round-toggle"));
+}
+
 /** Press one panel's button (the header's, or - on a phone - the sheet's row) until the panel reads open / closed. A click before
  *  hydration is a no-op, so the press is retried against what the header button says, and never doubled. */
 async function pressStageTool(card: Locator, panel: StagePanel, wantOpen: boolean): Promise<void> {
+  await expandStageCard(card); // a completed stage's buttons are away while its card is folded (PB1)
   const header = card.getByTestId(`stage-tool-${panel}`);
   await expect(header, `the card has a ${panel} button`).toBeAttached();
   const reads = async (): Promise<boolean> => (await header.getAttribute("aria-expanded")) === "true";
@@ -2686,6 +2712,42 @@ async function pressStageTool(card: Locator, panel: StagePanel, wantOpen: boolea
   }).toPass({ timeout: 15_000 });
 }
 
+/** Match Day PB1: a three-entrant generic league with EVERY match played and the stage COMPLETED through the API - the card the page
+ *  folds to one line (`stage-collapse-toggle`), whose three rounds are each a finished, folded bar. Three entrants play three rounds of one
+ *  match each (and a bye), so the card has three round bars and three real matches. */
+export async function seedCompletedLeague(
+  request: APIRequestContext,
+  label: string,
+): Promise<{ divisionId: string; stageId: string; fixtureIds: string[] }> {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `PB1 ${label} ${TAG}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Done",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  await addEntrantsViaApi(request, div.data!.id, ["Ana", "Ben", "Cy"].map((n) => `${n} ${TAG}`));
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+  expect(stage.status, `stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+  const gen = await apiJson<{ fixtures: { id: string }[] }>(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
+  expect(gen.status, `generate: ${JSON.stringify(gen.error)}`).toBeLessThan(300);
+  const fixtureIds = gen.data!.fixtures.map((f) => f.id);
+  expect(fixtureIds, "a league of three plays three matches").toHaveLength(3);
+  const started = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+  expect(started.status, `division start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+  for (const id of fixtureIds) await scoreFixture(request, id, 2, 1);
+  const done = await apiJson<{ completed: boolean }>(request, `/api/v1/stages/${stage.data!.id}/complete`, "POST");
+  expect(done.status, `complete: ${JSON.stringify(done.error)}`).toBeLessThan(300);
+  expect(done.data!.completed, "the stage completed").toBe(true);
+  return { divisionId: div.data!.id, stageId: stage.data!.id, fixtureIds };
+}
+
 /** Open one panel of one stage card, and wait until it says it is open. A no-op when it is already open (a second call is safe). */
 export async function openStagePanel(card: Locator, panel: StagePanel): Promise<void> {
   await pressStageTool(card, panel, true);
@@ -2695,6 +2757,7 @@ export async function openStagePanel(card: Locator, panel: StagePanel): Promise<
  *  opens inside its stage's card, closed by default) and return the tree. With no `stageId` it takes the one card that has a Bracket
  *  button, so a division with a double-elimination stage (whose tree stays on the page) is not confused with it. */
 export async function openBracket(page: Page, stageId?: string): Promise<Locator> {
+  if (stageId === undefined) await expandToggles(page.getByTestId("stage-collapse-toggle")); // a finished knockout's card starts folded (PB1)
   const card =
     stageId === undefined
       ? page.locator("section[data-stage-id]").filter({ has: page.getByTestId("stage-tool-bracket") }).first()

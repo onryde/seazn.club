@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { builtinModules } from "@seazn/engine/sports";
-import { TAG, activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, divisionPath, expectNoHorizontalScroll, openBracket, seedVenueWithCourts } from "./helpers";
+import { TAG, activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, divisionPath, expandAllFolds, expectNoHorizontalScroll, openBracket, seedVenueWithCourts } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 
 // W2b Task 13 (spec §5.5, UI-2 option A; X-RS-2, X-DW-1) — a credited result says which one, on every public surface:
@@ -1192,6 +1192,13 @@ test.describe("W2b loop H F1 — the run sheet keeps the result's tag whole", ()
       for (const divId of [lg.divId, ko.divId]) {
         await page.goto(sheets.get(divId)!);
         await dismissCookieBanner(page);
+        // Match Day PB1 (owner 2026-11-02): a round whose every match is settled loads folded to its bar, and this rig settles whole
+        // rounds. Once every row under test is on the page (in the DOM, folded or not), open the bars as an organiser would; the
+        // reads below still ask for each row VISIBLE.
+        for (const r of rows.filter((x) => x.div === divId)) {
+          await expect(page.getByTestId("run-sheet").locator(`li[data-fixture-no="${r.f.fixture_no}"]`), `${width} ${r.name}: on the page`).toBeAttached({ timeout: STEP_MS });
+        }
+        await expandAllFolds(page);
         for (const r of rows.filter((x) => x.div === divId)) {
           const row = page.getByTestId("run-sheet").locator(`li[data-fixture-no="${r.f.fixture_no}"]`);
           await expect(row, `${width} ${r.name}: the run-sheet row`).toBeVisible({ timeout: STEP_MS });

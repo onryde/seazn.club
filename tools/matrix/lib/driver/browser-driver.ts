@@ -846,8 +846,9 @@ export class BrowserDriver implements OrganiserDriver {
   }
 
   /** `runsheet-today-default` for a match-day case: the desk's phase, and the sheet's first load judged against it
-   *  and the fixtures this driver dated. The phase guard comes first: a case that never reached its match day
-   *  proves nothing about the "today" default, however the sheet opened. A case that dated nothing fails, never
+   *  and the fixtures this driver dated - the sheet opens on "all" even on a match day (Match Day PB1, owner
+   *  2026-11-02; it used to open on "today" there). The phase guard comes first: a case that never reached its match
+   *  day proves nothing about the match-day default, however the sheet opened. A case that dated nothing fails, never
    *  abstains — a match-day case with no dated fixture is a planner fault. */
   async #judgeTodayDefault(where: DivisionWhere, seen: DefaultFilterSeen | null): Promise<CheckResult> {
     const competitionId = [...this.#competitions].find(([, slug]) => slug === where.compSlug)?.[0];
@@ -856,7 +857,7 @@ export class BrowserDriver implements OrganiserDriver {
     const dated = [...(this.#dated.get(where.divisionId) ?? [])];
     const j = judgeTodayDefault({ phase, seen, datedToday: dated });
     return assertion("runsheet-today-default", [
-      { ok: phase === "match_day", note: `the desk reports phase ${phase}, not match_day: the case never reached its match day, so "today" was not the default in force` },
+      { ok: phase === "match_day", note: `the desk reports phase ${phase}, not match_day: the case never reached its match day, so the match-day default was not the one judged` },
       { ok: j.verdict === "pass", note: j.note },
     ]);
   }

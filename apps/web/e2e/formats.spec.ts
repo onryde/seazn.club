@@ -215,14 +215,18 @@ test("ko_plate template: completing the main draw computes a seed proposal; conf
   );
   expect(confirmed.data!.filled).toBe(4);
 
-  // See the plate seeded: at least one round-1 loser's name renders on the
-  // division page (desktop first, then 375px — no horizontal scroll at
-  // either).
+  // See the plate seeded: at least one round-1 loser's name renders IN THE
+  // PLATE'S CARD (desktop first, then 375px — no horizontal scroll at
+  // either). Scoped to the plate (PB1 review C1): the completed main draw's
+  // card loads folded (Match Day PB1, owner 2026-11-02), and a page-wide
+  // `.first()` resolved to that hidden row - it also proved nothing about
+  // the plate, since the loser played in the main draw too.
   await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
-  await expect(page.getByText(expectedLoserNames[0]!).first()).toBeVisible({ timeout: 20_000 });
+  const plateCard = stageCardOf(page, plate.id);
+  await expect(plateCard.getByText(expectedLoserNames[0]!).first()).toBeVisible({ timeout: 20_000 });
   await expectNoHorizontalScroll(page);
   await page.setViewportSize({ width: 375, height: 812 });
-  await expect(page.getByText(expectedLoserNames[0]!).first()).toBeVisible({ timeout: 20_000 });
+  await expect(plateCard.getByText(expectedLoserNames[0]!).first()).toBeVisible({ timeout: 20_000 });
   await expectNoHorizontalScroll(page);
 });
 

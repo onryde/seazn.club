@@ -32,7 +32,7 @@
 // REACHES over the API. Every rename, and every screen the
 // renames are read back from, is done in the browser.
 import { test, expect } from "@playwright/test";
-import { TAG, divisionPath, failOnNativeDialog, scoreFixture } from "../helpers";
+import { TAG, divisionPath, expandAllFolds, failOnNativeDialog, scoreFixture } from "../helpers";
 import { closeOpenContexts } from "../spectator-public-helpers";
 import { waitForHydration } from "../directory-kit";
 import { division, leagueFixtures, mintSpectatorOrg, publicCompetition } from "../spectator-w2-kit";
@@ -100,6 +100,13 @@ test("an organiser renames a pair three ways, and every screen that names it fol
   const visit = async (path: string) => {
     loads += 1;
     await page.goto(path);
+  };
+  // Match Day PB1 (owner 2026-11-02): on the fixtures tab a round whose every match is settled loads folded to its bar, and the
+  // pair's one Doubles match is scored below. Once the rows are on the page, open the bars as an organiser would; the name is
+  // still asked for VISIBLE. Not a page load (the LOADS ledger is unchanged).
+  const openSettledRounds = async () => {
+    await expect(page.getByTestId("run-sheet").locator("li[data-fixture-no]").first(), "the run sheet's rows rendered").toBeAttached({ timeout: STEP_MS });
+    await expandAllFolds(page);
   };
   const spectate = async (path: string, panel?: string) => {
     loads += 1;
@@ -183,6 +190,7 @@ test("an organiser renames a pair three ways, and every screen that names it fol
   await expect(publicStandings.getByText(created)).toHaveCount(0);
 
   await visit(doublesFixtures);
+  await openSettledRounds();
   await expect(shown(page, followed)).toBeVisible();
   await expect(page.getByText(created)).toHaveCount(0);
   await visit(doublesStandings);
@@ -215,6 +223,7 @@ test("an organiser renames a pair three ways, and every screen that names it fol
   await expect(page.getByRole("cell", { name: followed })).toHaveCount(0);
   expect(await storedName(page.request, pairId)).toBe(smash);
   await visit(doublesFixtures);
+  await openSettledRounds();
   await expect(shown(page, smash)).toBeVisible();
   await expect(page.getByText(followed)).toHaveCount(0);
   const afterSmash = await spectate(publicDoubles);

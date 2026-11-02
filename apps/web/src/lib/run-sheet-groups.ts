@@ -463,6 +463,28 @@ export function roundDone(fixtures: readonly RunSheetFixture[], held: ReadonlySe
 }
 
 /**
+ * Does a round's bar start collapsed (Match Day PB1, owner 2026-11-02)? Only a round with real matches, every one of them settled
+ * (`roundDone`: `done === total`, a held settle still open): a finished round is one line, the current and the upcoming ones are
+ * open. A round with no real match at all (only byes) is NOT finished - the empty set is not "everything done", and a bar that
+ * folded away nothing would be a toggle over no rows.
+ */
+export function roundStartsCollapsed(fixtures: readonly RunSheetFixture[], held: ReadonlySet<string>): boolean {
+  const { done, total } = roundDone(fixtures, held);
+  return total > 0 && done === total;
+}
+
+/**
+ * The fold default a round bar or a stage card keeps for the page visit (Match Day PB1, controller ruling 2, 2026-11-02). It is
+ * decided the FIRST time the thing is seen (`latched` absent: today's default), and from then on it only ever moves toward OPEN:
+ * a round or a stage that finishes while the person is looking stays open until a reload or their own tap, so rows never vanish
+ * from under a refresh. The one move it does make is the safe one - something that comes back to want a person (a void re-opens a
+ * match, a warning arrives) opens it. A person's own tap is not this; callers apply it over the value returned here.
+ */
+export function latchedOpen(latched: boolean | undefined, startsOpenNow: boolean): boolean {
+  return latched === undefined ? startsOpenNow : latched || startsOpenNow;
+}
+
+/**
  * When a round is played, from the rows it is asked of: the first and last calendar day in the VENUE zone and, when they are one
  * day, the clock span of its timed rows ("21:10" to "21:50", equal when only one row has a time). `null` when no row has a time:
  * a bar with nothing to say about time says nothing (an empty cell is not information).

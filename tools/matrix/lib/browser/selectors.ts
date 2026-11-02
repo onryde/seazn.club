@@ -80,6 +80,9 @@ export const TESTID = testids({
   entrantWithdraw: { id: "entrant-row-withdraw", file: `${V2}/entrants-panel.tsx`, needle: 'data-testid="entrant-row-withdraw"' },
   // desk/run-sheet.tsx, not stages-panel.tsx (the brief's file; re-pinned at Step 0).
   runSheetFilter: { id: "run-sheet-filter", file: `${V2}/desk/run-sheet.tsx`, needle: 'data-testid="run-sheet-filter"' },
+  // Match Day PB1: the folds openFixtureUi opens around a settled row - a completed stage's card, a finished round's bar.
+  stageCollapseToggle: { id: "stage-collapse-toggle", file: `${V2}/stages-panel.tsx`, needle: 'data-testid="stage-collapse-toggle"' },
+  runSheetRoundToggle: { id: "run-sheet-round-toggle", file: `${V2}/desk/run-sheet.tsx`, needle: 'data-testid="run-sheet-round-toggle"' },
   scorePad: { id: "score-pad", file: `${V2}/fixture-console.tsx`, needle: 'data-testid="score-pad"' },
   // Task 5: the entrant row's name button, and the builder's refusal line.
   entrantDisclosure: { id: "entrant-row-disclosure", file: `${V2}/entrants-panel.tsx`, needle: 'data-testid="entrant-row-disclosure"' },

@@ -2139,13 +2139,11 @@ describe("BrowserDriver — Void last entry, the date filler and the rail's hook
       expect(driver.checks().filter((c) => c.id === "runsheet-today-default")).toHaveLength(1);
     });
 
-    it("match day: 'today' showing exactly the fixtures this driver dated passes (dated 7 then 4); 'all', a missing or an extra row, and no filter at all fail", async () => {
+    it("match day: the sheet opened on 'all' passes (Match Day PB1: it opens on all even on a match day); the old 'today' default, and no filter at all, fail", async () => {
       const cases: [string, ReturnType<typeof seen> | { fold: { branch: "unfolded"; width: number }; defaultFilter: null }, string][] = [
-        // The sheet's rows arrive sorted (readDefaultFilter); the driver's dated list is sorted by it too (7 was dated before 4).
-        ["pass", seen("today", [4, 7]), "pass"],
-        ["all", seen("all", [4, 7, 9]), "fail"],
-        ["missing", seen("today", [4]), "fail"],
-        ["extra", seen("today", [4, 7, 9]), "fail"],
+        ["pass", seen("all", [4, 7, 9]), "pass"],
+        ["the old today default", seen("today", [4, 7]), "fail"],
+        ["today, rows short", seen("today", [4]), "fail"],
         ["no filter", { fold: { branch: "unfolded", width: 1280 }, defaultFilter: null }, "fail"],
       ];
       for (const [name, visit, verdict] of cases) {
@@ -2160,7 +2158,7 @@ describe("BrowserDriver — Void last entry, the date filler and the rail's hook
       }
     });
 
-    it("the phase guard: a match-day case whose desk phase is not match_day fails even when the sheet opened on 'all' as it should for that phase (the today default was never in force)", async () => {
+    it("the phase guard: a match-day case whose desk phase is not match_day fails even when the sheet opened on 'all' (the match-day default was never the one judged)", async () => {
       for (const phase of ["setting_up", "scheduled", "finished"]) {
         const { http } = dayHttp(phase);
         const { driver } = make({ http, spec: matchDay(), pages: railPages(seen("all", [4, 7, 9])) });

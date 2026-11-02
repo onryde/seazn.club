@@ -208,8 +208,9 @@ test.describe("the run sheet's round bar names its day in the app's locale, not 
 // THE TIMED ROUND'S DAY IS DERIVED FROM `now`, NEVER PINNED. A fixture
 // scheduled on TODAY makes the division `match_day` (division-phase.ts rule 3,
 // "some fixture is in_play, or scheduled and dated today"), and the fixtures
-// tab then MOUNTS on the "today" filter rather than "all"
-// (stages-panel.tsx: `phase === "match_day" ? "today" : "all"`). That filter
+// tab then MOUNTED on the "today" filter rather than "all" (it opens on "all"
+// always since Match Day PB1; this derivation stays, as the premise guard
+// below still protects the sheet's own "all" view). That filter
 // keeps only a fixture that is both timed AND dated today, so it drops the
 // untimed final this test exists to assert — leaving ONE round section where
 // the test expects two. The old literal `2026-09-20T10:00Z` therefore passed

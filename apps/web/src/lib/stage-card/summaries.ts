@@ -182,6 +182,32 @@ export function stageCounts(
 
 const NO_HELD: ReadonlySet<string> = new Set();
 
+/**
+ * Does a stage's card fold to one line, and does it start that way (Match Day PB1, owner 2026-11-02)?
+ *
+ * - `collapsible`: the card has a toggle. Only a COMPLETED stage with real matches: a running or not-started stage is always open
+ *   (nothing to put away yet), and a stage with no match at all has nothing to fold - the empty set is not "all done", and a line
+ *   that hid nothing would be a toggle over a "no fixtures" sentence.
+ * - `startsOpen`: whether a collapsible card starts open. It does when something on it wants a person: a match still open
+ *   (`openMatches` - a completed stage should have none, so one is a state to look at, never to hide), a warning handed in by the
+ *   page (`attention`: the seam W3's Swiss cut-drift notice feeds), or a settings panel already open on it (a deep link).
+ *
+ * A caller that holds an explicit choice (the person's tap) applies it over `startsOpen` - and only while `collapsible`: a stage
+ * that stops being complete must not stay folded behind a toggle it no longer has.
+ */
+export function stageCardCollapse(i: {
+  readonly status: string;
+  /** The stage's real matches, byes out. */
+  readonly realMatches: number;
+  /** Real matches not settled (in play, held, or still to come). */
+  readonly openMatches: number;
+  readonly attention: boolean;
+  readonly panelOpen: boolean;
+}): { collapsible: boolean; startsOpen: boolean } {
+  const collapsible = i.status === "complete" && i.realMatches > 0;
+  return { collapsible, startsOpen: !collapsible || i.openMatches > 0 || i.attention || i.panelOpen };
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Stage actions (item 8): the buttons follow the stage's state.
 // ---------------------------------------------------------------------------------------------------------------------

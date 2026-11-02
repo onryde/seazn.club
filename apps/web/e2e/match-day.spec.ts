@@ -679,7 +679,7 @@ test.describe("Match Day — Find a court on the division's run sheet (B2)", () 
       await page.goto(`${compPath}/d/${slug}?tab=fixtures`, { waitUntil: "load" });
       const sheet = page.getByTestId("run-sheet");
       await expect(sheet).toBeVisible();
-      // A division with matches today opens on "Today"; the unscheduled ones live under their own chip.
+      // The sheet opens on "All" whatever the day (Match Day PB1, owner 2026-11-02); the unscheduled ones live under their own chip.
       await sheet.locator('[data-filter="unscheduled"]').click();
       const setTime = sheet.locator('[data-row-action="set_time"]');
       await expect(setTime).toHaveCount(unscheduled);

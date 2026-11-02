@@ -331,9 +331,9 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     const path = await fixturePath(request, held.id);
     const division = path.split("/f/")[0]!;
     await page.goto(`${division}?tab=fixtures`);
-    // The sibling in play makes the division "Live", whose default run-sheet filter is "Today" - and an untimed abandoned
-    // match is not "today" (nor "needs result": that filter has never counted a held row, in a bracket either). "All" shows
-    // every row, which is what this test is about: the HOLD on the row.
+    // The run sheet opens on "All" whatever the phase (PB1, owner 2026-11-02; it used to open on "Today" once a sibling was in play,
+    // and an untimed abandoned match is not "today", nor "needs result" - that filter has never counted a held row). The click is kept
+    // as a no-op guard: "All" shows every row, which is what this test is about: the HOLD on the row.
     await page.getByRole("button", { name: "All", exact: true }).first().click();
     const row = page.locator(`li[data-fixture-no="${path.split("/f/")[1]!}"]`);
     await expect(row.getByTestId("run-sheet-held-chip"), "the run sheet holds the abandoned league match").toHaveText("Needs a decision");
@@ -375,6 +375,11 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     await page.goto(`${division}?tab=fixtures`);
     await page.getByRole("button", { name: "All", exact: true }).first().click();
     const settledRow = page.locator(`li[data-fixture-no="${path.split("/f/")[1]!}"]`);
+    // PB1 (owner 2026-11-02): a round whose every match is settled starts folded to its bar, and the settle just finished this one -
+    // open the folded rounds to see the row (the row is in the DOM either way; folded, it is hidden).
+    for (const bar of await page.getByTestId("run-sheet-round-toggle").all()) {
+      if ((await bar.getAttribute("aria-expanded")) === "false") await bar.click();
+    }
     await expect(settledRow, "rig: the row is on the sheet under All").toBeVisible();
     await expect(settledRow.getByTestId("run-sheet-held-chip")).toHaveCount(0);
   });
@@ -446,8 +451,10 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     await dismissCookieBanner(page);
     await expect(complete).toBeVisible();
     await expect(complete, "a held match is open: Complete is refused before it can be pressed").toBeDisabled();
-    // Match Day E1 item 1: the reason is behind an ⓘ now - hover it and the bubble is on screen, with the held-match count.
-    await page.getByTestId("stage-complete-info").hover();
+    // Match Day PB1: the reason is a bubble on the greyed Complete button itself (the ⓘ is gone) - hover it and the bubble is on screen.
+    await expect(page.getByTestId("stage-complete-info"), "PB1: the ⓘ is retired").toHaveCount(0);
+    await expect(page.getByTestId("stage-complete-hint"), "closed until asked").toBeHidden();
+    await complete.hover();
     await expect(page.getByTestId("stage-complete-hint")).toBeVisible();
     await expect(page.getByTestId("stage-progress-counts"), "the card says it is waiting for a decision").toContainText(ui("schedule.progress.held.one"));
 
@@ -1616,8 +1623,8 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
       widths++;
     }
     expect(widths).toBe(3);
-    // M3 (fix round 1): the DIVISION page agrees. It renders no phase pill (its phase gates only the start-locks tip and
-    // the run sheet's default filter — finding, fix round 1), so what it shows of the hold is the run sheet's row: the
+    // M3 (fix round 1): the DIVISION page agrees. It renders no phase pill (its phase gates only the start-locks tip; the
+    // run sheet's default filter stopped following it in PB1 — finding, fix round 1), so what it shows of the hold is the run sheet's row: the
     // held chip and the Settle action on the abandoned final, never a plain abandoned row.
     await page.setViewportSize({ width: 1280, height: 900 });
     const path = await fixturePath(request, ko.sf.id);
