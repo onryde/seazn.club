@@ -1451,6 +1451,42 @@ describe.skipIf(!HAS_DB)("R2 — Find a court opens a court the division can use
     expect(await findCourtForDivision(day.auth, competitionId, a.divisionId, at(20))).toEqual({ court_id: null, noun: "court" });
   });
 
+  it("I2 (fix round 1) — Find a court prefers a free court that is OPEN now; a court shut by its hours is the fallback, only when no other free court can take the match", async () => {
+    const day = await seedDay();
+    const { competitionId, a, b, open } = await splitDay(day);
+    const courtOf = async (divisionId: string) => (await findCourtForDivision(day.auth, competitionId, divisionId, at(20)))?.court_id;
+    // Declared: Doubles plays on Court 1 only, Mixed on Court 2 only, Open on all three (list order Court 1, 2, 3) - the R2 test's split.
+    const all = async () => ({ a: await courtOf(a.divisionId), b: await courtOf(b.divisionId), open: await courtOf(open.divisionId) });
+    expect(await all(), "premise: nothing shut, the first free court of each").toEqual({ a: day.courts.c1, b: day.courts.c2, open: day.courts.c1 });
+
+    // Court 1 shut for the day (a closed exception on the board's date): Open skips it for Court 2; Doubles, whose ONLY court it is,
+    // keeps it (a warn-only closure never takes the link away); Mixed is untouched.
+    await sql`insert into court_exceptions (court_id, org_id, date, closed) values (${day.courts.c1}, ${day.orgId}, '2026-11-07', true)`;
+    expect(await all()).toEqual({ a: day.courts.c1, b: day.courts.c2, open: day.courts.c2 });
+
+    // Courts 1 and 2 both shut: Open goes to Court 3, the last open one.
+    await sql`insert into court_exceptions (court_id, org_id, date, closed) values (${day.courts.c2}, ${day.orgId}, '2026-11-07', true)`;
+    expect(await all()).toEqual({ a: day.courts.c1, b: day.courts.c2, open: day.courts.c3 });
+
+    // Every court shut: the first free court of the division's list, shut or not - never "none" for a court that exists.
+    await sql`insert into court_exceptions (court_id, org_id, date, closed) values (${day.courts.c3}, ${day.orgId}, '2026-11-07', true)`;
+    expect(await all()).toEqual({ a: day.courts.c1, b: day.courts.c2, open: day.courts.c1 });
+
+    // A court shut but TAKEN is not free either way: Court 3 playing (another competition) leaves Open on Court 1.
+    const other = await seedCompetition(
+      day.auth,
+      "Club Night",
+      [
+        [await person(day.orgId, "Uma Uhl"), await person(day.orgId, "Vic Vale")],
+        [await person(day.orgId, "Wyn West"), await person(day.orgId, "Xen Xu")],
+      ],
+      { courts: [day.courts.c3] },
+    );
+    await place(day, other.fixtures[0]!.id, 0, day.courts.c3);
+    await setStatus(other.fixtures[0]!.id, "in_play");
+    expect(await courtOf(open.divisionId)).toBe(day.courts.c1);
+  });
+
   it("a TBD-only knockout: no ready match on no court, so no link at all (null) — its unscheduled row keeps the schedule board alone; a football division asks for a pitch", async () => {
     const day = await seedDay();
     const { competitionId, a } = await splitDay(day);

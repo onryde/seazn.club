@@ -25,7 +25,7 @@ import { DEFAULT_LOCALE, getDictionary, type Locale } from "@/lib/i18n";
 import { estimateQueue, rankCandidates } from "@/lib/match-day/estimate";
 import { withFindCourt } from "@/lib/match-day/view";
 import { routes } from "@/lib/routes";
-import { closureOf } from "@/lib/match-day/closure";
+import { closedNow, closureOf } from "@/lib/match-day/closure";
 import type {
   CourtClosure,
   MatchDayCandidate,
@@ -455,8 +455,12 @@ async function findCourtsOf(tx: Tx, board: Pick<Board, "courts" | "noCourt">): P
     for (const courtId of allowed.get(r.id) ?? []) entry.courts.add(courtId);
   }
   for (const [divisionId, { courts, noun }] of usable) {
-    const free = board.courts.find((c) => c.state === "free" && courts.has(c.court_id));
-    out.set(divisionId, { court_id: free?.court_id ?? null, noun });
+    // Free courts the division may use, in the board's list order. One that its hours have shut right now is the LAST choice
+    // (fix round 1, I2): "Find a court" should land where a match can be called without a "Call anyway", and falls back to a
+    // shut court only when no other free court can take the match - the call is warn-only, so it is still a court to open.
+    const free = board.courts.filter((c) => c.state === "free" && courts.has(c.court_id));
+    const pick = free.find((c) => !closedNow(c)) ?? free[0];
+    out.set(divisionId, { court_id: pick?.court_id ?? null, noun });
   }
   return out;
 }
