@@ -7241,5 +7241,11 @@
   "matchDay.closure.callPaused.rest": "Fermé pour le reste de la journée : aucun match ne peut être appelé sur {court}.",
   "matchDay.sheet.warn.crossesClosure": "{court} ferme de {from} à {until}, alors que ce match serait encore en cours.",
   "matchDay.sheet.warn.courtClosedUntil": "{court} : fermé jusqu'à {time}.",
-  "matchDay.sheet.warn.courtClosedToday": "{court} : fermé pour le reste de la journée."
+  "matchDay.sheet.warn.courtClosedToday": "{court} : fermé pour le reste de la journée.",
+  "matchDay.venue.label": "Lieux",
+  "matchDay.venue.all": "Afficher tous les lieux",
+  "matchDay.venue.triggerAll": "Tous les lieux",
+  "matchDay.venue.triggerMany.one": "{count} lieu",
+  "matchDay.venue.triggerMany.other": "{count} lieux",
+  "matchDay.venue.done": "Terminé"
 }

@@ -369,6 +369,33 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     expect(Object.keys(night), "anti-vacuity: four courts read").toHaveLength(4);
   });
 
+  it("E2-5 — every court carries its venue, and venues_today lists the venues where THIS competition has a match today, in any state, in venue order", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    // Nothing placed: no venue has a match today.
+    const empty = await getMatchDay(day.auth, day.comp.id, at(0));
+    expect(empty.venues_today).toEqual([]);
+    for (const c of empty.courts) expect(c.venue_id, c.court_name).toBe(day.venueOf[c.court_id]);
+    expect(empty.courts).toHaveLength(3);
+
+    // Today at Hall B (Court 3); tomorrow at Hall A (Court 1): only Hall B counts.
+    await place(day, between(day.comp, p1, p2).id, 60, day.courts.c3);
+    await place(day, between(day.comp, p3, p4).id, 24 * 60 + 60, day.courts.c1);
+    expect((await getMatchDay(day.auth, day.comp.id, at(0))).venues_today).toEqual([day.venues.hallB]);
+
+    // Another competition's match today at Hall A is not this competition's.
+    const other = await otherCompetition(day, "Other Cup", { courts: [day.courts.c2] });
+    await place(day, other.fixtures[0]!.id, 90, day.courts.c2);
+    expect((await getMatchDay(day.auth, day.comp.id, at(0))).venues_today).toEqual([day.venues.hallB]);
+
+    // A match of this competition played earlier today at Hall A counts, whatever its state now; the list is in venue order.
+    const played = between(day.comp, p1, p3);
+    await place(day, played.id, -60, day.courts.c1);
+    await setStatus(played.id, "decided");
+    await sql`update fixtures set finished_at = ${iso(-30)} where id = ${played.id}`;
+    expect((await getMatchDay(day.auth, day.comp.id, at(0))).venues_today).toEqual([day.venues.hallA, day.venues.hallB]);
+  });
+
   it("E2-3 — a court with no hours and no exceptions is open all day: no closure at any hour", async () => {
     const day = await seedDay();
     let checked = 0;
@@ -895,6 +922,7 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       needs_you: [],
       results_owed: 0,
       fixtures_today: 0,
+      venues_today: [],
     });
   });
 

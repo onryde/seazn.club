@@ -66,6 +66,7 @@ const queued = (id: string): MatchDayQueued => ({
 const court = (n: number, o: Partial<MatchDayCourt> = {}): MatchDayCourt => ({
   court_id: `c-${n}`,
   court_name: `Court ${n}`,
+  venue_id: "venue-1",
   venue_name: "Main Hall",
   sport_noun: "court",
   state: "free",

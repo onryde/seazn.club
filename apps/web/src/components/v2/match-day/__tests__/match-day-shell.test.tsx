@@ -40,6 +40,7 @@ import { NeedsYou, type NeedsYouItem } from "@/components/v2/desk/needs-you";
 const court = (id: string, name: string, o: Partial<MatchDayCourt> = {}): MatchDayCourt => ({
   court_id: id,
   court_name: name,
+  venue_id: "venue-1",
   venue_name: "Main Hall",
   sport_noun: "court",
   state: "free",
@@ -61,6 +62,7 @@ const view = (courts: MatchDayCourt[], now: string, playing_no_court: MatchDayFi
   needs_you: [],
   results_owed: 0,
   fixtures_today: 0,
+  venues_today: [],
 });
 
 const C1 = court("c-1", "Court 1");

@@ -35,9 +35,11 @@ import type { Severity } from "@/lib/division-phase";
 import type { MatchDayView } from "@/lib/match-day/types";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import {
+  filterByVenues,
   filterCourts,
   filterNoCourt,
   headerCountParts,
+  initialVenueSelection,
   isLive,
   isMatchDayView,
   matchLabel,
@@ -46,14 +48,20 @@ import {
   needsYouTone,
   noCourtNoun,
   orderCourts,
+  parseVenueParam,
   resolveFocus,
+  scopeCourtNames,
   sharedNoun,
+  venueOptions,
+  venueParamOf,
+  withVenueParam,
   type Opened,
 } from "@/lib/match-day/view";
 import { browserBandPollDeps, startBandPolling } from "@/components/v2/desk/band-poll";
 import { NeedsYou } from "@/components/v2/desk/needs-you";
 import { CourtFocus, NoCourtFocus, fixtureHref, type MatchDayCtx } from "./court-focus";
 import { CourtList, NoCourtList } from "./court-list";
+import { VenueFilter } from "./venue-filter";
 
 export interface MatchDayShellProps {
   competitionId: string;
@@ -74,6 +82,8 @@ export interface MatchDayShellProps {
   readOnly?: boolean;
   /** `?court=<id>`: the court to open first (Needs you's "Find a court" link, opened another way). Ignored when not on the list. */
   focusCourtId?: string | null;
+  /** `?venue=`: the venue filter's choice as the URL wrote it ("all", or venue ids), absent for the default (E2 item 5). */
+  venueParam?: string | readonly string[] | null;
 }
 
 export function MatchDayShell({
@@ -89,6 +99,7 @@ export function MatchDayShell({
   viewerPlan,
   readOnly = false,
   focusCourtId = null,
+  venueParam = null,
 }: MatchDayShellProps) {
   const [view, setView] = useState<MatchDayView>(initial);
   /** The court the organiser opened (its name kept to say so if it leaves the list); null until one is. */
@@ -100,6 +111,13 @@ export function MatchDayShell({
    *  court on the list opens it full-screen, as tapping it would. */
   const [phoneOpen, setPhoneOpen] = useState(() => opened !== null);
   const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
+  /** The venues listed (E2 item 5): the URL's choice, else the venues with a match today, else all. Display only. A court the page
+   *  was asked to open (`?court=`) is never hidden by it: its venue is added. */
+  const [venues, setVenues] = useState<ReadonlySet<string>>(() => {
+    const picked = initialVenueSelection(initial.courts, initial.venues_today, parseVenueParam(venueParam));
+    const asked = focusCourtId === null ? undefined : initial.courts.find((c) => c.court_id === focusCourtId);
+    return asked === undefined || picked.has(asked.venue_id) ? picked : new Set([...picked, asked.venue_id]);
+  });
   const [notice, setNotice] = useState<{ courtId: string; message: string } | null>(null);
   /** The Needs-you list, open under the header. */
   const [needsOpen, setNeedsOpen] = useState(false);
@@ -119,7 +137,12 @@ export function MatchDayShell({
 
   const filter = chosen.size === 0 ? null : chosen;
   // Listed by group — playing, called, up next, in use elsewhere, free — and the first of that list is the desktop's default focus.
-  const courts = useMemo(() => orderCourts(filterCourts(view.courts, filter)), [view.courts, filter]);
+  const venueChoices = useMemo(() => venueOptions(view.courts), [view.courts]);
+  const venueFilterOn = venueChoices.length > 1;
+  const courts = useMemo(
+    () => orderCourts(filterCourts(venueFilterOn ? scopeCourtNames(filterByVenues(view.courts, venues), venues) : view.courts, filter)),
+    [view.courts, venues, venueFilterOn, filter],
+  );
   const noCourt = useMemo(() => filterNoCourt(view.playing_no_court, filter), [view.playing_no_court, filter]);
   const focus = resolveFocus(courts, noCourt, opened);
   const focused = focus.kind === "court" ? focus.court : null;
@@ -157,10 +180,23 @@ export function MatchDayShell({
    *  be called onto — opened on its candidates, or the list when none is free. */
   const findCourt = (courtId: string | null) => {
     setNeedsOpen(false);
-    if (courtId !== null) open(courtId);
+    if (courtId !== null) {
+      // The court is named by the server whatever the venue filter lists: show its venue rather than send the organiser to a
+      // "left the list" notice for a court that is simply not listed.
+      const venue = view.courts.find((c) => c.court_id === courtId)?.venue_id;
+      if (venue !== undefined && !venues.has(venue)) chooseVenues(new Set([...venues, venue]));
+      open(courtId);
+    }
     else {
       setPhoneOpen(false);
       toTop();
+    }
+  };
+  /** A new venue selection: held, and written to the address (`?venue=`) so a reload and Back bring it back. */
+  const chooseVenues = (next: ReadonlySet<string>) => {
+    setVenues(next);
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", withVenueParam(window.location.href, venueParamOf(next, venueChoices)));
     }
   };
   const toggle = (divisionId: string) =>
@@ -235,28 +271,33 @@ export function MatchDayShell({
             )}
           </div>
         )}
-        {divisions.length > 1 && (
-          <div role="group" aria-label={t(dict, "matchDay.filter.label")} className="mt-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              aria-pressed={filter === null}
-              onClick={() => setChosen(new Set())}
-              className={chipClass(filter === null)}
-            >
-              {t(dict, "matchDay.filter.all")}
-            </button>
-            {divisions.map((d) => (
-              <button
-                key={d.id}
-                type="button"
-                data-testid="md-division-chip"
-                aria-pressed={chosen.has(d.id)}
-                onClick={() => toggle(d.id)}
-                className={chipClass(chosen.has(d.id))}
-              >
-                {d.name}
-              </button>
-            ))}
+        {(venueFilterOn || divisions.length > 1) && (
+          <div className="mt-3 flex min-w-0 flex-wrap items-start gap-2">
+            {venueFilterOn && <VenueFilter dict={dict} locale={locale} options={venueChoices} selected={venues} onChange={chooseVenues} />}
+            {divisions.length > 1 && (
+              <div role="group" aria-label={t(dict, "matchDay.filter.label")} className="flex min-w-0 flex-wrap gap-2">
+                <button
+                  type="button"
+                  aria-pressed={filter === null}
+                  onClick={() => setChosen(new Set())}
+                  className={chipClass(filter === null)}
+                >
+                  {t(dict, "matchDay.filter.all")}
+                </button>
+                {divisions.map((d) => (
+                  <button
+                    key={d.id}
+                    type="button"
+                    data-testid="md-division-chip"
+                    aria-pressed={chosen.has(d.id)}
+                    onClick={() => toggle(d.id)}
+                    className={chipClass(chosen.has(d.id))}
+                  >
+                    {d.name}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </header>

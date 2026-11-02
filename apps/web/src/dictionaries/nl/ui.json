@@ -7241,5 +7241,11 @@
   "matchDay.closure.callPaused.rest": "Gesloten voor de rest van vandaag, dus er kan geen wedstrijd naar {court} worden opgeroepen.",
   "matchDay.sheet.warn.crossesClosure": "{court} is gesloten van {from} tot {until}, terwijl deze wedstrijd dan nog bezig zou zijn.",
   "matchDay.sheet.warn.courtClosedUntil": "{court} is gesloten tot {time}.",
-  "matchDay.sheet.warn.courtClosedToday": "{court} is gesloten voor de rest van vandaag."
+  "matchDay.sheet.warn.courtClosedToday": "{court} is gesloten voor de rest van vandaag.",
+  "matchDay.venue.label": "Locaties",
+  "matchDay.venue.all": "Alle locaties tonen",
+  "matchDay.venue.triggerAll": "Alle locaties",
+  "matchDay.venue.triggerMany.one": "{count} locatie",
+  "matchDay.venue.triggerMany.other": "{count} locaties",
+  "matchDay.venue.done": "Klaar"
 }

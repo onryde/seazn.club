@@ -7241,5 +7241,11 @@
   "matchDay.closure.callPaused.rest": "Cerrado el resto de hoy: no se puede convocar ningún partido a {court}.",
   "matchDay.sheet.warn.crossesClosure": "{court} cierra de {from} a {until}, con este partido aún en juego.",
   "matchDay.sheet.warn.courtClosedUntil": "{court}: cerrado hasta las {time}.",
-  "matchDay.sheet.warn.courtClosedToday": "{court}: cerrado el resto de hoy."
+  "matchDay.sheet.warn.courtClosedToday": "{court}: cerrado el resto de hoy.",
+  "matchDay.venue.label": "Sedes",
+  "matchDay.venue.all": "Mostrar todas las sedes",
+  "matchDay.venue.triggerAll": "Todas las sedes",
+  "matchDay.venue.triggerMany.one": "{count} sede",
+  "matchDay.venue.triggerMany.other": "{count} sedes",
+  "matchDay.venue.done": "Hecho"
 }

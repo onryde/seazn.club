@@ -218,6 +218,101 @@ export function foldedNames(names: readonly string[], singular: string, plural: 
     .join(", ");
 }
 
+// ---- The venue filter (Match Day E2 item 5) -------------------------------------------------------------------------------
+// DISPLAY ONLY: it narrows which courts the page lists. Nothing a call is judged by reads it — a player busy on a court in a venue
+// that is not listed still stops a call (match-day-call.ts looks at every court).
+
+/** One venue in the filter: its courts on the board, and the noun they share (`sharedNoun`). */
+export interface VenueOption {
+  id: string;
+  name: string;
+  courts: number;
+  noun: VenueNoun;
+}
+
+/** The venues the courts sit in, once each, in the order the courts come (the server lists them venue by venue). More than one is
+ *  the condition for showing the filter at all. */
+export function venueOptions(courts: readonly MatchDayCourt[]): VenueOption[] {
+  const byId = new Map<string, { name: string; courts: MatchDayCourt[] }>();
+  for (const c of courts) {
+    const entry = byId.get(c.venue_id);
+    if (entry === undefined) byId.set(c.venue_id, { name: c.venue_name, courts: [c] });
+    else entry.courts.push(c);
+  }
+  return [...byId].map(([id, v]) => ({ id, name: v.name, courts: v.courts.length, noun: sharedNoun(v.courts) }));
+}
+
+/** `?venue=`: "all", a list of venue ids, or null when the URL makes no choice. A repeated key arrives as an array. */
+export type VenueParam = "all" | string[] | null;
+
+export function parseVenueParam(raw: string | readonly string[] | null | undefined): VenueParam {
+  const parts = (Array.isArray(raw) ? raw : raw === undefined || raw === null ? [] : [raw])
+    .flatMap((r) => String(r).split(","))
+    .map((x) => x.trim())
+    .filter((x) => x !== "");
+  if (parts.length === 0) return null;
+  if (parts.length === 1 && parts[0]!.toLowerCase() === "all") return "all";
+  return [...new Set(parts)];
+}
+
+/**
+ * The venues selected when the page opens (owner 2026-11-01): the URL's choice if it names a venue on the board; else the venues
+ * where this competition has a match today; else every venue. Ids that are not on the board are ignored, and a choice that leaves
+ * none falls through to the next rule — a stale link never opens an empty page. The result holds only venues on the board (the
+ * empty set only when there are no courts).
+ */
+export function initialVenueSelection(
+  courts: readonly MatchDayCourt[],
+  venuesToday: readonly string[],
+  param: VenueParam,
+): ReadonlySet<string> {
+  const onBoard = venueOptions(courts).map((o) => o.id);
+  const known = new Set(onBoard);
+  if (param === "all") return known;
+  const named = (param ?? []).filter((id) => known.has(id));
+  if (named.length > 0) return new Set(named);
+  const today = venuesToday.filter((id) => known.has(id));
+  return today.length > 0 ? new Set(today) : known;
+}
+
+/** The courts of the selected venues (every venue selected keeps every court). A selection naming nothing on the board is no filter,
+ *  rather than an empty page. */
+export function filterByVenues(courts: readonly MatchDayCourt[], selected: ReadonlySet<string>): MatchDayCourt[] {
+  const onBoard = new Set(courts.map((c) => c.venue_id));
+  const effective = [...selected].filter((id) => onBoard.has(id));
+  if (effective.length === 0) return [...courts];
+  const keep = new Set(effective);
+  return courts.filter((c) => keep.has(c.venue_id));
+}
+
+/** With exactly one venue selected the "(Venue)" the server added to a name two venues share is redundant: drop it. Only that
+ *  court's OWN venue suffix goes. Anything else is returned as it was. */
+export function scopeCourtNames(courts: readonly MatchDayCourt[], selected: ReadonlySet<string>): MatchDayCourt[] {
+  const onBoard = new Set(courts.map((c) => c.venue_id));
+  const effective = [...selected].filter((id) => onBoard.has(id));
+  if (effective.length !== 1) return [...courts];
+  return courts.map((c) => {
+    const suffix = ` (${c.venue_name})`;
+    return c.court_name.endsWith(suffix) && c.court_name.length > suffix.length
+      ? { ...c, court_name: c.court_name.slice(0, -suffix.length) }
+      : c;
+  });
+}
+
+/** The `?venue=` value a selection writes: "all" when it covers every venue, else the ids in the venues' order. */
+export function venueParamOf(selected: ReadonlySet<string>, options: readonly VenueOption[]): string {
+  const chosen = options.filter((o) => selected.has(o.id));
+  return chosen.length === options.length ? "all" : chosen.map((o) => o.id).join(",");
+}
+
+/** `href` with its `?venue=` replaced by `param` (the other parameters and the hash kept), as a path + query + hash for
+ *  `history.replaceState`. */
+export function withVenueParam(href: string, param: string): string {
+  const url = new URL(href, "https://seazn.invalid");
+  url.searchParams.set("venue", param);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
 /** The same filter on the "Playing, no court" group (B4): every match, or only the chosen divisions'. */
 export function filterNoCourt(fixtures: readonly MatchDayFixture[], divisions: ReadonlySet<string> | null): MatchDayFixture[] {
   return divisions === null ? [...fixtures] : fixtures.filter((f) => divisions.has(f.division_id));

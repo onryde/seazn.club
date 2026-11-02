@@ -1687,6 +1687,8 @@ export const MatchDayFixture = z.object({
 export const MatchDayCourt = z.object({
   court_id: Uuid,
   court_name: z.string(),
+  // Match Day E2 item 5: the venue filter's key.
+  venue_id: Uuid,
   venue_name: z.string(),
   // lib/venue.ts's VENUE_NOUNS (the route test pins the two equal; this module may not import @/).
   sport_noun: z.enum(["court", "pitch", "table", "board", "rink"]),
@@ -1729,6 +1731,8 @@ export const MatchDayView = z.object({
   ),
   results_owed: z.number().int().nonnegative(),
   fixtures_today: z.number().int().nonnegative(),
+  // Match Day E2 item 5: the venues where this competition has a match today (the venue filter's default selection).
+  venues_today: z.array(Uuid),
 });
 
 export const MatchDayCandidate = z.object({

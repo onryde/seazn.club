@@ -3169,6 +3169,11 @@
                               "court_name": {
                                 "type": "string"
                               },
+                              "venue_id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
                               "venue_name": {
                                 "type": "string"
                               },
@@ -3789,6 +3794,7 @@
                             "required": [
                               "court_id",
                               "court_name",
+                              "venue_id",
                               "venue_name",
                               "sport_noun",
                               "state",
@@ -4139,6 +4145,14 @@
                           "type": "integer",
                           "minimum": 0,
                           "maximum": 9007199254740991
+                        },
+                        "venues_today": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          }
                         }
                       },
                       "required": [
@@ -4150,7 +4164,8 @@
                         "playing_no_court",
                         "needs_you",
                         "results_owed",
-                        "fixtures_today"
+                        "fixtures_today",
+                        "venues_today"
                       ],
                       "additionalProperties": false
                     },
@@ -4171,6 +4186,7 @@
                       {
                         "court_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                         "court_name": "example",
+                        "venue_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                         "venue_name": "example",
                         "sport_noun": "court",
                         "state": "playing",
@@ -4294,7 +4310,10 @@
                       }
                     ],
                     "results_owed": 0,
-                    "fixtures_today": 0
+                    "fixtures_today": 0,
+                    "venues_today": [
+                      "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                    ]
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

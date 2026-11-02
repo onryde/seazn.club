@@ -92,6 +92,8 @@ export interface MatchDayCourt {
   court_id: string;
   /** The court's display label: venue-qualified only when two venues share a court name (lib/court-directory.ts). */
   court_name: string;
+  /** The court's venue (the venue filter's key, Match Day E2 item 5) and its name. */
+  venue_id: string;
   venue_name: string;
   /** What the playing area is called for the sport on it: the current match's sport, else its first queued match's, else the
    *  first division (in competition order) that has the court among its candidate courts. "court" when none says. */
@@ -166,4 +168,8 @@ export interface MatchDayView {
   /** This competition's matches today, each on its own division's day, plus those in play (`countFixturesToday`, read once per
    *  poll: the competition desk's own `fixtures_today`). */
   fixtures_today: number;
+  /** The venues where THIS competition has a match today (Match Day E2 item 5): the venue of every court one of its matches today
+   *  is on — played, playing, queued or called — whatever the match's state. The venue filter's default selection; empty when
+   *  none of today's matches has a court. */
+  venues_today: string[];
 }

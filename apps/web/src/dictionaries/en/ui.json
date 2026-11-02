@@ -7241,5 +7241,11 @@
   "matchDay.closure.callPaused.rest": "Closed for the rest of today, so no match can be called to {court}.",
   "matchDay.sheet.warn.crossesClosure": "{court} closes from {from} to {until}, while this match would still be on.",
   "matchDay.sheet.warn.courtClosedUntil": "{court} is closed until {time}.",
-  "matchDay.sheet.warn.courtClosedToday": "{court} is closed for the rest of today."
+  "matchDay.sheet.warn.courtClosedToday": "{court} is closed for the rest of today.",
+  "matchDay.venue.label": "Venues",
+  "matchDay.venue.all": "Show all venues",
+  "matchDay.venue.triggerAll": "All venues",
+  "matchDay.venue.triggerMany.one": "{count} venue",
+  "matchDay.venue.triggerMany.other": "{count} venues",
+  "matchDay.venue.done": "Done"
 }

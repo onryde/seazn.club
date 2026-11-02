@@ -9,6 +9,7 @@ export const dynamic = "force-dynamic";
 // is the page being honest, never the guard. A non-member gets the 404 `requireOrgPage` gives every console page.
 //
 // `?court=<id>` opens that court (B4: Needs you's "Find a court" names the free court whose candidates it means).
+// `?venue=<id>,<id>` (or `all`) is the venue filter's choice (E2 item 5); absent, the venues with a match today.
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getMatchDay } from "@/server/usecases/match-day";
 import { orgPlanKey } from "@/lib/entitlements";
@@ -27,7 +28,9 @@ export default async function MatchDayPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { orgSlug, compSlug } = await params;
-  const court = (await searchParams).court;
+  const query = await searchParams;
+  const court = query.court;
+  const venue = query.venue;
   const page = await requireCompetitionPage(orgSlug, compSlug, { tail: "/match-day" });
   const id = page.competition.id;
   const locale = await resolveLocale();
@@ -56,6 +59,7 @@ export default async function MatchDayPage({
         viewerPlan={viewerPlanFrom(planKey)}
         readOnly={!page.canEdit}
         focusCourtId={typeof court === "string" ? court : null}
+        venueParam={venue ?? null}
       />
     </main>
   );

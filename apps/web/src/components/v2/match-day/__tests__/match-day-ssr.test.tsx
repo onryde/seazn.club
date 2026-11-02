@@ -138,6 +138,7 @@ const fx = (o: Partial<MatchDayFixture> = {}): MatchDayFixture => ({
 const court = (o: Partial<MatchDayCourt> = {}): MatchDayCourt => ({
   court_id: "c-3",
   court_name: "Court 3",
+  venue_id: "venue-1",
   venue_name: "Main Hall",
   sport_noun: "court",
   state: "playing",
@@ -176,6 +177,7 @@ const view = (courts: MatchDayCourt[], playing_no_court: MatchDayFixture[] = [])
   needs_you: [],
   results_owed: 0,
   fixtures_today: 6,
+  venues_today: [],
 });
 
 const focus = (c: MatchDayCourt, notice: string | null = null) =>

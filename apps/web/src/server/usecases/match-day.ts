@@ -173,6 +173,7 @@ interface BoardQueued {
 interface BoardCourt {
   court_id: string;
   court_name: string;
+  venue_id: string;
   venue_name: string;
   state: MatchDayCourtState;
   current: FixtureRow | null;
@@ -191,6 +192,8 @@ interface Board {
   tz: string;
   day: string;
   courts: BoardCourt[];
+  /** The venues this competition has a match today on a court of (`MatchDayView.venues_today`). */
+  venuesToday: string[];
   /** This competition's ready "no court yet" matches, in order; read only when asked for. */
   noCourt: FixtureRow[];
   /** This competition's matches in play on no court, in its live divisions, in kick-off order (`playingNoCourtOf`). */
@@ -287,12 +290,13 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
     ...rows.flatMap((r) => (r.court_id !== null && liveDivisions.has(r.division_id) ? [r.court_id] : [])),
   ]);
   const courtNames = await courtNamesById(tx);
-  const orgCourts = await tx<{ id: string; venue_name: string }[]>`
-    select c.id, v.name as venue_name from courts c join venues v on v.id = c.venue_id
+  const orgCourts = await tx<{ id: string; venue_id: string; venue_name: string }[]>`
+    select c.id, v.id as venue_id, v.name as venue_name from courts c join venues v on v.id = c.venue_id
      order by v.sort, v.name, c.sort, c.name, c.id`;
   const courtIds = orgCourts.filter((c) => onBoard.has(c.id)).map((c) => c.id);
   if (courtIds.length !== onBoard.size) throw new Error("match-day: a board court is not one of the organisation's courts");
   const venueOf = new Map(orgCourts.map((c) => [c.id, c.venue_name]));
+  const venueIdOf = new Map(orgCourts.map((c) => [c.id, c.venue_id]));
 
   const holders = courtIds.length
     ? await tx<HolderRow[]>`
@@ -377,6 +381,7 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
     courts.push({
       court_id: courtId,
       court_name: courtNames.get(courtId) ?? "",
+      venue_id: venueIdOf.get(courtId) ?? "",
       venue_name: venueOf.get(courtId) ?? "",
       state,
       current,
@@ -409,7 +414,17 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
             (a.id < b.id ? -1 : 1),
         )
     : [];
-  return { comp, tz, day, courts, noCourt, playingNoCourt: playingNoCourtOf(rows, liveDivisions), courtNames };
+  // The venues this competition has a match today on a court of: `rows` is every match of its live divisions that is today's, in
+  // play or called, whatever its state now (a finished one too), so a venue whose matches are all played still counts.
+  // Listed in the organisation's venue order (the courts' own), so the answer does not depend on how the rows came back.
+  const withMatchToday = new Set(
+    rows.flatMap((r) => {
+      const venue = r.court_id !== null && liveDivisions.has(r.division_id) ? venueIdOf.get(r.court_id) : undefined;
+      return venue === undefined ? [] : [venue];
+    }),
+  );
+  const venuesToday = [...new Set(orgCourts.map((c) => c.venue_id))].filter((id) => withMatchToday.has(id));
+  return { comp, tz, day, courts, venuesToday, noCourt, playingNoCourt: playingNoCourtOf(rows, liveDivisions), courtNames };
 }
 
 /**
@@ -500,6 +515,7 @@ function courtView(c: BoardCourt, streams: Record<string, "live" | "waiting">, e
   return {
     court_id: c.court_id,
     court_name: c.court_name,
+    venue_id: c.venue_id,
     venue_name: c.venue_name,
     sport_noun: venueNoun(c.current?.sport_key ?? c.queue[0]?.row.sport_key ?? c.candidate_sport),
     state: c.state,
@@ -623,6 +639,7 @@ export async function getMatchDay(
     needs_you: withFindCourt(dict, atHome, findCourts, routes.competitionMatchDay(board.comp.org_slug, board.comp.slug)),
     results_owed: needsYouHome(fixturesToday) === "match_day" ? resultsOwedOf(desk) : 0,
     fixtures_today: fixturesToday,
+    venues_today: board.venuesToday,
   };
 }
 
