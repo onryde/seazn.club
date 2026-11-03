@@ -1,10 +1,14 @@
 // W3 app-B Task 4 (SW-H1 on the desk; X-SW-3, rulebook-W3 §3.3): what the desk says when Pair next is refused
 // SWISS_NO_LEGAL_PAIRING — the reason-specific sentence and the recovery it offers. Pure and client-safe: the wire
 // details in (`{ round, reason, field, finishAfter, canFinish }`, the five fields `swissGen` copies by name), the
-// dictionary keys, their parameters and the offered actions out. The sentence is COMPOSED — the reason's lead ("Round 4
-// can't be paired: …") plus a tail naming only the recoveries actually offered — so the copy never promises a button the
-// desk does not show: no Finish without a finished round to end at (and the server's `canFinish`), no Change rounds once
-// a match has started (the count is fixed from then on; `swissRoundControls[stage].started`).
+// dictionary keys, their parameters and whether Finish is offered out. The sentence is COMPOSED — the reason's lead
+// ("Round 4 can't be paired: …") plus a tail naming the recovery only when it is offered — so the copy never promises a
+// button the desk does not show: no Finish without a finished round to end at (and the server's `canFinish`).
+//
+// Finish is the ONLY recovery. "Change rounds" was built and dropped (controller ruling, T4 fix round 1): a refusal in
+// round 2 or later means the round before it is decided, so a match has started and the round count is fixed from then
+// on (`swissBoardStartedSql`); round 1 never reaches this refusal (a field under two answers STAGE_NOT_READY first).
+// The button could never be shown, so neither could its sentence.
 import type { SwissRefusalReason } from "@seazn/engine/scheduling/swiss";
 import type { MessageKey } from "./messages";
 import type { SwissFinishPlan } from "./swiss-finish-plan";
@@ -16,22 +20,19 @@ export interface NoPairingDetails {
   reason: SwissRefusalReason;
   /** The round's field (entrants to seat). */
   field: number;
-  /** k: the round "Finish after round k" ends the Swiss at (the round before `round`; 0 in round 1). */
+  /** k: the round "Finish after round k" ends the Swiss at — the server reads it from the Finish route's own state (0: no
+   *  round is finished). */
   finishAfter: number;
   /** THE Finish predicate's answer, from the server. */
   canFinish: boolean;
 }
 
-export type NoPairingAction = "finish" | "rounds";
-
 export interface NoPairingNotice {
   /** The reason's lead sentence. */
   key: MessageKey;
-  /** The recovery sentence, or null when nothing is offered. */
+  /** The Finish recovery sentence — present exactly when "Finish after round {finishAfter}" is offered, else null. */
   tail: MessageKey | null;
   params: { round: number; finishAfter: number };
-  /** In display order. */
-  actions: NoPairingAction[];
 }
 
 /** An exhaustive Record over the engine's own union: a sixth reason added to the engine reds `tsc` here. */
@@ -43,17 +44,10 @@ const LEAD_KEY: Record<SwissRefusalReason, MessageKey> = {
   field_too_small: "swiss.refusal.SWISS_NO_LEGAL_PAIRING.field_too_small",
 };
 
-/** The two recovery buttons' labels (`{n}` on the first: the round it finishes after). */
-export const NO_PAIRING_ACTION_KEY = {
-  finish: "swiss.recovery.finishAfter",
-  rounds: "swiss.recovery.changeRounds",
-} as const satisfies Record<NoPairingAction, MessageKey>;
+/** The Finish button's label (`{n}`: the round it finishes after). */
+export const NO_PAIRING_ACTION_KEY = { finish: "swiss.recovery.finishAfter" } as const satisfies Record<"finish", MessageKey>;
 
-const TAIL_KEY = {
-  both: "swiss.refusal.SWISS_NO_LEGAL_PAIRING.tail.both",
-  finish: "swiss.refusal.SWISS_NO_LEGAL_PAIRING.tail.finish",
-  rounds: "swiss.refusal.SWISS_NO_LEGAL_PAIRING.tail.rounds",
-} as const satisfies Record<string, MessageKey>;
+const TAIL_FINISH = "swiss.refusal.SWISS_NO_LEGAL_PAIRING.tail.finish" as const satisfies MessageKey;
 
 const isCount = (v: unknown, min: number): v is number => typeof v === "number" && Number.isInteger(v) && v >= min;
 
@@ -71,18 +65,14 @@ export function noPairingDetailsOf(extra: unknown): NoPairingDetails | null {
 
 /**
  * The notice for a refusal. Finish is offered on BOTH the server's `canFinish` and a round to finish after (`finishAfter`
- * 1 or more: round 1 has nothing behind it); Change rounds unless the stage has started (`roundsEditable: false`).
+ * 1 or more: nothing is finished before that).
  */
-export function noPairingNotice(details: NoPairingDetails, opts: { roundsEditable?: boolean } = {}): NoPairingNotice {
+export function noPairingNotice(details: NoPairingDetails): NoPairingNotice {
   const finish = details.canFinish && details.finishAfter >= 1;
-  const rounds = opts.roundsEditable !== false;
-  const actions: NoPairingAction[] = [...(finish ? (["finish"] as const) : []), ...(rounds ? (["rounds"] as const) : [])];
-  const tail = finish ? (rounds ? TAIL_KEY.both : TAIL_KEY.finish) : rounds ? TAIL_KEY.rounds : null;
   return {
     key: LEAD_KEY[details.reason],
-    tail,
+    tail: finish ? TAIL_FINISH : null,
     params: { round: details.round, finishAfter: details.finishAfter },
-    actions,
   };
 }
 

@@ -24,9 +24,8 @@ export type SwissRefusalMsg = (key: MessageKey, vars?: Record<string, string | n
  * refusal names its boards ("round {round} board {board}"), after the round-in-progress sentence — or, with `inProgress:
  * false`, the reopened-round one (Fix round 1, review m3). `SWISS_NO_LEGAL_PAIRING` (`{ round, reason, field, finishAfter,
  * canFinish }`, W3 app-B T4) is the REASON's sentence — the round, why it cannot be paired, and the Finish recovery when the
- * server offers it — or the generic one when the details are unreadable. These doors have no rounds control, and a round
- * refused past the first follows a started one (the count is fixed from then on), so Change rounds is never promised here;
- * the stages panel's own notice (`noPairingNotice`) offers it where the control is known.
+ * server offers it — or the generic one when the details are unreadable. The stages panel's own notice
+ * (`noPairingNotice`) composes the same sentence and adds the Finish button.
  */
 export function swissRefusalText(
   code: SwissRefusalCode,
@@ -37,7 +36,7 @@ export function swissRefusalText(
   const sentence = msg(swissRefusalKey(code));
   if (code === "SWISS_NO_LEGAL_PAIRING") {
     const noPairing = noPairingDetailsOf(details);
-    return noPairing === null ? sentence : noPairingText(noPairingNotice(noPairing, { roundsEditable: false }), msg);
+    return noPairing === null ? sentence : noPairingText(noPairingNotice(noPairing), msg);
   }
   if (code === "SWISS_ROUNDS_LOCKED") {
     const finish = details?.canFinish;

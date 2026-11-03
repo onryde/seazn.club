@@ -36,7 +36,6 @@ import {
   noPairingText,
   type NoPairingNotice,
 } from "@/lib/swiss-no-pairing";
-import { SwissRoundsDialog } from "@/components/v2/desk/swiss-rounds-dialog";
 import {
   swissFinishConfirm,
   swissFinishedNotice,
@@ -645,12 +644,10 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // line — another refusal, another write — never keeps a stale button.
   const [finishOffer, setFinishOffer] = useState<{ stageId: string; plan: SwissFinishPlan; text: string } | null>(null);
   // W3 app-B T4 (SW-H1 on the desk; X-SW-3) — a Pair next refused SWISS_NO_LEGAL_PAIRING: the amber notice that names the
-  // round and the reason with its recovery inside it (Finish after round k, and Change rounds while the count can still
-  // change). Keys, not text, so the sentence follows the locale; `plan` is the Finish it confirms (null: not offered).
-  // Cleared by any later act() / Swiss write, exactly as the red line is.
+  // round and the reason with its recovery inside it (Finish after round k). Keys, not text, so the sentence follows the
+  // locale; `plan` is the Finish it confirms (null: not offered). Cleared by any later act() / Swiss write, exactly as the
+  // red line is.
   const [pairingRefusal, setPairingRefusal] = useState<{ stageId: string; notice: NoPairingNotice; plan: SwissFinishPlan | null } | null>(null);
-  // The stage whose rounds dialog "Change rounds" opened (the notice's own mount; the rail's chip has another).
-  const [roundsDialogFor, setRoundsDialogFor] = useState<string | null>(null);
   const [paywallFeature, setPaywallFeature] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // stage id in flight
   const [notice, setNotice] = useState<string | null>(null);
@@ -918,17 +915,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           setError(msg("schedule.error.unpairFailed"));
         } else if (noPairing !== null) {
           // W3 app-B T4 (SW-H1; X-SW-3): the amber notice that says WHY and carries the recovery — never the red line, and
-          // never the "nothing new" a round that seated nobody used to read as. The rounds control says whether the count
-          // can still change (the lock is the first start); a stage with none on the desk offers Finish only. The phone's
-          // Stage-tools sheet closes, as the generic branch below does, so the notice is what shows.
-          const control = swissRoundControls?.[stageId];
-          const stageRounds = control?.rounds ?? stages.find((s) => s.id === stageId)?.config?.rounds;
+          // never the "nothing new" a round that seated nobody used to read as. Finish is the only recovery (Change rounds
+          // was dropped: a refusal past round 1 follows a started round, and the count is fixed from then on). Finish
+          // needs a readable round count, so with none the plan is null and the sentence stops promising it too. The
+          // phone's Stage-tools sheet closes, as the generic branch below does, so the notice is what shows.
+          const stageRounds = swissRoundControls?.[stageId]?.rounds ?? stages.find((s) => s.id === stageId)?.config?.rounds;
           const plan = noPairingFinishPlan(noPairing, stageRounds);
-          setPairingRefusal({
-            stageId,
-            notice: noPairingNotice(plan ? noPairing : { ...noPairing, canFinish: false }, { roundsEditable: control !== undefined && !control.started }),
-            plan,
-          });
+          setPairingRefusal({ stageId, notice: noPairingNotice(plan ? noPairing : { ...noPairing, canFinish: false }), plan });
           setOpenRailFor(null);
         } else if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) {
           // W3 T11: a Swiss refusal (SWISS_ROUNDS_ABOVE_MAX on a Generate or Pair next) in the reader's language, with
@@ -1106,8 +1099,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       )}
       {/* W3 app-B T4 (SW-H1; X-SW-3): Pair next refused for want of a legal pairing. Amber like the caution above, and the
           recovery sits INSIDE it so the organiser reads the reason and acts in one place: Finish after round k (the house
-          confirm, then the stage's finish route) and, while the count can still change, Change rounds. Full-width buttons on a
-          phone, a row from `sm`. */}
+          confirm, then the stage's finish route). A full-width button on a phone, auto width from `sm`. */}
       {pairingRefusal && (
         <div
           role="status"
@@ -1115,45 +1107,20 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           className="flex flex-col gap-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800"
         >
           <p>{noPairingText(pairingRefusal.notice, msg)}</p>
-          {pairingRefusal.notice.actions.length > 0 && (
+          {pairingRefusal.plan !== null && (
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-              {pairingRefusal.notice.actions.includes("finish") && pairingRefusal.plan !== null && (
-                <button
-                  type="button"
-                  data-testid="schedule-pairing-finish"
-                  disabled={busy !== null}
-                  onClick={() => void finishSwissStage(pairingRefusal.stageId, pairingRefusal.plan!)}
-                  className="btn btn-primary min-h-11 px-3 py-1.5 text-sm"
-                >
-                  {msg(NO_PAIRING_ACTION_KEY.finish, { n: pairingRefusal.plan.after })}
-                </button>
-              )}
-              {pairingRefusal.notice.actions.includes("rounds") && (
-                <button
-                  type="button"
-                  data-testid="schedule-pairing-rounds"
-                  disabled={busy !== null}
-                  aria-haspopup="dialog"
-                  onClick={() => setRoundsDialogFor(pairingRefusal.stageId)}
-                  className="btn btn-ghost min-h-11 px-3 py-1.5 text-sm"
-                >
-                  {msg(NO_PAIRING_ACTION_KEY.rounds)}
-                </button>
-              )}
+              <button
+                type="button"
+                data-testid="schedule-pairing-finish"
+                disabled={busy !== null}
+                onClick={() => void finishSwissStage(pairingRefusal.stageId, pairingRefusal.plan!)}
+                className="btn btn-primary min-h-11 px-3 py-1.5 text-sm"
+              >
+                {msg(NO_PAIRING_ACTION_KEY.finish, { n: pairingRefusal.plan.after })}
+              </button>
             </div>
           )}
         </div>
-      )}
-      {roundsDialogFor !== null && swissRoundControls?.[roundsDialogFor] && (
-        <SwissRoundsDialog
-          stageId={roundsDialogFor}
-          control={swissRoundControls[roundsDialogFor]!}
-          fixtures={fixtures.filter((f) => f.stage_id === roundsDialogFor).map((f) => ({ ...f, ext_key: f.ext_key ?? null }))}
-          onSave={saveSwissRounds}
-          onAddRound={(id) => addSwissRoundTo(id, "dialog")}
-          onFinish={(id, plan) => void finishSwissStage(id, plan)}
-          onClose={() => setRoundsDialogFor(null)}
-        />
       )}
       {gameExists && <OnlineGameExistsNotice arbiterHref={arbiterHref} />}
       {error && (

@@ -1,8 +1,9 @@
 // W3 app-B Task 4 (SW-H1 on the desk; X-SW-3, rulebook-W3 §3.3): what the desk says when Pair next is refused
 // SWISS_NO_LEGAL_PAIRING — the reason-specific sentence and the recovery it offers. `noPairingNotice` is pure: the wire
 // details in (`{ round, reason, field, finishAfter, canFinish }`, the five fields `swissGen` sends), the dictionary keys,
-// their parameters and the offered actions out. The expected sentences are the rulebook's (§3.3): the wording each reason
-// names, and the recovery clause ("finish the Swiss after round {finishAfter}", "change the number of rounds").
+// their parameters and whether Finish is offered out. The expected sentences are the rulebook's (§3.3): the wording each reason
+// names, and the recovery clause ("finish the Swiss after round {finishAfter}"). There is no "change the number of rounds"
+// clause: a round past the first follows a started one, and the count is fixed from then on (controller ruling, T4 fix 1).
 //
 // The reasons are the ENGINE's own union (`SwissRefusalReason`) read through an exhaustive Record: a sixth reason added to
 // the engine reds `tsc` here until it is classified, and the count is asserted so the sweep cannot shrink to nothing.
@@ -22,10 +23,12 @@ const REASON_WORDS: Record<SwissRefusalReason, string> = {
   rematch: "would repeat a match already played",
   colour: "would break the colour limits",
   no_bye_candidate: "every player has already had the bye",
-  search_limit: "could not be paired in time",
+  search_limit: "no legal pairing was found within the search limit",
   field_too_small: "needs at least two players",
 };
 const REASONS = Object.keys(REASON_WORDS) as SwissRefusalReason[];
+/** The one recovery sentence: Finish after round k. */
+const TAIL_FINISH: MessageKey = "swiss.refusal.SWISS_NO_LEGAL_PAIRING.tail.finish";
 
 const EN = en as unknown as Record<string, string>;
 const fill = (s: string, vars?: Record<string, string | number>) => s.replace(/\{(\w+)\}/g, (_m, k: string) => String(vars?.[k]));
@@ -49,26 +52,25 @@ describe("X-SW-3 noPairingNotice: the refusal's sentence and its recovery", () =
   it("X-SW-3 every refusal reason has its sentence and its recovery; round 1 offers no finish", () => {
     expect(REASONS, "the engine declares five reasons").toHaveLength(5);
     let checked = 0;
-    // The empty case first: round 1 has nothing to finish (finishAfter 0), so rounds only and no sentence about Finish.
+    // The empty case first: round 1 has nothing to finish (finishAfter 0), so no action and no sentence about Finish.
     for (const reason of REASONS) {
       const notice = noPairingNotice(details({ round: 1, reason, field: 2, finishAfter: 0, canFinish: false }));
-      expect(notice.actions, `round 1, ${reason}: rounds only`).toEqual(["rounds"]);
+      expect(notice.tail, `round 1, ${reason}: no recovery sentence`).toBeNull();
       const text = noPairingText(notice, msgEn);
       expect(text, `round 1, ${reason}: names the round and the reason`).toContain("Round 1");
       expect(text, `round 1, ${reason}`).toContain(REASON_WORDS[reason]);
-      expect(text, `round 1, ${reason}: no finish clause`).not.toMatch(/finish/i);
-      expect(text, `round 1, ${reason}: still says the number of rounds can change`).toContain("change the number of rounds");
+      expect(text, `round 1, ${reason}: no finish clause`).not.toMatch(/finish the swiss/i);
       checked++;
     }
-    // Round 4 after three complete rounds: Finish after round 3 is the way out, beside Change rounds.
+    // Round 4 after three complete rounds: Finish after round 3 is the way out.
     for (const reason of REASONS) {
       const notice = noPairingNotice(details({ reason }));
-      expect(notice.actions, `round 4, ${reason}: finish, then rounds`).toEqual(["finish", "rounds"]);
+      expect(notice.tail, `round 4, ${reason}: finish is offered`).toBe(TAIL_FINISH);
       const text = noPairingText(notice, msgEn);
       expect(text, `round 4, ${reason}`).toContain("Round 4");
       expect(text, `round 4, ${reason}`).toContain(REASON_WORDS[reason]);
       expect(text, `round 4, ${reason}: Finish after round 3`).toContain("finish the Swiss after round 3");
-      expect(text, `round 4, ${reason}: and the number of rounds`).toContain("change the number of rounds");
+      expect(text, `round 4, ${reason}: Change rounds is not a recovery the desk has`).not.toMatch(/change the number of rounds/i);
       expect(notice.params, `round 4, ${reason}`).toMatchObject({ round: 4, finishAfter: 3 });
       checked++;
     }
@@ -86,53 +88,62 @@ describe("X-SW-3 noPairingNotice: the refusal's sentence and its recovery", () =
     for (const reason of REASONS) {
       // canFinish false with rounds behind it (the Swiss is over, or a finished round was reopened): no Finish offered.
       const over = noPairingNotice(details({ reason, finishAfter: 3, canFinish: false }));
-      expect(over.actions, `${reason}: canFinish false`).toEqual(["rounds"]);
-      expect(noPairingText(over, msgEn), `${reason}: canFinish false says no finish`).not.toMatch(/finish/i);
+      expect(over.tail, `${reason}: canFinish false`).toBeNull();
+      expect(noPairingText(over, msgEn), `${reason}: canFinish false says no finish`).not.toMatch(/finish the swiss/i);
+      expect(noPairingText(over, msgEn), `${reason}: still says why`).toContain(REASON_WORDS[reason]);
       // canFinish true with nothing finished is a contradiction the server never sends; the desk still offers no button.
       const none = noPairingNotice(details({ reason, finishAfter: 0, canFinish: true }));
-      expect(none.actions, `${reason}: finishAfter 0`).toEqual(["rounds"]);
+      expect(none.tail, `${reason}: finishAfter 0`).toBeNull();
       // The pair: the same reason with both true offers it.
-      expect(noPairingNotice(details({ reason, finishAfter: 3, canFinish: true })).actions, `${reason}: both true`).toContain("finish");
+      expect(noPairingNotice(details({ reason, finishAfter: 3, canFinish: true })).tail, `${reason}: both true`).toBe(TAIL_FINISH);
       checked++;
     }
     expect(checked).toBe(REASONS.length);
   });
 
-  it("X-SW-3 a round count that is locked offers no Change rounds, and the sentence stops promising it", () => {
+  it("X-SW-3 the Finish tail says what the confirm says: the table is recalculated as a k-round event, not final as it stands", () => {
+    // One authority for the consequence (review m6): the confirm the Finish button opens (`stage.finish.confirm.final`) says
+    // the table is RECALCULATED over the rounds kept, so the notice that offers the button must not promise the opposite.
+    const confirm = msgEn("stage.finish.confirm.final", { round: 3 });
+    const recalculated = "recalculated as a 3-round event";
+    expect(confirm, "premise: the confirm says it").toContain(recalculated);
     let checked = 0;
     for (const reason of REASONS) {
-      const locked = noPairingNotice(details({ reason }), { roundsEditable: false });
-      expect(locked.actions, `${reason}: started stage`).toEqual(["finish"]);
-      const text = noPairingText(locked, msgEn);
-      expect(text, `${reason}`).toContain("finish the Swiss after round 3");
-      expect(text, `${reason}: no promise of changing the rounds`).not.toContain("change the number of rounds");
-      // Locked and nothing to finish: no action at all, and the sentence is the reason alone.
-      const bare = noPairingNotice(details({ reason, finishAfter: 0, canFinish: false }), { roundsEditable: false });
-      expect(bare.actions, `${reason}: nothing offered`).toEqual([]);
-      expect(bare.tail, `${reason}: no recovery sentence`).toBeNull();
-      expect(noPairingText(bare, msgEn), `${reason}`).toContain(REASON_WORDS[reason]);
+      const text = noPairingText(noPairingNotice(details({ reason, finishAfter: 3 })), msgEn);
+      expect(text, `${reason}: the notice says the same thing`).toContain(recalculated);
+      expect(text, `${reason}: and not "final as they stand"`).not.toMatch(/final as/i);
       checked++;
     }
     expect(checked).toBe(REASONS.length);
+  });
+
+  it("X-SW-3 search_limit does not tell the organiser to try again: the search is deterministic, so the same press gives the same answer", () => {
+    for (const reason of ["search_limit"] as const) {
+      for (const canFinish of [false, true]) {
+        const text = noPairingText(noPairingNotice(details({ reason, canFinish })), msgEn);
+        expect(text, `canFinish ${canFinish}`).not.toMatch(/try again|retry/i);
+        expect(text, `canFinish ${canFinish}: says pairing again changes nothing`).toContain("Pairing again gives the same answer");
+      }
+    }
+    // The differential: no other reason's lead is a retry, either.
+    expect(REASONS.filter((r) => /try again|retry/i.test(EN[`swiss.refusal.SWISS_NO_LEGAL_PAIRING.${r}`] ?? "")), "no lead says retry").toEqual([]);
   });
 
   it("X-SW-3 the Finish label names the round it finishes after, and the keys exist in all four locales with the same placeholders", () => {
-    const keys = new Set<MessageKey>([NO_PAIRING_ACTION_KEY.finish, NO_PAIRING_ACTION_KEY.rounds]);
+    const keys = new Set<MessageKey>([NO_PAIRING_ACTION_KEY.finish]);
     for (const reason of REASONS) {
       for (const finishAfter of [0, 3]) {
         for (const canFinish of [false, true]) {
-          for (const roundsEditable of [false, true]) {
-            const n = noPairingNotice(details({ reason, finishAfter, canFinish }), { roundsEditable });
-            keys.add(n.key);
-            if (n.tail !== null) keys.add(n.tail);
-          }
+          const n = noPairingNotice(details({ reason, finishAfter, canFinish }));
+          keys.add(n.key);
+          if (n.tail !== null) keys.add(n.tail);
         }
       }
     }
     expect(msgEn(NO_PAIRING_ACTION_KEY.finish, { n: 3 }), "the button").toBe("Finish after round 3");
-    expect(msgEn(NO_PAIRING_ACTION_KEY.rounds), "the button").toBe("Change rounds");
-    // 5 lead sentences + 3 tails + 2 labels.
-    expect(keys.size, "keys the notice can use").toBe(10);
+    // 5 lead sentences + 1 tail + 1 label. (Change rounds was dropped: a round past the first follows a started one, and
+    // the count is fixed from then on, so it could never be offered.)
+    expect(keys.size, "keys the notice can use").toBe(7);
     const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
     let checked = 0;
     for (const key of keys) {
@@ -144,7 +155,13 @@ describe("X-SW-3 noPairingNotice: the refusal's sentence and its recovery", () =
         checked++;
       }
     }
-    expect(checked, "10 keys x 4 locales").toBe(40);
+    expect(checked, "7 keys x 4 locales").toBe(28);
+    // The dropped keys are gone from all four, not orphaned.
+    for (const [locale, dict] of Object.entries({ en, es, fr, nl }) as [string, Record<string, string>][]) {
+      for (const gone of ["swiss.recovery.changeRounds", "swiss.refusal.SWISS_NO_LEGAL_PAIRING.tail.both", "swiss.refusal.SWISS_NO_LEGAL_PAIRING.tail.rounds"]) {
+        expect(dict[gone], `${locale} no longer has ${gone}`).toBeUndefined();
+      }
+    }
   });
 });
 

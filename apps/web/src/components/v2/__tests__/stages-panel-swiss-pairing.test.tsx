@@ -585,13 +585,14 @@ describe("StagesPanel — Add late player and the pending-latecomer line (W3 T10
 });
 
 // W3 app-B T4 (SW-H1 on the desk; X-SW-3, X-SW-26): Pair next refused SWISS_NO_LEGAL_PAIRING says WHY in an amber notice
-// with the recovery inside it — Finish after round k (behind the house confirm) and, where the round count can still
-// change, Change rounds — and never the "nothing new" a round that seats nobody used to read as. Driven through the real
+// with the recovery inside it — Finish after round k (behind the house confirm), the only recovery — and never the "nothing
+// new" a round that seats nobody used to read as. ("Change rounds" was built and dropped: a refusal past round 1 follows a
+// started round, so the count is fixed.) Driven through the real
 // `act()` (the StageRail's own `onAct`, with only the network and the confirm mocked): a builder test cannot see that the
 // panel routes the refusal to the notice instead of the red line. English is the default locale outside a DictProvider; the
 // other three locales' sentences are pinned in lib/__tests__/swiss-no-pairing.test.ts. Sport-agnostic on purpose: the
-// notice reads only the wire details and the stage's own rounds control, no sport field (one body, no registry sweep).
-describe("X-SW-3 the desk shows the refusal sentence and both actions, never nothing new", () => {
+// notice reads only the wire details and the stage's round count, no sport field (one body, no registry sweep).
+describe("X-SW-3 the desk shows the refusal sentence and the Finish action, never nothing new", () => {
   const EN = enDict as unknown as Record<string, string>;
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
   const BOARDS = 4;
@@ -654,39 +655,36 @@ describe("X-SW-3 the desk shows the refusal sentence and both actions, never not
   const byTestId = (tree: ReactElement[], id: string) => tree.filter((el) => propsOf(el)["data-testid"] === id);
   const finishCalls = () => apiV1Mock.mock.calls.filter(([path]) => String(path).includes("/swiss/finish"));
 
-  it("X-SW-3 the notice names the round and the reason, offers Finish after round 3 and Change rounds, and is not the red line or nothing new", async () => {
-    const { island, press } = await mount(control({ started: false }), async () => {
-      throw refusal();
-    });
-    expect(await press(), "the press did not land").toBe(false);
-    await flush();
-    const tree = island.tree();
-    const [notice] = byTestId(tree, "schedule-pairing-refusal");
-    expect(notice, "the amber notice is on the desk").toBeTruthy();
-    expect(String(propsOf(notice!).className), "amber, not red").toContain("bg-amber-50");
-    const said = textOf(notice);
-    expect(said, "names the round").toContain("Round 4");
-    expect(said, "and the reason, which the server's English sentence does not").toContain("would repeat a match already played");
-    expect(said, "and the recovery in words").toContain("finish the Swiss after round 3");
-    expect(textOf(byTestId(tree, "schedule-pairing-finish")[0]), "the Finish action").toBe("Finish after round 3");
-    expect(textOf(byTestId(tree, "schedule-pairing-rounds")[0]), "the Change rounds action").toBe("Change rounds");
-    expect(byTestId(tree, "schedule-error"), "the red line stays empty").toHaveLength(0);
-    expect(textOf(tree), "never the success copy of a round that seats nobody").not.toContain(EN["schedule.notice.nothingNew"]);
-    // Inside the notice, not beside it: the notice's own text carries both labels (capitalised — the tail says "finish" in prose).
-    expect(said, "the Finish action sits inside the notice").toContain("Finish after round 3");
-    expect(said, "and Change rounds").toContain("Change rounds");
-  });
-
-  it("X-SW-3 after the stage has started the round count is fixed: the notice offers Finish only and does not promise Change rounds", async () => {
-    const { island, press } = await mount(control({ started: true }), async () => {
-      throw refusal();
-    });
-    await press();
-    await flush();
-    const tree = island.tree();
-    expect(textOf(byTestId(tree, "schedule-pairing-finish")[0])).toBe("Finish after round 3");
-    expect(byTestId(tree, "schedule-pairing-rounds"), "no dead action").toHaveLength(0);
-    expect(textOf(byTestId(tree, "schedule-pairing-refusal")[0])).not.toContain("change the number of rounds");
+  it("X-SW-3 the notice names the round and the reason, offers Finish after round 3 only, and is not the red line or nothing new", async () => {
+    // Both states of the stage's rounds control: whether a match has started changes nothing the notice offers.
+    let checked = 0;
+    for (const started of [false, true]) {
+      const { island, press } = await mount(control({ started }), async () => {
+        throw refusal();
+      });
+      expect(await press(), `started ${started}: the press did not land`).toBe(false);
+      await flush();
+      const tree = island.tree();
+      const [notice] = byTestId(tree, "schedule-pairing-refusal");
+      expect(notice, `started ${started}: the amber notice is on the desk`).toBeTruthy();
+      expect(String(propsOf(notice!).className), "amber, not red").toContain("bg-amber-50");
+      const said = textOf(notice);
+      expect(said, "names the round").toContain("Round 4");
+      expect(said, "and the reason, which the server's English sentence does not").toContain("would repeat a match already played");
+      expect(said, "and the recovery in words").toContain("finish the Swiss after round 3");
+      expect(said, "and what Finish does to the table, as the confirm says it (review m6)").toContain("recalculated as a 3-round event");
+      expect(said, "never that the standings are final as they stand").not.toMatch(/final as/i);
+      expect(textOf(byTestId(tree, "schedule-pairing-finish")[0]), "the Finish action").toBe("Finish after round 3");
+      expect(byTestId(tree, "schedule-pairing-rounds"), `started ${started}: no Change rounds action`).toHaveLength(0);
+      expect(said, "no promise of changing the rounds").not.toMatch(/change (the number of )?rounds/i);
+      expect(byTestId(tree, "schedule-error"), "the red line stays empty").toHaveLength(0);
+      expect(textOf(tree), "never the success copy of a round that seats nobody").not.toContain(EN["schedule.notice.nothingNew"]);
+      // Inside the notice, not beside it: the notice's own text carries the label.
+      expect(said, "the Finish action sits inside the notice").toContain("Finish after round 3");
+      expect(tree.filter((el) => el.type === SwissRoundsDialog), "and no rounds dialog is ever opened from it").toHaveLength(0);
+      checked++;
+    }
+    expect(checked, "both control states").toBe(2);
   });
 
   it("X-SW-26 Finish asks the confirm (the event ends after round 3, the table is recalculated), posts only when confirmed, and clears the notice", async () => {
@@ -739,7 +737,7 @@ describe("X-SW-3 the desk shows the refusal sentence and both actions, never not
     expect(byTestId(island.tree(), "schedule-pairing-refusal"), "a stale refusal does not outlive the next press").toHaveLength(0);
   });
 
-  it("X-SW-3 a refusal Finish cannot answer (round 1, or the Swiss is over) offers Change rounds only; unreadable details fall back to the red line", async () => {
+  it("X-SW-3 a refusal Finish cannot answer (round 1, or the Swiss is over) offers no action, only the reason; unreadable details fall back to the red line", async () => {
     const roundOne = { round: 1, reason: "search_limit", field: 8, finishAfter: 0, canFinish: false };
     const a = await mount(control({ started: false }), async () => {
       throw refusal(roundOne, 422);
@@ -747,8 +745,11 @@ describe("X-SW-3 the desk shows the refusal sentence and both actions, never not
     await a.press();
     await flush();
     expect(byTestId(a.island.tree(), "schedule-pairing-finish"), "nothing to finish").toHaveLength(0);
-    expect(textOf(byTestId(a.island.tree(), "schedule-pairing-rounds")[0])).toBe("Change rounds");
-    expect(textOf(byTestId(a.island.tree(), "schedule-pairing-refusal")[0])).toContain("could not be paired in time");
+    expect(byTestId(a.island.tree(), "schedule-pairing-rounds"), "and no Change rounds either").toHaveLength(0);
+    const said = textOf(byTestId(a.island.tree(), "schedule-pairing-refusal")[0]);
+    expect(said, "the reason is still said").toContain("no legal pairing was found within the search limit");
+    expect(said, "no recovery is promised").not.toMatch(/finish the swiss/i);
+    expect(said, "and the search is not told to be tried again").not.toMatch(/try again/i);
 
     // A body the desk cannot read (a stale server): the generic sentence in the red line — never a notice with a guessed round.
     const b = await mount(control(), async () => {
@@ -760,9 +761,9 @@ describe("X-SW-3 the desk shows the refusal sentence and both actions, never not
     expect(textOf(byTestId(b.island.tree(), "schedule-error")[0])).toBe(EN["swiss.refusal.SWISS_NO_LEGAL_PAIRING"]);
   });
 
-  it("X-SW-26 a desk with no rounds control for the stage offers Finish only, over the stored round count", async () => {
-    // The control is the desk's read of the stage; without it the notice cannot know the count is editable (Change rounds is
-    // not promised) but the stage's own stored `config.rounds` (5) still tells the confirm which rounds go.
+  it("X-SW-26 a desk with no rounds control for the stage still offers Finish, over the stored round count", async () => {
+    // The control is the desk's read of the stage; without it the stage's own stored `config.rounds` (5) still tells the
+    // confirm which rounds go.
     const { island, press } = await mount(undefined, async () => {
       throw refusal();
     });
@@ -770,24 +771,8 @@ describe("X-SW-3 the desk shows the refusal sentence and both actions, never not
     await flush();
     const tree = island.tree();
     expect(textOf(byTestId(tree, "schedule-pairing-finish")[0]), "Finish is offered").toBe("Finish after round 3");
-    expect(byTestId(tree, "schedule-pairing-rounds"), "Change rounds is not").toHaveLength(0);
     (propsOf(byTestId(tree, "schedule-pairing-finish")[0]!).onClick as () => void)();
     await flush();
     expect(confirmMock.mock.calls[0]![0].body, "the confirm names the rounds that go, off config.rounds").toContain("Rounds 4–5 are removed.");
-  });
-
-  it("X-SW-3 Change rounds opens the rounds dialog for that stage", async () => {
-    const { island, press } = await mount(control({ started: false }), async () => {
-      throw refusal();
-    });
-    await press();
-    await flush();
-    expect(island.tree().filter((el) => el.type === SwissRoundsDialog), "closed until asked").toHaveLength(0);
-    (propsOf(byTestId(island.tree(), "schedule-pairing-rounds")[0]!).onClick as () => void)();
-    await flush();
-    const dialogs = island.tree().filter((el) => el.type === SwissRoundsDialog);
-    expect(dialogs, "the dialog is open").toHaveLength(1);
-    expect(propsOf(dialogs[0]!).stageId).toBe("s1");
-    expect(propsOf(dialogs[0]!).control, "over the stage's own rounds control").toMatchObject({ started: false, rounds: 5 });
   });
 });
