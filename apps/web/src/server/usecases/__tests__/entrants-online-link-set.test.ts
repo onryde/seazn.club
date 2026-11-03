@@ -101,14 +101,20 @@ describe.skipIf(!HAS_DB)("createEntrants on an online division - who the link re
     expect([...spy.calls[0]!.personIds!].sort()).toEqual([a.personId, b.personId].sort());
   });
 
-  it("explicit members: the same person named twice is asked about once", async () => {
+  it("explicit members: the same person named twice is asked about once (and the batch is refused: one entrant per division)", async () => {
     const auth = await seedOwner();
     const divisionId = await seedDivisionOf(auth, true);
     const a = await player(auth, true);
 
-    await createEntrants(auth, divisionId, [entryOf(a, "A1"), entryOf(a, "A2")]);
+    // UI5 item 3: the second entry names a person the first already holds, so the batch is refused whole - but only once
+    // the roster is written, after the scoped link read this test is about.
+    await expect(createEntrants(auth, divisionId, [entryOf(a, "A1"), entryOf(a, "A2")])).rejects.toMatchObject({
+      status: 409,
+      code: "PERSON_ON_OTHER_TEAM",
+    });
 
     expect(spy.calls[0]!.personIds).toEqual([a.personId]);
+    expect(await entrantCount(divisionId)).toBe(0);
   });
 
   it("explicit members: an unlinked player among them is refused, whatever else is named, and nobody enters", async () => {

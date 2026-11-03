@@ -206,6 +206,38 @@ interface InsertMembersOptions {
   context: string;
 }
 
+/** The refusal code a roster write carries when it names a person another entrant of the division already holds. The
+ *  console maps it to translated copy (`entrants-panel.tsx`, `entrants.err.personOnOtherTeam`). */
+export const PERSON_ON_OTHER_TEAM = "PERSON_ON_OTHER_TEAM";
+
+export interface HeldMembershipRow {
+  person_id: string;
+  person_name: string;
+  entrant_id: string;
+  entrant_name: string;
+}
+
+/** Who holds whom in a division: every membership of an entrant still in the field. The ONE predicate behind both the
+ *  roster refusal (`insertMembers`) and the console's "On <team>" map (`divisionRoster`), so the picker never offers a
+ *  person the write would refuse, nor hides one it would take.
+ *
+ *  A departed entrant (withdrawn, disqualified) holds no one. An americano division's `pair` entrants hold no one either:
+ *  its stage mints a pair per rotation from the individuals (`pairEntrantsFor` in stages.ts), so every player there is on
+ *  many pairs by design, and those are not teams anyone entered. */
+function heldMemberships(tx: Tx, divisionId: string, personIds?: string[]) {
+  return tx<HeldMembershipRow[]>`
+    select em.person_id, p.full_name as person_name, e.id as entrant_id, e.display_name as entrant_name
+    from entrants e
+    join entrant_members em on em.entrant_id = e.id
+    join persons p on p.id = em.person_id
+    where e.division_id = ${divisionId}
+      and e.status in ('registered','confirmed')
+      and not (e.kind = 'pair' and exists (
+        select 1 from stages s where s.division_id = e.division_id and s.kind = 'americano'))
+      ${personIds ? tx`and em.person_id in ${tx(personIds)}` : tx``}
+    order by e.created_at, e.id, p.full_name`;
+}
+
 async function insertMembers(
   tx: Tx,
   entrantId: string,
@@ -226,6 +258,21 @@ async function insertMembers(
     const seen = new Set(visible.map((r) => r.id));
     const missing = ids.filter((id) => !seen.has(id));
     throw new HttpError(422, `unknown person(s): ${missing.join(", ")}`);
+  }
+  // UI5 item 3 (owner, 2026-11-03): one person, one entrant per division. A person already held by ANOTHER entrant of
+  // this division is refused by name, with the entrant that holds them. Every caller writes this entrant's roster whole
+  // (a new entrant has none; PATCH and squad sync delete it first), so re-saving a team never meets its own rows - and a
+  // caller that forgot to would be refused for its own people, loudly, never pass silently.
+  const held = await heldMemberships(tx, opts.divisionId, ids);
+  if (held.length > 0) {
+    const rank = new Map(ids.map((id, i) => [id, i]));
+    const conflicts = [...held].sort((a, b) => rank.get(a.person_id)! - rank.get(b.person_id)!);
+    throw new HttpError(
+      409,
+      conflicts.map((c) => `${c.person_name} is already on ${c.entrant_name} in this division`).join("; "),
+      PERSON_ON_OTHER_TEAM,
+      { conflicts },
+    );
   }
   const warnings = await gateRosterEligibility(tx, {
     divisionId: opts.divisionId,
@@ -522,19 +569,16 @@ export interface DivisionRosterRow {
   entrant_name: string;
 }
 
-/** Every (person → team entrant) membership in a division. Powers the
- *  same-division double-roster warning: a person on two teams here is flagged
- *  (advisory, not blocked). */
+/** Every (person → entrant) membership in a division, read by the console's pickers: a person held here is left out of
+ *  the new-entrant suggestions, shown disabled as "On <team>" in a search, and blocks a roster's Save (UI5 item 3). Same
+ *  predicate as the write's refusal (`heldMemberships`). */
 export async function divisionRoster(
   auth: AuthCtx,
   divisionId: string,
 ): Promise<DivisionRosterRow[]> {
-  return withTenant(auth.orgId, (tx) => tx<DivisionRosterRow[]>`
-    select em.person_id, e.id as entrant_id, e.display_name as entrant_name
-    from entrants e
-    join entrant_members em on em.entrant_id = e.id
-    where e.division_id = ${divisionId}
-      and e.status in ('registered','confirmed')`);
+  return withTenant(auth.orgId, async (tx) =>
+    (await heldMemberships(tx, divisionId)).map(({ person_id, entrant_id, entrant_name }) => ({ person_id, entrant_id, entrant_name })),
+  );
 }
 
 export async function getEntrant(auth: AuthCtx, id: string): Promise<EntrantWithMembers> {
