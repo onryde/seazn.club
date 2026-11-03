@@ -128,7 +128,12 @@
 //    nothing else in a pack records which pool a fixture sat in.
 //  * ROUND NUMBER. `StageCtx.roundNo` is a fixture fact and is likewise
 //    undeclared, so `standingsDelta` is called without one. No shipped module
-//    reads it, but a future one could.
+//    reads it, but a future one could. ONE exception, W3 (engine 2.0.0): a
+//    SWISS table's ledger reads each counted fixture's round (the engine
+//    throws without one), and the only carrier a pack has is the ext key, as
+//    for a pool — the product keys a Swiss board `sw-r{round}-b{board}`
+//    (`usecases/stages.ts`, `mintSwissBoardExtKeys`). A Swiss stream whose
+//    key does not follow that convention is reported, not guessed at.
 //
 // ---------------------------------------------------------------------------
 // PARITY WITH THE PRODUCT'S BATCH IMPORT (session prompt item 2)
@@ -196,6 +201,7 @@ import {
   PointsRule,
   resolveTableRules,
   setsToWinOf,
+  swissDrawFactsOf,
   type FixtureResult,
   type StandingsRow,
   type TableFixture,
@@ -2295,8 +2301,19 @@ function deriveStandings(
       setsToWinOf(fold.module, fold.cfg),
     );
     gamePoints.set(result, [pair[0].points, pair[1].points]);
+    // W3 (engine 2.0.0): a Swiss ledger reads each counted fixture's round; a pack declares none, so it is read off the ext
+    // key the product mints (`sw-r{round}-b{board}`), and a key that does not follow it is a finding, never round 0.
+    let swissRound: number | undefined;
+    if (tableKind === "swiss") {
+      const m = /^sw-r(\d+)-/.exec(stream.fixtureExtKey);
+      if (m === null) {
+        return `stream "${stream.fixtureExtKey}" is in a swiss stage but its ext key names no round: the engine's Swiss ledger reads each counted fixture's round, so the key must follow the product's sw-r{round}-b{board}`;
+      }
+      swissRound = Number(m[1]);
+    }
     fixtures.push({
       id: fixtureKey(stream.divisionRef, stream.fixtureExtKey),
+      ...(swissRound !== undefined ? { roundNo: swissRound } : {}),
       ...(poolPrefix !== undefined &&
       stream.fixtureExtKey.startsWith(poolPrefix)
         ? { poolId: poolKey }
@@ -2359,7 +2376,7 @@ function deriveStandings(
   const stageConfig = stage.config as Record<string, unknown>;
   const carry = stageConfig["carry_deltas"];
   const overrides = stageConfig["rank_overrides"];
-  const tableStage: TableStage = {
+  const tableFields = {
     id: stage.ref,
     // americano rides the league fold (competition.ts:333, "Jul3/08 §3").
     kind: (stage.kind === "americano"
@@ -2383,7 +2400,6 @@ function deriveStandings(
     ...(stageConfig["rounds"] != null
       ? { rounds: stageConfig["rounds"] as number }
       : {}),
-    ...(stage.kind === "swiss" ? { swiss: true } : {}),
     ...(Array.isArray(carry)
       ? { openingDeltas: carry as readonly StandingsDelta[] }
       : {}),
@@ -2401,6 +2417,13 @@ function deriveStandings(
       ? { h2hScope: "overall" as const }
       : {}),
   };
+  // W3 (ruling R4; engine 2.0.0), as the product's `toTableStage`: a Swiss ledger stage names the sport's draw facts under
+  // the stage's merged cfg — the one cfg the rules above resolved under — and the engine refuses one that names none. The
+  // engine's `TableStage` is a union on `swiss`, so the two shapes are two branches, not a conditional spread.
+  const tableStage: TableStage =
+    stage.kind === "swiss"
+      ? { ...tableFields, swiss: true, swissDraw: swissDrawFactsOf(sport.module, sport.cfg) }
+      : tableFields;
 
   const completed = completeTableStage(tableStage, fixtures);
   // `PoolTable.pool` is the engine's own field name (`competition/stage.ts:232`

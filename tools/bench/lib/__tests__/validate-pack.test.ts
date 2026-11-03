@@ -2008,11 +2008,13 @@ describe("validatePack — the stage-config mirror is DRIVEN, key by key", () =>
       stage: { rounds: 2 },
       tiebreakers: ["points", "buchholz"],
       entrants: ["e1", "e2", "e3", "e4"],
+      // W3 (engine 2.0.0): a Swiss ledger reads each counted fixture's round, which a pack carries only in the ext key the
+      // product mints (`sw-r{round}-b{board}`): rounds 1 and 2 here.
       fixtures: [
-        ["f1", "e1", "e3", 2, 0],
-        ["f2", "e2", "e4", 2, 0],
-        ["f3", "e3", "e2", 2, 0],
-        ["f4", "e1", "e4", 2, 0],
+        ["sw-r1-b1", "e1", "e3", 2, 0],
+        ["sw-r1-b2", "e2", "e4", 2, 0],
+        ["sw-r2-b1", "e3", "e2", 2, 0],
+        ["sw-r2-b2", "e1", "e4", 2, 0],
       ],
       rows: [
         row("e1", 1, 2, 2, 0, 0, 6),
@@ -2022,6 +2024,22 @@ describe("validatePack — the stage-config mirror is DRIVEN, key by key", () =>
       ],
     });
     expectClean(validatePack(pack, UNIT), []);
+  });
+
+  it("reds a swiss stream whose ext key names no round, rather than reading it as round 0", () => {
+    // The pair of the test above: the SAME stage with ids that follow no `sw-r{round}-…` convention. The engine's Swiss ledger
+    // would throw on a fixture with no round, and a guess would silently fold a wrong Buchholz — so the finding names the key.
+    const pack = leaguePack({
+      stageKind: "swiss",
+      stage: { rounds: 2 },
+      tiebreakers: ["points", "buchholz"],
+      entrants: ["e1", "e2"],
+      fixtures: [["f1", "e1", "e2", 2, 0]],
+      rows: [row("e1", 1, 1, 1, 0, 0, 3), row("e2", 2, 1, 0, 0, 1, 0)],
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.message).toContain('stream "f1"');
+    expect(finding.message).toContain("names no round");
   });
 
   it("carries the stage's rngSeed into a drawing of lots", () => {

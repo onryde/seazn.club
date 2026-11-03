@@ -27,6 +27,7 @@ import {
   isBracketStageComplete,
   isTableStageComplete,
   placementTable,
+  swissDrawFactsOf,
   type BracketFixture,
   type BracketStage,
   type CompletedTableStage,
@@ -42,7 +43,7 @@ import {
 } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { resolveModule } from "./registry";
-import { resolveFixtureCfg } from "./fixture-cfg";
+import { liveCfg, resolveFixtureCfg } from "./fixture-cfg";
 import { forfeitPlayedFacts, playedFor } from "./forfeit-played";
 import { loadLotsDraws, persistLotsDraws, pinStageTableRules, tableRulesOf, type LoadedTableRules } from "./table-rules";
 
@@ -590,7 +591,7 @@ function toTableStage(
   lotsDraws: ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>,
 ): TableStage {
   const gamePoints = inputs.gamePoints;
-  return {
+  const fields = {
     id: inputs.stage.id,
     // americano rides the league fold (Jul3/08 §3)
     kind: (inputs.stage.kind === "americano" ? "league" : inputs.stage.kind) as TableStage["kind"],
@@ -602,7 +603,6 @@ function toTableStage(
     ...(inputs.seeds.size > 0 ? { seeds: inputs.seeds } : {}),
     ...(inputs.stage.config?.rngSeed != null ? { rngSeed: inputs.stage.config.rngSeed } : {}),
     ...(inputs.stage.config?.rounds != null ? { rounds: inputs.stage.config.rounds } : {}),
-    ...(inputs.stage.kind === "swiss" ? { swiss: true } : {}),
     // Jul3/05: carry-over openings, manual rank locks, circular-H2H mode
     ...(Array.isArray(inputs.stage.config?.carry_deltas)
       ? { openingDeltas: inputs.stage.config.carry_deltas as never }
@@ -618,6 +618,21 @@ function toTableStage(
     // W2d T12 (ST-G12, IH-TB-2): the schedule the head-to-head steps need complete, and the sport's order when it is not.
     scheduledPairs: scheduledPairsOf(inputs.fixtures, inputs.tableFixtures),
     ...(inputs.module.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: inputs.module.partialScheduleOrder }),
+  };
+  if (inputs.stage.kind !== "swiss") return fields;
+  // W3 (ruling R4; X-SW-7; engine 2.0.0): a Swiss ledger stage names the sport's draw facts under the stage's merged cfg
+  // (`swissDrawFactsOf`: whether a draw can stand in the stage, and the sets a match is won on). They turn the stage's
+  // points rule into D, the draw points of FIDE C.07 art. 16's dummy cap and of an unplayed round, and the engine
+  // refuses a Swiss stage that names none (CONFIG_INVALID) on its first ranking. The same live cfg the table rules
+  // resolve under (`tableRulesOf`), so the facts and the rule they scale read one cfg. Two returns, not a spread: the
+  // engine's `TableStage` is a union on `swiss`, and a conditional spread widens it to `true | undefined`.
+  return {
+    ...fields,
+    swiss: true,
+    swissDraw: swissDrawFactsOf(
+      inputs.module,
+      liveCfg(inputs.division.config, { kind: inputs.stage.kind, config: inputs.stage.config as Record<string, unknown> | null }, inputs.module),
+    ),
   };
 }
 
