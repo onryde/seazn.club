@@ -63,9 +63,10 @@ export async function watchPage(page: Page): Promise<PageWitness> {
   return { navigations, writes, stop: () => page.off("request", onRequest) };
 }
 
-/** The page is the one the organiser was typing into: the same URL (no `?label=` / `?url=`), the same document, and
- *  no navigation since {@link watchPage}. */
+/** The page is the one the organiser was typing into: the same URL (no `?label=` / `?url=`), the same document, no
+ *  navigation since {@link watchPage} — and the host form did not act on the prompt's submit (no write). */
 export async function expectPageKept(page: Page, witness: PageWitness, startUrl: string, why: string) {
+  expect(witness.writes, `${why}: the host form did not submit (no write to the competitions API)`).toEqual([]);
   expect(page.url(), `${why}: the URL is unchanged`).toBe(startUrl);
   const search = new URL(page.url()).searchParams;
   expect([search.has("label"), search.has("url")], `${why}: no prompt field in the query`).toEqual([false, false]);
