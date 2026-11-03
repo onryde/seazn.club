@@ -1024,14 +1024,9 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", 
 
   // Fix round 1 flipped this test (it pinned "Pair keeps a stored off"): the owner ruled colours always ON for a chess
   // Swiss, so a stage stored off that has not paired round 1 pairs in colour, whatever is stored (controller ruling I1).
-  it("UI5 fix round 1 (I1): a chess Swiss stored off before the change pairs round 1 in colour — read-side, nothing written; ON goes through", async () => {
+  it("UI5 fix round 1 (I1, Q2): a chess Swiss stored off before the change pairs round 1 in colour — read-side, nothing written; ON goes through; a re-Apply stores it on", async () => {
     const rig = await swissRig(BOARDGAME, 4, 3);
     await legacyOff(rig.stageId);
-    // The Format tab's Apply re-sends the template body, which names no `chess`: the legacy off rides StageCarry (T8 m6).
-    const body = [{ seq: 1, kind: "swiss" as const, name: "Swiss", config: { rounds: 3 }, progression: null }];
-    const [again] = await replaceStages(rig.auth, rig.divisionId, body);
-    expect(again!.config.chess, "the stored off survives the re-Apply").toBe(false);
-    rig.stageId = again!.id;
     await pair(rig);
     expect(await chessHandedToTheEngine(() => pair(rig)), "Pair round 1: the engine balances colours").toEqual([true]);
     expect(await roundOnePairRow(rig.divisionId), "round 1 coloured by lot").toHaveProperty("colour_lot");
@@ -1044,10 +1039,23 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", 
     expect((await storedConfig(on.stageId)).chess).toBe(true);
     // ...and once on, off is refused again.
     await expect(patchSwissStage(on.auth, on.stageId, { chess: false })).rejects.toMatchObject(refusal("SWISS_CHESS_ALWAYS_ON"));
+    // UI5 fix round 1 (ruling Q2): the Format tab's Apply re-sends the template body, which names no `chess`. A legacy
+    // off is NOT carried onto a chess Swiss (StageCarry, T8 m6, carried it before): the create door refuses an off, and
+    // the replaced slot is stored with the default.
+    const body = [{ seq: 1, kind: "swiss" as const, name: "Swiss", config: { rounds: 3 }, progression: null }];
+    const legacy = await swissRig(BOARDGAME, 4, 3);
+    await legacyOff(legacy.stageId);
+    const [again] = await replaceStages(legacy.auth, legacy.divisionId, body);
+    expect(again!.config.chess, "the legacy off is not carried: stored on").toBe(true);
     // The positive pair for the carry: never stored off, a re-Apply keeps the default on.
     const fresh = await swissRig(BOARDGAME, 4, 3);
     const [kept] = await replaceStages(fresh.auth, fresh.divisionId, body);
     expect(kept!.config.chess).toBe(true);
+    // Another sport keeps its own off through the carry: the drop is chess's alone.
+    const racket = await swissRig(BADMINTON, 4, 3);
+    await legacyOff(racket.stageId);
+    const [carried] = await replaceStages(racket.auth, racket.divisionId, body);
+    expect(carried!.config.chess, "badminton: the stored off rides the carry").toBe(false);
   });
 
   it("UI5 fix round 1 (I1): once round 1 is paired the stage keeps what it paired with — plain stays off, coloured stays on (round 2)", async () => {

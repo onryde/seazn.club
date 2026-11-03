@@ -285,14 +285,29 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are on by default for a NEW boardg
     expect(Object.hasOwn(await stageConfig(r.stageId), "chess"), "Pair never writes the default").toBe(false);
   });
 
-  it("BG-SW-1 an explicit chess: false on a new boardgame stage is stored, and round 1 still pairs in colour (UI5 fix round 1, I1)", async () => {
-    const r = await rig({ sport: "boardgame", n: 8, seeded: true, door: "createStages", config: { rounds: 3, chess: false } });
-    expect((await stageConfig(r.stageId)).chess).toBe(false);
-    await startDivision(r.auth, r.divisionId);
-    await generateStageFixtures(r.auth, r.stageId);
-    expect(await boards(r.stageId, 1)).toHaveLength(4);
-    const [audit] = await pairAudits(r.divisionId, r.stageId, 1);
-    expect(audit?.colour_lot, "colours on whatever is stored: the lot is drawn").toBe(swissColourLot(swissDrawSeed(r.stageId)));
+  // UI5 fix round 1 (controller ruling Q2): this test pinned "an explicit `chess: false` is kept"; a chess Swiss always
+  // balances colours, so both create doors now refuse it by the PATCH's own code.
+  it("BG-SW-1 an explicit chess: false on a new boardgame Swiss is 422 SWISS_CHESS_ALWAYS_ON at both doors, nothing written", async () => {
+    const r = await rig({ sport: "boardgame", n: 8, seeded: true, door: "createStages" });
+    const stagesOf = async () => (await sql<{ id: string }[]>`select id from stages where division_id = ${r.divisionId} order by seq`).map((x) => x.id);
+    const before = await stagesOf();
+    expect(before, "premise: the rig's one stage").toEqual([r.stageId]);
+    const off = { rounds: 3, chess: false };
+    let refused = 0;
+    await expect(createStages(r.auth, r.divisionId, { seq: 2, kind: "swiss", name: "Swiss 2", config: off, progression: null }), "createStages")
+      .rejects.toMatchObject({ status: 422, code: "SWISS_CHESS_ALWAYS_ON" });
+    refused++;
+    expect(await stagesOf(), "createStages wrote nothing").toEqual(before);
+    await expect(replaceStages(r.auth, r.divisionId, [{ seq: 1, kind: "swiss", name: "Swiss", config: off, progression: null }]), "replaceStages")
+      .rejects.toMatchObject({ status: 422, code: "SWISS_CHESS_ALWAYS_ON" });
+    refused++;
+    expect(await stagesOf(), "replaceStages rolled its delete back: the division keeps its stage").toEqual(before);
+    expect(refused, "anti-vacuity: both doors refused").toBe(2);
+    // The cleared pair: `chess: true` goes through the same door, and another sport's `chess: false` is stored as sent.
+    const [on] = await replaceStages(r.auth, r.divisionId, [{ seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 3, chess: true }, progression: null }]);
+    expect(on!.config.chess).toBe(true);
+    const other = await rig({ sport: "badminton", n: 4, seeded: true, door: "createStages", config: off });
+    expect((await stageConfig(other.stageId)).chess, "badminton: the refusal is chess's alone").toBe(false);
   });
 
   it("BG-SW-1 the lot refuses a round 1 the engine did not seat upper-at-home (its premise, guarded), writing nothing", async () => {
@@ -704,6 +719,38 @@ describe.runIf(HAS_DB)("m7 the draw is the stage's pairing numbers: round 2 brea
 });
 
 describe("BG-SW-1 the create-time default is the boardgame Swiss's alone", () => {
+  it("UI5 fix round 1 (Q2) every sport x variant x kind: an explicit chess: false is refused exactly on a boardgame Swiss (counted)", () => {
+    let checked = 0;
+    let refusedCells = 0;
+    for (const m of builtinModules as readonly AnySportModule[]) {
+      for (const variant of Object.keys(m.variants)) {
+        const division = m.configSchema.parse(m.variants[variant]);
+        for (const kind of StageKind.options) {
+          if (sportRefusesStageKind(m.key, kind)) continue;
+          const sent = { ...(kind === "swiss" ? { rounds: 3 } : {}), chess: false };
+          // The rule (owner, UI5 item 4; ruling Q2), stated apart from the code: a Swiss stage on the chess sport.
+          if (kind === "swiss" && m.key === "boardgame") {
+            let caught: unknown;
+            try {
+              validatedStageConfig(m, m.key, kind, variant, division, sent);
+            } catch (err) {
+              caught = err;
+            }
+            expect(caught, `${m.key}/${variant}/${kind}`).toMatchObject({ status: 422, code: "SWISS_CHESS_ALWAYS_ON" });
+            refusedCells++;
+          } else {
+            expect(validatedStageConfig(m, m.key, kind, variant, division, sent).chess, `${m.key}/${variant}/${kind}: stored as sent`).toBe(false);
+          }
+          checked++;
+        }
+      }
+    }
+    const chessVariants = Object.keys((builtinModules as readonly AnySportModule[]).find((m) => m.key === "boardgame")!.variants).length;
+    console.info(`Q2: ${checked} (sport, variant, kind) configs, ${refusedCells} refused`);
+    expect(checked, "anti-vacuity").toBeGreaterThan(StageKind.options.length);
+    expect(refusedCells, "one chess Swiss per boardgame variant").toBe(chessVariants);
+  });
+
   it("BG-SW-1 every sport x variant x kind: chess: true is stored exactly on a boardgame Swiss (counted)", () => {
     let checked = 0;
     let chessCells = 0;

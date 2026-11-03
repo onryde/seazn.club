@@ -22,6 +22,7 @@ import { storedStageRules } from "@/lib/stage-decider-off";
 import { defaultSwissChess } from "@/lib/swiss-draw";
 import { randomInt } from "node:crypto";
 import { refuseStagePoints, refuseUnsettableKeys, stageRulesProblem, stageSaveRefusal } from "./stage-rules-merge";
+import { swissRefusal } from "./swiss-refusal";
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
@@ -48,14 +49,19 @@ const withRngSeed = (config: Record<string, unknown>): Record<string, unknown> =
   config.rngSeed === undefined || config.rngSeed === null ? { ...config, rngSeed: randomInt(0, 2 ** 31) } : config;
 
 /** W3 Task 8 (BG-SW-1, REC RB3-10; SW-H3) — a NEW Swiss stage on a chess division is stored with `chess: true` when the
- *  create sends no `chess` (one sent, `false` included, is kept). Here, beside `withRngSeed`, because this is the one door
+ *  create sends no `chess`. UI5 fix round 1 (controller ruling Q2; owner: a chess Swiss always balances colours): one
+ *  that sends `chess: false` is refused, 422 SWISS_CHESS_ALWAYS_ON — the PATCH's own refusal — and nothing is written
+ *  (`replaceStages` rolls its delete back). Any other sport stores what it sends. Here, beside `withRngSeed`, because this is the one door
  *  every create path shares (`createStages` and `replaceStages` through `stageConfigsAtCreate`, and a template's stages
  *  through `instantiateTemplate` — the boardgame `swiss11` template among them), so there is one default, never a second.
  *  Pair does not read this default back: `swissPairsInColour` (stages.ts; UI5 fix round 1, ruling I1) pairs a chess
  *  Swiss in colour until its round 1 is paired, whatever is stored, so a stage stored before this default is coloured
  *  too (read-side, never rewritten). */
-const withSwissChessDefault = (sportKey: string, kind: StageKind, config: Record<string, unknown>): Record<string, unknown> =>
-  kind === "swiss" && config.chess === undefined && defaultSwissChess(sportKey) ? { ...config, chess: true } : config;
+const withSwissChessDefault = (sportKey: string, kind: StageKind, config: Record<string, unknown>): Record<string, unknown> => {
+  if (kind !== "swiss" || !defaultSwissChess(sportKey)) return config;
+  if (config.chess === false) throw swissRefusal("SWISS_CHESS_ALWAYS_ON");
+  return config.chess === undefined ? { ...config, chess: true } : config;
+};
 
 /** W2c Task 13b (R-13b-1; D3) — every whole decider any sport declares, refused at a stage config's TOP level. The
  *  engine-derived set lives in `lib/top-level-stage-deciders.ts`, shared with the API schema's named refusals, so the
@@ -101,7 +107,8 @@ export function withStageDefaults(
  * W2c Task 13 (ST-G8): `config.points` is asked the stage PUT's points questions too (`refuseStagePoints`): RULE_NOT_SETTABLE
  * on a bracket kind or for a walkover score the sport's table never reads, CONFIG_INVALID for metrics the sport does not
  * emit. Stored as sent, as before. W2d Task 10: a config with no `rngSeed` is given one (`withRngSeed`). W3 Task 8: a
- * Swiss stage on a chess division with no `chess` is given `chess: true` (`withSwissChessDefault`).
+ * Swiss stage on a chess division with no `chess` is given `chess: true`, and one sent `chess: false` is 422
+ * SWISS_CHESS_ALWAYS_ON (`withSwissChessDefault`; UI5 fix round 1, ruling Q2).
  */
 export function validatedStageConfig(
   module: AnySportModule,

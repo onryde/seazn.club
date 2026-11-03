@@ -479,6 +479,10 @@ function stageConfigsAtCreate(
     for (const key of ["points", "tiebreakers", "crossGroupTiebreakers", "chess"] as const) {
       if (carry?.[key] !== undefined && sent[key] === undefined) config[key] = carry[key];
     }
+    // UI5 fix round 1 (ruling Q2): the old desk switch's off is not carried onto a chess Swiss. The door below refuses
+    // an off (SWISS_CHESS_ALWAYS_ON), and a replaced slot is unpaired, so it would pair in colour anyway (ruling I1):
+    // the slot takes the default instead. A body's own off is still sent, and still refused.
+    if (sent.chess === undefined && config.chess === false && isChessSport(division.sport_key)) delete config.chess;
     return validatedStageConfig(
       sportModule,
       division.sport_key,
