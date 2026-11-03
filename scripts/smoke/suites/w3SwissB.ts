@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
 import { BASE, appendScoreEvent, call, check, newSession, signIn, smokeDb, tag, v1, v1data } from "../harness.ts";
@@ -138,7 +139,9 @@ export async function w3SwissBSuite(): Promise<void> {
 
   // Check 2 — T2 (X-SW-6). The delta is found by glob, never by number (it is renumbered at merge).
   {
-    const deltas = fileURLToPath(new URL("../../../db/migration/deltas/", import.meta.url));
+    // The repo root is read through a file that always exists: smoke-paths.test.ts resolves a literal `new URL(…, import.meta.url)`
+    // to a FILE (only a template's static head may name a directory), so the deltas directory is joined onto it, not named.
+    const deltas = `${dirname(fileURLToPath(new URL("../../../package.json", import.meta.url)))}/db/migration/deltas/`;
     const found = readdirSync(deltas).filter((f) => /^V\d+__w3_bye_score_cleanup\.sql$/.test(f));
     const block =
       found.length === 1 ? /do \$\$[\s\S]*?end \$\$;/.exec(readFileSync(`${deltas}${found[0]}`, "utf8").replace(/--.*$/gm, ""))?.[0] : undefined;
