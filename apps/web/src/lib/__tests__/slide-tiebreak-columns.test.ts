@@ -41,30 +41,45 @@ const swissDoc = (m: AnySportModule, cfg: unknown) => unpinnedRulesDoc({ module:
 const leagueDoc = (m: AnySportModule, cfg: unknown) => unpinnedRulesDoc({ module: m, kind: "league", divisionConfig: cfg });
 
 describe("ST-G21 slideTiebreakColumns - the empty cases first", () => {
-  it("no columns, no cascade, no Swiss-only keys: nothing", () => {
+  it("no columns, no cascade, no Swiss-only keys: nothing - for every sport (registry sweep, counted)", () => {
     expect(slideTiebreakColumns([], [], new Set())).toEqual([]);
-    const m = sport("football");
-    const doc = swissDoc(m, declaredCfgs(m)[0]!.cfg);
-    const shown = shownFor(m, doc.tiebreakers, doc);
-    expect(shown.length, "premise: the table has columns").toBeGreaterThan(0);
-    expect(slideTiebreakColumns(shown, [], swissOnlyKeysOf(m, doc.tiebreakers)), "an empty cascade").toEqual([]);
-    expect(slideTiebreakColumns(shown, doc.tiebreakers, new Set()), "no key is Swiss-only").toEqual([]);
+    let checked = 0;
+    const visited = forEachSport(({ module: m }) => {
+      const doc = swissDoc(m, declaredCfgs(m)[0]!.cfg);
+      const shown = shownFor(m, doc.tiebreakers, doc);
+      expect(shown.length, `${m.key}: premise - the table has columns`).toBeGreaterThan(0);
+      expect(slideTiebreakColumns(shown, [], swissOnlyKeysOf(m, doc.tiebreakers)), `${m.key}: an empty cascade`).toEqual([]);
+      expect(slideTiebreakColumns(shown, doc.tiebreakers, new Set()), `${m.key}: no key is Swiss-only`).toEqual([]);
+      checked++;
+    });
+    expect(visited, "sports swept").toBe(builtinModules.length);
+    expect(checked, "sports checked").toBe(visited);
   });
 
-  it("the Swiss-only set of an empty order is empty, and an unknown key never throws", () => {
-    const m = sport("football");
-    expect(swissOnlyKeysOf(m, []).size).toBe(0);
-    // A stored order is data (the engine throws CONFIG_INVALID on a key outside its vocabulary): the board degrades to "not a
-    // tie-break column" and goes on drawing, it never takes the TV down.
-    expect(() => swissOnlyKeysOf(m, ["no_such_key", "buchholz"])).not.toThrow();
-    expect([...swissOnlyKeysOf(m, ["no_such_key", "buchholz"])]).toEqual(["buchholz"]);
+  it("the Swiss-only set of an empty order is empty, and an unknown key never throws - for every sport (registry sweep, counted)", () => {
+    let checked = 0;
+    const visited = forEachSport(({ module: m }) => {
+      expect(swissOnlyKeysOf(m, []).size, `${m.key}: an empty order`).toBe(0);
+      // A stored order is data (the engine throws CONFIG_INVALID on a key outside its vocabulary): the board degrades to "not a
+      // tie-break column" and goes on drawing, it never takes the TV down.
+      expect(() => swissOnlyKeysOf(m, ["no_such_key", "buchholz"]), `${m.key}: an unknown key`).not.toThrow();
+      expect([...swissOnlyKeysOf(m, ["no_such_key", "buchholz"])], `${m.key}: the known Swiss-only key survives`).toEqual(["buchholz"]);
+      checked++;
+    });
+    expect(visited, "sports swept").toBe(builtinModules.length);
+    expect(checked, "sports checked").toBe(visited);
   });
 
-  it("a module this build cannot resolve answers as a resolved one does: the public table shows the ladders without a module, so the board keeps them (review m1)", () => {
-    const m = sport("football");
+  it("a module this build cannot resolve answers as a resolved one does: the public table shows the ladders without a module, so the board keeps them (review m1) - for every sport (counted)", () => {
     const order = ["points", "diff", "buchholz", "opp_diff", "lots"];
     expect([...swissOnlyKeysOf(null, order)].sort(), "no module").toEqual(["buchholz", "opp_diff"]);
-    expect([...swissOnlyKeysOf(null, order)].sort()).toEqual([...swissOnlyKeysOf(m, order)].sort());
+    let checked = 0;
+    const visited = forEachSport(({ module: m }) => {
+      expect([...swissOnlyKeysOf(null, order)].sort(), m.key).toEqual([...swissOnlyKeysOf(m, order)].sort());
+      checked++;
+    });
+    expect(visited, "sports swept").toBe(builtinModules.length);
+    expect(checked, "sports checked").toBe(visited);
     // and the same through the whole rule: the columns a table with no module shows (structural + derived only) are the first two
     const shown = tableColumns([], order, [row("a")], tableLayoutFor(null, "swiss"));
     expect(slideTiebreakColumns(shown, order, swissOnlyKeysOf(null, order)).map((c) => c.key)).toEqual(["buchholz", "opp_diff"]);
@@ -72,10 +87,15 @@ describe("ST-G21 slideTiebreakColumns - the empty cases first", () => {
 });
 
 describe("ST-G21 swissOnlyKeysOf - the engine's declaration, not a list", () => {
-  it("the Swiss ladders and Opp diff are Swiss-only; Sonneborn-Berger, the ledger and the ratios are not (rulebook X-SW-9; the engine's rule 3)", () => {
-    const m = sport("football");
-    const set = swissOnlyKeysOf(m, ["points", "diff", "for", "wins", "buchholz", "buchholz_cut1", "opp_diff", "sberger", "direct", "set_ratio", "lots"]);
-    expect([...set].sort()).toEqual(["buchholz", "buchholz_cut1", "opp_diff"]);
+  it("the Swiss ladders and Opp diff are Swiss-only; Sonneborn-Berger, the ledger and the ratios are not (rulebook X-SW-9; the engine's rule 3) - for every sport (counted)", () => {
+    let checked = 0;
+    const visited = forEachSport(({ module: m }) => {
+      const set = swissOnlyKeysOf(m, ["points", "diff", "for", "wins", "buchholz", "buchholz_cut1", "opp_diff", "sberger", "direct", "set_ratio", "lots"]);
+      expect([...set].sort(), m.key).toEqual(["buchholz", "buchholz_cut1", "opp_diff"]);
+      checked++;
+    });
+    expect(visited, "sports swept").toBe(builtinModules.length);
+    expect(checked, "sports checked").toBe(visited);
   });
 
   it("agrees with the engine on every key of every sport's Swiss and league defaults (registry sweep, counted)", () => {
@@ -144,6 +164,7 @@ describe("ST-G21 slideTiebreakColumns - the first two Swiss-only keys of the sta
   });
 
   it("premise anchors (the brief, rulebook X-SW-9): badminton -> Buchholz Cut-1, Buchholz; football -> Buchholz, Opp diff; chess -> Buchholz Cut-1, Buchholz (the first two of three)", () => {
+    // single-sport: the brief and rulebook X-SW-9 NAME these three sports' chains, typed once as anchors; the registry sweep above derives every sport's from the engine
     for (const [key, want] of [
       ["badminton", ["buchholz_cut1", "buchholz"]],
       ["football", ["buchholz", "opp_diff"]],
@@ -160,46 +181,62 @@ describe("ST-G21 slideTiebreakColumns - the first two Swiss-only keys of the sta
     expect(chain, "premise: chess's Swiss chain holds a third tie-break column after the two ladders").toContain("sberger");
   });
 
-  it("at most two, in the CASCADE's order (not the column order), and a key whose column the table does not show is skipped", () => {
-    const m = sport("football");
-    const doc = swissDoc(m, declaredCfgs(m)[0]!.cfg);
-    const three = ["points", "buchholz_cut1", "buchholz", "opp_diff", "lots"];
-    const shown = shownFor(m, three, doc);
-    expect(shown.map((c) => c.key), "premise: the three derived columns are shown").toEqual(expect.arrayContaining(["buchholz_cut1", "buchholz", "opp_diff"]));
-    const swissOnly = swissOnlyKeysOf(m, three);
-    expect(slideTiebreakColumns(shown, three, swissOnly).map((c) => c.key), "three Swiss-only keys: the third is not offered").toEqual(["buchholz_cut1", "buchholz"]);
-    expect(SLIDE_TIEBREAK_MAX, "owner option A: up to two").toBe(2);
+  it("at most two, in the CASCADE's order (not the column order), and a key whose column the table does not show is skipped - for every sport (registry sweep, counted)", () => {
+    let checked = 0;
+    const visited = forEachSport(({ module: m }) => {
+      const doc = swissDoc(m, declaredCfgs(m)[0]!.cfg);
+      const three = ["points", "buchholz_cut1", "buchholz", "opp_diff", "lots"];
+      const shown = shownFor(m, three, doc);
+      expect(shown.map((c) => c.key), `${m.key}: premise - the three derived columns are shown`).toEqual(expect.arrayContaining(["buchholz_cut1", "buchholz", "opp_diff"]));
+      const swissOnly = swissOnlyKeysOf(m, three);
+      expect(slideTiebreakColumns(shown, three, swissOnly).map((c) => c.key), `${m.key}: three Swiss-only keys: the third is not offered`).toEqual(["buchholz_cut1", "buchholz"]);
+      expect(SLIDE_TIEBREAK_MAX, "owner option A: up to two").toBe(2);
 
-    // Cascade order, not column order: the columns come out buchholz before opp_diff (DERIVED_METRICS order); the order says opp_diff first.
-    const reversed = ["points", "opp_diff", "buchholz", "lots"];
-    const shownReversed = shownFor(m, reversed, doc);
-    expect(shownReversed.map((c) => c.key).indexOf("buchholz"), "premise: the table lists Buchholz before Opp diff").toBeLessThan(shownReversed.map((c) => c.key).indexOf("opp_diff"));
-    expect(slideTiebreakColumns(shownReversed, reversed, swissOnlyKeysOf(m, reversed)).map((c) => c.key)).toEqual(["opp_diff", "buchholz"]);
+      // Cascade order, not column order: the columns come out buchholz before opp_diff (DERIVED_METRICS order); the order says opp_diff first.
+      const reversed = ["points", "opp_diff", "buchholz", "lots"];
+      const shownReversed = shownFor(m, reversed, doc);
+      expect(shownReversed.map((c) => c.key).indexOf("buchholz"), `${m.key}: premise - the table lists Buchholz before Opp diff`).toBeLessThan(shownReversed.map((c) => c.key).indexOf("opp_diff"));
+      expect(slideTiebreakColumns(shownReversed, reversed, swissOnlyKeysOf(m, reversed)).map((c) => c.key), `${m.key}: the cascade's order`).toEqual(["opp_diff", "buchholz"]);
 
-    // A Swiss-only key whose column is not in `shown` is skipped and the next one takes its place.
-    const withoutFirst = shown.filter((c) => c.key !== "buchholz_cut1");
-    expect(slideTiebreakColumns(withoutFirst, three, swissOnly).map((c) => c.key)).toEqual(["buchholz", "opp_diff"]);
-    // One column only: one comes back (the board has a template for one).
-    expect(slideTiebreakColumns(shown.filter((c) => c.key === "buchholz"), three, swissOnly).map((c) => c.key)).toEqual(["buchholz"]);
+      // A Swiss-only key whose column is not in `shown` is skipped and the next one takes its place.
+      const withoutFirst = shown.filter((c) => c.key !== "buchholz_cut1");
+      expect(slideTiebreakColumns(withoutFirst, three, swissOnly).map((c) => c.key), `${m.key}: a missing column is skipped`).toEqual(["buchholz", "opp_diff"]);
+      // One column only: one comes back (the board has a template for one).
+      expect(slideTiebreakColumns(shown.filter((c) => c.key === "buchholz"), three, swissOnly).map((c) => c.key), `${m.key}: one column`).toEqual(["buchholz"]);
+      checked++;
+    });
+    expect(visited, "sports swept").toBe(builtinModules.length);
+    expect(checked, "sports checked").toBe(visited);
   });
 
-  it("a stored order that repeats a key (the engine refuses it, but a stored order is data) draws that column once", () => {
-    const m = sport("football");
-    const doc = swissDoc(m, declaredCfgs(m)[0]!.cfg);
-    const repeated = ["points", "buchholz", "buchholz", "opp_diff", "lots"];
-    expect(new Set(repeated).size, "premise: the order repeats a key").toBeLessThan(repeated.length);
-    expect(engineSwissOnly(m, declaredCfgs(m)[0]!.cfg, repeated).filter((k) => k === "buchholz"), "premise: the engine sees the repeat").toHaveLength(2);
-    const got = slideTiebreakColumns(shownFor(m, repeated, doc), repeated, swissOnlyKeysOf(m, repeated));
-    expect(got.map((c) => c.key)).toEqual(["buchholz", "opp_diff"]);
+  it("a stored order that repeats a key (the engine refuses it, but a stored order is data) draws that column once - for every sport (registry sweep, counted)", () => {
+    let checked = 0;
+    const visited = forEachSport(({ module: m }) => {
+      const cfg = declaredCfgs(m)[0]!.cfg;
+      const doc = swissDoc(m, cfg);
+      const repeated = ["points", "buchholz", "buchholz", "opp_diff", "lots"];
+      expect(new Set(repeated).size, "premise: the order repeats a key").toBeLessThan(repeated.length);
+      expect(engineSwissOnly(m, cfg, repeated).filter((k) => k === "buchholz"), `${m.key}: premise - the engine sees the repeat`).toHaveLength(2);
+      const got = slideTiebreakColumns(shownFor(m, repeated, doc), repeated, swissOnlyKeysOf(m, repeated));
+      expect(got.map((c) => c.key), m.key).toEqual(["buchholz", "opp_diff"]);
+      checked++;
+    });
+    expect(visited, "sports swept").toBe(builtinModules.length);
+    expect(checked, "sports checked").toBe(visited);
   });
 
-  it("Sonneborn-Berger is valid in any stage, so it is never a tie-break column even when the table shows it", () => {
-    const m = sport("boardgame");
-    const order = ["points", "sberger", "buchholz", "lots"];
-    const doc = swissDoc(m, declaredCfgs(m)[0]!.cfg);
-    const shown = shownFor(m, order, doc);
-    expect(shown.some((c) => c.key === "sberger"), "premise: the table shows SB").toBe(true);
-    expect(swissOnlyKeysOf(m, order).has("sberger")).toBe(false);
-    expect(slideTiebreakColumns(shown, order, swissOnlyKeysOf(m, order)).map((c) => c.key)).toEqual(["buchholz"]);
+  it("Sonneborn-Berger is valid in any stage, so it is never a tie-break column even when the table shows it - for every sport (registry sweep, counted)", () => {
+    let checked = 0;
+    const visited = forEachSport(({ module: m }) => {
+      const order = ["points", "sberger", "buchholz", "lots"];
+      const doc = swissDoc(m, declaredCfgs(m)[0]!.cfg);
+      const shown = shownFor(m, order, doc);
+      expect(shown.some((c) => c.key === "sberger"), `${m.key}: premise - the table shows SB`).toBe(true);
+      expect(swissOnlyKeysOf(m, order).has("sberger"), `${m.key}: SB is not Swiss-only`).toBe(false);
+      expect(slideTiebreakColumns(shown, order, swissOnlyKeysOf(m, order)).map((c) => c.key), m.key).toEqual(["buchholz"]);
+      checked++;
+    });
+    expect(visited, "sports swept").toBe(builtinModules.length);
+    expect(checked, "sports checked").toBe(visited);
   });
 });

@@ -11,7 +11,7 @@
 // Expected values come from the rulebook (FIDE 1 / ½ / 0 in halves; UEFA art. 18 and FIDE C.07 arts. 8.1, 9.1 and 14 for the Swiss ladders), the
 // engine's own declarations (`pointsText`, the sport's `standingsDelta`) and the dictionaries - never from the builder.
 import { describe, expect, it } from "vitest";
-import { DERIVED_METRICS, derivedMetricText, pointsText, type StandingsRow } from "@seazn/engine/competition";
+import { DERIVED_METRICS, derivedMetricText, pointsText, tableLayoutOf, type StandingsRow } from "@seazn/engine/competition";
 import type { AnySportModule, TableStageKind } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
@@ -38,8 +38,9 @@ const sport = (key: string): AnySportModule => {
   if (m === undefined) throw new Error(`premise: ${key} is a built-in sport`);
   return m;
 };
-// single-sport: chess is the half-point Swiss sport (FIDE 1 / ½ / 0); football is the whole-point one with an opp_diff chain
+// single-sport: chess is the half-point Swiss sport (FIDE 1 / ½ / 0); the unit spelling of EVERY sport is swept in the registry test below
 const boardgame = sport("boardgame");
+// single-sport: football is the whole-point Swiss sport whose chain holds opp_diff (FB-TB-5); the unit spelling of EVERY sport is swept in the registry test below
 const football = sport("football");
 const halfDoc = unpinnedRulesDoc({ module: boardgame, kind: "swiss", divisionConfig: boardgame.variants.classical });
 const wholeDoc = unpinnedRulesDoc({ module: football, kind: "swiss", divisionConfig: {} });
@@ -139,6 +140,37 @@ describe("owner Q2.1 - one number format: the Swiss ladders print in the table's
     for (const cell of view.rows.flatMap((r) => r.cells)) expect(cell, "no half glyph on a whole-point table").not.toContain("½");
   });
 
+  it("every sport's Swiss table spells each ladder in ITS unit - '7½' on a half-point table, '7.5' on a whole-point one - and Opp diff as the integer it is (registry sweep, every declared cfg, counted)", () => {
+    const units = new Set<string>();
+    let stages = 0;
+    let cells = 0;
+    const visited = forEachSport(({ module: m }) => {
+      for (const { name, cfg } of declaredCfgs(m)) {
+        const doc = unpinnedRulesDoc({ module: m, kind: "swiss", divisionConfig: cfg });
+        // the unit is the ENGINE's declaration for the stage's points rule (the function the builder itself defers to), never the
+        // builder's own reading of it; the stored ladders are whole points, so 7.5 is fifteen halves on a half-point table
+        const unit = tableLayoutOf(doc.points, doc.reachable, doc.ballsPerOver).unit;
+        units.add(unit);
+        const want = unit === "half" ? "7½" : "7.5";
+        const cascade = [...new Set([...doc.tiebreakers, "buchholz", "buchholz_cut1", "sberger", "opp_diff"])];
+        const r = row("A", { rank: 1, played: 3, metrics: { buchholz: 7.5, buchholz_cut1: 7.5, sberger: 7.5, opp_diff: -3 } });
+        const shown = cellsOf(buildTableView(input(doc, m, [r], { cascade })), "A");
+        for (const key of ["buchholz", "buchholz_cut1", "sberger"] as const) {
+          expect(shown[key], `${m.key} ${name} (${unit}) ${key}`).toBe(want);
+          cells++;
+        }
+        expect(shown.opp_diff, `${m.key} ${name}: Opp diff has no unit and is never halved`).toBe("-3");
+        cells++;
+        stages++;
+      }
+    });
+    expect(visited, "sports swept").toBe(builtinModules.length);
+    expect(stages, "(sport, cfg) Swiss stages swept: more than one per sport").toBeGreaterThan(builtinModules.length);
+    expect(cells, "cells compared").toBe(stages * 4);
+    // anti-vacuity: the sweep met BOTH spellings, so '7½' was asked of a half-point table and '7.5' of a whole-point one
+    expect([...units].sort()).toEqual(["half", "whole"]);
+  });
+
   it("opp_diff is a difference of scores, never halved: a half-point layout still prints it as the integer it is", () => {
     // Not a reachable table (chess records no goal difference) - the formatter's own contract: a sum of differences has no unit.
     const r = row("A", { metrics: { opp_diff: 6 } });
@@ -152,6 +184,7 @@ describe("owner Q2.1 - one number format: the Swiss ladders print in the table's
     const view = buildTableView(input(halfDoc, boardgame, rows));
     expect(cellsOf(view, "E")).toMatchObject({ buchholz: "—", buchholz_cut1: "—", sberger: "—" });
     // a derived column that is not a Swiss ladder keeps the engine's own text: net run rate is signed, to three places
+    // single-sport: net run rate is cricket's own column (only cricket declares the runs ledger it reads), hand-derived from ECB 16.9.4(a)
     const cricket = sport("cricket");
     const nrr = derivedText(
       row("A", { metrics: { runs_for: 120, runs_against: 100, balls_faced_eff: 120, balls_bowled_eff: 120 } }),

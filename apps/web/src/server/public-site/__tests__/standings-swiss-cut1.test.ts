@@ -27,8 +27,7 @@
 //
 // The table is ranked by the engine's own `completeTableStage` and printed through the shared layer's `buildTableView`, so the
 // number checked is the one a visitor reads in the Cut-1 column, in its table's Points spelling (owner Q2).
-// single-sport: chess is the half-point Swiss sport whose Buchholz family is FIDE's; `swiss-art16-producer.test.ts` sweeps the
-// DB-backed producer, this file pins the arithmetic once at the display seam.
+// (`swiss-art16-producer.test.ts` sweeps the DB-backed producer; this file pins the arithmetic once, at the display seam.)
 import { describe, expect, it } from "vitest";
 import { MatchOutcome, type StandingsDelta } from "@seazn/engine/core";
 import {
@@ -52,6 +51,7 @@ import { buildTableView, type TableViewInput } from "../standings-view";
 
 const EN = en as unknown as Dict;
 const msg: TableViewInput["msg"] = (key, vars) => t(EN, key, vars);
+// single-sport: the rig is FIDE C.07's own arithmetic (win 1, draw 1/2, loss 0 and a hand-derived table), which only chess plays
 const bg = builtinModules.find((m) => m.key === "boardgame")!;
 const cfg = bg.variants.classical;
 const doc = unpinnedRulesDoc({ module: bg, kind: "swiss", divisionConfig: cfg });

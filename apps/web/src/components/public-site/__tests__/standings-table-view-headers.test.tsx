@@ -437,7 +437,6 @@ describe("hub table: a Swiss table's Round X of N chip (W3 T16, SW-L11)", () => 
 // serialises an omitted prop as `"$undefined"`, so a bare `data-col` probe passes in both states). The expected columns are the
 // engine's: the keys the stage's rules doc holds that the engine refuses outside a Swiss (`validateCascade`, `stage_format`).
 describe("ST-G21 the public table of a Swiss stage shows its tie-break ladders", () => {
-  const sportOf = (key: string) => builtinModules.find((m) => m.key === key)!;
   const cfgOf = (m: (typeof builtinModules)[number]) => (m.configSchema.safeParse({}).success ? {} : Object.values(m.variants)[0]);
 
   function viewFor(m: (typeof builtinModules)[number], kind: "swiss" | "league", dict: Dict = en as unknown as Dict): TableViewT {
@@ -479,23 +478,45 @@ describe("ST-G21 the public table of a Swiss stage shows its tie-break ladders",
   }
   const draw = (v: TableViewT) => renderToStaticMarkup(<StandingsTableView view={v} dict={en as unknown as Dict} testid={TESTID} />);
 
-  it("ST-G21 the public table of a Swiss stage under the default chain renders Buchholz Cut-1 and Buchholz headers", () => {
-    const badminton = sportOf("badminton");
-    const markup = draw(viewFor(badminton, "swiss"));
-    expect(headerOf(markup, "buchholz_cut1")?.abbr).toBe("Buchholz Cut-1");
-    expect(headerOf(markup, "buchholz")?.abbr).toBe("Buchholz");
-    // the football family's second ladder, Opp diff (Task 3's header), beside its Buchholz
-    const football = draw(viewFor(sportOf("football"), "swiss"));
-    expect(headerOf(football, "buchholz")?.abbr).toBe("Buchholz");
-    expect(headerOf(football, "opp_diff")?.abbr).toBe("Opp diff");
+  /** The keys the engine refuses outside a Swiss (its own declaration of "Swiss-only"), asked of the sport's default Swiss chain. */
+  const swissOnlyOf = (m: (typeof builtinModules)[number]): string[] => {
+    const rules = unpinnedRulesDoc({ module: m, kind: "swiss", divisionConfig: cfgOf(m) });
+    return validateCascade(rules.tiebreakers as never, { module: m, cfg: m.configSchema.parse(cfgOf(m)), stageKind: "league", crossGroup: false })
+      .filter((r) => r.reason === "stage_format")
+      .map((r) => String(r.key));
+  };
+  // The English words over the three Swiss-only columns (Task 3's headers; ST-G21): one word per KEY, the same for every sport.
+  const SWISS_ONLY_HEADER_EN: Readonly<Record<string, string>> = { buchholz_cut1: "Buchholz Cut-1", buchholz: "Buchholz", opp_diff: "Opp diff" };
+
+  it("ST-G21 the public table of a Swiss stage under the default chain renders the header of every Swiss-only key the engine puts on it, for every sport (registry sweep, counted)", () => {
+    const seen = new Set<string>();
+    let checked = 0;
+    for (const m of builtinModules) {
+      const markup = draw(viewFor(m, "swiss"));
+      const keys = swissOnlyOf(m);
+      expect(keys.length, `${m.key}: premise - the default Swiss chain holds Swiss-only keys`).toBeGreaterThan(0);
+      for (const key of keys) {
+        expect(headerOf(markup, key)?.abbr, `${m.key} ${key}`).toBe(SWISS_ONLY_HEADER_EN[key]);
+        seen.add(key);
+        checked++;
+      }
+    }
+    expect(checked, "headers checked").toBeGreaterThanOrEqual(22);
+    // anti-vacuity: the badminton/chess pair (Buchholz Cut-1, Buchholz) and the football family's Opp diff were all met
+    expect([...seen].sort()).toEqual(Object.keys(SWISS_ONLY_HEADER_EN).sort());
   });
 
-  it("ST-G21 a league table renders neither", () => {
-    for (const key of ["badminton", "football", "boardgame"]) {
-      const markup = draw(viewFor(sportOf(key), "league"));
-      expect(markup, `${key}: a league table still renders (the pair of the Swiss case above)`).toContain('data-col="points"');
-      for (const col of ["buchholz_cut1", "buchholz", "opp_diff"]) expect(headerOf(markup, col), `${key} ${col}`).toBeNull();
+  it("ST-G21 a league table renders neither, for every sport (registry sweep, counted)", () => {
+    let checked = 0;
+    for (const m of builtinModules) {
+      const markup = draw(viewFor(m, "league"));
+      expect(markup, `${m.key}: a league table still renders (the pair of the Swiss case above)`).toContain('data-col="points"');
+      for (const col of Object.keys(SWISS_ONLY_HEADER_EN)) {
+        expect(headerOf(markup, col), `${m.key} ${col}`).toBeNull();
+        checked++;
+      }
     }
+    expect(checked, "(sport, column) pairs checked").toBe(builtinModules.length * Object.keys(SWISS_ONLY_HEADER_EN).length);
   });
 
   it("every sport's Swiss table carries the engine's Swiss-only keys of its default chain, and a league table of the same sport none (registry sweep, counted)", () => {
@@ -518,17 +539,21 @@ describe("ST-G21 the public table of a Swiss stage shows its tie-break ladders",
     expect(columns, "Swiss-only columns met").toBeGreaterThanOrEqual(22);
   });
 
-  it("the phone fold: on a phone the ladders sit behind the table's own disclosure (max-md:hidden) while Pts stays; from md up nothing folds", () => {
-    for (const key of ["badminton", "football", "boardgame"]) {
-      const view = viewFor(sportOf(key), "swiss");
-      const ladders = view.columns.filter((c) => ["buchholz_cut1", "buchholz", "opp_diff"].includes(c.key));
+  it("the phone fold: on a phone the ladders sit behind the table's own disclosure (max-md:hidden) while Pts stays; from md up nothing folds - for every sport (registry sweep, counted)", () => {
+    let ladderColumns = 0;
+    for (const m of builtinModules) {
+      const key = m.key;
+      const view = viewFor(m, "swiss");
+      const ladders = view.columns.filter((c) => Object.keys(SWISS_ONLY_HEADER_EN).includes(c.key));
       expect(ladders.length, `${key}: ladders on the table`).toBeGreaterThan(0);
       for (const c of ladders) expect(c.compact, `${key} ${c.key} is long tail`).toBe(false);
       const markup = draw(view);
       for (const c of ladders) expect(headerOf(markup, c.key)!.cls, `${key} ${c.key}`).toMatch(/(^|\s)max-md:hidden(\s|$)/);
       expect(headerOf(markup, "points")!.cls, `${key}: Pts is never folded`).not.toMatch(/max-md:hidden/);
       expect(markup, `${key}: the disclosure exists`).toMatch(/data-testid="[^"]*-more"/);
+      ladderColumns += ladders.length;
     }
+    expect(ladderColumns, "ladder columns folded").toBeGreaterThanOrEqual(22);
   });
 
   // T9 review m4 / fix round 1 (b): with the engine's Swiss chains carrom and tennis hold both ladders, and their Swiss tables'
