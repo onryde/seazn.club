@@ -24,11 +24,14 @@ import { swissRoundsForFieldSize } from "@/lib/swiss-rounds";
 import { roundOnePairs, type SwissPairingMode } from "@/lib/swiss-pairing";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
+import type { TiebreakerKey } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { undoDivision } from "../history";
 import { startDivision } from "../schedule";
+import { putStageRules } from "../stage-rules";
 import { createStages, generateStageFixtures, unpairSwissRound } from "../stages";
 import { seedOrg } from "./_seed";
 
@@ -177,7 +180,7 @@ function byeHoldersOf(rows: FixtureRow[], nameOf: Map<string, string>): string[]
 
 /** A started Swiss stage over N seeded badminton entrants: the shells exist
  *  and nobody is seated, so the next Generate pairs round 1. */
-async function newSwiss(count: number, config: Record<string, unknown>) {
+async function newSwiss(count: number, config: Record<string, unknown>, opts: { tiebreakers?: readonly TiebreakerKey[] } = {}) {
   const { auth } = await seedOrg();
   const { divisionId, nameOf } = await seedBadmintonDivision(auth, count);
   const [stage] = await createStages(auth, divisionId, {
@@ -187,6 +190,8 @@ async function newSwiss(count: number, config: Record<string, unknown>) {
     config: { rounds: swissRoundsFor(count), ...config },
     progression: null,
   });
+  // The stage's OWN tie-break order, put before Start so it is what the stage pins (X-TB-2).
+  if (opts.tiebreakers !== undefined) await putStageRules(auth, stage!.id, { tiebreakers: [...opts.tiebreakers] });
   await startDivision(auth, divisionId);
   return { auth, divisionId, nameOf, stageId: stage!.id };
 }
@@ -527,8 +532,20 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
     expect(JSON.stringify(await configOf(stageId))).toBe(before);
   });
 
+  /** Badminton's declared Swiss order WITHOUT its closing `lots`, read off the module's own declaration. Engine 2.0.0 (X-SW-9)
+   *  closes every sport's Swiss order with `lots`, a SEEDED RANDOM drawing of the level class: a rank-adjacent round 2 over a
+   *  level score group would then seat whichever order the draw gave, and "E1|E2" would be luck. A stage's own order (which
+   *  a started stage pins, X-TB-2) may omit `lots`; residual ties then take seed order (tiebreakers.js, "seed then id"), the
+   *  pre-W3 behaviour this test characterises. */
+  const badmintonOrderWithoutLots = (): TiebreakerKey[] => {
+    const m = builtinModules.find((x) => x.key === "badminton")!;
+    const declared = m.defaultTiebreakers("swiss", m.configSchema.parse({}));
+    expect(declared.at(-1), "premise (X-SW-9): the declared Swiss order closes with lots").toBe("lots");
+    return declared.slice(0, -1);
+  };
+
   it("round 2 after a fold round 1 still pairs by the stored rank_adjacent cascade", async () => {
-    const { auth, nameOf, stageId } = await newSwiss(8, { pairing: "rank_adjacent" });
+    const { auth, nameOf, stageId } = await newSwiss(8, { pairing: "rank_adjacent" }, { tiebreakers: badmintonOrderWithoutLots() });
     await generateStageFixtures(auth, stageId); // round 1: fold (default)
     expect((await fixturesOfRound(stageId, 1)).map((f) => pairOf(f, nameOf)).sort()).toEqual(
       expectedRoundOne(8, "fold"),
@@ -539,7 +556,7 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
     // The SEATS, not only the ledger: a round 2 paired by fold would still
     // write `pairing: "rank_adjacent"` if only the label were right. Every
     // round-1 winner took it 2-0 on the same scores, so the cascade ties and
-    // falls back to seed order within each score group.
+    // falls back to seed order within each score group (the stage's own order has no `lots`, see above).
     const round2 = (await fixturesOfRound(stageId, 2)).map((f) => pairOf(f, nameOf)).sort();
     // rank-adjacent within each group: neighbours
     expect(round2).toEqual(["E1|E2", "E3|E4", "E5|E6", "E7|E8"]);

@@ -19,6 +19,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql, withTenant } from "@/lib/db";
 import { builtinModules } from "@seazn/engine/sports";
+import type { TiebreakerKey } from "@seazn/engine/sport";
 import { entrantKindCap } from "@seazn/engine/sport";
 import { buildTemplateStages } from "@/lib/format-templates";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -28,6 +29,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
+import { putStageRules } from "../stage-rules";
 import {
   completeStage,
   confirmSeedProposal,
@@ -96,7 +98,13 @@ async function pinRig(
   sport: Sport,
   n: number,
   rounds: number,
-  opts: { template?: "swiss_knockout" | "swiss_playoff"; q?: number; onCompleteTop?: number } = {},
+  opts: {
+    template?: "swiss_knockout" | "swiss_playoff";
+    q?: number;
+    onCompleteTop?: number;
+    /** The Swiss stage's OWN tie-break order (`PUT /stages/{id}/rules`), put before Start so it is what the stage pins. */
+    tiebreakers?: readonly TiebreakerKey[];
+  } = {},
 ): Promise<Rig> {
   const owner = (await seedOrg("pro")).auth;
   const comp = await createCompetition(owner, {
@@ -153,6 +161,7 @@ async function pinRig(
       koStageId = ko!.id;
     }
   }
+  if (opts.tiebreakers !== undefined) await putStageRules(owner, stageId, { tiebreakers: [...opts.tiebreakers] });
   await startDivision(owner, division.id);
   if (opts.template !== undefined) await generateStageFixtures(owner, koStageId!); // the follow-on stage's day-one TBD bracket
   const rig: Rig = {
@@ -343,11 +352,23 @@ describe.runIf(HAS_DB)("X-SW-24 a tied cut line (RB3-18)", () => {
     return stage.tableRules!.tiebreakers.keys.at(-1);
   }
 
-  for (const s of SPORTS) {
-    it(`X-SW-24 a tied cut line refuses SEEDING_TIE_UNRESOLVED and flags the tie (lots draw or seed pick), never a play-off fixture (${s.sport})`, async () => {
+  /** The sport's declared Swiss order WITHOUT its closing `lots` — a chain that leaves a level class to the seed (a stage's own
+   *  order may omit `lots`; the `seed` key itself is a comparator that breaks the tie, so it is NOT appended). Derived from the
+   *  sport's own declaration, never typed here. */
+  const withoutLots = (s: Sport): TiebreakerKey[] => {
+    const m = builtinModules.find((x) => x.key === s.sport)!;
+    const declared = m.defaultTiebreakers("swiss", m.configSchema.parse(m.variants[s.variant] ?? {}));
+    expect(declared.at(-1), `premise: ${s.sport}'s declared Swiss order closes with lots`).toBe("lots");
+    return declared.slice(0, -1);
+  };
+  // W3 (X-SW-9, engine 2.0.0): every sport's declared Swiss order now CLOSES with `lots`, so the declared chains alone no longer
+  // reach the seed-resolved half of this rule (one sport used to end without it). A stage may carry its own order, so that half
+  // runs on a stage whose own order omits `lots`: both ends stay in the sweep (the anti-vacuity test below counts them).
+  for (const variant of ["declared", "own order without lots"] as const) for (const s of SPORTS) {
+    it(`X-SW-24 a tied cut line refuses SEEDING_TIE_UNRESOLVED and flags the tie (lots draw or seed pick), never a play-off fixture (${s.sport}, ${variant})`, async () => {
       // 4 entrants, one round played, every board won 21-10 21-10 (or by the same result): the two winners and the two
       // losers are level on every score criterion. A knockout of the top 3 cuts between the two losers.
-      const rig = await pinRig(s, 4, 3, { template: "swiss_knockout", q: 3 });
+      const rig = await pinRig(s, 4, 3, { template: "swiss_knockout", q: 3, ...(variant === "declared" ? {} : { tiebreakers: withoutLots(s) }) });
       await playRound(rig, 1);
       const out = await finishSwissNow(rig.auth, rig.stageId);
       expect(out).toMatchObject({ finished_after: 1, completed: true });
@@ -384,10 +405,12 @@ describe.runIf(HAS_DB)("X-SW-24 a tied cut line (RB3-18)", () => {
     }, 300_000);
   }
 
-  it("X-SW-24 the sweep reaches both ends of the declared chains: one sport ends in the seed, one in lots (anti-vacuity)", async () => {
+  it("X-SW-24 the sweep reaches both ends: the declared chains end in lots, a stage's own order without lots leaves it to the seed (anti-vacuity)", async () => {
     const ends: (string | undefined)[] = [];
     for (const s of SPORTS) ends.push(await chainEnd(await pinRig(s, 4, 3, { template: "swiss_knockout", q: 3 })));
-    expect(ends.length, "sports checked").toBe(SPORTS.length);
+    // X-SW-9: the declared orders all close with lots; the lots-free end is a stage's OWN order (see the sweep above).
+    ends.push(await chainEnd(await pinRig(SPORTS[0], 4, 3, { template: "swiss_knockout", q: 3, tiebreakers: withoutLots(SPORTS[0]) })));
+    expect(ends.length, "chains checked").toBe(SPORTS.length + 1);
     expect(ends.includes("lots"), "a lots-ending chain is in the sweep").toBe(true);
     expect(ends.some((e) => e !== "lots"), "a non-lots chain is in the sweep").toBe(true);
   }, 300_000);

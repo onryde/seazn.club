@@ -59,6 +59,7 @@
 import { describe, expect, it } from "vitest";
 import { foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "@seazn/engine/core";
 import { defaultLineupPair, defaultOrderOf, makeEnvelope } from "@seazn/engine/testkit";
+import type { TiebreakerKey } from "@seazn/engine/sport";
 import {
   PointsRule,
   pointsRuleBounds,
@@ -94,11 +95,13 @@ const moduleOf = (key: string) => {
 };
 const GENERIC = moduleOf("generic");
 const BADMINTON = moduleOf("badminton");
-/** A badminton stage ranked POINTS-first, off the engine: its Swiss order (OC1), which is also the pre-W2d league default
- *  a stage active at the W2d deploy keeps in its pin (spec §5.10: the new defaults reach only stages not yet active, B1).
- *  Since W2d its league default is wins-first (BWF 16.2), where `wins` is the race itself, not a step after points — so
- *  the points-first scenes below hand the stage this order as its own. */
-const BADMINTON_POINTS_FIRST = [...defaultOrderOf(BADMINTON, "swiss")];
+/** A badminton stage ranked POINTS-first: the order a stage active at the W2d deploy keeps in its pin (spec §5.10: the new
+ *  defaults reach only stages not yet active, B1; X-TB-2: a started stage keeps its pinned order). It was badminton's Swiss
+ *  default (OC1) and the pre-W2d league default. Since W2d the league default is wins-first (BWF 16.2), where `wins` is the
+ *  race itself, not a step after points — and since W3 (engine 2.0.0, X-SW-9) the Swiss default is the Buchholz chain
+ *  ending in lots, so NO engine default is points-first-then-wins any more: the scenes below hand the stage this order as
+ *  its own pin. It is an INPUT (a stage's stored order), typed against the engine's key type, not an expected value. */
+const BADMINTON_POINTS_FIRST: readonly TiebreakerKey[] = ["points", "wins", "set_ratio", "point_ratio", "h2h_points"];
 const ICEHOCKEY = moduleOf("icehockey");
 const FOOTBALL = moduleOf("football");
 const CFG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false };
