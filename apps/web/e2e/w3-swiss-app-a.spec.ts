@@ -468,10 +468,13 @@ test.describe("X-SW-29 a bye has no court and no sheet", () => {
     for (const b of boards) await expect(page.locator(`[data-fixture-no="${b.fixture_no}"]`).first()).toBeAttached();
     for (const b of byes) await expect(page.locator(`[data-fixture-no="${b.fixture_no}"]`)).toHaveCount(0);
 
-    // The auto pass. Which planner answers is not this test's business: the placement service lays a board from the
-    // window's first org-local midnight (so a board can sit at 00:00 on 2030-06-18), the greedy fallback from the 11:00Z
-    // start. Either way the boards land on the window's first day, and the print-day list below names that day in the
-    // same org zone the window is read in, so the day assertion holds for both.
+    // The auto pass. The placement service lays a board from the window's first org-local midnight (so a board can sit
+    // at 00:00 on 2030-06-18), the greedy fallback from the 11:00Z start. The boards do NOT always land on the window's
+    // first day: X-SW-29 (W3 T11 finding) - the solver's lattice runs one slack day past greedy's end
+    // (`boundSolverWindow`), every objective rung (placed > days > day_span > day_start > idle_gap > imbalance) is
+    // shift-invariant, so the whole board can tie onto 2030-06-19 (measured about 1 run in 4 on a 4-vCPU placement
+    // container, the CI runner's size). The day assertion below is the defect's witness and is deliberately NOT relaxed;
+    // owner decision pending (W3 App B task-11 report).
     const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
       tz: "UTC",
       config: {

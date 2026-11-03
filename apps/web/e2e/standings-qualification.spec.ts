@@ -40,7 +40,6 @@ import {
 } from "@seazn/engine/competition";
 import type { TiebreakerKey } from "@seazn/engine/sport";
 import { generic } from "@seazn/engine/sports/generic";
-import { standingsColumns } from "../src/lib/public-site";
 import { TAG, addEntrantsViaApi, apiJson, expectNoHorizontalScroll, scoreFixture } from "./helpers";
 import { closeOpenContexts, openContexts } from "./spectator-public-helpers";
 import {
@@ -135,8 +134,9 @@ async function settle(request: APIRequestContext, t: Pick<TableRef, "stageId" | 
 test.beforeAll(async ({ browser }) => {
   // competition 1; three divisions at two calls each, plus one config read;
   // five stages; three entrant posts; four generates; three starts; ~10
-  // fixture lists; ten results at two calls each; ~8 standings polls.
-  test.setTimeout(Math.max(FLOOR_MS, (1 + 7 + 5 + 3 + 4 + 3 + 10 + 20 + 8) * API_CALL_MS));
+  // fixture lists; ten results at two calls each; ~8 standings polls; one
+  // stage read (the Swiss's pinned order, T11 review m2).
+  test.setTimeout(Math.max(FLOOR_MS, (1 + 7 + 5 + 3 + 4 + 3 + 10 + 20 + 8 + 1) * API_CALL_MS));
   seedContext = await browser.newContext();
   const request = seedContext.request;
   const org = await activeOrgSlug(request);
@@ -156,8 +156,9 @@ test.beforeAll(async ({ browser }) => {
   expect(read.data?.config, "the division's config reads back").toBeDefined();
   const perMatch = generic.matchPointsBounds(generic.configSchema.parse(read.data!.config));
   // W3 ruling 252 (RB3-8; X-SW-9, BD-TB-2): the order this Swiss ranks by is the engine's to declare - its one resolver over
-  // this scene's own layers (the stage below sets no order; the division's is read back, null = inherit), so the sport's
-  // Swiss chain answers. Never a list typed here: the hub column test below derives its ladders from it.
+  // this scene's own layers (the stage below is posted with no order; the division's is read back, null = inherit), so the
+  // sport's Swiss chain answers. Never a list typed here: the hub column test below derives its ladders from it. That the
+  // stage really ranks by the SPORT's order is a premise, asserted once the stage is started (below), not assumed.
   const swissCascade = resolveTableRules({
     module: generic,
     stageKind: "swiss",
@@ -178,6 +179,16 @@ test.beforeAll(async ({ browser }) => {
   const added = await addEntrantsViaApi(request, swissDiv.id, SWISS_NAMES);
   expect(added.status, "the Swiss field was created").toBe(201);
   ok(await apiJson(request, `/api/v1/divisions/${swissDiv.id}/start`, "POST"), "start swiss");
+  // T11 review m2 (assumptions are guards): the derivation above passed no stage order and the division's read-back order.
+  // The started stage must rank by its SPORT's layer and by the very keys the engine resolved - two independent sides that
+  // agree before the hub test trusts either. A stage or division order arriving from anywhere reds here, by name.
+  const started = await apiJson<{ tableRules: { tiebreakers: { keys: string[]; source: string } } | null }>(
+    request,
+    `/api/v1/stages/${swissId}`,
+  );
+  expect(started.status, JSON.stringify(started.error)).toBe(200);
+  expect(started.data?.tableRules?.tiebreakers.source, "premise: the started Swiss ranks by its sport's order").toBe("sport");
+  expect(started.data?.tableRules?.tiebreakers.keys, "premise: the Swiss's order is the chain the engine resolved").toEqual([...swissCascade]);
   for (let round = 1; round <= PLAYED; round++) {
     ok(await apiJson(request, `/api/v1/stages/${swissId}/generate`, "POST"), `pair round ${round}`);
     let seated: Fx[] = [];
@@ -773,23 +784,37 @@ function expectHeadersApart(g: Awaited<ReturnType<typeof headerGeometry>>, where
 /** The columns each width shows, pinned so the header fix cannot move the
  *  fold: every column from `md` up, the compact set on a closed phone table,
  *  every column again once "More" opens it. `TABLE_COLUMNS` is the generic
- *  table every stage kind draws (the name, the result ledger, the sport's
- *  metrics, Pts); a Swiss adds its chain's ladders after Pts (`everyColumn`). */
-const TABLE_COLUMNS = ["rank", "team", "played", "won", "lost", "for", "against", "diff", "points"];
+ *  table every stage kind draws: the name, the result ledger, the sport's
+ *  displayed metrics (the ENGINE's `generic.metrics`, in declaration order,
+ *  never typed here: T11 review m3), Pts. A Swiss adds its chain's ladders
+ *  after Pts (`everyColumn`). */
+const TABLE_COLUMNS = [
+  "rank",
+  "team",
+  "played",
+  "won",
+  "lost",
+  ...generic.metrics.filter((m) => m.display !== false).map((m) => m.key),
+  "points",
+];
 const COMPACT = ["rank", "team", "played", "won", "lost", "points"];
 
 /** Every column the hub's Swiss table draws, left to right. W3 ruling 252 (RB3-8; X-SW-9, BD-TB-2): a Swiss stage ranks by its
  *  sport's Swiss chain, and the public table prints that chain's derived ladders after Pts. Which ladders, and in what order, is
- *  the app's own column map (`standingsColumns`, which the hub's `tableColumns` calls) over the chain the ENGINE resolved for
- *  this scene in `beforeAll` - derived, never typed, so the next chain change moves this list with it. The ladders are long
- *  tail: `COMPACT` (the closed phone fold) does not change. */
+ *  the ENGINE's declaration, never the app's column map (that is the code under test - T11 review I1): `DERIVED_METRICS`
+ *  (engine `competition/display`) lists the "cascade keys that earn a standings column when the division's cascade uses them
+ *  ... Declaration order = column order", over the chain the engine resolved for this scene in `beforeAll`. Derived, never
+ *  typed, so the next chain change moves this list with it. The ladders are long tail: `COMPACT` (the closed phone fold) does
+ *  not change. */
 function everyColumn(): string[] {
-  const ladders = standingsColumns([], scene.swiss.cascade, [], DERIVED_METRICS)
-    .filter((c) => c.kind === "derived")
-    .map((c) => c.key);
+  const ladders = DERIVED_METRICS.filter((d) => scene.swiss.cascade.includes(d.key)).map((d) => d.key);
   // differential: before W3 this Swiss table drew TABLE_COLUMNS alone (the pre-2.0 generic chain held no ladder). A chain that
-  // puts none on it would leave this test asserting yesterday's list, so zero ladders is a failure, not a pass.
-  expect(ladders.length, `premise (ruling 252): the engine's Swiss chain ${JSON.stringify(scene.swiss.cascade)} puts a ladder on the table`).toBeGreaterThan(0);
+  // puts none on it would leave this test asserting yesterday's list, so zero ladders is a failure, not a pass. Both inputs
+  // are the engine's, so a red here is the engine's chain or its DERIVED_METRICS declaration, never the hub.
+  expect(
+    ladders.length,
+    `premise (ruling 252): the engine's Swiss chain ${JSON.stringify(scene.swiss.cascade)} holds a key its DERIVED_METRICS declares a column`,
+  ).toBeGreaterThan(0);
   console.log(`DERIVED hub Swiss ladders (ruling 252): ${JSON.stringify(ladders)} from ${JSON.stringify(scene.swiss.cascade)}`);
   return [...TABLE_COLUMNS, ...ladders];
 }
