@@ -4,6 +4,7 @@ import { fill, uiEn } from "./match-room-kit";
 import { closeOpenContexts } from "./spectator-public-helpers";
 import { API_CALL_MS, FLOOR_MS, STEP_MS, spectator } from "./spectator-w2-kit";
 import {
+  BADMINTON_GAME,
   LATE_SPORTS,
   addLatePlayer,
   isByeRow,
@@ -23,6 +24,7 @@ import {
   oppDiff,
   rankByChain,
   ratio,
+  sonnebornBerger,
   tablePoints,
   type ChainRow,
   type DeclaredPointsRule,
@@ -60,10 +62,8 @@ test.describe("W3 Swiss app-B scaffold", () => {
 const BADMINTON = LATE_SPORTS.find((s) => s.key === "badminton")!;
 const CHESS = LATE_SPORTS.find((s) => s.key === "boardgame")!;
 
-/** What `LATE_SPORTS`' badminton result sends for every board (two `badminton.game.summary` events at 21-10): the sets and
- *  rally points the oracle's ratio keys read. Typed from the kit's payload, so a kit change reds the order check loudly. */
-const BADMINTON_GAME = { won: 21, lost: 10, games: 2 } as const;
-/** One board played through the scorer's events: start + each result event, each a state read and a POST. */
+/** One board played through the scorer's events: start + each result event, each a state read and a POST. `BADMINTON_GAME` is
+ *  the kit's own payload (`LATE_SPORTS` sends it), so the sets and rally points the oracle's ratio keys read move with it. */
 const CALLS_PER_BADMINTON_BOARD = 2 * (1 + BADMINTON_GAME.games);
 const CALLS_PER_CHESS_BOARD = 2 * 2;
 
@@ -441,6 +441,10 @@ test.describe("SW-L10 an odd Swiss with three late players and a Buchholz cut in
     const outcome = (mask: number) => r4.map((f, i) => asOracle(f, (mask >> i) & 1 ? weaker(f) : stronger(f)));
     const upsets = (m: number) => m.toString(2).replace(/0/g, "").length;
     const masks = Array.from({ length: 1 << r4.length }, (_, m) => m).sort((x, y) => upsets(x) - upsets(y) || x - y);
+    // Measured on the w3b10 probe server (4 runs of rounds 1-3, each with its own lots): 13-14 of the 32 round-4 outcomes
+    // fit, so the search has wide margin. It is not a guarantee - rounds 1-3 follow the pairing's lots. If this ever reds
+    // with "0 of 32", the fix is to widen the search into round 3's results (search rounds 3 and 4 together), not to
+    // loosen what a fit is.
     const fits = masks.filter((m) => {
       const fx = [...played, ...outcome(m)];
       const { rank, pts } = judge(fx);
@@ -534,10 +538,13 @@ test.describe("SW-L10 an odd Swiss with three late players and a Buchholz cut in
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-// X-SW-12 on a chess Swiss: five seeded and three late players (one per case) over three rounds. P-A5 (colours never differ by
-// more than 2 and never repeat three times running; home is White, BG-SW-1), and every row's Buchholz and Cut-1 - the absences'
-// included - are the oracle's in the stage's half-point display, on the API and on the public table. Strict alternation is a
-// pairing PREFERENCE (P-Q5), so it is not asserted. Rounds 2 and 3 are Paired over the API: the desk's Pair is the flow above's.
+// X-SW-12 on a chess Swiss: five seeded and three late players (one per case) over four rounds. Round 1's bye is left STANDING:
+// L1 arrives in round 2, after round 1 is played, so nothing takes it. That puts a boardgame bye on the table (plan Task 2 step
+// 6; the sport whose `byeScore` left): it pays the declared win (X-SW-5), and the ladders read it - Buchholz scores it against a
+// dummy, Sonneborn-Berger as a win over that dummy. P-A5 (colours never three times running; home is White, BG-SW-1) with
+// X-SW-11's final-round topscorer exemption, and every row's Buchholz, Cut-1 and SB - the absences' and the bye's included - are
+// the oracle's in the stage's half-point display, on the API and on the public table. Strict alternation is a pairing
+// PREFERENCE (P-Q5), so it is not asserted. Rounds 2-4 are Paired over the API: the desk's Pair is the flow above's.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 test.describe("X-SW-12 chess: the three late-entry cases on one boardgame Swiss", () => {
   test.describe.configure({ mode: "serial" });
@@ -547,17 +554,23 @@ test.describe("X-SW-12 chess: the three late-entry cases on one boardgame Swiss"
 
   const SEEDED = 5;
   const LATE = 3;
-  const ROUNDS = 3;
-  const BOARDS_PLAYED = 3 + 3 + 4;
-  const API_CALLS = 12 + BOARDS_PLAYED * CALLS_PER_CHESS_BOARD + 25;
+  const ROUNDS = 4;
+  /** Round 1 seats five (two boards, the bye); L1 takes round 2's bye (a); round 3 seats six; round 4 seven, L3 taking its bye (b). */
+  const BOARDS_PLAYED = 2 + 3 + 3 + 4;
+  const API_CALLS = 14 + BOARDS_PLAYED * CALLS_PER_CHESS_BOARD + 30;
   /** Three Add late player paths (4 each) and the hub (2). */
   const UI_STEPS = LATE * 4 + 2;
 
-  test("5 + 3 late over three rounds: colours within the limits, and the absences' Buchholz is the oracle's in half-points", async ({ page, request, browser }) => {
+  test("5 + 3 late over four rounds with round 1's bye standing: colours within the limits, and every ladder is the oracle's in half-points", async ({
+    page,
+    request,
+    browser,
+  }) => {
     test.setTimeout(Math.max(FLOOR_MS, API_CALLS * API_CALL_MS + UI_STEPS * STEP_MS));
     const r = await startedSwiss(request, CHESS, SEEDED, ROUNDS, "SW-L10C");
-    const { rule, drawPoints } = await declared(request, r.stageId);
+    const { rule, chain, drawPoints } = await declared(request, r.stageId);
     expect(rule.unit, "premise: chess is shown in half-points").toBe("half");
+    expect(chain, "premise: the chess chain carries Sonneborn-Berger, so the table prints it").toContain("sberger");
     const names = new Map(r.nameOf);
     const strength = new Map([...r.nameOf].map(([id, n]) => [id, r.names.indexOf(n) + 1]));
     const stronger = (f: Seated) => (strength.get(f.home_entrant_id!)! < strength.get(f.away_entrant_id!)! ? f.home_entrant_id! : f.away_entrant_id!);
@@ -582,51 +595,104 @@ test.describe("X-SW-12 chess: the three late-entry cases on one boardgame Swiss"
       const res = await apiJson(request, `/api/v1/stages/${r.stageId}/generate`, "POST");
       expect(res.status, `pair round ${n}: ${JSON.stringify(res.error)}`).toBe(200);
     };
+    type StandingsRow = { entrantId: string; points: number; metrics: Record<string, number> };
+    const standings = async () => {
+      const got = await apiJson<{ rows: StandingsRow[] }>(request, `/api/v1/stages/${r.stageId}/standings`);
+      expect(got.status, JSON.stringify(got.error)).toBe(200);
+      return got.data!.rows;
+    };
 
-    const L1 = await late(1);
-    expect([L1.le.case, L1.le.round], "(a) before any board starts").toEqual(["a", 1]);
+    // Round 1 (paired by `startedSwiss`) seats five: one bye, which pays the declared win at once (X-SW-5).
+    const byes1 = standingBye((await rows()).filter((f) => f.round_no === 1));
+    expect(byes1, "round 1's five seat one bye").toHaveLength(1);
+    const holder = byes1[0]!.home_entrant_id!;
+    const byeFx: OracleFixture = { round: 1, home: holder, away: null, winner: holder };
+    await expect
+      .poll(async () => (await standings()).find((row) => row.entrantId === holder)?.points, {
+        timeout: 20_000,
+        message: "the boardgame bye pays the declared win",
+      })
+      .toBe(tablePoints([byeFx], rule).get(holder));
     for (const f of await boards(1)) await play(f);
     await pair(2);
-    const b2 = await boards(2);
-    await scoreAt(request, b2[0]!.id, "core.start");
-    const L2 = await late(2);
-    expect([L2.le.case, L2.le.round], "(c) a started round with no bye").toEqual(["c", 3]);
-    for (const [i, f] of b2.entries()) await play(f, i === 0);
+    const L1 = await late(1);
+    expect([L1.le.case, L1.le.round], "(a) before any board of round 2 starts: L1 takes round 2's bye").toEqual(["a", 2]);
+    for (const f of await boards(2)) await play(f);
     await pair(3);
     const b3 = await boards(3);
     await scoreAt(request, b3[0]!.id, "core.start");
+    const L2 = await late(2);
+    expect([L2.le.case, L2.le.round], "(c) a started round with no bye: L2 joins round 4").toEqual(["c", 4]);
+    for (const f of b3) await play(f, f.id === b3[0]!.id);
+    await pair(4);
+    const b4 = await boards(4);
+    await scoreAt(request, b4[0]!.id, "core.start");
     const L3 = await late(3);
-    expect([L3.le.case, L3.le.round], "(b) a started round with a bye").toEqual(["b", 3]);
-    for (const f of await boards(3)) await play(f, f.id === b3[0]!.id);
+    expect([L3.le.case, L3.le.round], "(b) a started round with a bye: L3 takes round 4's").toEqual(["b", 4]);
+    for (const f of await boards(4)) await play(f, f.id === b4[0]!.id);
     expect(played, "every board recorded").toHaveLength(BOARDS_PLAYED);
-    expect(standingBye(await rows()), "(a) and (b) took both byes").toHaveLength(0);
+    expect(
+      standingBye(await rows()).map((f) => [f.round_no, f.home_entrant_id]),
+      "only round 1's bye stands: (a) and (b) took rounds 2 and 4's",
+    ).toEqual([[1, holder]]);
+    const all = [...played, byeFx];
 
-    // P-A5 over the played boards, home = White, per entrant; zero entrants checked is a failure.
+    // P-A5 over the played boards, home = White, per entrant (a bye carries no colour). X-SW-11 (FIDE C.04.3 Art. 1.8; the app
+    // pairs the stage's last round with `finalRoundMaxScore` = (rounds - 1) x a win): in the FINAL round a board with a
+    // topscorer - over half that maximum going into it - is exempt from the limits on BOTH sides, so those two entrants' final
+    // games are not judged. The win is the declared rule's, through the oracle, never the product's maximum.
+    // At four games or fewer, a colour difference over 2 needs three in a row, so the run check carries P-A5's difference
+    // clause too (review m7). Its third clause - two non-topscorers with the same absolute preference never meet - is the
+    // limits read a round later: such a board leaves one of them three in a row, which the run check reads.
+    const winPts = tablePoints([{ round: 1, home: "w", away: "l", winner: "w" }], rule).get("w")!;
+    const before = tablePoints(
+      all.filter((f) => f.round < ROUNDS),
+      rule,
+    );
+    const topscorers = new Set([...before].filter(([, p]) => p > ((ROUNDS - 1) * winPts) / 2).map(([id]) => id));
+    const exempt = new Set(
+      played.filter((f) => f.round === ROUNDS && (topscorers.has(f.home) || topscorers.has(f.away!))).flatMap((f) => [f.home, f.away!]),
+    );
+    expect(exempt.size, "premise: the final round seats a topscorer (seed 1 wins every game), so X-SW-11 is reached").toBeGreaterThan(0);
     const colours = new Map<string, ("W" | "B")[]>();
     for (const f of [...played].sort((a, b) => a.round - b.round)) {
       colours.set(f.home, [...(colours.get(f.home) ?? []), "W"]);
       colours.set(f.away!, [...(colours.get(f.away!) ?? []), "B"]);
     }
-    const standings = await apiJson<{ rows: { entrantId: string; metrics: Record<string, number> }[] }>(request, `/api/v1/stages/${r.stageId}/standings`);
-    expect(standings.status, JSON.stringify(standings.error)).toBe(200);
+    const table = await standings();
+    let judged = 0;
     for (const [id, seq] of colours) {
+      const read = exempt.has(id) ? seq.slice(0, -1) : seq;
+      judged += read.length;
+      expect(read.join(""), `${names.get(id)}: no colour three times running${exempt.has(id) ? " before its exempt final board" : ""} (P-A5)`).not.toMatch(/WWW|BBB/);
       const whites = seq.filter((c) => c === "W").length;
-      expect(Math.abs(whites - (seq.length - whites)), `${names.get(id)}: colour difference within 2 (P-A5)`).toBeLessThanOrEqual(2);
-      expect(seq.join(""), `${names.get(id)}: no colour three times running (P-A5)`).not.toMatch(/WWW|BBB/);
-      const m = standings.data!.rows.find((row) => row.entrantId === id)!.metrics;
+      const m = table.find((row) => row.entrantId === id)!.metrics;
       expect([m.white, m.black], `${names.get(id)}: the table's colour count is the seats'`).toEqual([whites, seq.length - whites]);
     }
     expect(colours.size, "anti-vacuity: every entrant's colours checked").toBe(SEEDED + LATE);
+    expect(judged, "anti-vacuity: every game judged but each exempt entrant's final one").toBe(2 * BOARDS_PLAYED - exempt.size);
 
-    // The absences: L2 missed rounds 1-2 (added while round 2 was under way), L3 rounds 1-2 (added in round 3, which it played).
-    const opts: LedgerOpts = { rule, rounds: ROUNDS, drawPoints, absent: new Map([[L2.id, [1, 2]], [L3.id, [1, 2]]]) };
-    const want = Object.fromEntries(
-      [...names.keys()].map((id) => [names.get(id)!, { buchholz: display(buchholz(played, id, opts), rule.unit), buchholz_cut1: display(buchholzCut1(played, id, opts), rule.unit) }]),
-    );
+    // The absences: L1 missed round 1 (added in round 2, which it played); L2 and L3 rounds 1-3 (added in rounds 3 and 4, both
+    // play round 4).
+    const opts: LedgerOpts = { rule, rounds: ROUNDS, drawPoints, absent: new Map([[L1.id, [1]], [L2.id, [1, 2, 3]], [L3.id, [1, 2, 3]]]) };
+    const ladders = (fx: readonly OracleFixture[], id: string) => ({
+      buchholz: display(buchholz(fx, id, opts), rule.unit),
+      buchholz_cut1: display(buchholzCut1(fx, id, opts), rule.unit),
+      sberger: display(sonnebornBerger(fx, id, opts), rule.unit),
+    });
+    const want = Object.fromEntries([...names.keys()].map((id) => [names.get(id)!, ladders(all, id)]));
     expect(Object.keys(want), "anti-vacuity: every entrant judged").toHaveLength(SEEDED + LATE);
+    // The bye is in the numbers: read without it, the oracle's own ladders for its holder fall, so a table that dropped the bye
+    // (or scored it as a loss) could not match.
+    const blind = ladders(played, holder);
+    const seen = want[names.get(holder)!]!;
+    expect(blind.buchholz, "the standing bye adds to its holder's Buchholz").toBeLessThan(seen.buchholz);
+    expect(blind.sberger, "the standing bye adds to its holder's SB, as a win").toBeLessThan(seen.sberger);
     expect(
-      Object.fromEntries(standings.data!.rows.map((row) => [names.get(row.entrantId)!, { buchholz: row.metrics.buchholz, buchholz_cut1: row.metrics.buchholz_cut1 }])),
-      "the standings carry the oracle's Buchholz and Cut-1, in display points",
+      Object.fromEntries(
+        table.map((row) => [names.get(row.entrantId)!, { buchholz: row.metrics.buchholz, buchholz_cut1: row.metrics.buchholz_cut1, sberger: row.metrics.sberger }]),
+      ),
+      "the standings carry the oracle's Buchholz, Cut-1 and SB, in display points",
     ).toEqual(want);
     // And on the public table a visitor reads.
     const div = await apiJson<{ competition_id: string; slug: string }>(request, `/api/v1/divisions/${r.divisionId}`);
@@ -640,7 +706,12 @@ test.describe("X-SW-12 chess: the three late-entry cases on one boardgame Swiss"
         async () => {
           const got = await hubRows(visitor, hubUrl, div.data!.slug);
           if (typeof got === "string") return got;
-          return Object.fromEntries(got.map((row) => [names.get(whoIs(row.th, names))!, { buchholz: num(row.cells.buchholz), buchholz_cut1: num(row.cells.buchholz_cut1) }]));
+          return Object.fromEntries(
+            got.map((row) => [
+              names.get(whoIs(row.th, names))!,
+              { buchholz: num(row.cells.buchholz), buchholz_cut1: num(row.cells.buchholz_cut1), sberger: num(row.cells.sberger) },
+            ]),
+          );
         },
         { timeout: 60_000, intervals: [2_000], message: "the public table prints the oracle's ladders" },
       )
@@ -655,7 +726,7 @@ test.describe("X-SW-12 chess: the three late-entry cases on one boardgame Swiss"
 // Negatives: the same stage's round 1 (look-ahead asked, next round pairable), and the plan's 6 x 5 Swiss pairing round 3.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 test.describe("X-SW-10 the desk warns when the next round cannot be paired", () => {
-  test.describe.configure({ mode: "serial" });
+  // Not serial (review m8): the two tests build their own stages, so a red positive must not skip the negative (class 21).
 
   /** [home index, away index, result] per board, p0..p7 = seeds 1..8, `h`/`a` the side that wins, `d` a draw. */
   const HISTORY: readonly (readonly (readonly [number, number, "h" | "a" | "d"])[])[] = [

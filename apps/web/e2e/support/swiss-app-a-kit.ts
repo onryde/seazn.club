@@ -56,6 +56,10 @@ export async function scoreAt(request: APIRequestContext, fixtureId: string, typ
   expect(res.status, `${type}: ${JSON.stringify(res.error)}`).toBeLessThan(300);
 }
 
+/** Every badminton board the kit plays: `games` `badminton.game.summary` events, each `won`-`lost` to the winner. Exported so a
+ *  spec that feeds an oracle the board's sets and rally points reads the payload the kit SENDS, not a copy of it. */
+export const BADMINTON_GAME = { won: 21, lost: 10, games: 2 } as const;
+
 export const LATE_SPORTS: LateSport[] = [
   {
     key: "badminton",
@@ -67,8 +71,9 @@ export const LATE_SPORTS: LateSport[] = [
     },
     async result(request, f, winner) {
       const homeWins = winner === f.home_entrant_id;
-      for (let g = 0; g < 2; g++) {
-        await scoreAt(request, f.id, "badminton.game.summary", homeWins ? { home: 21, away: 10 } : { home: 10, away: 21 });
+      const { won, lost, games } = BADMINTON_GAME;
+      for (let g = 0; g < games; g++) {
+        await scoreAt(request, f.id, "badminton.game.summary", homeWins ? { home: won, away: lost } : { home: lost, away: won });
       }
     },
   },
