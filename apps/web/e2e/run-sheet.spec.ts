@@ -1255,6 +1255,11 @@ test("desktop (E1): the stage's actions sit in the card HEADER - left of the div
   expect(toolsBox.x, "the settings buttons are right of the divider").toBeGreaterThanOrEqual(dividerBox.x + dividerBox.width - 1);
   expect(Math.abs(railBox.y - toolsBox.y), "actions and settings share a line").toBeLessThan(24);
   expect(dividerBox.width, "a thin rule").toBeLessThanOrEqual(2);
+  // SCF (owner pick, Option A): the divider is the SETTINGS group's own first child, so it shares the settings buttons' line (centre to
+  // centre, within half a button) and is right beside them - it can never be stranded on a line of its own.
+  expect(Math.abs(dividerBox.y + dividerBox.height / 2 - (toolsBox.y + toolsBox.height / 2)), "the divider is on the settings buttons' line").toBeLessThan(toolsBox.height / 2);
+  expect(toolsBox.x - (dividerBox.x + dividerBox.width), "and right beside them").toBeLessThanOrEqual(24);
+  expect(await divider.evaluate((el) => el.parentElement?.getAttribute("data-testid")), "the divider belongs to the settings group").toBe("stage-tools-group");
 
   // PRINT WHAT WAS SEEN beside the gate (_RULES.md): where each stage-chrome testid landed.
   const presence: Record<string, { onPage: number; inRail: number; inRows: number }> = {};

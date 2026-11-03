@@ -29,6 +29,7 @@ export function WithReasonTip({
   id,
   reason,
   reasonTestId,
+  align = "start",
   children,
 }: {
   /** The bubble's id - the control's `aria-describedby` must name the same one. */
@@ -36,6 +37,10 @@ export function WithReasonTip({
   /** The reason, in words. */
   reason: React.ReactNode;
   reasonTestId: string;
+  /** Which edge of the control the floating bubble hangs from (from `md`; below it the bubble is in flow). `end` for a control that is
+   *  last in a right-aligned group (the stage card's Bracket button): a 256px bubble from its left edge would run off the card. The
+   *  two class strings are literal on purpose - Tailwind only generates tokens it can read. */
+  align?: "start" | "end";
   /** The greyed control that owns the reason. */
   children: React.ReactNode;
 }) {
@@ -89,7 +94,7 @@ export function WithReasonTip({
         id={id}
         data-testid={reasonTestId}
         data-open={open ? "true" : "false"}
-        className={`${open ? "block" : dismissed ? "hidden" : "hidden md:group-hover/tip:block group-focus-within/tip:block"} min-w-0 text-xs leading-snug text-slate-700 max-md:basis-full max-md:rounded-lg max-md:bg-slate-50 max-md:px-3 max-md:py-2 md:absolute md:left-0 md:top-full md:z-30 md:mt-1 md:w-64 md:max-w-[calc(100vw-2rem)] md:rounded-xl md:border md:border-purple-100 md:bg-white md:p-3 md:shadow-lg md:before:absolute md:before:inset-x-0 md:before:-top-1.5 md:before:h-1.5`}
+        className={`${open ? "block" : dismissed ? "hidden" : "hidden md:group-hover/tip:block group-focus-within/tip:block"} min-w-0 text-xs leading-snug text-slate-700 max-md:basis-full max-md:rounded-lg max-md:bg-slate-50 max-md:px-3 max-md:py-2 md:absolute ${align === "end" ? "md:right-0" : "md:left-0"} md:top-full md:z-30 md:mt-1 md:w-64 md:max-w-[calc(100vw-2rem)] md:rounded-xl md:border md:border-purple-100 md:bg-white md:p-3 md:shadow-lg md:before:absolute md:before:inset-x-0 md:before:-top-1.5 md:before:h-1.5`}
       >
         {reason}
       </span>

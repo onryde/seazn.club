@@ -13,8 +13,9 @@
 // its `canAddRound` says Add a round goes through, that button stands beside it.
 //
 // Beside it, the two rail pieces (stage-rail.tsx mounts them; this file owns their state and copy so the rail's own Swiss
-// blocks stay untouched): `SwissRoundsChip`, "Rounds: N · Edit" until the stage's first start and a fixed "Rounds: N"
-// after it, and `SwissAddRoundMenuItem`, the More menu's "Add a round" after that start — offered on THE predicate
+// blocks stay untouched): `SwissRoundsChip`, "Rounds: N · Edit" until the stage's first start and nothing in the row after it (SCF,
+// owner pick Option A: the count is fixed and the legend line says "N rounds"; the dialog stays mounted for a refusal that still
+// comes back), and `SwissAddRoundMenuItem`, the More menu's "Add a round" after that start — offered on THE predicate
 // `addSwissRound` judges by (`addRound`, ruling C11), and at the hard maximum shown disabled with the reason. W3 T13 adds
 // `SwissFinishMenuItem`, the More menu's "Finish the Swiss now" beside it — offered on THE Finish predicate (`finish`,
 // `swissFinishState`), disabled with the reason while no round is complete or the round in progress is undecided — and
@@ -26,7 +27,7 @@
 // Save and Cancel sit at the end of the BODY, not in `Modal`'s `footer` slot: the body is short at every width, and
 // keeping them in the children keeps the whole dialog visible to `renderIsland`'s walk (its tests drive the stepper and
 // Save the way a browser would).
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { Modal } from "@/components/modal";
@@ -34,6 +35,15 @@ import { swissFinishPlanOf, type SwissFinishPlan } from "@/lib/swiss-finish-plan
 import { swissRefusalKey } from "@/lib/swiss-refusals";
 import { swissRoundsGuidanceLine, swissRoundsWarnNotice } from "@/lib/swiss-rounds";
 import { swissMoreItemsOf, swissRoundsEditPreview, type SwissRoundControl, type SwissRoundsEditFixture } from "@/lib/swiss-rounds-edit";
+import {
+  alignOf,
+  floatsNow,
+  POPOVER_RAISED,
+  popoverClasses,
+  pressedAnItem,
+  useStagePopover,
+  type PopoverAlign,
+} from "./stage-popover";
 
 /** What a refused write answered: `ApiV1Error`'s code and details, and `text`, the refusal in the reader's language as
  *  the panel says it (`swissStageRefusal`) — never the server's English sentence (T12 Fix round 1, review m1). */
@@ -71,7 +81,8 @@ export interface SwissRoundsRail {
 }
 
 /**
- * The rail's round count. Editable (a button opening the dialog) until the stage's first start; a fixed chip after it.
+ * The rail's round count. Editable (a button opening the dialog) until the stage's first start; nothing in the row after it (the legend
+ * line says "N rounds"; SCF).
  * The dialog is portalled to <body>: the phone sheet it opens from is itself a modal layer with a focus trap, and
  * `onOpen` lets the rail close that sheet first.
  */
@@ -105,20 +116,11 @@ export function SwissRoundsChip({
       document.body,
     );
   if (rail.control.started) {
-    // A dialog open when the stage started (a LOCKED answer refreshes the desk under it) stays open over the fixed chip,
-    // so the refusal and its Add a round recovery are not swept away by the refresh (T12 Fix round 1, review m4).
-    return (
-      <>
-        <span
-          data-testid="stage-rounds"
-          data-state="fixed"
-          className="inline-flex min-h-11 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-semibold tabular-nums text-slate-600"
-        >
-          {label}
-        </span>
-        {dialog}
-      </>
-    );
+    // The count is fixed once the stage has started (SW-M10, X-SW-17): there is nothing to press, and the legend line already says
+    // "N rounds", so nothing is drawn in the action row (SCF, owner pick Option A - a bordered pill that does nothing reads as a
+    // button). Only a dialog that was open when the stage started stays, over nothing: the desk refreshes under it (a LOCKED answer),
+    // and its refusal and its Add a round recovery must not be swept away by that refresh (T12 Fix round 1, review m4).
+    return <>{dialog}</>;
   }
   return (
     <>
@@ -224,9 +226,9 @@ export function SwissFinishMenuItem({
 
 /**
  * The rail's More for a running Swiss that has no "Add late player" — a fed Swiss (batch-4 ruling 3: Add a round and
- * Finish the Swiss now are offered on ANY running Swiss; only the late add is root-only). The same toggle, panel and
- * testids as the late-add More in stage-rail.tsx, which keeps its own block unchanged; the rail mounts exactly one of the
- * two. Nothing at all when neither item shows (`swissMoreItemsOf`), so the toggle never opens an empty panel. The open
+ * Finish the Swiss now are offered on ANY running Swiss; only the late add is root-only). The same toggle, panel, testids and
+ * floating behaviour (SCF, stage-popover.ts) as the late-add More in stage-rail.tsx, which keeps its own block; the rail mounts
+ * exactly one of the two. Nothing at all when neither item shows (`swissMoreItemsOf`), so the toggle never opens an empty panel. The open
  * state is the rail's (`open`/`onToggle`); `onFinishOpen` closes the phone sheet before Finish's confirm.
  */
 export function SwissMoreMenu({
@@ -246,27 +248,49 @@ export function SwissMoreMenu({
 }) {
   const msg = useMsg();
   const items = swissMoreItemsOf(rail.control);
+  // SCF: the same floating menu as the rail's late-add More (stage-popover.ts) - this one's open state is the rail's (`open` /
+  // `onToggle`), so closing it is a toggle, and `onToggle` is only ever asked while `open` (the hook fires only then).
+  const [align, setAlign] = useState<PopoverAlign>("start");
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const rootRef = useStagePopover(open, (how) => {
+    onToggle();
+    if (how === "escape") toggleRef.current?.focus();
+  });
   if (!items.addRound && !items.finish) return null;
   return (
-    <>
+    <div ref={rootRef} data-testid="stage-more-root" className="flex min-w-0 flex-col gap-2 md:relative">
       <button
+        ref={toggleRef}
         type="button"
         aria-expanded={open}
         aria-controls={`stage-more-menu-${stageId}`}
-        onClick={onToggle}
+        onClick={() => {
+          if (!open) setAlign(alignOf(rootRef.current));
+          onToggle();
+        }}
         data-testid="stage-more"
         className="btn btn-ghost min-h-11 justify-between gap-1.5 px-3 py-1.5 text-xs"
       >
         {msg("desk.tools.more")}
         <span aria-hidden="true">{open ? "▴" : "▾"}</span>
       </button>
-      <div id={`stage-more-menu-${stageId}`} hidden={!open} data-testid="stage-more-menu" className="min-w-0 md:basis-full">
-        <div className="flex flex-col overflow-hidden rounded-xl border border-purple-200 bg-white md:max-w-md">
+      <div
+        id={`stage-more-menu-${stageId}`}
+        hidden={!open}
+        data-testid="stage-more-menu"
+        onClick={(e) => {
+          if (!floatsNow() || !pressedAnItem(e.target)) return;
+          onToggle();
+          toggleRef.current?.focus();
+        }}
+        className={popoverClasses(align)}
+      >
+        <div className={`flex flex-col overflow-hidden rounded-xl border border-purple-200 bg-white ${POPOVER_RAISED}`}>
           <SwissAddRoundMenuItem stageId={stageId} busy={busy} rail={rail} />
           <SwissFinishMenuItem stageId={stageId} busy={busy} rail={rail} onOpen={onFinishOpen} />
         </div>
       </div>
-    </>
+    </div>
   );
 }
 

@@ -2834,13 +2834,14 @@ export async function openStagePanel(card: Locator, panel: StagePanel): Promise<
 }
 
 /** Match Day E1 item 3: open the bracket tree of a single-elimination knockout stage (the bracket no longer sits above the cards; it
- *  opens inside its stage's card, closed by default) and return the tree. With no `stageId` it takes the one card that has a Bracket
- *  button, so a division with a double-elimination stage (whose tree stays on the page) is not confused with it. */
+ *  opens inside its stage's card, closed by default) and return the tree. With no `stageId` it takes the one card whose Bracket button
+ *  TOGGLES (a disclosure, `aria-expanded`), so a double-elimination or stepladder card (a link to its page tree) or a greyed one is not
+ *  confused with it. */
 export async function openBracket(page: Page, stageId?: string): Promise<Locator> {
   if (stageId === undefined) await expandToggles(page.getByTestId("stage-collapse-toggle")); // a finished knockout's card starts folded (PB1)
   const card =
     stageId === undefined
-      ? page.locator("section[data-stage-id]").filter({ has: page.getByTestId("stage-tool-bracket") }).first()
+      ? page.locator("section[data-stage-id]").filter({ has: page.locator('[data-testid="stage-tool-bracket"][aria-expanded]') }).first()
       : stageCardOf(page, stageId);
   await openStagePanel(card, "bracket");
   return card.getByTestId("bracket-panel");

@@ -958,7 +958,10 @@ export default async function DivisionPage({
             {stages
               .filter((st) => bracketPlacement(st.kind, fixtures.filter((f) => f.stage_id === st.id)) === "page")
               .map((st) => (
-                <div key={st.id} className="mb-6">
+                // SCF fix round 1: the anchor the stage card's Bracket link jumps to (`#bracket-<stage id>`). `scroll-mt-20` is the house
+                // margin for an anchor under the sticky app nav (an h-14 = 56px bar, `nav.tsx`; `#add-entrant` uses the same): with less,
+                // the panel's heading lands behind the bar (fix round 2, review m1).
+                <div key={st.id} id={`bracket-${st.id}`} className="mb-6 scroll-mt-20">
                   <BracketPanel
                     kind={st.kind}
                     fixtures={fixtures.filter((f) => f.stage_id === st.id)}

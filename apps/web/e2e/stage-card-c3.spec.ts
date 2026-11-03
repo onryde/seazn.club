@@ -380,6 +380,9 @@ test("E1 (PB1): Complete's reason is a bubble on the greyed button - hover, focu
     const [c, d, t] = await Promise.all([complete.boundingBox(), card.getByTestId("stage-controls-divider").boundingBox(), card.getByTestId("stage-tool-format").boundingBox()]);
     expect(c!.x + c!.width, "actions, then the divider").toBeLessThanOrEqual(d!.x + 1);
     expect(d!.x + d!.width, "then the settings").toBeLessThanOrEqual(t!.x + 1);
+    // SCF (owner pick, Option A): the divider is the settings group's first child - on Match rules' line, right beside it.
+    expect(Math.abs(d!.y + d!.height / 2 - (t!.y + t!.height / 2)), "the divider is on the settings buttons' line").toBeLessThan(t!.height / 2);
+    expect(t!.x - (d!.x + d!.width), "and right beside them").toBeLessThanOrEqual(24);
   } else {
     await railTrigger.click();
     await expect(card.getByTestId("stage-rail-sheet"), "phone: the actions are in the Stage tools sheet").toBeVisible();
@@ -586,12 +589,15 @@ test("E1: a single-elimination knockout card has a Bracket button; the tree is c
   await expect(page.getByTestId("bracket-panel"), "a reload closes it").toHaveCount(0);
 });
 
-test("E1: a double-elimination stage has NO Bracket button and keeps its two-lane tree on the page", async ({ page, request }) => {
+test("E1: a double-elimination stage's Bracket button is a LINK to its two-lane tree, which stays on the page", async ({ page, request }) => {
   test.setTimeout(150_000);
   const { divisionId, stageId } = await seedKnockoutDivision(request, "double_elim", 4);
   const card = await openCard(page, request, divisionId, stageId);
-  await expect(card.getByTestId("stage-tool-bracket"), "no button on a double-elimination card").toHaveCount(0);
-  await expect(card.getByTestId("stage-sheet-tool-bracket"), "nor a phone row").toHaveCount(0);
+  // SCF fix round 1 (owner 2026-11-03): every bracket-kind card has the button; a page-placed tree gets a same-page link, not a toggle.
+  await expect(card.getByTestId("stage-tool-bracket"), "a link on a double-elimination card").toHaveJSProperty("tagName", "A");
+  await expect(card.getByTestId("stage-tool-bracket")).toHaveAttribute("href", `#bracket-${stageId}`);
+  await expect(card.getByTestId("stage-tool-bracket"), "a link is not a disclosure").not.toHaveAttribute("aria-expanded", /.*/);
+  await expect(card.getByTestId("stage-sheet-tool-bracket"), "and its phone row, the same link").toHaveCount(1);
   await expect(page.getByTestId("bracket-panel-de"), "its tree stays on the page, outside the card").toBeVisible({ timeout: STEP_MS });
   await expect(card.getByTestId("bracket-panel-de"), "...not inside the card").toHaveCount(0);
   await expectNoHorizontalScroll(page);
