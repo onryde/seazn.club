@@ -718,7 +718,13 @@ describe.runIf(HAS_DB)("X-SW-26 Finish in sequence", () => {
       expect(asked, "Pair is refused").not.toBeNull();
       expect(asked!.code).toBe("SWISS_NO_LEGAL_PAIRING");
       expect(asked!.status, "409: Finish after round 3 is the way out").toBe(409);
-      expect(asked!.extra, "the round, why (every unmet pair is cut off), and the field of six").toEqual({ round: 4, reason: "rematch", field: 6 });
+      expect(asked!.extra, "the round, why (every unmet pair is cut off), the field of six, and the recovery: Finish after round 3 goes through").toEqual({
+        round: 4,
+        reason: "rematch",
+        field: 6,
+        finishAfter: 3,
+        canFinish: true,
+      });
       const r4 = roundOf(await rowsOf(rig.stageId), 4);
       expect(r4.length, "round 4's shells are still there").toBeGreaterThan(0);
       expect(r4.filter((f) => f.home_entrant_id !== null || f.away_entrant_id !== null), "the refusal seats nobody: round 4 is empty shells").toEqual([]);

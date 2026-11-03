@@ -1988,13 +1988,18 @@ export async function swissGen(
   // `field_too_small` cannot reach here: `refuseSwissFieldUnderTwo` above refuses a round's field under two first
   // (STAGE_NOT_READY), so the reason is one of the four a field of two or more can have. The status is the table's: 409
   // when Finish is the way out (`swissFinishDetails` — the same predicate every `canFinish` the server sends reads), else
-  // 422. The Finish details on the body and the reason-specific copy are Task 4's.
+  // 422.
+  // W3 app-B T4 (SW-H1 on the desk): the body carries the recovery the desk offers — `finishAfter` k = the round before
+  // this one (what "Finish after round k" ends the Swiss at; every earlier round is decided or Pair next would have been
+  // refused STAGE_NOT_READY first) and `canFinish`, THE Finish predicate's answer (the same one `swissFinishDetails` reads
+  // for every other emitter, so an offered Finish always goes through). The five fields are copied BY NAME: the engine's
+  // `SwissRefusal` object is never spread into the body, so nothing it carries (entrant ids, history) can reach the wire.
   if (!paired.ok) {
     const admin = await import("./swiss-rounds-admin");
     const finishNow = admin.swissFinishDetails(await admin.swissFinishStateOf(tx, stageId));
     throw swissRefusal(
       "SWISS_NO_LEGAL_PAIRING",
-      { round: target, reason: paired.reason, field: paired.field },
+      { round: target, reason: paired.reason, field: paired.field, finishAfter: target - 1, canFinish: finishNow.canFinish },
       { resolvable: finishNow.canFinish },
     );
   }

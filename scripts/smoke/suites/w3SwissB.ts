@@ -40,6 +40,11 @@ import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
  * the wire a venue screen reads). The standings slide carries `tiebreakColumns` with exactly two keys, in the stage's cascade
  * order: football's Swiss chain (FB-TB-5) is points, diff, for, wins, buchholz, opp_diff, direct, lots, so the two are buchholz
  * then opp_diff. Their header words are not asserted here (T3 owns the words); the pairing of header to key is.
+ * T4 (SW-H1 on the desk; X-SW-3, X-SW-26): the refusal of check 1 carries the recovery the desk offers inside its notice - exactly
+ * `round`, `reason`, `field`, `finishAfter` (3: the round before the refused one, typed from the arithmetic) and `canFinish` (true:
+ * three rounds are decided) beside `code` and `message`, nothing else - and the Finish that notice's button posts goes through
+ * from that same refused state: `POST /api/v1/stages/{id}/swiss/finish` ends the Swiss after round 3 and the two shell rounds go.
+ * It reuses check 1's stage (the Community plan caps active competitions at 3, and checks 1-3 already hold three).
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissB runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissBSuite(): Promise<void> {
@@ -48,7 +53,8 @@ export async function w3SwissBSuite(): Promise<void> {
   // T8: 1 (X-SW-8: a late entrant's missed round is a virtual-opponent round in the Buchholz the anonymous hub prints).
   // T3: 1 (a football Swiss's hub table carries an Opp diff column with its words, over the wire a visitor reads).
   // T9: 1 (ST-G21: the same stage's anonymous /present board payload carries two tie-break columns, buchholz then opp_diff).
-  const EXPECTED_CHECKS = 5;
+  // T4: 1 (the refusal carries finishAfter 3 and canFinish, and the Finish its notice offers ends the Swiss after round 3).
+  const EXPECTED_CHECKS = 6;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -67,6 +73,9 @@ export async function w3SwissBSuite(): Promise<void> {
     home_entrant_id: string | null;
     away_entrant_id: string | null;
   };
+
+  /** Check 1's refused stage, kept for check 5 (the recovery runs from the state check 1 left). */
+  let refused: { divId?: string; stageId?: string; status: number; error: Record<string, unknown> | undefined } | undefined;
 
   // Check 1 — T1 (X-SW-3). Rounds 1-3 of the S6 shape (the expected shape is typed here from the rulebook's arithmetic: nine
   // distinct pairs met leave two triangles, and a triangle has an odd number of vertices).
@@ -123,6 +132,7 @@ export async function w3SwissBSuite(): Promise<void> {
     // The refusal's details ride beside `code` on the v1 envelope (api-v1/http.ts merges HttpError `extra`). Finish is
     // available after three decided rounds, so the table's RESOLVABLE status (409) is the one that must come back.
     const err: { code?: string; round?: number; reason?: string; field?: number } | undefined = res.json.error;
+    refused = { divId, stageId, status: res.status, error: res.json.error };
     const row = SWISS_REFUSALS.SWISS_NO_LEGAL_PAIRING;
     const ok =
       started.status < 300 && seeded === 9 && before.length === 15 &&
@@ -351,6 +361,32 @@ export async function w3SwissBSuite(): Promise<void> {
     w3Check(
       "w3b T9: a football Swiss's anonymous /present board carries two tie-break columns on its standings slide, buchholz then opp_diff" +
         (ok ? "" : ` - competition ${comp?.id ?? "none"}, division ${divRes.status} ${div?.id ?? "none"} slug ${div?.slug ?? "none"}, entrants ${made.length}, start ${started.status}, pair ${paired.status}, board ${boardRes.status} (${html.length} bytes), tiebreakColumns keys ${JSON.stringify(keys)}`),
+      ok,
+    );
+  }
+
+  // Check 5 - T4 (SW-H1 on the desk; X-SW-3, X-SW-26). Check 1 left a six-player Swiss refused at round 4 with rounds 1-3 decided.
+  // The refusal's body carries the five recovery fields and nothing else beside `code` and `message`; `finishAfter` is 3 (the
+  // round before the refused one) and `canFinish` is true (three decided rounds). The desk's "Finish after round 3" posts the
+  // stage's finish route: it ends the Swiss after round 3 (200, complete) and the two shell rounds go - 6 rows (two rounds of
+  // three boards), leaving the 9 played boards. Expected numbers are typed from that arithmetic, never read from the code.
+  {
+    const body = refused?.error;
+    const extraKeys = Object.keys(body ?? {}).filter((k) => k !== "code" && k !== "message").sort();
+    const stageId = refused?.stageId;
+    const divId = refused?.divId;
+    const finish = await v1(owner, `/api/v1/stages/${stageId}/swiss/finish`, "POST");
+    const done = v1data<{ finished_after: number; completed: boolean; shells_removed: number } | undefined>(finish);
+    const left = (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    const ok =
+      refused !== undefined && stageId !== undefined && divId !== undefined && body?.code === "SWISS_NO_LEGAL_PAIRING" &&
+      JSON.stringify(extraKeys) === JSON.stringify(["canFinish", "field", "finishAfter", "reason", "round"]) &&
+      body.finishAfter === 3 && body.canFinish === true && body.round === 4 &&
+      finish.status === 200 && done?.finished_after === 3 && done.completed === true && done.shells_removed === 6 &&
+      left.length === 9 && left.every((f) => f.round_no <= 3);
+    w3Check(
+      "w3b X-SW-3/X-SW-26: the refusal carries finishAfter 3 and canFinish true beside round, reason and field and nothing more, and the Finish its notice offers ends the Swiss after round 3 (200, complete, rounds 4 and 5 removed)" +
+        (ok ? "" : ` - stage ${stageId ?? "none"}, refusal ${JSON.stringify(body ?? null)}, extra keys ${JSON.stringify(extraKeys)}, finish ${finish.status} ${JSON.stringify(finish.json).slice(0, 200)}, rows left ${left.length}, rounds ${JSON.stringify([...new Set(left.map((f) => f.round_no))].sort())}`),
       ok,
     );
   }
