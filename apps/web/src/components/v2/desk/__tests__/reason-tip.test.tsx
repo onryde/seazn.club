@@ -131,3 +131,26 @@ describe("WithReasonTip - the bubble on a greyed control (PB1)", () => {
     expect(r.removed.find(([t]) => t === "keydown")![1]).toBe(key[1]);
   });
 });
+
+describe("WithReasonTip - which edge the floating bubble hangs from (SCF fix round 1)", () => {
+  const classOf = (align?: "start" | "end") => {
+    vi.stubGlobal("document", { addEventListener: () => undefined, removeEventListener: () => undefined });
+    const island = renderIsland(WithReasonTip, {
+      id: "why",
+      reason: "Why not",
+      reasonTestId: "reason",
+      ...(align === undefined ? {} : { align }),
+      children: <button type="button" />,
+    });
+    return String(propsOf(island.tree().find((e) => propsOf(e)["data-testid"] === "reason")!).className);
+  };
+
+  it("hangs from the control's left edge by default, and from its right edge when asked (a control last in a right-aligned group)", () => {
+    const tokens = (c: string) => c.split(/\s+/);
+    expect(tokens(classOf()), "default").toContain("md:left-0");
+    expect(tokens(classOf()), "default is not the right edge").not.toContain("md:right-0");
+    expect(tokens(classOf("start"))).toContain("md:left-0");
+    expect(tokens(classOf("end")), "end").toContain("md:right-0");
+    expect(tokens(classOf("end")), "end is not the left edge").not.toContain("md:left-0");
+  });
+});

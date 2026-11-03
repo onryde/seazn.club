@@ -79,7 +79,8 @@ import { pointsDiffer, stageTakesPoints } from "@/components/v2/stage-rules/stag
 import { TiebreaksEditor, stageLikeOf } from "@/components/v2/rules/tiebreaks-editor";
 import { DivisionRulesStrip, TOGGLE_OFF, TOGGLE_ON, type DivisionRulesStripProps, type RulesPanel } from "@/components/v2/rules/division-rules-strip";
 import { BracketPanel } from "@/components/v2/bracket-panel";
-import { bracketPlacement } from "@/lib/bracket-view";
+import { WithReasonTip } from "@/components/v2/desk/reason-tip";
+import { bracketAccess, bracketPlacement } from "@/lib/bracket-view";
 import { inheritedOrder as inheritedOrderOf, stagePooled, takesBestNthFrom, tiebreaksDiffer } from "@/components/v2/stage-rules/stage-tiebreaks-model";
 import type { StageTableRules } from "@/server/api-v1/schemas";
 import { isStagePreset, resolvedStageCfg, stageFormatSaveFragment } from "@/components/v2/stage-rules/stage-row-model";
@@ -1248,7 +1249,12 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // card (the page used to draw it above the cards for every viewer). `bracketPlacement` is the one predicate for who draws what:
         // a double-elimination layout or a stepladder is not a card's to draw and keeps its place on the page.
         const bracketInCard = bracketPlacement(stage.kind, stageFixtures) === "card";
-        const settingsTools: { panel: StagePanelKey; label: string }[] = [
+        // SCF fix round 1 (owner 2026-11-03: "every knockout stage card gets a Bracket button"): EVERY bracket-kind card carries the button,
+        // and `bracketAccess` says what it does - open the tree in the card (`toggle`), jump to the page's tree (`link`, the double
+        // elimination layout and the stepladder, whose trees stay on the page), or sit greyed with its reason until there is something to
+        // show (`generate`: no fixtures yet; `unavailable`: fixtures no view can draw - never a button that opens nothing).
+        const bracketKind = bracketAccess(stage.kind, stageFixtures);
+        const settingsTools: { panel: StagePanelKey; label: string; access?: "link" | "generate" | "unavailable" }[] = [
           ...(sportKey === undefined
             ? []
             : [
@@ -1258,8 +1264,73 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   ? [{ panel: "tiebreaks" as const, label: msg("stageTiebreaks.title") }]
                   : []),
               ]),
-          ...(bracketInCard ? [{ panel: "bracket" as const, label: msg("bracket.title") }] : []),
+          ...(bracketKind === null
+            ? []
+            : [{ panel: "bracket" as const, label: msg("bracket.title"), ...(bracketKind === "toggle" ? {} : { access: bracketKind }) }]),
         ];
+        // One tool button, drawn for the header row (`sheet` false) and the phone sheet (true): a toggle that opens its panel, a link to
+        // the page's tree, or a greyed button whose reason rides a bubble (`aria-disabled`, not `disabled`: it stays in the tab order, so
+        // the reason is reachable by keyboard and by finger - the Complete button's pattern). A closure, not a component, on purpose:
+        // `renderIsland` never invokes a nested function component's render (see the legend note below).
+        const toolButton = (tool: (typeof settingsTools)[number], sheet: boolean) => {
+          const prefix = sheet ? "stage-sheet-tool" : "stage-tool";
+          const base = sheet
+            ? "flex min-h-11 w-full items-center rounded-lg border px-3 text-left text-sm font-semibold"
+            : "inline-flex min-h-11 items-center rounded-lg border px-3 text-xs font-semibold";
+          const focus = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600";
+          if (tool.access === "link") {
+            return (
+              <a
+                key={tool.panel}
+                href={`#bracket-${stage.id}`}
+                data-testid={`${prefix}-${tool.panel}`}
+                onClick={sheet ? () => setOpenRailFor(null) : undefined}
+                className={`${base} ${focus} ${TOGGLE_OFF}`}
+              >
+                {tool.label}
+              </a>
+            );
+          }
+          if (tool.access !== undefined) {
+            const hintId = `${prefix}-bracket-hint-${stage.id}`;
+            return (
+              <WithReasonTip
+                key={tool.panel}
+                id={hintId}
+                align="end"
+                reason={msg(tool.access === "generate" ? "bracket.generateFirst" : "bracket.unavailable")}
+                reasonTestId={`${prefix}-bracket-hint`}
+              >
+                <button
+                  type="button"
+                  aria-disabled="true"
+                  aria-describedby={hintId}
+                  data-testid={`${prefix}-${tool.panel}`}
+                  className={`${base} ${focus} ${TOGGLE_OFF} cursor-help opacity-50`}
+                >
+                  {tool.label}
+                </button>
+              </WithReasonTip>
+            );
+          }
+          const on = panelOpen(stage.id, tool.panel);
+          return (
+            <button
+              key={tool.panel}
+              type="button"
+              data-testid={`${prefix}-${tool.panel}`}
+              aria-expanded={on}
+              aria-controls={`stage-panel-${stage.id}-${tool.panel}`}
+              onClick={() => {
+                togglePanel(stage.id, tool.panel);
+                if (sheet) setOpenRailFor(null);
+              }}
+              className={`${base} ${focus} ${on ? TOGGLE_ON : TOGGLE_OFF}`}
+            >
+              {tool.label}
+            </button>
+          );
+        };
         // Held keeps Complete locked but is not "in play": it waits for the organiser, and the card says so in its own clause.
         const stageHeld = stageFixtures.filter(
           (f) => (f.status === "needs_decision" || awaitingIds.has(f.id)) && !isBye(toRunSheetFixture(f)),
@@ -1500,25 +1571,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
             toolsSlot={
               settingsTools.length > 0 ? (
                 <div data-testid="stage-sheet-tools" className="flex flex-col gap-2 md:hidden">
-                  {settingsTools.map((tool) => {
-                    const on = panelOpen(stage.id, tool.panel);
-                    return (
-                      <button
-                        key={tool.panel}
-                        type="button"
-                        data-testid={`stage-sheet-tool-${tool.panel}`}
-                        aria-expanded={on}
-                        aria-controls={`stage-panel-${stage.id}-${tool.panel}`}
-                        onClick={() => {
-                          togglePanel(stage.id, tool.panel);
-                          setOpenRailFor(null);
-                        }}
-                        className={`flex min-h-11 w-full items-center rounded-lg border px-3 text-left text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600 ${on ? TOGGLE_ON : TOGGLE_OFF}`}
-                      >
-                        {tool.label}
-                      </button>
-                    );
-                  })}
+                  {settingsTools.map((tool) => toolButton(tool, true))}
                 </div>
               ) : null
             }
@@ -1604,22 +1657,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                           <span aria-hidden="true" data-testid="stage-controls-divider" className="hidden h-6 w-px shrink-0 bg-slate-300 xl:block" />
                         )}
                         <div data-testid="stage-tools" className={`flex min-w-0 flex-wrap items-center gap-2 ${canEdit ? "max-md:hidden" : ""}`}>
-                          {settingsTools.map((tool) => {
-                            const on = panelOpen(stage.id, tool.panel);
-                            return (
-                              <button
-                                key={tool.panel}
-                                type="button"
-                                data-testid={`stage-tool-${tool.panel}`}
-                                aria-expanded={on}
-                                aria-controls={`stage-panel-${stage.id}-${tool.panel}`}
-                                onClick={() => togglePanel(stage.id, tool.panel)}
-                                className={`inline-flex min-h-11 items-center rounded-lg border px-3 text-xs font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600 ${on ? TOGGLE_ON : TOGGLE_OFF}`}
-                              >
-                                {tool.label}
-                              </button>
-                            );
-                          })}
+                          {settingsTools.map((tool) => toolButton(tool, false))}
                         </div>
                         </div>
                       )}
