@@ -663,13 +663,12 @@ describe("every builtin sport, walked from Who plays to Create (counts)", () => 
     });
   }
 
-  it("its whole offer on Format with four suggested, its venue noun, the rules strip with its variants and rules, its kinds, and its own variant sent", async () => {
-    let sports = 0;
-    let cards = 0;
-    let refusedPairs = 0;
-    let variantsSeen = 0;
-    let ruleFieldsSeen = 0;
-    for (const m of builtinModules) {
+  // One test per sport, each inside its own budget (a sport's walk renders its rules strip; eleven in one test ran 31s on
+  // a loaded runner, past the 30s budget), then the counts over all of them. Tests in a file run in order, so the counts
+  // test runs last and reds if any sport's test did not reach its end.
+  const tally = { sports: 0, cards: 0, refusedPairs: 0, variantsSeen: 0, ruleFieldsSeen: 0 };
+  for (const m of builtinModules) {
+    it(`${m.key}: its whole offer on Format with four suggested, its venue noun, the rules strip with its variants and rules, its kinds, and its own variant sent`, async () => {
       apiV1Mock.mockClear();
       pushMock.mockClear();
       const sport = ALL.find((s) => s.key === m.key)!;
@@ -686,14 +685,14 @@ describe("every builtin sport, walked from Who plays to Create (counts)", () => 
       // Format: the sport's whole offer rendered, four of them suggested, the rest folded until Show all.
       const offer = rulingsOffer(m.key);
       expect([...templateKeys(h)].sort(), m.key).toEqual([...offer].sort());
-      if (!offer.includes("americano")) refusedPairs++;
+      if (!offer.includes("americano")) tally.refusedPairs++;
       const suggested = templateCards(h).filter((c) => propsOf(c)["data-suggested"] !== undefined).map((c) => propsOf(c)["data-template"] as string);
       expect(suggested.length, m.key).toBe(Math.min(SUGGESTED_COUNT, offer.length));
       // Visible: the four, and the pick wherever it ranks.
       expect(new Set(visibleTemplateKeys(h)), m.key).toEqual(new Set([...suggested, pickedTemplate(h)!]));
       click(h, "division-builder-show-all");
       expect(visibleTemplateKeys(h).length, `${m.key}: Show all shows the whole offer`).toBe(offer.length);
-      cards += offer.length;
+      tally.cards += offer.length;
       // The plan's venue box is named in the sport's own noun (a chess board, not a court).
       const venues = h.tree().find((e) => e.type === "label" && walk(e).some((x) => propsOf(x)["data-testid"] === "division-builder-plan-venues"))!;
       expect(textOf(venues), m.key).toContain(UI[`divBuilder.plan.venues.${venueNoun(m.key)}`]);
@@ -706,7 +705,7 @@ describe("every builtin sport, walked from Who plays to Create (counts)", () => 
       const variantSelect = strip.find((e) => propsOf(e)["data-testid"] === "division-settings-variant")!;
       const optionKeys = walk(variantSelect).filter((e) => e.type === "option").map((e) => String(propsOf(e).value));
       expect([...optionKeys].sort(), m.key).toEqual(Object.keys(m.variants).sort());
-      variantsSeen += optionKeys.length;
+      tally.variantsSeen += optionKeys.length;
       const fieldsEl = strip.find((e) => e.type === MatchRuleFields);
       const declared = rulesFor(m.key).map((f) => f.key);
       if (declared.length > 0) {
@@ -714,7 +713,7 @@ describe("every builtin sport, walked from Who plays to Create (counts)", () => 
         const shown = [...html.matchAll(/data-testid="rule-field-([A-Za-z0-9_]+)"/g)].map((x) => x[1]);
         expect(shown.length, `${m.key}: its rule fields render`).toBeGreaterThan(0);
         for (const k of shown) expect(declared, `${m.key}: ${k}`).toContain(k);
-        ruleFieldsSeen += shown.length;
+        tally.ruleFieldsSeen += shown.length;
       }
       next(h);
       expect(currentStep(h), `${m.key}: ${stepError(h) ?? ""}`).toBe("review");
@@ -725,17 +724,20 @@ describe("every builtin sport, walked from Who plays to Create (counts)", () => 
       expect(body.variant_key, m.key).toBe(pickVariant(m.key, sport.variants));
       expect(Object.hasOwn(body.config as object, "entrants"), `${m.key}: the default kind sends nothing`).toBe(false);
       expect(pushMock, m.key).toHaveBeenCalledWith("/o/org/c/comp/d/open?tab=fixtures");
-      sports++;
-    }
-    console.info(`[division-builder] every sport: ${sports} sports, ${cards} cards, ${refusedPairs} refused the pair formats, ${variantsSeen} variants and ${ruleFieldsSeen} rule fields rendered`);
-    expect(sports).toBe(builtinModules.length);
-    expect(sports).toBeGreaterThanOrEqual(10);
-    expect(cards).toBeGreaterThan(100);
+      tally.sports++;
+    });
+  }
+
+  it("the counts over every sport's walk: each sport walked, both sides of the offer reached", () => {
+    console.info(`[division-builder] every sport: ${tally.sports} sports, ${tally.cards} cards, ${tally.refusedPairs} refused the pair formats, ${tally.variantsSeen} variants and ${tally.ruleFieldsSeen} rule fields rendered`);
+    expect(tally.sports).toBe(builtinModules.length);
+    expect(tally.sports).toBeGreaterThanOrEqual(10);
+    expect(tally.cards).toBeGreaterThan(100);
     // Both sides of the offer were reached: chess refused the pair formats, the rest offered them.
-    expect(refusedPairs).toBe(1);
-    expect(refusedPairs).toBeLessThan(sports);
-    expect(variantsSeen).toBeGreaterThanOrEqual(sports);
-    expect(ruleFieldsSeen).toBeGreaterThan(sports);
+    expect(tally.refusedPairs).toBe(1);
+    expect(tally.refusedPairs).toBeLessThan(tally.sports);
+    expect(tally.variantsSeen).toBeGreaterThanOrEqual(tally.sports);
+    expect(tally.ruleFieldsSeen).toBeGreaterThan(tally.sports);
   });
 
   it("chess's venue box says boards (the suggester's 'courts' fold-in), badminton's says courts", () => {
