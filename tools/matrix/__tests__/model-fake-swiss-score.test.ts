@@ -34,9 +34,9 @@ vi.mock("@seazn/engine/scheduling", async (importOriginal) => {
 const SPORTS = ["badminton", "boardgame"] as const;
 
 /** A started 5-player Swiss (an odd field: round 1 holds two boards and a bye), round 1 paired. */
-async function paired(sport: string) {
+async function paired(sport: string, variantKey?: string) {
   const d = new ModelFakeDriver({});
-  const variant = offlineBuilderDefault(sport);
+  const variant = variantKey ?? offlineBuilderDefault(sport);
   const m = await newModelState({ driver: d, row: "swiss", sport, variant, entrants: 5, tag: `t5-${sport}` });
   await d.start();
   await d.generate(); // Pair round 1
@@ -92,5 +92,66 @@ describe("X-SW-19 the Swiss twin pays the declared rule: a win, a draw and a bye
   }
   it("anti-vacuity: both sports ran", () => {
     expect(checked).toBe(SPORTS.length);
+  });
+});
+
+// W3 app-B T5 review m2: the twin paid every played loser 0. The product's table pays a PLAYED loser what the sport's rule says
+// (`loss.regulation`, `loss.ot`, a set score's second number), so the twin's Swiss pairing score diverged from the product's
+// wherever a sport pays a loser. Each case is a sport whose rule pays a loser something, driven by the result shape that earns it;
+// the expected pair is read from the engine's declared rule, applied to the case's shape - never from the twin. The premise of
+// each case is that the declared loser value is NOT 0, the value the old twin paid.
+describe("T5 review m2 - the twin pays a played loser what the declared Swiss rule pays", () => {
+  type Pair = readonly [number, number];
+  interface Shape {
+    readonly label: string;
+    readonly sport: string;
+    readonly variant: string;
+    readonly outcome: RequestedOutcome;
+    /** The declared [winner, loser] points of this result shape: read from the sport's rule, the cell the rulebook names. */
+    readonly declared: (rule: ReturnType<ReturnType<typeof sportModule>["tablePointsRule"]>, setsToWin: number | undefined) => Pair;
+  }
+  const SHAPES: readonly Shape[] = [
+    // A played loss is worth 1 in table tennis, in every variant (the D6 pair: an UNPLAYED loss is 0).
+    { label: "a played loss in table tennis", sport: "tabletennis", variant: "bo5", outcome: { kind: "win", winner: "home" }, declared: (r) => [r.win.regulation, r.loss.regulation] },
+    // An overtime result is its own cell of the rule (IIHF: win 2 / loss 1 against regulation 3 / 0).
+    { label: "an overtime loss in ice hockey", sport: "icehockey", variant: "iihf", outcome: { kind: "win", winner: "home", path: "overtime" }, declared: (r) => [r.win.ot!, r.loss.ot!] },
+    // A set sport pays by the set score: indoor volleyball's 3-2 is [2, 1], not the clean sweep's [3, 0].
+    { label: "a 3-2 loss in indoor volleyball", sport: "volleyball", variant: "indoor", outcome: { kind: "win", winner: "home", path: "decidingSet" }, declared: (r, n) => { if (n === undefined) throw new Error("premise: indoor volleyball declares sets to win"); return r.bySetScore![`${n}-${n - 1}`]!; } },
+    // The sequence's other half: a forfeit before play is an UNPLAYED result, which table tennis pays 0 - against the played loss's 1.
+    { label: "a walkover loss in table tennis (never played)", sport: "tabletennis", variant: "bo5", outcome: { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" }, declared: (r) => [r.win.regulation, r.loss.unplayed!] },
+  ];
+  let checked = 0;
+  for (const shape of SHAPES) {
+    it(`m2: ${shape.label} pays the loser the declared value`, async () => {
+      const { d, boards, bye, cfg, post } = await paired(shape.sport, shape.variant);
+      const module = sportModule(shape.sport);
+      const rule = module.tablePointsRule(cfg as never, "swiss");
+      const facts = swissDrawFactsOf(module, cfg);
+      const [won, lost] = shape.declared(rule, facts.setsToWin);
+      const plainWin = rule.bySetScore === undefined ? rule.win.regulation : (rule.bySetScore[`${facts.setsToWin}-0`] ?? rule.bySetScore["*"])![0];
+      // differential: the case's declared loser is not 0 where it is a played loss (the old twin's constant), and the unplayed one is
+      // the case where the right answer IS 0 - so the played and unplayed losses of one sport must differ.
+      if (shape.outcome.kind !== "forfeit") expect(lost, `premise: ${shape.label}'s declared loser is not the old twin's 0`).not.toBe(0);
+      else expect(rule.loss.regulation, "premise: a played loss in this sport pays more than the unplayed one").toBeGreaterThan(lost);
+
+      await post(boards[0]!.id, shape.outcome);
+      await post(boards[1]!.id, { kind: "win", winner: "home" });
+      handed.calls.length = 0;
+      await d.generate(); // Pair round 2
+      expect(handed.calls.length, "anti-vacuity: the Pair called the engine once").toBe(1);
+      const scores = new Map(handed.calls[0]!.map((x) => [x.entrantId, x.score]));
+      expect(scores.size, "anti-vacuity: the whole field was handed over").toBe(5);
+      const home = boards[0]!.home_entrant_id!;
+      const away = boards[0]!.away_entrant_id!;
+      expect([scores.get(home), scores.get(away)], `${shape.label}: [winner, loser] points`).toEqual([won, lost]);
+      // the other board is a plain home win (the clean sweep where the sport pays by set score), and the bye is a win: both are
+      // the rule's plain win, which is what the twin has always paid them
+      expect(scores.get(boards[1]!.home_entrant_id!), "a plain win").toBe(plainWin);
+      expect(scores.get(bye.home_entrant_id!), "a bye is a win").toBe(plainWin);
+      checked++;
+    });
+  }
+  it("anti-vacuity: every shape ran", () => {
+    expect(checked).toBe(SHAPES.length);
   });
 });

@@ -42,14 +42,16 @@
 // withdrawal policy branch on the stage kind. Not modelled: the implicit-bye
 // inference for a round a late entrant missed (only a pairing ORDER changes),
 // the rank_adjacent cascade rank, and chess colours. The pairing SCORE is the declared points rule (W3 app-B T5, X-SW-19):
-// the product reads the stage's table points; this twin has no table, so it pays a win, a draw and a bye the rule the
-// product's table would (`tablePointsRule(cfg, "swiss")`), not 1 and ½.
-import { BRACKET_STAGE_KINDS, swissDrawFactsOf, swissDrawPoints } from "@seazn/engine/competition";
+// the product reads the stage's table points; this twin has no table, so it pays each played board the way the table would -
+// the board's folded ledger paid by the sport's Swiss rule (fold.ts tableContribution), a bye the rule's win - not 1 and ½.
+// Not modelled: a points rule PINNED on the stage (the harness posts none) and a team's lineups at the fold.
+import { BRACKET_STAGE_KINDS, swissDrawFactsOf } from "@seazn/engine/competition";
 import { EngineError, type StageKind } from "@seazn/engine/core";
 import { generateRoundRobin, pairKey as swissPairKey, pairRound, type SwissStanding } from "@seazn/engine/scheduling";
 import { feedsNextMatch } from "../../../apps/web/src/lib/bracket-next-match.ts";
 import { isRunningRootSwiss } from "../../../apps/web/src/lib/open-entry-stages.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
+import { tableContribution } from "../lib/fold.ts";
 import { sportModule, stageCfg } from "../lib/sport-cfg.ts";
 import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantRow, type FinishSwissOut, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
@@ -644,28 +646,40 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     if (this.#divisionStatus === "setup") {
       for (const r of [...new Set(this.fixtures.map((f) => f.round_no ?? 0))].filter((x) => x > target)) this.#reconcile(r, "skip");
     }
-    // W3 app-B T5 (X-SW-19): the pairing score is what the stage's table would pay, from the sport's declared Swiss rule under the
-    // stage's cfg: a win is the rule's win (a set sport's clean sweep, "W-0"), a draw `swissDrawPoints`, a bye a win.
-    // The twin has no table, so it pays the rule directly - the product's `stageTablePoints` is the table's own fold.
+    // W3 app-B T5 (X-SW-19), T5 review m2: the pairing score is what the stage's table would pay. A played board is paid by the
+    // harness's one table implementation (fold.ts tableContribution: the board's own ledger, folded by the engine, paid by the
+    // sport's declared Swiss rule through `payout`) - so a played loser is paid what the rule pays HIM (table tennis 1, an IIHF
+    // overtime loss 1, a volleyball 3-2 loser 1), a set sport's winner what its set score earns, a forfeit what the rule pays
+    // an unplayed result, and a draw the rule's draw. Only the bye has no ledger: a one-sided award, paid the rule's win (a set
+    // sport's clean sweep, "W-0"), as the product's table pays it. The twin has no table of its own - the product's
+    // `stageTablePoints` is that fold.
     const module = sportModule(this.sport);
     const swissCfg = stageCfg(this.sport, this.cfg, "swiss", this.variant, rulesOfConfig(this.stage?.config));
     const rule = module.tablePointsRule(swissCfg, "swiss");
     const facts = swissDrawFactsOf(module, swissCfg);
     const winPair = rule.bySetScore === undefined ? undefined : (rule.bySetScore[`${facts.setsToWin}-0`] ?? rule.bySetScore["*"]);
     if (rule.bySetScore !== undefined && winPair === undefined) throw new Error(`fake: the ${this.sport} Swiss rule pays by set score but names no clean sweep or catch-all`);
-    const winPoints = winPair === undefined ? rule.win.regulation : winPair[0];
-    const drawPoints = swissDrawPoints(rule, facts);
+    const byePoints = winPair === undefined ? rule.win.regulation : winPair[0];
     const score = new Map(this.#active().map((id) => [id, 0]));
     const played = new Set<string>();
     const byes = new Set<string>();
+    const pay = (id: string, points: number) => score.set(id, (score.get(id) ?? 0) + points);
     for (const f of this.fixtures) {
       const o = f.outcome as { kind?: string; winner?: string } | null | undefined;
-      if (f.home_entrant_id !== null && f.away_entrant_id !== null) played.add(swissPairKey(f.home_entrant_id, f.away_entrant_id));
-      if (o?.kind === "award" && o.winner !== undefined) byes.add(o.winner);
-      if ((o?.kind === "win" || o?.kind === "award") && o.winner !== undefined) score.set(o.winner, (score.get(o.winner) ?? 0) + winPoints);
-      else if ((o?.kind === "draw" || o?.kind === "tie") && f.home_entrant_id !== null && f.away_entrant_id !== null) {
-        score.set(f.home_entrant_id, (score.get(f.home_entrant_id) ?? 0) + drawPoints);
-        score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + drawPoints);
+      if (f.home_entrant_id !== null && f.away_entrant_id !== null) {
+        played.add(swissPairKey(f.home_entrant_id, f.away_entrant_id));
+        const paid = tableContribution(module, swissCfg, { kind: "swiss", roundNo: f.round_no ?? 0 }, f.home_entrant_id, f.away_entrant_id, this.tableEvents(f));
+        // A guard, not a comment: a decided two-sided board always has a ledger the fold decides (the twin writes its outcomes
+        // only through one), so an outcome the fold cannot see would be paid nothing - silently.
+        if (paid === null && o != null) throw new Error(`fake: swiss fixture ${f.id} holds an outcome (${o.kind}) its ledger does not fold to`);
+        if (paid !== null) {
+          pay(f.home_entrant_id, paid.pair[0].points);
+          pay(f.away_entrant_id, paid.pair[1].points);
+          if (paid.outcome.kind === "award") byes.add(paid.outcome.winner);
+        }
+      } else if (o?.kind === "award" && o.winner !== undefined) {
+        byes.add(o.winner);
+        pay(o.winner, byePoints);
       }
     }
     const standings: SwissStanding[] = this.#active().map((id, i) => ({ entrantId: id, score: score.get(id) ?? 0, rank: i + 1 }));
