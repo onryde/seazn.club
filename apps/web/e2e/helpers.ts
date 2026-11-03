@@ -2519,9 +2519,10 @@ export async function createCompetitionViaUi(
 }
 
 /**
- * The division builder's Format step (Match Day C9) suggests four formats for
- * the plan and folds the rest of the sport's offer under Show all. Unfold it,
- * once, so a test can reach any card; a second call is a no-op (it reads
+ * The division builder's Format step (Match Day C9) suggests five formats for
+ * the plan and folds the rest of the sport's offer under Show more, the grid's
+ * sixth cell (C9 R2; it keeps the `division-builder-show-all` testid). Unfold
+ * it, once, so a test can reach any card; a second call is a no-op (it reads
  * `aria-expanded` rather than toggling blind). Call it on the Format step.
  */
 export async function showAllFormats(page: Page): Promise<void> {
@@ -2529,6 +2530,30 @@ export async function showAllFormats(page: Page): Promise<void> {
   await expect(showAll).toBeVisible();
   if ((await showAll.getAttribute("aria-expanded")) !== "true") await showAll.click();
   await expect(showAll).toHaveAttribute("aria-expanded", "true");
+}
+
+/**
+ * Pick a sport on the division builder's Who plays step (Match Day C9 R2): a
+ * radio tile per sport, five shown and the rest under the Show more tile
+ * (`division-builder-sport-more`). Opens Show more when the sport's tile is
+ * folded, taps the tile and proves its radio took. Re-tapping a radio is
+ * idempotent, so the tap is retried until it holds (a tap on markup React has
+ * not hydrated yet is otherwise lost).
+ */
+export async function pickBuilderSport(page: Page, sportKey: string): Promise<void> {
+  const tile = page.locator(`label[data-sport="${sportKey}"]`);
+  await expect(tile, `a sport tile for ${sportKey}`).toHaveCount(1);
+  if (!(await tile.isVisible())) {
+    const more = page.getByTestId("division-builder-sport-more");
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+  }
+  const radio = tile.locator('input[type="radio"][name="division-sport"]');
+  await expect(async () => {
+    await tile.click();
+    await expect(radio).toBeChecked({ timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
 }
 
 /**
@@ -2562,7 +2587,7 @@ export async function createDivisionViaUi(
   await page.goto(await competitionPath(page.request, competitionId, "/d/new"));
   // The name field is the first textbox on the Who plays step (see formats.spec.ts).
   await page.getByRole("textbox").first().fill(name);
-  if (sportKey) await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption(sportKey);
+  if (sportKey) await pickBuilderSport(page, sportKey);
   if (template) {
     await page.getByTestId("division-builder-step-format").click();
     await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "format");

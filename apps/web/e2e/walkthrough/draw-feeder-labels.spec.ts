@@ -65,6 +65,7 @@ import {
   expectNoHorizontalScroll,
   openBracket,
   scoreFixture,
+  pickBuilderSport,
   showAllFormats,
 } from "../helpers";
 // A genuinely signed-out context with the cookie banner already dismissed —
@@ -239,10 +240,10 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   // by NAME, and this journey scores eight matches through `generic.result`.
   // Leaving the default made the whole file fail at the first score with
   // `422 unknown event type` — a sport choice, not a scoring defect.
-  await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption("generic");
+  await pickBuilderSport(page, "generic");
   await page.getByRole("button", { name: L["wizard.tab.format"], exact: true }).click();
-  // Match Day C9: four formats are suggested for the plan; the rest of the
-  // sport's offer is under Show all.
+  // Match Day C9: five formats are suggested for the plan; the rest of the
+  // sport's offer is under Show more (C9 R2).
   await showAllFormats(page);
   // The radio is `sr-only` inside its card `<label>`, and the label's text is
   // title + help, so an exact accessible-name match cannot address it.

@@ -3,8 +3,9 @@ import { fileURLToPath } from "node:url";
 import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { builtinModules } from "@seazn/engine/sports";
 import { effectiveEntrantModel, type AnySportModule, type TiebreakerKey } from "@seazn/engine/sport";
-import { buildTemplateStages } from "../../src/lib/format-templates";
-import { TAG, apiJson, competitionPath, expectNoHorizontalScroll, showAllFormats, withDb } from "../helpers";
+import { STAGE_TEMPLATES, buildTemplateStages } from "../../src/lib/format-templates";
+import { PAIR_MINTING_STAGE_KINDS } from "../../src/lib/chess-individual-only-rule";
+import { TAG, apiJson, competitionPath, expectNoHorizontalScroll, pickBuilderSport, showAllFormats, withDb } from "../helpers";
 import { fill, uiEn as L } from "../match-room-kit";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
 
@@ -47,6 +48,18 @@ import { dismissCookieBanner } from "../scorepad-a11y-kit";
  * (ONLINE_CHESS_ALWAYS=1, e2e.yml); a server without it would not draw the
  * Online play control, and the test says so rather than skipping.
  *
+ * ## The pickers (C9 R2, owner 2026-11-03)
+ *
+ * Sport is a tile per sport (mock "Sport A"), five shown and a Show more tile
+ * as the sixth cell; the Format grid keeps its cards and its Show more is the
+ * sixth cell too. Both grids are measured collapsed and opened at every width
+ * (the tile is the grid's last cell, 44px targets, two or three sport tiles to
+ * a row, one or two format cards), with a shot of each. The keyboard moves the
+ * sport pick between the SHOWN tiles. After the chess division is made, the
+ * builder's sport order is read against the organisation's own division rows:
+ * its sports most recent first, then the owner's popular five, the registry,
+ * and "Any other game" last.
+ *
  * ## Widths
  *
  * The walk runs at 1280. At every step it is also measured at 1280, 1024, 768
@@ -85,6 +98,93 @@ const onStep = (page: Page, step: Step) => expect(builder(page)).toHaveAttribute
 const stepButton = (page: Page, step: Step) => page.getByTestId(`division-builder-step-${step}`);
 const next = (page: Page) => page.getByTestId("division-builder-next").click();
 const reviewRow = (page: Page, id: string) => page.locator(`[data-review-row="${id}"]`);
+
+/** The owner's popular sports, in his order (C9 R2 brief, 2026-11-03). */
+const POPULAR = ["football", "cricket", "badminton", "tennis", "tabletennis"];
+const REGISTRY = builtinModules.map((m) => m.key);
+/** The partner-rotation formats by the declarations: the live templates whose stages mint pairs. */
+const MINTING = STAGE_TEMPLATES.filter(
+  (t) => !t.retired && t.build({ qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 }).some((s) => PAIR_MINTING_STAGE_KINDS.includes(s.kind)),
+).map((t) => t.key);
+
+/** Every sport tile, in the picker's (DOM) order, folded or not. */
+const sportTilesInOrder = (page: Page) => page.locator("label[data-sport]").evaluateAll((els) => els.map((el) => el.getAttribute("data-sport") ?? ""));
+/** The sport tiles an organiser can see, in order. */
+const shownSports = (page: Page) =>
+  page.locator("label[data-sport]").evaluateAll((els) => els.filter((el) => el.getClientRects().length > 0).map((el) => el.getAttribute("data-sport") ?? ""));
+/** The format cards an organiser can see, in order. */
+const shownTemplates = (page: Page) =>
+  page.locator("label[data-template]").evaluateAll((els) => els.filter((el) => el.getClientRects().length > 0).map((el) => el.getAttribute("data-template") ?? ""));
+
+/**
+ * The Sport picker's order as the C9 R2 brief rules it, worked out here from the RECORD (never from the builder): the
+ * sports this organisation has run divisions in, most recent first, read as raw rows and ordered in JS; then the owner's
+ * popular five; then the registry's order; then any other listed sport by name; "generic" last. Only the sports the
+ * catalogue lists (the page's own `sports` rows) appear.
+ */
+async function sportOrderFromRecord(compId: string): Promise<string[]> {
+  const { listed, runs } = await withDb(async (sql) => {
+    const listed = await sql<{ key: string }[]>`select key from sports order by name`;
+    const runs = await sql<{ sport_key: string; created_at: Date }[]>`
+      select d.sport_key, d.created_at from divisions d where d.org_id = (select org_id from competitions where id = ${compId})`;
+    return { listed: listed.map((r) => r.key), runs: [...runs] };
+  });
+  const recent = runs.sort((a, b) => b.created_at.getTime() - a.created_at.getTime()).map((r) => r.sport_key);
+  const out: string[] = [];
+  for (const k of [...recent, ...POPULAR, ...REGISTRY, ...listed]) if (k !== "generic" && listed.includes(k) && !out.includes(k)) out.push(k);
+  return listed.includes("generic") ? [...out, "generic"] : out;
+}
+
+/**
+ * C9 R2: a picker grid measured collapsed and opened at every width - no horizontal page scroll, the Show more (or
+ * Show fewer) tile the grid's LAST shown cell and the only one, five shown before it when collapsed, every cell a 44px
+ * target, the columns the width asks for, and (`rowMatch`) the tile as tall as the card beside it. A shot of each.
+ * Leaves the grid collapsed at 1280. Counts what it measured.
+ */
+async function gridSweep(
+  page: Page,
+  testInfo: TestInfo,
+  o: { label: string; section: string; grid: string; more: string; cols: (width: number) => number; rowMatch: boolean },
+): Promise<void> {
+  let checked = 0;
+  const more = page.getByTestId(o.more);
+  for (const open of [false, true]) {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    if ((await more.getAttribute("aria-expanded")) !== String(open)) await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", String(open));
+    for (const width of WIDTHS) {
+      const at = `${o.label} ${open ? "opened" : "collapsed"} @${width}`;
+      await page.setViewportSize({ width, height: width < 768 ? 720 : 900 });
+      await expectNoHorizontalScroll(page);
+      const cells = await page.getByTestId(o.grid).evaluate((grid) =>
+        [...grid.children]
+          .filter((c) => c.getClientRects().length > 0)
+          .map((c) => {
+            const r = c.getBoundingClientRect();
+            return { tile: c.tagName === "BUTTON", x: Math.round(r.x), y: Math.round(r.y), h: r.height, dashed: getComputedStyle(c).borderTopStyle === "dashed" };
+          }),
+      );
+      expect(cells.filter((c) => c.tile), `${at}: one Show more tile`).toHaveLength(1);
+      expect(cells.at(-1)?.tile, `${at}: the tile is the grid's last cell`).toBe(true);
+      expect(cells.at(-1)?.dashed, `${at}: the tile's edge is dashed`).toBe(true);
+      if (!open) expect(cells.length, `${at}: five, then the tile`).toBe(6);
+      for (const c of cells) expect(c.h, `${at}: a 44px target`).toBeGreaterThanOrEqual(44);
+      expect(cells.filter((c) => c.y === cells[0]!.y).length, `${at}: ${o.cols(width)} to a row`).toBe(o.cols(width));
+      if (o.rowMatch && o.cols(width) > 1) {
+        const tile = cells.at(-1)!;
+        const mate = cells.find((c) => !c.tile && c.y === tile.y);
+        if (!open) expect(mate, `${at}: the tile shares its row with the fifth card`).toBeDefined();
+        if (mate) expect(Math.abs(mate.h - tile.h), `${at}: the tile is as tall as the card beside it`).toBeLessThanOrEqual(1);
+      }
+      await page.getByTestId(o.section).screenshot({ path: testInfo.outputPath(`${o.label}-${open ? "opened" : "collapsed"}-${width}.png`) });
+      checked++;
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await more.click();
+  await expect(more).toHaveAttribute("aria-expanded", "false");
+  expect(checked).toBe(WIDTHS.length * 2);
+}
 
 /** Measure the step on screen at every width, then come back to 1280. Counts what it checked: four widths, each with
  *  four step buttons and at least one footer action. */
@@ -187,7 +287,7 @@ async function landed(page: Page): Promise<string> {
 }
 
 test("an organiser makes a division in four steps, edits it from Review, and the record holds every field", async ({ page, request }, testInfo) => {
-  test.setTimeout(budget(5, 90, 4));
+  test.setTimeout(budget(5, 120, 8));
   const G = mod("generic");
   const model = effectiveEntrantModel(G.entrantModel ?? null, null);
   // A kind that is NOT the sport's default, so the choice is sent (class 19: the default goes unsent).
@@ -219,7 +319,60 @@ test("an organiser makes a division in four steps, edits it from Review, and the
   await page.getByTestId("division-builder-name").fill(name);
   // Fixed, the refusal goes at once: no "Enter a division name" left standing over a typed name.
   await expect(page.getByTestId("division-builder-error")).toBeHidden();
-  await page.getByRole("combobox", { name: L["wizard.sport"], exact: true }).selectOption("generic");
+
+  // ---- C9 R2: Sport is a tile per sport: one group named Sport, described by the "can't change" line; five shown,
+  // then the Show more tile naming the rest.
+  const sportGroup = page.getByRole("group", { name: L["wizard.sport"], exact: true });
+  await expect(sportGroup).toHaveAccessibleDescription(L["divBuilder.sportFixed"]!);
+  const sportTiles = await sportTilesInOrder(page);
+  expect(sportTiles.length, "a tile per listed sport").toBeGreaterThanOrEqual(REGISTRY.length);
+  expect(sportTiles.at(-1), "generic last").toBe("generic");
+  const sportMore = page.getByTestId("division-builder-sport-more");
+  await expect(sportMore).toHaveAttribute("aria-expanded", "false");
+  await expect(sportMore).toHaveText(plural("divBuilder.sport.showMore", sportTiles.length - 5));
+  expect(await shownSports(page), "five shown").toHaveLength(5);
+  // The keyboard: Tab from the name lands on the picked sport, and an arrow moves the pick to the next SHOWN tile -
+  // never into a folded one.
+  const focusedSport = () =>
+    page.evaluate(() => {
+      const el = document.activeElement as HTMLInputElement | null;
+      return el?.name === "division-sport" ? el.value : null;
+    });
+  const shownBefore = await shownSports(page);
+  await page.getByTestId("division-builder-name").focus();
+  await page.keyboard.press("Tab");
+  const startSport = await focusedSport();
+  expect(startSport, "Tab from the name lands on a sport tile").not.toBeNull();
+  await expect(page.locator(`label[data-sport="${startSport}"] input`), "on the picked one").toBeChecked();
+  await page.keyboard.press("ArrowRight");
+  const movedTo = await focusedSport();
+  expect(movedTo, "the arrow moves to the next shown tile").toBe(shownBefore[(shownBefore.indexOf(startSport!) + 1) % shownBefore.length]);
+  await expect(page.locator(`label[data-sport="${movedTo}"] input`), "the arrow moves the pick").toBeChecked();
+  await expect(page.locator(`label[data-sport="${movedTo}"]`)).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("sport-keyboard-focus-1280.png") });
+  await page.keyboard.press("ArrowLeft");
+  expect(await focusedSport()).toBe(startSport);
+  await gridSweep(page, testInfo, {
+    label: "sport",
+    section: "division-builder-sport",
+    grid: "division-builder-sports",
+    more: "division-builder-sport-more",
+    cols: (w) => (w < 768 ? 2 : 3),
+    rowMatch: false,
+  });
+  await pickBuilderSport(page, "generic");
+  // Opened to reach it, then closed: the picked sport is never folded away, and it reads "Any other game" here.
+  if ((await sportMore.getAttribute("aria-expanded")) === "true") await sportMore.click();
+  const genericTile = page.locator('label[data-sport="generic"]');
+  await expect(genericTile).toBeVisible();
+  await expect(genericTile).toHaveText(L["divBuilder.sport.generic"]!);
+  expect(await shownSports(page), "the pick takes the fifth slot").toHaveLength(5);
+  expect((await shownSports(page)).at(-1)).toBe("generic");
+  for (const width of [1280, 320] as const) {
+    await page.setViewportSize({ width, height: width < 768 ? 720 : 900 });
+    await page.getByTestId("division-builder-sport").screenshot({ path: testInfo.outputPath(`sport-picked-generic-${width}.png`) });
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
   // Class 19: the entrant kind OPENS at the engine's default for the sport, before any tap.
   const kinds = page.getByTestId("division-builder-entrant-kind");
   await expect(kinds.locator(`input[value="${model.defaultKind}"]`)).toBeChecked();
@@ -246,11 +399,27 @@ test("an organiser makes a division in four steps, edits it from Review, and the
   await expect(page.getByTestId("division-builder-age")).toHaveValue("16");
   await expect(page.getByTestId("division-builder-note")).toHaveValue(note);
 
-  // ---- 2 Format: the plan opens at 16 entrants (class 19), four suggested, the rest under Show all.
+  // ---- 2 Format: the plan opens at 16 entrants (class 19), five suggested, the rest under Show more (C9 R2).
   await next(page);
   await onStep(page, "format");
   await expect(page.getByTestId("division-builder-plan-entrants")).toHaveValue("16");
-  await expect(page.locator("label[data-suggested]")).toHaveCount(4);
+  await expect(page.locator("label[data-suggested]")).toHaveCount(5);
+  // C9 R2: Show more is the grid's sixth cell, as tall as the fifth card beside it; Americano and Mexicano, when the
+  // sport offers them, come after every other card.
+  await gridSweep(page, testInfo, {
+    label: "format",
+    section: "division-builder-templates",
+    grid: "division-builder-templates",
+    more: "division-builder-show-all",
+    cols: (w) => (w < 768 ? 1 : 2),
+    rowMatch: true,
+  });
+  {
+    const order = await page.locator("label[data-template]").evaluateAll((els) => els.map((el) => el.getAttribute("data-template") ?? ""));
+    const firstPair = order.findIndex((k) => MINTING.includes(k));
+    if (firstPair >= 0) expect(order.slice(firstPair).every((k) => MINTING.includes(k)), `pair formats last: ${order.join(",")}`).toBe(true);
+    expect(await shownTemplates(page), "five shown").toHaveLength(5);
+  }
   await page.getByTestId("division-builder-plan-entrants").fill("12");
   await showAllFormats(page);
   const groups = await card(page, "groups_ko");
@@ -428,7 +597,7 @@ function lichessCatalogue(): { key: string; limitSeconds: number; incrementSecon
 }
 
 test("chess: online play is asked first, Lichess is refused without one of its eight clocks, and the clock picked is stored", async ({ page, request }, testInfo) => {
-  test.setTimeout(budget(3, 45, 1));
+  test.setTimeout(budget(6, 60, 1));
   const catalogue = lichessCatalogue();
   expect(catalogue.length, "Lichess's catalogue").toBe(8);
   const picked = catalogue.find((c) => c.incrementSeconds > 0 && c.limitSeconds !== 600)!;
@@ -438,7 +607,7 @@ test("chess: online play is asked first, Lichess is refused without one of its e
   await page.setViewportSize({ width: 1280, height: 900 });
   const name = `Chess online ${TAG}`;
   await page.getByTestId("division-builder-name").fill(name);
-  await page.getByRole("combobox", { name: L["wizard.sport"], exact: true }).selectOption("boardgame");
+  await pickBuilderSport(page, "boardgame");
   // Chess is individuals only: said in words, no choice to make.
   const kinds = page.getByTestId("division-builder-entrant-kind");
   await expect(kinds).toContainText(L["divBuilder.entrants.only.individual"]!);
@@ -507,4 +676,28 @@ test("chess: online play is asked first, Lichess is refused without one of its e
     read++;
   }
   expect(read, "chess fields read back").toBeGreaterThan(0);
+
+  // ---- C9 R2: the next division's Sport picker leads with what this organisation has run, most recent first, read
+  // against the organisation's own division rows. Other specs make divisions in this organisation at the same time, so
+  // the page and the record are read again until they agree on one moment.
+  await page.goto(await competitionPath(request, compId, "/d/new"));
+  await expect(page.getByTestId("division-builder-name")).toBeVisible({ timeout: NAV_MS });
+  let agreed: string[] = [];
+  await expect
+    .poll(
+      async () => {
+        await page.reload();
+        await expect(page.getByTestId("division-builder-name")).toBeVisible({ timeout: NAV_MS });
+        const shown = await sportTilesInOrder(page);
+        const want = await sportOrderFromRecord(compId);
+        agreed = shown;
+        return shown.join(",") === want.join(",") ? "agree" : `page ${shown.join(",")} | record ${want.join(",")}`;
+      },
+      { message: "the Sport picker's order is the organisation's history, then the popular five, then the registry, generic last", timeout: 4 * NAV_MS, intervals: [500, 1_000, 2_000] },
+    )
+    .toBe("agree");
+  // The witness: the history moved something - the order is not the one with no history at all.
+  const noHistory = [...POPULAR, ...REGISTRY.filter((k) => !POPULAR.includes(k) && k !== "generic"), "generic"];
+  expect(agreed.filter((k) => REGISTRY.includes(k)), "the organisation's own sports lead, so the order is not the no-history one").not.toEqual(noHistory);
+  await page.getByTestId("division-builder-sport").screenshot({ path: testInfo.outputPath("sport-order-history-1280.png") });
 });

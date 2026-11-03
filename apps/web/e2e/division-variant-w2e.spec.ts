@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { builtinModules } from "@seazn/engine/sports";
 import { BWF_3X15_FROM } from "../src/lib/variant-label-keys";
-import { TAG, apiJson, competitionPath, createCompetitionViaUi, divisionPath } from "./helpers";
+import { TAG, apiJson, competitionPath, createCompetitionViaUi, divisionPath, pickBuilderSport } from "./helpers";
 import { openPanels } from "./helpers/rules-strip";
 
 const L = JSON.parse(
@@ -56,7 +56,7 @@ test("D2 a new badminton division is bwf-3x15: the builder opens on it, says why
   compId = await createCompetitionViaUi(page, `Variant W2e ${TAG}`, "public");
   await page.goto(await competitionPath(request, compId, "/d/new"));
   await page.getByRole("textbox").first().fill(`Singles ${TAG}`);
-  await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption("badminton");
+  await pickBuilderSport(page, "badminton");
 
   // Match Day C9: the variant is asked on the builder's Division rules step, by the Division rules strip itself (its
   // Match rules panel opens there), so the builder and Settings share one picker.
@@ -79,12 +79,12 @@ test("D2 a new badminton division is bwf-3x15: the builder opens on it, says why
   // The note is not on a sport that has none: it is the picker's state, not a fixed banner. The sport is asked on Who
   // plays; back there (free), tennis, and forward again.
   await whoStep.click();
-  await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption("tennis");
+  await pickBuilderSport(page, "tennis");
   await rulesStep.click();
   await expect(page.getByTestId("division-settings-variant")).toBeVisible();
   await expect(page.getByTestId("division-variant-hint")).toHaveCount(0);
   await whoStep.click();
-  await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption("badminton");
+  await pickBuilderSport(page, "badminton");
   await rulesStep.click();
   await expect(page.getByTestId("division-settings-variant")).toHaveValue("bwf-3x15");
 

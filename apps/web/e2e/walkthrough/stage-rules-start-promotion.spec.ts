@@ -55,6 +55,7 @@ import {
   createCompetitionViaUi,
   divisionPath,
   openStagePanel,
+  pickBuilderSport,
   showAllFormats,
 } from "../helpers";
 // Directive-free and JSX-free on purpose (design §T0), which is why a spec can
@@ -234,10 +235,10 @@ test("an organiser gives the league stage its own match format, and the Finals b
   // ABOUT, and the builder otherwise opens on its top suggestion, owner Q5).
   await page.goto(await competitionPath(request, compId, "/d/new"));
   await page.getByRole("textbox").first().fill(`Singles ${TAG}`);
-  await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption(SPORT);
+  await pickBuilderSport(page, SPORT);
   await page.getByRole("button", { name: L["wizard.tab.format"], exact: true }).click();
-  // Match Day C9: four formats are suggested for the plan; the rest of the
-  // sport's offer is under Show all.
+  // Match Day C9: five formats are suggested for the plan; the rest of the
+  // sport's offer is under Show more (C9 R2).
   await showAllFormats(page);
   // The radio itself is `sr-only` inside its card `<label>`, and the label's
   // text is title + help, so an exact accessible-name match cannot address it.

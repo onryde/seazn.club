@@ -7,6 +7,7 @@ import {
   addEntrantsViaApi,
   expectNoHorizontalScroll,
   openBracket,
+  pickBuilderSport,
   showAllFormats,
   stageCardOf,
 } from "./helpers";
@@ -24,8 +25,8 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
   // the required division name before opening the Format step.
   await page.getByRole("textbox").first().fill(`Formats ${TAG}`);
   await page.getByRole("button", { name: "Format", exact: true }).click();
-  // Four formats are suggested for the plan; the rest of the offer is one tap away.
-  await expect(page.locator("label[data-suggested]")).toHaveCount(4);
+  // Five formats are suggested for the plan (C9 R2); the rest of the offer is one tap away, on the grid's sixth cell.
+  await expect(page.locator("label[data-suggested]")).toHaveCount(5);
   await showAllFormats(page);
 
   // The new presets are visible on the format picker. Americano and Mexicano are
@@ -84,12 +85,9 @@ test("ko_plate template: completing the main draw computes a seed proposal; conf
   // (division-builder.tsx: `sports[0]?.key`) — never "generic". Scoring the
   // fixtures below with `generic.result` needs the generic/score sport
   // explicitly selected, or the event 422s as unrecognised for whatever
-  // sport happened to sort first. Scoped by label CONTAINMENT, not
-  // getByLabel: the <label> wraps every <option> text too (all sports/
-  // variants render as DOM text regardless of selection), so the computed
-  // accessible name is "SportBadmintonBoardgame…Volleyball" — never the bare
-  // "Sport" getByLabel(exact) would need.
-  await page.locator("label", { hasText: "Sport" }).locator("select").selectOption({ label: "Generic" });
+  // sport happened to sort first. C9 R2: the sport is a tile ("Any other
+  // game", last, under Show more), picked by its key.
+  await pickBuilderSport(page, "generic");
   await page.getByRole("button", { name: "Format", exact: true }).click();
   await showAllFormats(page);
   await page.getByText("Knockout + Plate", { exact: true }).click();
@@ -265,7 +263,7 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   await page.getByRole("textbox").first().fill(`SwissKO ${TAG}`);
   // Generic/Score, for the same reason ko_plate above picks it: the wizard
   // defaults to the catalog's first sport and `generic.result` would 422.
-  await page.locator("label", { hasText: "Sport" }).locator("select").selectOption({ label: "Generic" });
+  await pickBuilderSport(page, "generic");
   await page.getByRole("button", { name: "Format", exact: true }).click();
   await showAllFormats(page);
   await page.getByText("Swiss Knockout", { exact: true }).click();
