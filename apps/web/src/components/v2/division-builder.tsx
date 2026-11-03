@@ -52,7 +52,7 @@ import { CourtMultiPicker } from "@/components/v2/shared/court-multi-picker";
 // P9: BOARD-side Venue — no calendar (see court-multi-picker.tsx).
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { useMsg, useMsgPlural, useLocale } from "@/components/i18n/dict-provider";
-import { swissRoundsGuidanceLine } from "@/lib/swiss-rounds";
+import { swissRoundsDefault, swissRoundsGuidanceLine } from "@/lib/swiss-rounds";
 import type { MessageKey } from "@/lib/messages";
 import type { Dict } from "@/lib/i18n-constants";
 import { sportLabel } from "@/lib/scoring-vocab";
@@ -88,6 +88,21 @@ export interface SportOption {
   /** The engine's entrant model for the sport (`effectiveEntrantModel`, the page reads it off the pinned module). Absent:
    *  the builder does not ask, and sends no `config.entrants`. */
   entrants?: EntrantChoice;
+}
+
+/** The plan boxes' bounds (the inputs' own min/max). */
+const PLAN_BOUNDS = {
+  entrants: { min: 2, max: 64, whole: true },
+  venues: { min: 1, max: 64, whole: true },
+  hours: { min: 1, max: 240, whole: false },
+} as const;
+
+/** A plan box's typed text as the number the estimates read: within its bounds (entrants and venues whole numbers, hours
+ *  as typed); empty or not a number reads as the minimum (C9 fix round 1, m3: clamped on read and on blur, never per
+ *  keystroke). */
+function planNumber(raw: string, { min, max, whole }: { min: number; max: number; whole: boolean }): number {
+  const n = whole ? Math.floor(Number(raw)) : Number(raw);
+  return raw.trim() !== "" && Number.isFinite(n) && n >= min ? Math.min(max, n) : min;
 }
 
 // Template → format-gallery family, for "How this works" (v3/06 §4).
@@ -297,16 +312,23 @@ export function DivisionBuilder({
   // --- 2 Format ---
   const [template, setTemplate] = useState("league");
   const [qualified, setQualified] = useState(4);
-  const [swissRounds, setSwissRounds] = useState(3);
+  // C9 fix round 1 (I2): null until the organiser types in the Rounds box; until then the box follows the plan's
+  // entrant count (swissRoundsDefault, the same helper Settings opens a new Swiss at), as the match length follows the
+  // sport until it is touched.
+  const [swissRoundsPicked, setSwissRoundsPicked] = useState<number | null>(null);
   const [poolCount, setPoolCount] = useState(2);
   const [legs, setLegs] = useState(1);
   const [standingsCarry, setStandingsCarry] = useState<StandingsCarry>("none");
   const [showAll, setShowAll] = useState(false);
   // The plan the estimates are worked out for (builder-only: nothing here is sent). The entrant count is also the
   // example draw's and the Swiss guidance line's.
-  const [planEntrants, setPlanEntrants] = useState(16);
-  const [planVenues, setPlanVenues] = useState(2);
-  const [planHours, setPlanHours] = useState(4);
+  // The boxes keep what the organiser TYPES (C9 fix round 1, m3): clamping every keystroke turned "1" into 2 before the
+  // "2" of "12" arrived. The value is clamped where it is read (planNumber) and written back clamped on blur.
+  const [planEntrants, setPlanEntrants] = useState("16");
+  const [planVenues, setPlanVenues] = useState("2");
+  const [planHours, setPlanHours] = useState("4");
+  const planEntrantCount = planNumber(planEntrants, PLAN_BOUNDS.entrants);
+  const swissRounds = swissRoundsPicked ?? swissRoundsDefault(planEntrantCount);
 
   // --- 3 Division rules ---
   const [variantKey, setVariantKey] = useState(sport ? pickVariant(sport.key, sport.variants) : "");
@@ -442,10 +464,15 @@ export function DivisionBuilder({
   const VenueCap = venueLabel(sportKey);
   const offered = templatesForSport(sportKey);
   const planMinutes = matchMinutes >= 1 ? matchMinutes : 30;
-  const plan = { entrants: Math.max(2, Math.floor(planEntrants) || 2), venues: Math.max(1, Math.floor(planVenues) || 1), hours: planHours > 0 ? planHours : 1, matchMinutes: planMinutes };
+  const plan = {
+    entrants: planEntrantCount,
+    venues: planNumber(planVenues, PLAN_BOUNDS.venues),
+    hours: planNumber(planHours, PLAN_BOUNDS.hours),
+    matchMinutes: planMinutes,
+  };
   // Ranked at the builder's opening knobs, so the suggested four do not reshuffle while a knob moves; each card's own
   // counts are at the knobs as they stand.
-  const ranked = rankTemplates(offered.map((t) => t.key), plan, { qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 });
+  const ranked = rankTemplates(offered.map((t) => t.key), plan, { qualified: 4, swissRounds: swissRoundsDefault(plan.entrants), poolCount: 2, legs: 1 });
   const suggested = ranked.slice(0, SUGGESTED_COUNT).map((r) => r.key);
   // Every offered card is rendered, in rank order; past the suggested four they are folded (hidden, never unmounted)
   // until Show all. The picked card is never folded away.
@@ -969,7 +996,8 @@ export function DivisionBuilder({
                   min={2}
                   max={64}
                   value={planEntrants}
-                  onChange={(e) => setPlanEntrants(Math.min(64, Math.max(2, Number(e.target.value) || 2)))}
+                  onChange={(e) => setPlanEntrants(e.target.value)}
+                  onBlur={() => setPlanEntrants(String(planNumber(planEntrants, PLAN_BOUNDS.entrants)))}
                   data-testid="division-builder-plan-entrants"
                   className="input min-h-11 w-full"
                 />
@@ -981,7 +1009,8 @@ export function DivisionBuilder({
                   min={1}
                   max={64}
                   value={planVenues}
-                  onChange={(e) => setPlanVenues(Math.min(64, Math.max(1, Number(e.target.value) || 1)))}
+                  onChange={(e) => setPlanVenues(e.target.value)}
+                  onBlur={() => setPlanVenues(String(planNumber(planVenues, PLAN_BOUNDS.venues)))}
                   data-testid="division-builder-plan-venues"
                   className="input min-h-11 w-full"
                 />
@@ -993,7 +1022,8 @@ export function DivisionBuilder({
                   min={1}
                   max={240}
                   value={planHours}
-                  onChange={(e) => setPlanHours(Math.min(240, Math.max(1, Number(e.target.value) || 1)))}
+                  onChange={(e) => setPlanHours(e.target.value)}
+                  onBlur={() => setPlanHours(String(planNumber(planHours, PLAN_BOUNDS.hours)))}
                   data-testid="division-builder-plan-hours"
                   className="input min-h-11 w-full"
                 />
@@ -1092,7 +1122,7 @@ export function DivisionBuilder({
                     min={FORMAT_BOUNDS.swissRounds.min}
                     max={FORMAT_BOUNDS.swissRounds.max}
                     value={swissRounds}
-                    onChange={(e) => setSwissRounds(Number(e.target.value))}
+                    onChange={(e) => setSwissRoundsPicked(Number(e.target.value))}
                     aria-describedby="builder-swiss-rounds-guidance"
                     className="input min-h-11"
                   />

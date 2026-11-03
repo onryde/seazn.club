@@ -20,7 +20,11 @@ import { builtinModules } from "@seazn/engine/sports";
 import { effectiveEntrantModel, type EntrantKind } from "@seazn/engine/sport";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { DivisionBuilder, divisionCreateConfig, eligibilityPatch, type SportOption } from "@/components/v2/division-builder";
-import { templatesForSport } from "@/lib/format-templates";
+import { STAGE_TEMPLATES } from "@/lib/format-templates";
+import { rulesFor } from "@/lib/match-rules";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
+import { expandRules } from "./_rules-strip";
 import { sportOptionsFrom } from "@/lib/sport-options";
 import { pickVariant } from "@/lib/preferred-variant";
 import { venueNoun } from "@/lib/venue";
@@ -41,6 +45,7 @@ import {
   pressCreate,
   rulesDraft,
   rulesStripProps,
+  builderStrip,
   selectSport,
   setName,
   stepError,
@@ -502,10 +507,59 @@ describe("chess: online play first, and Lichess plays only its eight controls", 
   });
 });
 
+/**
+ * The format offer as the RULINGS state it, never as templatesForSport computes it (C9 fix round 1, review I5): every
+ * template but the retired Triple RR (owner ruling 2026-11-01), less americano and mexicano - the pair formats, whose
+ * stage rotates individual players into pair entrants - for chess (owner ruling 2026-10-26).
+ *
+ * The ENGINE's entrant models say more: a sport whose kinds hold no individuals or no pairs cannot play a pair format
+ * either (football, cricket, ice hockey and hockey hold teams only, volleyball teams and pairs). The builder still offers
+ * them that today - the fix is parked behind the format matrix's lockstep (task-C9-report.md, Fix round 1, I5) - so each
+ * such sport carries an `it.fails` row below that asserts the engine's offer: it fails now, and flips (reds) the day the
+ * offer is fixed, so this file has to be brought along.
+ */
+const PAIR_FORMATS = ["americano", "mexicano"];
+const LIVE_TEMPLATES = STAGE_TEMPLATES.map((t) => t.key).filter((k) => k !== "triple_rr");
+function rulingsOffer(sportKey: string): string[] {
+  return LIVE_TEMPLATES.filter((k) => sportKey !== "boardgame" || !PAIR_FORMATS.includes(k));
+}
+function engineOffer(sportKey: string): string[] {
+  const kinds: readonly string[] = modelOf(sportKey).kinds;
+  const canPlayPairs = sportKey !== "boardgame" && kinds.includes("individual") && kinds.includes("pair");
+  return LIVE_TEMPLATES.filter((k) => canPlayPairs || !PAIR_FORMATS.includes(k));
+}
+/** The sports whose engine entrant model cannot play a pair format but which the builder still offers one (the I5 gap). */
+const I5_GAP = builtinModules.map((m) => m.key).filter((k) => engineOffer(k).length !== rulingsOffer(k).length);
+
 describe("every builtin sport, walked from Who plays to Create (counts)", () => {
-  it("its whole offer on Format with four suggested, its venue noun, the rules strip, its kinds, and its own variant sent", async () => {
+  it("empty case first: neither oracle ever answers an empty offer - every sport keeps the live non-pair templates", () => {
+    const floor = LIVE_TEMPLATES.filter((k) => !PAIR_FORMATS.includes(k));
+    expect(floor.length).toBeGreaterThan(SUGGESTED_COUNT);
+    for (const m of builtinModules) {
+      expect(rulingsOffer(m.key), m.key).toEqual(expect.arrayContaining(floor));
+      expect(engineOffer(m.key), m.key).toEqual(expect.arrayContaining(floor));
+    }
+    // The gap is real and bounded: some sports, never all, and never chess (the ruling already refuses it).
+    expect(I5_GAP.length).toBeGreaterThan(0);
+    expect(I5_GAP.length).toBeLessThan(builtinModules.length);
+    expect(I5_GAP).not.toContain("boardgame");
+  });
+
+  for (const key of I5_GAP) {
+    it.fails(`KNOWN GAP (I5, parked): ${key}'s Format step offers no pair format, as its engine entrant model (${modelOf(key).kinds.join("/")}) cannot play one`, () => {
+      const h = mount([ALL.find((s) => s.key === key)!]);
+      setName(h, `${key} open`);
+      next(h);
+      expect([...templateKeys(h)].sort()).toEqual([...engineOffer(key)].sort());
+    });
+  }
+
+  it("its whole offer on Format with four suggested, its venue noun, the rules strip with its variants and rules, its kinds, and its own variant sent", async () => {
     let sports = 0;
     let cards = 0;
+    let refusedPairs = 0;
+    let variantsSeen = 0;
+    let ruleFieldsSeen = 0;
     for (const m of builtinModules) {
       apiV1Mock.mockClear();
       pushMock.mockClear();
@@ -521,8 +575,9 @@ describe("every builtin sport, walked from Who plays to Create (counts)", () => 
       next(h);
       expect(currentStep(h), m.key).toBe("format");
       // Format: the sport's whole offer rendered, four of them suggested, the rest folded until Show all.
-      const offer = templatesForSport(m.key).map((t) => t.key);
+      const offer = rulingsOffer(m.key);
       expect([...templateKeys(h)].sort(), m.key).toEqual([...offer].sort());
+      if (!offer.includes("americano")) refusedPairs++;
       const suggested = templateCards(h).filter((c) => propsOf(c)["data-suggested"] !== undefined).map((c) => propsOf(c)["data-template"] as string);
       expect(suggested.length, m.key).toBe(Math.min(SUGGESTED_COUNT, offer.length));
       // Visible: the four, and the pick wherever it ranks.
@@ -537,6 +592,21 @@ describe("every builtin sport, walked from Who plays to Create (counts)", () => 
       // Division rules: the strip, on this sport.
       expect(currentStep(h), m.key).toBe("rules");
       expect(rulesStripProps(h).sportKey, m.key).toBe(m.key);
+      // m13: the strip RENDERS this sport's variants (the engine's own) and its rule fields (the match-rules table).
+      const strip = builderStrip(h, expandRules).tree();
+      const variantSelect = strip.find((e) => propsOf(e)["data-testid"] === "division-settings-variant")!;
+      const optionKeys = walk(variantSelect).filter((e) => e.type === "option").map((e) => String(propsOf(e).value));
+      expect([...optionKeys].sort(), m.key).toEqual(Object.keys(m.variants).sort());
+      variantsSeen += optionKeys.length;
+      const fieldsEl = strip.find((e) => e.type === MatchRuleFields);
+      const declared = rulesFor(m.key).map((f) => f.key);
+      if (declared.length > 0) {
+        const html = renderToStaticMarkup(fieldsEl!);
+        const shown = [...html.matchAll(/data-testid="rule-field-([A-Za-z0-9_]+)"/g)].map((x) => x[1]);
+        expect(shown.length, `${m.key}: its rule fields render`).toBeGreaterThan(0);
+        for (const k of shown) expect(declared, `${m.key}: ${k}`).toContain(k);
+        ruleFieldsSeen += shown.length;
+      }
       next(h);
       expect(currentStep(h), `${m.key}: ${stepError(h) ?? ""}`).toBe("review");
       pressCreate(h);
@@ -548,9 +618,15 @@ describe("every builtin sport, walked from Who plays to Create (counts)", () => 
       expect(pushMock, m.key).toHaveBeenCalledWith("/o/org/c/comp/d/open?tab=fixtures");
       sports++;
     }
+    console.info(`[division-builder] every sport: ${sports} sports, ${cards} cards, ${refusedPairs} refused the pair formats, ${variantsSeen} variants and ${ruleFieldsSeen} rule fields rendered`);
     expect(sports).toBe(builtinModules.length);
     expect(sports).toBeGreaterThanOrEqual(10);
     expect(cards).toBeGreaterThan(100);
+    // Both sides of the offer were reached: chess refused the pair formats, the rest offered them.
+    expect(refusedPairs).toBe(1);
+    expect(refusedPairs).toBeLessThan(sports);
+    expect(variantsSeen).toBeGreaterThanOrEqual(sports);
+    expect(ruleFieldsSeen).toBeGreaterThan(sports);
   });
 
   it("chess's venue box says boards (the suggester's 'courts' fold-in), badminton's says courts", () => {
