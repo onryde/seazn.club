@@ -1248,6 +1248,7 @@ export type DictionaryKey =
   | "boardset.title"
   | "boardset.venuesDesc"
   | "boardset.venuesLabel"
+  | "bracket.appearsOnceGenerated"
   | "bracket.generateFirst"
   | "bracket.grandFinal"
   | "bracket.losers"

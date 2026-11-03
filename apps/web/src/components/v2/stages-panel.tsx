@@ -1298,7 +1298,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                 key={tool.panel}
                 id={hintId}
                 align="end"
-                reason={msg(tool.access === "generate" ? "bracket.generateFirst" : "bracket.unavailable")}
+                // Fix round 2 (controller ruling, review m6): only someone who can generate is told to "Generate fixtures" (`canEdit` is the
+                // rail's own gate for its Generate button); a viewer - including an organiser whose billing froze editing - gets a neutral line.
+                reason={msg(tool.access === "generate" ? (canEdit ? "bracket.generateFirst" : "bracket.appearsOnceGenerated") : "bracket.unavailable")}
                 reasonTestId={`${prefix}-bracket-hint`}
               >
                 <button

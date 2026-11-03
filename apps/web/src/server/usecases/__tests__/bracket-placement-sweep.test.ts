@@ -10,6 +10,15 @@
 // whose stages feed a bracket from an earlier stage is read twice: DAY ONE (the finals' TBD bracket, sized from the take, which every
 // picker template flipped to - timing "setup") and SEEDED (the earlier stage played out, its proposal confirmed, the finals' slots filled).
 //
+// Why ONE sport (the generic one) and not the registry: `bracketPlacement` reads three fields only - `id`, `round_no`, `seq_in_round`
+// (`BracketFixtureRef`) - and the stage writer that numbers them is sport-blind (the bracket generators take entrants and the shape knobs,
+// never a sport module). What varies a bracket's SHAPE is the field size and the knobs (third place, bracket reset, the take, the pool count),
+// and those are swept explicitly below. A second sport would re-run the same writer over the same numbers.
+//
+// The count is printed (`bracket sweep: ...`) and asserted against what the sweep ENUMERATED: every bracket stage it asked about ends as a
+// recorded case or a counted refusal, so a case cannot drop out silently. Each KNOWN refusal is tied to the cases it covers (label pattern
+// and exact count), so one new refusing size or template fails here instead of hiding behind a pattern that happens to match.
+//
 // Real Postgres required; skipped without DATABASE_URL (the house convention of the sibling usecase suites).
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -105,6 +114,40 @@ afterAll(async () => {
   await client?.end();
 });
 
+/** Every field size a standalone bracket is asked at: 2..33 (the byes of every non-power-of-two, and 32 -> 33 crossing a round). */
+const STANDALONE_SIZES = Array.from({ length: 32 }, (_, i) => i + 2);
+
+/** A refusal is the usecase saying no to an impossible request, not a stage that lost its bracket. Each known one is tied to the cases it
+ *  covers - a label pattern AND an exact count - so a new refusing size or template fails instead of matching a loose regex. */
+const KNOWN_REFUSALS: Array<{ re: RegExp; expected: number; why: string }> = [
+  {
+    re: /^page_playoff n=\d+: generate page_playoff refused \(page playoffs need exactly 4 entrants, got \d+\)$/,
+    expected: STANDALONE_SIZES.filter((n) => n !== 4).length,
+    why: "a standalone page playoff is the fixed four-team tree: every size but 4",
+  },
+  {
+    re: /^swiss_(playoff|knockout) n=2 q=\d+ pools=\d+ third=(true|false): generate swiss refused \(That is more rounds than this field can pair\.\)$/,
+    expected: 3,
+    why: "a Swiss feeder asked for more rounds than two entrants can play (swiss_playoff q=4; swiss_knockout q=2 with and without third place)",
+  },
+  {
+    re: /^ko_plate n=5 q=[34] third=false: seeding knockout from knockout refused \(bracket round 1 has no loser at position 2 \(found 1\)\)$/,
+    expected: 2,
+    why: "a Plate asked for the round-1 loser at position 2 of a bye-padded 5-entrant Main draw, which has one real round-1 match (q=3 and q=4)",
+  },
+];
+
+/** Every problem with a list of refusals: a rule that covered the wrong number of cases, and a refusal no rule has read. Empty = clean. */
+function auditRefusals(refused: readonly string[]): { problems: string[] } {
+  const problems: string[] = [];
+  for (const k of KNOWN_REFUSALS) {
+    const got = refused.filter((r) => k.re.test(r)).length;
+    if (got !== k.expected) problems.push(`known refusal "${k.why}" covered ${got} cases, expected ${k.expected}`);
+  }
+  for (const r of refused) if (!KNOWN_REFUSALS.some((k) => k.re.test(r))) problems.push(`unread refusal: ${r}`);
+  return { problems };
+}
+
 const KNOBS = (q: number, over: Partial<TemplateKnobs> = {}): TemplateKnobs => ({ qualified: q, swissRounds: 3, poolCount: 2, legs: 1, ...over });
 
 /** The bracket-type templates, FROM the catalogue: every non-retired template with a stage whose kind is a bracket kind. */
@@ -120,6 +163,9 @@ const withThirdPlace = (drafts: StageDraft[]): StageDraft[] => drafts.map((d) =>
 describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a bracket to show (card or page), once its fixtures exist", () => {
   const seen: Seen[] = [];
   const refused: string[] = [];
+  /** Every bracket stage the sweep asked about (about to generate / about to seed), and how many of those the usecase refused. */
+  let enumerated = 0;
+  let refusedBracket = 0;
 
   /** Create `drafts` as the division's stages, generate them in order, and record every bracket-kind stage's placement. */
   async function dayOne(label: string, n: number, drafts: StageDraft[]) {
@@ -134,13 +180,16 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
     }
     const stageIds = stages.map((s) => s.id);
     for (const [i, id] of stageIds.entries()) {
+      const isBracket = BRACKET_STAGE_KINDS.has(drafts[i]!.kind);
+      if (isBracket) enumerated++;
       try {
         await generateStageFixtures(auth, id);
       } catch (e) {
         refused.push(`${label}: generate ${drafts[i]!.kind} refused (${(e as Error).message})`);
+        if (isBracket) refusedBracket++;
         continue;
       }
-      if (BRACKET_STAGE_KINDS.has(drafts[i]!.kind)) {
+      if (isBracket) {
         const got = await placementOf(id, drafts[i]!.kind);
         seen.push({ label: `${label} / ${drafts[i]!.name}`, phase: "day-one", kind: drafts[i]!.kind, ...got });
       }
@@ -162,6 +211,8 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
     for (let i = 0; i + 1 < stageIds.length; i++) {
       const next = drafts[i + 1]!;
       if (!next.progression) continue;
+      const nextIsBracket = BRACKET_STAGE_KINDS.has(next.kind);
+      if (nextIsBracket) enumerated++;
       try {
         await playOut(auth, stageIds[i]!, seedOf);
         await completeStage(auth, stageIds[i]!);
@@ -170,9 +221,10 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
         await confirmSeedProposal(auth, stageIds[i + 1]!, { proposalId: proposal.id, ...(ties.length > 0 ? { tiePicks: ties } : {}) });
       } catch (e) {
         refused.push(`${label}: seeding ${drafts[i + 1]!.kind} from ${drafts[i]!.kind} refused (${(e as Error).message})`);
+        if (nextIsBracket) refusedBracket++;
         return;
       }
-      if (BRACKET_STAGE_KINDS.has(next.kind)) {
+      if (nextIsBracket) {
         const got = await placementOf(stageIds[i + 1]!, next.kind);
         seen.push({ label: `${label} / ${next.name}`, phase: "seeded", kind: next.kind, ...got });
       }
@@ -188,7 +240,7 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
       return [[kind, bare]];
     });
     for (const [name, draft] of variants) {
-      for (let n = 2; n <= 33; n++) await dayOne(`${name} n=${n}`, n, [draft]);
+      for (const n of STANDALONE_SIZES) await dayOne(`${name} n=${n}`, n, [draft]);
     }
     expect(seen.length, "anti-vacuity: standalone cases recorded").toBeGreaterThan(100);
   }, 600_000);
@@ -232,6 +284,10 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
   }, 900_000);
 
   it("no bracket stage came back without a bracket; every kind, template, placement and phase was reached; every refusal is a known one", () => {
+    const by = (key: (c: Seen) => string) => JSON.stringify(Object.fromEntries([...new Set(seen.map(key))].sort().map((k) => [k, seen.filter((c) => key(c) === k).length])));
+    const report = `bracket sweep: ${seen.length} cases checked (by kind ${by((c) => c.kind)}; by placement ${by((c) => String(c.placement))}; by phase ${by((c) => c.phase)}), ${refusedBracket} bracket stages refused, ${enumerated} enumerated`;
+    console.info(report);
+    expect(seen.length + refusedBracket, `every enumerated bracket stage is a recorded case or a counted refusal - ${report}`).toBe(enumerated);
     const nulls = seen.filter((c) => c.placement === null);
     expect(
       nulls.map((c) => `${c.phase}: ${c.label} (${c.kind}, ${c.rows} rows)`),
@@ -249,14 +305,42 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
     expect(new Set(seen.map((c) => c.placement)), "both placements are reached (card and page)").toEqual(new Set(["card", "page"]));
     expect(BRACKET_TEMPLATES.length, "the owner's ten bracket templates are all in the catalogue").toBeGreaterThanOrEqual(10);
 
-    // A refusal is the usecase saying no to an impossible request, not a stage that lost its bracket. Only these three are known; anything
-    // else is a new refusal that someone has to read.
-    const KNOWN: Array<[RegExp, string]> = [
-      [/page playoffs need exactly 4 entrants/, "a standalone page playoff is the fixed four-team tree"],
-      [/more rounds than this field can pair/, "a Swiss asked for more rounds than a tiny field can play"],
-      [/has no loser at position/, "a Plate asked for more round-1 losers than a bye-padded Main draw has real matches (ko_plate, n=5, q=3)"],
+    // A refusal is the usecase saying no to an impossible request, not a stage that lost its bracket (see `auditRefusals`).
+    const audit = auditRefusals(refused);
+    expect(audit.problems, `refusals: ${refused.length} read`).toEqual([]);
+    expect(refused.length, "anti-vacuity: the sweep did meet refusals (the three known ones)").toBeGreaterThan(0);
+  });
+});
+
+// The audit itself, without a database: it must accept exactly the refusals the real sweep meets today and reject each way they can drift.
+describe("the sweep's refusal audit (no database)", () => {
+  const PP = (n: number) => `page_playoff n=${n}: generate page_playoff refused (page playoffs need exactly 4 entrants, got ${n})`;
+  const SW = (name: string, q: number, third: boolean) => `${name} n=2 q=${q} pools=2 third=${third}: generate swiss refused (That is more rounds than this field can pair.)`;
+  const PL = (q: number) => `ko_plate n=5 q=${q} third=false: seeding knockout from knockout refused (bracket round 1 has no loser at position 2 (found 1))`;
+  const today = (): string[] => [...STANDALONE_SIZES.filter((n) => n !== 4).map(PP), SW("swiss_playoff", 4, false), SW("swiss_knockout", 2, false), SW("swiss_knockout", 2, true), PL(3), PL(4)];
+
+  it("accepts exactly what the sweep meets today (36 refusals: 31 + 3 + 2)", () => {
+    expect(today().length).toBe(36);
+    expect(auditRefusals(today()).problems).toEqual([]);
+  });
+
+  it("rejects every way the refusals can drift: a new size, a new template, a different size of the same refusal, one fewer, an unread text", () => {
+    const cases: Array<[string, string[]]> = [
+      ["page_playoff n=4 refused too (the valid size)", [...today(), PP(4)]],
+      ["one page_playoff size no longer refuses", today().filter((r) => r !== PP(7))],
+      ["a Swiss refusal at a size the rule does not name", [...today(), SW("swiss_knockout", 2, true).replace("n=2", "n=3")]],
+      ["a fourth Swiss refusal", [...today(), SW("swiss_playoff", 2, true)]],
+      ["the Plate refusal at another size", [...today(), PL(3).replace("n=5", "n=6")]],
+      ["the Plate refusal MOVED to another size (same count, so only the label pattern can see it)", [...today().filter((r) => r !== PL(3)), PL(3).replace("n=5", "n=6")]],
+      ["a Swiss refusal MOVED to another template (same count)", [...today().filter((r) => r !== SW("swiss_playoff", 4, false)), SW("swiss_other", 4, false)]],
+      ["the Plate refusal at another q", [...today().filter((r) => r !== PL(4)), PL(5)]],
+      ["a refusal text nobody has read", [...today(), "ko_plate n=8 q=4 third=false: seeding knockout from knockout refused (something new)"]],
     ];
-    const unknown = refused.filter((r) => !KNOWN.some(([re]) => re.test(r)));
-    expect(unknown, "refusals nobody has read").toEqual([]);
+    let rejected = 0;
+    for (const [what, list] of cases) {
+      expect(auditRefusals(list).problems.length, what).toBeGreaterThan(0);
+      rejected++;
+    }
+    expect(rejected, "anti-vacuity: every drift reached").toBe(cases.length);
   });
 });

@@ -6,7 +6,7 @@
 //   - CARD placement (a knockout): greyed with its reason until Generate; a press on the greyed button opens nothing; Generate (the real
 //     button, not an API call) turns it into the live toggle and the tree opens INSIDE the card.
 //   - PAGE placement (a stepladder, a double elimination): a same-page link; clicking it brings the page-level tree into view (it was
-//     out of view before); the tree is NOT inside the card.
+//     out of view before) with its heading clear of the sticky nav (hit-tested); the tree is NOT inside the card.
 //   - The carrom-ladder shape - a League, then Stepladder finals that take its top four: the League has no Bracket button at all, the
 //     finals' card has one (greyed until its fixtures exist, then a link).
 //   - The reason bubble stays inside the card at every width the header floats it (768, 1024, 1280), and on a phone the greyed row of the
@@ -80,6 +80,24 @@ async function onScreen(page: Page, loc: Locator): Promise<boolean> {
   const box = await loc.boundingBox();
   const vh = page.viewportSize()!.height;
   return box !== null && box.y < vh && box.y + box.height > 0;
+}
+
+/** The page tree's heading is the topmost thing at its own centre: the click's scroll left it clear of the sticky app nav (an h-14 bar). A box
+ *  check (`onScreen`) passes with the heading hidden behind the bar - hit-test, never box size (review m1). Polled: the scroll may still be settling. */
+async function expectHeadingClearOfNav(target: Locator, label: string): Promise<void> {
+  const heading = target.locator("h3").first();
+  await expect(heading, `${label}: the tree has a heading`).toBeVisible();
+  await expect
+    .poll(
+      () =>
+        heading.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          const hit = document.elementFromPoint(r.left + Math.min(r.width / 2, 24), r.top + r.height / 2);
+          return r.top >= 56 && hit !== null && (hit === el || el.contains(hit));
+        }),
+      { message: `${label}: the tree's heading is the topmost thing at its centre and starts below the 56px nav`, timeout: ACT_MS * 2 },
+    )
+    .toBe(true);
 }
 
 const GENERATE_FIRST = uiEn["bracket.generateFirst"]!;
@@ -194,8 +212,7 @@ test.describe("Bracket button: page placement (a stepladder)", () => {
     await link.click();
     await expect(page).toHaveURL(new RegExp(`#bracket-${stageId}$`));
     await expect.poll(() => onScreen(page, target), { message: "the click scrolled the page-level tree into view", timeout: ACT_MS * 2 }).toBe(true);
-    const top = (await target.boundingBox())!.y;
-    expect(top, "the tree starts on screen, not above the fold").toBeGreaterThanOrEqual(0);
+    await expectHeadingClearOfNav(target, "stepladder");
     await expectNoHorizontalScroll(page);
   });
 
@@ -217,6 +234,7 @@ test.describe("Bracket button: page placement (a stepladder)", () => {
     await link.click();
     await expect(page).toHaveURL(new RegExp(`#bracket-${stageId}$`));
     await expect.poll(() => onScreen(page, page.locator(`#bracket-${stageId}`)), { timeout: ACT_MS * 2 }).toBe(true);
+    await expectHeadingClearOfNav(page.locator(`#bracket-${stageId}`), "double elimination");
   });
 });
 
@@ -247,6 +265,7 @@ test.describe("Bracket button: the carrom-ladder shape (a League, then Stepladde
     await expect(league.getByTestId("stage-tool-bracket"), "still none on the league").toHaveCount(0);
     await finals.getByTestId("stage-tool-bracket").click();
     await expect(page).toHaveURL(new RegExp(`#bracket-${finalsId}$`));
+    await expectHeadingClearOfNav(page.locator(`#bracket-${finalsId}`), "carrom finals");
     await expectNoHorizontalScroll(page);
   });
 });
@@ -299,6 +318,7 @@ test.describe("Bracket button: on a phone (the Stage tools sheet)", () => {
     await expect(ladder.getByTestId("stage-rail-trigger"), "the tap closed the sheet").toHaveAttribute("aria-expanded", "false");
     await expect(page).toHaveURL(new RegExp(`#bracket-${ladderId}$`));
     await expect.poll(() => onScreen(page, page.locator(`#bracket-${ladderId}`)), { timeout: ACT_MS * 2 }).toBe(true);
+    await expectHeadingClearOfNav(page.locator(`#bracket-${ladderId}`), "phone stepladder");
     await expectNoHorizontalScroll(page);
   });
 });
