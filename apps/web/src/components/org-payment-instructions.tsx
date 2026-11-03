@@ -469,7 +469,8 @@ export function OrgPaymentInstructions({
             setSaved(false);
           }}
           orgId={orgId}
-          placeholder={"Bank: Example Bank\nAccount name: Riverside FC\nSort code: 00-00-00\nAccount no: 12345678\nReference: {{reference}}"}
+          placeholder={msg("pay.cashPlaceholder")}
+          showPlaceholder
         />
         <div className="mt-2 flex items-center gap-3">
           <button

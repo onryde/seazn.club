@@ -5232,6 +5232,7 @@ export type DictionaryKey =
   | "pay.cardTitle"
   | "pay.cashHintPost"
   | "pay.cashHintPre"
+  | "pay.cashPlaceholder"
   | "pay.cashTitle"
   | "pay.connect"
   | "pay.connectOwnerOnly"
