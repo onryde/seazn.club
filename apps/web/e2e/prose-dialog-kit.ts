@@ -24,18 +24,35 @@ export const CTA = { label: "Book your place", url: "https://example.com/registe
 /** The link in the description's Markdown once the Link prompt applied. */
 export const LINK_MD = `[${LINK.text}](${LINK.url})`;
 
-const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 /**
- * The sponsor button in the description's Markdown: its label, bold, linked to its URL. EITHER nesting is accepted
- * here, deliberately, and this is not the place that decides between them: the public renderer turns only
- * `**[label](url)**` (strong>a, lib/prose.ts `ctaButtons`) into the branded button, while the editor's Button tool
- * writes `[**label**](url)` (TipTap ranks the link mark outside bold), which renders as a plain bold link. That gap
- * predates task PEF and is routed to the controller in the PEF report. What THIS kit proves is that the prompt's
- * work reaches the editor's value at all — which a prompt that reloaded the page never did.
+ * The sponsor button in the description's Markdown, in the ONE shape lib/prose.ts documents for it: a paragraph that is
+ * only a bold link, bold outside — `**[label](url)**`. Until PEF round 2 the Button tool wrote `[**label**](url)`
+ * (TipTap ranks the link mark outside bold) and the public page drew that as a plain bold link, never the button.
  */
-export const CTA_IN_VALUE = new RegExp(
-  `\\*\\*\\[${esc(CTA.label)}\\]\\(${esc(CTA.url)}\\)\\*\\*|\\[\\*\\*${esc(CTA.label)}\\*\\*\\]\\(${esc(CTA.url)}\\)`,
-);
+export const CTA_MD = `**[${CTA.label}](${CTA.url})**`;
+
+/**
+ * Open the competition's PUBLIC page and read its description as a visitor gets it: the sponsor button is the branded
+ * `a.prose-cta` — painted as one (globals.css: `inline-flex`, the accent fill), not merely classed — and the plain link
+ * from the Link prompt stays a plain link.
+ */
+export async function expectPublicCta(page: Page, orgSlug: string, compSlug: string) {
+  await page.goto(`/shared/${orgSlug}/${compSlug}`);
+  const main = page.getByRole("main");
+  const button = main.locator("a.prose-cta");
+  await expect(button, "the public page draws exactly one sponsor button").toHaveCount(1, { timeout: 20_000 });
+  await expect(button, "the button carries the typed label").toHaveText(CTA.label);
+  await expect(button, "and goes where the prompt said").toHaveAttribute("href", CTA.url);
+  const painted = await button.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return { display: cs.display, background: cs.backgroundColor };
+  });
+  expect(painted.display, "painted as a button (inline-flex), not as an inline link").toBe("inline-flex");
+  expect(painted.background, "with a fill").not.toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
+  const link = main.locator(`a[href="${LINK.url}"]`);
+  await expect(link, "the Link prompt's link is on the public page").toHaveText(LINK.text);
+  await expect(link, "and is not a button").not.toHaveClass(/prose-cta/);
+}
 
 export interface PageWitness {
   /** Main-frame document requests: a form submitted natively is one; a client `router.refresh()` is not. */
