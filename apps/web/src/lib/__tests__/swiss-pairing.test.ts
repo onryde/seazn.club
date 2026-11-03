@@ -1,4 +1,5 @@
 // apps/web/src/lib/__tests__/swiss-pairing.test.ts
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -110,5 +111,26 @@ describe("swiss-pairing.ts stays client-safe", () => {
     // Positive half first, so a broken extractor cannot pass the negative vacuously.
     expect(specifiers).toContain("@seazn/engine/scheduling/swiss");
     expect(specifiers).not.toContain("@seazn/engine/scheduling");
+  });
+});
+
+describe("swiss-pairing.ts loads under node --experimental-strip-types", () => {
+  // scripts/smoke/suites/swissKnockout.ts imports this file with no build step, and index.ts imports every suite, so one
+  // construct strip-only mode cannot erase (a constructor parameter property, an enum) stops the WHOLE smoke at load with
+  // ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX. vitest transforms TypeScript itself and tsc accepts it: only the real loader sees it.
+  it("importing it with the smoke's loader answers its exports, and the premise error keeps its fields", () => {
+    const file = join(__dirname, "..", "swiss-pairing.ts");
+    const out = execFileSync(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        "--input-type=module",
+        "-e",
+        `const m = await import(${JSON.stringify(file)}); const e = new m.SwissRoundOnePremiseError(4, "rematch"); ` +
+          `console.log(JSON.stringify([typeof m.roundOnePairs, e.fieldSize, e.reason, e.name, e instanceof Error]));`,
+      ],
+      { cwd: join(__dirname, "..", "..", ".."), encoding: "utf8", timeout: 60_000 },
+    );
+    expect(JSON.parse(out.trim().split("\n").pop()!)).toEqual(["function", 4, "rematch", "SwissRoundOnePremiseError", true]);
   });
 });

@@ -46,12 +46,15 @@ export function effectiveSwissPairing(i: {
  *  needs a meeting, a bye or a colour already on record), yet the engine refused one. A named error, so a log line and a test
  *  can say which assumption failed. */
 export class SwissRoundOnePremiseError extends Error {
-  constructor(
-    readonly fieldSize: number,
-    readonly reason: string,
-  ) {
+  // Declared and assigned, not constructor parameter properties: scripts/smoke imports this file under node's strip-only
+  // TypeScript loader, which cannot erase a parameter property (swiss-pairing.test.ts loads it that way).
+  readonly fieldSize: number;
+  readonly reason: string;
+  constructor(fieldSize: number, reason: string) {
     super(`premise: round 1 of a fresh field of ${fieldSize} pairs, but the engine refused it (${reason})`);
     this.name = "SwissRoundOnePremiseError";
+    this.fieldSize = fieldSize;
+    this.reason = reason;
   }
 }
 
