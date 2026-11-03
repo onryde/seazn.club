@@ -77,13 +77,24 @@ describe("roundFieldsFor: the fields a round sequence of one stage kind carries"
   });
 
   it("a start-floor kind carries NO key at all (not a zero): every kind but swiss", () => {
+    // "No key" is not "a key set to undefined": `toEqual({})` accepts `{ roundBarrier: undefined }`, so each key is
+    // asserted ABSENT (and the key list empty), under a rest and under a per-player cap - the two inputs that make a
+    // Swiss row carry a value.
+    const cap: HardConstraint[] = [{ type: "max_fixtures_per_day", count: 2, scope: { kind: "every_person" } }];
+    const withCap = cfg({ perEntrantMinRest: 30, constraints: constraints({ hard: cap }) });
     let swept = 0;
     for (const k of StageKind.options.filter((x) => x !== "swiss")) {
-      expect(roundFieldsFor(k, cfg({ perEntrantMinRest: 30 }), DIV), `${k}`).toEqual({});
-      expect(Object.keys(roundFieldsFor(k, cfg(), DIV)), `${k}: no keys`).toEqual([]);
+      for (const [label, config] of [["a rest of 30", cfg({ perEntrantMinRest: 30 })], ["nothing set", cfg()], ["a rest and a cap", withCap]] as const) {
+        const fields = roundFieldsFor(k, config, DIV);
+        for (const key of ["roundBarrier", "roundGapMinutes", "roundsPerDayCap"] as const) {
+          expect(fields, `${k} (${label}): no ${key} key`).not.toHaveProperty(key);
+        }
+        expect(Object.keys(fields), `${k} (${label}): no keys at all`).toEqual([]);
+      }
       swept++;
     }
     expect(swept, "anti-vacuity").toBe(StageKind.options.length - 1);
+    expect(swept, "anti-vacuity: the sweep reached at least one non-swiss kind").toBeGreaterThan(0);
   });
 
   it("a Swiss stage with nothing set: the barrier and two explicit zeros", () => {

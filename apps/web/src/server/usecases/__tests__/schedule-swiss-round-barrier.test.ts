@@ -364,7 +364,8 @@ describe.runIf(HAS_DB)("X-SW-31 every producer stamps the round rules of a Swiss
       } else {
         tally.league++;
         for (const key of ["roundBarrier", "roundGapMinutes", "roundsPerDayCap"] as const) {
-          if (row[key] !== undefined) problem(`${site}: a ${kind} row carries ${key} ${JSON.stringify(row[key])}`);
+          // Absent, not "set to undefined": the key itself must not be on the row.
+          if (Object.hasOwn(row, key)) problem(`${site}: a ${kind} row carries ${key} ${JSON.stringify(row[key])}`);
         }
       }
       bySite.set(site, tally);
@@ -812,6 +813,133 @@ describe.runIf(HAS_DB)("X-SW-31 the wire: toRequest forwards the round rules to 
     });
     expect(problems, "the wire pins are complete").toEqual([]);
     expect(pinned, "anti-vacuity: round 1's two played boards are the pins that were checked").toBe(one.boards.length);
+  }, 240_000);
+
+  // m1 / m2 (task 9b review). `PinnedRow.day_index` is `optional` because day 0 is a real day: the proto says an ABSENT
+  // day counts the pin on whatever slot range its start falls in (or on none), a SET one counts it on that calendar day.
+  // So "no day" and "day 0" are different requests, and the wire must keep them apart for every format (the engine sets
+  // the day on every slotted pin of every kind, `pinDayOnWire`, and leaves it off a pin whose day the grid does not
+  // offer). Each case below puts two played boards on the timetable: one on a day the grid offers, one on the day before
+  // the window opens, and judges the engine's input and the request built from it, board by board.
+
+  /** Route every placement solve through the REAL `toRequest` into a recording call (never dialed; it answers with a
+   *  status the client reads as an error, so the engine ships greedy). */
+  async function recordWire() {
+    vi.stubEnv("PLACEMENT_SERVICE_HOST", CLOSED_PORT_HOST);
+    const placement = await import("@seazn/scheduler/placement-client");
+    const realSolveBuild = placement.solveBuild;
+    const wire: WireRequest[] = [];
+    const recordingCall = {
+      solveBuild: (request: unknown, _meta: unknown, _opts: unknown, cb: (e: null, r: unknown) => void) => {
+        wire.push(request as WireRequest);
+        cb(null, { assignments: [], status: 0, tiersCompleted: 0, objectiveValues: [], elapsedMs: 0, wallExhausted: false, error: undefined });
+        return undefined;
+      },
+    };
+    const solveBuild = vi
+      .spyOn(placement, "solveBuild")
+      .mockImplementation(((input: Parameters<typeof realSolveBuild>[0], opts: Parameters<typeof realSolveBuild>[1]) =>
+        realSolveBuild(input, opts, recordingCall as never)) as typeof placement.solveBuild);
+    return { wire, solveBuild };
+  }
+
+  /** The index, among the days the rig's window offers, of the org-local calendar day `ms` falls on - or undefined when
+   *  the day is not on the grid. From the rulebook (the window and the calendar), not from the code: the rig saves no
+   *  blackout, closed day or session window and its org zone is UTC (asserted in `division`), so every calendar day from
+   *  the window's first to its last is a day of slots, in date order. */
+  function gridDayOf(ms: number): number | undefined {
+    const first = Date.parse(utcDay(Date.parse(START)));
+    const last = Date.parse(utcDay(Date.parse(END_AT)));
+    const day = Date.parse(utcDay(ms));
+    return day < first || day > last ? undefined : (day - first) / DAY_MS;
+  }
+
+  interface PinSource {
+    fixtureId: string;
+    roundNo?: number;
+    dayIndex?: number;
+  }
+
+  /** A third day of the window at 10:00: a day index that is neither the first day nor zero by accident. */
+  const ON_GRID_MS = msAt(2 * 24 * 60 + 60);
+  /** The day before the window opens, 09:00: no slot of the grid falls on it. */
+  const OFF_GRID_MS = msAt(-24 * 60);
+
+  /** Put `onGrid` and `offGrid` where the cases need them (SQL: the organiser's own placement would refuse the second). */
+  async function placePlayedPair(rig: Rig, onGrid: Row, offGrid: Row): Promise<void> {
+    await sql`update fixtures set scheduled_at = ${new Date(ON_GRID_MS)}, court_id = ${rig.courts[0]!} where id = ${onGrid.id}`;
+    await sql`update fixtures set scheduled_at = ${new Date(OFF_GRID_MS)}, court_id = ${rig.courts[1]!} where id = ${offGrid.id}`;
+    await playRound(rig, [onGrid, offGrid]);
+  }
+
+  /** The two pins, as the engine handed them to the solver port and as the request carries them. */
+  function pinsOf(solveBuild: { mock: { calls: unknown[][] } }, wire: WireRequest[], onGrid: Row, offGrid: Row) {
+    expect(wire.length, "the one solve went out through the real toRequest").toBe(1);
+    const input = solveBuild.mock.calls[0]![0] as { existing: PinSource[] };
+    expect(wire[0]!.existing.length, "every pin crossed the wire").toBe(input.existing.length);
+    const find = (row: Row) => {
+      const at = input.existing.findIndex((e) => e.fixtureId === row.id);
+      expect(at, `the played board ${row.id} is a pin of the solve`).toBeGreaterThanOrEqual(0);
+      return { src: input.existing[at]!, wire: wire[0]!.existing[at]! };
+    };
+    return { on: find(onGrid), off: find(offGrid) };
+  }
+
+  it("a played Swiss round on a day the grid does not offer sends NO dayIndex (absent, never 0), beside one on the grid that sends its day", async () => {
+    const { wire, solveBuild } = await recordWire();
+    const { rig, stageId } = await swissOnly({ players: 4, courts: 6, rounds: 3, rest: 30, cap: 2 });
+    const one = await layRoundOne(rig, stageId);
+    await placePlayedPair(rig, one.boards[0]!, one.boards[1]!);
+    await generateStageFixtures(rig.auth, stageId); // Pair round 2
+    await autoSchedule(rig.auth, stageId, { only_unlocked: false, mode: "build" });
+    const { on, off } = pinsOf(solveBuild, wire, one.boards[0]!, one.boards[1]!);
+    const END = protoEnum("ROUND_BARRIER_END");
+
+    // Premises: the two instants really are one on the grid (and not on its first day) and one off it.
+    const day = gridDayOf(ON_GRID_MS);
+    expect(day, "premise: the on-grid pin is on the third day of the window").toBe(2);
+    expect(gridDayOf(OFF_GRID_MS), "premise: the day before the window is on no day of the grid").toBeUndefined();
+
+    // Positive: the pin on the grid carries its day, as a number, on the engine's input and on the wire.
+    expect(on.src.roundNo, "the on-grid pin is a round-bearing pin").toBe(1);
+    expect(on.src.dayIndex, "engine input: the pin's day").toBe(day);
+    expect(on.wire.dayIndex, "wire: the pin's day").toBe(day);
+    expect(on.wire.roundBarrier, "and it is a Swiss pin: END").toBe(END);
+
+    // Negative: the off-grid pin has NO day. The engine leaves the key off its input; the request's field is undefined
+    // (the encoder writes `day_index` only when it is not undefined), and above all it is not 0.
+    expect(off.src.roundNo, "the off-grid pin is a round-bearing pin too").toBe(1);
+    expect(off.src, "engine input: no dayIndex key at all").not.toHaveProperty("dayIndex");
+    expect(off.wire.dayIndex, "wire: absent, not 0").toBeUndefined();
+    expect(off.wire.roundBarrier, "and it is a Swiss pin: END").toBe(END);
+  }, 240_000);
+
+  it("PinnedRow.day_index goes out for EVERY format: a played LEAGUE board carries its org-local calendar day, one off the grid carries none", async () => {
+    const { wire, solveBuild } = await recordWire();
+    const rig = await division({ players: 4, courts: 3, rest: 30, cap: 2 });
+    const stageId = await leagueStage(rig, 1);
+    // Two boards of round 1 that share no entrant, so no pair of pins clashes on a person whatever the days.
+    const rows = await rowsOf(stageId);
+    const first = rows[0]!;
+    const second = rows.find(
+      (r) => r.id !== first.id && r.home_entrant_id !== first.home_entrant_id && r.home_entrant_id !== first.away_entrant_id && r.away_entrant_id !== first.home_entrant_id && r.away_entrant_id !== first.away_entrant_id,
+    );
+    expect(second, "premise: the league has a board disjoint from the first").toBeDefined();
+    await placePlayedPair(rig, first, second!);
+    await autoSchedule(rig.auth, stageId, { only_unlocked: false, mode: "build" });
+    const { on, off } = pinsOf(solveBuild, wire, first, second!);
+    const UNSPECIFIED = protoEnum("ROUND_BARRIER_UNSPECIFIED");
+
+    const day = gridDayOf(ON_GRID_MS);
+    expect(day, "premise: the on-grid pin is on the third day of the window").toBe(2);
+    expect(gridDayOf(OFF_GRID_MS), "premise: the day before the window is on no day of the grid").toBeUndefined();
+
+    expect(on.wire.roundBarrier, "premise: a league pin carries no barrier").toBe(UNSPECIFIED);
+    expect(off.wire.roundBarrier, "premise: a league pin carries no barrier").toBe(UNSPECIFIED);
+    expect(on.src.dayIndex, "engine input: the league pin's day").toBe(day);
+    expect(on.wire.dayIndex, "wire: the league pin's day").toBe(day);
+    expect(off.src, "engine input: no dayIndex key at all").not.toHaveProperty("dayIndex");
+    expect(off.wire.dayIndex, "wire: absent, not 0").toBeUndefined();
   }, 240_000);
 
   it("a league build sends the proto3 defaults: no barrier, no flag, no gap, no cap", async () => {
