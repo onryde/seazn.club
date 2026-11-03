@@ -244,6 +244,7 @@
   "board.ai.preset.refine.3": "Houd elk team op één veld.",
   "chip.draft": "Concept",
   "chip.registration": "Inschrijving open",
+  "chip.inProgress": "Bezig",
   "chip.live": "Live",
   "chip.completed": "Voltooid",
   "chip.archived": "Gearchiveerd",

@@ -3,13 +3,12 @@
 //  - The band a competition sits in. A match TODAY is the competition page's own question, asked of the same count
 //    (`needsYouHome`: the page that offers "Open Match Day" on a match day), so this home and that page cannot disagree about
 //    which competitions are on today. A Draft competition with a match today is in the deck too (owner: yes). A finished one
-//    (completed or archived, by the status chip's own vocabulary) is hidden by default whatever else is true of it.
+//    (its status completed or archived) is hidden by default whatever else is true of it.
 //  - The sports line: from the divisions — one named, two named, three or more as "N sports" with the full list for title/aria.
 //  - B's stub on a quiet card with nothing upcoming: "No fixtures yet" before any fixture exists, "No match scheduled" after.
 //  - When a match plays, as the page prints it everywhere (the deck's match and the quiet card's "Next:" line alike): its time
 //    in the organisation's zone, 24-hour, in the locale's own order (`fmtPublicTime`/`fmtPublicDate`), with its date in front
 //    unless it is on the deck's day — so two lines on one page can never disagree about a time.
-import { competitionChipState } from "@/components/ui/status-chip";
 import { needsYouHome } from "@/components/v2/desk/needs-you";
 import { fmtPublicDate, fmtPublicTime } from "@/lib/format";
 import { intlLocaleFor } from "@/lib/public-date-locale";
@@ -23,10 +22,10 @@ export function homeGroupOf(c: { status: string; played: number; fixturesToday: 
   // Asked first so a bad count is refused for every competition, a finished one included: `needsYouHome` throws on anything
   // but a whole, non-negative count, and a silent "not today" is the answer this page must never invent.
   const onMatchDay = needsYouHome(c.fixturesToday) === "match_day";
-  const chip = competitionChipState(c.status);
-  if (chip === "completed" || chip === "archived") return "finished";
+  // The band reads the competition's own status (the card's CHIP reads its divisions, `competitionChipState`).
+  if (c.status === "completed" || c.status === "archived") return "finished";
   if (onMatchDay) return "today";
-  if (chip === "live" || c.played > 0) return "underWay";
+  if (c.status === "live" || c.played > 0) return "underWay";
   return "notStarted";
 }
 

@@ -244,6 +244,7 @@
   "board.ai.preset.refine.3": "Garder chaque équipe sur un seul terrain.",
   "chip.draft": "Brouillon",
   "chip.registration": "Inscriptions ouvertes",
+  "chip.inProgress": "En cours",
   "chip.live": "En direct",
   "chip.completed": "Terminé",
   "chip.archived": "Archivé",

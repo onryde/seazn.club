@@ -244,6 +244,7 @@
   "board.ai.preset.refine.3": "Keep every team on a single court.",
   "chip.draft": "Draft",
   "chip.registration": "Registration open",
+  "chip.inProgress": "In progress",
   "chip.live": "Live",
   "chip.completed": "Completed",
   "chip.archived": "Archived",

@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { TAG, addEntrantsViaApi, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, stageCardOf } from "../helpers";
+import { TAG, addEntrantsViaApi, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, scoreFixture, stageCardOf } from "../helpers";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
 import { uiEn } from "../match-room-kit";
 import { escapeRe } from "../helpers/stage-summary";
@@ -19,6 +19,9 @@ import { escapeRe } from "../helpers/stage-summary";
  *   5. The builder's default sport follows the organisation's most recent sport, generic INCLUDED: after a generic division
  *      the builder opens on "Any other game" (picked, so shown among the five; still the last tile); after a badminton one,
  *      on badminton.
+ *   6. The org dashboard's card chip is read off the divisions (owner: "why does it saying registration open even though no
+ *      registration opened in division level"): a published competition, under way, with no division window open says
+ *      In progress, never Registration open; open one division's window and it says Registration open.
  *
  * Every string asserted is read from the dictionary (`uiEn`), except the removed banner's own title, which no dictionary holds
  * any more (that is the point) and is spelled out once below. Budgets are derived from the navigations and taps (class 20).
@@ -47,7 +50,7 @@ async function seedDivision(request: APIRequestContext, label: string): Promise<
   return { competitionId: comp.data!.id, divisionId: div.data!.id };
 }
 
-async function seedLeague(request: APIRequestContext, label: string, entrants: string[]): Promise<{ divisionId: string; stageId: string }> {
+async function seedLeague(request: APIRequestContext, label: string, entrants: string[]): Promise<{ competitionId: string; divisionId: string; stageId: string }> {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `UI5 ${label} ${TAG}`, visibility: "private" });
   expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
   const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
@@ -63,7 +66,7 @@ async function seedLeague(request: APIRequestContext, label: string, entrants: s
   expect(stage.status, `stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
   const gen = await apiJson(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
   expect(gen.status, `generate: ${JSON.stringify(gen.error)}`).toBeLessThan(300);
-  return { divisionId: div.data!.id, stageId: stage.data!.id };
+  return { competitionId: comp.data!.id, divisionId: div.data!.id, stageId: stage.data!.id };
 }
 
 test.describe("UI5: the division page's owner fixes, walked", () => {
@@ -228,5 +231,44 @@ test.describe("UI5: the division page's owner fixes, walked", () => {
     // A mixed organisation opens on its latest, whichever that is.
     await opensOnAfterCreating("badminton", "bwf");
     await expect(generic, "not picked: the catch-all folds back under Show more").toBeHidden();
+  });
+
+  test("6. the dashboard card of a published competition under way says In progress, not Registration open; a window open says Registration open", async ({ page, request }) => {
+    test.setTimeout(budget(3, 4));
+    const { competitionId, divisionId } = await seedLeague(request, "Under way", ["Ana", "Ben", "Cy", "Di"]);
+    // The owner's state: started while a draft (Start promotes only a PUBLISHED competition to live), then published, a
+    // result in, and no division taking entries.
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+    const published = await apiJson<{ status: string }>(request, `/api/v1/competitions/${competitionId}`, "PATCH", { status: "published" });
+    expect(published.data?.status, `publish: ${JSON.stringify(published.error)}`).toBe("published");
+    const fixtures = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
+    await scoreFixture(request, fixtures.data![0]!.id, 2, 1);
+
+    const base = await divisionPath(request, divisionId);
+    const orgHome = base.split("/c/")[0]!;
+    const comp = await apiJson<{ slug: string }>(request, `/api/v1/competitions/${competitionId}`);
+    const card = page.locator(`[data-testid="org-home-card"][data-comp="${comp.data!.slug}"]`);
+    const chip = card.locator("[data-chip]");
+
+    await page.goto(orgHome, { waitUntil: "load" });
+    await dismissCookieBanner(page);
+    await expect(card, "the competition's card, under way").toBeVisible({ timeout: NAV_MS });
+    await expect(chip).toHaveAttribute("data-chip", "in_progress");
+    await expect(chip).toHaveText(uiEn["chip.inProgress"]!);
+    await expect(card.getByText(uiEn["chip.registration"]!, { exact: true }), "never Registration open").toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+
+    // The positive pair: one division's window opened, the same card says Registration open.
+    const window = await apiJson(request, `/api/v1/divisions/${divisionId}/registration-settings`, "PUT", {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      approval: "auto",
+    });
+    expect(window.status, `window: ${JSON.stringify(window.error)}`).toBeLessThan(300);
+    await page.goto(orgHome, { waitUntil: "load" });
+    await expect(chip).toHaveAttribute("data-chip", "registration", { timeout: NAV_MS });
+    await expect(chip).toHaveText(uiEn["chip.registration"]!);
   });
 });

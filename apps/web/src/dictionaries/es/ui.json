@@ -244,6 +244,7 @@
   "board.ai.preset.refine.3": "Mantener a cada equipo en una sola pista.",
   "chip.draft": "Borrador",
   "chip.registration": "Inscripción abierta",
+  "chip.inProgress": "En curso",
   "chip.live": "En directo",
   "chip.completed": "Finalizado",
   "chip.archived": "Archivado",

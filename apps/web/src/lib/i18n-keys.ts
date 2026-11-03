@@ -1346,6 +1346,7 @@ export type DictionaryKey =
   | "chip.draft"
   | "chip.finished"
   | "chip.frozen"
+  | "chip.inProgress"
   | "chip.live"
   | "chip.onNow"
   | "chip.registration"

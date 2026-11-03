@@ -2,12 +2,14 @@
 // cards, page headers, fixture rows. Copy comes from lib/messages so the
 // vocabulary is a data table, not scattered class strings.
 import { type MessageKey } from "@/lib/messages";
+import { chipShowsCount } from "@/lib/public-site";
 import { msgFor } from "@/lib/messages-i18n";
 import type { Locale } from "@/lib/i18n-constants";
 
 export type ChipState =
   | "draft"
   | "registration"
+  | "in_progress"
   | "scheduled"
   | "live"
   | "completed"
@@ -17,6 +19,8 @@ export type ChipState =
 const CHIP_STYLE: Record<ChipState, string> = {
   draft: "bg-slate-100 text-slate-600",
   registration: "border border-purple-300 bg-white text-purple-700",
+  // UI5 item 6: under way, nothing on court this minute - the floodlit chip's lime, unlit and without its pulse.
+  in_progress: "border border-lime-600/40 bg-lime-50 text-lime-900",
   scheduled: "border border-purple-200 bg-purple-50 text-purple-700",
   // Floodlit scorebug (floodlit-console spec §5): lime-on-night 10.7:1.
   live: "bg-night text-lime-400 ring-1 ring-inset ring-lime-400/40",
@@ -28,6 +32,7 @@ const CHIP_STYLE: Record<ChipState, string> = {
 const CHIP_KEY: Record<ChipState, MessageKey> = {
   draft: "chip.draft",
   registration: "chip.registration",
+  in_progress: "chip.inProgress",
   scheduled: "chip.scheduled",
   live: "chip.live",
   completed: "chip.completed",
@@ -35,25 +40,56 @@ const CHIP_KEY: Record<ChipState, MessageKey> = {
   frozen: "chip.frozen",
 };
 
-/** Sort weight: Live first, then Registration open, Draft, rest (v3/03 §2). */
+/** Sort weight: Live first, then Registration open, In progress, Draft, rest (v3/03 §2; UI5 item 6). */
 export const CHIP_SORT: Record<ChipState, number> = {
   live: 0,
   registration: 1,
-  scheduled: 2,
-  draft: 3,
-  completed: 4,
-  frozen: 4,
-  archived: 5,
+  in_progress: 2,
+  scheduled: 3,
+  draft: 4,
+  completed: 5,
+  frozen: 5,
+  archived: 6,
 };
 
+/** What a competition's divisions say, the card chip's input (`listCompetitionCardStats` reads every field in its one
+ *  query for the whole list). Archived divisions count for none of it. */
+export interface CompetitionChipSignals {
+  /** Matches on court now. */
+  inPlay: number;
+  /** Any division's registration window open (the competition page's own predicate, card-stats.ts). */
+  registrationOpen: boolean;
+  divisions: number;
+  /** Divisions started and not finished (`status = 'active'`). */
+  divisionsActive: number;
+  divisionsCompleted: number;
+  /** Results in (card-stats' PLAYED). */
+  played: number;
+}
+
+const isCount = (n: number) => Number.isInteger(n) && n >= 0;
+
+/** A competition card's chip (UI5 item 6, owner 2026-11-03: "why does it saying registration open even though no
+ *  registration opened in division level"). Read off its DIVISIONS, never `competitions.status` alone - "published" means
+ *  public, not taking sign-ups. Archived; then a match in play is Live; a division's registration window open is
+ *  Registration open; every division completed (or the organiser's own "completed") is Completed; a division started or a
+ *  result in is In progress; else Draft. Signals no read can produce are refused, never printed as a chip. */
 export function competitionChipState(
   status: string,
+  s: CompetitionChipSignals,
   opts: { archived?: boolean } = {},
 ): ChipState {
+  if (![s.inPlay, s.divisions, s.divisionsActive, s.divisionsCompleted, s.played].every(isCount)) {
+    throw new RangeError(`competition chip signals must be whole counts: ${JSON.stringify(s)}`);
+  }
+  if (s.divisionsActive + s.divisionsCompleted > s.divisions) {
+    throw new RangeError(`more divisions started or finished than exist: ${JSON.stringify(s)}`);
+  }
   if (opts.archived || status === "archived") return "archived";
-  if (status === "live") return "live";
-  if (status === "published") return "registration";
-  if (status === "completed") return "completed";
+  if (chipShowsCount(s.inPlay)) return "live";
+  if (s.registrationOpen) return "registration";
+  if ((s.divisions > 0 && s.divisionsCompleted === s.divisions) || status === "completed") return "completed";
+  if (s.divisionsActive > 0 || s.played > 0) return "in_progress";
   return "draft";
 }
 
