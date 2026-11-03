@@ -140,6 +140,13 @@ function pickKind(h: H, kind: EntrantKind) {
   if (!chip) throw new Error(`no ${kind} chip`);
   (propsOf(walk(chip).find((e) => e.type === "input")!).onChange as () => void)();
 }
+/** Format, a League picked: a format with standings, so Review shows its points and tie-break rows. Since round 4 (I1)
+ *  badminton opens on the first card shown, a Knockout, which has neither; these tests opened on Americano before. */
+function toStandingsFormat(h: H) {
+  setName(h, "Open");
+  next(h);
+  pickTemplate(h, "league");
+}
 const reviewRow = (h: H, id: string): string => {
   const row = h.tree().find((e) => e.type === "li" && propsOf(e)["data-review-row"] === id);
   if (!row) throw new Error(`no review row ${id}`);
@@ -301,6 +308,7 @@ describe("Review: a receipt, Edit back to each step, Create", () => {
 
   it("every row's Edit opens the step that holds it, and each row says where it can be changed later (counts)", () => {
     const h = mount(sportsFor("badminton"));
+    toStandingsFormat(h);
     walkToReview(h);
     const rows = h.tree().filter((e) => e.type === "li" && typeof propsOf(e)["data-review-row"] === "string");
     const want: Record<string, string> = { who: "who", format: "format", rules: "rules", points: "rules", tiebreaks: "rules", schedule: "rules" };
@@ -443,6 +451,7 @@ describe("Create", () => {
       return String(url).endsWith("/divisions") ? { id: "d1", slug: "open" } : {};
     });
     const h = mount(sportsFor("badminton"));
+    toStandingsFormat(h);
     // The empty case first: nothing is saved before the first Create, so nothing is locked and every row has Edit.
     walkToReview(h, "Open");
     expect(propsOf(byTestId(h, "division-builder-who-fields")!).disabled).toBe(false);

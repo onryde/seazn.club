@@ -1,5 +1,5 @@
-// The 4-step builder's pure decisions (Match Day C9): the entrant kind it opens at and sends, the five formats it
-// suggests, the order and the collapsed view of the Format and Sport pickers (C9 R2), and the step a server refusal belongs to. Expected values come from the engine's own declarations (each
+// The 4-step builder's pure decisions (Match Day C9): the entrant kind it opens at and sends, the format it opens on
+// (the first card shown, round 4), the order and the collapsed view of the Format and Sport pickers (C9 R2), and the step a server refusal belongs to. Expected values come from the engine's own declarations (each
 // sport module's entrant model) and the rulebook draw sizes, never from the module under test.
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
@@ -8,6 +8,7 @@ import { STAGE_TEMPLATES, templatesForSport } from "@/lib/format-templates";
 import { PAIR_MINTING_STAGE_KINDS } from "@/lib/chess-individual-only-rule";
 import {
   BUILDER_STEPS,
+  OPENING_PLAN,
   SUGGESTED_COUNT,
   collapsedPicks,
   defaultSportKey,
@@ -19,12 +20,12 @@ import {
   firstBlockedStep,
   formatPickerOrder,
   isPairRotationTemplate,
+  openingKnobs,
   openingTemplate,
   pickAfterChange,
   rankTemplates,
   sportPickerOrder,
   stepForCreateError,
-  suggestTemplates,
 } from "../model";
 
 const KNOBS = { qualified: 4, poolCount: 2, legs: 1, swissRounds: 3 };
@@ -80,21 +81,6 @@ describe("entrant kind", () => {
 describe("suggested formats", () => {
   const plan = { entrants: 16, venues: 2, hours: 4, matchMinutes: 30 };
 
-  it("every sport gets exactly five distinct suggestions, all from its own offer (counts)", () => {
-    let checked = 0;
-    for (const m of builtinModules) {
-      const offered = templatesForSport(m.key, modelOf(m.key).kinds).map((t) => t.key);
-      const picks = suggestTemplates(offered, plan, KNOBS);
-      expect(picks.length, m.key).toBe(Math.min(SUGGESTED_COUNT, offered.length));
-      expect(new Set(picks).size, m.key).toBe(picks.length);
-      for (const p of picks) expect(offered, `${m.key} ${p}`).toContain(p);
-      checked++;
-    }
-    expect(checked).toBe(builtinModules.length);
-    // C9 R2 (owner 2026-11-03): "show 5 format and then 6th one as a show more".
-    expect(SUGGESTED_COUNT).toBe(5);
-  });
-
   it("the full ranking is a permutation of the offer: Show all loses no format (counts)", () => {
     let checked = 0;
     for (const m of builtinModules) {
@@ -105,9 +91,10 @@ describe("suggested formats", () => {
     expect(checked).toBeGreaterThan(100);
   });
 
-  it("a format with no fixed draw (ladder) is never suggested ahead of four that have one", () => {
+  it("a format with no fixed draw (ladder) is never ranked into the first five ahead of four that have one", () => {
     const offered = STAGE_TEMPLATES.filter((t) => !t.retired).map((t) => t.key);
-    expect(suggestTemplates(offered, plan, KNOBS)).not.toContain("ladder");
+    expect(offered.length, "premise: more than five formats to rank").toBeGreaterThan(SUGGESTED_COUNT);
+    expect(rankTemplates(offered, plan, KNOBS).slice(0, SUGGESTED_COUNT).map((r) => r.key)).not.toContain("ladder");
   });
 
   it("with NOTHING fitting the day, a format with a draw still outranks one without, whatever the offer's order", () => {
@@ -182,7 +169,14 @@ describe("the opening format (owner Q5) and the kinds it is picked for (Q3): the
     // A plan that locks the first (Community lacks formats.advanced) opens on the next it includes; a lock on an unranked
     // key moves nothing.
     expect(openingTemplate(["americano", "knockout"], 30, ["individual", "pair"], ["americano"])).toBe("knockout");
-    expect(openingTemplate(["americano", "knockout"], 30, ["individual", "pair"], ["not-a-template"])).toBe("americano");
+    // A lock on the first card shown moves the opening to the NEXT card shown - not to the League fallback. No
+    // partner-rotation format here, so the cards are shown in the suggester's order.
+    const offer = ["league", "knockout", "ko_plate"];
+    const shown = rankTemplates(offer, { ...OPENING_PLAN, matchMinutes: 30 }, openingKnobs(OPENING_PLAN.entrants)).map((r) => r.key);
+    expect(shown[1], "premise: the second card shown is not the fallback").not.toBe("league");
+    expect(openingTemplate(offer, 30, ["team"], [])).toBe(shown[0]);
+    expect(openingTemplate(offer, 30, ["team"], [shown[0]!])).toBe(shown[1]);
+    expect(openingTemplate(["americano", "knockout"], 30, ["individual", "pair"], ["not-a-template"])).toBe(openingTemplate(["americano", "knockout"], 30, ["individual", "pair"], []));
   });
 
   it("the kinds a division takes: none shown is every kind the sport allows; the kind shown, default or not, alone (counts)", () => {
@@ -246,13 +240,17 @@ describe("what a division narrowed on Who plays is offered (N1: the partner-rota
     expect(divisionFormatOffer(offer, ["pair"])).not.toContain("mexicano");
   });
 
-  it("the opening follows the same rule: a division of individuals opens on Americano where it ranks first; pairs or teams skip it", () => {
-    // The premise: Americano outranks a knockout at the opening plan (else the cases below say nothing).
-    expect(openingTemplate(["americano", "knockout"], 30, ["individual", "pair"], [])).toBe("americano");
-    // n3 narrows an untouched badminton to individuals alone, which still plays Americano (it pairs its own players).
-    expect(openingTemplate(["americano", "knockout"], 30, ["individual"], [])).toBe("americano");
-    expect(openingTemplate(["americano", "knockout"], 30, ["pair"], [])).toBe("knockout");
-    expect(openingTemplate(["americano", "knockout"], 30, ["team"], [])).toBe("knockout");
+  it("the opening is the first card SHOWN (round 4, I1 'A'): Americano ranks first yet opens only when nothing else is offered", () => {
+    // The premise: Americano outranks a knockout at the opening plan (else the cases below say nothing) - and the picker
+    // shows it after the knockout (R2), so the old opening (the ranking's first) and the right one differ.
+    const plan = { ...OPENING_PLAN, matchMinutes: 30 };
+    expect(rankTemplates(["americano", "knockout"], plan, openingKnobs(plan.entrants)).map((r) => r.key)).toEqual(["americano", "knockout"]);
+    for (const kinds of [["individual", "pair"], ["individual"], ["pair"], ["team"]]) {
+      expect(openingTemplate(["americano", "knockout"], 30, kinds, []), kinds.join("+")).toBe("knockout");
+    }
+    // Offered alone, it is the first card shown - to a division of individuals (n3: an untouched badminton), which plays it.
+    expect(openingTemplate(["americano"], 30, ["individual"], [])).toBe("americano");
+    expect(openingTemplate(["americano"], 30, ["pair"], [])).toBe("league");
   });
 
   it("a picked card after the sport or the kind changes: kept while still offered, else dropped so the opening applies (n1)", () => {

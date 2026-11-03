@@ -100,25 +100,20 @@ export function openingKnobs(entrants: number): TemplateKnobs {
 }
 
 /**
- * The format the builder OPENS on (owner ruling 2026-11-03, C9 Q5): the suggester's first for the sport at the opening
- * plan - skipping a format the division's entrant kinds cannot play (divisionPlaysTemplate: Americano rotates individual
- * players into pairs, so a division narrowed to pairs or teams opens on the first format it CAN play) and a format the
- * organisation's plan locks (`locked`, the page's templateLocks keys: a Community plan lacks formats.advanced, so it never
- * opens on a locked Americano that Next would refuse). With nothing ranked passing both, League (C9 review 2, n4: never
- * the offer's first, which is then unplayable or locked by construction).
+ * The format the builder OPENS on (owner ruling 2026-11-03, C9 Q5; round 4, I1 "A": the FIRST CARD SHOWN, the same rule
+ * as Sport): the first card of the picker's order (formatPickerOrder over the suggester's ranking at the opening plan, so
+ * Americano and Mexicano, shown last, are never opened on while another card is offered) - skipping a format the
+ * division's entrant kinds cannot play (divisionPlaysTemplate: Americano rotates individual players into pairs, so a
+ * division narrowed to pairs or teams opens on the first format it CAN play) and a format the organisation's plan locks
+ * (`locked`, the page's templateLocks keys: a Community plan lacks formats.advanced, so it never opens on a locked
+ * Americano that Next would refuse). With nothing passing both, League (C9 review 2, n4: never the offer's first, which
+ * is then unplayable or locked by construction).
  */
 export function openingTemplate(offered: readonly string[], matchMinutes: number, entrantKinds: readonly string[], locked: readonly string[]): string {
   const playable = (key: string) =>
     STAGE_TEMPLATES.some((x) => x.key === key) && !locked.includes(key) && divisionPlaysTemplate(key, entrantKinds);
   const ranked = rankTemplates(offered, { ...OPENING_PLAN, matchMinutes }, openingKnobs(OPENING_PLAN.entrants));
-  return ranked.find((r) => playable(r.key))?.key ?? "league";
-}
-
-/** The top SUGGESTED_COUNT of the ranking (the suggester's own, before the picker's order is laid over it). */
-export function suggestTemplates(offered: readonly string[], plan: PlanInput, knobs: TemplateKnobs): string[] {
-  return rankTemplates(offered, plan, knobs)
-    .slice(0, SUGGESTED_COUNT)
-    .map((r) => r.key);
+  return formatPickerOrder(ranked.map((r) => r.key)).find(playable) ?? "league";
 }
 
 /** What a collapsed picker (Format or Sport) shows: the first SUGGESTED_COUNT of its order, and the one picked never

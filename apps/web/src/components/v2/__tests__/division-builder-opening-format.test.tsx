@@ -1,5 +1,6 @@
 // Match Day C9 fix round 1, owner ruling 2026-11-03 (Q5, "apply rec"): the builder OPENS on the top suggestion - the
-// first format the suggester ranks for the sport at the opening plan - not on League.
+// first format the suggester ranks for the sport at the opening plan - not on League. Round 4 (I1, owner "A"): the top
+// suggestion as SHOWN - the first card of the grid, where Americano and Mexicano sit after every other (R2).
 //
 // The expected pick is the SUGGESTER's own ranking (`rankTemplates`, whose first five are `suggestTemplates`), asked with
 // the plan the Format step opens at, read off its own boxes (entrants, venues, hours, and the match-length box), and the
@@ -22,7 +23,7 @@ import { templatesForSport } from "@/lib/format-templates";
 import { rankTemplates } from "@/lib/division-builder/model";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
 import { swissRoundsDefault } from "@/lib/swiss-rounds";
-import { byTestId, currentStep, goToStep, next, pickTemplate, pickedTemplate, pressCreate, selectSport, setName, stepError } from "./_division-builder-driver";
+import { byTestId, currentStep, goToStep, next, pickTemplate, pickedTemplate, pressCreate, selectSport, setName, stepError, templateKeys, visibleTemplateKeys } from "./_division-builder-driver";
 
 const { apiV1Mock } = vi.hoisted(() => ({ apiV1Mock: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -81,6 +82,11 @@ const playableBy = (kinds: readonly string[]) => (key: string) =>
   !STAGE_TEMPLATES.find((t) => t.key === key)!
     .build({ qualified: 4, swissRounds: 4, poolCount: 2, legs: 1 })
     .some((s) => s.kind === "americano" && !kinds.includes("individual"));
+/** A partner-rotation format (Americano, Mexicano): its stages include the stage kind that pairs up individuals. */
+const isRotation = (key: string) =>
+  STAGE_TEMPLATES.find((t) => t.key === key)!
+    .build({ qualified: 4, swissRounds: 4, poolCount: 2, legs: 1 })
+    .some((s) => s.kind === "americano");
 const modelOfSport = (key: string) => effectiveEntrantModel(builtinModules.find((m) => m.key === key)!.entrantModel ?? null, null);
 const sportKinds = (key: string) => modelOfSport(key).kinds;
 /** The kinds an untouched division of this sport takes (n3: its default kind, alone). */
@@ -98,9 +104,13 @@ function suggestersRanking(h: H, sportKey: string): string[] {
   const offered = templatesForSport(sportKey, sportKinds(sportKey)).map((t) => t.key);
   return rankTemplates(offered, plan, { qualified: 4, swissRounds: swissRoundsDefault(plan.entrants), poolCount: 2, legs: 1 }).map((r) => r.key);
 }
-/** The suggester's first that a division taking these kinds can play (untouched: the sport's default kind, n3). */
-const suggestersPick = (h: H, sportKey: string, kinds: readonly string[] = untouchedKinds(sportKey)): string =>
-  suggestersRanking(h, sportKey).find(playableBy(kinds))!;
+/** The suggester's first that a division taking these kinds can play (untouched: the sport's default kind, n3) and that
+ *  is not a partner-rotation format while another is (I1: the grid shows those last, and the builder opens on the first
+ *  card shown). */
+const suggestersPick = (h: H, sportKey: string, kinds: readonly string[] = untouchedKinds(sportKey)): string => {
+  const playable = suggestersRanking(h, sportKey).filter(playableBy(kinds));
+  return (playable.find((k) => !isRotation(k)) ?? playable[0])!;
+};
 
 beforeEach(() => {
   apiV1Mock.mockReset();
@@ -108,10 +118,10 @@ beforeEach(() => {
 });
 
 describe("Q5: the builder opens on the top suggestion", () => {
-  it("every sport: the picked card on Format is the suggester's first, and never League (counts)", () => {
+  it("every sport: the picked card on Format is the suggester's first other than Americano/Mexicano, and never League (counts)", () => {
     let checked = 0;
     let differsFromLeague = 0;
-    let topIsTheSuggestersFirst = 0;
+    let movedPastRotation = 0;
     let offerLacksAmericano = 0;
     for (const m of builtinModules) {
       const h = mount(sportsFor(m.key));
@@ -119,17 +129,18 @@ describe("Q5: the builder opens on the top suggestion", () => {
       next(h);
       const want = suggestersPick(h, m.key);
       expect(pickedTemplate(h), m.key).toBe(want);
+      expect(pickedTemplate(h), `${m.key}: the first card shown`).toBe(visibleTemplateKeys(h)[0]);
       if (want !== "league") differsFromLeague++;
-      if (want === suggestersRanking(h, m.key)[0]) topIsTheSuggestersFirst++;
+      if (isRotation(suggestersRanking(h, m.key)[0]!)) movedPastRotation++;
       if (!suggestersRanking(h, m.key).includes("americano")) offerLacksAmericano++;
       checked++;
     }
     expect(checked).toBe(builtinModules.length);
     expect(checked).toBeGreaterThan(0);
     expect(differsFromLeague, "League, the old default, is not the top suggestion").toBe(checked);
-    // The sport's offer (I5) already holds only what the sport can play, so every sport opens on the very first - including
-    // the sports whose offer lost Americano, which before I5 the guard had to move on from.
-    expect(topIsTheSuggestersFirst, "sports opening on the suggester's very first").toBe(checked);
+    // I1: the sports whose ranking puts Americano first open past it (the five individual-default racket/table sports and
+    // generic); the sports whose offer lost Americano (I5) open on the ranking's very first.
+    expect(movedPastRotation, "sports whose ranking's first is Americano/Mexicano").toBeGreaterThan(0);
     expect(offerLacksAmericano, "sports whose engine model cannot play Americano (I5)").toBeGreaterThan(0);
   });
 
@@ -139,14 +150,16 @@ describe("Q5: the builder opens on the top suggestion", () => {
     next(h);
     const opensOn = pickedTemplate(h);
     expect(opensOn).toBe(suggestersPick(h, "generic"));
-    expect(opensOn, "premise: generic opens on its offer's very first").toBe(suggestersRanking(h, "generic")[0]);
+    expect(opensOn, "premise: generic opens on the first card shown").toBe(visibleTemplateKeys(h)[0]);
     goToStep(h, "who");
     const teams = h.tree().find((e) => e.type === "input" && propsOf(e).type === "radio" && propsOf(e).value === "team");
     (propsOf(teams!).onChange as () => void)();
     goToStep(h, "format");
-    const want = suggestersPick(h, "generic", ["team"]);
-    expect(want, "premise: the narrowed division opens elsewhere").not.toBe(opensOn);
-    expect(pickedTemplate(h)).toBe(want);
+    // Since I1 the untouched division never opened on Americano either, so the narrowed one may open on the same card; what
+    // narrowing changes is the OFFER - teams are offered no partner-rotation format - and the opening is still its first.
+    expect(templateKeys(h).some(isRotation), "the Teams division is offered no Americano/Mexicano").toBe(false);
+    expect(pickedTemplate(h)).toBe(suggestersPick(h, "generic", ["team"]));
+    expect(pickedTemplate(h)).toBe(visibleTemplateKeys(h)[0]);
   });
 
   it("an untouched builder creates the top suggestion's stages", async () => {
@@ -181,6 +194,57 @@ describe("Q5: the builder opens on the top suggestion", () => {
   });
 });
 
+// C9 round 4, owner ruling I1 ("A", 2026-11-03): Format opens on the FIRST CARD SHOWN - the same rule as Sport (round 3).
+// The picker puts Americano and Mexicano after every other card (R2), so a sport whose suggester ranks one of them first
+// (badminton, tennis, table tennis, carrom, generic: their Individuals offer) used to open on a card pinned into the last
+// collapsed slot. The expected card is read off the grid the organiser sees (the first card not folded away), never off
+// the builder's own helpers; the kinds swept are each sport's engine entrant model.
+describe("I1: the builder opens Format on the first card shown", () => {
+  /** Who plays, narrowed to `kind` as a tap on its radio does (no tap when it is the sport's own default; a one-kind
+   *  sport shows no kind radios at all). */
+  const pickKind = (h: H, sportKey: string, kind: string) => {
+    const radio = h.tree().find((e) => e.type === "input" && propsOf(e).name === "division-entrant-kind" && propsOf(e).value === kind);
+    if (!radio && sportKinds(sportKey).length === 1) return;
+    if (!radio) throw new Error(`no ${kind} radio`);
+    if (propsOf(radio).checked !== true) (propsOf(radio).onChange as () => void)();
+  };
+
+  it("empty case first: a sport whose offer holds no partner-rotation format opens on its first card too", () => {
+    const h = mount(sportsFor("football"));
+    setName(h, "Open");
+    next(h);
+    expect(templateKeys(h).some((k) => isRotation(k)), "premise: football is offered no Americano").toBe(false);
+    expect(pickedTemplate(h)).toBe(visibleTemplateKeys(h)[0]);
+  });
+
+  it("every sport x every kind its engine model takes: the opening pick is the first visible card (counts)", () => {
+    let checked = 0;
+    let rankedRotationFirst = 0;
+    for (const m of builtinModules) {
+      for (const kind of sportKinds(m.key)) {
+        const h = mount(sportsFor(m.key));
+        setName(h, "Open");
+        pickKind(h, m.key, kind);
+        next(h);
+        expect(currentStep(h), `${m.key}/${kind}`).toBe("format");
+        const shown = visibleTemplateKeys(h);
+        expect(shown.length, `${m.key}/${kind}: some card is shown`).toBeGreaterThan(0);
+        expect(pickedTemplate(h), `${m.key}/${kind}: shown ${shown.join(",")}`).toBe(shown[0]);
+        expect(isRotation(shown[0]!), `${m.key}/${kind}: a partner-rotation format is never the first card`).toBe(false);
+        // The witness: the suggester's own first for this division is a partner-rotation format - the I1 case, where the
+        // old opening (the ranking's first) and the right one differ.
+        if (isRotation(suggestersRanking(h, m.key).find(playableBy([kind]))!)) rankedRotationFirst++;
+        checked++;
+      }
+    }
+    const expected = builtinModules.reduce((n, m) => n + sportKinds(m.key).length, 0);
+    console.info(`[I1 sweep] ${checked} sport x kind cells, ${rankedRotationFirst} where the ranking's first is Americano/Mexicano`);
+    expect(checked).toBe(expected);
+    expect(checked).toBeGreaterThan(builtinModules.length);
+    expect(rankedRotationFirst, "cells the old opening got wrong").toBeGreaterThan(0);
+  });
+});
+
 // Found in fix round 1 (a scout audit of every e2e that walks the builder): a Community organisation's plan locks
 // Americano (formats.advanced), so opening on it put a locked card under the organiser and Next refused it until they
 // picked another - division-delete.spec, pricing-v3.spec's Free cap and event-pass's Free rig would all have stopped on
@@ -206,17 +270,16 @@ describe("Q5 on a plan that locks the top suggestion (Community)", () => {
     expect(pickedTemplate(h)).toBe(suggestersPick(h, "badminton"));
   });
 
-  it("every sport opens on the suggester's first it can play and the plan includes, and Next leaves Format (counts)", () => {
+  it("every sport opens on the first card shown that it can play and the plan includes, and Next leaves Format (counts)", () => {
     let checked = 0;
-    let movedByTheLock = 0;
     for (const m of builtinModules) {
       const h = mount(sportsFor(m.key), { templateLocks: COMMUNITY_LOCKS, viewerPlan: "community" });
       setName(h, "Open");
       next(h);
-      const want = suggestersRanking(h, m.key).find((k) => playableBy(sportKinds(m.key))(k) && notLocked(k));
+      // The grid's order (every card, folded or not), the first the plan includes.
+      const want = templateKeys(h).find(notLocked);
       expect(want, `${m.key}: something is open to a Community plan`).toBeDefined();
       expect(pickedTemplate(h), m.key).toBe(want);
-      if (want !== suggestersPick(h, m.key)) movedByTheLock++;
       // The step the organiser opens on is never refused: Next leaves Format.
       next(h);
       expect(stepError(h), m.key).toBeNull();
@@ -224,8 +287,29 @@ describe("Q5 on a plan that locks the top suggestion (Community)", () => {
       checked++;
     }
     expect(checked).toBe(builtinModules.length);
-    // The defect's own case: sports whose top suggestion a Community plan locks (Americano for badminton, generic, ...).
-    expect(movedByTheLock, "sports whose top suggestion a Community plan locks").toBeGreaterThan(0);
+    // Since I1 no Community lock reaches the first card shown (the lock's old case, Americano first, opens past it now),
+    // so this sweep alone no longer moves an opening: the next test locks the first card itself.
+  });
+
+  it("a plan that locks the first card shown opens on the next card shown, every sport (counts)", () => {
+    let checked = 0;
+    for (const m of builtinModules) {
+      const open = mount(sportsFor(m.key));
+      setName(open, "Open");
+      next(open);
+      const first = visibleTemplateKeys(open)[0]!;
+      expect(pickedTemplate(open), `${m.key}: unlocked, the first card`).toBe(first);
+      const h = mount(sportsFor(m.key), { templateLocks: { [first]: "formats.advanced" }, viewerPlan: "community" });
+      setName(h, "Open");
+      next(h);
+      const want = templateKeys(h).find((k) => k !== first);
+      expect(want, `${m.key}: a second card`).toBeDefined();
+      expect(pickedTemplate(h), `${m.key}: the lock on ${first} moves the opening`).toBe(want);
+      next(h);
+      expect(currentStep(h), m.key).toBe("rules");
+      checked++;
+    }
+    expect(checked).toBe(builtinModules.length);
   });
 
   it("a locked card the organiser picks is still refused by name (the lock is not lifted, only not opened on)", () => {
