@@ -108,7 +108,7 @@ async function slideOf(
 }
 
 /** The REAL public table for the same stage, rows and rules, in `locale`. */
-async function publicTable(m: AnySportModule, doc: Doc, rows: readonly StandingsRow[], locale = "en") {
+async function publicTable(m: AnySportModule, doc: Doc, rows: readonly StandingsRow[], locale = "en", metricSpecs: AnySportModule["metrics"] = m.metrics) {
   const dict = await getDictionary(toLocale(locale), "public");
   return buildTableView({
     id: "t",
@@ -116,7 +116,7 @@ async function publicTable(m: AnySportModule, doc: Doc, rows: readonly Standings
     caption: "Swiss",
     fullHref: "/x",
     rows,
-    metricSpecs: m.metrics,
+    metricSpecs,
     cascade: doc.tiebreakers,
     entrantNames: NAMES,
     entrantLogos: {},
@@ -158,16 +158,37 @@ describe("ST-G21 the standings slide - the empty case first: a league slide is t
     expect(checked, "(sport, cfg) league slides checked").toBeGreaterThan(SPORTS);
   });
 
-  it("a hand-built input (no module, no rules) and a module this build cannot resolve draw no tie-break column, and do not throw", async () => {
+  it("a hand-built input with no rules draws no tie-break column, and does not throw (the pair: the same rows with their rules do)", async () => {
     const m = sport("badminton");
     const doc = swissDoc(m, declaredCfgs(m)[0]!.cfg);
-    // The pair first: the same rows and rules with the module resolved DO get their two.
-    expect((await slideOf(m, doc, swissRows(m))).tiebreakColumns?.length, "premise: the resolved module gets its two").toBe(SLIDE_TIEBREAK_MAX);
-    for (const division of [{ sport_key: "no-such-sport", module_version: "9.9.9" }, { sport_key: undefined, module_version: undefined }]) {
-      const slide = await slideOf(m, doc, swissRows(m), { division });
-      expect(slide.tiebreakColumns, JSON.stringify(division)).toBeUndefined();
+    expect((await slideOf(m, doc, swissRows(m))).tiebreakColumns?.length, "premise: with its rules the slide gets its two").toBe(SLIDE_TIEBREAK_MAX);
+    for (const rules of [null, undefined, { tiebreakers: [] }]) {
+      const slide = await slideOf(m, rules as never, swissRows(m));
+      expect(slide.tiebreakColumns, JSON.stringify(rules)).toBeUndefined();
       expect(slide.rows).toHaveLength(IDS.length);
     }
+  });
+
+  it("a module this build cannot resolve keeps the ladders exactly as the public table shows them without one (review m1), and does not throw", async () => {
+    let checked = 0;
+    for (const { m, name, cfg } of FIRST_CASES) {
+      const doc = swissDoc(m, cfg);
+      const rows = swissRows(m);
+      const resolved = await slideOf(m, doc, rows);
+      expect(resolved.tiebreakColumns?.length, `${m.key}: premise - the resolved module gets its two`).toBe(SLIDE_TIEBREAK_MAX);
+      for (const division of [{ sport_key: "no-such-sport", module_version: "9.9.9" }, { sport_key: undefined, module_version: undefined }]) {
+        const slide = await slideOf(m, doc, rows, { division });
+        // the public table for the same stage with no module: structural + derived columns only (`metricSpecs` empty)
+        const c = compare(slide, await publicTable(m, doc, rows, "en", []));
+        expect(c.keys, `${m.key} ${name} ${JSON.stringify(division)}`).toEqual(resolved.tiebreakColumns!.map((x) => x.key));
+        expect(c.found, `${m.key}: the table shows them too`).toBe(true);
+        expect(c.headers).toEqual(c.tableHeaders);
+        expect(c.slideCells).toEqual(c.tableCells);
+        expect(slide.rows).toHaveLength(IDS.length);
+        checked++;
+      }
+    }
+    expect(checked, "(sport, no-module case) pairs checked").toBe(SPORTS * 2);
   });
 });
 
@@ -204,10 +225,9 @@ describe("ST-G21 a Swiss slide carries the tie-break columns, its cells the publ
     expect(slide.rows.map((r) => r.tiebreaks![1]), "Opp diff is an integer in the whole spelling, sign kept").toEqual(["3", "1", "-1", "-3"]);
   });
 
-  it("a chess (half-point) Swiss slide spells the ladders in halves, like its Points: the stored 7.5 reads 7½ - and a whole-point football table does not", async () => {
+  it("one stored ledger, two spellings: a half-point (chess) slide reads the 7.5 as 7½ and a whole-point (badminton) slide as 7.5 - the unit is the stage's own, taken by the slide from its layout", async () => {
     const chess = sport("boardgame");
-    const cfg = chess.variants.classical;
-    const doc = swissDoc(chess, cfg);
+    const doc = swissDoc(chess, chess.variants.classical);
     // chess stores Pts in HALVES (a win is 2): 3 -> "1½"
     const rows = swissRows(chess, (i) => 6 - 2 * i);
     const slide = await slideOf(chess, doc, rows);
@@ -216,8 +236,12 @@ describe("ST-G21 a Swiss slide carries the tie-break columns, its cells the publ
     expect(c.slideCells).toEqual(c.tableCells);
     expect(slide.rows.map((r) => r.tiebreaks![1])).toEqual(rows.map((r) => pointsText(r.metrics.buchholz! * 2, "half")));
     expect(slide.rows[0]!.tiebreaks![1], "premise: 7.5 whole points is fifteen halves").toBe("7½");
-    // the pair: football's whole-point table spells the same 7.5 as a plain decimal (the engine's formatter, not the builder's)
-    expect(pointsText(7.5, "whole")).toBe("7.5");
+    // The pair, built through the same slide builder: a whole-point sport given the SAME stored ledger spells it as a decimal.
+    // (An engine fact like `pointsText(7.5, "whole")` would not say the SLIDE does so; this does.)
+    const bad = sport("badminton");
+    const whole = await slideOf(bad, swissDoc(bad, declaredCfgs(bad)[0]!.cfg), swissRows(bad));
+    expect(whole.rows[0]!.tiebreaks![1], "the same 7.5 on a whole-point slide").toBe("7.5");
+    expect(whole.rows[0]!.tiebreaks![1]).not.toBe(slide.rows[0]!.tiebreaks![1]);
   });
 
   it("every sport and declared cfg: the slide's columns are the engine's first two Swiss-only keys of the stage order; headers and cells are the public table's (registry sweep, counted)", async () => {
@@ -265,12 +289,13 @@ describe("ST-G21 a Swiss slide carries the tie-break columns, its cells the publ
 });
 
 describe("ST-G21 a stage pinned to an older chain shows only what that chain holds (Review Focus 5)", () => {
-  it("ST-G21 a stage pinned to the pre-W3 chain shows no Buchholz column - on a Swiss stage, for every sport (counted), with the unpinned stage as the positive pair", async () => {
+  it("a stage pinned to a chain with no Swiss-only key shows none - on a Swiss stage, for every sport (counted), with the unpinned stage as the positive pair", async () => {
     let pinned = 0;
     let unpinned = 0;
     for (const { m, cfg } of FIRST_CASES) {
       const rows = swissRows(m);
-      // The chain a stage pinned before W3 holds: the engine's non-Swiss default for the sport - it names no Swiss-only key.
+      // A chain with no Swiss-only key: the engine's non-Swiss default for the sport (a stand-in for "older", which the next test pins
+      // literally - this one holds for every sport, and the current engine cannot produce a true pre-W3 chain).
       const old = leagueDoc(m, cfg);
       expect(engineSwissOnly(m, cfg, old.tiebreakers), `${m.key}: premise - the pre-W3 chain names no Swiss-only key`).toEqual([]);
       const pin = { ...swissDoc(m, cfg), tiebreakers: old.tiebreakers };
@@ -285,6 +310,32 @@ describe("ST-G21 a stage pinned to an older chain shows only what that chain hol
     expect(pinned, "sports checked pinned").toBe(SPORTS);
     expect(unpinned, "sports checked unpinned").toBe(SPORTS);
     expect(SPORTS).toBe(11);
+  });
+
+  // The chains a stage pinned BEFORE W3 carries, as engine 1.1.0 (what origin/main still runs) declared them: recorded fixtures, because
+  // the engine this branch pins cannot produce them. Read from 1.1.0's own `module.defaultTiebreakers("swiss", cfg)` on 2026-11-03
+  // (the first variant of each sport). badminton and football held no Swiss-only key; boardgame's Swiss default ALREADY held both ladders.
+  const ENGINE_1_1_0_SWISS_DEFAULT = {
+    badminton: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],
+    football: ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "fair_play", "lots"],
+    boardgame: ["points", "buchholz_cut1", "buchholz", "sberger", "direct", "wins", "lots"],
+  } as const;
+
+  it("ST-G21 a stage pinned to the pre-W3 chain shows exactly what that chain holds (Review Focus 5): badminton and football none, boardgame its two ladders - engine 1.1.0's recorded Swiss defaults", async () => {
+    const want = { badminton: [], football: [], boardgame: ["buchholz_cut1", "buchholz"] } as const;
+    let checked = 0;
+    for (const key of ["badminton", "football", "boardgame"] as const) {
+      const m = sport(key);
+      const cfg = declaredCfgs(m)[0]!.cfg;
+      const chain = ENGINE_1_1_0_SWISS_DEFAULT[key];
+      const pinned = await slideOf(m, { ...swissDoc(m, cfg), tiebreakers: chain }, swissRows(m));
+      expect((pinned.tiebreakColumns ?? []).map((c) => c.key), `${key} pinned to the 1.1.0 chain`).toEqual(want[key]);
+      // the pair: the same rows under today's unpinned Swiss default carry two, so the empty answers above are the pin's
+      const live = await slideOf(m, swissDoc(m, cfg), swissRows(m));
+      expect(live.tiebreakColumns?.length, `${key} unpinned`).toBe(SLIDE_TIEBREAK_MAX);
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 
   it("a chain holding ONE Swiss-only key shows one column (the board has a template for each count), and the column is that key", async () => {
@@ -337,5 +388,31 @@ describe.skipIf(!HAS_DB)("ST-G21 the organiser board's Swiss slide (buildDivisio
     expect(slide!.tiebreakColumns).toEqual(publicSlide.tiebreakColumns);
     expect(Object.fromEntries(slide!.rows.map((r) => [r.name, r.tiebreaks]))).toEqual(Object.fromEntries(publicSlide.rows.map((r) => [r.name, r.tiebreaks])));
     expect(slide!.rows.length).toBe(IDS.length);
+  });
+
+  it("review m6: the organiser board's tie-break headers are the board's label locale (English), never the org's - a Spanish org's header row is not half and half; the public board keeps the org's", async () => {
+    const m = sport("football");
+    const variant = Object.keys(m.variants)[0]!;
+    const { auth } = await seedOrg();
+    await sql`update organizations set default_locale = 'es' where id = ${auth.orgId}`;
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Copa", visibility: "public", branding: {} });
+    const division = await createDivision(auth, comp.id, { name: "Open", slug: "open", sport_key: m.key, variant_key: variant, config: {} as never });
+    await createEntrants(auth, division.id, IDS.map((id, i) => ({ kind: "team" as const, display_name: NAMES[id]!, seed: i + 1, members: [] })));
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 } });
+    const stored = await sql<{ id: string; display_name: string }[]>`select id, display_name from entrants where division_id = ${division.id}`;
+    const idOf = new Map(stored.map((e) => [e.display_name, e.id]));
+    const rows = swissRows(m).map((r) => ({ ...r, entrantId: idOf.get(NAMES[r.entrantId]!)! }));
+    await sql`insert into standings_snapshots (stage_id, pool_id, rows, computed_through_seq) values (${stage!.id}, null, ${sql.json(rows as never)}, 0)`;
+
+    const slide = (await buildDivisionSlides(auth, division.id, "Open")).find((s): s is StandingsSlide => s.kind === "standings");
+    const en = await getDictionary("en", "public");
+    const es = await getDictionary("es", "public");
+    const enWord = columnHeader({ key: "opp_diff", label: "Opp diff" }, (k) => t(en, k)).abbr;
+    const esWord = columnHeader({ key: "opp_diff", label: "Opp diff" }, (k) => t(es, k)).abbr;
+    expect(esWord, "premise: the Spanish word differs from the English one").not.toBe(enWord);
+    expect(slide!.tiebreakColumns!.map((c) => c.header), "the organiser board: the board's English").toEqual(["Buchholz", enWord]);
+    // the pair: the public builder over the same stage speaks the org's locale
+    const publicSlide = await slideOf(m, swissDoc(m, m.configSchema.parse(m.variants[variant])), swissRows(m), { locale: "es" });
+    expect(publicSlide.tiebreakColumns!.map((c) => c.header)).toEqual(["Buchholz", esWord]);
   });
 });

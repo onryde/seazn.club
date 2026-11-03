@@ -18,6 +18,11 @@ import { spectator } from "./spectator-w2-kit";
 // The negative has its positive pair: a LEAGUE on the same board draws its table with no Buchholz header, so the absence is the
 // cascade's and not an empty or unhydrated board.
 //
+// The ladders are a TV-board feature from Tailwind's `2xl` (1536px) up (owner ruling 2026-11-03) and fold below it
+// (`max-2xl:hidden`). A text read cannot see that - the folded cells are still in the DOM, so `textContent` finds them at 1280 -
+// so every width below is read as COMPUTED visibility (display, visibility and a painted box), in the same atomic snapshot as the
+// text: shown at 1920 and at exactly 1536, hidden at 1535 and at 1280, with the page itself never scrolling sideways.
+//
 // The board ROTATES every 9 s, so nothing here asserts across time: the table is read in ONE `evaluate` (an atomic snapshot of
 // the slide on screen), as `slideshow-pts-ratio.spec.ts` does. The organiser board is always English; its labels come from the
 // en dictionary rather than being typed.
@@ -29,7 +34,10 @@ const L = {
 /** The two ladders' words: the Buchholz NOTATION, printed as the engine labels it in every locale (owner, `NOTATION_HEADERS`). */
 const LADDERS = ["Buchholz Cut-1", "Buchholz"] as const;
 
-const DESKTOP = { width: 1280, height: 800 };
+/** Tailwind's `2xl` (96rem): where the board starts to draw the ladders. Not read from the code under test. */
+const LADDERS_FROM = 1536;
+const TV = { width: 1920, height: 1080 };
+const LAPTOP = { width: 1280, height: 800 };
 /** One API round trip against a local production build, with headroom. */
 const API_CALL_MS = 1_500;
 const FLOOR_MS = 60_000;
@@ -43,14 +51,23 @@ const clock = (page: Page) => page.locator("header span.tabular-nums");
 
 interface BoardTable {
   header: string[];
-  rows: Record<string, string[]>;
+  /** Per header cell: painted (display not none, visibility not hidden, a box with area) - computed, not attached. */
+  headerShown: boolean[];
+  rows: Record<string, { texts: string[]; shown: boolean[] }>;
+  /** The page itself scrolls sideways. */
+  pageScrolls: boolean;
 }
 
-/** Open a division's board and read the standings slide whose caption is `caption` as one snapshot (the pts-ratio spec's reader). */
-async function boardTable(page: Page, divisionId: string, caption: string): Promise<BoardTable> {
-  await page.setViewportSize(DESKTOP);
+/** Open a division's board at `viewport` and wait for it to hydrate. */
+async function openBoard(page: Page, divisionId: string, viewport: { width: number; height: number }) {
+  await page.setViewportSize(viewport);
   await page.goto(`/slideshow/divisions/${divisionId}`);
   await expect(clock(page)).toBeAttached();
+}
+
+/** Read the standings slide whose caption is `caption` as one snapshot (the pts-ratio spec's reader): text and computed
+ *  visibility of every cell in the SAME evaluate, so the rotation cannot put two slides between them. */
+async function readBoard(page: Page, caption: string): Promise<BoardTable> {
   let table: BoardTable | null = null;
   await expect
     .poll(
@@ -59,15 +76,22 @@ async function boardTable(page: Page, divisionId: string, caption: string): Prom
           const shown = document.querySelector("main h2")?.textContent?.trim();
           if (shown !== wanted) return null;
           const grids = [...document.querySelectorAll("main div.grid")];
-          const cells = (grid: Element) => [...grid.children].filter((c) => !c.hasAttribute("aria-hidden")).map((c) => (c.textContent ?? "").trim());
+          const cells = (grid: Element) => [...grid.children].filter((c) => !c.hasAttribute("aria-hidden"));
+          const painted = (el: Element) => {
+            const r = el.getBoundingClientRect();
+            const cs = getComputedStyle(el);
+            return cs.display !== "none" && cs.visibility !== "hidden" && r.width > 0 && r.height > 0;
+          };
+          const text = (el: Element) => (el.textContent ?? "").trim();
           const header = grids.find((g) => !g.classList.contains("relative"));
           if (!header) return null;
-          const rows: Record<string, string[]> = {};
+          const rows: Record<string, { texts: string[]; shown: boolean[] }> = {};
           for (const row of grids.filter((g) => g.classList.contains("relative"))) {
-            const texts = cells(row);
-            rows[texts[1] ?? "?"] = texts;
+            const cs = cells(row);
+            rows[text(cs[1]!)] = { texts: cs.map(text), shown: cs.map(painted) };
           }
-          return { header: cells(header), rows };
+          const de = document.documentElement;
+          return { header: cells(header).map(text), headerShown: cells(header).map(painted), rows, pageScrolls: de.scrollWidth > de.clientWidth };
         }, caption);
         if (table === null) await page.keyboard.press("ArrowRight");
         return table !== null;
@@ -76,6 +100,15 @@ async function boardTable(page: Page, divisionId: string, caption: string): Prom
     )
     .toBe(true);
   return table!;
+}
+
+/** The board at `width` (the page is already open): resize, then wait for the ladders' computed visibility to settle to `shown`. */
+async function boardAtWidth(page: Page, caption: string, width: number, shown: boolean): Promise<BoardTable> {
+  await page.setViewportSize({ width, height: TV.height });
+  await expect
+    .poll(async () => (await readBoard(page, caption)).headerShown.slice(-2).join(), { timeout: 15_000, intervals: [250], message: `the ladders are ${shown ? "painted" : "folded"} at ${width}px` })
+    .toBe(`${shown},${shown}`);
+  return readBoard(page, caption);
 }
 
 interface HubTable {
@@ -172,10 +205,11 @@ test.describe("ST-G21 the board and the public table show Buchholz for a Swiss",
     }
   });
 
-  test("the organiser's board headers the two ladders after Pts and the ratio, and each row prints its own - the cells the anonymous public table prints for the same entrants", async ({ page, browser }, testInfo) => {
-    testInfo.setTimeout(180_000);
-    const board = await boardTable(page, seeded.divisionId, "Swiss");
-    await testInfo.attach("swiss-board-1280", { body: await page.locator("main").screenshot(), contentType: "image/png" });
+  test("the organiser's board headers the two ladders after Pts and the ratio from 2xl up, each row prints its own - the cells the anonymous public table prints for the same entrants - and below 2xl they are folded", async ({ page, browser }, testInfo) => {
+    testInfo.setTimeout(240_000);
+    await openBoard(page, seeded.divisionId, TV);
+    const board = await readBoard(page, "Swiss");
+    await testInfo.attach("swiss-board-1920", { body: await page.locator("main").screenshot(), contentType: "image/png" });
 
     // The whole control set, membership and order: the old columns, Pts, the ratio, then the ladders last.
     expect(board.header.slice(0, 2)).toEqual(["#", L.entrant]);
@@ -184,9 +218,13 @@ test.describe("ST-G21 the board and the public table show Buchholz for a Swiss",
     expect(pts, "Pts is in the header").toBeGreaterThan(1);
     expect(board.header.slice(pts + 1, -2), "between Pts and the ladders: the ratio the cascade also holds, nothing else").toHaveLength(1);
     expect(Object.keys(board.rows).sort()).toEqual([...seeded.names].sort());
-    for (const [name, cells] of Object.entries(board.rows)) {
-      expect(cells, `${name}'s cells: one under every header`).toHaveLength(board.header.length);
+    for (const [name, row] of Object.entries(board.rows)) {
+      expect(row.texts, `${name}'s cells: one under every header`).toHaveLength(board.header.length);
     }
+    // PAINTED at a TV width: every header cell and every row cell, the ladders included (computed visibility, not attachment).
+    expect(board.headerShown, "every header cell is painted at 1920").toEqual(board.header.map(() => true));
+    for (const [name, row] of Object.entries(board.rows)) expect(row.shown, `${name}: every cell is painted at 1920`).toEqual(row.texts.map(() => true));
+    expect(board.pageScrolls, "the page does not scroll sideways at 1920").toBe(false);
 
     // The public table: the same entrants, the same ladders, the same text. Polled: the hub document is cached for a moment.
     const page2 = await spectator(browser, { width: 1280, height: 900 });
@@ -198,8 +236,8 @@ test.describe("ST-G21 the board and the public table show Buchholz for a Swiss",
           if (typeof hub === "string") return hub;
           if (hub.headers.buchholz_cut1 !== LADDERS[0] || hub.headers.buchholz !== LADDERS[1]) return `headers ${JSON.stringify(hub.headers)}`;
           const mismatched = seeded.names.filter((name) => {
-            const boardRow = board.rows[name]!;
-            return boardRow[boardRow.length - 2] !== cellsOf(hub, name, "buchholz_cut1") || boardRow[boardRow.length - 1] !== cellsOf(hub, name, "buchholz");
+            const texts = board.rows[name]!.texts;
+            return texts[texts.length - 2] !== cellsOf(hub, name, "buchholz_cut1") || texts[texts.length - 1] !== cellsOf(hub, name, "buchholz");
           });
           return mismatched.length === 0 ? "equal" : `unequal: ${mismatched.join(", ")}`;
         },
@@ -208,16 +246,32 @@ test.describe("ST-G21 the board and the public table show Buchholz for a Swiss",
       .toBe("equal");
 
     // Anti-vacuity: the ladders carry numbers, not only dashes or zeros (the losers' opponents scored).
-    const values = Object.values(board.rows).flatMap((cells) => cells.slice(-2));
+    const values = Object.values(board.rows).flatMap((row) => row.texts.slice(-2));
     expect(values.every((v) => v !== "—"), "no dash: every row has a ledger").toBe(true);
     expect(values.some((v) => v !== "0"), "at least one ladder is not zero").toBe(true);
+
+    // The breakpoint, on the same open page (a resize is a media-query change, not a reload): painted at exactly 2xl, folded one
+    // pixel below it and at a 1280 laptop - the other columns untouched at every width.
+    const kept = board.header.length - 2;
+    for (const [width, shown] of [[LADDERS_FROM, true], [LADDERS_FROM - 1, false], [LAPTOP.width, false]] as const) {
+      const at = await boardAtWidth(page, "Swiss", width, shown);
+      expect(at.header, `the header's text does not change with the width (${width})`).toEqual(board.header);
+      expect(at.headerShown.slice(0, kept), `${width}: the old columns stay painted`).toEqual(board.header.slice(0, kept).map(() => true));
+      expect(at.headerShown.slice(-2), `${width}: the ladders' headers`).toEqual([shown, shown]);
+      for (const [name, row] of Object.entries(at.rows)) expect(row.shown.slice(-2), `${width} ${name}: the ladders' cells`).toEqual([shown, shown]);
+      expect(at.pageScrolls, `the page does not scroll sideways at ${width}`).toBe(false);
+    }
+    await testInfo.attach("swiss-board-1280-folded", { body: await page.locator("main").screenshot(), contentType: "image/png" });
   });
 
-  test("a league beside it draws its table with no Buchholz header (the negative pair)", async ({ page }) => {
-    const board = await boardTable(page, seeded.leagueId, "Plain League");
-    // The table IS on screen - its header and both rows - so the absence below is the cascade's, not an unhydrated or empty board.
+  test("a league beside it draws its table with no Buchholz header at a TV width either (the negative pair)", async ({ page }) => {
+    await openBoard(page, seeded.leagueId, TV);
+    const board = await readBoard(page, "Plain League");
+    // The table IS on screen - its header and both rows, all painted - so the absence below is the cascade's, not an unhydrated,
+    // empty or merely folded board (1920 is wider than the 2xl the ladders need).
     expect(board.header.slice(0, 2)).toEqual(["#", L.entrant]);
     expect(Object.keys(board.rows).sort()).toEqual(["North", "South"]);
+    expect(board.headerShown, "every league header cell is painted").toEqual(board.header.map(() => true));
     for (const word of LADDERS) expect(board.header, word).not.toContain(word);
     expect(board.header.at(-1), "the league's header ends on Pts, as it always did").toBe(L.points);
   });

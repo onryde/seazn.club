@@ -51,14 +51,23 @@ describe("ST-G21 slideTiebreakColumns - the empty cases first", () => {
     expect(slideTiebreakColumns(shown, doc.tiebreakers, new Set()), "no key is Swiss-only").toEqual([]);
   });
 
-  it("the Swiss-only set of an empty order, and of a module this build cannot resolve, is empty - and an unknown key never throws", () => {
+  it("the Swiss-only set of an empty order is empty, and an unknown key never throws", () => {
     const m = sport("football");
     expect(swissOnlyKeysOf(m, []).size).toBe(0);
-    expect(swissOnlyKeysOf(null, ["buchholz", "opp_diff"]).size, "a retired module build").toBe(0);
     // A stored order is data (the engine throws CONFIG_INVALID on a key outside its vocabulary): the board degrades to "not a
     // tie-break column" and goes on drawing, it never takes the TV down.
     expect(() => swissOnlyKeysOf(m, ["no_such_key", "buchholz"])).not.toThrow();
     expect([...swissOnlyKeysOf(m, ["no_such_key", "buchholz"])]).toEqual(["buchholz"]);
+  });
+
+  it("a module this build cannot resolve answers as a resolved one does: the public table shows the ladders without a module, so the board keeps them (review m1)", () => {
+    const m = sport("football");
+    const order = ["points", "diff", "buchholz", "opp_diff", "lots"];
+    expect([...swissOnlyKeysOf(null, order)].sort(), "no module").toEqual(["buchholz", "opp_diff"]);
+    expect([...swissOnlyKeysOf(null, order)].sort()).toEqual([...swissOnlyKeysOf(m, order)].sort());
+    // and the same through the whole rule: the columns a table with no module shows (structural + derived only) are the first two
+    const shown = tableColumns([], order, [row("a")], tableLayoutFor(null, "swiss"));
+    expect(slideTiebreakColumns(shown, order, swissOnlyKeysOf(null, order)).map((c) => c.key)).toEqual(["buchholz", "opp_diff"]);
   });
 });
 
@@ -78,6 +87,7 @@ describe("ST-G21 swissOnlyKeysOf - the engine's declaration, not a list", () => 
           const want = new Set(engineSwissOnly(m, cfg, order));
           const got = swissOnlyKeysOf(m, order);
           expect([...got].sort(), `${m.key}: ${order.join(",")}`).toEqual([...want].sort());
+          expect([...swissOnlyKeysOf(null, order)].sort(), `${m.key}: rule 3 needs no sport`).toEqual([...want].sort());
           keys += order.length;
           swiss += got.size;
         }

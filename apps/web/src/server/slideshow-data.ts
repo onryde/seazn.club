@@ -19,7 +19,7 @@ import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { getDictionary, t } from "@/lib/i18n";
 import { poolLabel } from "@/lib/pool-label";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
-import { toLocale } from "@/lib/i18n-constants";
+import { DEFAULT_LOCALE, toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import {
   derivedMetricText,
@@ -170,7 +170,8 @@ function standingsSlideRows(
   snapRows: readonly StandingsSlideSnapshotRow[],
   shape: StandingsShape,
   names: Record<string, string>,
-  /** The page's words in the org's locale (`t(publicDict, key)`): the tie-break headers' abbreviations. */
+  /** The board's words for the tie-break headers' abbreviations (`t(dict, key)`): the page's own locale - the org's on the public
+   *  board, the board's label locale on the organiser's. */
   msg: (key: TKey) => string,
 ): { columns: StandingsSlideColumn[]; rows: StandingsSlideRow[]; level: boolean; tiebreakColumns?: StandingsSlideTiebreakColumn[] } {
   const engineRows: StandingsRow[] = snapRows.map((r) => ({ ...r, metrics: r.metrics ?? {} }));
@@ -376,6 +377,11 @@ export async function buildDivisionSlides(
   const lookup: SlotLabelLookup = (k, v) => msgFor(locale, k, v);
   // The pool labels' words (`table.poolLabel`), same org locale as `lookup`.
   const publicDict = await getDictionary(locale, "public");
+  // W3 app-B T9 (review m6): the board's HEADER words are `slideshowLabels(DEFAULT_LOCALE)` - the organiser board keeps the English
+  // it always showed (`app/slideshow/divisions/[id]/page.tsx`) - so the tie-break headers, one more cell of the same row, are
+  // spelled in that locale too: a Spanish org's header row reads "PTS ... BUCHHOLZ ... OPP DIFF", never half and half. The pool
+  // captions above keep the org's locale (they are slide copy, not the header row). Public `/present` stays the org's on both sides.
+  const boardDict = locale === DEFAULT_LOCALE ? publicDict : await getDictionary(DEFAULT_LOCALE, "public");
   // RS008: "stricter wins" per entrant — ANY roster member's explicit
   // opt-out masks that entrant's own display_name (a solo "individual"
   // entrant has exactly one member; a "pair"/"team" can have several).
@@ -434,7 +440,7 @@ export async function buildDivisionSlides(
         snap.rows as StandingsSlideSnapshotRow[],
         stageShape(sportModule, tableRules[stage.id], stage.kind),
         names,
-        (key) => t(publicDict, key),
+        (key) => t(boardDict, key),
       );
       if (rows.length > 0) {
         slides.push({ kind: "standings", division: divisionName, caption, columns, rows, level, ...(tiebreakColumns === undefined ? {} : { tiebreakColumns }) });

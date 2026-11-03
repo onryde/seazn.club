@@ -530,4 +530,36 @@ describe("ST-G21 the public table of a Swiss stage shows its tie-break ladders",
       expect(markup, `${key}: the disclosure exists`).toMatch(/data-testid="[^"]*-more"/);
     }
   });
+
+  // T9 review m4 / fix round 1 (b): with the engine's Swiss chains carrom and tennis hold both ladders, and their Swiss tables'
+  // `md` floor (`--sv-min-md`) is wider than the 734px card the hub gives a 768px page (measured on the built app: the card is
+  // 734 at 768). Their leagues fit. The overflow is REACHABLE, which AGENTS.md #23 makes a feature: the card is the scrolling element
+  // (`overflow-x-auto`) and carries a `tabindex`, a role and an accessible name, unconditionally. The page itself must not scroll
+  // (the browser check is the 768 shot); here the markup is held to the rail contract for EVERY sport's Swiss table, wide or not,
+  // and the sweep reports how many of each it met.
+  const MD_CARD_PX = 734;
+  it("every sport's Swiss table, whether or not its md floor fits the 734px card, scrolls inside ONE reachable rail: overflow-x-auto + role + tabindex 0 + a name (counted)", () => {
+    const wide: string[] = [];
+    const fits: string[] = [];
+    for (const m of builtinModules) {
+      const view = viewFor(m, "swiss");
+      const markup = draw(view);
+      const floor = Number(markup.match(/--sv-min-md:(\d+(?:\.\d+)?)px/)?.[1]);
+      expect(Number.isFinite(floor), `${m.key}: the md floor is declared on the table`).toBe(true);
+      (floor > MD_CARD_PX ? wide : fits).push(`${m.key} ${floor}px`);
+      const region = markup.match(new RegExp(`<div[^>]*data-testid="${TESTID}-scroll"[^>]*>`))?.[0];
+      expect(region, `${m.key}: the scrolling region`).toBeDefined();
+      expect(region!, `${m.key}: the card is the scrolling element`).toMatch(/class="[^"]*(^|\s)overflow-x-auto(\s|")/);
+      expect(region!, `${m.key}: a role`).toMatch(/role="region"/);
+      expect(region!, `${m.key}: tabindex 0, unconditionally`).toMatch(/tabindex="0"/);
+      expect(region!, `${m.key}: an accessible name (the division and the stage)`).toMatch(/aria-label="Div — Swiss"/);
+      // one rail only: a second scroller inside it would be a scroll trap
+      expect((markup.match(/overflow-x-auto/g) ?? []).length, `${m.key}: exactly one horizontal scroller`).toBe(1);
+    }
+    expect(fits.length + wide.length, "sports swept").toBe(builtinModules.length);
+    expect(builtinModules.length).toBe(11);
+    // anti-vacuity: the sweep met BOTH answers, so "the rail is there" was asked of a table that needs it and of one that does not
+    expect(wide.length, `Swiss tables wider than the ${MD_CARD_PX}px card: ${wide.join(", ")}`).toBeGreaterThan(0);
+    expect(fits.length, `Swiss tables that fit: ${fits.join(", ")}`).toBeGreaterThan(0);
+  });
 });

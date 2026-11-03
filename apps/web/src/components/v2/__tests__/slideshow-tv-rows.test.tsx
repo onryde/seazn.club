@@ -883,10 +883,11 @@ describe("export review I2: the kiosk board prints D exactly as the public table
 // The builder (`server/__tests__/slideshow-tiebreak-columns.test.ts`) decides WHICH columns and WHAT each cell says - the public
 // table's own. What this pins is what the board does with them: one fixed track each after Pts (and after the ratio, the
 // normal table's order), a template for every (result shape x 0/1/2 tie-break) combination, the entrant still the only growing
-// track, and the board BELOW `xl` exactly as it was - the two ladders (9rem each: the widest header any locale prints on one line)
-// would leave the entrant nothing at 768 and 1024, where the board already cuts a long name, so they fold (`max-xl:hidden`) as the
-// IIHF split's counts fold below `lg`. Priced from the rendered classes, like everything above: nothing about a track is typed
-// here but the case's own strings; widths, sizes and tracking are read off the markup, Tailwind's theme and the committed face.
+// track, and the board BELOW `2xl` exactly as it was - the two ladders (9rem each: the widest header any locale prints on one line)
+// cost the entrant 288px, which cut names to 140-224px at 1280 on every Swiss shape (T9 review I1; owner ruling 2026-11-03: the
+// board is a TV surface and a 1920 TV has the room), so they fold (`max-2xl:hidden`) as the IIHF split's counts fold below `lg`.
+// Priced from the rendered classes, like everything above: nothing about a track is typed here but the case's own strings;
+// widths, sizes and tracking are read off the markup, Tailwind's theme and the committed face.
 describe("ST-G21 the standings slide's tie-break columns (layout half)", () => {
   /** The result shapes the builder makes, from the public table's own declarations: `resultColumns(apart, draws)` columns, folded
    *  to the table's phone set (`compactKeysOf`) exactly when the stage's layout splits its results. */
@@ -954,11 +955,13 @@ describe("ST-G21 the standings slide's tie-break columns (layout half)", () => {
     if (best === undefined) throw new Error("no grid template applies");
     return best.tracks;
   }
-  /** Is the cell shown at `vw`? A `max-lg:hidden` cell shows from lg, a `max-xl:hidden` from xl. */
+  /** Is the cell shown at `vw`? A `max-lg:hidden` cell shows from lg, a `max-2xl:hidden` from 2xl. */
   function shownAt(cls: string, vw: number): boolean {
     for (const m of cls.matchAll(/(?:^|\s)max-([a-z0-9]+):hidden(?=\s|$)/g)) if (vw < themePx(`breakpoint-${m[1]}`)) return false;
     return true;
   }
+  /** Where the ladders start (owner ruling 2026-11-03), and the widths either side of it. */
+  const XXL = themePx("breakpoint-2xl");
   const XL = themePx("breakpoint-xl");
   const LG = themePx("breakpoint-lg");
   const MD = themePx("breakpoint-md");
@@ -982,7 +985,7 @@ describe("ST-G21 the standings slide's tie-break columns (layout half)", () => {
     expect(() => standingsTemplate(SHAPES.find((s) => s.apart)!.columns, true, 1)).toThrow("with a ratio column");
   });
 
-  it("every combination draws one track per cell at every width (768, lg, 1280, 1920), the entrant the only growing track, tie-breaks after Pts and the ratio", () => {
+  it("every combination draws one track per cell at every width (768, lg, 1280, one below 2xl, 2xl, 1920), the entrant the only growing track, tie-breaks after Pts and the ratio", () => {
     let checked = 0;
     for (const { shape, tb, ratio, label } of COMBOS) {
       const html = board(slide(shape, { ratio, tb }));
@@ -994,7 +997,7 @@ describe("ST-G21 the standings slide's tie-break columns (layout half)", () => {
         "#", labels.entrant, ...shape.columns.map((c) => labels[c.key]), labels.points, ...(ratio ? [labels.pointRatio] : []), ...TB.slice(0, tb).map((c) => c.header),
       ]);
       for (const g of [header!, ...rows]) {
-        for (const vw of [MD, LG, 1280, 1920]) {
+        for (const vw of [MD, LG, 1280, XXL - 1, XXL, 1920]) {
           const tracks = tracksAt(g.tokens, vw);
           const visible = g.cells.filter((c) => shownAt(c.cls, vw));
           expect(tracks, `${label} @${vw}: one track per visible cell`).toHaveLength(visible.length);
@@ -1006,22 +1009,22 @@ describe("ST-G21 the standings slide's tie-break columns (layout half)", () => {
       const after = 2 + shape.columns.length + 1 + (ratio ? 1 : 0);
       for (const r of rows) {
         expect(r.cells.slice(after).map((c) => c.text), label).toEqual(TB_CELLS.slice(0, tb));
-        for (const c of r.cells.slice(after)) expect(c.cls, `${label}: a tie-break cell folds below xl`).toMatch(/(^|\s)max-xl:hidden(\s|$)/);
+        for (const c of r.cells.slice(after)) expect(c.cls, `${label}: a tie-break cell folds below 2xl`).toMatch(/(^|\s)max-2xl:hidden(\s|$)/);
       }
-      for (const c of header!.cells.slice(after)) expect(c.cls, `${label}: a tie-break header folds below xl`).toMatch(/(^|\s)max-xl:hidden(\s|$)/);
+      for (const c of header!.cells.slice(after)) expect(c.cls, `${label}: a tie-break header folds below 2xl`).toMatch(/(^|\s)max-2xl:hidden(\s|$)/);
     }
     expect(COMBOS.length, "combinations").toBe(18);
-    expect(checked, "(grid x width) checks: 3 grids x 4 widths x 18").toBe(18 * 3 * 4);
+    expect(checked, "(grid x width) checks: 3 grids x 6 widths x 18").toBe(18 * 3 * 6);
   });
 
-  it("below xl the board is exactly the slide it was: the same template and the same cells shown, so the entrant's 768 track is unchanged (it neither gains nor loses by the columns)", () => {
+  it("below 2xl the board is exactly the slide it was: the same template and the same cells shown, so the entrant's 768, 1024 and 1280 tracks are unchanged (they neither gain nor lose by the columns)", () => {
     let compared = 0;
     for (const shape of SHAPES) {
       for (const ratio of shape.apart ? [false] : [false, true]) {
         const without = gridsOf(board(slide(shape, { ratio, tb: 0 })));
         const withTb = gridsOf(board(slide(shape, { ratio, tb: 2 })));
         for (let i = 0; i < without.length; i++) {
-          for (const vw of [MD, LG, XL - 1]) {
+          for (const vw of [MD, LG, XL, XXL - 1]) {
             expect(tracksAt(withTb[i]!.tokens, vw), `${shape.name}${ratio ? "+ratio" : ""} @${vw}`).toEqual(tracksAt(without[i]!.tokens, vw));
             expect(withTb[i]!.cells.filter((c) => shownAt(c.cls, vw)).map((c) => c.text.length > 0), `${shape.name} @${vw}: the cells shown`).toHaveLength(without[i]!.cells.filter((c) => shownAt(c.cls, vw)).length);
             compared++;
@@ -1029,15 +1032,15 @@ describe("ST-G21 the standings slide's tie-break columns (layout half)", () => {
         }
       }
     }
-    expect(compared, "grids x widths compared").toBe(6 * 3 * 3);
+    expect(compared, "grids x widths compared").toBe(6 * 3 * 4);
   });
 
-  it("in EVERY combination the tie-break tracks are fixed, equal, one per column and come after the old tracks unchanged (xl)", () => {
+  it("in EVERY combination the tie-break tracks are fixed, equal, one per column and come after the old tracks unchanged (2xl)", () => {
     let checked = 0;
     for (const { shape, tb, ratio, label } of COMBOS) {
       if (tb === 0) continue;
-      const base = tracksAt(gridsOf(board(slide(shape, { ratio, tb: 0 })))[0]!.tokens, XL);
-      const tracks = tracksAt(gridsOf(board(slide(shape, { ratio, tb })))[0]!.tokens, XL);
+      const base = tracksAt(gridsOf(board(slide(shape, { ratio, tb: 0 })))[0]!.tokens, XXL);
+      const tracks = tracksAt(gridsOf(board(slide(shape, { ratio, tb })))[0]!.tokens, XXL);
       expect(tracks.slice(0, base.length), `${label}: the old tracks come first, unchanged`).toEqual(base);
       const added = tracks.slice(base.length);
       expect(added, `${label}: one track per tie-break column`).toHaveLength(tb);
@@ -1097,9 +1100,9 @@ describe("ST-G21 the standings slide's tie-break columns (layout half)", () => {
   });
 
   // ---- what a tie-break track can hold, priced from the rendered classes ---------------------------------------------
-  /** The widths of the tie-break tracks (the last `tb` of the xl template). */
+  /** The widths of the tie-break tracks (the last `tb` of the 2xl template). */
   const tbTracksPx = (html: string, tb: number): number[] =>
-    tracksAt(gridsOf(html)[0]!.tokens, XL)
+    tracksAt(gridsOf(html)[0]!.tokens, XXL)
       .slice(-tb)
       .map((tr) => {
         if (tr.kind !== "fixed") throw new Error("a tie-break track is no longer fixed: re-derive this model");
@@ -1177,22 +1180,66 @@ describe("ST-G21 the standings slide's tie-break columns (layout half)", () => {
     return slideWidth(html, vw) - 2 * pad - tracks.reduce((s, tr) => s + (tr.kind === "fixed" ? tr.px : 0), 0) - (tracks.length - 1) * gap;
   };
 
-  it("the entrant keeps a track in every combination at 1280 (the cost is priced, and the owner sees the shot); at 1920 the 43-character name fits one line on every realistic Swiss shape", () => {
-    const cost: string[] = [];
+  // The entrant's track per board shape, from the CSS declarations ALONE - the pre-T9 tracks and the 2xl ones, never read back from
+  // `standingsTemplate`. The slide is `min(vw - 96, 72rem)` wide below 2xl and `min(vw - 96, 100rem)` from it (K-2); the row pads
+  // `px-6` each side (48) and puts `gap-x-5` (20) between tracks. The fixed tracks: `#` 4rem, each count 4rem, Pts 7rem, a ratio
+  // 6rem, each ladder 9rem (the rem is 16px).
+  //   1280 (the slide is 1152; 1152 - 48 = 1104; no ladders, they are folded below 2xl):
+  //     4/4        7 tracks: 4+16+7 = 27rem = 432, 6 gaps = 120      -> 1104 - 432 - 120 = 552
+  //     4/4+ratio  8 tracks: 27+6 = 33rem = 528, 7 gaps = 140        -> 1104 - 528 - 140 = 436
+  //     3/3        6 tracks: 4+12+7 = 23rem = 368, 5 gaps = 100      -> 1104 - 368 - 100 = 636
+  //     3/3+ratio  7 tracks: 23+6 = 29rem = 464, 6 gaps = 120        -> 1104 - 464 - 120 = 520
+  //     6/1        9 tracks: 4+24+7 = 35rem = 560, 8 gaps = 160      -> 1104 - 560 - 160 = 384
+  //     5/1        8 tracks: 4+20+7 = 31rem = 496, 7 gaps = 140      -> 1104 - 496 - 140 = 468
+  //   1536 (the slide is min(1440, 1600) = 1440; 1440 - 48 = 1392), with the two ladders (+288, +2 tracks, +40 gaps):
+  //     4/4 1392 - 720 - 160 = 512 | 4/4+ratio 1392 - 816 - 180 = 396 | 3/3 1392 - 656 - 140 = 596
+  //     3/3+ratio 1392 - 752 - 160 = 480 | 6/1 1392 - 848 - 200 = 344 | 5/1 1392 - 784 - 180 = 428
+  const NAME_TRACK_1280 = { "4/4": 552, "4/4+ratio": 436, "3/3": 636, "3/3+ratio": 520, "6/1": 384, "5/1": 468 } as const;
+  const NAME_TRACK_2XL = { "4/4": 512, "4/4+ratio": 396, "3/3": 596, "3/3+ratio": 480, "6/1": 344, "5/1": 428 } as const;
+  const shapeKey = (shape: (typeof SHAPES)[number], ratio: boolean) => `${shape.name}${ratio ? "+ratio" : ""}` as keyof typeof NAME_TRACK_1280;
+
+  it("at 1280 the entrant keeps exactly the track it had before the ladders, in every combination (the owner's ruling: they start at 2xl), and it is never below the floor of its board shape", () => {
+    let checked = 0;
+    for (const { shape, tb, ratio, label } of COMBOS) {
+      const html = board(slide(shape, { ratio, tb, name: LONG43 }));
+      const pinned = NAME_TRACK_1280[shapeKey(shape, ratio)];
+      expect(pinned, `${label}: a pinned track for the shape`).toBeGreaterThan(0);
+      // the pin is the floor (a track that shrank below it is a cut the owner did not accept), and the ladders add nothing at 1280
+      expect(nameTrackAt(html, 1280), `${label}: the entrant's track at 1280`).toBe(pinned);
+      expect(nameTrackAt(html, XXL - 1), `${label}: and one px below the ladders`).toBe(nameTrackAt(board(slide(shape, { ratio, tb: 0, name: LONG43 })), XXL - 1));
+      checked++;
+    }
+    expect(checked, "combinations pinned at 1280: 4 shapes x 3 tie-break counts + the ratio on two").toBe(18);
+    expect(new Set(Object.values(NAME_TRACK_1280)).size, "the pins are six different tracks (the probe can tell the shapes apart)").toBe(6);
+  });
+
+  it("at 2xl, the first width that draws the ladders, the entrant keeps the pinned track of its shape, and the ladders cost it exactly their tracks and gaps", () => {
+    let checked = 0;
     for (const { shape, tb, ratio, label } of COMBOS) {
       if (tb !== 2) continue;
       const html = board(slide(shape, { ratio, tb, name: LONG43 }));
-      const before = nameTrackAt(board(slide(shape, { ratio, tb: 0, name: LONG43 })), 1280);
-      const after = nameTrackAt(html, 1280);
-      expect(after, `${label}: the entrant's track at 1280`).toBeGreaterThan(0);
-      expect(after, `${label}: the columns come out of the entrant`).toBeLessThan(before);
-      cost.push(`${label}: ${before.toFixed(0)}px -> ${after.toFixed(0)}px`);
+      const before = nameTrackAt(board(slide(shape, { ratio, tb: 0, name: LONG43 })), XXL);
+      const after = nameTrackAt(html, XXL);
+      expect(after, `${label}: the entrant's track at ${XXL}`).toBe(NAME_TRACK_2XL[shapeKey(shape, ratio)]);
+      // two 9rem tracks and the two gaps beside them, measured on the rendered classes
+      expect(before - after, `${label}: what two ladders cost`).toBe(2 * spacingPx("36") + 2 * spacingPx("5"));
+      checked++;
+    }
+    expect(checked, "priced shapes with two tie-breaks at 2xl").toBe(6);
+  });
+
+  it("at 1920, the TV the ladders are for, the 43-character name fits one line on every realistic Swiss shape", () => {
+    let checked = 0;
+    for (const { shape, tb, ratio, label } of COMBOS) {
+      if (tb !== 2) continue;
       if (shape.apart) continue; // IIHF + Swiss: six counts and two ladders; a name is cut at 1920 too, which the owner sees in the shot
+      const html = board(slide(shape, { ratio, tb, name: LONG43 }));
       const cellTokens = classesAround(html, LONG43);
       expect(cellTokens, "the entrant is cut, not wrapped").toContain("truncate");
       const need = textWidth(DISPLAY[weightOf(cellTokens)]!, LONG43, themePx(`text-${one(cellTokens, /^text-(\d?xl|lg|base|sm)$/, "name size")[1]}`));
       expect(nameTrackAt(html, 1920), `${label}: ${LONG43} needs ${need.toFixed(0)}px at 1920`).toBeGreaterThanOrEqual(need);
+      checked++;
     }
-    expect(cost, "priced shapes with two tie-breaks (4/4, 3/3, +ratio, and the split pair)").toHaveLength(6);
+    expect(checked, "non-split shapes with two tie-breaks at 1920 (4/4, 3/3, each with the ratio)").toBe(4);
   });
 });
