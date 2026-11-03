@@ -1458,7 +1458,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // gates the rail drew it under: an editor (the rail is his), a Swiss with Unpair on offer, and `swissUnpairChangeHint` (every round seated,
         // round 2 on, a running root Swiss). The Pair next menu carries the same copy while a round waits, so it shows in exactly one place.
         const swissUnpairNote =
-          canEdit && stage.kind === "swiss" && stage.status !== "complete" && canUnpairSwiss && unpairChangeHint
+          canEdit && stage.kind === "swiss" && canUnpairSwiss && unpairChangeHint
             ? msg("schedule.pairing.changeHint")
             : null;
         // The sentences after the legend, in reading order; each is one span on the legend line, joined by " · ".

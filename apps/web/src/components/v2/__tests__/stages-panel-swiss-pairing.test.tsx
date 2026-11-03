@@ -338,7 +338,11 @@ describe("StagesPanel — rounds >= 2 explain how to change a pairing (X-SW-30)"
     const final = html(swissStage(), lastPaired);
     expect(final, "positive pair: the editor of the final round sees the line").toMatch(UNPAIR_HINT);
     expect(html(swissStage(), lastPaired, { canEdit: false }), "a viewer").not.toContain("stage-unpair-hint");
-    expect(html(swissStage({}, "complete"), lastPaired), "a finished stage").not.toContain("stage-unpair-hint");
+    // A finished stage's card is folded to one line (its body, rail and legend line are away), so ask for it open first: it is open, the line is not.
+    const finished = swissStage({}, "complete");
+    const finishedOpen = html(finished, lastPaired, { attentionStageIds: [finished.id] });
+    expect(finishedOpen, "positive pair: asked open, the finished card is open").toMatch(/data-testid="stage-collapse-toggle"[^>]*aria-expanded="true"/);
+    expect(finishedOpen, "a finished stage").not.toContain("stage-unpair-hint");
   });
 
   it("the final round paired shows BOTH sentences on the one legend line, in order: the system pairs it, then Unpair-then-Pair-next", () => {
