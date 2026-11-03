@@ -17,18 +17,37 @@ import { sportOptionsFrom } from "@/lib/sport-options";
 import { venueNoun } from "@/lib/venue";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
 import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 import { byTestId, goToStep, next, pickTemplate, setName, templateKeys } from "./_division-builder-driver";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
   usePathname: () => "/o/org/c/comp/d/new",
 }));
-vi.mock("@/components/i18n/dict-provider", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/components/i18n/dict-provider")>()),
-  useLocale: () => "en" as const,
-}));
+// The copy hooks read whichever locale a case sets (English unless it says otherwise), through the real i18n runtime
+// and that locale's own dictionary.
+const LOCALE = vi.hoisted(() => ({ current: "en" as "en" | "es" | "fr" | "nl" }));
+vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
+  const { plural, t } = await import("@/lib/i18n-runtime");
+  const dicts: Record<string, Record<string, unknown>> = {
+    en: (await import("@/dictionaries/en/ui.json")).default,
+    es: (await import("@/dictionaries/es/ui.json")).default,
+    fr: (await import("@/dictionaries/fr/ui.json")).default,
+    nl: (await import("@/dictionaries/nl/ui.json")).default,
+  };
+  return {
+    ...(await importOriginal<typeof import("@/components/i18n/dict-provider")>()),
+    useLocale: () => LOCALE.current,
+    useMsg: () => (key: string, vars?: Record<string, string | number>) => t(dicts[LOCALE.current]!, key as never, vars),
+    useMsgPlural: () => (key: string, count: number, vars?: Record<string, string | number>) =>
+      plural(dicts[LOCALE.current]!, key, count, LOCALE.current, vars),
+  };
+});
 
 const UI = uiEn as Record<string, string>;
+const DICTS = { en: UI, es: uiEs as Record<string, string>, fr: uiFr as Record<string, string>, nl: uiNl as Record<string, string> };
 const PLURAL = new Intl.PluralRules("en");
 const unitFor = (key: string, n: number) => UI[`${key}.${PLURAL.select(n)}`]!;
 const ALL: SportOption[] = sportOptionsFrom(
@@ -134,6 +153,45 @@ describe("Review's totals: four centred stats, a number over its unit (round 4)"
     ]);
     expect(ts[1]!.unit).toBe(UI["divBuilder.card.noDraw"]);
     expect(expectTotals(h, "badminton")).toBe(4);
+  });
+
+  it("every locale: a dash takes the unit's plural form, a count its own plural category (review 4 n3: French read '—' over 'tour')", () => {
+    // A dash is no count, so it reads as the plural ("rounds", "tours"); Intl puts 0 in French's "one", which is how a
+    // ladder's rounds tile once read "—" over the singular "tour". The witness: at least one locale where 0 is not "other".
+    const LOCALES = ["en", "es", "fr", "nl"] as const;
+    expect(LOCALES.filter((l) => new Intl.PluralRules(l).select(0) !== "other"), "a locale where 0 is not 'other'").toContain("fr");
+    let dashes = 0;
+    let counts = 0;
+    try {
+      for (const locale of LOCALES) {
+        LOCALE.current = locale;
+        const dict = DICTS[locale];
+        // The ladder: no fixed draw, so the rounds tile is a dash.
+        const ladder = mount("badminton");
+        setName(ladder, "Open");
+        next(ladder);
+        pickTemplate(ladder, "ladder");
+        goToStep(ladder, "review");
+        const dash = tiles(ladder).find((t) => t.id === "rounds")!;
+        expect(dash.value, locale).toBe("—");
+        expect(dash.unit, `${locale}: a dash reads as the plural`).toBe(dict["divBuilder.review.unit.rounds.other"]);
+        dashes++;
+        // The opening format (a fixed draw): each counted tile in that count's own category, in this locale.
+        const drawn = mount("badminton");
+        setName(drawn, "Open");
+        goToStep(drawn, "review");
+        const rules = new Intl.PluralRules(locale);
+        for (const t of tiles(drawn).filter((x) => x.id !== "time" && x.value !== "—")) {
+          const n = Number(t.value.replace(/\D/g, ""));
+          expect(t.unit, `${locale} ${t.id} ${n}`).toBe(dict[`divBuilder.review.unit.${t.id}.${rules.select(n)}`]);
+          counts++;
+        }
+      }
+    } finally {
+      LOCALE.current = "en";
+    }
+    expect(dashes).toBe(LOCALES.length);
+    expect(counts, "counted tiles read across the locales").toBeGreaterThanOrEqual(LOCALES.length * 3);
   });
 
   it("every sport's opening format: each tile reads as the screen and the dictionaries say (counts)", () => {

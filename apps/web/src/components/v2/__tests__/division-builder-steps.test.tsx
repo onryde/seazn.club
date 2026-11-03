@@ -471,10 +471,18 @@ describe("Create", () => {
       }
       return String(url).endsWith("/divisions") ? { id: "d1", slug: "open" } : {};
     });
-    const h = mount(sportsFor("badminton"));
+    // Every sport, badminton first (the opening): enough tiles that the Sport picker folds behind its Show more tile.
+    const h = mount(sportsFor("badminton", ...ALL.map((s) => s.key).filter((k) => k !== "badminton")));
     toStandingsFormat(h);
     // The empty case first: nothing is saved before the first Create, so nothing is locked and every row has Edit.
     walkToReview(h, "Open");
+    // Review 4 (n2): the Sport picker's Show more tile answers a hover while editable, and not once saved.
+    const moreHovers = () => {
+      const more = byTestId(h, "division-builder-sport-more");
+      if (!more) throw new Error("no Sport Show more tile");
+      return String(propsOf(more).className).split(/\s+/).filter((c) => /(^|:)hover:/.test(c));
+    };
+    expect(moreHovers(), "editable: Show more answers a hover").not.toEqual([]);
     expect(propsOf(byTestId(h, "division-builder-who-fields")!).disabled).toBe(false);
     expect(propsOf(byTestId(h, "division-builder-rules-fields")!).disabled).toBe(false);
     // m9 (C9 review 3): an editable tile invites the tap - a pointer cursor, and a hover border on the unpicked ones.
@@ -492,6 +500,8 @@ describe("Create", () => {
     const tones = whoTileTones(h);
     expect(["sport", "kind", "category"].map((g) => tones.filter((t) => t.group === g).length > 0), "a sport, kind and category tile each").toEqual([true, true, true]);
     for (const t of tones) expect([t.key, t.pointer, t.hover, t.idle, t.iconLive], t.key).toEqual([t.key, false, false, true, false]);
+    expect(tones.filter((t) => t.group === "sport").length, "every sport's tile read").toBe(ALL.length);
+    expect(moreHovers(), "saved: Show more answers no hover").toEqual([]);
     expect(walk(byTestId(h, "division-builder-who-fields")!).some((e) => propsOf(e)["data-testid"] === "division-builder-name")).toBe(true);
     expect(walk(byTestId(h, "division-builder-rules-fields")!).some((e) => e.type === DivisionRulesStrip)).toBe(true);
     expect(h.tree().filter((e) => e.type === SavedNote).map((e) => propsOf(e).name)).toEqual(["Open", "Open"]);

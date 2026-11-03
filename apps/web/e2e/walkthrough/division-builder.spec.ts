@@ -16,7 +16,7 @@ import { dismissCookieBanner } from "../scorepad-a11y-kit";
  *
  * Every step is tapped: the name refused empty, the sport, the entrant kind
  * (asked at creation since C9), the category, the folded age and note, Back
- * and Next with nothing lost, the plan, Show all, a format and its knobs, the
+ * and Next with nothing lost, the plan, Show more, a format and its knobs, the
  * Division rules strip in its draft mode (variant, points, tie-break order),
  * the folded schedule, the Review receipt, Edit from Review and straight back,
  * and Create. Then the system's own record is read back from the DATABASE —
@@ -1052,4 +1052,75 @@ test("round 4: Format opens on the first card shown (I1); icons turn lime on hov
     await page.getByTestId("division-builder-review").screenshot({ path: testInfo.outputPath(`review-${width}.png`) });
   }
   expect(measured, "anti-vacuity: tiles measured").toBe(12);
+});
+
+// C9 review 4: the icons' lime on KEYBOARD focus, shown on a tile that is NOT picked (the picked one is lime anyway, so
+// a check there proves nothing). Tab reaches each radio group on its CHECKED tile, and the arrow keys move the pick
+// with the focus, so no key alone focuses an unpicked tile: Tab sets keyboard modality into the group, then the
+// unpicked tile's radio takes focus by script - the browser keeps :focus-visible for it (asserted, as the premise).
+test("round 5: keyboard focus on an unpicked sport tile and format card lights its icon lime; leaving it, grey again", async ({ page, request }) => {
+  test.setTimeout(budget(4, 30, 0));
+  await openBuilderFromCompetition(page, request, "Builder round five");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.getByTestId("division-builder-name").fill(`Round five ${TAG}`);
+  await pickBuilderSport(page, "badminton");
+  await page.mouse.move(0, 0);
+
+  const token = (name: string) =>
+    page.evaluate((n) => {
+      const probe = document.createElement("span");
+      probe.style.color = `var(${n})`;
+      document.body.append(probe);
+      const c = getComputedStyle(probe).color;
+      probe.remove();
+      return c;
+    }, name);
+  const LIME = await token("--color-lime-700");
+  const iconColour = (tile: Locator) => tile.locator("svg").first().evaluate((el) => getComputedStyle(el).color);
+  /** Tab until focus sits inside `within`; returns the presses it took. */
+  const tabInto = async (within: string) => {
+    for (let i = 1; i <= 40; i++) {
+      await page.keyboard.press("Tab");
+      if (await page.evaluate((s) => document.activeElement?.closest(s) != null, within)) return i;
+    }
+    throw new Error(`Tab never reached ${within}`);
+  };
+  const focusVisible = (input: Locator) => input.evaluate((el) => document.activeElement === el && el.matches(":focus-visible"));
+  let checked = 0;
+
+  for (const grid of [
+    { label: "sport", tile: "label[data-sport]", picked: 'label[data-sport="badminton"]', other: 'label[data-sport="football"]', grey: "--color-slate-500", start: "division-builder-name" },
+    { label: "format", tile: "label[data-template]", picked: "", other: "", grey: "--color-slate-400", start: "division-builder-plan-hours" },
+  ]) {
+    if (grid.label === "format") {
+      await next(page);
+      await onStep(page, "format");
+      await page.mouse.move(0, 0);
+      const shown = await shownTemplates(page);
+      grid.picked = `label[data-template="${shown[0]}"]`;
+      grid.other = `label[data-template="${shown[1]}"]`;
+    }
+    const picked = page.locator(grid.picked);
+    const other = page.locator(grid.other);
+    await expect(picked.locator("input"), `${grid.label}: premise, the picked tile`).toBeChecked();
+    await expect(other.locator("input"), `${grid.label}: premise, the other tile is not picked`).not.toBeChecked();
+    const GREY = await token(grid.grey);
+    await expect.poll(() => iconColour(other), { message: `${grid.label}: the unpicked icon rests grey` }).toBe(GREY);
+
+    // From the control before the group, Tab lands on its checked tile; then the unpicked tile's radio takes focus.
+    await page.getByTestId(grid.start).focus();
+    expect(await tabInto(grid.tile), `${grid.label}: Tab reaches the group`).toBeGreaterThan(0);
+    await expect(picked.locator("input"), `${grid.label}: Tab lands on the checked tile`).toBeFocused();
+    await other.locator("input").focus();
+    expect(await focusVisible(other.locator("input")), `${grid.label}: premise, the unpicked radio has :focus-visible`).toBe(true);
+    await expect(other.locator("input"), `${grid.label}: focus did not move the pick`).not.toBeChecked();
+    await expect.poll(() => iconColour(other), { message: `${grid.label}: the focused, unpicked icon turns lime` }).toBe(LIME);
+    await expect.poll(() => iconColour(picked), { message: `${grid.label}: the picked icon stays lime` }).toBe(LIME);
+
+    // Focus leaves: the unpicked icon is grey again.
+    await page.getByTestId(grid.start).focus();
+    await expect.poll(() => iconColour(other), { message: `${grid.label}: unfocused, the icon is grey again` }).toBe(GREY);
+    checked++;
+  }
+  expect(checked, "anti-vacuity: the sport grid and the format grid").toBe(2);
 });

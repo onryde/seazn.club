@@ -111,7 +111,6 @@ export interface SportOption {
  *  memo is not recomputed on every render). */
 const NO_RECENT_SPORTS: readonly string[] = Object.freeze([]);
 
-/** The receipt rows the division POST already saved (I1): read-only once the division exists. */
 /** Owner 2026-11-03 (C9 round 4): a sport tile's icon and a format card's diagram are grey at rest and lime when the
  *  tile is hovered, keyboard-focused or picked; the tile's border and fill do not change. lime-700 is the house's deeper
  *  lime (lime-700 text across the console): the gantry hairline's --mk-lime reads 1.51:1 on the white tile and 1.41:1 on
@@ -133,6 +132,7 @@ function unitPhrases(text: string): ReactNode {
     </Fragment>
   ));
 }
+/** The receipt rows the division POST already saved (I1): read-only once the division exists. */
 const SAVED_WITH_DIVISION: readonly string[] = ["who", "rules", "points", "tiebreaks"];
 
 /** Who plays and Division rules, once saved: what they show is what the division holds, and where to change it. */
@@ -1039,7 +1039,7 @@ export function DivisionBuilder({
                     aria-expanded={sportsOpen}
                     aria-controls="division-builder-sports"
                     data-testid="division-builder-sport-more"
-                    className="flex min-h-14 min-w-0 items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-center text-sm font-medium text-purple-700 transition hover:border-purple-300 hover:bg-purple-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600"
+                    className={`flex min-h-14 min-w-0 items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-center text-sm font-medium text-purple-700 transition ${saved ? "" : "hover:border-purple-300 hover:bg-purple-50"} focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600`}
                   >
                     {sportsOpen ? msg("divBuilder.showFewer") : msgPlural("divBuilder.sport.showMore", sportsFoldedCount, { count: sportsFoldedCount })}
                   </button>
@@ -1594,7 +1594,10 @@ export function DivisionBuilder({
                 estimate.matches === null
                   ? ["matches", "—", msg("divBuilder.card.noDraw")]
                   : ["matches", numberText(estimate.matches), msgPlural("divBuilder.review.unit.matches", estimate.matches)],
-                ["rounds", estimate.rounds === null ? "—" : numberText(estimate.rounds), msgPlural("divBuilder.review.unit.rounds", estimate.rounds ?? 0)],
+                // A dash is no count: it reads as the plural form in every locale (French files 0 under "one").
+                estimate.rounds === null
+                  ? ["rounds", "—", msg("divBuilder.review.unit.rounds.other")]
+                  : ["rounds", numberText(estimate.rounds), msgPlural("divBuilder.review.unit.rounds", estimate.rounds)],
                 [
                   "time",
                   estimateMins === null ? "—" : msg("divBuilder.card.about", { time: hoursText(estimateMins) }),

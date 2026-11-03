@@ -91,10 +91,14 @@ describe("suggested formats", () => {
     expect(checked).toBeGreaterThan(100);
   });
 
-  it("a format with no fixed draw (ladder) is never ranked into the first five ahead of four that have one", () => {
+  it("a format with no fixed draw (ladder) is never SHOWN in the first five ahead of four that have one", () => {
+    // Review 4 (n4): the five shown (and marked data-suggested) are the picker's order over the ranking - rotation
+    // formats moved behind the ladder - not the raw ranking, so that is the list this reads.
     const offered = STAGE_TEMPLATES.filter((t) => !t.retired).map((t) => t.key);
     expect(offered.length, "premise: more than five formats to rank").toBeGreaterThan(SUGGESTED_COUNT);
-    expect(rankTemplates(offered, plan, KNOBS).slice(0, SUGGESTED_COUNT).map((r) => r.key)).not.toContain("ladder");
+    const shown = formatPickerOrder(rankTemplates(offered, plan, KNOBS).map((r) => r.key)).slice(0, SUGGESTED_COUNT);
+    expect(shown).toHaveLength(SUGGESTED_COUNT);
+    expect(shown).not.toContain("ladder");
   });
 
   it("with NOTHING fitting the day, a format with a draw still outranks one without, whatever the offer's order", () => {
