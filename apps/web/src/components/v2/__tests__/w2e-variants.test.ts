@@ -137,10 +137,11 @@ describe("D2 a new badminton division defaults to bwf-3x15 in the builder and th
     if (!sel) throw new Error("no variant select");
     return sel;
   };
-  const sportSelectOf = (h: ReturnType<typeof mount>): ReactElement => {
-    const sel = h.tree().find((e) => e.type === "select" && Array.isArray(propsOf(e).children) && (propsOf(e).children as ReactElement[]).some?.((c) => propsOf(c)?.value === "badminton"));
-    if (!sel) throw new Error("no sport select");
-    return sel;
+  /** The badminton tile (Match Day C9 R2: the Sport step is one radio tile per sport, not a select). */
+  const badmintonTileOf = (h: ReturnType<typeof mount>): ReactElement => {
+    const tile = h.tree().find((e) => e.type === "input" && propsOf(e).type === "radio" && propsOf(e).name === "division-sport" && propsOf(e).value === "badminton");
+    if (!tile) throw new Error("no badminton sport tile");
+    return tile;
   };
 
   it("the builder opens a badminton division on bwf-3x15, and the picker lists the three the engine declares", () => {
@@ -154,7 +155,8 @@ describe("D2 a new badminton division defaults to bwf-3x15 in the builder and th
   it("choosing badminton from another sport lands on bwf-3x15 too (the sport switch re-picks)", () => {
     const h = mount();
     expect(SPORTS[0]!.key, "premise: the first sport is not badminton").not.toBe("badminton");
-    (propsOf(sportSelectOf(h)).onChange as (e: { target: { value: string } }) => void)({ target: { value: "badminton" } });
+    expect(propsOf(badmintonTileOf(h)).checked, "premise: the badminton tile is not the one picked").toBe(false);
+    (propsOf(badmintonTileOf(h)).onChange as () => void)();
     expect(propsOf(variantSelectOf(h)).value).toBe("bwf-3x15");
   });
 
