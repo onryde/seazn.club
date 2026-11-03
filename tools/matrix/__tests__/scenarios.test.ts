@@ -9,7 +9,7 @@ import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { RULES, decide } from "../lib/applicability.ts";
-import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
+import { BUILDER_DEFAULT_KNOBS, ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { NoFieldSize, fieldSizeFor } from "../lib/field-size.ts";
 import { RefusedCall, SetupRefused, type EntrantInput, type EntrantRow, type LineupSlotWire, type StageRef } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
@@ -1914,21 +1914,27 @@ describe("snapshot — byes are declared, pools stay separate (Task 5 carries)",
     expect(byeDeclared("generic", cfg, "swiss", bye("x", null))).toBeNull();
   });
 
-  // W3 T11: the builder's Swiss default is 3 rounds (it was 5 — rulebook-W3-swiss.md §3.2's band for up to 8), so the
-  // field whose every entrant takes a bye is 3: an odd field of n playing n rounds byes each entrant once (§3.1).
-  it("a 3-entrant 3-round swiss gives everyone a bye and I3 still checks all 3 (not vacuous)", async () => {
-    expect(stagesForRow("swiss")[0]!.config.rounds, "premise: the swiss row posts the builder's 3 rounds").toBe(3);
+  // W3 T11 set the builder's Swiss default to 3 rounds (it was 5); Match Day C9 fix round 1 (review I2) made it follow the
+  // plan's entrants box instead (swissRoundsDefault of the opening 16: 4), and the swiss row posts what the builder opens
+  // at. An odd field takes one bye a round and nobody takes two (rulebook-W3-swiss.md §3.1), so the smallest odd field that
+  // the round budget may run on (an odd field of n reaches n rounds: hardMax) byes a different entrant every round - every
+  // entrant when the budget is odd, all but one when it is even - and I3 checks every entrant's table points.
+  it("the smallest odd swiss field for the row's round budget byes a different entrant every round, and I3 still checks the whole field (not vacuous)", async () => {
+    const rounds = stagesForRow("swiss")[0]!.config.rounds as number;
+    expect(rounds, "premise: the swiss row posts the builder's opening rounds").toBe(BUILDER_DEFAULT_KNOBS.swissRounds);
+    const field = rounds % 2 === 1 ? rounds : rounds + 1;
     const driver = new FakeSwissDriver();
     const ctx = ctxFor(driver, "LIFECYCLE", { row: "swiss" });
     const rec = new Recorder();
-    const setup = await setUpDivision(ctx, rec, 3);
+    const setup = await setUpDivision(ctx, rec, field);
     await playStage(ctx, rec, setup);
     const complete = await finishStage(ctx, rec, setup.stage.id);
     const observed = await snapshot(ctx, rec, setup, [{ stage: setup.stage, field: setup.entrants.map((e) => e.id), advance: null, complete }], { configEdit: null, withdrawal: null });
     const byes = observed.stages[0]!.fixtures.filter((f) => f.away === null);
-    expect(new Set(byes.map((f) => f.home))).toEqual(new Set(setup.entrants.map((e) => e.id)));
+    expect(byes, "one bye a round").toHaveLength(rounds);
+    expect(new Set(byes.map((f) => f.home)).size, "nobody takes two byes").toBe(rounds);
     expect(byes.every((f) => f.declared !== null)).toBe(true);
-    expect(evaluateInvariants(observed).find((c) => c.id === "I3-table-points-equal-declared")).toMatchObject({ verdict: "pass", checked: 3 });
+    expect(evaluateInvariants(observed).find((c) => c.id === "I3-table-points-equal-declared")).toMatchObject({ verdict: "pass", checked: field });
   });
 
   it("each pool's table is read on its own and keeps its poolId (a merged table would red I1/I3)", async () => {

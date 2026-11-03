@@ -49,10 +49,11 @@ export function cellId(row: RowKey, sport: string): string {
   return `${row}|${sport}`;
 }
 
-/** division-builder.tsx:289-292 — pinned by catalogue.test.ts. */
+/** division-builder.tsx's knob state - pinned by catalogue.test.ts. Swiss rounds have no literal since Match Day C9 fix
+ *  round 1 (review I2): untouched, the builder opens them at swissRoundsDefault of the plan's opening entrants (16 -> 4). */
 export const BUILDER_DEFAULT_KNOBS: Readonly<TemplateKnobs> = Object.freeze({
   qualified: 4,
-  swissRounds: 3,
+  swissRounds: 4,
   poolCount: 2,
   legs: 1,
 });
