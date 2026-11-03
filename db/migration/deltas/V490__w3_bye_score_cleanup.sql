@@ -39,7 +39,14 @@
 --    at all.
 -- 2. THE 1.x WINDOW. Between this strip and the 2.0.0 app serving, the 1.x app re-adds the default `byeScore: 2` to any
 --    boardgame config it writes (a division created or saved, a first event's snapshot, a folded state). The delta is
---    idempotent: run it once more after 2.0.0 is serving. The PR body carries this line.
+--    idempotent, so it is run once more after 2.0.0 is serving. The PR body carries this line.
+--    HOW (the re-run is NOT Flyway: it applies a version once, so a second migrate does nothing). Run the file by hand, as the
+--    migrating/owner role Flyway itself uses:
+--        psql "$DATABASE_URL" -f db/migration/deltas/V490__w3_bye_score_cleanup.sql
+--    then READ THE NOTICES: `counted before writing` and the five `<place> byeScore=<n>` lines. The role matters. V227 puts
+--    FORCE ROW LEVEL SECURITY on the four tables above (divisions, stages, fixtures, match_states) with policies `to app_user` only, so a role without BYPASSRLS (app_user, or
+--    the pooled application role) sees no row, counts 0, writes 0 and still exits clean: a run that reports all zeros on a
+--    database that was written by 1.x is the wrong role, not a clean database.
 -- 3. The 426 gate. After the deploy a native capture client still on engine 1.x sends `engine_epoch: 4` for a boardgame fixture
 --    and gets 426 ENGINE_OUTDATED; the web pad sends no `engine_epoch` and is unaffected. The emergency lever is
 --    ENGINE_EPOCH_FLOOR_OVERRIDE=boardgame=4, and it is safe here: outcomes, summaries and deltas are byte-identical across the

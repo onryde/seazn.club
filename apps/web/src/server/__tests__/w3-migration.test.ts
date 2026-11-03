@@ -492,6 +492,20 @@ const clean = (s: ByeSeed): ByeSeed => ({
   state: { ...s.state!, cfg: without((s.state as Json).cfg as Json) },
 });
 
+/** A boardgame chain carrying the key in exactly `places` (the rest of its places are clean), for staggered tallies. */
+function carryingIn(places: readonly Place[], base: Json): ByeSeed {
+  const s = clean(carrying(BOARDGAME, "classical", base));
+  const withKey = (cfg: Json): Json => ({ ...cfg, byeScore: 2 });
+  return {
+    ...s,
+    division: places.includes("divisions.config") ? withKey(s.division) : s.division,
+    stageConfig: places.includes("stages.config.rules") ? { ...s.stageConfig, rules: withKey(s.stageConfig.rules as Json) } : s.stageConfig,
+    override: places.includes("fixtures.rules_override") ? withKey(s.override!) : s.override,
+    snapshot: places.includes("fixtures.config_snapshot") ? withKey(s.snapshot!) : s.snapshot,
+    state: places.includes("match_states.state.cfg") ? { ...s.state!, cfg: withKey((s.state as Json).cfg as Json) } : s.state,
+  };
+}
+
 interface Verdict {
   counted: Record<Place, number>;
   changed: Record<Place, number>;
@@ -531,31 +545,53 @@ const boardgameDefaults = (): Json => {
 
 describe.runIf(HAS_DB)("W3 delta: byeScore cleanup", () => {
   it("X-SW-6 the cleanup removes byeScore from a boardgame division, a stage rules overlay, a rules_override, a config_snapshot and a match_states cfg (5 places, counted)", async () => {
-    const dirty = carrying(BOARDGAME, "classical", boardgameDefaults());
-    const control = clean(dirty);
-    // The rig: five places carry the key in the dirty row, none in the control, and each has siblings to keep.
-    expect(PLACES.map((p) => carries(p, dirty)), "premise: the dirty row carries the key in all five places").toEqual([true, true, true, true, true]);
+    // Staggered chains, so the five per-place counts are five DIFFERENT numbers and a count or a label put on the wrong place
+    // cannot read as right: A carries all five places, B everything but the stage rules, C the division, snapshot and state,
+    // D the division and state, E the division alone; a control carries none.
+    const [A, B, C, D, E] = [
+      ["divisions.config", "stages.config.rules", "fixtures.rules_override", "fixtures.config_snapshot", "match_states.state.cfg"],
+      ["divisions.config", "fixtures.rules_override", "fixtures.config_snapshot", "match_states.state.cfg"],
+      ["divisions.config", "fixtures.config_snapshot", "match_states.state.cfg"],
+      ["divisions.config", "match_states.state.cfg"],
+      ["divisions.config"],
+    ] satisfies Place[][];
+    const base = boardgameDefaults();
+    const dirty = [A, B, C, D, E].map((places) => carryingIn(places, base));
+    const control = clean(carrying(BOARDGAME, "classical", base));
+    // What each place holds, tallied from the seeds themselves with the same `carries` that reads the result back.
+    const tally = Object.fromEntries(PLACES.map((p) => [p, dirty.filter((d) => carries(p, d)).length])) as Record<Place, number>;
+    expect(new Set(Object.values(tally)).size, "premise: five distinct per-place counts").toBe(PLACES.length);
+    expect(Math.min(...Object.values(tally)), "premise: every place holds at least one").toBeGreaterThan(0);
     expect(PLACES.map((p) => carries(p, control)), "premise: the control carries it in none").toEqual([false, false, false, false, false]);
+    for (const d of dirty) {
+      for (const p of PLACES) if (carries(p, d)) expect(Object.keys(without(configIn(p, d)!)).length, `${p}: a sibling key to keep`).toBeGreaterThan(0);
+    }
 
     const out = await rolledBackWithNotices(async (tx, notices) => {
-      const { orgId, ids } = await seedByeRows(tx, [dirty, control]);
+      const { orgId, ids } = await seedByeRows(tx, [...dirty, control]);
       await asTenant(tx, orgId);
       const verdict = await runByeScoreDelta(tx, notices);
-      return { verdict, dirty: await readByeRow(tx, ids[0]!), control: await readByeRow(tx, ids[1]!) };
+      const rows: Stored[] = [];
+      for (const id of ids) rows.push(await readByeRow(tx, id));
+      return { verdict, rows };
     });
 
-    expect(out.verdict.counted, "counted before writing: one row in each place").toEqual(ALL_ONE);
-    expect(out.verdict.changed, "and one row written in each place").toEqual(ALL_ONE);
+    expect(out.verdict.counted, "counted before writing, place by place, is what the seeds hold").toEqual(tally);
+    expect(out.verdict.changed, "and the rows written, place by place, are the rows counted").toEqual(out.verdict.counted);
     let checked = 0;
-    for (const place of PLACES) {
-      expect(carries(place, out.dirty), `${place}: byeScore is gone`).toBe(false);
-      expect(Object.keys(configIn(place, out.dirty) ?? {}).length, `${place}: siblings remain to be checked`).toBeGreaterThan(0);
-      checked++;
+    for (const [i, seed] of dirty.entries()) {
+      const row = out.rows[i]!;
+      for (const place of PLACES) {
+        if (!carries(place, seed)) continue;
+        expect(carries(place, row), `chain ${"ABCDE"[i]} ${place}: byeScore is gone`).toBe(false);
+        checked++;
+      }
+      expect(row, `chain ${"ABCDE"[i]}: every sibling key, in every place, is what was seeded (the stage's own keys and the state's fold included)`).toEqual(expectedAfter(seed));
+      expect(row.state?.marker, "the state's fold marker is not the delta's to touch").toBe("fold boardgame");
     }
-    expect(checked, "anti-vacuity: five places checked").toBe(5);
-    expect(out.dirty, "every sibling key, in every place, is what was seeded (the stage's own keys and the state's fold included)").toEqual(expectedAfter(dirty));
-    expect(out.control, "a boardgame row without the key is untouched").toEqual(asSeeded(control));
-    expect(out.dirty.state?.marker, "the state's fold marker is not the delta's to touch").toBe("fold boardgame");
+    expect(checked, "anti-vacuity: every (chain, place) that carried the key was checked").toBe(Object.values(tally).reduce((a, b) => a + b, 0));
+    expect(checked).toBeGreaterThan(0);
+    expect(out.rows[dirty.length], "a boardgame row without the key is untouched").toEqual(asSeeded(control));
   }, 120_000);
 
   it("X-SW-6 the cleanup never touches a non-boardgame row that happens to carry the key", async () => {
