@@ -833,7 +833,7 @@ describe("createDivisionUi: the organiser's picks are pictured before Create", (
       first: () => loc(d),
       elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
       check: async () => act(`check ${d}`),
-      count: async () => (d === `testid:${TESTID.builderCreate.id}` ? (nexts >= 2 ? 1 : 0) : d === `testid:${TESTID.builderShowAll.id}` ? 1 : 0),
+      count: async () => (d === `testid:${TESTID.builderCreate.id}` ? (nexts >= 2 ? 1 : 0) : d === `testid:${TESTID.builderShowAll.id}` || d === `testid:${TESTID.builderSportMore.id}` ? 1 : 0),
       getAttribute: async () => "false",
       innerText: async () => "",
       click: async () => {
@@ -887,7 +887,8 @@ describe("createDivisionUi: the organiser's picks are pictured before Create", (
     // I-1: the first act's control is hydrated before anything touches it.
     `hydrated testid:${TESTID.builderName.id}`,
     `fill testid:${TESTID.builderName.id} = Open`,
-    `select ${field(NAME.sportSelect.text)} = badminton`,
+    `click testid:${TESTID.builderSportMore.id}`,
+    `check ${DATA.sportTile.selector.replace(/\]$/, '="badminton"]')}`,
     `shot 02-builder-basics${n}`,
     `click button:${NAME.formatTab.text}`,
     `click testid:${TESTID.builderShowAll.id}`,

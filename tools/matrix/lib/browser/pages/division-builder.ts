@@ -4,11 +4,12 @@
 //    Format, Division rules, Review. A `<nav>` of buttons named by each step (Format: wizard.tab.format); every step's
 //    section stays in the DOM, `hidden` unless current. Create (`division-builder-create`) renders only on Review, Next
 //    (`division-builder-next`) on every other step; Next refuses an unfinished step into `division-builder-error`.
-//  - Who plays: `division-builder-name`; Sport is `<label><span class="label">…</span><select>`, its options
-//    `value={s.key}`. An exact getByLabel cannot find it: a <label>'s text includes every <option>'s.
+//  - Who plays: `division-builder-name`; Sport is a radio tile per sport (C9 R2): a `<label data-sport={key}>` around an
+//    sr-only radio, five shown and the rest folded (`hidden`) until the Show more tile (`division-builder-sport-more`).
 //  - Format: each template is a <label> around an sr-only `<input type="radio" name="template">` and a span with
-//    format.template.<key>.label. Four are suggested for the plan; the rest are folded (`hidden`) until Show all
-//    (`division-builder-show-all`). Every knob is left untouched - the builder's defaults ARE BUILDER_DEFAULT_KNOBS.
+//    format.template.<key>.label. Five are suggested for the plan; the rest are folded (`hidden`) until Show more, the
+//    grid's sixth cell (`division-builder-show-all`). Every knob is left untouched - the builder's defaults ARE
+//    BUILDER_DEFAULT_KNOBS.
 //  - Division rules: the Division rules strip in its draft mode; the Variant select is the strip's
 //    (`<label><span class="label">divset.variant</span><select>`), options `value={v.key}`.
 //  - Create: POST /api/v1/competitions/<compId>/divisions → {id, slug}; THEN POST /api/v1/divisions/<division.id>/stages
@@ -18,7 +19,7 @@ import type { Page } from "playwright";
 import type { TemplateRowKey } from "../../catalogue.ts";
 import { actAndAwait } from "../respond.ts";
 import { DATA, NAME, TESTID, templateLabel } from "../selectors.ts";
-import { actBudget, awaitScreen, exactPath, navBudget, selectorValue, shoot, visit, type PageCtx } from "./ctx.ts";
+import { actBudget, attrEquals, awaitScreen, exactPath, navBudget, selectorValue, shoot, visit, type PageCtx } from "./ctx.ts";
 import { paths } from "./paths.ts";
 
 /** lib/division-builder/model.ts BUILDER_STEPS's length (pinned): Next is pressed at most this many times on the way to
@@ -82,12 +83,16 @@ export async function createDivisionUi(c: PageCtx, compSlug: string, compId: str
   await visit(c, paths.divisionNew(c.orgSlug, compSlug), { control: name, what: "the division builder's name field" });
   const field = (label: string) => page.locator("label").filter({ has: page.getByText(label, { exact: true }) }).locator("select");
   await name.fill(input.name, { timeout: t });
-  await field(NAME.sportSelect.text).selectOption({ value: input.sportKey }, { timeout: t });
+  // The sport's tile; one past the first five is folded under Show more. check() on the tile's <label> checks its sr-only
+  // radio and throws unless it ends checked.
+  const sportMore = page.getByTestId(TESTID.builderSportMore.id);
+  if ((await sportMore.count()) > 0 && (await sportMore.getAttribute("aria-expanded", { timeout: t })) !== "true") await sportMore.click({ timeout: t });
+  await page.locator(attrEquals(DATA.sportTile.selector, "sport key", input.sportKey)).check({ timeout: t });
   // Each pick is pictured on the step that shows it: Create lives on Review, so the shot before it can show neither the
   // sport, the format nor the variant.
   const basics = await shoot(c, "02-builder-basics");
   await page.getByRole("button", { name: NAME.formatTab.text, exact: true }).click({ timeout: t });
-  // Four formats are suggested for the plan; the row's may be folded under Show all.
+  // Five formats are suggested for the plan; the row's may be folded under Show more.
   const showAll = page.getByTestId(TESTID.builderShowAll.id);
   if ((await showAll.count()) > 0 && (await showAll.getAttribute("aria-expanded", { timeout: t })) !== "true") await showAll.click({ timeout: t });
   // check() on the template's <label> checks its sr-only radio and throws unless it ends checked.
