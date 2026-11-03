@@ -69,6 +69,13 @@ export interface CompetitionChipSignals {
 
 const isCount = (n: number) => Number.isInteger(n) && n >= 0;
 
+/** Whether a competition is over: every division completed (none counted when there are none), or the organiser's own
+ *  "completed". The chip's Completed rung and the org home's Finished band (`homeGroupOf`, UI5 fix round 1, review m5) -
+ *  ONE predicate, so a card never reads Completed while it sits in "Under way". */
+export function competitionCompleted(status: string, s: Pick<CompetitionChipSignals, "divisions" | "divisionsCompleted">): boolean {
+  return (s.divisions > 0 && s.divisionsCompleted === s.divisions) || status === "completed";
+}
+
 /** A competition card's chip (UI5 item 6, owner 2026-11-03: "why does it saying registration open even though no
  *  registration opened in division level"). Read off its DIVISIONS, never `competitions.status` alone - "published" means
  *  public, not taking sign-ups. Archived; then a match in play is Live; a division's registration window open is
@@ -88,7 +95,7 @@ export function competitionChipState(
   if (opts.archived || status === "archived") return "archived";
   if (chipShowsCount(s.inPlay)) return "live";
   if (s.registrationOpen) return "registration";
-  if ((s.divisions > 0 && s.divisionsCompleted === s.divisions) || status === "completed") return "completed";
+  if (competitionCompleted(status, s)) return "completed";
   if (s.divisionsActive > 0 || s.played > 0) return "in_progress";
   return "draft";
 }

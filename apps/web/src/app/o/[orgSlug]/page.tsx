@@ -216,7 +216,14 @@ export default async function OrgHomePage({
     const s = stats.get(e.c.id);
     return {
       e,
-      group: homeGroupOf({ status: e.c.status, played: s?.played ?? 0, fixturesToday: today.counts.get(e.c.id) ?? 0 }),
+      group: homeGroupOf({
+        status: e.c.status,
+        played: s?.played ?? 0,
+        fixturesToday: today.counts.get(e.c.id) ?? 0,
+        // The chip's own division counts (`chipOf` above), so the band and the chip agree on "finished" (UI5 fix round 1, m5).
+        divisions: s?.divisions ?? 0,
+        divisionsCompleted: s?.divisions_completed ?? 0,
+      }),
     };
   });
   const finishedCount = banded.filter((b) => b.group === "finished").length;
