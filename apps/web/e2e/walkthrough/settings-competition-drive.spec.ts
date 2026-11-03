@@ -11,6 +11,19 @@ import {
 import { apiJson, TAG } from "../helpers";
 import { routes } from "../../src/lib/routes";
 import { BRAND_PALETTE } from "../../src/lib/brand-palette";
+import {
+  CTA,
+  CTA_MD,
+  LINK,
+  LINK_MD,
+  ctaByApply,
+  escapeCloses,
+  expectPageKept,
+  expectPublicCta,
+  linkByEnter,
+  watchPage,
+  type PageWitness,
+} from "../prose-dialog-kit";
 
 /**
  * W5 of the settings walkthrough programme — `/o/{org}/c/{comp}/settings`,
@@ -295,6 +308,97 @@ test("general fields persist across the reload, and the rename that regenerates 
       page.getByRole("alertdialog"),
       "the guardian-consent interstitial must not fire without a youth division",
     ).toHaveCount(0);
+  } finally {
+    await releaseCompetition(request, comp.id);
+  }
+});
+
+test("the description editor's Link (Enter) and Button (Apply) prompts work inside the settings form and save nothing on their own (task PEF)", async ({
+  page,
+  request,
+}) => {
+  // Two navs (settings, the public page), and four commits: the two prompts and Escape (each a UI change read back),
+  // then the Save.
+  test.setTimeout(budget(2, 4));
+  // Unlisted, so its public page opens by link — where the sponsor button is read at the end.
+  const comp = await seedCompetition(request, org.orgId, { visibility: "unlisted", status: "draft" });
+  let witness: PageWitness | null = null;
+  try {
+    await page.goto(routes.competitionSettings(org.slug, comp.slug));
+    await expect(field(page, L.name)).toHaveValue(comp.name, { timeout: READ_MS });
+    const before = await apiJson<{ name: string; description: string | null }>(request, `/api/v1/competitions/${comp.id}`, "GET");
+    expect(before.status).toBe(200);
+
+    // A rename typed and NOT saved: the prompts must neither lose it nor save it.
+    const typedName = `Prompts typed ${TAG}`;
+    await field(page, L.name).fill(typedName);
+    const editor = page.getByRole("textbox", { name: ui("compset.description"), exact: true });
+    await editor.click();
+    const opening = "Doors open at nine. ";
+    await page.keyboard.type(`${opening}${LINK.text}`);
+    await expect(editor).toContainText(`${opening}${LINK.text}`);
+    witness = await watchPage(page);
+    const start = page.url();
+
+    // Link with Enter, the Button with Apply, then Escape — in sequence, each on the page the last one left.
+    const form = page.locator("form").filter({ has: editor });
+    await linkByEnter(page, form, editor);
+    await expectPageKept(page, witness, start, "Link + Enter");
+    await ctaByApply(page, form, editor);
+    await expectPageKept(page, witness, start, "Button + Apply");
+    await escapeCloses(page, form, editor);
+    await expectPageKept(page, witness, start, "Link + Escape");
+
+    // The page still holds what was typed...
+    await expect(field(page, L.name), "the typed name is still there").toHaveValue(typedName);
+    await expect(editor).toContainText(opening.trim());
+    await expect(page.getByText(L.saved, { exact: true }), "no 'Saved' — nothing was saved").toHaveCount(0);
+    // ...and the settings were not saved by a prompt: no PATCH left the page, and the row is as seeded.
+    expect(witness.writes, "no prompt submitted the settings form").toEqual([]);
+    const after = await apiJson<{ name: string; description: string | null }>(request, `/api/v1/competitions/${comp.id}`, "GET");
+    expect(after.data?.name, "the row's name is the seeded one, not the typed one").toBe(comp.name);
+    expect(after.data?.description ?? null, "the row's description is untouched").toBe(before.data?.description ?? null);
+
+    // The positive twin: Save, and the same watcher sees the PATCH, which carries both prompts' work with the button in
+    // its canonical shape, stored that way (the editor's half); then the public page draws it as the branded button
+    // (the renderer's half). A regression on either side is named by its own assertion.
+    const sent = await saveSettings(page, comp.id);
+    expect(witness.writes, "the watcher does see a PATCH when the form sends one").toEqual([`PATCH /api/v1/competitions/${comp.id}`]);
+    witness.stop();
+    const saved = await apiJson<{ name: string; slug: string; description: string | null }>(
+      request,
+      `/api/v1/competitions/${comp.id}`,
+      "GET",
+    );
+    expect(saved.data?.name).toBe(typedName);
+    expect(String(sent.description), "the link is in the editor's value").toContain(LINK_MD);
+    expect(String(sent.description), "the sponsor button is in the editor's value, in its canonical shape").toContain(CTA_MD);
+    expect(String(saved.data?.description), "and is stored that way").toContain(CTA_MD);
+    // The rename regenerated the slug (see the general-fields test), so the public URL is the saved row's.
+    await expectPublicCta(page, org.slug, saved.data!.slug);
+  } finally {
+    witness?.stop();
+    await releaseCompetition(request, comp.id);
+  }
+});
+
+test("a description saved in the Button tool's old shape, `[**label**](url)`, draws the branded button with no migration (task PEF round 2)", async ({
+  page,
+  request,
+}) => {
+  // One nav (the public page), one commit (the PATCH, read back).
+  test.setTimeout(budget(1, 1));
+  const comp = await seedCompetition(request, org.orgId, { visibility: "unlisted", status: "draft" });
+  try {
+    // Written the way the Button tool wrote it before round 2 — and the way rows saved before then still hold it.
+    const legacy = `Doors open at nine. ${LINK_MD}\n\n[**${CTA.label}**](${CTA.url})`;
+    const patched = await apiJson(request, `/api/v1/competitions/${comp.id}`, "PATCH", { description: legacy });
+    expect(patched.status, JSON.stringify(patched.error)).toBe(200);
+    const stored = await apiJson<{ slug: string; description: string | null }>(request, `/api/v1/competitions/${comp.id}`, "GET");
+    // Nothing rewrote the row: the old shape is what the public page is given.
+    expect(stored.data?.description, "the row holds the old shape, unmigrated").toBe(legacy);
+    expect(stored.data?.description, "premise: not the canonical shape").not.toContain(CTA_MD);
+    await expectPublicCta(page, org.slug, stored.data!.slug);
   } finally {
     await releaseCompetition(request, comp.id);
   }

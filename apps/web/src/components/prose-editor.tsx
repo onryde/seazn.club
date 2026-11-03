@@ -7,6 +7,7 @@
 // storage stays portable. Preview renders through the SAME pipeline +
 // component the public page uses — preview is truth.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { EditorContent, Extension, useEditor, type Editor } from "@tiptap/react";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
@@ -18,7 +19,7 @@ import {
   Bold, Eye, Heading2, Heading3, ImagePlus, Italic, Link2, List,
   ListOrdered, Megaphone, Minus, Pencil, Quote,
 } from "lucide-react";
-import { renderProse, DESCRIPTION_MAX } from "@/lib/prose";
+import { canonicalCtaMarkdown, renderProse, DESCRIPTION_MAX } from "@/lib/prose";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { useMsg } from "@/components/i18n/dict-provider";
 
@@ -132,13 +133,28 @@ export function ToolbarButton({
 /** Focus-trapped, Esc-to-close modal for the link/CTA prompts below — replaces
  *  the native browser prompt dialog so these stay stylable, localizable, and
  *  testable like the rest of the app's dialogs (see ui/confirm-provider.tsx for the same pattern
- *  used elsewhere). */
-function EditorDialog({
-  title, children, onClose,
+ *  used elsewhere).
+ *
+ *  It owns the prompt's `<form>` (Enter in a field applies, as the Apply button
+ *  does) and keeps that form out of the host's: the New competition form and
+ *  competition settings both mount this editor INSIDE their own `<form>`.
+ *  - Portaled to `document.body`, so the DOM never holds a form inside a form.
+ *    Chromium stops a `submit` at the nearest ancestor `<form>`, so a nested
+ *    form's submit never reached React's listener on `document`: this onSubmit
+ *    never ran and the browser sent the prompt's fields as a GET of the page,
+ *    wiping the host form (task PEF, 2026-11-03).
+ *  - `stopPropagation()` as well, because React bubbles a portal's events up the
+ *    React tree, not the DOM: without it the host form's onSubmit runs next and
+ *    creates the competition, or saves the settings. */
+export function EditorDialog({
+  title, children, onClose, onSubmit,
 }: {
   title: string;
+  /** The prompt's fields and buttons; a `type="submit"` button applies. */
   children: React.ReactNode;
   onClose: () => void;
+  /** The prompt's own fields, read off its form. */
+  onSubmit: (data: FormData) => void;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -155,7 +171,7 @@ function EditorDialog({
     return () => document.removeEventListener("keydown", onKey, true);
   }, [onClose]);
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-purple-950/30 p-4 backdrop-blur-sm"
       onPointerDown={(e) => {
@@ -170,9 +186,19 @@ function EditorDialog({
         className="w-full max-w-sm rounded-2xl border border-purple-100 bg-white p-5 shadow-2xl"
       >
         <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
-        {children}
+        <form
+          className="mt-3 space-y-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onSubmit(new FormData(e.currentTarget));
+          }}
+        >
+          {children}
+        </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -229,7 +255,9 @@ export function ProseEditor({
       const md = (
         e.storage as unknown as { markdown: { getMarkdown(): string } }
       ).markdown.getMarkdown();
-      onChange(md.slice(0, DESCRIPTION_MAX));
+      // The Button tool's mark order serialises `[**Label**](url)`; store the shape lib/prose documents,
+      // `**[Label](url)**` (same length, same render — PEF round 2).
+      onChange(canonicalCtaMarkdown(md).slice(0, DESCRIPTION_MAX));
     },
   });
 
@@ -430,83 +458,71 @@ export function ProseEditor({
       )}
 
       {linkDialog && (
-        <EditorDialog title={msg("editor.link")} onClose={() => setLinkDialog(null)}>
-          <form
-            className="mt-3 space-y-3"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const url = (new FormData(e.currentTarget).get("url") as string).trim();
-              applyLink(url);
-            }}
-          >
-            <label className="block">
-              <span className="label">{msg("editor.linkUrl")}</span>
-              <input
-                name="url"
-                type="url"
-                autoComplete="off"
-                defaultValue={linkDialog.url}
-                className="input w-full"
-              />
-            </label>
-            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <button type="button" className="btn btn-ghost" onClick={() => setLinkDialog(null)}>
-                {msg("editor.cancel")}
+        <EditorDialog
+          title={msg("editor.link")}
+          onClose={() => setLinkDialog(null)}
+          onSubmit={(data) => applyLink((data.get("url") as string).trim())}
+        >
+          <label className="block">
+            <span className="label">{msg("editor.linkUrl")}</span>
+            <input
+              name="url"
+              type="url"
+              autoComplete="off"
+              defaultValue={linkDialog.url}
+              className="input w-full"
+            />
+          </label>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button type="button" className="btn btn-ghost" onClick={() => setLinkDialog(null)}>
+              {msg("editor.cancel")}
+            </button>
+            {linkDialog.url !== "" && (
+              <button type="button" className="btn btn-ghost" onClick={() => applyLink("")}>
+                {msg("editor.removeLink")}
               </button>
-              {linkDialog.url !== "" && (
-                <button type="button" className="btn btn-ghost" onClick={() => applyLink("")}>
-                  {msg("editor.removeLink")}
-                </button>
-              )}
-              <button type="submit" className="btn btn-primary">
-                {msg("editor.apply")}
-              </button>
-            </div>
-          </form>
+            )}
+            <button type="submit" className="btn btn-primary">
+              {msg("editor.apply")}
+            </button>
+          </div>
         </EditorDialog>
       )}
 
       {ctaDialog && (
-        <EditorDialog title={msg("editor.cta")} onClose={() => setCtaDialog(null)}>
-          <form
-            className="mt-3 space-y-3"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const data = new FormData(e.currentTarget);
-              const label = (data.get("label") as string).trim();
-              const url = (data.get("url") as string).trim();
-              applyCta(label, url);
-            }}
-          >
-            <label className="block">
-              <span className="label">{msg("editor.buttonLabel")}</span>
-              <input
-                name="label"
-                type="text"
-                autoComplete="off"
-                defaultValue={ctaDialog.label}
-                className="input w-full"
-              />
-            </label>
-            <label className="block">
-              <span className="label">{msg("editor.buttonLink")}</span>
-              <input
-                name="url"
-                type="url"
-                autoComplete="off"
-                defaultValue={ctaDialog.url}
-                className="input w-full"
-              />
-            </label>
-            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <button type="button" className="btn btn-ghost" onClick={() => setCtaDialog(null)}>
-                {msg("editor.cancel")}
-              </button>
-              <button type="submit" className="btn btn-primary">
-                {msg("editor.apply")}
-              </button>
-            </div>
-          </form>
+        <EditorDialog
+          title={msg("editor.cta")}
+          onClose={() => setCtaDialog(null)}
+          onSubmit={(data) => applyCta((data.get("label") as string).trim(), (data.get("url") as string).trim())}
+        >
+          <label className="block">
+            <span className="label">{msg("editor.buttonLabel")}</span>
+            <input
+              name="label"
+              type="text"
+              autoComplete="off"
+              defaultValue={ctaDialog.label}
+              className="input w-full"
+            />
+          </label>
+          <label className="block">
+            <span className="label">{msg("editor.buttonLink")}</span>
+            <input
+              name="url"
+              type="url"
+              autoComplete="off"
+              defaultValue={ctaDialog.url}
+              className="input w-full"
+            />
+          </label>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button type="button" className="btn btn-ghost" onClick={() => setCtaDialog(null)}>
+              {msg("editor.cancel")}
+            </button>
+            <button type="submit" className="btn btn-primary">
+              {msg("editor.apply")}
+            </button>
+          </div>
         </EditorDialog>
       )}
     </div>

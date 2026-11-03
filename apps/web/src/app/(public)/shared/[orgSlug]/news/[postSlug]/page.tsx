@@ -14,7 +14,7 @@ import { getPublicOrg } from "@/server/public-site/data";
 import { publicPost } from "@/server/usecases/org-posts";
 import { HttpError } from "@/lib/errors";
 import { postHeroUrl, resolvePostSides, relatedCompetition } from "@/server/news/public-view";
-import { renderHelpMarkdown } from "@/server/help-content";
+import { renderProse } from "@/lib/prose";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { ShareBar } from "@/components/share-bar";
 import { shareLabels } from "@/components/public-site/share-labels";
@@ -77,7 +77,10 @@ export default async function PostPage({ params }: Props) {
   const scoreline = scoreboardFor(post.kind, post.title);
   const sides = scoreline && !heroUrl ? await resolvePostSides(post) : null;
   const related = await relatedCompetition(post);
-  const bodyHtml = await renderHelpMarkdown(post.bodyMd);
+  // Organiser prose, so the ONE organiser renderer (lib/prose): the composer's Preview is this same function, and a
+  // sponsor button drawn there is a button here (PEF round 2). The help centre's renderer is for help articles. The
+  // posts API bounds a body at 50 000 characters, past the description boxes' 20 000, so nothing saved is cut.
+  const bodyHtml = await renderProse(post.bodyMd, { maxChars: Number.POSITIVE_INFINITY });
   // publishedAt is a timestamptz — a real instant, not a calendar day an
   // organiser typed — so the pinned zone is about DETERMINISM, not
   // day-correctness. This route is ISR-cached (`revalidate = 30` above): ONE
