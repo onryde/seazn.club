@@ -3,9 +3,11 @@
 // The C1 round-order rule (docs/superpowers/specs/2026-08-12-round-order-hard-lexicographic-design.md) is: for every
 // pair on ONE round sequence — `(division, stage, pool)` — with round a < round b and at least one movable side, b's day
 // is not before a's, and on the same day b does not start before a. With one time zone that is `start_a <= start_b`:
-// every round-(r+1) board starts no earlier than the LATEST round-r board STARTS. It is a start floor, not an end floor
-// (ties are legal, "R1 and R2 simultaneously on two courts is fine"); the end floor a Swiss round really needs is a
-// recorded gap (task-3b report), not something these tests claim.
+// every round-(r+1) board starts no earlier than the LATEST round-r board STARTS. That is the C1 START floor (ties are
+// legal, "R1 and R2 simultaneously on two courts is fine"), and it is all this file claims. The end floor a Swiss round
+// really needs (round r+1 after round r's last board ENDS, X-SW-31) was the recorded gap of task 3b and landed in app-B
+// task 9b: a Swiss stage's rows now carry `roundBarrier: "end"` (+ the division's rest and per-player cap), proved in
+// `schedule-swiss-round-barrier.test.ts`. The end barrier implies this start floor, so everything below still holds.
 //
 // Before this task the rule's stage gate (`roundRobinStageIds`, schedule.ts) answered `kind in ('league', 'group')`, so
 // a Swiss row never carried its round to the placer, the solver or the verifier. A Swiss stage mints every round as a

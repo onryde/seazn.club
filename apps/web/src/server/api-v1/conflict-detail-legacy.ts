@@ -56,13 +56,16 @@ export function legacyConflictDetail(d: ConflictDetail): string {
  * weight argument actually needs to be true.
  */
 export function legacyVerifierConflict(c: Conflict): Omit<Conflict, "details"> & { detail?: string } {
-  const { fixtureId, reason, details, direct, shortfallMinutes, rule } = c;
+  const { fixtureId, reason, details, direct, shortfallMinutes, measuredCount, rule } = c;
   return {
     fixtureId,
     reason,
     ...(details !== undefined ? { detail: legacyConflictDetail(details) } : {}),
     ...(direct !== undefined ? { direct } : {}),
     ...(shortfallMinutes !== undefined ? { shortfallMinutes } : {}),
+    // X-SW-31 (ruling 256): the rounds-per-day kind's measured count rides through like the shortfall does. Only that
+    // kind sets it, so no pre-existing conflict's bytes move.
+    ...(measuredCount !== undefined ? { measuredCount } : {}),
     ...(rule !== undefined ? { rule } : {}),
   };
 }

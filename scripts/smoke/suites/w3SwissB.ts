@@ -61,6 +61,12 @@ import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
  * decided, the next Pair is refused SWISS_NO_LEGAL_PAIRING for round 6. The empty case is its own check (8), read off the SAME
  * stage: round 1 is Paired for real first (it asks the engine to look ahead, and gets "pairable" back) and the answer carries
  * neither `swiss_next_round` nor `swiss_paired_round`; the brute-force history is then written over that round by SQL.
+ *
+ * T9b (X-SW-31; engine 2.0.0 `roundBarrier`): the auto-schedule proposal of a Swiss stage puts round 2 after round 1's last
+ * board ENDS, not merely after it starts. Four players, four courts, two rounds, round 1 paired and round 2 still TBD v TBD, one
+ * 30-minute board a slot: round 1's two boards fit the first slot on two courts and round 2's two shells, with no entrant for a
+ * rest rule to hold back, would fit the same slot on the other two under the old start floor. So the proposal's earliest round-2
+ * start is at least round 1's latest start plus one match (09:30), and the apply the organiser clicks next accepts it.
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissB runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissBSuite(): Promise<void> {
@@ -73,7 +79,8 @@ export async function w3SwissBSuite(): Promise<void> {
   // T5: 1 (X-SW-19: an ice hockey Swiss's round 2 is paired in the table's own score groups - regulation winners together, the overtime winner outside).
   // T7: 2 (X-SW-10: a round whose every legal pairing kills the next is seated, and the Pair's answer says unpairable for round 5; Pair next is then refused for round 6.
   //        X-SW-10 empty case: a pairable round of the same shape is seated and the answer carries no next-round field).
-  const EXPECTED_CHECKS = 9;
+  // T9b: 1 (X-SW-31: the auto-schedule proposal of a Swiss round 2 starts after round 1's last board ends).
+  const EXPECTED_CHECKS = 10;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -589,6 +596,62 @@ export async function w3SwissBSuite(): Promise<void> {
     w3Check(
       "w3b X-SW-10 (empty case): round 1 of that chess Swiss is seated with the look-ahead asked and its next round pairable - the Pair's answer carries no swiss_next_round and no swiss_paired_round" +
         (ok ? "" : ` - division ${firstPair?.divId ?? "none"}, stage ${firstPair?.stageId ?? "none"}, pair ${firstPair?.status ?? "none"} ${JSON.stringify(firstPair?.json ?? null).slice(0, 300)}, round 1 boards ${firstPair?.rowsAfter ?? "none"}`),
+      ok,
+    );
+  }
+
+  // Check 6 - T9b (X-SW-31). The proposal, over the real route the organiser's Auto-schedule button posts to, and the apply
+  // behind its Apply button. Every number is typed from the rulebook arithmetic, none read back from the code under test:
+  // the match is 30 minutes (the settings below), so a round that starts 09:00 ends 09:30, and the end barrier puts the next
+  // round at 09:30 or later where the start floor alone would have allowed 09:00. Reuses the public competition (the org is
+  // on the Community plan and checks 1-3 each opened one).
+  {
+    const MATCH = 30 * 60_000;
+    const comp = publicComp;
+    const divRes = await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Barrier", sport_key: "badminton", variant_key: "bwf", config: {} });
+    const divId = v1data<{ id: string } | undefined>(divRes)?.id;
+    const made =
+      v1data<{ id: string }[] | undefined>(
+        await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+          Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `Q${i + 1} ${tag}`, seed: i + 1 }))),
+      ) ?? [];
+    const stageId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 } }),
+    )?.id;
+    const venue = v1data<{ id: string } | undefined>(await v1(owner, `/api/v1/orgs/${who.org_id}/venues`, "POST", { name: `Barrier Hall ${tag}` }));
+    const courts: string[] = [];
+    for (let i = 1; i <= 4; i++) {
+      const court = v1data<{ id: string } | undefined>(await v1(owner, `/api/v1/orgs/${who.org_id}/venues/${venue?.id}/courts`, "POST", { name: `Court ${i}` }));
+      if (court !== undefined) courts.push(court.id);
+    }
+    const settings = await v1(owner, `/api/v1/divisions/${divId}/schedule-settings`, "PUT", {
+      tz: "UTC",
+      config: { startAt: "2030-08-01T09:00:00.000Z", matchMinutes: 30, gapMinutes: 0, courts, perEntrantMinRest: 0, sessionWindows: [] },
+    });
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    const paired = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST"); // round 1
+    const rows =
+      (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    const roundOf = new Map(rows.map((f) => [f.id, f.round_no]));
+    const proposal = await v1(owner, `/api/v1/stages/${stageId}/schedule/auto`, "POST", { only_unlocked: false, mode: "build" });
+    const out = v1data<{ assignments: { fixture_id: string; scheduled_at: string; court_id: string }[]; conflicts: { code: string }[] } | undefined>(proposal);
+    const startsOf = (round: number) =>
+      (out?.assignments ?? []).filter((a) => roundOf.get(a.fixture_id) === round).map((a) => Date.parse(a.scheduled_at));
+    const r1 = startsOf(1);
+    const r2 = startsOf(2);
+    const r1LastEnd = Math.max(...r1) + MATCH;
+    const applied = await v1(owner, `/api/v1/stages/${stageId}/schedule/apply`, "POST", {
+      assignments: (out?.assignments ?? []).map((a) => ({ fixture_id: a.fixture_id, scheduled_at: a.scheduled_at, court_id: a.court_id })),
+      source: "auto",
+    });
+    const ok =
+      divRes.status < 300 && made.length === 4 && stageId !== undefined && courts.length === 4 && settings.status < 300 &&
+      started.status < 300 && paired.status === 200 && rows.length === 4 && proposal.status === 200 &&
+      r1.length === 2 && r2.length === 2 && Math.min(...r2) >= r1LastEnd &&
+      (out?.conflicts ?? []).every((c) => c.code !== "warn.order") && applied.status < 300;
+    w3Check(
+      "w3b X-SW-31: the auto-schedule proposal of a Swiss round 2 starts at or after round 1's last board ENDS (four courts, 30-minute boards: not 09:00 beside round 1), and the apply accepts it" +
+        (ok ? "" : ` - division ${divId ?? "none"}, courts ${courts.length}, settings ${settings.status}, start ${started.status}, pair ${paired.status}, rows ${rows.length}, auto ${proposal.status}, round 1 starts ${JSON.stringify(r1.map((t) => new Date(t).toISOString()))}, round 2 starts ${JSON.stringify(r2.map((t) => new Date(t).toISOString()))}, apply ${applied.status} ${JSON.stringify(applied.json).slice(0, 200)}`),
       ok,
     );
   }

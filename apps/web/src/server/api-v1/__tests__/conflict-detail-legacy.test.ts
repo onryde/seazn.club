@@ -283,6 +283,23 @@ describe("ScheduleConflict / AiPlanConflict — details round-trips through zod 
   });
 });
 
+describe("measured_count / measuredCount - a rounds_per_day breach's size survives both wire schemas (X-SW-31, ruling 256)", () => {
+  // zod strips an undeclared key silently (see the C3 comment above), so a count the usecase computes but a schema does not
+  // declare reaches no client: the sweep in schedule-swiss-round-barrier.test.ts reads the usecase's object, not the wire.
+  it("ScheduleConflict keeps measured_count, and leaves the key off a conflict that has none", () => {
+    const base = { fixture_id: "11111111-1111-4111-8111-111111111111", code: "warn.order" as const, blocking: true };
+    expect(ScheduleConflict.parse({ ...base, measured_count: 3 }).measured_count).toBe(3);
+    expect(Object.keys(ScheduleConflict.parse(base))).not.toContain("measured_count");
+  });
+
+  it("AiPlanConflict keeps measuredCount, and leaves the key off a conflict that has none", () => {
+    const element = AiPlanResponse.shape.warnings.element;
+    const base = { fixtureId: "11111111-1111-1111-1111-111111111111", reason: "order" };
+    expect(element.parse({ ...base, measuredCount: 3 }).measuredCount).toBe(3);
+    expect(Object.keys(element.parse(base))).not.toContain("measuredCount");
+  });
+});
+
 // ===========================================================================
 // 3. legacyVerifierConflict — the model's copy never carries `details`
 // ===========================================================================
@@ -315,6 +332,15 @@ describe("legacyVerifierConflict — the AI repair round's byte-identical copy",
     expect(out.rule).toBe("H6");
     expect(out.shortfallMinutes).toBe(15);
     expect(out.detail).toBe("starts before feeder f0 ends");
+  });
+
+  it("carries a `rounds_per_day` conflict's measuredCount (X-SW-31, ruling 256) to the model like the shortfall - and adds no key to a conflict without one", () => {
+    // The count is MEASURED beside the key (it is not part of identity), so the repair round must read it to tell a
+    // breach of three rounds from a breach of four. Taken from the rulebook's own example: cap 2, a day with 3 rounds.
+    const withCount = legacyVerifierConflict({ fixtureId: "f1", reason: "order" as const, measuredCount: 3 });
+    expect(withCount.measuredCount).toBe(3);
+    const withoutCount = legacyVerifierConflict({ fixtureId: "f1", reason: "order" as const, shortfallMinutes: 15 });
+    expect(Object.keys(withoutCount)).toEqual(["fixtureId", "reason", "shortfallMinutes"]);
   });
 
   it("rebuilds the pre-C3 key order — `detail` sits where it always did, not wherever the destructure left it (review finding 4)", () => {

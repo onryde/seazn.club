@@ -3524,6 +3524,11 @@ export const ScheduleConflict = z.object({
    *  conflict's identity and a number in there would move that identity every
    *  time the card moved. */
   shortfall_minutes: z.number().int().optional(),
+  /** How many rounds a calendar day holds, for a `rounds_per_day` breach (X-SW-31, ruling 256). Carried beside the
+   *  conflict for the same reason as `shortfall_minutes`: it is MEASURED, and a number inside `details` would move the
+   *  conflict's identity every time a board moved a round across a day. The cap it exceeds is
+   *  `details.required_count`. */
+  measured_count: z.number().int().optional(),
 });
 export type ScheduleConflict = z.infer<typeof ScheduleConflict>;
 
@@ -5575,6 +5580,9 @@ const AiPlanConflict = z.object({
   /** How short a measured breach falls, in minutes — the number a repair round
    *  needs to know how far to move the card (#399). */
   shortfallMinutes: z.number().int().optional(),
+  /** The rounds one day holds, for a `rounds_per_day` breach (X-SW-31, ruling 256) - `ScheduleConflict.measured_count`'s
+   *  twin on the engine-verbatim shape. Declared here or zod strips it. */
+  measuredCount: z.number().int().optional(),
 });
 
 // A durable constraints delta the architect inferred from the instruction —
