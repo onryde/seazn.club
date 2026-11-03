@@ -16,8 +16,13 @@ import { isSwissBoardExtKey, isSwissByeShellExtKey } from "@/lib/swiss-shell";
 //     shells, so nobody is absent from it — and an ad-hoc row that shares an open round's number does not open it;
 //   - an entrant holds a SEAT in a round when it is the home or away side of any fixture of that round, a bye's award winner
 //     included, whatever the fixture's status. A seat on a PENDING board is a seat (Review Focus 4: the table is ranked
-//     mid-round), and so is one on a void or walked-over row: the engine refuses an absent round the entrant holds a card in,
-//     and a card is any counted fixture the entrant is on;
+//     mid-round), and so is one on a void or walked-over row. A SEAT is not the engine's CARD: the engine counts only a
+//     `decided` or `walkover` fixture (COUNTS_FOR_STANDINGS, competition/stage.js) and refuses an absent round the entrant holds
+//     a card in. A walkover that carries a result is a card, so its seat must exempt the entrant (declaring it absent would be
+//     refused). A VOID row is NOT a card - the engine reads a round with no card and no declared absence as not on the entrant's card at all (Review
+//     Focus 1: a pending or voided board adds nothing) - and its seat still exempts the entrant: a round whose only seat is a void
+//     row is neither a played card nor a zero-point unplayed round for either player, unlike a latecomer's missed round, which
+//     is absent (swiss-absent-rounds.test.ts pins both against the engine's own fold);
 //   - it is ABSENT in every open round in which it holds no seat.
 // Keys are the table's entrants only (Review Focus 2): the engine refuses a key that is not one, which would fail EVERY
 // standings read of the stage. A case-(c) latecomer with no seat yet is on the roster but not on the table, so it has no

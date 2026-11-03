@@ -11,7 +11,21 @@
 // rows that must NOT open a round (ad-hoc, unseated shells) → the key filter → a second call. Every case reports how many
 // entrants it checked: zero checked is a failure (TEST-STRATEGY, anti-vacuity).
 import { describe, expect, it } from "vitest";
+import { MatchOutcome, type StandingsDelta } from "@seazn/engine/core";
+import {
+  completeTableStage,
+  payout,
+  swissDrawFactsOf,
+  type FixtureResult,
+  type StandingsRow,
+  type TableFixture,
+  type TableStage,
+} from "@seazn/engine/competition";
+import { builtinModules } from "@seazn/engine/sports";
+import type { TiebreakerKey } from "@seazn/engine/sport";
+import { tableRulesOf } from "@seazn/engine/testkit";
 import { swissAbsentRounds } from "../swiss-absent-rounds";
+import { unpinnedRulesDoc } from "./helpers/table-rules-doc";
 
 interface Row {
   round_no: number | null;
@@ -19,6 +33,8 @@ interface Row {
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   outcome: unknown;
+  /** The loader's `FixtureRow` carries it; the producer reads seats, never the status (the m2 test below pins that). */
+  status?: string;
 }
 
 /** A board shell `sw-r{round}-b{k}`, seated or not. */
@@ -152,4 +168,170 @@ describe("W3 T8 — swissAbsentRounds (X-SW-8): the rounds a table entrant was i
     const rows = [board(3, 1, "A", "B"), board(1, 1, "A", "B"), board(2, 1, "A", "B"), board(4, 1, "A", "B")];
     expect(swissAbsentRounds(rows, ["A", "B", "L"]).get("L")).toEqual([1, 2, 3, 4]);
   });
+});
+
+// ── batch 1 review m2: a void row is a SEAT, not a CARD ────────────────────────────────────────────────────────────────────
+// The engine's ledger counts only the fixtures whose status is `decided` or `walkover` (`COUNTS_FOR_STANDINGS`), so a `void` row
+// writes no card; and it refuses an absence in a round the entrant holds a card in. The producer reads SEATS (home / away / award
+// winner), whatever the status, so a void row still seats both of its players. Together: a round whose only seat is a void row is
+// NEITHER a played card NOR a zero-point unplayed round for either player - the engine reads "a round with no card and no declared
+// absence" as not on the entrant's card at all. A latecomer's missed round, on the other hand, IS absent.
+//
+// The expected values come from the ENGINE's own fold (`completeTableStage`, Swiss ledger and Buchholz family), never from
+// `swissAbsentRounds`: the producer's output is the thing under test, and the only absences written by hand are the scene's own
+// facts (L and M joined at round 2, so each missed round 1). The scene:
+//   R1  A 1-0 B    C 1/2 D    E 1-0 F           (L and M are not in the stage yet)
+//   R2  A 1-0 C    L 1-0 B    E 1/2 M    D v F  -> VOID   (D's and F's only seat in round 2 is the void row)
+// single-sport: boardgame (chess scoring, the half-point Swiss sport). The producer is sport-blind (it reads seats), and so is
+// the engine's status filter; `swiss-art16-producer.test.ts` sweeps the sports through the DB.
+describe("batch 1 m2 - a void row is a seat but not a card: a void-only round is neither played nor absent", () => {
+  const bg = builtinModules.find((m) => m.key === "boardgame")!;
+  const cfg = bg.variants.classical;
+  const doc = unpinnedRulesDoc({ module: bg, kind: "swiss", divisionConfig: cfg });
+  // The Buchholz family must be ON the stage's order, or the engine computes none of the ledger's effect.
+  const CASCADE: TiebreakerKey[] = [...new Set<TiebreakerKey>([...doc.tiebreakers, "buchholz", "buchholz_cut1"])];
+  const ENTRANTS = ["A", "B", "C", "D", "E", "F", "L", "M"];
+
+  type Result = "home" | "away" | "draw";
+  interface Game {
+    round: number;
+    k: number;
+    home: string;
+    away: string;
+    result: Result;
+  }
+  const PLAYED: Game[] = [
+    { round: 1, k: 1, home: "A", away: "B", result: "home" },
+    { round: 1, k: 2, home: "C", away: "D", result: "draw" },
+    { round: 1, k: 3, home: "E", away: "F", result: "home" },
+    { round: 2, k: 1, home: "A", away: "C", result: "home" },
+    { round: 2, k: 2, home: "B", away: "L", result: "away" },
+    { round: 2, k: 3, home: "E", away: "M", result: "draw" },
+  ];
+  /** The board that gets voided: D v F, round 2, board 4 - the only seat either of them holds in round 2. */
+  const VOIDED: Game = { round: 2, k: 4, home: "D", away: "F", result: "home" };
+
+  const delta = (entrantId: string, won: number, drawn: number, lost: number): StandingsDelta => ({
+    entrantId, played: 1, won, drawn, lost, points: 0, metrics: { wins: won },
+  });
+  /** The engine fixture of a game: paid by the stage's own rule, as the loader pays a decided result. */
+  function resultOf(g: Game): FixtureResult {
+    const draw = g.result === "draw";
+    const winner = g.result === "home" ? g.home : g.away;
+    const loser = winner === g.home ? g.away : g.home;
+    const pair: FixtureResult = [
+      delta(g.home, !draw && winner === g.home ? 1 : 0, draw ? 1 : 0, !draw && winner === g.away ? 1 : 0),
+      delta(g.away, !draw && winner === g.away ? 1 : 0, draw ? 1 : 0, !draw && winner === g.home ? 1 : 0),
+    ];
+    const outcome = draw ? MatchOutcome.parse({ kind: "draw" }) : MatchOutcome.parse({ kind: "win", winner, loser });
+    return payout(outcome, draw ? null : "regulation", pair, true, doc.points, undefined, undefined);
+  }
+  const outcomeOf = (g: Game): unknown =>
+    g.result === "draw"
+      ? { kind: "draw" }
+      : { kind: "win", winner: g.result === "home" ? g.home : g.away, loser: g.result === "home" ? g.away : g.home };
+  const decidedFixture = (g: Game): TableFixture => ({ id: `r${g.round}b${g.k}`, roundNo: g.round, status: "decided", unplayed: null, result: resultOf(g) });
+  /** The DB row of a game, as the loader hands it to the producer (a `status` column, seats, the shell's ext_key). */
+  const rowOf = (g: Game, status: string, outcome: unknown = outcomeOf(g)): Row => ({
+    round_no: g.round,
+    ext_key: `sw-r${g.round}-b${g.k}`,
+    home_entrant_id: g.home,
+    away_entrant_id: g.away,
+    outcome,
+    status,
+  });
+
+  /** The engine's own fold of a Swiss stage over `fixtures`, with `absent` as the stage's declared absences. */
+  const fold = (fixtures: readonly TableFixture[], absent: ReadonlyMap<string, readonly number[]>): StandingsRow[] => {
+    const stage = {
+      id: "swiss-void-row",
+      kind: "swiss",
+      entrants: ENTRANTS,
+      rules: tableRulesOf(CASCADE, doc.points),
+      swiss: true,
+      swissDraw: swissDrawFactsOf(bg, cfg),
+      swissAbsentRounds: absent,
+      rounds: 3,
+    } as TableStage;
+    return [...completeTableStage(stage, fixtures).tables.overall!];
+  };
+  const byId = (rows: readonly StandingsRow[]) => new Map(rows.map((r) => [r.entrantId, r]));
+  /** The ids whose whole row differs between two folds of the same entrants. */
+  const differing = (a: readonly StandingsRow[], b: readonly StandingsRow[]): string[] => {
+    const bb = byId(b);
+    return a.filter((r) => JSON.stringify(r) !== JSON.stringify(bb.get(r.entrantId))).map((r) => r.entrantId);
+  };
+
+  const played = PLAYED.map(decidedFixture);
+  // the scene's own facts: L and M joined at round 2, so each missed round 1 - and nobody else missed anything
+  const SCENE_ABSENT: ReadonlyMap<string, readonly number[]> = new Map([["L", [1]], ["M", [1]]]);
+  // The engine's table when D and F hold NEITHER a card NOR a declared absence in round 2 - how it reads a round that is not on
+  // their card at all. The void row must leave the table exactly here (not at "absent from round 2", which is a different table).
+  const NO_CARD_NO_ABSENCE = fold(played, SCENE_ABSENT);
+
+  // The two shapes a voided board takes in the DB: nothing recorded (a pending board voided by a withdrawal), and one that
+  // KEPT its result (`loadStageInputs` attaches a result to any row with an outcome and a state, whatever its status).
+  const SHAPES: { name: string; row: Row; fixture: TableFixture }[] = [
+    {
+      name: "a pending board voided (no outcome, no result)",
+      row: rowOf(VOIDED, "void", null),
+      fixture: { id: "void-r2b3", roundNo: 2, status: "void" },
+    },
+    {
+      name: "a played board voided afterwards (it kept its outcome and its result)",
+      row: rowOf(VOIDED, "void"),
+      fixture: { id: "void-r2b3", roundNo: 2, status: "void", unplayed: null, result: resultOf(VOIDED) },
+    },
+  ];
+
+  it("premise (empty case first): without any void row D and F are absent from round 2 beside the latecomers' round 1, and the engine ranks eight entrants", () => {
+    const rows = [...PLAYED.map((g) => rowOf(g, "decided"))];
+    const out = swissAbsentRounds(rows, ENTRANTS);
+    // D and F hold no seat in round 2 here, so they ARE absent from it: the void row is what changes that, below
+    expect(entries(out)).toEqual([["D", [2]], ["F", [2]], ["L", [1]], ["M", [1]]]);
+    expect(NO_CARD_NO_ABSENCE).toHaveLength(8);
+    // positive pair on the contrast: the engine's fold moves when an absence is declared (a no-absence fold is a different table)
+    expect(differing(NO_CARD_NO_ABSENCE, fold(played, new Map())), "L's and M's missed round changes their rows").toEqual(expect.arrayContaining(["L", "M"]));
+  });
+
+  for (const shape of SHAPES) {
+    describe(shape.name, () => {
+      const rows = [...PLAYED.map((g) => rowOf(g, "decided")), shape.row];
+      const fixtures = [...played, shape.fixture];
+      const produced = swissAbsentRounds(rows, ENTRANTS);
+
+      it("the producer keeps the void row's seat: D and F are absent from nothing, the latecomers only from round 1", () => {
+        expect(entries(produced)).toEqual([["L", [1]], ["M", [1]]]);
+        expect(produced.has("D"), "D's only seat in round 2 is the void row").toBe(false);
+        expect(produced.has("F"), "F's only seat in round 2 is the void row").toBe(false);
+        expect(produced.get("L"), "L missed round 1 (a latecomer's round IS absent) and nothing else").toEqual([1]);
+      });
+
+      it("the engine's fold of the stage equals its fold with D and F holding neither a card nor an absence in round 2: the void row is no card, and no absence stands in for it", () => {
+        const actual = fold(fixtures, produced);
+        expect(actual).toHaveLength(8);
+        expect(differing(actual, NO_CARD_NO_ABSENCE), "eight rows compared: none moves").toEqual([]);
+        expect(actual).toEqual(NO_CARD_NO_ABSENCE);
+      });
+
+      it("the engine's own definition of a card: a void round is no card (an absence declared in it is accepted), a decided round is one (refused)", () => {
+        // the engine refuses an absent round the entrant holds a card in; neither D nor F holds a card in round 2, whatever the
+        // void row seats - checked for both of the void row's players
+        for (const id of ["D", "F"]) {
+          expect(() => fold(fixtures, new Map([...SCENE_ABSENT, [id, [2]]])), `${id} may be declared absent from the void round`).not.toThrow();
+          // ...and the engine does refuse one in round 1, where the same player's decided game is a card - same call, so the refusal is real
+          expect(() => fold(fixtures, new Map([...SCENE_ABSENT, [id, [1]]])), `${id} holds a card in round 1`).toThrow(/holds a card/);
+        }
+      });
+
+      it("the contrast the producer must not produce: counting the void round as absent moves a table row for each of the void row's players", () => {
+        // what a producer that read a void row as NO seat would hand the engine: D and F absent from round 2 as well
+        const asAbsent = new Map<string, readonly number[]>([...SCENE_ABSENT, ["D", [2]], ["F", [2]]]);
+        const wrong = fold(fixtures, asAbsent);
+        const moved = differing(wrong, NO_CARD_NO_ABSENCE);
+        expect(moved, "a void-as-absent table is a different table, for both of the void row's players").toEqual(expect.arrayContaining(["D", "F"]));
+        expect(entries(asAbsent), "the contrast is not what the producer returned").not.toEqual(entries(produced));
+      });
+    });
+  }
 });
