@@ -7,6 +7,8 @@ import {
   addEntrantsViaApi,
   expectNoHorizontalScroll,
   openBracket,
+  pickBuilderSport,
+  showAllFormats,
   stageCardOf,
 } from "./helpers";
 
@@ -19,24 +21,35 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
   });
   await page.goto(await competitionPath(page.request, comp.data!.id, "/d/new"));
 
-  // The builder is tabbed; moving forward validates the current tab, so fill
-  // the required division name before opening the Format tab.
+  // The builder is in steps; moving forward validates the steps before, so fill
+  // the required division name before opening the Format step.
   await page.getByRole("textbox").first().fill(`Formats ${TAG}`);
+  // Badminton, picked: the builder opens on the organisation's latest sport, else football (C9 round 3), and the
+  // assertions below need a sport offered Americano and Mexicano.
+  await pickBuilderSport(page, "badminton");
   await page.getByRole("button", { name: "Format", exact: true }).click();
+  // Five formats are suggested for the plan (C9 R2); the rest of the offer is one tap away, on the grid's sixth cell.
+  await expect(page.locator("label[data-suggested]")).toHaveCount(5);
+  await showAllFormats(page);
 
-  // The new presets are visible on the format picker.
-  await expect(page.getByText("Americano (padel)")).toBeVisible();
-  await expect(page.getByText("Mexicano (padel)")).toBeVisible();
-  await expect(page.getByText("Ladder", { exact: true })).toBeVisible();
+  // The new presets are visible on the format picker. Americano and Mexicano are
+  // named without "(padel)" since Match Day C9: the builder offers them to
+  // badminton too (picked above), so the label names no one sport.
+  // Read inside the picker: the builder opens on its top suggestion (owner Q5,
+  // Americano here), so the Review receipt names that format too.
+  const cards = page.getByTestId("division-builder-templates");
+  await expect(cards.getByText("Americano", { exact: true })).toBeVisible();
+  await expect(cards.getByText("Mexicano", { exact: true })).toBeVisible();
+  await expect(cards.getByText("Ladder", { exact: true })).toBeVisible();
   // L3/#414 pass 3 — the two new qualification-from-any-stage presets.
-  await expect(page.getByText("Knockout + Plate", { exact: true })).toBeVisible();
-  await expect(page.getByText("Qualifying + Main draw", { exact: true })).toBeVisible();
+  await expect(cards.getByText("Knockout + Plate", { exact: true })).toBeVisible();
+  await expect(cards.getByText("Qualifying + Main draw", { exact: true })).toBeVisible();
   // Swiss Playoff and Swiss Knockout. `exact` matters: the plain "Swiss" card
   // sits right beside them, and a substring match would resolve to whichever
   // came first.
-  await expect(page.getByText("Swiss Playoff", { exact: true })).toBeVisible();
-  await expect(page.getByText("Swiss Knockout", { exact: true })).toBeVisible();
-  await expect(page.getByText("Swiss", { exact: true })).toBeVisible();
+  await expect(cards.getByText("Swiss Playoff", { exact: true })).toBeVisible();
+  await expect(cards.getByText("Swiss Knockout", { exact: true })).toBeVisible();
+  await expect(cards.getByText("Swiss", { exact: true })).toBeVisible();
   // Owner ruling 2026-11-01 (Match Day D1, legs Option A): the Triple round
   // robin is offered to no sport any more. Asserted only now, with the
   // picker's cards on screen, so an unrendered picker cannot pass it.
@@ -71,20 +84,20 @@ test("ko_plate template: completing the main draw computes a seed proposal; conf
   const competitionId = comp.data!.id;
   await page.goto(await competitionPath(page.request, competitionId, "/d/new"));
   await page.getByRole("textbox").first().fill(`KoPlate ${TAG}`);
-  // The wizard defaults Sport to the catalog's first entry alphabetically
-  // (division-builder.tsx: `sports[0]?.key`) — never "generic". Scoring the
+  // The wizard opens on the org's latest sport, else football (C9 round 3:
+  // `defaultSportKey`) — never "generic". Scoring the
   // fixtures below with `generic.result` needs the generic/score sport
   // explicitly selected, or the event 422s as unrecognised for whatever
-  // sport happened to sort first. Scoped by label CONTAINMENT, not
-  // getByLabel: the <label> wraps every <option> text too (all sports/
-  // variants render as DOM text regardless of selection), so the computed
-  // accessible name is "SportBadmintonBoardgame…Volleyball" — never the bare
-  // "Sport" getByLabel(exact) would need.
-  await page.locator("label", { hasText: "Sport" }).locator("select").selectOption({ label: "Generic" });
-  await page.locator("label", { hasText: "Variant" }).locator("select").selectOption({ label: "Score" });
+  // sport happened to sort first. C9 R2: the sport is a tile ("Any other
+  // game", last, under Show more), picked by its key.
+  await pickBuilderSport(page, "generic");
   await page.getByRole("button", { name: "Format", exact: true }).click();
+  await showAllFormats(page);
   await page.getByText("Knockout + Plate", { exact: true }).click();
-  await page.getByRole("button", { name: "Scheduling", exact: true }).click();
+  // The variant is on Division rules (the rules strip's own select) since Match Day C9.
+  await page.getByTestId("division-builder-next").click();
+  await page.locator("label", { hasText: "Variant" }).locator("select").selectOption({ label: "Score" });
+  await page.getByRole("button", { name: "Review", exact: true }).click();
   await page.getByRole("button", { name: /create division/i }).click();
   await page.waitForURL(/\/o\/[^/]+\/c\/[^/]+\/d\/(?!new(?:$|[/?]))[^/?]+/, { timeout: 20_000 });
   const slug = page.url().match(/\/d\/([^/?]+)/)![1]!;
@@ -253,9 +266,9 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   await page.getByRole("textbox").first().fill(`SwissKO ${TAG}`);
   // Generic/Score, for the same reason ko_plate above picks it: the wizard
   // defaults to the catalog's first sport and `generic.result` would 422.
-  await page.locator("label", { hasText: "Sport" }).locator("select").selectOption({ label: "Generic" });
-  await page.locator("label", { hasText: "Variant" }).locator("select").selectOption({ label: "Score" });
+  await pickBuilderSport(page, "generic");
   await page.getByRole("button", { name: "Format", exact: true }).click();
+  await showAllFormats(page);
   await page.getByText("Swiss Knockout", { exact: true }).click();
 
   // The knob: scoped by "Qualify to finals", NOT bare "Qualify" — the
@@ -277,8 +290,9 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   expect([await valid(1), await valid(2), await valid(32), await valid(33)]).toEqual([false, true, true, false]);
   // Fix round 1 (M1): a value past either end is refused before any POST, by
   // a sentence naming the field, never clamped into one the organiser did not
-  // type. 33 is still in the box from the check above.
-  await page.getByRole("button", { name: "Scheduling", exact: true }).click();
+  // type. 33 is still in the box from the check above. A jump to Review walks the
+  // steps before it and stops on the first unfinished one: this one.
+  await page.getByRole("button", { name: "Review", exact: true }).click();
   await expect(page.getByTestId("division-builder-error")).toHaveText("Qualify to finals: choose a whole number from 2 to 32.");
   await expect(page.getByTestId("division-builder-create")).toHaveCount(0);
   // A reachability check would pass on any value, so drive the case a
@@ -296,7 +310,9 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   // rather than trusting the default.
   await page.getByLabel("Rounds", { exact: true }).fill("3");
 
-  await page.getByRole("button", { name: "Scheduling", exact: true }).click();
+  await page.getByTestId("division-builder-next").click();
+  await page.locator("label", { hasText: "Variant" }).locator("select").selectOption({ label: "Score" });
+  await page.getByRole("button", { name: "Review", exact: true }).click();
   await page.getByRole("button", { name: /create division/i }).click();
   await page.waitForURL(/\/o\/[^/]+\/c\/[^/]+\/d\/(?!new(?:$|[/?]))[^/?]+/, { timeout: 30_000 });
   const slug = page.url().match(/\/d\/([^/?]+)/)![1]!;

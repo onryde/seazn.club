@@ -642,7 +642,8 @@ for (const vp of VIEWPORTS) {
       // competition — the entry point U1 names.
       await page.goto(`/o/${rig.orgSlug}/c/${rig.compSlug}/d/new`);
       await page.getByPlaceholder("U16 Boys T20").fill("Gate Trigger");
-      await page.getByRole("button", { name: "Scheduling" }).click();
+      // Match Day C9: Create is on the builder's last step, Review.
+      await page.getByRole("button", { name: "Review", exact: true }).click();
       await page.getByRole("button", { name: "Create division" }).click();
       // Scoped to the feature that bit — this page carries other gates.
       const gate = page.locator('[data-pass-gate][data-feature="divisions.per_competition.max"]');
@@ -754,7 +755,8 @@ for (const vp of VIEWPORTS) {
       // The paywall now renders pass-OWNED: one Pro path out, no second sale.
       await page.goto(`/o/${rig.orgSlug}/c/${rig.compSlug}/d/new`);
       await page.getByPlaceholder("U16 Boys T20").fill("Eleventh");
-      await page.getByRole("button", { name: "Scheduling" }).click();
+      // Match Day C9: Create is on the builder's last step, Review.
+      await page.getByRole("button", { name: "Review", exact: true }).click();
       await page.getByRole("button", { name: "Create division" }).click();
       // Scoped to the feature that actually bit, never `.first()`. The
       // scheduling tab used to carry its own COMPACT gate

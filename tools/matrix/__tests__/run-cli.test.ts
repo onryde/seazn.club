@@ -29,7 +29,7 @@ import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "..
 import { LOCAL_BASE } from "../lib/redact.ts";
 import { slugRunId } from "../lib/run-id.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
-import { REFUSED_CELLS, offeredCells } from "./refused-cells.ts";
+import { isNoOrganiserPathCell, NO_ORGANISER_PATH_CELLS, offeredCells, REFUSED_CELLS } from "./refused-cells.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import { main as renderMain } from "../render.ts";
 import { parseResults, type CaseResult, type CheckResult, type RunResults } from "../lib/results.ts";
@@ -2352,7 +2352,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(checked).toBe(rows.length);
   });
 
-  it("--layer L1 --scope grid, through the real planner and runner: the 229 offered cells (231 less chess americano/mexicano) at 1280, the 53 with no organiser path recorded 🚫 and never driven, every sport's variant order read once", async () => {
+  it("--layer L1 --scope grid, through the real planner and runner: the 229 offered cells (231 less chess americano/mexicano) at 1280, the 63 with no organiser path (53 API-only, 10 the builder does not offer: C9 review I5) recorded 🚫 and never driven, every sport's variant order read once", async () => {
     capture();
     const dir = dirFor();
     const { d, reads, opened } = gridDeps();
@@ -2365,17 +2365,20 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(new Set(r.cases.map((c) => c.caseId)).size).toBe(OFFERED);
     expect(r.cases.map((c) => `${c.row}|${c.sport}`)).toEqual(offeredCells(ROW_KEYS, SPORT_KEYS));
     const planned = r.cases.filter((c) => c.planned === true);
-    expect(planned).toHaveLength(53);
-    expect(planned.every((c) => c.state === "no_path" && (API_ONLY_ROWS as readonly string[]).includes(c.row))).toBe(true);
+    // 53 API-only cells no builder control builds, plus the cells the builder does not offer (C9 review I5, option 2).
+    const noPathPlanned = 53 + NO_ORGANISER_PATH_CELLS.length;
+    expect(planned).toHaveLength(noPathPlanned);
+    expect(planned.every((c) => c.state === "no_path" && ((API_ONLY_ROWS as readonly string[]).includes(c.row) || isNoOrganiserPathCell(`${c.row}|${c.sport}`)))).toBe(true);
+    expect(planned.filter((c) => isNoOrganiserPathCell(`${c.row}|${c.sport}`)).map((c) => `${c.row}|${c.sport}`)).toEqual([...NO_ORGANISER_PATH_CELLS]);
     // Every other case was handed to a driver: it is not marked planned, and its state is the scenario's.
-    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(OFFERED - 53);
+    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(OFFERED - noPathPlanned);
     expect(r.cases.filter((c) => c.planned === undefined).every((c) => c.state !== "no_path" && c.state !== "not_run")).toBe(true);
     expect([...reads].sort()).toEqual([...SPORT_KEYS].sort());
     expect(reads).toHaveLength(SPORT_KEYS.length);
     expect(opened()).toBe(1);
   }, 120_000);
 
-  it("--layer L2 --scope grid, through the real planner and runner: 1,729 runs at their own widths — 62 driven, 145 🚫, 1,522 ░ — each recording the pair-run it is", async () => {
+  it("--layer L2 --scope grid, through the real planner and runner: 1,729 runs at their own widths — 56 driven, 279 🚫, 1,394 ░ — each recording the pair-run it is", async () => {
     capture();
     const dir = dirFor();
     const { d, reads } = gridDeps();
@@ -2385,11 +2388,13 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(r.cases.every((c) => c.layer === "L2" && c.l2 !== undefined)).toBe(true);
     expect(new Set(r.cases.map((c) => c.l2!.n)).size).toBe(RAW_RUNS.length);
     // X-DR-1 (W2a): 1,731 -> 1,729 runs; driven 62 and 🚫 164 unchanged, ░ 1,503. W2e Task 32: 19 M12b runs have a screen
-    // path (🚫 164 -> 145, ░ 1,503 -> 1,522; layers-grid.test.ts).
-    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(62);
-    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(145);
-    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1522);
-    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(145 + 1522);
+    // path (🚫 164 -> 145, ░ 1,503 -> 1,522; layers-grid.test.ts). Match Day C9 review I5, option 2: every run on the ten
+    // no-organiser-path cells is 🚫 (driven 62 -> 56, 🚫 145 -> 279, ░ 1,522 -> 1,394; layers-grid.test.ts).
+    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(56);
+    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(279);
+    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1394);
+    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(279 + 1394);
+    expect(r.cases.filter((c) => isNoOrganiserPathCell(`${c.row}|${c.sport}`)).every((c) => c.state === "no_path")).toBe(true);
     // Only the driven runs' sports were asked for: a planned run posts nothing.
     expect(reads.length).toBeGreaterThan(0);
     expect(reads.length).toBeLessThan(SPORT_KEYS.length + 1);

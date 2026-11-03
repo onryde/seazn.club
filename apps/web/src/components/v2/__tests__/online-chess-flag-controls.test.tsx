@@ -56,6 +56,7 @@ import { DivisionSettings } from "@/components/v2/division-settings";
 import { DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
 import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-needs-result-queue";
 import { LichessLinkCard } from "@/components/lichess-link-card";
+import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 type SettingsProps = Parameters<typeof DivisionSettings>[0];
 function settingsProps(sportKey: string, config: Record<string, unknown>, onlineChessOffered: boolean): SettingsProps {
@@ -72,6 +73,7 @@ function settingsProps(sportKey: string, config: Record<string, unknown>, online
       inherited_camera_policy: "off",
     },
     orgId: "org1",
+    entrantKinds: engineEntrantKinds(sportKey),
     variants: [{ key: sportKey === "boardgame" ? "classical" : "standard", name: "Standard" }],
     structureLocked: false,
     lockedFields: [],

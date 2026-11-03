@@ -6,8 +6,8 @@
 // gated americano stage), so a future re-duplication in either call site is
 // caught two ways.
 import { describe, expect, it } from "vitest";
-import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "../format-gates";
-import { buildTemplateStages } from "@/lib/format-templates";
+import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate, templateLocksFor } from "../format-gates";
+import { STAGE_TEMPLATES, buildTemplateStages } from "@/lib/format-templates";
 
 describe("stageNeedsDoubleElimGate", () => {
   it.each(["double_elim", "page_playoff"])("gates on kind '%s'", (kind) => {
@@ -100,5 +100,40 @@ describe("swiss_knockout is free at the server gate, and swiss_playoff is not", 
   it("swiss_playoff still trips the double_elim gate on its page_playoff half", () => {
     const stages = buildTemplateStages("swiss_playoff", KNOBS);
     expect(stages.some((s) => stageNeedsDoubleElimGate(s.kind))).toBe(true);
+  });
+});
+
+// Match Day C9 fix round 1 (I3): the division builder's lock map, per plan shape. The expected maps are doc 10 §1 typed
+// here - formats.double_elim gates the double_elim and page_playoff KINDS, formats.advanced the americano and ladder
+// KINDS - over the templates whose stages carry them (group_playoffs and swiss_playoff end in a page playoff; mexicano is
+// an americano stage), never read off templateLocksFor or the gate predicates.
+describe("templateLocksFor: the division builder's per-plan template locks (C9 fix round 1, I3)", () => {
+  const DOUBLE_ELIM_TEMPLATES = ["group_playoffs", "swiss_playoff", "double_elim"];
+  const ADVANCED_TEMPLATES = ["americano", "mexicano", "ladder"];
+  const all = (keys: string[], feature: string) => Object.fromEntries(keys.map((k) => [k, feature]));
+
+  it("empty case first: a plan with both features (Pro) locks nothing", () => {
+    expect(templateLocksFor({ doubleElim: true, advanced: true })).toEqual({});
+  });
+
+  it("a plan with neither (Community) locks the six, each to its own feature", () => {
+    expect(templateLocksFor({ doubleElim: false, advanced: false })).toEqual({ ...all(DOUBLE_ELIM_TEMPLATES, "formats.double_elim"), ...all(ADVANCED_TEMPLATES, "formats.advanced") });
+  });
+
+  it("advanced only (an Event Pass): the double-elimination three stay locked, the advanced three open", () => {
+    expect(templateLocksFor({ doubleElim: false, advanced: true })).toEqual(all(DOUBLE_ELIM_TEMPLATES, "formats.double_elim"));
+  });
+
+  it("double elimination only: the advanced three stay locked", () => {
+    expect(templateLocksFor({ doubleElim: true, advanced: false })).toEqual(all(ADVANCED_TEMPLATES, "formats.advanced"));
+  });
+
+  it("every template is judged, and a template whose kinds need neither gate is never locked (counts)", () => {
+    const locked = templateLocksFor({ doubleElim: false, advanced: false });
+    let free = 0;
+    for (const t of STAGE_TEMPLATES) if (!(t.key in locked)) free++;
+    expect(free + Object.keys(locked).length).toBe(STAGE_TEMPLATES.length);
+    expect(free).toBeGreaterThan(0);
+    expect(Object.keys(locked)).toHaveLength(DOUBLE_ELIM_TEMPLATES.length + ADVANCED_TEMPLATES.length);
   });
 });

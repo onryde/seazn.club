@@ -75,6 +75,7 @@ import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
 import { PointsEditor } from "@/components/v2/rules/points-editor";
 import { LockLine } from "@/components/v2/rules/lock-line";
 import { DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
+import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 const L = (key: string, vars: Record<string, string | number> = {}, dict: Record<string, string> = enUi as Record<string, string>): string =>
   dict[key]!.replace(/\{(\w+)\}/g, (hole, name: string) => (name in vars ? String(vars[name]) : hole));
@@ -94,6 +95,7 @@ function props(over: Record<string, unknown> = {}, sportKey = "badminton", varia
   return {
     division: { id: "d1", name: "Open", sport_key: sportKey, variant_key: variantKey, config, logo_url: null, logo_storage_path: null },
     orgId: "org1",
+    entrantKinds: engineEntrantKinds(sportKey),
     variants: [{ key: variantKey, name: "Short" }, { key: "other", name: "Other" }],
     structureLocked: false,
     lockedFields: [] as RefusedField[],

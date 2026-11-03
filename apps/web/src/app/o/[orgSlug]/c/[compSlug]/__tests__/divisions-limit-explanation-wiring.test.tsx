@@ -56,6 +56,8 @@ vi.mock("@/server/usecases/divisions", () => ({
     { id: "d-live", name: "Open", sport_key: "generic", archived_at: null },
     { id: "d-gone", name: "Retired", sport_key: "generic", archived_at: "2026-01-02T00:00:00.000Z" },
   ],
+  // The wizard page's Sport-picker history (C9 review 3, m1: moved into this module); none here.
+  recentDivisionSports: async () => [],
 }));
 
 // THE value under test: whichever answer the server gives must reach both

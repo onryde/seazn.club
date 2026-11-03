@@ -209,8 +209,8 @@ test.describe.serial("event pass gate (community org)", () => {
     // the first `goto` had already landed on and the wait was vacuous.
     await page.goto(await competitionPath(page.request, compId, "/d/new"));
     await page.getByPlaceholder("U16 Boys T20").fill("Gate Trigger");
-    // The builder is a stepped wizard — submit lives on the last tab.
-    await page.getByRole("button", { name: "Scheduling" }).click();
+    // The builder is a stepped wizard — Create lives on the last step, Review.
+    await page.getByRole("button", { name: "Review", exact: true }).click();
     await page.getByRole("button", { name: "Create division" }).click();
     const gate = page.locator("[data-pass-gate]").first();
     await expect(gate).toBeVisible({ timeout: 20_000 });
@@ -264,7 +264,7 @@ test.describe.serial("event pass gate (community org)", () => {
 
     await page.goto(passHref!.replace(/\/upgrade(\?.*)?$/, "/d/new"));
     await page.getByPlaceholder("U16 Boys T20").fill("Owned Card");
-    await page.getByRole("button", { name: "Scheduling" }).click();
+    await page.getByRole("button", { name: "Review", exact: true }).click();
     await page.getByRole("button", { name: "Create division" }).click();
     // Scoped to the feature that actually bit, never `.first()` — the same
     // reason event-pass.spec.ts scopes it: `.first()` reads whichever gate

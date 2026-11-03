@@ -6,6 +6,7 @@ import { renderIsland, propsOf, walk } from "@/components/__tests__/_hook-harnes
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { buildTemplateStages } from "@/lib/format-templates";
 import enUi from "@/dictionaries/en/ui.json";
+import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -72,6 +73,7 @@ function mount(stages: StageProp[], locked: boolean, swissField?: number) {
       logo_storage_path: null,
     },
     orgId: "org1",
+    entrantKinds: engineEntrantKinds("badminton"),
     structureLocked: locked,
     lockedFields: [],
     stages,

@@ -76,16 +76,19 @@ test("an organiser watches the desk go Setting up → Scheduled → Today (a mat
   await page.goto(compPath);
 
   // 2. One division, made by hand: the row appears with its sport glyph and Setting up.
-  // "generic" explicitly — the wizard's unset default is alphabetically
-  // first ("badminton", individual/pair only, division-builder.tsx has no
-  // separate entrant-kind picker) and step 3 needs a TEAM division whose
+  // "generic" explicitly — the wizard's unset default is the org's latest
+  // sport, else football (C9 round 3), and step 3 needs a TEAM division whose
   // fixtures step 6's scoreFixture (event type "generic.result") can settle;
   // "football" satisfies the first but 422s "unknown event type
   // generic.result" on the second (confirmed by running this spec) — the
   // generic sport module is what mobile.spec.ts's own team registration
   // fixture (sport_key "generic", variant_key "score") uses for the same
-  // reason.
-  const divId = await createDivisionViaUi(page, compId, "Premier", "generic");
+  // reason. TEAMS picked on Who plays: the kind shown narrows the division to
+  // it ALWAYS (owner, C9 n3, 2026-11-03), so generic's untouched default
+  // (individual players) would refuse the four teams step 3 adds. And a
+  // LEAGUE, picked: a Teams division is offered no Americano (C9 review 2,
+  // N1), and the league is the format this walk reads.
+  const divId = await createDivisionViaUi(page, compId, "Premier", "generic", "league", "team");
   await page.goto(compPath);
   const row = page.getByTestId("desk-ledger-row").first();
   await expect(row).toHaveAttribute("data-phase", "setting_up");
@@ -96,7 +99,7 @@ test("an organiser watches the desk go Setting up → Scheduled → Today (a mat
   // 3. Reach: entrants + generated fixtures (API). Read: Needs you names the unscheduled round.
   const entrantsRes = await addEntrantsViaApi(request, divId, ["Riverside FC", "Valley CC", "Lakeside FC", "Harbour CC"], "team");
   if (entrantsRes.status >= 300) throw new Error(`entrants failed: ${entrantsRes.status} ids=${JSON.stringify(entrantsRes.ids)}`);
-  // The wizard's own Scheduling step (createDivisionViaUi) already defines
+  // The wizard's own Create (createDivisionViaUi) already defines
   // the stage graph on create — a manual POST .../stages at seq 1 here 409s
   // "stage seq 1 already exists" (confirmed by running this spec). Read the
   // stage the wizard made instead of declaring a second one.

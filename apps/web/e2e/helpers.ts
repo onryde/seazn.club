@@ -2519,30 +2519,99 @@ export async function createCompetitionViaUi(
 }
 
 /**
- * Create a division through the tabbed builder UI (basics → scheduling →
- * Create). Uses the builder's defaults for sport/format unless `sportKey` is
- * given; returns the division id parsed from the post-create URL.
+ * The division builder's Format step (Match Day C9) suggests five formats for
+ * the plan and folds the rest of the sport's offer under Show more, the grid's
+ * sixth cell (C9 R2; it keeps the `division-builder-show-all` testid). Unfold
+ * it, once, so a test can reach any card; a second call is a no-op (it reads
+ * `aria-expanded` rather than toggling blind). Call it on the Format step.
+ */
+export async function showAllFormats(page: Page): Promise<void> {
+  const showAll = page.getByTestId("division-builder-show-all");
+  await expect(showAll).toBeVisible();
+  if ((await showAll.getAttribute("aria-expanded")) !== "true") await showAll.click();
+  await expect(showAll).toHaveAttribute("aria-expanded", "true");
+}
+
+/**
+ * Pick a sport on the division builder's Who plays step (Match Day C9 R2): a
+ * radio tile per sport, five shown and the rest under the Show more tile
+ * (`division-builder-sport-more`). Opens Show more when the sport's tile is
+ * folded, taps the tile and proves its radio took. Re-tapping a radio is
+ * idempotent, so the tap is retried until it holds (a tap on markup React has
+ * not hydrated yet is otherwise lost).
+ */
+export async function pickBuilderSport(page: Page, sportKey: string): Promise<void> {
+  const tile = page.locator(`label[data-sport="${sportKey}"]`);
+  await expect(tile, `a sport tile for ${sportKey}`).toHaveCount(1);
+  if (!(await tile.isVisible())) {
+    const more = page.getByTestId("division-builder-sport-more");
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+  }
+  const radio = tile.locator('input[type="radio"][name="division-sport"]');
+  await expect(async () => {
+    await tile.click();
+    await expect(radio).toBeChecked({ timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
+}
+
+/**
+ * Create a division through the 4-step builder UI (Who plays → the Review
+ * step → Create; Match Day C9). The step nav's Review button walks every step
+ * before it and stops on the first unfinished one, so the defaults for
+ * format and rules ride through. Uses the builder's defaults for sport/format
+ * unless `sportKey` is given; returns the division id parsed from the
+ * post-create URL (the division's Fixtures tab).
  *
- * The builder has no separate entrant-kind picker (competition-desk e2e:
- * confirmed by reading division-builder.tsx — no entrantKind/team/pairs
- * control anywhere in it) — allowed entrant kinds are DERIVED from the
- * sport+variant module, so a walkthrough that needs team entrants must pick
- * a team sport here rather than pass a kind. Sports load `order by name`
- * (d/new/page.tsx), so the unset default is alphabetically first
- * ("badminton" — individual/pair only), not whatever the caller assumed.
+ * Who plays asks the entrant kind (Match Day C9) and opens at the sport's
+ * OWN default (badminton: individuals; football: teams), which this helper
+ * leaves alone - so a walkthrough that needs team entrants still picks a team
+ * sport here. The builder opens on the first sport tile shown - the
+ * organisation's most recent sport, else football (C9 round 3) - so the
+ * unset default depends on the org's history, not on the sports' names.
+ *
+ * Format opens on the first card shown for the sport (owner rulings
+ * 2026-11-03, Q5 and round 4's I1), NOT League - and never Americano or
+ * Mexicano, which the grid shows after every other card. A caller
+ * whose later steps need a particular stage kind (a league to generate team
+ * fixtures into) passes `template`: the helper opens Format, shows every
+ * format, picks that card and proves it checked before going on to Review.
  */
 export async function createDivisionViaUi(
   page: Page,
   competitionId: string,
   name: string,
   sportKey?: string,
+  template?: string,
+  /** The entrant kind picked on Who plays. The kind shown narrows the division to it ALWAYS (owner, Match Day C9 n3,
+   *  2026-11-03): left out, the division takes the sport's default kind ALONE, so a caller that adds another kind of
+   *  entrant (teams to generic) must pick it here. */
+  entrantKind?: "individual" | "pair" | "team",
 ): Promise<string> {
   await page.goto(await competitionPath(page.request, competitionId, "/d/new"));
-  // The name field is the first textbox on the Basics tab (see formats.spec.ts).
+  // The name field is the first textbox on the Who plays step (see formats.spec.ts).
   await page.getByRole("textbox").first().fill(name);
-  if (sportKey) await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption(sportKey);
-  // Creation is guarded to the last tab.
-  await page.getByRole("button", { name: "Scheduling", exact: true }).click();
+  if (sportKey) await pickBuilderSport(page, sportKey);
+  if (entrantKind) {
+    const kinds = page.getByTestId("division-builder-entrant-kind");
+    const radio = kinds.locator(`input[name="division-entrant-kind"][value="${entrantKind}"]`);
+    await expect(radio, `the ${entrantKind} chip on Who plays`).toHaveCount(1);
+    await expect(async () => {
+      await kinds.locator(`label[data-entrant-kind="${entrantKind}"]`).click();
+      await expect(radio).toBeChecked({ timeout: 1_000 });
+    }).toPass({ timeout: 10_000 });
+  }
+  if (template) {
+    await page.getByTestId("division-builder-step-format").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "format");
+    await showAllFormats(page);
+    const card = page.locator(`label[data-template="${template}"]`);
+    await card.click();
+    await expect(card.locator("input")).toBeChecked();
+  }
+  // Create is on the last step, Review; its step button walks the steps before it.
+  await page.getByRole("button", { name: "Review", exact: true }).click();
   await page.getByRole("button", { name: /create division/i }).click();
   // PROMPT-30: builder lands on the division slug URL — resolve id via API.
   await page.waitForURL(/\/o\/[^/]+\/c\/[^/]+\/d\/(?!new(?:$|[/?]))[^/?]+/, { timeout: 20_000 });

@@ -30,10 +30,10 @@ vi.mock("@/lib/client-v1", async (importOriginal) => ({
 
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { DivisionRulesStrip, expandRules, stripPropsOf } from "@/components/v2/__tests__/_rules-strip";
+import { builderStrip, pickTemplate as pickCard, pressCreate, walkToReview } from "@/components/v2/__tests__/_division-builder-driver";
 import { DivisionBuilder } from "@/components/v2/division-builder";
 import { PointsEditor } from "@/components/v2/rules/points-editor";
 import { TiebreaksEditor } from "@/components/v2/rules/tiebreaks-editor";
-import uiEn from "@/dictionaries/en/ui.json";
 import { sql } from "@/lib/db";
 import { sportOptionsFrom } from "@/lib/sport-options";
 import { CreateDivision, CreateStages, PatchDivision } from "@/server/api-v1/schemas";
@@ -45,7 +45,6 @@ import { createStages } from "../stages";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
-const UI = uiEn as Record<string, string>;
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -87,6 +86,18 @@ const click = (tree: ReactElement[], testId: string): void => {
   if (el === undefined) throw new Error(`no button ${testId} in: ${tree.map((n) => textOf(n)).join(" | ")}`);
   (propsOf(el).onClick as () => void)();
 };
+/** The builder's Division rules step (Match Day C9): the strip in draft mode, rendered with the props the builder hands it,
+ *  its editors opened, and every panel toggle it draws pressed (the builder opens Match format only). Its editors' handlers
+ *  are the builder's own setters, so render it again after a change to read the builder's new state. */
+function builderRules(h: { tree: () => ReactElement[] }): { tree: () => ReactElement[] } {
+  const strip = builderStrip(h, expandRules);
+  for (const panel of ["points", "tiebreaks"]) {
+    const toggle = strip.tree().find((e) => propsOf(e)["data-testid"] === `division-rules-toggle-${panel}`);
+    if (toggle !== undefined && propsOf(toggle)["aria-expanded"] !== true) (propsOf(toggle).onClick as () => void)();
+  }
+  return strip;
+}
+
 /** The last PATCH the island sent to `/api/v1/divisions/{id}`, as the route's own schema parses it. */
 function sentPatch(divisionId: string) {
   const call = [...apiV1Mock.mock.calls].reverse().find(([url, opts]) => url === `/api/v1/divisions/${divisionId}` && (opts as { method?: string })?.method === "PATCH");
@@ -186,7 +197,7 @@ describe.skipIf(!HAS_DB)("Match Day C2: the Division rules strip's saves reach t
   });
 });
 
-describe.skipIf(!HAS_DB)("Match Day C2: what the builder's Format tab saves round-trips into the Division rules strip", () => {
+describe.skipIf(!HAS_DB)("Match Day C2: what the builder's Division rules step sends round-trips into the Division rules strip", () => {
   it("football: a typed win and a typed order are POSTed, stored, read by the stage on create, and open in the strip as typed", async () => {
     // single-sport: the builder round trip is sport-blind past the points keys, which the strip seam above sweeps.
     const m = mod("football");
@@ -201,24 +212,24 @@ describe.skipIf(!HAS_DB)("Match Day C2: what the builder's Format tab saves roun
       archivedSlotsExplainRefusal: false,
       viewerPlan: "community",
     });
-    const points = find(h.tree(), PointsEditor);
-    expect(propsOf(points).scope, "premise: the Format tab's Points is the division's").toBe("division");
+    // A league: a table format, so the Points and Tie-breaks panels are drawn (since owner Q5, 2026-11-03, the builder
+    // opens on the top suggestion, which for football is a knockout).
+    pickCard(h, "league");
+    const points = find(builderRules(h).tree(), PointsEditor);
+    expect(propsOf(points).scope, "premise: the Division rules step's Points is the division's").toBe("division");
     const value = propsOf(points).value as Record<string, string>;
     expect(Object.hasOwn(value, "win"), "premise: football keeps a win box").toBe(true);
     const typedWin = Number(value.win) + 2;
     (propsOf(points).onChange as (next: Record<string, string>) => void)({ ...value, win: String(typedWin) });
     // The order is asked of the engine against the config the builder's editor holds (the picked variant's).
-    const cfgNow = propsOf(find(h.tree(), TiebreaksEditor)).divisionConfig;
+    const cfgNow = propsOf(find(builderRules(h).tree(), TiebreaksEditor)).divisionConfig;
     const order = divisionOrder(m, cfgNow);
-    (propsOf(find(h.tree(), TiebreaksEditor)).onChange as (next: TiebreakerKey[] | null) => void)(order);
+    (propsOf(find(builderRules(h).tree(), TiebreaksEditor)).onChange as (next: TiebreakerKey[] | null) => void)(order);
 
-    // Name -> Scheduling tab -> Create, as the organiser does; the two POSTs captured.
+    // Name, each step's Next, Create on Review, as the organiser does; the two POSTs captured.
     apiV1Mock.mockImplementation(async (url: string) => (String(url).endsWith("/divisions") ? { id: "d1", slug: "open" } : {}));
-    const nameInput = h.tree().find((e) => e.type === "input" && propsOf(e).placeholder === UI["wizard.divisionNamePlaceholder"]);
-    (propsOf(nameInput!).onChange as (e: unknown) => void)({ target: { value: "Open" } });
-    const button = (label: string) => h.tree().find((e) => e.type === "button" && textOf(e).trim() === label)!;
-    (propsOf(button(UI["wizard.tab.scheduling"]!)).onClick as () => void)();
-    (propsOf(button(UI["wizard.create"]!)).onClick as () => void)();
+    walkToReview(h, "Open");
+    pressCreate(h);
     await vi.waitFor(() => expect(apiV1Mock.mock.calls.some(([url]) => String(url).endsWith("/stages"))).toBe(true));
     const divisionBody = apiV1Mock.mock.calls.find(([url]) => String(url).endsWith("/divisions"))![1] as { json: unknown };
     const stagesBody = apiV1Mock.mock.calls.find(([url]) => String(url).endsWith("/stages"))![1] as { json: unknown };
@@ -250,7 +261,8 @@ describe.skipIf(!HAS_DB)("Match Day C2: what the builder's Format tab saves roun
 });
 
 // Fix round 1, M6: the builder's order is edited against one variant and one structure, and either can change after it. Asked
-// of the builder through its real handlers (the variant select's, a format card's radio, Create), the POST captured; no DB.
+// of the builder through its real handlers (the strip's variant select and order editor on the Division rules step, a format
+// card's radio, Create), the POST captured; no DB.
 describe("Match Day C2: the builder's tie-break order follows the variant and the structure it is sent with", () => {
   const football = () => {
     const m = mod("football");
@@ -259,8 +271,10 @@ describe("Match Day C2: the builder's tie-break order follows the variant and th
     expect(rows.length, "premise: football offers a second variant").toBeGreaterThan(1);
     return { m, sports: sportOptionsFrom([{ key: "football", name: "Football" }], rows) };
   };
-  const mountBuilder = (sports: ReturnType<typeof sportOptionsFrom>) =>
-    renderIsland(DivisionBuilder, {
+  // On a league, picked: the table this describe edits (owner Q5: the builder opens on the top suggestion, a knockout for
+  // football, which has no table).
+  const mountBuilder = (sports: ReturnType<typeof sportOptionsFrom>) => {
+    const h = renderIsland(DivisionBuilder, {
       competitionId: "c1",
       orgSlug: "org",
       compSlug: "comp",
@@ -269,11 +283,14 @@ describe("Match Day C2: the builder's tie-break order follows the variant and th
       archivedSlotsExplainRefusal: false,
       viewerPlan: "community",
     });
+    pickCard(h, "league");
+    return h;
+  };
   type H = ReturnType<typeof mountBuilder>;
   const setOrder = (h: H, m: AnySportModule): TiebreakerKey[] => {
-    const order = divisionOrder(m, propsOf(find(h.tree(), TiebreaksEditor)).divisionConfig);
-    (propsOf(find(h.tree(), TiebreaksEditor)).onChange as (next: TiebreakerKey[] | null) => void)(order);
-    expect(propsOf(find(h.tree(), TiebreaksEditor)).value, "premise: the editor holds the order").toEqual(order);
+    const order = divisionOrder(m, propsOf(find(builderRules(h).tree(), TiebreaksEditor)).divisionConfig);
+    (propsOf(find(builderRules(h).tree(), TiebreaksEditor)).onChange as (next: TiebreakerKey[] | null) => void)(order);
+    expect(propsOf(find(builderRules(h).tree(), TiebreaksEditor)).value, "premise: the editor holds the order").toEqual(order);
     return order;
   };
   const pickTemplate = (h: H, key: string): void => {
@@ -282,14 +299,11 @@ describe("Match Day C2: the builder's tie-break order follows the variant and th
     if (radio === undefined) throw new Error(`no ${key} card on screen`);
     (propsOf(radio).onChange as () => void)();
   };
-  /** Name, Scheduling, Create - the organiser's path - and the division POST's body. */
+  /** Name, each step's Next, Create on Review - the organiser's path - and the division POST's body. */
   async function create(h: H): Promise<Record<string, unknown>> {
     apiV1Mock.mockImplementation(async (url: string) => (String(url).endsWith("/divisions") ? { id: "d1", slug: "open" } : {}));
-    const nameInput = h.tree().find((e) => e.type === "input" && propsOf(e).placeholder === UI["wizard.divisionNamePlaceholder"]);
-    (propsOf(nameInput!).onChange as (e: unknown) => void)({ target: { value: "Open" } });
-    const button = (label: string) => h.tree().find((e) => e.type === "button" && textOf(e).trim() === label)!;
-    (propsOf(button(UI["wizard.tab.scheduling"]!)).onClick as () => void)();
-    (propsOf(button(UI["wizard.create"]!)).onClick as () => void)();
+    walkToReview(h, "Open");
+    pressCreate(h);
     await vi.waitFor(() => expect(apiV1Mock.mock.calls.some(([url]) => String(url).endsWith("/divisions"))).toBe(true));
     return (apiV1Mock.mock.calls.find(([url]) => String(url).endsWith("/divisions"))![1] as { json: Record<string, unknown> }).json;
   }
@@ -298,12 +312,12 @@ describe("Match Day C2: the builder's tie-break order follows the variant and th
     const { m, sports } = football();
     const h = mountBuilder(sports);
     setOrder(h, m);
-    const select = h.tree().find((e) => propsOf(e)["data-testid"] === "division-builder-variant")!;
-    const from = propsOf(select).value as string;
+    const variantSelect = () => builderRules(h).tree().find((e) => propsOf(e)["data-testid"] === "division-settings-variant")!;
+    const from = propsOf(variantSelect()).value as string;
     const to = Object.keys(m.variants).find((k) => k !== from)!;
-    (propsOf(select).onChange as (e: unknown) => void)({ target: { value: to } });
-    expect(propsOf(h.tree().find((e) => propsOf(e)["data-testid"] === "division-builder-variant")!).value, "premise: the variant moved").toBe(to);
-    expect(propsOf(find(h.tree(), TiebreaksEditor)).value, "the order is the sport's again").toBeNull();
+    (propsOf(variantSelect()).onChange as (e: unknown) => void)({ target: { value: to } });
+    expect(propsOf(variantSelect()).value, "premise: the variant moved").toBe(to);
+    expect(propsOf(find(builderRules(h).tree(), TiebreaksEditor)).value, "the order is the sport's again").toBeNull();
   });
 
   it("an order edited on a league, then a knockout picked: no table, so no order is sent; the league itself sends it (the pair)", async () => {
@@ -316,7 +330,8 @@ describe("Match Day C2: the builder's tie-break order follows the variant and th
     const knockout = mountBuilder(sports);
     setOrder(knockout, m);
     pickTemplate(knockout, "knockout");
-    expect(knockout.tree().some((e) => e.type === TiebreaksEditor), "premise: a knockout has no table, so no order editor").toBe(false);
+    expect(builderRules(knockout).tree().some((e) => e.type === TiebreaksEditor), "premise: a knockout has no table, so no order editor").toBe(false);
+    expect(builderRules(league).tree().some((e) => e.type === TiebreaksEditor), "the positive pair: a league draws it").toBe(true);
     const body = await create(knockout);
     expect(Object.hasOwn(body, "tiebreakers"), "the hidden order is not sent").toBe(false);
   });

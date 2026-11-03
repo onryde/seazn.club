@@ -16,6 +16,8 @@ import { DivisionSettings } from "@/components/v2/division-settings";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
 import enUi from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
+import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
+import { engineEntrantChoice } from "@/lib/__tests__/_engine-entrant-kinds";
 
 const { apiV1Mock } = vi.hoisted(() => ({ apiV1Mock: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -40,14 +42,14 @@ const RETIRED_LABEL = en[`format.template.${RETIRED}.label`]!;
 
 /** The builder's format picker card grid, as division-builder-chess-formats.test.tsx bounds it. */
 function builderGrid(sportKey: string): string {
-  const sport: SportOption = { key: sportKey, name: sportKey, variants: [{ key: "v", name: "V", system: true }] };
+  const sport: SportOption = { key: sportKey, name: sportKey, variants: [{ key: "v", name: "V", system: true }], entrants: engineEntrantChoice(sportKey) };
   const html = renderToStaticMarkup(
     <DictProvider dict={enUi as Dict} locale="en">
       <DivisionBuilder competitionId="c1" orgSlug="org" compSlug="comp" sports={[sport]} viewerPlan="community" />
     </DictProvider>,
   );
-  const start = html.indexOf('class="grid gap-2 sm:grid-cols-3"');
-  const end = html.indexOf('class="grid gap-4 sm:grid-cols-3"', start);
+  const start = html.indexOf('data-testid="division-builder-templates"');
+  const end = html.indexOf("</fieldset>", start);
   if (start === -1 || end === -1) throw new Error("could not locate the format picker's card grid");
   return html.slice(start, end);
 }
@@ -65,7 +67,11 @@ describe("the division builder offers no Triple round robin, for any sport (owne
     for (const m of builtinModules) {
       const grid = builderGrid(m.key);
       expect(grid, m.key).not.toContain(RETIRED_LABEL);
-      const refused = m.key === CHESS ? REFUSED_FOR_CHESS : [];
+      // Chess (owner ruling 2026-10-26) and every sport whose ENGINE entrant model holds no individuals (C9 fix round 1,
+      // I5; round 3's rule - the both-kinds check picks the same sports, by format-templates.test.ts's registry
+      // invariant) are offered no pair format.
+      const kinds = engineEntrantChoice(m.key).kinds as readonly string[];
+      const refused = m.key === CHESS || !kinds.includes("individual") || !kinds.includes("pair") ? REFUSED_FOR_CHESS : [];
       const cards = grid.split('name="template"').length - 1;
       expect(cards, m.key).toBe(STAGE_TEMPLATES.length - 1 - refused.length);
       cardsSeen += cards;
@@ -91,6 +97,7 @@ function mountSettings(stages: StageProp[]) {
       logo_storage_path: null,
     },
     orgId: "org1",
+    entrantKinds: engineEntrantKinds("badminton"),
     structureLocked: false,
     lockedFields: [],
     stages,

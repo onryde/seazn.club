@@ -14,10 +14,17 @@
 //
 // The grid stays rows × sports, but a cell the PRODUCT refuses (refusedCell:
 // chess americano/mexicano since the follow-up to #1027) is planned in no
-// layer: every scenario drops there with the refusal as its reason.
+// layer: every scenario drops there with the refusal as its reason. A cell the
+// builder does not OFFER but the product does not refuse (noOrganiserPathCell:
+// americano/mexicano on a sport whose engine entrant model holds no individuals,
+// Match Day C9 review I5 and round 3's shared rule) stays offered and planned: its browser
+// cases are 🚫, its HTTP cases still run.
 import { builtinModules } from "@seazn/engine/sports";
-// The product's own stage-kind rule (chess is individual-only), import-free so plain node loads it (boundary.test.ts).
-import { sportRefusesStageKind } from "../../../apps/web/src/lib/chess-individual-only-rule.ts";
+import { effectiveEntrantModel } from "@seazn/engine/sport";
+// The product's own stage-kind rules (chess is individual-only; a pair-minting stage needs individual players),
+// import-free so plain node loads them (boundary.test.ts).
+import { entrantKindsRefuseStageKind, sportRefusesStageKind } from "../../../apps/web/src/lib/chess-individual-only-rule.ts";
+import { routeTo, type Route } from "./routing.ts";
 import {
   STAGE_TEMPLATES,
   applyStandingsCarry,
@@ -49,10 +56,11 @@ export function cellId(row: RowKey, sport: string): string {
   return `${row}|${sport}`;
 }
 
-/** division-builder.tsx:289-292 — pinned by catalogue.test.ts. */
+/** division-builder.tsx's knob state - pinned by catalogue.test.ts. Swiss rounds have no literal since Match Day C9 fix
+ *  round 1 (review I2): untouched, the builder opens them at swissRoundsDefault of the plan's opening entrants (16 -> 4). */
 export const BUILDER_DEFAULT_KNOBS: Readonly<TemplateKnobs> = Object.freeze({
   qualified: 4,
-  swissRounds: 3,
+  swissRounds: 4,
   poolCount: 2,
   legs: 1,
 });
@@ -189,6 +197,38 @@ export function refusedCell(row: RowKey, sport: string): string | null {
   if (out === undefined) {
     out = stagesForRow(row).some((s) => sportRefusesStageKind(sport, s.kind)) ? REFUSED_CELL_REASON : null;
     refusedMemo.set(id, out);
+  }
+  return out;
+}
+
+/** The entrant kinds the sport's ENGINE module declares (`effectiveEntrantModel(module.entrantModel, null).kinds`): what
+ *  the division builder's page hands the format offer (format-templates.ts templatesForSport). */
+export function sportEntrantKinds(sport: string): readonly string[] {
+  const m = builtinModules.find((x) => x.key === sport);
+  if (m === undefined) throw new Error(`catalogue: '${sport}' is no engine sport (${SPORT_KEYS.join(", ")})`);
+  return effectiveEntrantModel(m.entrantModel ?? null, null).kinds;
+}
+
+/** Where a no-organiser-path cell's browser cases are routed: the americano, mexicano and ladder wave owes the rest of
+ *  Match Day C9 review I5 (option 1). Controller ruling 2026-11-03 (option 2). */
+export const NO_ORGANISER_PATH_ROUTE: Route = routeTo(
+  "W7",
+  "no organiser path: the division builder does not offer americano or mexicano to a sport whose engine entrant model holds no individuals (Match Day C9 review I5, option 2; round 3's shared rule). Owed: the stage create refuses it for team-only sports, the cells become refused, and the evidence is re-recorded on CI",
+);
+
+const noPathMemo = new Map<string, Route | null>();
+/** The route of a cell the builder does not OFFER although the product does not refuse it, or null when the builder
+ *  offers it (or the product refuses it: refusedCell). A stage of the row's own bodies is a pair-minting kind the
+ *  sport's ENGINE entrant model cannot play (entrantKindsRefuseStageKind - the predicate templatesForSport reads).
+ *  The cell stays OFFERED: the stage create still takes it, so its HTTP cases plan as before, while every browser case
+ *  on it is 🚫 (layers.ts planL1Grid, planL2) - no screen reaches it. */
+export function noOrganiserPathCell(row: RowKey, sport: string): Route | null {
+  const id = cellId(row, sport);
+  let out = noPathMemo.get(id);
+  if (out === undefined) {
+    const kinds = sportEntrantKinds(sport);
+    out = refusedCell(row, sport) === null && stagesForRow(row).some((s) => entrantKindsRefuseStageKind(kinds, s.kind)) ? NO_ORGANISER_PATH_ROUTE : null;
+    noPathMemo.set(id, out);
   }
   return out;
 }

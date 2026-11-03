@@ -201,7 +201,8 @@ test("a played division keeps its slot, and both surfaces say so", async ({ page
   // Surface 2: the same refusal through the wizard names the invisible cause.
   await page.goto(await competitionPath(page.request, compId, "/d/new"));
   await page.getByRole("textbox").first().fill("Fifth");
-  await page.getByRole("button", { name: "Scheduling", exact: true }).click();
+  // Match Day C9: the wizard is four steps; the Review step holds Create.
+  await page.getByRole("button", { name: "Review", exact: true }).click();
   await page.getByRole("button", { name: /create division/i }).click();
   await expect(
     page.locator('[data-feature="divisions.per_competition.max"]'),

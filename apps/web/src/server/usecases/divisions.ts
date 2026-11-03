@@ -1502,3 +1502,14 @@ export async function patchDivision(
   }
   return { ...row, refused, stagesKeptPinned };
 }
+
+/** The sports this organisation has run divisions in, most recent first (C9 R2: the builder's Sport picker leads with
+ *  them, and opens on the first). Archived divisions count - they were run. Divisions written in one transaction share
+ *  `now()`, so ties break on the sport key (C9 review 3, m1): the order, and with it the builder's default sport, never
+ *  flips between loads. Run inside the caller's tenant transaction. */
+export async function recentDivisionSports(tx: Tx, orgId: string): Promise<string[]> {
+  const rows = await tx<{ sport_key: string }[]>`
+    select sport_key from divisions where org_id = ${orgId}
+    group by sport_key order by max(created_at) desc, sport_key`;
+  return rows.map((r) => r.sport_key);
+}

@@ -94,6 +94,10 @@ vi.mock("@/server/usecases/stream-sessions", () => ({
 
 import DivisionPage from "../page";
 import { DivisionSettings } from "@/components/v2/division-settings";
+import { getDivision } from "@/server/usecases/divisions";
+import { resolveModule } from "@/server/engine-db";
+import { builtinModules } from "@seazn/engine/sports";
+import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 function findAll(node: ReactNode, type: unknown, out: ReactElement[] = []): ReactElement[] {
   if (Array.isArray(node)) {
@@ -186,5 +190,45 @@ describe("the division page hands the settings form its two locks, each from its
     const props = await settingsProps();
     expect(props.structureLocked).toBe(false);
     expect(props.lockedFields).toEqual(LOCKS);
+  });
+});
+
+// C9 fix round 1 (I5): the Format select offers no pair format (americano/mexicano) where the division's entrant model
+// holds no individuals (round 3's shared rule), so the page must hand the form THIS division's effective model - the engine's
+// declaration for the sport, narrowed by the division's own `config.entrants`.
+describe("the division page hands the settings form the division's entrant kinds (C9 fix round 1, I5)", () => {
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.listStages.mockReset().mockResolvedValue([]);
+    stagesSpies.getStageRosterDrift.mockReset().mockResolvedValue({ ghosts: [], unplaced: [] });
+    competitionsSpy.getCompetition.mockReset().mockResolvedValue({ id: "comp-1", frozen: false, visibility: "public", slug: "comp-one" });
+    fixturesSpy.listDivisionFixtures.mockReset().mockResolvedValue([]);
+    lockSpy.divisionLockedFields.mockReset().mockResolvedValue([]);
+  });
+
+  /** The page's pinned module, with the REAL engine entrant model of the sport (the file's mock declares none). */
+  async function withEngineModel<T>(sportKey: string, run: () => Promise<T>): Promise<T> {
+    const mocked = vi.mocked(resolveModule);
+    const base = mocked.getMockImplementation()!;
+    const entrantModel = builtinModules.find((m) => m.key === sportKey)!.entrantModel;
+    mocked.mockImplementation(((...a: Parameters<typeof resolveModule>) => ({ ...(base as (...x: unknown[]) => object)(...a), entrantModel })) as never);
+    try {
+      return await run();
+    } finally {
+      mocked.mockImplementation(base);
+    }
+  }
+
+  it("no override: the engine's own kinds for the sport (badminton holds individuals and pairs)", async () => {
+    const props = (await withEngineModel("badminton", settingsProps)) as unknown as { entrantKinds: readonly string[] };
+    expect(props.entrantKinds).toEqual(engineEntrantKinds("badminton"));
+    expect(props.entrantKinds).toEqual(expect.arrayContaining(["individual", "pair"]));
+  });
+
+  it("an override narrows it: a badminton division stored as individuals only hands the form ['individual']", async () => {
+    const base = await (getDivision as unknown as () => Promise<Record<string, unknown>>)();
+    vi.mocked(getDivision).mockResolvedValueOnce({ ...base, config: { entrants: { kinds: ["individual"], defaultKind: "individual" } } } as never);
+    const props = (await withEngineModel("badminton", settingsProps)) as unknown as { entrantKinds: readonly string[] };
+    expect(props.entrantKinds).toEqual(["individual"]);
   });
 });

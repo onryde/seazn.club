@@ -1192,6 +1192,8 @@ export default async function DivisionPage({
             orgId={auth.orgId}
             onlineChessOffered={onlineChessOn}
             swissField={activeEntrantIds.length}
+            // C9 fix round 1 (I5), round 3: the Format select offers no pair format where this model holds no individuals.
+            entrantKinds={entrantModel.kinds}
             // W2c Task 20 (S4): two locks, two sources. The stage STRUCTURE locks on any fixture row (replaceStages); the
             // RULES lock per field and per STARTED stage that inherits them - the same read the save asks (patchDivision).
             structureLocked={formatAlreadyLocked(fixtures.length)}

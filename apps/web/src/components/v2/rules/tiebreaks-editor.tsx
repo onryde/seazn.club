@@ -81,7 +81,7 @@ export function shownBadge(badge: TiebreakBadge): ShownBadge {
 const stepNameOf = (msg: Msg, sportKey: string) => (key: string): string => msg(unitLabelKey(key, sportKey));
 
 /** The phone row's summary: the first three real criteria. */
-function foldedSummary(keys: readonly TiebreakerKey[], name: (k: string) => string): string {
+export function foldedSummary(keys: readonly TiebreakerKey[], name: (k: string) => string): string {
   const steps = foldTiebreaks(keys).steps;
   return steps.slice(0, 3).map(name).join(", ") + (steps.length > 3 ? ", …" : "");
 }

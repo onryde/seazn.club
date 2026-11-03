@@ -61,7 +61,7 @@ function button(h: ReturnType<typeof mount>, label: string) {
   return el;
 }
 
-/** Name → Scheduling tab → Create, the way the organiser gets there. */
+/** Name → the Review step (each step before it judged) → Create, the way the organiser gets there. */
 async function submitFromWizard(h: ReturnType<typeof mount>) {
   const nameInput = h
     .tree()
@@ -73,7 +73,7 @@ async function submitFromWizard(h: ReturnType<typeof mount>) {
   if (!nameInput) throw new Error("name input not found");
   (propsOf(nameInput).onChange as (e: unknown) => void)({ target: { value: "Open" } });
 
-  (propsOf(button(h, uiEn["wizard.tab.scheduling"])).onClick as () => void)();
+  (propsOf(button(h, uiEn["divBuilder.step.review"])).onClick as () => void)();
   (propsOf(button(h, uiEn["wizard.create"])).onClick as () => void)();
   // The Create handler is `() => void submit()`, so there is no promise to
   // await — flush the queue instead.

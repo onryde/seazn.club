@@ -14,6 +14,7 @@ import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
+import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -64,6 +65,7 @@ function settings(locked: boolean) {
       inherited_camera_policy: "off",
     },
     orgId: "org1",
+    entrantKinds: engineEntrantKinds("boardgame"),
     variants: [{ key: "classical", name: "Classical" }],
     structureLocked: locked,
     // W2c: fixtures lock the structure; the variant locks once a stage that plays it has started. "Locked" is both.

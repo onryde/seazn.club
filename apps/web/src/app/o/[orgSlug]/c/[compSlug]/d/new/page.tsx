@@ -1,6 +1,14 @@
 export const dynamic = "force-dynamic";
-// Division builder: sport → variant → eligibility → stage graph (PROMPT-15).
+// The new-division builder (Match Day C9): Who plays / Format / Division rules / Review.
 import { redirect } from "next/navigation";
+import { effectiveEntrantModel } from "@seazn/engine/sport";
+import { resolveModule } from "@/server/engine-db";
+import { getDictionary, t } from "@/lib/i18n";
+import { resolveLocale } from "@/lib/resolve-locale";
+import { pointsLineDict, rulesLineDict } from "@/lib/rules-line";
+import { onlineChessOffered } from "@/server/usecases/external-play";
+import { competitionCameraPolicy } from "@/server/external-play/camera-policy";
+import { templateLocksFor } from "@/server/usecases/format-gates";
 import { requireCompetitionPage } from "@/server/page-auth";
 import { routes } from "@/lib/routes";
 import { getCompetition } from "@/server/usecases/competitions";
@@ -13,6 +21,7 @@ import { sportOptionsFrom, type VariantRow } from "@/lib/sport-options";
 // P9 scope item 5: org venues+courts feed the Scheduling step's court
 // multi-picker.
 import { listVenues } from "@/server/usecases/venues";
+import { recentDivisionSports } from "@/server/usecases/divisions";
 
 export default async function NewDivisionPage({
   params,
@@ -24,7 +33,7 @@ export default async function NewDivisionPage({
   const { auth, canEdit } = page;
   const id = page.competition.id;
   if (!canEdit) redirect(routes.competition(orgSlug, compSlug));
-  const [competition, constraintsAllowed, explainArchivedSlots, venues, planKey] = await Promise.all([
+  const [competition, constraintsAllowed, explainArchivedSlots, venues, planKey, doubleElimAllowed, advancedAllowed, carryAllowed, onlineChess] = await Promise.all([
     getCompetition(auth, id),
     // A multi-venue schedule seed is Pro (doc 12 §5) — gate the list in the
     // wizard rather than letting the settings PUT 402 after create.
@@ -41,30 +50,57 @@ export default async function NewDivisionPage({
     // P9 scope item 5: the Scheduling step's court multi-picker.
     listVenues(auth),
     orgPlanKey(auth.orgId),
+    // The stage writers' own gates (createStages: formats.double_elim, formats.advanced with the competition's event pass,
+    // standings.carry_over without), asked here so a format this organisation cannot create is said on the Format step
+    // instead of as a 402 after the division already exists.
+    hasFeature(auth.orgId, "formats.double_elim", id),
+    hasFeature(auth.orgId, "formats.advanced", id),
+    hasFeature(auth.orgId, "standings.carry_over"),
+    onlineChessOffered(auth),
   ]);
+  // m6 (C9 fix round 1): the competition's camera policy, named under the builder's camera select - read only where the
+  // select is offered (online chess), as the division page reads it only for a chess division.
+  const inheritedCameraPolicy = onlineChess ? await competitionCameraPolicy(id) : "off";
+  const locale = await resolveLocale();
+  const [uiDict, publicDict] = await Promise.all([getDictionary(locale, "ui"), getDictionary(locale, "public")]);
+  // Template → the feature it needs and this organisation lacks (format-gates.ts templateLocksFor: each template's own
+  // stage kinds, with the gate predicates createStages uses).
+  const templateLocks = templateLocksFor({ doubleElim: doubleElimAllowed, advanced: advancedAllowed });
   const viewerPlan = viewerPlanFrom(planKey);
 
   // Sport catalog + variant presets (system rows are tenant-readable, org
   // presets scoped by RLS — doc 07).
-  const sports = await withTenant(auth.orgId, async (tx) => {
-    const sportRows = await tx<{ key: string; name: string }[]>`
-      select key, name from sports order by name`;
+  const { sports, recentSports } = await withTenant(auth.orgId, async (tx) => {
+    const sportRows = await tx<{ key: string; name: string; module_version: string }[]>`
+      select key, name, module_version from sports order by name`;
+    // C9 R2 (owner 2026-11-03): the Sport picker leads with the sports this organisation has run divisions in, most
+    // recent first (archived divisions count: they were run); ties break on the sport key (review 3, m1).
+    const recent = await recentDivisionSports(tx, auth.orgId);
     // `config` is the variant's preset: the builder counts cricket's overs in the variant's own over length with it.
     const variantRows = await tx<VariantRow[]>`
       select sport_key, key, name, is_system, config from sport_variants
       order by is_system desc, name`;
-    return sportOptionsFrom(sportRows, variantRows);
+    // The entrant model of the module the create will pin (createDivision reads the same `module_version`).
+    const versionOf = new Map(sportRows.map((r) => [r.key, r.module_version]));
+    const options = sportOptionsFrom(sportRows, variantRows, (key) => {
+      const version = versionOf.get(key);
+      if (version === undefined) return undefined;
+      try {
+        const model = effectiveEntrantModel(resolveModule(key, version).entrantModel ?? null, null);
+        return { kinds: model.kinds, defaultKind: model.defaultKind };
+      } catch {
+        // A sport row with no shipped module: nothing to ask, nothing sent.
+        return undefined;
+      }
+    });
+    return { sports: options, recentSports: recent };
   });
 
   return (
     <>
       <main className="mx-auto max-w-3xl px-4 py-8">
-        <h1 className="mb-1 text-xl font-semibold tracking-tight text-slate-900">
-          New division
-        </h1>
-        <p className="mb-6 text-sm text-slate-500">
-          in <span className="font-medium">{competition.name}</span>
-        </p>
+        <h1 className="mb-1 text-xl font-semibold tracking-tight text-slate-900">{t(uiDict, "divBuilder.title")}</h1>
+        <p className="mb-6 min-w-0 break-words text-sm text-slate-600">{t(uiDict, "divBuilder.in", { competition: competition.name })}</p>
         <DivisionBuilder
           competitionId={id}
           orgSlug={orgSlug}
@@ -78,6 +114,13 @@ export default async function NewDivisionPage({
           constraintsAllowed={constraintsAllowed}
           archivedSlotsExplainRefusal={explainArchivedSlots}
           viewerPlan={viewerPlan}
+          onlineChessOffered={onlineChess}
+          inheritedCameraPolicy={inheritedCameraPolicy}
+          ruleDict={rulesLineDict(publicDict)}
+          pointsDict={pointsLineDict(publicDict)}
+          templateLocks={templateLocks}
+          carryAllowed={carryAllowed}
+          recentSports={recentSports}
         />
       </main>
     </>

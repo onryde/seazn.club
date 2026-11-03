@@ -2,9 +2,9 @@
 // longer OFFERS americano or mexicano for chess — both rotate players into pair entrants, and the server refuses the
 // stage (422 CHESS_INDIVIDUAL_ONLY). The picker renders the sport's offer (format-templates.ts templatesForSport).
 //
-// Same plain-SSR harness as division-builder-format-picker-i18n.test.tsx: the Format tab is CSS-hidden, not
-// JS-conditional, so its cards are in a renderToStaticMarkup pass. The builder starts on `sports[0]`, so each render
-// names the sport it is about first. Expected cards come from the ruling (chess loses americano and mexicano) and the
+// Same plain-SSR harness as division-builder-format-picker-i18n.test.tsx: the Format step is CSS-hidden, not
+// JS-conditional, so its cards are in a renderToStaticMarkup pass. The builder starts on the first tile shown (C9 round
+// 3: the organisation's latest sport), so each render names the sport it is about as that history, and checks it. Expected cards come from the ruling (chess loses americano and mexicano) and the
 // en dictionary, never from templatesForSport.
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -13,6 +13,7 @@ import { STAGE_TEMPLATES } from "@/lib/format-templates";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
+import { engineEntrantChoice } from "@/lib/__tests__/_engine-entrant-kinds";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -20,8 +21,8 @@ vi.mock("next/navigation", () => ({
 }));
 
 const en = enUi as Record<string, string>;
-const CHESS: SportOption = { key: "boardgame", name: "Chess", variants: [{ key: "blitz", name: "Blitz", system: true }] };
-const BADMINTON: SportOption = { key: "badminton", name: "Badminton", variants: [{ key: "bwf", name: "BWF", system: true }] };
+const CHESS: SportOption = { key: "boardgame", name: "Chess", variants: [{ key: "blitz", name: "Blitz", system: true }], entrants: engineEntrantChoice("boardgame") };
+const BADMINTON: SportOption = { key: "badminton", name: "Badminton", variants: [{ key: "bwf", name: "BWF", system: true }], entrants: engineEntrantChoice("badminton") };
 const REFUSED_FOR_CHESS = ["americano", "mexicano"];
 // Retired from every sport's offer (owner ruling 2026-11-01, Match Day D1): triple-rr-retired.test.tsx sweeps it.
 const OFFERED = STAGE_TEMPLATES.filter((t) => t.key !== "triple_rr");
@@ -29,12 +30,15 @@ const OFFERED = STAGE_TEMPLATES.filter((t) => t.key !== "triple_rr");
 function picker(first: SportOption): string {
   const html = renderToStaticMarkup(
     <DictProvider dict={enUi as Dict} locale="en">
-      <DivisionBuilder competitionId="c1" orgSlug="org" compSlug="comp" sports={[first, first === CHESS ? BADMINTON : CHESS]} viewerPlan="community" />
+      <DivisionBuilder competitionId="c1" orgSlug="org" compSlug="comp" sports={[first, first === CHESS ? BADMINTON : CHESS]} recentSports={[first.key]} viewerPlan="community" />
     </DictProvider>,
   );
+  // The render is about `first`: its tile is the checked one (`checked=""` on the one radio of that value).
+  const opened = [...html.matchAll(/<input[^>]*name="division-sport"[^>]*>/g)].map((m) => m[0]).filter((t) => /\schecked=""/.test(t));
+  if (opened.length !== 1 || !opened[0]!.includes(`value="${first.key}"`)) throw new Error(`the builder did not open on ${first.key}`);
   // The picker's own card grid, bounded as division-builder-format-picker-i18n.test.tsx bounds it.
-  const start = html.indexOf('class="grid gap-2 sm:grid-cols-3"');
-  const end = html.indexOf('class="grid gap-4 sm:grid-cols-3"', start);
+  const start = html.indexOf('data-testid="division-builder-templates"');
+  const end = html.indexOf("</fieldset>", start);
   if (start === -1 || end === -1) throw new Error("could not locate the format picker's card grid");
   return html.slice(start, end);
 }

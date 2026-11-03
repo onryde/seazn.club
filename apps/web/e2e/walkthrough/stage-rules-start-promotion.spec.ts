@@ -55,6 +55,8 @@ import {
   createCompetitionViaUi,
   divisionPath,
   openStagePanel,
+  pickBuilderSport,
+  showAllFormats,
 } from "../helpers";
 // Directive-free and JSX-free on purpose (design §T0), which is why a spec can
 // import it. The picker's own option label, so a rename of "Best of 3" moves
@@ -228,14 +230,16 @@ test("an organiser gives the league stage its own match format, and the Finals b
   compId = await createCompetitionViaUi(page, `Stage Rules ${TAG}`, "public");
 
   // The division, through the wizard, with the format an organiser picks when
-  // they want two stages: League + Finals. `createDivisionViaUi` cannot express
-  // this — it never visits the Format tab, so it always ships the default
-  // single `league` stage, and a one-stage division has no second stage for the
-  // per-stage lock to be ABOUT.
+  // they want two stages: League + Finals, picked on the Format step by hand
+  // (a one-stage division has no second stage for the per-stage lock to be
+  // ABOUT, and the builder otherwise opens on its top suggestion, owner Q5).
   await page.goto(await competitionPath(request, compId, "/d/new"));
   await page.getByRole("textbox").first().fill(`Singles ${TAG}`);
-  await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption(SPORT);
+  await pickBuilderSport(page, SPORT);
   await page.getByRole("button", { name: L["wizard.tab.format"], exact: true }).click();
+  // Match Day C9: five formats are suggested for the plan; the rest of the
+  // sport's offer is under Show more (C9 R2).
+  await showAllFormats(page);
   // The radio itself is `sr-only` inside its card `<label>`, and the label's
   // text is title + help, so an exact accessible-name match cannot address it.
   // Scope to the cards that actually carry a `template` radio, then pick by the
@@ -246,7 +250,7 @@ test("an organiser gives the league stage its own match format, and the Finals b
     .filter({ hasText: L["format.template.league_ko.label"] });
   await leagueKo.click();
   await expect(leagueKo.locator("input")).toBeChecked();
-  await page.getByRole("button", { name: L["wizard.tab.scheduling"], exact: true }).click();
+  await page.getByRole("button", { name: L["divBuilder.step.review"], exact: true }).click();
   await page.getByRole("button", { name: /create division/i }).click();
   await page.waitForURL(/\/o\/[^/]+\/c\/[^/]+\/d\/(?!new(?:$|[/?]))[^/?]+/, { timeout: STEP_MS });
   const divSlug = page.url().match(/\/d\/([^/?]+)/)![1]!;
