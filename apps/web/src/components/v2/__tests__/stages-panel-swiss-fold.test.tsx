@@ -1,14 +1,13 @@
 // Match Day PB1 x W3 (the merge of #1105 into the Swiss branch): a COMPLETED stage's card is one line until someone opens it
 // (stages-panel-collapse.test.tsx owns that rule for every kind). W3 put three things of its own in the Swiss card's HEADER - the
-// shape legend (PB1 already folds it), the pending-latecomer lines (T10) and the chess colours switch (T12) - and a header row
-// that stays drawn on a folded card makes it two or three lines, not one. The merge gates the last two on `!folded`; this pins
-// that, with the open card's positive pair beside every absence.
+// shape legend (PB1 already folds it), the pending-latecomer lines (T10) and the chess colours switch (T12, removed by UI5 item 4)
+// - and a header row that stays drawn on a folded card makes it two or three lines, not one. The merge gates the latecomer
+// lines on `!folded`; this pins that, with the open card's positive pair beside every absence.
 //
 // Node env, no DOM (AGENTS.md class 2): the fold's DEFAULT is read off the real StagesPanel in static markup. The attention seam
 // (a Swiss with a cut-drift warning starts open) is in swiss-cut-drift-warning.test.tsx, next to the warning it opens for.
 //
-// Another sport: the chess switch is a boardgame control (`isChessSport`), so the card is a chess one; the legend and the
-// latecomer lines are sport-blind, which the fold gate does not look at.
+// One sport (chess): the legend and the latecomer lines are sport-blind, which the fold gate does not look at.
 import { describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -89,10 +88,11 @@ const count = (html: string, testId: string): number => html.split(`data-testid=
 const expandedOf = (html: string): string | null => /data-testid="stage-collapse-toggle"[^>]*aria-expanded="(true|false)"|aria-expanded="(true|false)"[^>]*data-testid="stage-collapse-toggle"/.exec(html)?.slice(1).find((g) => g !== undefined) ?? null;
 
 /** The header rows W3 owns on a Swiss card, by the testid each carries. */
-const W3_HEADER_ROWS = ["stage-swiss-legend", "stage-swiss-latecomer", "stage-chess"] as const;
+// (The chess colours switch was a third, until UI5 item 4 removed it: a chess Swiss always balances colours.)
+const W3_HEADER_ROWS = ["stage-swiss-legend", "stage-swiss-latecomer"] as const;
 
 describe("PB1 x W3: a completed Swiss card folds to one line - W3's header rows fold with it", () => {
-  it("folded: none of the legend, the latecomer line and the chess switch is drawn; the open card (attention) draws every one", () => {
+  it("folded: neither the legend nor the latecomer line is drawn; the open card (attention) draws every one", () => {
     const open = panel({ attentionStageIds: [S] });
     expect(expandedOf(open), "premise: the attention card is open").toBe("true");
     for (const row of W3_HEADER_ROWS) expect(count(open, row), `open: ${row} is drawn`).toBeGreaterThan(0);
@@ -108,13 +108,12 @@ describe("PB1 x W3: a completed Swiss card folds to one line - W3's header rows 
     expect(checked, "anti-vacuity: every W3 header row checked").toBe(W3_HEADER_ROWS.length);
   });
 
-  it("a stage still running is never folded: its chess switch and latecomer line are drawn (the gate asks `folded`, not the stage's kind)", () => {
+  it("a stage still running is never folded: its latecomer line is drawn (the gate asks `folded`, not the stage's kind)", () => {
     const running = panel({
       stages: [swissStage("active")],
       fixtures: playedRounds().map((f, i) => (i === 3 ? { ...f, status: "in_play", outcome: null } : f)),
     });
     expect(count(running, "stage-collapse-toggle"), "premise: a running stage has no toggle").toBe(0);
-    expect(count(running, "stage-chess"), "chess switch").toBe(1);
     expect(count(running, "stage-swiss-latecomer"), "latecomer line").toBe(1);
   });
 

@@ -7,7 +7,8 @@ import "server-only";
 //
 //   `patchSwissStage`  `PATCH /stages/{id}` `{ rounds?, chess? }`: before the stage's first START, the count moves (shells
 //                      of removed rounds deleted, shells of added rounds minted for each round's own field) and the chess
-//                      switch moves; after it, SWISS_ROUNDS_LOCKED `{ canFinish, canAddRound }`.
+//                      flag moves — never OFF on a chess division (SWISS_CHESS_ALWAYS_ON, UI5 item 4: the desk's switch is
+//                      gone); after it, SWISS_ROUNDS_LOCKED `{ canFinish, canAddRound }`.
 //   `addSwissRound`    `POST /stages/{id}/swiss/add-round`: round N+1 for the field it will pair, within the hard maximum
 //                      (rulebook §3.1/§3.2), until the Swiss is over.
 //   `finishSwissNow`   `POST /stages/{id}/swiss/finish` (W3 T13, RB3-20, X-SW-26): end the Swiss after round k, the latest
@@ -36,6 +37,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { EngineError } from "@seazn/engine/core";
+import { isChessSport } from "@/lib/chess-individual-only-rule";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { isRootSwissStage } from "@/lib/open-entry-stages";
@@ -437,6 +439,11 @@ async function competitionOf(tx: Tx, divisionId: string): Promise<string> {
   return division!.competition_id;
 }
 
+async function divisionSport(tx: Tx, divisionId: string): Promise<string> {
+  const [division] = await tx<{ sport_key: string }[]>`select sport_key from divisions where id = ${divisionId}`;
+  return division!.sport_key;
+}
+
 export interface PatchSwissStageResult {
   rounds: number;
   chess: boolean;
@@ -450,7 +457,8 @@ export interface PatchSwissStageResult {
  * `PATCH /stages/{id}` (X-SW-17, BG-SW-1): the round count and the chess switch, until the stage's first start.
  *
  * Refused, nothing written: 404 (not this organisation's stage); STAGE_NOT_SWISS 422; SCHEDULE_LOCKED 422 (a frozen
- * timetable, as Unpair); SWISS_ROUNDS_LOCKED 409 `{ canFinish, canAddRound }` once any board of the stage has started
+ * timetable, as Unpair); SWISS_CHESS_ALWAYS_ON 422 for `chess: false` on a chess division, before the start or after (UI5
+ * item 4); SWISS_ROUNDS_LOCKED 409 `{ canFinish, canAddRound }` once any board of the stage has started
  * (`swissBoardStartedSql`, read over EVERY row — so a shell this edit would delete never holds data), and SWISS_OVER 422
  * `{ canFinish: false, canAddRound: false }` instead once the stage is complete or a later stage is under way (batch-4
  * ruling m1); for `rounds`,
@@ -466,6 +474,10 @@ export interface PatchSwissStageResult {
 export async function patchSwissStage(auth: AuthCtx, stageId: string, body: PatchSwissStage): Promise<PatchSwissStageResult> {
   const write = await withTenant(auth.orgId, async (tx) => {
     const stage = await lockedSwissStage(tx, stageId);
+    // UI5 item 4 (owner 2026-11-03): a chess Swiss always balances colours. Turning them off is refused before any other
+    // question — it can never succeed, started or not, so a started stage hears the permanent reason, not the start lock.
+    // A stage stored off before this is left as it is (no migration): switching it ON still goes through below.
+    if (body.chess === false && isChessSport(await divisionSport(tx, stage.division_id))) throw swissRefusal("SWISS_CHESS_ALWAYS_ON");
     const from = storedRounds(stage);
     const to = body.rounds ?? from;
     const rows = await stageRows(tx, stageId);

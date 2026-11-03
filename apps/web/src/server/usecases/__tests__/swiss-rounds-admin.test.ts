@@ -75,6 +75,7 @@ type Kind = "individual" | "pair" | "team";
 const RULED_STATUS = {
   STAGE_NOT_SWISS: 422, // never succeeds on that stage
   SWISS_CHESS_LOCKED: 422, // Phase 2 ruling: the colours' own code, 422
+  SWISS_CHESS_ALWAYS_ON: 422, // UI5 item 4 (owner 2026-11-03): a chess Swiss always balances colours - never succeeds as sent
   SWISS_NO_ROUND_LEFT: 409, // T10: resolvable by Add a round
   SWISS_OVER: 422, // T12 brief: the Swiss is over, nothing resolves it
   SWISS_ROUNDS_BELOW_SEATED: 409, // T12 ruling: Unpair resolves it
@@ -358,15 +359,19 @@ describe.runIf(HAS_DB)("X-SW-17 the round count is editable until the first fixt
       expect(await rowsOf(rig.stageId), "nothing written").toEqual(rows);
       expect(await ledgerState(rig.divisionId)).toEqual(ledger);
       expect(await storedConfig(rig.stageId)).toEqual(config);
-      // The chess colours are fixed with it (only before the first start can the toggle move) — refused with their OWN
-      // code (controller ruling, Phase 2: never the rounds sentence, which offers recoveries a colour change has not).
+      // The chess colours are fixed with it — refused with their OWN code (controller ruling, Phase 2: never the rounds
+      // sentence, which offers recoveries a colour change has not).
       await expect(patchSwissStage(rig.auth, rig.stageId, { chess: true })).rejects.toMatchObject(refusal("SWISS_CHESS_LOCKED"));
-      await expect(patchSwissStage(rig.auth, rig.stageId, { chess: false })).rejects.toMatchObject(refusal("SWISS_CHESS_LOCKED"));
-      // A body naming the count as well is a rounds change: the rounds refusal, with its recoveries.
-      await expect(patchSwissStage(rig.auth, rig.stageId, { rounds: 4, chess: false })).rejects.toMatchObject({
-        ...refusal("SWISS_ROUNDS_LOCKED"),
-        extra: { canFinish: false, canAddRound: true },
-      });
+      // UI5 item 4 (owner 2026-11-03): on chess (the boardgame key, the rulebook's chess sport) switching the colours OFF is
+      // refused whether or not play has started — that answer comes first, and a body naming the count as well is the same
+      // refusal. Another sport keeps the start lock's answers.
+      const chess = s.sport === "boardgame";
+      await expect(patchSwissStage(rig.auth, rig.stageId, { chess: false })).rejects.toMatchObject(
+        refusal(chess ? "SWISS_CHESS_ALWAYS_ON" : "SWISS_CHESS_LOCKED"),
+      );
+      await expect(patchSwissStage(rig.auth, rig.stageId, { rounds: 4, chess: false })).rejects.toMatchObject(
+        chess ? refusal("SWISS_CHESS_ALWAYS_ON") : { ...refusal("SWISS_ROUNDS_LOCKED"), extra: { canFinish: false, canAddRound: true } },
+      );
       expect(await rowsOf(rig.stageId), "nothing written by the colour refusals").toEqual(rows);
       expect(await ledgerState(rig.divisionId)).toEqual(ledger);
       expect(await storedConfig(rig.stageId)).toEqual(config);
@@ -951,12 +956,14 @@ describe.runIf(HAS_DB)("C11 the offered Add a round never leads to SWISS_ROUNDS_
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
-// The chess colours toggle (BG-SW-1, RB3-10 "can be switched off")
+// Chess colours: always on for a chess Swiss (BG-SW-1; UI5 item 4, owner 2026-11-03 — the desk's switch is gone, and the
+// PATCH refuses turning them off). A stage stored off before this is left as it is (no data migration).
 // ---------------------------------------------------------------------------------------------------------------------
 
-describe.runIf(HAS_DB)("BG-SW-1 the chess colours toggle", () => {
-  // Boardgame only: the chess default and its lot are a boardgame rule (T8, `defaultSwissChess`).
-  const BOARDGAME = SPORTS[1];
+describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", () => {
+  // Boardgame only: the chess default and its lot are a boardgame rule (T8, `defaultSwissChess`); badminton is the other
+  // sport, for the positive pair (the refusal is the chess rule's, not every Swiss's).
+  const [BADMINTON, BOARDGAME] = SPORTS;
 
   async function roundOnePairRow(divisionId: string) {
     const [row] = await sql<{ payload: Record<string, unknown> }[]>`
@@ -965,38 +972,58 @@ describe.runIf(HAS_DB)("BG-SW-1 the chess colours toggle", () => {
       order by seq desc limit 1`;
     return row!.payload;
   }
+  /** A stage stored with colours off before UI5 (the switch could write it then): the legacy row, by SQL. */
+  async function legacyOff(stageId: string) {
+    await sql`update stages set config = config || ${sql.json({ chess: false })} where id = ${stageId}`;
+  }
 
-  it("BG-SW-1 chess can be switched off before start and is then off at Pair", async () => {
+  it("UI5 item 4: switching a chess Swiss's colours off is 422 SWISS_CHESS_ALWAYS_ON before the start, nothing written; Pair draws the colour lot", async () => {
     const rig = await swissRig(BOARDGAME, 4, 3);
     expect((await storedConfig(rig.stageId)).chess, "premise: a new boardgame Swiss is stored with chess on (T8)").toBe(true);
-    const out = await patchSwissStage(rig.auth, rig.stageId, { chess: false });
-    expect(out).toMatchObject({ rounds: 3, chess: false, swiss_rounds: null, shells: { added: 0, removed: 0, slots_freed: 0 } });
-    expect((await storedConfig(rig.stageId)).chess).toBe(false);
-    expect(await roundsRows(rig.divisionId), "a colour change is no round-count change: no barrier").toEqual([]);
+    const config = await storedConfig(rig.stageId);
+    let refused = 0;
+    for (const body of [{ chess: false }, { rounds: 2, chess: false }]) {
+      await expect(patchSwissStage(rig.auth, rig.stageId, body), JSON.stringify(body)).rejects.toMatchObject(refusal("SWISS_CHESS_ALWAYS_ON"));
+      expect(await storedConfig(rig.stageId), `${JSON.stringify(body)}: nothing written (the count included)`).toEqual(config);
+      refused++;
+    }
+    expect(refused, "anti-vacuity: refused bodies").toBe(2);
+    expect(await roundsRows(rig.divisionId), "no round-count change either").toEqual([]);
+    // Its cleared pair: `chess: true` (a no-op here) and the count alone still go through on the same stage.
+    expect(await patchSwissStage(rig.auth, rig.stageId, { chess: true })).toMatchObject({ rounds: 3, chess: true });
+    expect(await patchSwissStage(rig.auth, rig.stageId, { rounds: 2 })).toMatchObject({ rounds: 2, chess: true });
     await pair(rig);
     await pair(rig); // Pair round 1
-    expect(await roundOnePairRow(rig.divisionId), "no colour lot at Pair: chess is off").not.toHaveProperty("colour_lot");
+    expect(await roundOnePairRow(rig.divisionId), "chess on: round 1 coloured by lot").toHaveProperty("colour_lot");
 
-    // The positive pair: left on, round 1's Pair draws the colour lot.
-    const on = await swissRig(BOARDGAME, 4, 3);
-    await pair(on);
-    await pair(on);
-    expect(await roundOnePairRow(on.divisionId), "chess on: round 1 coloured by lot").toHaveProperty("colour_lot");
+    // Another sport: the refusal is chess's, not every Swiss's — badminton's `chess: false` still goes through.
+    const other = await swissRig(BADMINTON, 4, 3);
+    expect(await patchSwissStage(other.auth, other.stageId, { chess: false })).toMatchObject({ rounds: 3, chess: false });
   });
 
-  it("BG-SW-1 the toggle survives a Format re-Apply (T8 review m6: chess rides StageCarry)", async () => {
+  it("UI5 item 4: a chess Swiss stored off before the change is left as it is — Pair keeps it off, a re-Apply carries it, ON goes through", async () => {
     const rig = await swissRig(BOARDGAME, 4, 3);
-    await patchSwissStage(rig.auth, rig.stageId, { chess: false });
-    // The Format tab's Apply re-sends the template body, which names no `chess`.
+    await legacyOff(rig.stageId);
+    // The Format tab's Apply re-sends the template body, which names no `chess`: the legacy off rides StageCarry (T8 m6).
     const body = [{ seq: 1, kind: "swiss" as const, name: "Swiss", config: { rounds: 3 }, progression: null }];
     const [again] = await replaceStages(rig.auth, rig.divisionId, body);
-    expect(again!.config.chess, "the organiser's off survives the re-Apply").toBe(false);
-    // The positive pair: never toggled, a re-Apply keeps the default on; a body that names chess wins over the carry.
+    expect(again!.config.chess, "the stored off survives the re-Apply").toBe(false);
+    rig.stageId = again!.id;
+    await pair(rig);
+    await pair(rig); // Pair round 1
+    expect(await roundOnePairRow(rig.divisionId), "left off: no colour lot at Pair").not.toHaveProperty("colour_lot");
+
+    // Switching it ON is the one change left (before play): it goes through and is stored.
+    const on = await swissRig(BOARDGAME, 4, 3);
+    await legacyOff(on.stageId);
+    expect(await patchSwissStage(on.auth, on.stageId, { chess: true })).toMatchObject({ rounds: 3, chess: true });
+    expect((await storedConfig(on.stageId)).chess).toBe(true);
+    // ...and once on, off is refused again.
+    await expect(patchSwissStage(on.auth, on.stageId, { chess: false })).rejects.toMatchObject(refusal("SWISS_CHESS_ALWAYS_ON"));
+    // The positive pair for the carry: never stored off, a re-Apply keeps the default on.
     const fresh = await swissRig(BOARDGAME, 4, 3);
     const [kept] = await replaceStages(fresh.auth, fresh.divisionId, body);
     expect(kept!.config.chess).toBe(true);
-    const [sent] = await replaceStages(rig.auth, rig.divisionId, [{ ...body[0]!, config: { rounds: 3, chess: true } }]);
-    expect(sent!.config.chess, "a body that sends chess replaces the carry").toBe(true);
   });
 });
 

@@ -16,6 +16,9 @@ import { escapeRe } from "../helpers/stage-summary";
  *   3. One person, one team per division. Ada is on Red: the add form's picker does not suggest her, a search shows her
  *      disabled and labelled "On Red", and a team with someone else saves. The server refuses the write the picker would not
  *      offer (409 PERSON_ON_OTHER_TEAM), and another division takes her.
+ *   4. A chess Swiss card has no "Chess colours" switch, before play or after: a chess Swiss always balances colours (stored
+ *      on), and the door refuses switching them off (422 SWISS_CHESS_ALWAYS_ON) - so an API client cannot do what the card
+ *      no longer offers.
  *   5. The builder's default sport follows the organisation's most recent sport, generic INCLUDED: after a generic division
  *      the builder opens on "Any other game" (picked, so shown among the five; still the last tile); after a badminton one,
  *      on badminton.
@@ -186,6 +189,56 @@ test.describe("UI5: the division page's owner fixes, walked", () => {
     await expect(page.locator(`[data-person="${ada.id}"]`)).toBeDisabled({ timeout: NAV_MS });
     const listed = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${divisionId}/entrants`);
     expect(listed.data?.length, "the refused Blue was never written").toBe(1);
+  });
+
+  test("4. a chess Swiss card has no Chess colours switch before play or after; the colours stay on and the door refuses switching them off", async ({ page, request }) => {
+    test.setTimeout(budget(2, 3));
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `UI5 Chess ${TAG}`, visibility: "private" });
+    expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Chess",
+      sport_key: "boardgame",
+      variant_key: "classical",
+      config: {},
+    });
+    expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+    const divisionId = div.data!.id;
+    const ents = await addEntrantsViaApi(request, divisionId, ["Ana", "Ben", "Cy", "Di"].map((n) => `${n} ${TAG}`));
+    expect(ents.ids, "entrants").toHaveLength(4);
+    const created = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 3 } });
+    expect(created.status, `stage: ${JSON.stringify(created.error)}`).toBeLessThan(300);
+    const stageId = created.data!.id;
+    const chessOf = async () => (await apiJson<{ config: { chess?: unknown } }>(request, `/api/v1/stages/${stageId}`)).data?.config.chess;
+    expect(await chessOf(), "premise: a new chess Swiss is stored with colours on").toBe(true);
+
+    const card = stageCardOf(page, stageId);
+    const switchOnCard = async (when: string) => {
+      await expect(card, `${when}: the Swiss card is on the Fixtures tab (the loaded page)`).toBeVisible({ timeout: NAV_MS });
+      await expect(card.getByTestId("stage-rounds"), `${when}: the card's rail is drawn (the organiser's view)`).toBeAttached({ timeout: NAV_MS });
+      await expect(page.getByTestId("stage-chess-switch"), `${when}: no Chess colours switch`).toHaveCount(0);
+      await expect(card.getByRole("switch"), `${when}: no switch of any name on the card`).toHaveCount(0);
+    };
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
+    await dismissCookieBanner(page);
+    await switchOnCard("before play");
+    await expectNoHorizontalScroll(page);
+    const off = async (when: string) => {
+      const res = await apiJson(request, `/api/v1/stages/${stageId}`, "PATCH", { chess: false });
+      expect([res.status, (res.error as { code?: string } | undefined)?.code], `${when}: switching the colours off is refused`).toEqual([422, "SWISS_CHESS_ALWAYS_ON"]);
+      expect(await chessOf(), `${when}: still on`).toBe(true);
+    };
+    await off("before play");
+
+    // Play starts: the same card, the same answer (the permanent reason, never the start lock's).
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+    const paired = await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST");
+    expect(paired.status, `pair round 1: ${JSON.stringify(paired.error)}`).toBeLessThan(300);
+    await page.reload({ waitUntil: "load" });
+    await expect(card, "after Start: the Swiss card").toBeVisible({ timeout: NAV_MS });
+    await expect(page.getByTestId("stage-chess-switch"), "after Start: no Chess colours switch").toHaveCount(0);
+    await expect(card.getByRole("switch"), "after Start: no switch on the card").toHaveCount(0);
+    await off("after Start");
   });
 
   test("5. the builder opens on the organisation's latest sport, generic included: Any other game after a generic division, badminton after a badminton one", async ({ page, request }) => {

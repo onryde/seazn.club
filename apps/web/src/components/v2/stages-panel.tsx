@@ -140,7 +140,6 @@ import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notic
 // header for why it stays presentational (props only, no data hook).
 import { StageRail, stageRailActions } from "@/components/v2/desk/stage-rail";
 import type { SwissRoundsRefusal } from "@/components/v2/desk/swiss-rounds-dialog";
-import { isChessSport } from "@/lib/chess-individual-only-rule";
 import type { SwissRoundControl } from "@/lib/swiss-rounds-edit";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -452,10 +451,9 @@ interface Props {
   /** W3 T10 — the division's own status (`divisions.status`), for the rail's "Add late player" gate
    *  (`swissLateEntryOffered`: offered only once the division has started). Optional: absent ⇒ never offered. */
   divisionStatus?: string;
-  /** W3 T12 Phase 2 (X-SW-17, BG-SW-1) — each Swiss stage's round count, chess switch and "Add a round" state as the
-   *  server judges them (`listSwissRoundControls`, read by the division page for an organiser on this tab). Drives the
-   *  rail's "Rounds: N · Edit" chip and More menu item, and the chess switch on a boardgame Swiss card. Optional: absent
-   *  ⇒ none of the three (a viewer; the pre-existing panel tests). */
+  /** W3 T12 Phase 2 (X-SW-17) — each Swiss stage's round count and "Add a round" state as the server judges them
+   *  (`listSwissRoundControls`, read by the division page for an organiser on this tab). Drives the rail's "Rounds: N ·
+   *  Edit" chip and More menu item. Optional: absent ⇒ neither (a viewer; the pre-existing panel tests). */
   swissRoundControls?: Record<string, SwissRoundControl>;
   /** W3 T17 (RB3-19, X-SW-25) — per Swiss stage id, who a correction moved across the cut AFTER the knockout began
    *  (`getSwissCutDrift`, read by the division page for an organiser on this tab; a stage with no drift is absent). Drives
@@ -747,8 +745,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     }
   }
 
-  // W3 T12 Phase 2 (X-SW-17, BG-SW-1) — the Swiss stage writes outside `act`: the rounds dialog's Save, "Add a round"
-  // (the rail's More item, and the recovery a SWISS_ROUNDS_LOCKED refusal offers in the dialog) and the chess switch.
+  // W3 T12 Phase 2 (X-SW-17) — the Swiss stage writes outside `act`: the rounds dialog's Save and "Add a round" (the
+  // rail's More item, and the recovery a SWISS_ROUNDS_LOCKED refusal offers in the dialog). (The chess colours switch was
+  // a third until UI5 item 4 removed it: a chess Swiss always balances colours.)
   // Each resolves null when it landed (said in the notice channel, the page refreshed), else the refusal; `report` says
   // it in this panel's own error line too — false when the dialog says it inside itself. A refusal refreshes the page as
   // well (T12 Fix round 1, review m4): these doors offer only what the desk's last read says goes through, so a server
@@ -830,16 +829,6 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       (err) => swissFinishRefusal(err, msg, msgPlural, locale),
     );
   };
-
-  const setSwissChess = (stageId: string, chess: boolean) =>
-    swissStageWrite(
-      stageId,
-      async () => {
-        await apiV1(`/api/v1/stages/${stageId}`, { method: "PATCH", json: { chess } });
-        return msg(chess ? "schedule.notice.chessOn" : "schedule.notice.chessOff");
-      },
-      true,
-    );
 
   async function act(
     stageId: string,
@@ -1690,51 +1679,6 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       {lateEntryNoticeText(line, { t: msg, plural: msgPlural })}
                     </p>
                   ))}
-                  {/* W3 T12 Phase 2 (BG-SW-1, RB3-10 "can be switched off"): the chess colours switch on a boardgame
-                      Swiss, for an organiser. Fixed once a match of the stage has started — said with its OWN sentence
-                      (SWISS_CHESS_LOCKED), never the rounds one. Inline, not a child component, for the same reason as
-                      the legend above (the panel's `renderIsland` tests walk this tree). */}
-                  {!folded && canEdit && stage.kind === "swiss" && isChessSport(sportKey) && swissRoundControls?.[stage.id] && (() => {
-                    const control = swissRoundControls[stage.id]!;
-                    const titleId = `stage-chess-title-${stage.id}`;
-                    const hintId = `stage-chess-hint-${stage.id}`;
-                    return (
-                      <div data-testid="stage-chess" className="w-full min-w-0">
-                        <button
-                          type="button"
-                          role="switch"
-                          data-testid="stage-chess-switch"
-                          aria-checked={control.chess}
-                          aria-labelledby={titleId}
-                          aria-describedby={hintId}
-                          disabled={busy !== null || control.started}
-                          onClick={() => void setSwissChess(stage.id, !control.chess)}
-                          className="flex min-h-11 w-full max-w-xl items-start gap-3 rounded-lg py-1 text-left disabled:cursor-not-allowed"
-                        >
-                          <span
-                            aria-hidden
-                            className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors motion-reduce:transition-none ${
-                              control.chess ? (control.started ? "bg-purple-300" : "bg-purple-600") : "bg-slate-300"
-                            }`}
-                          >
-                            <span
-                              className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-[left] motion-reduce:transition-none ${
-                                control.chess ? "left-[22px]" : "left-0.5"
-                              }`}
-                            />
-                          </span>
-                          <span className="min-w-0">
-                            <span id={titleId} className="block text-sm font-medium text-slate-800">
-                              {msg("stage.chess.label")}
-                            </span>
-                            <span id={hintId} data-testid="stage-chess-hint" className="mt-0.5 block text-xs leading-snug text-slate-500">
-                              {control.started ? msg(swissRefusalKey("SWISS_CHESS_LOCKED")) : msg("stage.chess.hint")}
-                            </span>
-                          </span>
-                        </button>
-                      </div>
-                    );
-                  })()}
                 </header>
 
                 {/* Match Day PB1: the card's body, one element so the toggle has something to control. `hidden` (not unmounted) while the
@@ -2501,8 +2445,8 @@ export function undoRefusalMessage(err: unknown, msg: Msg): string {
   return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.undoFailed"));
 }
 
-/** W3 T12 Fix round 1 (review m1): a refused Swiss stage write — the rounds dialog's Save, Add a round, the chess switch
- *  — in the reader's language, never the server's English sentence: a Swiss refusal with what to do next, a frozen
+/** W3 T12 Fix round 1 (review m1): a refused Swiss stage write — the rounds dialog's Save, Add a round — in the reader's
+ *  language, never the server's English sentence: a Swiss refusal with what to do next, a frozen
  *  timetable and a rule lock such as FIXTURE_HAS_OWN_FORMAT through `swissDoorRefusalText` — the ONE mapping the Entrants
  *  tab's recovery doors read too (batch-4 review I1) — and anything else (STAGE_NOT_READY) through this panel's own
  *  classifier. Exported pure for `classifyActError`'s reason. */
