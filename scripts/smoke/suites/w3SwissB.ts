@@ -72,8 +72,9 @@ import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
  * board starts re-pairs round 1 (case (a)); one added once a round-2 board has started joins from round 3 (case (c)); one added
  * once a round-3 board has started takes round 3's bye (case (b)). Every board is played through the scorer's own events, the
  * Swiss completes, and the knockout's seed proposal is the final table's top four (three rounds leave the scores 1-3-4-2, so 4th
- * and 5th are never level on points and the four are fixed; a tie INSIDE them, flagged for the organiser, is picked in the order
- * the proposal lists it, as the desk's pick would send it) - and its confirm seats the four in round 1. On check 1's private
+ * and 5th are never level on points and the four are fixed - ASSERTED from the standings' points; a tie INSIDE them, flagged for
+ * the organiser, is picked in the order the proposal lists it, as the desk's pick would send it, and only after the check that
+ * it lies inside the four; the label prints how many were picked) - and its confirm seats the four in round 1. On check 1's private
  * competition (the Community plan caps active competitions at 3 and a competition at 4 divisions: check 1's holds one).
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissB runs it alone (SELECTABLE_SUITES).
  */
@@ -730,10 +731,12 @@ export async function w3SwissBSuite(): Promise<void> {
     const lateB = await addLate(3);
     const round3 = await boardsOf(3);
     for (const f of round3) await play(f, f.id === round3Before[0]?.id);
-    const standing = v1data<{ rows: { entrantId: string; rank: number }[] } | undefined>(await v1(owner, `/api/v1/stages/${swissId}/standings`))?.rows ?? [];
+    const standing = v1data<{ rows: { entrantId: string; rank: number; points: number }[] } | undefined>(await v1(owner, `/api/v1/stages/${swissId}/standings`))?.rows ?? [];
     const done = await v1(owner, `/api/v1/stages/${swissId}/complete`, "POST");
     const proposal = await v1(owner, `/api/v1/stages/${koId}/seed-proposal`, "POST");
-    const computed = v1data<{ id: string; computed?: { qualifiers: { entrantId: string }[]; ties: { slots: string[]; entrantIds: string[] }[] } } | undefined>(proposal);
+    const computed = v1data<
+      { id: string; computed?: { qualifiers: { entrantId: string; destinationSlot: string }[]; ties: { slots: string[]; entrantIds: string[] }[] } } | undefined
+    >(proposal);
     const ties = computed?.computed?.ties ?? [];
     const confirmed = await v1(owner, `/api/v1/stages/${koId}/seed-proposal/confirm`, "POST", {
       proposalId: computed?.id,
@@ -741,7 +744,18 @@ export async function w3SwissBSuite(): Promise<void> {
     });
     const koRound1 = (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === koId && f.round_no === 1);
     const qualifiers = (computed?.computed?.qualifiers ?? []).map((q) => q.entrantId);
-    const topFour = [...standing].sort((a, b) => a.rank - b.rank).slice(0, 4).map((r) => r.entrantId);
+    const byRank = [...standing].sort((a, b) => a.rank - b.rank);
+    const topFour = byRank.slice(0, 4).map((r) => r.entrantId);
+    // The header's premise, asserted (review m2): three rounds leave 1-3-4-2, so 4th and 5th are never level on points and no
+    // tie can cross the cut.
+    const cutOnPoints = byRank.length > 4 && byRank[3].points > byRank[4].points;
+    // A tie the chain could not split (`tieUnbroken`) is picked above in the order the proposal lists it. That is only the
+    // organiser's pick INSIDE the four: one slot per tied entrant, each tied entrant one of the four, each slot a qualifier's.
+    // A tie across the cut would list more entrants than slots, and the listed order would decide who goes through.
+    const qualifierSlots = new Set((computed?.computed?.qualifiers ?? []).map((q) => q.destinationSlot));
+    const tiesInside = ties.every(
+      (t) => t.slots.length > 0 && t.entrantIds.length === t.slots.length && t.entrantIds.every((id) => topFour.includes(id)) && t.slots.every((sl) => qualifierSlots.has(sl)),
+    );
     const seatedKo = koRound1.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((id): id is string => id !== null);
     const ok =
       divRes.status < 300 && made.length === 7 && staged.status < 300 && swissId !== undefined && koId !== undefined && dayOne.status === 200 &&
@@ -750,12 +764,12 @@ export async function w3SwissBSuite(): Promise<void> {
       round2.length === 4 && lateC?.case === "c" && lateC.round === 3 &&
       round3Before.length === 4 && holder !== null && lateB?.case === "b" && lateB.round === 3 && lateB.bye_holder_id === holder && round3.length === 5 &&
       statuses.length === (4 + 4 + 5) * 3 && statuses.every((st) => st > 0 && st < 300) &&
-      standing.length === 10 && done.status === 200 && proposal.status < 300 &&
-      computed?.computed !== undefined && qualifiers.length === 4 && [...qualifiers].sort().join() === [...topFour].sort().join() &&
+      standing.length === 10 && cutOnPoints && done.status === 200 && proposal.status < 300 &&
+      computed?.computed !== undefined && tiesInside && qualifiers.length === 4 && [...qualifiers].sort().join() === [...topFour].sort().join() &&
       confirmed.status === 200 && koRound1.length === 2 && [...seatedKo].sort().join() === [...topFour].sort().join();
     w3Check(
-      "w3b SW-L10: seven seeded and three late players - (a) re-pairs round 1, (c) joins from round 3, (b) takes round 3's bye - played out over three rounds, the Swiss completes, and the knockout's seed proposal is the table's top four and its confirm seats them in round 1" +
-        (ok ? "" : ` - division ${divRes.status} ${divId ?? "none"}, entrants ${made.length}, stages ${staged.status}, day one ${dayOne.status}, start ${started.status}, pairs ${pairs.join(",")}, round 1 byes ${round1Byes} boards ${round1Boards.length}, late ${JSON.stringify([lateA, lateC, lateB])}, round 2 ${round2.length}, round 3 ${round3Before.length} -> ${round3.length} holder ${holder ?? "none"}, event statuses ${statuses.join(",")}, standings ${standing.length}, complete ${done.status} ${JSON.stringify(done.json).slice(0, 160)}, proposal ${proposal.status} ${JSON.stringify(proposal.json).slice(0, 240)}, ties ${ties.length}, confirm ${confirmed.status} ${JSON.stringify(confirmed.json).slice(0, 160)}, knockout round 1 ${JSON.stringify(koRound1.map((f) => [f.home_entrant_id, f.away_entrant_id]))}`),
+      `w3b SW-L10: seven seeded and three late players - (a) re-pairs round 1, (c) joins from round 3, (b) takes round 3's bye - played out over three rounds, the Swiss completes, and the knockout's seed proposal is the table's top four (4th above 5th on points; flagged ties picked inside the four: ${ties.length}) and its confirm seats them in round 1` +
+        (ok ? "" : ` - division ${divRes.status} ${divId ?? "none"}, entrants ${made.length}, stages ${staged.status}, day one ${dayOne.status}, start ${started.status}, pairs ${pairs.join(",")}, round 1 byes ${round1Byes} boards ${round1Boards.length}, late ${JSON.stringify([lateA, lateC, lateB])}, round 2 ${round2.length}, round 3 ${round3Before.length} -> ${round3.length} holder ${holder ?? "none"}, event statuses ${statuses.join(",")}, standings ${standing.length} points ${JSON.stringify(byRank.map((r) => r.points))}, complete ${done.status} ${JSON.stringify(done.json).slice(0, 160)}, proposal ${proposal.status} ${JSON.stringify(proposal.json).slice(0, 240)}, ties ${JSON.stringify(ties)} inside ${tiesInside}, confirm ${confirmed.status} ${JSON.stringify(confirmed.json).slice(0, 160)}, knockout round 1 ${JSON.stringify(koRound1.map((f) => [f.home_entrant_id, f.away_entrant_id]))}`),
       ok,
     );
   }
