@@ -234,6 +234,12 @@ const WALKTHROUGH_SPECS: string[] = [
   // rich-text boxes, Settle on a frozen run sheet, the New competition form's
   // "created private" note on a full public limit, and the frozen banner's names.
   "match-day-pb3-minors.spec.ts",
+  // Match Day Phase A, walked by an organiser (Task W) - the organiser's day on the Match Day page (open from the competition, the
+  // courts, the venue filter, Remote scoring Hide / Show, a closed court, Call and Undo with the preview's warnings, a refused busy
+  // player, the Final, the breadcrumb back) and the stage card (the rules strip, the card's actions, round bars and rows in time order,
+  // a round left open across a refresh, the bracket inline, Swiss from Pair next to Complete, Show finished, entrant kinds).
+  "match-day-organiser.spec.ts",
+  "stage-card-organiser.spec.ts",
   // Match Day C9 — the division builder in four steps, tapped from the
   // competition page to the new division's Fixtures tab: Edit from Review,
   // chess with a Lichess clock, and every field read back from the database.

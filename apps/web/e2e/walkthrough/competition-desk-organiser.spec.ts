@@ -1,4 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { expect, test, type Page } from "@playwright/test";
 import {
   activeOrg, apiJson, TAG, createCompetitionViaUi, createDivisionViaUi, addEntrantsViaApi,
   scoreFixture, setFixtureStatusSql, setStageStatusSql, screenshotAtWidths, expectNoHorizontalScroll,
@@ -6,6 +8,41 @@ import {
 } from "../helpers";
 import { zoneDateKey } from "../zone-split";
 import { needsYouInMatchDay } from "../needs-you-home";
+import { uiEn } from "../match-room-kit";
+
+/** The Open menu's items in the order the competition page DECLARES them (`openItems`), read from the source: the order is a declaration,
+ *  not something this walkthrough retypes. The Match Day item leads on an off-day and is left out on a match day (one door in two shapes). */
+const DECLARED_OPEN_IDS = ((): string[] => {
+  const src = readFileSync(fileURLToPath(new URL("../../src/app/o/[orgSlug]/c/[compSlug]/page.tsx", import.meta.url)), "utf8");
+  const start = src.indexOf("const openItems: DeskOpenItem[] = [");
+  const end = src.indexOf("\n  ];", start);
+  if (start < 0 || end < 0) throw new Error("page.tsx no longer declares openItems as a const array");
+  const ids = [...src.slice(start, end).matchAll(/id: "(\w+)"/g)].map((m) => m[1]!);
+  if (ids.length !== 4) throw new Error(`openItems declares ${ids.length} items, this walkthrough knows four: ${ids.join(", ")}`);
+  return ids;
+})();
+const OPEN_LABELS: Record<string, string> = {
+  matchday: uiEn["desk.tools.matchDay"]!,
+  slideshow: `${uiEn["action.slideshow"]} \u2197`,
+  public: `${uiEn["action.viewPublic"]} \u2197`,
+  qr: `${uiEn["action.qr"]} \u2197`,
+};
+
+/** Taps the Open menu, reads its items (id, words) in the order they are on the page, and puts it away with Escape. */
+async function readOpenMenu(page: Page): Promise<{ ids: string[]; words: string[] }> {
+  const toggle = page.getByTestId("desk-open-menu-toggle");
+  await expect(toggle).toHaveText(new RegExp(`^${uiEn["desk.tools.open"]}`));
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  const menu = page.getByRole("menu", { name: uiEn["desk.tools.open"]! });
+  await expect(menu).toBeVisible();
+  const items = menu.getByRole("menuitem");
+  const read = await items.evaluateAll((els) => els.map((e) => ({ id: (e.getAttribute("data-testid") ?? "").replace("desk-open-item-", ""), words: (e.textContent ?? "").trim() })));
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+  await expect(toggle, "Esc hands focus back to the button").toBeFocused();
+  return { ids: read.map((r) => r.id), words: read.map((r) => r.words) };
+}
 
 test.describe.configure({ mode: "serial" });
 
@@ -22,6 +59,21 @@ test("an organiser watches the desk go Setting up → Scheduled → Today (a mat
   await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
   await expect(page.getByTestId("desk-ledger-row")).toHaveCount(0);
   await shot("01-blank");
+
+  // 1b. The Match Day door, OFF a match day: not the filled button (that exists only on the day) but the Open menu's first item - one door in
+  // two shapes, never both. The menu lists every item in the order the page declares them, with the words the dictionary gives them.
+  await expect(page.getByTestId("desk-tool-match-day"), "off a match day there is no filled button").toHaveCount(0);
+  const offDay = await readOpenMenu(page);
+  expect(offDay.ids, "the Open menu, in the page's declared order, with Match Day leading").toEqual(DECLARED_OPEN_IDS);
+  expect(offDay.words, "and in the dictionary's words").toEqual(DECLARED_OPEN_IDS.map((id) => OPEN_LABELS[id]));
+  expect(offDay.ids[0], "the door leads the menu").toBe("matchday");
+  // Tapped, it opens Match Day in the same tab.
+  await page.getByTestId("desk-open-menu-toggle").click();
+  await page.getByTestId("desk-open-item-matchday").click();
+  await expect(page).toHaveURL(new RegExp(`${compPath}/match-day$`), { timeout: 20_000 });
+  await expect(page.getByTestId("match-day")).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  await page.goto(compPath);
 
   // 2. One division, made by hand: the row appears with its sport glyph and Setting up.
   // "generic" explicitly — the wizard's unset default is alphabetically
@@ -154,6 +206,14 @@ test("an organiser watches the desk go Setting up → Scheduled → Today (a mat
   await expect(page.locator('[data-phase="match_day"]').first()).toBeVisible();
   await expect(row.locator('[data-pill="match_day"]:visible')).toHaveText("Today");
   await expect(page.getByTestId("desk-tool-match-day")).toBeVisible();
+  // The door's other shape: on the day the filled button is the way in and the Open menu no longer lists Match Day - the rest keep the page's order.
+  const onDay = await readOpenMenu(page);
+  expect(onDay.ids, "on a match day the menu drops the Match Day item and keeps the declared order").toEqual(DECLARED_OPEN_IDS.filter((id) => id !== "matchday"));
+  expect(onDay.words).toEqual(onDay.ids.map((id) => OPEN_LABELS[id]));
+  await page.getByTestId("desk-tool-match-day").click();
+  await expect(page).toHaveURL(new RegExp(`${compPath}/match-day$`), { timeout: 20_000 });
+  await expect(page.getByTestId("match-day")).toBeVisible();
+  await page.goto(compPath);
   // The unscheduled round still needs the organiser — in Match Day now; this page says so in one line.
   await expect(needs).toHaveCount(0);
   await expect(page.getByTestId("desk-needs-you-in-match-day")).toBeVisible();
@@ -184,6 +244,9 @@ test("an organiser watches the desk go Setting up → Scheduled → Today (a mat
   // names the red attention beside it, rather than one deleting the other.
   await expect(masthead).toContainText("1 in play");
   await expect(page.getByTestId("desk-masthead-attention")).toHaveAttribute("data-attention-chip", "no_scorer");
+  // The live strip (W3's in-play band) is gone on every day: a match IS in play (the masthead above counts it, the positive pair), and this
+  // page draws no band for it - the board that shows what is being played is Match Day's.
+  await expect(page.getByTestId("desk-in-play-band"), "the live strip is gone").toHaveCount(0);
   await shot("05-no-scorer");
   // B1: the list is Match Day's on a match day — follow this page's one line there; No scorer leads it.
   const mdNeeds = await needsYouInMatchDay(page);
