@@ -363,6 +363,41 @@ describe("buildTableView", () => {
     expect(columnHeader({ key: "constructor", label: "X" }, msg)).toEqual({ abbr: "X", title: "X" });
   });
 
+  // W3 app-B T3 (X-SW-31; owner 2026-11-03: header "Opp diff", long forms sport-neutral). Real dictionaries, all four
+  // locales, counted; the column's label is READ off the engine's `DERIVED_METRICS` like the header test above.
+  it("opp_diff prints 'Opp diff' over its column and names itself in the tie popover (en), and es, fr, nl each say it in their own words", () => {
+    const oppDiff = DERIVED_METRICS.find((d) => d.key === "opp_diff");
+    expect(oppDiff, "premise: the engine declares an opp_diff column").toBeDefined();
+    const dicts = { en, es, fr, nl } as unknown as Record<string, Dict>;
+    const tied = row("b", { rank: 2, tieBreak: { key: "opp_diff", with: ["a"] } });
+    const table = [row("a", { rank: 1 }), tied];
+    const said = (locale: string) => {
+      const dict = dicts[locale]!;
+      const m = (key: Parameters<typeof t>[1], vars?: Record<string, string | number>) => t(dict, key, vars);
+      const header = columnHeader({ key: "opp_diff", label: oppDiff!.label }, m);
+      return { header, rule: tieBreakRule("opp_diff", m, tied, table), popover: m("table.tieBreak", { with: "Alpha", rule: tieBreakRule("opp_diff", m, tied, table) }) };
+    };
+    const english = said("en");
+    expect(english.header).toEqual({ abbr: "Opp diff", title: "Opponents' score difference" });
+    expect(english.rule).toBe("opponents' score difference");
+    expect(english.popover, "the tie popover names the rule").toContain("opponents' score difference");
+    const neutral: Record<string, RegExp> = { en: /goal/i, es: /gol/i, fr: /\bbuts?\b/i, nl: /doel/i };
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"]) {
+      const s = said(locale);
+      for (const text of [s.header.abbr, s.header.title, s.rule, s.popover]) {
+        expect(text.startsWith("table."), `${locale}: a dotted key leaked: ${text}`).toBe(false);
+        expect(neutral[locale]!.test(text), `${locale}: "${text}" is not sport-neutral`).toBe(false);
+        checked++;
+      }
+      if (locale === "en") continue;
+      expect(s.header.abbr, `${locale} abbr`).not.toBe(english.header.abbr);
+      expect(s.header.title, `${locale} title`).not.toBe(english.header.title);
+      expect(s.rule, `${locale} rule`).not.toBe(english.rule);
+    }
+    expect(checked, "strings checked").toBe(16);
+  });
+
   it("the structural abbreviation keys are spelled out, one per structural column (NEW-3's shape)", () => {
     // Task 16: the visible header letters are copy (en "P", es "PJ", fr "J",
     // nl "GS"), keyed per column. Exact membership against STRUCTURAL_KEYS, so

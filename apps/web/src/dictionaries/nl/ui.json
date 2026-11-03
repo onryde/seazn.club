@@ -3905,6 +3905,7 @@
   "div.detail.tiebreak.rule.direct": "directe ontmoeting",
   "div.detail.tiebreak.rule.buchholz": "Buchholz",
   "div.detail.tiebreak.rule.buchholz_cut1": "Buchholz Cut-1",
+  "div.detail.tiebreak.rule.opp_diff": "scoreverschil van de tegenstanders",
   "div.detail.tiebreak.rule.sberger": "Sonneborn–Berger",
   "div.detail.tiebreak.rule.seed": "reekshoofdplaatsing",
   "div.detail.tiebreak.rule.lots": "loting",

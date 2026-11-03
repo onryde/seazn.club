@@ -2022,6 +2022,7 @@ export type DictionaryKey =
   | "div.detail.tiebreak.rule.lots"
   | "div.detail.tiebreak.rule.matches_played"
   | "div.detail.tiebreak.rule.nrr"
+  | "div.detail.tiebreak.rule.opp_diff"
   | "div.detail.tiebreak.rule.point_diff"
   | "div.detail.tiebreak.rule.point_ratio"
   | "div.detail.tiebreak.rule.points"

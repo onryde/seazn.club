@@ -3958,6 +3958,7 @@
   "div.detail.tiebreak.rule.direct": "rencontre directe",
   "div.detail.tiebreak.rule.buchholz": "Buchholz",
   "div.detail.tiebreak.rule.buchholz_cut1": "Buchholz Cut-1",
+  "div.detail.tiebreak.rule.opp_diff": "écart de score des adversaires",
   "div.detail.tiebreak.rule.sberger": "Sonneborn–Berger",
   "div.detail.tiebreak.rule.seed": "tête de série",
   "div.detail.tiebreak.rule.lots": "tirage au sort",
