@@ -77,17 +77,18 @@ test("an organiser watches the desk go Setting up → Scheduled → Today (a mat
 
   // 2. One division, made by hand: the row appears with its sport glyph and Setting up.
   // "generic" explicitly — the wizard's unset default is alphabetically
-  // first ("badminton", individual/pair only; the builder's entrant kind opens
-  // at the sport's own default and createDivisionViaUi leaves it) and step 3 needs a TEAM division whose
+  // first ("badminton", individual/pair only) and step 3 needs a TEAM division whose
   // fixtures step 6's scoreFixture (event type "generic.result") can settle;
   // "football" satisfies the first but 422s "unknown event type
   // generic.result" on the second (confirmed by running this spec) — the
   // generic sport module is what mobile.spec.ts's own team registration
   // fixture (sport_key "generic", variant_key "score") uses for the same
-  // reason. And a LEAGUE, picked: Format opens on the suggester's top pick
-  // (Q5, owner 2026-11-03), Americano for generic, which pairs individuals and
-  // cannot take the four teams step 3 adds.
-  const divId = await createDivisionViaUi(page, compId, "Premier", "generic", "league");
+  // reason. TEAMS picked on Who plays: the kind shown narrows the division to
+  // it ALWAYS (owner, C9 n3, 2026-11-03), so generic's untouched default
+  // (individual players) would refuse the four teams step 3 adds. And a
+  // LEAGUE, picked: a Teams division is offered no Americano (C9 review 2,
+  // N1), and the league is the format this walk reads.
+  const divId = await createDivisionViaUi(page, compId, "Premier", "generic", "league", "team");
   await page.goto(compPath);
   const row = page.getByTestId("desk-ledger-row").first();
   await expect(row).toHaveAttribute("data-phase", "setting_up");

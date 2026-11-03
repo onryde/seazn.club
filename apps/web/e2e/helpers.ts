@@ -2583,11 +2583,24 @@ export async function createDivisionViaUi(
   name: string,
   sportKey?: string,
   template?: string,
+  /** The entrant kind picked on Who plays. The kind shown narrows the division to it ALWAYS (owner, Match Day C9 n3,
+   *  2026-11-03): left out, the division takes the sport's default kind ALONE, so a caller that adds another kind of
+   *  entrant (teams to generic) must pick it here. */
+  entrantKind?: "individual" | "pair" | "team",
 ): Promise<string> {
   await page.goto(await competitionPath(page.request, competitionId, "/d/new"));
   // The name field is the first textbox on the Who plays step (see formats.spec.ts).
   await page.getByRole("textbox").first().fill(name);
   if (sportKey) await pickBuilderSport(page, sportKey);
+  if (entrantKind) {
+    const kinds = page.getByTestId("division-builder-entrant-kind");
+    const radio = kinds.locator(`input[name="division-entrant-kind"][value="${entrantKind}"]`);
+    await expect(radio, `the ${entrantKind} chip on Who plays`).toHaveCount(1);
+    await expect(async () => {
+      await kinds.locator(`label[data-entrant-kind="${entrantKind}"]`).click();
+      await expect(radio).toBeChecked({ timeout: 1_000 });
+    }).toPass({ timeout: 10_000 });
+  }
   if (template) {
     await page.getByTestId("division-builder-step-format").click();
     await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "format");

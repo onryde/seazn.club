@@ -60,6 +60,16 @@ import { dismissCookieBanner } from "../scorepad-a11y-kit";
  * its sports most recent first, then the owner's popular five, the registry,
  * and "Any other game" last.
  *
+ * ## The entrant kind (C9 review 2, owner n3 "yes", 2026-11-03)
+ *
+ * The kind shown on Who plays narrows the division to that kind ALWAYS -
+ * clicked (the first test: generic, Teams) or left at the sport's default (the
+ * third: volleyball, Teams untouched) - and Review says the one kind it takes.
+ * Format offers what the DIVISION's kind can play (N1): Americano and Mexicano
+ * pair up individual players, so badminton at Individuals offers them, after
+ * every other card, and badminton at Pairs (or a Teams division) offers
+ * neither; an Americano picked before the kind changed is dropped.
+ *
  * ## Widths
  *
  * The walk runs at 1280. At every step it is also measured at 1280, 1024, 768
@@ -290,7 +300,8 @@ test("an organiser makes a division in four steps, edits it from Review, and the
   test.setTimeout(budget(5, 120, 8));
   const G = mod("generic");
   const model = effectiveEntrantModel(G.entrantModel ?? null, null);
-  // A kind that is NOT the sport's default, so the choice is sent (class 19: the default goes unsent).
+  // A kind that is NOT the sport's default, so the stored kind is the CLICKED one (n3 narrows an untouched one too: the
+  // third test reads that back).
   const kind = model.kinds.find((k) => k !== model.defaultKind)!;
   expect(kind, "premise: generic allows a second entrant kind, Teams (owner Q3's case)").toBe("team");
   expect(model.kinds.length, "premise: generic allows more than the one kind picked").toBeGreaterThan(1);
@@ -416,8 +427,10 @@ test("an organiser makes a division in four steps, edits it from Review, and the
   });
   {
     const order = await page.locator("label[data-template]").evaluateAll((els) => els.map((el) => el.getAttribute("data-template") ?? ""));
-    const firstPair = order.findIndex((k) => MINTING.includes(k));
-    if (firstPair >= 0) expect(order.slice(firstPair).every((k) => MINTING.includes(k)), `pair formats last: ${order.join(",")}`).toBe(true);
+    // N1: a Teams division is offered no partner-rotation format, folded or not (the third test walks the order of a
+    // division that IS offered them: badminton at Individuals).
+    expect(order.filter((k) => MINTING.includes(k)), `a Teams division: no Americano or Mexicano in ${order.join(",")}`).toEqual([]);
+    expect(order.length, "the cards it is offered").toBeGreaterThan(5);
     expect(await shownTemplates(page), "five shown").toHaveLength(5);
   }
   await page.getByTestId("division-builder-plan-entrants").fill("12");
@@ -468,7 +481,8 @@ test("an organiser makes a division in four steps, edits it from Review, and the
   await next(page);
   await onStep(page, "review");
   await expect(reviewRow(page, "who")).toContainText(name);
-  await expect(reviewRow(page, "who")).toContainText(L[`divBuilder.entrants.kind.${kind}`]!);
+  // n3: Review names the one kind the division takes.
+  await expect(reviewRow(page, "who")).toContainText(L[`divBuilder.review.only.${kind}`]!);
   await expect(reviewRow(page, "who")).toContainText(fill("divBuilder.review.under", { age: 16 }));
   await expect(reviewRow(page, "format")).toContainText(L["format.template.groups_ko.label"]!);
   await expect(reviewRow(page, "format")).toContainText(plural("divBuilder.review.pools", 3));
@@ -515,16 +529,35 @@ test("an organiser makes a division in four steps, edits it from Review, and the
   await onStep(page, "who");
   await expect(page.getByTestId("division-builder-who").getByTestId("division-builder-saved-note")).toContainText(name);
   await expect(page.getByTestId("division-builder-name")).toBeDisabled();
+  // n5 (C9 review 2): the saved step LOOKS read-only too - dimmed, in a real browser's computed style.
+  await expect(page.getByTestId("division-builder-who-fields")).toHaveCSS("opacity", "0.7");
   await stepButton(page, "rules").click();
   await onStep(page, "rules");
   await expect(page.getByTestId("division-builder-rules").getByTestId("division-builder-saved-note")).toContainText(name);
   await expect(win).toBeDisabled();
+  await expect(page.getByTestId("division-builder-rules-fields")).toHaveCSS("opacity", "0.7");
   await page.screenshot({ path: testInfo.outputPath("stages-refused-rules-1280.png"), fullPage: true });
   await stepButton(page, "review").click();
   await onStep(page, "review");
   for (const id of ["who", "rules", "points", "tiebreaks"]) {
     await expect(page.getByTestId(`division-builder-saved-${id}`), `${id} saved with the division`).toHaveText(L["divBuilder.review.saved"]!);
   }
+  // n5: the saved state at the phone and tablet widths too (Review's Saved pills, then the dimmed Who plays).
+  for (const width of [320, 768] as const) {
+    await page.setViewportSize({ width, height: width < 768 ? 720 : 900 });
+    await expectNoHorizontalScroll(page);
+    await page.screenshot({ path: testInfo.outputPath(`stages-refused-review-${width}.png`), fullPage: true });
+  }
+  await stepButton(page, "who").click();
+  await onStep(page, "who");
+  for (const width of [320, 768] as const) {
+    await page.setViewportSize({ width, height: width < 768 ? 720 : 900 });
+    await expectNoHorizontalScroll(page);
+    await page.screenshot({ path: testInfo.outputPath(`stages-refused-who-${width}.png`), fullPage: true });
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await stepButton(page, "review").click();
+  await onStep(page, "review");
   // ---- Create again: the stages are REPLACED, and it lands on the new division's Fixtures tab.
   await create.click();
   const slug = await landed(page);
@@ -542,7 +575,8 @@ test("an organiser makes a division in four steps, edits it from Review, and the
     ["name", division.name, name],
     ["sport_key", division.sport_key, "generic"],
     ["variant_key", division.variant_key, variant],
-    // Owner Q3 (2026-11-03): the kind picked narrows the division to it - teams, here (generic's default is individuals).
+    // Owner Q3 and n3 (2026-11-03): the kind shown narrows the division to it - teams, clicked here (generic's default is
+    // individuals).
     ["config.entrants", division.config.entrants, { kinds: [kind], defaultKind: kind }],
     ["config.points", division.config.points, { ...presetPoints, w: 4 }],
     ["config.onlinePlay (not chess: absent)", division.config.onlinePlay, undefined],
@@ -630,6 +664,9 @@ test("chess: online play is asked first, Lichess is refused without one of its e
   const onlineBox = await online.boundingBox();
   const variantBox = await strip.getByTestId("division-settings-variant").boundingBox();
   expect(onlineBox!.y, "online play sits above the variant").toBeLessThan(variantBox!.y);
+  // The variant the builder opened on, as shown: the one the division must store (n9 holds every column read back).
+  const shownVariant = await strip.getByTestId("division-settings-variant").inputValue();
+  expect(Object.keys(mod("boardgame").variants as object), "the variant shown is one of chess's").toContain(shownVariant);
   await online.selectOption("lichess");
   const clock = strip.getByTestId("division-time-control");
   // Class 19: the clock opens at "Choose" (no control yet), listing exactly the catalogue.
@@ -659,11 +696,21 @@ test("chess: online play is asked first, Lichess is refused without one of its e
   const { division, stages, schedule } = await readBack(slug, compId);
   const stored = division.config.clock as { base?: unknown; increment?: unknown; delay?: unknown } | undefined;
   const checks: [string, unknown, unknown][] = [
+    ["name", division.name, name],
     ["sport_key", division.sport_key, "boardgame"],
+    ["variant_key (as shown on Division rules)", division.variant_key, shownVariant],
     ["config.onlinePlay", division.config.onlinePlay, "lichess"],
     ["config.clock.base (seconds)", stored?.base, picked.limitSeconds],
     ["config.clock.increment (seconds)", stored?.increment, picked.incrementSeconds],
-    ["config.entrants (the sport's own default: unsent)", division.config.entrants, undefined],
+    // n3 (owner 2026-11-03): the one kind shown - chess's only one - is the division's, stored as such.
+    ["config.entrants (the kind shown, alone)", division.config.entrants, { kinds: ["individual"], defaultKind: "individual" }],
+    // Untouched on Who plays and Division rules: the server's defaults.
+    ["tiebreakers (untouched: the sport's, unsent)", division.tiebreakers, null],
+    ["category (open: unsent)", division.category, null],
+    ["age_max", division.age_max, null],
+    ["age_cutoff_month", division.age_cutoff_month, null],
+    ["age_cutoff_day", division.age_cutoff_day, null],
+    ["eligibility_note", division.eligibility_note, null],
     ["stages", stages.map((s) => `${s.seq}:${s.kind}`), ["1:swiss"]],
     ["swiss rounds", stages[0]?.config.rounds, 5],
     ["camera_policy", division.camera_policy, "required"],
@@ -675,7 +722,13 @@ test("chess: online play is asked first, Lichess is refused without one of its e
     expect(got, label).toEqual(want);
     read++;
   }
-  expect(read, "chess fields read back").toBeGreaterThan(0);
+  // n9 (C9 review 2): as the first test - every column the read-back SELECTED is held to an expected value, so a column
+  // added to the query and never checked reds here.
+  const covered = new Set(checks.map(([label]) => label.split(/[ .(]/)[0]!));
+  const unchecked = Object.keys(division).filter((column) => column !== "id" && column !== "slug" && !covered.has(column));
+  expect(unchecked, "a column read back with no expected value").toEqual([]);
+  expect(read, "chess fields read back").toBe(checks.length);
+  expect(read).toBeGreaterThanOrEqual(Object.keys(division).length - 2);
 
   // ---- C9 R2: the next division's Sport picker leads with what this organisation has run, most recent first, read
   // against the organisation's own division rows. Other specs make divisions in this organisation at the same time, so
@@ -700,4 +753,72 @@ test("chess: online play is asked first, Lichess is refused without one of its e
   const noHistory = [...POPULAR, ...REGISTRY.filter((k) => !POPULAR.includes(k) && k !== "generic"), "generic"];
   expect(agreed.filter((k) => REGISTRY.includes(k)), "the organisation's own sports lead, so the order is not the no-history one").not.toEqual(noHistory);
   await page.getByTestId("division-builder-sport").screenshot({ path: testInfo.outputPath("sport-order-history-1280.png") });
+});
+
+test("the entrant kind: Format offers a Pairs division no Americano (N1), and a kind left untouched is the division's only one (n3)", async ({ page, request }, testInfo) => {
+  test.setTimeout(budget(5, 60, 0));
+  expect([...MINTING].sort(), "premise: the partner-rotation formats are the owner's two").toEqual(["americano", "mexicano"]);
+  const badminton = effectiveEntrantModel(mod("badminton").entrantModel ?? null, null);
+  expect([badminton.defaultKind, badminton.kinds.includes("pair")], "premise: badminton opens at individuals and allows pairs").toEqual(["individual", true]);
+  const volleyball = effectiveEntrantModel(mod("volleyball").entrantModel ?? null, null);
+  // The witness for n3: volleyball allows more than its default, so storing the default alone NARROWS it.
+  expect([volleyball.defaultKind, volleyball.kinds.length > 1], "premise: volleyball opens at teams and allows another kind").toEqual(["team", true]);
+  const allCards = () => page.locator("label[data-template]").evaluateAll((els) => els.map((el) => el.getAttribute("data-template") ?? ""));
+  const checkedCards = () => page.locator("label[data-template]:has(input:checked)").evaluateAll((els) => els.map((el) => el.getAttribute("data-template") ?? ""));
+
+  const compId = await openBuilderFromCompetition(page, request, "Builder kinds");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.getByTestId("division-builder-name").fill(`Doubles ${TAG}`);
+  await pickBuilderSport(page, "badminton");
+  const kinds = page.getByTestId("division-builder-entrant-kind");
+  await expect(kinds.locator('input[value="individual"]')).toBeChecked();
+
+  // ---- Individuals: both partner-rotation formats are offered, after every other card (C9 R2). Americano is picked.
+  await next(page);
+  await onStep(page, "format");
+  await showAllFormats(page);
+  const asIndividuals = await allCards();
+  expect(asIndividuals.filter((k) => MINTING.includes(k)).sort(), `Individuals: ${asIndividuals.join(",")}`).toEqual([...MINTING].sort());
+  const firstPair = asIndividuals.findIndex((k) => MINTING.includes(k));
+  expect(asIndividuals.slice(firstPair).every((k) => MINTING.includes(k)), `pair formats last: ${asIndividuals.join(",")}`).toBe(true);
+  const americano = await card(page, "americano");
+  await americano.click();
+  await expect(americano.locator("input")).toBeChecked();
+
+  // ---- Back to Who plays: Pairs. On Format, neither format is offered, and the Americano pick is gone with its card.
+  await page.getByTestId("division-builder-back").click();
+  await onStep(page, "who");
+  await kinds.locator('label[data-entrant-kind="pair"]').click();
+  await expect(kinds.locator('input[value="pair"]')).toBeChecked();
+  await next(page);
+  await onStep(page, "format");
+  await showAllFormats(page);
+  const asPairs = await allCards();
+  expect(asPairs.filter((k) => MINTING.includes(k)), `N1: a Pairs division is offered no Americano or Mexicano: ${asPairs.join(",")}`).toEqual([]);
+  expect(asPairs, "only the partner-rotation cards left").toEqual(asIndividuals.filter((k) => !MINTING.includes(k)));
+  // One card checked, and a shown one (n1: the opening) - never a checked radio behind a missing card.
+  const picked = await checkedCards();
+  expect(picked, "one card checked").toHaveLength(1);
+  expect(MINTING).not.toContain(picked[0]);
+  await expect(page.locator(`label[data-template="${picked[0]}"]`)).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("kind-pairs-format-1280.png"), fullPage: true });
+
+  // ---- n3: volleyball, the kind left at its default (Teams). Review says "Teams only", and the division stores it alone.
+  await page.goto(await competitionPath(request, compId, "/d/new"));
+  await expect(page.getByTestId("division-builder-name")).toBeVisible({ timeout: NAV_MS });
+  const name = `Volley ${TAG}`;
+  await page.getByTestId("division-builder-name").fill(name);
+  await pickBuilderSport(page, "volleyball");
+  await expect(kinds.locator('input[value="team"]')).toBeChecked();
+  for (const step of ["format", "rules", "review"] as const) {
+    await next(page);
+    await onStep(page, step);
+  }
+  await expect(reviewRow(page, "who")).toContainText(L["divBuilder.review.only.team"]!);
+  await page.screenshot({ path: testInfo.outputPath("kind-untouched-review-1280.png"), fullPage: true });
+  await page.getByTestId("division-builder-create").click();
+  const slug = await landed(page);
+  const { division } = await readBack(slug, compId);
+  expect([division.name, division.sport_key], "the division read back").toEqual([name, "volleyball"]);
+  expect(division.config.entrants, "the untouched default, alone").toEqual({ kinds: ["team"], defaultKind: "team" });
 });
