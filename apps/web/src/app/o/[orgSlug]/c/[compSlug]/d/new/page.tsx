@@ -7,8 +7,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { pointsLineDict, rulesLineDict } from "@/lib/rules-line";
 import { onlineChessOffered } from "@/server/usecases/external-play";
-import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "@/server/usecases/format-gates";
-import { STAGE_TEMPLATES, buildTemplateStages } from "@/lib/format-templates";
+import { templateLocksFor } from "@/server/usecases/format-gates";
 import { requireCompetitionPage } from "@/server/page-auth";
 import { routes } from "@/lib/routes";
 import { getCompetition } from "@/server/usecases/competitions";
@@ -59,14 +58,9 @@ export default async function NewDivisionPage({
   ]);
   const locale = await resolveLocale();
   const [uiDict, publicDict] = await Promise.all([getDictionary(locale, "ui"), getDictionary(locale, "public")]);
-  // Template → the feature it needs and this organisation lacks. Read off each template's own stage kinds (the knobs do
-  // not change the kinds), with the gate predicates createStages uses.
-  const templateLocks: Record<string, string> = {};
-  for (const tpl of STAGE_TEMPLATES) {
-    const kinds = buildTemplateStages(tpl.key, { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });
-    if (!doubleElimAllowed && kinds.some((st) => stageNeedsDoubleElimGate(st.kind))) templateLocks[tpl.key] = "formats.double_elim";
-    else if (!advancedAllowed && kinds.some((st) => stageNeedsAdvancedFormatsGate(st))) templateLocks[tpl.key] = "formats.advanced";
-  }
+  // Template → the feature it needs and this organisation lacks (format-gates.ts templateLocksFor: each template's own
+  // stage kinds, with the gate predicates createStages uses).
+  const templateLocks = templateLocksFor({ doubleElim: doubleElimAllowed, advanced: advancedAllowed });
   const viewerPlan = viewerPlanFrom(planKey);
 
   // Sport catalog + variant presets (system rows are tenant-readable, org
