@@ -11,6 +11,7 @@ import {
 } from "../settings-support";
 import { addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, seedVenueWithCourts, TAG } from "../helpers";
 import { routes } from "../../src/lib/routes";
+import { middayZoneFor, withinToday } from "../midday-zone";
 
 /**
  * Match Day C7 — the org Competitions home, walked by an organiser (owner rulings 2026-11-01, progress.md 534-543).
@@ -64,12 +65,11 @@ test.beforeAll(async ({ browser }) => {
     done = await seedCompetition(req, org.orgId, { name: `Old Cup ${TAG}`, visibility: "private", status: "completed" });
     ({ courts } = await seedVenueWithCourts(req, [`Court A ${TAG}`, `Court B ${TAG}`], { orgId: org.orgId }));
 
-    // An instant inside today's UTC day near now (clamped a minute inside either end), the day the divisions plan in.
+    // The divisions plan in the zone where the real clock reads midday, so "today" has hours of room either side of now at every hour of
+    // the run; `within` refuses an offset that would leave that day rather than clamping it (e2e/midday-zone.ts, PB3 review m2).
     const now = Date.now();
-    const d = new Date(now);
-    const dayStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-    const within = (offsetMin: number) =>
-      new Date(Math.min(dayStart + 86_400_000 - 60_000, Math.max(dayStart + 60_000, now + offsetMin * 60_000))).toISOString();
+    const zone = middayZoneFor(now);
+    const within = withinToday(now, zone);
 
     // The two competitions with a match today: one division each, two players, the one match planned today on Court A.
     for (const [comp, at] of [
@@ -88,7 +88,7 @@ test.beforeAll(async ({ browser }) => {
       const { fixtureIds } = await createStageAndGenerate(req, div.data.id);
       if (fixtureIds.length !== 1) throw new Error(`expected one fixture, got ${fixtureIds.length}`);
       const settings = await apiJson(req, `/api/v1/divisions/${div.data.id}/schedule-settings`, "PUT", {
-        tz: "UTC",
+        tz: zone,
         config: { matchMinutes: 30, courts: courts.map((c) => c.id) },
       });
       if (settings.status >= 300) throw new Error(`schedule settings → ${settings.status} ${JSON.stringify(settings.error)}`);

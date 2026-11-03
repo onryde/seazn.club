@@ -16,8 +16,8 @@
 //
 // Sport-agnostic on purpose: the property is about the clock and the planning zone.
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { localDay, middayZoneFor, withinToday } from "../../../e2e/midday-zone";
 
@@ -136,5 +136,59 @@ describe("match-day.spec.ts is wired to it", () => {
     const utc = SPEC.match(/schedule-settings`, "PUT", \{\s*tz: "UTC"/g) ?? [];
     expect(utc.length).toBe(1);
     expect(SPEC.match(/middayZoneFor\(now\)/g)?.length, "one zone per seed").toBe(4);
+  });
+});
+
+// PB3 review m2: the clamp was not only in match-day.spec.ts. Two walkthroughs carried it (competitions-home, frozen-competition) and
+// run-sheet.spec.ts carried a COPY of `middayZoneFor`. One source scan over EVERY e2e file, so the next spec that pastes it reds here.
+describe("no e2e file carries the UTC-day clamp or its own copy of the midday zone", () => {
+  function e2eFiles(dir: string, out: string[] = []): string[] {
+    for (const name of readdirSync(dir)) {
+      const full = join(dir, name);
+      if (statSync(full).isDirectory()) {
+        if (name !== "node_modules") e2eFiles(full, out);
+      } else if (name.endsWith(".ts")) out.push(full);
+    }
+    return out;
+  }
+  const FILES = e2eFiles(resolve(WEB, "e2e"));
+  const rel = (f: string) => f.slice(WEB.length + 1);
+  /** The helper's own file explains the clamp in a comment; everything else is a spec or a kit. */
+  const others = FILES.filter((f) => rel(f) !== "e2e/midday-zone.ts");
+
+  it("scanned every e2e file (anti-vacuity: zero or a handful is a failure), including the specs that carried it", () => {
+    expect(FILES.length, "e2e .ts files scanned").toBeGreaterThan(100);
+    for (const must of [
+      "e2e/match-day.spec.ts",
+      "e2e/run-sheet.spec.ts",
+      "e2e/walkthrough/competitions-home.spec.ts",
+      "e2e/walkthrough/frozen-competition.spec.ts",
+      "e2e/midday-zone.ts",
+    ]) {
+      expect(FILES.map(rel), `${must} was scanned`).toContain(must);
+    }
+  });
+
+  it("none clamps a seeded instant into today's UTC day", () => {
+    const offenders = others
+      .filter((f) => /Math\.min\(\s*dayStart/.test(readFileSync(f, "utf8")) || /dayStart\s*\+\s*86_400_000\s*-/.test(readFileSync(f, "utf8")))
+      .map(rel);
+    expect(offenders, "these files still clamp to the UTC day - plan in middayZoneFor(now) and use withinToday").toEqual([]);
+  });
+
+  it("none defines its own middayZoneFor: the helper is the one copy", () => {
+    const offenders = others.filter((f) => /function\s+middayZoneFor\b/.test(readFileSync(f, "utf8"))).map(rel);
+    expect(offenders).toEqual([]);
+  });
+
+  it("the specs that plan 'today' use the shared helper (read from their imports)", () => {
+    for (const [file, from] of [
+      ["e2e/match-day.spec.ts", "./midday-zone"],
+      ["e2e/run-sheet.spec.ts", "./midday-zone"],
+      ["e2e/walkthrough/competitions-home.spec.ts", "../midday-zone"],
+      ["e2e/walkthrough/frozen-competition.spec.ts", "../midday-zone"],
+    ] as const) {
+      expect(readFileSync(resolve(WEB, file), "utf8"), file).toContain(`from "${from}"`);
+    }
   });
 });

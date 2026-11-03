@@ -20,6 +20,7 @@ import {
 // place it actually matters, so every width loop below calls it anyway
 // rather than assuming the storageState always covers the surface driving.
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { middayZoneFor } from "./midday-zone";
 // Same authority the row itself uses (`zoned-datetime.ts`, #448) — the
 // expected instant below is DERIVED from the two zones, not typed as a
 // constant, so the case still witnesses the regression if either zone
@@ -169,41 +170,9 @@ async function expectRunSheetNotClipped(page: Page, label: string): Promise<void
 // invented request body (a probe in W1 passed at every width once because its
 // setup calls had silently failed — stages 400, generate 404, start 422 —
 // while the page was never in the state under test).
-/**
- * A fixed-offset IANA zone in which `nowMs` reads as local **midday**.
- *
- * Fix round 4 (controller finding). Rounds 1-3 fought the UTC day boundary
- * with a clamp on how far the seeded fixtures could sit from real "now":
- * first `Math.max(3, room - 2)` (which DEMANDED 3 minutes of room it did not
- * have and overshot into tomorrow, a live 23:58 red), then half the room
- * actually available. The halving is arithmetically sound — half a positive
- * is strictly less than it, so every seeded instant stays inside today — but
- * it bought that by SHRINKING THE OFFSETS, and the "future" row has a second
- * job the clamp cannot do: it must still be in the future when the PAGE
- * RENDERS, which is three SQL writes, four API reads and a page load later.
- * At 23:59:50 UTC the future offset became 5 seconds, the row was already
- * past by render, `filteredNowIndex` moved, and the NOW-rule position
- * assertion went red with no day-group message to explain it. The window
- * went from ~3 minutes a day to tens of seconds; it never closed.
- *
- * A floor cannot both stay inside today and outlast render latency — that is
- * the real tension, and neither clamp resolves it. The offsets are not the
- * free variable here; THE VENUE ZONE IS. The sheet buckets and prints in
- * `scheduleSettings.tz` (amendment 4) and this seed chooses that value, so
- * choosing one where "now" is local midday puts ~12 hours of room on each
- * side of the day boundary at every hour of the real clock. The offsets then
- * go back to a flat ±90/-30 minutes: far enough that render latency is
- * irrelevant, and provably inside one local day whenever the run starts.
- *
- * `Etc/GMT±N` is POSIX-style and INVERTS THE SIGN — `Etc/GMT-5` is UTC+5.
- * These zones are deliberate: fixed-offset and DST-free, so a real zone's
- * seasonal shift cannot move the midday anchor out from under the seed.
- */
-function middayZoneFor(nowMs: number): string {
-  const offsetHours = 12 - new Date(nowMs).getUTCHours();
-  if (offsetHours === 0) return "UTC";
-  return `Etc/GMT${offsetHours > 0 ? "-" : "+"}${Math.abs(offsetHours)}`;
-}
+// `middayZoneFor` - the fixed-offset zone in which the real clock reads local MIDDAY, so a seed planned in it has ~12 hours of room on each
+// side of the day boundary at every hour of the run (fix round 4 of this file, the argument now lives with the helper) - is shared:
+// ./midday-zone.ts, also used by match-day.spec.ts and the Match Day walkthroughs (PB3 review m2).
 
 async function seedRunSheetDivision(
   request: import("@playwright/test").APIRequestContext,

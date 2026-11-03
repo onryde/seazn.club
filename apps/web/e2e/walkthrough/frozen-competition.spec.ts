@@ -16,6 +16,7 @@ import {
   withDb,
 } from "../helpers";
 import { dismissConsent, freshOrg } from "../directory-kit";
+import { middayZoneFor, withinToday } from "../midday-zone";
 
 /**
  * Walkthrough — a BILLING-FROZEN competition on its match day (Match Day PB2, owner rulings 2026-11-02: "apply rec" — a
@@ -101,17 +102,16 @@ async function seedFrozenDay(request: APIRequestContext, orgId: string, label: s
     { orgId },
   );
   const [c1, c2, c3] = [courts[0]!, courts[1]!, courts[2]!];
+  // The division plans in the zone where the real clock reads midday, so the board's "today" holds every seeded instant at every hour of
+  // the run; `within` refuses an offset that would leave that day rather than clamping it (e2e/midday-zone.ts, PB3 review m2).
+  const now = Date.now();
+  const zone = middayZoneFor(now);
+  const within = withinToday(now, zone);
   const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
-    tz: "UTC",
+    tz: zone,
     config: { matchMinutes: 30, courts: [c1.id, c2.id, c3.id] },
   });
   expect(settings.status, `schedule settings: ${JSON.stringify(settings.error)}`).toBeLessThan(300);
-
-  // Inside today's UTC day, near now, a minute clear of either end: the board is TODAY's.
-  const now = Date.now();
-  const dayStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
-  const within = (offsetMin: number) =>
-    new Date(Math.min(dayStart + 86_400_000 - 60_000, Math.max(dayStart + 60_000, now + offsetMin * 60_000))).toISOString();
   const pair = await withDb(async (sql) => {
     const rows = await sql<{ id: string; home_entrant_id: string; away_entrant_id: string }[]>`
       select id, home_entrant_id, away_entrant_id from fixtures where division_id = ${divisionId}`;
