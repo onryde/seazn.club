@@ -21,6 +21,7 @@ import { sportOptionsFrom, type VariantRow } from "@/lib/sport-options";
 // P9 scope item 5: org venues+courts feed the Scheduling step's court
 // multi-picker.
 import { listVenues } from "@/server/usecases/venues";
+import { recentDivisionSports } from "@/server/usecases/divisions";
 
 export default async function NewDivisionPage({
   params,
@@ -73,9 +74,8 @@ export default async function NewDivisionPage({
     const sportRows = await tx<{ key: string; name: string; module_version: string }[]>`
       select key, name, module_version from sports order by name`;
     // C9 R2 (owner 2026-11-03): the Sport picker leads with the sports this organisation has run divisions in, most
-    // recent first - one small query (archived divisions count: they were run).
-    const recentRows = await tx<{ sport_key: string }[]>`
-      select sport_key from divisions where org_id = ${auth.orgId} group by sport_key order by max(created_at) desc`;
+    // recent first (archived divisions count: they were run); ties break on the sport key (review 3, m1).
+    const recent = await recentDivisionSports(tx, auth.orgId);
     // `config` is the variant's preset: the builder counts cricket's overs in the variant's own over length with it.
     const variantRows = await tx<VariantRow[]>`
       select sport_key, key, name, is_system, config from sport_variants
@@ -93,7 +93,7 @@ export default async function NewDivisionPage({
         return undefined;
       }
     });
-    return { sports: options, recentSports: recentRows.map((r) => r.sport_key) };
+    return { sports: options, recentSports: recent };
   });
 
   return (
