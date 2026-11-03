@@ -1,10 +1,11 @@
 // W3 Task 11 (SW-H2, RB3-3; X-SW-16) — the builder's Swiss round count. Rulebook-W3-swiss.md §3.1's audit probe: the old
 // default of 5 "dead-ends in 15.5% of events" on a field of 6 (5 exceeds its safe maximum of 3). The default is now 3, the
 // owner's band for a field of up to 8 (§3.2); the box takes any count from 1; and a guidance line under it names the
-// field's recommendation and hard maximum for the builder's one entrant count — the example draw's (default 8), so
-// changing the example's entrants moves the line.
+// field's recommendation and hard maximum for the builder's one entrant count. Since Match Day C9 that is the Format
+// step's plan (default 16, the owner-approved mock's "16 pairs on 2 courts in 4 hours"), which the example draw also
+// uses, so changing the plan's entrants moves the line.
 //
-// Expected numbers are §3.2's table typed here (8 → 3 recommended, at most 7; 20 → 5, at most 19; 5 → 2, at most 5),
+// Expected numbers are §3.2's table typed here (16 → 4 recommended, at most 15; 20 → 5, at most 19; 5 → 2, at most 5),
 // never read off `swissRoundsGuidance`. Every Swiss template the builder offers is swept.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
@@ -69,7 +70,7 @@ beforeEach(() => {
 });
 
 describe("division builder — Swiss rounds default, minimum and guidance (X-SW-16)", () => {
-  it("every Swiss format opens at 3 rounds (not 5), accepts 1, caps at 15, and names the guidance for 8 entrants", () => {
+  it("every Swiss format opens at 3 rounds (not 5), accepts 1, caps at 15, and names the guidance for the plan's 16 entrants", () => {
     let checked = 0;
     for (const template of SWISS_TEMPLATES) {
       const h = mount();
@@ -79,7 +80,7 @@ describe("division builder — Swiss rounds default, minimum and guidance (X-SW-
       expect(String(propsOf(box!).value), template).toBe("3");
       expect(propsOf(box!).min, template).toBe(1);
       expect(propsOf(box!).max, template).toBe(15);
-      expect(guidance(h), template).toBe(fill(EN["swiss.rounds.guidance.other"]!, { n: 8, count: 3, hardMax: 7 }));
+      expect(guidance(h), template).toBe(fill(EN["swiss.rounds.guidance.other"]!, { n: 16, count: 4, hardMax: 15 }));
       // The line DESCRIBES the box and is not part of its name: outside the label (formats.spec.ts finds the box by
       // its exact label "Rounds"), wired by aria-describedby.
       const label = h.tree().find((e) => e.type === "label" && walk(e).includes(box!));
@@ -98,7 +99,7 @@ describe("division builder — Swiss rounds default, minimum and guidance (X-SW-
     expect(guidance(h)).toBeNull();
   });
 
-  it("the default reaches the request: the example draw is asked for 3 Swiss rounds", async () => {
+  it("the default reaches the request: the example draw is asked for 3 Swiss rounds, for the plan's 16 entrants", async () => {
     const h = mount();
     pickFormat(h, EN["format.template.swiss.label"]!);
     const show = h.tree().find((e) => e.type === "button" && textOf(e) === EN["wizard.showExample"]);
@@ -106,11 +107,11 @@ describe("division builder — Swiss rounds default, minimum and guidance (X-SW-
     await flush();
     expect(apiV1Mock).toHaveBeenCalledTimes(1);
     const body = (apiV1Mock.mock.calls[0]![1] as { json: { count: number; stages: { kind: string; config: { rounds?: number } }[] } }).json;
-    expect(body.count).toBe(8);
+    expect(body.count).toBe(16);
     expect(body.stages.find((s) => s.kind === "swiss")?.config.rounds).toBe(3);
   });
 
-  it("the line follows the example's entrant count (20 → 5 recommended, at most 19; 5 → 2, at most 5)", async () => {
+  it("the line follows the plan's entrant count (20 → 5 recommended, at most 19; 5 → 2, at most 5)", async () => {
     const h = mount();
     pickFormat(h, EN["format.template.swiss.label"]!);
     const show = h.tree().find((e) => e.type === "button" && textOf(e) === EN["wizard.showExample"]);

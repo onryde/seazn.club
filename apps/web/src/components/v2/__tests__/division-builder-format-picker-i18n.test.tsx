@@ -7,7 +7,7 @@
 // (format-templates.test.ts's coverage test) cannot prove — a component can
 // still hardcode English while the dictionary sits there unused.
 //
-// The Format tab's section is CSS-hidden (not JS-conditional) when another
+// The Format step's section is CSS-hidden (not JS-conditional) when another
 // tab is active — `className={... ${tab === "format" ? "" : "hidden"}}`, not
 // `{tab === "format" && ...}` (division-builder.tsx, the `tab === "format"`
 // section) — so its markup is present in a bare renderToStaticMarkup pass
@@ -64,18 +64,16 @@ function renderBuilder(dict: Dict, locale: Locale): string {
 }
 
 /** Isolates the picker's own card grid from the rest of the wizard markup.
- *  Necessary, not cosmetic: `FormatRecommendStrip` (a sibling component, out
- *  of this task's scope) renders its OWN numbered list of recommended
- *  formats on the same page, reusing stage `name:` fields that happen to
- *  share English words with STAGE_TEMPLATES' keys (e.g. "Knockout") — a
- *  page-wide `.not.toContain(enLabel)` check false-fails against THAT
- *  unrelated text, not against a real regression in the picker this task
- *  actually touched. Bounded by the two `sm:grid-cols-3` grids either side of
- *  the picker's own (division-builder.tsx, the template-cards `<div>` and the
- *  legs/pools/qualify knobs `<div>` right after it). */
+ *  Necessary, not cosmetic: the Review step's stage list reuses stage `name:`
+ *  fields that share English words with STAGE_TEMPLATES' labels (e.g.
+ *  "Knockout"), so a page-wide `.not.toContain(enLabel)` check would
+ *  false-fail against THAT text, not against a regression in the picker.
+ *  Bounded by the card grid's own testid and the end of its fieldset
+ *  (division-builder.tsx, Match Day C9: every offered card is rendered, the
+ *  ones past the suggested four folded with `hidden`). */
 function pickerSection(html: string): string {
-  const start = html.indexOf('class="grid gap-2 sm:grid-cols-3"');
-  const end = html.indexOf('class="grid gap-4 sm:grid-cols-3"', start);
+  const start = html.indexOf('data-testid="division-builder-templates"');
+  const end = html.indexOf("</fieldset>", start);
   if (start === -1 || end === -1) {
     throw new Error("could not locate the format picker's card grid in the rendered markup");
   }
@@ -112,7 +110,7 @@ describe("division builder's format picker renders dictionary copy, not the old 
 
         // Only assert English is ABSENT where the translation actually
         // differs — a couple of short proper nouns/cognates (e.g. fr/nl
-        // "Americano (padel)", nl "Ladder") are legitimately identical to
+        // "Americano", nl "Ladder") are legitimately identical to
         // en, and asserting absence there would always fail: a vacuous
         // check, not a strict one (same reasoning as
         // constraints-panel-i18n.test.tsx).

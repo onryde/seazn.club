@@ -71,7 +71,8 @@ describe("the division builder: switching Sport to Chess drops an americano/mexi
   it("harness guard: badminton renders every card, and a picked americano/mexicano is the one checked card", () => {
     for (const k of REFUSED_FOR_CHESS) {
       const h = mount([BADMINTON, CHESS]);
-      expect(cards(h).map((c) => c.key)).toEqual(OFFERED_KEYS);
+      // Every offered card, in the order the Format step ranks them for the plan (Match Day C9), so compared as a set.
+      expect(cards(h).map((c) => c.key).sort()).toEqual([...OFFERED_KEYS].sort());
       expect(checked(h), "the builder opens at league").toEqual(["league"]);
       pickTemplate(h, k);
       expect(checked(h), k).toEqual([k]);

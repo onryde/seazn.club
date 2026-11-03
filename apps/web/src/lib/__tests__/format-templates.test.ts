@@ -653,7 +653,7 @@ describe("STAGE_TEMPLATES — every key has dictionary-backed label/help copy (F
     });
   }
 
-  it("es/fr/nl are real translations, not English left in place (label OR help differs from en per key — a couple of short proper nouns/cognates, e.g. \"Ladder\"/\"Americano (padel)\", are legitimately identical in one field, so this only requires at least one of the two to differ)", () => {
+  it("es/fr/nl are real translations, not English left in place (label OR help differs from en per key — a couple of short proper nouns/cognates, e.g. \"Ladder\"/\"Americano\", are legitimately identical in one field, so this only requires at least one of the two to differ)", () => {
     const en = enUi as Record<string, string>;
     for (const t of STAGE_TEMPLATES) {
       const enLabel = en[`format.template.${t.key}.label`];

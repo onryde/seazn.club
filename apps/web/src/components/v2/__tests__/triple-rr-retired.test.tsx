@@ -46,8 +46,8 @@ function builderGrid(sportKey: string): string {
       <DivisionBuilder competitionId="c1" orgSlug="org" compSlug="comp" sports={[sport]} viewerPlan="community" />
     </DictProvider>,
   );
-  const start = html.indexOf('class="grid gap-2 sm:grid-cols-3"');
-  const end = html.indexOf('class="grid gap-4 sm:grid-cols-3"', start);
+  const start = html.indexOf('data-testid="division-builder-templates"');
+  const end = html.indexOf("</fieldset>", start);
   if (start === -1 || end === -1) throw new Error("could not locate the format picker's card grid");
   return html.slice(start, end);
 }

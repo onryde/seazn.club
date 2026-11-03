@@ -67,7 +67,8 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 });
 
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
-import { DivisionRulesStrip, stripPropsOf, type DivisionShape } from "./_rules-strip";
+import { DivisionRulesStrip, expandRules, stripPropsOf, type DivisionShape } from "./_rules-strip";
+import { builderStrip, currentStep } from "./_division-builder-driver";
 import { sportOptionsFrom } from "@/lib/sport-options";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 
@@ -129,8 +130,10 @@ describe("D2 a new badminton division defaults to bwf-3x15 in the builder and th
       competitionId: "c1", orgSlug: "org", compSlug: "comp", sports,
       constraintsAllowed: true, archivedSlotsExplainRefusal: false, viewerPlan: "community",
     });
+  /** The builder's variant select: on its Division rules step since Match Day C9, the strip's own select (draft mode),
+   *  rendered with the props the builder hands the strip. */
   const variantSelectOf = (h: ReturnType<typeof mount>): ReactElement => {
-    const sel = h.tree().find((e) => e.type === "select" && propsOf(e)["data-testid"] === "division-builder-variant");
+    const sel = builderStrip(h).tree().find((e) => e.type === "select" && propsOf(e)["data-testid"] === "division-settings-variant");
     if (!sel) throw new Error("no variant select");
     return sel;
   };
@@ -417,12 +420,17 @@ describe("TN-CF-1 the tennis fields refuse best of 1 with a match tie-break in t
       constraintsAllowed: true, archivedSlotsExplainRefusal: false, viewerPlan: "community",
     });
   type B = ReturnType<typeof mountBuilder>;
+  /** The rule grid on the builder's Division rules step: the strip (draft mode) rendered with the props the builder hands it,
+   *  its Match format editor opened. Its onChange is the builder's own `setRuleValues`. */
   const gridOf = (h: B): ReactElement => {
-    const g = h.tree().find((e) => typeof propsOf(e).sportKey === "string" && typeof propsOf(e).onChange === "function" && propsOf(e).values !== undefined);
+    const g = builderStrip(h, expandRules).tree().find((e) => typeof propsOf(e).sportKey === "string" && typeof propsOf(e).onChange === "function" && propsOf(e).values !== undefined);
     if (!g) throw new Error("no rule grid");
     return g;
   };
-  const typeRules = (h: B, next: Record<string, string>) => (propsOf(gridOf(h)).onChange as (v: Record<string, string>) => void)({ ...(propsOf(gridOf(h)).values as Record<string, string>), ...next });
+  const typeRules = (h: B, next: Record<string, string>) => {
+    const grid = gridOf(h);
+    (propsOf(grid).onChange as (v: Record<string, string>) => void)({ ...(propsOf(grid).values as Record<string, string>), ...next });
+  };
   const clickButton = (h: B, label: string) => {
     const el = h.tree().find((e) => e.type === "button" && textOf(e).trim() === label);
     if (!el) throw new Error(`no button ${label}`);
@@ -432,9 +440,12 @@ describe("TN-CF-1 the tennis fields refuse best of 1 with a match tie-break in t
     const input = h.tree().find((e) => e.type === "input" && propsOf(e).placeholder === activeDict.current["wizard.divisionNamePlaceholder"]);
     (propsOf(input!).onChange as (e: unknown) => void)({ target: { value: "Open" } });
   };
-  const eligibilityHidden = (h: B): boolean => {
-    const sec = h.tree().find((e) => e.type === "section" && /\bcard\b/.test(String(propsOf(e).className)) && textOf(e).includes(enUi["wizard.tab.eligibility"]));
-    return /\bhidden\b/.test(String(propsOf(sec!).className));
+  /** Who plays and Format passed with Next: on the Division rules step, where the grid is. */
+  const onRules = (h: B, dict: Record<string, string>) => {
+    nameIt(h);
+    clickButton(h, dict["wizard.next"]!);
+    clickButton(h, dict["wizard.next"]!);
+    expect(currentStep(h), "premise: on the Division rules step").toBe("rules");
   };
   const SENTENCE = (dict: Record<string, string>) => dict["rules.err.bo1MatchTiebreak"]!;
 
@@ -443,24 +454,24 @@ describe("TN-CF-1 the tennis fields refuse best of 1 with a match tie-break in t
     net.calls.length = 0;
   });
 
-  it("TN-CF-1 the builder: best of 1 with a match tie-break stops Next on the basics tab and says why; one field of the pair fixed, Next goes on", () => {
+  it("TN-CF-1 the builder: best of 1 with a match tie-break stops Next on the Division rules step and says why; one field of the pair fixed, Next goes on", () => {
     const h = mountBuilder();
-    nameIt(h);
+    onRules(h, enUi as Record<string, string>);
     typeRules(h, { bestOf: "1", finalSet: "mtb10" });
     expect(propsOf(gridOf(h)).state, "the grid is told").toBeDefined();
     clickButton(h, enUi["wizard.next"]);
     expect(h.text()).toContain(SENTENCE(enUi as Record<string, string>));
-    expect(eligibilityHidden(h), "still on the basics tab").toBe(true);
+    expect(currentStep(h), "still on the Division rules step").toBe("rules");
     typeRules(h, { finalSet: "tb10" });
     clickButton(h, enUi["wizard.next"]);
-    expect(eligibilityHidden(h), "off the basics tab").toBe(false);
+    expect(currentStep(h), "on to Review").toBe("review");
     expect(h.text()).not.toContain(SENTENCE(enUi as Record<string, string>));
   });
 
   it("TN-CF-1 the builder says it in Spanish too, and tells the grid which fields it is about", () => {
     activeDict.current = esUi as Record<string, string>;
     const h = mountBuilder();
-    nameIt(h);
+    onRules(h, esUi as Record<string, string>);
     typeRules(h, { bestOf: "1", finalSet: "mtb7" });
     const state = propsOf(gridOf(h)).state as { invalid: Map<string, string[]> };
     expect([...state.invalid.keys()].sort()).toEqual(["bestOf", "finalSet"]);
@@ -470,15 +481,19 @@ describe("TN-CF-1 the tennis fields refuse best of 1 with a match tie-break in t
     expect(h.text(), "not the engine's English constant").not.toContain(BO1_MATCH_TIEBREAK);
   });
 
-  it("TN-CF-1 the builder's Create refuses it too, when the rules were broken after the basics tab was passed (the guard is reached through the grid's handler)", async () => {
+  it("TN-CF-1 the builder's Create refuses it too, when the rules were broken after the step was passed (the guard is reached through the grid's handler)", async () => {
     const h = mountBuilder();
-    nameIt(h);
-    clickButton(h, enUi["wizard.tab.scheduling"]);
+    onRules(h, enUi as Record<string, string>);
+    clickButton(h, enUi["wizard.next"]);
+    expect(currentStep(h), "premise: a clean walk reaches Review").toBe("review");
     typeRules(h, { bestOf: "1", finalSet: "mtb10" });
     net.calls.length = 0;
-    clickButton(h, enUi["wizard.create"]);
+    const create = h.tree().find((e) => propsOf(e)["data-testid"] === "division-builder-create");
+    expect(propsOf(create!).disabled, "Create is disabled while a step is blocked").toBe(true);
+    (propsOf(create!).onClick as () => void)(); // pressed anyway: submit() asks again
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(net.calls.filter((c) => c.url.endsWith("/divisions")), "no division was POSTed").toEqual([]);
+    expect(currentStep(h), "the refusal is shown on the step that holds the grid").toBe("rules");
     expect(h.text()).toContain(SENTENCE(enUi as Record<string, string>));
   });
 
@@ -546,7 +561,7 @@ describe("pickers print the localised variant label, with the raw name as fallba
       competitionId: "c1", orgSlug: "org", compSlug: "comp", sports,
       constraintsAllowed: true, archivedSlotsExplainRefusal: false, viewerPlan: "community",
     });
-    const sel = h.tree().find((e) => e.type === "select" && propsOf(e)["data-testid"] === "division-builder-variant");
+    const sel = builderStrip(h).tree().find((e) => e.type === "select" && propsOf(e)["data-testid"] === "division-settings-variant");
     if (!sel) throw new Error("no variant select");
     return sel;
   };
@@ -603,13 +618,14 @@ describe("pickers print the localised variant label, with the raw name as fallba
   const DAY = Date.parse(BWF_3X15_FROM);
   const BEFORE = DAY - 1; // the last millisecond the note is true
   const hintOf = (h: { tree: () => ReactElement[] }) => h.tree().find((e) => propsOf(e)["data-testid"] === "division-variant-hint");
+  /** The builder on one badminton variant, and its Division rules step: the strip (draft mode) as the builder renders it. */
   const builderFor = (key: string) => {
     const sports = sportWith([]);
     sports[0] = { ...sports[0]!, variants: sports[0]!.variants.filter((v) => v.key === key) } as SportOption;
-    return renderIsland(DivisionBuilder, {
+    return builderStrip(renderIsland(DivisionBuilder, {
       competitionId: "c1", orgSlug: "org", compSlug: "comp", sports,
       constraintsAllowed: true, archivedSlotsExplainRefusal: false, viewerPlan: "community",
-    });
+    }));
   };
   /** The sentence as a reader of `locale` sees it on `BWF_3X15_FROM`: the day-month words, from the instant itself. */
   const dateIn = (locale: string): string =>
@@ -632,7 +648,7 @@ describe("pickers print the localised variant label, with the raw name as fallba
           const h = builderFor(key);
           const hint = hintOf(h);
           seen[key] = hint !== undefined;
-          const sel = h.tree().find((e) => e.type === "select" && propsOf(e)["data-testid"] === "division-builder-variant")!;
+          const sel = h.tree().find((e) => e.type === "select" && propsOf(e)["data-testid"] === "division-settings-variant")!;
           if (hint !== undefined) {
             expect(textOf(hint).trim(), `${locale} ${key}`).toBe(dict["variant.badminton.hint3x15"].replace("{date}", dateIn(locale)));
             expect(propsOf(hint).role).toBe("note");
@@ -677,7 +693,7 @@ describe("pickers print the localised variant label, with the raw name as fallba
         for (const [door, render] of [["builder", () => builderFor("bwf-3x15")], ["settings", settingsFor]] as const) {
           const h = render();
           expect(hintOf(h) !== undefined, `${door} at ${new Date(when).toISOString()}`).toBe(shown);
-          const sel = h.tree().find((e) => e.type === "select" && ["division-builder-variant", "division-settings-variant"].includes(String(propsOf(e)["data-testid"])))!;
+          const sel = h.tree().find((e) => e.type === "select" && propsOf(e)["data-testid"] === "division-settings-variant")!;
           expect(propsOf(sel)["aria-describedby"] !== undefined, `${door}: the select points at the note only while it is there`).toBe(shown);
           checked++;
         }

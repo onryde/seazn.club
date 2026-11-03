@@ -2,7 +2,7 @@
 // longer OFFERS americano or mexicano for chess — both rotate players into pair entrants, and the server refuses the
 // stage (422 CHESS_INDIVIDUAL_ONLY). The picker renders the sport's offer (format-templates.ts templatesForSport).
 //
-// Same plain-SSR harness as division-builder-format-picker-i18n.test.tsx: the Format tab is CSS-hidden, not
+// Same plain-SSR harness as division-builder-format-picker-i18n.test.tsx: the Format step is CSS-hidden, not
 // JS-conditional, so its cards are in a renderToStaticMarkup pass. The builder starts on `sports[0]`, so each render
 // names the sport it is about first. Expected cards come from the ruling (chess loses americano and mexicano) and the
 // en dictionary, never from templatesForSport.
@@ -33,8 +33,8 @@ function picker(first: SportOption): string {
     </DictProvider>,
   );
   // The picker's own card grid, bounded as division-builder-format-picker-i18n.test.tsx bounds it.
-  const start = html.indexOf('class="grid gap-2 sm:grid-cols-3"');
-  const end = html.indexOf('class="grid gap-4 sm:grid-cols-3"', start);
+  const start = html.indexOf('data-testid="division-builder-templates"');
+  const end = html.indexOf("</fieldset>", start);
   if (start === -1 || end === -1) throw new Error("could not locate the format picker's card grid");
   return html.slice(start, end);
 }

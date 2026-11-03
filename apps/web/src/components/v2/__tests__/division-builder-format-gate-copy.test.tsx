@@ -133,7 +133,7 @@ function gates(h: ReturnType<typeof mount>) {
   return h.tree().filter((el) => propsOf(el).feature === "formats.double_elim");
 }
 
-/** Name -> pick a format -> Scheduling tab -> Create. */
+/** Name -> pick a format -> the Review step -> Create. */
 async function submitFromWizard(h: ReturnType<typeof mount>, formatLabel: string) {
   const nameInput = h
     .tree()
@@ -144,7 +144,7 @@ async function submitFromWizard(h: ReturnType<typeof mount>, formatLabel: string
   (propsOf(button(h, uiEn["wizard.tab.format"])).onClick as () => void)();
   (propsOf(templateRadio(h, formatLabel)).onChange as () => void)();
 
-  (propsOf(button(h, uiEn["wizard.tab.scheduling"])).onClick as () => void)();
+  (propsOf(button(h, uiEn["divBuilder.step.review"])).onClick as () => void)();
   (propsOf(button(h, uiEn["wizard.create"])).onClick as () => void)();
   await new Promise((resolve) => setTimeout(resolve, 0));
 }

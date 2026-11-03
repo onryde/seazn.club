@@ -1,6 +1,6 @@
 // Match Day D1 — one source for a division's format field bounds (design 2026-10-31 Phase D).
 //
-// The division builder's Format tab and the Settings Format group set the same four fields — legs, pools, Swiss rounds
+// The division builder's Format step and the Settings Format group set the same four fields — legs, pools, Swiss rounds
 // and the Top N that qualifies — and each carried its own literals. They disagreed (legs 1-2 vs 1-4, rounds from 1 vs
 // from 3, Top N a fixed list vs any number 2-32), so a division one form built could be one the other could not show.
 //
@@ -20,6 +20,7 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expandWithHooks, propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
+import { currentStep, pickTemplate } from "@/components/v2/__tests__/_division-builder-driver";
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { LegsChoice, legsChoices } from "@/components/v2/legs-choice";
 import { AddStageForm } from "@/components/v2/stages-panel";
@@ -113,13 +114,9 @@ function mountSettings(stages: StageProp[] = []): Island {
   );
 }
 
-/** The builder's template cards are radios in `templatesForSport` order. */
+/** The builder's template cards carry their key (`data-template`); they are ranked for the plan, not in offer order. */
 function pickBuilderTemplate(h: Island, key: string): void {
-  const index = templatesForSport(SPORT).findIndex((t) => t.key === key);
-  const radios = h.tree().filter((e) => e.type === "input" && propsOf(e).name === "template");
-  const radio = radios[index];
-  if (index === -1 || !radio) throw new Error(`no builder template card for ${key}`);
-  (propsOf(radio).onChange as () => void)();
+  pickTemplate(h, key);
 }
 
 function pickSettingsTemplate(h: Island, key: string): void {
@@ -215,7 +212,7 @@ describe("FORMAT_BOUNDS — the owner's legs ruling", () => {
 });
 
 describe("both forms offer exactly FORMAT_BOUNDS", () => {
-  it("the division builder's Format tab: every bounded field of every template", () => {
+  it("the division builder's Format step: every bounded field of every template", () => {
     const { checked, seen, mismatches } = sweep(mountBuilder(), pickBuilderTemplate);
     console.info(`[format-bounds] builder: ${checked} bounded fields checked over ${templatesForSport(SPORT).length} templates`);
     expect(mismatches).toEqual([]);
@@ -408,7 +405,7 @@ describe("the builder refuses a format knob outside its bounds before any POST (
     if (!input) throw new Error(`no ${bound} control on screen`);
     (propsOf(input).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
   }
-  /** A builder on its Format tab (Basics passed with a name), on `template`. */
+  /** A builder on its Format step (Who plays passed with a name), on `template`. */
   function onFormat(template: string): Island {
     const h = mountBuilder();
     const name = h.tree().find((e) => propsOf(e)["data-testid"] === "division-builder-name");
@@ -421,14 +418,16 @@ describe("the builder refuses a format knob outside its bounds before any POST (
     const p = h.tree().find((e) => propsOf(e)["data-testid"] === "division-builder-error");
     return p ? textOf(p) : null;
   };
-  const onLastTab = (h: Island) => h.tree().some((e) => propsOf(e)["data-testid"] === "division-builder-create");
+  // Match Day C9: Next from Format goes on to Division rules (the step after it), so "accepted" is "left Format for it".
+  const wentOn = (h: Island) => currentStep(h) === "rules";
+  const onReview = (h: Island) => h.tree().some((e) => propsOf(e)["data-testid"] === "division-builder-create");
   const calls = (path: RegExp) => apiV1Mock.mock.calls.filter(([url]) => path.test(String(url))).length;
 
   it("premise: the refusal copy exists and names the field and the brief's range", () => {
     expect(topNRefusal).toBe("Qualify to finals: choose a whole number from 2 to 32.");
   });
 
-  it("Next: empty, 40, 3.5 and 1 are refused on the Format tab with the sentence; 2 and 32 go on to Scheduling (counts)", () => {
+  it("Next: empty, 40, 3.5 and 1 are refused on the Format step with the sentence; 2 and 32 go on to Division rules (counts)", () => {
     let refused = 0;
     let accepted = 0;
     for (const value of [...REFUSED, ...ACCEPTED]) {
@@ -437,11 +436,11 @@ describe("the builder refuses a format knob outside its bounds before any POST (
       press(h, uiEn["wizard.next"]);
       if (REFUSED.includes(value)) {
         expect(errorText(h), JSON.stringify(value)).toBe(topNRefusal);
-        expect(onLastTab(h), JSON.stringify(value)).toBe(false);
+        expect(currentStep(h), JSON.stringify(value)).toBe("format");
         refused++;
       } else {
         expect(errorText(h), value).toBeNull();
-        expect(onLastTab(h), value).toBe(true);
+        expect(wentOn(h), value).toBe(true);
         accepted++;
       }
     }
@@ -469,18 +468,31 @@ describe("the builder refuses a format knob outside its bounds before any POST (
     expect(checked).toBe(6);
   });
 
-  it("Create, reached by jumping back to Basics and on to Scheduling: 3.5 creates no division at all", async () => {
-    apiV1Mock.mockClear();
+  it("a jump past Format with a bad knob stops ON Format: back to Who plays, then the Review step", () => {
     const h = onFormat("league_ko");
     type(h, "qualify", "3.5");
-    press(h, uiEn["wizard.tab.basics"]); // going back is free
-    press(h, uiEn["wizard.tab.scheduling"]); // forward from Basics checks Basics only
-    expect(onLastTab(h), "premise: the jump reaches Create").toBe(true);
+    press(h, uiEn["divBuilder.step.who"]); // going back is free
+    expect(currentStep(h)).toBe("who");
+    press(h, uiEn["divBuilder.step.review"]); // forward judges every step before the target, not just the one left
+    expect(onReview(h), "the jump does not reach Create").toBe(false);
+    expect(currentStep(h)).toBe("format");
+    expect(errorText(h)).toBe(topNRefusal);
+  });
+
+  it("Create, with a bad knob behind it (the Format step stays mounted, folded, under Review): 3.5 creates no division at all", async () => {
+    apiV1Mock.mockClear();
+    const h = onFormat("league_ko");
+    press(h, uiEn["wizard.next"]);
+    press(h, uiEn["wizard.next"]);
+    expect(onReview(h), "premise: a clean walk reaches Create").toBe(true);
+    type(h, "qualify", "3.5");
     const create = h.tree().find((e) => propsOf(e)["data-testid"] === "division-builder-create");
-    (propsOf(create!).onClick as () => void)();
+    expect(propsOf(create!).disabled, "Create is disabled while a step is blocked").toBe(true);
+    (propsOf(create!).onClick as () => void)(); // pressed anyway: submit() asks again
     await flush();
     expect(calls(/\/divisions$/)).toBe(0);
     expect(calls(/\/stages$/)).toBe(0);
+    expect(currentStep(h), "the refusal is shown on the step that holds the knob").toBe("format");
     expect(errorText(h)).toBe(topNRefusal);
   });
 
@@ -502,7 +514,7 @@ describe("the builder refuses a format knob outside its bounds before any POST (
       pickBuilderTemplate(hidden, "league");
       press(hidden, uiEn["wizard.next"]);
       expect(errorText(hidden), `league, ${bound} ${value} hidden`).toBeNull();
-      expect(onLastTab(hidden)).toBe(true);
+      expect(wentOn(hidden)).toBe(true);
       checked++;
     }
     expect(checked).toBe(2);
