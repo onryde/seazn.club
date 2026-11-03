@@ -324,6 +324,25 @@ describe("the cap note reads in all four languages", () => {
     for (const w of ["only your team", "solo tu equipo", "seule votre équipe", "alleen je team"]) expect(BAN.test(w), w).toBe(true);
   });
 
+  // PB3 re-review 3: `visibility.private.consequence` is the Private segment's line - on the New competition form AND in the shared
+  // visibility picker - and it still said "Only your team can see it", the word the owner retired. It names the same audience as the
+  // checklist row, in that row's own words, in every locale, and carries no "team" word either.
+  it("the Private line names the organisation's members as the checklist row does, never a team, in every locale", () => {
+    const KEY = "visibility.private.consequence";
+    const BAN = /(?<![\p{L}])(team|teams|équipe|équipes|equipo|equipos)(?![\p{L}])/iu;
+    let checked = 0;
+    for (const [locale, d] of Object.entries(dicts)) {
+      const row = d["comp.wizard.reach.team"]!.toLowerCase();
+      expect(row, `${locale}: the row exists`).toBeTruthy();
+      expect(d[KEY], `${locale} ${KEY}`).toBeTruthy();
+      expect(d[KEY]!.toLowerCase(), `${locale} ${KEY} names the row's audience: "${row}"`).toContain(row);
+      expect(BAN.test(d[KEY]!), `${locale} ${KEY} says "team": ${d[KEY]}`).toBe(false);
+      if (locale !== "en") expect(d[KEY], `${locale} ${KEY} is still English`).not.toBe(dicts.en![KEY]);
+      checked++;
+    }
+    expect(checked, "all four locales").toBe(4);
+  });
+
   it("the note renders in each locale's own words (and the limit is interpolated, never left as {limit})", () => {
     for (const [locale, d] of Object.entries(dicts)) {
       const html = renderToStaticMarkup(

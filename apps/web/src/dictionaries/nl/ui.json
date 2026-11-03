@@ -337,7 +337,7 @@
   "progression.rosterDrift.sheetsStop": "Geprinte scoreformulieren voor deze fase werken dan niet meer.",
   "visibility.legend": "Wie dit kan zien",
   "visibility.private.label": "Privé",
-  "visibility.private.consequence": "Alleen jouw team kan het zien.",
+  "visibility.private.consequence": "Alleen leden van je organisatie op Seazn kunnen het zien.",
   "visibility.unlisted.label": "Alleen link",
   "visibility.unlisted.consequence": "Iedereen met de link kan bekijken. Verborgen voor Google en onze directory.",
   "visibility.public.label": "Openbaar",

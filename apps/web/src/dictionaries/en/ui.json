@@ -337,7 +337,7 @@
   "progression.rosterDrift.sheetsStop": "Printed scorer sheets for this stage will stop working.",
   "visibility.legend": "Who can see this",
   "visibility.private.label": "Private",
-  "visibility.private.consequence": "Only your team can see it.",
+  "visibility.private.consequence": "Only members of your organisation on Seazn can see it.",
   "visibility.unlisted.label": "Link only",
   "visibility.unlisted.consequence": "Anyone with the link can view. Hidden from Google and our directory.",
   "visibility.public.label": "Public",
