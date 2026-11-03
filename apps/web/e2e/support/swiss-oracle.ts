@@ -24,6 +24,8 @@ export interface OracleFixture {
   readonly sets?: readonly [number, number];
   /** Rally points won by home and away over the whole match. */
   readonly points?: readonly [number, number];
+  /** Goals scored by home and away - a goals sport's result (rulebook §5, the goals family). */
+  readonly goals?: readonly [number, number];
 }
 
 /** The part of the engine's declared points rule (`PointsRule`) the oracle reads - typed here, structurally, not imported. */
@@ -174,6 +176,23 @@ export function buchholzCut1(fixtures: readonly OracleFixture[], entrant: string
   const vurs = parts.filter((p) => p.kind === "absent" || p.kind === "absent_last");
   const cut = Math.min(...(vurs.length > 0 ? vurs : parts).map((p) => p.value));
   return parts.reduce((s, p) => s + p.value, 0) - cut;
+}
+
+/** Opponents' collective goal difference (rulebook §5 "New keys": `opp_diff`, the goals family's UEFA criterion): the sum of
+ *  every played opponent's own goal difference over the whole stage. The rulebook defines no unplayed-round value for it, so a
+ *  bye anywhere on the table is a refusal, not a guess. */
+export function oppDiff(fixtures: readonly OracleFixture[], entrant: string): number {
+  const gd = new Map<string, number>();
+  for (const f of fixtures) {
+    if (f.away === null) refuse(`round ${f.round}: opp_diff over a bye is not modelled`);
+    const [h, a] = f.goals ?? refuse(`round ${f.round}: opp_diff needs the board's goals`);
+    gd.set(f.home, (gd.get(f.home) ?? 0) + h - a);
+    gd.set(f.away!, (gd.get(f.away!) ?? 0) + a - h);
+  }
+  if (!gd.has(entrant)) refuse(`${entrant} is not on the table`);
+  return fixtures
+    .filter((f) => f.home === entrant || f.away === entrant)
+    .reduce((s, f) => s + gd.get(f.home === entrant ? f.away! : f.home)!, 0);
 }
 
 /** A row the chain ranks: the entrant's value under each key the test can state. A key the chain reaches for a tied group

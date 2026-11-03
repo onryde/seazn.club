@@ -14,6 +14,7 @@ import {
   display,
   drawPointsOf,
   levelGroups,
+  oppDiff,
   rankByChain,
   ratio,
   tablePoints,
@@ -159,5 +160,27 @@ describe("swiss-oracle: the chain's order (rulebook §5, §6.2)", () => {
   it("guards: a chain key the oracle does not model, and a tie reaching a key a row lacks, are refused", () => {
     expect(() => rankByChain([row("P", { points: 1 })], ["points", "sberger"], met)).toThrow(OracleRefusal);
     expect(() => rankByChain([row("P", { points: 1 }), row("Q", { points: 1 })], ["points", "buchholz"], met)).toThrow(OracleRefusal);
+  });
+});
+
+describe("swiss-oracle: opponents' goal difference (rulebook §5, the goals family)", () => {
+  // R1: P 2-0 Q, R 3-1 S. R2: P 1-1 R, Q 0-2 S. Goal differences: P +2, Q -4, R +2, S 0 (typed from the four results).
+  const goals = (round: number, home: string, away: string, h: number, a: number): OracleFixture => ({
+    round,
+    home,
+    away,
+    winner: h === a ? null : h > a ? home : away,
+    goals: [h, a],
+  });
+  const FX = [goals(1, "P", "Q", 2, 0), goals(1, "R", "S", 3, 1), goals(2, "P", "R", 1, 1), goals(2, "Q", "S", 0, 2)];
+
+  it("each entrant sums its opponents' own goal difference: P = Q -4 + R +2 = -2, Q = P +2 + S 0 = 2, R = S 0 + P +2 = 2, S = R +2 + Q -4 = -2", () => {
+    expect(["P", "Q", "R", "S"].map((id) => oppDiff(FX, id))).toEqual([-2, 2, 2, -2]);
+  });
+
+  it("guards: a bye, a board without goals, and an entrant not on the table are refused", () => {
+    expect(() => oppDiff([...FX, bye(3, "P")], "Q")).toThrow(OracleRefusal);
+    expect(() => oppDiff([win(1, "P", "Q")], "P")).toThrow(OracleRefusal);
+    expect(() => oppDiff(FX, "Nobody")).toThrow(OracleRefusal);
   });
 });
