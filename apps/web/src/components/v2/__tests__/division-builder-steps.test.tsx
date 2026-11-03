@@ -272,6 +272,9 @@ describe("the four steps", () => {
 describe("Review: a receipt, Edit back to each step, Create", () => {
   it("Edit on the Format row opens Format with a way straight back; the receipt shows the change", () => {
     const h = mount(sportsFor("badminton"));
+    setName(h, "Open");
+    next(h);
+    pickTemplate(h, "league");
     walkToReview(h);
     expect(byTestId(h, "division-builder-back-to-review"), "not offered on a normal walk").toBeUndefined();
     expect(reviewRow(h, "format")).toContain(UI["format.template.league.label"]);
@@ -476,7 +479,8 @@ describe("Create", () => {
 });
 
 describe("the entrant kind (asked at creation; the engine's model per sport)", () => {
-  it("left at the sport's default, nothing is sent; another kind is sent with every kind the sport allows", async () => {
+  // Owner ruling 2026-11-03 (C9 Q3): a picked kind narrows the division to that kind (Settings can widen it later).
+  it("left at the sport's default, nothing is sent; another kind narrows the division to that kind alone", async () => {
     const untouched = mount(sportsFor("badminton"));
     walkToReview(untouched, "Open");
     pressCreate(untouched);
@@ -490,7 +494,8 @@ describe("the entrant kind (asked at creation; the engine's model per sport)", (
     expect(reviewRow(pairs, "who")).toContain(UI["divBuilder.entrants.kind.pair"]);
     pressCreate(pairs);
     await flush();
-    expect((divisionBody().config as { entrants?: unknown }).entrants).toEqual({ kinds: [...modelOf("badminton").kinds], defaultKind: "pair" });
+    expect(modelOf("badminton").kinds, "premise: badminton allows more than pairs").toContain("individual");
+    expect((divisionBody().config as { entrants?: unknown }).entrants).toEqual({ kinds: ["pair"], defaultKind: "pair" });
   });
 
   it("opens at the engine's default per sport - teams for volleyball, individuals for badminton (class 19)", () => {

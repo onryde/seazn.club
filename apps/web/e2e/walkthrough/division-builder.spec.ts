@@ -29,6 +29,15 @@ import { dismissCookieBanner } from "../scorepad-a11y-kit";
  * builder submits through, unchanged by C9 — so "the payload is unchanged"
  * means the same stages any earlier builder sent for the same knobs.
  *
+ * ## A lost answer (C9 fix round 1, I1)
+ *
+ * The first stages request reaches the server, which makes the stages, and its
+ * answer is then lost (Playwright fetches it and aborts it to the page): the
+ * organiser sees a refusal on Format, the steps already saved with the division
+ * read-only and saying so, and Create again REPLACES the stages. The database
+ * then holds one division with the values typed before the refusal and the
+ * format's stages once - a second append would have doubled them.
+ *
  * ## Chess
  *
  * The second test is chess with online play: on Division rules, online play is
@@ -150,18 +159,24 @@ type DivisionRow = {
   age_cutoff_month: number | null;
   age_cutoff_day: number | null;
   eligibility_note: string | null;
+  camera_policy: string | null;
 };
 type StageRow = { seq: number; kind: string; name: string; config: Record<string, unknown>; progression: unknown };
 
-async function readBack(slug: string, competitionId: string): Promise<{ division: DivisionRow; stages: StageRow[]; schedule: Record<string, unknown> | null }> {
+async function readBack(
+  slug: string,
+  competitionId: string,
+): Promise<{ division: DivisionRow; stages: StageRow[]; schedule: Record<string, unknown> | null; divisionsInCompetition: number }> {
   return withDb(async (sql) => {
     const [division] = await sql<DivisionRow[]>`
-      select id, slug, name, sport_key, variant_key, config, tiebreakers, category, age_max, age_cutoff_month, age_cutoff_day, eligibility_note
+      select id, slug, name, sport_key, variant_key, config, tiebreakers, category, age_max, age_cutoff_month, age_cutoff_day, eligibility_note,
+             camera_policy
       from divisions where competition_id = ${competitionId} and slug = ${slug}`;
     if (!division) throw new Error(`no division ${slug} in ${competitionId}`);
     const stages = await sql<StageRow[]>`select seq, kind, name, config, progression from stages where division_id = ${division.id} order by seq`;
     const [schedule] = await sql<{ config: Record<string, unknown> }[]>`select config from schedule_settings where division_id = ${division.id}`;
-    return { division, stages: [...stages], schedule: schedule?.config ?? null };
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from divisions where competition_id = ${competitionId}`;
+    return { division, stages: [...stages], schedule: schedule?.config ?? null, divisionsInCompetition: n };
   });
 }
 
@@ -172,12 +187,13 @@ async function landed(page: Page): Promise<string> {
 }
 
 test("an organiser makes a division in four steps, edits it from Review, and the record holds every field", async ({ page, request }, testInfo) => {
-  test.setTimeout(budget(4, 70, 4));
+  test.setTimeout(budget(5, 90, 4));
   const G = mod("generic");
   const model = effectiveEntrantModel(G.entrantModel ?? null, null);
   // A kind that is NOT the sport's default, so the choice is sent (class 19: the default goes unsent).
   const kind = model.kinds.find((k) => k !== model.defaultKind)!;
-  expect(kind, "premise: generic allows a second entrant kind").toBeDefined();
+  expect(kind, "premise: generic allows a second entrant kind, Teams (owner Q3's case)").toBe("team");
+  expect(model.kinds.length, "premise: generic allows more than the one kind picked").toBeGreaterThan(1);
   const variant = "score";
   const preset = (G.variants as Record<string, Record<string, unknown>>)[variant]!;
   const presetPoints = preset.points as Record<string, number>;
@@ -242,6 +258,10 @@ test("an organiser makes a division in four steps, edits it from Review, and the
   await expect(groups.locator("input")).toBeChecked();
   await page.getByLabel(L["wizard.pools"]!, { exact: true }).fill("3");
   await page.getByTestId("legs-choice").getByText(L["wizard.legsHomeAway"]!, { exact: true }).click();
+  // Class 19: carried standings open at "none"; the organiser carries the points into the knockout.
+  const carry = page.getByTestId("division-builder-carry");
+  await expect(carry).toHaveValue("none");
+  await carry.selectOption("points");
   await sweep(page, testInfo, "format", "step2-format");
 
   // ---- 3 Division rules: the strip, in draft mode (no Save anywhere), its Match rules panel open.
@@ -283,8 +303,10 @@ test("an organiser makes a division in four steps, edits it from Review, and the
   await expect(reviewRow(page, "who")).toContainText(fill("divBuilder.review.under", { age: 16 }));
   await expect(reviewRow(page, "format")).toContainText(L["format.template.groups_ko.label"]!);
   await expect(reviewRow(page, "format")).toContainText(plural("divBuilder.review.pools", 3));
-  await expect(reviewRow(page, "points")).toContainText(L["divBuilder.review.own"]!);
-  await expect(reviewRow(page, "tiebreaks")).toContainText(L["divBuilder.review.own"]!);
+  // m7: the rows say what is played, marked the organiser's (the unit suite pins the full words).
+  await expect(reviewRow(page, "points")).toContainText(L["divBuilder.review.points.own"]!.replace("{points}", "").trim());
+  await expect(reviewRow(page, "points")).toContainText("4");
+  await expect(reviewRow(page, "tiebreaks")).toContainText(L["divBuilder.review.order.own"]!.split("{order}")[0]!.trim());
   await expect(reviewRow(page, "schedule")).toContainText(fill("divBuilder.review.minutes", { minutes: 25 }));
   for (const [row, later] of [["who", "who"], ["format", "format"], ["rules", "rules"], ["schedule", "schedule"]] as const) {
     await expect(reviewRow(page, row)).toContainText(L[`divBuilder.review.later.${later}`]!);
@@ -303,23 +325,56 @@ test("an organiser makes a division in four steps, edits it from Review, and the
   await expect(reviewRow(page, "format")).toContainText(plural("divBuilder.review.pools", 2));
   await expect(reviewRow(page, "format")).not.toContainText(plural("divBuilder.review.pools", 3));
 
-  // ---- Create: lands on the new division's Fixtures tab.
+  // ---- Create, on a bad connection (I1): the first stages request lands on the server, and its answer is lost.
+  const stagesCalls: string[] = [];
+  const stagesRoute = "**/api/v1/divisions/*/stages";
+  await page.route(stagesRoute, async (route) => {
+    stagesCalls.push(route.request().method());
+    if (stagesCalls.length > 1) return route.continue();
+    await route.fetch();
+    return route.abort("failed");
+  });
   const create = page.getByTestId("division-builder-create");
   await expect(create).toBeEnabled();
   await create.click();
+  // The refusal lands on Format, the step whose stages were refused.
+  await onStep(page, "format");
+  await expect(page.getByTestId("division-builder-error")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("stages-refused-1280.png"), fullPage: true });
+  // Who plays and Division rules were saved with the division: read-only now, and said so by name.
+  await stepButton(page, "who").click();
+  await onStep(page, "who");
+  await expect(page.getByTestId("division-builder-who").getByTestId("division-builder-saved-note")).toContainText(name);
+  await expect(page.getByTestId("division-builder-name")).toBeDisabled();
+  await stepButton(page, "rules").click();
+  await onStep(page, "rules");
+  await expect(page.getByTestId("division-builder-rules").getByTestId("division-builder-saved-note")).toContainText(name);
+  await expect(win).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath("stages-refused-rules-1280.png"), fullPage: true });
+  await stepButton(page, "review").click();
+  await onStep(page, "review");
+  for (const id of ["who", "rules", "points", "tiebreaks"]) {
+    await expect(page.getByTestId(`division-builder-saved-${id}`), `${id} saved with the division`).toHaveText(L["divBuilder.review.saved"]!);
+  }
+  // ---- Create again: the stages are REPLACED, and it lands on the new division's Fixtures tab.
+  await create.click();
   const slug = await landed(page);
+  await page.unroute(stagesRoute);
+  expect(stagesCalls, "the retry replaces the stages the lost answer made").toEqual(["POST", "PUT"]);
   await expect(page.getByTestId("division-rules-strip")).toBeVisible({ timeout: NAV_MS });
   await page.screenshot({ path: testInfo.outputPath("landing-fixtures-1280.png"), fullPage: true });
 
   // ---- The record, read from the database.
-  const { division, stages, schedule } = await readBack(slug, compId);
+  const { division, stages, schedule, divisionsInCompetition } = await readBack(slug, compId);
+  expect(divisionsInCompetition, "one division, however many times Create was pressed").toBe(1);
   const startIso = await page.evaluate(() => new Date("2030-06-12T09:00").toISOString());
   const endIso = await page.evaluate(() => new Date("2030-06-13T23:59:00").toISOString());
   const fields: [string, unknown, unknown][] = [
     ["name", division.name, name],
     ["sport_key", division.sport_key, "generic"],
     ["variant_key", division.variant_key, variant],
-    ["config.entrants", division.config.entrants, { kinds: [...model.kinds], defaultKind: kind }],
+    // Owner Q3 (2026-11-03): the kind picked narrows the division to it - teams, here (generic's default is individuals).
+    ["config.entrants", division.config.entrants, { kinds: [kind], defaultKind: kind }],
     ["config.points", division.config.points, { ...presetPoints, w: 4 }],
     ["config.onlinePlay (not chess: absent)", division.config.onlinePlay, undefined],
     ["tiebreakers", division.tiebreakers, ownOrder],
@@ -329,20 +384,35 @@ test("an organiser makes a division in four steps, edits it from Review, and the
     ["age_cutoff_month", division.age_cutoff_month, 9],
     ["age_cutoff_day", division.age_cutoff_day, 1],
     ["eligibility_note", division.eligibility_note, note],
+    ["camera_policy (not chess: NULL, the server's default)", division.camera_policy, null],
     ["schedule.matchMinutes", schedule?.matchMinutes, 25],
     ["schedule.startAt", schedule?.startAt, startIso],
     ["schedule.endAt", schedule?.endAt, endIso],
   ];
-  for (const [label, got, want] of fields) expect(got, label).toEqual(want);
+  let fieldsRead = 0;
+  for (const [label, got, want] of fields) {
+    expect(got, label).toEqual(want);
+    fieldsRead++;
+  }
+  // m11: every column the read-back SELECTED is held to an expected value (id and slug key the read itself), so a column
+  // added to the query and never checked reds here; the count is of reads that ran, never of an array literal.
+  const covered = new Set(fields.map(([label]) => label.split(/[ .(]/)[0]!));
+  const unchecked = Object.keys(division).filter((column) => column !== "id" && column !== "slug" && !covered.has(column));
+  expect(unchecked, "a column read back with no expected value").toEqual([]);
+  expect(fieldsRead, "fields read back").toBeGreaterThanOrEqual(Object.keys(division).length - 2);
   const want = buildTemplateStages("groups_ko", { qualified: 4, swissRounds: 3, poolCount: 2, legs: 2 });
-  expect(stages.length, "the stages the format builds").toBe(want.length);
+  expect(stages.length, "the stages the format builds, once: the retry replaced the lost answer's").toBe(want.length);
   let stagesChecked = 0;
   for (const [i, w] of want.entries()) {
     expect(stages[i], `stage ${i + 1}`).toMatchObject({ seq: i + 1, kind: w.kind, name: w.name, config: w.config, progression: w.progression });
     stagesChecked++;
   }
+  expect(stagesChecked, "every stage row read back").toBe(stages.length);
   expect(stagesChecked).toBeGreaterThan(1);
-  expect(fields.length + stagesChecked, "every inventory field read back").toBe(15 + want.length);
+  // K5: the carry picked on Format, on the stage that follows the groups (what was typed, not the builder's).
+  expect(want[1]?.progression, "premise: groups_ko's knockout has a progression to carry into").toBeTruthy();
+  expect((stages[1]?.progression as { carry?: unknown } | null)?.carry, "stage 2's progression.carry").toBe("points");
+  expect((stages[0]?.progression as { carry?: unknown } | null)?.carry, "stage 1 carries nothing").toBeUndefined();
 });
 
 /** The eight controls Lichess plays, read from the catalogue's source (server-only, so not importable here). */
@@ -401,15 +471,23 @@ test("chess: online play is asked first, Lichess is refused without one of its e
   await expect(page.getByTestId("division-builder-error")).toHaveText(L["divBuilder.err.timeControl"]!);
   await page.screenshot({ path: testInfo.outputPath("chess-rules-refused-1280.png"), fullPage: true });
   await clock.selectOption(picked.key);
+  // m6: the camera, next to online play, opens at the server's default (inherit the competition's); Required is picked.
+  const camera = strip.getByTestId("division-builder-camera");
+  await expect(camera).toHaveValue("inherit");
+  await camera.selectOption("required");
+  // m8: the control moves the match length - both clocks spent, base + 40 moves of increment, rounded up.
+  const slotMinutes = Math.ceil((2 * (picked.limitSeconds + 40 * picked.incrementSeconds)) / 60);
+  await expect(page.getByTestId("division-builder-match-minutes")).toHaveValue(String(slotMinutes));
   await sweep(page, testInfo, "rules", "chess-rules");
 
   await next(page);
   await onStep(page, "review");
   await expect(reviewRow(page, "rules")).toContainText(L["divset.onlinePlay.lichess"]!);
+  await expect(reviewRow(page, "rules")).toContainText(fill("divBuilder.review.camera", { policy: L["divset.camera.required"]! }));
   await page.getByTestId("division-builder-create").click();
   const slug = await landed(page);
 
-  const { division, stages } = await readBack(slug, compId);
+  const { division, stages, schedule } = await readBack(slug, compId);
   const stored = division.config.clock as { base?: unknown; increment?: unknown; delay?: unknown } | undefined;
   const checks: [string, unknown, unknown][] = [
     ["sport_key", division.sport_key, "boardgame"],
@@ -419,7 +497,14 @@ test("chess: online play is asked first, Lichess is refused without one of its e
     ["config.entrants (the sport's own default: unsent)", division.config.entrants, undefined],
     ["stages", stages.map((s) => `${s.seq}:${s.kind}`), ["1:swiss"]],
     ["swiss rounds", stages[0]?.config.rounds, 5],
+    ["camera_policy", division.camera_policy, "required"],
+    ["schedule.matchMinutes (the control's length)", schedule?.matchMinutes, slotMinutes],
   ];
-  for (const [label, got, want] of checks) expect(got, label).toEqual(want);
-  expect(checks.length).toBe(7);
+  // m11: the count is of reads that ran, never of the array literal.
+  let read = 0;
+  for (const [label, got, want] of checks) {
+    expect(got, label).toEqual(want);
+    read++;
+  }
+  expect(read, "chess fields read back").toBeGreaterThan(0);
 });

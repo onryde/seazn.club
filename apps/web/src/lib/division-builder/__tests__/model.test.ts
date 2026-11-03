@@ -10,7 +10,9 @@ import {
   SUGGESTED_COUNT,
   entrantKindAfterSportChange,
   entrantsConfigFor,
+  divisionEntrantKinds,
   firstBlockedStep,
+  openingTemplate,
   rankTemplates,
   stepForCreateError,
   suggestTemplates,
@@ -35,13 +37,16 @@ describe("entrant kind", () => {
     expect(checked).toBeGreaterThan(5);
   });
 
-  it("a kind other than the sport's default is sent as the default kind, with every kind the sport allows kept (counts)", () => {
+  // Owner ruling 2026-11-03 (C9 Q3, "apply rec"): the kind picked NARROWS the division to that kind; Settings can widen it.
+  it("a kind other than the sport's default narrows the division to it: kinds = [picked], and it is the default (counts)", () => {
     let checked = 0;
     for (const m of builtinModules) {
       const model = modelOf(m.key);
       for (const kind of model.kinds) {
         if (kind === model.defaultKind) continue;
-        expect(entrantsConfigFor(model, kind), `${m.key} ${kind}`).toEqual({ kinds: [...model.kinds], defaultKind: kind });
+        expect(entrantsConfigFor(model, kind), `${m.key} ${kind}`).toEqual({ kinds: [kind], defaultKind: kind });
+        // The right answer differs from the old one: the sport allows more than the one kind picked.
+        expect(model.kinds.length, `${m.key}: the sport allows more than ${kind}`).toBeGreaterThan(1);
         checked++;
       }
     }
@@ -164,3 +169,25 @@ describe("steps", () => {
     expect(stepForCreateError("division", {})).toBe("review");
   });
 });
+
+describe("the opening format (owner Q5) and the kinds it is picked for (Q3): the empty cases", () => {
+  it("nothing offered opens on League; a division that takes no kind never opens on a pair-rotation format", () => {
+    expect(openingTemplate([], 30, ["individual", "pair"])).toBe("league");
+    // Americano/mexicano only: a division with no declared kinds can play neither, so the offer's first is the fallback.
+    expect(openingTemplate(["americano", "mexicano"], 30, [])).toBe("americano");
+    expect(openingTemplate(["americano", "knockout"], 30, [])).toBe("knockout");
+  });
+
+  it("the kinds a division takes: none picked is every kind the sport allows; a picked kind is that kind alone (counts)", () => {
+    let checked = 0;
+    for (const m of builtinModules) {
+      const model = modelOf(m.key);
+      expect(divisionEntrantKinds(model, null), m.key).toEqual(model.kinds);
+      expect(divisionEntrantKinds(model, model.defaultKind), `${m.key} default`).toEqual(model.kinds);
+      for (const kind of model.kinds) if (kind !== model.defaultKind) expect(divisionEntrantKinds(model, kind), `${m.key} ${kind}`).toEqual([kind]);
+      checked++;
+    }
+    expect(checked).toBe(builtinModules.length);
+  });
+});
+

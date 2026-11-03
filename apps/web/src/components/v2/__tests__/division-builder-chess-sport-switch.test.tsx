@@ -73,7 +73,10 @@ describe("the division builder: switching Sport to Chess drops an americano/mexi
       const h = mount([BADMINTON, CHESS]);
       // Every offered card, in the order the Format step ranks them for the plan (Match Day C9), so compared as a set.
       expect(cards(h).map((c) => c.key).sort()).toEqual([...OFFERED_KEYS].sort());
-      expect(checked(h), "the builder opens at league").toEqual(["league"]);
+      // Exactly one card checked at open (owner Q5: the top suggestion), then each pick moves it.
+      expect(checked(h), "one card is checked at open").toHaveLength(1);
+      pickTemplate(h, "league");
+      expect(checked(h)).toEqual(["league"]);
       pickTemplate(h, k);
       expect(checked(h), k).toEqual([k]);
     }

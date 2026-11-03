@@ -74,6 +74,10 @@ import {
   BUILDER_STEPS,
   entrantKindAfterSportChange,
   entrantsConfigFor,
+  divisionEntrantKinds,
+  OPENING_PLAN,
+  openingKnobs,
+  openingTemplate,
   firstBlockedStep,
   rankTemplates,
   stepForCreateError,
@@ -330,7 +334,17 @@ export function DivisionBuilder({
   const [customNote, setCustomNote] = useState("");
 
   // --- 2 Format ---
-  const [template, setTemplate] = useState("league");
+  // Owner ruling 2026-11-03 (C9 Q5): null until the organiser picks a card; until then the builder opens on the
+  // suggester's first for the sport at the opening plan that the division's entrant kinds can play (model.ts
+  // openingTemplate). It follows the sport and the kind picked on Who plays, never the plan typed on Format.
+  const [templatePicked, setTemplatePicked] = useState<string | null>(null);
+  const template =
+    templatePicked ??
+    openingTemplate(
+      templatesForSport(sportKey).map((t) => t.key),
+      defaultMatchMinutes(sportKey, sport ? pickVariant(sport.key, sport.variants) : ""),
+      sport?.entrants === undefined ? [] : divisionEntrantKinds(sport.entrants, entrantKind),
+    );
   const [qualified, setQualified] = useState(4);
   // C9 fix round 1 (I2): null until the organiser types in the Rounds box; until then the box follows the plan's
   // entrant count (swissRoundsDefault, the same helper Settings opens a new Swiss at), as the match length follows the
@@ -344,9 +358,9 @@ export function DivisionBuilder({
   // example draw's and the Swiss guidance line's.
   // The boxes keep what the organiser TYPES (C9 fix round 1, m3): clamping every keystroke turned "1" into 2 before the
   // "2" of "12" arrived. The value is clamped where it is read (planNumber) and written back clamped on blur.
-  const [planEntrants, setPlanEntrants] = useState("16");
-  const [planVenues, setPlanVenues] = useState("2");
-  const [planHours, setPlanHours] = useState("4");
+  const [planEntrants, setPlanEntrants] = useState(String(OPENING_PLAN.entrants));
+  const [planVenues, setPlanVenues] = useState(String(OPENING_PLAN.venues));
+  const [planHours, setPlanHours] = useState(String(OPENING_PLAN.hours));
   const planEntrantCount = planNumber(planEntrants, PLAN_BOUNDS.entrants);
   const swissRounds = swissRoundsPicked ?? swissRoundsDefault(planEntrantCount);
 
@@ -411,7 +425,7 @@ export function DivisionBuilder({
     setEntrantKind(next?.entrants && entrantKind !== null ? entrantKindAfterSportChange(entrantKind, entrantKindTouched, next.entrants) : (next?.entrants?.defaultKind ?? null));
     // Chess is offered no americano/mexicano (templatesForSport): a pick the new sport is not offered falls back to
     // league rather than staying selected behind a card that is no longer rendered.
-    setTemplate((t) => templateAfterSportChange(t, key));
+    setTemplatePicked((t) => (t === null ? null : templateAfterSportChange(t, key)));
     if (!matchMinutesTouched) setMatchMinutes(defaultMatchMinutes(key, firstVariant));
   }
 
@@ -503,7 +517,7 @@ export function DivisionBuilder({
   };
   // Ranked at the builder's opening knobs, so the suggested four do not reshuffle while a knob moves; each card's own
   // counts are at the knobs as they stand.
-  const ranked = rankTemplates(offered.map((t) => t.key), plan, { qualified: 4, swissRounds: swissRoundsDefault(plan.entrants), poolCount: 2, legs: 1 });
+  const ranked = rankTemplates(offered.map((t) => t.key), plan, openingKnobs(plan.entrants));
   const suggested = ranked.slice(0, SUGGESTED_COUNT).map((r) => r.key);
   // Every offered card is rendered, in rank order; past the suggested four they are folded (hidden, never unmounted)
   // until Show all. The picked card is never folded away.
@@ -1121,7 +1135,7 @@ export function DivisionBuilder({
                       picked ? "border-purple-500 bg-purple-50 text-purple-900" : "border-slate-200 bg-white text-slate-700 hover:border-purple-200"
                     }`}
                   >
-                    <input type="radio" name="template" checked={picked} onChange={() => setTemplate(t.key)} className="sr-only" />
+                    <input type="radio" name="template" checked={picked} onChange={() => setTemplatePicked(t.key)} className="sr-only" />
                     <FormatShape stages={t.build({ qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 })} className={`shrink-0 ${picked ? "text-purple-600" : "text-slate-400"}`} />
                     <span className="min-w-0">
                       <span className="flex flex-wrap items-center gap-x-2">

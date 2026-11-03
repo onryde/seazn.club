@@ -84,8 +84,10 @@ test("an organiser watches the desk go Setting up → Scheduled → Today (a mat
   // generic.result" on the second (confirmed by running this spec) — the
   // generic sport module is what mobile.spec.ts's own team registration
   // fixture (sport_key "generic", variant_key "score") uses for the same
-  // reason.
-  const divId = await createDivisionViaUi(page, compId, "Premier", "generic");
+  // reason. And a LEAGUE, picked: Format opens on the suggester's top pick
+  // (Q5, owner 2026-11-03), Americano for generic, which pairs individuals and
+  // cannot take the four teams step 3 adds.
+  const divId = await createDivisionViaUi(page, compId, "Premier", "generic", "league");
   await page.goto(compPath);
   const row = page.getByTestId("desk-ledger-row").first();
   await expect(row).toHaveAttribute("data-phase", "setting_up");

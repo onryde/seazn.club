@@ -30,7 +30,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => ({
 
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { DivisionRulesStrip, expandRules, stripPropsOf } from "@/components/v2/__tests__/_rules-strip";
-import { builderStrip, pressCreate, walkToReview } from "@/components/v2/__tests__/_division-builder-driver";
+import { builderStrip, pickTemplate as pickCard, pressCreate, walkToReview } from "@/components/v2/__tests__/_division-builder-driver";
 import { DivisionBuilder } from "@/components/v2/division-builder";
 import { PointsEditor } from "@/components/v2/rules/points-editor";
 import { TiebreaksEditor } from "@/components/v2/rules/tiebreaks-editor";
@@ -212,6 +212,9 @@ describe.skipIf(!HAS_DB)("Match Day C2: what the builder's Division rules step s
       archivedSlotsExplainRefusal: false,
       viewerPlan: "community",
     });
+    // A league: a table format, so the Points and Tie-breaks panels are drawn (since owner Q5, 2026-11-03, the builder
+    // opens on the top suggestion, which for football is a knockout).
+    pickCard(h, "league");
     const points = find(builderRules(h).tree(), PointsEditor);
     expect(propsOf(points).scope, "premise: the Division rules step's Points is the division's").toBe("division");
     const value = propsOf(points).value as Record<string, string>;
@@ -268,8 +271,10 @@ describe("Match Day C2: the builder's tie-break order follows the variant and th
     expect(rows.length, "premise: football offers a second variant").toBeGreaterThan(1);
     return { m, sports: sportOptionsFrom([{ key: "football", name: "Football" }], rows) };
   };
-  const mountBuilder = (sports: ReturnType<typeof sportOptionsFrom>) =>
-    renderIsland(DivisionBuilder, {
+  // On a league, picked: the table this describe edits (owner Q5: the builder opens on the top suggestion, a knockout for
+  // football, which has no table).
+  const mountBuilder = (sports: ReturnType<typeof sportOptionsFrom>) => {
+    const h = renderIsland(DivisionBuilder, {
       competitionId: "c1",
       orgSlug: "org",
       compSlug: "comp",
@@ -278,6 +283,9 @@ describe("Match Day C2: the builder's tie-break order follows the variant and th
       archivedSlotsExplainRefusal: false,
       viewerPlan: "community",
     });
+    pickCard(h, "league");
+    return h;
+  };
   type H = ReturnType<typeof mountBuilder>;
   const setOrder = (h: H, m: AnySportModule): TiebreakerKey[] => {
     const order = divisionOrder(m, propsOf(find(builderRules(h).tree(), TiebreaksEditor)).divisionConfig);

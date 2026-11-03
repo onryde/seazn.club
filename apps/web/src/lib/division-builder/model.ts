@@ -2,7 +2,9 @@
 // Review. The component (components/v2/division-builder.tsx) holds the state; what it opens at, what it sends and where
 // a refusal lands are decided here, so they can be tested without a DOM.
 import type { EntrantKind } from "@seazn/engine/sport";
-import type { TemplateKnobs } from "@/lib/format-templates";
+import { STAGE_TEMPLATES, type TemplateKnobs } from "@/lib/format-templates";
+import { entrantKindsRefuseStageKind } from "@/lib/chess-individual-only-rule";
+import { swissRoundsDefault } from "@/lib/swiss-rounds";
 import { estimateMinutes, estimateTemplate, type FormatEstimate } from "./format-estimate";
 
 export const BUILDER_STEPS = ["who", "format", "rules", "review"] as const;
@@ -17,13 +19,19 @@ export interface EntrantChoice {
 /**
  * `config.entrants` for the kind picked on Who plays. Nothing at the sport's own default, so a division created without
  * touching it stores exactly what it did before the builder asked (the Entrants tab then shows "Using the sport's
- * default"). Another kind is sent as the default kind with every kind the sport allows kept: the builder asks which
- * kind enters, it does not narrow what the Entrants tab may add later.
+ * default"). Another kind NARROWS the division to it - that kind alone, and the default (owner ruling 2026-11-03, C9 Q3):
+ * a "Teams" division takes teams. Settings can widen it later.
  */
 export function entrantsConfigFor(model: EntrantChoice, chosen: EntrantKind): { kinds: EntrantKind[]; defaultKind: EntrantKind } | undefined {
   if (!model.kinds.includes(chosen)) throw new Error(`entrant kind '${chosen}' is not allowed (${model.kinds.join(", ")})`);
   if (chosen === model.defaultKind) return undefined;
-  return { kinds: [...model.kinds], defaultKind: chosen };
+  return { kinds: [chosen], defaultKind: chosen };
+}
+
+/** The kinds the division will take, as Create sends them: the one picked (Q3), else every kind the sport allows. */
+export function divisionEntrantKinds(model: EntrantChoice, chosen: EntrantKind | null): readonly EntrantKind[] {
+  if (chosen === null || !model.kinds.includes(chosen)) return model.kinds;
+  return entrantsConfigFor(model, chosen)?.kinds ?? model.kinds;
 }
 
 /** The kind after the organiser picks another sport. A kind they never touched follows the sport (it was the old
@@ -77,6 +85,30 @@ export function rankTemplates(offered: readonly string[], plan: PlanInput, knobs
     return a.i - b.i;
   });
   return rows.map((r) => ({ key: r.key, estimate: r.estimate, minutes: r.minutes, fits: r.fits }));
+}
+
+/** The plan the Format step opens at (entrants, places played at once, hours): the boxes' first values, and the plan the
+ *  opening format is picked for. The match length is the sport's own default. */
+export const OPENING_PLAN = { entrants: 16, venues: 2, hours: 4 } as const;
+
+/** The knobs every card is ranked at: the builder's opening knobs for a field of `entrants`. */
+export function openingKnobs(entrants: number): TemplateKnobs {
+  return { qualified: 4, swissRounds: swissRoundsDefault(entrants), poolCount: 2, legs: 1 };
+}
+
+/**
+ * The format the builder OPENS on (owner ruling 2026-11-03, C9 Q5): the suggester's first for the sport at the opening
+ * plan - skipping a format the division's entrant kinds cannot play. At the opening plan the first suggestion is
+ * Americano for every sport but chess, and Americano rotates individual players into pairs: a team-only sport (or a
+ * division narrowed to teams) opens on the first format it CAN play. Falls back to the offer's first, then League.
+ */
+export function openingTemplate(offered: readonly string[], matchMinutes: number, entrantKinds: readonly string[]): string {
+  const playable = (key: string) => {
+    const t = STAGE_TEMPLATES.find((x) => x.key === key);
+    return t !== undefined && !t.build(openingKnobs(OPENING_PLAN.entrants)).some((s) => entrantKindsRefuseStageKind(entrantKinds, s.kind));
+  };
+  const ranked = rankTemplates(offered, { ...OPENING_PLAN, matchMinutes }, openingKnobs(OPENING_PLAN.entrants));
+  return ranked.find((r) => playable(r.key))?.key ?? offered[0] ?? "league";
 }
 
 /** The four the Format step shows before "Show all". */

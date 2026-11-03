@@ -2545,17 +2545,32 @@ export async function showAllFormats(page: Page): Promise<void> {
  * sport here. Sports load `order by name` (d/new/page.tsx), so the unset
  * default is alphabetically first ("badminton"), not whatever the caller
  * assumed.
+ *
+ * Format opens on the suggester's top pick for the sport (owner ruling
+ * 2026-11-03, Q5), NOT League - Americano for badminton and generic. A caller
+ * whose later steps need a particular stage kind (a league to generate team
+ * fixtures into) passes `template`: the helper opens Format, shows every
+ * format, picks that card and proves it checked before going on to Review.
  */
 export async function createDivisionViaUi(
   page: Page,
   competitionId: string,
   name: string,
   sportKey?: string,
+  template?: string,
 ): Promise<string> {
   await page.goto(await competitionPath(page.request, competitionId, "/d/new"));
   // The name field is the first textbox on the Who plays step (see formats.spec.ts).
   await page.getByRole("textbox").first().fill(name);
   if (sportKey) await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption(sportKey);
+  if (template) {
+    await page.getByTestId("division-builder-step-format").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "format");
+    await showAllFormats(page);
+    const card = page.locator(`label[data-template="${template}"]`);
+    await card.click();
+    await expect(card.locator("input")).toBeChecked();
+  }
   // Create is on the last step, Review; its step button walks the steps before it.
   await page.getByRole("button", { name: "Review", exact: true }).click();
   await page.getByRole("button", { name: /create division/i }).click();
