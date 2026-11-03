@@ -572,12 +572,13 @@ test("Pair next, tapped for round 2: the stage's own Neighbours mode pairs off t
   const played = new Set(
     round1.map((f) => pairKey(f.home_entrant_id! as EntrantId, f.away_entrant_id! as EntrantId)),
   );
-  const expected = (mode: SwissPairingMode): string[] =>
-    bySeed(
-      pairRound(standings, { played }, mode === "rank_adjacent" ? { pairing: "rank_adjacent" } : {}).pairings.map(
-        (p) => [seedOf.get(p.home)!, seedOf.get(p.away)!] as const,
-      ),
-    );
+  const expected = (mode: SwissPairingMode): string[] => {
+    const round = pairRound(standings, { played }, mode === "rank_adjacent" ? { pairing: "rank_adjacent" } : {});
+    // W3 (engine 2.0.0): the engine answers a round or a refusal. Round 2 of a fresh field has a legal pairing, so a
+    // refusal here is a broken premise, not an expected value.
+    if (!round.ok) throw new Error(`premise: round 2 of this field is pairable (${round.reason})`);
+    return bySeed(round.pairings.map((p) => [seedOf.get(p.home)!, seedOf.get(p.away)!] as const));
+  };
   expect(expected("rank_adjacent"), "Neighbours and top-vs-bottom agree on round 2 — the test is blind").not.toEqual(
     expected("fold"),
   );

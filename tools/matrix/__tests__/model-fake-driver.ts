@@ -657,6 +657,12 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     const standings: SwissStanding[] = this.#active().map((id, i) => ({ entrantId: id, score: score.get(id) ?? 0, rank: i + 1 }));
     const cfg = this.stage?.config ?? {};
     const round = pairRound(standings, { played, byes }, { chess: cfg.chess === true, ...(cfg.pairing === "rank_adjacent" ? { pairing: "rank_adjacent" as const } : {}) });
+    // W3 (engine 2.0.0): `pairRound` answers a round or a refusal VALUE; the product's Pair answers a refusal with the named
+    // SWISS_NO_LEGAL_PAIRING (409 — the desk can Finish, here the only arm the twin models) and seats nobody. The twin
+    // refuses before it touches a shell, as the product does. Its scoring (T5) and Finish arm (T4) are not modelled yet.
+    if (!round.ok) {
+      throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, round.code, `round ${target} cannot be paired: ${round.reason}`, null, { round: target, reason: round.reason, field: round.field });
+    }
     const shells = this.#roundOf(target);
     const boards = shells.filter((f) => !this.byeShells.has(f.id));
     round.pairings.forEach((p, i) => {

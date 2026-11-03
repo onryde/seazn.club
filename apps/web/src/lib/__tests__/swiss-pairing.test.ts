@@ -47,8 +47,11 @@ describe("roundOnePairs mirrors the engine", () => {
       score: 0,
       rank: i + 1,
     }));
-    return pairRound(standings, { played: new Set() }, pairing === "rank_adjacent" ? { pairing } : {})
-      .pairings.map((p) => [Number(p.home), Number(p.away)].sort((a, b) => a - b) as [number, number])
+    const round = pairRound(standings, { played: new Set() }, pairing === "rank_adjacent" ? { pairing } : {});
+    // W3 (engine 2.0.0): a round or a refusal. A fresh field of n has a legal round 1, so a refusal is a broken premise.
+    if (!round.ok) throw new Error(`premise: round 1 of ${n} fresh players is pairable (${round.reason})`);
+    return round.pairings
+      .map((p) => [Number(p.home), Number(p.away)].sort((a, b) => a - b) as [number, number])
       .sort((a, b) => a[0] - b[0]);
   }
   // Odd sizes 3/7/11 are what kill a rank-order mutation, because the bye moves.

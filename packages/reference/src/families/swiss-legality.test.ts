@@ -13,18 +13,19 @@
 //     counted and asserted > 0.
 //   - P-A4: its walkover clause and its second-bye clause are both reached once walkovers exhaust the bye-eligible pool
 //     below the hard maximum. That is where the sweep found the named engine 1.x defect (a bye re-given where a refusal
-//     was owed). The engine's SwissHistory has one bye-eligibility channel, `byes`, and the harness passes walkover
+//     was owed); engine 2.0.0 refuses there with a named value (W3, SW-H1) and the sweep asserts no illegal round. The engine's SwissHistory has one bye-eligibility channel, `byes`, and the harness passes walkover
 //     winners through it. That is the harness's encoding; how the app maps them is App-B's to prove on the real app path.
 //   - P-A7: checked on every round with a departed entrant (counted), but it cannot be VIOLATED here. The harness builds
 //     the engine's standings from the active field, and pairRound has no departed channel, so the app path (App-B) owns it.
-//   - P-Q2: printed as an opportunity count (a bye above a strictly lower eligible entrant). It is 0 because engine 1.1.0
-//     never offers that choice, so only the unit tests witness P-Q2.
+//   - P-Q2: printed as an opportunity count (a bye above a strictly lower eligible entrant), never asserted. Engine 1.1.0
+//     never offered that choice (the count was 0); engine 2.0.0 does in some rounds (15 of 1602 on the seeded run), so the
+//     unit tests are what witness P-Q2 and the printed count is what to watch.
 //
 // Single-sport reason: the checker has no sport parameter. Its one sport-dependent rule is P-A5 (chess colours, the
 // boardgame row), so the "another sport" axis is `chess` on and off, which every colour test runs both ways.
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import { pairKey, pairRound } from "@seazn/engine/scheduling";
+import { SWISS_NO_LEGAL_PAIRING, pairKey, pairRound } from "@seazn/engine/scheduling";
 import { checkSwissRound, type SwissColour, type SwissHistoryIn, type SwissRound1Mode, type SwissRoundIn, type SwissRule, type SwissVerdict } from "./swiss-legality.ts";
 import type * as Matching from "./swiss-matching.ts";
 import { BLOSSOM_MAX_N, BRUTE_FORCE_MAX_N, SwissOutOfScope, blossomMatching, bruteForceMaximumMatching, bruteForcePerfectMatching } from "./swiss-matching.ts";
@@ -33,6 +34,15 @@ import { BLOSSOM_MAX_N, BRUTE_FORCE_MAX_N, SwissOutOfScope, blossomMatching, bru
 function report(line: string): void {
   // eslint-disable-next-line no-console -- the count a property or sweep checked is printed, never only asserted (TEST-STRATEGY rule 2)
   console.info(`[swiss-legality] ${line}`);
+}
+
+/** W3 (engine 2.0.0): `pairRound` answers a round (`ok: true`) or a refusal (`ok: false`, `code`, `reason`, `field`) as a
+ *  VALUE; it no longer throws a refusal. The checker's `outcome`, from either answer. A throw is not a refusal any more, so
+ *  it is not caught: it would be an engine defect, and judging it as a "refusal" would let the oracle call it correct. */
+function outcomeOf(result: ReturnType<typeof pairRound>): SwissRoundIn["outcome"] {
+  return result.ok
+    ? { kind: "paired", boards: result.pairings.map((p) => ({ home: p.home, away: p.away })), bye: result.bye ?? null }
+    : { kind: "refused", reason: `${result.code}: ${result.reason} (field ${result.field})` };
 }
 
 /** RB3-24's bound, typed from the rulebook (never read from the code under test): blossom answers n <= 128, the
@@ -459,22 +469,25 @@ describe("P-A4 × P-A6: an odd round with no bye-eligible entrant left", () => {
   });
 
   // Named regression (TEST-STRATEGY rule 10), found by the producer -> consumer sweep with walkovers: the same history
-  // through the engine's real pairRound. The rulebook's answer is refusal_correct. This test PINS engine 1.1.0's exact
-  // output (controller ruling, fix round 2), so any change to it turns the test red; App-B's bump flips it to assert
-  // refusal_correct. The walkover winner reaches the engine through `byes`, its one bye-eligibility channel (header).
-  it("engine 1.1.0 defect pin (P-A4 × P-A6): 3 players, round 3 with no bye-eligible entrant — 1.1.0 returns A–B with C's SECOND bye (illegal); App-B's bump flips this to refusal_correct", () => {
+  // through the engine's real pairRound. The rulebook's answer is refusal_correct (the hand-checked case above: no entrant
+  // may take the bye). Engine 1.1.0 returned A–B with C's SECOND bye (illegal, P-A4 × P-A6) and this test pinned that;
+  // engine 2.0.0 (W3, SW-H1) answers the round with a named refusal VALUE instead, so the pin flips, as its old title said
+  // App-B's bump would. The walkover winner reaches the engine through `byes`, its one bye-eligibility channel (header).
+  it("engine 2.0.0 (P-A4 × P-A6): 3 players, round 3 with no bye-eligible entrant — the engine refuses with SWISS_NO_LEGAL_PAIRING (no_bye_candidate) instead of re-giving C a second bye, and the oracle calls it refusal_correct", () => {
     const standings = [{ entrantId: "A", score: 2, rank: 1 }, { entrantId: "B", score: 1, rank: 2 }, { entrantId: "C", score: 1, rank: 3 }];
-    let outcome: SwissRoundIn["outcome"];
-    try {
-      const r = pairRound(standings, { played: new Set([pairKey("A", "C")]), byes: new Set(["C", "B", "A"]) }, { chess: false });
-      outcome = { kind: "paired", boards: r.pairings.map((p) => ({ home: p.home, away: p.away })), bye: r.bye ?? null };
-    } catch (e) {
-      outcome = { kind: "refused", reason: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
-    }
+    const answer = pairRound(standings, { played: new Set([pairKey("A", "C")]), byes: new Set(["C", "B", "A"]) }, { chess: false });
+    // The engine's own declarations: a refusal is `ok: false` under the declared code, and "no bye candidate" is the declared
+    // reason for an odd field in which nobody may take the bye (SwissRefusalReason).
+    expect(answer.ok, "premise: the engine refused the round").toBe(false);
+    if (answer.ok) throw new Error("premise: the engine refused the round");
+    expect(answer.code).toBe(SWISS_NO_LEGAL_PAIRING);
+    expect(answer.reason).toBe("no_bye_candidate");
+    expect(answer.field).toBe(3);
+    const outcome = outcomeOf(answer);
     const v = check(["A", "B", "C"], THREE_NO_ELIGIBLE, outcome);
-    report(`engine 1.1.0 defect pin (P-A4 × P-A6): outcome ${JSON.stringify(outcome)} → ${v.verdict} ${JSON.stringify(v.violations)}`);
-    expect(outcome).toEqual({ kind: "paired", boards: [{ home: "A", away: "B" }], bye: "C" });
-    expect(v).toEqual({ verdict: "illegal", violations: [{ rule: "P-A4", detail: "C already received the pairing-allocated bye" }], examined: { boards: 1, byes: 1, candidates: 0 } });
+    report(`engine 2.0.0 (P-A4 × P-A6): outcome ${JSON.stringify(outcome)} → ${v.verdict} ${JSON.stringify(v.violations)}`);
+    expect(outcome.kind).toBe("refused");
+    expect(v).toEqual({ verdict: "refusal_correct", violations: [], examined: { boards: 0, byes: 0, candidates: 0 } });
   });
 });
 
@@ -502,11 +515,6 @@ describe("producer -> consumer (R15): the engine's real pairRound, every round j
     const SEQUENCES = 200;
     const histogram: Record<SwissVerdict["verdict"], number> = { legal: 0, illegal: 0, refusal_correct: 0, refusal_wrong: 0, empty_success: 0 };
     const illegal: string[] = [];
-    /** Engine 1.x defect, named (see the 1.1.0 defect pin above): an odd round with NO bye-eligible entrant left (every
-     *  active entrant had the bye or a walkover win — reachable below the hard maximum only through walkovers) owes a
-     *  named refusal (P-A4, P-A6); 1.1.0 re-gives a bye instead. Matched exactly: odd field, empty eligible pool, every
-     *  violation P-A4. Printed, not asserted — App-B's bump asserts it 0, with `illegal === 0` restored. */
-    const reByeWithNoEligible: string[] = [];
     const notes: string[] = [];
     let rounds = 0;
     let boards = 0;
@@ -561,13 +569,7 @@ describe("producer -> consumer (R15): the engine's real pairRound, every round j
           byes: new Set([...byes, ...walkoverWinners]),
           ...(chess ? { colours: new Map(Object.entries(colours)) } : {}),
         };
-        let outcome: SwissRoundIn["outcome"];
-        try {
-          const r = pairRound(standings, engineHistory, { chess, pairing: mode });
-          outcome = { kind: "paired", boards: r.pairings.map((p) => ({ home: p.home, away: p.away })), bye: r.bye ?? null };
-        } catch (e) {
-          outcome = { kind: "refused", reason: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
-        }
+        const outcome = outcomeOf(pairRound(standings, engineHistory, { chess, pairing: mode }));
         const before: SwissHistoryIn = { met: met.map(([a, b]): Pair => [a, b]), byes: [...byes], walkoverWinners: [...walkoverWinners], colours: structuredClone(colours), scores: { ...scores } };
         const v = checkSwissRound({ field, departed: [...departed], chess, history: before, round1Mode: mode, outcome });
         rounds++;
@@ -595,8 +597,7 @@ describe("producer -> consumer (R15): the engine's real pairRound, every round j
         }
         if (v.verdict === "illegal") {
           const line = `${at}: ${JSON.stringify(v.violations)} | history ${JSON.stringify(before)} | outcome ${JSON.stringify(outcome)}`;
-          if (odd && eligible.length === 0 && v.violations.every((x) => x.rule === "P-A4")) reByeWithNoEligible.push(line);
-          else illegal.push(line);
+          illegal.push(line);
         }
         if (v.verdict !== "legal") {
           notes.push(`${at}: ${v.verdict}`);
@@ -649,16 +650,19 @@ describe("producer -> consumer (R15): the engine's real pairRound, every round j
     }
     report(`producer -> consumer: ${SEQUENCES} sequences (seeds ${BASE_SEED}..${BASE_SEED + SEQUENCES - 1}), ${rounds} rounds, ${boards} boards, ${withdrawals} withdrawals`);
     report(`verdicts: ${JSON.stringify(histogram)}`);
-    // HAND-OFF to App-B's engine bump: once SW-H1 is closed, this becomes `expect(histogram.empty_success).toBe(0)`,
-    // with `expect(histogram.refusal_wrong).toBe(0)` beside it (an empty round must not turn into a wrong refusal).
-    report(`empty_success = ${histogram.empty_success} ${JSON.stringify(emptySplit)} — SW-H1 in engine 1.x, printed, not asserted; App-B's bump asserts 0`);
+    report(`empty_success = ${histogram.empty_success} ${JSON.stringify(emptySplit)} — SW-H1 is closed in engine 2.0.0, asserted 0 below`);
     report(`reach: ${JSON.stringify(reach)}`);
-    report(`known engine 1.x defect — a bye re-given with no bye-eligible entrant left (a refusal was owed): ${reByeWithNoEligible.length} (printed, not asserted; App-B's bump asserts 0)`);
     for (const line of notes.slice(0, 40)) report(`  stop: ${line}`);
     for (const line of illegal.slice(0, 20)) report(`  ILLEGAL: ${line}`);
-    // No illegal round outside the one named defect — every other rule held on every round the engine seated.
+    // W3 (engine 2.0.0; the hand-off this file's header named): SW-H1 is closed, so the engine seats no empty round and
+    // refuses with a name where a refusal is owed (a bye is no longer re-given with nobody bye-eligible, P-A4 × P-A6). No
+    // illegal round at all, no empty success, no wrong refusal — and the refusal path IS reached (a sweep that never
+    // refused would prove none of it): every refusal the oracle judged was owed.
     expect(illegal).toEqual([]);
-    expect(histogram.illegal).toBe(reByeWithNoEligible.length);
+    expect(histogram.illegal).toBe(0);
+    expect(histogram.empty_success).toBe(0);
+    expect(histogram.refusal_wrong).toBe(0);
+    expect(histogram.refusal_correct).toBeGreaterThan(0);
     expect(rounds).toBeGreaterThan(0);
     expect(histogram.legal).toBeGreaterThan(0);
     expect(boards).toBeGreaterThan(0);

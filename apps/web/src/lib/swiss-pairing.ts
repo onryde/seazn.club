@@ -52,6 +52,10 @@ export function roundOnePairs(fieldSize: number, pairing: SwissPairingMode): Arr
     rank: i + 1,
   }));
   const round = pairRound(standings, { played: new Set() }, pairing === "rank_adjacent" ? { pairing } : {});
+  // W3 app-B T1 (X-SW-3; engine 2.0.0): a refusal (`ok: false`) carries no pairings. Round one of two or more entrants always
+  // pairs, so this is the guard the hint keeps in front of an engine answer it would otherwise read `.pairings` off:
+  // a refusal says nothing, and the hint with it.
+  if (!round.ok) return [];
   return round.pairings
     .map((p) => {
       const a = Number(p.home);

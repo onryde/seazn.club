@@ -329,7 +329,8 @@ export async function admitSwissLateEntrant(
         { played: hist.played, colours: hist.colours, byes: hist.byes },
         { chess },
       );
-      if (paired.pairings.length !== 1) return false;
+      // W3 app-B T1 (X-SW-3; engine 2.0.0): a refused pairing (`ok: false`) seats nobody, so the holder cannot be played.
+      if (!paired.ok || paired.pairings.length !== 1) return false;
       byePairing = paired.pairings[0]!;
       return true;
     };

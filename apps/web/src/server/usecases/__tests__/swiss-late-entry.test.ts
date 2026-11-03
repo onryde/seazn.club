@@ -451,6 +451,8 @@ for (const s of SPORTS) {
         ],
         { played: new Set(), byes: hist.byes },
       );
+      // W3 (engine 2.0.0): a round or a refusal; three players with one bye on record still have a legal round.
+      if (!odd.ok) throw new Error(`premise: the three-player field is pairable (${odd.reason})`);
       expect(odd.bye).toBe(holder);
     });
 

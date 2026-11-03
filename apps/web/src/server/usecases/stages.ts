@@ -1981,6 +1981,23 @@ export async function swissGen(
     { played, colours, byes },
     { chess, ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}) },
   );
+  // W3 app-B T1 (X-SW-3; rulebook-W3 §3.1, P-A1/P-A6; engine 2.0.0): a round with no legal pairing is REFUSED, not seated
+  // empty. Engine 1.x answered with an empty round, so Pair next read "up to date" for a round that could not be played.
+  // Nothing above wrote anything (the reads are the only I/O so far), and this throws BEFORE the reshape and the seats, so
+  // the whole press — shells, events, seats — stays as it was, and the whole Generate is one transaction besides.
+  // `field_too_small` cannot reach here: `refuseSwissFieldUnderTwo` above refuses a round's field under two first
+  // (STAGE_NOT_READY), so the reason is one of the four a field of two or more can have. The status is the table's: 409
+  // when Finish is the way out (`swissFinishDetails` — the same predicate every `canFinish` the server sends reads), else
+  // 422. The Finish details on the body and the reason-specific copy are Task 4's.
+  if (!paired.ok) {
+    const admin = await import("./swiss-rounds-admin");
+    const finishNow = admin.swissFinishDetails(await admin.swissFinishStateOf(tx, stageId));
+    throw swissRefusal(
+      "SWISS_NO_LEGAL_PAIRING",
+      { round: target, reason: paired.reason, field: paired.field },
+      { resolvable: finishNow.canFinish },
+    );
+  }
   // W3 T8 (BG-SW-1; SW-H3, REC RB3-10): with chess colours on, round 1's colours are by lot (FIDE C.04.3 A3 5.1): board
   // 1's upper player takes the lot's colour and the boards alternate. Swapped HERE, before the seats are written, so the
   // stored fixtures carry it (home = White) and round 2's colour history reads it. Whether colours are on is
