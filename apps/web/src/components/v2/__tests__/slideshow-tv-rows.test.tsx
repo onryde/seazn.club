@@ -43,13 +43,16 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
 
-import { Slideshow } from "@/components/v2/slideshow";
+import { Slideshow, standingsTemplate } from "@/components/v2/slideshow";
 import { buildPublicDivisionSlides, type FixtureSlideItem, type Slide, type StandingsSlideColumn } from "@/server/slideshow-data";
 import { iihfLeague } from "@/server/engine-db/__tests__/helpers/stored-table-rows";
 import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
 import { builtinModules } from "@seazn/engine/sports";
 import { slideshowLabels } from "@/server/slideshow-labels";
-import { ratioText } from "@seazn/engine/competition";
+import { DERIVED_METRICS, pointsText, ratioText } from "@seazn/engine/competition";
+import { resultColumns } from "@/lib/public-site";
+import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
+import { columnHeader, compactKeysOf, tableLayoutFor } from "@/server/public-site/standings-view";
 import { getDictionary } from "@/lib/i18n";
 import { t } from "@/lib/i18n-runtime";
 import { openFace, textWidth, type Face } from "@/components/public-site/__tests__/font-advance";
@@ -872,5 +875,324 @@ describe("export review I2: the kiosk board prints D exactly as the public table
       checked++;
     }
     expect(checked).toBe(5);
+  });
+});
+
+// ---- W3 app-B T9 (ST-G21): a Swiss slide's tie-break columns, the BOARD half ----------------------------------------------
+//
+// The builder (`server/__tests__/slideshow-tiebreak-columns.test.ts`) decides WHICH columns and WHAT each cell says - the public
+// table's own. What this pins is what the board does with them: one fixed track each after Pts (and after the ratio, the
+// normal table's order), a template for every (result shape x 0/1/2 tie-break) combination, the entrant still the only growing
+// track, and the board BELOW `xl` exactly as it was - the two ladders (9rem each: the widest header any locale prints on one line)
+// would leave the entrant nothing at 768 and 1024, where the board already cuts a long name, so they fold (`max-xl:hidden`) as the
+// IIHF split's counts fold below `lg`. Priced from the rendered classes, like everything above: nothing about a track is typed
+// here but the case's own strings; widths, sizes and tracking are read off the markup, Tailwind's theme and the committed face.
+describe("ST-G21 the standings slide's tie-break columns (layout half)", () => {
+  /** The result shapes the builder makes, from the public table's own declarations: `resultColumns(apart, draws)` columns, folded
+   *  to the table's phone set (`compactKeysOf`) exactly when the stage's layout splits its results. */
+  const iihf = builtinModules.find((m) => m.key === "icehockey")!;
+  const splitLayout = tableLayoutFor(unpinnedRulesDoc({ module: iihf, divisionConfig: iihf.variants.iihf }));
+  const SHAPES = ([false, true] as const).flatMap((apart) =>
+    ([true, false] as const).map((draws) => {
+      const layout = apart ? splitLayout : tableLayoutFor(null);
+      const keep = compactKeysOf(layout);
+      const columns: StandingsSlideColumn[] = resultColumns(apart, draws).map((c) => ({
+        key: c.key as StandingsSlideColumn["key"],
+        compact: !apart || keep.has(c.key),
+      }));
+      return { apart, draws, columns, name: `${columns.length}/${columns.filter((c) => c.compact).length}` };
+    }),
+  );
+  const TB = [
+    { key: "buchholz_cut1", header: "Buchholz Cut-1" },
+    { key: "buchholz", header: "Buchholz" },
+  ] as const;
+  const TB_CELLS = ["7.5", "6"] as const;
+
+  function slide(shape: (typeof SHAPES)[number], opts: { ratio: boolean; tb: number; name?: string }): Slide {
+    const rows = [opts.name ?? "North Harbour Rovers", "West"].map((name, i) => ({
+      rank: `${i + 1}`,
+      name,
+      results: shape.columns.map(() => "3"),
+      points: "9",
+      ...(opts.ratio ? { pointRatio: "1.50" } : {}),
+      ...(opts.tb > 0 ? { tiebreaks: TB_CELLS.slice(0, opts.tb) as unknown as string[] } : {}),
+    }));
+    return {
+      kind: "standings",
+      division: "Cup",
+      caption: "Swiss",
+      columns: shape.columns,
+      level: false,
+      rows,
+      ...(opts.tb > 0 ? { tiebreakColumns: TB.slice(0, opts.tb).map((c) => ({ ...c })) } : {}),
+    };
+  }
+  /** Every combination the board must have a template for: split tables never carry a ratio (the cascade refuses it, see above). */
+  const COMBOS = SHAPES.flatMap((shape) =>
+    [0, 1, 2].flatMap((tb) => (shape.apart ? [false] : [false, true]).map((ratio) => ({ shape, tb, ratio, label: `${shape.name}${ratio ? "+ratio" : ""} x ${tb} tie-break` }))),
+  );
+
+  const gridsOf = (html: string) =>
+    [...html.matchAll(/<div class="((?:relative )?grid [^"]*grid-cols-\[[^"]*)"[^>]*>(.*?)<\/div>(?=<div|<\/div>)/g)].map((g) => ({
+      tokens: g[1]!.split(/\s+/).filter(Boolean),
+      cells: [...g[2]!.matchAll(/<span(?![^>]*aria-hidden)([^>]*)>([^<]*)<\/span>/g)].map((x) => ({ cls: /class="([^"]*)"/.exec(x[1]!)?.[1] ?? "", text: x[2]! })),
+    }));
+  /** The tracks of the template that applies at `vw`: the largest breakpoint's `grid-cols-[…]` at or below it (Tailwind's own rule). */
+  function tracksAt(tokens: string[], vw: number): Track[] {
+    let best: { from: number; tracks: Track[] } | undefined;
+    for (const token of tokens) {
+      const m = /^(?:([a-z0-9]+):)?grid-cols-\[(.+)\]$/.exec(token);
+      if (!m) continue;
+      const from = m[1] ? themePx(`breakpoint-${m[1]}`) : 0;
+      if (vw < from || (best !== undefined && best.from > from)) continue;
+      best = { from, tracks: m[2]!.split("_").flatMap((raw): Track[] => {
+        const rep = /^repeat\((\d+),(.+)\)$/.exec(raw);
+        return rep ? Array.from({ length: Number(rep[1]) }, () => trackOf(rep[2]!)) : [trackOf(raw)];
+      }) };
+    }
+    if (best === undefined) throw new Error("no grid template applies");
+    return best.tracks;
+  }
+  /** Is the cell shown at `vw`? A `max-lg:hidden` cell shows from lg, a `max-xl:hidden` from xl. */
+  function shownAt(cls: string, vw: number): boolean {
+    for (const m of cls.matchAll(/(?:^|\s)max-([a-z0-9]+):hidden(?=\s|$)/g)) if (vw < themePx(`breakpoint-${m[1]}`)) return false;
+    return true;
+  }
+  const XL = themePx("breakpoint-xl");
+  const LG = themePx("breakpoint-lg");
+  const MD = themePx("breakpoint-md");
+
+  it("slideshow templates: every (result shape x 0/1/2 tie-break) combination has a template (counted)", () => {
+    expect(SHAPES.map((s) => s.name).sort(), "the four result shapes the builder makes").toEqual(["3/3", "4/4", "5/1", "6/1"]);
+    const seen = new Set<string>();
+    let count = 0;
+    for (const { shape, tb, ratio, label } of COMBOS) {
+      const template = standingsTemplate(shape.columns, ratio, tb);
+      expect(typeof template, label).toBe("string");
+      expect(seen.has(template), `${label}: a template of its own`).toBe(false);
+      seen.add(template);
+      count++;
+    }
+    expect(count, "4 shapes x 3 tie-break counts, plus the ratio on the two shapes that can carry one").toBe(18);
+    // refused by name, never drawn on a template with the wrong track count
+    for (const shape of SHAPES) {
+      expect(() => standingsTemplate(shape.columns, false, 3), `${shape.name}`).toThrow(`standings slide: no grid template for ${shape.name} result columns with 3 tie-break columns`);
+    }
+    expect(() => standingsTemplate(SHAPES.find((s) => s.apart)!.columns, true, 1)).toThrow("with a ratio column");
+  });
+
+  it("every combination draws one track per cell at every width (768, lg, 1280, 1920), the entrant the only growing track, tie-breaks after Pts and the ratio", () => {
+    let checked = 0;
+    for (const { shape, tb, ratio, label } of COMBOS) {
+      const html = board(slide(shape, { ratio, tb }));
+      const [header, ...rows] = gridsOf(html);
+      expect(rows, label).toHaveLength(2);
+      const labels = slideshowLabels("en");
+      // header order: #, entrant, results..., Pts, [ratio], tie-breaks
+      expect(header!.cells.map((c) => c.text), label).toEqual([
+        "#", labels.entrant, ...shape.columns.map((c) => labels[c.key]), labels.points, ...(ratio ? [labels.pointRatio] : []), ...TB.slice(0, tb).map((c) => c.header),
+      ]);
+      for (const g of [header!, ...rows]) {
+        for (const vw of [MD, LG, 1280, 1920]) {
+          const tracks = tracksAt(g.tokens, vw);
+          const visible = g.cells.filter((c) => shownAt(c.cls, vw));
+          expect(tracks, `${label} @${vw}: one track per visible cell`).toHaveLength(visible.length);
+          expect(tracks.flatMap((tr, i) => (grows(tr) ? [i] : [])), `${label} @${vw}: the entrant alone grows`).toEqual([1]);
+          checked++;
+        }
+      }
+      // the cells: each row prints its own, in order, after Pts and the ratio
+      const after = 2 + shape.columns.length + 1 + (ratio ? 1 : 0);
+      for (const r of rows) {
+        expect(r.cells.slice(after).map((c) => c.text), label).toEqual(TB_CELLS.slice(0, tb));
+        for (const c of r.cells.slice(after)) expect(c.cls, `${label}: a tie-break cell folds below xl`).toMatch(/(^|\s)max-xl:hidden(\s|$)/);
+      }
+      for (const c of header!.cells.slice(after)) expect(c.cls, `${label}: a tie-break header folds below xl`).toMatch(/(^|\s)max-xl:hidden(\s|$)/);
+    }
+    expect(COMBOS.length, "combinations").toBe(18);
+    expect(checked, "(grid x width) checks: 3 grids x 4 widths x 18").toBe(18 * 3 * 4);
+  });
+
+  it("below xl the board is exactly the slide it was: the same template and the same cells shown, so the entrant's 768 track is unchanged (it neither gains nor loses by the columns)", () => {
+    let compared = 0;
+    for (const shape of SHAPES) {
+      for (const ratio of shape.apart ? [false] : [false, true]) {
+        const without = gridsOf(board(slide(shape, { ratio, tb: 0 })));
+        const withTb = gridsOf(board(slide(shape, { ratio, tb: 2 })));
+        for (let i = 0; i < without.length; i++) {
+          for (const vw of [MD, LG, XL - 1]) {
+            expect(tracksAt(withTb[i]!.tokens, vw), `${shape.name}${ratio ? "+ratio" : ""} @${vw}`).toEqual(tracksAt(without[i]!.tokens, vw));
+            expect(withTb[i]!.cells.filter((c) => shownAt(c.cls, vw)).map((c) => c.text.length > 0), `${shape.name} @${vw}: the cells shown`).toHaveLength(without[i]!.cells.filter((c) => shownAt(c.cls, vw)).length);
+            compared++;
+          }
+        }
+      }
+    }
+    expect(compared, "grids x widths compared").toBe(6 * 3 * 3);
+  });
+
+  it("in EVERY combination the tie-break tracks are fixed, equal, one per column and come after the old tracks unchanged (xl)", () => {
+    let checked = 0;
+    for (const { shape, tb, ratio, label } of COMBOS) {
+      if (tb === 0) continue;
+      const base = tracksAt(gridsOf(board(slide(shape, { ratio, tb: 0 })))[0]!.tokens, XL);
+      const tracks = tracksAt(gridsOf(board(slide(shape, { ratio, tb })))[0]!.tokens, XL);
+      expect(tracks.slice(0, base.length), `${label}: the old tracks come first, unchanged`).toEqual(base);
+      const added = tracks.slice(base.length);
+      expect(added, `${label}: one track per tie-break column`).toHaveLength(tb);
+      for (const tr of added) expect(tr.kind, `${label}: fixed - the header and the rows share one px`).toBe("fixed");
+      expect(new Set(added.map((tr) => (tr.kind === "fixed" ? tr.px : -1))).size, `${label}: all the same width`).toBe(1);
+      checked++;
+    }
+    expect(checked, "combinations with tie-breaks").toBe(12);
+  });
+
+  // The seam, through its real producer and consumer: the BUILDER's own slide for every sport's Swiss stage is drawn by the board.
+  // The hand-built slides above prove the board; the builder tests prove the slide; this proves they meet (a column the builder makes
+  // that the board has no template for would throw here, and a board that dropped the cells would print none).
+  it("through the real builder: every sport's and declared cfg's Swiss slide is drawn by the board with its tie-break headers and its cells, in order (registry sweep, counted)", async () => {
+    let drawn = 0;
+    let withTiebreaks = 0;
+    const shapes = new Set<string>();
+    const sports = forEachSport(() => {});
+    for (const m of builtinModules) {
+      for (const { cfg } of declaredCfgs(m)) {
+        const doc = unpinnedRulesDoc({ module: m, kind: "swiss", divisionConfig: cfg });
+        const rows = ["a", "b", "c"].map((id, i) => ({
+          entrantId: id,
+          played: 3,
+          won: 3 - i,
+          drawn: 0,
+          lost: i,
+          points: 9 - 3 * i,
+          rank: i + 1,
+          metrics: { points_won: 63 - 7 * i, points_lost: 42, sets_won: 6 - i, sets_lost: 1 + i, buchholz: 7.5 - 1.5 * i, buchholz_cut1: 6 - i, opp_diff: 3 - 2 * i },
+        }));
+        const slides = await buildPublicDivisionSlides({
+          division: { id: "d1", name: "Open", sport_key: m.key, module_version: m.version },
+          stages: [{ id: "sw", kind: "swiss", name: "Swiss", table_rules: doc }],
+          pools: [],
+          fixtures: [],
+          standings: [{ stage_id: "sw", pool_id: null, rows }],
+          entrants: rows.map((r) => ({ id: r.entrantId, display_name: `Team ${r.entrantId}` })),
+        });
+        const built = slides.find((x) => x.kind === "standings");
+        if (built === undefined || built.kind !== "standings") throw new Error(`premise: ${m.key}: the builder made a standings slide`);
+        const [header, ...bodies] = gridsOf(board(built));
+        const columns = built.tiebreakColumns ?? [];
+        expect(columns.length, `${m.key}: a Swiss slide carries its two`).toBe(2);
+        expect(header!.cells.slice(-columns.length).map((c) => c.text), `${m.key}: the header`).toEqual(columns.map((c) => c.header));
+        bodies.forEach((g, i) => expect(g.cells.slice(-columns.length).map((c) => c.text), `${m.key}: row ${i}`).toEqual(built.rows[i]!.tiebreaks));
+        expect(bodies, `${m.key}: a row per entrant`).toHaveLength(rows.length);
+        shapes.add(`${built.columns.length}/${built.columns.filter((c) => c.compact).length}${built.rows.some((r) => r.pointRatio !== undefined) ? "+ratio" : ""}`);
+        drawn++;
+        withTiebreaks += columns.length;
+      }
+    }
+    expect(sports, "sports in the registry").toBe(11);
+    expect(drawn, "(sport, cfg) Swiss slides drawn").toBeGreaterThan(sports);
+    expect(withTiebreaks, "tie-break columns drawn").toBe(drawn * 2);
+    expect(shapes.size, `anti-vacuity: the registry makes more than one board shape (${[...shapes].sort().join(", ")})`).toBeGreaterThan(2);
+  });
+
+  // ---- what a tie-break track can hold, priced from the rendered classes ---------------------------------------------
+  /** The widths of the tie-break tracks (the last `tb` of the xl template). */
+  const tbTracksPx = (html: string, tb: number): number[] =>
+    tracksAt(gridsOf(html)[0]!.tokens, XL)
+      .slice(-tb)
+      .map((tr) => {
+        if (tr.kind !== "fixed") throw new Error("a tie-break track is no longer fixed: re-derive this model");
+        return tr.px;
+      });
+  const headerType = (html: string) => {
+    const header = gridsOf(html)[0]!.tokens;
+    expect(header, "the header is set in capitals").toContain("uppercase");
+    return {
+      size: themePx(`text-${one(header, /^text-(\d?xl|lg|base|sm)$/, "header size")[1]}`),
+      tracking: Number(one(header, /^tracking-\[([0-9.]+)em\]$/, "header tracking")[1]),
+      face: DISPLAY[weightOf(header)]!,
+    };
+  };
+
+  it("the header of each tie-break column fits its track on ONE line in every locale, in EVERY combination (the engine's keys, the public dictionary's words); the probe can see a wrap", async () => {
+    const wider: string[] = [];
+    let checked = 0;
+    let widest = { px: 0, what: "" };
+    const words: { locale: string; key: string; abbr: string }[] = [];
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const dict = await getDictionary(locale, "public");
+      for (const d of DERIVED_METRICS.filter((x) => ["buchholz_cut1", "buchholz", "opp_diff"].includes(x.key))) {
+        const { abbr } = columnHeader({ key: d.key, label: d.label }, (k) => t(dict, k));
+        expect(abbr.startsWith("table."), `${locale} ${d.key} resolves`).toBe(false);
+        words.push({ locale, key: d.key, abbr });
+      }
+    }
+    expect(words, "3 keys x 4 locales").toHaveLength(12);
+    for (const { shape, tb, ratio, label } of COMBOS) {
+      if (tb === 0) continue;
+      const html = board(slide(shape, { ratio, tb }));
+      const type = headerType(html);
+      for (const px of tbTracksPx(html, tb)) {
+        for (const w of words) {
+          const need = textWidth(type.face, w.abbr.toUpperCase(), type.size, type.tracking);
+          if (need > widest.px) widest = { px: need, what: `${w.locale} "${w.abbr}"` };
+          if (need > px) wider.push(`${label}: ${w.locale} ${w.key} "${w.abbr}" is ${need.toFixed(1)}px in a ${px}px track`);
+          checked++;
+        }
+      }
+    }
+    expect(checked, "(track x word) checks: 6 shapes x (1 + 2 tie-break tracks) = 18 tracks, 12 words").toBe(18 * 12);
+    expect(wider, "a label wider than its track wraps to a second line").toEqual([]);
+    // the probe can say no: the widest label overflows a 7rem track, so 9rem is not slack for nothing
+    expect(widest.px, `the widest header (${widest.what})`).toBeGreaterThan(themePx("spacing") * 28);
+  });
+
+  it("the track holds the widest realistic cell with air to spare, in every combination: 1000.5 (a thousand-point Buchholz), a four-digit negative Opp diff, and the half spelling", () => {
+    const air = spacingPx("2");
+    let checked = 0;
+    for (const { shape, tb, ratio, label } of COMBOS) {
+      if (tb === 0) continue;
+      const html = board(slide(shape, { ratio, tb }));
+      const row = gridsOf(html)[1]!;
+      const cell = row.cells.at(-1)!;
+      const size = themePx(`text-${one(cell.cls.split(/\s+/), /^text-(\d?xl|lg|base|sm)$/, "tie-break cell size")[1]}`);
+      for (const value of [pointsText(1000.5, "whole"), pointsText(-1000, "whole"), pointsText(1000.5, "half")]) {
+        for (const px of tbTracksPx(html, tb)) {
+          // semibold is the wider face and the cell sets no weight: the safe direction
+          expect(px, `${label}: ${value}`).toBeGreaterThanOrEqual(textWidth(DISPLAY[600]!, value, size) + air);
+          checked++;
+        }
+      }
+    }
+    expect(checked, "(track x value) checks: 18 tracks x 3 values").toBe(18 * 3);
+  });
+
+  // ---- what the extra tracks cost the entrant ------------------------------------------------------------------------
+  const nameTrackAt = (html: string, vw: number): number => {
+    const row = gridsOf(html).find((g) => g.tokens.includes("relative"))!;
+    const tracks = tracksAt(row.tokens, vw);
+    const pad = spacingPx(one(row.tokens, /^px-(\d+(?:\.\d+)?)$/, "row px")[1]!);
+    const gap = spacingPx(one(row.tokens, /^gap-x-(\d+)$/, "row gap-x")[1]!);
+    return slideWidth(html, vw) - 2 * pad - tracks.reduce((s, tr) => s + (tr.kind === "fixed" ? tr.px : 0), 0) - (tracks.length - 1) * gap;
+  };
+
+  it("the entrant keeps a track in every combination at 1280 (the cost is priced, and the owner sees the shot); at 1920 the 43-character name fits one line on every realistic Swiss shape", () => {
+    const cost: string[] = [];
+    for (const { shape, tb, ratio, label } of COMBOS) {
+      if (tb !== 2) continue;
+      const html = board(slide(shape, { ratio, tb, name: LONG43 }));
+      const before = nameTrackAt(board(slide(shape, { ratio, tb: 0, name: LONG43 })), 1280);
+      const after = nameTrackAt(html, 1280);
+      expect(after, `${label}: the entrant's track at 1280`).toBeGreaterThan(0);
+      expect(after, `${label}: the columns come out of the entrant`).toBeLessThan(before);
+      cost.push(`${label}: ${before.toFixed(0)}px -> ${after.toFixed(0)}px`);
+      if (shape.apart) continue; // IIHF + Swiss: six counts and two ladders; a name is cut at 1920 too, which the owner sees in the shot
+      const cellTokens = classesAround(html, LONG43);
+      expect(cellTokens, "the entrant is cut, not wrapped").toContain("truncate");
+      const need = textWidth(DISPLAY[weightOf(cellTokens)]!, LONG43, themePx(`text-${one(cellTokens, /^text-(\d?xl|lg|base|sm)$/, "name size")[1]}`));
+      expect(nameTrackAt(html, 1920), `${label}: ${LONG43} needs ${need.toFixed(0)}px at 1920`).toBeGreaterThanOrEqual(need);
+    }
+    expect(cost, "priced shapes with two tie-breaks (4/4, 3/3, +ratio, and the split pair)").toHaveLength(6);
   });
 });

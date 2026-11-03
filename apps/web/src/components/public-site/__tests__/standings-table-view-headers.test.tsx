@@ -37,7 +37,7 @@ import {
   STRUCTURAL_KEYS,
 } from "@/server/public-site/standings-view";
 import { builtinModules } from "@seazn/engine/sports";
-import { RATIO_LEDGERS, type StandingsRow } from "@seazn/engine/competition";
+import { RATIO_LEDGERS, validateCascade, type StandingsRow } from "@seazn/engine/competition";
 import { StandingsTableView } from "../standings-table-view";
 import { defaultOrderOf } from "@seazn/engine/testkit";
 import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
@@ -426,5 +426,108 @@ describe("hub table: a Swiss table's Round X of N chip (W3 T16, SW-L11)", () => 
     const classes = tag.match(/class="([^"]*)"/)![1]!.split(/\s+/);
     for (const c of ["max-w-full", "w-fit"]) expect(classes, c).toContain(c);
     expect(classes.some((c) => /^w-\d|^min-w-\[/.test(c)), "no fixed width").toBe(false);
+  });
+});
+
+// ── W3 app-B T9 (ST-G21): the public table of a Swiss stage shows the ladders ─────────────────────────────────────────
+//
+// Premise 9 of the plan: the public table already picks its columns through `tableColumns` over the stage's cascade, so the
+// engine's Swiss default chain brings Buchholz Cut-1 / Buchholz / Opp diff into it with no new code. What was owed is the PROOF
+// (here), the `opp_diff` header (Task 3) and the phone fold. Every assertion on the markup anchors on `="` (AGENTS.md: React
+// serialises an omitted prop as `"$undefined"`, so a bare `data-col` probe passes in both states). The expected columns are the
+// engine's: the keys the stage's rules doc holds that the engine refuses outside a Swiss (`validateCascade`, `stage_format`).
+describe("ST-G21 the public table of a Swiss stage shows its tie-break ladders", () => {
+  const sportOf = (key: string) => builtinModules.find((m) => m.key === key)!;
+  const cfgOf = (m: (typeof builtinModules)[number]) => (m.configSchema.safeParse({}).success ? {} : Object.values(m.variants)[0]);
+
+  function viewFor(m: (typeof builtinModules)[number], kind: "swiss" | "league", dict: Dict = en as unknown as Dict): TableViewT {
+    const rules = unpinnedRulesDoc({ module: m, kind, divisionConfig: cfgOf(m) });
+    const ledger = new Set<string>([...m.metrics.map((x) => x.key), ...Object.values(RATIO_LEDGERS).flat()]);
+    const row = (id: string, rank: number): StandingsRow => ({
+      entrantId: id,
+      rank,
+      played: 3,
+      won: 2,
+      drawn: 0,
+      lost: 1,
+      points: 6,
+      metrics: { ...Object.fromEntries([...ledger].map((k) => [k, 5])), buchholz: 7.5, buchholz_cut1: 6, opp_diff: -3, sberger: 4.25 },
+    });
+    return buildTableView({
+      id: "t",
+      division: { id: "d1", slug: "div", name: "Div" },
+      caption: kind === "swiss" ? "Swiss" : "League",
+      fullHref: "/x",
+      rows: [row("a", 1), row("b", 2)],
+      metricSpecs: m.metrics,
+      cascade: rules.tiebreakers,
+      entrantNames: { a: "Alpha", b: "Beta" },
+      entrantLogos: {},
+      entrantColours: {},
+      championId: null,
+      updatedAt: "2026-11-03T10:00:00Z",
+      msg: (k, v) => t(dict, k, v),
+      rules,
+      dateOf: () => null,
+      stageKind: kind,
+    });
+  }
+  /** A header cell's visible abbreviation and class list, found by its `data-col="…"`. */
+  function headerOf(markup: string, key: string): { abbr: string; cls: string } | null {
+    const m = markup.match(new RegExp(`<th[^>]*data-col="${key}"[^>]*class="([^"]*)"[^>]*>(?:(?!</th>).)*?<span aria-hidden="true">([^<]*)</span>`));
+    return m === null ? null : { abbr: m[2]!, cls: m[1]! };
+  }
+  const draw = (v: TableViewT) => renderToStaticMarkup(<StandingsTableView view={v} dict={en as unknown as Dict} testid={TESTID} />);
+
+  it("ST-G21 the public table of a Swiss stage under the default chain renders Buchholz Cut-1 and Buchholz headers", () => {
+    const badminton = sportOf("badminton");
+    const markup = draw(viewFor(badminton, "swiss"));
+    expect(headerOf(markup, "buchholz_cut1")?.abbr).toBe("Buchholz Cut-1");
+    expect(headerOf(markup, "buchholz")?.abbr).toBe("Buchholz");
+    // the football family's second ladder, Opp diff (Task 3's header), beside its Buchholz
+    const football = draw(viewFor(sportOf("football"), "swiss"));
+    expect(headerOf(football, "buchholz")?.abbr).toBe("Buchholz");
+    expect(headerOf(football, "opp_diff")?.abbr).toBe("Opp diff");
+  });
+
+  it("ST-G21 a league table renders neither", () => {
+    for (const key of ["badminton", "football", "boardgame"]) {
+      const markup = draw(viewFor(sportOf(key), "league"));
+      expect(markup, `${key}: a league table still renders (the pair of the Swiss case above)`).toContain('data-col="points"');
+      for (const col of ["buchholz_cut1", "buchholz", "opp_diff"]) expect(headerOf(markup, col), `${key} ${col}`).toBeNull();
+    }
+  });
+
+  it("every sport's Swiss table carries the engine's Swiss-only keys of its default chain, and a league table of the same sport none (registry sweep, counted)", () => {
+    let swiss = 0;
+    let columns = 0;
+    for (const m of builtinModules) {
+      const rules = unpinnedRulesDoc({ module: m, kind: "swiss", divisionConfig: cfgOf(m) });
+      const refused = validateCascade(rules.tiebreakers as never, { module: m, cfg: m.configSchema.parse(cfgOf(m)), stageKind: "league", crossGroup: false })
+        .filter((r) => r.reason === "stage_format")
+        .map((r) => String(r.key));
+      const shown = viewFor(m, "swiss").columns.map((c) => c.key);
+      expect(refused.length, `${m.key}: premise - the default Swiss chain holds Swiss-only keys`).toBeGreaterThan(0);
+      for (const key of refused) expect(shown, `${m.key} ${key}`).toContain(key);
+      for (const key of refused) expect(viewFor(m, "league").columns.map((c) => c.key), `${m.key} league ${key}`).not.toContain(key);
+      swiss++;
+      columns += refused.length;
+    }
+    expect(swiss, "sports swept").toBe(builtinModules.length);
+    expect(builtinModules.length).toBe(11);
+    expect(columns, "Swiss-only columns met").toBeGreaterThanOrEqual(22);
+  });
+
+  it("the phone fold: on a phone the ladders sit behind the table's own disclosure (max-md:hidden) while Pts stays; from md up nothing folds", () => {
+    for (const key of ["badminton", "football", "boardgame"]) {
+      const view = viewFor(sportOf(key), "swiss");
+      const ladders = view.columns.filter((c) => ["buchholz_cut1", "buchholz", "opp_diff"].includes(c.key));
+      expect(ladders.length, `${key}: ladders on the table`).toBeGreaterThan(0);
+      for (const c of ladders) expect(c.compact, `${key} ${c.key} is long tail`).toBe(false);
+      const markup = draw(view);
+      for (const c of ladders) expect(headerOf(markup, c.key)!.cls, `${key} ${c.key}`).toMatch(/(^|\s)max-md:hidden(\s|$)/);
+      expect(headerOf(markup, "points")!.cls, `${key}: Pts is never folded`).not.toMatch(/max-md:hidden/);
+      expect(markup, `${key}: the disclosure exists`).toMatch(/data-testid="[^"]*-more"/);
+    }
   });
 });

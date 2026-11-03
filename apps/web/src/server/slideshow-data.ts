@@ -16,13 +16,12 @@ import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import { creditsNobody, forfeitLedgerOfReason, unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import { outcomeTagWords } from "@/lib/outcome-text";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
-import { getDictionary } from "@/lib/i18n";
+import { getDictionary, t } from "@/lib/i18n";
 import { poolLabel } from "@/lib/pool-label";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import {
-  PLAIN_LAYOUT,
   derivedMetricText,
   isLevelTable,
   pointsText,
@@ -30,10 +29,12 @@ import {
   type OutcomeKey,
   type PointsRule,
   type StandingsRow,
-  type TableLayout,
 } from "@seazn/engine/competition";
-import { cellText, compactKeysOf, resultColumnsOf, tableColumns, tableLayoutFor } from "@/server/public-site/standings-view";
+import { cellText, columnHeader, compactKeysOf, resultColumnsOf, tableColumns, tableLayoutFor, type DisplayLayout } from "@/server/public-site/standings-view";
 import type { MetricSpecLike } from "@/lib/public-site";
+import { slideTiebreakColumns, swissOnlyKeysOf } from "@/lib/slide-tiebreak-columns";
+import type { TKey } from "@/lib/i18n-runtime";
+import type { AnySportModule } from "@seazn/engine/sport";
 import { resolveModule } from "@/server/engine-db/registry";
 import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 
@@ -70,6 +71,17 @@ export interface StandingsSlideRow {
    *  condition), and on none otherwise — the board shows the column exactly
    *  when a row carries this. */
   pointRatio?: string;
+  /** W3 app-B T9 (ST-G21): the cells of the slide's `tiebreakColumns`, paired with them by index - the public table's own
+   *  cell text (`cellText`, the Swiss format), so the board and the table cannot print different numbers in the same cell.
+   *  Set on every row of a slide that has tie-break columns, on none otherwise. */
+  tiebreaks?: string[];
+}
+
+/** One of a Swiss slide's tie-break columns (ST-G21): the engine key and the header the public table prints over it
+ *  (`columnHeader`'s abbr, in the org's locale - notation such as "Buchholz Cut-1" is the same in every locale). */
+export interface StandingsSlideTiebreakColumn {
+  key: string;
+  header: string;
 }
 
 /** The inputs the division page hands `standingsColumns`: the pinned module's
@@ -79,8 +91,12 @@ export interface StandingsSlideRow {
 interface StandingsShape {
   metricSpecs: readonly MetricSpecLike[];
   cascade: readonly string[];
-  /** W2d T17: the stage's table layout (`tableLayoutFor`, the public table's own) — its points unit. */
-  layout: TableLayout;
+  /** W2d T17: the stage's table layout (`tableLayoutFor`, the public table's own) — its points unit; and, since W3 app-B T9,
+   *  whether the stage is a Swiss (its ladders print in the Swiss spelling the public table gives them). */
+  layout: DisplayLayout;
+  /** W3 app-B T9 (ST-G21): the keys of the stage's order that the engine declares Swiss-only (`swissOnlyKeysOf`) - which of
+   *  its columns may be tie-break columns on the board. */
+  swissOnly: ReadonlySet<string>;
 }
 
 /** A stage's loaded rules as these builders receive them: the organiser's from `stageTableRulesDocs`, the public one's
@@ -99,27 +115,33 @@ interface StandingsShapeInput {
   module_version?: string;
 }
 
-/** Resolves a division's pinned module's metrics the way the division page does
+/** Resolves a division's pinned module the way the division page does
  *  (`(public)/live/.../[divisionSlug]/page.tsx`): a module this build no
  *  longer carries degrades to structural columns only — it never throws. The
  *  cascade is each stage's own (`stageShape`). */
-function divisionMetrics(division: StandingsShapeInput): readonly MetricSpecLike[] {
-  if (division.sport_key === undefined || division.module_version === undefined) return [];
+function divisionModule(division: StandingsShapeInput): AnySportModule | null {
+  if (division.sport_key === undefined || division.module_version === undefined) return null;
   try {
-    return resolveModule(division.sport_key, division.module_version).metrics;
+    return resolveModule(division.sport_key, division.module_version);
   } catch {
-    return [];
+    return null;
   }
 }
 
-/** One stage's standings shape: the division's metrics and the stage's order (none for a stage whose rules the loader
+/** One stage's standings shape: the division's module (metrics) and the stage's order (none for a stage whose rules the loader
  *  refused, or a hand-built input that carries none). The layout takes no `ballsPerOver` (W2e T8c review M3): the slide
- *  prints result columns, points and the points ratio, and the over length moves only net run rate, which it never shows. */
-const stageShape = (metricSpecs: readonly MetricSpecLike[], rules: StageRulesInput | null | undefined): StandingsShape => ({
-  metricSpecs,
-  cascade: rules?.tiebreakers ?? [],
-  layout: rules?.points === undefined || rules.reachable === undefined ? PLAIN_LAYOUT : tableLayoutFor({ points: rules.points, reachable: rules.reachable }),
-});
+ *  prints result columns, points and the points ratio, and the over length moves only net run rate, which it never shows.
+ *  W3 app-B T9: it takes the stage's KIND, because the tie-break columns it now prints (a Swiss's ladders) are spelled in the
+ *  Swiss format only on a Swiss stage - the public table's own rule (`tableLayoutFor`). */
+const stageShape = (sportModule: AnySportModule | null, rules: StageRulesInput | null | undefined, stageKind: string): StandingsShape => {
+  const cascade = rules?.tiebreakers ?? [];
+  return {
+    metricSpecs: sportModule?.metrics ?? [],
+    cascade,
+    layout: tableLayoutFor(rules?.points === undefined || rules.reachable === undefined ? null : { points: rules.points, reachable: rules.reachable }, stageKind),
+    swissOnly: swissOnlyKeysOf(sportModule, cascade),
+  };
+};
 
 /** A snapshot row as `standings_snapshots` persists it. `metrics` is optional
  *  only because hand-built inputs predate it; a real snapshot always has it. */
@@ -148,7 +170,9 @@ function standingsSlideRows(
   snapRows: readonly StandingsSlideSnapshotRow[],
   shape: StandingsShape,
   names: Record<string, string>,
-): { columns: StandingsSlideColumn[]; rows: StandingsSlideRow[]; level: boolean } {
+  /** The page's words in the org's locale (`t(publicDict, key)`): the tie-break headers' abbreviations. */
+  msg: (key: TKey) => string,
+): { columns: StandingsSlideColumn[]; rows: StandingsSlideRow[]; level: boolean; tiebreakColumns?: StandingsSlideTiebreakColumn[] } {
   const engineRows: StandingsRow[] = snapRows.map((r) => ({ ...r, metrics: r.metrics ?? {} }));
   // The public table's own selection over the same rows, under the stage's layout (`tableColumns`).
   const shown = tableColumns(shape.metricSpecs, shape.cascade, engineRows, shape.layout);
@@ -163,14 +187,23 @@ function standingsSlideRows(
   // W2d T17 (X-TB-6, RB2B-17): the public table's own helpers — a level table has no places and no leader, and the
   // points print in the stage's unit.
   const level = isLevelTable(engineRows);
+  // W3 app-B T9 (ST-G21): a Swiss stage's first two ladders - chosen from the stage's own order and the engine's Swiss-only
+  // declaration (`slideTiebreakColumns`), their cells the public table's (`cellText`), their headers the table's (`columnHeader`).
+  const tiebreaks = slideTiebreakColumns(shown, shape.cascade, shape.swissOnly);
   const rows = engineRows.map((r, i) => ({
     rank: rankText({ ...r, rank: r.rank ?? i + 1 }, level),
     name: names[r.entrantId] ?? "—",
     results: results.map((c) => cellText(r, c, shape.layout)),
     points: pointsText(r.points, shape.layout.unit),
     ...(showsPointRatio ? { pointRatio: derivedMetricText(r, "point_ratio") ?? "—" } : {}),
+    ...(tiebreaks.length > 0 ? { tiebreaks: tiebreaks.map((c) => cellText(r, c, shape.layout)) } : {}),
   }));
-  return { columns, rows, level };
+  return {
+    columns,
+    rows,
+    level,
+    ...(tiebreaks.length > 0 ? { tiebreakColumns: tiebreaks.map((c) => ({ key: c.key, header: columnHeader(c, msg).abbr })) } : {}),
+  };
 }
 
 export interface FixtureSlideItem {
@@ -234,6 +267,10 @@ export type Slide =
       rows: StandingsSlideRow[];
       /** W2d T17 (X-TB-6, anti-goal 3): no counted fixture yet — no row is drawn as first. */
       level: boolean;
+      /** W3 app-B T9 (ST-G21): a Swiss slide's tie-break columns (at most two, after Pts and the ratio), each row's cells in
+       *  its `tiebreaks`. Absent on every slide whose stage holds no Swiss-only key in its order - a pinned older chain, a
+       *  league: the slide is then exactly what it was. */
+      tiebreakColumns?: StandingsSlideTiebreakColumn[];
     }
   | {
       kind: "fixtures";
@@ -372,7 +409,7 @@ export async function buildDivisionSlides(
   // The division's own module and each stage's order decide its standings
   // columns, the same way they do on its public page (W2d Task 9: the order from
   // the one loader, `stageTableRulesDocs`).
-  const metricSpecs = divisionMetrics(priv[0] ?? {});
+  const sportModule = divisionModule(priv[0] ?? {});
   const tableRules = await withTenant(auth.orgId, (tx) => stageTableRulesDocs(tx, stages.map((s) => s.id)));
 
   // ── Standings — one slide per table stage (per pool when pooled) ──
@@ -393,9 +430,14 @@ export async function buildDivisionSlides(
           )
         : [{ caption: stage.name, snap: await getStandings(auth, stage.id) }];
     for (const { caption, snap } of tables) {
-      const { columns, rows, level } = standingsSlideRows(snap.rows as StandingsSlideSnapshotRow[], stageShape(metricSpecs, tableRules[stage.id]), names);
+      const { columns, rows, level, tiebreakColumns } = standingsSlideRows(
+        snap.rows as StandingsSlideSnapshotRow[],
+        stageShape(sportModule, tableRules[stage.id], stage.kind),
+        names,
+        (key) => t(publicDict, key),
+      );
       if (rows.length > 0) {
-        slides.push({ kind: "standings", division: divisionName, caption, columns, rows, level });
+        slides.push({ kind: "standings", division: divisionName, caption, columns, rows, level, ...(tiebreakColumns === undefined ? {} : { tiebreakColumns }) });
       }
     }
   }
@@ -668,13 +710,13 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
   const stageById = new Map(data.stages.map((s) => [s.id, s]));
   const poolById = new Map(data.pools.map((p) => [p.id, p]));
   const slides: Slide[] = [];
-  const metricSpecs = divisionMetrics(data.division);
+  const sportModule = divisionModule(data.division);
 
   for (const snap of data.standings) {
     const stage = stageById.get(snap.stage_id);
     if (!stage || snap.rows.length === 0) continue;
     const pool = snap.pool_id !== null ? poolById.get(snap.pool_id) : undefined;
-    const { columns, rows, level } = standingsSlideRows(snap.rows, stageShape(metricSpecs, stage.table_rules), names);
+    const { columns, rows, level, tiebreakColumns } = standingsSlideRows(snap.rows, stageShape(sportModule, stage.table_rules, stage.kind), names, (key) => t(publicDict, key));
     slides.push({
       kind: "standings",
       division: data.division.name,
@@ -684,6 +726,7 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
       columns,
       rows,
       level,
+      ...(tiebreakColumns === undefined ? {} : { tiebreakColumns }),
     });
   }
 

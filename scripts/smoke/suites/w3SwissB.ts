@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
-import { appendScoreEvent, call, check, newSession, signIn, smokeDb, tag, v1, v1data } from "../harness.ts";
+import { BASE, appendScoreEvent, call, check, newSession, signIn, smokeDb, tag, v1, v1data } from "../harness.ts";
 import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
 
 /**
@@ -32,6 +32,13 @@ import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
  * header "Opp diff" and its sport-neutral long form "Opponents' score difference" (the org's locale is English; the words are the
  * owner's, typed here, not read back from the dictionary under test) - football's own Swiss chain (FB-TB-5) holds the key, so the
  * column is there with no tie-break configuration at all.
+ *
+ * T9 (ST-G21; rulebook-W3 §8 T9): the TV board shows the Swiss tie-break columns. The same football Swiss shape as T3 (round 1
+ * paired, nothing played), read from the anonymous division board `/shared/{org}/{comp}/{div}/present` - the page that builds the
+ * slides from the public read models and hands them to the client as RSC props (there is no HTTP slides document; this payload is
+ * the wire a venue screen reads). The standings slide carries `tiebreakColumns` with exactly two keys, in the stage's cascade
+ * order: football's Swiss chain (FB-TB-5) is points, diff, for, wins, buchholz, opp_diff, direct, lots, so the two are buchholz
+ * then opp_diff. Their header words are not asserted here (T3 owns the words); the pairing of header to key is.
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissB runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissBSuite(): Promise<void> {
@@ -39,7 +46,8 @@ export async function w3SwissBSuite(): Promise<void> {
   // T2: 1 (a boardgame division's stored byeScore is gone from the config GET answers, once the V490 delta has run).
   // T8: 1 (X-SW-8: a late entrant's missed round is a virtual-opponent round in the Buchholz the anonymous hub prints).
   // T3: 1 (a football Swiss's hub table carries an Opp diff column with its words, over the wire a visitor reads).
-  const EXPECTED_CHECKS = 4;
+  // T9: 1 (ST-G21: the same stage's anonymous /present board payload carries two tie-break columns, buchholz then opp_diff).
+  const EXPECTED_CHECKS = 5;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -305,6 +313,41 @@ export async function w3SwissBSuite(): Promise<void> {
     w3Check(
       "w3b T3: a football Swiss's anonymous hub table carries an Opp diff column (\"Opp diff\" over \"Opponents' score difference\") beside its Buchholz" +
         (ok ? "" : ` - competition ${comp?.id ?? "none"}, division ${divRes.status} ${divId ?? "none"}, entrants ${made.length}, start ${started.status}, pair ${paired.status}, hub ${hubRes.status}, table ${table === undefined ? "missing" : "found"}, opp_diff ${JSON.stringify(oppDiff ?? null)}, columns ${JSON.stringify(table?.columns.map((c) => c.key) ?? [])}`),
+      ok,
+    );
+  }
+
+  // Check 5 - T9 (ST-G21). A football Swiss, round 1 paired, read from the anonymous division board's RSC payload. The football
+  // chain (FB-TB-5, typed here from the rulebook as in check 4) is points, diff, for, wins, buchholz, opp_diff, direct, lots, so
+  // the board's two tie-break columns are buchholz then opp_diff - in the cascade's order, not alphabetical (b < o would hide a
+  // reversed order, so the order is asserted on the payload text itself).
+  {
+    const comp = publicComp;
+    const divRes = await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Football board", sport_key: "football", variant_key: "11-a-side", config: {} });
+    const div = v1data<{ id: string; slug?: string } | undefined>(divRes);
+    const made =
+      v1data<{ id: string }[] | undefined>(
+        await v1(owner, `/api/v1/divisions/${div?.id}/entrants`, "POST",
+          ["A", "B", "C", "D"].map((n, i) => ({ kind: "team", display_name: `${n} Board ${tag}`, seed: i + 1 }))),
+      ) ?? [];
+    const stageId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${div?.id}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 } }),
+    )?.id;
+    const started = await v1(owner, `/api/v1/divisions/${div?.id}/start`, "POST");
+    const paired = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+    const orgSlug = orgs.find((o) => o.id === who.org_id)?.slug ?? "";
+    const boardRes = await fetch(`${BASE}/shared/${orgSlug}/${comp?.slug}/${div?.slug}/present`);
+    const html = boardRes.status === 200 ? await boardRes.text() : "";
+    // The flight payload quotes its JSON inside a JS string, so the quotes arrive as \" (anchored on them, not on a bare word).
+    const block = /\\"tiebreakColumns\\":\[((?:\{[^\]}]*\},?)+)\]/.exec(html)?.[1] ?? "";
+    const keys = [...block.matchAll(/\\"key\\":\\"([a-z0-9_]+)\\"/g)].map((m) => m[1]);
+    const ok =
+      made.length === 4 && stageId !== undefined && started.status < 300 && paired.status === 200 && orgSlug !== "" && div?.slug !== undefined &&
+      boardRes.status === 200 && keys.length === 2 && keys[0] === "buchholz" && keys[1] === "opp_diff";
+    w3Check(
+      "w3b T9: a football Swiss's anonymous /present board carries two tie-break columns on its standings slide, buchholz then opp_diff" +
+        (ok ? "" : ` - competition ${comp?.id ?? "none"}, division ${divRes.status} ${div?.id ?? "none"} slug ${div?.slug ?? "none"}, entrants ${made.length}, start ${started.status}, pair ${paired.status}, board ${boardRes.status} (${html.length} bytes), tiebreakColumns keys ${JSON.stringify(keys)}`),
       ok,
     );
   }
