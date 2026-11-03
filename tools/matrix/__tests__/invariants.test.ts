@@ -725,6 +725,35 @@ describe("I4 nothing-ends-stuck", () => {
       expect(r.verdict).toBe("fail");
       expect(r.evidence.join(" ")).toMatch(/round 1 .*refused.*seated 2/);
     });
+    // T6 review m2: the other Pair refusal that offers Finish (a running Swiss whose field shrank under the target round) is judged
+    // the same way. The exemption is per CODE: a round that claims one refusal is backed only by a recorded refusal of THAT code.
+    describe("SWISS_ROUNDS_ABOVE_MAX (m2)", () => {
+      const aboveMax = { status: 409, code: "SWISS_ROUNDS_ABOVE_MAX", total: 0, created: 0 };
+      it("a named SWISS_ROUNDS_ABOVE_MAX refusal is not \"paired nobody\": the round is checked, and the Finish taken after it counts", () => {
+        const s = stage({
+          kind: "swiss", generates: [ok1, aboveMax], pairRounds: [{ roundNo: 1, seated: 2 }, { roundNo: 2, seated: 0, refused: "SWISS_ROUNDS_ABOVE_MAX" }],
+          finish: finish200, complete: done, fixtures: [fx({ home: "a", away: "b", outcome: win("a") })],
+        });
+        const r = evaluateInvariant(I4, run([s]));
+        // 2 generates + 2 pair rounds + 1 finish + 1 complete + 1 terminal two-sided fixture
+        expect(r, r.evidence.join("; ")).toMatchObject({ verdict: "pass", checked: 7 });
+        expect(r.evidence.join("; ")).not.toMatch(/paired nobody/);
+      });
+      it("the same round without the marker is still \"paired nobody (SW-H1)\": the exemption is the marker's, not the refusal's presence", () => {
+        const s = stage({ kind: "swiss", generates: [ok1, aboveMax], pairRounds: [{ roundNo: 1, seated: 2 }, { roundNo: 2, seated: 0 }], complete: done });
+        const r = evaluateInvariant(I4, run([s]));
+        expect(r.verdict).toBe("fail");
+        expect(r.evidence).toContain("stage 1: round 2 paired nobody (SW-H1)");
+      });
+      it("a round that claims SWISS_ROUNDS_ABOVE_MAX is not backed by a SWISS_NO_LEGAL_PAIRING refusal (the code must match), nor by a 5xx", () => {
+        const other = stage({ kind: "swiss", generates: [noPairing], pairRounds: [{ roundNo: 1, seated: 0, refused: "SWISS_ROUNDS_ABOVE_MAX" }], complete: done });
+        const r = evaluateInvariant(I4, run([other]));
+        expect(r.verdict).toBe("fail");
+        expect(r.evidence.join(" ")).toMatch(/round 1 .*SWISS_ROUNDS_ABOVE_MAX.*no named refusal/);
+        const crash = stage({ kind: "swiss", generates: [{ ...aboveMax, status: 500 }], pairRounds: [{ roundNo: 1, seated: 0, refused: "SWISS_ROUNDS_ABOVE_MAX" }], complete: done });
+        expect(evaluateInvariant(I4, run([crash])).verdict).toBe("fail");
+      });
+    });
     it("the Finish the loop took is judged like a generate: a 2xx or a NAMED refusal passes, a crash fails, and it counts as checked", () => {
       const base = { kind: "swiss", generates: [noPairing], pairRounds: [{ roundNo: 1, seated: 0, refused: "SWISS_NO_LEGAL_PAIRING" }], complete: done };
       const none = evaluateInvariant(I4, run([stage(base)]));

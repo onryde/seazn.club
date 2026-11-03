@@ -63,7 +63,7 @@ import { MixedLedger, type ActionType, type FillerName, type PadPolicy } from ".
 import {
   DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VOID_EVENT, VisibilityDegraded, requireVoidTarget,
   type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type FixtureStateOut, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type FinishSwissOut, type FixtureStateOut, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StandingsRowWire, type StartOut, type VoidedOut, type WithdrawOut,
 } from "./types.ts";
 
@@ -158,6 +158,13 @@ export const FORFEIT_DIALOG_ROUTE = routeTo("W2", "a forfeit with generated play
  *  FORFEIT_DIALOG_ROUTE would be refused by MixedLedger.exempt (one route per type); no scenario does: the refusal
  *  probe is DW-ALL's, which posts no play. */
 export const NEITHER_WITHHELD_ROUTE = routeTo("W2", "a double walkover on a match that feeds no next match is posted over http: the console's forfeit dialog withholds Neither there and shows its guidance instead, so the refusal is the server's to answer");
+/** W3 app-B Task 6 review m3: "Finish the Swiss now" (the organiser's recovery from a Swiss Pair refused SWISS_NO_LEGAL_PAIRING or
+ *  SWISS_ROUNDS_ABOVE_MAX) is an http path in this harness; the desk's Finish action is not driven in the browser. A Swiss that
+ *  dead-ends on a browser cell (L2 runs R4 in the browser on three Swiss rows) has no recovery in this layer, which is a cell with
+ *  no path (M-4 ruling), owned by the Swiss wave: a named NoOrganiserPath the runner records as no-path, never an error red. The
+ *  NoOrganiserPath below spells the wave as a literal (the Q-A guard reads a literal only, PF-3); browser-driver.test.ts pins
+ *  the two together. */
+export const FINISH_SWISS_ROUTE = routeTo("W3", "Finish the Swiss now is an http path: the desk's Finish action is not driven in the browser, so a Swiss that dead-ends in this layer has no recovery here");
 /** The ledger row both finalize paths append (fixture-console.tsx send, scoring.ts finalizeFixture; text-pinned). */
 export const FINALIZE_EVENT = "core.finalize";
 /** The completion event the scenario reads finalRanks from (common.ts finishStage). */
@@ -1159,6 +1166,14 @@ export class BrowserDriver implements OrganiserDriver {
       this.#finalRanks.set(stageId, out.events.find((ev) => ev.type === STAGE_COMPLETED)?.finalRanks ?? null);
     }
     return out;
+  }
+
+  /** NOT a Finish: this layer has none (FINISH_SWISS_ROUTE). It exists so the Swiss loop, which asks its driver for the organiser's
+   *  recovery from a refused Pair, is answered in the house shape for a path a layer does not drive - a NoOrganiserPath naming the wave
+   *  that owes it - and not with a misuse of the driver. It touches no page, sends nothing over http, and records nothing on the
+   *  mixed ledger (Finish is not one of its action types), so a case that never dead-ends is unchanged. */
+  finishSwiss(_stageId: string): Promise<FinishSwissOut> {
+    return Promise.reject(new NoOrganiserPath("W3", FINISH_SWISS_ROUTE.why));
   }
 
   rebuild(stageId: string): Promise<void> { return this.#write(() => this.#http.rebuild(stageId)); }

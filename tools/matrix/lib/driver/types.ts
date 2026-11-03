@@ -231,10 +231,11 @@ export interface OrganiserDriver {
   withdraw(entrantId: string): Promise<WithdrawOut>;
   completeStage(stageId: string): Promise<CompleteOut>;
   /** W3 app-B Task 6 (X-SW-26): "Finish the Swiss now" (POST /stages/:id/swiss/finish) - the organiser's recovery from a
-   *  Swiss Pair refused SWISS_NO_LEGAL_PAIRING. It ends the Swiss after its last complete round AND completes the stage, so
-   *  its answer is the stage's completion (the next stage's draft proposal included) and `/complete` is never sent after it
-   *  (the drivers record the stage completed, as completeStage does). A refusal throws RefusedCall. Optional: a driver
-   *  without it (the browser driver) cannot take the recovery, and the Swiss loop says so by name (DriverMisuse). */
+   *  Swiss Pair refused SWISS_NO_LEGAL_PAIRING or SWISS_ROUNDS_ABOVE_MAX with `canFinish`. It ends the Swiss after its last
+   *  complete round AND completes the stage, so its answer is the stage's completion (the next stage's draft proposal included) and
+   *  `/complete` is never sent after it (the drivers record the stage completed, as completeStage does). A refusal throws
+   *  RefusedCall. Optional: a driver without it cannot take the recovery at all, and the Swiss loop says so by name (DriverMisuse).
+   *  The browser driver has the method but no Finish: it throws NoOrganiserPath (a layer that does not drive the path, M-4). */
   finishSwiss?(stageId: string): Promise<FinishSwissOut>;
   /** Confirms a draft seed proposal (POST /stages/:id/seed-proposal/confirm,
    *  schemas.ts ConfirmSeedProposal): fills the stage's TBD rows through

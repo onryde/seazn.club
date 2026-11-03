@@ -787,17 +787,34 @@ export function drawsDeclaredOnReached(ctx: ScenarioContext, plays: readonly Sta
   return plays.some((p) => p.complete !== null && stageDrawsOk(ctx, p.stage));
 }
 
-/** The refusal a Swiss Pair answers when no round is left that repeats nobody (stages.ts swissGen; typed against the
- *  product's own refusal table, so a rename there is a compile error here). */
-const SWISS_DEAD_END: SwissRefusalCode = "SWISS_NO_LEGAL_PAIRING";
+/** The Swiss Pair refusals that stop the loop AND offer the organiser's recovery, Finish (typed against the product's own refusal
+ *  table, so a rename there is a compile error here):
+ *   - SWISS_NO_LEGAL_PAIRING: no round is left that repeats nobody (stages.ts swissGen); its body carries `finishAfter`, `canFinish`.
+ *   - SWISS_ROUNDS_ABOVE_MAX: a running Swiss whose field a withdrawal shrank under the target round (judgeSwissPairAt, T6 review
+ *     m2); its body is `{ rounds, field, hardMax, canFinish, finish?: { after, rounds } }` - `canFinish` again, no `finishAfter`.
+ *  Both answer 409 when Finish is on offer and 422 when it is not (the table rows' `resolvableStatus`), and both carry `canFinish`,
+ *  which is the one key the loop reads to take the recovery. */
+const SWISS_FINISHABLE_REFUSALS: readonly SwissRefusalCode[] = ["SWISS_NO_LEGAL_PAIRING", "SWISS_ROUNDS_ABOVE_MAX"];
 
-/** W3 app-B Task 6 (X-SW-26): the organiser's recovery from the dead end - "Finish the Swiss now" - taken over the driver and
+/** The first NAMED refusal among a Pair's answers that stops the loop and may offer Finish, or null (T6 review m2). A 5xx that
+ *  carries such a code is a crash, not a refusal (`isNamedRefusal`), and is not one. */
+function pairStopped(refusals: readonly RefusedCall[]): { readonly code: SwissRefusalCode; readonly canFinish: boolean } | null {
+  for (const e of refusals) {
+    const code = SWISS_FINISHABLE_REFUSALS.find((c) => c === e.code);
+    if (code !== undefined && isNamedRefusal(e.status, e.code)) return { code, canFinish: e.extra?.canFinish === true };
+  }
+  return null;
+}
+
+/** W3 app-B Task 6 (X-SW-26): the organiser's recovery from a Pair refusal that offers it - "Finish the Swiss now" - taken over the driver and
  *  recorded on the stage's track. A 2xx is the stage's COMPLETION (finishSwissNow completes the stage itself and mints the next
  *  stage's draft proposal), so it is kept as the CompleteObs finishStage hands back and /complete is not sent again. A named
- *  refusal is recorded, committed nothing, and returns false. A driver without the route cannot take the recovery, which is
- *  said by name rather than read as an ordinary refusal. Returns whether the stage was finished. */
-async function finishSwiss(ctx: ScenarioContext, rec: Recorder, stageId: string): Promise<boolean> {
-  if (ctx.driver.finishSwiss === undefined) throw new DriverMisuse(`scenario: the driver cannot Finish the Swiss (no finishSwiss) - stage ${stageId}'s Pair was refused ${SWISS_DEAD_END} and offered Finish`);
+ *  refusal is recorded, committed nothing, and returns false. A 5xx is recorded the same way and ended UNKNOWN (finishStage reads
+ *  it). A driver without the route cannot take the recovery, which is said by name rather than read as an ordinary refusal; a
+ *  driver whose LAYER does not drive it (the browser's) throws NoOrganiserPath from its own finishSwiss, which is not caught
+ *  here. Returns whether the stage was finished. */
+async function finishSwiss(ctx: ScenarioContext, rec: Recorder, stageId: string, offeredBy: SwissRefusalCode): Promise<boolean> {
+  if (ctx.driver.finishSwiss === undefined) throw new DriverMisuse(`scenario: the driver cannot Finish the Swiss (no finishSwiss) - stage ${stageId}'s Pair was refused ${offeredBy} and offered Finish`);
   const track = rec.track(stageId);
   try {
     const f = await ctx.driver.finishSwiss(stageId);
@@ -839,16 +856,16 @@ export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: Divi
       const refusals: RefusedCall[] = [];
       const fixtures = await recordGenerate(ctx, rec, stage.id, (e) => refusals.push(e));
       const batch = (fixtures ?? []).filter((f) => f.round_no === r && seatedOpen(f));
-      // W3 app-B Task 6 (premise 5): a Pair the product REFUSED by name with the dead end is a refusal, not an empty success -
-      // marked on the round so I4 does not read it as "paired nobody" (SW-H1).
-      const deadEnd = refusals.find((e) => e.code === SWISS_DEAD_END && isNamedRefusal(e.status, e.code));
-      const pr: PairRoundObs = { roundNo: r, seated: batch.length, ...(deadEnd !== undefined ? { refused: SWISS_DEAD_END } : {}) };
+      // W3 app-B Task 6 (premise 5; review m2): a Pair the product REFUSED by name with a refusal that offers Finish is a refusal,
+      // not an empty success - marked with its code on the round so I4 does not read it as "paired nobody" (SW-H1).
+      const stopped = pairStopped(refusals);
+      const pr: PairRoundObs = { roundNo: r, seated: batch.length, ...(stopped !== null ? { refused: stopped.code } : {}) };
       rec.pairRounds.push(pr);
       track.pairRounds.push(pr);
       if (batch.length === 0) { // I4 fails on the empty pair round
         // ...and the organiser's recovery, where the product offers it (`canFinish`): Finish the Swiss after the last round
         // that could be paired. A Finish the product refuses leaves the organiser stuck: refused_generate, as before.
-        if (deadEnd !== undefined && deadEnd.extra?.canFinish === true && await finishSwiss(ctx, rec, stage.id)) { exit("finished_early"); return; }
+        if (stopped !== null && stopped.canFinish && await finishSwiss(ctx, rec, stage.id, stopped.code)) { exit("finished_early"); return; }
         exit(fixtures === null ? "refused_generate" : "empty_pair_round");
         return;
       }
@@ -1019,8 +1036,15 @@ export async function configProbe(ctx: ScenarioContext, rec: Recorder, setup: Di
 export async function finishStage(ctx: ScenarioContext, rec: Recorder, stageId: string): Promise<CompleteObs> {
   // W3 app-B Task 6: a Swiss the loop finished (Finish) is already complete - Finish ran the stage's completion itself, and a
   // second /complete is never sent (the drivers refuse it). Its answer is the completion.
-  const finished = rec.track(stageId).finishCompleted;
-  if (finished !== null) return finished;
+  const track = rec.track(stageId);
+  if (track.finishCompleted !== null) return track.finishCompleted;
+  // T6 review m1: a Finish that answered 5xx ended UNKNOWN - it may have committed the completion, so (design section 6.4) the drivers
+  // send neither Finish nor /complete again for the stage. The case is judged on that ending (I4 names a 5xx a crash, not a refusal),
+  // instead of /complete being asked and refused as a misuse of the driver.
+  if (track.finish !== null && track.finish.status >= 500) {
+    rec.notes.push(`finish ended unknown ${track.finish.status} ${track.finish.code ?? "(no code)"}; /complete is not sent after it`);
+    return { status: track.finish.status, code: track.finish.code, completed: false, finalRanks: null, seedProposal: null };
+  }
   try {
     const c = await ctx.driver.completeStage(stageId);
     const done = c.events.find((e) => e.type === "stage_completed");

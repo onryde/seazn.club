@@ -58,7 +58,8 @@ export class HttpDriver implements OrganiserDriver {
   readonly #session: Session;
   readonly #expectedOrgId: string;
   readonly #t: Transport;
-  readonly #completed = new Set<string>();
+  /** Stages completed, or whose completion ended unknown, and the call that did it (T6 review m1: the refusal names it). */
+  readonly #completed = new Map<string, string>();
   readonly #timeoutMs: number;
   #calls = 0;
 
@@ -349,8 +350,10 @@ export class HttpDriver implements OrganiserDriver {
 
   /** The one place a completion is sent and recorded (completeStage, finishSwiss). */
   async #commitsCompletion<T extends CompleteOut>(stageId: string, path: string, what: string): Promise<T> {
-    if (this.#completed.has(stageId)) {
-      throw new DriverMisuse(`driver: stage ${stageId} already completed, or its ${what} ended unknown (5xx or no answer) — ${what} is never repeated (design §6.4)`);
+    const first = this.#completed.get(stageId);
+    if (first !== undefined) {
+      // Names the call that completed the stage or ended unknown (a Finish is not a /complete), and the one now refused.
+      throw new DriverMisuse(`driver: stage ${stageId} already completed, or its ${first} ended unknown (5xx or no answer) — ${what} is never sent after it (design §6.4)`);
     }
     // Parked Task 6 (a): completeStage COMMITS the completion and then runs
     // progressCompletedStage (usecases/stages.ts:4140-4170), which can throw —
@@ -365,18 +368,18 @@ export class HttpDriver implements OrganiserDriver {
     try {
       r = await this.#send(path, "POST", {});
     } catch (e) {
-      this.#completed.add(stageId);
+      this.#completed.set(stageId, what);
       throw e;
     }
-    if (r.status >= 500) this.#completed.add(stageId);
+    if (r.status >= 500) this.#completed.set(stageId, what);
     let out: T;
     try {
       out = this.#unwrap<T>("POST", path, r);
     } catch (e) {
-      if (e instanceof RefusedCall && e.code === SEEDING_FAILED_AFTER_COMMIT) this.#completed.add(stageId);
+      if (e instanceof RefusedCall && e.code === SEEDING_FAILED_AFTER_COMMIT) this.#completed.set(stageId, what);
       throw e;
     }
-    if (out.completed) this.#completed.add(stageId);
+    if (out.completed) this.#completed.set(stageId, what);
     return out;
   }
 

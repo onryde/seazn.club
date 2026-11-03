@@ -329,6 +329,27 @@ describe("HttpDriver — finishSwiss (W3 app-B Task 6, X-SW-26)", () => {
     }
     expect(checked).toBe(3);
   });
+  // T6 review m1: the refusal after an unknown ending names the CALL that ended unknown. A Finish that answered 5xx must not
+  // read as "its /complete ended unknown" - the one sentence the harness's reader sees would then name a call never made.
+  it("m1: the DriverMisuse after an unknown ending names the call that ended unknown - a Finish 5xx says Finish, a /complete 5xx says /complete", async () => {
+    const order = [
+      { first: "finishSwiss", then: "completeStage", named: /its Finish ended unknown/, notNamed: /its \/complete ended unknown/ },
+      { first: "completeStage", then: "finishSwiss", named: /its \/complete ended unknown/, notNamed: /its Finish ended unknown/ },
+    ] as const;
+    let checked = 0;
+    for (const o of order) {
+      const { t, calls } = fake([() => err(500, "INTERNAL")]);
+      const d = drv(t);
+      await expect(d[o.first]("s1"), `${o.first} answers the 5xx as the HTTP failure it is`).rejects.toBeInstanceOf(RefusedCall);
+      const refused = await d[o.then]("s1").catch((x: unknown) => x);
+      expect(refused, `${o.then} after ${o.first}`).toBeInstanceOf(DriverMisuse);
+      expect((refused as DriverMisuse).message).toMatch(o.named);
+      expect((refused as DriverMisuse).message).not.toMatch(o.notNamed);
+      expect(calls.length, "the refused call sent nothing").toBe(1);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both orders ran").toBe(order.length);
+  });
   it("completed:false (the answer says the stage is still open) records no completion", async () => {
     const { t, calls } = fake([() => ok(finished({ completed: false, events: [] }))]);
     const d = drv(t);
