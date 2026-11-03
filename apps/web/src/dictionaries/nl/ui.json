@@ -7393,6 +7393,8 @@
   "matchDay.back.list": "Terug naar de lijst",
   "matchDay.readOnly": "Alleen bekijken. Wedstrijden oproepen en scorerlinks zijn voor de organisatoren van de competitie.",
   "matchDay.frozen": "Je organisatie zit boven de limiet van actieve competities van haar abonnement. Wedstrijden worden nog steeds gescoord, maar je kunt ze hier niet oproepen of een oproep ongedaan maken, en geen nieuwe stream koppelen. Archiveer een competitie of upgrade je abonnement om de hele dag vanaf deze pagina te leiden.",
+  "matchDay.frozenNames": "Nu alleen-lezen:",
+  "matchDay.frozenMore": "+{count} meer",
   "matchDay.needsYou.findCourt.court": "Baan zoeken",
   "matchDay.needsYou.findCourt.pitch": "Veld zoeken",
   "matchDay.needsYou.findCourt.table": "Tafel zoeken",

@@ -48,6 +48,7 @@ import { CourtFocus } from "../court-focus";
 import { CourtList } from "../court-list";
 import { MatchDayShell, type MatchDayShellProps } from "../match-day-shell";
 import { VenueFilter } from "../venue-filter";
+import { NO_FROZEN_NAMES } from "@/lib/match-day/frozen-names";
 import { NeedsYou, type NeedsYouItem } from "@/components/v2/desk/needs-you";
 
 const dict = en as Dict;
@@ -124,6 +125,7 @@ const props = (initial: MatchDayView, o: Partial<MatchDayShellProps> = {}): Matc
   dict,
   scoreDict: publicEn as Dict,
   viewerPlan: "pro",
+  frozenNames: NO_FROZEN_NAMES,
   ...o,
 });
 

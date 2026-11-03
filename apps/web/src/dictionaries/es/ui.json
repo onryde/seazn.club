@@ -7393,6 +7393,8 @@
   "matchDay.back.list": "Volver a la lista",
   "matchDay.readOnly": "Solo lectura. Llamar partidos y los enlaces de anotador son para los organizadores de la competición.",
   "matchDay.frozen": "Tu organización supera el límite de competiciones activas de su plan. Los partidos se siguen puntuando, pero aquí no puedes convocarlos ni deshacer una convocatoria, ni conectar una nueva retransmisión. Archiva una competición o mejora tu plan para dirigir toda la jornada desde esta página.",
+  "matchDay.frozenNames": "Solo lectura ahora:",
+  "matchDay.frozenMore": "+{count} más",
   "matchDay.needsYou.findCourt.court": "Buscar una pista",
   "matchDay.needsYou.findCourt.pitch": "Buscar un campo",
   "matchDay.needsYou.findCourt.table": "Buscar una mesa",

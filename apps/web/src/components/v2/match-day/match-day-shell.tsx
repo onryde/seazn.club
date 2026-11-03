@@ -24,7 +24,7 @@
 //  - a view-only member (`readOnly`) gets the same page with nothing that writes, and without the Needs-you list;
 //  - Needs you's unscheduled row carries "Find a court": the first free court's candidates, opened in place (`?court=` when
 //    the link is opened another way), or back to the list when no court is free.
-import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
@@ -33,6 +33,7 @@ import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { routes } from "@/lib/routes";
 import type { Severity } from "@/lib/division-phase";
+import type { FrozenNames } from "@/lib/match-day/frozen-names";
 import type { MatchDayView } from "@/lib/match-day/types";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import {
@@ -88,6 +89,10 @@ export interface MatchDayShellProps {
   readOnly?: boolean;
   /** The competition is billing-frozen (task F1): no Call and no Undo call, and the page says why. */
   frozen?: boolean;
+  /** PB3 item 7: the org's billing-frozen competitions (at most three, this one first, and a count of the rest), named under the
+   *  banner. REQUIRED, so a mount that forgets it fails to compile instead of quietly dropping the names; pass
+   *  `NO_FROZEN_NAMES` where there is nothing to name. Only read when `frozen` and not `readOnly`, the banner's own condition. */
+  frozenNames: FrozenNames;
   /** `?court=<id>`: the court to open first (Needs you's "Find a court" link, opened another way). Ignored when not on the list. */
   focusCourtId?: string | null;
   /** `?venue=`: the venue filter's choice as the URL wrote it ("all", or venue ids), absent for the default (E2 item 5). */
@@ -107,6 +112,7 @@ export function MatchDayShell({
   viewerPlan,
   readOnly = false,
   frozen = false,
+  frozenNames,
   focusCourtId = null,
   venueParam = null,
 }: MatchDayShellProps) {
@@ -265,6 +271,26 @@ export function MatchDayShell({
             {frozen && !readOnly && (
               <p data-testid="md-frozen" className="mt-2 text-xs text-amber-800">
                 {t(dict, "matchDay.frozen")}
+              </p>
+            )}
+            {/* PB3 item 7: which competitions are over the limit, so the organiser knows what to archive. The competition on screen
+                is first and plain (a link to this page would be a link to itself); the rest link to their own pages. */}
+            {frozen && !readOnly && frozenNames.shown.length > 0 && (
+              <p data-testid="md-frozen-names" className="mt-1 min-w-0 text-xs text-amber-800 [overflow-wrap:anywhere]">
+                {t(dict, "matchDay.frozenNames")}{" "}
+                {frozenNames.shown.map((c, i) => (
+                  <Fragment key={c.id}>
+                    {i > 0 && ", "}
+                    {c.id === competitionId ? (
+                      <span className="font-medium">{c.name}</span>
+                    ) : (
+                      <Link href={routes.competition(orgSlug, c.slug)} className="font-medium underline underline-offset-2">
+                        {c.name}
+                      </Link>
+                    )}
+                  </Fragment>
+                ))}
+                {frozenNames.more > 0 && `, ${t(dict, "matchDay.frozenMore", { count: frozenNames.more })}`}
               </p>
             )}
           </div>

@@ -3882,6 +3882,8 @@ export type DictionaryKey =
   | "matchDay.free.since"
   | "matchDay.free.title"
   | "matchDay.frozen"
+  | "matchDay.frozenMore"
+  | "matchDay.frozenNames"
   | "matchDay.header.free"
   | "matchDay.header.noCourt.board.one"
   | "matchDay.header.noCourt.board.other"

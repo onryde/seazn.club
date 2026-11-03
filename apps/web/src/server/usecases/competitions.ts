@@ -441,6 +441,25 @@ export async function createCompetition(
 // costs one extra round trip and cannot self-deadlock. Same phase boundary
 // autoSchedule documents: transaction for the read, no pooled connection held
 // for the unbounded work.
+/**
+ * The org's billing-frozen competitions, named - for the Match Day banner that tells an over-limit organisation which ones are
+ * read-only (Match Day PB3). Built on the PERSISTED set (`frozenCompetitionIds`: chosen once, stored in `frozen_at`), never on a
+ * recomputation of "who would freeze now", so the banner names exactly the competitions the server refuses. Empty for an in-quota
+ * org, at the cost `frozenCompetitionIds` already has. Ordered by name, then id, so the order is the same on every read.
+ *
+ * Phase boundary as `getCompetition`: the set is read first, outside any transaction, and the names after.
+ */
+export async function listFrozenCompetitions(auth: AuthCtx): Promise<{ id: string; name: string; slug: string }[]> {
+  const frozen = await frozenCompetitionIds(auth.orgId);
+  if (frozen.size === 0) return [];
+  return withTenant(auth.orgId, async (tx) =>
+    tx<{ id: string; name: string; slug: string }[]>`
+      select id, name, slug from competitions
+      where id in ${tx([...frozen])}
+      order by lower(name), id`,
+  );
+}
+
 export async function getCompetition(auth: AuthCtx, id: string): Promise<CompetitionRow> {
   const row = await withTenant(auth.orgId, async (tx) => {
     const [found] = await tx<CompetitionRow[]>`

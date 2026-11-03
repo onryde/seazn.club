@@ -6,7 +6,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { MatchDayView } from "@/lib/match-day/types";
 
-const h = vi.hoisted(() => ({ frozen: false as boolean | undefined, canEdit: true, needs: [] as MatchDayView["needs_you"] }));
+const h = vi.hoisted(() => ({
+  frozen: false as boolean | undefined,
+  canEdit: true,
+  needs: [] as MatchDayView["needs_you"],
+  /** What `listFrozenCompetitions` answers (a database read, so doubled here; its own suite holds it to the persisted set). */
+  frozenRows: [] as { id: string; name: string; slug: string }[],
+  frozenReadFails: false,
+  frozenReads: 0,
+}));
 
 vi.mock("@/server/page-auth", () => ({
   requireCompetitionPage: async () => ({
@@ -18,6 +26,11 @@ vi.mock("@/server/page-auth", () => ({
 }));
 vi.mock("@/server/usecases/competitions", () => ({
   getCompetition: async () => ({ id: "comp-1", name: "Summer League", slug: "summer-league", frozen: h.frozen }),
+  listFrozenCompetitions: async () => {
+    h.frozenReads++;
+    if (h.frozenReadFails) throw new Error("db down");
+    return h.frozenRows;
+  },
 }));
 vi.mock("@/server/usecases/match-day", () => ({
   getMatchDay: async (): Promise<MatchDayView> => ({
@@ -43,6 +56,7 @@ import type { Dict } from "@/lib/i18n-constants";
 import en from "@/dictionaries/en/ui.json";
 import { needsYouItems } from "@/components/v2/desk/needs-you";
 import { MatchDayShell } from "@/components/v2/match-day/match-day-shell";
+import { FROZEN_NAMES_SHOWN, NO_FROZEN_NAMES, frozenNamesFor, type FrozenNames } from "@/lib/match-day/frozen-names";
 import type { CompetitionDesk } from "@/server/usecases/competition-desk";
 import type { Attention } from "@/lib/division-phase";
 
@@ -68,6 +82,72 @@ describe("F1 — the Match Day page hands the shell the competition's billing fr
     const html = await render();
     expect(html).toContain('data-testid="md-frozen"');
     expect(html).toContain(t(en as Dict, "matchDay.frozen").replace(/'/g, "&#x27;"));
+  });
+});
+
+// Match Day PB3 item 7: the banner names the org's frozen competitions. The page reads them (the persisted set, through
+// `listFrozenCompetitions`), cuts them with `frozenNamesFor` and hands the shell the result as a REQUIRED prop - so this is the seam
+// where a literal `NO_FROZEN_NAMES` would compile, render and quietly take the names off the banner.
+describe("PB3 item 7 - the page names the frozen competitions on the banner", () => {
+  const ROWS = [
+    { id: "c-a", name: "Autumn League", slug: "autumn-league" },
+    { id: "comp-1", name: "Summer League", slug: "summer-league" },
+    { id: "c-w", name: "Winter Cup", slug: "winter-cup" },
+    { id: "c-x", name: "Xmas Cup", slug: "xmas-cup" },
+    { id: "c-y", name: "Yule Cup", slug: "yule-cup" },
+  ];
+  const shellProps = async () => {
+    const tree = (await Page({ params: Promise.resolve({ orgSlug: "riverside", compSlug: "summer-league" }), searchParams: Promise.resolve({}) })) as {
+      props: { children: { type: unknown; props: { frozenNames: FrozenNames } } };
+    };
+    expect(tree.props.children.type).toBe(MatchDayShell);
+    return tree.props.children.props;
+  };
+
+  beforeEach(() => {
+    h.frozen = true;
+    h.canEdit = true;
+    h.needs = [];
+    h.frozenRows = ROWS;
+    h.frozenReadFails = false;
+    h.frozenReads = 0;
+  });
+
+  it("EMPTY CASE FIRST: a competition that is not frozen names nothing and does not even ask", async () => {
+    h.frozen = false;
+    expect((await shellProps()).frozenNames).toEqual(NO_FROZEN_NAMES);
+    expect(h.frozenReads, "no read for an in-quota org").toBe(0);
+    expect(await render()).not.toContain('data-testid="md-frozen-names"');
+  });
+
+  it("frozen: this competition first, then the others in the server's order, a count for the rest, all drawn in the page", async () => {
+    const out = (await shellProps()).frozenNames;
+    expect(h.frozenReads).toBeGreaterThan(0);
+    expect(out).toEqual(frozenNamesFor(ROWS, "comp-1"));
+    expect(out.shown.map((r) => r.id), "this one, then the server's order (not re-sorted)").toEqual(["comp-1", "c-a", "c-w"]);
+    expect(out.more, "five frozen, the cap named, the rest counted").toBe(ROWS.length - FROZEN_NAMES_SHOWN);
+    const html = await render();
+    expect(html).toContain('data-testid="md-frozen-names"');
+    for (const r of out.shown) expect(html).toContain(r.name);
+    expect(html).toContain(t(en as Dict, "matchDay.frozenMore", { count: out.more }));
+    // The names beyond the cap are NOT drawn - they are counted.
+    expect(html).not.toContain("Yule Cup");
+  });
+
+  it("a viewer's page asks for nothing and names nothing (the banner is the organiser's)", async () => {
+    h.canEdit = false;
+    expect((await shellProps()).frozenNames).toEqual(NO_FROZEN_NAMES);
+    expect(h.frozenReads).toBe(0);
+    expect(await render()).not.toContain('data-testid="md-frozen-names"');
+  });
+
+  it("fails soft: a read that throws leaves the banner as it was, with no names, instead of failing the page", async () => {
+    h.frozenReadFails = true;
+    expect((await shellProps()).frozenNames).toEqual(NO_FROZEN_NAMES);
+    expect(h.frozenReads, "the read WAS attempted - the empty answer is a fallback, not a skipped call").toBeGreaterThan(0);
+    const html = await render();
+    expect(html).toContain('data-testid="md-frozen"');
+    expect(html).not.toContain('data-testid="md-frozen-names"');
   });
 });
 

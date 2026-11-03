@@ -59,6 +59,7 @@ import { CourtFocus, NoCourtFocus, type MatchDayCtx } from "@/components/v2/matc
 import { CandidateRows, FreeCourtBody } from "@/components/v2/match-day/candidate-list";
 import { CallSheetBody } from "@/components/v2/match-day/call-sheet";
 import { MatchRoundChip } from "@/components/v2/match-day/round-chip";
+import { NO_FROZEN_NAMES, type FrozenNames } from "@/lib/match-day/frozen-names";
 import { DotLine, MatchDayShell } from "@/components/v2/match-day/match-day-shell";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
@@ -1106,6 +1107,7 @@ describe("the header, the filter and the poll's cadence", () => {
         dict={dict}
         scoreDict={publicEn as Dict}
         viewerPlan="pro"
+        frozenNames={NO_FROZEN_NAMES}
       />,
     );
     expect(html).toContain(t(dict, "matchDay.title", { date: "Saturday 31 Oct" }));
@@ -1129,6 +1131,7 @@ describe("the header, the filter and the poll's cadence", () => {
         dict={dict}
         scoreDict={publicEn as Dict}
         viewerPlan="pro"
+        frozenNames={NO_FROZEN_NAMES}
       />,
     );
     const tagOf = (testId: string) => html.match(new RegExp(`<[^>]*data-testid="${testId}"[^>]*>`))?.[0] ?? "";
@@ -1277,6 +1280,7 @@ const shellHtml = (v: MatchDayView) =>
       dict={dict}
       scoreDict={publicEn as Dict}
       viewerPlan="pro"
+      frozenNames={NO_FROZEN_NAMES}
     />,
   );
 const tagWith = (html: string, testId: string) => html.match(new RegExp(`<[^>]*data-testid="${testId}"[^>]*>`))?.[0] ?? "";
@@ -1696,7 +1700,10 @@ const noCourtList = (fixtures: MatchDayFixture[], openLabel = t(dict, "matchDay.
     />,
   );
 
-const shellWith = (v: MatchDayView, o: { readOnly?: boolean; frozen?: boolean; focusCourtId?: string | null } = {}) =>
+const shellWith = (
+  v: MatchDayView,
+  o: { readOnly?: boolean; frozen?: boolean; focusCourtId?: string | null; frozenNames?: FrozenNames } = {},
+) =>
   renderToStaticMarkup(
     <MatchDayShell
       competitionId="comp-1"
@@ -1709,6 +1716,7 @@ const shellWith = (v: MatchDayView, o: { readOnly?: boolean; frozen?: boolean; f
       dict={dict}
       scoreDict={publicEn as Dict}
       viewerPlan="pro"
+      frozenNames={NO_FROZEN_NAMES}
       {...o}
     />,
   );
@@ -2062,6 +2070,76 @@ describe("F1 — a billing-frozen competition: no Call, no Undo call", () => {
       checked++;
     }
     expect(checked).toBe(4);
+  });
+});
+
+// Match Day PB3 item 7: the banner above names the org's frozen competitions, so the organiser can see what to archive. The names are
+// the PERSISTED set, shaped by `frozenNamesFor` (the page test holds that seam); here the shell draws what it is handed, and only
+// under the banner's own condition (frozen, and an organiser's page).
+describe("PB3 item 7 - the frozen banner names the frozen competitions", () => {
+  const ref = (id: string, name: string, slug: string) => ({ id, name, slug });
+  const THREE: FrozenNames = {
+    shown: [ref("comp-1", "Safe Badminton 2026", "safe-badminton"), ref("c-2", "Autumn League", "autumn-league"), ref("c-3", "Spring Cup", "spring-cup")],
+    more: 0,
+  };
+  const names = (html: string) => html.match(/<p data-testid="md-frozen-names"[^>]*>[\s\S]*?<\/p>/)?.[0] ?? "";
+
+  it("EMPTY CASE FIRST: frozen with nothing to name draws the banner and no names line", () => {
+    const html = shellWith(view([court()]), { frozen: true, frozenNames: NO_FROZEN_NAMES });
+    expect(html).toContain('data-testid="md-frozen"');
+    expect(html).not.toContain('data-testid="md-frozen-names"');
+  });
+
+  it("names each competition in order; the one on screen is plain text, the others link to their own pages", () => {
+    const line = names(shellWith(view([court()]), { frozen: true, frozenNames: THREE }));
+    expect(line, "the names line rendered").not.toBe("");
+    expect(line).toContain(esc(t(dict, "matchDay.frozenNames")));
+    const at = (n: string) => line.indexOf(n);
+    expect(at("Safe Badminton 2026")).toBeGreaterThan(-1);
+    expect(at("Safe Badminton 2026")).toBeLessThan(at("Autumn League"));
+    expect(at("Autumn League")).toBeLessThan(at("Spring Cup"));
+    // Others link; this one does not (a link to the page you are on).
+    expect(line).toContain(`href="${routes.competition("acme", "autumn-league")}"`);
+    expect(line).toContain(`href="${routes.competition("acme", "spring-cup")}"`);
+    expect(line).not.toContain(`href="${routes.competition("acme", "safe-badminton")}"`);
+    expect(line.match(/<a /g) ?? [], "two links, for the two others").toHaveLength(2);
+    // All named, so no "+N more" for any N (the positive pair is the next test).
+    for (const n of [1, 2, 3, 4]) expect(line).not.toContain(esc(t(dict, "matchDay.frozenMore", { count: n })));
+  });
+
+  it("past three: '+N more' with the real count, in the reader's words", () => {
+    const line = names(shellWith(view([court()]), { frozen: true, frozenNames: { ...THREE, more: 4 } }));
+    expect(line).toContain(esc(t(dict, "matchDay.frozenMore", { count: 4 })));
+    expect(t(dict, "matchDay.frozenMore", { count: 4 }), "the count really is interpolated").toContain("4");
+    const one = names(shellWith(view([court()]), { frozen: true, frozenNames: { ...THREE, more: 1 } }));
+    expect(one).toContain(esc(t(dict, "matchDay.frozenMore", { count: 1 })));
+  });
+
+  it("only under the banner's own condition: not on a viewer's page, and not on a competition that is not frozen", () => {
+    expect(names(shellWith(view([court()]), { frozen: true, frozenNames: THREE }))).not.toBe("");
+    expect(names(shellWith(view([court()]), { frozen: true, readOnly: true, frozenNames: THREE }))).toBe("");
+    expect(names(shellWith(view([court()]), { frozen: false, frozenNames: THREE }))).toBe("");
+  });
+
+  it("a name is text, never markup", () => {
+    const evil: FrozenNames = { shown: [ref("c-9", "<img src=x onerror=alert(1)>", "evil")], more: 0 };
+    const line = names(shellWith(view([court()]), { frozen: true, frozenNames: evil }));
+    expect(line).not.toContain("<img");
+    expect(line).toContain("&lt;img");
+  });
+
+  it("the two phrases exist in all four locales, differ from English, and 'more' keeps its {count}", () => {
+    let checked = 0;
+    for (const [locale, d] of Object.entries(DICTS)) {
+      for (const key of ["matchDay.frozenNames", "matchDay.frozenMore"]) {
+        const v = d[key];
+        expect(typeof v === "string" && v !== "", `${locale} ${key}`).toBe(true);
+        if (locale !== "en") expect(v, `${locale} ${key} is translated`).not.toBe(DICTS.en![key]);
+        checked++;
+      }
+      expect(d["matchDay.frozenMore"], locale).toContain("{count}");
+    }
+    expect(checked).toBe(8);
   });
 });
 
