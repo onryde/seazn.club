@@ -202,7 +202,9 @@ test("PB1 item 3: a completed stage is one line - its toggle opens and closes th
 // true if that state survives the new props, which no node-environment test can see. The write is the row's own set-time editor (PATCH the
 // fixture, then `router.refresh()`), and the refresh is witnessed on the wire (the RSC GET that follows the PATCH), not assumed: a write that
 // refreshed nothing would leave the round open for the wrong reason. Anti-vacuity: the refresh's effect is read back too (the row's time
-// cell changed - server data), and a round nobody touched keeps its default beside it.
+// now shows - server data), and TWO rounds are finished: one the person opens, one they leave folded. After the refresh the opened one is
+// open and the left one is STILL folded, so "the choice was kept" and "everything came back open" give different answers (a round with a
+// match left to play defaults to open, so a round that does not could not tell them apart - PB3 review m4).
 test("PB3 item 5: a round opened by hand stays open across a real router.refresh() after a write in another round", async ({ page, request }) => {
   test.setTimeout(150_000);
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `PB3 refresh ${TAG}`, visibility: "private" });
@@ -223,25 +225,29 @@ test("PB3 item 5: a round opened by hand stays open across a real router.refresh
   expect(gen.status, `generate: ${JSON.stringify(gen.error)}`).toBeLessThan(300);
   const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
   expect(started.status, `division start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
-  // One match played: its round is FINISHED (folded by default); the other two rounds still have a match to play (open by default).
+  // Two matches played: their rounds are FINISHED (folded by default); the third round still has a match to play (open by default).
   const rows = await withDb((sql) => sql<{ id: string; round_no: number; fixture_no: number }[]>`
     select id, round_no, fixture_no from fixtures where stage_id = ${stageId} order by round_no, seq_in_round`);
   expect(rows, "a league of three plays three matches, one round each").toHaveLength(3);
-  const played = rows[0]!;
-  const waiting = rows.slice(1);
+  const played = rows[0]!; // finished, and opened by hand below
+  const left = rows[1]!; // finished, and never touched: it must still be folded after the refresh
+  const waiting = rows.slice(2);
+  expect(waiting, "one round still has a match to play").toHaveLength(1);
   await scoreFixture(request, played.id, 2, 1);
+  await scoreFixture(request, left.id, 1, 0);
 
   const card = await openCard(page, request, divisionId, stageId);
   const bar = (round: number) => card.locator(`[aria-controls="run-sheet-rounds-${stageId}-${round}"]`);
   const rowsOf = (round: number) => card.locator(`#run-sheet-rounds-${stageId}-${round} li[data-fixture-no]:visible`);
   await expect(card.getByTestId("run-sheet-round-toggle"), "three rounds, a bar each").toHaveCount(3);
 
-  // Defaults first: the finished round is folded, the two with work left are open.
-  await expect(bar(played.round_no), "the finished round starts folded").toHaveAttribute("aria-expanded", "false");
+  // Defaults first: the two finished rounds are folded, the one with work left is open.
+  for (const f of [played, left]) await expect(bar(f.round_no), `round ${f.round_no} is finished, so it starts folded`).toHaveAttribute("aria-expanded", "false");
   for (const w of waiting) await expect(bar(w.round_no), `round ${w.round_no} still has a match to play, so it starts open`).toHaveAttribute("aria-expanded", "true");
   await expect(rowsOf(played.round_no)).toHaveCount(0);
+  await expect(rowsOf(left.round_no)).toHaveCount(0);
 
-  // The person opens the finished round.
+  // The person opens ONE finished round (and leaves the other folded).
   await bar(played.round_no).click();
   await expect(bar(played.round_no)).toHaveAttribute("aria-expanded", "true");
   await expect(rowsOf(played.round_no), "its one match is on screen").toHaveCount(1);
@@ -271,7 +277,10 @@ test("PB3 item 5: a round opened by hand stays open across a real router.refresh
   // ... and the round opened by hand is STILL open, rows and all. The bar and the list agree.
   await expect(bar(played.round_no), "the round the person opened survived the refresh").toHaveAttribute("aria-expanded", "true");
   await expect(rowsOf(played.round_no), "its match is still on screen").toHaveCount(1);
-  // The rounds nobody touched kept their defaults beside it (so 'everything is open' cannot pass for 'the choice was kept').
+  // The finished round nobody touched is STILL folded - the discriminator: a refresh that re-opened every round would pass the line above
+  // and fail this one - and the round with work left is still open by its default.
+  await expect(bar(left.round_no), "the finished round the person left folded is still folded").toHaveAttribute("aria-expanded", "false");
+  await expect(rowsOf(left.round_no), "and its rows are still hidden").toHaveCount(0);
   for (const w of waiting) await expect(bar(w.round_no)).toHaveAttribute("aria-expanded", "true");
   await expectNoHorizontalScroll(page);
 });

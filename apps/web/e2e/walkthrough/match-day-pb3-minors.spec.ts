@@ -74,6 +74,8 @@ interface HintBox {
   label: string;
   /** The dictionary key of the hint the box must draw. */
   key: string;
+  /** The dictionary key of the copy that LABELS the box on screen: its accessible name (PB3 review C1 - the hint is not the name). */
+  labelKey: string;
   /** The editor's contenteditable on the page the person is on. */
   editor: (page: Page) => Locator;
   /** Type `text` in, press the box's own save, and return what is STORED (database). */
@@ -92,6 +94,14 @@ async function prove(page: Page, box: HintBox, width: number): Promise<void> {
   const editor = box.editor(page);
   await expect(editor, `${box.label}: the editor is on the page`).toBeVisible({ timeout: NAV_MS });
   await expect(editor).toHaveAttribute("aria-placeholder", hint);
+  // The box is NAMED by its own label, found the way a screen reader finds it: by role and name. Never the generic fallback (the payment
+  // box and the news body are not "Description"s), and the hint is the placeholder, not the name.
+  const name = uiEn[box.labelKey]!;
+  expect(name, `${box.label}: the dictionary has the label`).toBeTruthy();
+  await expect(editor, `${box.label}: the box's accessible name is its own label`).toHaveAttribute("aria-label", name);
+  await expect(page.getByRole("textbox", { name, exact: true }), `${box.label}: the one textbox with that name`).toHaveCount(1);
+  expect(name, `${box.label}: the hint is not the name`).not.toBe(hint);
+  if (box.labelKey !== "compset.description") expect(name, `${box.label}: not the generic fallback`).not.toBe(uiEn["editor.description"]);
 
   // Drawn, in the house grey, inside the viewport.
   const empty = editor.locator("p.is-editor-empty");
@@ -164,6 +174,7 @@ for (const width of [1280, 768, 320] as const) {
       {
         label: "about",
         key: "settings.org.about.placeholder",
+        labelKey: "settings.org.about",
         editor: EDITOR,
         saveTyped: async (p) => {
           await p.getByRole("button", { name: uiEn["settings.org.about.save"]!, exact: true }).click();
@@ -179,6 +190,7 @@ for (const width of [1280, 768, 320] as const) {
       {
         label: "payment",
         key: "pay.cashPlaceholder",
+        labelKey: "pay.cashTitle",
         editor: EDITOR,
         saveTyped: async (p) => {
           await p.getByRole("button", { name: uiEn["pay.save"]!, exact: true }).click();
@@ -194,6 +206,7 @@ for (const width of [1280, 768, 320] as const) {
       {
         label: "news",
         key: "news.composer.bodyPlaceholder",
+        labelKey: "news.composer.body",
         editor: EDITOR,
         // The composer closes after a save: the empty pass is a SECOND post, opened afresh (reopen), whose body is the empty box.
         saveTyped: async (p, text) => {
@@ -221,6 +234,7 @@ for (const width of [1280, 768, 320] as const) {
       {
         label: "competition",
         key: "compset.descriptionPlaceholder",
+        labelKey: "compset.description",
         editor: EDITOR,
         // The DB is polled, not the "Saved." line: the first save leaves it on screen, so it cannot witness the second.
         saveTyped: async (p) => {
@@ -390,6 +404,12 @@ for (const width of [1280, 1024, 768, 320] as const) {
     await expect(form.getByRole("radio", { name: uiEn["visibility.public.label"]!, exact: true })).toBeChecked();
     await expect(form.getByTestId("public-cap-note"), "a free slot: no note").toHaveCount(0);
     await expectReach(form, REACH.public, "free slot, Public");
+    // ... and the two other places the form speaks of reach keep their promise while a slot is free: the line under the segments, and a
+    // Showcase switch that can be turned on.
+    const consequence = form.getByTestId("visibility-consequence");
+    const showcase = form.getByRole("switch", { name: uiEn["showcase.label"]!, exact: true });
+    await expect(consequence, "free slot: Public's line promises the listing").toHaveText(uiEn["visibility.public.consequence"]!);
+    await expect(showcase, "free slot: Showcase can be turned on").toBeEnabled();
 
     // 2. Fill the slot with a real public competition. Only a PUBLISHED one holds a place under dashboard.public.max (a draft does
     //    not: the meter counts "actually published" dashboards), so the holder is published, by the row, as the unit test does.
@@ -416,14 +436,27 @@ for (const width of [1280, 1024, 768, 320] as const) {
         "href",
         `/o/${slug}/settings/billing`,
       );
-      // The checklist tells the truth: only the team will find it.
+      // The note names the audience in the checklist's own words (the members of the organisation), never "team" (owner, C8).
+      const rowWords = uiEn["comp.wizard.reach.team"]!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      await expect(note, `${v}: the note names the row's audience`).toHaveText(new RegExp(rowWords, "i"));
+      await expect(note, `${v}: and does not say "team"`).not.toHaveText(/\bteam\b/i);
+      // The checklist tells the truth: only members of the organisation will find it.
       await expectReach(form, REACH.private, `${v} over the cap`);
+      // So do the other two places the form speaks of reach (PB3 review m5): the line under the segments stops promising the listing,
+      // the link and search engines; the Showcase switch is off, with the CAP as its reason.
+      await expect(consequence, `${v}: the line under the segments says it is created private`).toHaveText(uiEn["visibility.capped.consequence"]!);
+      await expect(consequence, `${v}: and no longer promises the old reach`).not.toHaveText(uiEn[`visibility.${v}.consequence`]!);
+      await expect(showcase, `${v}: Showcase cannot be turned on`).toBeDisabled();
+      await expect(form.getByText(uiEn["comp.wizard.showcase.capped"]!, { exact: true }), `${v}: the reason is the cap`).toBeVisible();
+      await expect(form.getByText(uiEn["showcase.needsPublic"]!), `${v}: not "set visibility to public" under a Public that is selected`).toHaveCount(0);
       checkedNotes++;
     }
     expect(checkedNotes, "both visibilities that take a public place were checked").toBe(2);
     await pick(form, "private");
     await expect(form.getByTestId("public-cap-note"), "private: nothing to warn about").toHaveCount(0);
     await expectReach(form, REACH.private, "Private");
+    await expect(consequence, "private: its own line, as it always was").toHaveText(uiEn["visibility.private.consequence"]!);
+    await expect(form.getByText(uiEn["showcase.needsPublic"]!), "private: the old reason, as it always was").toBeVisible();
     // Back on Public: the note is back, in the screen, with a 44px way out and no sideways scroll.
     await pick(form, "public");
     const note = form.getByTestId("public-cap-note");
@@ -482,8 +515,10 @@ for (const width of [1280, 768, 320] as const) {
     );
     expect(frozenInDb, "a limit of one over five live competitions freezes four").toHaveLength(4);
 
-    // Open Match Day of one that IS frozen (the freeze keeps the newest running, so pick from the stored set).
-    const subject = frozenInDb[0]!;
+    // Open Match Day of one that IS frozen (the freeze keeps the newest running, so pick from the stored set) - the LAST of them by name.
+    // The server lists names in name order, so an implementation that merely printed that order would hide this one behind "+1 more";
+    // only one that puts the competition on screen first names it (PB3 review m3).
+    const subject = frozenInDb[frozenInDb.length - 1]!;
     await page.goto(`${await competitionPath(page.request, subject.id)}/match-day`, { waitUntil: "load" });
     await expect(page.getByTestId("md-header")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("md-frozen"), "the banner is there").toHaveText(uiEn["matchDay.frozen"]!);
@@ -495,6 +530,7 @@ for (const width of [1280, 768, 320] as const) {
     expect(text).toContain(uiEn["matchDay.frozenNames"]!);
     const named = frozenInDb.filter((r) => text.includes(r.name));
     expect(named, "three competitions are named").toHaveLength(3);
+    expect(text.indexOf(subject.name), "this competition is named at all (not hidden behind '+N more')").toBeGreaterThanOrEqual(0);
     expect(text.indexOf(subject.name), "this competition is named first").toBeLessThan(Math.min(...named.filter((r) => r.id !== subject.id).map((r) => text.indexOf(r.name))));
     const unnamed = frozenInDb.filter((r) => !text.includes(r.name));
     expect(unnamed, "one frozen competition is counted, not named").toHaveLength(1);
@@ -505,6 +541,34 @@ for (const width of [1280, 768, 320] as const) {
     // This one is plain text; the others are links to their own competition pages.
     await expect(names.getByRole("link"), "two links, for the two others named").toHaveCount(2);
     await expectNoHorizontalScroll(page);
+
+    // 44px targets (PB3 review m1), by what a finger lands on: every name, link or plain, and the "+N more" are 44px tall, and the
+    // element at the top, middle and bottom of each link IS that link (a painted box is not a hit area).
+    const entries = names.locator("li");
+    await expect(entries, "three names and the '+1 more'").toHaveCount(4);
+    for (const li of await entries.all()) {
+      const inner = li.locator("a, span").first();
+      const hit = (await ((await inner.count()) > 0 ? inner : li).boundingBox())!;
+      expect(hit.height, `an entry is a 44px target: ${(await li.textContent())?.trim()}`).toBeGreaterThanOrEqual(43.5);
+    }
+    let hitTested = 0;
+    for (const link of await names.getByRole("link").all()) {
+      await link.scrollIntoViewIfNeeded();
+      for (const fraction of [0.08, 0.5, 0.92]) {
+        const lands = await link.evaluate((el, f) => {
+          const r = el.getBoundingClientRect();
+          const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height * f);
+          return at !== null && (at === el || el.contains(at));
+        }, fraction);
+        expect(lands, `a tap ${Math.round(fraction * 100)}% down "${(await link.textContent())?.trim()}" lands on it`).toBe(true);
+        hitTested++;
+      }
+    }
+    expect(hitTested, "anti-vacuity: both links, three points each").toBe(6);
+    // The rows are a wrapping flex row, the label above it: read from the page, not from the class names.
+    const labelBox = (await names.locator("p").boundingBox())!;
+    const firstEntry = (await entries.first().boundingBox())!;
+    expect(firstEntry.y, "the label is a line of its own, above the names").toBeGreaterThanOrEqual(labelBox.y + labelBox.height - 1);
     const other = named.find((r) => r.id !== subject.id)!;
     await names.getByRole("link", { name: other.name }).click();
     await expect(page).toHaveURL(new RegExp(`${(await competitionPath(page.request, other.id)).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`), { timeout: NAV_MS });
