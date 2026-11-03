@@ -2480,11 +2480,15 @@ export function boundSolverWindow<T extends SlotConfig & VerifyConfig>(
  * multi-day window, and the 2026-08-13 day-aware rungs made that MORE true,
  * not less. It used to be that T1 minimised `makespanMinutes`, which pulled
  * every fixture toward the earliest reachable day; T1 is now
- * `days → day_span → day_start`, and its FIRST rung minimises the count of
- * calendar days used, which pulls in the same direction harder. Either way a
- * wide window and a tight one behave identically without a day cap forcing
- * the difference: a seven-day window and a one-day window both pile every
- * match onto day one.
+ * `days → day_span → day_start`, and its FIRST rung minimises the COUNT of
+ * calendar days used, which packs harder but no longer says WHICH day. Either
+ * way a wide window and a tight one behave identically without a day cap
+ * forcing the difference: a seven-day window and a one-day window both pile
+ * every match onto ONE day, not necessarily the first. Every rung is
+ * shift-invariant, so a whole-day shift ties on all of them and the solver may
+ * pick any day the lattice reaches (W3 T11 finding: a board landed on the
+ * window's second day under `boundSolverWindow`'s slack day; owner decision
+ * pending, see the W3 App B task-11 report).
  *
  * `max_fixtures_per_day` is the one hard rule that already does this, fully
  * wired end to end (`build-encode.ts` groups by `dayKeyInTz` and encodes an
