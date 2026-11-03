@@ -221,3 +221,35 @@ describe("the CSV import wizard says a Lichess refusal in the organiser's langua
     expect(bannerText(island)).not.toContain(t(uiEn, "import.lichess.linkRequired.unnamed"));
   });
 });
+
+// UI5 fix round 1 (ruling Q3): the import's commit also refuses a player the division already holds (one person, one entrant
+// per division), whole and by FILE ROWS - the same wizard branch shape as the Lichess refusal above.
+describe("the CSV import wizard says PERSON_ON_OTHER_TEAM in the organiser's language, naming the file rows", () => {
+  const SERVER_HELD = "Ada One is already on Acme U12 in this division";
+  it("rows named, then one row, then no rows: each in the organiser's words, never the server's; the retry imports", async () => {
+    const commits = stubFetch([
+      { status: 409, error: { code: "PERSON_ON_OTHER_TEAM", message: SERVER_HELD, conflicts: [], person_ids: [], rows: [3, 4] } },
+      { status: 409, error: { code: "PERSON_ON_OTHER_TEAM", message: SERVER_HELD, conflicts: [], person_ids: ["p-ada"], rows: [3] } },
+      { status: 409, error: { code: "PERSON_ON_OTHER_TEAM", message: SERVER_HELD } },
+    ]);
+    const island = await mountWithPreview();
+
+    (propsOf(commitButton(island)!).onClick as () => void)();
+    await vi.waitFor(() => expect(errorBanner(island)).toBeTruthy());
+    expect(bannerText(island)).toContain(pluralRuntime(uiEn, "import.personOnOtherTeam", 2, "en", { rows: "3 and 4" }));
+    expect(bannerText(island), "never the server's English").not.toContain(SERVER_HELD);
+    expect(commitButton(island), "the preview stays").toBeTruthy();
+
+    (propsOf(commitButton(island)!).onClick as () => void)();
+    await vi.waitFor(() => expect(bannerText(island)).toContain(pluralRuntime(uiEn, "import.personOnOtherTeam", 1, "en", { rows: "3" })));
+
+    (propsOf(commitButton(island)!).onClick as () => void)();
+    await vi.waitFor(() => expect(bannerText(island)).toContain(t(uiEn, "import.personOnOtherTeam.unnamed")));
+    expect(bannerText(island)).not.toContain(SERVER_HELD);
+
+    (propsOf(commitButton(island)!).onClick as () => void)();
+    await vi.waitFor(() => expect(nav.refresh, "the fourth commit was accepted").toHaveBeenCalledTimes(1));
+    expect(errorBanner(island)).toBeUndefined();
+    expect(commits).toHaveLength(4);
+  });
+});

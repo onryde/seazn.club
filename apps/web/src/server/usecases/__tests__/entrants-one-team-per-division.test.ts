@@ -225,3 +225,58 @@ describe.skipIf(!HAS_DB)("one person, one team per division (UI5 item 3)", () =>
     });
   });
 });
+
+// UI5 fix round 1 (controller ruling Q3): reinstating a withdrawn entrant brings its roster back into the field, so the
+// one-team rule asks again — the bypass the review found (`patchEntrant`'s status write never asked it).
+describe.skipIf(!HAS_DB)("one person, one team per division: reinstating a withdrawn entrant (UI5 fix round 1, Q3)", () => {
+  const statusOf = async (id: string) => (await sql<{ status: string }[]>`select status from entrants where id = ${id}`)[0]!.status;
+
+  it("a withdrawn team whose player has since joined another team is refused by name; it stays withdrawn", async () => {
+    const { auth, division, person } = await rig();
+    const div = await division("A");
+    const ada = await person("Ada Reinstate");
+    const bo = await person("Bo Reinstate");
+    const [red] = await createEntrants(auth, div.id, [team("Red", [ada, bo])]);
+    await patchEntrant(auth, red!.id, { status: "withdrawn" });
+    const [blue] = await createEntrants(auth, div.id, [team("Blue", [ada])]); // allowed: Red holds no one now
+
+    await expect(patchEntrant(auth, red!.id, { status: "registered" })).rejects.toMatchObject(
+      refusedFor([{ person_id: ada, person_name: "Ada Reinstate", entrant_id: blue!.id, entrant_name: "Blue" }]),
+    );
+    expect(await statusOf(red!.id), "a refused reinstatement writes nothing").toBe("withdrawn");
+    expect(await rosterOf(auth, red!.id), "and keeps the roster").toEqual([ada, bo].sort());
+
+    // Its cleared pair: once Ada leaves Blue, the same reinstatement goes through — and its own people are never a conflict.
+    await patchEntrant(auth, blue!.id, { members: [] });
+    await patchEntrant(auth, red!.id, { status: "registered" });
+    expect(await statusOf(red!.id)).toBe("registered");
+    // The second call: re-asserting the active status is no reinstatement, and asks nothing.
+    await patchEntrant(auth, red!.id, { status: "registered" });
+    expect(await statusOf(red!.id)).toBe("registered");
+  });
+
+  it("a reinstatement that also replaces the roster is asked of the NEW roster; an empty roster reinstates", async () => {
+    const { auth, division, person } = await rig();
+    const div = await division("A");
+    const ada = await person("Ada New Roster");
+    const cy = await person("Cy New Roster");
+    const [red] = await createEntrants(auth, div.id, [team("Red", [ada])]);
+    await patchEntrant(auth, red!.id, { status: "withdrawn" });
+    const [blue] = await createEntrants(auth, div.id, [team("Blue", [ada])]);
+    // Ada's old seat on Red is replaced by Cy in the same write: nothing clashes.
+    await patchEntrant(auth, red!.id, { status: "confirmed", members: [member(cy)] });
+    expect(await statusOf(red!.id)).toBe("confirmed");
+    expect(await rosterOf(auth, red!.id)).toEqual([cy]);
+    // ...but a new roster naming Blue's player is refused, by the roster write's own check.
+    await patchEntrant(auth, red!.id, { status: "withdrawn" });
+    await expect(patchEntrant(auth, red!.id, { status: "registered", members: [member(ada)] })).rejects.toMatchObject(
+      refusedFor([{ person_id: ada, person_name: "Ada New Roster", entrant_id: blue!.id, entrant_name: "Blue" }]),
+    );
+    expect(await statusOf(red!.id)).toBe("withdrawn");
+    // The empty case: a withdrawn entrant with nobody on it reinstates.
+    const [empty] = await createEntrants(auth, div.id, [team("Empty", [])]);
+    await patchEntrant(auth, empty!.id, { status: "withdrawn" });
+    await patchEntrant(auth, empty!.id, { status: "registered" });
+    expect(await statusOf(empty!.id)).toBe("registered");
+  });
+});

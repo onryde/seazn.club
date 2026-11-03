@@ -219,14 +219,15 @@ export interface HeldMembershipRow {
   entrant_kind: string;
 }
 
-/** Who holds whom in a division: every membership of an entrant still in the field. The ONE predicate behind both the
- *  roster refusal (`insertMembers`) and the console's "On <team>" map (`divisionRoster`), so the picker never offers a
- *  person the write would refuse, nor hides one it would take.
+/** Who holds whom in a division: every membership of an entrant still in the field. The ONE predicate behind the roster
+ *  refusal (`insertMembers`; UI5 fix round 1, ruling Q3: also a reinstatement, `writeEntrantPatch`, and the CSV import's
+ *  commit, `imports.ts`) and the console's "On <team>" map (`divisionRoster`), so the picker never offers a person the
+ *  write would refuse, nor hides one it would take.
  *
  *  A departed entrant (withdrawn, disqualified) holds no one. An americano division's `pair` entrants hold no one either:
  *  its stage mints a pair per rotation from the individuals (`pairEntrantsFor` in stages.ts), so every player there is on
  *  many pairs by design, and those are not teams anyone entered. */
-function heldMemberships(tx: Tx, divisionId: string, personIds?: string[]) {
+export function heldMemberships(tx: Tx, divisionId: string, personIds?: string[]) {
   return tx<HeldMembershipRow[]>`
     select em.person_id, p.full_name as person_name, e.id as entrant_id, e.display_name as entrant_name, e.kind as entrant_kind
     from entrants e
@@ -238,6 +239,29 @@ function heldMemberships(tx: Tx, divisionId: string, personIds?: string[]) {
         select 1 from stages s where s.division_id = e.division_id and s.kind = 'americano'))
       ${personIds ? tx`and em.person_id in ${tx(personIds)}` : tx``}
     order by e.created_at, e.id, p.full_name`;
+}
+
+/** The one-team refusal: 409 PERSON_ON_OTHER_TEAM, one English sentence per holder (screens say it from the code and
+ *  `conflicts`, never from the message), `{ conflicts }` plus whatever a caller adds (the import's file `rows`). `also` is
+ *  a caller's own sentence for a clash no stored holder explains (one import file putting a person on two entrants). */
+export function personOnOtherTeamError(
+  conflicts: readonly HeldMembershipRow[],
+  extra: Record<string, unknown> = {},
+  also: readonly string[] = [],
+): HttpError {
+  return new HttpError(
+    409,
+    [
+      ...conflicts.map((c) =>
+        c.entrant_kind === "individual"
+          ? `${c.person_name} is already entered in this division`
+          : `${c.person_name} is already on ${c.entrant_name} in this division`,
+      ),
+      ...also,
+    ].join("; "),
+    PERSON_ON_OTHER_TEAM,
+    { conflicts, ...extra },
+  );
 }
 
 async function insertMembers(
@@ -268,19 +292,7 @@ async function insertMembers(
   const held = await heldMemberships(tx, opts.divisionId, ids);
   if (held.length > 0) {
     const rank = new Map(ids.map((id, i) => [id, i]));
-    const conflicts = [...held].sort((a, b) => rank.get(a.person_id)! - rank.get(b.person_id)!);
-    throw new HttpError(
-      409,
-      conflicts
-        .map((c) =>
-          c.entrant_kind === "individual"
-            ? `${c.person_name} is already entered in this division`
-            : `${c.person_name} is already on ${c.entrant_name} in this division`,
-        )
-        .join("; "),
-      PERSON_ON_OTHER_TEAM,
-      { conflicts },
-    );
+    throw personOnOtherTeamError([...held].sort((a, b) => rank.get(a.person_id)! - rank.get(b.person_id)!));
   }
   const warnings = await gateRosterEligibility(tx, {
     divisionId: opts.divisionId,
@@ -1035,6 +1047,16 @@ export async function writeEntrantPatch(
       [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
     }
     if (!row) throw new HttpError(404, "entrant not found");
+    // UI5 fix round 1 (ruling Q3): a reinstated entrant brings its roster back into the field, so the one-team rule asks
+    // again (`heldMemberships`, the roster write's own predicate) — a player who joined another entrant of the division
+    // while this one was away is refused by name, and the transaction writes nothing. A patch that also replaces the
+    // roster is asked by `insertMembers` over the NEW roster instead (below), never over the one it replaces.
+    if (reinstating && !DEPARTED_STATUSES.has(row.status) && !members) {
+      const mine = await tx<{ person_id: string }[]>`select person_id from entrant_members where entrant_id = ${id}`;
+      const held =
+        mine.length === 0 ? [] : (await heldMemberships(tx, row.division_id, mine.map((m) => m.person_id))).filter((h) => h.entrant_id !== id);
+      if (held.length > 0) throw personOnOtherTeamError(held);
+    }
     // Crossing the field boundary in EITHER direction: a withdrawal removes a
     // qualifier a draft proposal may already name, and an un-withdrawal makes
     // one offerable again. Both are field changes; a move between two departed
