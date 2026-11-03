@@ -440,7 +440,7 @@ async function readByeRow(tx: Tx, id: { division: string; stage: string; fixture
 
 /** The object each place keeps the sport config in, so "carries byeScore" is asked of the same thing in every place. */
 const configIn = (place: Place, row: Stored | ByeSeed): Json | null => {
-  const r = row as Json;
+  const r = row as unknown as Json;
   switch (place) {
     case "divisions.config":
       return (r.division as Json | undefined) ?? null;
@@ -458,10 +458,7 @@ const carries = (place: Place, row: Stored | ByeSeed): boolean => {
   const cfg = configIn(place, row);
   return cfg !== null && Object.hasOwn(cfg, "byeScore");
 };
-const without = (cfg: Json): Json => {
-  const { byeScore: _gone, ...rest } = cfg;
-  return rest;
-};
+const without = (cfg: Json): Json => Object.fromEntries(Object.entries(cfg).filter(([k]) => k !== "byeScore"));
 /** What the delta must leave: the seed with `byeScore` out of the one object each place keeps its config in. */
 const expectedAfter = (s: ByeSeed): Stored => ({
   division: without(s.division),
