@@ -23,6 +23,7 @@ import type { Dict, Locale } from "@/lib/i18n-constants";
 import { unitLabelKey } from "@/lib/stage-card/summaries";
 import { generateDoubleElim, generatePagePlayoff, generateSingleElim, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
 import { tableRulesOf } from "../stage-rules/__tests__/_table-rules-fixture";
+import { innerOf, subtreeOf } from "./_markup";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
@@ -544,6 +545,13 @@ describe("E1 item 1: the header is [actions | divider | settings], the footer ro
     // The divider is a desktop device: hidden below md, where the actions are the Stage tools sheet.
     expect(tag(html, "stage-controls-divider"), "bare `hidden`, not `max-md:hidden`").toMatch(/class="(?:[^"]* )?hidden /);
     expect(tag(html, "stage-controls-divider")).toMatch(/\bmd:block\b/);
+    // SCF (owner pick, Option A): the divider is the SETTINGS group's own first child, not the rail's - so wherever the header wraps, it
+    // shares a line with the buttons it divides. A divider left in the rail (or between the two groups) could be stranded on a line alone.
+    const group = innerOf(html, "stage-tools-group");
+    expect(group, "the settings group is on the card").not.toBeNull();
+    expect(group!, "the divider is the group's FIRST child").toMatch(/^<span[^>]*data-testid="stage-controls-divider"/);
+    expect(group!.indexOf('data-testid="stage-tools"'), "the buttons follow it inside the same group").toBeGreaterThan(group!.indexOf("stage-controls-divider"));
+    expect(subtreeOf(html, "stage-rail"), "the rail holds no divider of its own").not.toContain("stage-controls-divider");
     // The header is the cluster's home: it comes before the counts line and before the rows.
     expect(rail!).toBeLessThan(html.indexOf('data-testid="stage-progress-counts"'));
     expect(rail!).toBeLessThan(html.indexOf('data-testid="stage-run-sheet"'));
@@ -606,6 +614,111 @@ describe("E1 item 1: the header is [actions | divider | settings], the footer ro
     const done = panel({ fixtures: [fixture(A, 1, { status: "decided", outcome: DECIDED })] });
     expect(tag(done, "stage-complete")).not.toBeNull();
     expect(done).not.toContain("stage-complete-hint");
+  });
+});
+
+// SCF (owner pick, Option A, 2026-11-03): the divider is drawn when the ACTIONS group draws a control (the panel asks `stageRailActions`, the
+// rail answers by drawing), and it is the settings group's first child. The oracle for "the group drew a control" is the rail's OWN
+// rendered markup, read here - not the predicate the panel asked - so the two places that must agree are checked against each other.
+// One sport (badminton): the header's geometry does not read the sport; the per-sport rule panels are swept in their own suites.
+describe("SCF: the divider is drawn exactly when the actions group draws a control, and it is the settings group's first child", () => {
+  const RAIL_CONTROLS = ["stage-generate", "stage-complete", "stage-unpair", "stage-delete", "stage-add-match", "stage-rounds", "stage-more"];
+  const swissControl = (started: boolean) => ({
+    started,
+    rounds: 3,
+    chess: false,
+    field: 6,
+    addRound: { canAddRound: false, refusal: "over" as const, field: null, hardMax: null },
+    finish: { canFinish: false, refusal: "over" as const, finishedAfter: 3, inProgress: false, completeInstead: false },
+  });
+  /** Round 1 seated (and `decided` when `played`), round 2 an empty shell: what a Swiss holds mid-event. */
+  const swissRows = (o: { played?: boolean; seatedRounds?: number[] } = {}) =>
+    Array.from({ length: 6 }, (_, i) => {
+      const round = Math.floor(i / 3) + 1;
+      const seated = (o.seatedRounds ?? [1]).includes(round);
+      return {
+        ...fixture(A, i + 1, o.played && round === 1 ? { status: "decided", outcome: DECIDED } : {}),
+        round_no: round,
+        home_entrant_id: seated ? "e1" : null,
+        away_entrant_id: seated ? "e2" : null,
+        ext_key: `sw-r${round}-b${(i % 3) + 1}`,
+      };
+    });
+
+  interface Row {
+    name: string;
+    over: Record<string, unknown>;
+  }
+  const rows = (): Row[] => {
+    const out: Row[] = [];
+    for (const kind of StageKind.options.filter((k) => k !== "swiss")) {
+      for (const status of ["pending", "active", "complete"]) {
+        out.push({
+          name: `${kind}/${status}`,
+          over: {
+            stages: [stageRow({ kind, status })],
+            fixtures: status === "pending" ? [] : MOCK_FIXTURES,
+            stageTableRules: { [A]: tableRulesOf(sport("badminton"), "league") },
+          },
+        });
+      }
+    }
+    const swiss = (status: string) => stageRow({ kind: "swiss", name: "Swiss", status, config: { rounds: 3 } });
+    const ctl = (started: boolean) => ({ swissRoundControls: { [A]: swissControl(started) } });
+    out.push(
+      { name: "swiss/pending, nothing generated, count still editable: Generate + the Rounds button", over: { stages: [swiss("pending")], fixtures: [], ...ctl(false) } },
+      { name: "swiss/active, round 2 waiting: Pair next", over: { stages: [swiss("active")], fixtures: swissRows({ played: true }), ...ctl(true) } },
+      { name: "swiss/active, every round seated: Complete", over: { stages: [swiss("active")], fixtures: swissRows({ played: true, seatedRounds: [1, 2] }), ...ctl(true) } },
+      // The SCF case: a finished Swiss with play on it has nothing to complete or delete, and its fixed Rounds pill is gone - an empty group.
+      { name: "swiss/complete with play on it, count fixed: an EMPTY group", over: { stages: [swiss("complete")], fixtures: swissRows({ played: true, seatedRounds: [1, 2] }), ...ctl(true) } },
+      { name: "swiss/complete with nothing played, count fixed: Delete alone", over: { stages: [swiss("complete")], fixtures: swissRows({ seatedRounds: [1, 2] }), ...ctl(true) } },
+    );
+    return out;
+  };
+
+  it("an editor: one divider per card whose rail drew a control, none beside an empty group; first child of the settings group; never inside the rail", () => {
+    let checked = 0;
+    let withDivider = 0;
+    let without = 0;
+    let withGroup = 0;
+    for (const r of rows()) {
+      const html = panel(r.over);
+      const rail = subtreeOf(html, "stage-rail");
+      expect(rail, `${r.name}: positive pair, the editor's rail is on the card`).not.toBeNull();
+      const drew = RAIL_CONTROLS.some((id) => rail!.includes(`data-testid="${id}"`));
+      const group = innerOf(html, "stage-tools-group");
+      if (group !== null) withGroup++;
+      const expected = drew && group !== null ? 1 : 0;
+      expect(count(html, "stage-controls-divider"), `${r.name}: ${drew ? "the rail drew a control" : "the rail's group is empty"}`).toBe(expected);
+      expect(rail, `${r.name}: never inside the rail`).not.toContain("stage-controls-divider");
+      if (expected === 1) {
+        expect(group!, `${r.name}: the settings group's first child`).toMatch(/^<span[^>]*data-testid="stage-controls-divider"/);
+        withDivider++;
+      } else without++;
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every row checked").toBe(rows().length);
+    expect(withDivider, "both answers are in the table: a divider").toBeGreaterThan(0);
+    expect(without, "both answers are in the table: none beside an empty group").toBeGreaterThan(0);
+    expect(withGroup, "the settings group is really on the cards").toBeGreaterThan(0);
+  });
+
+  it("a finished Swiss that is played and not deletable draws no divider, though its settings buttons are there (the pill that used to earn it is gone)", () => {
+    const row = rows().find((r) => r.name.startsWith("swiss/complete with play"))!;
+    const html = panel({ ...row.over, activeEntrantIds: ["e1", "e2", "e3", "e4", "e5", "e6"] });
+    expect(html, "positive pair: the settings buttons are on the card").toContain('data-testid="stage-tool-format"');
+    expect(text(innerOf(html, "stage-swiss-legend") ?? ""), "positive pair: the legend line still says the round count").toContain("3 rounds");
+    expect(html).not.toContain('data-testid="stage-rounds"');
+    expect(html).not.toContain("stage-controls-divider");
+  });
+
+  it("a viewer: no rail, no divider, but the settings group is still on the card", () => {
+    for (const r of rows().filter((x) => x.name.startsWith("swiss/") || x.name.startsWith("league/"))) {
+      const html = panel({ ...r.over, canEdit: false });
+      expect(html, `${r.name}: positive pair`).toContain('data-testid="stage-tools"');
+      expect(html, `${r.name}: no rail`).not.toContain('data-testid="stage-rail"');
+      expect(html, `${r.name}: no divider`).not.toContain("stage-controls-divider");
+    }
   });
 });
 

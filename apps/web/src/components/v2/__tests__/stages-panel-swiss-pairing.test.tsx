@@ -8,6 +8,7 @@ import es from "@/dictionaries/es/ui.json";
 import enDict from "@/dictionaries/en/ui.json";
 import { ApiV1Error } from "@/lib/client-v1";
 import { SWISS_PAIRING_ROUND_ONE_ONLY_CODE } from "@/lib/swiss-pairing";
+import { parentOf, subtreeOf } from "./_markup";
 
 const apiV1Mock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/client-v1", async (importOriginal) => ({
@@ -354,6 +355,65 @@ describe("StagesPanel — no Add match on a Swiss stage (X-SW-21)", () => {
     expect(html).toContain('data-testid="stage-generate"');
     expect(html).not.toContain('data-testid="stage-add-match"');
     expect(html).toContain('data-testid="stage-swiss-adhoc-note"');
+  });
+});
+
+// SCF (owner pick, Option A, 2026-11-03): the sentence that stood in the rail's action row, where the Add match button would be, is
+// INFORMATION - it moved to the stage's legend line ("5 rounds · 3 matches per round · 15 fixtures · Swiss rounds are paired by the system.
+// Add friendlies in another stage."), under the gates it always had (an editor, a stage that is not finished, one with fixtures). The copy
+// is ruling 252's and is unchanged: the expected words are the dictionaries', never retyped here.
+describe("StagesPanel — the Swiss 'paired by the system' sentence is on the legend line, not in the action row (SCF)", () => {
+  const KEY = "swiss.refusal.SWISS_ADHOC_REFUSED";
+  const NOTE = 'data-testid="stage-swiss-adhoc-note"';
+  const render = (over: Record<string, unknown> = {}, dict: Record<string, string> = enDict as Record<string, string>, locale = "en") =>
+    renderToStaticMarkup(
+      <DictProvider dict={dict as never} locale={locale as never}>
+        <StagesPanel {...props} stages={[swissStage()]} fixtures={fixtures([1])} {...over} />
+      </DictProvider>,
+    );
+  const plain = (markup: string) => markup.replace(/<[^>]*>/g, "").replace(/&#x27;/g, "'");
+
+  it("an editor of a running Swiss: the sentence follows the legend, in the same line, in every locale; the rail's row does not hold it", () => {
+    let locales = 0;
+    for (const [locale, dict] of [["en", enDict], ["es", es]] as const) {
+      const D = dict as Record<string, string>;
+      const html = render({}, D, locale);
+      const rail = subtreeOf(html, "stage-rail");
+      expect(rail, `${locale}: positive pair, the rail rendered`).toContain('data-testid="stage-generate"');
+      expect(rail, `${locale}: the row holds controls only`).not.toContain("stage-swiss-adhoc-note");
+      expect(plain(rail!), `${locale}: nor its words`).not.toContain(D[KEY]);
+      const legendText = plain(subtreeOf(html, "stage-swiss-legend")!);
+      expect(legendText, `${locale}: premise, the legend line has its own words`).toMatch(/\d/);
+      const line = parentOf(html, "stage-swiss-legend");
+      expect(line, `${locale}: the sentence shares the legend's container`).toBe(parentOf(html, "stage-swiss-adhoc-note"));
+      expect(plain(line!), `${locale}: "<legend> · <sentence>", the sentence in the reader's words`).toBe(`${legendText} · ${D[KEY]}`);
+      locales++;
+    }
+    expect(locales, "anti-vacuity: locales checked").toBe(2);
+  });
+
+  it("the gates it always had: a viewer, a finished stage, a stage with nothing generated and a league all show none - each with its positive pair", () => {
+    const shows = render();
+    expect(shows, "positive pair: the editor of a running Swiss sees it").toContain(NOTE);
+    const viewer = render({ canEdit: false });
+    expect(viewer, "viewer: the legend is still there").toContain('data-testid="stage-swiss-legend"');
+    expect(viewer, "viewer: no sentence").not.toContain(NOTE);
+    const done = render({ stages: [swissStage({ rounds: 2 }, "complete")] });
+    expect(done, "complete: the legend is still there").toContain('data-testid="stage-swiss-legend"');
+    expect(done, "complete: no sentence").not.toContain(NOTE);
+    const empty = render({ stages: [swissStage({ rounds: 2 }, "pending")], fixtures: [] });
+    expect(empty, "nothing generated: Generate is offered").toContain('data-testid="stage-generate"');
+    expect(empty, "nothing generated: no sentence").not.toContain(NOTE);
+    const league = render({ stages: [{ ...swissStage(), kind: "league", name: "League" }] });
+    expect(league, "league: Add match is offered").toContain('data-testid="stage-add-match"');
+    expect(league, "league: no sentence").not.toContain(NOTE);
+  });
+
+  it("with no legend (a field too small to describe) the sentence stands alone, with no dangling separator", () => {
+    const html = render({ activeEntrantIds: [] });
+    expect(html, "premise: no legend for an empty field").not.toContain('data-testid="stage-swiss-legend"');
+    expect(subtreeOf(html, "stage-swiss-adhoc-note"), "the sentence is still told").not.toBeNull();
+    expect(plain(parentOf(html, "stage-swiss-adhoc-note")!), "alone on its line, no dangling separator").toBe((enDict as Record<string, string>)[KEY]);
   });
 });
 
