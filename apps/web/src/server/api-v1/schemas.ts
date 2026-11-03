@@ -340,6 +340,8 @@ export const TiebreakerKeyS = z.enum([
   // W2d (spec §5.6; Task 4's keys, moved here by PS-2c): the BWF/ITTF/ATP/FIH/IIHF steps and the h2h block modifiers.
   "set_diff", "point_diff", "h2h_two", "h2h_wins", "h2h_set_ratio", "h2h_point_ratio", "h2h_reapply", "h2h_exclusion",
   "matches_played", "field_goals",
+  // W3 app-B T1 (X-SW-9; engine 2.0.0): the Swiss chain's opponents' goal difference.
+  "opp_diff",
 ]);
 
 /** V364 first-class eligibility: gender category badge/gate (evaluated in
@@ -3386,7 +3388,7 @@ export type RuleCode = z.infer<typeof RuleCode>;
 // `conflict-detail.ts` uses for its field-order witness: a
 // `Record<ConflictDetailKind, true>` object literal requires every key of
 // the engine's union and rejects any key not in it, so a kind added to (or
-// renamed in) the engine's 25 and forgotten here is a TYPE ERROR at this
+// renamed in) the engine's 32 and forgotten here is a TYPE ERROR at this
 // file, not a wire enum that silently stops matching what the engine emits.
 const CONFLICT_DETAIL_KIND_WITNESS: Record<ConflictDetailKind, true> = {
   person_double_booking: true,
@@ -3414,6 +3416,11 @@ const CONFLICT_DETAIL_KIND_WITNESS: Record<ConflictDetailKind, true> = {
   order_inside_feeder_rest: true,
   round_order_day: true,
   round_order_same_day: true,
+  // W3 app-B T1 (X-SW-31): the engine's 29th-32nd kinds.
+  round_order_end: true,
+  no_slot_round_barrier: true,
+  rounds_per_day: true,
+  no_slot_rounds_per_day: true,
   no_slot_lattice: true,
   no_slot_budget: true,
   stranded_fixture: true,

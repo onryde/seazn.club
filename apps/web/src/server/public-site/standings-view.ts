@@ -162,6 +162,11 @@ export const METRIC_HEADER_KEYS: Readonly<Record<string, Readonly<Record<string,
   point_diff: { "Pts diff": { abbr: "table.abbr.pointDiff", title: "table.col.pointDiff" } },
   field_goals: { FG: { abbr: "table.abbr.fieldGoals", title: "table.col.fieldGoals" } },
   game_ratio: { "Game ratio": { abbr: "table.abbr.gameRatio", title: "table.col.gameRatio" } },
+  // W3 app-B T1 (X-SW-9; rulebook-W3 §5 T10): the Swiss chain's opponents' goal difference (UEFA CL league phase art. 18).
+  // Keyed by the engine's own label ("Opp diff", `DERIVED_METRICS`), neutral like "Diff" (goals in football, runs in cricket).
+  // English prints that label (the house rule in standings-view.test.ts: "the English value IS the engine's label"); preflight
+  // R10 / plan Task 3 wrote "Opp GD", which that test refuses — T3 decides whether to exempt it.
+  opp_diff: { "Opp diff": { abbr: "table.abbr.oppDiff", title: "table.col.oppDiff" } },
 };
 
 /** The columns whose header is the sport's own NOTATION, printed as the engine
@@ -255,6 +260,7 @@ export const TIE_BREAK_MSG_KEYS: Readonly<Record<string, TKey>> = {
   direct: "table.tieBreak.direct",
   buchholz: "table.tieBreak.buchholz",
   buchholz_cut1: "table.tieBreak.buchholz_cut1",
+  opp_diff: "table.tieBreak.opp_diff",
   sberger: "table.tieBreak.sberger",
   seed: "table.tieBreak.seed",
   lots: "table.tieBreak.lots",

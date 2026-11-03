@@ -144,6 +144,26 @@ const CASES: Record<ConflictDetailKind, { detail: ConflictDetail; expected: stri
     detail: { kind: "round_order_same_day", roundNo: 2, otherRoundNo: 1, day: "2026-08-01" },
     expected: "round 2 starts before round 1 on the same day (2026-08-01)",
   },
+  // W3 app-B T1 (X-SW-31; engine 2.0.0's 29th-32nd kinds): the Swiss round barrier and the rounds-per-day cap.
+  // Each kind's fields are the ones the engine sets (calendar.ts: `roundEndConflicts`, `roundsPerDayConflicts`, and the
+  // placer's `no_slot_round_barrier` / `no_slot_rounds_per_day` refusals). Like court_tag_mismatch, they postdate the
+  // pre-C3 baseline, so this is new prose with nothing historical to reproduce.
+  round_order_end: {
+    detail: { kind: "round_order_end", roundNo: 2, otherRoundNo: 1 },
+    expected: "round 2 starts before round 1 has ended",
+  },
+  no_slot_round_barrier: {
+    detail: { kind: "no_slot_round_barrier", roundNo: 2, otherRoundNo: 3, otherFixtureId: "f9" },
+    expected: "no slot where round 2 ends before round 3's f9 starts",
+  },
+  rounds_per_day: {
+    detail: { kind: "rounds_per_day", day: "2026-08-01", requiredCount: 2 },
+    expected: "more than 2 rounds on 2026-08-01",
+  },
+  no_slot_rounds_per_day: {
+    detail: { kind: "no_slot_rounds_per_day", roundNo: 3, requiredCount: 2 },
+    expected: "no day left for round 3 within the 2 rounds/day cap",
+  },
   no_slot_lattice: {
     detail: { kind: "no_slot_lattice" },
     expected: "no legal slot in the lattice",

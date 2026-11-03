@@ -147,6 +147,14 @@ const LEGACY_PROSE: Record<ConflictDetailKind, (d: ConflictDetail) => string> = 
     `round ${d.roundNo} (day ${d.day}) starts before round ${d.otherRoundNo} (day ${d.otherDay})`,
   round_order_same_day: (d) =>
     `round ${d.roundNo} starts before round ${d.otherRoundNo} on the same day (${d.day})`,
+  // W3 app-B T1 (X-SW-31): the 29th-32nd kinds postdate the d0cd9a25 baseline (they did not exist then),
+  // so there is no historical English to reproduce; new prose in the neighbouring round_order_* style. The engine sets
+  // exactly these fields for each (calendar.ts `roundEndConflicts`, `roundsPerDayConflicts`, the placer's refusals).
+  round_order_end: (d) => `round ${d.roundNo} starts before round ${d.otherRoundNo} has ended`,
+  no_slot_round_barrier: (d) =>
+    `no slot where round ${d.roundNo} ends before round ${d.otherRoundNo}'s ${d.otherFixtureId} starts`,
+  rounds_per_day: (d) => `more than ${d.requiredCount} rounds on ${d.day}`,
+  no_slot_rounds_per_day: (d) => `no day left for round ${d.roundNo} within the ${d.requiredCount} rounds/day cap`,
   no_slot_lattice: () => "no legal slot in the lattice",
   no_slot_budget: () => "left unplaced when the solver's budget expired",
 };

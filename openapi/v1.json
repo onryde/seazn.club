@@ -5314,7 +5314,8 @@
                                     "h2h_reapply",
                                     "h2h_exclusion",
                                     "matches_played",
-                                    "field_goals"
+                                    "field_goals",
+                                    "opp_diff"
                                   ]
                                 }
                               },
@@ -5767,7 +5768,8 @@
                             "h2h_reapply",
                             "h2h_exclusion",
                             "matches_played",
-                            "field_goals"
+                            "field_goals",
+                            "opp_diff"
                           ]
                         }
                       },
@@ -5975,7 +5977,8 @@
                                   "h2h_reapply",
                                   "h2h_exclusion",
                                   "matches_played",
-                                  "field_goals"
+                                  "field_goals",
+                                  "opp_diff"
                                 ]
                               }
                             },
@@ -6580,7 +6583,8 @@
                                   "h2h_reapply",
                                   "h2h_exclusion",
                                   "matches_played",
-                                  "field_goals"
+                                  "field_goals",
+                                  "opp_diff"
                                 ]
                               }
                             },
@@ -7019,7 +7023,8 @@
                             "h2h_reapply",
                             "h2h_exclusion",
                             "matches_played",
-                            "field_goals"
+                            "field_goals",
+                            "opp_diff"
                           ]
                         }
                       },
@@ -7292,7 +7297,8 @@
                                   "h2h_reapply",
                                   "h2h_exclusion",
                                   "matches_played",
-                                  "field_goals"
+                                  "field_goals",
+                                  "opp_diff"
                                 ]
                               }
                             },
@@ -8629,7 +8635,8 @@
                                   "h2h_reapply",
                                   "h2h_exclusion",
                                   "matches_played",
-                                  "field_goals"
+                                  "field_goals",
+                                  "opp_diff"
                                 ]
                               }
                             },
@@ -9144,7 +9151,8 @@
                                   "h2h_reapply",
                                   "h2h_exclusion",
                                   "matches_played",
-                                  "field_goals"
+                                  "field_goals",
+                                  "opp_diff"
                                 ]
                               }
                             },
@@ -15587,6 +15595,10 @@
                                             "order_inside_feeder_rest",
                                             "round_order_day",
                                             "round_order_same_day",
+                                            "round_order_end",
+                                            "no_slot_round_barrier",
+                                            "rounds_per_day",
+                                            "no_slot_rounds_per_day",
                                             "no_slot_lattice",
                                             "no_slot_budget",
                                             "stranded_fixture"
@@ -21917,7 +21929,8 @@
                                             "h2h_reapply",
                                             "h2h_exclusion",
                                             "matches_played",
-                                            "field_goals"
+                                            "field_goals",
+                                            "opp_diff"
                                           ]
                                         }
                                       },
@@ -21973,7 +21986,8 @@
                                             "h2h_reapply",
                                             "h2h_exclusion",
                                             "matches_played",
-                                            "field_goals"
+                                            "field_goals",
+                                            "opp_diff"
                                           ]
                                         }
                                       }
@@ -22022,7 +22036,8 @@
                                             "h2h_reapply",
                                             "h2h_exclusion",
                                             "matches_played",
-                                            "field_goals"
+                                            "field_goals",
+                                            "opp_diff"
                                           ]
                                         }
                                       }
@@ -28904,6 +28919,7 @@
                                       "h2h_exclusion",
                                       "matches_played",
                                       "field_goals",
+                                      "opp_diff",
                                       "fewest_played"
                                     ]
                                   },
@@ -29298,7 +29314,8 @@
                                           "h2h_reapply",
                                           "h2h_exclusion",
                                           "matches_played",
-                                          "field_goals"
+                                          "field_goals",
+                                          "opp_diff"
                                         ]
                                       }
                                     },
@@ -29354,7 +29371,8 @@
                                           "h2h_reapply",
                                           "h2h_exclusion",
                                           "matches_played",
-                                          "field_goals"
+                                          "field_goals",
+                                          "opp_diff"
                                         ]
                                       }
                                     }
@@ -29403,7 +29421,8 @@
                                           "h2h_reapply",
                                           "h2h_exclusion",
                                           "matches_played",
-                                          "field_goals"
+                                          "field_goals",
+                                          "opp_diff"
                                         ]
                                       }
                                     }
@@ -31438,7 +31457,8 @@
                             "h2h_reapply",
                             "h2h_exclusion",
                             "matches_played",
-                            "field_goals"
+                            "field_goals",
+                            "opp_diff"
                           ]
                         },
                         "examples": [
@@ -31491,7 +31511,8 @@
                             "h2h_reapply",
                             "h2h_exclusion",
                             "matches_played",
-                            "field_goals"
+                            "field_goals",
+                            "opp_diff"
                           ]
                         },
                         "examples": [
@@ -31796,7 +31817,8 @@
                                   "h2h_reapply",
                                   "h2h_exclusion",
                                   "matches_played",
-                                  "field_goals"
+                                  "field_goals",
+                                  "opp_diff"
                                 ]
                               }
                             },
@@ -31840,7 +31862,8 @@
                                   "h2h_reapply",
                                   "h2h_exclusion",
                                   "matches_played",
-                                  "field_goals"
+                                  "field_goals",
+                                  "opp_diff"
                                 ]
                               }
                             },
@@ -38046,6 +38069,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -38903,6 +38930,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -39798,6 +39829,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -44688,6 +44723,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -83202,6 +83241,7 @@
                                             "h2h_exclusion",
                                             "matches_played",
                                             "field_goals",
+                                            "opp_diff",
                                             "fewest_played"
                                           ]
                                         },
@@ -115211,6 +115251,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -115370,6 +115414,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -120099,6 +120147,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -120258,6 +120310,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -121806,6 +121862,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -122452,6 +122512,10 @@
                                                 "order_inside_feeder_rest",
                                                 "round_order_day",
                                                 "round_order_same_day",
+                                                "round_order_end",
+                                                "no_slot_round_barrier",
+                                                "rounds_per_day",
+                                                "no_slot_rounds_per_day",
                                                 "no_slot_lattice",
                                                 "no_slot_budget",
                                                 "stranded_fixture"

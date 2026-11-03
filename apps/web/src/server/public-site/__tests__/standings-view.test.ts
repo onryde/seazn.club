@@ -352,6 +352,12 @@ describe("buildTableView", () => {
     expect(columnHeader({ key: "sets_won", label: "Games won" }, msg)).toEqual({ abbr: "table.col.gamesWon", title: "table.col.gamesWon" });
     expect(columnHeader({ key: "set_ratio", label: "Ratio" }, msg)).toEqual({ abbr: "table.abbr.ratio", title: "table.col.ratio" });
     expect(columnHeader({ key: "nrr", label: "NRR" }, msg)).toEqual({ abbr: "NRR", title: "NRR" });
+    // W3 app-B T1 (X-SW-9): the Swiss chain's opponents' goal difference. The label is READ off the engine's own
+    // `DERIVED_METRICS`, so a relabel there makes the entry unfound (an English label printed in every locale) and this red.
+    const oppDiff = DERIVED_METRICS.find((d) => d.key === "opp_diff");
+    expect(oppDiff, "premise: the engine declares an opp_diff column").toBeDefined();
+    expect(columnHeader({ key: "opp_diff", label: oppDiff!.label }, msg)).toEqual({ abbr: "table.abbr.oppDiff", title: "table.col.oppDiff" });
+    expect(en["table.abbr.oppDiff" as keyof typeof en], "English prints the engine's label over the column").toBe(oppDiff!.label);
     // A label no module declares for that key is not guessed at.
     expect(columnHeader({ key: "sets_won", label: "Frames won" }, msg)).toEqual({ abbr: "Frames won", title: "Frames won" });
     expect(columnHeader({ key: "constructor", label: "X" }, msg)).toEqual({ abbr: "X", title: "X" });

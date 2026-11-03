@@ -107,6 +107,54 @@ describe("formatConflictDetail — court_double_booking's optional otherFixtureI
   });
 });
 
+// W3 app-B T1 (X-SW-31; engine 2.0.0's 29th-32nd kinds). The fields below are the ones the engine sets for
+// each kind (calendar.ts `roundEndConflicts`, `roundsPerDayConflicts` and the placer's refusals); the measured values
+// (`shortfallMinutes`, `measuredCount`) ride outside the detail and are Task 9b's.
+describe("formatConflictDetail — the Swiss round barrier and rounds-per-day kinds (W3, X-SW-31)", () => {
+  it("round_order_end names both rounds", () => {
+    expect(formatConflictDetail({ kind: "round_order_end", roundNo: 2, otherRoundNo: 1 }, baseCtx)).toBe(
+      "Round 2 starts before round 1 has finished",
+    );
+  });
+
+  it("no_slot_round_barrier names the later round's board through fixtureTitles, never its id", () => {
+    const d: ConflictDetail = { kind: "no_slot_round_barrier", roundNo: 2, otherRoundNo: 3, otherFixtureId: "f2" };
+    const text = formatConflictDetail(d, baseCtx);
+    expect(text).toBe("No slot where round 2 can finish before Charlie vs Delta in round 3 starts");
+    expect(text).not.toContain("f2");
+  });
+
+  it("rounds_per_day names the day and the cap", () => {
+    expect(formatConflictDetail({ kind: "rounds_per_day", day: "2026-08-14", requiredCount: 2 }, baseCtx)).toBe(
+      "More than 2 rounds on 2026-08-14",
+    );
+  });
+
+  it("no_slot_rounds_per_day names the round and the cap", () => {
+    expect(formatConflictDetail({ kind: "no_slot_rounds_per_day", roundNo: 3, requiredCount: 2 }, baseCtx)).toBe(
+      "No day left for round 3 within the limit of 2 rounds a day",
+    );
+  });
+
+  it("all four read in French too (a locale without the key would render the key itself)", () => {
+    const ctx: ConflictDetailCtx = { ...baseCtx, msg: msgFr };
+    const details: ConflictDetail[] = [
+      { kind: "round_order_end", roundNo: 2, otherRoundNo: 1 },
+      { kind: "no_slot_round_barrier", roundNo: 2, otherRoundNo: 3, otherFixtureId: "f2" },
+      { kind: "rounds_per_day", day: "2026-08-14", requiredCount: 2 },
+      { kind: "no_slot_rounds_per_day", roundNo: 3, requiredCount: 2 },
+    ];
+    let checked = 0;
+    for (const d of details) {
+      const text = formatConflictDetail(d, ctx);
+      expect(text, d.kind).not.toMatch(/^board\.conflict\.detail\./);
+      expect(text, `${d.kind}: translated, not the English`).not.toBe(formatConflictDetail(d, baseCtx));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: four kinds checked").toBe(4);
+  });
+});
+
 describe("formatConflictDetail — locked_slot_clash and court_tag_mismatch resolve courtName too (P9 review wave 3, finding #3)", () => {
   const COURT_UUID = "9a1b2c3d-4e5f-4061-8a1b-2c3d4e5f6071";
 
@@ -280,13 +328,18 @@ describe("formatConflictDetail — exhaustive sweep", () => {
     { kind: "order_inside_feeder_rest", otherFixtureId: "f1", requiredMinutes: 30 },
     { kind: "round_order_day", roundNo: 1, day: "2026-08-14", otherRoundNo: 2, otherDay: "2026-08-15" },
     { kind: "round_order_same_day", roundNo: 1, otherRoundNo: 2, day: "2026-08-14" },
+    // W3 app-B T1 (X-SW-31): the engine's 29th-32nd kinds, with the fields it sets for each.
+    { kind: "round_order_end", roundNo: 2, otherRoundNo: 1 },
+    { kind: "no_slot_round_barrier", roundNo: 2, otherRoundNo: 3, otherFixtureId: "f1" },
+    { kind: "rounds_per_day", day: "2026-08-14", requiredCount: 2 },
+    { kind: "no_slot_rounds_per_day", roundNo: 3, requiredCount: 2 },
     { kind: "no_slot_lattice" },
     { kind: "no_slot_budget" },
   ];
 
-  // 30 populated details above (instruction_time and court_double_booking
+  // 34 populated details above (instruction_time and court_double_booking
   // each appear twice, deliberately — see the design doc's key table) cover
-  // all 28 `ConflictDetailKind` members — closed via ALL_KINDS_WITNESS below,
+  // all 32 `ConflictDetailKind` members — closed via ALL_KINDS_WITNESS below,
   // not a hand-maintained count that can quietly fall behind the union again
   // (this comment previously said "27" before stranded_fixture, P10's 28th
   // kind, landed; and "25" before that, after court_tag_mismatch and
@@ -328,6 +381,10 @@ describe("formatConflictDetail — exhaustive sweep", () => {
       order_inside_feeder_rest: true,
       round_order_day: true,
       round_order_same_day: true,
+      round_order_end: true,
+      no_slot_round_barrier: true,
+      rounds_per_day: true,
+      no_slot_rounds_per_day: true,
       no_slot_lattice: true,
       no_slot_budget: true,
     };
