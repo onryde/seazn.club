@@ -24,7 +24,7 @@
 //  - a view-only member (`readOnly`) gets the same page with nothing that writes, and without the Needs-you list;
 //  - Needs you's unscheduled row carries "Find a court": the first free court's candidates, opened in place (`?court=` when
 //    the link is opened another way), or back to the list when no court is free.
-import { Fragment, useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
@@ -273,25 +273,33 @@ export function MatchDayShell({
                 {t(dict, "matchDay.frozen")}
               </p>
             )}
-            {/* PB3 item 7: which competitions are over the limit, so the organiser knows what to archive. The competition on screen
-                is first and plain (a link to this page would be a link to itself); the rest link to their own pages. */}
+            {/* PB3 item 7: which competitions are over the limit, so the organiser knows what to archive. The label sits on its own line, then
+                one wrapping row of 44px targets (Match Day is the phone-at-the-venue page; a 16px inline link two words from the next one is a
+                mis-tap). The competition on screen is first and plain (a link to this page would be a link to itself); the rest link to their
+                own pages; "+N more" closes the row. PB3 review m1. */}
             {frozen && !readOnly && frozenNames.shown.length > 0 && (
-              <p data-testid="md-frozen-names" className="mt-1 min-w-0 text-xs text-amber-800 [overflow-wrap:anywhere]">
-                {t(dict, "matchDay.frozenNames")}{" "}
-                {frozenNames.shown.map((c, i) => (
-                  <Fragment key={c.id}>
-                    {i > 0 && ", "}
-                    {c.id === competitionId ? (
-                      <span className="font-medium">{c.name}</span>
-                    ) : (
-                      <Link href={routes.competition(orgSlug, c.slug)} className="font-medium underline underline-offset-2">
-                        {c.name}
-                      </Link>
-                    )}
-                  </Fragment>
-                ))}
-                {frozenNames.more > 0 && `, ${t(dict, "matchDay.frozenMore", { count: frozenNames.more })}`}
-              </p>
+              <div data-testid="md-frozen-names" className="mt-1 min-w-0 text-xs text-amber-800">
+                <p>{t(dict, "matchDay.frozenNames")}</p>
+                <ul className="m-0 flex list-none flex-wrap items-center gap-x-4 p-0">
+                  {frozenNames.shown.map((c) => (
+                    <li key={c.id} className="min-w-0 max-w-full">
+                      {c.id === competitionId ? (
+                        <span className="inline-flex min-h-11 max-w-full items-center font-medium [overflow-wrap:anywhere]">{c.name}</span>
+                      ) : (
+                        <Link
+                          href={routes.competition(orgSlug, c.slug)}
+                          className="inline-flex min-h-11 max-w-full items-center font-medium underline underline-offset-2 [overflow-wrap:anywhere]"
+                        >
+                          {c.name}
+                        </Link>
+                      )}
+                    </li>
+                  ))}
+                  {frozenNames.more > 0 && (
+                    <li className="inline-flex min-h-11 items-center">{t(dict, "matchDay.frozenMore", { count: frozenNames.more })}</li>
+                  )}
+                </ul>
+              </div>
             )}
           </div>
           {needsTone !== null && (

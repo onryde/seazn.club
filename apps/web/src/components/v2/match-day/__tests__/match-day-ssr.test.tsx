@@ -2082,7 +2082,7 @@ describe("PB3 item 7 - the frozen banner names the frozen competitions", () => {
     shown: [ref("comp-1", "Safe Badminton 2026", "safe-badminton"), ref("c-2", "Autumn League", "autumn-league"), ref("c-3", "Spring Cup", "spring-cup")],
     more: 0,
   };
-  const names = (html: string) => html.match(/<p data-testid="md-frozen-names"[^>]*>[\s\S]*?<\/p>/)?.[0] ?? "";
+  const names = (html: string) => html.match(/<div data-testid="md-frozen-names"[^>]*>[\s\S]*?<\/div>/)?.[0] ?? "";
 
   it("EMPTY CASE FIRST: frozen with nothing to name draws the banner and no names line", () => {
     const html = shellWith(view([court()]), { frozen: true, frozenNames: NO_FROZEN_NAMES });
@@ -2105,6 +2105,28 @@ describe("PB3 item 7 - the frozen banner names the frozen competitions", () => {
     expect(line.match(/<a /g) ?? [], "two links, for the two others").toHaveLength(2);
     // All named, so no "+N more" for any N (the positive pair is the next test).
     for (const n of [1, 2, 3, 4]) expect(line).not.toContain(esc(t(dict, "matchDay.frozenMore", { count: n })));
+  });
+
+  it("PB3 m1: 44px targets - the label is a line of its own, then ONE wrapping row whose every entry (a link, this competition's plain name, '+N more') is min-h-11", () => {
+    const line = names(shellWith(view([court()]), { frozen: true, frozenNames: { ...THREE, more: 2 } }));
+    expect(line, "the names block rendered").not.toBe("");
+    // The label is a paragraph BEFORE the row, not inline text in front of the first name.
+    const label = line.match(/<p>([\s\S]*?)<\/p>/);
+    expect(label, "the label has a line of its own").not.toBeNull();
+    expect(label![1]).toBe(esc(t(dict, "matchDay.frozenNames")));
+    const list = line.match(/<ul class="([^"]*)">([\s\S]*)<\/ul>/);
+    expect(list, "the names are a list").not.toBeNull();
+    expect(list![1], "one row that wraps").toMatch(/(^|\s)flex(\s|$)/);
+    expect(list![1]).toMatch(/(^|\s)flex-wrap(\s|$)/);
+    expect(line.indexOf("<p>")).toBeLessThan(line.indexOf("<ul"));
+    // Every entry: three names and the "+N more", each with a 44px floor on the element the finger lands on.
+    const items = list![2]!.split("<li").slice(1);
+    expect(items, "three names and the '+N more'").toHaveLength(THREE.shown.length + 1);
+    for (const li of items) expect(li, `an entry without the 44px floor: ${li.slice(0, 120)}`).toMatch(/min-h-11/);
+    // The links are the targets that matter: every <a> carries it itself, not only its <li>.
+    const anchors = list![2]!.match(/<a [^>]*>/g) ?? [];
+    expect(anchors, "two links, for the two others").toHaveLength(2);
+    for (const a of anchors) expect(a).toMatch(/min-h-11/);
   });
 
   it("past three: '+N more' with the real count, in the reader's words", () => {
