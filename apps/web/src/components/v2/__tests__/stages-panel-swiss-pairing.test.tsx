@@ -5,10 +5,12 @@ import { StagesPanel } from "@/components/v2/stages-panel";
 import { StageRail, SwissPairingMenuPanel } from "@/components/v2/desk/stage-rail";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
 import enDict from "@/dictionaries/en/ui.json";
 import { ApiV1Error } from "@/lib/client-v1";
 import { SWISS_PAIRING_ROUND_ONE_ONLY_CODE } from "@/lib/swiss-pairing";
-import { parentOf, subtreeOf } from "./_markup";
+import { innerOf, parentOf, subtreeOf } from "./_markup";
 
 const apiV1Mock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/client-v1", async (importOriginal) => ({
@@ -287,12 +289,14 @@ describe("StagesPanel — rounds >= 2 explain how to change a pairing (X-SW-30)"
     expect(html).not.toContain(HINT);
   });
 
-  // Batch-4 m2: with every round seated there is no Pair next menu to carry the line, yet Unpair is on the rail for the
-  // final round — the line goes beside it, on the SAME gate (a running root Swiss whose Unpair is offered), for a round
-  // from 2 on, and in exactly one place.
-  it("batch-4 m2: the FINAL round paired says the line beside Unpair; one place only, on the same gate", () => {
-    const UNPAIR_HINT = /data-testid="stage-unpair-hint"[^>]*>([^<]*)<\/p>/;
-    const html = (stage: Stage, rows: ReturnType<typeof fixtures>) => renderToStaticMarkup(<StagesPanel {...props} stages={[stage]} fixtures={rows} />);
+  // Batch-4 m2: with every round seated there is no Pair next menu to carry the line, yet Unpair is on the rail for the final round - the
+  // line is said on the SAME gate (a running root Swiss whose Unpair is offered), for a round from 2 on, and in exactly one place. SCF fix
+  // round 1 (review I1): that place is the stage's LEGEND LINE, beside the "paired by the system" sentence - the actions row holds controls
+  // only. The expected words are the dictionary's.
+  it("batch-4 m2 + SCF I1: the FINAL round paired says the line on the legend line, not in the row; one place only, on the same gate", () => {
+    const UNPAIR_HINT = /data-testid="stage-unpair-hint"[^>]*>([^<]*)<\/span>/;
+    const html = (stage: Stage, rows: ReturnType<typeof fixtures>, over: Record<string, unknown> = {}) =>
+      renderToStaticMarkup(<StagesPanel {...props} stages={[stage]} fixtures={rows} {...over} />);
     const lastPaired = fixtures([1, 2]).map((f) => (f.round_no === 1 ? { ...f, status: "decided" } : f));
     const roundOneOnly = fixtures([1]).filter((f) => f.round_no === 1);
     // Round 3 waiting behind a paired round 2: the round Unpair clears is from 2 on, yet the menu carries the line.
@@ -304,9 +308,9 @@ describe("StagesPanel — rounds >= 2 explain how to change a pairing (X-SW-30)"
     ];
     type Row = { name: string; stage: Stage; rows: ReturnType<typeof fixtures>; unpair: boolean; line: boolean; menu: boolean };
     const ROWS: Row[] = [
-      { name: "round 2 of 2 paired, unplayed: no menu, the line beside Unpair", stage: swissStage(), rows: lastPaired, unpair: true, line: true, menu: false },
-      { name: "round 2 waiting: the menu carries the line, not Unpair too", stage: swissStage(), rows: fixtures([1]), unpair: true, line: false, menu: true },
-      { name: "round 3 waiting, round 2 paired: the menu carries it, not Unpair too", stage: swissStage({ rounds: 3 }), rows: round3Waiting, unpair: true, line: false, menu: true },
+      { name: "round 2 of 2 paired, unplayed: no menu, the line on the legend line", stage: swissStage(), rows: lastPaired, unpair: true, line: true, menu: false },
+      { name: "round 2 waiting: the menu carries the line, not the legend too", stage: swissStage(), rows: fixtures([1]), unpair: true, line: false, menu: true },
+      { name: "round 3 waiting, round 2 paired: the menu carries it, not the legend too", stage: swissStage({ rounds: 3 }), rows: round3Waiting, unpair: true, line: false, menu: true },
       { name: "a fed Swiss, its final round paired: not a running root Swiss", stage: { ...swissStage(), progression: { from: "s0" } }, rows: lastPaired, unpair: true, line: false, menu: false },
       { name: "a one-round Swiss paired: round 1's pairing is a choice, not the rules'", stage: swissStage({ rounds: 1 }), rows: roundOneOnly, unpair: true, line: false, menu: false },
       { name: "the final round played: no Unpair, no line", stage: swissStage(), rows: lastPaired.map((f) => (f.round_no === 2 ? { ...f, status: "decided" } : f)), unpair: false, line: false, menu: false },
@@ -318,12 +322,35 @@ describe("StagesPanel — rounds >= 2 explain how to change a pairing (X-SW-30)"
       expect(out.includes('data-testid="stage-unpair"'), `${r.name}: Unpair`).toBe(r.unpair);
       expect(menuFor(r.stage, r.rows) !== null, `${r.name}: a Pair next menu`).toBe(r.menu);
       const said = UNPAIR_HINT.exec(out);
-      expect(said?.[1] ?? null, `${r.name}: the line beside Unpair`).toBe(r.line ? COPY : null);
-      if (r.line) expect(out.indexOf("stage-unpair-hint"), `${r.name}: after Unpair`).toBeGreaterThan(out.indexOf('data-testid="stage-unpair"'));
+      expect(said?.[1] ?? null, `${r.name}: the line on the legend line`).toBe(r.line ? COPY : null);
+      // Never in the row, whatever the state: the rail's subtree holds no hint, and no paragraph of its own.
+      expect(subtreeOf(out, "stage-rail") ?? "", `${r.name}: the row holds controls only`).not.toContain("stage-unpair-hint");
+      if (r.line) {
+        expect(parentOf(out, "stage-unpair-hint"), `${r.name}: shares the legend's container`).toBe(parentOf(out, "stage-swiss-legend"));
+        expect(out.indexOf("stage-unpair-hint"), `${r.name}: after the legend`).toBeGreaterThan(out.indexOf('data-testid="stage-swiss-legend"'));
+      }
       checked++;
     }
     expect(checked, "anti-vacuity: rows").toBe(ROWS.length);
     expect(ROWS.filter((r) => r.line).length, "both answers reached").toBeGreaterThan(0);
+
+    // The same gates as the row had: a viewer (the rail is the editor's), and a finished stage, say none - each beside its positive pair.
+    const final = html(swissStage(), lastPaired);
+    expect(final, "positive pair: the editor of the final round sees the line").toMatch(UNPAIR_HINT);
+    expect(html(swissStage(), lastPaired, { canEdit: false }), "a viewer").not.toContain("stage-unpair-hint");
+    expect(html(swissStage({}, "complete"), lastPaired), "a finished stage").not.toContain("stage-unpair-hint");
+  });
+
+  it("the final round paired shows BOTH sentences on the one legend line, in order: the system pairs it, then Unpair-then-Pair-next", () => {
+    const lastPaired = fixtures([1, 2]).map((f) => (f.round_no === 1 ? { ...f, status: "decided" } : f));
+    const out = renderToStaticMarkup(<StagesPanel {...props} stages={[swissStage()]} fixtures={lastPaired} />);
+    const line = parentOf(out, "stage-swiss-adhoc-note")!;
+    expect(line, "positive control: the shared legend container").toContain('data-testid="stage-swiss-legend"');
+    expect(line.indexOf("stage-swiss-adhoc-note"), "the system-pairs sentence first").toBeLessThan(line.indexOf("stage-unpair-hint"));
+    expect(parentOf(out, "stage-unpair-hint"), "one container").toBe(line);
+    const seps = (line.match(/aria-hidden="true"> · </g) ?? []).length;
+    expect(seps, "legend · sentence · line: two separators, none dangling").toBe(2);
+    expect(innerOf(out, "stage-unpair-hint")).toBe(COPY);
   });
 
   it("in Spanish, the line is the Spanish catalog's", () => {
@@ -371,11 +398,11 @@ describe("StagesPanel — the Swiss 'paired by the system' sentence is on the le
         <StagesPanel {...props} stages={[swissStage()]} fixtures={fixtures([1])} {...over} />
       </DictProvider>,
     );
-  const plain = (markup: string) => markup.replace(/<[^>]*>/g, "").replace(/&#x27;/g, "'");
+  const plain = (markup: string) => markup.replace(/<[^>]*>/g, "").replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
 
   it("an editor of a running Swiss: the sentence follows the legend, in the same line, in every locale; the rail's row does not hold it", () => {
     let locales = 0;
-    for (const [locale, dict] of [["en", enDict], ["es", es]] as const) {
+    for (const [locale, dict] of [["en", enDict], ["es", es], ["fr", fr], ["nl", nl]] as const) {
       const D = dict as Record<string, string>;
       const html = render({}, D, locale);
       const rail = subtreeOf(html, "stage-rail");
@@ -389,7 +416,7 @@ describe("StagesPanel — the Swiss 'paired by the system' sentence is on the le
       expect(plain(line!), `${locale}: "<legend> · <sentence>", the sentence in the reader's words`).toBe(`${legendText} · ${D[KEY]}`);
       locales++;
     }
-    expect(locales, "anti-vacuity: locales checked").toBe(2);
+    expect(locales, "anti-vacuity: locales checked - all four").toBe(4);
   });
 
   it("the gates it always had: a viewer, a finished stage, a stage with nothing generated and a league all show none - each with its positive pair", () => {

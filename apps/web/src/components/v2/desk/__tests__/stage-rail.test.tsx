@@ -871,23 +871,33 @@ describe("StageRail — the rounds chip and Add a round (W3 T12 Phase 2)", () =>
     expect(checked, "anti-vacuity: rows").toBe(ROWS.length);
   });
 
-  // Batch-4 m2: T14's line, beside Unpair, when no Pair next menu carries it (the panel decides when, through
-  // `swissUnpairChangeHint`; stages-panel-swiss-pairing.test.tsx pins that seam).
-  it("batch-4 m2: unpairChangeHint puts T14's line after Unpair; never without Unpair, never unasked", () => {
-    const at = (props: { canUnpairSwiss: boolean; unpairChangeHint?: boolean }) =>
+  // Batch-4 m2 put T14's line ("Unpair, then Pair next") beside Unpair; SCF fix round 1 (review I1) moved it to the stage's legend line,
+  // because the actions row holds controls only (stages-panel-swiss-pairing.test.tsx pins where it went and when). The rail itself must
+  // never draw a sentence: no paragraph at all, in any state a Swiss rail can be in.
+  it("SCF I1: the rail draws Unpair and no sentence - no paragraph and no unpair hint in any Swiss state", () => {
+    const at = (props: { canUnpairSwiss: boolean; swissHasUnseated: boolean; fixtureCount: number; status?: string }) =>
       renderToStaticMarkup(
-        <StageRail stage={swiss as never} canEdit busy={null} fixtureCount={9} deletable={false}
+        <StageRail stage={{ ...swiss, status: props.status ?? "active" } as never} canEdit busy={null} fixtureCount={props.fixtureCount} deletable={false}
           onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-          adhoc={false} {...NEUTRAL} {...props} />,
+          adhoc={false} {...NEUTRAL} canUnpairSwiss={props.canUnpairSwiss} swissHasUnseated={props.swissHasUnseated} />,
       );
-    const HINT = 'data-testid="stage-unpair-hint"';
-    const on = at({ canUnpairSwiss: true, unpairChangeHint: true });
-    expect(on, "positive control: Unpair rendered").toContain('data-testid="stage-unpair"');
-    expect(on).toContain(HINT);
-    expect(on).toContain(en["schedule.pairing.changeHint"]);
-    expect(on.indexOf(HINT), "after Unpair").toBeGreaterThan(on.indexOf('data-testid="stage-unpair"'));
-    expect(at({ canUnpairSwiss: true }), "unasked").not.toContain(HINT);
-    expect(at({ canUnpairSwiss: false, unpairChangeHint: true }), "no Unpair, no line naming it").not.toContain(HINT);
+    const STATES = [
+      { name: "final round paired, Unpair on offer", canUnpairSwiss: true, swissHasUnseated: false, fixtureCount: 9 },
+      { name: "a round waiting, Unpair on offer", canUnpairSwiss: true, swissHasUnseated: true, fixtureCount: 9 },
+      { name: "nothing to unpair", canUnpairSwiss: false, swissHasUnseated: false, fixtureCount: 9 },
+      { name: "no fixtures yet", canUnpairSwiss: false, swissHasUnseated: true, fixtureCount: 0 },
+      { name: "finished", canUnpairSwiss: false, swissHasUnseated: false, fixtureCount: 9, status: "complete" },
+    ];
+    let checked = 0;
+    for (const st of STATES) {
+      const html = at(st);
+      expect(html, `${st.name}: no unpair hint`).not.toContain("stage-unpair-hint");
+      expect(html, `${st.name}: no sentence`).not.toContain(en["schedule.pairing.changeHint"]!);
+      expect(html, `${st.name}: no paragraph in the row`).not.toMatch(/<p[\s>]/);
+      checked++;
+    }
+    expect(at(STATES[0]!), "positive control: Unpair itself is still on the rail").toContain('data-testid="stage-unpair"');
+    expect(checked, "anti-vacuity: states checked").toBe(STATES.length);
   });
 
   // Merge with Match Day #1103 (E1 item 1), amended by SCF (owner pick, Option A): the rail is the header's ACTIONS group. The divider that

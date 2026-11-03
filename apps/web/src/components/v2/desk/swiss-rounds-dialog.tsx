@@ -13,8 +13,9 @@
 // its `canAddRound` says Add a round goes through, that button stands beside it.
 //
 // Beside it, the two rail pieces (stage-rail.tsx mounts them; this file owns their state and copy so the rail's own Swiss
-// blocks stay untouched): `SwissRoundsChip`, "Rounds: N · Edit" until the stage's first start and a fixed "Rounds: N"
-// after it, and `SwissAddRoundMenuItem`, the More menu's "Add a round" after that start — offered on THE predicate
+// blocks stay untouched): `SwissRoundsChip`, "Rounds: N · Edit" until the stage's first start and nothing in the row after it (SCF,
+// owner pick Option A: the count is fixed and the legend line says "N rounds"; the dialog stays mounted for a refusal that still
+// comes back), and `SwissAddRoundMenuItem`, the More menu's "Add a round" after that start — offered on THE predicate
 // `addSwissRound` judges by (`addRound`, ruling C11), and at the hard maximum shown disabled with the reason. W3 T13 adds
 // `SwissFinishMenuItem`, the More menu's "Finish the Swiss now" beside it — offered on THE Finish predicate (`finish`,
 // `swissFinishState`), disabled with the reason while no round is complete or the round in progress is undecided — and

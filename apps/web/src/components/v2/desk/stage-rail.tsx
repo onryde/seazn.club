@@ -11,8 +11,9 @@
 // the controls are the same bottom sheet as before. Court tags and the old "To schedule in this stage" footer are the panel's now (the
 // first at the card's foot, the second gone: the counts line above the rows says it).
 //
-// SCF (owner pick, Option A, 2026-11-03): the row holds CONTROLS and nothing else. The Swiss "paired by the system" sentence moved to the
-// stage's legend line; the fixed "Rounds: N" pill is gone once the count cannot change; More and the Pair next ▾ panel float from `md`
+// SCF (owner pick, Option A, 2026-11-03): the row holds CONTROLS and nothing else. The Swiss "paired by the system" sentence and the
+// "Unpair, then Pair next" line (said beside Unpair through the final round) moved to the stage's legend line (stages-panel.tsx); the fixed
+// "Rounds: N" pill is gone once the count cannot change; More and the Pair next ▾ panel float from `md`
 // (stage-popover.ts); and the divider between this group and the settings buttons is the settings group's own (stages-panel.tsx), asked
 // of `stageRailActions` below, so it can never be stranded on a line of its own.
 //
@@ -182,9 +183,6 @@ export interface StageRailProps {
    *  (`listSwissRoundControls`), its rows and the two writes, held by the panel: the "Rounds: N · Edit" chip and the
    *  More menu's "Add a round" (swiss-rounds-dialog.tsx). Absent ⇒ neither (any other kind of stage). */
   swissRounds?: SwissRoundsRail;
-  /** Batch-4 m2 — T14's "Unpair, then Pair next" line, said beside Unpair when no Pair next menu carries it
-   *  (`swissUnpairChangeHint`, lib/swiss-pairing-menu.ts). Absent ⇒ no line. */
-  unpairChangeHint?: boolean;
   /** Match Day C3 (review round 1, phone ruling): the stage's Match rules / Points / Tie-breaks rows, built by the panel (it owns which
    *  panel is open) and mounted as the TOP rows of this sheet below `md` - the card's one phone trigger. The slot carries its own
    *  `md:hidden` (the header's buttons are the desktop twin). Absent: nothing, so the rail's other callers are unchanged. */
@@ -254,7 +252,6 @@ export function StageRail({
   swissPairingMenu,
   lateEntry,
   swissRounds,
-  unpairChangeHint,
 }: StageRailProps) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -616,11 +613,6 @@ export function StageRail({
                 >
                   {busy === stage.id ? msg("schedule.working") : msg("schedule.unpair")}
                 </button>
-              )}
-              {stage.kind === "swiss" && canUnpairSwiss && unpairChangeHint && (
-                <p data-testid="stage-unpair-hint" className="min-w-0 text-xs leading-snug text-slate-500 md:max-w-[60ch]">
-                  {msg("schedule.pairing.changeHint")}
-                </p>
               )}
               {completeButton &&
                 (() => {

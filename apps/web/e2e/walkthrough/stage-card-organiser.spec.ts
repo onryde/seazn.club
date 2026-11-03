@@ -171,7 +171,7 @@ test.describe("The stage card, walked", () => {
     const declared = railIds
       .filter((id) => RAIL_SRC.includes(`data-testid="${id}"`))
       .sort((x, y) => RAIL_SRC.indexOf(`data-testid="${x}"`) - RAIL_SRC.indexOf(`data-testid="${y}"`));
-    const expectedOrder = [...declared.filter((id) => id !== "stage-controls-divider"), "stage-controls-divider", "stage-tool-format", "stage-tool-points", "stage-tool-tiebreaks"];
+    const expectedOrder = [...declared, "stage-controls-divider", "stage-tool-format", "stage-tool-points", "stage-tool-tiebreaks"];
     const present: string[] = [];
     for (const id of expectedOrder) if ((await card.getByTestId(id).count()) > 0) present.push(id);
     expect(present.length, "anti-vacuity: the card shows its actions, the divider and the three settings").toBeGreaterThanOrEqual(6);

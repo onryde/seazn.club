@@ -76,7 +76,7 @@ function mount(over: Partial<StageRailProps> = {}) {
     const ref = propsOf(el).ref as { current: unknown };
     ref.current =
       as === "root"
-        ? { contains: (n: unknown) => n === INSIDE, getBoundingClientRect: () => ({ left: 700, right: 780 }) }
+        ? { contains: (n: unknown) => n === INSIDE, getBoundingClientRect: () => ({ left: 700, right: 780 }), closest: () => null }
         : { focus: () => void focused.push(testid) };
   };
   wire("stage-more-root", "root");
@@ -130,7 +130,20 @@ describe("StageRail - More floats from md: outside press, Escape and choosing an
     expect(rail.focused, "focus is back on the trigger").toEqual(["stage-more"]);
   });
 
-  it("at md: choosing an item closes it and puts focus on More; padding and a disabled item do not", () => {
+  it("at md: focus moving on out of the menu (Tab) closes it like a press elsewhere; focus inside it does not (review m9)", () => {
+    const b = browser(true);
+    const rail = mount();
+    rail.click("stage-more");
+    expect(b.count("focusin"), "listening while open").toBe(1);
+    b.fire("focusin", { target: INSIDE });
+    expect(rail.moreOpen(), "focus inside the root (its trigger, its items)").toBe(true);
+    b.fire("focusin", { target: OUTSIDE });
+    expect(rail.moreOpen(), "focus left it").toBe(false);
+    expect(rail.focused, "and focus stays where the user put it").toEqual([]);
+    expect(b.count("focusin"), "and stops listening").toBe(0);
+  });
+
+  it("at md: choosing an item closes it and puts focus on More; a press on padding does not (what counts as an item is pinned in stage-popover.test.ts)", () => {
     browser(true);
     const rail = mount();
     rail.click("stage-more");
@@ -149,8 +162,9 @@ describe("StageRail - More floats from md: outside press, Escape and choosing an
     rail.click("stage-more");
     expect(rail.moreOpen(), "premise: it opened").toBe(true);
     b.fire("pointerdown", { target: OUTSIDE });
+    b.fire("focusin", { target: OUTSIDE });
     b.fire("keydown", { key: "Escape", defaultPrevented: false });
-    expect(rail.moreOpen(), "no outside press, no Escape below md").toBe(true);
+    expect(rail.moreOpen(), "no outside press, no focus-leaves, no Escape below md").toBe(true);
     const menu = propsOf(rail.byTestid("stage-more-menu")).onClick as (e: object) => void;
     menu({ target: { closest: () => ({}) } });
     expect(rail.moreOpen(), "an item does not fold it below md").toBe(true);
@@ -171,7 +185,7 @@ describe("StageRail - More floats from md: outside press, Escape and choosing an
     const island = renderIsland(SwissMoreMenu, { stageId: "s1", busy: null, rail, open: true, onToggle: () => void toggled++, onFinishOpen: () => {} });
     const find = (testid: string) => island.tree().find((e) => propsOf(e)["data-testid"] === testid)!;
     expect(find("stage-more-menu"), "premise: the menu rendered, both items inside").toBeDefined();
-    (propsOf(find("stage-more-root")).ref as { current: unknown }).current = { contains: (n: unknown) => n === INSIDE, getBoundingClientRect: () => ({ left: 700, right: 780 }) };
+    (propsOf(find("stage-more-root")).ref as { current: unknown }).current = { contains: (n: unknown) => n === INSIDE, getBoundingClientRect: () => ({ left: 700, right: 780 }), closest: () => null };
     const focused: string[] = [];
     (propsOf(find("stage-more")).ref as { current: unknown }).current = { focus: () => void focused.push("more") };
 
@@ -182,8 +196,13 @@ describe("StageRail - More floats from md: outside press, Escape and choosing an
     b.fire("keydown", { key: "Escape", defaultPrevented: false });
     expect(toggled).toBe(2);
     expect(focused, "Escape puts focus on More").toEqual(["more"]);
+    b.fire("focusin", { target: INSIDE });
+    expect(toggled, "focus inside: nothing").toBe(2);
+    b.fire("focusin", { target: OUTSIDE });
+    expect(toggled, "focus leaving: asked to close").toBe(3);
+    expect(focused, "and focus is left where it went").toEqual(["more"]);
     (propsOf(find("stage-more-menu")).onClick as (e: object) => void)({ target: { closest: () => ({}) } });
-    expect(toggled, "an item asks it to close").toBe(3);
+    expect(toggled, "an item asks it to close").toBe(4);
     expect(focused).toEqual(["more", "more"]);
 
     // Closed: no listener at all (a stray press must never be able to ask a closed menu to toggle - that would OPEN it).
@@ -192,6 +211,7 @@ describe("StageRail - More floats from md: outside press, Escape and choosing an
     expect(closed.tree().length, "premise: rendered").toBeGreaterThan(0);
     expect(fresh.count("pointerdown"), "closed: no pointer listener").toBe(0);
     expect(fresh.count("keydown"), "closed: no key listener").toBe(0);
+    expect(fresh.count("focusin"), "closed: no focus listener").toBe(0);
   });
 });
 
@@ -211,6 +231,13 @@ describe("StageRail - the Pair next ▾ panel floats from md", () => {
     b.fire("pointerdown", { target: OUTSIDE });
     expect(rail.pairingOpen(), "a press outside closed it").toBe(false);
     expect(rail.focused, "an outside press leaves focus alone").toEqual([]);
+
+    rail.click("stage-pairing-toggle");
+    b.fire("focusin", { target: INSIDE });
+    expect(rail.pairingOpen(), "focus inside the split button + panel").toBe(true);
+    b.fire("focusin", { target: OUTSIDE });
+    expect(rail.pairingOpen(), "Tab on to the next control closed it (review m9: no two menus open at once)").toBe(false);
+    expect(rail.pairingPick(), "closed").toBe("closed");
 
     rail.click("stage-pairing-toggle");
     expect(rail.pairingPick(), "reopened as it was left: the pick survived the close").toBe("rank_adjacent");

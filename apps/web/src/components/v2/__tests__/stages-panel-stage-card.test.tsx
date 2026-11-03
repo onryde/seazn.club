@@ -542,9 +542,12 @@ describe("E1 item 1: the header is [actions | divider | settings], the footer ro
     expect(count(html, "stage-controls"), "one cluster").toBe(1);
     const cluster = html.slice(html.indexOf('data-testid="stage-controls"'));
     expect(cluster.indexOf('data-testid="stage-rail"'), "the actions group opens the cluster").toBeLessThan(cluster.indexOf('data-testid="stage-tools"'));
-    // The divider is a desktop device: hidden below md, where the actions are the Stage tools sheet.
-    expect(tag(html, "stage-controls-divider"), "bare `hidden`, not `max-md:hidden`").toMatch(/class="(?:[^"]* )?hidden /);
-    expect(tag(html, "stage-controls-divider")).toMatch(/\bmd:block\b/);
+    // The divider is a wide-desktop device (fix round 1, review m1): hidden below xl (1280). Below md the actions are the Stage tools sheet;
+    // from md to xl the busiest Swiss state wraps the settings group onto its own line, where a rule that leads the line divides nothing.
+    // Whole class tokens, so `max-xl:*` or `md:block` can never satisfy it by overlap.
+    const dividerClasses = (/class="([^"]*)"/.exec(tag(html, "stage-controls-divider") ?? "")?.[1] ?? "").split(/\s+/).filter(Boolean);
+    expect(dividerClasses, "bare `hidden`, shown by `xl:block` alone").toEqual(expect.arrayContaining(["hidden", "xl:block"]));
+    expect(dividerClasses.filter((c) => /(^|:)(block|inline-block|flex)$/.test(c)), "and no other display class turns it on earlier").toEqual(["xl:block"]);
     // SCF (owner pick, Option A): the divider is the SETTINGS group's own first child, not the rail's - so wherever the header wraps, it
     // shares a line with the buttons it divides. A divider left in the rail (or between the two groups) could be stranded on a line alone.
     const group = innerOf(html, "stage-tools-group");

@@ -27,12 +27,16 @@ const budget = (navs: number, acts: number): number => SEED_MS + navs * NAV_MS +
 
 /** md and up, where the menus float: the owner's laptop, a small laptop, and the first width at which the rail is a row. */
 const WIDTHS = [1280, 1024, 768] as const;
+/** Tailwind's `xl`: the divider is drawn from here up. */
+const XL = 1280;
 
 type Req = APIRequestContext;
 
 interface Seed {
   divisionId: string;
   stageId: string;
+  /** The stage BELOW the Swiss's card, when the seed asked for a neighbour (a second, empty knockout stage). */
+  neighbourId?: string;
 }
 
 async function seedDivision(request: Req, label: string, stage: { kind: string; name: string; config?: Record<string, unknown> }, entrants: number): Promise<Seed> {
@@ -64,22 +68,35 @@ const fixturesOf = async (request: Req, divisionId: string): Promise<Fx[]> => {
   return res.data!;
 };
 
-type SwissState = "round-one-waiting" | "paired" | "played";
+type SwissState = "round-one-waiting" | "paired" | "played" | "final-paired";
 
 /** A Swiss over six entrants, three rounds, started. `round-one-waiting`: the shells only. `paired`: round 1 seated, nothing played (Rounds is
- *  still a button). `played`: one board of round 1 decided - the count is fixed now. */
-async function seedSwiss(request: Req, label: string, state: SwissState): Promise<Seed> {
-  const seed = await seedDivision(request, label, { kind: "swiss", name: "Swiss", config: { rounds: 3 } }, 6);
+ *  still a button). `played`: one board of round 1 decided - the count is fixed now. `final-paired`: a TWO-round Swiss with round 1 played and
+ *  the last round seated and unplayed - no Pair next menu any more, Unpair on offer: the state in which "Unpair, then Pair next" is said
+ *  beside Unpair (batch-4 m2), the one the review (I1) found a sentence in the row for. */
+async function seedSwiss(request: Req, label: string, state: SwissState, opts: { neighbour?: boolean } = {}): Promise<Seed> {
+  const seed = await seedDivision(request, label, { kind: "swiss", name: "Swiss", config: { rounds: state === "final-paired" ? 2 : 3 } }, 6);
+  if (opts.neighbour) {
+    const next = await apiJson<{ id: string }>(request, `/api/v1/divisions/${seed.divisionId}/stages`, "POST", { seq: 2, kind: "knockout", name: "Playoffs", config: {} });
+    expect(next.status, `neighbour stage: ${JSON.stringify(next.error)}`).toBeLessThan(300);
+    seed.neighbourId = next.data!.id;
+  }
   const started = await apiJson(request, `/api/v1/divisions/${seed.divisionId}/start`, "POST");
   expect(started.status, `division start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
   if (state !== "round-one-waiting") {
     const paired = await apiJson(request, `/api/v1/stages/${seed.stageId}/generate`, "POST");
     expect(paired.status, `pair round 1: ${JSON.stringify(paired.error)}`).toBeLessThan(300);
   }
-  if (state === "played") {
+  if (state === "played" || state === "final-paired") {
     const seated = (await fixturesOf(request, seed.divisionId)).filter((f) => f.round_no === 1 && f.home_entrant_id !== null);
     expect(seated.length, "premise: round 1 is seated").toBeGreaterThan(0);
-    await scoreFixture(request, seated[0]!.id, 2, 0);
+    for (const f of state === "played" ? seated.slice(0, 1) : seated) await scoreFixture(request, f.id, 2, 0);
+  }
+  if (state === "final-paired") {
+    const last = await apiJson(request, `/api/v1/stages/${seed.stageId}/generate`, "POST");
+    expect(last.status, `pair the last round: ${JSON.stringify(last.error)}`).toBeLessThan(300);
+    const seatedLast = (await fixturesOf(request, seed.divisionId)).filter((f) => f.round_no === 2 && f.home_entrant_id !== null);
+    expect(seatedLast.length, "premise: the last round is seated, so no round waits for Pair next").toBeGreaterThan(0);
   }
   return seed;
 }
@@ -168,6 +185,11 @@ async function expectFloats(page: Page, card: Locator, trigger: Locator, menu: L
   // A card low on the page opens its popover below the fold (that is what a popover over the content does); bring it into view, THEN
   // hit-test its corners - the page scrolls, nothing re-lays out.
   await menu.scrollIntoViewIfNeeded();
+  // The panel stays INSIDE its card, side to side (fix round 1, review m2): at 1280 a panel hung from the trigger's left edge used to overhang
+  // the card's right border by ~14px. Aligned to the card, not the viewport.
+  const [m, c] = [await boxOf(menu, `${what}: the panel`), await boxOf(card, `${what}: the card`)];
+  expect(m.x + m.width, `${what}: the panel's right edge (${m.x + m.width}) is inside the card's (${c.x + c.width})`).toBeLessThanOrEqual(c.x + c.width + 0.5);
+  expect(m.x, `${what}: the panel's left edge (${m.x}) is inside the card's (${c.x})`).toBeGreaterThanOrEqual(c.x - 0.5);
   const corners = await expectOnTop(menu, what);
   await expectNoHorizontalScroll(page);
   return corners;
@@ -264,49 +286,167 @@ test.describe("SCF: the Swiss stage card's action row (Option A)", () => {
     expect(widths).toBe(WIDTHS.length);
   });
 
-  test("the Swiss sentence is on the legend line, not in the action row; the row holds controls only - at 1280, 768 and 320", async ({ page, request }) => {
-    test.setTimeout(budget(3, 12));
-    const seed = await seedSwiss(request, "Sentence", "paired");
-    const sentence = uiEn["swiss.refusal.SWISS_ADHOC_REFUSED"]!;
-    let widths = 0;
-    for (const width of [1280, 768, 320]) {
+  test("a popover that reaches past its card paints over the NEXT card, not behind it - Pair next ▾ and More, at 1280 and 768", async ({ page, request }) => {
+    test.setTimeout(budget(2, 30));
+    // The state: a Swiss card whose body is empty (a run-sheet filter that matches nothing, a card with no rows) above a second stage's card.
+    // No seed makes a card that short on its own (its body is always taller than the 106px menu), so the body is taken away here - the header,
+    // the menus and the neighbour are the real ones. It is the case the review (m10) could only argue by construction: `.card` makes no
+    // stacking context and the popover is `z-30`, so the menu must sit over the neighbour's box.
+    const seed = await seedSwiss(request, "Neighbour", "paired", { neighbour: true });
+    let menus = 0;
+    for (const width of [1280, 768]) {
       const card = await openCard(page, request, seed, width);
-      const note = card.getByTestId("stage-swiss-adhoc-note");
-      const legend = card.getByTestId("stage-swiss-legend");
-      await expect(legend, `@${width}: positive pair - the legend line is there`).toBeVisible();
-      await expect(note, `@${width}: the sentence is visible without opening anything`).toBeVisible();
-      await expect(note).toHaveText(sentence);
-      // Same line: one container holds both, and the note sits after the legend.
-      const shared = await note.evaluate((n) => n.parentElement === document.querySelector('[data-testid="stage-swiss-legend"]')?.parentElement);
-      expect(shared, `@${width}: the sentence shares the legend's container`).toBe(true);
-      const [l, n] = [await boxOf(legend, "legend"), await boxOf(note, "sentence")];
-      expect(n.y + n.height, `@${width}: the sentence is below or beside the legend, never above it`).toBeGreaterThanOrEqual(l.y);
-      // Not in the action row: the rail holds no sentence, no paragraph, and every piece of text in it is a control's.
-      const rail = card.getByTestId("stage-rail");
-      await expect(rail.getByTestId("stage-swiss-adhoc-note"), `@${width}: the rail does not hold it`).toHaveCount(0);
-      if (width >= 768) {
-        const stray = await rail.evaluate((root) => {
-          const out: string[] = [];
-          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-          let checked = 0;
-          for (let t = walker.nextNode(); t; t = walker.nextNode()) {
-            const text = (t.textContent ?? "").trim();
-            if (text === "" || (t.parentElement && getComputedStyle(t.parentElement).display === "none")) continue;
-            checked++;
-            if (t.parentElement?.closest("button, a[href], [role='button'], [role='menuitem'], [role='radio']") === null) out.push(text);
-          }
-          return { stray: out, checked };
-        });
-        expect(stray.checked, `@${width}: anti-vacuity - the row has text to check`).toBeGreaterThan(0);
-        expect(stray.stray, `@${width}: the row holds controls only`).toEqual([]);
+      const neighbour = stageCardOf(page, seed.neighbourId!);
+      await expect(neighbour, `@${width}: the neighbour card is on the page`).toBeVisible();
+      await card.evaluate((sec) => {
+        const sheet = sec.querySelector('[data-testid="stage-sheet"]')!;
+        for (const child of Array.from(sheet.children)) if (child.tagName !== "HEADER") (child as HTMLElement).style.display = "none";
+      });
+      // Pair next's panel (106px) reaches the next card on its own at 1280; More's (one row, about 54px) and the 768 layout fall short of the
+      // 24px gap between cards, so where the menu does not reach, the NEIGHBOUR is pulled up until it does (a margin on the neighbour only: the
+      // menu is absolutely placed and does not move). Stacking does not depend on the distance - it is the same `popoverClasses` chain on both
+      // roots - but a hit-test needs the two boxes to overlap, and the premise below says by how much they do.
+      for (const [triggerId, menuId] of [["stage-pairing-toggle", "stage-pairing-menu"], ["stage-more", "stage-more-menu"]] as const) {
+        const tag = `${menuId} @${width}`;
+        await neighbour.evaluate((el) => void (el.style.marginTop = ""));
+        await card.getByTestId(triggerId).click();
+        const menu = card.getByTestId(menuId);
+        await expect(menu, `${tag}: opens`).toBeVisible();
+        await menu.scrollIntoViewIfNeeded();
+        let [m, n] = [await boxOf(menu, "menu"), await boxOf(neighbour, "neighbour")];
+        const natural = m.y + m.height - n.y;
+        if (natural < 20) {
+          await neighbour.evaluate((el, up) => void (el.style.marginTop = `-${up}px`), Math.ceil(20 - natural));
+          [m, n] = [await boxOf(menu, "menu"), await boxOf(neighbour, "neighbour")];
+        }
+        const overlap = m.y + m.height - n.y;
+        expect(overlap, `${tag}: premise - the menu reaches ${Math.round(overlap)}px into the neighbour's box (naturally ${Math.round(natural)}px)`).toBeGreaterThanOrEqual(12);
+        const probes = await page.evaluate(
+          ({ mx, mw, ny, over, nx }) => {
+            const ys = [ny + 3, ny + over / 2, ny + Math.max(3, over - 3)];
+            const inMenu = [mx + mw * 0.2, mx + mw * 0.5, mx + mw * 0.8].flatMap((x) =>
+              ys.map((y) => {
+                const hit = document.elementFromPoint(x, y);
+                return { x: Math.round(x), y: Math.round(y), menu: hit?.closest('[data-testid$="-menu"]') !== null && hit?.closest('[data-testid$="-menu"]') !== undefined, on: hit?.tagName ?? "nothing" };
+              }),
+            );
+            const beside = document.elementFromPoint(nx, ys[1]!);
+            return { inMenu, besideIsNeighbour: beside?.closest("section[data-stage-id]")?.getAttribute("data-stage-id") ?? null };
+          },
+          { mx: m.x, mw: m.width, ny: n.y, over: overlap, nx: n.x + 12 },
+        );
+        for (const h of probes.inMenu) expect(h.menu, `${tag}: the menu is on top of the neighbour at (${h.x}, ${h.y}) - it hit <${h.on}>`).toBe(true);
+        expect(probes.besideIsNeighbour, `${tag}: positive pair - beside the menu the neighbour's own box is hit`).toBe(seed.neighbourId);
+        await page.keyboard.press("Escape");
+        await expect(menu).toBeHidden();
+        menus++;
       }
-      await expectNoHorizontalScroll(page);
-      widths++;
     }
-    expect(widths, "anti-vacuity: every width read").toBe(3);
+    expect(menus, "anti-vacuity: both menus, both widths").toBe(4);
   });
 
-  test("the divider is the settings group's: it shares a line with Match rules, immediately left of it - Swiss paired, Swiss played, and a league - at 1280, 1024 and 768", async ({ page, request }) => {
+  test("keyboard: Tab on from an open Pair next ▾ closes it, so More opens alone and one Escape puts it away - at 1280 and 768", async ({ page, request }) => {
+    test.setTimeout(budget(2, 24));
+    const seed = await seedSwiss(request, "Keyboard", "paired");
+    let widths = 0;
+    for (const width of [1280, 768]) {
+      const card = await openCard(page, request, seed, width);
+      const toggle = card.getByTestId("stage-pairing-toggle");
+      const pairing = card.getByTestId("stage-pairing-menu");
+      const more = card.getByTestId("stage-more");
+      const moreMenu = card.getByTestId("stage-more-menu");
+      await toggle.focus();
+      await page.keyboard.press("Enter");
+      await expect(pairing, `@${width}: Enter on the ▾ opens Pair next`).toBeVisible();
+      // Tab until focus reaches More - the real keyboard path, not a programmatic focus; the panel's own stops come first.
+      let tabs = 0;
+      for (; tabs < 15; tabs++) {
+        if (await more.evaluate((el) => el === document.activeElement)) break;
+        await page.keyboard.press("Tab");
+      }
+      await expect(more, `@${width}: Tab reached More (after ${tabs} presses)`).toBeFocused();
+      await expect(pairing, `@${width}: and Pair next closed on the way`).toBeHidden();
+      await page.keyboard.press("Enter");
+      await expect(moreMenu, `@${width}: Enter on More opens it`).toBeVisible();
+      await expect(pairing, `@${width}: Pair next is still shut - one menu open, not two`).toBeHidden();
+      await page.keyboard.press("Escape");
+      await expect(moreMenu, `@${width}: one Escape closes More`).toBeHidden();
+      await expect(more, `@${width}: focus is on More`).toBeFocused();
+      await expect(pairing, `@${width}: nothing else opened`).toBeHidden();
+      widths++;
+    }
+    expect(widths, "anti-vacuity: both widths driven").toBe(2);
+  });
+
+  test("the Swiss sentences are on the legend line, not in the action row; the row holds controls only - round 2 waiting AND the final round, at 1280, 768 and 320", async ({ page, request }) => {
+    test.setTimeout(budget(6, 24));
+    const sentence = uiEn["swiss.refusal.SWISS_ADHOC_REFUSED"]!;
+    const unpairLine = uiEn["schedule.pairing.changeHint"]!;
+    // [state, whether "Unpair, then Pair next" is the legend line's: only once every round is seated (before that the Pair next menu carries it)].
+    const states: Array<[SwissState, boolean]> = [["paired", false], ["final-paired", true]];
+    let cells = 0;
+    let strayChecks = 0;
+    for (const [state, hasUnpairLine] of states) {
+      const seed = await seedSwiss(request, `Sentence ${state}`, state);
+      for (const width of [1280, 768, 320]) {
+        const tag = `${state} @${width}`;
+        const card = await openCard(page, request, seed, width);
+        const note = card.getByTestId("stage-swiss-adhoc-note");
+        const legend = card.getByTestId("stage-swiss-legend");
+        await expect(legend, `${tag}: positive pair - the legend line is there`).toBeVisible();
+        await expect(note, `${tag}: the sentence is visible without opening anything`).toBeVisible();
+        await expect(note).toHaveText(sentence);
+        // Same line: one container holds both, and the note sits after the legend.
+        const shared = await note.evaluate((n) => n.parentElement === document.querySelector('[data-testid="stage-swiss-legend"]')?.parentElement);
+        expect(shared, `${tag}: the sentence shares the legend's container`).toBe(true);
+        const [l, n] = [await boxOf(legend, "legend"), await boxOf(note, "sentence")];
+        expect(n.y + n.height, `${tag}: the sentence is below or beside the legend, never above it`).toBeGreaterThanOrEqual(l.y);
+
+        // "Unpair, then Pair next": on the legend line in the final round (beside the sentence), nowhere on the card while a round still waits.
+        const hint = card.getByTestId("stage-unpair-hint");
+        if (hasUnpairLine) {
+          await expect(card.getByTestId("stage-unpair"), `${tag}: positive pair - Unpair is on the card (in the row/sheet)`).toBeAttached();
+          await expect(hint, `${tag}: the line is on the legend line, visible with nothing opened`).toBeVisible();
+          await expect(hint).toHaveText(unpairLine);
+          expect(await hint.evaluate((h) => h.parentElement === document.querySelector('[data-testid="stage-swiss-legend"]')?.parentElement), `${tag}: it shares the legend's container`).toBe(true);
+          const h = await boxOf(hint, "unpair line");
+          expect(h.y + h.height, `${tag}: after the legend, never above it`).toBeGreaterThanOrEqual(l.y);
+        } else {
+          await expect(card.getByTestId("stage-pairing-toggle"), `${tag}: positive pair - a round waits, so Pair next carries the line`).toBeAttached();
+          await expect(hint, `${tag}: no legend line while a round waits`).toHaveCount(0);
+        }
+
+        // Not in the action row: the rail holds neither sentence, no paragraph, and every piece of text in it is a control's.
+        const rail = card.getByTestId("stage-rail");
+        await expect(rail.getByTestId("stage-swiss-adhoc-note"), `${tag}: the rail does not hold the sentence`).toHaveCount(0);
+        await expect(rail.getByTestId("stage-unpair-hint"), `${tag}: the rail does not hold the Unpair line`).toHaveCount(0);
+        if (width >= 768) {
+          const stray = await rail.evaluate((root) => {
+            const out: string[] = [];
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            let checked = 0;
+            for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+              const text = (t.textContent ?? "").trim();
+              if (text === "" || (t.parentElement && getComputedStyle(t.parentElement).display === "none")) continue;
+              checked++;
+              if (t.parentElement?.closest("button, a[href], [role='button'], [role='menuitem'], [role='radio']") === null) out.push(text);
+            }
+            return { stray: out, checked, paragraphs: root.querySelectorAll("p").length };
+          });
+          expect(stray.checked, `${tag}: anti-vacuity - the row has text to check`).toBeGreaterThan(0);
+          expect(stray.stray, `${tag}: the row holds controls only`).toEqual([]);
+          expect(stray.paragraphs, `${tag}: and no paragraph`).toBe(0);
+          strayChecks++;
+        }
+        await expectNoHorizontalScroll(page);
+        cells++;
+      }
+    }
+    expect(cells, "anti-vacuity: every (state, width) read").toBe(states.length * 3);
+    expect(strayChecks, "anti-vacuity: the stray-text walk ran at md and up in both states").toBe(states.length * 2);
+  });
+
+  test("the divider is the settings group's, drawn from 1280 up: on Match rules' line, immediately left of it; at 1024 and 768 it is gone - Swiss paired, Swiss played, and a league", async ({ page, request }) => {
     test.setTimeout(budget(WIDTHS.length * 3, WIDTHS.length * 3 * 10));
     const swissPaired = await seedSwiss(request, "Divider paired", "paired");
     const swissPlayed = await seedSwiss(request, "Divider played", "played");
@@ -317,13 +457,26 @@ test.describe("SCF: the Swiss stage card's action row (Option A)", () => {
       ["league", league],
     ];
     let checked = 0;
+    let hiddenBelow = 0;
+    let shownAt1280 = 0;
     for (const [name, seed] of cases) {
       for (const width of WIDTHS) {
         const card = await openCard(page, request, seed, width);
         const divider = card.getByTestId("stage-controls-divider");
         const rules = card.getByTestId("stage-tool-format");
         await expect(rules, `${name} @${width}: positive pair - Match rules is on the card`).toBeVisible();
-        await expect(divider, `${name} @${width}: the divider is drawn (the row has a control)`).toBeVisible();
+        await expect(card.getByTestId("stage-tools-group"), `${name} @${width}: positive pair - the settings group is drawn`).toBeVisible();
+        // Below 1280 the busiest Swiss state wraps the settings group onto its own line, where a rule that LEADS the line divides nothing from
+        // its left (fix round 1, review m1): it is not drawn there (`xl:block`). Still IN the DOM, so a test can tell "hidden" from "never built".
+        if (width < XL) {
+          await expect(divider, `${name} @${width}: the divider is not drawn below 1280`).toBeHidden();
+          expect(await divider.count(), `${name} @${width}: but it is built (hidden, not absent)`).toBe(1);
+          await expectNoHorizontalScroll(page);
+          hiddenBelow++;
+          checked++;
+          continue;
+        }
+        await expect(divider, `${name} @${width}: the divider is drawn from 1280 up (the row has a control)`).toBeVisible();
         const [d, r] = [await boxOf(divider, "divider"), await boxOf(rules, "Match rules")];
         const dMid = d.y + d.height / 2;
         expect(dMid, `${name} @${width}: the divider shares Match rules' line`).toBeGreaterThanOrEqual(r.y);
@@ -347,10 +500,13 @@ test.describe("SCF: the Swiss stage card's action row (Option A)", () => {
         expect(lineMates, `${name} @${width}: the divider's line holds Match rules`).toContain("stage-tool-format");
         console.log(`SCF divider ${name} @${width}: divider x${Math.round(d.x)} y${Math.round(d.y)}, rules x${Math.round(r.x)} y${Math.round(r.y)}, line: ${lineMates.join(", ")}`);
         await expectNoHorizontalScroll(page);
+        shownAt1280++;
         checked++;
       }
     }
     expect(checked, "anti-vacuity: every (state, width) pair checked").toBe(cases.length * WIDTHS.length);
+    expect(shownAt1280, "the positive pair: the divider was drawn and measured at 1280 in every state").toBe(cases.length);
+    expect(hiddenBelow, "and absent from the screen at every narrower width in every state").toBe(cases.length * (WIDTHS.length - 1));
   });
 
   test("Rounds: a real button until the count is fixed, absent from the row after it - and the legend says the count either way", async ({ page, request }) => {

@@ -1382,6 +1382,19 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           canEdit && stage.kind === "swiss" && stage.status !== "complete" && stageFixtures.length > 0
             ? msg(swissRefusalKey("SWISS_ADHOC_REFUSED"))
             : null;
+        // SCF fix round 1 (review I1): the "Unpair, then Pair next" line batch-4 m2 put beside Unpair for the final round is information too - a
+        // ~105-char sentence in the actions row is what the owner called a mess - so it joins the legend line beside the sentence above, under the
+        // gates the rail drew it under: an editor (the rail is his), a Swiss with Unpair on offer, and `swissUnpairChangeHint` (every round seated,
+        // round 2 on, a running root Swiss). The Pair next menu carries the same copy while a round waits, so it shows in exactly one place.
+        const swissUnpairNote =
+          canEdit && stage.kind === "swiss" && stage.status !== "complete" && canUnpairSwiss && unpairChangeHint
+            ? msg("schedule.pairing.changeHint")
+            : null;
+        // The sentences after the legend, in reading order; each is one span on the legend line, joined by " · ".
+        const legendNotes = [
+          swissAdhocNote ? { testid: "stage-swiss-adhoc-note", text: swissAdhocNote } : null,
+          swissUnpairNote ? { testid: "stage-unpair-hint", text: swissUnpairNote } : null,
+        ].filter((n): n is { testid: string; text: string } => n !== null);
         // W3 T10 (X-SW-14 UI half) — the pending-latecomer count: entrants stamped for the round the next Pair seats,
         // and any who arrived after the last round had started. A desk notice, so organisers only.
         const swissLatecomers =
@@ -1484,7 +1497,6 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   }
             }
             swissRounds={swissRoundsRail}
-            unpairChangeHint={unpairChangeHint}
             toolsSlot={
               settingsTools.length > 0 ? (
                 <div data-testid="stage-sheet-tools" className="flex flex-col gap-2 md:hidden">
@@ -1587,7 +1599,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                         // themselves inside `stage-tools`. Not re-indented with what it holds, to keep this change small in a file others edit.
                         <div data-testid="stage-tools-group" className={`flex min-w-0 items-center gap-3 ${canEdit ? "max-md:hidden" : ""}`}>
                         {railHasActions && (
-                          <span aria-hidden="true" data-testid="stage-controls-divider" className="hidden h-6 w-px shrink-0 bg-slate-300 md:block" />
+                          // From `xl` (1280) only (fix round 1, review m1; controller ruling): below it the busiest Swiss state wraps this group onto
+                          // its own line, where a rule that leads the line divides nothing from its left - the line break already separates the groups.
+                          <span aria-hidden="true" data-testid="stage-controls-divider" className="hidden h-6 w-px shrink-0 bg-slate-300 xl:block" />
                         )}
                         <div data-testid="stage-tools" className={`flex min-w-0 flex-wrap items-center gap-2 ${canEdit ? "max-md:hidden" : ""}`}>
                           {settingsTools.map((tool) => {
@@ -1628,7 +1642,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       component's render (see stage-rail.tsx's header for the
                       full investigation), so a `<SwissLegend>` here would be
                       invisible to them. */}
-                  {!folded && (swissLegend || swissAdhocNote) && (
+                  {!folded && (swissLegend || legendNotes.length > 0) && (
                     <div className="w-full min-w-0 text-xs text-slate-500">
                       {swissLegend && (
                         <p data-testid="stage-swiss-legend" className="inline min-w-0">
@@ -1639,13 +1653,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                           unchanged) moved here from the actions row, where it stood in place of the Add match button the stage cannot have.
                           It is information, not an action: it joins the legend line, "5 rounds · 3 matches per round · 15 fixtures · Swiss
                           rounds are paired by the system. Add friendlies in another stage." It shows under the gates it always had (the rail
-                          drew it for an editor of a running Swiss with fixtures), so a viewer and a finished or empty stage see none. */}
-                      {swissAdhocNote && (
-                        <>
-                          {swissLegend && <span aria-hidden="true"> · </span>}
-                          <span data-testid="stage-swiss-adhoc-note">{swissAdhocNote}</span>
-                        </>
-                      )}
+                          drew it for an editor of a running Swiss with fixtures), so a viewer and a finished or empty stage see none. The
+                          final round's "Unpair, then Pair next" line (fix round 1, I1) follows it the same way. */}
+                      {legendNotes.map((note, i) => (
+                        <Fragment key={note.testid}>
+                          {(swissLegend || i > 0) && <span aria-hidden="true"> · </span>}
+                          <span data-testid={note.testid}>{note.text}</span>
+                        </Fragment>
+                      ))}
                     </div>
                   )}
                   {/* W3 T10 — under the legend, in the header (never inside the
