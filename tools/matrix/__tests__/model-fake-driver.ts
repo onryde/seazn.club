@@ -46,12 +46,12 @@
 // the board's folded ledger paid by the sport's Swiss rule (fold.ts tableContribution), a bye the rule's win - not 1 and ½.
 // Not modelled: a points rule PINNED on the stage (the harness posts none) and a team's lineups at the fold.
 import { BRACKET_STAGE_KINDS, swissDrawFactsOf } from "@seazn/engine/competition";
-import { EngineError, type StageKind } from "@seazn/engine/core";
+import { EngineError, playRecorded, type StageKind } from "@seazn/engine/core";
 import { generateRoundRobin, pairKey as swissPairKey, pairRound, type SwissStanding } from "@seazn/engine/scheduling";
 import { feedsNextMatch } from "../../../apps/web/src/lib/bracket-next-match.ts";
 import { isRunningRootSwiss } from "../../../apps/web/src/lib/open-entry-stages.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
-import { tableContribution } from "../lib/fold.ts";
+import { envelopes, tableContribution, unplayedBoard } from "../lib/fold.ts";
 import { sportModule, stageCfg } from "../lib/sport-cfg.ts";
 import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantRow, type FinishSwissOut, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
@@ -667,16 +667,23 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     for (const f of this.fixtures) {
       const o = f.outcome as { kind?: string; winner?: string } | null | undefined;
       if (f.home_entrant_id !== null && f.away_entrant_id !== null) {
-        played.add(swissPairKey(f.home_entrant_id, f.away_entrant_id));
-        const paid = tableContribution(module, swissCfg, { kind: "swiss", roundNo: f.round_no ?? 0 }, f.home_entrant_id, f.away_entrant_id, this.tableEvents(f));
+        const events = this.tableEvents(f);
+        const paid = tableContribution(module, swissCfg, { kind: "swiss", roundNo: f.round_no ?? 0 }, f.home_entrant_id, f.away_entrant_id, events);
         // A guard, not a comment: a decided two-sided board always has a ledger the fold decides (the twin writes its outcomes
         // only through one), so an outcome the fold cannot see would be paid nothing - silently.
         if (paid === null && o != null) throw new Error(`fake: swiss fixture ${f.id} holds an outcome (${o.kind}) its ledger does not fold to`);
         if (paid !== null) {
           pay(f.home_entrant_id, paid.pair[0].points);
           pay(f.away_entrant_id, paid.pair[1].points);
-          if (paid.outcome.kind === "award") byes.add(paid.outcome.winner);
         }
+        // The pairing history, as the product's `buildSwissHistory` reads it (T6 review m4). Only a ONE-seat award is a bye; a
+        // two-seated board that was NOT PLAYED - a double walkover, a walkover, a forfeit before any play (`unplayedBoard`, the
+        // engine's one rule) - is no meeting (P-A2: the pair may meet again), and its winner, who scored a win without play,
+        // may not take the pairing-allocated bye (P-A4, FIDE C.04.1(d)). A win by retirement after play is a played game and
+        // bars nobody. Every other seated board, decided or not, is a meeting.
+        if (o != null && unplayedBoard(o, playRecorded(envelopes("matrix", events), module))) {
+          if (o.winner !== undefined) byes.add(o.winner);
+        } else played.add(swissPairKey(f.home_entrant_id, f.away_entrant_id));
       } else if (o?.kind === "award" && o.winner !== undefined) {
         byes.add(o.winner);
         pay(o.winner, byePoints);
@@ -723,7 +730,18 @@ export class ModelFakeDriver extends FakeLeagueDriver {
    *  (422) once the stage is complete; SWISS_FINISH_NOTHING_PLAYED (409) before any round is complete; SWISS_FINISH_ROUND_UNDECIDED
    *  (409) when a board past k has started. Written: every row past k is deleted, `config.rounds := k`, and the stage completes
    *  through the twin's own completeStage (finishSwissNow's `completeStage`) - its answer, the next-stage fields included,
-   *  plus `finished_after`, `shells_removed` and `slots_freed` (the twin lays no slots out, so 0). */
+   *  plus `finished_after`, `shells_removed` and `slots_freed` (the twin lays no slots out, so 0).
+   *
+   *  Not modelled (the product refuses these too; this list is the twin's complete gap, T6 review m7):
+   *   - SCHEDULE_LOCKED 422, the frozen timetable, first and outside the predicate: the twin has no timetable to lock.
+   *   - FIXTURE_HAS_OWN_FORMAT: a removed shell carrying its own format; the twin's rows carry none.
+   *   - STAGE_NOT_READY from `tableStageCompletable`, raised INSIDE the transaction after the delete so it rolls the delete back.
+   *     The twin deletes first and completes after, which is safe only because `judgeFinish` guarantees every row up to k is
+   *     decided, so its completeStage cannot refuse here; a twin whose completion could refuse would need the rollback.
+   *   - `over` for "a later stage is under way": the twin is one stage, so `over` is only "this stage is complete".
+   *  And in the Pair above: SWISS_ROUNDS_ABOVE_MAX (a field shrunk under the target round, judgeSwissPairAt) is not raised: the twin pairs
+   *  the active field and never compares the round count with that field's hard maximum, so the loop's handling of that refusal
+   *  is proved against a hand-built body of the product's shape (scenarios.test.ts), not against this twin. */
   async finishSwiss(_stageId: string): Promise<FinishSwissOut> {
     this.log("finishSwiss");
     const path = "/api/v1/stages/s1/swiss/finish";

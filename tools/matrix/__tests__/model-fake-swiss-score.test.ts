@@ -6,8 +6,10 @@
 // Expected values come from the engine's own declarations (`tablePointsRule`, `swissDrawFactsOf`, `swissDrawPoints`), applied
 // to the results the test posts; never from the twin. What the twin hands the engine is read through a spy on `pairRound`.
 import { swissDrawFactsOf, swissDrawPoints } from "@seazn/engine/competition";
-import type { SwissStanding } from "@seazn/engine/scheduling";
+import { playRecorded } from "@seazn/engine/core";
+import { pairKey, type SwissHistory, type SwissStanding } from "@seazn/engine/scheduling";
 import { describe, expect, it, vi } from "vitest";
+import { envelopes } from "../lib/fold.ts";
 import { newModelState } from "../lib/model/commands.ts";
 import { resolveSportCfg, sportModule, stageCfg } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
@@ -17,13 +19,18 @@ import { ModelFakeDriver } from "./model-fake-driver.ts";
 
 // The root vitest config leaves the engine external, whose module namespace `vi.spyOn` cannot patch (apps/web's inlines it),
 // so the engine's `pairRound` is wrapped at the module boundary instead: the real one runs, and what it was handed is kept.
-const handed = vi.hoisted(() => ({ calls: [] as (readonly SwissStanding[])[] }));
+const handed = vi.hoisted(() => ({
+  calls: [] as (readonly SwissStanding[])[],
+  /** The pairing history each call was handed (T6 review m4): which pairs have met, and who may no longer take the bye. */
+  histories: [] as SwissHistory[],
+}));
 vi.mock("@seazn/engine/scheduling", async (importOriginal) => {
   const real = await importOriginal<typeof import("@seazn/engine/scheduling")>();
   return {
     ...real,
     pairRound: (...a: Parameters<typeof real.pairRound>) => {
       handed.calls.push(a[0]);
+      handed.histories.push(a[1]);
       return real.pairRound(...a);
     },
   };
@@ -132,7 +139,11 @@ describe("T5 review m2 - the twin pays a played loser what the declared Swiss ru
       // differential: the case's declared loser is not 0 where it is a played loss (the old twin's constant), and the unplayed one is
       // the case where the right answer IS 0 - so the played and unplayed losses of one sport must differ.
       if (shape.outcome.kind !== "forfeit") expect(lost, `premise: ${shape.label}'s declared loser is not the old twin's 0`).not.toBe(0);
-      else expect(rule.loss.regulation, "premise: a played loss in this sport pays more than the unplayed one").toBeGreaterThan(lost);
+      else {
+        expect(rule.loss.regulation, "premise: a played loss in this sport pays more than the unplayed one").toBeGreaterThan(lost);
+        // The expected pair restates `payout`'s award branch (win.regulation / loss.unplayed); a declared `forfeit` row would outrank it.
+        expect(rule.forfeit, "premise: no forfeit row outranks the award cell this case reads").toBeUndefined();
+      }
 
       await post(boards[0]!.id, shape.outcome);
       await post(boards[1]!.id, { kind: "win", winner: "home" });
@@ -160,5 +171,64 @@ describe("T5 review m2 - the twin pays a played loser what the declared Swiss ru
     await post(boards[1]!.id, { kind: "win", winner: "home" });
     Object.assign(boards[0]!, { status: "decided", outcome: { kind: "win", winner: boards[0]!.home_entrant_id! } }); // an outcome with NO ledger behind it
     await expect(d.generate()).rejects.toThrow(/holds an outcome \(win\) its ledger does not fold to/);
+  });
+});
+
+// W3 app-B T6 review m4: the twin's pairing HISTORY is the product's (usecases/stages.ts buildSwissHistory), for the two things it
+// rewrote. A two-seated board that was NOT PLAYED is not a meeting (rulebook P-A2, FIDE C.04.2 3.5): the pair may meet again. Its
+// WINNER, though, has scored "a win due to an opponent not appearing", and may not take the pairing-allocated bye (P-A4, FIDE
+// C.04.1(d)) - while a win by retirement AFTER play is a played game and bars nothing. Only a one-seat award is a bye. The twin read
+// every award as a bye and every seated board as a meeting. Each case is one result shape, round 1 of an odd field of 5 (two boards
+// and the bye), read through the history the twin hands the engine for round 2; the rulebook's answer is the case's, and the engine
+// only supplies whether the posted stream held any play.
+describe("T6 review m4 - the twin's pairing history: an unplayed board is no meeting, and its winner is barred from the bye", () => {
+  interface Case {
+    readonly label: string;
+    readonly outcome: RequestedOutcome;
+    /** P-A2: this board's pair has NOT met. */
+    readonly unplayed: boolean;
+    /** P-A4: the board's winner (the home side, here) may no longer take the bye. */
+    readonly winnerBarred: boolean;
+    /** Whether the posted stream holds any play, by the engine (`playRecorded`) - the premise that makes the case what it says. */
+    readonly holdsPlay: boolean;
+  }
+  const CASES: readonly Case[] = [
+    { label: "a walkover (nobody played)", outcome: { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" }, unplayed: true, winnerBarred: true, holdsPlay: false },
+    // The differential: the same award shape and the same winner, but after play - so the right answer is the OPPOSITE of the walkover's.
+    { label: "a retirement after play", outcome: { kind: "forfeit", by: "away", reason: "retired", at: "after_start" }, unplayed: false, winnerBarred: false, holdsPlay: true },
+    { label: "a double walkover", outcome: { kind: "double_walkover" }, unplayed: true, winnerBarred: false, holdsPlay: false },
+    { label: "an ordinary win", outcome: { kind: "win", winner: "home" }, unplayed: false, winnerBarred: false, holdsPlay: true },
+  ];
+  let checked = 0;
+  for (const c of CASES) {
+    it(`m4: ${c.label} - the pair ${c.unplayed ? "has NOT met" : "has met"}, and the winner is ${c.winnerBarred ? "barred from" : "still eligible for"} the bye`, async () => {
+      const sport = "tabletennis";
+      const { d, boards, bye, cfg, post } = await paired(sport, "bo5");
+      const stream = (f: (typeof boards)[number]) => generateStream({ sportKey: sport, cfg, stageKind: "swiss", home: f.home_entrant_id!, away: f.away_entrant_id!, outcome: c.outcome });
+      const module = sportModule(sport);
+      expect(playRecorded(envelopes("matrix", stream(boards[0]!)), module), `premise: ${c.label}'s stream ${c.holdsPlay ? "holds play" : "holds none"}`).toBe(c.holdsPlay);
+      await post(boards[0]!.id, c.outcome);
+      await post(boards[1]!.id, { kind: "win", winner: "home" });
+      handed.histories.length = 0;
+      await d.generate(); // Pair round 2
+      expect(handed.histories.length, "anti-vacuity: the Pair called the engine once").toBe(1);
+      const { played, byes } = handed.histories[0]!;
+      if (byes === undefined) throw new Error("premise: the twin hands the engine a bye history");
+      const [home, away] = [boards[0]!.home_entrant_id!, boards[0]!.away_entrant_id!];
+      expect(played.has(pairKey(home, away)), `${c.label}: the pair ${c.unplayed ? "has not" : "has"} met`).toBe(!c.unplayed);
+      expect(byes.has(home), `${c.label}: the winner ${c.winnerBarred ? "is" : "is not"} barred from the bye`).toBe(c.winnerBarred);
+      expect(byes.has(away), `${c.label}: the loser is never barred`).toBe(false);
+      // The positive pair of every negative above: the round-1 bye IS recorded (only a one-seat award is a bye), and the other board,
+      // an ordinary win, is a meeting that bars nobody.
+      expect(byes.has(bye.home_entrant_id!), "the round-1 bye is in the history").toBe(true);
+      expect(played.has(pairKey(boards[1]!.home_entrant_id!, boards[1]!.away_entrant_id!)), "an ordinary win is a meeting").toBe(true);
+      expect(byes.has(boards[1]!.home_entrant_id!), "an ordinary win bars nobody from the bye").toBe(false);
+      checked++;
+    });
+  }
+  it("anti-vacuity: every case ran, and the cases differ on both facts", () => {
+    expect(checked).toBe(CASES.length);
+    expect(new Set(CASES.map((c) => c.unplayed)).size, "cases of both unplayed answers").toBe(2);
+    expect(new Set(CASES.map((c) => c.winnerBarred)).size, "cases of both barred answers").toBe(2);
   });
 });
