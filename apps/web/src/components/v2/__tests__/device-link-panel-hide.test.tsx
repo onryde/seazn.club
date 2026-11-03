@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { DeviceLinkPanel, type DeviceLinkHide } from "@/components/v2/device-link-panel";
-import { SeaznQrImage } from "@/components/v2/seazn-qr-image";
+import { PHONE_HANDOVER_QR_MAX_PX, SeaznQrImage } from "@/components/v2/seazn-qr-image";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { messages } from "@/lib/messages";
 import { t as tRuntime } from "@/lib/i18n-runtime";
@@ -292,6 +292,8 @@ describe("hidden: one row — heading · state · [Show QR] [Copy link]", () => 
     expect(api.posts).toEqual(["/api/v1/fixtures/f1/device-links"]);
     expect(api.deletes).toEqual([]);
     expect(dlinkQr(tree), "the QR is on screen").toBeDefined();
+    // Match Day's compact panel paints its QR at the same phone-handover cap as the full panel and the stream camera.
+    expect(propsOf(dlinkQr(tree)!).maxSize, "the compact QR's cap").toBe(PHONE_HANDOVER_QR_MAX_PX);
     expect(byTestId(tree, "device-link-hide"), "and Hide is there to put it away again").toBeDefined();
   });
 
