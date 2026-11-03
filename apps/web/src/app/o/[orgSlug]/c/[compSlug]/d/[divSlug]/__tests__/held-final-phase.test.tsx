@@ -1,10 +1,10 @@
-// W2a fix round 1 (M3, M10) — the division page reads a recorded abandon awaiting its settle the way the desk does.
+// W2a fix round 1 (M10) — the division page reads a recorded abandon awaiting its settle the way the desk does.
 // A knockout whose only fixture (the final) was abandoned with nobody decided is stored `abandoned`, so every fixture
-// is terminal — the shape that read "Finished" (addendum 9). The page must hand `resolvePhase` the hold
-// (`awaitsSettle`, from `listFixturesAwaitingSettle`) and thread the same ids to the run sheet (M10). The division page
-// renders no phase pill, so this is asserted where the phase goes: StagesPanel's `phase` prop. Same harness as the
-// sibling roster-drift-stage-wiring.test.tsx (no jsdom; the async server component is called directly and its returned
-// element tree walked).
+// is terminal — the shape that read "Finished" (addendum 9). The page threads the hold's ids (`listFixturesAwaitingSettle`)
+// to the run sheet, which holds that row (M10). UI5 item 1 (2026-11-03): the page used to derive a division phase here
+// too (M3), for the start-locks banner and nothing else; the banner is gone and so is the phase, so this file now pins
+// that the panel is handed none. Same harness as the sibling roster-drift-stage-wiring.test.tsx (no jsdom; the async
+// server component is called directly and its returned element tree walked).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
@@ -168,13 +168,12 @@ const renderTab = () =>
   });
 
 type PanelProps = {
-  phase?: string;
   awaitingSettle?: readonly string[];
   ruleDict?: Record<string, string>;
   pointsDict?: Record<string, string>;
 };
 
-describe("the division page reads an abandoned final awaiting its settle as owed work (fix round 1, M3/M10)", () => {
+describe("the division page threads an abandoned final awaiting its settle to the run sheet (fix round 1, M10)", () => {
   beforeEach(() => {
     pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
     stagesSpies.listStages.mockReset().mockResolvedValue([KO_STAGE]);
@@ -183,26 +182,31 @@ describe("the division page reads an abandoned final awaiting its settle as owed
     fixtureSpies.listDivisionFixtures.mockReset().mockResolvedValue([FINAL]);
   });
 
-  it("positive pair first: the same final NOT awaiting a settle (a table-stage abandon, say) reads finished", async () => {
+  it("positive pair first: the same final NOT awaiting a settle (a table-stage abandon, say) reaches the sheet as no hold", async () => {
     deskSpies.listFixturesAwaitingSettle.mockReset().mockResolvedValue(new Set());
     const panel = find(await renderTab(), StagesPanel);
     expect(panel, "the fixtures tab mounts StagesPanel").not.toBeNull();
     const props = panel!.props as PanelProps;
-    // Rulebook, not this code: every fixture terminal and nothing owed is the division-phase.ts rule-2 "finished".
-    expect(props.phase).toBe("finished");
     expect(props.awaitingSettle).toEqual([]);
   });
 
-  it("the final awaiting its settle is NOT finished (addendum 9), and its id reaches the run sheet (M10)", async () => {
+  it("the final awaiting its settle: its id reaches the run sheet (M10), asked about THIS division", async () => {
     deskSpies.listFixturesAwaitingSettle.mockReset().mockResolvedValue(new Set([FINAL.id]));
     const panel = find(await renderTab(), StagesPanel);
     expect(panel).not.toBeNull();
     const props = panel!.props as PanelProps;
-    expect(props.phase, "a held final is owed work, never Finished").not.toBe("finished");
-    expect(props.phase).toBeDefined();
     expect(props.awaitingSettle).toEqual([FINAL.id]);
     expect(deskSpies.listFixturesAwaitingSettle).toHaveBeenCalledTimes(1);
     expect(deskSpies.listFixturesAwaitingSettle.mock.calls[0]![1], "asked about THIS division").toBe("div-1");
+  });
+
+  it("UI5 item 1: the page hands the panel no division phase (it existed only for the removed start-locks banner)", async () => {
+    deskSpies.listFixturesAwaitingSettle.mockReset().mockResolvedValue(new Set());
+    const panel = find(await renderTab(), StagesPanel);
+    expect(panel).not.toBeNull();
+    const keys = Object.keys(panel!.props as object);
+    expect(keys, "premise: the props were read").toContain("awaitingSettle");
+    expect(keys).not.toContain("phase");
   });
 });
 

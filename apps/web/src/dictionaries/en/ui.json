@@ -1647,8 +1647,6 @@
   "tips.learnMore": "Learn more",
   "tips.division.visibility.title": "Who can see a division",
   "tips.division.visibility.body": "A division follows its competition: Private is team-only, Link only means anyone with the link, Public is listed and findable on Google once the competition is published.",
-  "tips.division.start-locks.title": "Starting locks the setup",
-  "tips.division.start-locks.body": "Once scoring starts, entrants and format are locked so results stay fair. Finish seeding and structure first.",
   "tips.scoring.seq-conflict.title": "Someone else scored first",
   "tips.scoring.seq-conflict.body": "Two scorers updated the same match at once. The app refreshed to the latest score — re-enter your point if it's still missing.",
   "tips.entrants.kinds.title": "Teams, individuals and pairs",

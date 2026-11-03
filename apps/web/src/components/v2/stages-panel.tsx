@@ -40,7 +40,6 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import type { HoldState } from "@/server/relay/domain/session";
 import { useConfirm } from "@/components/ui/confirm-provider";
-import { TipCallout } from "@/components/ui/tip";
 import { ChevronRight } from "lucide-react";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { useNow } from "@/components/public-site/match-centre/use-now";
@@ -48,12 +47,7 @@ import { seedingErrorMessage } from "@/lib/seeding-error";
 import { scoringErrorText } from "@/lib/scoring-vocab";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
-import {
-  DEFAULT_MATCH_MINUTES,
-  hasPlayedFixture,
-  isUnscheduledFixture,
-  type DivisionPhase,
-} from "@/lib/division-phase";
+import { DEFAULT_MATCH_MINUTES, isUnscheduledFixture } from "@/lib/division-phase";
 import { feedLabels, type FeedRow } from "@/lib/schedule-board";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { parseRoundRoleKey, type PointsRule } from "@seazn/engine/competition";
@@ -323,7 +317,7 @@ interface Props {
    *  qualifiers still in the field, which is an intersection, not a number —
    *  the same resolution `generateStageFixturesWrite` performs.
    *
-   *  Optional for the same reason `venues`/`rosterDrift`/`phase` are: a dozen
+   *  Optional for the same reason `venues`/`rosterDrift` are: a dozen
    *  pre-existing `stages-panel-*.test.tsx` files build props without it.
    *  ABSENT means "roster unknown" and renders NO legend — never a match count
    *  of zero dressed up as a fact. */
@@ -357,7 +351,7 @@ interface Props {
    *  organiser's own right here. Absent means `canEdit`, which is the safe direction for a caller that never heard of the freeze. */
   canSettle?: boolean;
   /** The division's sport. Every sport has the per-stage rules row since W2c Task 17 (which fields it shows is the
-   *  engine's `ruleKeys`, not a list of sports here). Optional for the same reason `venues`/`phase` are: a dozen
+   *  engine's `ruleKeys`, not a list of sports here). Optional for the same reason `venues` is: a dozen
    *  pre-existing `stages-panel-*.test.tsx` files build props without it, and an absent sport renders no row, which is
    *  the safe direction. */
   sportKey?: string;
@@ -416,11 +410,6 @@ interface Props {
   orgTz: string;
   /** Documents menu goes through the Jul3/06 / v12 exports (Pro `exports` gate). */
   canExport: boolean;
-  /** Competition Desk (2026-09-02): the division's derived phase
-   *  (`resolvePhase`, division-phase.ts). Optional — pre-existing
-   *  `stages-panel-*.test.tsx` files build props without it; an absent
-   *  phase hides the start-locks tip below, which is the safe direction. */
-  phase?: DivisionPhase;
   /** The division's resolved `schedule_settings.config.matchMinutes`
    *  (`page.tsx`, already falling back to `defaultMatchMinutes()`) — the
    *  grace in the run sheet's "Needs result" filter, which is
@@ -432,7 +421,7 @@ interface Props {
    *  never have it, and `ScheduleConfig` lives under `@/server` where a client
    *  component cannot import it.
    *
-   *  Optional for the same reason `venues`/`rosterDrift`/`phase` above are —
+   *  Optional for the same reason `venues`/`rosterDrift` above are —
    *  a dozen pre-existing `stages-panel-*.test.tsx` files build props without
    *  it. The fallback is `DEFAULT_MATCH_MINUTES`, the schema's own default
    *  pinned by `division-phase.test.ts`, never a number typed in here. */
@@ -441,7 +430,7 @@ interface Props {
   /** Spec 2026-09-30 §2 (T6) — each fixture with a stream session up, as a person reads it (`openStreamStates`, read by
    *  the division page for an organiser). Each run-sheet row shows a "● Live" / "● Waiting for phone" chip linking to
    *  its fixture page with `?stream=open` — the division's path to Stop; the panel itself lives on the fixture page.
-   *  Optional like `venues`/`phase`: the pre-existing `stages-panel-*.test.tsx` props build without it (no chips). */
+   *  Optional like `venues`: the pre-existing `stages-panel-*.test.tsx` props build without it (no chips). */
   streamStates?: Record<string, HoldState>;
   /** W2a fix round 1 (M10) — the recorded abandons awaiting their settle (ids; the division page's
    *  `listFixturesAwaitingSettle`), threaded to the run sheet so each row reads held. Optional: none by default. */
@@ -596,7 +585,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1067,20 +1056,6 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   return (
     <div className="space-y-6">
       {rulesStrip !== undefined && <DivisionRulesStrip {...rulesStrip} />}
-      {/* L1 (fix round H, Critical — instance ELEVEN): gated on PROGRESS, not
-          on the phase WORD, exactly as the pill (phase-pill.tsx: a red
-          attention outranks the phase) and the masthead (competition-desk.ts's
-          `nothingHasHappened`) already are. `setting_up` does not mean
-          "nothing has happened yet" — resolvePhase's RULE 4 returns it for a
-          division whose whole league is played and COMPLETE while a later
-          stage still owes its fixtures — so this told an organiser looking at
-          "1. League · Complete" and six Decided results to "Finish seeding and
-          structure first". `hasPlayedFixture` is division-phase.ts's own
-          predicate over the same PLAYED set the desk counts with, not a
-          fourth hand-copy of it. */}
-      {canEdit && phase === "setting_up" && !hasPlayedFixture(fixtures) && (
-        <TipCallout id="division.start-locks" />
-      )}
       {notice && (
         <p className="flex items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
           {notice}

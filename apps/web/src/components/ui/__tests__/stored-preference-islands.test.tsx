@@ -31,11 +31,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const TIP_KEY = "seazn.tip.division.start-locks";
+// Any registered tip: TipCallout is keyed by id. It was the division start-locks tip until UI5 item 1 removed that
+// banner (2026-11-03); the component itself is generic and keeps its contract.
+const TIP_ID = "division.visibility" as const;
+const TIP_KEY = `seazn.tip.${TIP_ID}`;
 
 describe("TipCallout", () => {
   const mount = () =>
-    renderIsland(TipCallout, { id: "division.start-locks" as const }, undefined, { hydrate: true });
+    renderIsland(TipCallout, { id: TIP_ID }, undefined, { hydrate: true });
   const dismiss = (island: ReturnType<typeof mount>) => {
     const x = island.tree().find((el) => el.type === "button");
     expect(x, "dismiss button").toBeDefined();
@@ -43,7 +46,7 @@ describe("TipCallout", () => {
   };
 
   it("server render shows nothing — a dismissed callout must never flash", () => {
-    expect(renderToStaticMarkup(<TipCallout id="division.start-locks" />)).toBe("");
+    expect(renderToStaticMarkup(<TipCallout id={TIP_ID} />)).toBe("");
   });
 
   it("first visit shows it after hydration; ✕ hides it and remembers", () => {

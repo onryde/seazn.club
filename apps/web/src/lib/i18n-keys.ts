@@ -8727,8 +8727,6 @@ export type DictionaryKey =
   | "tips.board.filter.body"
   | "tips.board.filter.title"
   | "tips.dismiss"
-  | "tips.division.start-locks.body"
-  | "tips.division.start-locks.title"
   | "tips.division.visibility.body"
   | "tips.division.visibility.title"
   | "tips.entrants.kinds.body"

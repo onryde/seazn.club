@@ -1647,8 +1647,6 @@
   "tips.learnMore": "Más información",
   "tips.division.visibility.title": "Quién puede ver una división",
   "tips.division.visibility.body": "Una división sigue a su competición: Privada es solo para el equipo, Solo enlace significa que cualquiera con el enlace puede verla, Pública aparece en los listados y en Google una vez publicada la competición.",
-  "tips.division.start-locks.title": "Iniciar bloquea la configuración",
-  "tips.division.start-locks.body": "Una vez que comienza la puntuación, los participantes y el formato quedan bloqueados para que los resultados sigan siendo justos. Termina primero la siembra y la estructura.",
   "tips.scoring.seq-conflict.title": "Alguien puntuó antes",
   "tips.scoring.seq-conflict.body": "Dos anotadores actualizaron el mismo partido a la vez. La app se actualizó al último marcador — vuelve a introducir tu punto si aún falta.",
   "tips.entrants.kinds.title": "Equipos, individuales y parejas",
