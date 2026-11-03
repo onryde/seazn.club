@@ -154,4 +154,11 @@ describe("T5 review m2 - the twin pays a played loser what the declared Swiss ru
   it("anti-vacuity: every shape ran", () => {
     expect(checked).toBe(SHAPES.length);
   });
+  // The guard the twin carries instead of paying such a board nothing: a decided two-sided board whose ledger folds to no outcome.
+  it("m2 guard: a two-sided board holding an outcome its ledger does not fold to is refused by name, not paid 0", async () => {
+    const { d, boards, post } = await paired("badminton");
+    await post(boards[1]!.id, { kind: "win", winner: "home" });
+    Object.assign(boards[0]!, { status: "decided", outcome: { kind: "win", winner: boards[0]!.home_entrant_id! } }); // an outcome with NO ledger behind it
+    await expect(d.generate()).rejects.toThrow(/holds an outcome \(win\) its ledger does not fold to/);
+  });
 });
