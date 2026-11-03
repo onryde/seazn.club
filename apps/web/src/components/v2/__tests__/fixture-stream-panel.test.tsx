@@ -77,7 +77,8 @@ import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "@/components/v2/refusal-f
 import { D3Warning, PhoneStripView, SignalChain } from "@/components/v2/stream-signal-chain";
 import QRCode from "qrcode";
 import { ExternalLink } from "lucide-react";
-import { SeaznQrImage, SeaznQrPlaceholder } from "@/components/v2/seazn-qr-image";
+import { PHONE_HANDOVER_QR_MAX_PX, SeaznQrImage, SeaznQrPlaceholder } from "@/components/v2/seazn-qr-image";
+import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { SEAZN_QR_ERROR_CORRECTION, SEAZN_QR_QUIET_MODULES, type SeaznQr } from "@/lib/seazn-qr";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { chainFor } from "@/lib/stream-chain";
@@ -1300,6 +1301,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     const cap = sheetQrCap();
     expect(cap).toBeGreaterThanOrEqual(320); // spec §7's floor on desktop
     expect(propsOf(qrEl!).maxSize, "the sheet's cap; the component snaps inside it").toBe(cap);
+    expect(propsOf(qrEl!).maxSize, "the shared phone-handover cap (Remote scoring's too)").toBe(PHONE_HANDOVER_QR_MAX_PX);
     const field = byTestId(tree, "stream-qr-text")!;
     expect(String(attr(field, "className")).split(/\s+/), "the paste code is ph-no-capture").toContain("ph-no-capture");
     // W3 (regression): the paste code is the QR's text — exactly the four keys, in order, never a credential.
@@ -1336,6 +1338,33 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(propsOf(strip!).id).toBe("stream-why-f-1");
     expect(propsOf(strip!).strip).toEqual({ tone: "slate", icon: "phone", lead: null, body: { key: "stream.phone.pairFirst" } });
     expect(chainOf(tree)?.chain?.phone).toEqual({ tone: "slate", word: "notConnected", mark: null });
+  });
+
+  it("owner 2026-11-03 ('increase the remote scoring QR like streaming'): the stream camera's QR and Remote scoring's are painted at ONE cap — the same maxSize on both panels", async () => {
+    // The stream side: the code card at Ready with no phone, as above.
+    const stream = qrImageOf(body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ phone: null }), code: { status: "ok", text: CODE_TEXT, image: SYMBOL } }), "stream-qr");
+    // The Remote scoring side: the REAL panel, its QR shown through its own ensure (POST) — the mount read finds a live link.
+    const link = { id: "l1", label: null, expires_at: null, created_at: "2026-11-03T09:00:00.000Z" };
+    apiV1.mockImplementation(async (url, o) => {
+      if (url !== "/api/v1/fixtures/f-1/device-links") throw new Error(`no double for ${o?.method ?? "GET"} ${url}`);
+      return o?.method === "POST" ? { ...link, secret: "dl_parity" } : link;
+    });
+    vi.stubGlobal("window", { location: { origin: "https://parity.example" } });
+    try {
+      const turns = async () => {
+        for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+      };
+      const island = renderIsland(DeviceLinkPanel, { fixtureId: "f-1", sportKey: "badminton", viewerPlan: "pro" as const, embedded: true });
+      await turns();
+      click(byTestId(island.tree(), "device-link-show"));
+      await turns();
+      const dlink = island.tree().find((el) => el.type === SeaznQrImage && propsOf(el).testId === "dlink-qr");
+      expect(stream, "the stream QR renders").toBeDefined();
+      expect(dlink, "the Remote scoring QR renders").toBeDefined();
+      expect(propsOf(dlink!).maxSize, "Remote scoring's cap IS the stream camera's").toBe(propsOf(stream!).maxSize);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("the code before the encoder answers: a placeholder the QR's size for THIS text, and the paste code ALREADY there; still asking: a module-less placeholder and no paste code; refused: the error with Retry", () => {

@@ -41,7 +41,8 @@ const LOGO = `data:image/png;base64,${publicFile(SEAZN_QR_LOGO_PATH).toString("b
 /** Spec §7's logo and the printed sheets' (`scorer-sheet-pdf.ts` reads the same file). */
 const SHEET_LOGO_PATH = "/logo-square.png";
 const THEMES_PATH = resolve(import.meta.dirname, "../../../../../docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md");
-const DLINK_PANEL_PATH = resolve(import.meta.dirname, "../../components/v2/device-link-panel.tsx");
+/** Where the phone-handover cap (the stream camera's QR and Remote scoring's, one value) is declared. */
+const HANDOVER_CAP_PATH = resolve(import.meta.dirname, "../../components/v2/seazn-qr-image.tsx");
 const CHECKIN_PATH = resolve(import.meta.dirname, "../../components/v2/checkin-qr.tsx");
 const SHEET_PDF_PATH = resolve(import.meta.dirname, "../../server/scorer-sheet-pdf.ts");
 /** The production origin (`lib/site-origin.ts`'s fallback): the LONGEST origin a real link carries today, so the
@@ -246,7 +247,9 @@ describe("renderSeaznQr's symbol (spec §7, D7)", () => {
       expect(m, `${name} is declared`).not.toBeNull();
       return Number(m![1]);
     };
-    const dlinkCap = declared(DLINK_PANEL_PATH, "DLINK_QR_MAX_PX");
+    // Remote scoring's cap is the phone-handover cap it shares with the stream camera (owner 2026-11-03) — §8a's.
+    const dlinkCap = declared(HANDOVER_CAP_PATH, "PHONE_HANDOVER_QR_MAX_PX");
+    expect(dlinkCap, "the shared phone-handover cap is §8a's stream cap").toBe(streamCap);
     const checkinCap = declared(CHECKIN_PATH, "CHECKIN_QR_MAX_PX");
     // D10's enlarged room at the e2e's two viewports, in the ruling's own words (the caption's room binds only on a
     // near-square screen).
@@ -258,6 +261,9 @@ describe("renderSeaznQr's symbol (spec §7, D7)", () => {
       cases.push({ name: "stream @ the cap (1280, 768)", text: STREAM_PAYLOAD, box: streamCap, dpr });
       cases.push({ name: "stream @ 320", text: STREAM_PAYLOAD, box: avail320, dpr });
       cases.push({ name: "Remote scoring @ its cap", text: DLINK, box: dlinkCap, dpr });
+      // At 320 the console's hand-over card leaves the QR 228 px — the same whole scale (57 modules × 4 at 1×, 8 at 2×,
+      // 12 at 3×) as the stream card's 238 available snaps to, so the stream's figure stands in for it.
+      cases.push({ name: "Remote scoring @ 320", text: DLINK, box: avail320, dpr });
       cases.push({ name: "check-in @ its cap", text: CHECKIN, box: checkinCap, dpr });
     }
     // 320 @ 125 % zoom: on a 1× desktop panel (DPR 1.25, the edge) and on a phone (a 320-CSS-px phone is 2×, so 2.5).
@@ -280,14 +286,14 @@ describe("renderSeaznQr's symbol (spec §7, D7)", () => {
       checked++;
     }
     expect(misses, "every painted size decodes exactly — no tolerance window").toEqual([]);
-    expect(checked).toBe(3 * 4 + 2 + 3 * enlarged.length);
+    expect(checked).toBe(3 * 5 + 2 + 3 * enlarged.length);
     expect(seen.size, "the rows are distinct sizes, not one size checked many times").toBeGreaterThan(15);
   });
 
   it("the check-in QR paints at ≥ 3 px per module for a REAL check-in link, and Remote scoring at ≥ 3 too (ruling I-1)", () => {
     const rows: [string, string, string, string][] = [
       ["check-in", CHECKIN, CHECKIN_PATH, "CHECKIN_QR_MAX_PX"],
-      ["Remote scoring", DLINK, DLINK_PANEL_PATH, "DLINK_QR_MAX_PX"],
+      ["Remote scoring", DLINK, HANDOVER_CAP_PATH, "PHONE_HANDOVER_QR_MAX_PX"],
     ];
     let checked = 0;
     for (const [name, text, path, constant] of rows) {

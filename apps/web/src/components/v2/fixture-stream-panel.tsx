@@ -36,7 +36,7 @@ import { ReplayCopyButton } from "./stream-replay-copy";
 import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "./refusal-focus";
 import { channelStatus, youtubeTargetLabel } from "./youtube-connect-panel";
 import { D3Warning, PhoneStripView, SignalChain } from "./stream-signal-chain";
-import { SeaznQrImage, SeaznQrPlaceholder } from "./seazn-qr-image";
+import { PHONE_HANDOVER_QR_MAX_PX, SeaznQrImage, SeaznQrPlaceholder } from "./seazn-qr-image";
 import { useProvidedPhoneSession, useSharedPhoneSession } from "./stream-session-provider";
 import { useTabReturn } from "./use-tab-return";
 import { ScoreLiveSummary, ScoreTiming, useStreamPrefs } from "./stream-score-settings";
@@ -633,13 +633,8 @@ export function FixtureStreamPanel({
 // §8a option A ("Stepper") and §8b option A ("Three tiles"), values from `_THEMES.md`. Three pieces, each tested where
 // it CAN be in a node harness: `PhoneTab` (the container — fetch, poll and every action), `PhoneTabBody` (pure: every
 // state is a function of its props). Destinations are managed on the Streaming page (T8, D1): the tab only PICKS one
-// (and saves it as the fixture's pre-pick, capture QR v2 §6.7.3), and links there.
-
-/** §8a's `QR size` cap (amended 2026-10-01, B6 fix round 1 ruling I-2): 363 CSS px. Capture QR v2 (§6.12, Option B rev
- *  2): the v2 payload is a 57-module symbol (v8 + the quiet zone), which `SeaznQrImage` snaps to 6 px per module — 342 px
- *  wherever the code card gives it room (768 and up), and 4 px per module (228) in a 320-px phone's card. The symbol's
- *  EC level, quiet zone and logo are `lib/seazn-qr`'s (§8a's `QR encoding` row). */
-const STREAM_QR_MAX_PX = 363;
+// (and saves it as the fixture's pre-pick, capture QR v2 §6.7.3), and links there. The code card's QR is painted at
+// `PHONE_HANDOVER_QR_MAX_PX` — §8a's `QR size` cap, shared with Remote scoring's QR (`seazn-qr-image.tsx`).
 
 /** The fixture's stream code as the body shows it (capture QR v2 §6.1): asked for, refused, or its paste text — the QR's
  *  own text, `captureQrV2Text` — with the image once the browser has encoded THAT text (never the previous code's). */
@@ -1973,10 +1968,10 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       <div className="mt-2">
         {p.code.status === "ok" ? (
           p.code.image ? (
-            <SeaznQrImage testId="stream-qr" sensitive qr={p.code.image} alt={msg("stream.phone.qr.alt")} maxSize={STREAM_QR_MAX_PX} />
+            <SeaznQrImage testId="stream-qr" sensitive qr={p.code.image} alt={msg("stream.phone.qr.alt")} maxSize={PHONE_HANDOVER_QR_MAX_PX} />
           ) : (
             // The QR's own square and caption line, so the card keeps its size when the symbol lands (review m-7).
-            <SeaznQrPlaceholder maxSize={STREAM_QR_MAX_PX} modules={seaznQrModules(p.code.text)} />
+            <SeaznQrPlaceholder maxSize={PHONE_HANDOVER_QR_MAX_PX} modules={seaznQrModules(p.code.text)} />
           )
         ) : p.code.status === "error" ? (
           <div data-testid="stream-code-error" role="alert" className="flex flex-wrap items-center gap-2 text-sm text-red-700">
@@ -1986,7 +1981,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
             </button>
           </div>
         ) : (
-          <SeaznQrPlaceholder maxSize={STREAM_QR_MAX_PX} modules={null} />
+          <SeaznQrPlaceholder maxSize={PHONE_HANDOVER_QR_MAX_PX} modules={null} />
         )}
       </div>
       {p.code.status === "ok" && (

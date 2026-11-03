@@ -15,6 +15,17 @@ import { enlargedQrSize, holdScreenWakeLock, snapQrSize } from "@/lib/qr-enlarge
 // A TYPE only: the encoder (`qrcode`) stays out of this component's bundle — the check-in QR loads it on the tap.
 import type { SeaznQr } from "@/lib/seazn-qr";
 
+/** The phone-handover QR's cap, CSS px: ONE value for the two QRs a phone scans to take a job over at a match — the
+ *  stream camera's (`fixture-stream-panel.tsx`, the Stream tab's code card) and Remote scoring's (`device-link-panel.tsx`,
+ *  the fixture console's hand-over and Match Day's scorer panel) — so the two can never drift (owner 2026-11-03: "increase
+ *  the size of remote scoring QR like streaming"). It is §8a's `QR size` cap (amended 2026-10-01, B6 fix round 1 ruling
+ *  I-2): 363. Both payloads are a 57-module symbol (v8 + the quiet zone) — capture QR v2's stream code (§6.12, Option B
+ *  rev 2) and today's 71-byte pad URL — which `SeaznQrImage` snaps to 6 px per module, 342 px, wherever the host gives it
+ *  room (768 and up), and to 4 px per module (228) in a 320-px phone's card. The symbol's EC level, quiet zone and logo
+ *  are `lib/seazn-qr`'s (§8a's `QR encoding` row). The painted size is the frame snapped to whole device px per module
+ *  (B6 fix round 1, ruling I-2). Check-in keeps its own cap (`checkin-qr.tsx`): its symbol is 89 modules. */
+export const PHONE_HANDOVER_QR_MAX_PX = 363;
+
 /** The replay-blocking class, applied to every element that paints a sensitive QR. */
 export const QR_NO_CAPTURE = "ph-no-capture";
 export const qrCaptureClass = (sensitive: boolean): string => (sensitive ? QR_NO_CAPTURE : "");
