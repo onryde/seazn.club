@@ -230,6 +230,10 @@ const WALKTHROUGH_SPECS: string[] = [
   // Call, Undo or new stream; the match scored and finalized on the pad; a
   // viewer with no Needs you.
   "frozen-competition.spec.ts",
+  // Match Day PB3 — the minors batch, tapped: the grey hint in the four other
+  // rich-text boxes, Settle on a frozen run sheet, the New competition form's
+  // "created private" note on a full public limit, and the frozen banner's names.
+  "match-day-pb3-minors.spec.ts",
 
   // Settings W2 — the organisation and news panels, the four people-facing
   // tabs (team, api, preferences, account), and the five-org support cap.
