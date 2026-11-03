@@ -4,6 +4,19 @@ import { TAG, activeOrg, apiJson, expectNoHorizontalScroll } from "../helpers";
 import { uiEn, fill } from "../match-room-kit";
 import { uiString, type W2Locale } from "../spectator-w2-kit";
 import { LOCALES } from "../../src/lib/i18n-constants";
+import {
+  CTA_MD,
+  LINK,
+  LINK_MD,
+  competitionsNamed,
+  ctaByApply,
+  escapeCloses,
+  expectPageKept,
+  expectPublicCta,
+  linkByEnter,
+  watchPage,
+  type PageWitness,
+} from "../prose-dialog-kit";
 
 /**
  * Match Day C8 — an organiser makes a competition through the New competition
@@ -34,6 +47,14 @@ import { LOCALES } from "../../src/lib/i18n-constants";
  * page via "Later", then opens the public page the organiser would share and
  * reads the typed sentence AND the bold run off it: markdown went in as
  * markdown and came out as markup.
+ *
+ * ## The editor's prompts (task PEF)
+ *
+ * The editor sits inside this form, and its Link and Button prompts are forms of their own. One test per width drives
+ * Link (Enter), Button (Apply) and Escape and holds the page to what was typed: same URL and document, the fields
+ * still filled, no competition created — then Creates, so each "nothing happened" read has a positive twin
+ * (e2e/prose-dialog-kit.ts says why), and opens the public page, where the Button's work must be the branded sponsor
+ * button (PEF round 2: the editor used to write a shape the public page drew as a plain bold link).
  *
  * ## Widths
  *
@@ -431,6 +452,81 @@ for (const width of WIDTHS) {
         if (createdId) {
           const res = await apiJson(page.request, `/api/v1/competitions/${createdId}`, "PATCH", { visibility: "private" });
           expect(res.status, "cleanup: take the showcased competition private").toBeLessThan(300);
+        }
+      }
+    });
+
+    test("the editor's Link (Enter) and Button (Apply) prompts work inside the form, and leave it as typed (task PEF)", async ({
+      page,
+    }) => {
+      // 3 navigations (org home, form, public page) and ~50 taps, types and reads (the prompts' URLs are typed key by key).
+      test.setTimeout(budget(3, 50));
+      const org = await activeOrg(page);
+      const name = `C8 Prompts ${width} ${TAG}`;
+      const ends = "2030-12-31";
+      let createdId: string | null = null;
+      let witness: PageWitness | null = null;
+      try {
+        const form = await openBlankForm(page, org.slug);
+        const nameInput = form.getByPlaceholder(uiEn["comp.wizard.name.placeholder"]!);
+        const endsInput = form.getByLabel(new RegExp(`^${uiEn["comp.wizard.endsOn"]}`));
+        await nameInput.fill(name);
+        await endsInput.fill(ends);
+        // Unlisted: one more field the prompts must leave as set, a draft that never counts against the public cap, and
+        // one whose public page opens by its link — where the sponsor button is read at the end.
+        await tapVisibility(form, "unlisted");
+        const editor = form.getByRole("textbox", { name: uiEn["editor.description"]!, exact: true });
+        await editor.click();
+        const opening = "Doors open at nine. ";
+        await page.keyboard.type(`${opening}${LINK.text}`);
+        await expect(editor).toContainText(`${opening}${LINK.text}`);
+        // The baseline every "nothing was created" read below is held to: no competition by this name yet.
+        expect(await competitionsNamed(org.id, name), "baseline: no competition by this name").toBe(0);
+        witness = await watchPage(page);
+        const start = page.url();
+
+        // Link, applied with Enter in its field; then the Button, applied with Apply; then Escape on a third prompt.
+        // The sequence matters: each prompt opens on a page the one before it left.
+        await linkByEnter(page, form, editor);
+        await expectPageKept(page, witness, start, "Link + Enter");
+        await ctaByApply(page, form, editor);
+        await expectPageKept(page, witness, start, "Button + Apply");
+        await escapeCloses(page, form, editor);
+        await expectPageKept(page, witness, start, "Link + Escape");
+
+        // The form is as it was typed...
+        await expect(nameInput, "the typed name is still there").toHaveValue(name);
+        await expect(endsInput, "the typed end date is still there").toHaveValue(ends);
+        await expect(form.getByRole("radio", { name: uiEn["visibility.unlisted.label"]!, exact: true })).toBeChecked();
+        await expect(editor).toContainText(opening.trim());
+        // ...and the form did not act: nothing reached the competitions API, and the database has no such competition.
+        expect(witness.writes, "no prompt submitted the New competition form").toEqual([]);
+        expect(await competitionsNamed(org.id, name), "no competition was created by a prompt").toBe(0);
+
+        // The positive half of each read above, so neither is vacuous: Create, and the same watcher sees the POST,
+        // the same query sees the row, and the wire carries both prompts' work as the editor's value — the button in
+        // its canonical shape — and the public page draws it as the branded button.
+        const isCreate = (r: { method(): string; url(): string }) =>
+          r.method() === "POST" && /\/api\/v1\/competitions$/.test(new URL(r.url()).pathname);
+        const posted = page.waitForRequest(isCreate);
+        const made = page.waitForResponse((r) => isCreate(r.request()));
+        await form.getByRole("button", { name: uiEn["comp.wizard.create"]!, exact: true }).click();
+        const body = (await posted).postDataJSON() as Record<string, unknown>;
+        const created = ((await (await made).json()) as { data: { id: string; slug: string } }).data;
+        createdId = created.id;
+        expect(witness.writes, "the watcher does see a POST when the form sends one").toEqual(["POST /api/v1/competitions"]);
+        expect(await competitionsNamed(org.id, name), "the same read does see the competition Create made").toBe(1);
+        witness.stop();
+        // The shape the editor wrote first (the editor's half), then what a visitor sees (the renderer's half): a
+        // regression on either side is named by its own assertion.
+        expect(String(body.description), "the link is in the editor's value").toContain(LINK_MD);
+        expect(String(body.description), "the sponsor button is in the editor's value, in its canonical shape").toContain(CTA_MD);
+        await expectPublicCta(page, org.slug, created.slug);
+      } finally {
+        witness?.stop();
+        if (createdId) {
+          const res = await apiJson(page.request, `/api/v1/competitions/${createdId}`, "DELETE");
+          expect(res.status, "cleanup: delete the unlisted draft").toBeLessThan(300);
         }
       }
     });
