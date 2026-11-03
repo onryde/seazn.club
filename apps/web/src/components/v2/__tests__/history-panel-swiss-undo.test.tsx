@@ -130,7 +130,7 @@ describe("HistoryPanel — the Swiss barrier events are named in the reader's la
 
 describe("HistoryPanel — a Swiss refusal of Undo, Redo or Restore is said in the reader's language", () => {
   /** Press `control` and have the server refuse with `code`, carrying a server sentence unlike the dictionary's. */
-  async function refuse(control: "history-undo" | "history-redo" | "checkpoint-restore", code: string) {
+  async function refuse(control: "history-undo" | "history-redo" | "checkpoint-restore", code: string, extra?: Record<string, unknown>) {
     const ctx = await mount([
       { seq: 1, type: "fixtures_generated", undoable: true, undone: false, created_at: "2026-10-31T10:00:00.000Z" },
     ]);
@@ -139,7 +139,7 @@ describe("HistoryPanel — a Swiss refusal of Undo, Redo or Restore is said in t
       // The status the server answers with for a table code (the table's own), never one typed in for all of them; a
       // code outside the table (the look-alike case below) has no row, so it answers a plain 409.
       const status = Object.hasOwn(SWISS_REFUSALS, code) ? SWISS_REFUSALS[code as SwissRefusalCode].status : 409;
-      if (/\/(undo|redo|restore)$/.test(path)) throw new ApiV1Error(SERVER, status, code);
+      if (/\/(undo|redo|restore)$/.test(path)) throw new ApiV1Error(SERVER, status, code, extra);
       return path.endsWith("/history") ? { watermark: null, seq: 2, events: [] } : CHECKPOINTS;
     });
     const button = ctx.byTestid(control)[0];
@@ -169,6 +169,29 @@ describe("HistoryPanel — a Swiss refusal of Undo, Redo or Restore is said in t
     expect(redo.shown).toBe(EN["swiss.refusal.SWISS_LATE_ENTRY_NOT_UNDOABLE"]);
     const restore = await refuse("checkpoint-restore", "SWISS_LATE_ENTRY_NOT_UNDOABLE");
     expect(restore.shown).toBe(EN["swiss.refusal.SWISS_LATE_ENTRY_NOT_UNDOABLE"]);
+  });
+
+  it("SWISS_NO_LEGAL_PAIRING says the reason and the recovery its body carries, as every other door does; without a readable body, the generic sentence (review m10)", async () => {
+    // The panel's Swiss branch used the generic key alone, which drops the round and the reason a refusal's body carries; the
+    // three step doors now say them through `swissRefusalText`, as Pair next's own desk does.
+    const wire = { round: 4, reason: "rematch", field: 6, finishAfter: 3, canFinish: true };
+    const fill = (s: string, vars: Record<string, unknown>) => s.replace(/\{(\w+)\}/g, (_m, k: string) => String(vars[k]));
+    const lead = fill(EN["swiss.refusal.SWISS_NO_LEGAL_PAIRING.rematch"]!, wire);
+    const tail = fill(EN["swiss.refusal.SWISS_NO_LEGAL_PAIRING.tail.finish"]!, wire);
+    let checked = 0;
+    for (const control of ["history-undo", "history-redo", "checkpoint-restore"] as const) {
+      const { shown } = await refuse(control, "SWISS_NO_LEGAL_PAIRING", wire);
+      expect(shown, `${control}: the reason's sentence and the Finish recovery`).toBe(`${lead} ${tail}`);
+      expect(shown, `${control}: not the generic sentence`).not.toBe(EN["swiss.refusal.SWISS_NO_LEGAL_PAIRING"]);
+      checked++;
+    }
+    // canFinish false: the reason alone, no recovery promised.
+    const over = await refuse("history-undo", "SWISS_NO_LEGAL_PAIRING", { ...wire, canFinish: false });
+    expect(over.shown, "Finish is not offered").toBe(lead);
+    // No details (a stale server): the generic sentence, never a notice with a guessed round.
+    const bare = await refuse("history-undo", "SWISS_NO_LEGAL_PAIRING");
+    expect(bare.shown).toBe(EN["swiss.refusal.SWISS_NO_LEGAL_PAIRING"]);
+    expect(checked, "anti-vacuity: the three step doors").toBe(3);
   });
 
   it("a code that only LOOKS Swiss still surfaces the server's own message", async () => {
