@@ -19,7 +19,7 @@ import {
   Bold, Eye, Heading2, Heading3, ImagePlus, Italic, Link2, List,
   ListOrdered, Megaphone, Minus, Pencil, Quote,
 } from "lucide-react";
-import { renderProse, DESCRIPTION_MAX } from "@/lib/prose";
+import { canonicalCtaMarkdown, renderProse, DESCRIPTION_MAX } from "@/lib/prose";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { useMsg } from "@/components/i18n/dict-provider";
 
@@ -255,7 +255,9 @@ export function ProseEditor({
       const md = (
         e.storage as unknown as { markdown: { getMarkdown(): string } }
       ).markdown.getMarkdown();
-      onChange(md.slice(0, DESCRIPTION_MAX));
+      // The Button tool's mark order serialises `[**Label**](url)`; store the shape lib/prose documents,
+      // `**[Label](url)**` (same length, same render — PEF round 2).
+      onChange(canonicalCtaMarkdown(md).slice(0, DESCRIPTION_MAX));
     },
   });
 

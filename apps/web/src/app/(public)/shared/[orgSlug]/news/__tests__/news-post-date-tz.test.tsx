@@ -70,7 +70,6 @@ vi.mock("@/server/news/public-view", () => ({
   resolvePostSides: async () => null,
   relatedCompetition: async () => null,
 }));
-vi.mock("@/server/help-content", () => ({ renderHelpMarkdown: async () => "" }));
 
 import PostPage from "../[postSlug]/page";
 
