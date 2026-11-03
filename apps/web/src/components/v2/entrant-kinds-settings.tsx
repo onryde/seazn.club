@@ -49,8 +49,8 @@ export function EntrantKindsSettings({
   entrantModel: EffectiveEntrantModel;
   /** False for a billing-frozen club: the block shows, read-only. A viewer never gets the block at all (the page). */
   canEdit: boolean;
-  /** Whether the block opens unfolded. The page passes `true` for a division with no entrants (Match Day E1 item 7); otherwise it
-   *  opens folded under one row naming the kinds. */
+  /** Whether the block opens unfolded. Default folded, under one row naming the kinds - and the division page always leaves it
+   *  so (UI5 item 2, owner 2026-11-03: closed by default, an empty division included). */
   defaultOpen?: boolean;
 }) {
   const msg = useMsg();

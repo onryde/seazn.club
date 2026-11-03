@@ -34,8 +34,9 @@ import { uiEn, fill } from "../match-room-kit";
  *      card (SCF: the card does not grow; Escape and a tap elsewhere close them) and the "paired by the system" sentence read off the
  *      legend line, the second round, Complete enabled only when every match is played, the card folding to its one line - and then
  *      the competition page: the finished division is hidden, the Show finished switch brings it back and puts it away again.
- *   4. The Entrants tab: the entrant kinds block above the roster - open on an empty division, folded under one row once there is an
- *      entrant, Save lands in the stored config and survives a reload, Reset drops it and the chips follow the sport default.
+ *   4. The Entrants tab: the entrant kinds block above the roster - closed on an empty division (UI5 item 2) and folded under one
+ *      row once there is an entrant, Save lands in the stored config and survives a reload, Reset drops it and the chips follow the
+ *      sport default.
  *
  * Every string asserted is read from the dictionary (`uiEn` / `fill`), every count from the database, and the card's action order from
  * the rail's own source (the order it renders them in is a declaration; the test does not retype it). Budgets are derived from the
@@ -444,7 +445,7 @@ test.describe("The stage card, walked", () => {
     await expect(switchEl).toHaveAttribute("aria-checked", "false");
   });
 
-  test("the Entrants tab: the kinds block sits above the roster, opens on an empty division, folds once there is an entrant, Save and Reset", async ({ page, request }) => {
+  test("the Entrants tab: the kinds block sits above the roster, starts closed on an empty division and with an entrant, Save and Reset", async ({ page, request }) => {
     test.setTimeout(budget(5, 25));
     const seed = await seedDivision(request, "Kinds", { entrants: [], start: false });
     const { divisionId } = seed;
@@ -460,10 +461,14 @@ test.describe("The stage card, walked", () => {
     await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: NAV_MS });
     await expect(toggle, "no entrant kinds group in Settings").toHaveCount(0);
 
-    // The Entrants tab, empty: open by default, above the roster's add form.
+    // The Entrants tab, empty: closed by default (UI5 item 2, owner 2026-11-03 - Match Day E1 item 7 had opened it here), above
+    // the roster's add form. A tap opens it.
     await page.goto(`${base}?tab=entrants`, { waitUntil: "load" });
     await expect(toggle).toBeVisible({ timeout: NAV_MS });
-    await expect(toggle, "an empty division opens the kinds block").toHaveAttribute("aria-expanded", "true");
+    await expect(toggle, "an empty division starts with the kinds block closed").toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByTestId("entrant-kinds"), "folded: no body").toHaveCount(0);
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await expect(page.getByTestId("entrant-kinds")).toBeVisible();
     const header = await toggle.boundingBox();
     const addForm = await page.getByRole("heading", { name: uiEn["entrants.add.title"]! }).boundingBox();
@@ -477,11 +482,11 @@ test.describe("The stage card, walked", () => {
     expect(kindChips, "anti-vacuity: every kind is offered").toBe(KINDS.length);
     await expectNoHorizontalScroll(page);
 
-    // One entrant in: the block folds under its one row.
+    // One entrant in: still folded under its one row.
     const first = await addEntrantsViaApi(request, divisionId, [`Kinds Probe ${TAG}`]);
     expect(first.status).toBeLessThan(300);
     await page.reload({ waitUntil: "load" });
-    await expect(toggle, "a division with an entrant folds the block").toHaveAttribute("aria-expanded", "false");
+    await expect(toggle, "a division with an entrant starts with the block closed").toHaveAttribute("aria-expanded", "false");
     await expect(page.getByTestId("entrant-kinds"), "folded: no body").toHaveCount(0);
 
     // Open, tick the opposite of Pair, Save.

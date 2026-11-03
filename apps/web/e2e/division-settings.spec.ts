@@ -887,18 +887,24 @@ test("entrant kinds: on the Entrants tab above the roster, not in Settings; Save
   await expect(page.locator("[data-kind]"), "no kind chip in Settings").toHaveCount(0);
   await expect(page.getByRole("button", { name: /^Format/ }), "Format stays in Settings").toBeVisible();
 
-  // Entrants tab: the group is there and sits ABOVE the roster's add form. Match Day E1 item 7: this rig has NO entrants yet, so it
-  // opens by default (the organiser is about to add the first one and this decides what the form offers) - and with a roster it is
-  // folded under its one summary row. Both directions, in the browser: add one entrant, reload, and it folds.
+  // Entrants tab: the group is there and sits ABOVE the roster's add form. UI5 item 2 (owner, 2026-11-03): it starts CLOSED, always -
+  // this rig has NO entrants yet, the case Match Day E1 item 7 used to open, and it is folded under its one summary row. Both
+  // directions, in the browser: empty and folded, then add one entrant, reload, and it is still folded.
   await page.goto(`${base}?tab=entrants`);
   await expect(toggle).toBeVisible({ timeout: 20_000 });
-  await expect(toggle, "an empty division opens the kinds block by default").toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByTestId("entrant-kinds"), "its body is drawn").toBeVisible();
+  await expect(toggle, "an empty division starts with the kinds block closed").toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("entrant-kinds"), "folded: no body").toHaveCount(0);
   const header = await toggle.boundingBox();
   const addForm = await page.getByRole("heading", { name: "Add entrant" }).boundingBox();
   expect(header, "the group header is laid out").not.toBeNull();
   expect(addForm, "the add-entrant form is laid out").not.toBeNull();
   expect(header!.y, "the entrant kinds sit above the roster").toBeLessThan(addForm!.y);
+  // Opened by a tap, the body is drawn; closed by a tap, it folds again.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("entrant-kinds"), "opened: its body is drawn").toBeVisible();
+  await toggle.click();
+  await expect(page.getByTestId("entrant-kinds"), "closed again: no body").toHaveCount(0);
   const first = await addEntrantsViaApi(request, rig.divisionId, ["Kinds Probe"]);
   expect(first.status, "adding the first entrant").toBeLessThan(300);
   await page.goto(`${base}?tab=entrants`);
