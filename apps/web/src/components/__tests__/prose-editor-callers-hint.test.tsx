@@ -18,6 +18,7 @@
 // Markdown is proven in a browser by e2e/walkthrough/match-day-pb3-minors.spec.ts.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { ProseEditor } from "@/components/prose-editor";
@@ -96,14 +97,16 @@ describe("every ProseEditor call site draws its hint", () => {
 
 // ── layer 2: the real components, driven ─────────────────────────────────────
 
-const editorOf = (island: { tree: () => import("react").ReactElement[] }) => {
+type Mounted = { tree: () => ReactElement[] };
+
+const editorOf = (island: Mounted) => {
   const editors = island.tree().filter((el) => el.type === ProseEditor);
   expect(editors).toHaveLength(1);
   return propsOf(editors[0]!);
 };
 
 describe("the four editors that never drew a hint now do", () => {
-  const cases: [string, () => ReturnType<typeof renderIsland>, string][] = [
+  const cases: [string, () => Mounted, string][] = [
     [
       "org About",
       () => renderIsland(OrgAbout, { orgId: "o1", initialValue: null, branding: {} }),

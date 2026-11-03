@@ -36,6 +36,11 @@ export type RowActionInput = {
    *  an input and does not derive it itself. */
   hasOfficials: boolean;
   canEdit: boolean;
+  /** Match Day PB3 (m7): may this viewer SETTLE a held match? The organiser's right to settle, WITHOUT the billing freeze that
+   *  `canEdit` folds in. A frozen competition is read-only for the timetable (`moveFixture` refuses it), but scoring and settling
+   *  stay allowed (a settle is a score event, and `scoring.ts` is not freeze-gated), so the held row's Settle must not read
+   *  `canEdit`. Optional, and absent means `canEdit`: a producer that never heard of the freeze keeps its behaviour. */
+  canSettle?: boolean;
   /** The VENUE zone (`scheduleSettings.tz`), for both bucketing and printing.
    *  Never the org zone: one zone per fixture (_RULES.md). */
   tz: string;
@@ -131,6 +136,7 @@ export function canEditFixtureTime(input: {
 
 export function fixtureRowAction(input: RowActionInput): RowAction {
   const { status, scheduledAt, hasOfficials, canEdit, tz, nowMs, awaitingDraw, awaitsSettle } = input;
+  const canSettle = input.canSettle ?? canEdit;
 
   // 1. Live beats everything. A match in play is the one thing an organiser
   //    standing at the venue is looking for, whatever its time says.
@@ -138,11 +144,11 @@ export function fixtureRowAction(input: RowActionInput): RowAction {
 
   // 1b. W2a (finding 25): HELD — a bracket match that ended level is owed the organiser's settle, and nothing else
   //     moves until it gets one. Neither a result (nobody advanced) nor open scoring (the match is over). The settle
-  //     is organiser-only on the server, so a viewer who cannot edit only views it. Fix round 1 (M10): a recorded
+  //     is organiser-only on the server, so a viewer who cannot settle only views it. Fix round 1 (M10): a recorded
   //     abandon awaiting its settle is held the same way — before rule 2, where its stored `abandoned` would read as a
   //     result. X-AB-5: so is a TABLE stage's (a Swiss board holds the next round); the caller's `awaitsSettle` is the
   //     engine's stage-aware settle offer, so this rule never reads a stage kind.
-  if (status === "needs_decision" || awaitsSettle) return canEdit ? { kind: "decide" } : { kind: "view" };
+  if (status === "needs_decision" || awaitsSettle) return canSettle ? { kind: "decide" } : { kind: "view" };
 
   // 2. Settled. Checked before the scheduling rules below so a cancelled match
   //    never invites an organiser to score a match that will not be played —

@@ -259,6 +259,41 @@ describe("a held fixture (needs_decision) reads Needs a decision and offers Sett
     expect(rowAction(html)).toBe("view");
   });
 
+  // Match Day PB3 (m7): a billing-FROZEN competition arrives here with `canEdit` false (the page folds the freeze in) but with the
+  // organiser's `canSettle` true - scoring and settling are not freeze-gated, and the fixture page already offers the settle.
+  it("PB3 m7: a frozen competition (canEdit false, canSettle true) still offers Settle on the held row", () => {
+    const html = renderToStaticMarkup(
+      <RunSheetRow fixture={HELD} href="/f/1" tz={TZ} orgTz={TZ} nowMs={NOW_MS} canEdit={false} canSettle entrantNames={ENTRANTS} />,
+    );
+    expectRowRendered(html);
+    expect(html).toContain('data-testid="run-sheet-held-chip"');
+    expect(rowAction(html)).toBe("decide");
+    expect(html).toContain(">Settle<");
+  });
+
+  it("PB3 m7: ...and nothing else is loosened - the same frozen row's time stays a plain label, its unscheduled twin stays a view", () => {
+    const timed = renderToStaticMarkup(
+      <RunSheetRow fixture={fx()} href="/f/1" tz={TZ} orgTz={TZ} nowMs={NOW_MS} canEdit={false} canSettle entrantNames={ENTRANTS} />,
+    );
+    expectRowRendered(timed);
+    expect(timed, "the time cell is not an editor on a frozen competition").not.toContain('data-testid="run-sheet-edit-time"');
+    const unscheduled = renderToStaticMarkup(
+      <RunSheetRow fixture={fx({ scheduled_at: null })} href="/f/1" tz={TZ} orgTz={TZ} nowMs={NOW_MS} canEdit={false} canSettle entrantNames={ENTRANTS} />,
+    );
+    expectRowRendered(unscheduled);
+    expect(rowAction(unscheduled)).toBe("view");
+    // The positive pair: the editable row gets both (the time cell IS an editor, and the unscheduled row offers the time).
+    expect(
+      renderToStaticMarkup(
+        <RunSheetRow fixture={fx()} href="/f/1" tz={TZ} orgTz={TZ} nowMs={NOW_MS} canEdit canSettle entrantNames={ENTRANTS} />,
+      ),
+    ).toContain('data-testid="run-sheet-edit-time"');
+    const editable = renderToStaticMarkup(
+      <RunSheetRow fixture={fx({ scheduled_at: null })} href="/f/1" tz={TZ} orgTz={TZ} nowMs={NOW_MS} canEdit canSettle entrantNames={ENTRANTS} />,
+    );
+    expect(rowAction(editable)).toBe("set_time");
+  });
+
   it("M10 (fix round 1): a recorded abandon awaiting its settle — stored `abandoned` — is held too: chip and Settle", () => {
     const abandoned = fx({ status: "abandoned", outcome: null });
     const held = rowHtml(abandoned, true, undefined, true);
