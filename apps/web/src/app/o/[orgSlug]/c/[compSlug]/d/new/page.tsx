@@ -7,6 +7,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { pointsLineDict, rulesLineDict } from "@/lib/rules-line";
 import { onlineChessOffered } from "@/server/usecases/external-play";
+import { competitionCameraPolicy } from "@/server/external-play/camera-policy";
 import { templateLocksFor } from "@/server/usecases/format-gates";
 import { requireCompetitionPage } from "@/server/page-auth";
 import { routes } from "@/lib/routes";
@@ -56,6 +57,9 @@ export default async function NewDivisionPage({
     hasFeature(auth.orgId, "standings.carry_over"),
     onlineChessOffered(auth),
   ]);
+  // m6 (C9 fix round 1): the competition's camera policy, named under the builder's camera select - read only where the
+  // select is offered (online chess), as the division page reads it only for a chess division.
+  const inheritedCameraPolicy = onlineChess ? await competitionCameraPolicy(id) : "off";
   const locale = await resolveLocale();
   const [uiDict, publicDict] = await Promise.all([getDictionary(locale, "ui"), getDictionary(locale, "public")]);
   // Template → the feature it needs and this organisation lacks (format-gates.ts templateLocksFor: each template's own
@@ -106,6 +110,7 @@ export default async function NewDivisionPage({
           archivedSlotsExplainRefusal={explainArchivedSlots}
           viewerPlan={viewerPlan}
           onlineChessOffered={onlineChess}
+          inheritedCameraPolicy={inheritedCameraPolicy}
           ruleDict={rulesLineDict(publicDict)}
           pointsDict={pointsLineDict(publicDict)}
           templateLocks={templateLocks}

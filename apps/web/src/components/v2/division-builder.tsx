@@ -15,9 +15,12 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { buildRuleOverride } from "./rules/match-format-editor";
-import { divisionPointsDirty, divisionPointsOf, divisionPointsPatch } from "./rules/points-editor";
-import { divisionOrderRefusals } from "./rules/tiebreaks-editor";
+import { divisionPointsDirty, divisionPointsOf, divisionPointsPatch, stagePointsHeadline } from "./rules/points-editor";
+import { divisionOrderRefusals, divisionSportOrder, foldedSummary } from "./rules/tiebreaks-editor";
+import { unitLabelKey } from "@/lib/stage-card/summaries";
 import { DivisionRulesStrip } from "./rules/division-rules-strip";
+import { CAMERA_INHERIT, cameraSelectOptions, cameraSummary, type CameraChoice } from "./division-settings";
+import type { CameraPolicy } from "@/lib/camera-policy";
 import { stageTakesPoints } from "./stage-rules/stage-points-model";
 import { divisionSummaryClauses } from "./stage-rules/stage-row-model";
 import { moduleFor } from "@/lib/rule-scope";
@@ -42,7 +45,7 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { doubleElimFormatReason } from "@/lib/feature-copy";
 import { venueNoun, venueLabel, pluralizeVenue } from "@/lib/venue";
-import { defaultMatchMinutes } from "@/lib/match-length";
+import { defaultMatchMinutes, timeControlMatchMinutes } from "@/lib/match-length";
 import { pickVariant } from "@/lib/preferred-variant";
 import { FormatExplainerPanel } from "@/components/v2/format-explainer-panel";
 import { LegsChoice } from "@/components/v2/legs-choice";
@@ -267,6 +270,7 @@ export function DivisionBuilder({
   archivedSlotsExplainRefusal = false,
   viewerPlan,
   onlineChessOffered = false,
+  inheritedCameraPolicy = "off",
   ruleDict,
   pointsDict,
   templateLocks = {},
@@ -290,6 +294,9 @@ export function DivisionBuilder({
   viewerPlan: ViewerPlan;
   /** Online chess is offered to this club (T20): Division rules shows the online play select for chess. */
   onlineChessOffered?: boolean;
+  /** The competition's camera policy (`competitionCameraPolicy`): what a division that sets none plays, named under the
+   *  camera select. The column is NOT NULL, default "off". */
+  inheritedCameraPolicy?: CameraPolicy;
   /** The public dictionary's `format.*` / `format.points.*` slices, for the rules' words (the strip and the receipt). */
   ruleDict?: Dict;
   pointsDict?: Dict;
@@ -347,13 +354,16 @@ export function DivisionBuilder({
   const [variantKey, setVariantKey] = useState(sport ? pickVariant(sport.key, sport.variants) : "");
   const [ruleValues, setRuleValues] = useState<Record<string, string>>({});
   const [onlinePlay, setOnlinePlay] = useState<"off" | "lichess">("off");
+  // m6 (C9 fix round 1): the server's default - absent ⇒ NULL ⇒ the competition's policy (CreateDivision.camera_policy).
+  const [cameraChoice, setCameraChoice] = useState<CameraChoice>(CAMERA_INHERIT);
   const [pointsValues, setPointsValues] = useState<Record<string, string> | null>(null);
   const [tiebreakOrder, setTiebreakOrder] = useState<TiebreakerKey[] | null>(null);
   // The schedule seed (optional; also editable later on the schedule board). Real court ids picked from the org's own
   // court list (P9 scope item 5) — no fabricated default.
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [courts, setCourts] = useState<string[]>([]);
-  const [matchMinutes, setMatchMinutes] = useState(() =>
+  // The sport's (or variant's) default until the organiser types one; an online division's control overrides it below.
+  const [sportMatchMinutes, setMatchMinutes] = useState(() =>
     defaultMatchMinutes(sports[0]?.key, sports[0] ? pickVariant(sports[0].key, sports[0].variants) : ""),
   );
   // Once the organiser edits the length, stop auto-filling it from the sport.
@@ -396,6 +406,7 @@ export function DivisionBuilder({
     setPointsValues(null);
     setTiebreakOrder(null);
     setOnlinePlay("off");
+    setCameraChoice(CAMERA_INHERIT);
     // A kind the organiser never picked follows the sport; a picked one is kept where the new sport allows it.
     setEntrantKind(next?.entrants && entrantKind !== null ? entrantKindAfterSportChange(entrantKind, entrantKindTouched, next.entrants) : (next?.entrants?.defaultKind ?? null));
     // Chess is offered no americano/mexicano (templatesForSport): a pick the new sport is not offered falls back to
@@ -477,6 +488,9 @@ export function DivisionBuilder({
   const onlineShown = onlinePlayShown(sportKey, onlineChessOffered);
   const lichess = onlineShown && onlinePlay === "lichess";
   const timeControlKey = lichess ? selectedTimeControlKey(ruleValues, builderCfg) : "";
+  // m8 (C9 fix round 1): an online division plays its Lichess control, so its slot is that control's length (both clocks
+  // spent) - until the organiser types a length, which always stands. The seed, the estimates and Review all read this.
+  const matchMinutes = (!matchMinutesTouched ? timeControlMatchMinutes(timeControlKey) : undefined) ?? sportMatchMinutes;
   const venue = venueNoun(sportKey); // "pitch" / "table" / "court" / "board" / "rink"
   const VenueCap = venueLabel(sportKey);
   const offered = templatesForSport(sportKey);
@@ -505,7 +519,7 @@ export function DivisionBuilder({
   }
   const hoursText = (minutes: number) =>
     new Intl.NumberFormat(locale, { style: "unit", unit: "hour", unitDisplay: "short", maximumFractionDigits: 1 }).format(Math.round((minutes / 60) * 10) / 10);
-  const placesText = (n: number) => msgPlural(`matchDay.header.places.${venue}` as "matchDay.header.places.court", n, { count: n });
+  const placesText = (n: number) => msgPlural(`divBuilder.places.${venue}` as "divBuilder.places.court", n, { count: n });
 
   // --- Validation: each step's first problem, said in the reader's words. ---
   function stepProblem(s: BuilderStep): string | null {
@@ -653,6 +667,8 @@ export function DivisionBuilder({
             config,
             // The division's own tie-break order (`divisions.tiebreakers`). Absent while untouched: the sport's.
             ...(sentOrder === null ? {} : { tiebreakers: sentOrder }),
+            // m6: only an online division, and only a picked policy - untouched, the server's default (inherit) stands.
+            ...(lichess && cameraChoice !== CAMERA_INHERIT ? { camera_policy: cameraChoice } : {}),
             ...eligibilityPatch({ maxAge, cutoffMonth, cutoffDay, category, customNote }),
           },
         });
@@ -717,6 +733,26 @@ export function DivisionBuilder({
     ruleDict === undefined || sportModule === null ? [] : divisionSummaryClauses(sportKey, sportModule, builderCfg).map((c) => rulesChipText(ruleDict, c));
   const timeControlLabel = timeControlKey === "" ? undefined : timeControlOptions(msg).find((o) => o.key === timeControlKey)?.label;
   const variant = sport?.variants.find((v) => v.key === variantKey);
+  // m7 (C9 fix round 1): the Points and Tie-breaks rows say what the division will play, as the receipt (mock A7) does:
+  // the stage card's one phrase for the points ("Win 2 · Loss 0") and the tie-break panel's folded order, each marked the
+  // sport's or the organiser's. Read for the first table kind, as the Points and Tie-breaks panels read it.
+  const ownPoints = pointsValues !== null && divisionPointsDirty(sportKey, builderPoints, pointsValues);
+  const pointsHeadline =
+    sportModule === null || draftTableKinds.length === 0
+      ? null
+      : stagePointsHeadline(
+          {
+            module: sportModule,
+            kind: draftTableKinds[0]!,
+            stageConfig: {},
+            divisionConfig: ownPoints ? { ...builderCfg, points: divisionPointsPatch(sportKey, builderPoints, pointsValues!) } : builderCfg,
+            stored: undefined,
+            pointsDict,
+          },
+          msg,
+        );
+  const shownOrder = tiebreakOrder ?? (sportModule === null ? null : divisionSportOrder(sportModule, builderCfg, draftTableKinds));
+  const orderText = shownOrder === null || shownOrder.length === 0 ? null : foldedSummary(shownOrder, (k) => msg(unitLabelKey(k, sportKey)));
   const reviewRows: { id: string; step: BuilderStep; label: string; value: string; later: string }[] = [
     {
       id: "who",
@@ -755,6 +791,7 @@ export function DivisionBuilder({
       value: [
         variant ? variantOptionLabel(sportKey, variant, msg) : null,
         lichess ? msg("divBuilder.review.lichess", { control: timeControlLabel ?? "—" }) : null,
+        lichess ? msg("divBuilder.review.camera", { policy: cameraSummary(cameraChoice, inheritedCameraPolicy, msg) }) : null,
         ...rulesSummary,
       ]
         .filter((x) => x !== null)
@@ -767,14 +804,20 @@ export function DivisionBuilder({
             id: "points",
             step: "rules" as const,
             label: msg("stagePoints.title"),
-            value: pointsValues !== null && divisionPointsDirty(sportKey, builderPoints, pointsValues) ? msg("divBuilder.review.own") : msg("divBuilder.review.sports"),
+            value:
+              pointsHeadline === null
+                ? msg(ownPoints ? "divBuilder.review.own" : "divBuilder.review.sports")
+                : msg(ownPoints ? "divBuilder.review.points.own" : "divBuilder.review.points.sports", { points: pointsHeadline }),
             later: msg("divBuilder.review.later.rules"),
           },
           {
             id: "tiebreaks",
             step: "rules" as const,
             label: msg("stageTiebreaks.title"),
-            value: tiebreakOrder === null ? msg("divBuilder.review.sports") : msg("divBuilder.review.own"),
+            value:
+              orderText === null
+                ? msg(tiebreakOrder === null ? "divBuilder.review.sports" : "divBuilder.review.own")
+                : msg(tiebreakOrder === null ? "divBuilder.review.order.sports" : "divBuilder.review.order.own", { order: orderText }),
             later: msg("divBuilder.review.later.rules"),
           },
         ]
@@ -1010,7 +1053,9 @@ export function DivisionBuilder({
         <div className="card space-y-4 p-4 md:p-6">
           <fieldset className="min-w-0" data-testid="division-builder-plan">
             <legend className="text-sm font-medium text-slate-800">{msg("divBuilder.plan.title")}</legend>
-            <p className="text-xs text-slate-500">{msg("divBuilder.plan.note")}</p>
+            <p className="text-xs text-slate-500" data-testid="division-builder-plan-note">
+              {msg("divBuilder.plan.note", { minutes: plan.matchMinutes })}
+            </p>
             <div className="mt-2 grid grid-cols-3 gap-2 md:max-w-md">
               <label className="block min-w-0">
                 <span className="label">{msg("recommend.entrants")}</span>
@@ -1281,6 +1326,31 @@ export function DivisionBuilder({
               setPointsValues,
               order: tiebreakOrder,
               setOrder: setTiebreakOrder,
+              cameraControl: (
+                <div>
+                  <label className="block">
+                    <span className="label">{msg("divset.camera.label")}</span>
+                    <select
+                      value={cameraChoice}
+                      onChange={(e) => setCameraChoice(e.target.value as CameraChoice)}
+                      className="select block min-h-11 w-full md:max-w-xs"
+                      data-testid="division-builder-camera"
+                    >
+                      {cameraSelectOptions(msg).map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {cameraChoice === CAMERA_INHERIT && (
+                    <p className="mt-1 text-[11px] text-slate-600" data-testid="division-builder-camera-inherited">
+                      {msg("divBuilder.camera.inherited", { policy: cameraSelectOptions(msg).find((o) => o.value === inheritedCameraPolicy)?.label ?? inheritedCameraPolicy })}
+                    </p>
+                  )}
+                  <p className="mt-1 text-[11px] text-slate-600">{msg("divset.camera.help")}</p>
+                </div>
+              ),
             }}
           />
         )}

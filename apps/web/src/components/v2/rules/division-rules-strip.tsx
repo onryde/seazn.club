@@ -87,6 +87,9 @@ export interface DivisionRulesDraft {
   setPointsValues: (values: Record<string, string>) => void;
   order: TiebreakerKey[] | null;
   setOrder: (order: TiebreakerKey[] | null) => void;
+  /** Match Day C9 fix round 1 (m6, mock A5): the builder's "Camera during online play" control, drawn right under online
+   *  play while it is Lichess. Saved divisions edit the camera in Settings (division-settings.tsx), not here. */
+  cameraControl?: ReactNode;
 }
 
 interface Feedback {
@@ -482,6 +485,7 @@ export function DivisionRulesStrip({
           )}
         </div>
       )}
+      {draft?.cameraControl !== undefined && onlinePlay === "lichess" && <div className="mt-3">{draft.cameraControl}</div>}
     </div>
   );
 

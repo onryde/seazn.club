@@ -324,7 +324,10 @@ describe("Review: a receipt, Edit back to each step, Create", () => {
     expect(rows).toEqual(["who", "format", "rules", "schedule"]);
   });
 
-  it("Create is disabled while a step is blocked, says which and why, and offers the way there", () => {
+  // A GUARD, not a browser path (review m12): Next refuses every blocked step, so no organiser reaches Review with one
+  // blocked; the test reaches it only by typing into the Who card's name field, which stays mounted (hidden) under Review.
+  // The guard is the assumption "Review is only reached with every step clear", made a refusal rather than a comment.
+  it("guard (no browser path reaches it): Create is disabled while a step is blocked, says which and why, and offers the way there", () => {
     const h = mount(sportsFor("badminton"));
     walkToReview(h);
     expect(propsOf(byTestId(h, "division-builder-create")!).disabled).toBe(false);
@@ -560,6 +563,51 @@ describe("chess: online play first, and Lichess plays only its eight controls", 
     pressCreate(h);
     await flush();
     expect(Object.hasOwn(divisionBody().config as object, "onlinePlay")).toBe(false);
+  });
+
+  // m8 (C9 fix round 1): the control moves the slot the seed and the estimates use. Expected lengths are the rule worked
+  // by hand (match-length.test.ts's table: both clocks spent, base + 40 moves of increment, rounded up), never the
+  // builder's helper; 15+10 and 3+0 differ from the variant's default and from each other.
+  it("m8: a picked Lichess control moves the match length; a length the organiser types stays put (sequence)", async () => {
+    const BY_HAND: Record<string, number> = { "15+10": 44, "3+0": 6 };
+    const box = (h: H) => Number(propsOf(byTestId(h, "division-builder-match-minutes")!).value);
+    const pick = (h: H, key: string) => rulesDraft(h).setRuleValues((v) => ({ ...v, ...timeControlRuleValues(key)! }));
+    const h = mount([{ ...chess, variants: [offClock!] }], { onlineChessOffered: true });
+    setName(h, "Online");
+    next(h);
+    next(h);
+    // The empty case: no control yet, the variant's own default stands.
+    const opening = box(h);
+    rulesDraft(h).setOnlinePlay("lichess");
+    expect(box(h), "Lichess with no control keeps the default").toBe(opening);
+    expect(opening).not.toBe(BY_HAND["15+10"]);
+    pick(h, "15+10");
+    expect(box(h)).toBe(BY_HAND["15+10"]);
+    pick(h, "3+0");
+    expect(box(h), "a second control moves it again").toBe(BY_HAND["3+0"]);
+    // Online play off again: the control no longer applies, the default is back.
+    rulesDraft(h).setOnlinePlay("off");
+    expect(box(h)).toBe(opening);
+    rulesDraft(h).setOnlinePlay("lichess");
+    pick(h, "15+10");
+    next(h);
+    expect(currentStep(h)).toBe("review");
+    serverAccepts();
+    pressCreate(h);
+    await flush();
+    const seed = posts(/\/schedule-settings$/).at(-1);
+    expect((seed![1] as { json: { config: { matchMinutes: number } } }).json.config.matchMinutes, "the seed carries it").toBe(BY_HAND["15+10"]);
+
+    // Typed by the organiser: a later control no longer moves it.
+    const typed = mount([{ ...chess, variants: [offClock!] }], { onlineChessOffered: true });
+    setName(typed, "Online");
+    next(typed);
+    next(typed);
+    rulesDraft(typed).setOnlinePlay("lichess");
+    pick(typed, "15+10");
+    (propsOf(byTestId(typed, "division-builder-match-minutes")!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "50" } });
+    pick(typed, "3+0");
+    expect(box(typed)).toBe(50);
   });
 });
 
