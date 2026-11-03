@@ -767,6 +767,41 @@ describe("swiss: a step invariant with nothing to judge yet abstains for that st
   });
 });
 
+// W3 app-B Task 6 (app-A T7 review m3; rulebook P-A2, X-SW-15): the model's step invariants read the same exemption as the scenarios
+// - a board the engine reads as not played is no meeting - because the model runs against the product that now pairs it again.
+describe("swiss: an unplayed board is no meeting for the model's step I6 (P-A2)", () => {
+  const I6 = "I6-swiss-no-rematch";
+  const open = async () => {
+    const d = new ModelFakeDriver();
+    const m = await newModelState({ driver: d, row: "swiss", sport: "generic", variant: "score", entrants: 4, tag: "t" });
+    await play(m, d, [["Start", 0], ["Generate", 0]]);
+    const round1 = d.fixtures.filter((f) => f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null);
+    expect(round1.length, "premise: 4 entrants seat 2 boards in round 1").toBe(2);
+    return { m, d, round1 };
+  };
+  /** Round 2 seats round 1's two pairs again (the product may, when they were not played). */
+  const repair = (d: ModelFakeDriver, round1: readonly { home_entrant_id: string | null; away_entrant_id: string | null }[]): void => {
+    const round2 = d.fixtures.filter((f) => f.round_no === 2).slice(0, 2);
+    round2.forEach((f, i) => Object.assign(f, { home_entrant_id: round1[i]!.home_entrant_id, away_entrant_id: round1[i]!.away_entrant_id, status: "scheduled", outcome: null }));
+  };
+  it("differential: a rematch of two double-walkover boards passes, and the same rematch of two PLAYED boards fails", async () => {
+    const unplayed = await open();
+    for (const f of unplayed.round1) await unplayed.d.postStream(f.id, [{ type: "core.forfeit", payload: { by: "both", reason: "walkover" } }]);
+    expect(unplayed.round1.map((f) => (f.outcome as { kind?: string } | null)?.kind), "premise: the twin wrote two double walkovers").toEqual(["double_walkover", "double_walkover"]);
+    repair(unplayed.d, unplayed.round1);
+    const before = unplayed.m.stepChecks.get(I6) ?? 0;
+    await checkStep(unplayed.m, unplayed.d); // would throw ModelViolation on the rematch
+    expect((unplayed.m.stepChecks.get(I6) ?? 0) - before, "I6 judged all four boards").toBe(4);
+
+    const played = await open();
+    for (const f of played.round1) Object.assign(f, { status: "decided", outcome: { kind: "win", winner: f.home_entrant_id } });
+    repair(played.d, played.round1);
+    const e = await violation(checkStep(played.m, played.d));
+    expect(e.check).toBe(I6);
+    expect(e.evidence.join(" ")).toMatch(/rematched in rounds 1 and 2/);
+  });
+});
+
 describe("I-1: a refusal of a command the model holds legal is an unexpected-refusal step failure, not an ordinary refusal", () => {
   class Refusing extends ModelFakeDriver {
     armed: "postStream" | "withdraw" | null = null;

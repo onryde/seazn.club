@@ -51,12 +51,13 @@ import { feedsNextMatch } from "../../../apps/web/src/lib/bracket-next-match.ts"
 import { isRunningRootSwiss } from "../../../apps/web/src/lib/open-entry-stages.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { sportModule, stageCfg } from "../lib/sport-cfg.ts";
-import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantRow, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
+import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantRow, type FinishSwissOut, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { FakeLeagueDriver, bracketWithdrawalActs, bracketWithdrawalPolicy, rulesOfConfig, type FakeFixture } from "./fake-driver.ts";
 import { nextMatchStartedText, rosterLockText, withdrawalReason } from "./product-text.ts";
 import { fixtureStatusFromFold } from "./w2a-status.ts";
+import { finishRefusal, finishRowsOf, judgeFinish, swissRefusedCall, type FinishRow } from "./swiss-finish-twin.ts";
 
 export interface ModelFakeOpts {
   /** #879: after an entrant is added while the stage has fixtures, the next Generate seats every pair again. */
@@ -671,10 +672,13 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     const cfg = this.stage?.config ?? {};
     const round = pairRound(standings, { played, byes }, { chess: cfg.chess === true, ...(cfg.pairing === "rank_adjacent" ? { pairing: "rank_adjacent" as const } : {}) });
     // W3 (engine 2.0.0): `pairRound` answers a round or a refusal VALUE; the product's Pair answers a refusal with the named
-    // SWISS_NO_LEGAL_PAIRING (409 — the desk can Finish, here the only arm the twin models) and seats nobody. The twin
-    // refuses before it touches a shell, as the product does. Its Finish arm (T4) is not modelled yet.
+    // SWISS_NO_LEGAL_PAIRING and seats nobody. The twin refuses before it touches a shell, as the product does. The status and
+    // the body are swissGen's (stages.ts, W3 app-B T4): 409 when Finish is the way out, else 422 (the table row's
+    // `resolvableStatus`), and the five fields `{ round, reason, field, finishAfter, canFinish }` - `finishAfter` and `canFinish`
+    // read from THE Finish predicate (swiss-finish-twin.ts), the one `finishSwiss` below judges by.
     if (!round.ok) {
-      throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, round.code, `round ${target} cannot be paired: ${round.reason}`, null, { round: target, reason: round.reason, field: round.field });
+      const finish = judgeFinish(this.#finishRows(), Number(this.stage?.config.rounds), this.completed);
+      throw swissRefusedCall("POST", "/api/v1/stages/s1/generate", round.code, { round: target, reason: round.reason, field: round.field, finishAfter: finish.finishedAfter, canFinish: finish.canFinish }, finish.canFinish);
     }
     const shells = this.#roundOf(target);
     const boards = shells.filter((f) => !this.byeShells.has(f.id));
@@ -689,6 +693,38 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       Object.assign(byeShell, { home_entrant_id: round.bye, away_entrant_id: null, status: "forfeited", outcome: { kind: "award", winner: round.bye, loser: null, reason: "bye" } });
     }
     return { created: 0, existing: this.fixtures.length, fixtures: this.rows() };
+  }
+
+  /** The stage's rows as the Finish predicate reads them. `started` is swissBoardStartedSql: a result (fixtureHasResultSql: a
+   *  result status, an abandoned row with an outcome, or score events), or a decided board that is not the bye shell. */
+  #finishRows(): FinishRow[] {
+    return finishRowsOf(this.fixtures, {
+      bye: (f) => this.byeShells.has(f.id),
+      seated: swissSeated,
+      result: (f) => (this.ledgers.get(f.id) ?? []).length > 0 || RESULT_STATUSES.has(f.status) || (f.status === "abandoned" && f.outcome !== null),
+    });
+  }
+  /** `POST /stages/{id}/swiss/finish` (swiss-rounds-admin.ts finishSwissNow, W3 T13, X-SW-26): end the Swiss after k, the latest
+   *  round whose seated boards are all decided, and complete the stage. Refused, nothing written: STAGE_NOT_SWISS (422); SWISS_OVER
+   *  (422) once the stage is complete; SWISS_FINISH_NOTHING_PLAYED (409) before any round is complete; SWISS_FINISH_ROUND_UNDECIDED
+   *  (409) when a board past k has started. Written: every row past k is deleted, `config.rounds := k`, and the stage completes
+   *  through the twin's own completeStage (finishSwissNow's `completeStage`) - its answer, the next-stage fields included,
+   *  plus `finished_after`, `shells_removed` and `slots_freed` (the twin lays no slots out, so 0). */
+  async finishSwiss(_stageId: string): Promise<FinishSwissOut> {
+    this.log("finishSwiss");
+    const path = "/api/v1/stages/s1/swiss/finish";
+    if (this.stage === null) throw new Error("fake: finishSwiss before postStages");
+    if (!this.#swiss) throw swissRefusedCall("POST", path, "STAGE_NOT_SWISS", {});
+    const state = judgeFinish(this.#finishRows(), Number(this.stage.config.rounds), this.completed);
+    const refused = finishRefusal(path, state);
+    if (refused !== null) throw refused;
+    const k = state.finishedAfter;
+    const doomed = new Set(this.fixtures.filter((f) => (f.round_no ?? 0) > k).map((f) => f.id));
+    this.fixtures = this.fixtures.filter((f) => !doomed.has(f.id));
+    for (const id of doomed) { this.byeShells.delete(id); this.ledgers.delete(id); }
+    if (k !== state.rounds) this.stage.config = { ...this.stage.config, rounds: k };
+    const complete = await this.completeStage();
+    return { ...complete, finished_after: k, shells_removed: doomed.size, slots_freed: 0 };
   }
 
   /** A test hook for stages.ts addFixture (PROMPT-66): an ad-hoc match on a

@@ -284,6 +284,65 @@ describe("HttpDriver — completeStage is never repeated after completion (desig
   });
 });
 
+// W3 app-B Task 6: Finish the Swiss (POST /stages/{id}/swiss/finish, finishSwissNow) completes the stage itself, so the driver
+// keeps the same promise as completeStage: after a completion, or an outcome it cannot know, /complete and Finish are never sent
+// again for that stage (a repeat would re-run the progression and mint a second draft proposal).
+describe("HttpDriver — finishSwiss (W3 app-B Task 6, X-SW-26)", () => {
+  const finished = (over: Record<string, unknown> = {}) => ({ completed: true, events: [{ type: "stage_completed", finalRanks: ["a", "b"] }], seed_proposal: { id: "sp-1", status: "draft" }, finished_after: 3, shells_removed: 2, slots_freed: 0, ...over });
+  it("POSTs the stage's swiss/finish route (no body fields) and passes the completion answer through, seed proposal and k included", async () => {
+    const { t, calls } = fake([(c) => (c.path === "/api/v1/stages/s1/swiss/finish" ? ok(finished()) : undefined)]);
+    expect(await drv(t).finishSwiss("s1")).toEqual(finished());
+    expect(calls.map((c) => [c.method, c.path])).toEqual([["POST", "/api/v1/stages/s1/swiss/finish"]]);
+    expect(calls[0]!.body).toEqual({});
+  });
+  it("a Finish that completed the stage blocks a later /complete AND a second Finish for it - no HTTP - and only for it", async () => {
+    const { t, calls } = fake([() => ok(finished())]);
+    const d = drv(t);
+    await d.finishSwiss("s1");
+    await expect(d.completeStage("s1")).rejects.toBeInstanceOf(DriverMisuse);
+    await expect(d.finishSwiss("s1")).rejects.toBeInstanceOf(DriverMisuse);
+    expect(calls.length).toBe(1);
+    await d.finishSwiss("s2"); // the guard is per stage
+    expect(calls.map((c) => c.path)).toEqual(["/api/v1/stages/s1/swiss/finish", "/api/v1/stages/s2/swiss/finish"]);
+  });
+  it("a named 4xx refusal committed nothing: it throws the product's RefusedCall, redacted, and the call stays retryable", async () => {
+    let n = 0;
+    const { t, calls } = fake([() => (n++ === 0 ? err(409, "SWISS_FINISH_NOTHING_PLAYED", { canFinish: false }) : ok(finished()))]);
+    const d = drv(t);
+    const e = await d.finishSwiss("s1").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect(e).toMatchObject({ status: 409, code: "SWISS_FINISH_NOTHING_PLAYED", extra: { canFinish: false } });
+    expect((e as RefusedCall).message).not.toContain("abc123secret");
+    expect((await d.finishSwiss("s1")).finished_after).toBe(3);
+    expect(calls.length).toBe(2);
+  });
+  it("a 5xx, no answer, or the 409 STAGE_COMPLETED_SEEDING_FAILED may follow a committed completion: a repeat is DriverMisuse with no HTTP", async () => {
+    let checked = 0;
+    for (const fail of [() => err(500, "INTERNAL"), () => { throw new Error("socket hang up"); }, () => err(409, SEEDING_FAILED_AFTER_COMMIT)]) {
+      const { t, calls } = fake([fail]);
+      const d = drv(t);
+      await expect(d.finishSwiss("s1")).rejects.toThrow();
+      await expect(d.finishSwiss("s1")).rejects.toBeInstanceOf(DriverMisuse);
+      await expect(d.completeStage("s1")).rejects.toBeInstanceOf(DriverMisuse);
+      expect(calls.length).toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+  it("completed:false (the answer says the stage is still open) records no completion", async () => {
+    const { t, calls } = fake([() => ok(finished({ completed: false, events: [] }))]);
+    const d = drv(t);
+    expect((await d.finishSwiss("s1")).completed).toBe(false);
+    await d.completeStage("s1");
+    expect(calls.map((c) => c.path)).toEqual(["/api/v1/stages/s1/swiss/finish", "/api/v1/stages/s1/complete"]);
+  });
+  it("the route is the product's: swiss/finish is a POST route that takes no body, in the stage's app router", () => {
+    const route = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps/web/src/app/api/v1/stages/[id]/swiss/finish/route.ts"), "utf8");
+    expect(route).toMatch(/export async function POST/);
+    expect(route).toMatch(/finishSwissNow\(auth, id\)/);
+  });
+});
+
 describe("HttpDriver — the seed proposal (W1-driving T6, D1)", () => {
   it("confirmSeedProposal POSTs the proposal id (and tiePicks) to the stage's confirm route and answers the product's fill", async () => {
     const answer = { proposalId: "sp-1", filled: 4, fixtures: [{ id: "f1", stage_id: "s2", pool_id: null, round_no: 1, fixture_no: 1, home_entrant_id: "a", away_entrant_id: "b", status: "scheduled", outcome: null, ext_key: "se-r0-m0", is_final: false }] };

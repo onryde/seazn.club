@@ -297,7 +297,20 @@ const I4: InvariantSpec = {
       }
       for (const p of s.pairRounds) {
         checked++;
-        if (p.seated === 0) fails.push(`stage ${s.seq}: round ${p.roundNo} paired nobody (SW-H1)`);
+        if (p.refused !== undefined) {
+          // W3 app-B Task 6 (premise 5): a round the product REFUSED is judged as a refused generate is - it must be backed
+          // by a recorded NAMED refusal of that code - and is not "paired nobody". Only a 2xx that seats nobody is the
+          // engine's empty success (SW-H1), and that still fails below.
+          if (p.seated !== 0) fails.push(`stage ${s.seq}: round ${p.roundNo} refused ${p.refused} yet seated ${p.seated}`);
+          else if (!s.generates.some((g) => g.code === p.refused && isNamedRefusal(g.status, g.code))) {
+            fails.push(`stage ${s.seq}: round ${p.roundNo} refused ${p.refused}, but no named refusal of that code was recorded for it`);
+          }
+        } else if (p.seated === 0) fails.push(`stage ${s.seq}: round ${p.roundNo} paired nobody (SW-H1)`);
+      }
+      if (s.finish !== undefined) {
+        checked++;
+        const ok2xx = s.finish.status >= 200 && s.finish.status < 300;
+        if (!ok2xx && !isNamedRefusal(s.finish.status, s.finish.code)) fails.push(`stage ${s.seq}: finish answered ${s.finish.status} ${s.finish.code ?? "(no code)"} — not a named refusal`);
       }
       if (s.complete === null) { fails.push(`stage ${s.seq}: never asked to complete`); continue; }
       checked++;
@@ -349,17 +362,29 @@ const I6: InvariantSpec = {
   check(stages) {
     const fails: string[] = [];
     let checked = 0;
+    let unplayed = 0;
     for (const s of stages) {
-      const seen = new Map<string, number>();
+      // Rulebook P-A2 / X-SW-15 (W3 app-B Task 6): a pair whose board was NOT PLAYED has not met, so the product may pair it
+      // again. A board is a meeting only when it was played; the verdict is the engine's (ObservedFixture.unplayed, set
+      // from `isUnplayedForfeit` where the board is observed), never a list of outcome kinds kept here. Each board is
+      // judged against the pair's EARLIER boards by round, in whatever order the rows are listed.
+      const byPair = new Map<string, ObservedFixture[]>();
       for (const f of s.fixtures.filter(twoSided)) {
         checked++;
+        if (f.unplayed === true) unplayed++;
         if (f.home === f.away) fails.push(`${f.id}: ${f.home} paired with itself`);
         const k = pairKey(f.home!, f.away!);
-        if (seen.has(k)) fails.push(`${k} rematched in rounds ${seen.get(k)} and ${f.roundNo}`);
-        else seen.set(k, f.roundNo ?? 0);
+        byPair.set(k, [...(byPair.get(k) ?? []), f]);
+      }
+      for (const [k, boards] of byPair) {
+        let met: number | null = null; // the round of the pair's first PLAYED board so far
+        for (const f of [...boards].sort((a, b) => (a.roundNo ?? 0) - (b.roundNo ?? 0))) {
+          if (met !== null) fails.push(`${k} rematched in rounds ${met} and ${f.roundNo}`);
+          else if (f.unplayed !== true) met = f.roundNo ?? 0;
+        }
       }
     }
-    return result(fails, checked);
+    return result(fails, checked, unplayed > 0 ? [`${unplayed} unplayed board(s) do not count as meetings (P-A2)`] : []);
   },
 };
 

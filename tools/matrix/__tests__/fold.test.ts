@@ -1,9 +1,13 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { FORFEIT_REASONS } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import {
   CfgInvalid, UnknownSport, UnknownVariant, drawsAllowed, entrantKindFor, resolveSportCfg, sportModule, variantKeys,
 } from "../lib/sport-cfg.ts";
-import { FOLD_OPTIONS, declaredPoints, envelopes, foldStream, lineupsFor } from "../lib/fold.ts";
+import { FOLD_OPTIONS, declaredPoints, envelopes, foldStream, lineupsFor, unplayedBoard } from "../lib/fold.ts";
 import { ALL_OUTCOMES, GeneratorUnsupported, OutcomeUnreachable, START, outcomeLabel, type ForfeitReason, type StreamRequest } from "../lib/streams/types.ts";
 import { genericGenerator } from "../lib/streams/generic.ts";
 import { generateStream, matchesRequest, register } from "../lib/streams/index.ts";
@@ -240,5 +244,53 @@ describe("generic streams + matchesRequest", () => {
     // "generator" would have returned a stream here.
     expect(() => generateStream({ ...req("score", { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" }), sportKey: "constructor" }))
       .toThrow(GeneratorUnsupported);
+  });
+});
+
+// W3 app-B Task 6 (app-A T7 review m3; rulebook P-A2, X-SW-15): I6 exempts a board the engine reads as NOT PLAYED. The
+// verdict comes from the engine's own predicate, the one the product's pairing history reads (stages.ts buildSwissHistory),
+// and the expected values below are the rulebook's sentence, not that predicate's output: "A pair whose match was not
+// played (a one-sided walkover, a double walkover, a forfeit before play) has not met"; a retirement after play is a meeting.
+describe("unplayedBoard - the engine's verdict on a seated Swiss board (P-A2)", () => {
+  const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+  const award = (reason: string) => ({ kind: "award", winner: "a", loser: "b", reason });
+
+  it("empty cases first: no outcome, a played result and a bye are never unplayed, whatever the ledger reads", () => {
+    for (const played of [false, true]) {
+      expect(unplayedBoard(null, played), "no outcome").toBe(false);
+      expect(unplayedBoard({ kind: "win", winner: "a" }, played), "a win").toBe(false);
+      expect(unplayedBoard({ kind: "draw" }, played), "a draw").toBe(false);
+      // A bye: nobody forfeited, so it is no unplayed forfeit (engine isUnplayedForfeit; P-A4's bye is its own round).
+      expect(unplayedBoard(award("bye"), played), "a bye").toBe(false);
+    }
+  });
+  it("a double walkover is unplayed, with or without play", () => {
+    for (const played of [false, true]) expect(unplayedBoard({ kind: "double_walkover" }, played)).toBe(true);
+  });
+  it("every forfeit reason x played: a walkover is unplayed whatever was played, any other reason only before play - counted", () => {
+    let checked = 0;
+    for (const reason of FORFEIT_REASONS) {
+      for (const played of [false, true]) {
+        const expected = reason === "walkover" || !played; // P-A2: "a one-sided walkover ... a forfeit before play"
+        expect(unplayedBoard(award(reason), played), `${reason}, played=${played}`).toBe(expected);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: the engine declares forfeit reasons").toBe(FORFEIT_REASONS.length * 2);
+    expect(FORFEIT_REASONS.length).toBeGreaterThan(1);
+    // differential: a retirement AFTER play is a meeting; the same retirement before play is not
+    expect(unplayedBoard(award("retired"), true)).toBe(false);
+    expect(unplayedBoard(award("retired"), false)).toBe(true);
+  });
+  it("a pre-W2b win by forfeit is unplayed only while nothing was played", () => {
+    expect(unplayedBoard({ kind: "win", winner: "a", method: "forfeit" }, false)).toBe(true);
+    expect(unplayedBoard({ kind: "win", winner: "a", method: "forfeit" }, true)).toBe(false);
+  });
+  it("the product reads the same two ingredients: buildSwissHistory asks for a double walkover and for isUnplayedForfeit", () => {
+    const src = readFileSync(resolve(REPO, "apps/web/src/server/usecases/stages.ts"), "utf8");
+    const at = src.indexOf("export function buildSwissHistory(");
+    expect(at, "anti-vacuity: the pairing history is where it was").toBeGreaterThan(-1);
+    const body = src.slice(at, src.indexOf("const latestSeated", at));
+    expect(body).toMatch(/const unplayed =\s*o\?\.kind === "double_walkover" \|\| \(o != null && isUnplayedForfeit\(/);
   });
 });

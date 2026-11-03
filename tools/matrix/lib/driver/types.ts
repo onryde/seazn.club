@@ -73,6 +73,10 @@ export interface StartOut { division_id: string; status: string; started: boolea
  *  /complete's answer is the only place the harness learns its id. */
 export interface SeedProposalRef { readonly id: string; readonly status: string }
 export interface CompleteOut { completed: boolean; events: { type: string; finalRanks?: string[] }[]; division_completed?: boolean; seed_proposal?: SeedProposalRef | null }
+/** W3 app-B Task 6: POST /stages/{id}/swiss/finish (usecases/swiss-rounds-admin.ts finishSwissNow, FinishSwissResult) - the
+ *  stage's completion answer, which Finish performs itself, plus k (`finished_after`: the round whose standings became final),
+ *  the rows past it deleted and how many held a laid-out slot. */
+export interface FinishSwissOut extends CompleteOut { finished_after: number; shells_removed: number; slots_freed: number }
 /** A flagged seeding tie: the destination slots it spans and the tied
  *  entrants, in the product's listed order (computeSeedProposal `ties`). */
 export interface SeedTie { readonly slots: readonly string[]; readonly entrantIds: readonly string[]; readonly reason: string }
@@ -226,6 +230,12 @@ export interface OrganiserDriver {
   forfeit(fixtureId: string, by: string, reason: ForfeitReason, idempotencyPrefix: string, play?: readonly StreamEvent[]): Promise<PostedEvent[]>;
   withdraw(entrantId: string): Promise<WithdrawOut>;
   completeStage(stageId: string): Promise<CompleteOut>;
+  /** W3 app-B Task 6 (X-SW-26): "Finish the Swiss now" (POST /stages/:id/swiss/finish) - the organiser's recovery from a
+   *  Swiss Pair refused SWISS_NO_LEGAL_PAIRING. It ends the Swiss after its last complete round AND completes the stage, so
+   *  its answer is the stage's completion (the next stage's draft proposal included) and `/complete` is never sent after it
+   *  (the drivers record the stage completed, as completeStage does). A refusal throws RefusedCall. Optional: a driver
+   *  without it (the browser driver) cannot take the recovery, and the Swiss loop says so by name (DriverMisuse). */
+  finishSwiss?(stageId: string): Promise<FinishSwissOut>;
   /** Confirms a draft seed proposal (POST /stages/:id/seed-proposal/confirm,
    *  schemas.ts ConfirmSeedProposal): fills the stage's TBD rows through
    *  fillSlot. A refusal (stale, already confirmed, an unresolved tie, a
