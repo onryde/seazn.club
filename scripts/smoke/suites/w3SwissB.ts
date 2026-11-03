@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
 import { check, newSession, signIn, smokeDb, tag, v1, v1data } from "../harness.ts";
 import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
@@ -12,11 +14,18 @@ import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
  * p2-p5}, each a home win — leave two unplayed triangles, so round 4 has no rematch-free perfect matching. `POST
  * /api/v1/stages/{id}/generate` answers SWISS_NO_LEGAL_PAIRING at the status the SWISS_REFUSALS row rules (read off the
  * table, never a typed literal), names the round, the reason and the field, and every round-4 seat stays empty.
+ *
+ * T2 (X-SW-6; boardgame FOLD_EPOCH 4 -> 5): a board game division that still stores the 1.x `byeScore` has it removed by the
+ * V490 delta, and `GET /api/v1/divisions/{id}` reads the stored config back without it. The division is created through the API,
+ * given the pre-deploy shape by SQL (`byeScore: 2` beside the rest, read back first to prove the GET returns the stored row and
+ * not a parse that would strip it), and the delta's own DO block is run on it (found by glob, never by number) as the app's
+ * tenant role for this organization, so RLS limits it to the rows this run made.
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissB runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissBSuite(): Promise<void> {
   // T1: 1 (Pair next on a history with no legal round is refused SWISS_NO_LEGAL_PAIRING and seats nobody).
-  const EXPECTED_CHECKS = 1;
+  // T2: 1 (a boardgame division's stored byeScore is gone from the config GET answers, once the V490 delta has run).
+  const EXPECTED_CHECKS = 2;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -101,6 +110,54 @@ export async function w3SwissBSuite(): Promise<void> {
     w3Check(
       "w3b X-SW-3: Pair next on a Swiss whose round 4 has no legal pairing is refused 409 SWISS_NO_LEGAL_PAIRING (round 4, rematch, field 6), every round-4 seat stays empty and nothing else moves" +
         (ok ? "" : ` — division ${divId ?? "none"}, stage ${stageId ?? "none"}, players ${ids.length}, start ${started.status}, seeded ${seeded === -1 ? "no DATABASE_URL" : seeded}, rows before ${before.length}, generate ${res.status} (want ${row.resolvableStatus}) ${JSON.stringify(res.json).slice(0, 200)}, round 4 rows ${round4.length}, unchanged ${JSON.stringify(after) === JSON.stringify(before)}`),
+      ok,
+    );
+  }
+
+  // Check 2 — T2 (X-SW-6). The delta is found by glob, never by number (it is renumbered at merge).
+  {
+    const deltas = fileURLToPath(new URL("../../../db/migration/deltas/", import.meta.url));
+    const found = readdirSync(deltas).filter((f) => /^V\d+__w3_bye_score_cleanup\.sql$/.test(f));
+    const block =
+      found.length === 1 ? /do \$\$[\s\S]*?end \$\$;/.exec(readFileSync(`${deltas}${found[0]}`, "utf8").replace(/--.*$/gm, ""))?.[0] : undefined;
+    const canon = (o: Record<string, unknown>) => JSON.stringify(Object.fromEntries(Object.entries(o).sort(([a], [b]) => (a < b ? -1 : 1))));
+    const comp = v1data<{ id: string } | undefined>(
+      await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W3 Swiss B bye ${tag}`, visibility: "private" }),
+    );
+    const divId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Chess", sport_key: "boardgame", variant_key: "classical", config: {} }),
+    )?.id;
+    const config = async () =>
+      v1data<{ config: Record<string, unknown> } | undefined>(await v1(owner, `/api/v1/divisions/${divId}`))?.config;
+    let legacy: Record<string, unknown> | undefined;
+    let migrated: Record<string, unknown> | undefined;
+    let ran = "not run";
+    if (process.env.DATABASE_URL && divId !== undefined && block !== undefined) {
+      const db = smokeDb();
+      try {
+        // The pre-deploy shape: a 1.x server stored the default beside the rest of the config.
+        const [row] = await db<{ org_id: string }[]>`
+          update divisions set config = config || '{"byeScore": 2}'::jsonb where id = ${divId} returning org_id`;
+        legacy = await config();
+        await db.begin(async (tx) => {
+          await tx`select set_config('app.current_org', ${row!.org_id}, true)`;
+          await tx`set local role app_user`;
+          await tx`set local client_min_messages = warning`; // the block's NOTICEs (counts) are for a migration log, not this one
+          await tx.unsafe(block);
+        });
+        migrated = await config();
+        ran = "ran";
+      } finally {
+        await db.end();
+      }
+    }
+    const siblings = legacy === undefined ? [] : Object.keys(legacy).filter((k) => k !== "byeScore");
+    const ok =
+      legacy !== undefined && migrated !== undefined && legacy.byeScore === 2 && !("byeScore" in migrated) && siblings.length > 0 &&
+      canon(migrated) === canon(Object.fromEntries(siblings.map((k) => [k, legacy![k]])));
+    w3Check(
+      "w3b X-SW-6: a boardgame division that stored byeScore reads back without it after the V490 delta, every other config key as it was" +
+        (ok ? "" : ` — division ${divId ?? "none"}, delta files ${found.length}, block ${block === undefined ? "missing" : "found"}, ${process.env.DATABASE_URL ? ran : "no DATABASE_URL"}, before ${JSON.stringify(legacy)}, after ${JSON.stringify(migrated)}`),
       ok,
     );
   }

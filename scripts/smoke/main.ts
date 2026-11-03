@@ -1252,8 +1252,9 @@ export async function main() {
   await suite("w3SwissA", () => w3SwissASuite());
 
   // Format matrix W3 Swiss app-B: counted checks for the tasks that owe one (T1: a round with no legal pairing is refused
-  // by name and seats nobody); the suite's own header lists each. After w3SwissA, as the plan places it. Own fresh owner;
-  // keyless; one SQL seed (the S6 history) through DATABASE_URL.
+  // by name and seats nobody; T2: a boardgame division's stored byeScore is gone once the V490 delta has run); the suite's
+  // own header lists each. After w3SwissA, as the plan places it. Own fresh owner; keyless; SQL seeds (the S6 history, the
+  // 1.x byeScore) and the delta's own block through DATABASE_URL.
   await suite("w3SwissB", () => w3SwissBSuite());
 }
 
