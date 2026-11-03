@@ -4,7 +4,7 @@
 import type { EntrantKind } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { STAGE_TEMPLATES, type TemplateKnobs } from "@/lib/format-templates";
-import { PAIR_MINTING_STAGE_KINDS } from "@/lib/chess-individual-only-rule";
+import { PAIR_MINTING_STAGE_KINDS, entrantKindsPlayPairMinting } from "@/lib/chess-individual-only-rule";
 import { swissRoundsDefault } from "@/lib/swiss-rounds";
 import { estimateMinutes, estimateTemplate, type FormatEstimate } from "./format-estimate";
 
@@ -136,16 +136,13 @@ export function isPairRotationTemplate(key: string): boolean {
   return t !== undefined && t.build(openingKnobs(OPENING_PLAN.entrants)).some((s) => PAIR_MINTING_STAGE_KINDS.includes(s.kind));
 }
 
-/** The entrant kind a partner-rotation format needs the DIVISION to take (C9 review 2, N1): Americano and Mexicano rotate
- *  individual players into new pairs (stages.ts americanoGen plays one person per entrant, pairEntrantsFor mints the
- *  pairs), so a division that takes no individual players - narrowed to Pairs or Teams on Who plays (Q3, n3) - cannot
- *  play them. What the SPORT is offered is decided upstream, by its engine model (templatesForSport): this narrows that
- *  offer to the division's kinds. */
-export const PAIR_ROTATION_NEEDS_KIND: EntrantKind = "individual";
-
-/** Can a division taking these kinds play this format? Only a partner-rotation format needs a kind. */
+/** Can a division taking these kinds play this format? (C9 review 2, N1; round 3: the shared rule.) Americano and
+ *  Mexicano rotate individual players into new pairs, so a division that takes no individual players - narrowed to Pairs
+ *  or Teams on Who plays (Q3, n3) - cannot play them. The kinds needed are `PAIR_MINTING_NEEDS_KINDS`, the one rule the
+ *  sport offer and Settings › Format read too, so the builder and Settings cannot drift. What the SPORT is offered is
+ *  decided upstream (templatesForSport): this narrows that offer to the division's kinds. */
 export function divisionPlaysTemplate(key: string, divisionKinds: readonly string[]): boolean {
-  return !isPairRotationTemplate(key) || divisionKinds.includes(PAIR_ROTATION_NEEDS_KIND);
+  return !isPairRotationTemplate(key) || entrantKindsPlayPairMinting(divisionKinds);
 }
 
 /** The Format step's offer for the division: the sport's offer, less what the division's kinds cannot play (N1). The

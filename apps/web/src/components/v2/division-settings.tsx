@@ -338,7 +338,7 @@ export function DivisionSettings({
   swissField?: number;
   /** C9 fix round 1 (review I5): the entrant kinds the division's ENGINE model holds (the page's effective model: the
    *  sport's declaration with this division's `config.entrants` override, chess read without it). The Format select
-   *  offers no pair format (americano/mexicano) where it lacks individuals or pairs (templatesForSport). Required, so a
+   *  offers no pair format (americano/mexicano) where it lacks individuals (templatesForSport; C9 round 3: the rule the builder reads). Required, so a
    *  mount cannot leave the offer unchecked. */
   entrantKinds: readonly string[];
 }) {
@@ -742,7 +742,7 @@ export function DivisionSettings({
                       dictionary-coverage test backstops every t.key actually
                       resolving. */}
                   {/* The sport's offer (templatesForSport): chess, and any division whose entrant model holds no
-                      individuals or no pairs (the team sports, volleyball), lists no americano/mexicano, except the
+                      individuals (the team sports, volleyball, a Pairs or Teams division), lists no americano/mexicano, except the
                       structure the division already plays, so it still shows what it is. */}
                   {templatesForSport(division.sport_key, entrantKinds, detected).map((t) => (
                     <option key={t.key} value={t.key}>

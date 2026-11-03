@@ -849,3 +849,50 @@ test("the entrant kind: Format offers a Pairs division no Americano (N1), and a 
   expect([division.name, division.sport_key], "the division read back").toEqual([name, "volleyball"]);
   expect(division.config.entrants, "the untouched default, alone").toEqual({ kinds: ["team"], defaultKind: "team" });
 });
+
+test("Settings › Format offers a builder-made Individuals Americano division Americano and Mexicano, Americano selected (C9 round 3)", async ({ page, request }, testInfo) => {
+  test.setTimeout(budget(4, 60, 0));
+  expect([...MINTING].sort(), "premise: the partner-rotation formats are the owner's two").toEqual(["americano", "mexicano"]);
+  const badminton = effectiveEntrantModel(mod("badminton").entrantModel ?? null, null);
+  // The witness: badminton's own model holds pairs too, so a division narrowed to Individuals (n3) is the one shape the
+  // old both-kinds rule refused in Settings while the builder offered it.
+  expect([badminton.defaultKind, badminton.kinds.includes("pair")], "premise: badminton opens at individuals and allows pairs").toEqual(["individual", true]);
+
+  const compId = await openBuilderFromCompetition(page, request, "Builder settings format");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const name = `Rotation ${TAG}`;
+  await page.getByTestId("division-builder-name").fill(name);
+  await pickBuilderSport(page, "badminton");
+  await expect(page.getByTestId("division-builder-entrant-kind").locator('input[value="individual"]')).toBeChecked();
+  await next(page);
+  await onStep(page, "format");
+  await showAllFormats(page);
+  const americano = await card(page, "americano");
+  await americano.click();
+  await expect(americano.locator("input")).toBeChecked();
+  for (const step of ["rules", "review"] as const) {
+    await next(page);
+    await onStep(page, step);
+  }
+  await page.getByTestId("division-builder-create").click();
+  const slug = await landed(page);
+  const { division, stages } = await readBack(slug, compId);
+  expect([division.name, division.sport_key], "the division read back").toEqual([name, "badminton"]);
+  expect(division.config.entrants, "n3: an Individuals division stores that kind alone").toEqual({ kinds: ["individual"], defaultKind: "individual" });
+  expect(stages.map((s) => s.kind), "one americano stage").toEqual(["americano"]);
+
+  // ---- Settings › Format: the structure the division plays is selected, and both partner-rotation formats are offered.
+  await page.goto(page.url().replace(/\?tab=fixtures$/, "?tab=settings"));
+  const settings = page.getByTestId("division-settings");
+  await expect(settings).toBeVisible({ timeout: NAV_MS });
+  await settings.getByRole("button", { name: /Format/ }).first().click();
+  const select = page.getByTestId("format-template");
+  await expect(select).toBeVisible();
+  await expect(select, "Americano selected").toHaveValue("americano");
+  const offered = await select.locator("option").evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+  expect(offered.filter((k) => MINTING.includes(k)).sort(), `Settings offers both: ${offered.join(",")}`).toEqual([...MINTING].sort());
+  expect(offered.length, "and the rest of the offer").toBeGreaterThan(MINTING.length);
+  await expectNoHorizontalScroll(page);
+  await select.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("settings-format-americano-1280.png"), fullPage: true });
+});

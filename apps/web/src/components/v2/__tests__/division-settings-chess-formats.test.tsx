@@ -23,11 +23,13 @@ const OFFERED_KEYS = STAGE_TEMPLATES.map((t) => t.key).filter((k) => k !== "trip
 
 type Stage = { name: string; kind: string; config: Record<string, unknown> | null; progression: null };
 
-function mount(sport_key: string, variant_key: string, stages: Stage[]) {
+/** `entrantKinds`: the division's effective kinds as the page hands them; the sport's engine declaration unless a test
+ *  stands in for a division whose `config.entrants` narrowed them (a builder-made one, C9 review 2 n3). */
+function mount(sport_key: string, variant_key: string, stages: Stage[], entrantKinds: readonly string[] = engineEntrantKinds(sport_key)) {
   return renderIsland(DivisionSettings, {
     division: { id: "d1", name: "Open", sport_key, variant_key, config: {}, logo_url: null, logo_storage_path: null },
     orgId: "org1",
-    entrantKinds: engineEntrantKinds(sport_key),
+    entrantKinds,
     structureLocked: false,
     lockedFields: [],
     stages,
@@ -112,5 +114,50 @@ describe("division Settings offers no pair format where the entrant model cannot
     const a = formatSelect(mount("football", "standard", [AMERICANO]));
     expect(a.value).toBe("americano");
     expect(a.values).toEqual(OFFERED_KEYS.filter((k) => k !== "mexicano"));
+  });
+});
+
+// C9 round 3 (controller ruling on the review-2 n3 fallout): the division builder stores exactly the one kind it showed
+// (`config.entrants {kinds:[k]}`), so the page hands Settings a ONE-kind model. Settings must offer that division what
+// the builder offered it. The rule, from the rulings and the engine's declarations (never from templatesForSport): a
+// pair format rotates INDIVIDUAL players into the PAIR entrants the sport's engine model declares, chess refuses both by
+// key, so a one-kind division is offered americano and mexicano exactly when it takes individuals, its sport is not chess,
+// and its sport's engine model holds pairs.
+describe("division Settings offers a builder-made one-kind division the pair formats the builder did (C9 round 3)", () => {
+  const playsPairsAsDivision = (sport: string, kind: string) =>
+    sport !== "boardgame" && kind === "individual" && engineEntrantKinds(sport).includes("pair");
+
+  it("empty case first: a division whose effective model holds no kinds is offered no pair format", () => {
+    const s = formatSelect(mount("badminton", "bwf", [LEAGUE], []));
+    expect(s.values).toEqual(OFFERED_KEYS.filter((k) => !REFUSED_FOR_CHESS.includes(k)));
+  });
+
+  it("the owner's case: a badminton Individuals division built as Americano lists americano AND mexicano, americano selected", () => {
+    const a = formatSelect(mount("badminton", "bwf", [AMERICANO], ["individual"]));
+    expect(a.value).toBe("americano");
+    expect(a.values).toEqual(OFFERED_KEYS);
+    const l = formatSelect(mount("badminton", "bwf", [LEAGUE], ["individual"]));
+    expect(l.value).toBe("league");
+    for (const k of REFUSED_FOR_CHESS) expect(l.values, `an Individuals league is offered ${k}`).toContain(k);
+  });
+
+  it("every registered sport x every kind its engine declares, as a one-kind division: the pair formats exactly where the division takes individuals on a pair sport (counts)", () => {
+    let swept = 0;
+    let offering = 0;
+    let refusing = 0;
+    for (const m of builtinModules) {
+      for (const kind of engineEntrantKinds(m.key)) {
+        const s = formatSelect(mount(m.key, Object.keys(m.variants)[0] ?? "standard", [LEAGUE], [kind]));
+        const plays = playsPairsAsDivision(m.key, kind);
+        expect(s.values, `${m.key} as ${kind}`).toEqual(plays ? OFFERED_KEYS : OFFERED_KEYS.filter((k) => !REFUSED_FOR_CHESS.includes(k)));
+        if (plays) offering++;
+        else refusing++;
+        swept++;
+      }
+    }
+    console.info(`[settings one-kind offer] ${swept} sport x kind cells, ${offering} offered the pair formats, ${refusing} refused`);
+    expect(swept, "anti-vacuity: every sport's kinds were swept").toBeGreaterThanOrEqual(builtinModules.length);
+    expect(offering, "badminton, carrom, generic, table tennis, tennis as individuals").toBe(5);
+    expect(refusing).toBeGreaterThan(0);
   });
 });

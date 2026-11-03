@@ -37,17 +37,24 @@ export function sportRefusesStageKind(sportKey: string | null | undefined, kind:
   return isChessSport(sportKey) && PAIR_MINTING_STAGE_KINDS.includes(kind);
 }
 
-/** What a pair-minting stage needs an entrant model (`entrantModel.kinds`) to hold: the INDIVIDUAL players it rotates
- *  (americanoGen pairs individual players) and the PAIR entrants it mints (pairEntrantsFor). Match Day C9 fix round 1:
- *  a sport whose ENGINE model lacks either is not offered the format (review I5: football, cricket, hockey and ice
- *  hockey hold teams only, volleyball teams and pairs, and chess individuals only, so the engine says what the chess
- *  ruling says). The division builder narrows that offer by the DIVISION's one kind with its own rule (C9 review 2, N1:
- *  lib/division-builder/model.ts divisionPlaysTemplate - individual players are what a division needs). Settings still
- *  reads THIS rule with the division's effective kinds (review 2, n2: unchanged by ruling). */
-export const PAIR_MINTING_NEEDS_KINDS: readonly string[] = Object.freeze(["individual", "pair"]);
+/** What a pair-minting stage needs an entrant model (`entrantModel.kinds`, a sport's or a division's) to hold: the
+ *  INDIVIDUAL players it rotates (americanoGen plays one person per entrant). ONE rule for every reader (C9 round 3,
+ *  controller ruling): the sport offer (templatesForSport with the engine's kinds: football, cricket, hockey and ice
+ *  hockey hold teams only and volleyball teams and pairs, so none is offered the format), the division builder
+ *  (divisionPlaysTemplate with the division's one kind, review 2 N1), and Settings › Format (templatesForSport with the
+ *  division's effective kinds, which a builder-made division narrows to exactly one, n3). The PAIR entrants it mints
+ *  (pairEntrantsFor) are no longer a second need: chess, the one sport holding individuals and no pairs, is refused by
+ *  key (sportRefusesStageKind), and format-templates.test.ts asserts over the registry that every other sport holding
+ *  individuals declares pairs - a new sport that does not reds that test, not a division. */
+export const PAIR_MINTING_NEEDS_KINDS: readonly string[] = Object.freeze(["individual"]);
+
+/** Can an entrant model holding these kinds play a pair-minting stage? An empty model (nothing declared) cannot. */
+export function entrantKindsPlayPairMinting(entrantKinds: readonly string[]): boolean {
+  return PAIR_MINTING_NEEDS_KINDS.every((k) => entrantKinds.includes(k));
+}
 
 /** Can an entrant model holding these kinds (a sport's, or a division's) NOT play this stage kind? Only a pair-minting
- *  kind needs anything; an empty model (nothing declared) holds neither kind, so it is refused every pair-minting kind. */
+ *  kind needs anything. */
 export function entrantKindsRefuseStageKind(entrantKinds: readonly string[], kind: string): boolean {
-  return PAIR_MINTING_STAGE_KINDS.includes(kind) && !PAIR_MINTING_NEEDS_KINDS.every((k) => entrantKinds.includes(k));
+  return PAIR_MINTING_STAGE_KINDS.includes(kind) && !entrantKindsPlayPairMinting(entrantKinds);
 }

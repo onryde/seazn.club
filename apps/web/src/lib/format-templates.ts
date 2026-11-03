@@ -315,8 +315,9 @@ const KIND_PROBE_KNOBS: TemplateKnobs = { qualified: 4, swissRounds: 5, poolCoun
  *  `retired` template is left out for every sport (Triple round robin, owner ruling 2026-11-01), and so is a template
  *  any of whose stages is a kind the sport refuses - by KEY (chess is individual-only, owner ruling 2026-10-26,
  *  follow-up to #1027: americano and mexicano mint pair entrants, so chess is offered neither) or by its ENGINE entrant
- *  model (Match Day C9 fix round 1, review I5: a pair-minting stage needs individual players and pair entrants, so a
- *  sport whose `entrantKinds` lacks either - the team sports, volleyball - is offered neither format either).
+ *  model (Match Day C9 fix round 1, review I5; round 3: a pair-minting stage needs individual players,
+ *  PAIR_MINTING_NEEDS_KINDS, so `entrantKinds` lacking them - the team sports, volleyball, a Pairs or Teams division -
+ *  is offered neither format either).
  *  `entrantKinds` is the sport's own declaration (`effectiveEntrantModel(module.entrantModel, null).kinds`), required so
  *  no caller can forget it. The refusal is read off each template's OWN stage graph, never a list of keys, so a later
  *  template carrying such a stage is left out too. `current` (Settings: the structure the division already plays) is

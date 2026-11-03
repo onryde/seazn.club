@@ -676,9 +676,11 @@ describe("STAGE_TEMPLATES — every key has dictionary-backed label/help copy (F
 // round robin is offered to no sport (owner ruling 2026-11-01, Match Day D1 legs Option A): the forms offer legs 1-2, so
 // the template stays in STAGE_TEMPLATES only for what already reads it (stored divisions, seeds, the matrix catalogue).
 // Match Day C9 fix round 1 (review I5): the same two formats are offered to no sport whose ENGINE entrant model cannot
-// play them - an americano stage needs individual players to rotate (usecases/stages.ts americanoGen) and mints pair
-// entrants (pairEntrantsFor), so a sport whose `entrantModel.kinds` lacks either is offered neither (football, cricket,
-// hockey and ice hockey hold teams only; volleyball teams and pairs; chess individuals only).
+// play them - an americano stage needs individual players to rotate (usecases/stages.ts americanoGen), so a sport whose
+// `entrantModel.kinds` lacks them is offered neither (football, cricket, hockey and ice hockey hold teams only;
+// volleyball teams and pairs). C9 round 3 (controller ruling): individuals are the ONE need, shared with the division
+// builder and Settings; the pairs it mints (pairEntrantsFor) are a registry invariant asserted below, and chess - the
+// one sport holding individuals without pairs - is refused by key.
 // The expected lists below come from the rulings and the ENGINE's entrant-model declarations (chess = the `boardgame`
 // module; the pair formats are americano and mexicano; the retired one is triple_rr), never from templatesForSport.
 describe("templatesForSport: the format templates offered per sport (chess individual-only, follow-up to #1027; Triple RR retired; C9 I5 entrant models)", () => {
@@ -686,7 +688,7 @@ describe("templatesForSport: the format templates offered per sport (chess indiv
   const REFUSED_FOR_CHESS = ["americano", "mexicano"];
   /** The pair formats (americano and mexicano, its mode) and what playing one needs of the sport's entrant model. */
   const PAIR_FORMATS = ["americano", "mexicano"];
-  const PAIR_FORMAT_NEEDS = ["individual", "pair"];
+  const PAIR_FORMAT_NEEDS = ["individual"];
   const RETIRED = ["triple_rr"];
   const ALL_KEYS = STAGE_TEMPLATES.map((t) => t.key);
   const OFFERED = ALL_KEYS.filter((k) => !RETIRED.includes(k));
@@ -698,14 +700,16 @@ describe("templatesForSport: the format templates offered per sport (chess indiv
 
   it("empty case first: a sport whose entrant model holds no kinds at all is offered no pair format, and every other template but Triple RR", () => {
     expect(keysOf(templatesForSport("generic", []))).toEqual(OFFERED.filter((k) => !PAIR_FORMATS.includes(k)));
-    // One kind short either way is still refused: individuals with no pairs (chess's shape), pairs with no individuals.
-    expect(keysOf(templatesForSport("generic", ["individual"]))).toEqual(OFFERED.filter((k) => !PAIR_FORMATS.includes(k)));
+    // No individuals is refused, whatever else is held: pairs or teams alone (a Pairs or Teams division, n3).
     expect(keysOf(templatesForSport("generic", ["team", "pair"]))).toEqual(OFFERED.filter((k) => !PAIR_FORMATS.includes(k)));
-    // The positive pair: both kinds held, both formats offered.
+    expect(keysOf(templatesForSport("generic", ["pair"]))).toEqual(OFFERED.filter((k) => !PAIR_FORMATS.includes(k)));
+    // The positive pair: individuals held, both formats offered - alone (a builder-made Individuals division, C9 round
+    // 3: it stores exactly that one kind) or beside pairs (a sport's own model).
+    expect(keysOf(templatesForSport("generic", ["individual"]))).toEqual(OFFERED);
     expect(keysOf(templatesForSport("generic", ["individual", "pair"]))).toEqual(OFFERED);
   });
 
-  it("every registered sport: the offer is every template but Triple RR, less the pair formats where the ENGINE's entrant model lacks individuals or pairs (counts)", () => {
+  it("every registered sport: the offer is every template but Triple RR, less the pair formats where the ENGINE's entrant model lacks individuals, and for chess by key (counts)", () => {
     let checked = 0;
     let refusing = 0;
     let offering = 0;
@@ -731,8 +735,25 @@ describe("templatesForSport: the format templates offered per sport (chess indiv
     expect(refusing).toBeGreaterThan(0);
     expect(offering).toBeGreaterThan(0);
     expect(refusedSports).toContain(CHESS);
-    // The chess ruling and the engine agree: chess's model holds individuals only, so the engine rule refuses it too.
-    expect(canPlayPairFormats(kindsOf(builtinModules.find((m) => m.key === CHESS)!))).toBe(false);
+    // Chess holds individuals, so it is the KEY rule that refuses it: the engine model alone would not.
+    expect(canPlayPairFormats(kindsOf(builtinModules.find((m) => m.key === CHESS)!))).toBe(true);
+  });
+
+  it("the dropped half is a registry invariant: every sport whose engine model holds individuals declares pairs too, chess the one exception (counts)", () => {
+    // A pair format MINTS pair entrants (pairEntrantsFor). C9 round 3 made individuals the rule's only need, which is
+    // sound only while no offered sport lacks pairs: a new engine sport holding individuals and no pairs reds HERE.
+    let holdingIndividuals = 0;
+    const withoutPairs: string[] = [];
+    for (const m of builtinModules) {
+      const kinds = kindsOf(m);
+      if (!kinds.includes("individual")) continue;
+      holdingIndividuals++;
+      if (!kinds.includes("pair")) withoutPairs.push(m.key);
+    }
+    console.info(`[format-templates] round 3 invariant: ${holdingIndividuals} sports hold individuals, without pairs: ${withoutPairs.join(", ") || "none"}`);
+    expect(holdingIndividuals, "anti-vacuity: sports holding individuals were found").toBeGreaterThan(1);
+    expect(withoutPairs).toEqual([CHESS]);
+    expect(keysOf(templatesForSport(CHESS, kindsFor(CHESS))), "and chess is refused by key").toEqual(OFFERED.filter((k) => !PAIR_FORMATS.includes(k)));
   });
 
   it("the positive pair, named: badminton is still offered americano and mexicano, and both build a pair-rotating americano stage", () => {
