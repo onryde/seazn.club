@@ -147,7 +147,10 @@ async function activeOrder(divisionId: string): Promise<{ id: string; seed: numb
 /** The engine's own round 1 over `order` (rank = position), board by board: what the Pair hands on before any lot. */
 function engineRoundOne(order: readonly string[], chess: boolean): { home: string; away: string }[] {
   const standings: SwissStanding[] = order.map((id, i) => ({ entrantId: id, score: 0, rank: i + 1 }) as SwissStanding);
-  return pairRound(standings, { played: new Set() }, { chess }).pairings.map((p) => ({ home: p.home, away: p.away }));
+  const round = pairRound(standings, { played: new Set() }, { chess });
+  // W3 (engine 2.0.0): a round or a refusal. Round 1 of a fresh field is always pairable, so a refusal is a broken premise.
+  if (!round.ok) throw new Error(`premise: round 1 of a fresh field is pairable (${round.reason})`);
+  return round.pairings.map((p) => ({ home: p.home, away: p.away }));
 }
 
 /** The seats we expect for round 1: the draw (X-SW-22), the engine's pairing, and — chess on — the lot (BG-SW-1). */
@@ -238,7 +241,7 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are on by default for a NEW boardg
     expect(Object.hasOwn(await stageConfig(r.stageId), "chess"), "read-side: Pair never writes the default").toBe(false);
   });
 
-  it("BG-SW-1 an EXISTING boardgame Swiss stage with chess unset whose round 1 was paired plain keeps today's colours", async () => {
+  it("BG-SW-1 an EXISTING boardgame Swiss stage with chess unset whose round 1 was paired plain takes no colour lot, and alternates its home side outside chess (X-SW-4)", async () => {
     const r = await rig({ sport: "boardgame", n: 8, seeded: true, door: "sql-legacy" });
     expect(Object.hasOwn(await stageConfig(r.stageId), "chess"), "premise: stored before W3, no chess key").toBe(false);
     await startDivision(r.auth, r.divisionId);
@@ -260,8 +263,34 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are on by default for a NEW boardg
     const r2 = await boards(r.stageId, 2);
     expect(r2).toHaveLength(4);
 
-    // Today's engine rule (non-chess, scheduling/swiss.ts `assignColours`): the upper board side is home. Upper = more
-    // points, then the better seed. Points from the round-1 results read back.
+    // Round 1 (re-made above as a plain Pair, neutral colours): the upper seed is home — unchanged by engine 2.0.0.
+    // Round 2 (W3, engine 2.0.0 X-SW-4; rulebook P-Q6/RB3-11): outside chess the home side ALTERNATES from the games each
+    // player has PLAYED — a player who was home last time takes the away side now where the pairing allows. Engine 1.x
+    // put the upper board at home every round, which is what this test used to pin ("today's colours"); a stage whose
+    // round 1 was paired plain keeps pairing plain (`swissPairsInColour`, ruling I1), so it takes the alternation too.
+    // The oracle below is the rule as the rulebook states it, written from the round-1 sides read back — never from the
+    // pairer:
+    //   balance(e) = home games played - away games played;  balance > 0 wants away, < 0 wants home, 0 is neutral.
+    //   Opposite wants (or one neutral): each gets its side. Both neutral: the upper board is home. The same want on
+    //   both: the larger |balance| gets it, and on a tie the upper board does.
+    const balance = new Map<string, number>();
+    for (const b of r1) {
+      balance.set(b.home, (balance.get(b.home) ?? 0) + 1);
+      balance.set(b.away, (balance.get(b.away) ?? 0) - 1);
+    }
+    const bal = (id: string) => balance.get(id) ?? 0;
+    const homeOf = (upper: string, lower: string): string => {
+      const [bu, bl] = [bal(upper), bal(lower)];
+      if (bu === 0 && bl === 0) return upper;
+      if (bu === 0) return bl < 0 ? lower : upper; // the lower one wants a side; the neutral upper takes the other
+      if (bl === 0) return bu < 0 ? upper : lower;
+      if (Math.sign(bu) !== Math.sign(bl)) return bu < 0 ? upper : lower; // opposite wants: the one who wants home is home
+      // the same want: the larger imbalance gets it, then the upper board
+      const winner = Math.abs(bl) > Math.abs(bu) ? lower : upper;
+      const winnerWantsHome = bal(winner) < 0;
+      return winnerWantsHome ? winner : winner === upper ? lower : upper;
+    };
+    // Who won round 1 (points): the upper board of round 2 is the one with more points, then the better seed.
     const won = new Set((await sql<{ w: string }[]>`
       select outcome->>'winner' as w from fixtures where stage_id = ${r.stageId} and round_no = 1`).map((x) => x.w));
     const pts = (id: string) => (won.has(id) ? 1 : 0);
@@ -270,12 +299,20 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are on by default for a NEW boardg
       expect(r.seedOf(b.home)! < r.seedOf(b.away)!, `round 1 ${b.ext_key}: the upper seed is home`).toBe(true);
       checked++;
     }
+    let flipped = 0;
     for (const b of r2) {
-      const homeUpper = pts(b.home) > pts(b.away) || (pts(b.home) === pts(b.away) && r.seedOf(b.home)! < r.seedOf(b.away)!);
-      expect(homeUpper, `round 2 ${b.ext_key}: the upper board side is home`).toBe(true);
+      const homeIsUpper = pts(b.home) > pts(b.away) || (pts(b.home) === pts(b.away) && r.seedOf(b.home)! < r.seedOf(b.away)!);
+      const [upper, lower] = homeIsUpper ? [b.home, b.away] : [b.away, b.home];
+      expect(b.home, `round 2 ${b.ext_key}: home alternates from the games played (X-SW-4)`).toBe(homeOf(upper, lower));
+      if (!homeIsUpper) flipped++;
       checked++;
     }
-    console.info(`BG-SW-1 m5: ${checked} boards upper-at-home across rounds 1-2`);
+    // The rig reaches the rule: round 1 sends S1-S4 home and S5-S8 away, the winners {S1,S2,S7,S8} and the losers {S3,S4,S5,S6}
+    // fold to S1-S7, S2-S8, S3-S5, S4-S6 — each board pairs a player who was home with one who was away, so the
+    // away-before side takes home and the UPPER side is away on all four. A rig where the old rule and the new agree would
+    // witness nothing.
+    expect(flipped, "witness: the upper side is away on every round-2 board (engine 1.x had it home)").toBe(4);
+    console.info(`BG-SW-1 m5: ${checked} boards checked across rounds 1-2`);
     expect(checked).toBe(8);
     for (const round of [1, 2]) {
       const audits = await pairAudits(r.divisionId, r.stageId, round);
@@ -317,6 +354,8 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are on by default for a NEW boardg
     const real = engine.pairRound;
     const spy = vi.spyOn(engine, "pairRound").mockImplementation((...args: Parameters<typeof real>) => {
       const out = real(...args);
+      // A refusal passes through untouched (W3, engine 2.0.0: `pairRound` answers a round or a refusal).
+      if (!out.ok) return out;
       // The premise broken on board 2: the lower player at home.
       return { ...out, pairings: out.pairings.map((p, i) => (i === 1 ? { ...p, home: p.away, away: p.home } : p)) };
     });
@@ -533,10 +572,15 @@ async function roundOneDecided(r: Rig, sport: Sport): Promise<string[]> {
   return d;
 }
 
-/** Round 2 by pairing number d1..d8, hand-derived (see the header). */
+/** Round 2 by pairing number d1..d8, hand-derived (see the header). WHO meets whom: each score group folds by the draw —
+ *  the winners d1..d4 as d1-d3, d2-d4; the losers d5..d8 as d5-d7, d6-d8. WHICH SIDE is home (W3, engine 2.0.0 X-SW-4;
+ *  rulebook P-Q6/RB3-11): outside chess it alternates from the games played. Round 1 put d1..d4 home (they won there) and
+ *  d5..d8 away, so in each winners' board both players were home last time and want away: the UPPER board's player gets
+ *  its preference (equal imbalance), so the lower is home; in each losers' board both were away and want home, so the
+ *  upper is home. (Engine 1.x seated the upper board at home in every group.) */
 const roundTwoByDraw = (d: readonly string[]) => [
-  { home: d[0]!, away: d[2]! },
-  { home: d[1]!, away: d[3]! },
+  { home: d[2]!, away: d[0]! },
+  { home: d[3]!, away: d[1]! },
   { home: d[4]!, away: d[6]! },
   { home: d[5]!, away: d[7]! },
 ];
@@ -639,9 +683,11 @@ describe.runIf(HAS_DB)("m7 the draw is the stage's pairing numbers: round 2 brea
 
       await generateStageFixtures(r.auth, r.stageId); // Pair round 2
       // Registration order as the tie-break, as before T8: each score group folded by registration.
+      // Sides (X-SW-4, as in `roundTwoByDraw`): the winners reg0..reg3 were home in round 1 and take the away side against
+      // each other, the losers reg4..reg7 were away and take home — the upper board of each group gets its preference.
       expect(seats(await boards(r.stageId, 2))).toEqual([
-        { home: reg[0]!, away: reg[2]! },
-        { home: reg[1]!, away: reg[3]! },
+        { home: reg[2]!, away: reg[0]! },
+        { home: reg[3]!, away: reg[1]! },
         { home: reg[4]!, away: reg[6]! },
         { home: reg[5]!, away: reg[7]! },
       ]);
@@ -706,9 +752,12 @@ describe.runIf(HAS_DB)("m7 the draw is the stage's pairing numbers: round 2 brea
     const P = (n: number) => r.ids[n - 1]!; // P1..P8 seeded 1..8
     expect(d, "round 1 folds by seed: P1..P4 at home v P5..P8").toEqual([1, 2, 3, 4, 5, 6, 7, 8].map(P));
     await generateStageFixtures(r.auth, r.stageId);
+    // Who meets whom is the seed fold of each score group; the sides alternate from the games played (X-SW-4): P1..P4 were
+    // home in round 1 (they won there), so the winners' boards put the upper player away; P5..P8 were away, so the losers'
+    // boards put the upper player home.
     expect(seats(await boards(r.stageId, 2))).toEqual([
-      { home: P(1), away: P(3) },
-      { home: P(2), away: P(4) },
+      { home: P(3), away: P(1) },
+      { home: P(4), away: P(2) },
       { home: P(5), away: P(7) },
       { home: P(6), away: P(8) },
     ]);

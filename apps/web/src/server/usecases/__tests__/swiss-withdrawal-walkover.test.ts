@@ -191,7 +191,10 @@ describe.runIf(HAS_DB)("swiss withdrawal — never expunge, walk the paired boar
     const next = await generateStageFixtures(rig.auth, rig.stageId);
     expect(next.reshaped).toEqual({ matches_added: 0, matches_removed: 1, byes_added: 1, byes_removed: 0 });
     const r2 = round(await fixturesOf(rig.stageId), 2);
-    expect(shape(rig, r2)).toEqual(["sw-r2-b1: S1 v S2", "sw-r2-bye: S3 bye"]);
+    // W3 (X-SW-4, engine 2.0.0; rulebook P-Q6): outside chess the side that was home plays away, from PLAYED games only. S1 played
+    // round 1 at home (wants away); S2's board was the withdrawal's walkover, which holds no record, so S2 is home. Before
+    // W3 the upper seed was always home ("S1 v S2"). Who is the bye (S3, the lowest) is unchanged.
+    expect(shape(rig, r2)).toEqual(["sw-r2-b1: S2 v S1", "sw-r2-bye: S3 bye"]);
     expect(r2.flatMap((f) => [f.home_entrant_id, f.away_entrant_id])).not.toContain(S4);
   });
 
@@ -205,7 +208,10 @@ describe.runIf(HAS_DB)("swiss withdrawal — never expunge, walk the paired boar
 
     await generateStageFixtures(rig.auth, rig.stageId); // Pair round 2
     const r2 = round(await fixturesOf(rig.stageId), 2);
-    expect(shape(rig, r2)).toEqual(["sw-r2-b1: S1 v S4", "sw-r2-b2: S2 v S3"]);
+    // W3 (X-SW-4, engine 2.0.0): home alternates from played games. S1 played round 1 at home (wants away) and S4's win was by
+    // walkover (no record) → S4 home. S2 forfeited (no record) and S3 played round 1 away (wants home) → S3 home. Before W3
+    // the upper seed was home on both ("S1 v S4", "S2 v S3"); the PAIRS are unchanged.
+    expect(shape(rig, r2)).toEqual(["sw-r2-b1: S4 v S1", "sw-r2-b2: S3 v S2"]);
     // A (legacy) ad-hoc board puts S4 at 1 played of 3 scheduled — under half.
     const { fixture_id: adHoc } = await seedLegacySwissAdhoc(rig.stageId, S4!, S3!);
 
