@@ -11,6 +11,17 @@ import {
 import { apiJson, TAG } from "../helpers";
 import { routes } from "../../src/lib/routes";
 import { BRAND_PALETTE } from "../../src/lib/brand-palette";
+import {
+  CTA_IN_VALUE,
+  LINK,
+  LINK_MD,
+  ctaByApply,
+  escapeCloses,
+  expectPageKept,
+  linkByEnter,
+  watchPage,
+  type PageWitness,
+} from "../prose-dialog-kit";
 
 /**
  * W5 of the settings walkthrough programme — `/o/{org}/c/{comp}/settings`,
@@ -296,6 +307,64 @@ test("general fields persist across the reload, and the rename that regenerates 
       "the guardian-consent interstitial must not fire without a youth division",
     ).toHaveCount(0);
   } finally {
+    await releaseCompetition(request, comp.id);
+  }
+});
+
+test("the description editor's Link (Enter) and Button (Apply) prompts work inside the settings form and save nothing on their own (task PEF)", async ({
+  page,
+  request,
+}) => {
+  // One nav, and four commits: the two prompts and Escape (each a UI change read back), then the Save.
+  test.setTimeout(budget(1, 4));
+  const comp = await seedCompetition(request, org.orgId, { visibility: "private", status: "draft" });
+  let witness: PageWitness | null = null;
+  try {
+    await page.goto(routes.competitionSettings(org.slug, comp.slug));
+    await expect(field(page, L.name)).toHaveValue(comp.name, { timeout: READ_MS });
+    const before = await apiJson<{ name: string; description: string | null }>(request, `/api/v1/competitions/${comp.id}`, "GET");
+    expect(before.status).toBe(200);
+
+    // A rename typed and NOT saved: the prompts must neither lose it nor save it.
+    const typedName = `Prompts typed ${TAG}`;
+    await field(page, L.name).fill(typedName);
+    const editor = page.getByRole("textbox", { name: ui("compset.description"), exact: true });
+    await editor.click();
+    const opening = "Doors open at nine. ";
+    await page.keyboard.type(`${opening}${LINK.text}`);
+    await expect(editor).toContainText(`${opening}${LINK.text}`);
+    witness = await watchPage(page);
+    const start = page.url();
+
+    // Link with Enter, the Button with Apply, then Escape — in sequence, each on the page the last one left.
+    const form = page.locator("form").filter({ has: editor });
+    await linkByEnter(page, form, editor);
+    await expectPageKept(page, witness, start, "Link + Enter");
+    await ctaByApply(page, form, editor);
+    await expectPageKept(page, witness, start, "Button + Apply");
+    await escapeCloses(page, form, editor);
+    await expectPageKept(page, witness, start, "Link + Escape");
+
+    // The page still holds what was typed...
+    await expect(field(page, L.name), "the typed name is still there").toHaveValue(typedName);
+    await expect(editor).toContainText(opening.trim());
+    await expect(page.getByText(L.saved, { exact: true }), "no 'Saved' — nothing was saved").toHaveCount(0);
+    // ...and the settings were not saved by a prompt: no PATCH left the page, and the row is as seeded.
+    expect(witness.writes, "no prompt submitted the settings form").toEqual([]);
+    const after = await apiJson<{ name: string; description: string | null }>(request, `/api/v1/competitions/${comp.id}`, "GET");
+    expect(after.data?.name, "the row's name is the seeded one, not the typed one").toBe(comp.name);
+    expect(after.data?.description ?? null, "the row's description is untouched").toBe(before.data?.description ?? null);
+
+    // The positive twin: Save, and the same watcher sees the PATCH, which carries both prompts' work.
+    const sent = await saveSettings(page, comp.id);
+    expect(witness.writes, "the watcher does see a PATCH when the form sends one").toEqual([`PATCH /api/v1/competitions/${comp.id}`]);
+    expect(String(sent.description), "the link is in the editor's value").toContain(LINK_MD);
+    expect(String(sent.description), "the sponsor button (its label, bold, linked) is in the editor's value").toMatch(CTA_IN_VALUE);
+    const saved = await apiJson<{ name: string; description: string | null }>(request, `/api/v1/competitions/${comp.id}`, "GET");
+    expect(saved.data?.name).toBe(typedName);
+    expect(String(saved.data?.description)).toMatch(CTA_IN_VALUE);
+  } finally {
+    witness?.stop();
     await releaseCompetition(request, comp.id);
   }
 });
