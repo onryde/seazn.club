@@ -14,15 +14,18 @@
 // kind of the stage it belongs to, read from the `stages` table. A producer that stamps nothing, or stamps a league row,
 // fails by name. It counts: producers driven, rows judged, and zero of either is a failure.
 //
-// Every pass here runs the GREEDY fallback (no PLACEMENT_SERVICE_HOST, or a closed port): the placement service the
-// vendored client talks to does not carry `round_barrier`, the unpaired-slot flag or the gap and cap fields yet (the
-// open dependency in the task report), so nothing here proves the CP-SAT side. The seam to it IS proved: the engine's
-// own port input, observed at the one function every solve leaves the process through.
+// Every pass in the first five describes runs the GREEDY fallback (a closed port), so what they prove is the app half
+// and the greedy / verifier side. The last two describes cover the rest: "the wire" drives the REAL `toRequest` and
+// reads the request it builds (no network); "the live solver" needs the placement service at the vendored pin
+// (`PLACEMENT_SERVICE_HOST`, always set in the CI usecases job) and proves the CP-SAT side answers a Swiss build SOLVED
+// - the unpaired shells accepted, the barrier, gap and cap and the pins' day all honoured - instead of refusing it.
 //
 // single-sport: badminton - the rules read stage kind, round_no, the slot columns and the division's settings, never a
 // sport field.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { EngineError } from "@seazn/engine/core";
 import type { Assignment } from "@seazn/engine/scheduling";
 import * as engine from "@seazn/engine/scheduling";
@@ -701,4 +704,221 @@ describe.runIf(HAS_DB)("X-SW-31 the rounds-per-day cap reports its measured coun
     expect(perDay.every((c) => c.shortfall_minutes === undefined), "and no shortfall, which is the end barrier's").toBe(true);
     expect(report.conflicts.filter((c) => c.details?.kind === "round_order_end"), "the rounds themselves are in order").toEqual([]);
   }, 240_000);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The wire and the live solver
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** The enum value of the vendored proto's `ROUND_BARRIER_END`, read from the proto itself (the rulebook of the wire), not
+ *  typed here: the generated stubs are not importable from the app. */
+function protoEnum(name: string): number {
+  const proto = readFileSync(resolve(process.cwd(), "../../packages/scheduler/proto/scheduler.proto"), "utf8");
+  const m = new RegExp(`\\b${name}\\s*=\\s*(\\d+)\\s*;`).exec(proto);
+  expect(m, `the vendored proto declares ${name}`).not.toBeNull();
+  return Number(m![1]);
+}
+
+interface WireFixture {
+  entrantIndices: number[];
+  personIndices: number[];
+  round?: number;
+  roundBarrier: number;
+  unpairedRoundSlot: boolean;
+  roundGapMinutes: number;
+  roundsPerDayCap: number;
+}
+interface WirePin {
+  round?: number;
+  roundBarrier: number;
+  dayIndex?: number;
+}
+interface WireRequest {
+  fixtures: WireFixture[];
+  existing: WirePin[];
+}
+
+describe.runIf(HAS_DB)("X-SW-31 the wire: toRequest forwards the round rules to the placement service (rulings 255-256)", () => {
+  it("every wire fixture carries END, the gap and the cap; exactly the unpaired slots carry the flag; every pin of the sequence carries END and its day", async () => {
+    // Never dialed: the recording call answers (with a status the client reads as ERROR, so the engine ships greedy).
+    vi.stubEnv("PLACEMENT_SERVICE_HOST", CLOSED_PORT_HOST);
+    const placement = await import("@seazn/scheduler/placement-client");
+    const realSolveBuild = placement.solveBuild;
+    const wire: WireRequest[] = [];
+    const recordingCall = {
+      solveBuild: (request: unknown, _meta: unknown, _opts: unknown, cb: (e: null, r: unknown) => void) => {
+        wire.push(request as WireRequest);
+        cb(null, { assignments: [], status: 0, tiersCompleted: 0, objectiveValues: [], elapsedMs: 0, wallExhausted: false, error: undefined });
+        return undefined;
+      },
+    };
+    const solveBuild = vi
+      .spyOn(placement, "solveBuild")
+      .mockImplementation(((input: Parameters<typeof realSolveBuild>[0], opts: Parameters<typeof realSolveBuild>[1]) =>
+        realSolveBuild(input, opts, recordingCall as never)) as typeof placement.solveBuild);
+    const END = protoEnum("ROUND_BARRIER_END");
+    expect(END, "the proto's END is not the UNSPECIFIED zero").toBeGreaterThan(0);
+
+    const rest = 30;
+    const cap = 2;
+    const { rig, stageId } = await swissOnly({ players: 4, courts: 6, rounds: 3, rest, cap });
+    const one = await layRoundOne(rig, stageId);
+    await playRound(rig, one.boards); // round 1 decided: the pins of the next pass
+    await generateStageFixtures(rig.auth, stageId); // Pair round 2; round 3 stays TBD v TBD
+    const rows = (await rowsOf(stageId)).filter((r) => !isSwissByeShellExtKey(r.ext_key));
+    const movableRows = rows.filter((r) => r.round_no > 1);
+    const unpairedRows = movableRows.filter((r) => r.home_entrant_id === null && r.away_entrant_id === null);
+    expect(unpairedRows.length, "premise: round 3 is two unpaired slots").toBe(2);
+
+    await autoSchedule(rig.auth, stageId, { only_unlocked: false, mode: "build" });
+    expect(wire.length, "the one solve went out through the real toRequest").toBe(1);
+    const input = solveBuild.mock.calls[0]![0] as unknown as {
+      fixtures: { roundNo?: number; roundGapMinutes?: number; roundsPerDayCap?: number }[];
+      existing: { roundNo?: number; roundBarrier?: string; dayIndex?: number }[];
+    };
+    const req = wire[0]!;
+    expect(req.fixtures.length, "every movable board crossed the wire").toBe(movableRows.length);
+
+    const problems: string[] = [];
+    let flagged = 0;
+    req.fixtures.forEach((f, i) => {
+      if (f.roundBarrier !== END) problems.push(`fixture ${i}: roundBarrier ${f.roundBarrier}, not END (${END})`);
+      if (f.roundGapMinutes !== rest) problems.push(`fixture ${i}: roundGapMinutes ${f.roundGapMinutes}, not ${rest}`);
+      if (f.roundsPerDayCap !== cap) problems.push(`fixture ${i}: roundsPerDayCap ${f.roundsPerDayCap}, not ${cap}`);
+      if (f.round !== input.fixtures[i]!.roundNo) problems.push(`fixture ${i}: round ${f.round}`);
+      // The contract the service enforces: a fixture with neither seat is refused unless it is flagged an unpaired slot,
+      // and a flagged one must carry no seat at all.
+      const seatless = f.entrantIndices.length === 0 && f.personIndices.length === 0;
+      if (seatless && !f.unpairedRoundSlot) problems.push(`fixture ${i}: no entrant and no person, and not flagged (the service would refuse the request)`);
+      if (f.unpairedRoundSlot && !seatless) problems.push(`fixture ${i}: flagged unpaired but seated`);
+      if (f.unpairedRoundSlot) flagged++;
+    });
+    expect(problems, "the wire fixtures are complete").toEqual([]);
+    expect(req.fixtures.length, "anti-vacuity: fixtures were checked").toBeGreaterThan(0);
+    expect(flagged, "exactly the unpaired slots are flagged").toBe(unpairedRows.length);
+
+    // The pins: the engine's own input says which carry a round, and the wire must agree on every one of them.
+    expect(req.existing.length, "every pin crossed the wire").toBe(input.existing.length);
+    let pinned = 0;
+    req.existing.forEach((p, i) => {
+      const src = input.existing[i]!;
+      if (src.roundNo === undefined) return;
+      pinned++;
+      if (src.roundBarrier !== "end") problems.push(`pin ${i}: the engine input has roundBarrier ${JSON.stringify(src.roundBarrier)}`);
+      if (p.roundBarrier !== END) problems.push(`pin ${i}: roundBarrier ${p.roundBarrier}, not END`);
+      if (p.round !== src.roundNo) problems.push(`pin ${i}: round ${p.round}, not ${src.roundNo}`);
+      if (typeof src.dayIndex !== "number") problems.push(`pin ${i}: the engine input has no dayIndex`);
+      if (p.dayIndex !== src.dayIndex) problems.push(`pin ${i}: dayIndex ${p.dayIndex}, not ${src.dayIndex}`);
+    });
+    expect(problems, "the wire pins are complete").toEqual([]);
+    expect(pinned, "anti-vacuity: round 1's two played boards are the pins that were checked").toBe(one.boards.length);
+  }, 240_000);
+
+  it("a league build sends the proto3 defaults: no barrier, no flag, no gap, no cap", async () => {
+    vi.stubEnv("PLACEMENT_SERVICE_HOST", CLOSED_PORT_HOST);
+    const placement = await import("@seazn/scheduler/placement-client");
+    const realSolveBuild = placement.solveBuild;
+    const wire: WireRequest[] = [];
+    const recordingCall = {
+      solveBuild: (request: unknown, _meta: unknown, _opts: unknown, cb: (e: null, r: unknown) => void) => {
+        wire.push(request as WireRequest);
+        cb(null, { assignments: [], status: 0, tiersCompleted: 0, objectiveValues: [], elapsedMs: 0, wallExhausted: false, error: undefined });
+        return undefined;
+      },
+    };
+    vi.spyOn(placement, "solveBuild").mockImplementation(((input: Parameters<typeof realSolveBuild>[0], opts: Parameters<typeof realSolveBuild>[1]) =>
+      realSolveBuild(input, opts, recordingCall as never)) as typeof placement.solveBuild);
+    const rig = await division({ players: 4, courts: 3, rest: 30, cap: 2 });
+    const stageId = await leagueStage(rig, 1);
+    await autoSchedule(rig.auth, stageId, { only_unlocked: false, mode: "build" });
+    expect(wire.length, "the one solve went out").toBe(1);
+    const sent = wire[0]!.fixtures;
+    expect(sent.length, "anti-vacuity: the league's boards crossed the wire").toBeGreaterThan(0);
+    expect(sent.filter((f) => f.roundBarrier !== 0 || f.unpairedRoundSlot || f.roundGapMinutes !== 0 || f.roundsPerDayCap !== 0), "no league fixture carries a round rule").toEqual([]);
+  }, 240_000);
+});
+
+// Needs the placement service at the vendored pin. `PLACEMENT_SERVICE_HOST` is set in the CI usecases job; a CI run
+// without it must FAIL here rather than skip (a gate nothing asserts is how coverage disappears), so only a local run
+// with no service skips.
+const LIVE_SOLVER = !!process.env.PLACEMENT_SERVICE_HOST || !!process.env.CI;
+
+describe.runIf(HAS_DB && LIVE_SOLVER)("X-SW-31 the live solver answers a Swiss build SOLVED, with the barrier, the gap and the cap honoured (rulings 255-256)", () => {
+  /** The solver's own reply, read off the call-through spy: it ANSWERED (not a transport failure or a refusal). */
+  async function solverReply(solveBuild: { mock: { results: { type: string; value: unknown }[] } }) {
+    expect(solveBuild.mock.results.length, "the solve reached the placement client").toBe(1);
+    expect(solveBuild.mock.results[0]!.type, "and the client did not throw").toBe("return");
+    return (await solveBuild.mock.results[0]!.value) as { status: string; assignments: unknown[]; error?: { code: string; message: string } };
+  }
+
+  it("a fresh Swiss (round 1 paired, rounds 2 and 3 unpaired slots) is solved, not refused, and every round waits for the last", async () => {
+    const placement = await import("@seazn/scheduler/placement-client");
+    const solveBuild = vi.spyOn(placement, "solveBuild"); // called through, against the real service
+    const rest = 30;
+    const cap = 2;
+    const rounds = 3;
+    const { rig, stageId } = await swissOnly({ players: 4, courts: 6, rounds, rest, cap });
+    const rows = (await rowsOf(stageId)).filter((r) => !isSwissByeShellExtKey(r.ext_key));
+    expect(rows.filter((r) => r.home_entrant_id === null).length, "premise: four unpaired slots go to the solver").toBe(4);
+
+    const out = await autoSchedule(rig.auth, stageId, { only_unlocked: false, mode: "build" });
+    const reply = await solverReply(solveBuild);
+    // Not refused: a request the service rejects (INVALID_REQUEST "neither entrant_indices nor person_indices", or a
+    // contradictory sequence) rejects the client call and the engine ships greedy; a refusal after the answer is
+    // `verifier_rejected`. Neither is "solved".
+    expect(["OPTIMAL", "FEASIBLE"], `the service solved the request (reply ${reply.status}, error ${JSON.stringify(reply.error)})`).toContain(reply.status);
+    expect(reply.assignments.length, "and placed every board, the unpaired slots included").toBe(rows.length);
+    expect(["ok", "already_optimal"], `the board the organiser gets is the solver's (status ${out.solver.status}, reason ${out.solver.not_searched_reason})`).toContain(out.solver.status);
+
+    const sp = proposedSpans(out, rows);
+    expect([...sp.keys()].sort(), "every round is placed").toEqual([1, 2, 3]);
+    expect(sp.get(2)!.minStart, "round 2 waits round 1's last end plus the rest").toBeGreaterThanOrEqual(sp.get(1)!.maxEnd + rest * MIN);
+    expect(sp.get(3)!.minStart, "round 3 waits round 2's last end plus the rest").toBeGreaterThanOrEqual(sp.get(2)!.maxEnd + rest * MIN);
+    const roundsOnDay = new Map<string, Set<number>>();
+    const round = new Map(rows.map((r) => [r.id, r.round_no]));
+    for (const a of out.assignments) {
+      const d = utcDay(Date.parse(a.scheduled_at));
+      roundsOnDay.set(d, (roundsOnDay.get(d) ?? new Set()).add(round.get(a.fixture_id)!));
+    }
+    expect(roundsOnDay.size, "anti-vacuity: days were counted").toBeGreaterThan(0);
+    expect(Math.max(...[...roundsOnDay.values()].map((s) => s.size)), `no day holds more than ${cap} rounds`).toBeLessThanOrEqual(cap);
+    expect(roundsOnDay.size, "three rounds under a cap of two take at least two days").toBeGreaterThanOrEqual(Math.ceil(rounds / cap));
+    expect(orderCodes(out.conflicts), "the proposal carries no round-order conflict").toEqual([]);
+
+    await applyAuto(rig, stageId, out);
+    expect(orderCodes((await validateSchedule(rig.auth, rig.divisionId)).conflicts), "the apply accepted it and the board report is clean").toEqual([]);
+  }, 300_000);
+
+  it("after round 1 is played (its boards are pins carrying the barrier and their day) the next pass is solved and keeps both", async () => {
+    const placement = await import("@seazn/scheduler/placement-client");
+    const solveBuild = vi.spyOn(placement, "solveBuild");
+    const rest = 30;
+    const cap = 2;
+    const { rig, stageId } = await swissOnly({ players: 4, courts: 6, rounds: 3, rest, cap });
+    const one = await layRoundOne(rig, stageId); // round 1: 10:00 and 09:00 on day 1, last END 10:30
+    await playRound(rig, one.boards);
+    await generateStageFixtures(rig.auth, stageId); // Pair round 2
+    const rows = (await rowsOf(stageId)).filter((r) => !isSwissByeShellExtKey(r.ext_key));
+    const movable = rows.filter((r) => r.round_no > 1);
+    expect(movable.length, "premise: rounds 2 and 3 are the movable boards").toBe(4);
+
+    const out = await autoSchedule(rig.auth, stageId, { only_unlocked: false, mode: "build" });
+    const reply = await solverReply(solveBuild);
+    expect(["OPTIMAL", "FEASIBLE"], `the service solved the request (reply ${reply.status}, error ${JSON.stringify(reply.error)})`).toContain(reply.status);
+    expect(reply.assignments.length, "and placed every movable board").toBe(movable.length);
+    expect(["ok", "already_optimal"], `the board is the solver's (status ${out.solver.status}, reason ${out.solver.not_searched_reason})`).toContain(out.solver.status);
+
+    const sp = proposedSpans(out, rows);
+    expect([...sp.keys()].sort(), "rounds 2 and 3 are proposed").toEqual([2, 3]);
+    expect(sp.get(2)!.minStart, "round 2 waits the pins' last end plus the rest").toBeGreaterThanOrEqual(one.lastEnd + rest * MIN);
+    expect(sp.get(3)!.minStart, "round 3 waits round 2's last end plus the rest").toBeGreaterThanOrEqual(sp.get(2)!.maxEnd + rest * MIN);
+    // The pins' day counts toward the cap: round 1 is on day 1, so day 1 takes at most ONE more round.
+    const day1 = utcDay(one.lastStart);
+    const day1Rounds = new Set(out.assignments.filter((a) => utcDay(Date.parse(a.scheduled_at)) === day1).map((a) => rows.find((r) => r.id === a.fixture_id)!.round_no));
+    expect(day1Rounds.size, `day ${day1} already holds round 1 (a pin), so it takes at most ${cap - 1} more`).toBeLessThanOrEqual(cap - 1);
+    expect(orderCodes(out.conflicts), "no round-order conflict").toEqual([]);
+
+    await applyAuto(rig, stageId, out);
+    expect(orderCodes((await validateSchedule(rig.auth, rig.divisionId)).conflicts), "the apply accepted it").toEqual([]);
+  }, 300_000);
 });

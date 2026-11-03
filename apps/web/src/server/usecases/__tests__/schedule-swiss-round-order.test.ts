@@ -18,14 +18,14 @@
 // round 1's highest), before anything references them. A placer that walks the rows by id — `slotFixtures` with no
 // round, every row sorting as round 0 — then puts round 3 on the first slots and round 1 on the last. Only round order
 // can put round 1 first. Asserted as a premise in every rig, so a change to the re-key cannot quietly make the shape
-// easy. Every pass here runs the GREEDY fallback, with or without PLACEMENT_SERVICE_HOST: the CP-SAT service refuses a
-// request holding any fixture with neither entrants nor persons (INVALID_REQUEST), which every TBD shell is, so a Swiss
-// stage with unpaired rounds never reaches the solver. Greedy keeps the floor through its `(roundNo, id)` processing
-// order plus its legalisation drop; nothing in this file proves the CP-SAT side until the service takes such fixtures.
-// `solver.engine` rides on every failure message.
+// easy. The passes here run on whatever solver the environment has: since owner ruling 255 (W3 app-B task 9b) the
+// client forwards an unpaired round slot as such, so a placement service at the vendored pin takes a Swiss stage with TBD
+// rounds and these passes then prove the CP-SAT side too; with no service they fall back to greedy, which keeps the floor
+// through its `(roundNo, id)` processing order plus its legalisation drop. (Before ruling 255 the service refused every
+// TBD shell, INVALID_REQUEST, and each pass here was greedy.) `solver.engine` rides on every failure message.
 //
 // single-sport: badminton — the rule reads stage kind, round_no, ext_key and the slot columns, never a sport field.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { EngineError } from "@seazn/engine/core";
 import { sql, withTenant } from "@/lib/db";
@@ -59,6 +59,10 @@ afterAll(async () => {
   const client = globalForDb._sql;
   globalForDb._sql = undefined;
   await client?.end();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 const START = "2030-08-01T09:00:00.000Z";
@@ -342,6 +346,12 @@ describe.runIf(HAS_DB)("W3 T3b the board's own gates hold a Swiss stage to round
   it("a drag of a round-3 board ahead of round 1 is refused for round order; the same drag of a round-1 board is not", async () => {
     const [players, rounds] = [5, 3];
     const rig = await swissRig(players, rounds, 2);
+    // The gates under test do not care who laid the board, but THIS drag does: it needs a free hour BEFORE the first
+    // board, inside the competition window. A placement service packs from the window's first midnight (`startAt` is the
+    // draft anchor, not a floor for the solver), where "an hour earlier" is the day before the competition and trips
+    // `outside_competition_window`, not round order. Greedy starts at `startAt`, so the board is laid by greedy here (a
+    // closed port; the other passes in this file take whatever solver the environment has).
+    vi.stubEnv("PLACEMENT_SERVICE_HOST", "127.0.0.1:1");
     await applyAuto(rig, await autoSchedule(rig.auth, rig.stageId, { only_unlocked: false, mode: "build" }));
     const { boards } = await split(rig.stageId, players, rounds);
     const first = Math.min(...stored(boards).map((p) => p.startMs));

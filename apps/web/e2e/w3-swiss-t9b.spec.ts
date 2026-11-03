@@ -10,10 +10,11 @@ import { stageFixtures } from "./support/swiss-app-a-kit";
 // describe; serial mode is set per describe, never file-wide (AGENTS.md class 21). Run only by the CI dispatch (`e2e.yml`)
 // and judged as a WHOLE file, never with `-g`.
 //
-// WHAT IS DELIBERATELY NOT ASSERTED: that the placement service solved the board. The vendored placement client does not
-// yet carry `round_barrier` and its siblings (the open dependency recorded in the task report), so against the live
-// service the build gate may reject the solver's board and ship the greedy one (`verifier_rejected`). Either board must
-// keep the barrier, and that is what this file proves; the strip's status is read for the failure message only.
+// WHAT IS DELIBERATELY NOT ASSERTED: that the placement service (rather than the greedy fallback) produced the board.
+// The vendored client forwards the round rules now (round_barrier, the gap, the cap, the unpaired-slot flag, the pins'
+// day), and `schedule-swiss-round-barrier.test.ts` proves the live solver answers SOLVED; but a CI e2e run may or may not
+// have a service behind it, and either board must keep the barrier. That is what this file proves; the strip's status
+// is read for the failure message only.
 //
 // Geometry: four players, four courts, two rounds of 30-minute boards. Round 1 (two boards) fills two courts in the first
 // slot; round 2 is still TBD v TBD, so no entrant exists for a rest rule to hold it back, and under the old start floor its
