@@ -67,6 +67,14 @@ import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
  * 30-minute board a slot: round 1's two boards fit the first slot on two courts and round 2's two shells, with no entrant for a
  * rest rule to hold back, would fit the same slot on the other two under the old start floor. So the proposal's earliest round-2
  * start is at least round 1's latest start plus one match (09:30), and the apply the organiser clicks next accepts it.
+ * T10 (SW-L10; ruling 250): the API skeleton of the e2e's whole flow (`apps/web/e2e/w3-swiss-app-b.spec.ts`). A badminton
+ * swiss_knockout (Top 4, three rounds) of seven seeded players: round 1 is paired with a bye; a late player added before any
+ * board starts re-pairs round 1 (case (a)); one added once a round-2 board has started joins from round 3 (case (c)); one added
+ * once a round-3 board has started takes round 3's bye (case (b)). Every board is played through the scorer's own events, the
+ * Swiss completes, and the knockout's seed proposal is the final table's top four (three rounds leave the scores 1-3-4-2, so 4th
+ * and 5th are never level on points and the four are fixed; a tie INSIDE them, flagged for the organiser, is picked in the order
+ * the proposal lists it, as the desk's pick would send it) - and its confirm seats the four in round 1. On check 1's private
+ * competition (the Community plan caps active competitions at 3 and a competition at 4 divisions: check 1's holds one).
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissB runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissBSuite(): Promise<void> {
@@ -80,7 +88,8 @@ export async function w3SwissBSuite(): Promise<void> {
   // T7: 2 (X-SW-10: a round whose every legal pairing kills the next is seated, and the Pair's answer says unpairable for round 5; Pair next is then refused for round 6.
   //        X-SW-10 empty case: a pairable round of the same shape is seated and the answer carries no next-round field).
   // T9b: 1 (X-SW-31: the auto-schedule proposal of a Swiss round 2 starts after round 1's last board ends).
-  const EXPECTED_CHECKS = 10;
+  // T10: 1 (SW-L10: seven seeded and three late players - cases (a), (c), (b) - played out, completed, and the knockout seeded with its top four).
+  const EXPECTED_CHECKS = 11;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -102,6 +111,8 @@ export async function w3SwissBSuite(): Promise<void> {
 
   /** Check 1's refused stage, kept for check 6 (the recovery runs from the state check 1 left). */
   let refused: { divId?: string; stageId?: string; status: number; error: Record<string, unknown> | undefined } | undefined;
+  /** Check 1's private competition, kept for check 11 (it holds one division of the four a competition may have). */
+  let firstComp: { id: string } | undefined;
 
   // Check 1 — T1 (X-SW-3). Rounds 1-3 of the S6 shape (the expected shape is typed here from the rulebook's arithmetic: nine
   // distinct pairs met leave two triangles, and a triangle has an odd number of vertices).
@@ -114,6 +125,7 @@ export async function w3SwissBSuite(): Promise<void> {
     const comp = v1data<{ id: string } | undefined>(
       await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W3 Swiss B ${tag}`, visibility: "private" }),
     );
+    firstComp = comp;
     const divId = v1data<{ id: string } | undefined>(
       await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Open", sport_key: "badminton", variant_key: "bwf", config: {} }),
     )?.id;
@@ -657,6 +669,93 @@ export async function w3SwissBSuite(): Promise<void> {
     w3Check(
       "w3b X-SW-31: the auto-schedule proposal of a Swiss round 2 starts at or after round 1's last board ENDS (four courts, 30-minute boards: not 09:00 beside round 1), and the apply accepts it" +
         (ok ? "" : ` - division ${divId ?? "none"}, courts ${courts.length}, settings ${settings.status}, start ${started.status}, pair ${paired.status}, rows ${rows.length}, auto ${proposal.status}, round 1 starts ${JSON.stringify(r1.map((t) => new Date(t).toISOString()))}, round 2 starts ${JSON.stringify(r2.map((t) => new Date(t).toISOString()))}, apply ${applied.status} ${JSON.stringify(applied.json).slice(0, 200)}`),
+      ok,
+    );
+  }
+
+  // Check 11 - T10 (SW-L10). The e2e flow's skeleton over HTTP, on check 1's competition. Seven seeded players (seeds 1-7) and
+  // three rounds; every board is a home win (two 21-10 games through the scorer's own events). The expected cases and rounds are
+  // ruling 250's arithmetic: (a) round 1 (nothing started), (c) round 3 (added while round 2 runs, no bye in an even round), (b)
+  // round 3 (added while round 3 runs, nine players leave a bye). The knockout's four come from the completed Swiss's own table.
+  {
+    const comp = firstComp;
+    const divRes = await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Swiss KO", sport_key: "badminton", variant_key: "bwf", config: {} });
+    const divId = v1data<{ id: string } | undefined>(divRes)?.id;
+    const made =
+      v1data<{ id: string }[] | undefined>(
+        await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+          Array.from({ length: 7 }, (_, i) => ({ kind: "individual", display_name: `K${i + 1} ${tag}`, seed: i + 1 }))),
+      ) ?? [];
+    const staged = await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", [
+      { seq: 1, kind: "swiss", name: "Swiss", config: { pairing: "rank_adjacent", rounds: 3 }, progression: null },
+      { seq: 2, kind: "knockout", name: "Knockout", config: {}, progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }], placement: "rank_order", timing: "setup" } },
+    ]);
+    const stages = v1data<{ id: string; seq: number }[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/stages`)) ?? [];
+    const swissId = stages.find((s) => s.seq === 1)?.id;
+    const koId = stages.find((s) => s.seq === 2)?.id;
+    const dayOne = await v1(owner, `/api/v1/stages/${koId}/generate`, "POST");
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    const rows = async () =>
+      (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === swissId);
+    const isBye = (f: Fx) => /^sw-r\d+-bye$/.test(f.ext_key ?? "");
+    const boardsOf = async (r: number) => (await rows()).filter((f) => f.round_no === r && !isBye(f) && f.home_entrant_id !== null && f.away_entrant_id !== null);
+    const byesOf = async (r: number) => (await rows()).filter((f) => f.round_no === r && isBye(f) && f.home_entrant_id !== null);
+    const statuses: number[] = [];
+    const play = async (f: Fx, alreadyStarted: boolean) => {
+      if (!alreadyStarted) statuses.push((await appendScoreEvent(owner, f.id, "core.start", {})).status);
+      for (let g = 0; g < 2; g++) statuses.push((await appendScoreEvent(owner, f.id, "badminton.game.summary", { home: 21, away: 10 })).status);
+    };
+    type Late = { case?: string; round?: number; bye_holder_id?: string };
+    const addLate = async (i: number) =>
+      v1data<{ id: string; late_entry?: Late }[] | undefined>(
+        await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST", [{ kind: "individual", display_name: `KL${i} ${tag}` }]),
+      )?.[0]?.late_entry;
+    const pairs: number[] = [];
+    const pair = async () => pairs.push((await v1(owner, `/api/v1/stages/${swissId}/generate`, "POST")).status);
+
+    await pair();
+    const round1Byes = (await byesOf(1)).length;
+    const lateA = await addLate(1);
+    const round1Boards = await boardsOf(1);
+    for (const f of round1Boards) await play(f, false);
+    await pair();
+    const round2 = await boardsOf(2);
+    if (round2[0]) statuses.push((await appendScoreEvent(owner, round2[0].id, "core.start", {})).status);
+    const lateC = await addLate(2);
+    for (const [i, f] of round2.entries()) await play(f, i === 0);
+    await pair();
+    const round3Before = await boardsOf(3);
+    const holder = (await byesOf(3))[0]?.home_entrant_id ?? null;
+    if (round3Before[0]) statuses.push((await appendScoreEvent(owner, round3Before[0].id, "core.start", {})).status);
+    const lateB = await addLate(3);
+    const round3 = await boardsOf(3);
+    for (const f of round3) await play(f, f.id === round3Before[0]?.id);
+    const standing = v1data<{ rows: { entrantId: string; rank: number }[] } | undefined>(await v1(owner, `/api/v1/stages/${swissId}/standings`))?.rows ?? [];
+    const done = await v1(owner, `/api/v1/stages/${swissId}/complete`, "POST");
+    const proposal = await v1(owner, `/api/v1/stages/${koId}/seed-proposal`, "POST");
+    const computed = v1data<{ id: string; computed?: { qualifiers: { entrantId: string }[]; ties: { slots: string[]; entrantIds: string[] }[] } } | undefined>(proposal);
+    const ties = computed?.computed?.ties ?? [];
+    const confirmed = await v1(owner, `/api/v1/stages/${koId}/seed-proposal/confirm`, "POST", {
+      proposalId: computed?.id,
+      ...(ties.length > 0 ? { tiePicks: ties.map((t) => ({ slots: t.slots, order: t.entrantIds })) } : {}),
+    });
+    const koRound1 = (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === koId && f.round_no === 1);
+    const qualifiers = (computed?.computed?.qualifiers ?? []).map((q) => q.entrantId);
+    const topFour = [...standing].sort((a, b) => a.rank - b.rank).slice(0, 4).map((r) => r.entrantId);
+    const seatedKo = koRound1.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((id): id is string => id !== null);
+    const ok =
+      divRes.status < 300 && made.length === 7 && staged.status < 300 && swissId !== undefined && koId !== undefined && dayOne.status === 200 &&
+      started.status < 300 && pairs.length === 3 && pairs.every((st) => st === 200) && round1Byes === 1 &&
+      lateA?.case === "a" && lateA.round === 1 && round1Boards.length === 4 &&
+      round2.length === 4 && lateC?.case === "c" && lateC.round === 3 &&
+      round3Before.length === 4 && holder !== null && lateB?.case === "b" && lateB.round === 3 && lateB.bye_holder_id === holder && round3.length === 5 &&
+      statuses.length === (4 + 4 + 5) * 3 && statuses.every((st) => st > 0 && st < 300) &&
+      standing.length === 10 && done.status === 200 && proposal.status < 300 &&
+      computed?.computed !== undefined && qualifiers.length === 4 && [...qualifiers].sort().join() === [...topFour].sort().join() &&
+      confirmed.status === 200 && koRound1.length === 2 && [...seatedKo].sort().join() === [...topFour].sort().join();
+    w3Check(
+      "w3b SW-L10: seven seeded and three late players - (a) re-pairs round 1, (c) joins from round 3, (b) takes round 3's bye - played out over three rounds, the Swiss completes, and the knockout's seed proposal is the table's top four and its confirm seats them in round 1" +
+        (ok ? "" : ` - division ${divRes.status} ${divId ?? "none"}, entrants ${made.length}, stages ${staged.status}, day one ${dayOne.status}, start ${started.status}, pairs ${pairs.join(",")}, round 1 byes ${round1Byes} boards ${round1Boards.length}, late ${JSON.stringify([lateA, lateC, lateB])}, round 2 ${round2.length}, round 3 ${round3Before.length} -> ${round3.length} holder ${holder ?? "none"}, event statuses ${statuses.join(",")}, standings ${standing.length}, complete ${done.status} ${JSON.stringify(done.json).slice(0, 160)}, proposal ${proposal.status} ${JSON.stringify(proposal.json).slice(0, 240)}, ties ${ties.length}, confirm ${confirmed.status} ${JSON.stringify(confirmed.json).slice(0, 160)}, knockout round 1 ${JSON.stringify(koRound1.map((f) => [f.home_entrant_id, f.away_entrant_id]))}`),
       ok,
     );
   }
