@@ -44,13 +44,13 @@ describe("swissFinishPlanOf", () => {
   });
 });
 
-describe("the confirm (the brief's copy: \"Standings after round {k} become final. Rounds {k+1}–{N} are removed.\")", () => {
+describe("the confirm (owner Q4's copy: \"The Swiss ends after round {k}. The table is recalculated as a {k}-round event. Rounds {k+1}–{N} are removed.\")", () => {
   it("many, one and no rounds removed; the barrier sentence only when rounds go", () => {
     const undo = EN["swiss.refusal.SWISS_ROUNDS_CHANGE_NOT_UNDOABLE"]!;
     expect(swissFinishConfirmBody({ after: 3, rounds: 5 }, msg)).toBe(
       `${fill("stage.finish.confirm.final", { round: 3 })} ${fill("stage.finish.confirm.removeMany", { from: 4, to: 5 })} ${undo}`,
     );
-    expect(EN["stage.finish.confirm.final"]).toBe("Standings after round {round} become final.");
+    expect(EN["stage.finish.confirm.final"]).toBe("The Swiss ends after round {round}. The table is recalculated as a {round}-round event.");
     expect(EN["stage.finish.confirm.removeMany"]).toBe("Rounds {from}–{to} are removed.");
     expect(swissFinishConfirmBody({ after: 4, rounds: 5 }, msg)).toBe(
       `${fill("stage.finish.confirm.final", { round: 4 })} ${fill("stage.finish.confirm.removeOne", { round: 5 })} ${undo}`,

@@ -12,12 +12,28 @@
 //   R3  no menu when no round is waiting to be paired.
 //   X-SW-22 (W3 T8) an unseeded round 1 is the stage's seeded random draw, so the
 //       round-1 menu says so — only when the field it pairs holds an unseeded entrant.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import en from "@/dictionaries/en/ui.json";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import type { Locale } from "@/lib/i18n-constants";
 import { roundOnePairs, SWISS_PAIRINGS } from "@/lib/swiss-pairing";
+
+// W3 app-B T4 (carry n3 from the Task 1 re-review): `roundOnePairs` raises SwissRoundOnePremiseError when the engine refuses
+// a fresh round 1 (a premise that cannot break with a real engine), and the hint is read during a CLIENT render. The mock
+// wraps the real function and breaks it only while a test sets `premise.broken`, so every other test in this file keeps the
+// real engine (the oracle above reads it too).
+const premise = vi.hoisted(() => ({ broken: false }));
+vi.mock("@/lib/swiss-pairing", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/swiss-pairing")>();
+  return {
+    ...real,
+    roundOnePairs: (fieldSize: number, pairing: Parameters<typeof real.roundOnePairs>[1]) => {
+      if (premise.broken) throw new real.SwissRoundOnePremiseError(fieldSize, "rematch");
+      return real.roundOnePairs(fieldSize, pairing);
+    },
+  };
+});
 import { swissActiveFieldSize } from "@/lib/swiss-legend";
 import { planSwissShells } from "@/lib/swiss-shell";
 import {
@@ -295,6 +311,12 @@ describe("swissPairingHint — the line under each option", () => {
   /** A round 1 nobody draws (every entrant seeded). */
   const undrawn = { unseededDrawn: false, seededAheadOfDraw: false };
   const numbered = { fieldSize: 10, seedsNumbered: true, ...undrawn };
+  // The premise flag and the console spy are per test: reset them whether the test passes or fails.
+  const afterEachRestore: (() => void)[] = [];
+  afterEach(() => {
+    premise.broken = false;
+    for (const restore of afterEachRestore.splice(0)) restore();
+  });
 
   it("numbers come from the engine's own pairing, first three, then an ellipsis", () => {
     const fold = roundOnePairs(10, "fold").slice(0, 3).map(([a, b]) => `${a}v${b}`).join(", ");
@@ -313,6 +335,25 @@ describe("swissPairingHint — the line under each option", () => {
     expect(swissPairingHint("fold", loose, t)).toBe(en["schedule.pairing.hintFoldGeneric"]);
     expect(swissPairingHint("rank_adjacent", loose, t)).toBe(en["schedule.pairing.hintAdjacentGeneric"]);
     expect(swissPairingHint("fold", loose, t)).not.toMatch(/\d+v\d+/);
+  });
+
+  it("n3 a round-one premise that breaks degrades to the generic line and logs, instead of throwing into the render", () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    afterEachRestore.push(() => logged.mockRestore());
+    // The positive pair: the same menu, healthy, prints numbers; broken it prints the generic line of each mode.
+    premise.broken = false;
+    expect(swissPairingHint("fold", numbered, t)).toBe("1v6, 2v7, 3v8…");
+    premise.broken = true;
+    expect(() => swissPairingHint("fold", numbered, t)).not.toThrow();
+    expect(swissPairingHint("fold", numbered, t)).toBe(en["schedule.pairing.hintFoldGeneric"]);
+    expect(swissPairingHint("rank_adjacent", numbered, t)).toBe(en["schedule.pairing.hintAdjacentGeneric"]);
+    // Logged once per call that hit the break (the three broken calls above), naming the function.
+    expect(logged).toHaveBeenCalledTimes(3);
+    expect(String(logged.mock.calls[0]![0])).toContain("swissPairingHint");
+    // A menu that never asks for numbers never reaches the engine, so it never logs.
+    logged.mockClear();
+    expect(swissPairingHint("fold", { fieldSize: 10, seedsNumbered: false, ...undrawn }, t)).toBe(en["schedule.pairing.hintFoldGeneric"]);
+    expect(logged).not.toHaveBeenCalled();
   });
 
   it("a field too small to pair gets the generic line rather than an empty one", () => {

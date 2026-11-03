@@ -222,7 +222,18 @@ export function swissPairingHint(
   menu: Pick<SwissPairingMenu, "fieldSize" | "seedsNumbered" | "unseededDrawn" | "seededAheadOfDraw">,
   t: SwissPairingT,
 ): string {
-  const pairs = menu.seedsNumbered ? roundOnePairs(menu.fieldSize, mode) : [];
+  let pairs: Array<[number, number]> = [];
+  if (menu.seedsNumbered) {
+    try {
+      pairs = roundOnePairs(menu.fieldSize, mode);
+    } catch (err) {
+      // W3 app-B T4 (carry n3, Task 1 re-review): `roundOnePairs` raises SwissRoundOnePremiseError when the engine refuses a
+      // fresh round 1 — a broken premise, not an answer. This line is garnish under an option and is read during a client
+      // render, where a throw would blank the whole desk; say the mode's generic line (the same one an unnumbered field
+      // gets) and log the break so it is not silent.
+      console.error("swissPairingHint: the round-one premise broke, showing the generic hint", err);
+    }
+  }
   if (pairs.length === 0) {
     const fold = mode === "fold";
     if (!menu.unseededDrawn) return t(fold ? "schedule.pairing.hintFoldGeneric" : "schedule.pairing.hintAdjacentGeneric");

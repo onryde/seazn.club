@@ -29,7 +29,7 @@ export function swissFinishPlanOf(details: Record<string, unknown> | undefined):
 export type SwissFinishMsg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
 /**
- * The confirm's body: "Standings after round {k} become final. Rounds {k+1}–{N} are removed." (one removed round said
+ * The confirm's body: "The Swiss ends after round {k}. The table is recalculated as a {k}-round event. Rounds {k+1}–{N} are removed." (one removed round said
  * as one; none when every round is played), and — when rounds go — that the change cannot be undone (the finish appends
  * an undo barrier, SWISS_ROUNDS_CHANGE_NOT_UNDOABLE).
  */

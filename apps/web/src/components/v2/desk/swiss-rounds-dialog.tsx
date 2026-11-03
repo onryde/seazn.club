@@ -20,7 +20,7 @@
 // `SwissFinishMenuItem`, the More menu's "Finish the Swiss now" beside it — offered on THE Finish predicate (`finish`,
 // `swissFinishState`), disabled with the reason while no round is complete or the round in progress is undecided — and
 // the same Finish as the dialog's recovery when a SWISS_ROUNDS_LOCKED refusal says `canFinish: true`. Either way the
-// panel confirms first ("Standings after round {k} become final…", `swissFinishConfirm`), then posts. Batch 4 (ruling 3):
+// panel confirms first ("The Swiss ends after round {k}. The table is recalculated as a {k}-round event…", `swissFinishConfirm`), then posts. Batch 4 (ruling 3):
 // both items show on ANY running Swiss, root or fed (`swissMoreItemsOf`, the one rule) — a fed Swiss, which has no "Add
 // late player", gets its own More holding just these two (`SwissMoreMenu`), so the rail's late-add block stays as it is.
 //
