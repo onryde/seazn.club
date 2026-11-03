@@ -31,18 +31,21 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
   // The new presets are visible on the format picker. Americano and Mexicano are
   // named without "(padel)" since Match Day C9: the builder offers them to
   // badminton too (the default sport here), so the label names no one sport.
-  await expect(page.getByText("Americano", { exact: true })).toBeVisible();
-  await expect(page.getByText("Mexicano", { exact: true })).toBeVisible();
-  await expect(page.getByText("Ladder", { exact: true })).toBeVisible();
+  // Read inside the picker: the builder opens on its top suggestion (owner Q5,
+  // Americano here), so the Review receipt names that format too.
+  const cards = page.getByTestId("division-builder-templates");
+  await expect(cards.getByText("Americano", { exact: true })).toBeVisible();
+  await expect(cards.getByText("Mexicano", { exact: true })).toBeVisible();
+  await expect(cards.getByText("Ladder", { exact: true })).toBeVisible();
   // L3/#414 pass 3 — the two new qualification-from-any-stage presets.
-  await expect(page.getByText("Knockout + Plate", { exact: true })).toBeVisible();
-  await expect(page.getByText("Qualifying + Main draw", { exact: true })).toBeVisible();
+  await expect(cards.getByText("Knockout + Plate", { exact: true })).toBeVisible();
+  await expect(cards.getByText("Qualifying + Main draw", { exact: true })).toBeVisible();
   // Swiss Playoff and Swiss Knockout. `exact` matters: the plain "Swiss" card
   // sits right beside them, and a substring match would resolve to whichever
   // came first.
-  await expect(page.getByText("Swiss Playoff", { exact: true })).toBeVisible();
-  await expect(page.getByText("Swiss Knockout", { exact: true })).toBeVisible();
-  await expect(page.getByText("Swiss", { exact: true })).toBeVisible();
+  await expect(cards.getByText("Swiss Playoff", { exact: true })).toBeVisible();
+  await expect(cards.getByText("Swiss Knockout", { exact: true })).toBeVisible();
+  await expect(cards.getByText("Swiss", { exact: true })).toBeVisible();
   // Owner ruling 2026-11-01 (Match Day D1, legs Option A): the Triple round
   // robin is offered to no sport any more. Asserted only now, with the
   // picker's cards on screen, so an unrendered picker cannot pass it.
