@@ -64,8 +64,15 @@ function categoryRadios(h: ReturnType<typeof mount>) {
 describe("DivisionBuilder — division-builder-category bench hook", () => {
   it('the category group\'s fieldset carries data-testid="division-builder-category"', () => {
     const h = mount();
-    const fieldset = h.tree().find((e) => e.type === "fieldset");
-    expect(fieldset, "no <fieldset> in the tree").toBeTruthy();
+    // The INNERMOST fieldset holding the category radios - located by its radios, never by the testid under test. Since
+    // C9 fix round 1 (I1) the whole "Who" card is a <fieldset> too (it locks once the division is saved), so the first
+    // fieldset in the tree is no longer the category group.
+    const holders = h
+      .tree()
+      .filter((e) => e.type === "fieldset" && walk(e).some((c) => propsOf(c).name === "division-category"));
+    expect(holders.length, "no <fieldset> holds the category radios").toBeGreaterThan(0);
+    const fieldset = holders.find((outer) => !holders.some((inner) => inner !== outer && walk(outer).includes(inner)));
+    expect(fieldset, "no innermost holder").toBeTruthy();
     expect(propsOf(fieldset!)["data-testid"]).toBe("division-builder-category");
   });
 

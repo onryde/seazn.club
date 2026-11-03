@@ -7538,5 +7538,8 @@
   "divBuilder.review.blocked": "{step} is not finished: {reason}",
   "divBuilder.review.goTo": "Go to {step}",
   "divBuilder.created.noStages": "{name} was created, but its stages were not added. Fix the format, then Create adds them to it.",
+  "divBuilder.saved.note": "{name} is saved with these. Change them later on the division's page.",
+  "divBuilder.review.saved": "Saved",
+  "divBuilder.review.savedLater": "Saved with the division. Change it on the division's page.",
   "divBuilder.create.stages": "Add the stages"
 }

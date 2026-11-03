@@ -19,7 +19,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { effectiveEntrantModel, type EntrantKind } from "@seazn/engine/sport";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
-import { DivisionBuilder, divisionCreateConfig, eligibilityPatch, type SportOption } from "@/components/v2/division-builder";
+import { DivisionBuilder, SavedNote, divisionCreateConfig, eligibilityPatch, type SportOption } from "@/components/v2/division-builder";
+import { DivisionRulesStrip } from "@/components/v2/rules/division-rules-strip";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
 import { rulesFor } from "@/lib/match-rules";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -412,6 +413,61 @@ describe("Create", () => {
     await flush();
     expect(posts(/\/divisions$/).length, "the division is POSTed once").toBe(1);
     expect(posts(/\/stages$/).length, "the stages twice: refused, then sent").toBe(2);
+    expect(pushMock).toHaveBeenCalledWith("/o/org/c/comp/d/open?tab=fixtures");
+  });
+
+  // C9 fix round 1 (I1): the retry sends the stages only, so what the division was SAVED with must not stay editable -
+  // an edit there would be dropped without a word. Who plays and the Division rules strip lock, the receipt says which
+  // rows are saved, and the retry REPLACES the stages (PUT): a first POST whose answer was lost cannot double them.
+  it("I1: after a refused stages request, Who plays and the rules lock, the receipt says saved, and the retry PUTs the stages", async () => {
+    let stagesRefused = 0;
+    apiV1Mock.mockImplementation(async (url: string) => {
+      if (String(url).endsWith("/stages") && stagesRefused === 0) {
+        stagesRefused++;
+        throw new TypeError("Failed to fetch"); // a dropped connection, not a server answer
+      }
+      return String(url).endsWith("/divisions") ? { id: "d1", slug: "open" } : {};
+    });
+    const h = mount(sportsFor("badminton"));
+    // The empty case first: nothing is saved before the first Create, so nothing is locked and every row has Edit.
+    walkToReview(h, "Open");
+    expect(propsOf(byTestId(h, "division-builder-who-fields")!).disabled).toBe(false);
+    expect(propsOf(byTestId(h, "division-builder-rules-fields")!).disabled).toBe(false);
+    for (const id of ["who", "format", "rules", "points", "tiebreaks", "schedule"]) expect(byTestId(h, `division-builder-edit-${id}`), id).toBeDefined();
+    expect(h.tree().some((e) => e.type === SavedNote)).toBe(false);
+    pressCreate(h);
+    await flush();
+    expect(byTestId(h, "division-builder-created-no-stages")).toBeDefined();
+    // Saved: the two steps' controls sit in a disabled fieldset (a browser disables every control inside it).
+    expect(propsOf(byTestId(h, "division-builder-who-fields")!).disabled).toBe(true);
+    expect(propsOf(byTestId(h, "division-builder-rules-fields")!).disabled).toBe(true);
+    expect(walk(byTestId(h, "division-builder-who-fields")!).some((e) => propsOf(e)["data-testid"] === "division-builder-name")).toBe(true);
+    expect(walk(byTestId(h, "division-builder-rules-fields")!).some((e) => e.type === DivisionRulesStrip)).toBe(true);
+    expect(h.tree().filter((e) => e.type === SavedNote).map((e) => propsOf(e).name)).toEqual(["Open", "Open"]);
+    // The receipt: saved rows lose Edit and say so; Format and the schedule seed are still the organiser's to change.
+    let savedRows = 0;
+    for (const id of ["who", "rules", "points", "tiebreaks"]) {
+      expect(byTestId(h, `division-builder-edit-${id}`), id).toBeUndefined();
+      expect(textOf(byTestId(h, `division-builder-saved-${id}`)!), id).toBe(UI["divBuilder.review.saved"]);
+      expect(reviewRow(h, id), id).toContain(UI["divBuilder.review.savedLater"]);
+      savedRows++;
+    }
+    expect(savedRows).toBe(4);
+    for (const id of ["format", "schedule"]) {
+      expect(byTestId(h, `division-builder-edit-${id}`), id).toBeDefined();
+      expect(byTestId(h, `division-builder-saved-${id}`), id).toBeUndefined();
+    }
+    // The refusal lands on Format (the step still to send); back to Review through each Next.
+    expect(currentStep(h)).toBe("format");
+    next(h);
+    next(h);
+    expect(currentStep(h)).toBe("review");
+    // The retry: no second division, and the stages REPLACE (PUT) rather than add (the first request was POST).
+    pressCreate(h);
+    await flush();
+    expect(posts(/\/divisions$/).length).toBe(1);
+    const stageMethods = posts(/\/stages$/).map(([, o]) => (o as { method: string }).method);
+    expect(stageMethods).toEqual(["POST", "PUT"]);
     expect(pushMock).toHaveBeenCalledWith("/o/org/c/comp/d/open?tab=fixtures");
   });
 });

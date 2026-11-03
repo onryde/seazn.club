@@ -7538,5 +7538,8 @@
   "divBuilder.review.blocked": "{step} n'est pas terminé : {reason}",
   "divBuilder.review.goTo": "Aller à {step}",
   "divBuilder.created.noStages": "{name} a été créée, mais ses phases n'ont pas été ajoutées. Corrigez le format, puis Créer les ajoutera.",
+  "divBuilder.saved.note": "{name} est enregistrée avec ces réglages. Modifiez-les plus tard sur la page de la division.",
+  "divBuilder.review.saved": "Enregistré",
+  "divBuilder.review.savedLater": "Enregistré avec la division. Modifiez-le sur la page de la division.",
   "divBuilder.create.stages": "Ajouter les phases"
 }

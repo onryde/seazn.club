@@ -7538,5 +7538,8 @@
   "divBuilder.review.blocked": "{step} is nog niet klaar: {reason}",
   "divBuilder.review.goTo": "Naar {step}",
   "divBuilder.created.noStages": "{name} is aangemaakt, maar de fases zijn niet toegevoegd. Pas het format aan; Aanmaken voegt ze dan toe.",
+  "divBuilder.saved.note": "{name} is hiermee opgeslagen. Wijzig dit later op de pagina van de divisie.",
+  "divBuilder.review.saved": "Opgeslagen",
+  "divBuilder.review.savedLater": "Opgeslagen met de divisie. Wijzig dit op de pagina van de divisie.",
   "divBuilder.create.stages": "Fases toevoegen"
 }

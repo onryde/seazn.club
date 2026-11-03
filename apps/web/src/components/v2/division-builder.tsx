@@ -90,6 +90,19 @@ export interface SportOption {
   entrants?: EntrantChoice;
 }
 
+/** The receipt rows the division POST already saved (I1): read-only once the division exists. */
+const SAVED_WITH_DIVISION: readonly string[] = ["who", "rules", "points", "tiebreaks"];
+
+/** Who plays and Division rules, once saved: what they show is what the division holds, and where to change it. */
+export function SavedNote({ name }: { name: string }) {
+  const msg = useMsg();
+  return (
+    <p role="status" className="mb-3 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700" data-testid="division-builder-saved-note">
+      {msg("divBuilder.saved.note", { name })}
+    </p>
+  );
+}
+
 /** The plan boxes' bounds (the inputs' own min/max). */
 const PLAN_BOUNDS = {
   entrants: { min: 2, max: 64, whole: true },
@@ -369,6 +382,10 @@ export function DivisionBuilder({
   const [busy, setBusy] = useState(false);
   // A division created whose stages were then refused: Create again adds the stages to IT, never a second division.
   const [created, setCreated] = useState<{ id: string; slug: string; name: string } | null>(null);
+  // C9 fix round 1 (I1): what the division was saved with (Who plays, the Division rules strip) is read-only once it
+  // exists; only the stages (Format) and the schedule seed are still to be sent.
+  const saved = created !== null;
+  const rowSaved = (id: string) => saved && SAVED_WITH_DIVISION.includes(id);
 
   function selectSport(key: string) {
     setSportKey(key);
@@ -641,10 +658,13 @@ export function DivisionBuilder({
         });
         division = { id: made.id, slug: made.slug, name };
       }
+      const retry = created !== null;
       setCreated(division);
       phase = "stages";
       stages = buildStages().map((s, i) => ({ ...s, seq: i + 1 }));
-      await apiV1(`/api/v1/divisions/${division.id}/stages`, { method: "POST", json: stages });
+      // I1: a retry REPLACES the stages (PUT) rather than adding them: on a bad connection the first POST can land while
+      // its answer is lost, and a second POST would leave the division with two stage graphs.
+      await apiV1(`/api/v1/divisions/${division.id}/stages`, { method: retry ? "PUT" : "POST", json: stages });
 
       // Seed scheduling settings. Non-fatal: the board can set these later, so a failure here does not block create.
       const seedInput = { courts, matchMinutes, startAt: scheduleStart, endAt: scheduleEnd };
@@ -820,7 +840,10 @@ export function DivisionBuilder({
 
       {/* ---------------- 1 Who plays ---------------- */}
       <section className={section("who")} data-testid="division-builder-who" aria-label={msg("divBuilder.step.who")}>
-        <div className="card space-y-4 p-4 md:p-6">
+        {created !== null && <SavedNote name={created.name} />}
+        {/* C9 fix round 1 (I1): once the division is saved (its stages refused), what it was saved with is read-only here -
+            a retry sends the stages only, so an edit here would be silently dropped. */}
+        <fieldset disabled={saved} className="card min-w-0 space-y-4 p-4 md:p-6" data-testid="division-builder-who-fields">
           <label className="block">
             <span className="label">{msg("wizard.divisionName")}</span>
             <input
@@ -979,7 +1002,7 @@ export function DivisionBuilder({
               </label>
             </div>
           </div>
-        </div>
+        </fieldset>
       </section>
 
       {/* ---------------- 2 Format ---------------- */}
@@ -1228,6 +1251,9 @@ export function DivisionBuilder({
 
       {/* ---------------- 3 Division rules ---------------- */}
       <section className={section("rules")} data-testid="division-builder-rules" aria-label={msg("rulesStrip.title")}>
+        {created !== null && <SavedNote name={created.name} />}
+        {/* I1: the rules were saved with the division - read-only on a retry; the schedule card below is not saved yet. */}
+        <fieldset disabled={saved} className="min-w-0" data-testid="division-builder-rules-fields">
         {sportModule !== null && sport !== undefined && (
           <DivisionRulesStrip
             // The draft has no division yet; the strip never PATCHes in draft mode (it throws if it ever tried).
@@ -1258,6 +1284,7 @@ export function DivisionBuilder({
             }}
           />
         )}
+        </fieldset>
 
         <div className="card space-y-4 p-4 md:p-6" data-testid="division-builder-schedule">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
@@ -1378,17 +1405,23 @@ export function DivisionBuilder({
               <div className="min-w-0">
                 <p className="text-xs font-semibold text-slate-600">{r.label}</p>
                 <p className="min-w-0 break-words text-sm text-slate-900">{r.value}</p>
-                <p className="mt-0.5 text-xs text-slate-500">{r.later}</p>
+                <p className="mt-0.5 text-xs text-slate-500">{rowSaved(r.id) ? msg("divBuilder.review.savedLater") : r.later}</p>
               </div>
-              <button
-                type="button"
-                onClick={() => goTo(r.step, { fromReview: true })}
-                aria-label={msg("divBuilder.review.editRow", { row: r.label })}
-                data-testid={`division-builder-edit-${r.id}`}
-                className="btn btn-ghost min-h-11 shrink-0 px-3 text-sm"
-              >
-                {msg("divBuilder.review.edit")}
-              </button>
+              {rowSaved(r.id) ? (
+                <span className="shrink-0 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800" data-testid={`division-builder-saved-${r.id}`}>
+                  {msg("divBuilder.review.saved")}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => goTo(r.step, { fromReview: true })}
+                  aria-label={msg("divBuilder.review.editRow", { row: r.label })}
+                  data-testid={`division-builder-edit-${r.id}`}
+                  className="btn btn-ghost min-h-11 shrink-0 px-3 text-sm"
+                >
+                  {msg("divBuilder.review.edit")}
+                </button>
+              )}
             </li>
           ))}
         </ul>
