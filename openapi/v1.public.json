@@ -12872,7 +12872,7 @@
     },
     "/api/v1/divisions/{id}/roster": {
       "get": {
-        "summary": "Every (person → team entrant) membership in the division (same-division double-roster warning)",
+        "summary": "Every (person → entrant) membership of an entrant still in the division's field, of every kind, with `entrant_kind` (a withdrawn or disqualified entrant holds no one, nor do an americano division's rotation pairs). The console's one-team-per-division read: a person listed here is refused on any other entrant of the division (409 PERSON_ON_OTHER_TEAM, the roster write's own predicate)",
         "tags": [
           "entrants"
         ],
