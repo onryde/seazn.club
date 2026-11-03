@@ -479,23 +479,44 @@ describe("Create", () => {
 });
 
 describe("the entrant kind (asked at creation; the engine's model per sport)", () => {
-  // Owner ruling 2026-11-03 (C9 Q3): a picked kind narrows the division to that kind (Settings can widen it later).
-  it("left at the sport's default, nothing is sent; another kind narrows the division to that kind alone", async () => {
+  // Owner rulings 2026-11-03 (C9 Q3, then n3 "yes"): the kind shown narrows the division to that kind ALWAYS - picked or
+  // left at the sport's default (Settings can widen it later). Review says the one kind the division takes.
+  it("left at the sport's default, the division takes that kind alone; another kind narrows it to that kind; Review says which", async () => {
+    expect(modelOf("badminton").kinds, "premise: badminton allows more than individuals").toContain("pair");
     const untouched = mount(sportsFor("badminton"));
     walkToReview(untouched, "Open");
+    expect(reviewRow(untouched, "who")).toContain(UI["divBuilder.review.only.individual"]);
     pressCreate(untouched);
     await flush();
-    expect(Object.hasOwn(divisionBody().config as object, "entrants"), "the default kind sends nothing").toBe(false);
+    expect((divisionBody().config as { entrants?: unknown }).entrants, "the untouched default narrows too (n3)").toEqual({ kinds: ["individual"], defaultKind: "individual" });
 
     apiV1Mock.mockClear();
     const pairs = mount(sportsFor("badminton"));
     pickKind(pairs, "pair");
     walkToReview(pairs, "Doubles");
-    expect(reviewRow(pairs, "who")).toContain(UI["divBuilder.entrants.kind.pair"]);
+    expect(reviewRow(pairs, "who")).toContain(UI["divBuilder.review.only.pair"]);
+    expect(reviewRow(pairs, "who")).not.toContain(UI["divBuilder.review.only.individual"]);
     pressCreate(pairs);
     await flush();
-    expect(modelOf("badminton").kinds, "premise: badminton allows more than pairs").toContain("individual");
     expect((divisionBody().config as { entrants?: unknown }).entrants).toEqual({ kinds: ["pair"], defaultKind: "pair" });
+  });
+
+  it("every sport, untouched: Create sends the engine's default kind alone, and Review names it (counts)", async () => {
+    let checked = 0;
+    const engineKeys = builtinModules.map((m) => m.key);
+    for (const key of engineKeys) {
+      apiV1Mock.mockClear();
+      const model = modelOf(key);
+      const h = mount(sportsFor(key));
+      walkToReview(h, `Open ${key}`);
+      expect(reviewRow(h, "who"), key).toContain(UI[`divBuilder.review.only.${model.defaultKind}`]);
+      pressCreate(h);
+      await flush();
+      expect((divisionBody().config as { entrants?: unknown }).entrants, key).toEqual({ kinds: [model.defaultKind], defaultKind: model.defaultKind });
+      checked++;
+    }
+    expect(checked).toBe(engineKeys.length);
+    expect(checked).toBeGreaterThan(5);
   });
 
   it("opens at the engine's default per sport - teams for volleyball, individuals for badminton (class 19)", () => {
@@ -701,7 +722,9 @@ describe("every builtin sport, walked from Who plays to Create (counts)", () => 
       const body = divisionBody();
       expect(body.sport_key, m.key).toBe(m.key);
       expect(body.variant_key, m.key).toBe(pickVariant(m.key, sport.variants));
-      expect(Object.hasOwn(body.config as object, "entrants"), `${m.key}: the default kind sends nothing`).toBe(false);
+      // n3 (owner 2026-11-03): the kind shown - here the engine's default, untouched - narrows the division to it alone.
+      const kindModel = modelOf(m.key);
+      expect((body.config as { entrants?: unknown }).entrants, `${m.key}: the default kind, alone`).toEqual({ kinds: [kindModel.defaultKind], defaultKind: kindModel.defaultKind });
       expect(pushMock, m.key).toHaveBeenCalledWith("/o/org/c/comp/d/open?tab=fixtures");
       tally.sports++;
     });

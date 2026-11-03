@@ -34,7 +34,6 @@ import {
   applyStandingsCarry,
   buildTemplateStages,
   clampKnob,
-  templateAfterSportChange,
   templateHasProgression,
   templatesForSport,
   type StageDraft,
@@ -80,9 +79,12 @@ import {
   entrantKindAfterSportChange,
   entrantsConfigFor,
   divisionEntrantKinds,
+  divisionFormatOffer,
+  divisionPlaysTemplate,
   OPENING_PLAN,
   openingKnobs,
   openingTemplate,
+  pickAfterChange,
   firstBlockedStep,
   formatPickerOrder,
   rankTemplates,
@@ -126,6 +128,17 @@ export function SavedNote({ name }: { name: string }) {
  *  never one it might not be able to play. */
 function offerKinds(sport: SportOption | undefined): readonly string[] {
   return sport?.entrants?.kinds ?? [];
+}
+
+/** The kinds a division of this sport will take with this kind shown on Who plays (Q3, n3); none declared, none. */
+function kindsFor(sport: SportOption | undefined, kind: EntrantKind | null): readonly string[] {
+  return sport?.entrants === undefined ? [] : divisionEntrantKinds(sport.entrants, kind);
+}
+
+/** The Format step's offer (C9 review 2, N1): what the sport is offered (its engine model), less what a division taking
+ *  `kinds` cannot play. The cards, the ranking, the suggested five, the opening and Next all read it. */
+function formatOfferFor(sport: SportOption | undefined, kinds: readonly string[]): string[] {
+  return sport === undefined ? [] : divisionFormatOffer(templatesForSport(sport.key, offerKinds(sport)).map((t) => t.key), kinds);
 }
 
 /** The plan boxes' bounds (the inputs' own min/max). */
@@ -188,6 +201,12 @@ const KIND_LABEL: Record<EntrantKind, MessageKey> = {
   individual: "divBuilder.entrants.kind.individual",
   pair: "divBuilder.entrants.kind.pair",
   team: "divBuilder.entrants.kind.team",
+};
+/** Review's Who plays row: the one kind the division takes (C9 review 2, n3), in the run of its " · " summary. */
+const REVIEW_KIND_ONLY: Record<EntrantKind, MessageKey> = {
+  individual: "divBuilder.review.only.individual",
+  pair: "divBuilder.review.only.pair",
+  team: "divBuilder.review.only.team",
 };
 const KIND_ONLY: Record<EntrantKind, MessageKey> = {
   individual: "divBuilder.entrants.only.individual",
@@ -367,12 +386,16 @@ export function DivisionBuilder({
   // suggester's first for the sport at the opening plan that the division's entrant kinds can play (model.ts
   // openingTemplate). It follows the sport and the kind picked on Who plays, never the plan typed on Format.
   const [templatePicked, setTemplatePicked] = useState<string | null>(null);
+  // C9 review 2 (N1): the kinds the division will take, and the formats it can play - the offer, the ranking, the
+  // opening and Next all read this one list, so a division narrowed to Pairs or Teams is never offered Americano.
+  const divisionKinds = kindsFor(sport, entrantKind);
+  const formatOffer = formatOfferFor(sport, divisionKinds);
   const template =
     templatePicked ??
     openingTemplate(
-      templatesForSport(sportKey, offerKinds(sport)).map((t) => t.key),
+      formatOffer,
       defaultMatchMinutes(sportKey, sport ? pickVariant(sport.key, sport.variants) : ""),
-      sport?.entrants === undefined ? [] : divisionEntrantKinds(sport.entrants, entrantKind),
+      divisionKinds,
       Object.keys(templateLocks),
     );
   const [qualified, setQualified] = useState(4);
@@ -452,11 +475,12 @@ export function DivisionBuilder({
     setOnlinePlay("off");
     setCameraChoice(CAMERA_INHERIT);
     // A kind the organiser never picked follows the sport; a picked one is kept where the new sport allows it.
-    setEntrantKind(next?.entrants && entrantKind !== null ? entrantKindAfterSportChange(entrantKind, entrantKindTouched, next.entrants) : (next?.entrants?.defaultKind ?? null));
-    // Chess and the team sports are offered no americano/mexicano (templatesForSport): a pick the new sport is not
-    // offered falls back to league rather than staying selected behind a card that is no longer rendered. Untouched, the
-    // opening format follows the sport (Q5).
-    setTemplatePicked((t) => (t === null ? null : templateAfterSportChange(t, key, offerKinds(next))));
+    const nextKind = next?.entrants && entrantKind !== null ? entrantKindAfterSportChange(entrantKind, entrantKindTouched, next.entrants) : (next?.entrants?.defaultKind ?? null);
+    setEntrantKind(nextKind);
+    // Chess and the team sports are offered no americano/mexicano (templatesForSport), nor is a division of pairs or
+    // teams (N1): a pick the new sport's division is not offered is dropped rather than staying selected behind a card
+    // that is no longer rendered - to the opening format (n1), not a picked League. Untouched, the opening follows (Q5).
+    setTemplatePicked((t) => pickAfterChange(t, formatOfferFor(next, kindsFor(next, nextKind))));
     if (!matchMinutesTouched) setMatchMinutes(defaultMatchMinutes(key, firstVariant));
   }
 
@@ -538,7 +562,7 @@ export function DivisionBuilder({
   const matchMinutes = (!matchMinutesTouched ? timeControlMatchMinutes(timeControlKey) : undefined) ?? sportMatchMinutes;
   const venue = venueNoun(sportKey); // "pitch" / "table" / "court" / "board" / "rink"
   const VenueCap = venueLabel(sportKey);
-  const offered = templatesForSport(sportKey, offerKinds(sport));
+  const offered = formatOffer;
   const planMinutes = matchMinutes >= 1 ? matchMinutes : 30;
   const plan = {
     entrants: planEntrantCount,
@@ -548,7 +572,7 @@ export function DivisionBuilder({
   };
   // Ranked at the builder's opening knobs, so the suggested five do not reshuffle while a knob moves; each card's own
   // counts are at the knobs as they stand.
-  const ranked = rankTemplates(offered.map((t) => t.key), plan, openingKnobs(plan.entrants));
+  const ranked = rankTemplates(offered, plan, openingKnobs(plan.entrants));
   // C9 R2 (owner 2026-11-03): the cards in the ranking's order with Americano and Mexicano after every other.
   const pickerOrder = formatPickerOrder(ranked.map((r) => r.key));
   const suggested = pickerOrder.slice(0, SUGGESTED_COUNT);
@@ -584,6 +608,8 @@ export function DivisionBuilder({
       if (bound !== null) return bound;
       // Said in the reader's language; the upgrade box below the cards gives the plan's own reason.
       if (templateLock !== undefined) return msg("divBuilder.err.formatLocked", { format: templateLabel(template) });
+      // N1: a format the division's kinds cannot play (a stale pick that outlived a change of kind) never passes.
+      if (!divisionPlaysTemplate(template, divisionKinds)) return msg("divBuilder.err.formatKind", { format: templateLabel(template) });
       if (carryLocked) return msg("divBuilder.err.carryLocked");
     }
     if (s === "rules") {
@@ -809,7 +835,8 @@ export function DivisionBuilder({
       value: [
         name.trim() || "—",
         sportLabel(sportKey, msg),
-        entrantKind === null ? null : kindLabel(entrantKind),
+        // n3: the division takes this kind alone - Review says so ("Teams only").
+        entrantKind === null ? null : msg(REVIEW_KIND_ONLY[entrantKind]),
         msg(CATEGORIES.find((c) => c.key === category)!.labelKey),
         maxAge && Number(maxAge) > 0 ? msg("divBuilder.review.under", { age: Number(maxAge) }) : msg("divBuilder.review.allAges"),
       ]
@@ -934,7 +961,9 @@ export function DivisionBuilder({
         {created !== null && <SavedNote name={created.name} />}
         {/* C9 fix round 1 (I1): once the division is saved (its stages refused), what it was saved with is read-only here -
             a retry sends the stages only, so an edit here would be silently dropped. */}
-        <fieldset disabled={saved} className="card min-w-0 space-y-4 p-4 md:p-6" data-testid="division-builder-who-fields">
+        {/* C9 review 2 (n5): once saved, the step reads as read-only - dimmed, as its disabled controls are - beside the
+            note saying where it changes now. A disclosure closed then stays closed; Review lists what it holds. */}
+        <fieldset disabled={saved} className="card min-w-0 space-y-4 p-4 transition-opacity disabled:opacity-70 md:p-6" data-testid="division-builder-who-fields">
           <label className="block">
             <span className="label">{msg("wizard.divisionName")}</span>
             <input
@@ -1013,6 +1042,9 @@ export function DivisionBuilder({
                         onChange={() => {
                           setEntrantKind(k);
                           setEntrantKindTouched(true);
+                          // N1: a pick the division of this kind cannot play (Americano, once it takes pairs or teams)
+                          // is dropped, so the opening format applies again (n1).
+                          setTemplatePicked((t) => pickAfterChange(t, formatOfferFor(sport, kindsFor(sport, k))));
                         }}
                         className="sr-only"
                       />
@@ -1177,9 +1209,10 @@ export function DivisionBuilder({
           <fieldset className="min-w-0">
             <legend className="text-sm font-medium text-slate-800">{showAll ? msg("divBuilder.allFormats") : msg("divBuilder.suggested")}</legend>
             <div id="division-builder-templates" className="mt-2 grid gap-2 md:grid-cols-2" data-testid="division-builder-templates">
-              {/* The sport's OFFER, not every template: chess is individual-only (owner ruling 2026-10-26), so it is
-                  offered no americano/mexicano (format-templates.ts templatesForSport). In the picker's order: the
-                  ranking, Americano and Mexicano after every other (C9 R2). */}
+              {/* The division's OFFER, not every template: chess is individual-only (owner ruling 2026-10-26), so it is
+                  offered no americano/mexicano (format-templates.ts templatesForSport), nor is a division of pairs or
+                  teams (C9 review 2, N1: formatOfferFor). In the picker's order: the ranking, Americano and Mexicano
+                  after every other (C9 R2). */}
               {pickerOrder.map((key) => {
                 const t = STAGE_TEMPLATES.find((x) => x.key === key)!;
                 const row = ranked.find((r) => r.key === key)!;
@@ -1377,7 +1410,7 @@ export function DivisionBuilder({
       <section className={section("rules")} data-testid="division-builder-rules" aria-label={msg("rulesStrip.title")}>
         {created !== null && <SavedNote name={created.name} />}
         {/* I1: the rules were saved with the division - read-only on a retry; the schedule card below is not saved yet. */}
-        <fieldset disabled={saved} className="min-w-0" data-testid="division-builder-rules-fields">
+        <fieldset disabled={saved} className="min-w-0 transition-opacity disabled:opacity-70" data-testid="division-builder-rules-fields">
         {sportModule !== null && sport !== undefined && (
           <DivisionRulesStrip
             // The draft has no division yet; the strip never PATCHes in draft mode (it throws if it ever tried).

@@ -41,8 +41,9 @@ export function sportRefusesStageKind(sportKey: string | null | undefined, kind:
  *  (americanoGen pairs individual players) and the PAIR entrants it mints (pairEntrantsFor). Match Day C9 fix round 1:
  *  a sport whose ENGINE model lacks either is not offered the format (review I5: football, cricket, hockey and ice
  *  hockey hold teams only, volleyball teams and pairs, and chess individuals only, so the engine says what the chess
- *  ruling says), and the builder never OPENS on a format the division's own kinds cannot play (owner Q5, with Q3's
- *  narrowing). */
+ *  ruling says). The division builder narrows that offer by the DIVISION's one kind with its own rule (C9 review 2, N1:
+ *  lib/division-builder/model.ts divisionPlaysTemplate - individual players are what a division needs). Settings still
+ *  reads THIS rule with the division's effective kinds (review 2, n2: unchanged by ruling). */
 export const PAIR_MINTING_NEEDS_KINDS: readonly string[] = Object.freeze(["individual", "pair"]);
 
 /** Can an entrant model holding these kinds (a sport's, or a division's) NOT play this stage kind? Only a pair-minting

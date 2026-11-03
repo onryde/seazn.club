@@ -335,13 +335,6 @@ export function templatesForSport(
   );
 }
 
-/** The builder's template after the organiser picks another sport: kept when the new sport is offered it, else the
- *  builder's own default (`league`), so a chess or football division can never be submitted with an americano picked
- *  for padel. */
-export function templateAfterSportChange(template: string, sportKey: string, entrantKinds: readonly string[]): string {
-  return templatesForSport(sportKey, entrantKinds).some((t) => t.key === template) ? template : "league";
-}
-
 /** Clamps a knob (poolCount, qualified) into [min,max] — called at both UI
  *  call sites (division-builder.tsx, division-settings.tsx) right before
  *  buildTemplateStages, not on every keystroke. A `<input type="number"

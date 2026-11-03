@@ -6,11 +6,12 @@
 // opening knobs the ranking declares. Every sport, counted; League (the old default) is never the top suggestion at the
 // opening plan, so every row is a case where the old answer and the right one differ.
 //
-// One guard on top of the ruling (accepted by the owner 2026-11-03): Americano rotates INDIVIDUAL players into PAIR
-// entrants (the engine's americanoGen), so a division whose kinds lack either opens on the first ranked format it can
-// play instead. Since review I5 the SPORT's offer already leaves Americano out where the sport's engine model cannot play
-// it (the team sports, volleyball, chess), so every sport opens on the suggester's very first; the guard is reached by a
-// division narrowed to teams on Who plays (Q3), whose sport is still offered Americano.
+// One guard on top of the ruling (accepted by the owner 2026-11-03): Americano rotates INDIVIDUAL players into pairs (the
+// server's americanoGen), so a division that takes no individual players opens on the first ranked format it can play
+// instead. Since review I5 the SPORT's offer already leaves Americano out where the sport's engine model cannot play it
+// (the team sports, volleyball, chess), and since review 2 (N1) the Format offer is the DIVISION's - a division narrowed
+// to Pairs or Teams on Who plays is not offered it at all - so every division opens on the first of its own offer. The
+// suggester's ranking below is of the SPORT's offer, read with the division's kinds (the one kind shown, n3).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
@@ -65,13 +66,16 @@ async function flush() {
 }
 const boxNumber = (h: H, id: string) => Number(propsOf(byTestId(h, id)!).value);
 
-/** The rulebook fact the guard rests on: Americano/Mexicano (stage kind "americano") pairs individual players into pair
- *  entrants, so the division must take both. */
+/** The rulebook fact the guard rests on: Americano/Mexicano (stage kind "americano") pairs up individual players (the
+ *  server mints the pairs), so the DIVISION must take individual players (C9 review 2, N1). */
 const playableBy = (kinds: readonly string[]) => (key: string) =>
   !STAGE_TEMPLATES.find((t) => t.key === key)!
     .build({ qualified: 4, swissRounds: 4, poolCount: 2, legs: 1 })
-    .some((s) => s.kind === "americano" && !(kinds.includes("individual") && kinds.includes("pair")));
-const sportKinds = (key: string) => effectiveEntrantModel(builtinModules.find((m) => m.key === key)!.entrantModel ?? null, null).kinds;
+    .some((s) => s.kind === "americano" && !kinds.includes("individual"));
+const modelOfSport = (key: string) => effectiveEntrantModel(builtinModules.find((m) => m.key === key)!.entrantModel ?? null, null);
+const sportKinds = (key: string) => modelOfSport(key).kinds;
+/** The kinds an untouched division of this sport takes (n3: its default kind, alone). */
+const untouchedKinds = (key: string) => [modelOfSport(key).defaultKind];
 
 /** The suggester's ranking for the sport on screen, at the plan the Format step's boxes open at. */
 function suggestersRanking(h: H, sportKey: string): string[] {
@@ -85,8 +89,8 @@ function suggestersRanking(h: H, sportKey: string): string[] {
   const offered = templatesForSport(sportKey, sportKinds(sportKey)).map((t) => t.key);
   return rankTemplates(offered, plan, { qualified: 4, swissRounds: swissRoundsDefault(plan.entrants), poolCount: 2, legs: 1 }).map((r) => r.key);
 }
-/** The suggester's first that a division taking these kinds can play. */
-const suggestersPick = (h: H, sportKey: string, kinds: readonly string[] = sportKinds(sportKey)): string =>
+/** The suggester's first that a division taking these kinds can play (untouched: the sport's default kind, n3). */
+const suggestersPick = (h: H, sportKey: string, kinds: readonly string[] = untouchedKinds(sportKey)): string =>
   suggestersRanking(h, sportKey).find(playableBy(kinds))!;
 
 beforeEach(() => {

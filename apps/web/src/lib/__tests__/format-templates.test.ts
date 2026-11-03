@@ -22,7 +22,6 @@ import {
   buildTemplateStages,
   clampKnob,
   detectTemplate,
-  templateAfterSportChange,
   templateHasProgression,
   templatesForSport,
 } from "../format-templates";
@@ -779,21 +778,5 @@ describe("templatesForSport: the format templates offered per sport (chess indiv
     expect(keysOf(templatesForSport(CHESS, kindsFor(CHESS)))).toEqual(first);
     expect(keysOf(STAGE_TEMPLATES)).toEqual(ALL_KEYS);
     expect(ALL_KEYS).toEqual(expect.arrayContaining([...REFUSED_FOR_CHESS, ...RETIRED]));
-  });
-
-  it("templateAfterSportChange: switching the builder to chess off americano/mexicano falls back to league, an offered pick is kept, and switching back keeps league", () => {
-    expect(templateAfterSportChange("americano", CHESS, kindsFor(CHESS))).toBe("league");
-    expect(templateAfterSportChange("mexicano", CHESS, kindsFor(CHESS))).toBe("league");
-    expect(templateAfterSportChange("swiss", CHESS, kindsFor(CHESS))).toBe("swiss");
-    expect(templateAfterSportChange("americano", "badminton", kindsFor("badminton"))).toBe("americano");
-    // Retired from every sport's offer (owner ruling 2026-11-01): a builder can never be left holding it.
-    expect(templateAfterSportChange("triple_rr", "badminton", kindsFor("badminton"))).toBe("league");
-    // The sequence: badminton americano -> chess (league) -> badminton keeps league (the pick is not remembered).
-    const onChess = templateAfterSportChange("americano", CHESS, kindsFor(CHESS));
-    expect(templateAfterSportChange(onChess, "badminton", kindsFor("badminton"))).toBe("league");
-    // C9 I5: a team sport (the engine holds football as teams only) falls back off a pair format the same way.
-    expect(kindsFor("football")).not.toContain("individual");
-    expect(templateAfterSportChange("americano", "football", kindsFor("football"))).toBe("league");
-    expect(templateAfterSportChange("league_ko", "football", kindsFor("football"))).toBe("league_ko");
   });
 });

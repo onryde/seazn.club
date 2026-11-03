@@ -13,10 +13,13 @@ import {
   entrantKindAfterSportChange,
   entrantsConfigFor,
   divisionEntrantKinds,
+  divisionFormatOffer,
+  divisionPlaysTemplate,
   firstBlockedStep,
   formatPickerOrder,
   isPairRotationTemplate,
   openingTemplate,
+  pickAfterChange,
   rankTemplates,
   sportPickerOrder,
   stepForCreateError,
@@ -31,32 +34,23 @@ const modelOf = (key: string) => {
 };
 
 describe("entrant kind", () => {
-  it("every sport opens at the engine's default kind and sends NOTHING for it, so the payload is the one the server defaults (counts)", () => {
+  // Owner ruling 2026-11-03 (C9 Q3, then n3 "yes"): the division takes EXACTLY the kind shown on Who plays - picked,
+  // clicked or left at the sport's default. Settings can widen it later.
+  it("every kind of every sport, the default included, narrows the division to that kind alone (counts)", () => {
     let checked = 0;
-    for (const m of builtinModules) {
-      const model = modelOf(m.key);
-      expect(entrantsConfigFor(model, model.defaultKind), m.key).toBeUndefined();
-      checked++;
-    }
-    expect(checked).toBe(builtinModules.length);
-    expect(checked).toBeGreaterThan(5);
-  });
-
-  // Owner ruling 2026-11-03 (C9 Q3, "apply rec"): the kind picked NARROWS the division to that kind; Settings can widen it.
-  it("a kind other than the sport's default narrows the division to it: kinds = [picked], and it is the default (counts)", () => {
-    let checked = 0;
+    let narrowedDefaults = 0;
     for (const m of builtinModules) {
       const model = modelOf(m.key);
       for (const kind of model.kinds) {
-        if (kind === model.defaultKind) continue;
         expect(entrantsConfigFor(model, kind), `${m.key} ${kind}`).toEqual({ kinds: [kind], defaultKind: kind });
-        // The right answer differs from the old one: the sport allows more than the one kind picked.
-        expect(model.kinds.length, `${m.key}: the sport allows more than ${kind}`).toBeGreaterThan(1);
         checked++;
       }
+      // The witness for n3: at the default, the division now takes LESS than the sport allows (it used to send nothing).
+      if (model.kinds.length > 1) narrowedDefaults++;
     }
-    // badminton, tennis, table tennis, carrom: pair; volleyball: pair; generic: team + pair.
-    expect(checked).toBeGreaterThanOrEqual(6);
+    expect(checked).toBe(builtinModules.reduce((n, m) => n + modelOf(m.key).kinds.length, 0));
+    // badminton, tennis, table tennis, carrom (individual, pair), volleyball (team, pair), generic (all three).
+    expect(narrowedDefaults).toBeGreaterThanOrEqual(6);
   });
 
   it("refuses a kind the sport does not allow rather than sending it (chess is individual-only)", () => {
@@ -179,8 +173,10 @@ describe("steps", () => {
 describe("the opening format (owner Q5) and the kinds it is picked for (Q3): the empty cases", () => {
   it("nothing offered opens on League; a division that takes no kind never opens on a pair-rotation format", () => {
     expect(openingTemplate([], 30, ["individual", "pair"], [])).toBe("league");
-    // Americano/mexicano only: a division with no declared kinds can play neither, so the offer's first is the fallback.
-    expect(openingTemplate(["americano", "mexicano"], 30, [], [])).toBe("americano");
+    // Americano/mexicano only: a division with no declared kinds can play neither. The fallback is League, never the
+    // offer's first - that one is unplayable by construction (C9 review 2, n4: fail closed).
+    expect(openingTemplate(["americano", "mexicano"], 30, [], [])).toBe("league");
+    expect(openingTemplate(["americano", "mexicano"], 30, ["pair"], ["americano"])).toBe("league");
     expect(openingTemplate(["americano", "knockout"], 30, [], [])).toBe("knockout");
     // A plan that locks the first (Community lacks formats.advanced) opens on the next it includes; a lock on an unranked
     // key moves nothing.
@@ -188,19 +184,104 @@ describe("the opening format (owner Q5) and the kinds it is picked for (Q3): the
     expect(openingTemplate(["americano", "knockout"], 30, ["individual", "pair"], ["not-a-template"])).toBe("americano");
   });
 
-  it("the kinds a division takes: none picked is every kind the sport allows; a picked kind is that kind alone (counts)", () => {
+  it("the kinds a division takes: none shown is every kind the sport allows; the kind shown, default or not, alone (counts)", () => {
     let checked = 0;
     for (const m of builtinModules) {
       const model = modelOf(m.key);
       expect(divisionEntrantKinds(model, null), m.key).toEqual(model.kinds);
-      expect(divisionEntrantKinds(model, model.defaultKind), `${m.key} default`).toEqual(model.kinds);
-      for (const kind of model.kinds) if (kind !== model.defaultKind) expect(divisionEntrantKinds(model, kind), `${m.key} ${kind}`).toEqual([kind]);
+      // n3: the default is a kind like any other - the division takes it alone.
+      for (const kind of model.kinds) expect(divisionEntrantKinds(model, kind), `${m.key} ${kind}`).toEqual([kind]);
       checked++;
     }
     expect(checked).toBe(builtinModules.length);
   });
 });
 
+
+// C9 review 2, N1 (with the owner's n3 "yes"): the Format step reads the DIVISION's kinds, not only the sport's. Americano
+// and Mexicano rotate individual players into pairs (stages.ts americanoGen plays one person per entrant), so a division
+// that takes no individual players - narrowed to Pairs or Teams on Who plays - is not offered them.
+describe("what a division narrowed on Who plays is offered (N1: the partner-rotation formats need individual players)", () => {
+  // The oracle restates the rule from the stage kinds the server mints pairs for, never from the module under test.
+  const mintsPairs = (key: string) => STAGE_TEMPLATES.find((t) => t.key === key)!.build(KNOBS).some((s) => PAIR_MINTING_STAGE_KINDS.includes(s.kind));
+  const takesIndividuals = (kinds: readonly string[]) => kinds.includes("individual");
+
+  it("empty case first: a division that takes no kind plays no partner-rotation format, and an empty offer stays empty", () => {
+    expect(divisionFormatOffer([], [])).toEqual([]);
+    expect(divisionFormatOffer([], ["individual"])).toEqual([]);
+    expect(divisionPlaysTemplate("americano", [])).toBe(false);
+    expect(divisionPlaysTemplate("mexicano", [])).toBe(false);
+    // Nothing else needs a kind: a league is played by whatever the division takes, even nothing declared.
+    expect(divisionPlaysTemplate("league", [])).toBe(true);
+  });
+
+  it("every sport x every kind it allows: the offer is the sport's, less the partner-rotation formats when the kind is not individual (counts)", () => {
+    let checked = 0;
+    const dropped: string[] = [];
+    const kept: string[] = [];
+    for (const m of builtinModules) {
+      const model = modelOf(m.key);
+      const sportOffer = templatesForSport(m.key, model.kinds).map((t) => t.key);
+      for (const kind of model.kinds) {
+        const kinds = divisionEntrantKinds(model, kind);
+        const want = sportOffer.filter((k) => !mintsPairs(k) || takesIndividuals(kinds));
+        expect(divisionFormatOffer(sportOffer, kinds), `${m.key} ${kind}`).toEqual(want);
+        if (sportOffer.some(mintsPairs)) (takesIndividuals(kinds) ? kept : dropped).push(`${m.key} ${kind}`);
+        checked++;
+      }
+    }
+    expect(checked).toBe(builtinModules.reduce((n, m) => n + modelOf(m.key).kinds.length, 0));
+    // The review's list: badminton, tennis, table tennis and carrom with Pairs; generic with Teams (and Pairs).
+    expect(dropped.sort()).toEqual(["badminton pair", "carrom pair", "generic pair", "generic team", "tabletennis pair", "tennis pair"]);
+    // The positive pair: the same sports at Individuals keep both formats.
+    expect(kept.sort()).toEqual(["badminton individual", "carrom individual", "generic individual", "tabletennis individual", "tennis individual"]);
+  });
+
+  it("the owner's two by name: badminton at Individuals is offered Americano and Mexicano; at Pairs, neither", () => {
+    const offer = templatesForSport("badminton", modelOf("badminton").kinds).map((t) => t.key);
+    expect(offer, "premise: the sport is offered both").toEqual(expect.arrayContaining(["americano", "mexicano"]));
+    expect(divisionFormatOffer(offer, ["individual"])).toEqual(expect.arrayContaining(["americano", "mexicano"]));
+    expect(divisionFormatOffer(offer, ["pair"])).not.toContain("americano");
+    expect(divisionFormatOffer(offer, ["pair"])).not.toContain("mexicano");
+  });
+
+  it("the opening follows the same rule: a division of individuals opens on Americano where it ranks first; pairs or teams skip it", () => {
+    // The premise: Americano outranks a knockout at the opening plan (else the cases below say nothing).
+    expect(openingTemplate(["americano", "knockout"], 30, ["individual", "pair"], [])).toBe("americano");
+    // n3 narrows an untouched badminton to individuals alone, which still plays Americano (it pairs its own players).
+    expect(openingTemplate(["americano", "knockout"], 30, ["individual"], [])).toBe("americano");
+    expect(openingTemplate(["americano", "knockout"], 30, ["pair"], [])).toBe("knockout");
+    expect(openingTemplate(["americano", "knockout"], 30, ["team"], [])).toBe("knockout");
+  });
+
+  it("a picked card after the sport or the kind changes: kept while still offered, else dropped so the opening applies (n1)", () => {
+    expect(pickAfterChange(null, ["league", "americano"])).toBeNull();
+    expect(pickAfterChange("americano", [])).toBeNull();
+    expect(pickAfterChange("americano", ["league", "americano"])).toBe("americano");
+    // Never a picked League in its place (the old fallback): League is not the opening's suggestion.
+    expect(pickAfterChange("americano", ["league", "knockout"])).toBeNull();
+  });
+
+  it("the sequence across sports (format-templates' templateAfterSportChange, retired with n1): chess and football drop a pair pick, a retired format is never kept, an offered pick is", () => {
+    const offerOf = (key: string) => {
+      const model = modelOf(key);
+      return divisionFormatOffer(templatesForSport(key, model.kinds).map((t) => t.key), divisionEntrantKinds(model, model.defaultKind));
+    };
+    expect(pickAfterChange("americano", offerOf("boardgame"))).toBeNull();
+    expect(pickAfterChange("mexicano", offerOf("boardgame"))).toBeNull();
+    expect(pickAfterChange("swiss", offerOf("boardgame"))).toBe("swiss");
+    expect(pickAfterChange("americano", offerOf("badminton"))).toBe("americano");
+    // Retired from every sport's offer (owner ruling 2026-11-01): a builder can never be left holding it.
+    expect(pickAfterChange("triple_rr", offerOf("badminton"))).toBeNull();
+    // badminton Americano -> chess (dropped) -> badminton: the pick is not remembered.
+    const onChess = pickAfterChange("americano", offerOf("boardgame"));
+    expect(pickAfterChange(onChess, offerOf("badminton"))).toBeNull();
+    // The engine holds football as teams only: a pair format is dropped there too; one it is offered stays.
+    expect(modelOf("football").kinds).not.toContain("individual");
+    expect(pickAfterChange("americano", offerOf("football"))).toBeNull();
+    expect(pickAfterChange("league_ko", offerOf("football"))).toBe("league_ko");
+  });
+});
 
 // C9 R2 (owner 2026-11-03): "show 5 format and then 6th one as a show more", and "in step 1, in sport, can we have
 // similar format way of choosing the sport?". The rule, from the brief: the first five, then the Show more tile; the

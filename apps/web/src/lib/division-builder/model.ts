@@ -4,7 +4,7 @@
 import type { EntrantKind } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { STAGE_TEMPLATES, type TemplateKnobs } from "@/lib/format-templates";
-import { PAIR_MINTING_STAGE_KINDS, entrantKindsRefuseStageKind } from "@/lib/chess-individual-only-rule";
+import { PAIR_MINTING_STAGE_KINDS } from "@/lib/chess-individual-only-rule";
 import { swissRoundsDefault } from "@/lib/swiss-rounds";
 import { estimateMinutes, estimateTemplate, type FormatEstimate } from "./format-estimate";
 
@@ -18,21 +18,21 @@ export interface EntrantChoice {
 }
 
 /**
- * `config.entrants` for the kind picked on Who plays. Nothing at the sport's own default, so a division created without
- * touching it stores exactly what it did before the builder asked (the Entrants tab then shows "Using the sport's
- * default"). Another kind NARROWS the division to it - that kind alone, and the default (owner ruling 2026-11-03, C9 Q3):
- * a "Teams" division takes teams. Settings can widen it later.
+ * `config.entrants` for the kind shown on Who plays: the division takes that kind alone, and it is the default (owner
+ * rulings 2026-11-03, C9 Q3 and then n3 "yes": the kind shown NARROWS the division ALWAYS - picked, clicked or left at the
+ * sport's default). A "Teams" division takes teams; an untouched badminton division takes individual players. Settings
+ * can widen it later.
  */
-export function entrantsConfigFor(model: EntrantChoice, chosen: EntrantKind): { kinds: EntrantKind[]; defaultKind: EntrantKind } | undefined {
+export function entrantsConfigFor(model: EntrantChoice, chosen: EntrantKind): { kinds: EntrantKind[]; defaultKind: EntrantKind } {
   if (!model.kinds.includes(chosen)) throw new Error(`entrant kind '${chosen}' is not allowed (${model.kinds.join(", ")})`);
-  if (chosen === model.defaultKind) return undefined;
   return { kinds: [chosen], defaultKind: chosen };
 }
 
-/** The kinds the division will take, as Create sends them: the one picked (Q3), else every kind the sport allows. */
+/** The kinds the division will take, as Create sends them: the one shown (Q3, n3), else - none shown, or one the sport
+ *  does not allow - every kind the sport allows. */
 export function divisionEntrantKinds(model: EntrantChoice, chosen: EntrantKind | null): readonly EntrantKind[] {
   if (chosen === null || !model.kinds.includes(chosen)) return model.kinds;
-  return entrantsConfigFor(model, chosen)?.kinds ?? model.kinds;
+  return entrantsConfigFor(model, chosen).kinds;
 }
 
 /** The kind after the organiser picks another sport. A kind they never touched follows the sport (it was the old
@@ -101,22 +101,17 @@ export function openingKnobs(entrants: number): TemplateKnobs {
 
 /**
  * The format the builder OPENS on (owner ruling 2026-11-03, C9 Q5): the suggester's first for the sport at the opening
- * plan - skipping a format the division's entrant kinds cannot play (Americano rotates individual players into pairs, so
- * a division narrowed to teams opens on the first format it CAN play) and a format the organisation's plan locks
- * (`locked`, the page's templateLocks keys: a Community plan lacks formats.advanced, so it never opens on a locked
- * Americano that Next would refuse). Falls back to the offer's first, then League.
+ * plan - skipping a format the division's entrant kinds cannot play (divisionPlaysTemplate: Americano rotates individual
+ * players into pairs, so a division narrowed to pairs or teams opens on the first format it CAN play) and a format the
+ * organisation's plan locks (`locked`, the page's templateLocks keys: a Community plan lacks formats.advanced, so it never
+ * opens on a locked Americano that Next would refuse). With nothing ranked passing both, League (C9 review 2, n4: never
+ * the offer's first, which is then unplayable or locked by construction).
  */
 export function openingTemplate(offered: readonly string[], matchMinutes: number, entrantKinds: readonly string[], locked: readonly string[]): string {
-  const playable = (key: string) => {
-    const t = STAGE_TEMPLATES.find((x) => x.key === key);
-    return (
-      t !== undefined &&
-      !locked.includes(key) &&
-      !t.build(openingKnobs(OPENING_PLAN.entrants)).some((s) => entrantKindsRefuseStageKind(entrantKinds, s.kind))
-    );
-  };
+  const playable = (key: string) =>
+    STAGE_TEMPLATES.some((x) => x.key === key) && !locked.includes(key) && divisionPlaysTemplate(key, entrantKinds);
   const ranked = rankTemplates(offered, { ...OPENING_PLAN, matchMinutes }, openingKnobs(OPENING_PLAN.entrants));
-  return ranked.find((r) => playable(r.key))?.key ?? offered[0] ?? "league";
+  return ranked.find((r) => playable(r.key))?.key ?? "league";
 }
 
 /** The top SUGGESTED_COUNT of the ranking (the suggester's own, before the picker's order is laid over it). */
@@ -139,6 +134,31 @@ export function collapsedPicks(order: readonly string[], picked: string | null):
 export function isPairRotationTemplate(key: string): boolean {
   const t = STAGE_TEMPLATES.find((x) => x.key === key);
   return t !== undefined && t.build(openingKnobs(OPENING_PLAN.entrants)).some((s) => PAIR_MINTING_STAGE_KINDS.includes(s.kind));
+}
+
+/** The entrant kind a partner-rotation format needs the DIVISION to take (C9 review 2, N1): Americano and Mexicano rotate
+ *  individual players into new pairs (stages.ts americanoGen plays one person per entrant, pairEntrantsFor mints the
+ *  pairs), so a division that takes no individual players - narrowed to Pairs or Teams on Who plays (Q3, n3) - cannot
+ *  play them. What the SPORT is offered is decided upstream, by its engine model (templatesForSport): this narrows that
+ *  offer to the division's kinds. */
+export const PAIR_ROTATION_NEEDS_KIND: EntrantKind = "individual";
+
+/** Can a division taking these kinds play this format? Only a partner-rotation format needs a kind. */
+export function divisionPlaysTemplate(key: string, divisionKinds: readonly string[]): boolean {
+  return !isPairRotationTemplate(key) || divisionKinds.includes(PAIR_ROTATION_NEEDS_KIND);
+}
+
+/** The Format step's offer for the division: the sport's offer, less what the division's kinds cannot play (N1). The
+ *  cards, the ranking, the suggested five, the opening and Next all read this one list. */
+export function divisionFormatOffer(sportOffer: readonly string[], divisionKinds: readonly string[]): string[] {
+  return sportOffer.filter((key) => divisionPlaysTemplate(key, divisionKinds));
+}
+
+/** The picked card after the organiser changes the sport or the kind (C9 review 2, n1 and N1): kept while the division
+ *  is still offered it, else dropped - null, so the opening format (openingTemplate) applies again rather than a picked
+ *  League the suggester would not have opened on. */
+export function pickAfterChange(picked: string | null, offer: readonly string[]): string | null {
+  return picked !== null && offer.includes(picked) ? picked : null;
 }
 
 /** The Format picker's order (owner 2026-11-03, C9 R2: "Americano, Mexicano always show in bottom"): the ranking, with
