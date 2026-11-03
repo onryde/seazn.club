@@ -177,10 +177,12 @@ test("the hand-over panel in every state, en + fr: Show QR re-shows, Revoke and 
   let wakeOpens = 0;
   for (const [w, h] of [[320, 568], [768, 1024], [1280, 800]] as const) {
     await page.setViewportSize({ width: w, height: h });
-    // B6 fix round 1 (ruling I-2): the inline QR is a whole number of device px per module — at least three for the
-    // real 71-byte pad URL — and the crop is the PANEL around it (review m-6), which is what differs by width.
+    // B6 fix round 1 (ruling I-2): the inline QR is a whole number of device px per module, and the crop is the PANEL
+    // around it (review m-6), which is what differs by width. Owner 2026-11-03: it shares the stream camera's cap, so the
+    // real 71-byte pad URL (the same 57-module symbol as the stream code) paints as §8a's stream figures do — six px per
+    // module at 768 and up, four in a 320-px phone's card.
     await expect(async () => {
-      await expectWholeModuleScale(page, panel.getByTestId("dlink-qr"), { what: `Remote scoring @ ${w}`, minPerModule: 3 });
+      await expectWholeModuleScale(page, panel.getByTestId("dlink-qr"), { what: `Remote scoring @ ${w}`, minPerModule: w === 320 ? 4 : 6 });
     }).toPass({ timeout: 5_000 });
     await expectNoHorizontalScroll(page);
     await shotQr(page, panel, `b6-dlink-qr-${w}-normal.png`);

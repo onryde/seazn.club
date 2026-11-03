@@ -36,6 +36,9 @@
 //
 // W3 T3 (SW-M7, X-SW-5): the 19th site, `usecases/stages.ts` `swissGen`'s bye seat. W3 and Match Day each added one site while
 // the ledger stood at 17, so the merge (91cd747724) kept both rows under the literal 18: the total is 19.
+//
+// stg cfg-defaults fix (2026-11-03): the 20th, a third call in `append-event.ts` — the first event's freeze reads the
+// resolution in its "stored" form, apart from the fold's (which fills the sport's schema defaults: fixture-cfg.ts).
 import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -166,7 +169,9 @@ const SITES: readonly { file: string; count: number; case: string; override?: fa
   { file: "apps/web/src/server/engine-db/fold.ts", count: 1, case: "fold.ts loadFoldInputs" },
   // W2c Task 15 (X-SR-7): the second is the refusal's format line — the rules that stand, named for the refused pad
   // (rules-version.test.ts pins it against the describer over `loadFixturePadCfg`'s cfg).
-  { file: "apps/web/src/server/engine-db/append-event.ts", count: 2, case: "append-event.ts appendEvent" },
+  // stg cfg-defaults fix: the third is the freeze's own read, the resolution in its "stored" form (fixture-cfg.ts) — the
+  // fold's cfg carries the schema's defaults, the snapshot does not. The first-event case drives it.
+  { file: "apps/web/src/server/engine-db/append-event.ts", count: 3, case: "append-event.ts appendEvent" },
   { file: "apps/web/src/server/engine-db/competition.ts", count: 2, case: "competition.ts loadStageInputs" },
   { file: "apps/web/src/server/public-site/match-centre-load.ts", count: 1, case: "match-centre-load.ts loadMatchCentre" },
   // W2c Task 19: the second is `loadFixtureMatchRules` - the console block's "what this match plays now" (its `effective`).
@@ -194,7 +199,7 @@ const SITES: readonly { file: string; count: number; case: string; override?: fa
 const SITE_TOTAL = SITES.reduce((n, s) => n + s.count, 0);
 
 describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)", () => {
-  it("the site ledger is exact: 19 production calls, and none unlisted", () => {
+  it("the site ledger is exact: 20 production calls, and none unlisted", () => {
     const files: string[] = [];
     (function walk(d: string) {
       for (const e of readdirSync(d)) {
@@ -213,8 +218,8 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
       if (n > 0) found.set(rel, n);
     }
     expect(Object.fromEntries(found)).toEqual(Object.fromEntries(SITES.map((s) => [s.file, s.count])));
-    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(19);
-    expect(SITE_TOTAL, "the ledger's own rows add up to the scan").toBe(19);
+    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(20);
+    expect(SITE_TOTAL, "the ledger's own rows add up to the scan").toBe(20);
   });
 
   it("the comment stripper keeps a call and drops prose (both directions)", () => {
@@ -568,11 +573,11 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     expect(league[0]!.out?.tieBoard, "no overlay on a table stage").toBe("draw");
   });
 
-  // M3 (review): the ledger above pins the 19 sites in the SOURCE; this pins that the cases DROVE all 19 - 18 with the
+  // M3 (review): the ledger above pins the 20 sites in the SOURCE; this pins that the cases DROVE all 20 - 19 with the
   // override and the stage line without one (its row says `override: false`). Sites come from the spy's own caller frames (`callSite`), so a case cannot vouch for a site it never
   // reached. Declared last: vitest runs a file's cases in order, so every case above has run (or was filtered out
   // with -t, in which case this one is filtered out too).
-  it.skipIf(!HAS_DB)("every one of the 19 call sites was driven (18 with the override, the stage line without), per the spy's caller frames", () => {
+  it.skipIf(!HAS_DB)("every one of the 20 call sites was driven (19 with the override, the stage line without), per the spy's caller frames", () => {
     const tally = (driven: ReadonlySet<string>) => {
       const byFile = new Map<string, number>();
       for (const site of driven) {
@@ -595,7 +600,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
       SITES.filter((s) => s.override === false).map((s) => s.file).sort(),
     );
     expect(DRIVEN.size + DRIVEN_NO_OVERRIDE.size, "anti-vacuity: the sites checked").toBe(SITE_TOTAL);
-    expect(SITE_TOTAL).toBe(19);
+    expect(SITE_TOTAL).toBe(20);
   });
 });
 

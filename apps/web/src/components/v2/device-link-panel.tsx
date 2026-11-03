@@ -14,15 +14,13 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { apiV1 } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { failureKey, liveCopy } from "@/components/v2/device-link-copy";
-import { SeaznQrImage } from "@/components/v2/seazn-qr-image";
+// The Remote scoring QR is painted at `PHONE_HANDOVER_QR_MAX_PX`, the cap it shares with the stream camera's QR (owner
+// 2026-11-03) — its rationale is beside the constant.
+import { PHONE_HANDOVER_QR_MAX_PX, SeaznQrImage } from "@/components/v2/seazn-qr-image";
 import { renderSeaznQr, type SeaznQr } from "@/lib/seazn-qr";
 import { officialLabelKey } from "@/lib/official-label";
 import { useSessionStorageItem, writeSessionStorageItem } from "@/lib/use-client-snapshot";
 import type { ViewerPlan } from "@/lib/viewer-plan";
-
-/** The Remote scoring QR's cap, CSS px: four px per module for today's 71-byte pad URL (v8, 57 modules with the quiet
- *  zone: 228). The painted size is the frame snapped to whole device px per module (B6 fix round 1, ruling I-2). */
-const DLINK_QR_MAX_PX = 240;
 
 /**
  * Match Day's opt-in "Hide" (E2 item 6): a compact panel that can be put away. Hidden, it is one row — the host's heading,
@@ -484,7 +482,7 @@ export function DeviceLinkPanel({
           <div className="min-w-0">
             <div className="space-y-2 text-center">
               {/* `ph-no-capture` on the QR and the URL, exactly as the full panel below (session replay). */}
-              <SeaznQrImage testId="dlink-qr" sensitive qr={minted.qr} alt={msg("dlink.alt")} maxSize={DLINK_QR_MAX_PX} />
+              <SeaznQrImage testId="dlink-qr" sensitive qr={minted.qr} alt={msg("dlink.alt")} maxSize={PHONE_HANDOVER_QR_MAX_PX} />
               <button
                 type="button"
                 data-testid="device-link-copy"
@@ -599,7 +597,7 @@ export function DeviceLinkPanel({
               outright (no children, no src). The QR's class is the shared
               component's, applied because it is `sensitive` — on the inline
               image and on the tap-to-enlarge overlay (D10). */}
-          <SeaznQrImage testId="dlink-qr" sensitive qr={minted.qr} alt={msg("dlink.alt")} maxSize={DLINK_QR_MAX_PX} />
+          <SeaznQrImage testId="dlink-qr" sensitive qr={minted.qr} alt={msg("dlink.alt")} maxSize={PHONE_HANDOVER_QR_MAX_PX} />
           <p
             data-testid="device-link-url"
             className="ph-no-capture break-all rounded bg-slate-50 px-2 py-1 font-mono text-[10px] text-slate-500"

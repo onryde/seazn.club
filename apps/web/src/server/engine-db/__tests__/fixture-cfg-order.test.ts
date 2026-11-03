@@ -2,6 +2,8 @@
 // W2c Task 10 (spec §4.4, D4). Pure: the DB proof that every caller hands the resolver its fixture's override is
 // bracket-overlay-callers.test.ts. Expected values come from the engine's declarations (`bracketDeciders`,
 // `configSchema`, `variants`) and from the literals the case itself writes, never from the resolver.
+// The ORDER is the resolution's own, so a case that pins an exact shape or identity reads the "stored" form: the default
+// "fold" form also fills the sport's schema defaults (stg cfg-defaults fix; pinned in fixture-cfg-defaults.test.ts).
 import { describe, expect, it } from "vitest";
 import { EngineError, foldMatch } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
@@ -14,7 +16,7 @@ const none = { config_snapshot: null, rules_override: null };
 describe("P3 resolveFixtureCfg order", () => {
   it("empty case first: no snapshot and no override is the stage-scoped cfg itself, nothing added", () => {
     const division = { bestOf: 5 };
-    expect(resolveFixtureCfg(none, division, null, mod("badminton"))).toBe(division);
+    expect(resolveFixtureCfg(none, division, null, mod("badminton"), "stored")).toBe(division);
   });
   it("X-SR-2: override beats stage beats division (badminton bestOf: 5 / 3 / 1)", () => {
     const division = { bestOf: 5 }, stage = { kind: "league" as const, config: { rules: { bestOf: 3 } } };
@@ -49,7 +51,7 @@ describe("P3 resolveFixtureCfg order", () => {
     expect(r.tiebreak).toBe(false);
   });
   it("a frozen snapshot wins over everything, override included", () => {
-    expect(resolveFixtureCfg({ config_snapshot: { bestOf: 3 }, rules_override: { bestOf: 1 } }, { bestOf: 5 }, null, mod("badminton"))).toEqual({ bestOf: 3 });
+    expect(resolveFixtureCfg({ config_snapshot: { bestOf: 3 }, rules_override: { bestOf: 1 } }, { bestOf: 5 }, null, mod("badminton"), "stored")).toEqual({ bestOf: 3 });
   });
   it("a non-object override is ignored (null, array, string)", () => {
     // `toBe` the division object, not `toMatchObject`: a spread of `[]`, `["x"]` or `"x"` copies (and, for the last two,
@@ -57,7 +59,7 @@ describe("P3 resolveFixtureCfg order", () => {
     const division = { bestOf: 5 };
     let checked = 0;
     for (const ov of [null, [], "x", ["x"], undefined, 0, true]) {
-      expect(resolveFixtureCfg({ config_snapshot: null, rules_override: ov }, division, null, mod("badminton")), JSON.stringify(ov) ?? "undefined").toBe(division);
+      expect(resolveFixtureCfg({ config_snapshot: null, rules_override: ov }, division, null, mod("badminton"), "stored"), JSON.stringify(ov) ?? "undefined").toBe(division);
       checked++;
     }
     expect(checked).toBe(7);
@@ -74,10 +76,10 @@ describe("P3 resolveFixtureCfg order", () => {
     // division row's own config (every later fixture of the division would then read this match's override).
     const division = { bestOf: 5 };
     const override = { bestOf: 1 };
-    expect(resolveFixtureCfg({ config_snapshot: null, rules_override: override }, division, null, mod("badminton"))).toEqual({ bestOf: 1 });
+    expect(resolveFixtureCfg({ config_snapshot: null, rules_override: override }, division, null, mod("badminton"), "stored")).toEqual({ bestOf: 1 });
     expect(division).toEqual({ bestOf: 5 });
     const rules = { setTo: 15 };
-    const out = resolveFixtureCfg({ config_snapshot: null, rules_override: override }, division, { kind: "league", config: { rules } }, mod("badminton"));
+    const out = resolveFixtureCfg({ config_snapshot: null, rules_override: override }, division, { kind: "league", config: { rules } }, mod("badminton"), "stored");
     expect(out).toEqual({ bestOf: 1, setTo: 15 });
     expect(division).toEqual({ bestOf: 5 });
     expect(rules).toEqual({ setTo: 15 });

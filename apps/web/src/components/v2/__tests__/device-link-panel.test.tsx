@@ -15,12 +15,10 @@
 // The `apiV1` double keeps the REAL `ApiV1Error` class (the panel branches on
 // `instanceof`; a lookalike makes that silently false). Every POST URL is
 // recorded; the GET that `refresh()` issues on mount answers the active link.
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
-import { SeaznQrImage } from "@/components/v2/seazn-qr-image";
+import { PHONE_HANDOVER_QR_MAX_PX, SeaznQrImage } from "@/components/v2/seazn-qr-image";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { messages } from "@/lib/messages";
 import { t as tRuntime } from "@/lib/i18n-runtime";
@@ -298,11 +296,12 @@ describe("device-link panel — what it says about a sealed link (null expiry)",
     expect(qr, "the QR renders through SeaznQrImage").toBeDefined();
     expect(propsOf(qr!).qr, "the symbol the helper drew, with its module count").toEqual(DLINK_SYMBOL);
     expect(propsOf(qr!).alt).toBe(t("dlink.alt"));
-    // The cap is the panel's declared one (review m-10: read, never a literal here) and holds whole px per module for
-    // a real pad URL (v8: 57 modules with the quiet zone) — four of them.
-    const cap = Number(/const DLINK_QR_MAX_PX = (\d+);/.exec(readFileSync(resolve(import.meta.dirname, "../device-link-panel.tsx"), "utf8"))![1]);
-    expect(propsOf(qr!).maxSize).toBe(cap);
-    expect(Math.floor(cap / 57), "at least three px per module").toBeGreaterThanOrEqual(3);
+    // The cap is the phone-handover cap the stream camera's QR shares (owner 2026-11-03: "like streaming"; review m-10:
+    // the declared constant, never a literal here), and it holds whole px per module for a real pad URL (v8: 57 modules
+    // with the quiet zone) — six of them, the stream code's figure at 768 and up (§8a's QR size row: 342 CSS px).
+    const cap = propsOf(qr!).maxSize as number;
+    expect(cap, "the shared phone-handover cap").toBe(PHONE_HANDOVER_QR_MAX_PX);
+    expect(Math.floor(cap / DLINK_SYMBOL.modules), "at least six px per module, as the stream code").toBeGreaterThanOrEqual(6);
     expect(island.tree().find((el) => el.type === "img"), "no bare img bypasses the component").toBeUndefined();
     expect(island.text()).toContain(t("dlink.sameQr"));
     expect(island.text()).not.toMatch(/19(69|70)/);
