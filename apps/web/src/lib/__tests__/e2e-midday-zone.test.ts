@@ -16,6 +16,7 @@
 //
 // Sport-agnostic on purpose: the property is about the clock and the planning zone.
 import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
@@ -157,7 +158,13 @@ describe("no e2e file carries the UTC-day clamp or its own copy of the midday zo
   const others = FILES.filter((f) => rel(f) !== "e2e/midday-zone.ts");
 
   it("scanned every e2e file (anti-vacuity: zero or a handful is a failure), including the specs that carried it", () => {
-    expect(FILES.length, "e2e .ts files scanned").toBeGreaterThan(100);
+    // The floor is the size of the suite (317 .ts files when this was written), so a scan that quietly stopped descending into a
+    // directory reds here; and the count is checked against `find`, a second way of walking the tree that shares no code with the scan.
+    expect(FILES.length, "e2e .ts files scanned").toBeGreaterThanOrEqual(300);
+    const found = execFileSync("find", [resolve(WEB, "e2e"), "-name", "*.ts", "-not", "-path", "*/node_modules/*"], { encoding: "utf8" })
+      .split("\n")
+      .filter((l) => l.length > 0);
+    expect(FILES.length, "the scan saw as many .ts files as `find` does").toBe(found.length);
     for (const must of [
       "e2e/match-day.spec.ts",
       "e2e/run-sheet.spec.ts",
@@ -169,16 +176,61 @@ describe("no e2e file carries the UTC-day clamp or its own copy of the midday zo
     }
   });
 
+  // The clamp is a SHAPE, not a set of variable names: "one day's milliseconds, less a minute" (the last instant of the UTC day), or a
+  // `Math.min(` that sits within a few tokens of a day's milliseconds. Written however many ways: 86_400_000, 86400000, 24 * 60 * 60 * 1000.
+  const DAY_MS = String.raw`(?:86_?400_?000|24\s*\*\s*60\s*\*\s*60\s*\*\s*1_?000)`;
+  const LAST_MINUTE_OF_DAY = new RegExp(`${DAY_MS}\\s*-\\s*(?:60_?000|60\\s*\\*\\s*1_?000)`);
+  const MIN_NEAR_DAY = new RegExp(`Math\\.min\\([^;]{0,80}${DAY_MS}|${DAY_MS}[^;]{0,80}Math\\.min\\(`);
+  const CLAMPS = [LAST_MINUTE_OF_DAY, MIN_NEAR_DAY];
+  const COPIES = [/\bfunction\s+middayZoneFor\b/, /\b(?:const|let|var)\s+middayZoneFor\s*=/];
+
+  it("the clamp shapes match the clamp however its variables are named (the guards can fail)", () => {
+    for (const clamp of [
+      "const end = Math.min(dayStart + 86_400_000 - 60_000, t);",
+      "const last = base + 86_400_000 - 60_000;",
+      "const x = Math.min(t, startOfDay + 86400000);",
+      "const y = Math.min(t, 24 * 60 * 60 * 1000 + d);",
+      "const z = (d + 86_400_000) > t ? Math.min(t, d) : t;",
+    ]) {
+      expect(CLAMPS.some((re) => re.test(clamp)), clamp).toBe(true);
+    }
+    // The positive pair: a day's milliseconds used for something else is not a clamp (no Math.min near it, not "a day less a minute").
+    expect(CLAMPS.some((re) => re.test("const tomorrow = today + 86_400_000;")), "a plain day offset is allowed").toBe(false);
+    expect(CLAMPS.some((re) => re.test("await page.waitForTimeout(60_000);")), "unrelated numbers are allowed").toBe(false);
+    for (const copy of ["function middayZoneFor(now: number) {", "const middayZoneFor = (now: number) => now;", "let middayZoneFor = pick();"]) {
+      expect(COPIES.some((re) => re.test(copy)), copy).toBe(true);
+    }
+    expect(COPIES.some((re) => re.test('import { middayZoneFor } from "./midday-zone";')), "importing it is the point").toBe(false);
+  });
+
   it("none clamps a seeded instant into today's UTC day", () => {
-    const offenders = others
-      .filter((f) => /Math\.min\(\s*dayStart/.test(readFileSync(f, "utf8")) || /dayStart\s*\+\s*86_400_000\s*-/.test(readFileSync(f, "utf8")))
-      .map(rel);
+    const offenders = others.filter((f) => CLAMPS.some((re) => re.test(readFileSync(f, "utf8")))).map(rel);
     expect(offenders, "these files still clamp to the UTC day - plan in middayZoneFor(now) and use withinToday").toEqual([]);
   });
 
-  it("none defines its own middayZoneFor: the helper is the one copy", () => {
-    const offenders = others.filter((f) => /function\s+middayZoneFor\b/.test(readFileSync(f, "utf8"))).map(rel);
+  it("none defines its own middayZoneFor (function or const): the helper is the one copy", () => {
+    const offenders = others.filter((f) => COPIES.some((re) => re.test(readFileSync(f, "utf8")))).map(rel);
     expect(offenders).toEqual([]);
+  });
+
+  // PB3 re-review: `tz: zone` in the two walkthroughs was unpinned - reverting a PUT to `tz: "UTC"` left every guard green while the
+  // seeded instants went back to straddling the UTC day. Every schedule-settings PUT in each file plans in the zone, and the count is
+  // pinned so a new PUT has to say which zone it is in.
+  it("every schedule-settings PUT in the walkthroughs that seed today plans in the midday zone (tz: zone), none in UTC", () => {
+    let checked = 0;
+    for (const [file, expected] of [
+      ["e2e/walkthrough/competitions-home.spec.ts", 1],
+      ["e2e/walkthrough/frozen-competition.spec.ts", 1],
+    ] as const) {
+      const src = readFileSync(resolve(WEB, file), "utf8");
+      const puts = src.match(/schedule-settings`,\s*"PUT"/g) ?? [];
+      const zoned = src.match(/schedule-settings`,\s*"PUT",\s*\{\s*tz:\s*zone\b/g) ?? [];
+      expect(puts.length, `${file}: schedule-settings PUTs`).toBe(expected);
+      expect(zoned.length, `${file}: PUTs that plan in the midday zone`).toBe(expected);
+      expect(src, `${file}: no UTC zone left in the seed`).not.toMatch(/tz:\s*"UTC"/);
+      checked += zoned.length;
+    }
+    expect(checked, "anti-vacuity: both PUTs were checked").toBe(2);
   });
 
   it("the specs that plan 'today' use the shared helper (read from their imports)", () => {
