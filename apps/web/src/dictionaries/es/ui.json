@@ -2427,6 +2427,8 @@
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.field_too_small": "La ronda {round} necesita al menos dos jugadores.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.tail.finish": "Puedes terminar la fase suiza tras la ronda {finishAfter}; la clasificación se recalcula entonces como un evento de {finishAfter} rondas.",
   "swiss.recovery.finishAfter": "Terminar tras la ronda {n}",
+  "swiss.warning.nextRoundUnpairable": "Puede que la ronda {next} no sea posible: se empareje como se empareje la ronda {round}, no quedará ningún emparejamiento válido para la ronda {next}. Puedes terminar la fase suiza tras la ronda {round}.",
+  "swiss.warning.nextRoundUnknown": "No se pudo comprobar a tiempo la ronda {next}.",
   "swiss.rounds.guidance.one": "Para {n} participantes: {count} ronda recomendada, como máximo {hardMax}.",
   "swiss.rounds.guidance.other": "Para {n} participantes: {count} rondas recomendadas, como máximo {hardMax}.",
   "swiss.rounds.shrunk.one": "Quedan {field} participantes, suficientes para {count} ronda como máximo. Puedes terminar la fase suiza con las rondas ya jugadas.",

@@ -3043,6 +3043,14 @@ export const GenerateResult = z.object({
   fixtures: z.array(Fixture),
   reshaped: SwissReshapeResult.optional(),
   swiss_rounds: SwissRoundsJudgementResult.optional(),
+  /** W3 app-B T7 (X-SW-10; rulebook-W3-swiss.md §3.3 "Prevention"): the Swiss one-round look-ahead's verdict on the round AFTER
+   *  the one just seated, ABSENT unless it was asked for (a stage above its safe maximum, never the last round) and the answer
+   *  was not "pairable". `unpairable`: every legal pairing of the round just seated leaves the next one with none (the next
+   *  Pair will be refused SWISS_NO_LEGAL_PAIRING). `unknown`: the search ran out of budget before the engine could tell. The
+   *  round is seated either way; `swiss_paired_round` names it. */
+  swiss_next_round: z.enum(["unpairable", "unknown"]).optional(),
+  /** The round this Pair seated, sent with `swiss_next_round` so a client names both rounds from one number. */
+  swiss_paired_round: z.number().int().optional(),
 });
 
 /** POST /stages/{id}/generate body. `pairing` = a ROUND-1-ONLY Swiss override

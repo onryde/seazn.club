@@ -25729,6 +25729,18 @@
                             "hardMax"
                           ],
                           "additionalProperties": false
+                        },
+                        "swiss_next_round": {
+                          "type": "string",
+                          "enum": [
+                            "unpairable",
+                            "unknown"
+                          ]
+                        },
+                        "swiss_paired_round": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
@@ -28134,6 +28146,18 @@
                             "hardMax"
                           ],
                           "additionalProperties": false
+                        },
+                        "swiss_next_round": {
+                          "type": "string",
+                          "enum": [
+                            "unpairable",
+                            "unknown"
+                          ]
+                        },
+                        "swiss_paired_round": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
                         },
                         "removed": {
                           "type": "integer",

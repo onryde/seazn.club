@@ -51,6 +51,14 @@ import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
  * regulation wins, and round 2 is paired: the two regulation winners (3 points each, a group of their own) are seated against
  * each other and the overtime winner (2 points) is not seated against either. The old +1 per win put all three winners in one
  * group, whose top two by seed are paired - and the overtime winner is seed 1, so it would have met a regulation winner.
+ *
+ * T7 (X-SW-10; rulebook-W3-swiss.md §3.3 "Prevention"): the one-round look-ahead reaches the wire. A chess Swiss of eight and six
+ * rounds (above the safe maximum 4, so rounds 1-5 ask the engine to look ahead) whose first four rounds were found by brute force
+ * (seed 8078287; the same history `swiss-look-ahead.test.ts` proves with its oracle: round 5 has legal pairings and every one of
+ * them leaves round 6 with none, under the colour limits). The history is written onto the minted shells by SQL and every board
+ * is then PLAYED through the scorer's own events, so the table points the pairing reads are real. Pair next seats round 5 and
+ * the answer carries `swiss_next_round: "unpairable"` with `swiss_paired_round: 5`; the warning tells the truth: with round 5
+ * decided, the next Pair is refused SWISS_NO_LEGAL_PAIRING for round 6.
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissB runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissBSuite(): Promise<void> {
@@ -61,7 +69,8 @@ export async function w3SwissBSuite(): Promise<void> {
   // T9: 1 (ST-G21: the same stage's anonymous /present board payload carries two tie-break columns, buchholz then opp_diff).
   // T4: 1 (the refusal carries finishAfter 3 and canFinish, and the Finish its notice offers ends the Swiss after round 3).
   // T5: 1 (X-SW-19: an ice hockey Swiss's round 2 is paired in the table's own score groups - regulation winners together, the overtime winner outside).
-  const EXPECTED_CHECKS = 7;
+  // T7: 1 (X-SW-10: a round whose every legal pairing kills the next is seated, and the Pair's answer says unpairable for round 5; Pair next is then refused for round 6).
+  const EXPECTED_CHECKS = 8;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -464,6 +473,94 @@ export async function w3SwissBSuite(): Promise<void> {
     w3Check(
       "w3b X-SW-19: an ice hockey Swiss's round 2 is paired in the table's own score groups - the two regulation winners (IIHF 3 points) meet each other, the overtime winner (2 points) meets neither" +
         (ok ? "" : ` - division ${divRes.status} ${divId ?? "none"}, entrants ${made.length}, start ${started.status}, pair ${paired1.status}/${paired2.status}, round 1 boards ${round1.length}, event statuses ${statuses.join(",")} ${refusedEvents.slice(0, 2).join(" ; ")}, round 2 boards ${JSON.stringify(round2.map((f) => [seedOf.get(f.home_entrant_id!), seedOf.get(f.away_entrant_id!)]))} (seeds), regulation winners ${JSON.stringify(regWinners.map((w) => seedOf.get(w)))}, OT winner seed 1 meets a regulation winner ${otMeetsRegulation}`),
+      ok,
+    );
+  }
+
+  // Check 7 - T7 (X-SW-10). A chess Swiss of eight players (seeds 1-8) and six rounds on the public competition check 3 opened (the
+  // Community plan caps active competitions at 3). Rounds 1-4 are the brute-force history UNPAIRABLE_NEXT_N8 (seed 8078287) as
+  // [home index, away index, result] with p0..p7 = seeds 1..8 and `h` / `a` the home / away side winning, `d` a draw; typed here,
+  // proved by an oracle in swiss-look-ahead.test.ts (every legal round 5 leaves a round 6 with no legal pairing under the
+  // colour limits - never a rematch-only history: none of 6-8 players has a non-last round like that). Round 5 of 6 is above the
+  // safe maximum floor(8 / 2) = 4 and is not the last round, so the app asks the engine to look ahead; its verdict rides on the
+  // answer. Differential: a pairable round's answer carries no `swiss_next_round` at all (round 1 of this same stage is the empty case).
+  {
+    const HISTORY: readonly (readonly (readonly [number, number, "h" | "a" | "d"])[])[] = [
+      [[6, 3, "a"], [4, 1, "h"], [0, 5, "a"], [7, 2, "d"]],
+      [[5, 3, "a"], [7, 4, "a"], [2, 1, "h"], [0, 6, "a"]],
+      [[3, 4, "a"], [5, 2, "d"], [6, 7, "a"], [1, 0, "d"]],
+      [[4, 2, "a"], [7, 5, "h"], [1, 6, "a"], [3, 0, "h"]],
+    ];
+    const comp = publicComp;
+    const divRes = await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Chess look-ahead", sport_key: "boardgame", variant_key: "classical", config: {} });
+    const divId = v1data<{ id: string } | undefined>(divRes)?.id;
+    const made =
+      v1data<{ id: string; seed: number | null }[] | undefined>(
+        await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+          Array.from({ length: 8 }, (_, i) => ({ kind: "individual", display_name: `L${i + 1} ${tag}`, seed: i + 1 }))),
+      ) ?? [];
+    // p0..p7 are seeds 1..8, whatever order the POST answered them in.
+    const ids = [...made].sort((a, b) => (a.seed ?? 0) - (b.seed ?? 0)).map((e) => e.id);
+    const stageId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 6, chess: true } }),
+    )?.id;
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    const rows = async () =>
+      (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    const seated = (all: Fx[], r: number) => all.filter((f) => f.round_no === r && f.home_entrant_id !== null && f.away_entrant_id !== null);
+    // The history is SQL-seeded onto the shells (no route seats a board by hand); -1: no DATABASE_URL, so the seed could not be
+    // written and the check cannot be judged (it fails, never skips).
+    let seeded = -1;
+    if (process.env.DATABASE_URL && stageId !== undefined && ids.length === 8) {
+      const db = smokeDb();
+      try {
+        seeded = 0;
+        for (const [i, round] of HISTORY.entries()) {
+          for (const [b, [home, away]] of round.entries()) {
+            seeded += (
+              await db`update fixtures set home_entrant_id = ${ids[home]}, away_entrant_id = ${ids[away]}, status = 'scheduled', outcome = null
+                       where stage_id = ${stageId} and ext_key = ${`sw-r${i + 1}-b${b + 1}`}`
+            ).count;
+          }
+        }
+      } finally {
+        await db.end();
+      }
+    }
+    // ...then every board is PLAYED through the scorer's own events: sixteen boards, a start and a result each.
+    const statuses: number[] = [];
+    const play = async (f: Fx | undefined, winner: string | null) => {
+      if (f === undefined) {
+        statuses.push(0);
+        return;
+      }
+      statuses.push((await appendScoreEvent(owner, f.id, "core.start", {})).status);
+      statuses.push(
+        (await appendScoreEvent(owner, f.id, "boardgame.result", winner === null ? { winner: null, method: "agreement" } : { winner, method: "resign" })).status,
+      );
+    };
+    const before = await rows();
+    for (const [i, round] of HISTORY.entries()) {
+      const boards = seated(before, i + 1).sort((x, y) => x.seq_in_round - y.seq_in_round);
+      for (const [b, [home, away, res]] of round.entries()) await play(boards[b], res === "d" ? null : res === "h" ? ids[home] : ids[away]);
+    }
+    const paired = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const answer = v1data<{ created?: number; swiss_next_round?: string; swiss_paired_round?: number } | undefined>(paired);
+    const afterPair = await rows();
+    const round5 = seated(afterPair, 5);
+    // The warning tells the truth: with round 5 decided, the next Pair is refused for round 6.
+    for (const f of round5) await play(f, f.home_entrant_id);
+    const sixth = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const refusal: { code?: string; round?: number } | undefined = sixth.json.error;
+    const ok =
+      divId !== undefined && stageId !== undefined && made.length === 8 && started.status < 300 && seeded === 16 &&
+      before.length === 24 && statuses.length === 40 && statuses.slice(0, 32).every((st) => st > 0 && st < 300) &&
+      paired.status === 200 && answer?.created === 4 && answer.swiss_next_round === "unpairable" && answer.swiss_paired_round === 5 &&
+      round5.length === 4 && statuses.slice(32).every((st) => st > 0 && st < 300) &&
+      sixth.status === SWISS_REFUSALS.SWISS_NO_LEGAL_PAIRING.resolvableStatus && refusal?.code === "SWISS_NO_LEGAL_PAIRING" && refusal.round === 6;
+    w3Check(
+      "w3b X-SW-10: a chess Swiss of eight and six rounds seats round 5 and the Pair's answer says swiss_next_round unpairable (paired round 5) - and round 6 is then refused SWISS_NO_LEGAL_PAIRING, as the warning said" +
+        (ok ? "" : ` - division ${divRes.status} ${divId ?? "none"}, stage ${stageId ?? "none"}, players ${made.length}, start ${started.status}, seeded ${seeded === -1 ? "no DATABASE_URL" : seeded}, rows ${before.length}, event statuses ${statuses.join(",")}, pair ${paired.status} ${JSON.stringify(paired.json).slice(0, 240)}, round 5 boards ${round5.length}, round 6 ${sixth.status} ${JSON.stringify(sixth.json).slice(0, 200)}`),
       ok,
     );
   }

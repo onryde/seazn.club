@@ -2427,6 +2427,8 @@
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.field_too_small": "Le tour {round} nécessite au moins deux joueurs.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.tail.finish": "Vous pouvez terminer la phase suisse après le tour {finishAfter} ; le classement est alors recalculé comme pour un événement de {finishAfter} tours.",
   "swiss.recovery.finishAfter": "Terminer après le tour {n}",
+  "swiss.warning.nextRoundUnpairable": "Le tour {next} risque d'être impossible : quelle que soit la façon d'apparier le tour {round}, aucun appariement valide ne restera pour le tour {next}. Vous pouvez terminer la phase suisse après le tour {round}.",
+  "swiss.warning.nextRoundUnknown": "Le tour {next} n'a pas pu être vérifié à temps.",
   "swiss.rounds.guidance.one": "Pour {n} participants : {count} tour recommandé, au plus {hardMax}.",
   "swiss.rounds.guidance.other": "Pour {n} participants : {count} tours recommandés, au plus {hardMax}.",
   "swiss.rounds.shrunk.one": "Il reste {field} participants, de quoi jouer au plus {count} tour. Vous pouvez terminer la phase suisse avec les tours déjà joués.",

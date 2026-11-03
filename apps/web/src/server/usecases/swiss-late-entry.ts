@@ -446,6 +446,8 @@ async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<LateEntryResult> {
       ...(gen.drawSeed !== null ? { draw_seed: gen.drawSeed } : {}),
       ...(gen.drawOrder !== null ? { draw_order: gen.drawOrder } : {}),
       ...(gen.colourLot !== null ? { colour_lot: gen.colourLot } : {}),
+      // W3 app-B T7 (X-SW-11): a re-pair of the final round sends the topscorer line too, and records it like a Pair does.
+      ...(gen.finalRoundMaxScore !== null ? { final_round_max_score: gen.finalRoundMaxScore } : {}),
     },
     ctx.actorId,
   );

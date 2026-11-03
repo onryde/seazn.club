@@ -8516,6 +8516,8 @@ export type DictionaryKey =
   | "swiss.rounds.shrunkWarnLater.other"
   | "swiss.rounds.warn.one"
   | "swiss.rounds.warn.other"
+  | "swiss.warning.nextRoundUnknown"
+  | "swiss.warning.nextRoundUnpairable"
   | "table.abbr.boardRatio"
   | "table.abbr.drawn"
   | "table.abbr.fieldGoals"

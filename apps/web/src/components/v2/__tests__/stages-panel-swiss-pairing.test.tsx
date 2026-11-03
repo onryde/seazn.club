@@ -776,3 +776,248 @@ describe("X-SW-3 the desk shows the refusal sentence and the Finish action, neve
     expect(confirmMock.mock.calls[0]![0].body, "the confirm names the rounds that go, off config.rounds").toContain("Rounds 4–5 are removed.");
   });
 });
+
+// W3 app-B Task 7 (X-SW-10; rulebook-W3-swiss.md §3.3 "Prevention"): a Pair that landed but whose look-ahead says the NEXT round
+// may not be possible gets an amber line of its own - beside the round-count caution (`schedule-warning`), never inside it:
+// both ride on one answer for any stage above its safe maximum, and one paragraph would run two cautions together. The
+// Generate's answer is fed in the shape the server sends (`swiss_next_round` + `swiss_paired_round`), through the real
+// `act()` the rail calls.
+describe("X-SW-10 the desk warns, in the amber channel, when the next round may not be possible", () => {
+  const EN = enDict as unknown as Record<string, string>;
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const TESTID = "swiss-next-round-warning";
+  const byTestId = (tree: ReactElement[], id: string) => tree.filter((el) => propsOf(el)["data-testid"] === id);
+  /** The 8-entrant field, rounds 1-2 decided and 3-5 waiting, so the press pairs round 3 of 5. */
+  const rows = () =>
+    Array.from({ length: 5 * 4 }, (_, i) => {
+      const round = Math.floor(i / 4) + 1;
+      const played = round <= 2;
+      return {
+        id: `f${i + 1}`,
+        stage_id: "s1",
+        pool_id: null,
+        round_no: round,
+        seq_in_round: (i % 4) + 1,
+        fixture_no: i + 1,
+        home_entrant_id: played ? `e${(i % 4) + 1}` : null,
+        away_entrant_id: played ? `e${(i % 4) + 5}` : null,
+        scheduled_at: null,
+        venue: null,
+        court_label: null,
+        court_id: null,
+        court_name: null,
+        status: played ? "decided" : "scheduled",
+        outcome: played ? { kind: "win", winner: `e${(i % 4) + 1}`, loser: `e${(i % 4) + 5}` } : null,
+        ext_key: `sw-r${round}-b${(i % 4) + 1}`,
+      };
+    });
+
+  async function press(answer: unknown, openSheet = false) {
+    apiV1Mock.mockReset();
+    apiV1Mock.mockImplementation((path: string) => (path.endsWith("/generate") ? Promise.resolve(answer) : Promise.resolve({})));
+    const island = renderIsland(StagesPanel, { ...props, stages: [swissStage({ rounds: 5 })], fixtures: rows(), divisionStatus: "active" } as never);
+    await flush();
+    const railOf = () => island.tree().find((el) => el.type === StageRail)!;
+    // The phone's Stage-tools sheet: Pair next is pressed from inside it. Opened through the rail's own toggle.
+    if (openSheet) (propsOf(railOf()).onToggleOpen as (id: string) => void)("s1");
+    if (openSheet) expect(propsOf(railOf()).open, "rig: the sheet is open before the press").toBe(true);
+    const onAct = propsOf(railOf()).onAct as (id: string, action: "generate") => Promise<boolean>;
+    const landed = await onAct("s1", "generate");
+    await flush();
+    return { island, landed, sheetOpen: () => propsOf(railOf()).open as boolean };
+  }
+  const PAIRED = { created: 4, existing: 16 };
+
+  it("empty case first: an ordinary Pair answer (no verdict) renders no next-round line, and the success notice is there", async () => {
+    const { island, landed } = await press(PAIRED);
+    expect(landed, "the press landed").toBe(true);
+    const tree = island.tree();
+    // the positive pair: the page is rendering its notice, so the absence below is the verdict's, not a dead tree
+    expect(textOf(tree), "the success notice is on the desk").toContain("Generated 4 fixture(s)");
+    expect(byTestId(tree, TESTID), "no verdict, no caution").toHaveLength(0);
+  });
+
+  it("X-SW-10 unpairable: an amber line names the next round and the finish-after round, and the Pair still reads as landed", async () => {
+    const { island, landed } = await press({ ...PAIRED, swiss_next_round: "unpairable", swiss_paired_round: 3 });
+    expect(landed, "the press landed: it is a caution, not a refusal").toBe(true);
+    const tree = island.tree();
+    const [line] = byTestId(tree, TESTID);
+    expect(line, "the amber line is on the desk").toBeTruthy();
+    expect(String(propsOf(line!).className), "amber, in the house channel").toContain("bg-amber-50");
+    expect(String(propsOf(line!).className)).toContain("text-amber-800");
+    expect(String(propsOf(line!).className), "never the red or green channel").not.toMatch(/bg-(red|emerald)-/);
+    const said = textOf(line);
+    expect(said, "names the NEXT round (paired 3, warns about 4)").toContain("Round 4 may not be possible");
+    expect(said, "and the way out, after the round just paired").toContain("You can finish after round 3.");
+    expect(said, "no template placeholder is left").not.toMatch(/[{}]/);
+    expect(textOf(tree), "the success notice is still said").toContain("Generated 4 fixture(s)");
+    expect(byTestId(tree, "schedule-error"), "the red line stays empty").toHaveLength(0);
+    expect(byTestId(tree, "schedule-pairing-refusal"), "and it is not the refusal notice").toHaveLength(0);
+    // differential: the numbers follow the server's paired round, not a constant
+    const other = await press({ ...PAIRED, swiss_next_round: "unpairable", swiss_paired_round: 7 });
+    const otherSaid = textOf(byTestId(other.island.tree(), TESTID)[0]);
+    expect(otherSaid).toContain("Round 8 may not be possible");
+    expect(otherSaid).toContain("finish after round 7.");
+  });
+
+  it("X-SW-10 unknown: the could-not-check line, with no way out promised", async () => {
+    const { island } = await press({ ...PAIRED, swiss_next_round: "unknown", swiss_paired_round: 3 });
+    const [line] = byTestId(island.tree(), TESTID);
+    expect(line, "the amber line is on the desk").toBeTruthy();
+    expect(String(propsOf(line!).className)).toContain("bg-amber-50");
+    const said = textOf(line);
+    expect(said).toBe("Round 4 could not be checked in time.");
+    expect(said, "it promises no Finish: nothing is known to be wrong").not.toMatch(/finish/i);
+  });
+
+  it("X-SW-10 on a phone the caution closes the Stage-tools sheet so it is seen; the ordinary Pair leaves the sheet as it was", async () => {
+    // Pair next is pressed inside the sheet and the line is said outside it - a refusal closes the sheet for the same reason.
+    const plain = await press(PAIRED, true);
+    expect(plain.sheetOpen(), "an ordinary Pair leaves the sheet open (the empty case: nothing to say)").toBe(true);
+    for (const verdict of ["unpairable", "unknown"] as const) {
+      const said = await press({ ...PAIRED, swiss_next_round: verdict, swiss_paired_round: 3 }, true);
+      expect(byTestId(said.island.tree(), TESTID), `${verdict}: the line is on the desk`).toHaveLength(1);
+      expect(said.sheetOpen(), `${verdict}: the sheet closed, so the line shows`).toBe(false);
+    }
+  });
+
+  it("X-SW-10 a verdict the desk cannot name a round for renders nothing rather than a guessed round (stale server)", async () => {
+    let checked = 0;
+    for (const answer of [
+      { ...PAIRED, swiss_next_round: "unpairable" },
+      { ...PAIRED, swiss_next_round: "unpairable", swiss_paired_round: 0 },
+      { ...PAIRED, swiss_next_round: "unpairable", swiss_paired_round: "3" },
+      { ...PAIRED, swiss_next_round: "bogus", swiss_paired_round: 3 },
+      { ...PAIRED, swiss_next_round: "pairable", swiss_paired_round: 3 },
+    ]) {
+      const { island } = await press(answer);
+      expect(textOf(island.tree()), "the success notice is on the desk").toContain("Generated 4 fixture(s)");
+      expect(byTestId(island.tree(), TESTID), JSON.stringify(answer)).toHaveLength(0);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every malformed answer was tried").toBe(5);
+  });
+
+  it("X-SW-10 both cautions on one answer render as two lines: the round-count warning is not swallowed (the sequence)", async () => {
+    const notice = { verdict: "warn", recommended: 4, safeMax: 4, hardMax: 7 };
+    const { island } = await press({ ...PAIRED, swiss_rounds: notice, swiss_next_round: "unpairable", swiss_paired_round: 3 });
+    const tree = island.tree();
+    const rounds = byTestId(tree, "schedule-warning");
+    const next = byTestId(tree, TESTID);
+    expect(rounds, "the round-count caution is still there").toHaveLength(1);
+    expect(next, "and the next-round line beside it").toHaveLength(1);
+    expect(textOf(rounds[0]), "each line says its own thing").not.toContain("Round 4 may not be possible");
+    expect(textOf(next[0])).not.toContain(textOf(rounds[0]));
+  });
+
+  it("X-SW-10 the line does not outlive the next press, however that press ends (landed clean, refused, or another write)", async () => {
+    // landed clean
+    apiV1Mock.mockReset();
+    let answer: unknown | Error = { ...PAIRED, swiss_next_round: "unpairable", swiss_paired_round: 3 };
+    apiV1Mock.mockImplementation((path: string) => {
+      if (!path.endsWith("/generate")) return Promise.resolve({});
+      return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
+    });
+    const island = renderIsland(StagesPanel, { ...props, stages: [swissStage({ rounds: 5 })], fixtures: rows(), divisionStatus: "active" } as never);
+    await flush();
+    const onAct = propsOf(island.tree().find((el) => el.type === StageRail)!).onAct as (id: string, action: "generate") => Promise<boolean>;
+    await onAct("s1", "generate");
+    await flush();
+    expect(byTestId(island.tree(), TESTID), "the line is up after the first press").toHaveLength(1);
+
+    answer = PAIRED;
+    await onAct("s1", "generate");
+    await flush();
+    expect(byTestId(island.tree(), TESTID), "a clean press clears it").toHaveLength(0);
+
+    // up again, then a refused press clears it too (the refusal notice replaces it, never joins it)
+    answer = { ...PAIRED, swiss_next_round: "unknown", swiss_paired_round: 3 };
+    await onAct("s1", "generate");
+    await flush();
+    expect(byTestId(island.tree(), TESTID)).toHaveLength(1);
+    answer = new ApiV1Error("nope", 409, "SWISS_NO_LEGAL_PAIRING", { round: 4, reason: "rematch", field: 8, finishAfter: 3, canFinish: true });
+    expect(await onAct("s1", "generate"), "the refused press did not land").toBe(false);
+    await flush();
+    expect(byTestId(island.tree(), TESTID), "a refused press clears it").toHaveLength(0);
+    expect(byTestId(island.tree(), "schedule-pairing-refusal"), "the refusal notice is up in its place").toHaveLength(1);
+  });
+
+  it("X-SW-10 the line is cleared by every other write that clears the amber channel: Add a round and Rebuild (the sequence)", async () => {
+    // The three resets (act, a Swiss stage write, Rebuild) are three lines of one rule; each is held by its own press.
+    apiV1Mock.mockReset();
+    confirmMock.mockReset();
+    confirmMock.mockResolvedValue(true);
+    const verdict: unknown = { ...PAIRED, swiss_next_round: "unpairable", swiss_paired_round: 3 };
+    apiV1Mock.mockImplementation((path: string) => {
+      if (path.endsWith("/generate")) return Promise.resolve(verdict);
+      if (path.endsWith("/swiss/add-round")) return Promise.resolve({ rounds: 6 });
+      if (path.endsWith("/rebuild")) return Promise.resolve({ created: 0, existing: 0, removed: 0, slots: { kept: 0, freed: 0, unscheduled: 0 } });
+      return Promise.resolve({});
+    });
+    const control: SwissRoundControl = {
+      started: true,
+      rounds: 5,
+      chess: false,
+      field: 8,
+      addRound: { canAddRound: true, refusal: null, field: 8, hardMax: 7 } as never,
+      finish: { canFinish: false, refusal: null, finishedAfter: 2, inProgress: false, completeInstead: false },
+    };
+    const island = renderIsland(StagesPanel, {
+      ...props,
+      stages: [swissStage({ rounds: 5 })],
+      fixtures: rows(),
+      divisionStatus: "active",
+      swissRoundControls: { s1: control },
+      rosterDrift: { s1: { ghosts: [{ id: "e1", display_name: "Withdrawn Wendy" }], unplaced: [] } },
+    } as never);
+    await flush();
+    const rail = () => island.tree().find((el) => el.type === StageRail)!;
+    const lineUp = () => byTestId(island.tree(), TESTID).length;
+    const showVerdict = async () => {
+      await (propsOf(rail()).onAct as (id: string, action: "generate") => Promise<boolean>)("s1", "generate");
+      await flush();
+      expect(lineUp(), "rig: the line is up before the write").toBe(1);
+    };
+
+    let cleared = 0;
+    // 1. a Swiss stage write (Add a round)
+    await showVerdict();
+    const swissRounds = propsOf(rail()).swissRounds as { onAddRound: (id: string, from: "more" | "dialog") => Promise<unknown> };
+    await swissRounds.onAddRound("s1", "more");
+    await flush();
+    expect(lineUp(), "Add a round clears it").toBe(0);
+    cleared++;
+    // 2. Rebuild fixtures (the roster-drift banner's button; the house confirm answers yes)
+    await showVerdict();
+    const rebuild = byTestId(island.tree(), "roster-drift-rebuild");
+    expect(rebuild, "rig: the Rebuild button is on the desk").toHaveLength(1);
+    (propsOf(rebuild[0]!).onClick as () => void)();
+    await flush();
+    expect(apiV1Mock.mock.calls.some(([path]) => String(path).endsWith("/rebuild")), "rig: the rebuild posted").toBe(true);
+    expect(lineUp(), "Rebuild clears it").toBe(0);
+    cleared++;
+    expect(cleared, "anti-vacuity: both writes were tried").toBe(2);
+  });
+
+  it("the Spanish, French and Dutch catalogs carry both sentences, translated, with the English placeholders", async () => {
+    // The sentence is composed by `msg` from the catalog (`nextRoundText`), so a missing or untranslated entry is a red here,
+    // not a silent English line; `i18n:check` pins key parity, this pins the content.
+    const locales = await Promise.all([
+      import("@/dictionaries/es/ui.json"),
+      import("@/dictionaries/fr/ui.json"),
+      import("@/dictionaries/nl/ui.json"),
+    ]);
+    let checked = 0;
+    for (const [i, loc] of (["es", "fr", "nl"] as const).entries()) {
+      const dict = locales[i]!.default as unknown as Record<string, string>;
+      for (const key of ["swiss.warning.nextRoundUnpairable", "swiss.warning.nextRoundUnknown"]) {
+        expect(dict[key], `${loc} has ${key}`).toBeTruthy();
+        expect(dict[key], `${loc} ${key} is not the English sentence`).not.toBe(EN[key]);
+        const params = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+        expect(params(dict[key]!), `${loc} ${key} keeps the English placeholders`).toEqual(params(EN[key]!));
+        checked++;
+      }
+    }
+    expect(checked, "three locales x two keys").toBe(6);
+  });
+});

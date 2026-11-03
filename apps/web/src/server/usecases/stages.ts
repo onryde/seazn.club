@@ -22,7 +22,7 @@ import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./forma
 import { validatedStageConfig } from "./stage-defaults";
 import { refuseNewStageTable } from "./table-rule-guards";
 import { swissRefusal } from "./swiss-refusal";
-import { judgeSwissRounds, swissRoundsNoticeOf, type SwissRoundsJudgement, type SwissRoundsNotice, type SwissRoundsShrunk } from "@/lib/swiss-rounds";
+import { judgeSwissRounds, swissRoundsGuidance, swissRoundsNoticeOf, type SwissRoundsJudgement, type SwissRoundsNotice, type SwissRoundsShrunk } from "@/lib/swiss-rounds";
 import { isRootSwissStage } from "@/lib/open-entry-stages";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
@@ -40,6 +40,7 @@ import {
   pairKey,
   type AmericanoRound,
   type SwissStanding,
+  type SwissNextRound,
   type Colour,
 } from "@seazn/engine/scheduling";
 import {
@@ -61,6 +62,8 @@ import {
 import type { TiebreakerKey } from "@seazn/engine/sport";
 import { completeStageIfReady, recomputeStandings, type CompleteResult } from "@/server/engine-db";
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
+import { liveCfg } from "@/server/engine-db/fixture-cfg";
+import { maxRoundPoints } from "@/server/engine-db/swiss-max-round-points";
 // L3/#414 pass 3 — not re-exported through the engine-db barrel (index.ts),
 // but these two ARE exported from the module itself (pass 2); reuse them
 // rather than re-deriving lane/thirdPlace from round/position (never
@@ -1487,6 +1490,13 @@ export type SwissGenResult = {
    *  the mint, `judgeSwissPairAt` at a Pair) — never a refusal (that throws); null when the pass had nothing to pair. A
    *  warn, or a running Swiss's shrunk-field warning, rides on the Generate's answer. */
   swissRounds: SwissRoundsJudgement | SwissRoundsShrunk | null;
+  /** W3 app-B T7 (X-SW-10): the engine's look-ahead verdict on the round AFTER the one this pass seated - present only when
+   *  the pass asked for it (`lookAhead`, a stage above its safe maximum, never the last round); null when it did not, or
+   *  nothing was seated. `pairable` is a verdict too (the Generate's answer drops it: nothing to tell). */
+  nextRound: SwissNextRound | null;
+  /** W3 app-B T7 (X-SW-11): the `finalRoundMaxScore` this pass sent (table points), else null. Recorded on the round's
+   *  ledger row (`final_round_max_score`) so a later pass can tell the stage's one use of it has been spent. */
+  finalRoundMaxScore: number | null;
 };
 
 /**
@@ -1721,6 +1731,27 @@ export function buildSwissHistory(
   return { played, colours, byes };
 }
 
+/** W3 app-B T7 (X-SW-11, engine T4c re-review): whether an EARLIER round of this stage was paired with `finalRoundMaxScore`.
+ *  The engine's topscorer exception is the stage's final round only; an "Add a round" after that round was paired would
+ *  make a new last round, and paired under the exception again a non-topscorer can be barred from both colours (the
+ *  engine's M3 guard throws CONFIG_INVALID). So the exception is sent at most once per stage.
+ *
+ *  The source is the ledger: every pass that sent it records `final_round_max_score` on its pairing row (`fixtures_generated`,
+ *  a Redo's step row included, or a late-entry re-pair, `swiss_late_entry`). A round's NEWEST pairing row decides whether
+ *  that round used it - so a final round paired with it, Unpaired, and re-paired once an added round made it a middle one
+ *  has NOT spent it - and only a round before `target` counts: re-pairing the same final round (Unpair then Pair) is the
+ *  same use, not a second one. An undone step is still a row, the direction that errs safe (the exception withheld means a
+ *  refusal by name, never a throw). */
+async function swissFinalMaxSentEarlier(tx: Tx, stageId: string, divisionId: string, target: number): Promise<boolean> {
+  const rows = await tx<{ round: number; sent: boolean }[]>`
+    select distinct on (payload->>'round') (payload->>'round')::int as round, payload ? 'final_round_max_score' as sent
+      from division_events
+     where division_id = ${divisionId} and payload->>'stage_id' = ${stageId} and payload ? 'round'
+       and (type = 'fixtures_generated' or (type = 'swiss_late_entry' and payload->>'case' = 'a'))
+     order by payload->>'round', seq desc`;
+  return rows.some((r) => r.sent && r.round < target);
+}
+
 /** Review m7: round 1's drawn order for a later round. Round 1's field is the entrants round 1 SEATED, not today's active
  *  list: a withdrawal since would shrink the shuffle and reorder everyone. Null when round 1 drew nobody (every entrant
  *  seeded) or seats no one — and (ruling, fix round 1b) when round 1 was NOT paired by the draw: a stage live at deploy
@@ -1842,6 +1873,8 @@ export async function swissGen(
       drawOrder: null,
       colourLot: null,
       swissRounds,
+      nextRound: null,
+      finalRoundMaxScore: null,
     };
   }
 
@@ -1862,6 +1895,8 @@ export async function swissGen(
       drawOrder: null,
       colourLot: null,
       swissRounds: null,
+      nextRound: null,
+      finalRoundMaxScore: null,
     };
   }
 
@@ -1950,10 +1985,9 @@ export async function swissGen(
   // table on an IIHF overtime win (3 / 2 / 1 / 0), chess's half-points (2 / 1), a `bySetScore` map and a pinned or custom
   // rule. An entrant the table does not list yet scores 0. Read-only: the call stores no lots draw (points do not depend on
   // the order a tie is broken in), and it runs under the division lock this Generate holds.
-  // `rule` is the very points rule that paid those scores (the pin once the stage started); it stays in scope for the
-  // final-round maximum (app-B T7), which must be in the same units.
+  // `rule` is the very points rule that paid those scores (the pin once the stage started): the final-round maximum below
+  // (app-B T7) is measured under it, so the topscorer line and the scores it is compared with are in one unit.
   const { points, rule } = await stageTablePoints(tx, stageId);
-  void rule;
   const score = new Map(field.map((e) => [e.id, points.get(e.id) ?? 0]));
 
   const cascadeRank = new Map<string, number>();
@@ -1986,10 +2020,36 @@ export async function swissGen(
     rank: cascadeRank.get(e.id) ?? cascadeRank.size + seedRank(e, i),
   }));
   const chess = await swissPairsInColour(tx, divisionId, { id: stageId, config: cfg }, division.sport_key, existing);
+  // W3 app-B T7 (X-SW-10; rulebook-W3-swiss.md §3.3 "Prevention", RB3-4): above the safe maximum ⌊n/2⌋ of THIS round's field a
+  // round can seat boards that leave the next one with no legal pairing. The engine then prefers a seating after which the
+  // next round can still be paired, and reports whether it is (`nextRound`). Never on the last round: no next round to protect,
+  // and set there it would move boards and warn for a round that never comes (engine `SwissConstraints.lookAhead`).
+  const lookAhead = target < rounds && rounds > swissRoundsGuidance(field.length).safeMax;
+  // W3 app-B T7 (X-SW-11; RB3-10; FIDE C.04.3 Art. 1.8): the final round's topscorer line - (rounds − 1) × the most ONE fixture
+  // pays one side under this stage's own points rule, in the table points the score above is measured in. The maximum goes
+  // through the engine's `payout` (`maxRoundPoints`), never a hand formula, so a bonus the table pays is counted. Three
+  // guards, each load-bearing:
+  //  - chess colours on: outside chess there is no colour limit to lift;
+  //  - `rounds > 1`: a one-round Swiss would send (1 − 1) × win = 0, which the engine refuses (CONFIG_INVALID);
+  //  - ONCE per stage: "Add a round" after the final round was paired makes a NEW last round, and an exemption used on two
+  //    rounds can bar a non-topscorer from both colours - the engine's own M3 guard throws CONFIG_INVALID. Read from the
+  //    ledger (`swissFinalMaxSentEarlier`), the way round 1's draw order is.
+  // A maximum of 0 (a pinned rule whose win pays nothing) is never sent either: the engine refuses it, and nobody could be
+  // a topscorer of a table that pays nothing.
+  let finalMax: number | undefined;
+  if (chess && target === rounds && rounds > 1 && !(await swissFinalMaxSentEarlier(tx, stageId, divisionId, target))) {
+    const most = maxRoundPoints(rule, sportModule, liveCfg(division.config, { kind: "swiss", config: cfg }, sportModule));
+    if (most > 0) finalMax = (rounds - 1) * most;
+  }
   const paired = pairRound(
     standings,
     { played, colours, byes },
-    { chess, ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}) },
+    {
+      chess,
+      ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}),
+      ...(lookAhead ? { lookAhead: true } : {}),
+      ...(finalMax !== undefined ? { finalRoundMaxScore: finalMax } : {}),
+    },
   );
   // W3 app-B T1 (X-SW-3; rulebook-W3 §3.1, P-A1/P-A6; engine 2.0.0): a round with no legal pairing is REFUSED, not seated
   // empty. Engine 1.x answered with an empty round, so Pair next read "up to date" for a round that could not be played.
@@ -2184,6 +2244,8 @@ export async function swissGen(
     drawOrder: target === 1 ? drawOrder : null,
     colourLot,
     swissRounds,
+    nextRound: lookAhead ? (paired.nextRound ?? null) : null,
+    finalRoundMaxScore: finalMax ?? null,
   };
 }
 
@@ -2849,6 +2911,14 @@ export interface GenerateOutcome {
    *  shrank under its count while this round still pairs (`verdict: "shrunk"`, fix round 1). A count above the hard
    *  maximum is otherwise refused (SWISS_ROUNDS_ABOVE_MAX). */
   swiss_rounds?: SwissRoundsNotice;
+  /** W3 app-B T7 (X-SW-10; rulebook-W3-swiss.md §3.3): Swiss only, and ABSENT unless this Pair asked the engine to look one
+   *  round ahead (a stage above its safe maximum, not the last round) and the answer was not "pairable": `unpairable` -
+   *  every legal pairing of the round just seated leaves the next one with none; `unknown` - the search budget ran out
+   *  before the engine could tell. The round is seated either way. Always with `swiss_paired_round`. */
+  swiss_next_round?: "unpairable" | "unknown";
+  /** W3 app-B T7: the round the Pair just seated, sent beside `swiss_next_round` so the desk names the round it follows
+   *  ({round}) and the one it warns about ({round} + 1) from ONE number, the server's - never a second count of its own. */
+  swiss_paired_round?: number;
 }
 
 /**
@@ -3516,6 +3586,8 @@ export async function generateStageFixturesTx(
   let swissSeatedCount = 0;
   let swissReshaped: SwissReshape | undefined;
   let swissRoundsWarn: SwissRoundsNotice | undefined;
+  // W3 app-B T7 (X-SW-10): the look-ahead's verdict when it is not "pairable", and the round it follows.
+  let swissNext: { verdict: "unpairable" | "unknown"; round: number } | undefined;
   // Rides on this pass's `fixtures_generated` row when it seated a round.
   let swissAudit: Record<string, unknown> | undefined;
   let gen: GenFixture[];
@@ -3525,6 +3597,9 @@ export async function generateStageFixturesTx(
     swissSeatedCount = swiss.seatedCount;
     if (!isEmptySwissReshape(swiss.reshaped)) swissReshaped = swiss.reshaped;
     swissRoundsWarn = swissRoundsNoticeOf(swiss.swissRounds);
+    if (swiss.round !== null && swiss.nextRound !== null && swiss.nextRound !== "pairable") {
+      swissNext = { verdict: swiss.nextRound, round: swiss.round };
+    }
     // `override` is true only when the body named a mode OTHER than the one
     // this round would have used anyway — picking the default is no override.
     swissAudit =
@@ -3540,6 +3615,8 @@ export async function generateStageFixturesTx(
             // W3 T9 (T8 review n1): and its drawn order, which later rounds read instead of re-deriving it.
             ...(swiss.drawOrder !== null ? { draw_order: swiss.drawOrder } : {}),
             ...(swiss.colourLot !== null ? { colour_lot: swiss.colourLot } : {}),
+            // W3 app-B T7 (X-SW-11): the final round's topscorer line this pass sent - the stage's one use of it.
+            ...(swiss.finalRoundMaxScore !== null ? { final_round_max_score: swiss.finalRoundMaxScore } : {}),
           }
         : undefined;
   } else if (stage.kind === "americano") {
@@ -3896,6 +3973,7 @@ export async function generateStageFixturesTx(
       fixtures,
       ...(swissReshaped ? { reshaped: swissReshaped } : {}),
       ...(swissRoundsWarn ? { swiss_rounds: swissRoundsWarn } : {}),
+      ...(swissNext ? { swiss_next_round: swissNext.verdict, swiss_paired_round: swissNext.round } : {}),
     },
     divisionId: stage.division_id,
     competitionId: division!.competition_id,

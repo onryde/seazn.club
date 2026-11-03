@@ -2427,6 +2427,8 @@
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.field_too_small": "Ronde {round} heeft minstens twee spelers nodig.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.tail.finish": "Je kunt de Zwitserse fase afronden na ronde {finishAfter}; de stand wordt dan herberekend als een evenement van {finishAfter} rondes.",
   "swiss.recovery.finishAfter": "Afronden na ronde {n}",
+  "swiss.warning.nextRoundUnpairable": "Ronde {next} is misschien niet mogelijk: hoe ronde {round} ook wordt gekoppeld, er blijft geen geldige koppeling over voor ronde {next}. Je kunt de Zwitserse fase afronden na ronde {round}.",
+  "swiss.warning.nextRoundUnknown": "Ronde {next} kon niet op tijd worden gecontroleerd.",
   "swiss.rounds.guidance.one": "Voor {n} deelnemers: {count} ronde aanbevolen, hoogstens {hardMax}.",
   "swiss.rounds.guidance.other": "Voor {n} deelnemers: {count} rondes aanbevolen, hoogstens {hardMax}.",
   "swiss.rounds.shrunk.one": "Er zijn nog {field} deelnemers, genoeg voor hoogstens {count} ronde. Je kunt de Zwitserse fase afronden met de al gespeelde rondes.",

@@ -28,6 +28,7 @@ import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import { swissRoundsWarnNotice, type SwissRoundsNotice } from "@/lib/swiss-rounds";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
+import { nextRoundNoticeOf, nextRoundText, type NextRoundNotice } from "@/lib/swiss-next-round";
 import {
   NO_PAIRING_ACTION_KEY,
   noPairingDetailsOf,
@@ -656,6 +657,11 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // (generic failure, red) — an amber, actionable "here's what to fix" state
   // so it's never confused with the "nothing new — up to date" success copy.
   const [warning, setWarning] = useState<string | null>(null);
+  // W3 app-B T7 (X-SW-10): the look-ahead's caution after a Pair that landed - the NEXT round may not be possible (or could
+  // not be checked in time). Its own amber line, never folded into `warning`: a stage above its safe maximum also carries the
+  // round-count caution on the same answer, and one paragraph would run the two together. The verdict and the round it
+  // follows, not text, so the sentence follows the locale; cleared by every later act() / Swiss write, as `warning` is.
+  const [nextRound, setNextRound] = useState<NextRoundNotice | null>(null);
   // T16: a refused Unpair / Rebuild over a board an online game stands behind (OnlineGameExistsNotice).
   const [gameExists, setGameExists] = useState(false);
   // Set after an inline reschedule lands: the notice grows an Undo button
@@ -775,6 +781,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     setPaywallFeature(null);
     setNotice(null);
     setWarning(null);
+    setNextRound(null);
     setPairingRefusal(null);
     setBusy(stageId);
     try {
@@ -858,6 +865,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     setPaywallFeature(null);
     setNotice(null);
     setWarning(null);
+    setNextRound(null);
     setPairingRefusal(null);
     setGameExists(false);
     setBusy(stageId);
@@ -875,6 +883,12 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         setNotice(generateNoticeText(out, msg, msgPlural, locale));
         // W3 T11 review m1: a caution, not a success — the amber channel.
         setWarning(generateWarningText(out, msgPlural));
+        // W3 app-B T7 (X-SW-10): and the look-ahead's caution, in its own line. Pair next is pressed inside the phone's
+        // Stage-tools sheet and the line is said outside it, so - as a refusal does - a caution closes the sheet to be
+        // seen; the ordinary Pair leaves it as it was.
+        const next = nextRoundNoticeOf(out);
+        setNextRound(next);
+        if (next !== null) setOpenRailFor(null);
       } else if (action === "unpair") {
         const out = await apiV1<{ cleared: number; round: number }>(
           `/api/v1/stages/${stageId}/unpair`,
@@ -972,6 +986,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     setPaywallFeature(null);
     setNotice(null);
     setWarning(null);
+    setNextRound(null);
     setGameExists(false);
     setBusy(stageId);
     try {
@@ -1095,6 +1110,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       {warning && (
         <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800" data-testid="schedule-warning">
           {warning}
+        </p>
+      )}
+      {/* W3 app-B T7 (X-SW-10): the Pair landed and the next round may not be possible. The house amber channel, a line of its
+          own beside the caution above; no button - the way out (Finish after the round just paired) is said in the sentence,
+          and the rail offers it once that round is decided. */}
+      {nextRound && (
+        <p role="status" className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800" data-testid="swiss-next-round-warning">
+          {nextRoundText(nextRound, msg)}
         </p>
       )}
       {/* W3 app-B T4 (SW-H1; X-SW-3): Pair next refused for want of a legal pairing. Amber like the caution above, and the
@@ -2289,6 +2312,10 @@ export type GenerateNoticeWire = {
   existing: number;
   reshaped?: SwissReshapeWire;
   swiss_rounds?: SwissRoundsNotice;
+  /** W3 app-B T7 (X-SW-10): the look-ahead's verdict on the round after the one just seated, with that round. Read by
+   *  `nextRoundNoticeOf`, which drops a verdict it cannot name a round for. */
+  swiss_next_round?: "unpairable" | "unknown";
+  swiss_paired_round?: number;
 };
 
 /**
