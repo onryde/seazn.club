@@ -1,19 +1,24 @@
-// The 4-step builder's pure decisions (Match Day C9): the entrant kind it opens at and sends, the four formats it
-// suggests, and the step a server refusal belongs to. Expected values come from the engine's own declarations (each
+// The 4-step builder's pure decisions (Match Day C9): the entrant kind it opens at and sends, the five formats it
+// suggests, the order and the collapsed view of the Format and Sport pickers (C9 R2), and the step a server refusal belongs to. Expected values come from the engine's own declarations (each
 // sport module's entrant model) and the rulebook draw sizes, never from the module under test.
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
 import { STAGE_TEMPLATES, templatesForSport } from "@/lib/format-templates";
+import { PAIR_MINTING_STAGE_KINDS } from "@/lib/chess-individual-only-rule";
 import {
   BUILDER_STEPS,
   SUGGESTED_COUNT,
+  collapsedPicks,
   entrantKindAfterSportChange,
   entrantsConfigFor,
   divisionEntrantKinds,
   firstBlockedStep,
+  formatPickerOrder,
+  isPairRotationTemplate,
   openingTemplate,
   rankTemplates,
+  sportPickerOrder,
   stepForCreateError,
   suggestTemplates,
 } from "../model";
@@ -80,7 +85,7 @@ describe("entrant kind", () => {
 describe("suggested formats", () => {
   const plan = { entrants: 16, venues: 2, hours: 4, matchMinutes: 30 };
 
-  it("every sport gets exactly four distinct suggestions, all from its own offer (counts)", () => {
+  it("every sport gets exactly five distinct suggestions, all from its own offer (counts)", () => {
     let checked = 0;
     for (const m of builtinModules) {
       const offered = templatesForSport(m.key, modelOf(m.key).kinds).map((t) => t.key);
@@ -91,7 +96,8 @@ describe("suggested formats", () => {
       checked++;
     }
     expect(checked).toBe(builtinModules.length);
-    expect(SUGGESTED_COUNT).toBe(4);
+    // C9 R2 (owner 2026-11-03): "show 5 format and then 6th one as a show more".
+    expect(SUGGESTED_COUNT).toBe(5);
   });
 
   it("the full ranking is a permutation of the offer: Show all loses no format (counts)", () => {
@@ -195,3 +201,170 @@ describe("the opening format (owner Q5) and the kinds it is picked for (Q3): the
   });
 });
 
+
+// C9 R2 (owner 2026-11-03): "show 5 format and then 6th one as a show more", and "in step 1, in sport, can we have
+// similar format way of choosing the sport?". The rule, from the brief: the first five, then the Show more tile; the
+// one picked never folds away - outside the first five it takes the fifth slot.
+describe("a collapsed picker (Format and Sport): five, the pick pinned into the fifth slot", () => {
+  it("empty case first: an empty order shows nothing, whatever is picked", () => {
+    expect(collapsedPicks([], null)).toEqual([]);
+    expect(collapsedPicks([], "league")).toEqual([]);
+  });
+
+  it("the pick at every position of an eight-long order: inside the first five nothing moves; outside, it is the fifth (counts)", () => {
+    const order = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    let checked = 0;
+    for (const [i, picked] of order.entries()) {
+      const shown = collapsedPicks(order, picked);
+      expect(shown, picked).toEqual(i < 5 ? ["a", "b", "c", "d", "e"] : ["a", "b", "c", "d", picked]);
+      checked++;
+    }
+    expect(checked).toBe(order.length);
+    expect(collapsedPicks(order, null), "nothing picked: the first five").toEqual(["a", "b", "c", "d", "e"]);
+  });
+
+  it("fewer than five in the order: every one, and nothing invented", () => {
+    expect(collapsedPicks(["a", "b", "c"], "c")).toEqual(["a", "b", "c"]);
+    expect(collapsedPicks(["a", "b", "c", "d", "e"], "e")).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
+  it("a pick the order does not hold (a format the sport no longer offers) is never shown as a phantom sixth", () => {
+    expect(collapsedPicks(["a", "b", "c", "d", "e", "f"], "zz")).toEqual(["a", "b", "c", "d", "e"]);
+  });
+});
+
+/** The partner-rotation formats by the DECLARATIONS: the templates whose stage graph holds a kind that mints pair
+ *  entrants (chess-individual-only-rule.ts PAIR_MINTING_STAGE_KINDS), never a list of keys. */
+const MINTING = STAGE_TEMPLATES.filter((t) => t.build(KNOBS).some((s) => PAIR_MINTING_STAGE_KINDS.includes(s.kind))).map((t) => t.key);
+
+describe("Americano and Mexicano sort after every other format (owner 2026-11-03)", () => {
+  it("the formats held last are the ones that mint pairs, and they are the owner's two by name", () => {
+    expect([...MINTING].sort(), "the owner named Americano and Mexicano").toEqual(["americano", "mexicano"]);
+    let checked = 0;
+    for (const t of STAGE_TEMPLATES) {
+      expect(isPairRotationTemplate(t.key), t.key).toBe(MINTING.includes(t.key));
+      checked++;
+    }
+    expect(checked).toBe(STAGE_TEMPLATES.length);
+    expect(isPairRotationTemplate("no-such-template")).toBe(false);
+  });
+
+  it("empty case first: an empty ranking orders to nothing", () => {
+    expect(formatPickerOrder([])).toEqual([]);
+  });
+
+  it("every sport at several plans: the whole ranking, once; the pair formats after every other; each side in the ranking's order (counts)", () => {
+    const plans = [
+      { entrants: 16, venues: 2, hours: 4, matchMinutes: 30 },
+      { entrants: 8, venues: 4, hours: 8, matchMinutes: 20 },
+      { entrants: 32, venues: 1, hours: 2, matchMinutes: 45 },
+    ];
+    let checked = 0;
+    let moved = 0;
+    for (const m of builtinModules) {
+      for (const plan of plans) {
+        const offered = templatesForSport(m.key, modelOf(m.key).kinds).map((t) => t.key);
+        const ranked = rankTemplates(offered, plan, KNOBS).map((r) => r.key);
+        const order = formatPickerOrder(ranked);
+        expect([...order].sort(), m.key).toEqual([...ranked].sort());
+        const firstPair = order.findIndex((k) => MINTING.includes(k));
+        if (firstPair >= 0) expect(order.slice(firstPair).every((k) => MINTING.includes(k)), `${m.key}: nothing after a pair format but pair formats`).toBe(true);
+        expect(order.filter((k) => !MINTING.includes(k)), m.key).toEqual(ranked.filter((k) => !MINTING.includes(k)));
+        expect(order.filter((k) => MINTING.includes(k)), m.key).toEqual(ranked.filter((k) => MINTING.includes(k)));
+        // The witness: the ranking put a pair format ahead of another format, and the picker did not.
+        if (ranked.some((k, i) => MINTING.includes(k) && ranked.slice(i + 1).some((x) => !MINTING.includes(x)))) moved++;
+        checked++;
+      }
+    }
+    expect(checked).toBe(builtinModules.length * plans.length);
+    expect(moved, "some sport's ranking put a pair format ahead of another, or the rule is untested").toBeGreaterThan(0);
+  });
+
+  it("collapsed: a pair format shows only when fewer than five others are offered, or it is the pick (every sport, counts)", () => {
+    const plan = { entrants: 16, venues: 2, hours: 4, matchMinutes: 30 };
+    let pairsOffered = 0;
+    for (const m of builtinModules) {
+      const offered = templatesForSport(m.key, modelOf(m.key).kinds).map((t) => t.key);
+      const order = formatPickerOrder(rankTemplates(offered, plan, KNOBS).map((r) => r.key));
+      const others = order.filter((k) => !MINTING.includes(k)).length;
+      for (const pair of order.filter((k) => MINTING.includes(k))) {
+        pairsOffered++;
+        expect(collapsedPicks(order, null).includes(pair), `${m.key} ${pair}, nothing picked`).toBe(others < 5);
+        expect(collapsedPicks(order, pair), `${m.key} ${pair}, picked`).toContain(pair);
+        const otherPick = order.find((k) => !MINTING.includes(k))!;
+        expect(collapsedPicks(order, otherPick).includes(pair), `${m.key} ${pair}, another picked`).toBe(others < 5);
+      }
+    }
+    expect(pairsOffered, "some sport offers the pair formats").toBeGreaterThan(0);
+  });
+});
+
+/** The owner's popular sports, in his order (brief 2026-11-03): football, cricket, badminton, tennis, table tennis. */
+const POPULAR = ["football", "cricket", "badminton", "tennis", "tabletennis"];
+const REGISTRY = builtinModules.map((m) => m.key);
+
+describe("the sport picker's order (owner 2026-11-03): the organisation's own, the popular five, the registry, generic last", () => {
+  it("empty case first: no sports listed orders to nothing, whatever the history", () => {
+    expect(sportPickerOrder([], [])).toEqual([]);
+    expect(sportPickerOrder([], ["football", "boardgame"])).toEqual([]);
+  });
+
+  it("no history: the popular five in the owner's order, the rest in the registry's, generic last (the registry, counts)", () => {
+    for (const k of [...POPULAR, "generic"]) expect(REGISTRY, `premise: the registry ships ${k}`).toContain(k);
+    const order = sportPickerOrder(REGISTRY, []);
+    expect(order.slice(0, 5)).toEqual(POPULAR);
+    expect(order.slice(5, -1)).toEqual(REGISTRY.filter((k) => !POPULAR.includes(k) && k !== "generic"));
+    expect(order.at(-1)).toBe("generic");
+    expect([...order].sort()).toEqual([...REGISTRY].sort());
+    expect(order.length).toBeGreaterThanOrEqual(10);
+    // The witness: the registry's own order is not the picker's (it ships chess third).
+    expect(order).not.toEqual(REGISTRY);
+  });
+
+  it("the page's order does not leak in: the registry decides, whatever order the page lists the sports in", () => {
+    const byName = [...REGISTRY].sort();
+    expect(sportPickerOrder(byName, [])).toEqual(sportPickerOrder(REGISTRY, []));
+  });
+
+  it("each registry sport as the one most recently run comes first; generic, most recent or not, stays last (counts)", () => {
+    let checked = 0;
+    for (const k of REGISTRY) {
+      const order = sportPickerOrder(REGISTRY, [k]);
+      if (k === "generic") expect(order.at(-1), k).toBe("generic");
+      else expect(order[0], k).toBe(k);
+      expect(order.at(-1), k).toBe("generic");
+      expect(new Set(order).size, k).toBe(REGISTRY.length);
+      checked++;
+    }
+    expect(checked).toBe(REGISTRY.length);
+  });
+
+  it("the history in its own order, most recent first, then the popular ones it did not name, then the rest", () => {
+    const order = sportPickerOrder(REGISTRY, ["carrom", "generic", "badminton", "boardgame"]);
+    expect(order.slice(0, 3)).toEqual(["carrom", "badminton", "boardgame"]);
+    expect(order.slice(3, 7)).toEqual(POPULAR.filter((k) => k !== "badminton"));
+    expect(order.at(-1)).toBe("generic");
+  });
+
+  it("a sport in the history the page does not list is left out; a listed sport the registry does not ship sits before generic", () => {
+    expect(sportPickerOrder(["badminton", "generic"], ["hockey"])).toEqual(["badminton", "generic"]);
+    expect(sportPickerOrder(["generic", "padel", "badminton"], [])).toEqual(["badminton", "padel", "generic"]);
+    // Names Object.prototype owns are sports like any other here (a Set, never an object lookup).
+    expect(sportPickerOrder(["constructor", "football"], ["toString"])).toEqual(["football", "constructor"]);
+  });
+
+  it("the picked sport is never folded away: each registry sport picked, the collapsed five hold it (counts)", () => {
+    let pinned = 0;
+    for (const k of REGISTRY) {
+      const order = sportPickerOrder(REGISTRY, []);
+      const shown = collapsedPicks(order, k);
+      expect(shown, k).toContain(k);
+      expect(shown.length, k).toBe(5);
+      if (order.indexOf(k) >= 5) {
+        expect(shown[4], `${k} takes the fifth slot`).toBe(k);
+        pinned++;
+      }
+    }
+    expect(pinned, "some sport sits past the first five, so the pin is exercised").toBeGreaterThan(0);
+  });
+});

@@ -2,8 +2,10 @@
 
 // The new-division builder (/o/[orgSlug]/c/[compSlug]/d/new), Match Day C9: four steps the owner approved on 2026-11-02.
 //
-//   1 Who plays       name, sport, entrant kind, category; age and the eligibility note folded away.
-//   2 Format          a visual picker (shape diagrams, match counts): 4 suggested formats plus Show all, knobs below.
+//   1 Who plays       name, sport (icon tiles, five then Show more: C9 R2), entrant kind, category; age and the
+//                     eligibility note folded away.
+//   2 Format          a visual picker (shape diagrams, match counts): 5 suggested formats, then a Show more tile as the
+//                     sixth cell (C9 R2); Americano and Mexicano last. Knobs below.
 //   3 Division rules  the Division rules strip the Fixtures tab shows (DivisionRulesStrip, in its draft mode), then the
 //                     schedule seed, folded. For chess, online play comes first.
 //   4 Review          a receipt of stages, matches, rounds and a time estimate; every row names where it can be changed
@@ -69,9 +71,12 @@ import { onlinePlayShown } from "@/lib/online-chess";
 import type { DivisionCategoryValue } from "@/components/registration-hub-row-derive";
 import { divisionEndBounds, divisionStartBounds, endDateIsBackwards, type CompetitionWindow } from "@/lib/date-order";
 import { FormatShape } from "@/components/v2/division-builder/format-shape";
+import { SportIcon } from "@/components/v2/division-builder/sport-icon";
 import { estimateMinutes, estimateStages } from "@/lib/division-builder/format-estimate";
 import {
   BUILDER_STEPS,
+  CATCH_ALL_SPORT,
+  collapsedPicks,
   entrantKindAfterSportChange,
   entrantsConfigFor,
   divisionEntrantKinds,
@@ -79,7 +84,9 @@ import {
   openingKnobs,
   openingTemplate,
   firstBlockedStep,
+  formatPickerOrder,
   rankTemplates,
+  sportPickerOrder,
   stepForCreateError,
   SUGGESTED_COUNT,
   type BuilderStep,
@@ -96,6 +103,10 @@ export interface SportOption {
    *  the builder does not ask, and sends no `config.entrants`. */
   entrants?: EntrantChoice;
 }
+
+/** No history: the Sport picker's order is the popular five, then the registry's (one stable empty list, so the order's
+ *  memo is not recomputed on every render). */
+const NO_RECENT_SPORTS: readonly string[] = Object.freeze([]);
 
 /** The receipt rows the division POST already saved (I1): read-only once the division exists. */
 const SAVED_WITH_DIVISION: readonly string[] = ["who", "rules", "points", "tiebreaks"];
@@ -286,6 +297,7 @@ export function DivisionBuilder({
   pointsDict,
   templateLocks = {},
   carryAllowed = true,
+  recentSports = NO_RECENT_SPORTS,
 }: {
   competitionId: string;
   orgSlug: string;
@@ -317,6 +329,9 @@ export function DivisionBuilder({
   templateLocks?: Readonly<Record<string, string>>;
   /** `standings.carry_over`: carrying standings into the next stage. */
   carryAllowed?: boolean;
+  /** The sports this organisation has run divisions in, most recent first (the page's one query): the Sport picker
+   *  leads with them (C9 R2). */
+  recentSports?: readonly string[];
 }) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -331,6 +346,13 @@ export function DivisionBuilder({
   const [name, setName] = useState("");
   const [sportKey, setSportKey] = useState(sports[0]?.key ?? "");
   const sport = useMemo(() => sports.find((s) => s.key === sportKey), [sports, sportKey]);
+  // C9 R2: the Sport picker's tiles, in its order (the organisation's own, the popular five, the registry, generic last);
+  // five shown until Show more, the picked one never folded away.
+  const sportOrder = useMemo(() => sportPickerOrder(sports.map((s) => s.key), recentSports), [sports, recentSports]);
+  const [sportsOpen, setSportsOpen] = useState(false);
+  const sportsShown = collapsedPicks(sportOrder, sportKey);
+  const sportFolded = (key: string) => !sportsOpen && !sportsShown.includes(key);
+  const sportsFoldedCount = sportOrder.filter(sportFolded).length;
   const [entrantKind, setEntrantKind] = useState<EntrantKind | null>(() => sports[0]?.entrants?.defaultKind ?? null);
   const [entrantKindTouched, setEntrantKindTouched] = useState(false);
   const [eligibilityOpen, setEligibilityOpen] = useState(false);
@@ -524,14 +546,17 @@ export function DivisionBuilder({
     hours: planNumber(planHours, PLAN_BOUNDS.hours),
     matchMinutes: planMinutes,
   };
-  // Ranked at the builder's opening knobs, so the suggested four do not reshuffle while a knob moves; each card's own
+  // Ranked at the builder's opening knobs, so the suggested five do not reshuffle while a knob moves; each card's own
   // counts are at the knobs as they stand.
   const ranked = rankTemplates(offered.map((t) => t.key), plan, openingKnobs(plan.entrants));
-  const suggested = ranked.slice(0, SUGGESTED_COUNT).map((r) => r.key);
-  // Every offered card is rendered, in rank order; past the suggested four they are folded (hidden, never unmounted)
-  // until Show all. The picked card is never folded away.
-  const folded = (key: string) => !showAll && !suggested.includes(key) && key !== template;
-  const foldedCount = ranked.filter((r) => folded(r.key)).length;
+  // C9 R2 (owner 2026-11-03): the cards in the ranking's order with Americano and Mexicano after every other.
+  const pickerOrder = formatPickerOrder(ranked.map((r) => r.key));
+  const suggested = pickerOrder.slice(0, SUGGESTED_COUNT);
+  // Every offered card is rendered, in the picker's order; past the first five they are folded (hidden, never
+  // unmounted) until Show more. The picked card is never folded away: outside the five it takes the fifth slot.
+  const formatsShown = collapsedPicks(pickerOrder, template);
+  const folded = (key: string) => !showAll && !formatsShown.includes(key);
+  const foldedCount = pickerOrder.filter(folded).length;
   const estimate = estimateStages(stagesNow, plan.entrants);
   const estimateMins = estimateMinutes(estimate, plan.venues, plan.matchMinutes);
   const templateLock = templateLocks[template];
@@ -924,17 +949,44 @@ export function DivisionBuilder({
             />
           </label>
           <div>
-            <label className="block">
-              <span className="label">{msg("wizard.sport")}</span>
-              <select value={sportKey} onChange={(e) => selectSport(e.target.value)} className="select min-h-11 w-full md:max-w-xs" aria-describedby="division-builder-sport-fixed">
-                {sports.map((s) => (
-                  <option key={s.key} value={s.key}>
-                    {sportLabel(s.key, msg)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {/* OUTSIDE the label: the select's description, not part of its name ("Sport"). */}
+            {/* C9 R2 (owner 2026-11-03, mock "Sport A"): a tile per sport, an icon and its name, in a radio group - native
+                radios sharing one name, so the arrow keys move between the tiles and the pick is the checked radio. Five
+                shown, then a Show more tile as the next cell; the picked sport is never folded away. */}
+            <fieldset className="min-w-0" data-testid="division-builder-sport" aria-describedby="division-builder-sport-fixed">
+              <legend className="label">{msg("wizard.sport")}</legend>
+              <div id="division-builder-sports" className="grid grid-cols-2 gap-2 md:grid-cols-3" data-testid="division-builder-sports">
+                {sportOrder.map((key) => {
+                  const picked = key === sportKey;
+                  return (
+                    <label
+                      key={key}
+                      data-sport={key}
+                      className={`${sportFolded(key) ? "hidden" : "flex"} min-h-14 min-w-0 cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 ${
+                        picked ? "border-purple-500 bg-purple-50 font-semibold text-purple-900" : "border-slate-200 bg-white text-slate-700 hover:border-purple-200"
+                      }`}
+                    >
+                      <input type="radio" name="division-sport" value={key} checked={picked} onChange={() => selectSport(key)} className="sr-only" />
+                      <SportIcon sportKey={key} className={`shrink-0 ${picked ? "text-purple-600" : "text-slate-500"}`} />
+                      {/* "Any other game" names the catch-all here only; everywhere else it keeps the catalogue's name. */}
+                      <span className="min-w-0 break-words">{key === CATCH_ALL_SPORT ? msg("divBuilder.sport.generic") : sportLabel(key, msg)}</span>
+                    </label>
+                  );
+                })}
+                {(sportsOpen || sportsFoldedCount > 0) && (
+                  <button
+                    type="button"
+                    onClick={() => setSportsOpen((v) => !v)}
+                    aria-expanded={sportsOpen}
+                    aria-controls="division-builder-sports"
+                    data-testid="division-builder-sport-more"
+                    className="flex min-h-14 min-w-0 items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-center text-sm font-medium text-purple-700 transition hover:border-purple-300 hover:bg-purple-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600"
+                  >
+                    {sportsOpen ? msg("divBuilder.showFewer") : msgPlural("divBuilder.sport.showMore", sportsFoldedCount, { count: sportsFoldedCount })}
+                  </button>
+                )}
+              </div>
+            </fieldset>
+            {/* The group's description (aria-describedby above), not part of its name ("Sport"). */}
             <p id="division-builder-sport-fixed" className="mt-1 text-xs text-slate-500">
               {msg("divBuilder.sportFixed")}
             </p>
@@ -1124,10 +1176,11 @@ export function DivisionBuilder({
 
           <fieldset className="min-w-0">
             <legend className="text-sm font-medium text-slate-800">{showAll ? msg("divBuilder.allFormats") : msg("divBuilder.suggested")}</legend>
-            <div className="mt-2 grid gap-2 md:grid-cols-2" data-testid="division-builder-templates">
+            <div id="division-builder-templates" className="mt-2 grid gap-2 md:grid-cols-2" data-testid="division-builder-templates">
               {/* The sport's OFFER, not every template: chess is individual-only (owner ruling 2026-10-26), so it is
-                  offered no americano/mexicano (format-templates.ts templatesForSport). */}
-              {ranked.map(({ key }) => {
+                  offered no americano/mexicano (format-templates.ts templatesForSport). In the picker's order: the
+                  ranking, Americano and Mexicano after every other (C9 R2). */}
+              {pickerOrder.map((key) => {
                 const t = STAGE_TEMPLATES.find((x) => x.key === key)!;
                 const row = ranked.find((r) => r.key === key)!;
                 const picked = template === key;
@@ -1165,18 +1218,21 @@ export function DivisionBuilder({
                   </label>
                 );
               })}
+              {/* C9 R2: Show more is the grid's next cell (the sixth, collapsed), a card-sized tile with a dashed edge -
+                  beside the fifth card it takes that row's height. */}
+              {(showAll || foldedCount > 0) && (
+                <button
+                  type="button"
+                  onClick={() => setShowAll((v) => !v)}
+                  aria-expanded={showAll}
+                  aria-controls="division-builder-templates"
+                  data-testid="division-builder-show-all"
+                  className="flex min-h-20 min-w-0 items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white p-3 text-center text-sm font-medium text-purple-700 transition hover:border-purple-300 hover:bg-purple-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600"
+                >
+                  {showAll ? msg("divBuilder.showFewer") : msg("divBuilder.showAll", { count: foldedCount })}
+                </button>
+              )}
             </div>
-            {(showAll || foldedCount > 0) && (
-              <button
-                type="button"
-                onClick={() => setShowAll((v) => !v)}
-                aria-expanded={showAll}
-                data-testid="division-builder-show-all"
-                className="btn btn-ghost mt-2 min-h-11"
-              >
-                {showAll ? msg("divBuilder.showFewer") : msg("divBuilder.showAll", { count: foldedCount })}
-              </button>
-            )}
           </fieldset>
 
           {templateLock !== undefined && (

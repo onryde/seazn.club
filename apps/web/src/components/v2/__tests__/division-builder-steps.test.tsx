@@ -11,7 +11,7 @@
 //     the default is the ENGINE's per sport (volleyball teams, badminton individuals), and an untouched kind follows the sport;
 //   - chess with online play: Lichess without one of its eight controls is refused on Division rules; with one, it is sent;
 //   - Create lands on the new division's Fixtures tab (the stage cards);
-//   - every builtin sport: its whole offer on the Format step, four suggested, its venue noun in the plan, the rules strip
+//   - every builtin sport: its whole offer on the Format step, five suggested, its venue noun in the plan, the rules strip
 //     on Division rules, the engine's entrant kinds, and a Create that sends the sport's own variant (counted).
 // Expected values come from the engine (`builtinModules`, entrant models, variant presets), the dictionaries, the Lichess
 // catalogue and the owner's rulings - never from the builder.
@@ -161,17 +161,17 @@ describe("the four steps", () => {
     expect(currentStep(h)).toBe("who");
   });
 
-  it("the sport select is named Sport alone: its 'set at creation' hint describes it from outside the label", () => {
+  it("the sport group is named Sport alone: its 'set at creation' hint describes it from outside the legend (C9 R2 tiles)", () => {
     const h = mount(sportsFor("badminton"));
-    const select = h.tree().find((e) => e.type === "select" && propsOf(e)["aria-describedby"] === "division-builder-sport-fixed");
-    expect(select, "the sport select points at its hint").toBeDefined();
-    const label = h.tree().find((e) => e.type === "label" && walk(e).includes(select!));
-    expect(label, "the select sits in its label").toBeDefined();
-    const inLabel = walk(label!).filter((e) => e.type === "span" || e.type === "p").map((e) => textOf(e).trim());
-    expect(inLabel).toEqual([UI["wizard.sport"]]);
+    const group = h.tree().find((e) => e.type === "fieldset" && propsOf(e)["aria-describedby"] === "division-builder-sport-fixed");
+    expect(group, "the sport group points at its hint").toBeDefined();
+    const legend = walk(group!).find((e) => e.type === "legend");
+    expect(legend, "the group has its legend").toBeDefined();
+    expect(textOf(legend!).trim()).toBe(UI["wizard.sport"]);
     const hint = h.tree().find((e) => propsOf(e).id === "division-builder-sport-fixed");
     expect(hint && textOf(hint).trim()).toBe(UI["divBuilder.sportFixed"]);
-    expect(walk(label!).includes(hint!), "the hint is NOT in the label (it would join the select's name)").toBe(false);
+    expect(walk(legend!).includes(hint!), "the hint is NOT in the legend (it would join the group's name)").toBe(false);
+    expect(walk(group!).includes(hint!), "the hint sits outside the group it describes").toBe(false);
   });
 
   it("Next is refused on an unfinished step with the reason, and goes on once it is done", () => {
@@ -642,7 +642,7 @@ describe("every builtin sport, walked from Who plays to Create (counts)", () => 
   // test runs last and reds if any sport's test did not reach its end.
   const tally = { sports: 0, cards: 0, refusedPairs: 0, variantsSeen: 0, ruleFieldsSeen: 0 };
   for (const m of builtinModules) {
-    it(`${m.key}: its whole offer on Format with four suggested, its venue noun, the rules strip with its variants and rules, its kinds, and its own variant sent`, async () => {
+    it(`${m.key}: its whole offer on Format with five suggested, its venue noun, the rules strip with its variants and rules, its kinds, and its own variant sent`, async () => {
       apiV1Mock.mockClear();
       pushMock.mockClear();
       const sport = ALL.find((s) => s.key === m.key)!;
@@ -656,14 +656,19 @@ describe("every builtin sport, walked from Who plays to Create (counts)", () => 
       setName(h, `${m.key} open`);
       next(h);
       expect(currentStep(h), m.key).toBe("format");
-      // Format: the sport's whole offer rendered, four of them suggested, the rest folded until Show all.
+      // Format: the sport's whole offer rendered, five of them suggested, the rest folded until Show more (C9 R2).
       const offer = engineOffer(m.key);
       expect([...templateKeys(h)].sort(), m.key).toEqual([...offer].sort());
       if (!offer.includes("americano")) tally.refusedPairs++;
       const suggested = templateCards(h).filter((c) => propsOf(c)["data-suggested"] !== undefined).map((c) => propsOf(c)["data-template"] as string);
       expect(suggested.length, m.key).toBe(Math.min(SUGGESTED_COUNT, offer.length));
-      // Visible: the four, and the pick wherever it ranks.
-      expect(new Set(visibleTemplateKeys(h)), m.key).toEqual(new Set([...suggested, pickedTemplate(h)!]));
+      // Visible: five - the suggested ones, and the pick never folded away: outside the five it takes the fifth slot.
+      const visible = visibleTemplateKeys(h);
+      const pick = pickedTemplate(h)!;
+      expect(visible.length, m.key).toBe(Math.min(SUGGESTED_COUNT, offer.length));
+      expect(visible, `${m.key}: the pick is shown`).toContain(pick);
+      for (const k of visible) if (k !== pick) expect(suggested, `${m.key}: ${k} is shown only as a suggestion`).toContain(k);
+      if (!suggested.includes(pick)) expect(visible.at(-1), `${m.key}: the pick takes the fifth slot`).toBe(pick);
       click(h, "division-builder-show-all");
       expect(visibleTemplateKeys(h).length, `${m.key}: Show all shows the whole offer`).toBe(offer.length);
       tally.cards += offer.length;

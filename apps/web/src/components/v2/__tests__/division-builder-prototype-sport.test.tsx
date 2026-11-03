@@ -38,8 +38,8 @@ vi.mock("@/lib/venue", async (importOriginal) => ({
   venueLabel: () => "Court",
 }));
 
-/** The builder with `key` LISTED beside football, then the sport select driven to it: the production path
- *  `selectSport(e.target.value)` that sets `sportKey`. */
+/** The builder with `key` LISTED beside football, then its sport tile tapped (C9 R2: a radio tile per sport): the
+ *  production path `selectSport(key)` that sets `sportKey`. */
 function mountOn(key: string) {
   const sports: SportOption[] = [
     { key: "football", name: "Football", variants: [{ key: "score", name: "Score", system: true }] },
@@ -54,9 +54,11 @@ function mountOn(key: string) {
     archivedSlotsExplainRefusal: false,
     viewerPlan: "community",
   });
-  const select = h.tree().find((e) => e.type === "select" && propsOf(e).value === "football");
-  if (!select) throw new Error("no sport select found");
-  (propsOf(select).onChange as (e: { target: { value: string } }) => void)({ target: { value: key } });
+  const radios = h.tree().filter((e) => e.type === "input" && propsOf(e).type === "radio" && propsOf(e).name === "division-sport");
+  if (radios.find((e) => propsOf(e).checked === true && propsOf(e).value === "football") === undefined) throw new Error("no sport tile picked at football");
+  const tile = radios.find((e) => propsOf(e).value === key);
+  if (!tile) throw new Error(`no sport tile for ${key}`);
+  (propsOf(tile).onChange as () => void)();
   return h;
 }
 const strips = (h: ReturnType<typeof mountOn>) => h.tree().filter((e) => e.type === DivisionRulesStrip);

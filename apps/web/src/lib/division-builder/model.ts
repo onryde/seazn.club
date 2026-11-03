@@ -2,8 +2,9 @@
 // Review. The component (components/v2/division-builder.tsx) holds the state; what it opens at, what it sends and where
 // a refusal lands are decided here, so they can be tested without a DOM.
 import type { EntrantKind } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import { STAGE_TEMPLATES, type TemplateKnobs } from "@/lib/format-templates";
-import { entrantKindsRefuseStageKind } from "@/lib/chess-individual-only-rule";
+import { PAIR_MINTING_STAGE_KINDS, entrantKindsRefuseStageKind } from "@/lib/chess-individual-only-rule";
 import { swissRoundsDefault } from "@/lib/swiss-rounds";
 import { estimateMinutes, estimateTemplate, type FormatEstimate } from "./format-estimate";
 
@@ -56,7 +57,9 @@ export interface RankedTemplate {
   fits: boolean;
 }
 
-export const SUGGESTED_COUNT = 4;
+/** How many cards a collapsed picker shows; its Show more tile is the next grid cell (C9 R2, owner 2026-11-03: "show 5
+ *  format and then 6th one as a show more", and the Sport picker "similar"). Both the Format and the Sport pickers. */
+export const SUGGESTED_COUNT = 5;
 
 /** Every offered template, best first for the plan: formats with a fixed draw before those without (a ladder has no
  *  clock to budget); among them those that fit the time first; of those, the one that guarantees everyone the most
@@ -116,11 +119,56 @@ export function openingTemplate(offered: readonly string[], matchMinutes: number
   return ranked.find((r) => playable(r.key))?.key ?? offered[0] ?? "league";
 }
 
-/** The four the Format step shows before "Show all". */
+/** The top SUGGESTED_COUNT of the ranking (the suggester's own, before the picker's order is laid over it). */
 export function suggestTemplates(offered: readonly string[], plan: PlanInput, knobs: TemplateKnobs): string[] {
   return rankTemplates(offered, plan, knobs)
     .slice(0, SUGGESTED_COUNT)
     .map((r) => r.key);
+}
+
+/** What a collapsed picker (Format or Sport) shows: the first SUGGESTED_COUNT of its order, and the one picked never
+ *  folded away - outside them, it takes the last of those slots (C9 R2). A pick the order does not hold (a format the
+ *  sport no longer offers) is not shown. */
+export function collapsedPicks(order: readonly string[], picked: string | null): string[] {
+  const head = order.slice(0, SUGGESTED_COUNT);
+  if (picked === null || head.includes(picked) || !order.includes(picked)) return head;
+  return [...order.slice(0, SUGGESTED_COUNT - 1), picked];
+}
+
+/** A partner-rotation format (Americano, Mexicano): one whose stages mint pair entrants (PAIR_MINTING_STAGE_KINDS). */
+export function isPairRotationTemplate(key: string): boolean {
+  const t = STAGE_TEMPLATES.find((x) => x.key === key);
+  return t !== undefined && t.build(openingKnobs(OPENING_PLAN.entrants)).some((s) => PAIR_MINTING_STAGE_KINDS.includes(s.kind));
+}
+
+/** The Format picker's order (owner 2026-11-03, C9 R2: "Americano, Mexicano always show in bottom"): the ranking, with
+ *  the partner-rotation formats after every other; each side keeps the ranking's order. */
+export function formatPickerOrder(ranked: readonly string[]): string[] {
+  return [...ranked.filter((k) => !isPairRotationTemplate(k)), ...ranked.filter((k) => isPairRotationTemplate(k))];
+}
+
+/** The owner's popular sports, in his order (C9 R2, 2026-11-03): after the organisation's own, before the rest. */
+export const POPULAR_SPORTS: readonly string[] = Object.freeze(["football", "cricket", "badminton", "tennis", "tabletennis"]);
+/** The catch-all sport: always the Sport picker's last tile, named "Any other game" there (and only there). */
+export const CATCH_ALL_SPORT = "generic";
+
+/**
+ * The Sport picker's order (C9 R2): the sports this organisation has run divisions in, most recent first (`recent`, the
+ * page's one query); then the popular five; then the rest in the engine registry's order; then any listed sport the
+ * registry does not ship, in the page's order; the catch-all last. Only listed sports (`keys`) appear, each once.
+ */
+export function sportPickerOrder(keys: readonly string[], recent: readonly string[], registry: readonly string[] = builtinModules.map((m) => m.key)): string[] {
+  const listed = new Set(keys);
+  const out: string[] = [];
+  const add = (k: string) => {
+    if (listed.has(k) && k !== CATCH_ALL_SPORT && !out.includes(k)) out.push(k);
+  };
+  for (const k of recent) add(k);
+  for (const k of POPULAR_SPORTS) add(k);
+  for (const k of registry) add(k);
+  for (const k of keys) add(k);
+  if (listed.has(CATCH_ALL_SPORT)) out.push(CATCH_ALL_SPORT);
+  return out;
 }
 
 /** The earliest step (in step order) holding a problem, or null when every step is clear. */

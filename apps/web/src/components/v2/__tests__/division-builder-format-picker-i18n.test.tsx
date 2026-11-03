@@ -73,7 +73,7 @@ function renderBuilder(dict: Dict, locale: Locale): string {
  *  false-fail against THAT text, not against a regression in the picker.
  *  Bounded by the card grid's own testid and the end of its fieldset
  *  (division-builder.tsx, Match Day C9: every offered card is rendered, the
- *  ones past the suggested four folded with `hidden`). */
+ *  ones past the suggested five folded with `hidden`; C9 R2 put Show more inside the grid). */
 function pickerSection(html: string): string {
   const start = html.indexOf('data-testid="division-builder-templates"');
   const end = html.indexOf("</fieldset>", start);

@@ -63,10 +63,15 @@ function pickTemplate(h: H, key: string): void {
   if (!card) throw new Error(`no ${key} card on screen`);
   (propsOf(card.radio).onChange as () => void)();
 }
+/** A tap on the `to` sport's tile (C9 R2: the Sport step is a radio tile per sport), after checking `from` is the one
+ *  picked. */
 function selectSport(h: H, from: string, to: string): void {
-  const select = h.tree().find((e) => e.type === "select" && propsOf(e).value === from);
-  if (!select) throw new Error(`no sport select showing ${from}`);
-  (propsOf(select).onChange as (e: { target: { value: string } }) => void)({ target: { value: to } });
+  const radios = h.tree().filter((e) => e.type === "input" && propsOf(e).type === "radio" && propsOf(e).name === "division-sport");
+  const picked = radios.filter((e) => propsOf(e).checked === true).map((e) => propsOf(e).value);
+  if (picked.length !== 1 || picked[0] !== from) throw new Error(`no sport tile picked at ${from} (picked: ${picked.join(",")})`);
+  const tile = radios.find((e) => propsOf(e).value === to);
+  if (!tile) throw new Error(`no sport tile for ${to}`);
+  (propsOf(tile).onChange as () => void)();
 }
 
 describe("the division builder: switching Sport to Chess drops an americano/mexicano pick (follow-up to #1027)", () => {

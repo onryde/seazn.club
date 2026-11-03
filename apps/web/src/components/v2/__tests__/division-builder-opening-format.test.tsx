@@ -1,7 +1,7 @@
 // Match Day C9 fix round 1, owner ruling 2026-11-03 (Q5, "apply rec"): the builder OPENS on the top suggestion - the
 // first format the suggester ranks for the sport at the opening plan - not on League.
 //
-// The expected pick is the SUGGESTER's own ranking (`rankTemplates`, whose first four are `suggestTemplates`), asked with
+// The expected pick is the SUGGESTER's own ranking (`rankTemplates`, whose first five are `suggestTemplates`), asked with
 // the plan the Format step opens at, read off its own boxes (entrants, venues, hours, and the match-length box), and the
 // opening knobs the ranking declares. Every sport, counted; League (the old default) is never the top suggestion at the
 // opening plan, so every row is a case where the old answer and the right one differ.

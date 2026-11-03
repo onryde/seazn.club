@@ -69,16 +69,20 @@ export default async function NewDivisionPage({
 
   // Sport catalog + variant presets (system rows are tenant-readable, org
   // presets scoped by RLS — doc 07).
-  const sports = await withTenant(auth.orgId, async (tx) => {
+  const { sports, recentSports } = await withTenant(auth.orgId, async (tx) => {
     const sportRows = await tx<{ key: string; name: string; module_version: string }[]>`
       select key, name, module_version from sports order by name`;
+    // C9 R2 (owner 2026-11-03): the Sport picker leads with the sports this organisation has run divisions in, most
+    // recent first - one small query (archived divisions count: they were run).
+    const recentRows = await tx<{ sport_key: string }[]>`
+      select sport_key from divisions where org_id = ${auth.orgId} group by sport_key order by max(created_at) desc`;
     // `config` is the variant's preset: the builder counts cricket's overs in the variant's own over length with it.
     const variantRows = await tx<VariantRow[]>`
       select sport_key, key, name, is_system, config from sport_variants
       order by is_system desc, name`;
     // The entrant model of the module the create will pin (createDivision reads the same `module_version`).
     const versionOf = new Map(sportRows.map((r) => [r.key, r.module_version]));
-    return sportOptionsFrom(sportRows, variantRows, (key) => {
+    const options = sportOptionsFrom(sportRows, variantRows, (key) => {
       const version = versionOf.get(key);
       if (version === undefined) return undefined;
       try {
@@ -89,6 +93,7 @@ export default async function NewDivisionPage({
         return undefined;
       }
     });
+    return { sports: options, recentSports: recentRows.map((r) => r.sport_key) };
   });
 
   return (
@@ -115,6 +120,7 @@ export default async function NewDivisionPage({
           pointsDict={pointsLineDict(publicDict)}
           templateLocks={templateLocks}
           carryAllowed={carryAllowed}
+          recentSports={recentSports}
         />
       </main>
     </>

@@ -48,10 +48,12 @@ export function setName(h: BuilderIsland, value: string): void {
   (propsOf(el).onChange as (e: unknown) => void)({ target: { value } });
 }
 
+/** Pick a sport, as a tap on its tile does (C9 R2: the Sport step is a radio tile per sport; a tile folded under Show
+ *  more is in the tree too, hidden, as the format cards are). */
 export function selectSport(h: BuilderIsland, key: string): void {
-  const el = h.tree().find((e) => e.type === "select" && propsOf(e)["aria-describedby"] === "division-builder-sport-fixed");
-  if (!el) throw new Error("no sport select");
-  (propsOf(el).onChange as (e: unknown) => void)({ target: { value: key } });
+  const radio = h.tree().find((e) => e.type === "input" && propsOf(e).type === "radio" && propsOf(e).name === "division-sport" && propsOf(e).value === key);
+  if (!radio) throw new Error(`no sport tile for ${key}`);
+  (propsOf(radio).onChange as () => void)();
 }
 
 /** Every format card rendered (folded or not), in the order the builder ranks them. */
@@ -59,7 +61,7 @@ export function templateCards(h: BuilderIsland): ReactElement[] {
   return h.tree().filter((e) => e.type === "label" && typeof propsOf(e)["data-template"] === "string");
 }
 
-/** The cards an organiser can see without Show all: not folded away. */
+/** The cards an organiser can see without Show more: not folded away. */
 export function visibleTemplateKeys(h: BuilderIsland): string[] {
   return templateCards(h)
     .filter((e) => !/(^|\s)hidden(\s|$)/.test(String(propsOf(e).className)))
