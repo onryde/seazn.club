@@ -61,7 +61,7 @@ describe("selectors are pinned to the product's text", () => {
       if (tag !== undefined && !d.needle.includes(`<${tag} `)) out.push(`${k}: element ${tag} not in needle ${d.needle}`);
       return out;
     });
-    expect(Object.keys(DATA).length).toBe(13);
+    expect(Object.keys(DATA).length).toBe(14);
     expect(wrong).toEqual([]);
   });
 

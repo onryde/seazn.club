@@ -10,6 +10,7 @@ import { deciderKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { TOP_LEVEL_STAGE_DECIDERS } from "../../../apps/web/src/lib/top-level-stage-deciders.ts";
 import { FORMAT_BOUNDS } from "../../../apps/web/src/lib/format-bounds.ts";
+import { swissRoundsDefault } from "../../../apps/web/src/lib/swiss-rounds.ts";
 import { STAGE_DECIDER_MOVED, StageConfig } from "../../../apps/web/src/server/api-v1/schemas.ts";
 import { SWISS_REQUESTED_BYES_DEFERRED_MESSAGE } from "../../../apps/web/src/lib/swiss-refusals.ts";
 import {
@@ -19,6 +20,7 @@ import {
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const BUILDER = readFileSync(resolve(REPO, "apps/web/src/components/v2/division-builder.tsx"), "utf8");
+const MODEL = readFileSync(resolve(REPO, "apps/web/src/lib/division-builder/model.ts"), "utf8");
 /** The table the builder AND the /start funnel pick a new division's variant from (W2e: moved out of the builder). */
 const PREFERRED = readFileSync(resolve(REPO, "apps/web/src/lib/preferred-variant.ts"), "utf8");
 /** The product's one group → group → knockout shape (server/templates/catalog). */
@@ -406,10 +408,22 @@ describe("API-only rows — bodies derived from product authorities", () => {
 });
 
 describe("catalogue — builder parity (text pins; a builder change reds here)", () => {
-  it("knob defaults match division-builder.tsx's useState literals", () => {
+  it("knob defaults match division-builder.tsx's useState literals; Swiss rounds open at swissRoundsDefault of the plan's opening entrants", () => {
     const pick = (name: string) => Number(new RegExp(`const \\[${name}, set\\w+\\] = useState\\((\\d+)\\)`).exec(BUILDER)?.[1]);
-    expect({ qualified: pick("qualified"), swissRounds: pick("swissRounds"), poolCount: pick("poolCount"), legs: pick("legs") })
-      .toEqual(BUILDER_DEFAULT_KNOBS);
+    // Match Day C9 fix round 1 (review I2): the Rounds box has no literal. Untouched it follows the plan's entrants box
+    // (swissRoundsDefault), and the page object never types in either, so the rounds the builder sends are
+    // swissRoundsDefault of the entrants box's opening value (model.ts OPENING_PLAN). Each link is read off the source,
+    // and the expected count comes from the helper the builder calls, never a number typed here.
+    expect(BUILDER).toContain("const [swissRoundsPicked, setSwissRoundsPicked] = useState<number | null>(null);");
+    expect(BUILDER).toContain("const swissRounds = swissRoundsPicked ?? swissRoundsDefault(planEntrantCount);");
+    expect(BUILDER).toContain("const planEntrantCount = planNumber(planEntrants, PLAN_BOUNDS.entrants);");
+    expect(BUILDER).toContain("const [planEntrants, setPlanEntrants] = useState(String(OPENING_PLAN.entrants));");
+    const opening = Number(/export const OPENING_PLAN = \{ entrants: (\d+),/.exec(MODEL)?.[1]);
+    expect(opening, "model.ts OPENING_PLAN.entrants").toBeGreaterThan(1);
+    const swissRounds = swissRoundsDefault(opening);
+    expect({ qualified: pick("qualified"), swissRounds, poolCount: pick("poolCount"), legs: pick("legs") }).toEqual(BUILDER_DEFAULT_KNOBS);
+    // The old literal (3) and the plan's answer differ, so this pin witnesses the I2 change rather than passing either way.
+    expect(swissRounds).not.toBe(3);
   });
 
   // Match Day D1: the builder clamps against FORMAT_BOUNDS (apps/web/src/lib/format-bounds.ts), the one set of bounds it

@@ -1,4 +1,5 @@
 import "server-only";
+import { STAGE_TEMPLATES, buildTemplateStages } from "@/lib/format-templates";
 // Shared stage-format entitlement gates (doc 10 §1, Jul3/08 §8) — the single
 // definition of "does this stage kind/config need formats.double_elim /
 // formats.advanced". Split out of usecases/stages.ts because `withTenant`
@@ -51,4 +52,18 @@ export function stageNeedsDoubleElimGate(kind: string): boolean {
  *  re-threading a narrower type through createStages and createFromTemplate. */
 export function stageNeedsAdvancedFormatsGate(stage: StageFormatGateInput): boolean {
   return stage.kind === "americano" || stage.kind === "ladder";
+}
+
+/** The division builder's template locks (Match Day C9; fix round 1, I3): template key → the feature its stages need
+ *  and this organisation lacks, read off each template's OWN stage kinds (the knobs never change the kinds) with the two
+ *  gates above, the double-elimination gate asked first as createStages asks it. The builder refuses Next on a locked
+ *  pick and shows its UpgradeGate, so the 402 is said on the Format step, not after the division exists. */
+export function templateLocksFor(allowed: { doubleElim: boolean; advanced: boolean }): Record<string, string> {
+  const locks: Record<string, string> = {};
+  for (const tpl of STAGE_TEMPLATES) {
+    const stages = buildTemplateStages(tpl.key, { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });
+    if (!allowed.doubleElim && stages.some((st) => stageNeedsDoubleElimGate(st.kind))) locks[tpl.key] = "formats.double_elim";
+    else if (!allowed.advanced && stages.some((st) => stageNeedsAdvancedFormatsGate(st))) locks[tpl.key] = "formats.advanced";
+  }
+  return locks;
 }

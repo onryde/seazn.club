@@ -288,6 +288,7 @@ export function DivisionSettings({
   viewerPlan,
   onlineChessOffered,
   swissField,
+  entrantKinds,
 }: {
   division: DivisionSettingsInfo;
   /** Org id, for the tag-suggestions fetch only (the division PATCH itself
@@ -335,6 +336,11 @@ export function DivisionSettings({
    *  late-entry stamp can exist yet. Under 2 (or absent) ⇒ no guidance line, and a switch to a Swiss seeds the band for a
    *  field of up to 8. */
   swissField?: number;
+  /** C9 fix round 1 (review I5): the entrant kinds the division's ENGINE model holds (the page's effective model: the
+   *  sport's declaration with this division's `config.entrants` override, chess read without it). The Format select
+   *  offers no pair format (americano/mexicano) where it lacks individuals (templatesForSport; C9 round 3: the rule the builder reads). Required, so a
+   *  mount cannot leave the offer unchecked. */
+  entrantKinds: readonly string[];
 }) {
   const msg = useMsg();
   // W3 T11 (X-SW-16): the Swiss Rounds field's guidance line is counted ("for 6 entrants").
@@ -735,9 +741,10 @@ export function DivisionSettings({
                       still fail to compile. format-templates.test.ts's
                       dictionary-coverage test backstops every t.key actually
                       resolving. */}
-                  {/* The sport's offer (templatesForSport): chess lists no americano/mexicano, except the structure a
-                      division stored before the ruling already plays, so it still shows what it is. */}
-                  {templatesForSport(division.sport_key, detected).map((t) => (
+                  {/* The sport's offer (templatesForSport): chess, and any division whose entrant model holds no
+                      individuals (the team sports, volleyball, a Pairs or Teams division), lists no americano/mexicano, except the
+                      structure the division already plays, so it still shows what it is. */}
+                  {templatesForSport(division.sport_key, entrantKinds, detected).map((t) => (
                     <option key={t.key} value={t.key}>
                       {msg(`format.template.${t.key}.label` as MessageKey)}
                     </option>

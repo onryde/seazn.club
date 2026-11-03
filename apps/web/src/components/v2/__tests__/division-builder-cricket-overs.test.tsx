@@ -5,8 +5,11 @@
 // "20 overs" on The Hundred used to POST `ballsPerInnings: 120`, which the server stored beside the variant's own
 // `ballsPerOver: 5`: a 24-over Hundred.
 //
-// Driven through the real handlers (the harness `renderIsland` the other builder tests use): the variant select's onChange,
-// the rule grid's onChange, the Create button, with the transport mocked and the division POST's body read. The presets are
+// Driven through the real handlers (the harness `renderIsland` the other builder tests use). Since Match Day C9 the variant
+// and the rule grid are on the Division rules step, the DivisionRulesStrip in draft mode: a nested component the harness
+// does not expand, so the variant pick and the typed rule values go through the strip's `draft` callbacks (the builder's own
+// state setters, the ones the strip's select and Match format editor call). Then each step's Next and the Create button,
+// with the transport mocked and the division POST's body read. The presets are
 // the ENGINE's own (`cricket.variants`, which `sync:sports` writes to `sport_variants`), and the expected balls are the
 // engine's own reading of the variant, never a number typed here.
 //
@@ -14,11 +17,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { cricket } from "@seazn/engine/sports/cricket";
-import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
-import { MatchFormatEditor } from "@/components/v2/rules/match-format-editor";
+import { pressCreate, rulesDraft, walkToReview } from "@/components/v2/__tests__/_division-builder-driver";
 import { sportOptionsFrom } from "@/lib/sport-options";
-import uiEn from "@/dictionaries/en/ui.json";
 
 const { apiV1Mock } = vi.hoisted(() => ({ apiV1Mock: vi.fn() }));
 
@@ -54,33 +56,24 @@ function mount() {
 }
 type H = ReturnType<typeof mount>;
 
+/** The variant the strip's select shows is `from`; the organiser picks `to` (the strip's select calls `onVariantChange`). */
 function pickVariant(h: H, from: string, to: string): void {
-  const select = h.tree().find((e) => e.type === "select" && propsOf(e).value === from);
-  if (!select) throw new Error(`no variant select showing ${from}`);
-  (propsOf(select).onChange as (e: { target: { value: string } }) => void)({ target: { value: to } });
+  const draft = rulesDraft(h);
+  if (draft.variantKey !== from) throw new Error(`no variant select showing ${from} (it shows ${draft.variantKey})`);
+  draft.onVariantChange(to);
 }
-/** The organiser types `overs` into the rule grid: the grid's own onChange, as RuleFieldControl calls it. The grid is the ONE
- *  Match format editor (Match Day C2), division scope, in edit mode. */
+/** The organiser types `overs` into the rule grid: the ONE Match format editor (Match Day C2), whose onChange the strip
+ *  hands the draft's `setRuleValues` with every value it holds. */
 function typeOvers(h: H, overs: string): void {
-  const grid = h.tree().find((e) => e.type === MatchFormatEditor && propsOf(e).scope === "division" && propsOf(e).mode === "edit");
-  if (!grid) throw new Error("no rule grid on screen");
-  const onChange = propsOf(grid).onChange as (next: Record<string, string>) => void;
-  onChange({ ...(propsOf(grid).values as Record<string, string>), overs });
+  const draft = rulesDraft(h);
+  draft.setRuleValues({ ...draft.ruleValues, overs });
 }
-function button(h: H, label: string) {
-  const el = h.tree().find((e) => e.type === "button" && textOf(e) === label);
-  if (!el) throw new Error(`no button labelled ${JSON.stringify(label)}`);
-  return el;
-}
-/** Name -> Scheduling tab -> Create; the division POST's body. */
+/** Name -> each step's Next -> Create on Review; the division POST's body. */
 async function create(h: H): Promise<{ variant_key: string; config: Record<string, unknown> }> {
   apiV1Mock.mockReset();
   apiV1Mock.mockImplementation(async (url: string) => (url.endsWith("/divisions") ? { id: "d1", slug: "open" } : {}));
-  const nameInput = h.tree().find((e) => e.type === "input" && propsOf(e).placeholder === uiEn["wizard.divisionNamePlaceholder"]);
-  if (!nameInput) throw new Error("name input not found");
-  (propsOf(nameInput).onChange as (e: unknown) => void)({ target: { value: "Open" } });
-  (propsOf(button(h, uiEn["wizard.tab.scheduling"])).onClick as () => void)();
-  (propsOf(button(h, uiEn["wizard.create"])).onClick as () => void)();
+  walkToReview(h, "Open");
+  pressCreate(h);
   await new Promise((resolve) => setTimeout(resolve, 0));
   const post = apiV1Mock.mock.calls.find(([url]) => String(url).endsWith("/divisions"));
   if (!post) throw new Error("the division was never POSTed");

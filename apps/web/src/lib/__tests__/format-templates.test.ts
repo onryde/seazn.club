@@ -22,11 +22,11 @@ import {
   buildTemplateStages,
   clampKnob,
   detectTemplate,
-  templateAfterSportChange,
   templateHasProgression,
   templatesForSport,
 } from "../format-templates";
 import { builtinModules } from "@seazn/engine/sports";
+import { effectiveEntrantModel } from "@seazn/engine/sport";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { ProgressionSchema } from "@/server/api-v1/schemas";
 import {
@@ -653,7 +653,7 @@ describe("STAGE_TEMPLATES — every key has dictionary-backed label/help copy (F
     });
   }
 
-  it("es/fr/nl are real translations, not English left in place (label OR help differs from en per key — a couple of short proper nouns/cognates, e.g. \"Ladder\"/\"Americano (padel)\", are legitimately identical in one field, so this only requires at least one of the two to differ)", () => {
+  it("es/fr/nl are real translations, not English left in place (label OR help differs from en per key — a couple of short proper nouns/cognates, e.g. \"Ladder\"/\"Americano\", are legitimately identical in one field, so this only requires at least one of the two to differ)", () => {
     const en = enUi as Record<string, string>;
     for (const t of STAGE_TEMPLATES) {
       const enLabel = en[`format.template.${t.key}.label`];
@@ -675,62 +675,112 @@ describe("STAGE_TEMPLATES — every key has dictionary-backed label/help copy (F
 // players into PAIR entrants, so the builder and Settings no longer OFFER those two templates for chess. And the Triple
 // round robin is offered to no sport (owner ruling 2026-11-01, Match Day D1 legs Option A): the forms offer legs 1-2, so
 // the template stays in STAGE_TEMPLATES only for what already reads it (stored divisions, seeds, the matrix catalogue).
-// The expected lists below come from the rulings (chess = the `boardgame` module; the refused formats are americano and
-// mexicano; the retired one is triple_rr), never from templatesForSport itself.
-describe("templatesForSport: the format templates offered per sport (chess individual-only, follow-up to #1027; Triple RR retired)", () => {
+// Match Day C9 fix round 1 (review I5): the same two formats are offered to no sport whose ENGINE entrant model cannot
+// play them - an americano stage needs individual players to rotate (usecases/stages.ts americanoGen), so a sport whose
+// `entrantModel.kinds` lacks them is offered neither (football, cricket, hockey and ice hockey hold teams only;
+// volleyball teams and pairs). C9 round 3 (controller ruling): individuals are the ONE need, shared with the division
+// builder and Settings; the pairs it mints (pairEntrantsFor) are a registry invariant asserted below, and chess - the
+// one sport holding individuals without pairs - is refused by key.
+// The expected lists below come from the rulings and the ENGINE's entrant-model declarations (chess = the `boardgame`
+// module; the pair formats are americano and mexicano; the retired one is triple_rr), never from templatesForSport.
+describe("templatesForSport: the format templates offered per sport (chess individual-only, follow-up to #1027; Triple RR retired; C9 I5 entrant models)", () => {
   const CHESS = "boardgame";
   const REFUSED_FOR_CHESS = ["americano", "mexicano"];
+  /** The pair formats (americano and mexicano, its mode) and what playing one needs of the sport's entrant model. */
+  const PAIR_FORMATS = ["americano", "mexicano"];
+  const PAIR_FORMAT_NEEDS = ["individual"];
   const RETIRED = ["triple_rr"];
   const ALL_KEYS = STAGE_TEMPLATES.map((t) => t.key);
   const OFFERED = ALL_KEYS.filter((k) => !RETIRED.includes(k));
   const keysOf = (ts: readonly { key: string }[]) => ts.map((t) => t.key);
+  /** The sport's entrant kinds as the ENGINE declares them (the oracle's only input from the sport). */
+  const kindsOf = (m: (typeof builtinModules)[number]) => effectiveEntrantModel(m.entrantModel ?? null, null).kinds;
+  const canPlayPairFormats = (kinds: readonly string[]) => PAIR_FORMAT_NEEDS.every((k) => kinds.includes(k));
+  const kindsFor = (key: string) => kindsOf(builtinModules.find((m) => m.key === key)!);
 
-  it("every registered sport: chess is offered every template but americano, mexicano and Triple RR, every other sport every template but Triple RR (counts)", () => {
+  it("empty case first: a sport whose entrant model holds no kinds at all is offered no pair format, and every other template but Triple RR", () => {
+    expect(keysOf(templatesForSport("generic", []))).toEqual(OFFERED.filter((k) => !PAIR_FORMATS.includes(k)));
+    // No individuals is refused, whatever else is held: pairs or teams alone (a Pairs or Teams division, n3).
+    expect(keysOf(templatesForSport("generic", ["team", "pair"]))).toEqual(OFFERED.filter((k) => !PAIR_FORMATS.includes(k)));
+    expect(keysOf(templatesForSport("generic", ["pair"]))).toEqual(OFFERED.filter((k) => !PAIR_FORMATS.includes(k)));
+    // The positive pair: individuals held, both formats offered - alone (a builder-made Individuals division, C9 round
+    // 3: it stores exactly that one kind) or beside pairs (a sport's own model).
+    expect(keysOf(templatesForSport("generic", ["individual"]))).toEqual(OFFERED);
+    expect(keysOf(templatesForSport("generic", ["individual", "pair"]))).toEqual(OFFERED);
+  });
+
+  it("every registered sport: the offer is every template but Triple RR, less the pair formats where the ENGINE's entrant model lacks individuals, and for chess by key (counts)", () => {
     let checked = 0;
-    let others = 0;
+    let refusing = 0;
+    let offering = 0;
+    const refusedSports: string[] = [];
     for (const m of builtinModules) {
       checked++;
-      const offered = keysOf(templatesForSport(m.key));
+      const kinds = kindsOf(m);
+      const offered = keysOf(templatesForSport(m.key, kinds));
       for (const k of RETIRED) expect(offered, `${m.key}: ${k}`).not.toContain(k);
-      if (m.key === CHESS) {
-        expect(offered).toEqual(OFFERED.filter((k) => !REFUSED_FOR_CHESS.includes(k)));
+      if (canPlayPairFormats(kinds) && m.key !== CHESS) {
+        offering++;
+        expect(offered, `${m.key} (${kinds.join("/")})`).toEqual(OFFERED);
       } else {
-        others++;
-        expect(offered, m.key).toEqual(OFFERED);
+        refusing++;
+        refusedSports.push(m.key);
+        expect(offered, `${m.key} (${kinds.join("/")})`).toEqual(OFFERED.filter((k) => !PAIR_FORMATS.includes(k)));
       }
     }
-    // Anti-vacuity: the registry was swept, chess was in it, and the positive side covered every other sport.
+    console.info(`[format-templates] I5 offer: ${checked} sports swept, ${refusing} refused the pair formats (${refusedSports.join(", ")}), ${offering} offered them`);
+    // Anti-vacuity: the registry was swept, both sides were reached, and chess was among the refused.
     expect(checked).toBe(builtinModules.length);
     expect(checked).toBeGreaterThanOrEqual(11);
-    expect(builtinModules.some((m) => m.key === CHESS)).toBe(true);
-    expect(others).toBe(checked - 1);
+    expect(refusing).toBeGreaterThan(0);
+    expect(offering).toBeGreaterThan(0);
+    expect(refusedSports).toContain(CHESS);
+    // Chess holds individuals, so it is the KEY rule that refuses it: the engine model alone would not.
+    expect(canPlayPairFormats(kindsOf(builtinModules.find((m) => m.key === CHESS)!))).toBe(true);
+  });
+
+  it("the dropped half is a registry invariant: every sport whose engine model holds individuals declares pairs too, chess the one exception (counts)", () => {
+    // A pair format MINTS pair entrants (pairEntrantsFor). C9 round 3 made individuals the rule's only need, which is
+    // sound only while no offered sport lacks pairs: a new engine sport holding individuals and no pairs reds HERE.
+    let holdingIndividuals = 0;
+    const withoutPairs: string[] = [];
+    for (const m of builtinModules) {
+      const kinds = kindsOf(m);
+      if (!kinds.includes("individual")) continue;
+      holdingIndividuals++;
+      if (!kinds.includes("pair")) withoutPairs.push(m.key);
+    }
+    console.info(`[format-templates] round 3 invariant: ${holdingIndividuals} sports hold individuals, without pairs: ${withoutPairs.join(", ") || "none"}`);
+    expect(holdingIndividuals, "anti-vacuity: sports holding individuals were found").toBeGreaterThan(1);
+    expect(withoutPairs).toEqual([CHESS]);
+    expect(keysOf(templatesForSport(CHESS, kindsFor(CHESS))), "and chess is refused by key").toEqual(OFFERED.filter((k) => !PAIR_FORMATS.includes(k)));
   });
 
   it("the positive pair, named: badminton is still offered americano and mexicano, and both build a pair-rotating americano stage", () => {
-    const offered = keysOf(templatesForSport("badminton"));
+    const offered = keysOf(templatesForSport("badminton", kindsFor("badminton")));
     for (const k of REFUSED_FOR_CHESS) expect(offered).toContain(k);
     for (const k of REFUSED_FOR_CHESS) expect(STAGE_TEMPLATES.find((t) => t.key === k)!.build({ qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 }).map((s) => s.kind)).toEqual(["americano"]);
   });
 
-  it("empty case: a missing or unknown sport (a division that could not be read) is offered every template but Triple RR — only chess is refused more", () => {
-    for (const key of [undefined, null, "", "not-a-sport"]) expect(keysOf(templatesForSport(key)), String(key)).toEqual(OFFERED);
+  it("a missing or unknown sport (a division that could not be read) is offered every template but Triple RR when its kinds can play the pair formats — only chess is refused by KEY", () => {
+    for (const key of [undefined, null, "", "not-a-sport"]) expect(keysOf(templatesForSport(key, ["individual", "pair"])), String(key)).toEqual(OFFERED);
   });
 
   it("the CURRENT structure stays listed: a chess division stored with americano before the ruling still shows it, and nothing else comes back", () => {
     const offered = OFFERED.filter((k) => !REFUSED_FOR_CHESS.includes(k));
-    expect(keysOf(templatesForSport(CHESS, "americano"))).toEqual(OFFERED.filter((k) => k !== "mexicano"));
-    expect(keysOf(templatesForSport(CHESS, "mexicano"))).toEqual(OFFERED.filter((k) => k !== "americano"));
+    expect(keysOf(templatesForSport(CHESS, kindsFor(CHESS), "americano"))).toEqual(OFFERED.filter((k) => k !== "mexicano"));
+    expect(keysOf(templatesForSport(CHESS, kindsFor(CHESS), "mexicano"))).toEqual(OFFERED.filter((k) => k !== "americano"));
     // An offered or custom (null) current adds nothing, and never a duplicate.
-    expect(keysOf(templatesForSport(CHESS, "league"))).toEqual(offered);
-    expect(keysOf(templatesForSport(CHESS, null))).toEqual(offered);
-    expect(keysOf(templatesForSport(CHESS, "not-a-template"))).toEqual(offered);
+    expect(keysOf(templatesForSport(CHESS, kindsFor(CHESS), "league"))).toEqual(offered);
+    expect(keysOf(templatesForSport(CHESS, kindsFor(CHESS), null))).toEqual(offered);
+    expect(keysOf(templatesForSport(CHESS, kindsFor(CHESS), "not-a-template"))).toEqual(offered);
   });
 
   it("a division stored as a Triple round robin keeps it listed, in its STAGE_TEMPLATES place, for every sport — and only that one", () => {
     let checked = 0;
     for (const m of builtinModules) {
-      const offered = keysOf(templatesForSport(m.key, "triple_rr"));
-      const base = m.key === CHESS ? ALL_KEYS.filter((k) => !REFUSED_FOR_CHESS.includes(k)) : ALL_KEYS;
+      const offered = keysOf(templatesForSport(m.key, kindsOf(m), "triple_rr"));
+      const base = m.key === CHESS || !canPlayPairFormats(kindsOf(m)) ? ALL_KEYS.filter((k) => !PAIR_FORMATS.includes(k)) : ALL_KEYS;
       expect(offered, m.key).toEqual(base);
       checked++;
     }
@@ -745,21 +795,9 @@ describe("templatesForSport: the format templates offered per sport (chess indiv
   });
 
   it("a second call answers the same and STAGE_TEMPLATES is untouched", () => {
-    const first = keysOf(templatesForSport(CHESS));
-    expect(keysOf(templatesForSport(CHESS))).toEqual(first);
+    const first = keysOf(templatesForSport(CHESS, kindsFor(CHESS)));
+    expect(keysOf(templatesForSport(CHESS, kindsFor(CHESS)))).toEqual(first);
     expect(keysOf(STAGE_TEMPLATES)).toEqual(ALL_KEYS);
     expect(ALL_KEYS).toEqual(expect.arrayContaining([...REFUSED_FOR_CHESS, ...RETIRED]));
-  });
-
-  it("templateAfterSportChange: switching the builder to chess off americano/mexicano falls back to league, an offered pick is kept, and switching back keeps league", () => {
-    expect(templateAfterSportChange("americano", CHESS)).toBe("league");
-    expect(templateAfterSportChange("mexicano", CHESS)).toBe("league");
-    expect(templateAfterSportChange("swiss", CHESS)).toBe("swiss");
-    expect(templateAfterSportChange("americano", "badminton")).toBe("americano");
-    // Retired from every sport's offer (owner ruling 2026-11-01): a builder can never be left holding it.
-    expect(templateAfterSportChange("triple_rr", "badminton")).toBe("league");
-    // The sequence: badminton americano -> chess (league) -> badminton keeps league (the pick is not remembered).
-    const onChess = templateAfterSportChange("americano", CHESS);
-    expect(templateAfterSportChange(onChess, "badminton")).toBe("league");
   });
 });

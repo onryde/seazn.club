@@ -29,3 +29,20 @@ export function offeredRows(rows: readonly string[], sport: string): string[] {
 
 /** A refused cell's drop reason names the ruling and the refusal code. */
 export const REFUSED_REASON = /chess is individual-only \(owner ruling 2026-10-26\)[\s\S]*CHESS_INDIVIDUAL_ONLY/;
+
+// Match Day C9 review I5, option 2 (controller ruling 2026-11-03): the same two formats are not OFFERED to a sport
+// whose engine entrant model holds no individuals (round 3's shared rule) - the stage rotates individual players into pair
+// entrants. Football, cricket, ice hockey and hockey hold teams only and volleyball teams and pairs
+// (`entrantModel.kinds`). The stage create does not refuse them yet, so these cells stay offered and planned: every
+// browser case on them is 🚫 (no screen reaches them) and their HTTP cases run as before.
+
+/** Every cell with no organiser path, `row|sport`, row-major in the grid's order. */
+export const NO_ORGANISER_PATH_CELLS: readonly string[] = Object.freeze([
+  "americano|football", "americano|cricket", "americano|volleyball", "americano|icehockey", "americano|hockey",
+  "mexicano|football", "mexicano|cricket", "mexicano|volleyball", "mexicano|icehockey", "mexicano|hockey",
+]);
+
+/** Is this `row|sport` cell one the builder does not offer although the product does not refuse it? */
+export function isNoOrganiserPathCell(cell: string): boolean {
+  return NO_ORGANISER_PATH_CELLS.includes(cell);
+}

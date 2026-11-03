@@ -30,6 +30,7 @@ import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
 import enPublic from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
+import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: () => undefined, replace: () => undefined, push: () => undefined }),
@@ -65,6 +66,7 @@ function settingsSurface(sport: string, canEdit: boolean): string {
   const island = renderIsland(DivisionSettings, {
     division: { id: "d1", name: "Open", sport_key: sport, variant_key: "standard", config: {}, logo_url: null, logo_storage_path: null },
     orgId: "org1",
+    entrantKinds: engineEntrantKinds(sport),
     structureLocked: false,
     lockedFields: [],
     stages: [],

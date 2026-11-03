@@ -11,10 +11,10 @@ A **division** is a single draw inside your competition: "Men's A", "U14 Mixed",
 ## The division wizard
 
 1. Open your competition and press **Add division**.
-2. Pick the **sport** and variant — this decides how matches are scored.
-3. Pick who plays: **teams**, **individuals** or **pairs**.
-4. Choose a **format** — league, knockout, groups + knockout, and more. Not sure? Press *How this works* next to any format for a diagram and a live example, or read the [format guides](/help/formats).
-5. Review and create. Nothing is locked until you start scoring, so experiment freely.
+2. **Who plays** — name the division, pick the **sport** (the sports your organisation has run come first) and who plays: **teams**, **individuals** or **pairs**. The division takes the kind you pick; you can widen it later on its Entrants tab.
+3. **Format** — league, knockout, groups + knockout, and more. Not sure? Press *How this works* next to any format for a diagram and a live example, or read the [format guides](/help/formats).
+4. **Division rules** — the variant and the match rules, which decide how matches are scored.
+5. **Review** and create. Nothing is locked until you start scoring, so experiment freely.
 
 ## Common questions
 

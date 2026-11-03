@@ -26,6 +26,7 @@ import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
+import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -55,6 +56,7 @@ function props(over: Partial<ComponentProps<typeof DivisionSettings>> & { sportK
       logo_storage_path: null,
     },
     orgId: "org1",
+    entrantKinds: engineEntrantKinds(sportKey),
     structureLocked: false,
     lockedFields: [],
     stages: [],

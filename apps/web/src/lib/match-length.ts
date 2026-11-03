@@ -2,6 +2,8 @@
 // variant-specific overrides. Used to pre-fill the scheduling match length in
 // the division builder — the organiser can always change it.
 
+import { estimatedSeconds, SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
+
 const SPORT_DEFAULT: Record<string, number> = {
   football: 60,
   soccer: 60,
@@ -63,4 +65,13 @@ export function defaultMatchMinutes(sportKey?: string | null, variantKey?: strin
   const s = (sportKey ?? "").toLowerCase();
   const v = (variantKey ?? "").toLowerCase();
   return VARIANT_OVERRIDE[`${s}:${v}`] ?? SPORT_DEFAULT[s] ?? 30;
+}
+
+/** Match Day C9 (m8): an online chess game's slot, from its Lichess control (a `SHIP1_TIME_CONTROLS` key): BOTH clocks
+ *  spent, each Lichess's own estimate of a player's time (`estimatedSeconds`: the base plus 40 moves of increment - the
+ *  budget the external-play sweep's `expectedEndAt` waits out), rounded UP to whole minutes. Undefined for a key
+ *  outside the catalogue, so the sport's default stands. */
+export function timeControlMatchMinutes(key: string): number | undefined {
+  const tc = SHIP1_TIME_CONTROLS.find((t) => t.key === key);
+  return tc === undefined ? undefined : Math.ceil((2 * estimatedSeconds(tc)) / 60);
 }

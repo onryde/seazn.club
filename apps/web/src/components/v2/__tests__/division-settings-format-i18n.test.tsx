@@ -44,6 +44,7 @@ import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
+import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -80,13 +81,16 @@ function mount(stages: Stages = []) {
     division: {
       id: "d1",
       name: "Open",
-      sport_key: "football",
-      variant_key: "standard",
+      // A sport offered EVERY live template (C9 fix round 1, I5: the team sports lose americano and mexicano, whose
+      // stage needs individual players and pairs), so the option sweeps below see every template's copy.
+      sport_key: "generic",
+      variant_key: "score",
       config: {},
       logo_url: null,
       logo_storage_path: null,
     },
     orgId: "org1",
+    entrantKinds: engineEntrantKinds("generic"),
     structureLocked: false,
     lockedFields: [],
     stages,

@@ -4,11 +4,12 @@ import { TAG, apiJson, activeOrg } from "./helpers";
 /**
  * The division wizard's schedule seed refuses a backwards range in the panel.
  *
- * Why this needs a browser rather than a unit test: the predicate
+ * Why this needs a browser as well as a unit test: the predicate
  * (`endDateIsBackwards`) has its own suite, but nothing there proves the
- * WIZARD calls it — and the wizard cannot be mounted in this repo's suite
- * (`useLocale()` throws outside a `DictProvider`, and apps/web has no jsdom).
- * Deleting the guard from `submit()` leaves every unit test green.
+ * WIZARD calls it, through the real date fields (apps/web has no jsdom). Since
+ * Match Day C9 the guard is the Division rules step's own check
+ * (`stepProblem("rules")` in division-builder.tsx): a backwards range stops the
+ * walk to Review on that step, so Create is never reached.
  *
  * The failure it prevents is silent by construction: the schedule-settings
  * seed PUT is wrapped in a deliberate try/catch so a paywalled court list
@@ -41,8 +42,8 @@ test("the division wizard refuses a backwards schedule range, and creates nothin
   await expect(name).toBeVisible({ timeout: 20_000 });
   await name.fill(`Backwards ${TAG}`);
 
-  // Walk to the last tab. Bounded rather than a fixed count so adding a step
-  // to the wizard does not silently make this test stop reaching the dates.
+  // Walk to the last step. Bounded rather than a fixed count so adding a step
+  // to the wizard does not silently make this test stop reaching Create.
   const create = page.getByTestId("division-builder-create");
   const next = page.getByTestId("division-builder-next");
   for (let i = 0; i < 8 && !(await create.isVisible()); i += 1) {
@@ -51,21 +52,33 @@ test("the division wizard refuses a backwards schedule range, and creates nothin
   await expect(create).toBeVisible();
   await expect(create).toBeEnabled();
 
-  // End the day BEFORE the start. Both controls live on this tab; `fill`
-  // writes what the organiser would have typed, which is exactly the input the
-  // advisory `min=` does not stop. Start is a native date input + time
-  // <select> now, not `input[type="datetime-local"]` — Chrome's clock popup
-  // ignored `step` (quarter-hour-time-select design doc). The tab now has
-  // TWO date inputs (Start's date half plus End's own), so both are addressed
-  // by their accessible label rather than `input[type="date"]` position.
+  // Match Day C9: the dates live on Division rules, folded under "Set now"
+  // (optional: most divisions are scheduled from the desk later). Going back
+  // is free; open the fold.
+  await page.getByTestId("division-builder-step-rules").click();
+  const toggle = page.getByTestId("division-builder-schedule-toggle");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+  // End the day BEFORE the start. `fill` writes what the organiser would have
+  // typed, which is exactly the input the advisory `min=` does not stop. Start
+  // is a native date input + time <select> now, not
+  // `input[type="datetime-local"]` — Chrome's clock popup ignored `step`
+  // (quarter-hour-time-select design doc). The step has TWO date inputs
+  // (Start's date half plus End's own), so both are addressed by their
+  // accessible label rather than `input[type="date"]` position.
   await page.getByLabel("Start date & time").fill("2026-10-12");
   await page.getByLabel("Time", { exact: true }).selectOption("09:00");
   await page.getByLabel("End date").fill("2026-10-11");
 
-  await create.click();
+  // Back to Review: the jump walks every step before it and stops on the
+  // first that is not done - this one, saying why. Create is never reached.
+  await page.getByTestId("division-builder-step-review").click();
 
   const error = page.getByTestId("division-builder-error");
   await expect(error).toBeVisible();
+  await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "rules");
+  await expect(create).toBeHidden();
 
   // THE assertions. An error banner proves a message was shown, not that the
   // create was withheld — and "withheld" is the whole point, because a
@@ -77,6 +90,8 @@ test("the division wizard refuses a backwards schedule range, and creates nothin
   // dates the right way round. Without it a wizard that refused EVERY create
   // would satisfy every assertion above.
   await page.getByLabel("End date").fill("2026-10-13");
+  await page.getByTestId("division-builder-step-review").click();
+  await expect(create).toBeVisible();
   await create.click();
   await expect(page).not.toHaveURL(/\/d\/new$/, { timeout: 20_000 });
   expect(await countDivisions()).toBe(1);

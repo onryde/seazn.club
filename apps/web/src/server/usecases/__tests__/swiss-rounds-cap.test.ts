@@ -28,6 +28,7 @@ import { createStages, generateStageFixtures, rebuildStageFixtures, unpairSwissR
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedRegistration } from "./_registration-fixtures";
 import { seedOrg } from "./_seed";
+import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -179,7 +180,7 @@ describe.runIf(HAS_DB)("X-SW-16 Generate refuses rounds > hard max; writes nothi
   // has a hard maximum of 3, so 5 rounds cannot exist. Swept over every sport the registry offers a Swiss.
   it("X-SW-16 Generate refuses rounds > hard max; writes nothing (4 entrants × 5 rounds, every sport offering a Swiss)", async () => {
     const { auth } = await seedOrg("pro");
-    const offered = builtinModules.filter((m) => templatesForSport(m.key).some((t) => t.key === "swiss"));
+    const offered = builtinModules.filter((m) => templatesForSport(m.key, engineEntrantKinds(m.key)).some((t) => t.key === "swiss"));
     expect(offered.length, "premise: the registry offers a Swiss").toBeGreaterThan(1);
     let checked = 0;
     for (const m of offered) {

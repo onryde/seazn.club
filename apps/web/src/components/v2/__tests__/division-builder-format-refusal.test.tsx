@@ -62,7 +62,7 @@ const refusal = (): string =>
 const OUT_OF_RANGE = String(FORMAT_BOUNDS.qualify.max + 1);
 const IN_RANGE = String(FORMAT_BOUNDS.qualify.min + 1);
 
-/** A builder on the Format tab, Swiss Knockout picked (it shows the Top N knob and the Rounds knob), a name entered. */
+/** A builder on the Format step, Swiss Knockout picked (it shows the Top N knob and the Rounds knob), a name entered. */
 function onFormatTab(): H {
   const h = mount();
   setName(h, "Cup");
@@ -74,10 +74,10 @@ function onFormatTab(): H {
 beforeEach(() => apiV1Mock.mockReset());
 
 describe("division builder - a format refusal goes when the knob it names changes", () => {
-  it("Next / a tab jump: refused at 33, gone the moment the box changes, not resurrected by putting 33 back, raised again on the next press", () => {
+  it("Next / a step jump: refused at 33, gone the moment the box changes, not resurrected by putting 33 back, raised again on the next press", () => {
     const h = onFormatTab();
     setKnob(h, "qualify", OUT_OF_RANGE);
-    press(h, UI["wizard.tab.scheduling"]!);
+    press(h, UI["divBuilder.step.review"]!);
     expect(h.text(), "premise: the refusal is on screen").toContain(refusal());
 
     setKnob(h, "qualify", IN_RANGE);
@@ -86,7 +86,7 @@ describe("division builder - a format refusal goes when the knob it names change
     setKnob(h, "qualify", OUT_OF_RANGE);
     expect(h.text(), "putting 33 back does not resurrect it - nothing has been pressed").not.toContain(refusal());
 
-    press(h, UI["wizard.tab.scheduling"]!);
+    press(h, UI["divBuilder.step.review"]!);
     expect(h.text(), "the second call refuses again (the clear is not a latch)").toContain(refusal());
   });
 
@@ -104,20 +104,21 @@ describe("division builder - a format refusal goes when the knob it names change
   it("changing the format picks a different knob set: the refusal about the old one goes too", () => {
     const h = onFormatTab();
     setKnob(h, "qualify", OUT_OF_RANGE);
-    press(h, UI["wizard.tab.scheduling"]!);
+    press(h, UI["divBuilder.step.review"]!);
     expect(h.text()).toContain(refusal());
     pickFormat(h, "Double elimination");
     expect(h.text(), "the template that showed the Top N is gone with its refusal").not.toContain(refusal());
   });
 
-  it("Create: the last tab can be reached past a bad knob (tabs jump); the refusal Create raises clears the same way", () => {
+  it("Create, with a bad knob behind it (Format stays mounted, folded, under Review): the refusal Create raises clears the same way", () => {
     const h = onFormatTab();
+    press(h, UI["wizard.next"]!);
+    press(h, UI["wizard.next"]!);
+    const create = () => h.tree().find((e) => e.type === "button" && propsOf(e)["data-testid"] === "division-builder-create");
+    expect(create(), "premise: a clean walk reaches Create").toBeDefined();
     setKnob(h, "qualify", OUT_OF_RANGE);
-    press(h, UI["wizard.tab.basics"]!); // back is free, and Basics -> Scheduling checks Basics only
-    press(h, UI["wizard.tab.scheduling"]!);
-    const create = h.tree().find((e) => e.type === "button" && propsOf(e)["data-testid"] === "division-builder-create");
-    expect(create, "premise: Scheduling is open past the bad knob").toBeDefined();
-    (propsOf(create!).onClick as () => void)();
+    expect(propsOf(create()!).disabled, "Create is disabled while a step is blocked").toBe(true);
+    (propsOf(create()!).onClick as () => void)(); // pressed anyway: submit() asks again
     expect(h.text(), "premise: Create refuses the knob before any POST").toContain(refusal());
     expect(apiV1Mock, "and nothing was sent").not.toHaveBeenCalled();
     setKnob(h, "qualify", IN_RANGE);
@@ -127,10 +128,10 @@ describe("division builder - a format refusal goes when the knob it names change
   it("an error that is NOT about the format is left alone by a knob change", () => {
     const h = onFormatTab();
     setKnob(h, "qualify", OUT_OF_RANGE);
-    press(h, UI["wizard.tab.scheduling"]!);
+    press(h, UI["divBuilder.step.review"]!);
     expect(h.text(), "premise: a format refusal was raised").toContain(refusal());
-    // Back to Basics (free), blank the name, try to move on: the name is refused - a different error in the same slot.
-    press(h, UI["wizard.tab.basics"]!);
+    // Back to Who plays (free), blank the name, try to move on: the name is refused - a different error in the same slot.
+    press(h, UI["divBuilder.step.who"]!);
     setName(h, "");
     press(h, UI["wizard.tab.format"]!);
     expect(h.text(), "premise: the name error is on screen").toContain(UI["wizard.err.name"]!);
@@ -155,7 +156,7 @@ describe("division builder - the 44px tap floor (D1)", () => {
     for (const el of numbers) expect(classesOfEl(el), `a number input (${String(propsOf(el)["data-format-bound"] ?? propsOf(el).min)})`).toContain("min-h-11");
   });
 
-  it("Cancel, Back, Next (and Create on the last tab) carry min-h-11", () => {
+  it("Cancel, Back, Next (and Create on the last step) carry min-h-11", () => {
     const h = mount();
     setName(h, "Cup");
     const row = (labels: string[]) => {
@@ -174,7 +175,7 @@ describe("division builder - the 44px tap floor (D1)", () => {
     press(h, UI["wizard.next"]!);
     press(h, UI["wizard.next"]!);
     const create = h.tree().find((e) => e.type === "button" && propsOf(e)["data-testid"] === "division-builder-create");
-    expect(create, "the last tab draws Create").toBeDefined();
+    expect(create, "the last step draws Create").toBeDefined();
     expect(classesOfEl(create!)).toContain("min-h-11");
   });
 });

@@ -15,7 +15,7 @@
 // (`refused`), the rest lands; a stage pinned at generate keeps what it started with (`stagesKeptPinned`) and the strip says so
 // beside the Save that caused it. The division's tie-break order is `divisions.tiebreakers`, the field a stage on "Use the
 // division's order" reads (`loadTableRules`: own ?? division ?? sport).
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
@@ -23,7 +23,7 @@ import type { TableStageKind, TiebreakerKey } from "@seazn/engine/sport";
 import type { Dict } from "@/lib/i18n-constants";
 import { configIssueText, settingsSaveErrorText } from "@/lib/config-issue-copy";
 import { ONLINE_CHESS_DISABLED_CODE, onlinePlayShown } from "@/lib/online-chess";
-import { CHESS_INDIVIDUAL_ONLY } from "@/lib/chess-individual-only";
+import { CHESS_INDIVIDUAL_ONLY, isChessSport } from "@/lib/chess-individual-only";
 import { LICHESS_CLOCK_FIELD_KEYS, selectedTimeControlKey, timeControlOptions, timeControlRuleValues } from "@/lib/online-time-control";
 import { hasLinkGaps, linkGapSentence, type LinkGapsSummary } from "@/lib/online-link-gaps";
 import { keptPinnedOf, refusedFieldsOf, type KeptPinnedStage, type RefusedField } from "@/lib/rule-errors";
@@ -66,6 +66,30 @@ export interface DivisionRulesStripProps {
   lichessGaps?: LinkGapsSummary;
   /** Panels open on first render (tests, a deep link). */
   initialOpen?: readonly RulesPanel[];
+  /** The new-division builder's Division rules step (Match Day C9, owner 2026-11-02: "the existing Division rules strip, as
+   *  its own step; reuse the strip's component"). The strip then edits a DRAFT the builder owns and sends at Create: no
+   *  PATCH, no Save, no locks, and the rules grid inherits the picked variant's preset. `divisionConfig` is the config
+   *  the division would be created with, which the points and the summary read. */
+  draft?: DivisionRulesDraft;
+}
+
+/** The builder's draft state, owned by the builder so it survives moving between its steps. */
+export interface DivisionRulesDraft {
+  variantKey: string;
+  /** Called on a variant pick, in place of the saved strip's re-seed: the builder resets what the variant decides. */
+  onVariantChange: (key: string) => void;
+  ruleValues: Record<string, string>;
+  setRuleValues: Dispatch<SetStateAction<Record<string, string>>>;
+  onlinePlay: "off" | "lichess";
+  setOnlinePlay: (value: "off" | "lichess") => void;
+  /** Null while untouched: the points the config keeps. */
+  pointsValues: Record<string, string> | null;
+  setPointsValues: (values: Record<string, string>) => void;
+  order: TiebreakerKey[] | null;
+  setOrder: (order: TiebreakerKey[] | null) => void;
+  /** Match Day C9 fix round 1 (m6, mock A5): the builder's "Camera during online play" control, drawn right under online
+   *  play while it is Lichess. Saved divisions edit the camera in Settings (division-settings.tsx), not here. */
+  cameraControl?: ReactNode;
 }
 
 interface Feedback {
@@ -95,6 +119,7 @@ export function DivisionRulesStrip({
   onlineChessOffered,
   lichessGaps,
   initialOpen = [],
+  draft,
 }: DivisionRulesStripProps) {
   const msg = useMsg();
   const plural = useMsgPlural();
@@ -106,24 +131,35 @@ export function DivisionRulesStrip({
   const mode = canEdit ? "edit" : "locked";
 
   // --- The match format's form (absorbed from Settings' Match rules block). ---
-  const [variantKey, setVariantKey] = useState<string>(savedVariantKey ?? "");
-  const [ruleValues, setRuleValues] = useState<Record<string, string>>(() => hydrateRuleValues(sportKey, divisionConfig));
-  const [onlinePlay, setOnlinePlay] = useState<"off" | "lichess">(divisionConfig.onlinePlay === "lichess" ? "lichess" : "off");
+  const [savedFormVariantKey, setVariantKeyState] = useState<string>(savedVariantKey ?? "");
+  const [savedFormRuleValues, setRuleValuesState] = useState<Record<string, string>>(() => hydrateRuleValues(sportKey, divisionConfig));
+  const [savedFormOnlinePlay, setOnlinePlayState] = useState<"off" | "lichess">(divisionConfig.onlinePlay === "lichess" ? "lichess" : "off");
   const points = sportModule === null ? undefined : divisionPointsOf(sportModule, divisionConfig);
-  const [pointsValues, setPointsValues] = useState<Record<string, string>>(() => hydrateDivisionPoints(sportKey, points));
-  const [order, setOrder] = useState<TiebreakerKey[] | null>(() => (divisionTiebreakers === null ? null : [...divisionTiebreakers]));
+  const [savedFormPointsValues, setPointsValuesState] = useState<Record<string, string>>(() => hydrateDivisionPoints(sportKey, points));
+  const [savedFormOrder, setOrderState] = useState<TiebreakerKey[] | null>(() => (divisionTiebreakers === null ? null : [...divisionTiebreakers]));
   // A saved change (or another tab's) arrives as new props after `router.refresh()`: the forms re-read them. Compared by
   // CONTENT, never by reference (every refresh hands back new objects; R3.5 review F6).
   const signature = JSON.stringify([savedVariantKey, divisionConfig, divisionTiebreakers]);
   const [synced, setSynced] = useState(signature);
   if (synced !== signature) {
     setSynced(signature);
-    setVariantKey(savedVariantKey ?? "");
-    setRuleValues(hydrateRuleValues(sportKey, divisionConfig));
-    setOnlinePlay(divisionConfig.onlinePlay === "lichess" ? "lichess" : "off");
-    setPointsValues(hydrateDivisionPoints(sportKey, points));
-    setOrder(divisionTiebreakers === null ? null : [...divisionTiebreakers]);
+    setVariantKeyState(savedVariantKey ?? "");
+    setRuleValuesState(hydrateRuleValues(sportKey, divisionConfig));
+    setOnlinePlayState(divisionConfig.onlinePlay === "lichess" ? "lichess" : "off");
+    setPointsValuesState(hydrateDivisionPoints(sportKey, points));
+    setOrderState(divisionTiebreakers === null ? null : [...divisionTiebreakers]);
   }
+  // A draft's values are the builder's (the re-sync above only ever touches the saved strip's own form).
+  const variantKey = draft ? draft.variantKey : savedFormVariantKey;
+  const setVariantKey = draft ? draft.onVariantChange : setVariantKeyState;
+  const ruleValues = draft ? draft.ruleValues : savedFormRuleValues;
+  const setRuleValues = draft ? draft.setRuleValues : setRuleValuesState;
+  const onlinePlay = draft ? draft.onlinePlay : savedFormOnlinePlay;
+  const setOnlinePlay = draft ? draft.setOnlinePlay : setOnlinePlayState;
+  const pointsValues = draft ? (draft.pointsValues ?? hydrateDivisionPoints(sportKey, points)) : savedFormPointsValues;
+  const setPointsValues = draft ? draft.setPointsValues : setPointsValuesState;
+  const order = draft ? draft.order : savedFormOrder;
+  const setOrder = draft ? draft.setOrder : setOrderState;
 
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
@@ -147,7 +183,10 @@ export function DivisionRulesStrip({
   if (sportModule === null) return null;
 
   const presetOf = (key: string | null) => (key === null ? undefined : variants.find((v) => v.key === key)?.config);
-  const inheritedCfg = configUnderVariant(divisionConfig, presetOf(savedVariantKey), presetOf(variantKey), variantKey === (savedVariantKey ?? ""));
+  // A draft has nothing stored: its grid inherits the picked variant's preset, as the create lays the overrides over it.
+  const inheritedCfg = draft
+    ? (presetOf(variantKey) ?? {})
+    : configUnderVariant(divisionConfig, presetOf(savedVariantKey), presetOf(variantKey), variantKey === (savedVariantKey ?? ""));
   const ruleState = ruleFormState({ sportKey, variantKey, values: ruleValues, base: inheritedCfg });
   const lichessClock = sportKey === "boardgame" && onlinePlay === "lichess";
   const timeControl = lichessClock ? selectedTimeControlKey(ruleValues, divisionConfig) : "";
@@ -164,6 +203,8 @@ export function DivisionRulesStrip({
   // play it), the Lichess clock, then the rule grid's own fields (`divisionGridFields`, the grid's own list). The first lock
   // names the stage for the whole section; when EVERY control is locked the section is read-only - its chips, no Save.
   const variantShown = savedVariantKey !== null && variants.length > 0;
+  // Match Day C9 (owner 2026-11-02): for chess, online play comes first - it decides which clocks the grid offers.
+  const chessOnlineFirst = isChessSport(sportKey);
   const onlineShown = onlinePlayShown(sportKey, onlineChessOffered);
   const omitted = lichessClock ? LICHESS_CLOCK_FIELD_KEYS : undefined;
   const formatControls: (RefusedField | undefined)[] = [
@@ -186,6 +227,10 @@ export function DivisionRulesStrip({
     });
 
   const pickVariantKey = (next: string) => {
+    if (draft) {
+      draft.onVariantChange(next);
+      return;
+    }
     setRuleValues(
       ruleValuesAfterVariantSwitch({
         sportKey,
@@ -220,6 +265,8 @@ export function DivisionRulesStrip({
 
   /** One save: the PATCH, then what it kept and what it did not reach, said beside the panel's own Save. */
   async function save(panel: RulesPanel, body: () => Record<string, unknown>) {
+    // A draft renders no Save: the builder sends it at Create. Reaching here would PATCH a division that does not exist.
+    if (draft) throw new Error("the builder's draft rules strip never saves");
     setBusy(true);
     setFeedback(null);
     try {
@@ -361,6 +408,87 @@ export function DivisionRulesStrip({
       : []),
   ];
 
+  // The variant select and the online-play select, drawn in an order that depends on the sport (below).
+  const variantControl = variantShown && (
+    <div>
+      {/* Match Day E1 item 4: every field in these panels is label-above, content-sized. The label is the `.label` span (the grid's own
+          fields wear it), the select a block that is full width below md and 20rem from md - so the label can never sit beside it. */}
+      <label className="block">
+        <span className="label">{msg("divset.variant")}</span>
+        <select
+          disabled={busy || variantLock !== undefined}
+          value={variantKey}
+          onChange={(e) => pickVariantKey(e.target.value)}
+          aria-describedby={[meaningText === undefined ? undefined : `${panelId}-variant-meaning`, hint === undefined ? undefined : `${panelId}-variant-hint`].filter((id) => id !== undefined).join(" ") || undefined}
+          data-testid="division-settings-variant"
+          className="select block min-h-11 w-full md:max-w-xs"
+        >
+          {variants.map((v) => (
+            <option key={v.key} value={v.key}>
+              {variantOptionLabel(sportKey, v, msg)}
+              {/* The builder's picker marks an organisation's own preset (as it did before Match Day C9); Settings
+                  names it as the organiser did. */}
+              {draft && !v.system ? msg("wizard.orgPreset") : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      {meaningText !== undefined && (
+        <p id={`${panelId}-variant-meaning`} data-testid="division-variant-meaning" className="mt-1 min-w-0 text-xs text-slate-700">
+          {meaningText}
+        </p>
+      )}
+      {hint !== undefined && (
+        <p id={`${panelId}-variant-hint`} role="note" data-testid="division-variant-hint" className="mt-2 min-w-0 rounded-md bg-slate-50 px-3 py-2 text-xs leading-snug text-slate-700">
+          {msg(hint.key, hint.vars)}
+        </p>
+      )}
+    </div>
+  );
+  const onlineControl = onlineShown && (
+    <div>
+      <label className="block">
+        <span className="label">{msg("divset.onlinePlay.label")}</span>
+        <select
+          disabled={busy}
+          value={onlinePlay}
+          onChange={(e) => setOnlinePlay(e.target.value as "off" | "lichess")}
+          className="select block min-h-11 w-full md:max-w-xs"
+          data-testid="division-online-play"
+        >
+          <option value="off">{msg("divset.onlinePlay.off")}</option>
+          <option value="lichess">{msg("divset.onlinePlay.lichess")}</option>
+        </select>
+      </label>
+      <p className="mt-1 text-[11px] text-slate-600">{msg("divset.onlinePlay.help")}</p>
+      {/* WARN, never block: the select and Save stay live. */}
+      {onlinePlay === "lichess" && lichessGaps !== undefined && hasLinkGaps(lichessGaps) && (
+        <div
+          role="status"
+          data-testid="division-online-link-gaps"
+          className="mt-2 grid min-w-0 gap-2 break-words rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+        >
+          {lichessGaps.unlinked.count > 0 && (
+            <p data-testid="division-online-unlinked" className="min-w-0 [overflow-wrap:anywhere]">
+              {linkGapSentence("unlinked", lichessGaps.unlinked, locale, plural)}
+            </p>
+          )}
+          {lichessGaps.reconnect.count > 0 && (
+            <p data-testid="division-online-reconnect" className="min-w-0 [overflow-wrap:anywhere]">
+              {linkGapSentence("reconnect", lichessGaps.reconnect, locale, plural)}
+            </p>
+          )}
+          {lichessGaps.empty.count > 0 && (
+            <p data-testid="division-online-empty" className="min-w-0 [overflow-wrap:anywhere]">
+              {linkGapSentence("empty", lichessGaps.empty, locale, plural)}
+            </p>
+          )}
+        </div>
+      )}
+      {draft?.cameraControl !== undefined && onlinePlay === "lichess" && <div className="mt-3">{draft.cameraControl}</div>}
+    </div>
+  );
+
   return (
     <section className="card min-w-0 p-0" aria-labelledby={`${panelId}-title`} data-testid="division-rules-strip">
       <div className="flex min-w-0 flex-col gap-3 px-4 py-3 md:flex-row md:items-start md:justify-between">
@@ -410,83 +538,19 @@ export function DivisionRulesStrip({
           ) : (
             <>
               {formatLock !== undefined && <LockLine testId="division-locked-format" text={lockSentence(formatLock, msg)} />}
-              {variantShown && (
-                <div>
-                  {/* Match Day E1 item 4: every field in these panels is label-above, content-sized. The label is the `.label` span (the grid's own
-                      fields wear it), the select a block that is full width below md and 20rem from md - so the label can never sit beside it. */}
-                  <label className="block">
-                    <span className="label">{msg("divset.variant")}</span>
-                    <select
-                      disabled={busy || variantLock !== undefined}
-                      value={variantKey}
-                      onChange={(e) => pickVariantKey(e.target.value)}
-                      aria-describedby={[meaningText === undefined ? undefined : `${panelId}-variant-meaning`, hint === undefined ? undefined : `${panelId}-variant-hint`].filter((id) => id !== undefined).join(" ") || undefined}
-                      data-testid="division-settings-variant"
-                      className="select block min-h-11 w-full md:max-w-xs"
-                    >
-                      {variants.map((v) => (
-                        <option key={v.key} value={v.key}>
-                          {variantOptionLabel(sportKey, v, msg)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {meaningText !== undefined && (
-                    <p id={`${panelId}-variant-meaning`} data-testid="division-variant-meaning" className="mt-1 min-w-0 text-xs text-slate-700">
-                      {meaningText}
-                    </p>
-                  )}
-                  {hint !== undefined && (
-                    <p id={`${panelId}-variant-hint`} role="note" data-testid="division-variant-hint" className="mt-2 min-w-0 rounded-md bg-slate-50 px-3 py-2 text-xs leading-snug text-slate-700">
-                      {msg(hint.key, hint.vars)}
-                    </p>
-                  )}
-                </div>
+              {/* Chess plays online first (Match Day C9, owner): whether the division plays on Lichess decides which clocks
+                  it may use, so it is asked before the variant. Every other sport: the variant, then online play. */}
+              {chessOnlineFirst ? (
+                <>
+                  {onlineControl}
+                  {variantControl}
+                </>
+              ) : (
+                <>
+                  {variantControl}
+                  {onlineControl}
+                </>
               )}
-
-              {onlineShown && (
-                <div>
-                  <label className="block">
-                    <span className="label">{msg("divset.onlinePlay.label")}</span>
-                    <select
-                      disabled={busy}
-                      value={onlinePlay}
-                      onChange={(e) => setOnlinePlay(e.target.value as "off" | "lichess")}
-                      className="select block min-h-11 w-full md:max-w-xs"
-                      data-testid="division-online-play"
-                    >
-                      <option value="off">{msg("divset.onlinePlay.off")}</option>
-                      <option value="lichess">{msg("divset.onlinePlay.lichess")}</option>
-                    </select>
-                  </label>
-                  <p className="mt-1 text-[11px] text-slate-600">{msg("divset.onlinePlay.help")}</p>
-                  {/* WARN, never block: the select and Save stay live. */}
-                  {onlinePlay === "lichess" && lichessGaps !== undefined && hasLinkGaps(lichessGaps) && (
-                    <div
-                      role="status"
-                      data-testid="division-online-link-gaps"
-                      className="mt-2 grid min-w-0 gap-2 break-words rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
-                    >
-                      {lichessGaps.unlinked.count > 0 && (
-                        <p data-testid="division-online-unlinked" className="min-w-0 [overflow-wrap:anywhere]">
-                          {linkGapSentence("unlinked", lichessGaps.unlinked, locale, plural)}
-                        </p>
-                      )}
-                      {lichessGaps.reconnect.count > 0 && (
-                        <p data-testid="division-online-reconnect" className="min-w-0 [overflow-wrap:anywhere]">
-                          {linkGapSentence("reconnect", lichessGaps.reconnect, locale, plural)}
-                        </p>
-                      )}
-                      {lichessGaps.empty.count > 0 && (
-                        <p data-testid="division-online-empty" className="min-w-0 [overflow-wrap:anywhere]">
-                          {linkGapSentence("empty", lichessGaps.empty, locale, plural)}
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
               {lichessClock && (
                 <div>
                   <label className="block">
@@ -528,11 +592,13 @@ export function DivisionRulesStrip({
                 state={ruleState}
                 disabled={busy}
               />
-              <div className="flex flex-wrap items-center gap-3">
-                <button type="button" disabled={busy} onClick={saveFormat} className="btn btn-primary min-h-11 px-3 text-xs" data-testid="division-rules-format-save">
-                  {busy ? msg("schedule.working") : msg("rulesStrip.format.save")}
-                </button>
-              </div>
+              {!draft && (
+                <div className="flex flex-wrap items-center gap-3">
+                  <button type="button" disabled={busy} onClick={saveFormat} className="btn btn-primary min-h-11 px-3 text-xs" data-testid="division-rules-format-save">
+                    {busy ? msg("schedule.working") : msg("rulesStrip.format.save")}
+                  </button>
+                </div>
+              )}
               {feedbackFor("format")}
             </>
           )}
@@ -550,8 +616,8 @@ export function DivisionRulesStrip({
             value={pointsValues}
             onChange={setPointsValues}
             kinds={tableKinds}
-            onSave={savePoints}
-            dirty={divisionPointsDirty(sportKey, points, pointsValues)}
+            onSave={draft ? undefined : savePoints}
+            dirty={draft ? undefined : divisionPointsDirty(sportKey, points, pointsValues)}
             saving={busy}
             lockText={pointsLock === undefined ? null : lockSentence(pointsLock, msg)}
             pointsDict={pointsDict}
@@ -568,11 +634,11 @@ export function DivisionRulesStrip({
             mode={mode}
             module={sportModule}
             value={order}
-            stored={divisionTiebreakers}
+            stored={draft ? undefined : divisionTiebreakers}
             onChange={setOrder}
             divisionConfig={divisionConfig}
             kinds={tableKinds}
-            onSave={saveOrder}
+            onSave={draft ? undefined : saveOrder}
             saving={busy}
           />
           {feedbackFor("tiebreaks")}

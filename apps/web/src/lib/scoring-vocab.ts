@@ -1244,8 +1244,10 @@ export const wicketLabel = (k: string, m: MsgFn): string =>
   k in WICKET_KEY ? m(WICKET_KEY[k as WicketKind]) : title(k);
 export const extraLabel = (k: string, m: MsgFn): string =>
   k in EXTRA_KEY ? m(EXTRA_KEY[k as ExtraKind]) : title(k);
+// Own keys only: `k in` also answers inherited Object.prototype names ("constructor"), whose lookup is a function, not
+// a message key (the division builder's Review names the sport; division-builder-prototype-sport.test.tsx).
 export const sportLabel = (k: string, m: MsgFn): string =>
-  k in SPORT_KEY ? m(SPORT_KEY[k as SportKey]) : title(k);
+  Object.hasOwn(SPORT_KEY, k) ? m(SPORT_KEY[k as SportKey]) : title(k);
 
 /** Localized palette-swatch name for a stored hex; null when hex isn't a swatch. */
 export function swatchLabel(hex: string | null | undefined, m: MsgFn): string | null {

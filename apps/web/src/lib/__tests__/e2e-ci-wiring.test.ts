@@ -240,6 +240,10 @@ const WALKTHROUGH_SPECS: string[] = [
   // a round left open across a refresh, the bracket inline, Swiss from Pair next to Complete, Show finished, entrant kinds).
   "match-day-organiser.spec.ts",
   "stage-card-organiser.spec.ts",
+  // Match Day C9 — the division builder in four steps, tapped from the
+  // competition page to the new division's Fixtures tab: Edit from Review,
+  // chess with a Lichess clock, and every field read back from the database.
+  "division-builder.spec.ts",
 
   // Settings W2 — the organisation and news panels, the four people-facing
   // tabs (team, api, preferences, account), and the five-org support cap.

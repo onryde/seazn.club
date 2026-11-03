@@ -70,7 +70,11 @@ previously ✅/⛔ red anywhere; §10.5 gates; the denied-state case (no
    about generic `win_loss`.
 3. **Team sports declare a team-only entrant model** while americano pairs are
    built from persons (`offered-matrix.md` reason a) — a result path alone does
-   not make football americano coherent. Put that to the owner, not a patch.
+   not make football americano coherent. RULED (C9, 2026-11-03, option 2): the builder
+   and Settings no longer offer americano/mexicano where the division takes no
+   individual players; the 10 L1 cells are 🚫 "no organiser path" and routed here.
+   This wave owes the SERVER refusal (API + template path), refusing those cells, and
+   re-recording the affected CI evidence (expect-77, w2a-local-selection, judge ids).
 4. **Mexicano stops on any non-`decided` fixture** (FX-G11): a `finalized`,
    `forfeited` or `abandoned` match blocks every later round. Drive M1 and M4
    through the next-round generate, not just the result.

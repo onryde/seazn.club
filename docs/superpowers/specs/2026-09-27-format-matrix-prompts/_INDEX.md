@@ -20,7 +20,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | W4 | Knockout family | not started |
 | W5 | Round-robin family | not started |
 | W6 | Double elimination | not started |
-| W7 | Americano, mexicano, ladder | not started |
+| W7 | Americano, mexicano, ladder | not started — also owns the 10 L1 cells C9 routed here as 🚫 "no organiser path" (team-only / team+pair sports offered americano/mexicano; `NO_ORGANISER_PATH_ROUTE`, tools/matrix/lib/catalogue.ts): add the server refusal, refuse the cells, re-record evidence on CI |
 | W8 | Scorer sheets (lane) | not started |
 | W9 | Operational [O] (lane) | not started |
 | W10 | Sweep lane: ST-G22 youth-name privacy FIRST, #878 browser Sentry, shadow invariants, #858 #853 #843 | not started |

@@ -51,6 +51,7 @@ import {
 import { createCourt, createVenue } from "../venues";
 import { seedRegistration } from "./_registration-fixtures";
 import { seedOrg } from "./_seed";
+import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -120,7 +121,7 @@ function sportFor(kind: Kind): SportPick {
     (m) =>
       m.key in PLAYED_WIN &&
       (m.entrantModel?.kinds ?? ["individual"]).includes(kind) &&
-      SWISS_TEMPLATES.every((t) => templatesForSport(m.key).some((x) => x.key === t)),
+      SWISS_TEMPLATES.every((t) => templatesForSport(m.key, engineEntrantKinds(m.key)).some((x) => x.key === t)),
   );
   const pick = offered.find((m) => m.entrantModel?.defaultKind === kind) ?? offered[0];
   if (pick === undefined) throw new Error(`no scorable sport declares the '${kind}' entrant kind`);
