@@ -27,13 +27,19 @@ import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
  * latecomer's missed round 1 is a virtual-opponent round, not a round that never happened. The other input of the same task
  * (X-SW-7, the side(s) of a result lost without playing) has no smoke check: it is proved against the real forfeit and withdrawal
  * writers in `swiss-art16-producer.test.ts`.
+ *
+ * T3 (opp_diff labels, owner Q2): a football Swiss division's anonymous hub table carries the `opp_diff` column, with its short
+ * header "Opp diff" and its sport-neutral long form "Opponents' score difference" (the org's locale is English; the words are the
+ * owner's, typed here, not read back from the dictionary under test) - football's own Swiss chain (FB-TB-5) holds the key, so the
+ * column is there with no tie-break configuration at all.
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissB runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissBSuite(): Promise<void> {
   // T1: 1 (Pair next on a history with no legal round is refused SWISS_NO_LEGAL_PAIRING and seats nobody).
   // T2: 1 (a boardgame division's stored byeScore is gone from the config GET answers, once the V490 delta has run).
   // T8: 1 (X-SW-8: a late entrant's missed round is a virtual-opponent round in the Buchholz the anonymous hub prints).
-  const EXPECTED_CHECKS = 3;
+  // T3: 1 (a football Swiss's hub table carries an Opp diff column with its words, over the wire a visitor reads).
+  const EXPECTED_CHECKS = 4;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -182,10 +188,13 @@ export async function w3SwissBSuite(): Promise<void> {
   //   "n½", so the cells are "4", "5½", "4", "4".
   //   Differential: with the absent round left off L's card (the pre-task state: no producer for the field) L = B 1 + A 4 = 5 ->
   //   "2½", and B = 11 -> "5½" stays - the check tells the readings apart on L.
+  // The org is on the Community plan (competitions.max_active = 3) and checks 1-3 each open one, so check 4 reuses this public one.
+  let publicComp: { id: string; slug?: string } | undefined;
   {
     const comp = v1data<{ id: string; slug?: string } | undefined>(
       await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W3 Swiss B art16 ${tag}`, visibility: "public" }),
     );
+    publicComp = comp;
     const divId = v1data<{ id: string } | undefined>(
       await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Chess", sport_key: "boardgame", variant_key: "classical", config: {} }),
     )?.id;
@@ -260,6 +269,42 @@ export async function w3SwissBSuite(): Promise<void> {
     w3Check(
       "w3b X-SW-8: a late entrant's missed round is a virtual-opponent round - the anonymous hub table prints Buchholz 4 / 5\u00bd / 4 / 4 for A / B / C / L (boardgame, R = 3), not the 2\u00bd the unplayed round left off would give L" +
         (ok ? "" : ` - division ${divId ?? "none"}, start ${started.status}, pair ${pairs.join("/")}, late ${addedRes.status} ${JSON.stringify(late?.late_entry ?? null)}, boards ok ${r1ok}/${r2ok}/${r3ok}, event statuses ${statuses.join(",")}, hub ${hubRes.status} table ${table === undefined ? "missing" : `${table.rows.length} rows, buchholz column ${col}`}, got ${JSON.stringify(got)} want ${JSON.stringify(want)}`),
+      ok,
+    );
+  }
+
+  // Check 4 - T3 (opp_diff labels). A football Swiss, round 1 paired and nothing played: the columns come from the stage's order, not from results.
+  // Football's default Swiss chain is ["points", "diff", "for", "wins", "buchholz", "opp_diff", "direct", "lots"] (FB-TB-5), so
+  // the hub table must carry an `opp_diff` column worded "Opp diff" / "Opponents' score difference" (owner Q2, amendment A:
+  // sport-neutral - a football table does not say "goal"), and its Buchholz beside it.
+  {
+    const comp = publicComp;
+    const divRes = await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Football", sport_key: "football", variant_key: "11-a-side", config: {} });
+    const divId = v1data<{ id: string } | undefined>(divRes)?.id;
+    const made =
+      v1data<{ id: string }[] | undefined>(
+        await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+          ["A", "B", "C", "D"].map((n, i) => ({ kind: "team", display_name: `${n} FC ${tag}`, seed: i + 1 }))),
+      ) ?? [];
+    const stageId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 } }),
+    )?.id;
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    // Round 1 paired: the hub publishes a Swiss stage's table once the stage has boards (the columns still come from its order).
+    const paired = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+    const orgSlug = orgs.find((o) => o.id === who.org_id)?.slug ?? "";
+    const hubRes = await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${comp?.slug}/hub`);
+    type HubCol = { key: string; abbr: string; title: string };
+    const table = (v1data<{ tables?: { divisionId: string; columns: HubCol[] }[] } | undefined>(hubRes)?.tables ?? []).filter((t) => t.divisionId === divId)[0];
+    const oppDiff = table?.columns.find((c) => c.key === "opp_diff");
+    const ok =
+      made.length === 4 && stageId !== undefined && started.status < 300 && paired.status === 200 && orgSlug !== "" && hubRes.status === 200 && table !== undefined &&
+      oppDiff !== undefined && oppDiff.abbr === "Opp diff" && oppDiff.title === "Opponents' score difference" &&
+      table.columns.some((c) => c.key === "buchholz");
+    w3Check(
+      "w3b T3: a football Swiss's anonymous hub table carries an Opp diff column (\"Opp diff\" over \"Opponents' score difference\") beside its Buchholz" +
+        (ok ? "" : ` - competition ${comp?.id ?? "none"}, division ${divRes.status} ${divId ?? "none"}, entrants ${made.length}, start ${started.status}, pair ${paired.status}, hub ${hubRes.status}, table ${table === undefined ? "missing" : "found"}, opp_diff ${JSON.stringify(oppDiff ?? null)}, columns ${JSON.stringify(table?.columns.map((c) => c.key) ?? [])}`),
       ok,
     );
   }
