@@ -42,6 +42,20 @@ export const PUBLICLY_READABLE_VISIBILITIES = ["public", "unlisted"] as const;
 export type PubliclyReadableVisibility =
   (typeof PUBLICLY_READABLE_VISIBILITIES)[number];
 
+/**
+ * Will a create with this visibility come back PRIVATE because the org has no public slot left?
+ *
+ * The client's half of `resolveCreateVisibility` (usecases/competitions.ts), which NEVER refuses a create over
+ * `dashboard.public.max`: a visibility the cap meters, with no slot left, is created private and the 201 says so. The New competition
+ * form asks this before Create so its "Who will find it" list does not promise reach the create will not deliver.
+ *
+ * `slotsLeft` is `publicSlotsLeft(...).left`: `null` when the plan has no public cap (or the form could not read one), in which case
+ * there is nothing to warn about. `public-slots-left.test.ts` holds this function to the real create at every point of a filling cap.
+ */
+export function createdPrivateOverCap(visibility: string, slotsLeft: number | null): boolean {
+  return slotsLeft === 0 && (PUBLICLY_READABLE_VISIBILITIES as readonly string[]).includes(visibility);
+}
+
 /** True when a listing surface may enumerate this competition: public
  *  visibility AND past draft. Unlisted and private are never listed; a draft
  *  is not listed whatever its visibility. */

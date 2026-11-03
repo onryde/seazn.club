@@ -12,10 +12,14 @@ export function ShowcaseOptIn({
   visibility,
   checked,
   onChange,
+  capped,
 }: {
   visibility: string;
   checked: boolean;
   onChange: (on: boolean) => void;
+  /** No public slot is left, so this one is created private whatever was picked (PB3 m5): the switch is off with THAT reason, not
+   *  "set visibility to public" under a Public that is already selected. REQUIRED, like the form's other cap props. */
+  capped: boolean;
 }) {
   const msg = useMsg();
   const isPublic = visibility === "public";
@@ -46,7 +50,7 @@ export function ShowcaseOptIn({
       {!isPublic && (
         <p id="showcase-why" className="mt-1.5 flex items-start gap-1.5 text-[13px] leading-snug text-amber-700">
           <Info aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" strokeWidth={2} />
-          <span>{msg("showcase.needsPublic")}</span>
+          <span>{msg(capped ? "comp.wizard.showcase.capped" : "showcase.needsPublic")}</span>
         </p>
       )}
       <details className="group mt-1">

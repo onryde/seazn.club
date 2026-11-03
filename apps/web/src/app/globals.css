@@ -293,10 +293,13 @@ body {
   }
   /* The editor's empty-state hint (ProseEditor `showPlaceholder`): the same
      slate-400 as an <input>'s placeholder. Floated with no height so the
-     caret sits on the first line and a long sentence wraps beside it. */
+     caret sits on the first line and a long sentence wraps beside it. A hint
+     may be a small multi-line example (the payment instructions), so its line
+     breaks are kept. */
   .competition-prose p.is-editor-empty::before {
     @apply pointer-events-none float-left h-0 text-slate-400;
     content: attr(data-placeholder);
+    white-space: pre-line;
   }
   .competition-prose ul {
     @apply my-3 list-disc space-y-1 pl-6;

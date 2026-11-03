@@ -153,6 +153,8 @@ export function Composer({
             onChange={setBodyMd}
             orgId={orgId}
             placeholder={msg("news.composer.bodyPlaceholder")}
+            showPlaceholder
+            label={msg("news.composer.body")}
           />
         </div>
       </div>

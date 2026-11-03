@@ -275,6 +275,8 @@ export function CompetitionSettings({
                     onChange={(md) => setForm({ ...form, description: md })}
                     orgId={orgId}
                     placeholder={msg("compset.descriptionPlaceholder")}
+                    showPlaceholder
+                    label={msg("compset.description")}
                     previewStyle={publicThemeStyleChain(competition.branding, orgBranding)}
                   />
                 )}

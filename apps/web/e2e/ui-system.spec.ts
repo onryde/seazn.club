@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { TAG, apiJson, activeOrg, failOnNativeDialog, competitionPath } from "./helpers";
+import { uiEn } from "./match-room-kit";
 
 // PROMPT-32 acceptance: match-day cards navigate, ConfirmDialog replaced
 // window.confirm everywhere, and the visibility picker surfaces the share
@@ -132,7 +133,7 @@ test("visibility picker: Link only surfaces a copyable URL; public page stays no
 
   await page.goto(await competitionPath(page.request, comp.data!.id, "/settings"));
   // Radio cards speak plain language (v3/03 §7).
-  await expect(page.getByText("Only your team can see it.")).toBeVisible();
+  await expect(page.getByText(uiEn["visibility.private.consequence"]!, { exact: true })).toBeVisible();
   await page.getByRole("radio", { name: /link only/i }).check();
   // The consequence is immediate: share URL + copy affordance appear.
   await expect(page.getByText(`/shared/${orgSlug}/${comp.data!.slug}`).first()).toBeVisible();

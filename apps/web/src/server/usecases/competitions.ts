@@ -5,7 +5,7 @@ import "server-only";
 import { z } from "zod";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
-import { invalidateOrgEntitlements, requireFeature, withinLimit } from "@/lib/entitlements";
+import { getLimit, invalidateOrgEntitlements, requireFeature, withinLimit } from "@/lib/entitlements";
 import { publicDashboardsReason } from "@/lib/feature-copy";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS, type AnalyticsEvent } from "@/lib/analytics-events";
@@ -168,6 +168,22 @@ export async function assertActiveQuota(auth: AuthCtx): Promise<void> {
 export async function withinPublicQuota(auth: AuthCtx, excludeId?: string): Promise<{ ok: boolean; limit: number | null }> {
   const count = await countPublicDashboards(auth.orgId, excludeId);
   return withinLimit(auth.orgId, "dashboard.public.max", count + 1);
+}
+
+/**
+ * How many more publicly-readable dashboards this org can open before a create degrades to private - the New competition form's
+ * cap-aware "Who will find it" (Match Day PB3). `null` when the plan has NO public cap.
+ *
+ * The same two inputs `withinPublicQuota` compares - `getLimit("dashboard.public.max")` and `countPublicDashboards` - so a create
+ * degrades exactly when `left` is 0 (`left >= 1` is `count + 1 <= limit`). `public-slots-left.test.ts` holds the two together at
+ * every point of a filling cap rather than trusting this paragraph. `left` clamps at 0: the cap can be exceeded (a plan
+ * downgrade, an Event Pass lapsing), and a negative count of slots would read as nonsense.
+ */
+export async function publicSlotsLeft(orgId: string): Promise<{ limit: number; left: number } | null> {
+  const limit = await getLimit(orgId, "dashboard.public.max");
+  if (limit === null) return null;
+  const count = await countPublicDashboards(orgId);
+  return { limit, left: Math.max(0, limit - count) };
 }
 
 /** The REFUSING form, and the only caller left is `patchCompetition` below:
@@ -425,6 +441,25 @@ export async function createCompetition(
 // costs one extra round trip and cannot self-deadlock. Same phase boundary
 // autoSchedule documents: transaction for the read, no pooled connection held
 // for the unbounded work.
+/**
+ * The org's billing-frozen competitions, named - for the Match Day banner that tells an over-limit organisation which ones are
+ * read-only (Match Day PB3). Built on the PERSISTED set (`frozenCompetitionIds`: chosen once, stored in `frozen_at`), never on a
+ * recomputation of "who would freeze now", so the banner names exactly the competitions the server refuses. Empty for an in-quota
+ * org, at the cost `frozenCompetitionIds` already has. Ordered by name, then id, so the order is the same on every read.
+ *
+ * Phase boundary as `getCompetition`: the set is read first, outside any transaction, and the names after.
+ */
+export async function listFrozenCompetitions(auth: AuthCtx): Promise<{ id: string; name: string; slug: string }[]> {
+  const frozen = await frozenCompetitionIds(auth.orgId);
+  if (frozen.size === 0) return [];
+  return withTenant(auth.orgId, async (tx) =>
+    tx<{ id: string; name: string; slug: string }[]>`
+      select id, name, slug from competitions
+      where id in ${tx([...frozen])}
+      order by lower(name), id`,
+  );
+}
+
 export async function getCompetition(auth: AuthCtx, id: string): Promise<CompetitionRow> {
   const row = await withTenant(auth.orgId, async (tx) => {
     const [found] = await tx<CompetitionRow[]>`

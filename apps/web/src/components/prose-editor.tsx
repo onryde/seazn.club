@@ -24,7 +24,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
-interface Props {
+interface BaseProps {
   /** Markdown value (controlled-ish: initial + onChange). */
   value: string;
   onChange: (markdown: string) => void;
@@ -49,9 +49,28 @@ interface Props {
    *  the first keystroke). Off by default because `placeholder` has only ever
    *  been the textbox's accessible name here, and four other editors pass one
    *  (org about, payment instructions, news, competition settings) that has
-   *  never been drawn. When on, the accessible name becomes "Description" and the
-   *  sentence is exposed as `aria-placeholder`, as a native placeholder is. */
+   *  never been drawn. When on, the hint is exposed as `aria-placeholder` (as a
+   *  native placeholder is) and is NO LONGER the accessible name, so the caller
+   *  must name the box with `label` (see {@link Props}). */
   showPlaceholder?: boolean;
+  /** The textbox's accessible name: the copy that labels the box on screen ("Story",
+   *  "Description"), so a screen reader announces what the box IS. Optional while the
+   *  hint is not drawn (the name then falls back to `placeholder`, as it always has);
+   *  REQUIRED once `showPlaceholder` is on, where the hint can no longer be the name. */
+  label?: string;
+}
+
+/** `showPlaceholder` and `label` travel together: a drawn hint without a name would fall back to a
+ *  generic "Description" on every box (PB3 review C1), so `tsc` names every caller that forgets. */
+type Props = BaseProps & ({ showPlaceholder: true; label: string } | { showPlaceholder?: false });
+
+/**
+ * The textbox's accessible name (a contenteditable has none of its own). An explicit `label` is the box's name, always. Without one:
+ * while the hint is not drawn the placeholder has always been the name, and with `showPlaceholder` (where `label` is required by the
+ * type) the generic fallback. Pure, so the precedence is pinned in a node-env test (PB3 review C1).
+ */
+export function textboxName(o: { label?: string; placeholder?: string; showPlaceholder: boolean }, fallback: string): string {
+  return o.label ?? (o.showPlaceholder ? fallback : (o.placeholder ?? fallback));
 }
 
 /**
@@ -166,6 +185,7 @@ export function ProseEditor({
   touch = false,
   fill = false,
   showPlaceholder = false,
+  label,
 }: Props) {
   const msg = useMsg();
   const [tab, setTab] = useState<"write" | "preview">("write");
@@ -201,7 +221,7 @@ export function ProseEditor({
         // prohibited (axe: aria-prohibited-attr). Declare what it really is.
         role: "textbox",
         "aria-multiline": "true",
-        "aria-label": showPlaceholder ? msg("editor.description") : (placeholder ?? msg("editor.description")),
+        "aria-label": textboxName({ label, placeholder, showPlaceholder }, msg("editor.description")),
         ...(showPlaceholder && placeholder ? { "aria-placeholder": placeholder } : {}),
       },
     },

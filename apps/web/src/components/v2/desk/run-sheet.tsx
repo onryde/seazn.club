@@ -129,6 +129,7 @@ export function RunSheet({
   courtNames,
   venues,
   canEdit,
+  canSettle,
   hrefFor,
   filter,
   onFilter,
@@ -179,6 +180,9 @@ export function RunSheet({
    *  reads them itself. */
   venues?: readonly Venue[];
   canEdit: boolean;
+  /** Match Day PB3 (m7): may this viewer settle a held match? `canEdit` is `editable` (the billing freeze folded in); a frozen
+   *  competition keeps its settle. Threaded to every row; absent means `canEdit`. */
+  canSettle?: boolean;
   hrefFor: (fixture: RunSheetFixture) => string;
   filter: RunSheetFilter;
   onFilter: (filter: RunSheetFilter) => void;
@@ -398,6 +402,7 @@ export function RunSheet({
                 orgTz={orgTz}
                 nowMs={nowMs}
                 canEdit={canEdit}
+                canSettle={canSettle}
                 entrantNames={entrantNames}
                 entrantStatuses={entrantStatuses}
                 courtNames={courtNames}
@@ -478,6 +483,7 @@ export function RunSheet({
                     orgTz={orgTz}
                     nowMs={nowMs}
                     canEdit={canEdit}
+                    canSettle={canSettle}
                     entrantNames={entrantNames}
                     entrantStatuses={entrantStatuses}
                     courtNames={courtNames}
@@ -568,6 +574,7 @@ export function RunSheet({
                 orgTz={orgTz}
                 nowMs={nowMs}
                 canEdit={canEdit}
+                canSettle={canSettle}
                 entrantNames={entrantNames}
                 entrantStatuses={entrantStatuses}
                 courtNames={courtNames}
@@ -683,6 +690,7 @@ export function RunSheet({
                     orgTz={orgTz}
                     nowMs={nowMs}
                     canEdit={canEdit}
+                    canSettle={canSettle}
                     entrantNames={entrantNames}
                     entrantStatuses={entrantStatuses}
                     courtNames={courtNames}
@@ -982,6 +990,8 @@ function RowWithNow({
   orgTz: string;
   nowMs: number;
   canEdit: boolean;
+  /** Survives `...rest` into `RunSheetRow`, like `canEdit`. */
+  canSettle?: boolean;
   entrantNames: Record<string, string>;
   /** W3 T15 ruling 2 — survives `...rest` into `RunSheetRow`, like `streamState`. */
   entrantStatuses?: ForfeitEntrantStatuses;

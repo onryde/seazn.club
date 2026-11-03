@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
 // `?venue=<id>,<id>` (or `all`) is the venue filter's choice (E2 item 5); absent, the venues with a match today.
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getMatchDay } from "@/server/usecases/match-day";
-import { getCompetition } from "@/server/usecases/competitions";
+import { getCompetition, listFrozenCompetitions } from "@/server/usecases/competitions";
 import { orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { listDivisions } from "@/server/usecases/divisions";
@@ -24,6 +24,7 @@ import { getDictionary } from "@/lib/i18n";
 import { pickDictPrefixes } from "@/lib/i18n-subset";
 import { MatchDayShell } from "@/components/v2/match-day/match-day-shell";
 import { matchDayForReader } from "@/lib/match-day/view";
+import { frozenNamesFor, NO_FROZEN_NAMES } from "@/lib/match-day/frozen-names";
 
 export default async function MatchDayPage({
   params,
@@ -51,6 +52,13 @@ export default async function MatchDayPage({
   // is serialised into the response, so the rows would still reach a browser that never shows them. The competition page strips
   // them the same way (`desk && canEdit ? needsYouItems(…) : []`). The poll that follows strips with the same helper (PB2 item 3).
   const initial = matchDayForReader(view, page.canEdit);
+  // PB3 item 7: the banner names the org's frozen competitions. It is the organiser's banner (`frozen && !readOnly`), so only an
+  // organiser on a frozen competition pays the read; everyone else costs nothing. The names are an addition to the banner: a read
+  // that fails leaves the banner as it was rather than failing the page.
+  const frozenNames =
+    competition.frozen === true && page.canEdit
+      ? frozenNamesFor(await listFrozenCompetitions(page.auth).catch(() => []), id)
+      : NO_FROZEN_NAMES;
   return (
     <main className="mx-auto max-w-6xl px-4 py-6 md:py-8">
       <MatchDayShell
@@ -69,6 +77,7 @@ export default async function MatchDayPage({
         viewerPlan={viewerPlanFrom(planKey)}
         readOnly={!page.canEdit}
         frozen={competition.frozen === true}
+        frozenNames={frozenNames}
         focusCourtId={typeof court === "string" ? court : null}
         venueParam={venue ?? null}
       />

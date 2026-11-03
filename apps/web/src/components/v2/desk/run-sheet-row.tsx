@@ -147,6 +147,7 @@ export function RunSheetRow({
   orgTz,
   nowMs,
   canEdit,
+  canSettle,
   entrantNames,
   courtNames,
   venues,
@@ -180,6 +181,9 @@ export function RunSheetRow({
   orgTz: string;
   nowMs: number;
   canEdit: boolean;
+  /** Match Day PB3 (m7): may this viewer settle a held match? `canEdit` here is `editable` (the billing freeze folded in), and a
+   *  frozen competition keeps its settle, so the held row reads this instead. Absent means `canEdit`. See `fixtureRowAction`. */
+  canSettle?: boolean;
   entrantNames: Record<string, string>;
   courtNames?: Record<string, string>;
   /** Org venues with nested courts (`listVenues` shape), for the inline
@@ -336,6 +340,7 @@ export function RunSheetRow({
     scheduledAt: fixture.scheduled_at,
     hasOfficials,
     canEdit,
+    canSettle,
     tz,
     nowMs,
     awaitingDraw,

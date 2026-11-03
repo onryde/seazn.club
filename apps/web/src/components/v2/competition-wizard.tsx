@@ -22,7 +22,8 @@ import {
 } from "@/lib/public-dashboard-upgrade";
 import { VisibilitySegmented } from "@/components/ui/visibility-segmented";
 import { ProseEditor } from "@/components/prose-editor";
-import { CompetitionReach } from "@/components/v2/competition-reach";
+import { CompetitionReach, type ReachCap } from "@/components/v2/competition-reach";
+import { createdPrivateOverCap } from "@/lib/competition-listing";
 import { ShowcaseOptIn } from "@/components/v2/showcase-optin";
 import { FirstDivisionPrompt, type CreatedCompetition } from "@/components/v2/first-division-prompt";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
@@ -43,6 +44,7 @@ export function CompetitionWizard({
   orgSlug,
   orgId,
   publicDashboardUpgrade,
+  publicSlots,
   viewerPlan,
 }: {
   orgSlug: string;
@@ -58,6 +60,14 @@ export function CompetitionWizard({
    * exists to close. `tsc` names every caller instead.
    */
   publicDashboardUpgrade: PublicDashboardUpgrade | null;
+  /**
+   * The org's public slots (Match Day PB3): its `dashboard.public.max` and how many are still free, read by the Server Component
+   * page. `null` when the plan has no public cap (or the read failed): the checklist then says nothing about a cap.
+   *
+   * REQUIRED for the reason `publicDashboardUpgrade` is: an optional prop is how the figure quietly stops arriving, and a literal
+   * `null` compiles and silently takes the warning off the form. `tsc` names every caller; the page test pins the real read.
+   */
+  publicSlots: { limit: number; left: number } | null;
   viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
@@ -93,6 +103,13 @@ export function CompetitionWizard({
   // Public switches it off (consent is given again on the way back).
   const showcaseOn = visibility === "public" && discoverable;
   const blocker = createBlocker({ name, startsOn, endsOn });
+  // No public slot left and a visibility the cap meters: the server will create this one PRIVATE (it never refuses a create over the
+  // cap), so the checklist is told BEFORE Create rather than the organiser finding out on the card after. The request is unchanged -
+  // the form still asks for what was picked and the server is the authority on what is created.
+  const cap: ReachCap | null =
+    publicSlots !== null && createdPrivateOverCap(visibility, publicSlots.left)
+      ? { limit: publicSlots.limit, canUpgrade: publicDashboardGain(publicSlots.limit, publicDashboardUpgrade) !== null }
+      : null;
 
   function pickVisibility(next: string) {
     setVisibility(next);
@@ -301,10 +318,20 @@ export function CompetitionWizard({
           {/* From `lg` the footer's own rule closes the card, so this group drops its
               bottom rule (two hairlines 25px apart read as a mistake). */}
           <div className="space-y-5 border-y border-purple-100 py-5 lg:border-b-0 lg:pb-0">
-            <VisibilitySegmented value={visibility} onChange={pickVisibility} />
-            <CompetitionReach visibility={visibility} discoverable={showcaseOn} />
+            <VisibilitySegmented value={visibility} onChange={pickVisibility} capped={cap !== null} />
+            <CompetitionReach
+              visibility={visibility}
+              discoverable={showcaseOn}
+              cap={cap}
+              billingHref={routes.billing(orgSlug)}
+            />
             <div className="border-t border-dashed border-purple-200 pt-4">
-              <ShowcaseOptIn visibility={visibility} checked={showcaseOn} onChange={setDiscoverable} />
+              <ShowcaseOptIn
+                visibility={cap ? "private" : visibility}
+                checked={showcaseOn}
+                onChange={setDiscoverable}
+                capped={cap !== null}
+              />
             </div>
           </div>
 
@@ -325,6 +352,7 @@ export function CompetitionWizard({
             touch
             fill
             showPlaceholder
+            label={msg("editor.description")}
           />
         </div>
 

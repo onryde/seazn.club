@@ -109,6 +109,58 @@ describe("fixtureRowAction — a held fixture (W2a, needs_decision)", () => {
   });
 });
 
+// Match Day PB3 item 2 (m7 from the PB2 review). A billing-FROZEN competition is read-only for the timetable, but scoring and
+// settling stay allowed (scoring.ts is not freeze-gated; a settle is a score event), and the fixture page already offers the settle.
+// The page folds the freeze into the run sheet's `canEdit`, so a held match showed "View" there. `canSettle` is the organiser's
+// right to settle WITHOUT the freeze; everything else on the ladder keeps reading `canEdit`.
+describe("fixtureRowAction — the settle on a frozen competition (PB3 m7)", () => {
+  const HELD_KINDS = [
+    ["needs_decision", { status: "needs_decision" }],
+    ["a recorded abandon awaiting its settle", { status: "abandoned", awaitsSettle: true }],
+  ] as const;
+
+  it("a frozen competition (canEdit false, canSettle true) still offers Settle on every held shape", () => {
+    let checked = 0;
+    for (const [label, held] of HELD_KINDS) {
+      for (const scheduledAt of [TODAY_1500, TOMORROW_1000, null]) {
+        expect(fixtureRowAction(row({ ...held, scheduledAt, canEdit: false, canSettle: true })).kind, `${label} @ ${scheduledAt}`).toBe("decide");
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("an organiser WITHOUT settle rights only views it, whatever canEdit says", () => {
+    let checked = 0;
+    for (const [label, held] of HELD_KINDS) {
+      for (const canEdit of [true, false]) {
+        expect(fixtureRowAction(row({ ...held, canEdit, canSettle: false })).kind, `${label} canEdit=${canEdit}`).toBe("view");
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("an absent canSettle follows canEdit, both ways — every producer that never heard of the freeze keeps its behaviour", () => {
+    expect(fixtureRowAction(row({ status: "needs_decision", canEdit: true })).kind).toBe("decide");
+    expect(fixtureRowAction(row({ status: "needs_decision", canEdit: false })).kind).toBe("view");
+  });
+
+  it("nothing else on the ladder is loosened: a frozen row still cannot be given a time", () => {
+    // The freeze DOES gate the timetable (`moveFixture` refuses it), so the unscheduled row stays a read-only view...
+    expect(fixtureRowAction(row({ scheduledAt: null, canEdit: false, canSettle: true })).kind).toBe("view");
+    // ...and its positive pair: the same row, editable, offers the time.
+    expect(fixtureRowAction(row({ scheduledAt: null, canEdit: true, canSettle: true })).kind).toBe("set_time");
+    // The time cell is its own predicate and reads `canEdit` alone.
+    expect(canEditFixtureTime({ status: "scheduled", scheduledAt: TODAY_1500, canEdit: false })).toBe(false);
+  });
+
+  it("scoring is untouched by canSettle (the ladder never gated it): a frozen scheduled row still scores", () => {
+    expect(fixtureRowAction(row({ canEdit: false, canSettle: true })).kind).toBe("score");
+    expect(fixtureRowAction(row({ canEdit: false, canSettle: false })).kind).toBe("score");
+  });
+});
+
 // F5 (W2 walkthrough gate 1): a TIMED bracket fixture whose entrants are still
 // undrawn read "Awaiting draw" as its sub-line and offered "Score" as its
 // action — a promise the fixture cannot keep, since neither side is named.

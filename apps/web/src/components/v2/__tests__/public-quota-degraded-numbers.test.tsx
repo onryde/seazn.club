@@ -102,6 +102,7 @@ const mountWizard = (upgrade: PublicDashboardUpgrade | null) =>
     orgSlug: "riverside",
     orgId: "org-1",
     publicDashboardUpgrade: upgrade,
+    publicSlots: null,
     viewerPlan: "community",
   });
 

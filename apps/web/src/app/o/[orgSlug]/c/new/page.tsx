@@ -12,6 +12,7 @@ import { sql } from "@/lib/db";
 import { featurePlan } from "@/lib/feature-copy";
 import { planLabel } from "@/lib/plan-label";
 import { orgPlanKey } from "@/lib/entitlements";
+import { publicSlotsLeft } from "@/server/usecases/competitions";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import {
   PUBLIC_DASHBOARD_FEATURE,
@@ -56,6 +57,9 @@ export default async function NewCompetitionPage({
   // Fails soft: the create form must render even when the matrix read does
   // not, and `null` here suppresses only the upgrade figure.
   const upgrade = await publicDashboardUpgrade().catch(() => null);
+  // Match Day PB3: how many public slots the org has left, for the form's "Who will find it". Fails soft the same way: `null` says
+  // nothing about a cap, which is today's form.
+  const publicSlots = await publicSlotsLeft(auth.orgId).catch(() => null);
   const viewerPlan = viewerPlanFrom(await orgPlanKey(auth.orgId));
 
   return (
@@ -82,6 +86,7 @@ export default async function NewCompetitionPage({
         orgId={auth.orgId}
         templates={TEMPLATE_CATALOG}
         publicDashboardUpgrade={upgrade}
+        publicSlots={publicSlots}
         viewerPlan={viewerPlan}
       />
     </main>

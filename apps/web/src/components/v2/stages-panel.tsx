@@ -351,6 +351,10 @@ interface Props {
    *  predate this field. */
   rosterDrift?: Record<string, RosterDrift>;
   canEdit: boolean;
+  /** Match Day PB3 (m7): may this viewer settle a held match? `canEdit` is the page's `editable` - the billing freeze folded in -
+   *  and a frozen competition keeps its settle (a settle is a score event; scoring is not freeze-gated). The page hands the
+   *  organiser's own right here. Absent means `canEdit`, which is the safe direction for a caller that never heard of the freeze. */
+  canSettle?: boolean;
   /** The division's sport. Every sport has the per-stage rules row since W2c Task 17 (which fields it shows is the
    *  engine's `ruleKeys`, not a list of sports here). Optional for the same reason `venues`/`phase` are: a dozen
    *  pre-existing `stages-panel-*.test.tsx` files build props without it, and an absent sport renders no row, which is
@@ -591,7 +595,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1025,6 +1029,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     // row's inline editor instead of a second venues fetch.
     venues,
     canEdit,
+    canSettle: canSettle ?? canEdit,
     hrefFor: (f: { fixture_no: number }) => routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no),
     filter,
     onFilter: setFilter,

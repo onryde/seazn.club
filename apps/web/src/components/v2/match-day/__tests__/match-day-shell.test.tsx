@@ -40,6 +40,7 @@ import { CourtFocus, NoCourtFocus } from "../court-focus";
 import { CourtList, NoCourtList } from "../court-list";
 import { MatchDayShell, type MatchDayShellProps } from "../match-day-shell";
 import { NeedsYou, type NeedsYouItem } from "@/components/v2/desk/needs-you";
+import { NO_FROZEN_NAMES } from "@/lib/match-day/frozen-names";
 
 const court = (id: string, name: string, o: Partial<MatchDayCourt> = {}): MatchDayCourt => ({
   court_id: id,
@@ -83,6 +84,7 @@ const props = (initial: MatchDayView): MatchDayShellProps => ({
   dict: en as Dict,
   scoreDict: publicEn as Dict,
   viewerPlan: "pro",
+  frozenNames: NO_FROZEN_NAMES,
 });
 
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));

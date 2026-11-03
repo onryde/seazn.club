@@ -210,6 +210,18 @@ describe("openFoldsAround: openFixtureUi opens the folds around a settled row be
     }
   });
 
+  it("a ladder's flat list carries a round-list id but no bar names it: the card is opened, no bar is clicked (PB1 n1)", async () => {
+    // The real shape (desk/run-sheet.tsx serves the rounds and the flat branch under one id scheme): a prefixed id, and no
+    // round toggle for it, so the folded-bar count is 0.
+    const r = foldedRow({ card: "folded", listId: ROUND_LIST, round: "none" });
+    await openFoldsAround(r.ctx, r.row);
+    expect(r.log).toEqual(["open card"]);
+    // The positive pair: the same id WITH a folded bar (a table stage's round) is clicked open.
+    const withBar = foldedRow({ card: "folded", listId: ROUND_LIST, round: "folded" });
+    await openFoldsAround(withBar.ctx, withBar.row);
+    expect(withBar.log).toEqual(["open card", "open round"]);
+  });
+
   it("a round list id that could break out of the selector is refused by name", async () => {
     const r = foldedRow({ card: "open", listId: `${ROUND_LIST_PREFIX}x"],a[href`, round: "folded" });
     await expect(openFoldsAround(r.ctx, r.row)).rejects.toThrow(/round list id/);

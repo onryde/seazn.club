@@ -54,6 +54,8 @@ export function OrgAbout({
         onChange={setValue}
         orgId={orgId}
         placeholder={msg("settings.org.about.placeholder")}
+        showPlaceholder
+        label={msg("settings.org.about")}
         previewStyle={publicThemeStyleChain(branding)}
       />
       <div className="flex items-center gap-3">

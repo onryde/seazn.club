@@ -87,7 +87,7 @@ const expandFields = (node: ReactNode): ReactElement[] =>
 const mount = () =>
   renderIsland(
     CompetitionWizard,
-    { orgSlug: "riverside", orgId: "org-1", publicDashboardUpgrade: null, viewerPlan: "community" },
+    { orgSlug: "riverside", orgId: "org-1", publicDashboardUpgrade: null, publicSlots: null, viewerPlan: "community" },
     expandFields,
   );
 type Island = ReturnType<typeof mount>;
@@ -368,7 +368,7 @@ describe("<VisibilitySegmented>", () => {
   it("three radios from the schema's own enum, one checked, and the selected option's consequence underneath", () => {
     let checked = 0;
     for (const value of Visibility.options) {
-      const html = renderToStaticMarkup(<VisibilitySegmented value={value} onChange={() => {}} />);
+      const html = renderToStaticMarkup(<VisibilitySegmented value={value} onChange={() => {}} capped={false} />);
       const radios = [...html.matchAll(/<input[^>]*type="radio"[^>]*>/g)].map((m) => m[0]);
       expect(radios.map((r) => /value="([a-z]+)"/.exec(r)![1])).toEqual([...Visibility.options]);
       expect(radios.filter((r) => /\schecked(=|\s|>)/.test(r)).length, value).toBe(1);
@@ -385,7 +385,7 @@ describe("<VisibilitySegmented>", () => {
   });
 
   it("each segment WRAPS its radio (so a click on the label picks it) and is a 44px target", () => {
-    const html = renderToStaticMarkup(<VisibilitySegmented value="public" onChange={() => {}} />);
+    const html = renderToStaticMarkup(<VisibilitySegmented value="public" onChange={() => {}} capped={false} />);
     const labels = [...html.matchAll(/<label[^>]*>(.*?)<\/label>/g)];
     expect(labels).toHaveLength(3);
     for (const l of labels) {
@@ -401,7 +401,7 @@ describe("<VisibilitySegmented>", () => {
 
   it("picking an option reports it", () => {
     const seen: string[] = [];
-    const island = renderIsland(VisibilitySegmented, { value: "public", onChange: (v: string) => seen.push(v) });
+    const island = renderIsland(VisibilitySegmented, { value: "public", onChange: (v: string) => seen.push(v), capped: false });
     const radio = island.tree().find((e) => e.type === "input" && propsOf(e).value === "private")!;
     (propsOf(radio).onChange as () => void)();
     expect(seen).toEqual(["private"]);
@@ -412,7 +412,7 @@ describe("<ShowcaseOptIn>", () => {
   it("is disabled unless Public, and says why in amber-700", () => {
     let checked = 0;
     for (const visibility of Visibility.options) {
-      const html = flat(renderToStaticMarkup(<ShowcaseOptIn visibility={visibility} checked={false} onChange={() => {}} />));
+      const html = flat(renderToStaticMarkup(<ShowcaseOptIn visibility={visibility} checked={false} onChange={() => {}} capped={false} />));
       const input = /<input[^>]*role="switch"[^>]*>/.exec(html)![0];
       const isPublic = visibility === "public";
       expect(/\sdisabled(=|\s|>)/.test(input), `${visibility} disabled`).toBe(!isPublic);
@@ -432,7 +432,7 @@ describe("<ShowcaseOptIn>", () => {
   it("shows the switch on only on Public, whatever it is handed", () => {
     let checked = 0;
     for (const visibility of Visibility.options) {
-      const html = flat(renderToStaticMarkup(<ShowcaseOptIn visibility={visibility} checked onChange={() => {}} />));
+      const html = flat(renderToStaticMarkup(<ShowcaseOptIn visibility={visibility} checked onChange={() => {}} capped={false} />));
       const input = /<input[^>]*role="switch"[^>]*>/.exec(html)![0];
       // React prints a checked input as `checked=""`.
       expect(/\schecked(=|\s|>)/.test(input), `${visibility} checked`).toBe(visibility === "public");
@@ -442,7 +442,7 @@ describe("<ShowcaseOptIn>", () => {
   });
 
   it("carries the one line and 'What this allows', whose consent wording is the existing key, unedited", () => {
-    const html = flat(renderToStaticMarkup(<ShowcaseOptIn visibility="public" checked onChange={() => {}} />));
+    const html = flat(renderToStaticMarkup(<ShowcaseOptIn visibility="public" checked onChange={() => {}} capped={false} />));
     expect(html).toContain(msg("showcase.label"));
     expect(html).toContain(msg("comp.wizard.showcase.line"));
     expect(html).toContain(msg("comp.wizard.showcase.allows"));
@@ -456,7 +456,7 @@ describe("<ShowcaseOptIn>", () => {
 
   it("is a switch with a real label, and toggling reports the new value", () => {
     const seen: boolean[] = [];
-    const island = renderIsland(ShowcaseOptIn, { visibility: "public", checked: false, onChange: (v: boolean) => seen.push(v) });
+    const island = renderIsland(ShowcaseOptIn, { visibility: "public", checked: false, onChange: (v: boolean) => seen.push(v), capped: false });
     const input = island.tree().find((e) => e.type === "input")!;
     expect(propsOf(input).role).toBe("switch");
     (propsOf(input).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
@@ -555,6 +555,8 @@ describe("the description is the competition-settings editor", () => {
       fill: true,
       showPlaceholder: true,
       placeholder: msg("comp.wizard.description.placeholder"),
+      // The hint is not the box's name: the wizard keeps "Description" (new-competition-form.spec.ts finds it by that name).
+      label: msg("editor.description"),
     });
     call(editor, "onChange", "Two days of **singles** and doubles.");
     expect(propsOf(find(island, ProseEditor)).value).toBe("Two days of **singles** and doubles.");
@@ -733,11 +735,14 @@ describe("TemplateGallery hands the wizard the org id the editor uploads to", ()
       orgId: "org-1",
       templates: [],
       publicDashboardUpgrade: null,
+      publicSlots: { limit: 2, left: 0 },
       viewerPlan: "community" as const,
     });
     const blank = island.tree().find((el) => propsOf(el)["data-testid"] === "template-start-blank")!;
     (propsOf(blank).onClick as () => void)();
     const wizard = island.tree().find((el) => el.type === CompetitionWizard)!;
     expect(propsOf(wizard)).toMatchObject({ orgSlug: "riverside", orgId: "org-1" });
+    // Match Day PB3: and the org's public slots, so the blank form's checklist can say the create will come back private.
+    expect(propsOf(wizard).publicSlots).toEqual({ limit: 2, left: 0 });
   });
 });

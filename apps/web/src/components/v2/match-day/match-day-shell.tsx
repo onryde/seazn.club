@@ -33,6 +33,7 @@ import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { routes } from "@/lib/routes";
 import type { Severity } from "@/lib/division-phase";
+import type { FrozenNames } from "@/lib/match-day/frozen-names";
 import type { MatchDayView } from "@/lib/match-day/types";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import {
@@ -88,6 +89,10 @@ export interface MatchDayShellProps {
   readOnly?: boolean;
   /** The competition is billing-frozen (task F1): no Call and no Undo call, and the page says why. */
   frozen?: boolean;
+  /** PB3 item 7: the org's billing-frozen competitions (at most three, this one first, and a count of the rest), named under the
+   *  banner. REQUIRED, so a mount that forgets it fails to compile instead of quietly dropping the names; pass
+   *  `NO_FROZEN_NAMES` where there is nothing to name. Only read when `frozen` and not `readOnly`, the banner's own condition. */
+  frozenNames: FrozenNames;
   /** `?court=<id>`: the court to open first (Needs you's "Find a court" link, opened another way). Ignored when not on the list. */
   focusCourtId?: string | null;
   /** `?venue=`: the venue filter's choice as the URL wrote it ("all", or venue ids), absent for the default (E2 item 5). */
@@ -107,6 +112,7 @@ export function MatchDayShell({
   viewerPlan,
   readOnly = false,
   frozen = false,
+  frozenNames,
   focusCourtId = null,
   venueParam = null,
 }: MatchDayShellProps) {
@@ -266,6 +272,34 @@ export function MatchDayShell({
               <p data-testid="md-frozen" className="mt-2 text-xs text-amber-800">
                 {t(dict, "matchDay.frozen")}
               </p>
+            )}
+            {/* PB3 item 7: which competitions are over the limit, so the organiser knows what to archive. The label sits on its own line, then
+                one wrapping row of 44px targets (Match Day is the phone-at-the-venue page; a 16px inline link two words from the next one is a
+                mis-tap). The competition on screen is first and plain (a link to this page would be a link to itself); the rest link to their
+                own pages; "+N more" closes the row. PB3 review m1. */}
+            {frozen && !readOnly && frozenNames.shown.length > 0 && (
+              <div data-testid="md-frozen-names" className="mt-1 min-w-0 text-xs text-amber-800">
+                <p>{t(dict, "matchDay.frozenNames")}</p>
+                <ul className="m-0 flex list-none flex-wrap items-center gap-x-4 p-0">
+                  {frozenNames.shown.map((c) => (
+                    <li key={c.id} className="min-w-0 max-w-full">
+                      {c.id === competitionId ? (
+                        <span className="inline-flex min-h-11 max-w-full items-center font-medium [overflow-wrap:anywhere]">{c.name}</span>
+                      ) : (
+                        <Link
+                          href={routes.competition(orgSlug, c.slug)}
+                          className="inline-flex min-h-11 max-w-full items-center font-medium underline underline-offset-2 [overflow-wrap:anywhere]"
+                        >
+                          {c.name}
+                        </Link>
+                      )}
+                    </li>
+                  ))}
+                  {frozenNames.more > 0 && (
+                    <li className="inline-flex min-h-11 items-center">{t(dict, "matchDay.frozenMore", { count: frozenNames.more })}</li>
+                  )}
+                </ul>
+              </div>
             )}
           </div>
           {needsTone !== null && (

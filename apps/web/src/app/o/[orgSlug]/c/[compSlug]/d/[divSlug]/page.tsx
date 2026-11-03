@@ -1048,6 +1048,10 @@ export default async function DivisionPage({
               venues={panelVenues}
               rosterDrift={rosterDrift}
               canEdit={editable}
+              // Match Day PB3 (m7): the run sheet's Settle is the ORGANISER's right, not the timetable's. A billing-frozen competition
+              // folds into `editable` (read-only timetable), but scoring and settling stay allowed (a settle is a score event, and
+              // scoring.ts is not freeze-gated; the fixture page already offers it), so the held row reads the page-level `canEdit`.
+              canSettle={canEdit}
               sportKey={division.sport_key}
               variantKey={division.variant_key}
               divisionConfig={(division.config ?? {}) as Record<string, unknown>}
