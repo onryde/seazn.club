@@ -11,10 +11,13 @@ import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
+import { builtinModules } from "@seazn/engine/sports";
 import { connectionOptions, sql } from "@/lib/db";
 import { holdsSlot } from "@/lib/rebuild-slots";
 import { createCompetition } from "@/server/usecases/competitions";
-import { createDivision } from "@/server/usecases/divisions";
+import { seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
+import { post } from "@/server/engine-db/__tests__/helpers/w2b-rig";
+import { createDivision, patchDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { createCourt, createVenue } from "@/server/usecases/venues";
@@ -295,5 +298,359 @@ describe.runIf(HAS_DB)("W3 delta: swiss_first_round_stage_id on entrants", () =>
     expect(verdict.fksAfter, "… adds no second key").toEqual(verdict.fksBefore);
     expect(verdict.kept, "… and moves no stored value").toEqual({ r: 2, s: stage!.id });
     expect(verdict.orphaned, "the stage deleted: the stamp's stage is null, so the stamp counts nowhere").toEqual({ r: 2, s: null });
+  }, 120_000);
+});
+
+// W3 App B Task 2 (X-SW-6, ruling 251; boardgame FOLD_EPOCH 4 → 5) — the delta that removes the stored `byeScore` from a
+// board game's config in all five places a sport config is stored, before the deploy. DATA CHANGE (LOUD). Read by glob like
+// the deltas above. The block runs here inside a transaction that is always rolled back, scoped to the seeded organization as
+// the app's tenant role (`app_user` + `app.current_org`, as w2e-migration.test.ts does): RLS shows the run that org's rows
+// alone, so every count is the seed's and the empty case is deterministic on the shared test DB. One test (the started-division
+// save) COMMITS an org-scoped run, because the save it proves goes through the app's own pool.
+//
+// Expected values: the scope (which sports ever stored the key) is boardgame's alone, read from the engine 1.1.0 package the
+// app ran on until this branch (dist/sports/boardgame/boardgame.js is the one sport file declaring `byeScore`); the sibling
+// keys are the seeded values minus the key, never read back from the SQL under test.
+const BYE_SCORE_NAME = /^V\d+__w3_bye_score_cleanup\.sql$/;
+const byeScoreFiles = readdirSync(DELTAS).filter((f) => BYE_SCORE_NAME.test(f));
+const byeScoreText = byeScoreFiles.length === 1 ? readFileSync(resolve(DELTAS, byeScoreFiles[0]!), "utf8") : "";
+/** The statements, comments removed: a `--` line naming a literal must not satisfy a check meant for the SQL. */
+const byeScoreCode = byeScoreText.replace(/--.*$/gm, "");
+const BYE_SCORE_BLOCK = /do \$\$[\s\S]*?end \$\$;/.exec(byeScoreCode)?.[0];
+const byeScoreUpdates = (BYE_SCORE_BLOCK ?? "")
+  .split(";")
+  .map((x) => x.trim().replace(/^begin\s+/i, ""))
+  .filter((x) => /^update\s/i.test(x));
+
+/** V481's names for the five places a sport config is stored; the notices name them the same way. */
+const PLACES = ["divisions.config", "stages.config.rules", "fixtures.rules_override", "fixtures.config_snapshot", "match_states.state.cfg"] as const;
+type Place = (typeof PLACES)[number];
+const BOARDGAME = "boardgame";
+
+describe("W3 delta: byeScore cleanup, the file", () => {
+  it("X-SW-6 exactly one delta carries the name; it is LOUD, names the five places and stg's count, and is five updates scoped to boardgame, each guarded by the key", () => {
+    expect(byeScoreFiles, "one delta named *__w3_bye_score_cleanup.sql").toHaveLength(1);
+    expect(byeScoreText, "the header announces the data change").toMatch(/DATA CHANGE \(LOUD\)/);
+    for (const place of ["divisions.config", "stages.config->'rules'", "fixtures.rules_override", "fixtures.config_snapshot", "match_states.state->'cfg'"]) {
+      expect(byeScoreText, `the header names ${place}`).toContain(place);
+    }
+    expect(byeScoreText, "the header quotes stg's count (13 / 0 / 0 / 23 / 28, read 2026-11-02)").toContain("13 / 0 / 0 / 23 / 28");
+    expect(BYE_SCORE_BLOCK, "one DO block").toBeDefined();
+    expect(byeScoreCode.replace(BYE_SCORE_BLOCK ?? "", "").trim(), "and nothing outside it").toBe("");
+    expect(byeScoreUpdates, "one update per place").toHaveLength(PLACES.length);
+    for (const u of byeScoreUpdates) {
+      expect(u, "scoped by the division's sport").toMatch(/\bsport_key = 'boardgame'/);
+      expect(u, "guarded by the key, so a second run matches nothing").toMatch(/\? 'byeScore'/);
+    }
+    expect([...new Set([...byeScoreCode.matchAll(/sport_key\s*(?:=|in)\s*\(?\s*'([a-z]+)'/g)].map((m) => m[1]))], "boardgame is the only sport named").toEqual([BOARDGAME]);
+    expect(builtinModules.some((m) => m.key === BOARDGAME), "premise: boardgame is a builtin sport").toBe(true);
+  });
+});
+
+type Json = Record<string, unknown>;
+
+/** `body` on its own one-connection client inside a transaction that is always rolled back; the notices it raised. */
+async function rolledBackWithNotices<T>(body: (tx: Tx, notices: string[]) => Promise<T>): Promise<T> {
+  const url = process.env.DATABASE_URL!;
+  const notices: string[] = [];
+  const client = postgres(url, {
+    max: 1,
+    ssl: connectionOptions(url).ssl,
+    connection: { search_path: connectionOptions(url).schema },
+    onnotice: (n) => notices.push(String(n.message)),
+  });
+  let value: T | undefined;
+  try {
+    await expect(
+      client.begin(async (tx) => {
+        value = await body(tx, notices);
+        throw ROLLBACK;
+      }),
+    ).rejects.toBe(ROLLBACK);
+  } finally {
+    await client.end();
+  }
+  return value as T;
+}
+
+/** The rest of `tx` as the app's tenant role for `orgId` (`withTenant`): RLS shows that org's rows alone. */
+async function asTenant(tx: Tx, orgId: string): Promise<void> {
+  await tx`select set_config('app.current_org', ${orgId}, true)`;
+  await tx`set local role app_user`;
+}
+
+/** One division + stage + fixture (+ state) as a pre-deploy server stored them, written raw. */
+interface ByeSeed {
+  sport: string;
+  variant: string;
+  division: Json;
+  /** The whole `stages.config`: `rules` is the overlay, its other keys are not sport config. */
+  stageConfig: Json;
+  override: Json | null;
+  snapshot: Json | null;
+  /** The whole `match_states.state`: `cfg` is the sport config, the rest is the fold the delta must leave alone. */
+  state: Json | null;
+}
+interface Stored {
+  division: Json;
+  stage: Json;
+  override: Json | null;
+  snapshot: Json | null;
+  state: Json | null;
+}
+
+async function seedByeRows(tx: Tx, seeds: readonly ByeSeed[]): Promise<{ orgId: string; ids: { division: string; stage: string; fixture: string }[] }> {
+  const suffix = randomUUID().slice(0, 8);
+  const [org] = await tx<{ id: string }[]>`insert into organizations (name, slug) values (${"W3 bye " + suffix}, ${"w3-bye-" + suffix}) returning id`;
+  const [comp] = await tx<{ id: string }[]>`
+    insert into competitions (org_id, name, slug) values (${org!.id}, ${"W3 bye " + suffix}, ${"w3-bye-" + suffix}) returning id`;
+  const j = (v: Json | null) => (v === null ? null : tx.json(v as never));
+  const ids: { division: string; stage: string; fixture: string }[] = [];
+  for (const [i, s] of seeds.entries()) {
+    const [d] = await tx<{ id: string }[]>`
+      insert into divisions (competition_id, org_id, name, slug, sport_key, variant_key, config, module_version)
+      values (${comp!.id}, ${org!.id}, ${s.sport + " " + i}, ${"d-" + i}, ${s.sport}, ${s.variant}, ${tx.json(s.division as never)},
+              (select module_version from sports where key = ${s.sport}))
+      returning id`;
+    const [st] = await tx<{ id: string }[]>`
+      insert into stages (division_id, org_id, seq, kind, name, config)
+      values (${d!.id}, ${org!.id}, 1, 'league', 'S1', ${tx.json(s.stageConfig as never)}) returning id`;
+    const [f] = await tx<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, rules_override, config_snapshot)
+      values (${st!.id}, ${d!.id}, ${org!.id}, 1, 1, ${j(s.override)}, ${j(s.snapshot)}) returning id`;
+    if (s.state !== null) {
+      await tx`insert into match_states (fixture_id, org_id, last_seq, state, summary)
+               values (${f!.id}, ${org!.id}, 0, ${tx.json(s.state as never)}, ${tx.json({ marker: "summary " + i } as never)})`;
+    }
+    ids.push({ division: d!.id, stage: st!.id, fixture: f!.id });
+  }
+  return { orgId: org!.id, ids };
+}
+
+async function readByeRow(tx: Tx, id: { division: string; stage: string; fixture: string }): Promise<Stored> {
+  const [r] = await tx<{ division: Json; stage: Json; override: Json | null; snapshot: Json | null; state: Json | null }[]>`
+    select d.config as division, s.config as stage, f.rules_override as override, f.config_snapshot as snapshot, m.state as state
+      from divisions d
+      join stages s on s.id = ${id.stage}
+      join fixtures f on f.id = ${id.fixture}
+      left join match_states m on m.fixture_id = f.id
+     where d.id = ${id.division}`;
+  return r!;
+}
+
+/** The object each place keeps the sport config in, so "carries byeScore" is asked of the same thing in every place. */
+const configIn = (place: Place, row: Stored | ByeSeed): Json | null => {
+  const r = row as Json;
+  switch (place) {
+    case "divisions.config":
+      return (r.division as Json | undefined) ?? null;
+    case "stages.config.rules":
+      return (((r.stage ?? r.stageConfig) as Json | undefined)?.rules as Json | undefined) ?? null;
+    case "fixtures.rules_override":
+      return (r.override as Json | null | undefined) ?? null;
+    case "fixtures.config_snapshot":
+      return (r.snapshot as Json | null | undefined) ?? null;
+    case "match_states.state.cfg":
+      return ((r.state as Json | null | undefined)?.cfg as Json | undefined) ?? null;
+  }
+};
+const carries = (place: Place, row: Stored | ByeSeed): boolean => {
+  const cfg = configIn(place, row);
+  return cfg !== null && Object.hasOwn(cfg, "byeScore");
+};
+const without = (cfg: Json): Json => {
+  const { byeScore: _gone, ...rest } = cfg;
+  return rest;
+};
+/** What the delta must leave: the seed with `byeScore` out of the one object each place keeps its config in. */
+const expectedAfter = (s: ByeSeed): Stored => ({
+  division: without(s.division),
+  stage: { ...s.stageConfig, ...(s.stageConfig.rules ? { rules: without(s.stageConfig.rules as Json) } : {}) },
+  override: s.override === null ? null : without(s.override),
+  snapshot: s.snapshot === null ? null : without(s.snapshot),
+  state: s.state === null ? null : { ...s.state, cfg: without(s.state.cfg as Json) },
+});
+const asSeeded = (s: ByeSeed): Stored => ({ division: s.division, stage: s.stageConfig, override: s.override, snapshot: s.snapshot, state: s.state });
+
+/** A seed that carries `byeScore: 2` in all five places beside siblings, for a sport. */
+function carrying(sport: string, variant: string, base: Json): ByeSeed {
+  const withKey = { ...base, byeScore: 2 };
+  return {
+    sport,
+    variant,
+    division: withKey,
+    stageConfig: { rounds: 5, rules: { colors: false, byeScore: 2 } },
+    override: { colors: false, byeScore: 2 },
+    snapshot: withKey,
+    state: { cfg: withKey, marker: "fold " + sport },
+  };
+}
+/** The same shape without the key: the control the delta must not touch. */
+const clean = (s: ByeSeed): ByeSeed => ({
+  ...s,
+  division: without(s.division),
+  stageConfig: { ...s.stageConfig, rules: { colors: false } },
+  override: { colors: false },
+  snapshot: without(s.snapshot!),
+  state: { ...s.state!, cfg: without((s.state as Json).cfg as Json) },
+});
+
+interface Verdict {
+  counted: Record<Place, number>;
+  changed: Record<Place, number>;
+}
+/** Runs the block; the counts it reported before writing and the rows each update changed. Throws on any other notice. */
+async function runByeScoreDelta(tx: Tx, notices: string[]): Promise<Verdict> {
+  const from = notices.length;
+  expect(BYE_SCORE_BLOCK, "the delta's DO block was found").toBeDefined();
+  await tx.unsafe(BYE_SCORE_BLOCK!);
+  const counted = {} as Record<Place, number>;
+  const changed = {} as Record<Place, number>;
+  for (const n of notices.slice(from)) {
+    const before = /^W3 bye score cleanup: counted before writing (.+)$/.exec(n);
+    const wrote = /^W3 bye score cleanup: (\S+) byeScore=(\d+)$/.exec(n);
+    if (before) {
+      for (const m of before[1]!.matchAll(/(\S+)=(\d+)/g)) counted[m[1] as Place] = Number(m[2]);
+    } else if (wrote) {
+      changed[wrote[1] as Place] = Number(wrote[2]);
+    } else {
+      throw new Error(`a notice that is not the delta's: ${n}`);
+    }
+  }
+  expect(Object.keys(counted).sort(), "a count per place, before writing").toEqual([...PLACES].sort());
+  expect(Object.keys(changed).sort(), "a change count per place").toEqual([...PLACES].sort());
+  expect(Object.keys(changed).length, "… and one update per place").toBe(byeScoreUpdates.length);
+  return { counted, changed };
+}
+
+const ALL_ZERO: Record<Place, number> = Object.fromEntries(PLACES.map((p) => [p, 0])) as Record<Place, number>;
+const ALL_ONE: Record<Place, number> = Object.fromEntries(PLACES.map((p) => [p, 1])) as Record<Place, number>;
+
+/** boardgame's own declared defaults (the engine parse of {}) — the sibling keys a real stored config holds. */
+const boardgameDefaults = (): Json => {
+  const m = builtinModules.find((x) => x.key === BOARDGAME)!;
+  return m.configSchema.parse({}) as Json;
+};
+
+describe.runIf(HAS_DB)("W3 delta: byeScore cleanup", () => {
+  it("X-SW-6 the cleanup removes byeScore from a boardgame division, a stage rules overlay, a rules_override, a config_snapshot and a match_states cfg (5 places, counted)", async () => {
+    const dirty = carrying(BOARDGAME, "classical", boardgameDefaults());
+    const control = clean(dirty);
+    // The rig: five places carry the key in the dirty row, none in the control, and each has siblings to keep.
+    expect(PLACES.map((p) => carries(p, dirty)), "premise: the dirty row carries the key in all five places").toEqual([true, true, true, true, true]);
+    expect(PLACES.map((p) => carries(p, control)), "premise: the control carries it in none").toEqual([false, false, false, false, false]);
+
+    const out = await rolledBackWithNotices(async (tx, notices) => {
+      const { orgId, ids } = await seedByeRows(tx, [dirty, control]);
+      await asTenant(tx, orgId);
+      const verdict = await runByeScoreDelta(tx, notices);
+      return { verdict, dirty: await readByeRow(tx, ids[0]!), control: await readByeRow(tx, ids[1]!) };
+    });
+
+    expect(out.verdict.counted, "counted before writing: one row in each place").toEqual(ALL_ONE);
+    expect(out.verdict.changed, "and one row written in each place").toEqual(ALL_ONE);
+    let checked = 0;
+    for (const place of PLACES) {
+      expect(carries(place, out.dirty), `${place}: byeScore is gone`).toBe(false);
+      expect(Object.keys(configIn(place, out.dirty) ?? {}).length, `${place}: siblings remain to be checked`).toBeGreaterThan(0);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: five places checked").toBe(5);
+    expect(out.dirty, "every sibling key, in every place, is what was seeded (the stage's own keys and the state's fold included)").toEqual(expectedAfter(dirty));
+    expect(out.control, "a boardgame row without the key is untouched").toEqual(asSeeded(control));
+    expect(out.dirty.state?.marker, "the state's fold marker is not the delta's to touch").toBe("fold boardgame");
+  }, 120_000);
+
+  it("X-SW-6 the cleanup never touches a non-boardgame row that happens to carry the key", async () => {
+    // Every other sport the engine registers, each carrying the key in all five places, beside one boardgame row that proves
+    // the run was not a no-op (the positive pair: the scope is what spares the others, not the delta doing nothing).
+    const others = builtinModules.filter((m) => m.key !== BOARDGAME);
+    const seeds = others.map((m) => carrying(m.key, Object.keys(m.variants)[0]!, m.variants[Object.keys(m.variants)[0]!] as Json));
+    const bg = carrying(BOARDGAME, "classical", boardgameDefaults());
+
+    const out = await rolledBackWithNotices(async (tx, notices) => {
+      const { orgId, ids } = await seedByeRows(tx, [bg, ...seeds]);
+      await asTenant(tx, orgId);
+      const verdict = await runByeScoreDelta(tx, notices);
+      const rows: Stored[] = [];
+      for (const id of ids) rows.push(await readByeRow(tx, id));
+      return { verdict, rows };
+    });
+
+    expect(out.verdict.counted, "only the boardgame row was counted").toEqual(ALL_ONE);
+    expect(out.verdict.changed, "and only it was written").toEqual(ALL_ONE);
+    expect(PLACES.some((p) => carries(p, out.rows[0]!)), "the boardgame row lost the key everywhere").toBe(false);
+    let spared = 0;
+    for (const [i, s] of seeds.entries()) {
+      expect(out.rows[i + 1], `${s.sport}: untouched, byeScore and all`).toEqual(asSeeded(s));
+      for (const place of PLACES) {
+        expect(carries(place, out.rows[i + 1]!), `${s.sport} ${place}: still carries it`).toBe(true);
+        spared++;
+      }
+    }
+    expect(others.length, "the sweep covers the engine's registry less boardgame").toBe(builtinModules.length - 1);
+    expect(spared, "anti-vacuity: every other sport, five places each").toBe(others.length * PLACES.length);
+    expect(spared).toBeGreaterThan(0);
+  }, 120_000);
+
+  it("X-SW-6 a second run changes 0 rows, and a run over an organization with no boardgame row changes 0", async () => {
+    const dirty = carrying(BOARDGAME, "classical", boardgameDefaults());
+    const out = await rolledBackWithNotices(async (tx, notices) => {
+      // The empty case first: a fresh organization holding no row at all.
+      const empty = await seedByeRows(tx, []);
+      await asTenant(tx, empty.orgId);
+      const none = await runByeScoreDelta(tx, notices);
+      // Back to the connecting role to seed the dirty row, then the tenant again.
+      await tx`reset role`;
+      const { orgId, ids } = await seedByeRows(tx, [dirty]);
+      await asTenant(tx, orgId);
+      const first = await runByeScoreDelta(tx, notices);
+      const afterFirst = await readByeRow(tx, ids[0]!);
+      const second = await runByeScoreDelta(tx, notices);
+      const afterSecond = await readByeRow(tx, ids[0]!);
+      return { none, first, afterFirst, second, afterSecond };
+    });
+    expect(out.none.counted, "nothing to count in an empty organization").toEqual(ALL_ZERO);
+    expect(out.none.changed, "and nothing written").toEqual(ALL_ZERO);
+    expect(out.first.changed, "premise: the first run wrote one row in each place").toEqual(ALL_ONE);
+    expect(out.second.counted, "a second run counts 0 …").toEqual(ALL_ZERO);
+    expect(out.second.changed, "… changes 0 rows in every place").toEqual(ALL_ZERO);
+    expect(out.afterSecond, "… and moves nothing").toEqual(out.afterFirst);
+  }, 120_000);
+});
+
+describe.runIf(HAS_DB)("W3 delta: a started boardgame division that still stores byeScore", () => {
+  it("X-SW-6 a started boardgame division whose stored config still carries byeScore refuses its next save by name, and saves after the delta strips the key", async () => {
+    const s = await seedBracket({ sport: BOARDGAME, variant: "classical", stageKind: "swiss", stageConfig: { rounds: 3 }, entrants: 4 });
+    await post(s.auth, s.fixtureIds[0]!, "core.start");
+    // The pre-deploy stored shape: a 1.x server wrote the default beside the rest of the config.
+    await sql`update divisions set config = config || '{"byeScore": 2}'::jsonb where id = ${s.divisionId}`;
+    const stored = async () => (await sql<{ config: Json }[]>`select config from divisions where id = ${s.divisionId}`)[0]!.config;
+    const legacy = await stored();
+    expect(legacy.byeScore, "rig: the stored config carries the key").toBe(2);
+    // The Settings page re-sends the stored config on every save; the engine's parse strips the key, so it reads as a change.
+    await expect(patchDivision(s.auth, s.divisionId, { config: legacy } as never)).rejects.toMatchObject({
+      status: 409,
+      code: "DIVISION_FORMAT_LOCKED",
+      extra: { refused: [expect.objectContaining({ field: "byeScore", code: "DIVISION_FORMAT_LOCKED" })] },
+    });
+    // The delta, committed, scoped by RLS to this fresh organization.
+    const url = process.env.DATABASE_URL!;
+    const client = postgres(url, { max: 1, ssl: connectionOptions(url).ssl, connection: { search_path: connectionOptions(url).schema }, onnotice: () => {} });
+    try {
+      await client.begin(async (tx) => {
+        await asTenant(tx, s.auth.orgId);
+        expect(BYE_SCORE_BLOCK, "the delta's DO block was found").toBeDefined();
+        await tx.unsafe(BYE_SCORE_BLOCK!);
+      });
+    } finally {
+      await client.end();
+    }
+    const migrated = await stored();
+    expect("byeScore" in migrated, "the delta removed it").toBe(false);
+    expect(migrated, "and every sibling key is what was stored").toEqual(without(legacy));
+    const saved = await patchDivision(s.auth, s.divisionId, { name: "Renamed", config: migrated } as never);
+    expect(saved.refused, "the same save, nothing refused").toEqual([]);
+    expect(saved.name, "and the unrelated field landed").toBe("Renamed");
   }, 120_000);
 });
