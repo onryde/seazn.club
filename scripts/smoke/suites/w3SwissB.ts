@@ -173,6 +173,10 @@ export async function w3SwissBSuite(): Promise<void> {
     );
   }
 
+  // Check 2's private competition, kept for checks 7 and 10. The Community plan caps active competitions at 3 (checks 1-3 open
+  // one each) and a competition at 4 divisions, and the public one holds four - checks 3, 4, 5 and 8, whose readers are public.
+  let byeComp: { id: string } | undefined;
+
   // Check 2 — T2 (X-SW-6). The delta is found by glob, never by number (it is renumbered at merge).
   {
     // The repo root is read through a file that always exists: smoke-paths.test.ts resolves a literal `new URL(…, import.meta.url)`
@@ -185,6 +189,7 @@ export async function w3SwissBSuite(): Promise<void> {
     const comp = v1data<{ id: string } | undefined>(
       await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W3 Swiss B bye ${tag}`, visibility: "private" }),
     );
+    byeComp = comp;
     const divId = v1data<{ id: string } | undefined>(
       await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Chess", sport_key: "boardgame", variant_key: "classical", config: {} }),
     )?.id;
@@ -417,8 +422,8 @@ export async function w3SwissBSuite(): Promise<void> {
     );
   }
 
-  // Check 7 - T5 (X-SW-19; SW-M11). An ice hockey Swiss of six teams (seeds 1-6), fifteen scorer events (five a board) on the public competition check 3 opened (the
-  // Community plan caps active competitions at 3). IIHF pays 3 / 2 / 1 / 0 (regulation win 3, overtime win 2, overtime loss 1,
+  // Check 7 - T5 (X-SW-19; SW-M11). An ice hockey Swiss of six teams (seeds 1-6), fifteen scorer events (five a board) on the private competition check 2 opened (the
+  // Community plan caps active competitions at 3, and a competition at 4 divisions: the public one is full). IIHF pays 3 / 2 / 1 / 0 (regulation win 3, overtime win 2, overtime loss 1,
   // regulation loss 0), typed here from the rulebook, never read from the code under test. Round 1 is played through the scorer's
   // own events: the board seed 1 sits on is won by seed 1 IN OVERTIME (level after three periods, then a goal), the other two
   // boards by their better seed in regulation (a goal, then the three periods to full time). Round 2 is then paired:
@@ -427,7 +432,7 @@ export async function w3SwissBSuite(): Promise<void> {
   // Differential: under the old +1 a win all three winners hold 1 point in ONE group of three, whose lowest-ranked (by seed)
   // floats down and whose top two are paired - seed 1, the overtime winner, would have met the better regulation winner.
   {
-    const comp = publicComp;
+    const comp = byeComp;
     const divRes = await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Ice hockey", sport_key: "icehockey", variant_key: "iihf", config: {} });
     const divId = v1data<{ id: string } | undefined>(divRes)?.id;
     const made =
@@ -496,7 +501,7 @@ export async function w3SwissBSuite(): Promise<void> {
   // answer. The differential (a pairable round's answer carries no `swiss_next_round` at all) is check 9, next: round 1 of THIS
   // stage is Paired for real just after Start (its answer is kept in `firstPair`) and the history is then written over it by SQL -
   // rounds 1-4 are otherwise never Paired, so no pairable answer would be read here. (A fresh division is not an option: the
-  // Community plan caps a competition at 4 divisions, and checks 3, 4, 6 and 7 already hold them on this one.)
+  // Community plan caps a competition at 4 divisions, and checks 3, 4, 5 and 8 hold them on this one.)
   let firstPair: { status: number; json: Record<string, unknown>; divId?: string; stageId?: string; rowsAfter: number } | undefined;
   {
     const HISTORY: readonly (readonly (readonly [number, number, "h" | "a" | "d"])[])[] = [
@@ -603,11 +608,11 @@ export async function w3SwissBSuite(): Promise<void> {
   // Check 10 - T9b (X-SW-31). The proposal, over the real route the organiser's Auto-schedule button posts to, and the apply
   // behind its Apply button. Every number is typed from the rulebook arithmetic, none read back from the code under test:
   // the match is 30 minutes (the settings below), so a round that starts 09:00 ends 09:30, and the end barrier puts the next
-  // round at 09:30 or later where the start floor alone would have allowed 09:00. Reuses the public competition (the org is
-  // on the Community plan and checks 1-3 each opened one).
+  // round at 09:30 or later where the start floor alone would have allowed 09:00. Reuses check 2's private competition (the org
+  // is on the Community plan: checks 1-3 each opened one, and the public one already holds its 4 divisions).
   {
     const MATCH = 30 * 60_000;
-    const comp = publicComp;
+    const comp = byeComp;
     const divRes = await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Barrier", sport_key: "badminton", variant_key: "bwf", config: {} });
     const divId = v1data<{ id: string } | undefined>(divRes)?.id;
     const made =
