@@ -136,8 +136,10 @@ export const ROUND_LIST_PREFIX = "run-sheet-rounds-";
 /** Match Day PB1 (owner 2026-11-02): a COMPLETED stage's card loads folded to one line and a FINISHED round (every real match
  *  settled) to its bar, so a settled fixture's row is attached but HIDDEN, and a click on its link would wait for a visibility
  *  that never comes. Opens the row's card (`stage-collapse-toggle`), then its round (the `run-sheet-round-toggle` whose
- *  `aria-controls` is the row's list), each only when it reads folded - the way an organiser would. A row in a bracket or a
- *  ladder has no round bar (its list carries no round id): only its card is opened. */
+ *  `aria-controls` is the row's list), each only when it reads folded - the way an organiser would. A bracket's rows sit in a
+ *  list without the round-list prefix, so no bar is looked for; a ladder's flat list DOES carry a `run-sheet-rounds-...` id (the
+ *  rounds branch and the flat branch in `desk/run-sheet.tsx` share one id scheme) but no bar names it, so the folded-bar count is
+ *  0 and the walk stops there. Either way only the card is opened. */
 export async function openFoldsAround(c: PageCtx, row: Locator): Promise<void> {
   const t = actBudget(c, 1);
   const card = row.locator("xpath=ancestor::section[@data-stage-id][1]");
