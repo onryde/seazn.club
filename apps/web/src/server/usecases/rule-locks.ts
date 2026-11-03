@@ -36,7 +36,8 @@ export const tableRuleKeys = (module: AnySportModule, variant: string | null): R
  *    (`goalCredit(awardScore, real)`, FB-RT-1), which a stage rule pays as a result and leaves standing — even one that
  *    carries its own award score, which replaces the credit only where nothing was played (W2c fix round 1: the
  *    addendum-2 condition for unlocking it does not hold);
- *  - a board game's `byeScore` is declared and read nowhere.
+ *  - (W3, X-SW-6, ruling 251: a board game's `byeScore` was declared and read nowhere, and engine 2.0.0 removed it — a
+ *    pairing-allocated bye always pays the win — so no module declares it and there is nothing left to name.)
  * Anything not named here stays locked, which is the safe side for a key a future module declares. Pinned against the
  * engine's declarations in division-locks.test.ts.
  *
