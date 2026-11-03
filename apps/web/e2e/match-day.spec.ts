@@ -18,6 +18,7 @@ import {
   withDb,
 } from "./helpers";
 import { dismissConsent, freshOrg } from "./directory-kit";
+import { middayZoneFor, withinToday } from "./midday-zone";
 
 /**
  * Match Day, task A3 (spec docs/superpowers/specs/2026-10-31-match-day-design.md §6, §7): the court list and the focused
@@ -26,13 +27,14 @@ import { dismissConsent, freshOrg } from "./directory-kit";
  * putting the match back where it was.
  *
  * The seed is two courts of one competition (a generic/score league of four players, the division's schedule settings naming
- * exactly those two courts and planning in UTC):
+ * exactly those two courts and planning in the zone where the real clock reads midday, e2e/midday-zone.ts):
  *   - Court 1: Ana v Ben IN PLAY (planned 40 minutes ago, a real core.start), and Ana v Cal queued behind it, planned 10
  *     minutes ago — a late-running court, as a real day looks;
  *   - Court 2: free, with Cal v Dee planned on it later today.
  * So Court 2's candidates are Cal v Dee first (its own next match, both players free), Ana v Cal greyed (Ana is on Court 1)
- * and the unplaced rest, every one of which has Ana or Ben in it, greyed too. Times sit inside today's UTC day whatever the
- * clock says, so the run never straddles a midnight.
+ * and the unplaced rest, every one of which has Ana or Ben in it, greyed too. Times sit inside the division's planning day whatever
+ * the clock says (a seed that clamped to the UTC day tied every future match at 23:59 near midnight UTC), so the run never
+ * straddles a midnight.
  *
  * Task A4 adds the `needsYou` seed: two more players (Eve, Fay) and a third court, so that
  *   - Court 3: Eve v Fay IN PLAY with nothing recorded and no scorer named — the desk's red `no_scorer`, which marks the
@@ -102,17 +104,16 @@ async function seedMatchDay(
   ]);
   const [court1, court2] = [courts[0]!, courts[1]!];
   const court3 = opts.needsYou ? courts[2]! : null;
+  // The division plans in the zone where the real clock reads midday, so "today" has hours of room either side of now at every hour
+  // of the run (e2e/midday-zone.ts); `within` refuses an offset that would leave that day rather than clamping it into a tie.
+  const now = Date.now();
+  const zone = middayZoneFor(now);
+  const within = withinToday(now, zone);
   const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
-    tz: "UTC",
+    tz: zone,
     config: { matchMinutes: 30, courts: [court1.id, court2.id, ...(court3 ? [court3.id] : [])] },
   });
   expect(settings.status, `schedule settings: ${JSON.stringify(settings.error)}`).toBeLessThan(300);
-
-  // Today's UTC day, and an instant inside it near now (clamped a minute inside either end).
-  const now = Date.now();
-  const dayStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
-  const within = (offsetMin: number) =>
-    new Date(Math.min(dayStart + 86_400_000 - 60_000, Math.max(dayStart + 60_000, now + offsetMin * 60_000))).toISOString();
 
   const fixtureOf = await withDb(async (sql) => {
     const rows = await sql<{ id: string; home_entrant_id: string; away_entrant_id: string }[]>`
@@ -789,16 +790,16 @@ async function seedLevels(request: APIRequestContext, label: string, opts: { lon
     const { fixtureIds } = await createStageAndGenerate(request, divisionId);
     const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
     expect(started.status, `division start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+    // Planned in the zone where the real clock reads midday, as the board's own seed does (e2e/midday-zone.ts).
+    const now = Date.now();
+    const zone = middayZoneFor(now);
     const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
-      tz: "UTC",
+      tz: zone,
       config: { matchMinutes: 30, courts: [tennisCourt.id, badmintonCourt.id] },
     });
     expect(settings.status, `schedule settings: ${JSON.stringify(settings.error)}`).toBeLessThan(300);
     const fixtureId = fixtureIds[0]!;
-    // Today's UTC day, a minute inside either end, as the board's own seed does.
-    const now = Date.now();
-    const dayStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
-    const at = new Date(Math.min(dayStart + 86_400_000 - 60_000, Math.max(dayStart + 60_000, now - 20 * 60_000))).toISOString();
+    const at = withinToday(now, zone)(-20);
     await withDb((sql) => sql`update fixtures set court_id = ${court.id}, scheduled_at = ${at} where id = ${fixtureId}`);
     return { fixtureId, home: ents.ids[0]!, away: ents.ids[1]! };
   };
@@ -1384,6 +1385,12 @@ async function seedE2(request: APIRequestContext, label: string): Promise<E2Seed
   });
   if (comp.status >= 300 || !comp.data) throw new Error(`competition → ${comp.status} ${JSON.stringify(comp.error)}`);
   const competitionId = comp.data.id;
+  // Every division plans in the zone where the real clock reads midday, so the offsets below (-20 .. +120 minutes) stay inside one
+  // planning day and keep their order at every hour of the real clock; see e2e/midday-zone.ts (the old UTC-day clamp tied them all at
+  // 23:59 from about 21:55Z on, CI run 41548545074).
+  const now = Date.now();
+  const zone = middayZoneFor(now);
+  const within = withinToday(now, zone);
   const hallA = await seedVenueWithCourts(request, [`E2A1 ${nonce}`, `E2A2 ${nonce}`, `E2A3 ${nonce}`, `E2A4 ${nonce}`], { venueName: `Hall A ${nonce} ${TAG}` });
   const hallB = await seedVenueWithCourts(request, [`E2B1 ${nonce}`, `E2B2 ${nonce}`], { venueName: `Hall B ${nonce} ${TAG}` });
   const [a1, a2, a3, a4] = hallA.courts as [E2Seed["courts"]["a1"], E2Seed["courts"]["a2"], E2Seed["courts"]["a3"], E2Seed["courts"]["a4"]];
@@ -1398,7 +1405,7 @@ async function seedE2(request: APIRequestContext, label: string): Promise<E2Seed
     await createStageAndGenerate(request, div.data.id, stage);
     const started = await apiJson(request, `/api/v1/divisions/${div.data.id}/start`, "POST");
     expect(started.status, `division start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
-    const settings = await apiJson(request, `/api/v1/divisions/${div.data.id}/schedule-settings`, "PUT", { tz: "UTC", config: { matchMinutes: 30, courts: allCourts } });
+    const settings = await apiJson(request, `/api/v1/divisions/${div.data.id}/schedule-settings`, "PUT", { tz: zone, config: { matchMinutes: 30, courts: allCourts } });
     expect(settings.status, `schedule settings: ${JSON.stringify(settings.error)}`).toBeLessThan(300);
     return { id: div.data.id, ents: ents.ids };
   };
@@ -1406,10 +1413,6 @@ async function seedE2(request: APIRequestContext, label: string): Promise<E2Seed
   const league = await division("E2 League", [names.ana, names.ben, names.cal, names.dee]);
   const cup = await division("E2 Cup", [`Wil ${nonce}`, `Xan ${nonce}`, `Yun ${nonce}`, `Zed ${nonce}`], { kind: "knockout", name: "Cup", config: {} });
 
-  const now = Date.now();
-  const dayStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
-  const within = (offsetMin: number) =>
-    new Date(Math.min(dayStart + 86_400_000 - 60_000, Math.max(dayStart + 60_000, now + offsetMin * 60_000))).toISOString();
   const [ana, ben, cal, dee] = league.ents as [string, string, string, string];
   const rows = await withDb((sql) => sql<{ id: string; division_id: string; home_entrant_id: string | null; away_entrant_id: string | null; round_no: number }[]>`
     select id, division_id, home_entrant_id, away_entrant_id, round_no from fixtures where division_id in ${sql([league.id, cup.id])} order by round_no, seq_in_round`);
@@ -1808,15 +1811,15 @@ async function seedTiny(request: APIRequestContext, label: string, n: number): P
   const started = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
   expect(started.status, `division start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
   const { courts } = await seedVenueWithCourts(request, [`E2T1 ${nonce}`, `E2T2 ${nonce}`]);
-  const settings = await apiJson(request, `/api/v1/divisions/${div.data!.id}/schedule-settings`, "PUT", { tz: "UTC", config: { matchMinutes: 30, courts: courts.map((c) => c.id) } });
+  const now = Date.now();
+  const zone = middayZoneFor(now);
+  const settings = await apiJson(request, `/api/v1/divisions/${div.data!.id}/schedule-settings`, "PUT", { tz: zone, config: { matchMinutes: 30, courts: courts.map((c) => c.id) } });
   expect(settings.status, `schedule settings: ${JSON.stringify(settings.error)}`).toBeLessThan(300);
   const [p1, p2] = ents.ids as [string, string];
   const first = await withDb((sql) => sql<{ id: string }[]>`
     select id from fixtures where division_id = ${div.data!.id}
        and ((home_entrant_id = ${p1} and away_entrant_id = ${p2}) or (home_entrant_id = ${p2} and away_entrant_id = ${p1}))`);
-  const now = Date.now();
-  const dayStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
-  const at = new Date(Math.min(dayStart + 86_400_000 - 60_000, Math.max(dayStart + 60_000, now - 10 * 60_000))).toISOString();
+  const at = withinToday(now, zone)(-10);
   await withDb((sql) => sql`update fixtures set court_id = ${courts[0]!.id}, scheduled_at = ${at} where id = ${first[0]!.id}`);
   await startFixture(request, first[0]!.id);
   return { competitionId: comp.data.id, court2: courts[1]!.name };
