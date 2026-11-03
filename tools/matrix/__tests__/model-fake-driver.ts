@@ -41,14 +41,16 @@
 // feeds stay the league path's: only Start, Generate, Rebuild and the
 // withdrawal policy branch on the stage kind. Not modelled: the implicit-bye
 // inference for a round a late entrant missed (only a pairing ORDER changes),
-// the rank_adjacent cascade rank, and chess colours.
-import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
+// the rank_adjacent cascade rank, and chess colours. The pairing SCORE is the declared points rule (W3 app-B T5, X-SW-19):
+// the product reads the stage's table points; this twin has no table, so it pays a win, a draw and a bye the rule the
+// product's table would (`tablePointsRule(cfg, "swiss")`), not 1 and ½.
+import { BRACKET_STAGE_KINDS, swissDrawFactsOf, swissDrawPoints } from "@seazn/engine/competition";
 import { EngineError, type StageKind } from "@seazn/engine/core";
 import { generateRoundRobin, pairKey as swissPairKey, pairRound, type SwissStanding } from "@seazn/engine/scheduling";
 import { feedsNextMatch } from "../../../apps/web/src/lib/bracket-next-match.ts";
 import { isRunningRootSwiss } from "../../../apps/web/src/lib/open-entry-stages.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
-import { stageCfg } from "../lib/sport-cfg.ts";
+import { sportModule, stageCfg } from "../lib/sport-cfg.ts";
 import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantRow, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
@@ -641,6 +643,17 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     if (this.#divisionStatus === "setup") {
       for (const r of [...new Set(this.fixtures.map((f) => f.round_no ?? 0))].filter((x) => x > target)) this.#reconcile(r, "skip");
     }
+    // W3 app-B T5 (X-SW-19): the pairing score is what the stage's table would pay, from the sport's declared Swiss rule under the
+    // stage's cfg: a win is the rule's win (a set sport's clean sweep, "W-0"), a draw `swissDrawPoints`, a bye a win.
+    // The twin has no table, so it pays the rule directly - the product's `stageTablePoints` is the table's own fold.
+    const module = sportModule(this.sport);
+    const swissCfg = stageCfg(this.sport, this.cfg, "swiss", this.variant, rulesOfConfig(this.stage?.config));
+    const rule = module.tablePointsRule(swissCfg, "swiss");
+    const facts = swissDrawFactsOf(module, swissCfg);
+    const winPair = rule.bySetScore === undefined ? undefined : (rule.bySetScore[`${facts.setsToWin}-0`] ?? rule.bySetScore["*"]);
+    if (rule.bySetScore !== undefined && winPair === undefined) throw new Error(`fake: the ${this.sport} Swiss rule pays by set score but names no clean sweep or catch-all`);
+    const winPoints = winPair === undefined ? rule.win.regulation : winPair[0];
+    const drawPoints = swissDrawPoints(rule, facts);
     const score = new Map(this.#active().map((id) => [id, 0]));
     const played = new Set<string>();
     const byes = new Set<string>();
@@ -648,10 +661,10 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       const o = f.outcome as { kind?: string; winner?: string } | null | undefined;
       if (f.home_entrant_id !== null && f.away_entrant_id !== null) played.add(swissPairKey(f.home_entrant_id, f.away_entrant_id));
       if (o?.kind === "award" && o.winner !== undefined) byes.add(o.winner);
-      if ((o?.kind === "win" || o?.kind === "award") && o.winner !== undefined) score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
+      if ((o?.kind === "win" || o?.kind === "award") && o.winner !== undefined) score.set(o.winner, (score.get(o.winner) ?? 0) + winPoints);
       else if ((o?.kind === "draw" || o?.kind === "tie") && f.home_entrant_id !== null && f.away_entrant_id !== null) {
-        score.set(f.home_entrant_id, (score.get(f.home_entrant_id) ?? 0) + 0.5);
-        score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + 0.5);
+        score.set(f.home_entrant_id, (score.get(f.home_entrant_id) ?? 0) + drawPoints);
+        score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + drawPoints);
       }
     }
     const standings: SwissStanding[] = this.#active().map((id, i) => ({ entrantId: id, score: score.get(id) ?? 0, rank: i + 1 }));
@@ -659,7 +672,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     const round = pairRound(standings, { played, byes }, { chess: cfg.chess === true, ...(cfg.pairing === "rank_adjacent" ? { pairing: "rank_adjacent" as const } : {}) });
     // W3 (engine 2.0.0): `pairRound` answers a round or a refusal VALUE; the product's Pair answers a refusal with the named
     // SWISS_NO_LEGAL_PAIRING (409 — the desk can Finish, here the only arm the twin models) and seats nobody. The twin
-    // refuses before it touches a shell, as the product does. Its scoring (T5) and Finish arm (T4) are not modelled yet.
+    // refuses before it touches a shell, as the product does. Its Finish arm (T4) is not modelled yet.
     if (!round.ok) {
       throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, round.code, `round ${target} cannot be paired: ${round.reason}`, null, { round: target, reason: round.reason, field: round.field });
     }

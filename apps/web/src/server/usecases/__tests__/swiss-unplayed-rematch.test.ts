@@ -132,10 +132,9 @@ describe("W3 T7 buildSwissHistory: X-SW-15 a pair whose match was not played has
       expect(h.played.has(pairKey("a", "b")), "a and b have met").toBe(c.met);
       expect(h.played.has(pairKey("c", "d")), "the played board beside it has met").toBe(true);
       // Both sides SAT the round, met or not (M2: a double walkover is decided, nobody is owed a bye for it): no
-      // implicit bye, so neither is bye-marked for it and neither is credited a point for the round.
+      // implicit bye, so neither is bye-marked for it. (The points of the round are the table's, not the history's: W3
+      // app-B T5, X-SW-19 - swiss-score-groups.test.ts.)
       expect(h.byes.has("b"), "the side that lost or forfeited is not given a bye for the round").toBe(false);
-      // FIDE game points: ½ for a draw, else nothing for b — never the implicit bye's +1.
-      expect(h.score.get("b"), "nor a point").toBe((c.outcome as { kind: string }).kind === "draw" ? 0.5 : 0);
       // P-A4 (m1): only a win without play bars the winner from the pairing-allocated bye.
       expect(h.byes.has("a"), c.barred ? "a won without play: barred from the bye" : "a is still bye-eligible").toBe(c.barred);
       checked++;
@@ -166,17 +165,15 @@ describe("W3 T7 buildSwissHistory: X-SW-15 a pair whose match was not played has
     expect(Math.min(coloured, colourless), "both answers asked").toBeGreaterThan(0);
   });
 
-  it("X-SW-15 a walkover winner is still never given the bye: not met, yet bye-marked, and the win's point stands (P-A4)", () => {
+  it("X-SW-15 a walkover winner is still never given the bye: not met, yet bye-marked (P-A4)", () => {
     const h = historyOf(award("walkover"), false);
     expect(h.played.has(pairKey("a", "b")), "not met (P-A2)").toBe(false);
     expect(h.byes.has("a"), "the walkover winner may not take the pairing-allocated bye (P-A4)").toBe(true);
-    expect(h.score.get("a"), "the win's point").toBe(1);
   });
 
-  it("X-SW-15 a double walkover: both sides keep their bye eligibility, score nothing, and take no colour (M2, P-A5)", () => {
+  it("X-SW-15 a double walkover: both sides keep their bye eligibility and take no colour (M2, P-A5)", () => {
     const h = historyOf({ kind: "double_walkover" }, undefined);
     expect([h.byes.has("a"), h.byes.has("b")], "both still bye-eligible").toEqual([false, false]);
-    expect([h.score.get("a"), h.score.get("b")], "both on 0").toEqual([0, 0]);
     expect([h.colours.get("a"), h.colours.get("b")], "a game nobody played holds no colour").toEqual([undefined, undefined]);
   });
 

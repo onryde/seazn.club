@@ -800,6 +800,33 @@ export async function rankedStageStandings(
 }
 
 /**
+ * W3 app-B T5 (SW-M11; X-SW-19; RB3-9): each entrant's points on the stage's own table, and the points rule that paid them.
+ * A Swiss round is paired by SCORE GROUPS, and the score is this number: read from the same inputs (`loadStageInputs`) and
+ * the same engine fold (`completeTableStage`) the published table is, so the groups, the table and the tie-breaks agree
+ * (rulebook §5, last paragraph). A formula over the fixtures (`win.regulation`, `swissDrawPoints`) would be a second
+ * authority; it would part from the table on an IIHF overtime win (3 / 2 / 1 / 0), a `bySetScore` map and a bonus rule.
+ *
+ * `points` holds a row for every entrant the fold lists; an entrant with no row (not seated yet) is simply absent, which
+ * the caller reads as 0. `rule` is the very `rules.points` object `loadStageInputs` paid every result with
+ * (`payout(…, rules.points, …)`): the stage's one rule, its pin once started - returned as handed, never re-read, so a
+ * caller that needs the rule (the final-round maximum) shares it with the scores.
+ *
+ * It NEVER stores a lots draw, unlike `rankedStageStandings`: points do not depend on the order a tie is broken in, so the
+ * draw the fold may make (`newLotsDraws`) is dropped on the floor here - nothing is persisted, and a stage's stored draws are
+ * exactly what they were. Safe to call in the caller's transaction under the division lock, as `swissGen` does.
+ */
+export async function stageTablePoints(
+  tx: Tx,
+  stageId: string,
+): Promise<{ points: ReadonlyMap<string, number>; rule: PointsRule }> {
+  const inputs = await loadStageInputs(tx, stageId);
+  const { tables } = completeTableStage(toTableStage(inputs, await loadLotsDraws(tx, stageId)), inputs.tableFixtures);
+  const points = new Map<string, number>();
+  for (const pool of tables.pools) for (const row of pool.rows) points.set(row.entrantId, row.points);
+  return { points, rule: inputs.rules.points };
+}
+
+/**
  * W2d (spec §5.8, X-TB-4; PS-5b): rank the stage with its stored lots draws; store any draw the ranker had to make
  * (`persistLotsDraws`, one live draw per pool and member set), then RE-READ the stored rows and rank again, so the order
  * and `drawn_at` every caller sees — the snapshot, the rank_lock event — are the stored ones (the DB's `now()`), never

@@ -323,7 +323,10 @@ export async function admitSwissLateEntrant(
       if (hist.played.has(pairKey(holder, entrantId))) return false;
       const paired = pairRound(
         [
-          { entrantId: holder, score: hist.score.get(holder) ?? 0, rank: 1 },
+          // W3 app-B T5 (X-SW-19): the history holds no score any more (the pairing score is the table's), and none is
+          // needed here: this question is the pair's rematch and colours, and the holder is the upper standing by rank — on
+          // level scores, which is what two entrants asked about alone are, rank is the order.
+          { entrantId: holder, score: 0, rank: 1 },
           { entrantId, score: 0, rank: 2 },
         ],
         { played: hist.played, colours: hist.colours, byes: hist.byes },

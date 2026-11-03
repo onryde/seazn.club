@@ -65,7 +65,7 @@ import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 // but these two ARE exported from the module itself (pass 2); reuse them
 // rather than re-deriving lane/thirdPlace from round/position (never
 // arithmetic — see parseExtKey's own comment).
-import { parseExtKey, bracketWinnerLoser, loadCrossGroupRules, rankedStageStandings } from "@/server/engine-db/competition";
+import { parseExtKey, bracketWinnerLoser, loadCrossGroupRules, rankedStageStandings, stageTablePoints } from "@/server/engine-db/competition";
 import { pinStageTableRules, stageTableRulesDocs, type StageTableRulesDoc } from "@/server/engine-db/table-rules";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { killsLoserEdge, lockDivisionConfigShared, lockStageSeats } from "@/server/engine-db/fed-seats";
@@ -1600,10 +1600,10 @@ export function refuseSwissFieldUnderTwo(stageId: string, fieldSize: number): vo
   }
 }
 
-/** The round history `pairRound` is handed (scheduling `SwissHistory`), in the shape `swissGen` builds it. */
+/** The round history `pairRound` is handed (scheduling `SwissHistory`), in the shape `swissGen` builds it. It holds no SCORE:
+ *  W3 app-B T5 (X-SW-19) moved the pairing score to the stage's own table points (`stageTablePoints`), so the history is
+ *  who has met, in which colours, and who may no longer take the bye - never a second count of the points. */
 export interface SwissHistoryState {
-  /** Each entrant's pairing score: 1 per win or bye, ½ per draw. */
-  score: Map<string, number>;
   /** `pairKey`s of every pair that has met. */
   played: Set<string>;
   /** Each player's colours in round order; a game nobody played holds none. */
@@ -1614,11 +1614,17 @@ export interface SwissHistoryState {
 
 /**
  * The history loop of `swissGen` (its award loop plus its implicit-bye loop), extracted by W3 T6 UNCHANGED except for one
- * rule: the implicit-bye loop credits and bye-marks an entrant for round r only when r is at or after their first Swiss
- * round. For a stage where every first round is null it is the inline loop it replaced, row for row — proven over real
- * seeded rows against a verbatim copy of that loop (swiss-late-field.test.ts). `swissGen` calls it; Task 7 changes its
+ * rule: the implicit-bye loop bye-marks an entrant for round r only when r is at or after their first Swiss round. For a
+ * stage where every first round is null it is the inline loop it replaced, row for row (colours and byes) — proven over
+ * real seeded rows against a verbatim copy of that loop (swiss-late-field.test.ts). `swissGen` calls it; Task 7 changes its
  * `played` rule, keys the P-A4 bye bar on the same "unplayed" reading, and takes every forfeit out of colours as the
  * engine does (a pre-W2b chess win by forfeit included); Task 9 reads it for case (b)'s colours.
+ *
+ * W3 app-B T5 (X-SW-19) took the SCORE out of it: the loop used to add +1 per win, award or bye (and for every implicit
+ * bye) and +½ per draw, a second authority for a number the published table pays by the stage's points rule - an IIHF
+ * overtime win and a regulation win were both +1. The pairing score is the table's points now (`stageTablePoints`), so
+ * the loops keep their other jobs: `played`, `colours`, `byes`, and which entrants sat each round (`inRound`). A legacy
+ * implicit bye (no row, first round null) is therefore worth what the table gives it, 0, and still bars the bye (P-A4).
  *
  * `existing` is the stage's rows in ANY order: the colours are a sequence, so the function sorts its own copy into round
  * order (round_no, seq_in_round) rather than trusting its caller's ORDER BY. That precondition is enforced here, not stated
@@ -1634,7 +1640,6 @@ export function buildSwissHistory(
 ): SwissHistoryState {
   // Round order is this function's own invariant (review m1): a copy, so the caller's array is untouched.
   const rows = [...existing].sort((a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round);
-  const score = new Map<string, number>(entrants.map((e) => [e.id, 0]));
   const played = new Set<string>();
   const colours = new Map<string, Colour[]>();
   const byes = new Set<string>();
@@ -1652,7 +1657,6 @@ export function buildSwissHistory(
       forRound.add(o.winner);
       inRound.set(f.round_no, forRound);
       byes.add(o.winner);
-      score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
       continue;
     }
     if (!f.home_entrant_id || !f.away_entrant_id) continue;
@@ -1678,16 +1682,11 @@ export function buildSwissHistory(
     }
     // FIDE C.04.1(d) (owner-approved 2026-09-24; rulebook P-A4): a player who has scored "a (forfeit) win due to an
     // opponent not appearing" may not later receive the pairing-allocated bye. `byes` feeds ONLY `pairRound`'s bye
-    // pick, so this is eligibility and nothing else — no bye score (the +1 below is the win's). Keyed on the same
+    // pick, so this is eligibility and nothing else — no bye score (the win's points are the table's). Keyed on the same
     // `unplayed` as `played` above: a win WITHOUT play bars the bye (a walkover, a forfeit before play, a pre-W2b chess
     // win by forfeit with nothing played), while a retirement, withdrawal or disqualification won after play is a
     // played game and bars nothing.
     if (unplayed && o?.winner) byes.add(o.winner);
-    if ((o?.kind === "win" || o?.kind === "award") && o.winner) score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
-    else if (o?.kind === "draw" || o?.kind === "tie") {
-      score.set(f.home_entrant_id, (score.get(f.home_entrant_id) ?? 0) + 0.5);
-      score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + 0.5);
-    }
   }
   const latestSeated = latestSeatedSwissRound(rows);
   for (let r = 1; r <= (latestSeated ?? 0); r++) {
@@ -1704,22 +1703,22 @@ export function buildSwissHistory(
       continue;
     }
     // This round already carries an explicit bye row, so the award loop above
-    // has credited whoever sat out; inferring a second one here would
-    // double-count. (C1: this used to fire for a two-sided forfeit as well,
+    // has marked whoever sat out; inferring a second one here would
+    // double-mark. (C1: this used to fire for a two-sided forfeit as well,
     // which silently suppressed the implicit-bye inference for that round.)
     if (inRoundR.some((f) => isOneSidedAwardBye(f))) continue;
     const seen = inRound.get(r) ?? new Set();
     for (const e of entrants) {
       // W3 T6 (ruling 251; rulebook §4 late-entry row, FIDE C.04.2 2.4): a round before the entrant's first Swiss round
       // is a MISSED round — 0 points, and not a bye, so they stay bye-eligible (P-A4) — never an implicit bye. Null is
-      // from round 1, so an entrant enrolled before Start is credited exactly as before.
+      // from round 1, so an entrant enrolled before Start is bye-marked exactly as before. W3 app-B T5 (X-SW-19): the
+      // implicit bye no longer scores - the table gives a round with no row 0, and the pairing score is the table's.
       if (!seen.has(e.id) && (e.swiss_first_round ?? 1) <= r) {
         byes.add(e.id);
-        score.set(e.id, (score.get(e.id) ?? 0) + 1);
       }
     }
   }
-  return { score, played, colours, byes };
+  return { played, colours, byes };
 }
 
 /** Review m7: round 1's drawn order for a later round. Round 1's field is the entrants round 1 SEATED, not today's active
@@ -1944,7 +1943,18 @@ export async function swissGen(
     existing.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null),
     sportModule,
   );
-  const { score, played, colours, byes } = buildSwissHistory(existing, field, playedFacts);
+  const { played, colours, byes } = buildSwissHistory(existing, field, playedFacts);
+  // W3 app-B T5 (SW-M11; X-SW-19; RB3-9): the pairing score IS the stage's table points - the same inputs and the same
+  // engine fold the published table is read from (`stageTablePoints`), so the score groups, the table and the tie-breaks read
+  // one number (rulebook §5, last paragraph). Not a count of this loop's own (+1 a win, +½ a draw): that parted from the
+  // table on an IIHF overtime win (3 / 2 / 1 / 0), chess's half-points (2 / 1), a `bySetScore` map and a pinned or custom
+  // rule. An entrant the table does not list yet scores 0. Read-only: the call stores no lots draw (points do not depend on
+  // the order a tie is broken in), and it runs under the division lock this Generate holds.
+  // `rule` is the very points rule that paid those scores (the pin once the stage started); it stays in scope for the
+  // final-round maximum (app-B T7), which must be in the same units.
+  const { points, rule } = await stageTablePoints(tx, stageId);
+  void rule;
+  const score = new Map(field.map((e) => [e.id, points.get(e.id) ?? 0]));
 
   const cascadeRank = new Map<string, number>();
   if (rankAdjacent && existing.some((f) => isSwissBoardSeated(f) && DECIDED.has(f.status))) {

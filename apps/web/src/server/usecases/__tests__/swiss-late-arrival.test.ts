@@ -9,12 +9,13 @@
 // rows before the arrival, never from the code under test.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { builtinModules } from "@seazn/engine/sports";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
 import { forfeitPlayedFacts } from "@/server/engine-db/forfeit-played";
+import { stageTablePoints } from "@/server/engine-db/competition";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, patchEntrant } from "../entrants";
@@ -257,13 +258,16 @@ for (const s of SPORTS) {
       expect(await lateRows(rig.divisionId)).toEqual([
         { stage_id: rig.stageId, entrant_id: leaver, case: "c", round: 3, source: "reinstate" },
       ]);
-      // Ruling 251 / FIDE C.04.2 2.4: round 2 was missed, so it scores 0 — the history credits round 1's win and nothing
-      // for round 2, and does not spend the bye.
+      // Ruling 251 / FIDE C.04.2 2.4: round 2 was missed, so it scores 0 - the Pair's score (the table's points, W3 app-B T5,
+      // X-SW-19) is round 1's win and nothing for round 2 - and the history does not spend the bye.
       const rows = (await rowsOf(rig.stageId)) as unknown as SwissExistingFixture[];
       const [d] = await sql<{ sport_key: string; module_version: string }[]>`select sport_key, module_version from divisions where id = ${rig.divisionId}`;
       const facts = await forfeitPlayedFacts(sql, rows.filter((f) => f.home_entrant_id && f.away_entrant_id), resolveModule(d!.sport_key, d!.module_version));
       const hist = buildSwissHistory(rows, [{ id: leaver, seed: 1, swiss_first_round: 3 }], facts);
-      expect(hist.score.get(leaver)).toBe(1);
+      const pairPoints = (await withTenant(rig.auth.orgId, (tx) => stageTablePoints(tx, rig.stageId))).points.get(leaver);
+      expect(pairPoints, "round 1's win at the sport's declared value, and nothing for the missed round").toBe(
+        mod(s.sport).tablePointsRule(mod(s.sport).configSchema.parse(mod(s.sport).variants[s.variant]), "swiss").win.regulation,
+      );
       expect(hist.byes.has(leaver)).toBe(false);
       // The round-3 Pair seats them.
       await generateStageFixtures(rig.auth, rig.stageId);

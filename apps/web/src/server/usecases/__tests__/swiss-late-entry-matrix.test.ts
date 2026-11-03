@@ -32,6 +32,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { CreateStage, EntrantKind } from "@/server/api-v1/schemas";
 import { resolveModule } from "@/server/engine-db";
 import { forfeitPlayedFacts } from "@/server/engine-db/forfeit-played";
+import { stageTablePoints } from "@/server/engine-db/competition";
 import type { StandingsSnapshotRow } from "@/server/public-site/data";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -372,13 +373,15 @@ async function assertStoredPoints(rig: Rig, label: string): Promise<number> {
   return table.length;
 }
 
-/** Ruling 251 on the two records a missed round could leak into: the Pair's history (its score and bye eligibility,
- *  P-A4) and the stored table. Expected values are the rows' own facts; a missed round adds nothing to either. */
+/** Ruling 251 on the two records a missed round could leak into: the Pair's inputs (its score - the stage's table points
+ *  since W3 app-B T5, X-SW-19 - and its bye eligibility, P-A4) and the stored table. Expected values are the rows' own facts
+ *  under the sport's declared rule; a missed round adds nothing to either. */
 async function assertMissedRoundsScoreZero(rig: Rig, lateId: string, label: string): Promise<void> {
   const rows = await rowsOf(rig.swissStageId);
   const facts = recordOnRows(rows, lateId);
   const hist = await historyOf(rig);
-  expect(hist.score.get(lateId) ?? 0, `${label}: the Pair counts only what was played (0 per missed round)`).toBe(facts.won);
+  const pairScore = (await withTenant(rig.auth.orgId, (tx) => stageTablePoints(tx, rig.swissStageId))).points.get(lateId) ?? 0;
+  expect(pairScore, `${label}: the Pair counts only what was played (0 per missed round)`).toBe(pointsOnRows(rows, lateId, declaredPay(rig)));
   expect(hist.byes.has(lateId), `${label}: a missed round is no bye (P-A4: still bye-eligible)`).toBe(facts.byes > 0);
   const row = (await storedTable(rig.swissStageId)).find((r) => r.entrantId === lateId);
   if (facts.won + facts.lost === 0) {
@@ -767,7 +770,8 @@ describe.runIf(HAS_DB)("X-SW-12 the cut carries a latecomer correctly", () => {
           // only what was won (in latecomer-first, CUT_ROUNDS − 1, where a bye-credit would add one). The stored fold has no
           // implicit-bye path; its record and points below are structural guards.
           const hist = await historyOf(rig);
-          expect(hist.score.get(late.id) ?? 0, "the Pair scores the missed round 0").toBe(facts.won);
+          const pairScore = (await withTenant(rig.auth.orgId, (tx) => stageTablePoints(tx, rig.swissStageId))).points.get(late.id) ?? 0;
+          expect(pairScore, "the Pair scores the missed round 0").toBe(pointsOnRows(rows, late.id, declaredPay(rig)));
           expect(hist.byes.has(late.id), "bye-ineligible only for a real bye row, never for the missed round").toBe(facts.byes > 0);
           const table = await storedTable(rig.swissStageId);
           const row = table.find((r) => r.entrantId === late.id);
