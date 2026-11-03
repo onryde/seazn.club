@@ -150,3 +150,53 @@ describe.skipIf(!HAS_DB)("Match Day for read-only staff (B4, Q1b): the write doo
     expect(await links(), "the admin's link was minted").toBe(1);
   });
 });
+
+// Match Day PB2 item 3: the POLL carries no Needs-you rows to a reader the page would not show them to. The page strips them
+// from its first paint (task G5, `page.canEdit`), but the shell then polls this route every few seconds — so a viewer's
+// browser received the organiser's to-do list on the second read. The route now asks the page's own predicate (an editor
+// role) and strips the rows and the owed-result count for anyone else. The organiser is asked FIRST, so the viewer's empty
+// list is a strip, never an empty day.
+describe.skipIf(!HAS_DB)("Match Day PB2 item 3: the poll strips Needs you for a viewer; an organiser keeps the rows", () => {
+  let day: Day;
+  let viewer: string;
+  let admin: string;
+
+  beforeAll(async () => {
+    day = await seedDay();
+    viewer = await member(day.orgId, "viewer");
+    admin = await member(day.orgId, "admin");
+    // A match day with work on it: the division running, one match planned at the real now (so the list lives on Match Day,
+    // `needsYouHome`), the other five with no time — the desk's "unscheduled" row.
+    await sql`update divisions set status = 'active' where id = ${day.comp.divisionId}`;
+    const [p1, p2] = day.comp.pairs;
+    const nowMin = (Date.now() - Date.parse("2026-11-07T10:00:00.000Z")) / 60_000;
+    await place(day, between(day.comp, p1!, p2!).id, nowMin, day.courts.c1);
+  });
+
+  const poll = async (userId: string) => {
+    authState.userId = userId;
+    const r = await read(await matchDayRoute(request("GET", `/competitions/${day.comp.id}/match-day`), ctx(day.comp.id)));
+    expect(r.status).toBe(200);
+    return MatchDayView.parse(r.body.data);
+  };
+
+  it("organisers (owner, admin) get the rows; a viewer gets none — and the same board otherwise", async () => {
+    const owner = await poll(day.auth.userId!);
+    const adminView = await poll(admin);
+    expect(owner.needs_you.length, "premise: the organiser has Needs-you rows today").toBeGreaterThan(0);
+    expect(owner.needs_you.map((r) => r.kind)).toContain("unscheduled");
+    expect(adminView.needs_you.map((r) => r.key), "an admin is an organiser").toEqual(owner.needs_you.map((r) => r.key));
+
+    const viewerView = await poll(viewer);
+    expect(viewerView.needs_you, "a viewer's poll carries no Needs-you row").toEqual([]);
+    expect(viewerView.results_owed, "…nor the owed-result count").toBe(0);
+    // Only the list is withheld: the courts, the matches on no court and the day's counts are the organiser's.
+    const board = (v: ReturnType<typeof MatchDayView.parse>) => ({
+      courts: v.courts.map((c) => [c.court_id, c.state, c.current?.id ?? null]),
+      playing_no_court: v.playing_no_court.map((f) => f.id),
+      fixtures_today: v.fixtures_today,
+      venues_today: v.venues_today,
+    });
+    expect(board(viewerView)).toEqual(board(owner));
+  });
+});

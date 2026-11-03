@@ -82,6 +82,9 @@ const degradedResponse = (limit: number | null) => ({
 
 /** Fill the mandatory end date, then fire the form the way a browser would. */
 async function createWith(tree: () => ReactElement[]): Promise<void> {
+  // Match Day C8: Create needs a name as well (the sheet defaults its own).
+  const name = tree().find((el) => el.type === "input" && propsOf(el).maxLength === 200);
+  (propsOf(name!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Summer Cup" } });
   const fields = tree().filter((el) => el.type === DateTimeField);
   // [starts, ends] — both forms render the pair in that order, and only the
   // second is mandatory (#376). Without it submit() returns before the POST.
@@ -97,6 +100,7 @@ const PRO: PublicDashboardUpgrade = { plan: "Pro", limit: 10 };
 const mountWizard = (upgrade: PublicDashboardUpgrade | null) =>
   renderIsland(CompetitionWizard, {
     orgSlug: "riverside",
+    orgId: "org-1",
     publicDashboardUpgrade: upgrade,
     viewerPlan: "community",
   });

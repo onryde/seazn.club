@@ -1,7 +1,8 @@
 "use client";
 
-// ⋯ overflow menu for EntityCard (v3/03 §1): card actions live here so the
-// card body stays one clean click target. Link items only — mutating actions
+// ⋯ overflow menu for a card (v3/03 §1; the org home's cards and the
+// competition page): card actions live here so the card body stays one clean
+// click target. Link items only — mutating actions
 // belong on the page they navigate to.
 import Link from "@/components/ui/console-link";
 import { useEffect, useRef, useState } from "react";
@@ -14,7 +15,19 @@ export interface CardMenuItem {
   external?: boolean;
 }
 
-export function CardMenu({ items, name }: { items: CardMenuItem[]; name: string }) {
+export function CardMenu({
+  items,
+  name,
+  tone = "light",
+  tap = false,
+}: {
+  items: CardMenuItem[];
+  name: string;
+  /** "night": the trigger sits on the org home's night today deck (Match Day C7) and reads in cream there. */
+  tone?: "light" | "night";
+  /** A 44px trigger, the tap floor (Match Day C7's org home cards). Off: the 32px trigger other pages lay out around. */
+  tap?: boolean;
+}) {
   const msg = useMsg();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -45,14 +58,18 @@ export function CardMenu({ items, name }: { items: CardMenuItem[]; name: string 
         aria-expanded={open}
         aria-label={`${msg("card.actions")}: ${name}`}
         onClick={() => setOpen((v) => !v)}
-        className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-purple-50 hover:text-purple-700"
+        className={`grid place-items-center rounded-lg transition ${tap ? "h-11 w-11" : "h-8 w-8"} ${
+          tone === "night"
+            ? "text-cream/70 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-lime-400"
+            : "text-slate-400 hover:bg-purple-50 hover:text-purple-700"
+        }`}
       >
         <MoreHorizontal className="h-4 w-4" strokeWidth={2} />
       </button>
       {open && (
         <div
           role="menu"
-          className="absolute right-0 top-9 z-20 w-44 rounded-xl border border-purple-100 bg-white py-1 shadow-lg"
+          className={`absolute right-0 z-20 w-44 rounded-xl border border-purple-100 bg-white py-1 shadow-lg ${tap ? "top-12" : "top-9"}`}
         >
           {items.map((item) => (
             <Link

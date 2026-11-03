@@ -1920,7 +1920,7 @@
         ]
       },
       "patch": {
-        "summary": "Update a competition",
+        "summary": "Update a competition. 402 when the patch brings the competition back into the `competitions.max_active` count from outside it — a status into draft/published/live from archived or completed, or an end date (alone or with a status) that ends an Event Pass's exemption — while the organisation is at its limit, as a create would be; also 402 when the competition is billing-frozen (anything but archiving or completing it) and at `dashboard.public.max` when it becomes publicly readable. 409 slug in use",
         "tags": [
           "competitions"
         ],
@@ -2318,6 +2318,50 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
             "content": {
               "application/json": {
                 "schema": {
@@ -2833,7 +2877,7 @@
     },
     "/api/v1/competitions/{id}/match-day": {
       "get": {
-        "summary": "Match Day: the competition's courts today. The courts are every division's candidate courts and every court holding one of its matches today (each match on its own division's day: the venue zone, else the organisation's; `date`, the header's label, is the organisation's day in `tz`). Archived divisions are left out. Each court's `state` comes from its matches' status, from any competition of the organisation: `playing` (this competition's match in play: `current`), `called` (called and not started: `current`), `in_use_elsewhere` (another competition's match playing or called: `in_use_by`), else `free` (`free_since`). `queue`: this competition's unstarted matches planned on the court today, in planned order, `estimated_at` = the later of `planned_at` and the end of the match before (another competition's planned matches on the court count; planned times are never written). `playing_no_court`: this competition's matches in play with no court (an untimed bracket match, an online board), in live divisions, in kick-off order (no recorded kick-off last), each carrying what a playing court's `current` carries. `needs_you`: the competition desk's Needs-you rows, in the reader's language — an unscheduled row of a division with a ready match and no court also carries `alt` (Find a court): the first free court one of those matches may be called onto (`court_id`), or null for the page's list; `results_owed`: matches past their time with no result; `fixtures_today`: this competition's matches today, plus any in play",
+        "summary": "Match Day: the competition's courts today. The courts are every division's candidate courts and every court holding one of its matches today (each match on its own division's day: the venue zone, else the organisation's; `date`, the header's label, is the organisation's day in `tz`). Archived divisions are left out. Each court's `state` comes from its matches' status, from any competition of the organisation: `playing` (this competition's match in play: `current`), `called` (called and not started: `current`), `in_use_elsewhere` (another competition's match playing or called: `in_use_by`), else `free` (`free_since`). `queue`: this competition's unstarted matches planned on the court today, in planned order, `estimated_at` = the later of `planned_at` and the end of the match before (another competition's planned matches on the court count; planned times are never written). `playing_no_court`: this competition's matches in play with no court (an untimed bracket match, an online board), in live divisions, in kick-off order (no recorded kick-off last), each carrying what a playing court's `current` carries. `needs_you`: the competition desk's Needs-you rows, in the reader's language — an unscheduled row of a division with a ready match and no court also carries `alt` (Find a court): the first free court one of those matches may be called onto (`court_id`), or null for the page's list; `results_owed`: matches past their time with no result (both are the organiser's: a reader without an editor's role — a view-only member, an API key — gets `needs_you` empty and `results_owed` 0); `fixtures_today`: this competition's matches today, plus any in play",
         "tags": [
           "competitions"
         ],

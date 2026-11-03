@@ -29,12 +29,15 @@ import { markReconnectNeeded } from "@/server/youtube/token-store";
 import { AUTO_START_CONJUNCTS, AUTO_START_REFUSALS, type AutoStartRefusal } from "@/server/relay/domain/auto-stream";
 import { postBeat, postStart } from "../capture-phone";
 import { fixtureStreamTarget, reissueStreamCode, saveStreamSettings } from "../stream-codes";
-import { listStreamTargets } from "../stream-targets";
+import { createStreamTarget, listStreamTargets } from "../stream-targets";
 import { streamPhone } from "../stream-phone";
 import { grantCredits } from "../stream-credits";
 import { autoStartRefusalOf, maybeAutoStart } from "../stream-auto";
 import { apply, createSession, startBroadcast, stopSession, tickSession } from "../stream-sessions";
 import { captureRig, override, phoneId, type CaptureRig } from "./_capture-rig";
+import { CaptureRefusalError } from "@/server/api-v1/capture-http";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { frozenCompetitionIds } from "../entitlement-freeze";
 import { startedDivisionWithFixture } from "./_rig";
 
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
@@ -1156,6 +1159,104 @@ describe.skipIf(!HAS_DB)("final review m-1 — the automatic start's stamp commi
     expect(checked).toBe(2);
     expect(await sessionsOf(r.fixtureId)).toHaveLength(0);
     expect((await settingsOf(r.fixtureId))!.auto_started_at).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Match Day PB2 fix round 1 (a), controller ruling 2026-11-02: a billing-frozen competition starts NO new stream by any
+// path — the automatic start (which PB2 item 1 newly reaches: a frozen match can now be started, and auto-start fires once it
+// is in_play), the phone operator's start and the organiser's Go live — because streams cost money, the same reason the
+// owner hid "+ Connect a stream". Guarded once, at the ONE start seam (`startBroadcast`), never per caller. A stream that is
+// already running keeps running and can still be stopped.
+describe.skipIf(!HAS_DB)("Match Day PB2 (a): a billing-frozen competition starts no new stream — automatic, phone or organiser — and a running one keeps running", () => {
+  /** The freeze, pinned the way the other PB2 suites pin it (scoring-frozen-competition.test.ts "ceiling"): the org keeps its
+   *  plan, so every streaming entitlement still holds, and the active-competition ceiling is 0. */
+  async function freezeOrg(orgId: string): Promise<void> {
+    await sql`insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
+              values (${orgId}, 'competitions.max_active', 0, 'PB2 (a)')
+              on conflict (org_id, feature_key) do update set int_value = 0, bool_value = null`;
+    await invalidateOrgEntitlements(orgId);
+  }
+  async function thaw(orgId: string): Promise<void> {
+    await sql`delete from org_entitlement_overrides where org_id = ${orgId} and feature_key = 'competitions.max_active'`;
+    await invalidateOrgEntitlements(orgId);
+  }
+  const competitionOf = async (fx: string) => (await sql<{ id: string }[]>`
+    select d.competition_id as id from fixtures f join divisions d on d.id = f.division_id where f.id = ${fx}`)[0]!.id;
+  async function expectFrozen(r: CaptureRig, frozen: boolean): Promise<void> {
+    const ids = await frozenCompetitionIds(r.auth.orgId);
+    expect(ids.has(await competitionOf(r.fixtureId)), `premise: the competition is ${frozen ? "" : "not "}frozen`).toBe(frozen);
+  }
+
+  it("automatic: frozen, in play, every other conjunct holding → the beat starts nothing and stores not_entitled; thawed, the next beat after the retry spacing starts it", async () => {
+    const { r, phone } = await autoRig();
+    await freezeOrg(r.auth.orgId);
+    await expectFrozen(r, true);
+    expect((await sql<{ status: string }[]>`select status from fixtures where id = ${r.fixtureId}`)[0]!.status, "premise: in play").toBe("in_play");
+    await beat(r, phone);
+    expect(await sessionsOf(r.fixtureId), "frozen: no session of any cause").toHaveLength(0);
+    const s = (await settingsOf(r.fixtureId))!;
+    expect(s.auto_start_refusal, "frozen: the attempt is refused, and says so on the strip").toBe("not_entitled");
+    expect(s.auto_started_at).toBeNull();
+
+    // The positive pair, on the SAME fixture: the only fact changed is the freeze.
+    await thaw(r.auth.orgId);
+    await expectFrozen(r, false);
+    r.tick((AUTO_START_RETRY_SECONDS + 1) * SEC);
+    await beat(r, phone);
+    expect(await autoSessionsOf(r.fixtureId), "thawed: the automatic start fires").toHaveLength(1);
+  });
+
+  it("phone: frozen → the operator's start is refused not_entitled naming competitions.max_active and opens no session; thawed, the same phone starts", async () => {
+    const r = await captureRig({ credits: 3, connectAfterMs: NEVER });
+    const phone = phoneId("a");
+    await beat(r, phone, { claim: "new", mode: "operator" });
+    await freezeOrg(r.auth.orgId);
+    await expectFrozen(r, true);
+    let refused: unknown = null;
+    try {
+      await postStart(r.code, r.tok, { phone }, r.deps, r.now());
+    } catch (err) {
+      refused = err;
+    }
+    expect(refused, "frozen: the phone's start is refused").toBeInstanceOf(CaptureRefusalError);
+    expect([(refused as CaptureRefusalError).status, (refused as CaptureRefusalError).code]).toEqual([403, "not_entitled"]);
+    expect((refused as Error).message).toContain("competitions.max_active");
+    expect(await sessionsOf(r.fixtureId)).toHaveLength(0);
+
+    await thaw(r.auth.orgId);
+    const { sid } = await postStart(r.code, r.tok, { phone }, r.deps, r.now());
+    expect((await sessionsOf(r.fixtureId)).map((x) => x.id), "thawed: the phone starts").toEqual([sid]);
+  });
+
+  it("organiser: frozen → Go live answers the freeze's 402 and writes no session; a stream started BEFORE the freeze keeps running through it and still stops", async () => {
+    const r = await captureRig({ credits: 3, connectAfterMs: NEVER });
+    // Before the freeze (the empty case): Go live starts. Another match of the organisation is made now too (a new
+    // competition is itself refused once frozen), on a destination of its own, so its Go live below can only meet the freeze
+    // (a shared destination would answer target_in_use first).
+    const running = await r.start(phoneId("a"));
+    const other = (await startedDivisionWithFixture(r.auth)).fixtureId;
+    const second = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Second", streamKey: `yt-${randomUUID()}` });
+    await pairPresentPhone(other, { at: r.now() });
+    await freezeOrg(r.auth.orgId);
+    await expectFrozen(r, true);
+    expect((await frozenCompetitionIds(r.auth.orgId)).has(await competitionOf(other)), "premise: the other match's competition is frozen (ceiling 0)").toBe(true);
+    let refused: unknown = null;
+    try {
+      await createSession(r.auth, other, { mode: "passthrough", targetId: second.id }, r.deps);
+    } catch (err) {
+      refused = err;
+    }
+    expect(refused, "frozen: a new Go live is refused").toBeInstanceOf(PaymentRequiredError);
+    expect((refused as PaymentRequiredError).featureKey).toBe("competitions.max_active");
+    expect(await sessionsOf(other), "frozen: no session row for the refused start").toHaveLength(0);
+    // The stream already on air is untouched by the freeze, and its Stop still works.
+    const before = (await sessionsOf(r.fixtureId)).find((x) => x.id === running)!;
+    expect(["requested", "provisioning", "warming", "live"], "the running stream is still running").toContain(before.state);
+    await stopSession(r.auth, r.fixtureId, running, r.deps);
+    expect(["ending", "completed"], "Stop still reaches it on a frozen competition").toContain(
+      (await sessionsOf(r.fixtureId)).find((x) => x.id === running)!.state,
+    );
   });
 });
 

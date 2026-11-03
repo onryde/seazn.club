@@ -21,7 +21,7 @@ export interface LedgerRow {
   /** "Knockout", "League + Groups"... — null/absent once every stage was
    *  deleted. Distinct from `statusLine` (progress/next), restored from
    *  `card-stats`' `formatLabel(stage_kinds)` after W1 dropped it wiring off
-   *  the EntityCard grid. Optional (not just nullable) so existing test
+   *  the (since-deleted) EntityCard grid. Optional (not just nullable) so existing test
    *  fixtures that predate this field don't all need updating. */
   formatLabel?: string | null;
   /** null when getCompetitionDesk failed: the row still renders from card stats. */

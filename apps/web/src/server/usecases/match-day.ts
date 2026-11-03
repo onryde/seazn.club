@@ -88,13 +88,144 @@ const wholeMinutes = (ms: number): number => Math.max(0, Math.floor(ms / MS_PER_
 export async function countFixturesToday(tx: Tx, competitionId: string, now: Date): Promise<number> {
   const [org] = await tx<{ timezone: string | null }[]>`
     select o.timezone from competitions c join organizations o on o.id = c.org_id where c.id = ${competitionId}`;
-  const days = await divisionDays(tx, org?.timezone ?? null, now, tx`d.competition_id = ${competitionId} and d.archived_at is null`);
-  const [row] = await tx<{ n: number }[]>`
-    select count(*)::int as n
-      from fixtures f join ${dayTable(tx, days)} on w.division_id = f.division_id
-     where f.status <> ${CANCELLED}
-       and ((f.scheduled_at >= w.day_from and f.scheduled_at < w.day_to) or f.status = ${IN_PLAY})`;
-  return row?.n ?? 0;
+  const read = await countTodayByCompetition(tx, org?.timezone ?? null, now, tx`d.competition_id = ${competitionId}`);
+  return read.get(competitionId)?.n ?? 0;
+}
+
+/** The match a competition's day is headlined by on the org home's deck (C7 review M2): one of TODAY's matches, both sides
+ *  known. `court_id` is resolved to a label by the caller. */
+interface TodayHeadlineRaw {
+  fixture_id: string;
+  home: string;
+  away: string;
+  court_id: string | null;
+  scheduled_at: string | null;
+  in_play: boolean;
+}
+
+/** Upcoming statuses: the only matches a "what's next" answer may name (card-stats' own `next` reads the same two). */
+const UPCOMING = ["scheduled", IN_PLAY] as const;
+
+/**
+ * The one "how many matches today" rule, per competition, for the divisions `where` picks (alias `d`; an archived division is
+ * always left out here, I1). Two statements whatever the number of competitions: the divisions' days, then ONE read over the
+ * `w(division_id, day_from, day_to)` table joined in. `countFixturesToday` (one competition: the desk, Match Day) and
+ * `competitionsFixturesToday` (the org home's whole list, C7) are both this, so the two cannot disagree.
+ *
+ * The same read also picks each competition's headline among the matches it counts: in play first (whatever its planned
+ * day — it is counted as today), then the earliest planned; only an upcoming match with both sides known qualifies, as on the
+ * card (card-stats' D4a: a side still to be decided is no "what's next" answer). None qualifying: no headline.
+ */
+async function countTodayByCompetition(
+  tx: Tx,
+  orgTz: string | null,
+  now: Date,
+  where: postgres.Fragment,
+): Promise<Map<string, { n: number; headline: TodayHeadlineRaw | null }>> {
+  const days = await divisionDays(tx, orgTz, now, tx`${where} and d.archived_at is null`);
+  if (days.length === 0) return new Map();
+  const rows = await tx<
+    {
+      competition_id: string;
+      n: number;
+      qualifies: boolean;
+      fixture_id: string;
+      home: string | null;
+      away: string | null;
+      court_id: string | null;
+      scheduled_at: Date | null;
+      in_play: boolean;
+    }[]
+  >`
+    select x.* from (
+      select d.competition_id,
+             count(*) over (partition by d.competition_id)::int as n,
+             row_number() over (
+               partition by d.competition_id
+               order by (f.status in ${tx([...UPCOMING])} and he.id is not null and ae.id is not null) desc,
+                        (f.status = ${IN_PLAY}) desc, f.scheduled_at asc nulls last, f.round_no, f.seq_in_round, f.id
+             ) as rk,
+             (f.status in ${tx([...UPCOMING])} and he.id is not null and ae.id is not null) as qualifies,
+             f.id as fixture_id, he.display_name as home, ae.display_name as away, f.court_id, f.scheduled_at,
+             f.status = ${IN_PLAY} as in_play
+        from fixtures f
+        join ${dayTable(tx, days)} on w.division_id = f.division_id
+        join divisions d on d.id = f.division_id
+        left join entrants he on he.id = f.home_entrant_id
+        left join entrants ae on ae.id = f.away_entrant_id
+       where f.status <> ${CANCELLED}
+         and ((f.scheduled_at >= w.day_from and f.scheduled_at < w.day_to) or f.status = ${IN_PLAY})
+    ) x
+    where x.rk = 1`;
+  return new Map(
+    rows.map((r) => [
+      r.competition_id,
+      {
+        n: r.n,
+        // `qualifies` already demands both entrants joined, and `display_name` is NOT NULL: the null checks only narrow.
+        headline:
+          r.qualifies && r.home !== null && r.away !== null
+            ? { fixture_id: r.fixture_id, home: r.home, away: r.away, court_id: r.court_id, scheduled_at: iso(r.scheduled_at), in_play: r.in_play }
+            : null,
+      },
+    ]),
+  );
+}
+
+/** The deck's headline match for a competition: today's, both sides known, its court resolved to the venue-qualified label. */
+export interface TodayHeadline {
+  fixture_id: string;
+  home: string;
+  away: string;
+  court_label: string | null;
+  scheduled_at: string | null;
+  in_play: boolean;
+}
+
+/** The org Competitions home's today deck (Match Day C7): the organisation's day, how many of each listed competition's
+ *  matches are today, and the one each is headlined by. */
+export interface CompetitionsToday {
+  /** The organisation's day `now` falls on, 'YYYY-MM-DD': the deck's date label, as the Match Day view's `date` is. */
+  day: string;
+  /** The organisation's zone (else UTC): the deck shows its match times in it. */
+  tz: string;
+  /** Competition id -> its matches today. A competition with none is absent. */
+  counts: Map<string, number>;
+  /** Competition id -> today's headline match. Absent when none of today's matches is upcoming with both sides known. */
+  next: Map<string, TodayHeadline>;
+}
+
+/**
+ * `countFixturesToday` for a whole list of competitions: ONE tenant transaction and at most four statements however long the
+ * list (the organisation's zone, the divisions' days, one read of today's counts and headlines, and — only when a headline has
+ * a court — the court labels) - never a query per card. Every read is under the tenant's RLS, so a competition of another
+ * organisation is never counted even when its id is asked for.
+ */
+export async function competitionsFixturesToday(
+  auth: AuthCtx,
+  competitionIds: readonly string[],
+  now: Date = new Date(),
+): Promise<CompetitionsToday> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
+    const orgTz = org?.timezone ?? null;
+    const tz = resolveVenueTz(null, orgTz);
+    const { day } = todayIn(tz, now);
+    const read =
+      competitionIds.length === 0
+        ? new Map<string, { n: number; headline: TodayHeadlineRaw | null }>()
+        : await countTodayByCompetition(tx, orgTz, now, tx`d.competition_id = any(${[...competitionIds]}::uuid[])`);
+    const courtNames = [...read.values()].some((r) => r.headline?.court_id) ? await courtNamesById(tx) : new Map<string, string>();
+    const counts = new Map<string, number>();
+    const next = new Map<string, TodayHeadline>();
+    for (const [id, { n, headline }] of read) {
+      counts.set(id, n);
+      if (headline === null) continue;
+      const { court_id, ...rest } = headline;
+      next.set(id, { ...rest, court_label: court_id === null ? null : (courtNames.get(court_id) ?? court_id) });
+    }
+    return { day, tz, counts, next };
+  });
 }
 
 /**

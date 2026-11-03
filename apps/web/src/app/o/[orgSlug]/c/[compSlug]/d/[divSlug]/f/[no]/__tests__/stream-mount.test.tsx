@@ -344,3 +344,50 @@ describe("the organiser fixture page mounts the match rules block (W2c Task 19, 
     expect(props.matchRules).toBeUndefined();
   });
 });
+
+// Match Day PB2 (owner 2026-11-02, "apply rec", option A): a billing-frozen competition still SCORES — the events door asks no
+// freeze (scoring.ts; scoring-frozen-competition.test.ts drives it) — so the page hands the console its pad, the organiser's
+// settle/forfeit/abandon (all score events) and the device hand-over exactly as it would unfrozen. What the freeze still stops
+// stays off: the match rules block (its writer is freeze-guarded) and a NEW stream (no panel; a stream on air keeps Stop, F1).
+// One row per page role, unfrozen first (the empty case), on a live match.
+describe("PB2 — a billing-frozen page keeps the pad, the organiser's actions and the hand-over", () => {
+  type Role = [name: string, canEdit: boolean, canScore: boolean, want: { canEdit: boolean; canOrganise: boolean; deviceHandover: boolean }];
+  const ROLES: Role[] = [
+    ["organiser", true, true, { canEdit: true, canOrganise: true, deviceHandover: true }],
+    ["official scorer", false, true, { canEdit: true, canOrganise: false, deviceHandover: false }],
+    ["viewer", false, false, { canEdit: false, canOrganise: false, deviceHandover: false }],
+  ];
+  const pick = (p: Record<string, unknown>) => ({ canEdit: p.canEdit, canOrganise: p.canOrganise, deviceHandover: p.deviceHandover });
+
+  it("EMPTY CASE FIRST (unfrozen): each role's pad, organiser actions and hand-over", async () => {
+    let checked = 0;
+    for (const [name, canEdit, canScore, want] of ROLES) {
+      Object.assign(scene, { canEdit, canScore, frozen: false, status: "in_play" });
+      expect(pick(await consoleProps()), name).toEqual(want);
+      checked++;
+    }
+    expect(checked).toBe(ROLES.length);
+  });
+
+  it("frozen: the same three for every role — and still no match rules block and no new-stream panel", async () => {
+    let checked = 0;
+    for (const [name, canEdit, canScore, want] of ROLES) {
+      Object.assign(scene, { canEdit, canScore, frozen: true, status: "in_play", open: [] });
+      spies.matchRules.mockClear();
+      const props = await consoleProps();
+      expect(pick(props), `${name}: frozen scores like unfrozen`).toEqual(want);
+      expect(props.matchRules, `${name}: the rules block's writer is freeze-guarded`).toBeUndefined();
+      expect(spies.matchRules, name).not.toHaveBeenCalled();
+      expect(props.stream, `${name}: no new stream on a frozen page`).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(ROLES.length);
+  });
+
+  it("frozen: a finalized match still offers no hand-over (the write lock, not the freeze, closes it)", async () => {
+    Object.assign(scene, { canEdit: true, canScore: true, frozen: true, status: "finalized" });
+    expect((await consoleProps()).deviceHandover).toBe(false);
+    Object.assign(scene, { frozen: false });
+    expect((await consoleProps()).deviceHandover).toBe(false);
+  });
+});

@@ -11,7 +11,7 @@
 //
 // SHAPE, same as `help-device-links-copy.test.ts`: every label the article
 // quotes is read from `dictionaries/en/ui.json`, every number and role from the
-// module that enforces it (`ROWS_PER_PAGE`, `EDITOR_ROLES`, `PASS_FEATURES`),
+// module that enforces it (`ROWS_PER_PAGE`, `EDITOR_ROLES`),
 // so a relabel or a rule change moves this test instead of leaving the page
 // describing yesterday's product. Where a claim is about a CAUSE (Rebuild
 // deletes the match, so the link cascades), the pin is that the article names
@@ -37,7 +37,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import en from "@/dictionaries/en/ui.json";
 import { HELP_ARTICLE_SLUGS } from "@/lib/help";
-import { PASS_FEATURES } from "@/lib/pass-features";
 import { ROWS_PER_PAGE } from "@/lib/scorer-sheets";
 import { EDITOR_ROLES } from "@/lib/types";
 import { VIEW_ONLY_COPY } from "@/lib/scan-screen";
@@ -106,14 +105,6 @@ describe("scorer-sheets.md says what the sheet is and who can print it", () => {
     }
   });
 
-  it("names Pro and the Event Pass, and claims no plan-free reach (the pass lifts device links)", () => {
-    expect(PASS_FEATURES.has("scoring.device_links")).toBe(true);
-    const plans = sentences().filter((s) => /\bPro\b/.test(s) && /\bEvent Pass\b/i.test(s));
-    expect(plans, "no sentence names both Pro and the Event Pass").not.toHaveLength(0);
-    const everyPlan = /\b(?:on|for|with)\s+(?:any|every|all)\s+plans?\b|\bwhatever (?:your|the) plan\b/i;
-    expect(sentences().filter((s) => everyPlan.test(s))).toEqual([]);
-  });
-
   it("quotes the print control as it is labelled: the Day select and the Print scorer sheets button", () => {
     // Bold, as the article sets every control it names: a bare "Day" matches
     // any sentence about days.
@@ -139,15 +130,12 @@ describe("scorer-sheets.md says what the sheet is and who can print it", () => {
     expect(sentences().filter((s) => bare.test(s))).toEqual([]);
   });
 
-  it("says the control appears only once a match has a time — and the upgrade prompt only then too", () => {
-    // print-scorer-sheets.tsx returns null with no printable day BEFORE its
-    // UpgradeGate branch, so a Community organiser with nothing timed sees
-    // neither the button nor the prompt.
+  it("says the control appears only once a match has a time", () => {
+    // print-scorer-sheets.tsx returns null with no printable day, so an
+    // organiser with nothing timed sees no button. (There is no plan gate: remote
+    // scoring, and so the sheets, are free on every plan since V488.)
     const HAS_TIME = /\bhas a time\b/i;
     expect(sentences().some((s) => /\bcontrol\b/i.test(s) && /\bshows? up\b|\bappears?\b/i.test(s) && HAS_TIME.test(s))).toBe(true);
-    const prompt = sentences().filter((s) => /\bupgrade prompt\b/i.test(s));
-    expect(prompt, "the upgrade prompt is never mentioned").not.toHaveLength(0);
-    expect(prompt.every((s) => HAS_TIME.test(s)), prompt.join(" | ")).toBe(true);
   });
 
   it("links 'start the division first' to the division lifecycle, as batch-import.md does", () => {

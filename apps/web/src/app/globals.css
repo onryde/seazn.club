@@ -291,6 +291,13 @@ body {
   .competition-prose p {
     @apply my-3 first:mt-0 last:mb-0;
   }
+  /* The editor's empty-state hint (ProseEditor `showPlaceholder`): the same
+     slate-400 as an <input>'s placeholder. Floated with no height so the
+     caret sits on the first line and a long sentence wraps beside it. */
+  .competition-prose p.is-editor-empty::before {
+    @apply pointer-events-none float-left h-0 text-slate-400;
+    content: attr(data-placeholder);
+  }
   .competition-prose ul {
     @apply my-3 list-disc space-y-1 pl-6;
   }
@@ -512,19 +519,6 @@ body {
   textarea {
     font-size: 16px;
   }
-}
-
-/* Compact list mode (v3/03 §2 toggle): same card DOM, quieter rendering —
-   secondary lines collapse, the card reads as a row. */
-.ecard-list .ecard {
-  @apply px-4 py-2.5;
-}
-.ecard-list .ecard .ecard-meta,
-.ecard-list .ecard .ecard-progress {
-  display: none;
-}
-.ecard-list .ecard .ecard-next {
-  @apply mt-0.5;
 }
 
 /* ── "Stadium night" system (design/v3/12) ────────────────────────────────

@@ -2,7 +2,7 @@
 // driven through its REAL handler and the REAL limiter (Redis replaced at the limiter's own test seam). The use-case
 // (capture-scoring-link.test.ts) proves the decisions; this file proves the ROUTE carries them:
 //   - the 2xx is the BARE `{url}` (no `ok`), parsed with the contract's twin, a repeat answering the same url;
-//   - every refusal is `{code, message}` exactly, with its agreed status (replaced, match_finished, not_entitled, invalid,
+//   - every refusal is `{code, message}` exactly, with its agreed status (replaced, match_finished, invalid,
 //     code_ended);
 //   - the body is STRICT: not JSON, an unknown key, a phone outside 16..64 → 422 invalid, nothing written;
 //   - no Bearer and the org's own API key answer the ONE 401 body (never key-reachable);
@@ -14,6 +14,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { captureRoute } from "@/server/api-v1/capture-http";
 import { log } from "@/server/logger";
@@ -37,7 +39,6 @@ vi.mock("@sentry/nextjs", async (io) => ({ ...(await io<Record<string, unknown>>
 async function captureRig(opts: Parameters<typeof rawRig>[0] = {}) {
   const r = await rawRig(opts);
   setRelayDriversForTest(r.deps.drivers);
-  await override(r.auth.orgId, "scoring.device_links", true);
   return r;
 }
 afterAll(() => setRelayDriversForTest(null));
@@ -131,19 +132,22 @@ describe.skipIf(!HAS_DB)("POST /api/v1/capture/codes/{code}/scoring-link", () =>
     expectRefusal(await read(await call(r.code, { phone: phoneId("x") }, { auth: `Bearer ${r.tok}` })), 409, "replaced", "a stranger");
   });
 
-  it("the refusals on the wire: 409 match_finished (nothing written), 402 not_entitled (nothing written) — each {code, message} exactly, no-store", async () => {
+  it("the refusal on the wire: 409 match_finished (nothing written) — {code, message} exactly, no-store; and a Community org's phone is served the link (free on every plan)", async () => {
     const finished = await captureRig();
     const A = phoneId("a");
     await claim(finished, A);
     await sql`update fixtures set status = 'finalized' where id = ${finished.fixtureId}`;
     expectRefusal(await read(await call(finished.code, { phone: A }, { auth: `Bearer ${finished.tok}` })), 409, "match_finished", "finalized");
     expect(await linkCount(finished)).toBe(0);
-    const unpaid = await captureRig();
+    const community = await captureRig();
     const B = phoneId("b");
-    await claim(unpaid, B);
-    await override(unpaid.auth.orgId, "scoring.device_links", false);
-    expectRefusal(await read(await call(unpaid.code, { phone: B }, { auth: `Bearer ${unpaid.tok}` })), 402, "not_entitled", "no plan");
-    expect(await linkCount(unpaid)).toBe(0);
+    await claim(community, B);
+    await setOrgPlan(community.auth.orgId, "community");
+    await invalidateOrgEntitlements(community.auth.orgId);
+    const served = await read(await call(community.code, { phone: B }, { auth: `Bearer ${community.tok}` }));
+    expect(served).toMatchObject({ status: 200, ...NO_STORE });
+    expect(String(served.body.url)).toMatch(URL_PATTERN);
+    expect(await linkCount(community)).toBe(1);
   });
 
   it("STRICT body: not JSON, an unknown key, a phone of 15 or 65 characters, a missing phone → 422 invalid, no-store, nothing written", async () => {
@@ -279,15 +283,15 @@ describe.skipIf(!HAS_DB)("POST /api/v1/capture/codes/{code}/scoring-link", () =>
     expect(op.security).toEqual([{ captureTok: [] }]);
     expect(op.requestBody).toBeDefined();
     const observed = [...new Set(statuses)].sort();
-    expect(observed).toEqual([200, 401, 402, 404, 409, 422, 429]);
+    expect(observed).toEqual([200, 401, 404, 409, 422, 429]);
     for (const s of [...observed, 503]) expect(op.responses[String(s)], String(s)).toBeDefined();
   });
 
   it("never 410, and every refusal was the bare body: the file did answer", () => {
     expect(statuses.length).toBeGreaterThan(20);
     expect(statuses).not.toContain(410);
-    // replaced, match_finished, not_entitled, invalid ×5, code_ended ×3, not_a_stream_code; the mint budget's
+    // replaced, match_finished, invalid ×5, code_ended ×3, not_a_stream_code; the mint budget's
     // code_ended ×2 and replaced ×2; the deleted issuer's code_ended.
-    expect(refusalsChecked).toBe(17);
+    expect(refusalsChecked).toBe(16);
   });
 });

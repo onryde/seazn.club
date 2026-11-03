@@ -12,8 +12,7 @@ type Ctx = { params: Promise<{ id: string }> };
  * The fixture's device link (doc 13 §7; scorer sheets §4.2): editor session
  * only. Re-shows the live sealed link unchanged (200) or mints one (201),
  * replacing a legacy hash-only link. Never revokes a sealed link — Revoke &
- * reissue is `POST …/device-links/reissue`. 402 `scoring.device_links` for
- * Community without an Event Pass.
+ * reissue is `POST …/device-links/reissue`. Free on every plan.
  */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {

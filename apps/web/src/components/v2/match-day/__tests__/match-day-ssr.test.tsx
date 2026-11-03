@@ -2004,7 +2004,7 @@ describe("B4 — Q1(b): a view-only member sees the day and nothing that writes"
 
 // Task F1 (owner ruling 10-31 (1)): a BILLING-frozen competition (over its organisation's `competitions.max_active`) offers no
 // Call and no Undo call — the server refuses both with a 402 (match-day-call.test.ts, "the billing freeze") — and says why. The
-// rest of the page is untouched: the scorer QR, the pad and the stream links are not the call path.
+// scorer QR and the pad are not the call path: a frozen competition still scores (PB2, the describe below).
 describe("F1 — a billing-frozen competition: no Call, no Undo call", () => {
   const frozenCtx: MatchDayCtx = { ...ctx, frozen: true };
   const CALLED = () => court({ state: "called", current: fx({ started_at: null, headline: null, called_at: "2026-10-31T11:31:00.000Z" }) });
@@ -2021,19 +2021,19 @@ describe("F1 — a billing-frozen competition: no Call, no Undo call", () => {
     expect(shellWith(view([court()]))).not.toContain('data-testid="md-frozen"');
   });
 
-  it("frozen: the called court has no Undo call and no scorer QR (task G1), but keeps its panel, and its link reads 'Open match'", () => {
+  it("frozen: the called court has no Undo call, but keeps its panel, its scorer QR and 'Open pad' (PB2: a frozen competition still scores)", () => {
     const html = focusWith(CALLED(), frozenCtx);
     expect(html).toContain(`>${t(dict, "matchDay.called.title")}<`);
     expect(html).not.toContain('data-testid="md-undo-call"');
     expect(html).not.toContain(`>${esc(t(dict, "matchDay.called.undo"))}<`);
-    // G1: every score write from a frozen competition is refused (402, scoring.ts), so the QR is a link that cannot score.
-    expect(html).not.toContain('data-testid="md-scorer"');
-    expect(html).not.toContain('data-role="device-link-panel"');
-    expect(html).toMatch(new RegExp(`data-testid="md-open-pad"[^>]*>${t(dict, "matchDay.focus.openMatch")}<`));
-    expect(html).not.toContain(`>${t(dict, "matchDay.focus.openPad")}<`);
+    // Not the call path: scoring and the pad stay.
+    expect(html).toContain('data-testid="md-scorer"');
+    expect(html).toMatch(new RegExp(`data-testid="md-open-pad"[^>]*>${t(dict, "matchDay.focus.openPad")}<`));
     const playing = focusWith(court(), frozenCtx);
-    expect(playing).not.toContain('data-testid="md-scorer"');
-    expect(playing).toContain(`>${esc(t(dict, "matchDay.stream.connect"))}<`);
+    expect(playing).toContain('data-testid="md-scorer"');
+    // PB2 item 2: a NEW stream is not offered on a frozen competition (the create route 402s).
+    expect(playing).not.toContain('data-testid="md-stream-connect"');
+    expect(playing).not.toContain(`>${esc(t(dict, "matchDay.stream.connect"))}<`);
   });
 
   it("frozen: a free court still lists its candidates, with no call button at all", () => {
@@ -2065,11 +2065,12 @@ describe("F1 — a billing-frozen competition: no Call, no Undo call", () => {
   });
 });
 
-// Task G1 (final whole-branch review, merge-blocking): a billing-frozen competition refuses EVERY score write (402,
-// scoring.ts assertEntitledToScore), so Match Day must not hand out the scorer QR / device link or an "Open pad" that opens no
-// pad — the fixture page (f/[no]/page.tsx) draws a read-only console and no hand-over there. Each case is a (shape x role x link)
-// cell, the unfrozen editor first as the empty case, so a gate that always hides cannot pass.
-describe("G1 — a billing-frozen competition: no scorer QR / device link, 'Open match' not 'Open pad'", () => {
+// Match Day PB2 (owner 2026-11-02, "apply rec", option A): a billing-frozen competition still SCORES — the events door asks no
+// freeze (scoring.ts; scoring-frozen-competition.test.ts writes through it) — so Match Day hands out the scorer QR / device link
+// and "Open pad" exactly as it does unfrozen. This reverses task G1, which withheld both while every score write was refused.
+// Each case is a (shape x linked-device) cell, the unfrozen editor first as the empty case; the view-only reader is the control
+// that the frozen gate is gone while the read-only one stands.
+describe("PB2 — a billing-frozen competition keeps the scorer QR / device link and 'Open pad'", () => {
   const frozenCtx: MatchDayCtx = { ...ctx, frozen: true };
   const focusWith = (c: MatchDayCourt, x: MatchDayCtx) =>
     renderToStaticMarkup(
@@ -2077,64 +2078,134 @@ describe("G1 — a billing-frozen competition: no scorer QR / device link, 'Open
     );
   type Attn = "no_scorer" | null;
   const calledAt = "2026-10-31T11:31:00.000Z";
-  /** Every shape that offers a scorer panel to an editor, rendered for a role, by what the desk says about the match's scorer:
-   *  "no_scorer" (nobody linked: the editor sees an open QR) or null (a scorer's link is live: the desk flags nothing). */
+  /** Every shape that offers a scorer panel to an editor, by what the desk says about the match's scorer: "no_scorer" (nobody
+   *  linked: the editor sees an open QR) or null (a scorer's link is live: the desk flags nothing). */
   const SHAPES: Array<[string, (x: MatchDayCtx, a: Attn) => string]> = [
     ["a playing court", (x, a) => focusWith(court({ current: fx({ scorer_attention: a }) }), x)],
     ["a called court", (x, a) => focusWith(court({ state: "called", current: fx({ started_at: null, headline: null, called_at: calledAt, scorer_attention: a }) }), x)],
     ["a match on no court", (x, a) => noCourtFocus(fx({ scorer_attention: a }), x)],
   ];
+  const offersScoring = (html: string, label: string) => {
+    expect(html, label).toContain('data-testid="md-scorer"');
+    expect(html, label).toContain('data-role="device-link-panel"');
+    expect(html, label).toMatch(new RegExp(`data-testid="md-open-pad"[^>]*>${t(dict, "matchDay.focus.openPad")}<`));
+    expect(html, label).not.toContain(`>${t(dict, "matchDay.focus.openMatch")}<`);
+  };
 
   it("EMPTY CASE FIRST (an unfrozen editor): every shape offers the scorer QR panel and 'Open pad', linked device or not", () => {
     let checked = 0;
     for (const [name, render] of SHAPES) {
       for (const a of ["no_scorer", null] as const) {
-        const html = render(ctx, a);
-        expect(html, `${name} ${a}`).toContain('data-testid="md-scorer"');
-        expect(html, `${name} ${a}`).toContain('data-role="device-link-panel"');
-        expect(html, `${name} ${a}`).toMatch(new RegExp(`data-testid="md-open-pad"[^>]*>${t(dict, "matchDay.focus.openPad")}<`));
+        offersScoring(render(ctx, a), `${name} ${a}`);
         checked++;
       }
     }
     expect(checked).toBe(SHAPES.length * 2);
   });
 
-  it("frozen editor and frozen editor with a linked device: no scorer QR panel and no device-link panel in any shape; the link reads 'Open match'", () => {
+  it("frozen editor, with or without a linked device: the same scorer QR panel, device-link panel and 'Open pad' in every shape", () => {
     let checked = 0;
     for (const [name, render] of SHAPES) {
-      // "no_scorer": the editor, nobody linked. null: a linked device (the desk flags nothing). Either way the panel is gone.
       for (const a of ["no_scorer", null] as const) {
-        const html = render(frozenCtx, a);
-        expect(html, `${name} ${a}`).not.toContain('data-testid="md-scorer"');
-        expect(html, `${name} ${a}`).not.toContain('data-role="device-link-panel"');
-        expect(html, `${name} ${a}`).not.toContain("data-md-scorer=");
-        expect(html, `${name} ${a}`).toMatch(new RegExp(`data-testid="md-open-pad"[^>]*>${t(dict, "matchDay.focus.openMatch")}<`));
-        expect(html, `${name} ${a}`).not.toContain(`>${t(dict, "matchDay.focus.openPad")}<`);
+        offersScoring(render(frozenCtx, a), `frozen: ${name} ${a}`);
         checked++;
       }
     }
     expect(checked).toBe(SHAPES.length * 2);
   });
 
-  it("frozen AND view-only: still nothing (the two gates are independent - the label is 'Open match' either way)", () => {
+  it("frozen AND view-only: nothing, and 'Open match' — the read-only gate stands on its own", () => {
     const both: MatchDayCtx = { ...ctx, frozen: true, readOnly: true };
+    let checked = 0;
     for (const [name, render] of SHAPES) {
       const html = render(both, "no_scorer");
       expect(html, name).not.toContain('data-testid="md-scorer"');
-      expect(html, name).toContain(`>${t(dict, "matchDay.focus.openMatch")}<`);
+      expect(html, name).not.toContain('data-role="device-link-panel"');
+      expect(html, name).toMatch(new RegExp(`data-testid="md-open-pad"[^>]*>${t(dict, "matchDay.focus.openMatch")}<`));
+      checked++;
     }
+    expect(checked).toBe(SHAPES.length);
   });
 
-  it("the page: a frozen competition's 'playing, no court' list says 'Open match' too, and the focused panel hands the fact on", () => {
+  it("the page: a frozen competition's 'playing, no court' list says 'Open pad', and the focused court carries the scorer panel", () => {
     const nc = fx({ id: "nc-1" });
     const base = shellWith({ ...view([court()], [nc]) });
     const frozen = shellWith({ ...view([court()], [nc]) }, { frozen: true });
     const label = (html: string) => html.match(/data-testid="md-no-court-open"[^>]*>([^<]*)</)?.[1];
     expect(label(base)).toBe(esc(t(dict, "matchDay.focus.openPad")));
-    expect(label(frozen)).toBe(esc(t(dict, "matchDay.focus.openMatch")));
-    // The shell's focused court (the first, playing) carries no scorer panel when frozen, and does when not.
+    expect(label(frozen)).toBe(esc(t(dict, "matchDay.focus.openPad")));
     expect(base).toContain('data-testid="md-scorer"');
-    expect(frozen).not.toContain('data-testid="md-scorer"');
+    expect(frozen).toContain('data-testid="md-scorer"');
+    // …while the banner still says why Call and Undo are gone.
+    expect(frozen).toContain('data-testid="md-frozen"');
+  });
+});
+
+// Match Day PB2 item 2 (owner 2026-11-02, "hide"): "+ Connect a stream" is not offered on a billing-frozen competition — the
+// stream-session create route answers the freeze's 402 (stream-sessions routes.test.ts) — while a stream that is already up
+// (waiting for its phone, live, or live with a preview) still shows, with its way to the stream panel (Stop is the one write
+// a frozen page keeps there, F1). Every (shape x stream state) cell, the unfrozen editor first.
+describe("PB2 — '+ Connect a stream' is hidden on a frozen competition; a stream that is up still shows", () => {
+  const frozenCtx: MatchDayCtx = { ...ctx, frozen: true };
+  const VIDEO = "dQw4w9WgXcQ";
+  const STATES: Array<[string, Partial<MatchDayFixture>]> = [
+    ["no stream", { stream: null }],
+    ["waiting for the phone", { stream: "waiting" }],
+    ["live, nothing to embed", { stream: "live", live_video: null }],
+    ["live, with a preview", { stream: "live", live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: false } }],
+  ];
+  const SHAPES: Array<[string, (x: MatchDayCtx, o: Partial<MatchDayFixture>) => string]> = [
+    [
+      "a playing court",
+      (x, o) =>
+        renderToStaticMarkup(
+          <CourtFocus ctx={x} court={goldenCourt("badminton", BADMINTON!, o)} backLabel="All courts" onBack={() => {}} onChanged={() => {}} onRefused={() => {}} refreshKey="k" divisions={null} />,
+        ),
+    ],
+    ["a match on no court", (x, o) => noCourtFocus(goldenMatch("badminton", BADMINTON!, { id: "nc-1", ...o }), x)],
+  ];
+  const CONNECT = 'data-testid="md-stream-connect"';
+  /** What the corner shows for a stream that is up, read off the markup: the waiting word, the live badge, the preview. */
+  const upShows = (html: string, state: string) =>
+    state === "waiting for the phone"
+      ? html.includes(`>${esc(t(dict, "matchDay.stream.waiting"))}<`)
+      : state.startsWith("live, with")
+        ? html.includes('data-testid="md-stream-preview"') && html.includes(`>${esc(t(dict, "matchDay.stream.settings"))}<`)
+        : html.includes('data-md-stream="live"');
+
+  it("EMPTY CASE FIRST (an unfrozen editor): no stream offers '+ Connect a stream'; a stream that is up shows instead", () => {
+    expect(BADMINTON, "a badminton golden stream mid-game").not.toBeNull();
+    let checked = 0;
+    for (const [shape, render] of SHAPES) {
+      for (const [state, o] of STATES) {
+        const html = render(ctx, o);
+        if (state === "no stream") {
+          expect(html, `${shape}, ${state}`).toContain(CONNECT);
+          expect(html, `${shape}, ${state}`).toContain(`>${esc(t(dict, "matchDay.stream.connect"))}<`);
+        } else {
+          expect(html, `${shape}, ${state}`).not.toContain(CONNECT);
+          expect(upShows(html, state), `${shape}, ${state}`).toBe(true);
+        }
+        checked++;
+      }
+    }
+    expect(checked).toBe(SHAPES.length * STATES.length);
+  });
+
+  it("frozen: never '+ Connect a stream', in any shape or state; a stream that is up shows exactly as unfrozen", () => {
+    let checked = 0;
+    for (const [shape, render] of SHAPES) {
+      for (const [state, o] of STATES) {
+        const html = render(frozenCtx, o);
+        expect(html, `${shape}, ${state}`).not.toContain(CONNECT);
+        expect(html, `${shape}, ${state}`).not.toContain(`>${esc(t(dict, "matchDay.stream.connect"))}<`);
+        if (state !== "no stream") expect(upShows(html, state), `${shape}, ${state}`).toBe(true);
+        // The rest of the court is untouched: the score and the scorer QR (item 1).
+        expect(html, `${shape}, ${state}`).toContain('data-testid="md-scorer"');
+        checked++;
+      }
+    }
+    expect(checked).toBe(SHAPES.length * STATES.length);
   });
 });
 

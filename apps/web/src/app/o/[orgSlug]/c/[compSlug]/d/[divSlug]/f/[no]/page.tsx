@@ -164,7 +164,7 @@ export default async function FixturePage({
   ]);
 
   // Spec 2026-09-30 §2 (P1) — Stream on the fixture page. The PAGE's canEdit (owner/admin), never the console's
-  // `canScore && !frozen`. The context loader reads nothing unless the full panel is offered (an organiser on a page that
+  // `canScore`. The context loader reads nothing unless the full panel is offered (an organiser on a page that
   // is not billing-frozen), and the session read runs only for an organiser: a scorer's or viewer's refresh pays nothing.
   const frozen = competition.frozen ?? false;
   const locale = await resolveLocale();
@@ -314,10 +314,13 @@ export default async function FixturePage({
             voids_event_id: e.voids_event_id,
             device_link_id: e.device_link_id,
           }))}
-          canEdit={canScore && !(competition.frozen ?? false)}
+          // Match Day PB2 (owner 2026-11-02, option A): a billing-frozen competition still SCORES — the events door asks no
+          // freeze (scoring.ts) — so its pad, its organiser actions and its device hand-over stay. What the freeze stops lives
+          // elsewhere on this page (the match rules block, a new stream, the check-in QR).
+          canEdit={canScore}
           // W2a X-ST-2 (finding 11): settle, forfeit and abandon are the ORGANISER's — the page's own canEdit
           // (owner/admin), never `canScore`, which an accepted official scorer also holds.
-          canOrganise={canEdit && !(competition.frozen ?? false)}
+          canOrganise={canEdit}
           stageKind={stageKind}
           recorderNames={recorderNames}
           availability={availability}
@@ -339,7 +342,6 @@ export default async function FixturePage({
           // the pad's heading. It used to render as the last card below.
           deviceHandover={
             canEdit &&
-            !(competition.frozen ?? false) &&
             fixture.status !== "finalized" &&
             fixture.status !== "cancelled"
           }

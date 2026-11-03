@@ -3155,7 +3155,7 @@ for (const sport of SPORTS) {
     // the rate-limited /api/auth/magic-link route) — safe to call once per
     // sport, twelve times in one run.
     await loginUi(page, email);
-    // Device links (05-devicelink below) are Pro-only.
+    // The gallery org is Pro. (Device links, 05-devicelink below, are free on every plan since V488.)
     await setOrgPlanBySql({ email }, "pro");
 
     const { home, away } = sport.roster(tag);

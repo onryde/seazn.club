@@ -44,7 +44,10 @@ export const PASS_FEATURES = new Set([
   // exactly as blocked, which is strictly worse than never offering it.
   "officials.auto",
   "discipline.enforced",
-  "scoring.device_links",
+  // `scoring.device_links` LEFT this set at V488 (remote scoring is free on every
+  // plan, owner ruling 2026-11-02): community now holds it too, so the pass no
+  // longer beats the community row and a pass CTA offering it would sell
+  // something already free.
   "scoring.audit_export",
   // `stages.per_division.max` LEFT this set at V471 ("all stages are free",
   // owner ruling 2026-10-20): unlimited on every plan, so the pass no longer

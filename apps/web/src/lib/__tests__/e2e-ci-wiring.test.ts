@@ -226,6 +226,10 @@ const WALKTHROUGH_SPECS: string[] = [
   // The organiser desks.
   "competition-desk-organiser.spec.ts",
   "settings-admin.spec.ts",
+  // Match Day PB2 — a billing-frozen competition run by hand: Match Day with no
+  // Call, Undo or new stream; the match scored and finalized on the pad; a
+  // viewer with no Needs you.
+  "frozen-competition.spec.ts",
 
   // Settings W2 — the organisation and news panels, the four people-facing
   // tabs (team, api, preferences, account), and the five-org support cap.
@@ -464,10 +468,18 @@ const WALKTHROUGH_SPECS: string[] = [
   // at 320/768/1280: it opens at the ORG's today (not the first option), sends
   // the day the organiser picks, lands the file as a browser download, reads a
   // "nothing on that day" refusal in the viewer's language, and gives a
-  // Community org the device-links upgrade pill instead. The control's unit
+  // Community org the same control, no upgrade pill (remote scoring is free on
+  // every plan, V488). The control's unit
   // suite drives a stubbed fetch and a fake anchor; only a browser shows the
   // download and the header's phone stacking.
   "scorer-sheets-print-control.spec.ts",
+  // Remote scoring is free on every plan (V488): a Community org opens the
+  // hand-over panel with no upgrade gate, creates the scoring link and shows its
+  // QR at 320/768/1280, and a signed-out phone opens that link and taps the match
+  // to its end — the result lands in the organiser's ledger carrying the link's
+  // id. The unit suites drive the usecase and the route; only a browser meets the
+  // plan, the panel and the courtside phone together.
+  "remote-scoring-free-plan.spec.ts",
   // Scorer sheets (Task 10) — the whole journey on the printed artefact: the
   // day printed from the Schedule page, EVERY QR decoded from the downloaded
   // PDF's pixels and scanned on a phone that must name that card's match, one
@@ -524,6 +536,16 @@ const WALKTHROUGH_SPECS: string[] = [
   // reconnect-needed row (the daily sweep, same exclusion), Disconnect and its three outcomes, two matches on one
   // channel, and the consent links.
   "youtube-connect.spec.ts",
+
+  // Match Day — C7, the org Competitions home: in through the nav, today's two (a Draft one included) in the deck with
+  // Open Match Day, the quiet card's stub, Show finished, and each Open Match Day landing on that competition's courts.
+  "competitions-home.spec.ts",
+  // Match Day C8 — the organiser's New competition form, from the org home to
+  // "Add your first division": every field tapped or typed, Ends following
+  // Start, the "Who will find it" list read after each visibility, the Showcase
+  // rules, a description typed with the Bold button, Create, and each exit of
+  // the first-division screen. The only test that taps the form end to end.
+  "new-competition-form.spec.ts",
 ];
 
 /** The values of `E2E_WALKTHROUGH_SLICE` that e2e.yml dispatches. Named here

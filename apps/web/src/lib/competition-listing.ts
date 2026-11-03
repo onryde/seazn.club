@@ -22,6 +22,26 @@
 /** The one status that keeps a publicly-readable competition off every listing. */
 export const UNLISTED_STATUS = "draft";
 
+/** The status a competition is BORN with (V207's column default; `createCompetition`
+ *  inserts none). The New competition form asks "who will find it" of a
+ *  competition that is still this, and `competition-reach-db.test.ts` holds the
+ *  two together by creating one. */
+export const NEW_COMPETITION_STATUS = UNLISTED_STATUS;
+
+/**
+ * Visibilities a stranger can OPEN by direct link — the cap's "publicly
+ * READABLE", not the listing rule's "LISTED". `private` is outside it: the view
+ * does not admit it and the `/shared/...` page 404s.
+ *
+ * Lives here, and is re-exported by `server/usecases/entitlement-freeze.ts`
+ * (which keeps the long rationale for why the cap counts this set), because the
+ * "Who will find it" list in the New competition form is a client island and
+ * `entitlement-freeze` is `server-only`. One tuple, two readers.
+ */
+export const PUBLICLY_READABLE_VISIBILITIES = ["public", "unlisted"] as const;
+export type PubliclyReadableVisibility =
+  (typeof PUBLICLY_READABLE_VISIBILITIES)[number];
+
 /** True when a listing surface may enumerate this competition: public
  *  visibility AND past draft. Unlisted and private are never listed; a draft
  *  is not listed whatever its visibility. */
@@ -52,4 +72,62 @@ export function linkOnlyRobots(c: { visibility: string; status: string }): {
  */
 export function publishWouldList(c: { visibility: string; status: string }): boolean {
   return c.visibility === "public" && c.status === UNLISTED_STATUS;
+}
+
+/** The audiences the New competition form names, in the order it lists them. */
+export const REACH_AUDIENCES = ["team", "link", "org", "search", "showcase"] as const;
+export type ReachAudience = (typeof REACH_AUDIENCES)[number];
+
+/** `yes` now, `after_publish` (a public draft: listed once published), or `no`. */
+export type ReachState = "yes" | "after_publish" | "no";
+
+/**
+ * WHO will find a competition, answered from the rules in this file — so the
+ * form's checklist cannot drift from what the listing queries, the sitemap and
+ * the pages' robots actually do. One reader has a floor this file does not
+ * model (showcase, below), and the form's copy says so.
+ *
+ *  - team:     org members always see their own competition.
+ *  - link:     anyone holding the URL, from the moment it exists —
+ *              `PUBLICLY_READABLE_VISIBILITIES`.
+ *  - org:      the org's public page — `competitionIsListed`; a public draft is
+ *              listed once published (`publishWouldList`).
+ *  - search:   crawlers — indexable exactly when `linkOnlyRobots` adds no
+ *              `robots` key; the same "once published" for a public draft.
+ *  - showcase: seazn.club's home and sport pages — opt-in (`discoverable`) AND
+ *              listed (`public_discovery_v` excludes drafts, V419). Listed
+ *              already implies public, which is the coupling the server
+ *              enforces on the flag itself, so a stale flag on a non-public
+ *              competition reads "no" without a second clause.
+ *
+ *              `after_publish` here is a CEILING, not a promise: the view also
+ *              asks a quality floor of any showcased competition — a decided or
+ *              finalized fixture, or a division past setup (a published
+ *              schedule) — plus a verified owner email, an active org and no
+ *              staff block (V306). That floor is about the competition's
+ *              progress, not its visibility or status, so it is not modelled
+ *              here; the form's row says "may appear once you publish and it has
+ *              a published schedule or a result", and
+ *              `competition-reach-db.test.ts` pins the floor against the real
+ *              view so that sentence cannot outlive it.
+ */
+export function competitionReach(c: {
+  visibility: string;
+  status: string;
+  discoverable: boolean;
+}): Record<ReachAudience, ReachState> {
+  const listing = { visibility: c.visibility, status: c.status };
+  const listed: ReachState = competitionIsListed(listing)
+    ? "yes"
+    : publishWouldList(listing)
+      ? "after_publish"
+      : "no";
+  const indexable = linkOnlyRobots(listing).robots === undefined;
+  return {
+    team: "yes",
+    link: (PUBLICLY_READABLE_VISIBILITIES as readonly string[]).includes(c.visibility) ? "yes" : "no",
+    org: listed,
+    search: indexable ? "yes" : listed === "after_publish" ? "after_publish" : "no",
+    showcase: c.discoverable ? listed : "no",
+  };
 }

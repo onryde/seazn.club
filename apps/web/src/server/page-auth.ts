@@ -9,7 +9,8 @@ import "server-only";
 import { notFound, permanentRedirect, redirect } from "next/navigation";
 import { getCurrentUser, getUserOrgs, getActiveOrgId, safeNextPath } from "@/lib/auth";
 import { sql } from "@/lib/db";
-import { EDITOR_ROLES, type OrgMembership, type User } from "@/lib/types";
+// PB2 fix round 1 (m3): ONE authority for "can this member edit" — the same predicate the Match Day route strips by.
+import { isEditorRole, type OrgMembership, type User } from "@/lib/types";
 import { resourceOrg, type AuthCtx, type ResourceKind } from "@/server/api-v1/auth";
 import { HttpError } from "@/lib/errors";
 import { routes } from "@/lib/routes";
@@ -99,7 +100,7 @@ export async function requirePageAuth(opts: { next?: unknown } = {}): Promise<Pa
     auth: { orgId: org.id, via: "session", userId: user.id, role: org.role, keyId: null },
     user,
     org,
-    canEdit: (EDITOR_ROLES as readonly string[]).includes(org.role),
+    canEdit: isEditorRole(org.role),
   };
 }
 
@@ -136,7 +137,7 @@ export async function requireOrgPage(
     auth: { orgId: org.id, via: "session", userId: user.id, role: org.role, keyId: null },
     user,
     org,
-    canEdit: (EDITOR_ROLES as readonly string[]).includes(org.role),
+    canEdit: isEditorRole(org.role),
   };
 }
 
@@ -192,7 +193,7 @@ export async function requireBillingPage(
       auth: { orgId: org.id, via: "session", userId: user.id, role: org.role, keyId: null },
       user,
       org,
-      canEdit: (EDITOR_ROLES as readonly string[]).includes(org.role),
+      canEdit: isEditorRole(org.role),
       viaPayer: false,
     };
   }
@@ -288,7 +289,7 @@ export async function requireFixturePage(
   if (!fixture) notFound();
 
   const canEdit = membership
-    ? (EDITOR_ROLES as readonly string[]).includes(membership.role)
+    ? isEditorRole(membership.role)
     : false;
   let canScore = canEdit;
   if (!canScore) {
@@ -334,7 +335,7 @@ export async function requireResourcePageAuth(
   const orgs = await getUserOrgs(user.id);
   const org = orgs.find((o) => o.id === orgId);
 
-  const canEdit = org ? (EDITOR_ROLES as readonly string[]).includes(org.role) : false;
+  const canEdit = org ? isEditorRole(org.role) : false;
   let canScore = canEdit;
   if (!canScore && kind === "fixture") {
     const { acceptedOfficialCovers } = await import("@/server/usecases/scorers");

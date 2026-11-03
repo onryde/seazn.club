@@ -1,5 +1,5 @@
 import "server-only";
-// Card-grid aggregates (v3/03 §1–2): the EntityCard's meta / "Next:" /
+// Card-grid aggregates (v3/03 §1–2): a card's meta / "Next:" /
 // progress lines in one query per list — no N+1 across a 3-column grid.
 // Read-only; RLS scopes everything through withTenant.
 import { withTenant } from "@/lib/db";
@@ -40,8 +40,9 @@ export interface CompetitionCardStats {
   entrants: number;
   played: number;
   total: number;
-  /** Most common division sport — drives the card banner tint (v8). */
-  top_sport: string | null;
+  /** The live divisions' sports, most divisions first, then by key: the org home's sports line (Match Day C7 - one named,
+   *  two named, three or more as "N sports"). Empty for a competition with no division. */
+  sports: string[];
   next: NextFixture | null;
 }
 
@@ -132,16 +133,17 @@ export async function listCompetitionCardStats(
           join divisions d on d.id = f.division_id
           where d.competition_id = c.id and d.archived_at is null
             and f.status <> 'cancelled') as total,
-        (select d.sport_key from divisions d
-          where d.competition_id = c.id and d.archived_at is null
-          group by d.sport_key order by count(*) desc, d.sport_key limit 1) as top_sport,
+        coalesce((select array_agg(x.sport_key order by x.n desc, x.sport_key)
+          from (select d.sport_key, count(*) as n from divisions d
+                 where d.competition_id = c.id and d.archived_at is null
+                 group by d.sport_key) x), '{}') as sports,
         nf.next
       from competitions c
       left join lateral (
         -- #14: the JSON carries court_id, not a bare joined courts.name
         -- (two venues may legally share one court name) — resolved to the
         -- venue-qualified court_label by resolveNextCourtLabel below,
-        -- which is what nextLine() (same file) actually reads.
+        -- which is what nextLine() in org-home/home-rules.ts reads.
         select jsonb_build_object(
             'home', he.display_name, 'away', ae.display_name,
             'court_id', f.court_id, 'scheduled_at', f.scheduled_at,
@@ -244,39 +246,4 @@ export function formatLabel(kinds: string[]): string | null {
     americano: "Americano",
   };
   return kinds.map((k) => label[k] ?? k).join(" + ");
-}
-
-export interface NextLine {
-  /** "Arun vs Dev · Court 2 · 14:30" — no "Next:"/"Now:" label baked in; the
-   *  caller (EntityCard) renders that from the `ui` catalog so it localizes
-   *  and so the live vs upcoming label is chosen exactly once, not stacked
-   *  (design/fix-ui/02-console-org.md: "both Next: and Now: labels render
-   *  together when only one should show"). */
-  text: string;
-  /** True when this fixture is in play right now — the caller shows "Now:"
-   *  instead of "Next:". */
-  live: boolean;
-}
-
-/** The card's one-line answer to "what's next?". Null-safe on every field
- *  (TBD entrants, unscheduled fixtures). `locale` drives the date/weekday
- *  formatting so it matches the rest of a localized card instead of always
- *  rendering English weekday/month names. */
-export function nextLine(next: NextFixture | null, locale: string): NextLine | null {
-  if (!next) return null;
-  const pair = `${next.home ?? "TBD"} vs ${next.away ?? "TBD"}`;
-  const parts = [pair];
-  if (next.court_label) parts.push(next.court_label);
-  if (next.scheduled_at) {
-    const at = new Date(next.scheduled_at);
-    const sameDay = at.toDateString() === new Date().toDateString();
-    parts.push(
-      new Intl.DateTimeFormat(locale, {
-        ...(sameDay ? {} : { weekday: "short", day: "numeric", month: "short" }),
-        hour: "2-digit",
-        minute: "2-digit",
-      }).format(at),
-    );
-  }
-  return { text: parts.join(" · "), live: next.in_play };
 }

@@ -54,6 +54,7 @@ import { pairPresentPhone, resealTargetDestination, rigTarget, rigUser, spendMon
 import { createApiKey } from "@/server/usecases/api-keys";
 import { grantCredits } from "@/server/usecases/stream-credits";
 import { defaultDeps, heartbeat } from "@/server/usecases/stream-sessions";
+import { frozenCompetitionIds } from "@/server/usecases/entitlement-freeze";
 import { createStreamTarget } from "@/server/usecases/stream-targets";
 import { seedOrg } from "@/server/usecases/__tests__/_seed";
 import { startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
@@ -631,6 +632,56 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     expect((await stop(o.fixtureId, first.body.data!.sessionId)).status).toBe(200);
     expect((await create(o.fixtureId, { mode: "passthrough", targetId: other.id })).status).toBe(201);
     expect(await settings()).toBe(other.id);
+  });
+
+  // Match Day PB2 item 2 (owner 2026-11-02, "hide"): a billing-frozen competition (over `competitions.max_active`) starts no
+  // NEW stream — the organiser's Go live answers the freeze's own 402 — while the stream it already has stays readable and
+  // stoppable (reads and Stop are not guarded; a frozen page's panel is Stop-only, F1). The freeze is the override pin (the
+  // org keeps Pro, so the relay and overlay gates still pass and the 402 is the freeze's, not a plan's).
+  it("PB2 over HTTP: on a FROZEN competition a Go live is 402 competitions.max_active, documented, and writes nothing; the running stream still reads and stops; after the thaw the same Go live is 201", async () => {
+    const o = await organiser({ credits: 3, fixtures: 2 });
+    const [a, b] = [o.fixtureIds[0]!, o.fixtureIds[1]!];
+    // B's own destination, so nothing but the freeze can refuse its Go live (A's running session holds `o.target`).
+    const other = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Court two", streamKey: `k-${randomUUID().slice(0, 8)}` });
+    const [{ competition_id: competitionId }] = await sql<{ competition_id: string }[]>`
+      select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${a}`;
+    // The empty case first: unfrozen, the Go live is admitted.
+    expect([...(await frozenCompetitionIds(o.auth.orgId))], "premise: nothing frozen").toEqual([]);
+    const running = await create(a, { mode: "passthrough", targetId: o.target.id });
+    expect(running.status, JSON.stringify(running.body.error)).toBe(201);
+    const sessionId = running.body.data!.sessionId;
+
+    await sql`insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
+              values (${o.auth.orgId}, 'competitions.max_active', 0, 'pb2 routes')
+              on conflict (org_id, feature_key) do update set int_value = 0, bool_value = null`;
+    await invalidateOrgEntitlements(o.auth.orgId);
+    expect([...(await frozenCompetitionIds(o.auth.orgId))], "premise: exactly this competition is frozen").toEqual([competitionId]);
+
+    const refused = await create(b, { mode: "passthrough", targetId: other.id });
+    expect(refused.status).toBe(402);
+    expect(refused.body.error).toMatchObject({ code: "PAYMENT_REQUIRED", feature_key: "competitions.max_active" });
+    expect(await sessionsOn(b), "a refused Go live wrote no session").toBe(0);
+    expect(await sql`select 1 from fixture_stream_settings where fixture_id = ${b}`, "…and no pre-pick").toHaveLength(0);
+    const doc = buildOpenApiDocument() as {
+      paths: Record<string, { post?: { summary?: string; responses: Record<string, { content: { "application/json": { schema: { properties: { error: { properties?: Record<string, { description?: string }> } } } } } }> } }>;
+    };
+    const post = doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!;
+    expect(post.summary).toContain("402 PAYMENT_REQUIRED competitions.max_active");
+    expect(post.responses["402"]!.content["application/json"].schema.properties.error.properties!.feature_key!.description).toContain("competitions.max_active");
+
+    // Not guarded: the running stream's read and its Stop.
+    const cur = await current(a);
+    expect(cur.status).toBe(200);
+    expect(StreamSessionCurrent.parse(cur.body.data)).toMatchObject({ id: sessionId });
+    const stopped = await stop(a, sessionId);
+    expect(stopped.status, JSON.stringify(stopped.body.error)).toBe(200);
+    expect(StreamSessionCurrent.parse(stopped.body.data)).toMatchObject({ id: sessionId, state: "completed", endReason: "stopped" });
+
+    // The thaw: the same Go live on the same fixture is admitted.
+    await sql`delete from org_entitlement_overrides where org_id = ${o.auth.orgId} and feature_key = 'competitions.max_active'`;
+    await invalidateOrgEntitlements(o.auth.orgId);
+    const thawed = await create(b, { mode: "passthrough", targetId: other.id });
+    expect(thawed.status, JSON.stringify(thawed.body.error)).toBe(201);
   });
 
   it("W5 over HTTP: a Go live with no phone paired is 409 phone_not_paired on the wire, documented on the route, and writes nothing", async () => {

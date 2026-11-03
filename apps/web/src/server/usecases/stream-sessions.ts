@@ -67,6 +67,7 @@ import { DestinationNotAllowedError, TargetUnreadableError } from "./stream-targ
 import { holderHref, holderRows, wireHolder, type TargetHolder } from "./stream-target-holders";
 import { setFixtureStreamUrl } from "./fixtures";
 import { markAutoStartBlocked, writeStreamSettings } from "./stream-codes";
+import { assertCompetitionNotFrozen } from "./entitlement-freeze";
 
 export { ACTIVE_STATES, TERMINAL_STATES };
 
@@ -1685,6 +1686,14 @@ export async function startBroadcast(
   if ((actor.source === "auto") !== (opts.autoStartedAt !== undefined)) {
     throw new Error(`startBroadcast: auto_started_at is stamped by an auto start and only by one (a ${actor.source} start ${opts.autoStartedAt === undefined ? "brought none" : "brought one"}) on fixture ${fixtureId}`);
   }
+  // Match Day PB2 (owner 2026-11-02, "hide"; fix round 1 (a), controller ruling): a billing-frozen competition starts no
+  // NEW stream by ANY path — the organiser's Go live (402 on the wire), the phone operator's start (`phoneStartRefusal`:
+  // not_entitled) and the automatic start (`autoStartRefusalOf`: not_entitled, retried after the spacing) — because a stream
+  // costs money. Asked HERE, the one start seam, after the caller-bug guards and before the relay, the credits, the storage
+  // read and any provider call, so a refusal writes and spends nothing. Reading a session and stopping one never come
+  // through here, so a stream already running keeps running (a frozen page's panel is Stop-only, fixture-stream-mount.ts).
+  // Outside any transaction, as `frozenCompetitionIds` requires (entitlement-freeze.ts): no caller holds one here.
+  await assertCompetitionNotFrozen(orgId, competitionId);
   // R5 (Task 14b): a production deployment with no RELAY_DRIVERS has no relay (drivers.ts `disabledRelayDrivers`).
   // Refused with the ingest's own 503 BEFORE anything else — no expiry, no provider call, no monthly grant, no row —
   // so nothing is faked and no credit moves. The Phone tab already reads this code.

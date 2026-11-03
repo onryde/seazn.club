@@ -23,6 +23,7 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary } from "@/lib/i18n";
 import { pickDictPrefixes } from "@/lib/i18n-subset";
 import { MatchDayShell } from "@/components/v2/match-day/match-day-shell";
+import { matchDayForReader } from "@/lib/match-day/view";
 
 export default async function MatchDayPage({
   params,
@@ -48,8 +49,8 @@ export default async function MatchDayPage({
   ]);
   // Task G5: a viewer's first paint carries no Needs-you rows. The shell draws none for a view-only reader, but the `initial` prop
   // is serialised into the response, so the rows would still reach a browser that never shows them. The competition page strips
-  // them the same way (`desk && canEdit ? needsYouItems(…) : []`).
-  const initial = page.canEdit ? view : { ...view, needs_you: [] };
+  // them the same way (`desk && canEdit ? needsYouItems(…) : []`). The poll that follows strips with the same helper (PB2 item 3).
+  const initial = matchDayForReader(view, page.canEdit);
   return (
     <main className="mx-auto max-w-6xl px-4 py-6 md:py-8">
       <MatchDayShell

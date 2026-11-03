@@ -24,7 +24,8 @@ import {
 } from "../device-links";
 import { reissueStreamCode, type ResolvedCode } from "../stream-codes";
 import { rigUser } from "@/server/relay/__tests__/_session-rig";
-import { captureRig, override, phoneId, type CaptureRig } from "./_capture-rig";
+import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { captureRig, phoneId, type CaptureRig } from "./_capture-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -64,10 +65,9 @@ async function claim(r: CaptureRig, phone: string, via: { code: string; tok: str
 }
 const link = (r: CaptureRig, phone: string, via: { code: string; tok: string } = r) => postScoringLink(via.code, via.tok, { phone }, r.deps, r.now(), "203.0.113.7");
 
-/** A rig whose phone A is current and whose plan has scoring links — the 200's premise. */
+/** A rig whose phone A is current — the 200's premise. */
 async function ready(opts: Parameters<typeof captureRig>[0] = {}) {
   const r = await captureRig(opts);
-  await override(r.auth.orgId, "scoring.device_links", true);
   const A = phoneId("a");
   await claim(r, A);
   return { r, A };
@@ -341,18 +341,15 @@ describe.skipIf(!HAS_DB)("postScoringLink — the phone's Remote scoring link (�
     expect((await link(decided.r, decided.A)).url).toMatch(URL_PATTERN);
   });
 
-  it("the plan gate: no scoring.device_links → 402 not_entitled, nothing written; an Event Pass on THIS fixture's competition lifts it (resolved against the competition, like the console)", async () => {
+  it("a Community org's phone is served the link, and the repeat is the same url (remote scoring is free on every plan)", async () => {
     const { r, A } = await ready();
-    await sql`delete from org_entitlement_overrides where org_id = ${r.auth.orgId} and feature_key = 'scoring.device_links'`;
+    // The rig seeds a Pro org (streaming needs it); the phone's link must not care what plan it is on.
+    await setOrgPlan(r.auth.orgId, "community");
     await invalidateOrgEntitlements(r.auth.orgId);
-    const got = await refused(link(r, A));
-    expect({ status: got.status, code: got.body.code }).toEqual({ status: 402, code: "not_entitled" });
-    expect(await linksOf(r.fixtureId)).toEqual([]);
-    const [{ competition_id }] = await sql<{ competition_id: string }[]>`
-      select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${r.fixtureId}`;
-    await sql`insert into competition_passes (competition_id, org_id) values (${competition_id}, ${r.auth.orgId})`;
-    await invalidateOrgEntitlements(r.auth.orgId);
-    expect((await link(r, A)).url).toMatch(URL_PATTERN);
+    const first = await link(r, A);
+    expect(first.url).toMatch(URL_PATTERN);
+    expect((await link(r, A)).url).toBe(first.url);
+    expect(await linksOf(r.fixtureId)).toHaveLength(1);
   });
 
   it("no DEVICE_LINK_KEK → 503 unavailable, with no link (nothing written) and with a sealed link to re-open (left untouched); a malformed key is the same", async () => {
@@ -452,8 +449,8 @@ describe.skipIf(!HAS_DB)("postScoringLink — the phone's Remote scoring link (�
   });
 
   it("anti-vacuity: this file asserted raw refusal bodies", () => {
-    // replaced ×2, code_ended ×2 + 2 (the deleted issuer and its wrong-tok twin), match_finished ×3, not_entitled ×1,
+    // replaced ×2, code_ended ×2 + 2 (the deleted issuer and its wrong-tok twin), match_finished ×3,
     // unavailable ×4 + 1.
-    expect(refusalsChecked).toBe(15);
+    expect(refusalsChecked).toBe(14);
   });
 });

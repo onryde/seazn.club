@@ -4,13 +4,13 @@
 // parses with the schema the OpenAPI document publishes for it.
 //
 // Real Postgres required; skipped without DATABASE_URL (CI runs them).
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { FixtureCallPreview, FixtureCallUndone, FixtureCalled } from "@/server/api-v1/schemas";
 import { ROUTES } from "@/server/api-v1/openapi";
 import { createApiKey } from "@/server/usecases/api-keys";
-import { at, between, callRows, person, place, seedCompetition, slotOf, type Day, seedDay } from "@/server/usecases/__tests__/_match-day-seed";
+import { ORG_TZ, at, between, callRows, person, place, seedCompetition, slotOf, type Day, seedDay } from "@/server/usecases/__tests__/_match-day-seed";
 import { msgFor } from "@/lib/messages-i18n";
 import { DELETE as undoRoute, POST as callRoute } from "@/app/api/v1/fixtures/[id]/call/route";
 import { POST as previewRoute } from "@/app/api/v1/fixtures/[id]/call/preview/route";
@@ -62,6 +62,23 @@ describe.skipIf(!HAS_DB)("/api/v1/fixtures/{id}/call", () => {
       on conflict (org_id, feature_key) do update set bool_value = true`;
     await invalidateOrgEntitlements(day.orgId);
     secret = (await createApiKey(day.auth, { name: "match day call route", scopes: ["manage"] })).secret;
+  });
+
+  // The doors read the wall clock (`new Date()`), and the preview judges a call against the org's day: on the real clock a
+  // call made in the last half hour before midnight in Amsterdam runs past the day's end and warns `past_day_end`, so this
+  // file went red every night (CI, 22:59Z). Every test runs at the seed's own T0 instead — 11:00 in Amsterdam, a match
+  // length clear of both ends of the day. Only Date is faked (no timers), so the database client is untouched; the
+  // file-level afterEach's `useRealTimers` restores it.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(at(0));
+  });
+
+  it("premise of the pinned clock: T0 and the latest instant this file calls, queues or places to (+120, with room) are ONE day in the org's zone", () => {
+    // Read with Intl, not with the doors' own day helper: the guard must not agree with the code it protects by construction.
+    const dayIn = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: ORG_TZ, dateStyle: "short" }).format(d);
+    expect(new Date().toISOString(), "the pin holds").toBe(at(0).toISOString());
+    expect(dayIn(at(180)), "three hours after T0 is still T0's day in Amsterdam").toBe(dayIn(at(0)));
   });
 
   it("call → 200; a second match onto the same court → 409 COURT_BUSY with its details on the wire; preview elsewhere → 200; undo → 200; undo again → 409 NOT_CALLED", async () => {
@@ -132,7 +149,7 @@ describe.skipIf(!HAS_DB)("/api/v1/fixtures/{id}/call", () => {
     // The pushed league match is planned at +45 on Court 2; calling another match there at +31 runs it to +61, past its plan.
     await place(day, pushed.id, 45, day.courts.c2);
     const [{ round_no }] = await sql<{ round_no: number }[]>`select round_no from fixtures where id = ${pushed.id}`;
-    // `new Date()` is what the route calls with; only Date is faked (no timers), so the database client is untouched.
+    // `new Date()` is what the route calls with: this test's own minute on the pinned clock (beforeEach).
     vi.setSystemTime(at(31));
     const askedIn = async (locale: string | undefined) => {
       reader.locale = locale;

@@ -157,7 +157,13 @@ export async function pricingV3Suite(): Promise<void> {
     !renderedAttr(upgradeEnded.body, "data-pass-active"),
   );
 
-  const dashboardEnded = await html(buyer, `/o/${orgRow.slug}`);
+  // Match Day C7: the org home hides a finished competition until "Show finished" is on (`?finished=1`), so the page is
+  // read with it on, and the card is asserted PRESENT first: without it the HELD check below passes on an empty page.
+  const dashboardEnded = await html(buyer, `/o/${orgRow.slug}?finished=1`);
+  check(
+    "p301: the finished competition's card is on the org home with Show finished on",
+    dashboardEnded.status === 200 && dashboardEnded.body.includes(`data-comp="${compA.slug}"`),
+  );
   check(
     "p301: dashboard card seal shows ENDED once its competition finished",
     dashboardEnded.status === 200 && renderedAttr(dashboardEnded.body, "data-pass-ended"),

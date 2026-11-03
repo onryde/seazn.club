@@ -12,8 +12,13 @@
 // helper the <UpgradeGate> button uses, never a typed "pro"), WHICH feature key,
 // and that the answer reaches `<TemplateGallery>`'s props.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { walk, propsOf } from "@/components/__tests__/_hook-harness";
+import { readFileSync } from "node:fs";
+import { renderToStaticMarkup } from "react-dom/server";
+import { walk, propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { TemplateGallery } from "@/components/v2/template-gallery";
+import { CompetitionWizard } from "@/components/v2/competition-wizard";
+import { FirstDivisionPrompt } from "@/components/v2/first-division-prompt";
+import { apiV1 } from "@/lib/client-v1";
 import { featurePlan } from "@/lib/feature-copy";
 import { planLabel } from "@/lib/plan-label";
 import { PUBLIC_DASHBOARD_FEATURE } from "@/lib/public-dashboard-upgrade";
@@ -43,8 +48,14 @@ vi.mock("next/navigation", () => ({
   redirect: () => {
     throw new Error("redirected");
   },
+  // The wizard (rendered below, to check what it emits) reads the router.
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
+vi.mock("@/lib/client-v1", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/client-v1")>("@/lib/client-v1");
+  return { ...actual, apiV1: vi.fn() };
+});
 vi.mock("@/lib/i18n", () => ({
   getDictionary: async () => ({}),
   t: (_dict: unknown, key: string) => key,
@@ -63,6 +74,14 @@ beforeEach(() => {
   h.calls = [];
   h.rows = [{ int_value: 10 }];
   h.fail = false;
+});
+
+describe("the create page hands the gallery the org the description editor uploads to", () => {
+  it("orgId is the signed-in org's id, not its slug", async () => {
+    const props = await galleryProps();
+    expect(props.orgId).toBe("org1");
+    expect(props.orgSlug).toBe("riverside");
+  });
 });
 
 describe("the create page supplies the public-dashboard upgrade figure", () => {
@@ -97,5 +116,82 @@ describe("the create page supplies the public-dashboard upgrade figure", () => {
     // The create path must survive a database that the figure did not.
     expect(props.templates).toBeInstanceOf(Array);
     expect((props.templates as unknown[]).length).toBeGreaterThan(0);
+  });
+});
+
+// From `lg` the page widens its <main> (4xl -> 6xl) while the New competition
+// form, or one of the two screens it turns into, is mounted. The page cannot see
+// the gallery's client state, so it keys a CSS `:has()` on an attribute those
+// roots carry. A selector nobody emits (or one the template gallery's own
+// degrade card, inside its modal, also emits) is a page that is the wrong width
+// with every unit suite green, so the selector is held to the components here.
+describe("the page's wide-page selector is held to the components that carry it", () => {
+  const mainClass = async () => {
+    const output = await NewCompetitionPage({ params: Promise.resolve({ orgSlug: "riverside" }) });
+    const main = walk(output).find((el) => el.type === "main")!;
+    return String(propsOf(main).className);
+  };
+  const wizardProps = {
+    orgSlug: "riverside",
+    orgId: "org1",
+    publicDashboardUpgrade: null,
+    viewerPlan: "community" as const,
+  };
+
+  it("widens to 6xl at lg on exactly one attribute, and that attribute is not a testid", async () => {
+    const cls = await mainClass();
+    const hooks = [...cls.matchAll(/lg:has-\[\[([a-z-]+)\]\]:max-w-6xl/g)].map((m) => m[1]!);
+    expect(hooks, `main className: ${cls}`).toHaveLength(1);
+    expect(hooks[0]).toMatch(/^data-wide-page$/);
+    // Below lg it stays the 4xl column (the widening is lg-only).
+    expect(cls).toMatch(/(^|\s)max-w-4xl(\s|$)/);
+    expect(cls).not.toMatch(/(^|\s)max-w-6xl/);
+  });
+
+  it("the form, the degraded-create card and the first-division screen each carry it", async () => {
+    const attr = (await mainClass()).match(/lg:has-\[\[([a-z-]+)\]\]/)![1]!;
+    // 1. the blank form
+    const form = renderIsland(CompetitionWizard, wizardProps);
+    expect(propsOf(form.tree()[0]!)[attr], "the form's root").toBeDefined();
+    // 2. the degraded-create card
+    vi.mocked(apiV1).mockResolvedValue({
+      id: "c1",
+      slug: "autumn-open",
+      visibility: "private",
+      discoverable: false,
+      public_quota_degraded: { feature_key: "dashboard.public.max", limit: 2 },
+    } as never);
+    const named = form.tree().find((el) => el.type === "input" && propsOf(el).maxLength === 200)!;
+    (propsOf(named).onChange as (e: unknown) => void)({ target: { value: "Autumn Open" } });
+    const dates = form.tree().filter((el) => propsOf(el).kind === "date");
+    expect(dates, "the form has a Starts and an Ends date field").toHaveLength(2);
+    (propsOf(dates[1]!).onChange as (v: string) => void)("2030-12-31");
+    const formEl = form.tree().find((el) => el.type === "form")!;
+    await (propsOf(formEl).onSubmit as (e: { preventDefault: () => void }) => unknown)({ preventDefault: () => {} });
+    const degraded = form.tree().find((el) => propsOf(el)["data-testid"] === "public-quota-degraded");
+    expect(degraded, "a degraded create shows its card").toBeDefined();
+    expect(propsOf(degraded!)[attr], "the degraded card's root").toBeDefined();
+    // 3. the first-division screen
+    const prompt = renderToStaticMarkup(
+      <FirstDivisionPrompt
+        orgSlug="riverside"
+        created={{
+          name: "Autumn Open",
+          slug: "autumn-open",
+          visibility: "public",
+          discoverable: false,
+          startsOn: "",
+          endsOn: "2030-12-31",
+        }}
+      />,
+    );
+    expect(prompt).toMatch(new RegExp(`^<div[^>]*${attr}=`));
+  });
+
+  it("the template gallery's own degrade card does NOT carry it (it sits in a modal and must not widen the page)", () => {
+    const gallery = readFileSync(new URL("../../../../../../components/v2/template-gallery.tsx", import.meta.url), "utf8");
+    // Anti-vacuity: the card this guards is really in that file.
+    expect(gallery).toContain('data-testid="public-quota-degraded"');
+    expect(gallery).not.toContain("data-wide-page");
   });
 });

@@ -1054,7 +1054,7 @@ export async function main() {
   // --- Format matrix W2a (Task 17): a knockout always finishes. A level
   // football semi is held and settled by lot, a drawn chess game is decided by
   // its Armageddon tie-break, a level generic result is refused, and a device
-  // link may not settle. Own fresh org (repriced to Pro for the device link);
+  // link may not settle. Own fresh org (repriced to Pro);
   // keyless-safe.
   await suite("bracketFinish", () => bracketFinishSuite());
 

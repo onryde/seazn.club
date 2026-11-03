@@ -23,8 +23,11 @@ test("card grid: competition card renders match-day anatomy and navigates", asyn
   await expect(card).toBeVisible();
   // Status chip vocabulary (v3/03 §1): a fresh competition reads "Draft".
   await expect(card.getByText("Draft", { exact: true })).toBeVisible();
+  // Nothing scheduled yet: the card ends in the Match Day C7 stub, whose own link ("Set up the draw for Card Nav …") also
+  // carries the name — so the card's stretched link is asked for by its EXACT name.
+  await expect(card.getByTestId("org-home-stub")).toHaveAttribute("data-stub", "no_fixtures");
   // Whole card is the click target (stretched link).
-  await card.getByRole("link", { name: `Card Nav ${TAG}` }).click();
+  await card.getByRole("link", { name: `Card Nav ${TAG}`, exact: true }).click();
   // PROMPT-30: cards navigate to the slug URL.
   await page.waitForURL(/\/o\/[^/]+\/c\/[^/?]+$/, { timeout: 20_000 });
   await expect(page.getByRole("heading", { name: `Card Nav ${TAG}` })).toBeVisible();

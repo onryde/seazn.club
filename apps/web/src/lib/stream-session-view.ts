@@ -176,7 +176,8 @@ export const END_REASON_KEYS: Record<StreamEndReason, MessageKey> = {
  *  seventh YouTube code does not compile here until it has copy (`CREATE_ERROR_KEYS`) and a fix (`YOUTUBE_REFUSAL_FIX`). */
 export const CREATE_ERROR_CODES = [
   "no_credits", "overlay_required", "active_session", "phone_not_paired", "phone_not_responding", "storage_exhausted", "ingest_unavailable",
-  "composed_unavailable", "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", ...YOUTUBE_REFUSAL_CODES, "unknown",
+  "composed_unavailable", "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", "competition_frozen",
+  ...YOUTUBE_REFUSAL_CODES, "unknown",
 ] as const;
 export type CreateErrorCode = (typeof CREATE_ERROR_CODES)[number];
 
@@ -197,6 +198,8 @@ export const CREATE_ERROR_KEYS: Record<CreateErrorCode, MessageKey> = {
   destination_not_allowed: "stream.error.destination_not_allowed",
   target_unreadable: "stream.error.target_unreadable",
   plan_lacks_relay: "stream.error.plan_lacks_relay",
+  // Match Day PB2 fix round 1 (m5): a stale tab's Go live after the competition froze — the freeze's own 402 says why.
+  competition_frozen: "stream.error.competition_frozen",
   // YouTube Connect T12 (spec §6.2): one sentence per refusal, the reason only — "nothing was started or charged" is the panel's own
   // line under it (`stream.youtube.refused.nothing`), said once for all six.
   youtube_reconnect_needed: "stream.error.youtube_reconnect_needed",
@@ -261,6 +264,9 @@ export function createErrorCode(err: unknown): CreateErrorCode {
   if (w.code === DESTINATION_NOT_ALLOWED) return "destination_not_allowed";
   if (w.code === TARGET_UNREADABLE) return "target_unreadable";
   if (w.code === "PAYMENT_REQUIRED" && PLAN_GATE_FEATURES.includes(w.extra.feature_key as string)) return "plan_lacks_relay";
+  // PB2 m5: the billing freeze (entitlement-freeze.ts `assertCompetitionNotFrozen`, asked at the one start seam) — a panel
+  // opened before the competition froze. Not a plan gate on streaming (no UpgradeGate): the competition is over its quota.
+  if (w.code === "PAYMENT_REQUIRED" && w.extra.feature_key === "competitions.max_active") return "competition_frozen";
   // A YouTube refusal rides the wire as its own lower-case code (prepare.ts `youtubeRefusal`). Only the six this list names: a
   // `youtube_*` code a newer server adds reads as `unknown` (the generic retry line) — never as its raw code on screen.
   if (isYoutubeRefusalCode(w.code)) return w.code;
@@ -560,6 +566,8 @@ export const AUTO_REFUSAL_KEYS: Record<AutoRefusal, MessageKey> = {
   not_entitled: "stream.auto.refusal.not_entitled",
   destination_in_use: "stream.auto.refusal.destination_in_use",
   unavailable: "stream.auto.refusal.unavailable",
+  // PB2 re-review 1, m10: served (never stored) while the competition is billing-frozen — the manual Go live's own reason (m5).
+  competition_frozen: "stream.auto.refusal.competition_frozen",
 };
 
 /** B4 fix round 1, I-2: the destination an automatic start tried, as far as the strip needs it — whether it is a connected YouTube
@@ -603,6 +611,7 @@ export const AUTO_REFUSAL_REMEDY: Record<AutoRefusal, AutoRefusalRemedy | undefi
   not_entitled: undefined,
   destination_in_use: undefined,
   unavailable: undefined,
+  competition_frozen: undefined,
 };
 
 /** §7.4: "Phone · 78% charging · 2.4 Mbps · heard 4 s ago" — the read model's readings and the server's `elapsedMs`. */

@@ -1,9 +1,9 @@
 // Scorer sheets §4.4 — the schedule page's `printable` guard and what it hands
 // the print control. Printing mints scoring links, so only an editor on a
 // competition that is not billing-frozen (D8) sees the control; the day list
-// is only read for them; the device-links gate is asked for THIS competition
-// (an Event Pass lifts one competition — pass-scoping-guard's rule); and the
-// default day is "today" on the ORG clock, never the machine's.
+// is only read for them; remote scoring is free on every plan, so a Community
+// org (the plan this file renders as) gets the control too; and the default
+// day is "today" on the ORG clock, never the machine's.
 //
 // Same technique as venues-prop.test.tsx beside it (no jsdom): call the server
 // component and walk the returned element tree. That proves the WIRING — a
@@ -15,15 +15,11 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 const state = vi.hoisted(() => ({
   canEdit: true,
   frozen: false,
-  deviceLinks: true,
   orgTz: "Europe/London",
 }));
 const sheets = vi.hoisted(() => ({ listSheetDays: vi.fn(async (): Promise<string[]> => ["2026-09-23"]) }));
 const ent = vi.hoisted(() => ({
-  // (orgId, featureKey, competitionId?) — lib/entitlements.ts's signature.
-  hasFeature: vi.fn(async (...args: [string, string, string?]) =>
-    args[1] === "scoring.device_links" ? state.deviceLinks : true,
-  ),
+  hasFeature: vi.fn(async () => true),
   orgPlanKey: vi.fn(async () => "community"),
 }));
 
@@ -92,14 +88,14 @@ const renderPage = () =>
   CompetitionSchedulePage({ params: Promise.resolve({ orgSlug: "org", compSlug: "comp" }) });
 
 beforeEach(() => {
-  Object.assign(state, { canEdit: true, frozen: false, deviceLinks: true, orgTz: "Europe/London" });
+  Object.assign(state, { canEdit: true, frozen: false, orgTz: "Europe/London" });
   sheets.listSheetDays.mockClear().mockImplementation(async () => ["2026-09-23"]);
   ent.hasFeature.mockClear();
 });
 afterEach(() => vi.useRealTimers());
 
 describe("schedule page — the scorer-sheets print control (§4.4)", () => {
-  it("an editor on a live competition gets the print control, opening at the default day", async () => {
+  it("an editor on a live competition gets the print control, opening at the default day — on a Community org too", async () => {
     state.canEdit = true;
     state.frozen = false;
     const el = find(await renderPage(), PrintScorerSheets);
@@ -108,8 +104,6 @@ describe("schedule page — the scorer-sheets print control (§4.4)", () => {
     expect(printProps(el)).toMatchObject({
       action: "/api/v1/competitions/comp-1/exports/scorer-sheets",
       days: ["2026-09-23"],
-      allowed: true,
-      viewerPlan: "community",
     });
     expect(sheets.listSheetDays).toHaveBeenCalledWith(expect.objectContaining({ orgId: "org-1" }), "comp-1");
   });
@@ -131,14 +125,6 @@ describe("schedule page — the scorer-sheets print control (§4.4)", () => {
     expect(find(tree, ScheduleBoard)).not.toBeNull();
     expect(find(tree, PrintScorerSheets)).toBeNull();
     expect(sheets.listSheetDays).not.toHaveBeenCalled();
-  });
-
-  it("without device links for THIS competition the control is handed allowed=false (the upgrade gate), asked with the competition id", async () => {
-    state.deviceLinks = false;
-    const el = find(await renderPage(), PrintScorerSheets);
-    expect(el).not.toBeNull();
-    expect(printProps(el).allowed).toBe(false);
-    expect(ent.hasFeature).toHaveBeenCalledWith("org-1", "scoring.device_links", "comp-1");
   });
 
   it("no printable day → the control is handed an empty list and no default (it renders nothing)", async () => {
