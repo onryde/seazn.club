@@ -58,7 +58,13 @@ test("D2 a new badminton division is bwf-3x15: the builder opens on it, says why
   await page.getByRole("textbox").first().fill(`Singles ${TAG}`);
   await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption("badminton");
 
-  const picker = page.getByTestId("division-builder-variant");
+  // Match Day C9: the variant is asked on the builder's Division rules step, by the Division rules strip itself (its
+  // Match rules panel opens there), so the builder and Settings share one picker.
+  const rulesStep = page.getByTestId("division-builder-step-rules");
+  const whoStep = page.getByTestId("division-builder-step-who");
+  await rulesStep.click();
+  await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "rules");
+  const picker = page.getByTestId("division-settings-variant");
   await expect(picker).toHaveValue("bwf-3x15", { timeout: STEP_MS });
   // Labelled, not the raw key: the picker prints the dictionary's words for both formats.
   await expect(picker.locator("option:checked")).toHaveText(L["variant.badminton.bwf3x15"]!);
@@ -70,13 +76,19 @@ test("D2 a new badminton division is bwf-3x15: the builder opens on it, says why
   } else {
     await expect(hint, "from BWF's day the dated note is gone").toHaveCount(0);
   }
-  // The note is not on a sport that has none: it is the picker's state, not a fixed banner.
+  // The note is not on a sport that has none: it is the picker's state, not a fixed banner. The sport is asked on Who
+  // plays; back there (free), tennis, and forward again.
+  await whoStep.click();
   await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption("tennis");
+  await rulesStep.click();
+  await expect(page.getByTestId("division-settings-variant")).toBeVisible();
   await expect(page.getByTestId("division-variant-hint")).toHaveCount(0);
+  await whoStep.click();
   await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption("badminton");
-  await expect(page.getByTestId("division-builder-variant")).toHaveValue("bwf-3x15");
+  await rulesStep.click();
+  await expect(page.getByTestId("division-settings-variant")).toHaveValue("bwf-3x15");
 
-  await page.getByRole("button", { name: L["wizard.tab.scheduling"], exact: true }).click();
+  await page.getByRole("button", { name: L["divBuilder.step.review"], exact: true }).click();
   await page.getByRole("button", { name: /create division/i }).click();
   await page.waitForURL(/\/o\/[^/]+\/c\/[^/]+\/d\/(?!new(?:$|[/?]))[^/?]+/, { timeout: STEP_MS });
   const slug = page.url().match(/\/d\/([^/?]+)/)![1]!;

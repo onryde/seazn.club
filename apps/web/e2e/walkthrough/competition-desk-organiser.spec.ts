@@ -25,8 +25,8 @@ test("an organiser watches the desk go Setting up → Scheduled → Today (a mat
 
   // 2. One division, made by hand: the row appears with its sport glyph and Setting up.
   // "generic" explicitly — the wizard's unset default is alphabetically
-  // first ("badminton", individual/pair only, division-builder.tsx has no
-  // separate entrant-kind picker) and step 3 needs a TEAM division whose
+  // first ("badminton", individual/pair only; the builder's entrant kind opens
+  // at the sport's own default and createDivisionViaUi leaves it) and step 3 needs a TEAM division whose
   // fixtures step 6's scoreFixture (event type "generic.result") can settle;
   // "football" satisfies the first but 422s "unknown event type
   // generic.result" on the second (confirmed by running this spec) — the
@@ -44,7 +44,7 @@ test("an organiser watches the desk go Setting up → Scheduled → Today (a mat
   // 3. Reach: entrants + generated fixtures (API). Read: Needs you names the unscheduled round.
   const entrantsRes = await addEntrantsViaApi(request, divId, ["Riverside FC", "Valley CC", "Lakeside FC", "Harbour CC"], "team");
   if (entrantsRes.status >= 300) throw new Error(`entrants failed: ${entrantsRes.status} ids=${JSON.stringify(entrantsRes.ids)}`);
-  // The wizard's own Scheduling step (createDivisionViaUi) already defines
+  // The wizard's own Create (createDivisionViaUi) already defines
   // the stage graph on create — a manual POST .../stages at seq 1 here 409s
   // "stage seq 1 already exists" (confirmed by running this spec). Read the
   // stage the wizard made instead of declaring a second one.

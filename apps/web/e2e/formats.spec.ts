@@ -7,6 +7,7 @@ import {
   addEntrantsViaApi,
   expectNoHorizontalScroll,
   openBracket,
+  showAllFormats,
   stageCardOf,
 } from "./helpers";
 
@@ -19,14 +20,19 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
   });
   await page.goto(await competitionPath(page.request, comp.data!.id, "/d/new"));
 
-  // The builder is tabbed; moving forward validates the current tab, so fill
-  // the required division name before opening the Format tab.
+  // The builder is in steps; moving forward validates the steps before, so fill
+  // the required division name before opening the Format step.
   await page.getByRole("textbox").first().fill(`Formats ${TAG}`);
   await page.getByRole("button", { name: "Format", exact: true }).click();
+  // Four formats are suggested for the plan; the rest of the offer is one tap away.
+  await expect(page.locator("label[data-suggested]")).toHaveCount(4);
+  await showAllFormats(page);
 
-  // The new presets are visible on the format picker.
-  await expect(page.getByText("Americano (padel)")).toBeVisible();
-  await expect(page.getByText("Mexicano (padel)")).toBeVisible();
+  // The new presets are visible on the format picker. Americano and Mexicano are
+  // named without "(padel)" since Match Day C9: the builder offers them to
+  // badminton too (the default sport here), so the label names no one sport.
+  await expect(page.getByText("Americano", { exact: true })).toBeVisible();
+  await expect(page.getByText("Mexicano", { exact: true })).toBeVisible();
   await expect(page.getByText("Ladder", { exact: true })).toBeVisible();
   // L3/#414 pass 3 — the two new qualification-from-any-stage presets.
   await expect(page.getByText("Knockout + Plate", { exact: true })).toBeVisible();
@@ -81,10 +87,13 @@ test("ko_plate template: completing the main draw computes a seed proposal; conf
   // accessible name is "SportBadmintonBoardgame…Volleyball" — never the bare
   // "Sport" getByLabel(exact) would need.
   await page.locator("label", { hasText: "Sport" }).locator("select").selectOption({ label: "Generic" });
-  await page.locator("label", { hasText: "Variant" }).locator("select").selectOption({ label: "Score" });
   await page.getByRole("button", { name: "Format", exact: true }).click();
+  await showAllFormats(page);
   await page.getByText("Knockout + Plate", { exact: true }).click();
-  await page.getByRole("button", { name: "Scheduling", exact: true }).click();
+  // The variant is on Division rules (the rules strip's own select) since Match Day C9.
+  await page.getByTestId("division-builder-next").click();
+  await page.locator("label", { hasText: "Variant" }).locator("select").selectOption({ label: "Score" });
+  await page.getByRole("button", { name: "Review", exact: true }).click();
   await page.getByRole("button", { name: /create division/i }).click();
   await page.waitForURL(/\/o\/[^/]+\/c\/[^/]+\/d\/(?!new(?:$|[/?]))[^/?]+/, { timeout: 20_000 });
   const slug = page.url().match(/\/d\/([^/?]+)/)![1]!;
@@ -254,8 +263,8 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   // Generic/Score, for the same reason ko_plate above picks it: the wizard
   // defaults to the catalog's first sport and `generic.result` would 422.
   await page.locator("label", { hasText: "Sport" }).locator("select").selectOption({ label: "Generic" });
-  await page.locator("label", { hasText: "Variant" }).locator("select").selectOption({ label: "Score" });
   await page.getByRole("button", { name: "Format", exact: true }).click();
+  await showAllFormats(page);
   await page.getByText("Swiss Knockout", { exact: true }).click();
 
   // The knob: scoped by "Qualify to finals", NOT bare "Qualify" — the
@@ -277,8 +286,9 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   expect([await valid(1), await valid(2), await valid(32), await valid(33)]).toEqual([false, true, true, false]);
   // Fix round 1 (M1): a value past either end is refused before any POST, by
   // a sentence naming the field, never clamped into one the organiser did not
-  // type. 33 is still in the box from the check above.
-  await page.getByRole("button", { name: "Scheduling", exact: true }).click();
+  // type. 33 is still in the box from the check above. A jump to Review walks the
+  // steps before it and stops on the first unfinished one: this one.
+  await page.getByRole("button", { name: "Review", exact: true }).click();
   await expect(page.getByTestId("division-builder-error")).toHaveText("Qualify to finals: choose a whole number from 2 to 32.");
   await expect(page.getByTestId("division-builder-create")).toHaveCount(0);
   // A reachability check would pass on any value, so drive the case a
@@ -296,7 +306,9 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   // rather than trusting the default.
   await page.getByLabel("Rounds", { exact: true }).fill("3");
 
-  await page.getByRole("button", { name: "Scheduling", exact: true }).click();
+  await page.getByTestId("division-builder-next").click();
+  await page.locator("label", { hasText: "Variant" }).locator("select").selectOption({ label: "Score" });
+  await page.getByRole("button", { name: "Review", exact: true }).click();
   await page.getByRole("button", { name: /create division/i }).click();
   await page.waitForURL(/\/o\/[^/]+\/c\/[^/]+\/d\/(?!new(?:$|[/?]))[^/?]+/, { timeout: 30_000 });
   const slug = page.url().match(/\/d\/([^/?]+)/)![1]!;

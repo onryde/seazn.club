@@ -157,12 +157,12 @@ export function hubAssignTargetSelector(targetRegistrationId: string): string {
 
 /**
  * `label[data-category="mens"|"womens"|"mixed"|"open"]` —
- * `division-builder.tsx:655-670`, `B03r-repins-2026-09-03.md`'s two traps:
- * `data-category` is on the LABEL, never the underlying (`sr-only`) radio —
- * clicking the radio directly is "not visible"/gets intercepted — and the
- * enclosing fieldset is closed on mount (`tab` state defaults to `"basics"`
- * — see this file's own `division-builder.tsx` caller for opening the
- * eligibility tab first). Exported as a pure selector builder for a FUTURE
+ * `division-builder.tsx` (the Who plays step), `B03r-repins-2026-09-03.md`'s
+ * trap: `data-category` is on the LABEL, never the underlying (`sr-only`)
+ * radio — clicking the radio directly is "not visible"/gets intercepted.
+ * Since Match Day C9 the chips sit on the builder's FIRST step, shown on
+ * mount (they used to sit on a closed Eligibility tab). Exported as a pure
+ * selector builder for a FUTURE
  * caller that drives the wizard (`_tiny`'s own registration division never
  * does — see this file's header comment on why division creation is always
  * the plain `POST .../divisions` call, one of `B03r-repins-2026-09-03.md`'s

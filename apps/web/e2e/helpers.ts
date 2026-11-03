@@ -2519,17 +2519,32 @@ export async function createCompetitionViaUi(
 }
 
 /**
- * Create a division through the tabbed builder UI (basics → scheduling →
- * Create). Uses the builder's defaults for sport/format unless `sportKey` is
- * given; returns the division id parsed from the post-create URL.
+ * The division builder's Format step (Match Day C9) suggests four formats for
+ * the plan and folds the rest of the sport's offer under Show all. Unfold it,
+ * once, so a test can reach any card; a second call is a no-op (it reads
+ * `aria-expanded` rather than toggling blind). Call it on the Format step.
+ */
+export async function showAllFormats(page: Page): Promise<void> {
+  const showAll = page.getByTestId("division-builder-show-all");
+  await expect(showAll).toBeVisible();
+  if ((await showAll.getAttribute("aria-expanded")) !== "true") await showAll.click();
+  await expect(showAll).toHaveAttribute("aria-expanded", "true");
+}
+
+/**
+ * Create a division through the 4-step builder UI (Who plays → the Review
+ * step → Create; Match Day C9). The step nav's Review button walks every step
+ * before it and stops on the first unfinished one, so the defaults for
+ * format and rules ride through. Uses the builder's defaults for sport/format
+ * unless `sportKey` is given; returns the division id parsed from the
+ * post-create URL (the division's Fixtures tab).
  *
- * The builder has no separate entrant-kind picker (competition-desk e2e:
- * confirmed by reading division-builder.tsx — no entrantKind/team/pairs
- * control anywhere in it) — allowed entrant kinds are DERIVED from the
- * sport+variant module, so a walkthrough that needs team entrants must pick
- * a team sport here rather than pass a kind. Sports load `order by name`
- * (d/new/page.tsx), so the unset default is alphabetically first
- * ("badminton" — individual/pair only), not whatever the caller assumed.
+ * Who plays asks the entrant kind (Match Day C9) and opens at the sport's
+ * OWN default (badminton: individuals; football: teams), which this helper
+ * leaves alone - so a walkthrough that needs team entrants still picks a team
+ * sport here. Sports load `order by name` (d/new/page.tsx), so the unset
+ * default is alphabetically first ("badminton"), not whatever the caller
+ * assumed.
  */
 export async function createDivisionViaUi(
   page: Page,
@@ -2538,11 +2553,11 @@ export async function createDivisionViaUi(
   sportKey?: string,
 ): Promise<string> {
   await page.goto(await competitionPath(page.request, competitionId, "/d/new"));
-  // The name field is the first textbox on the Basics tab (see formats.spec.ts).
+  // The name field is the first textbox on the Who plays step (see formats.spec.ts).
   await page.getByRole("textbox").first().fill(name);
   if (sportKey) await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption(sportKey);
-  // Creation is guarded to the last tab.
-  await page.getByRole("button", { name: "Scheduling", exact: true }).click();
+  // Create is on the last step, Review; its step button walks the steps before it.
+  await page.getByRole("button", { name: "Review", exact: true }).click();
   await page.getByRole("button", { name: /create division/i }).click();
   // PROMPT-30: builder lands on the division slug URL — resolve id via API.
   await page.waitForURL(/\/o\/[^/]+\/c\/[^/]+\/d\/(?!new(?:$|[/?]))[^/?]+/, { timeout: 20_000 });

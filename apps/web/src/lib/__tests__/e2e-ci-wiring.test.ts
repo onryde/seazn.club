@@ -234,6 +234,10 @@ const WALKTHROUGH_SPECS: string[] = [
   // rich-text boxes, Settle on a frozen run sheet, the New competition form's
   // "created private" note on a full public limit, and the frozen banner's names.
   "match-day-pb3-minors.spec.ts",
+  // Match Day C9 — the division builder in four steps, tapped from the
+  // competition page to the new division's Fixtures tab: Edit from Review,
+  // chess with a Lichess clock, and every field read back from the database.
+  "division-builder.spec.ts",
 
   // Settings W2 — the organisation and news panels, the four people-facing
   // tabs (team, api, preferences, account), and the five-org support cap.

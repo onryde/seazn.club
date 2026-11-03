@@ -65,6 +65,7 @@ import {
   expectNoHorizontalScroll,
   openBracket,
   scoreFixture,
+  showAllFormats,
 } from "../helpers";
 // A genuinely signed-out context with the cookie banner already dismissed —
 // the spectator surfaces' own helper, never a bare `browser.newContext()`
@@ -228,9 +229,9 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   // depends on it.
   const compId = await createCompetitionViaUi(page, `Draw Feeders ${TAG}`, "public");
 
-  // The division through the wizard, on the Format tab, picking the template
-  // that ships two stages. `createDivisionViaUi` never visits that tab and
-  // always ships one `league` stage, which has no sibling-fed seat in it.
+  // The division through the wizard, on the Format step, picking the template
+  // that ships two stages. `createDivisionViaUi` never picks there and always
+  // ships one `league` stage, which has no sibling-fed seat in it.
   await visit(page, await competitionPath(request, compId, "/d/new"));
   await page.getByRole("textbox").first().fill(`Singles ${TAG}`);
   // `generic` explicitly: the wizard defaults to whichever sport sorts first
@@ -239,6 +240,9 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   // `422 unknown event type` — a sport choice, not a scoring defect.
   await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption("generic");
   await page.getByRole("button", { name: L["wizard.tab.format"], exact: true }).click();
+  // Match Day C9: four formats are suggested for the plan; the rest of the
+  // sport's offer is under Show all.
+  await showAllFormats(page);
   // The radio is `sr-only` inside its card `<label>`, and the label's text is
   // title + help, so an exact accessible-name match cannot address it.
   const leagueKo = page
@@ -247,7 +251,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
     .filter({ hasText: L["format.template.league_ko.label"] });
   await leagueKo.click();
   await expect(leagueKo.locator("input"), "the League + Finals radio did not take").toBeChecked();
-  await page.getByRole("button", { name: L["wizard.tab.scheduling"], exact: true }).click();
+  await page.getByRole("button", { name: L["divBuilder.step.review"], exact: true }).click();
   await page.getByRole("button", { name: /create division/i }).click();
   await visitBySubmit(page, /\/o\/[^/]+\/c\/[^/]+\/d\/(?!new(?:$|[/?]))[^/?]+/);
   const divSlug = page.url().match(/\/d\/([^/?]+)/)![1]!;
