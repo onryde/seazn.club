@@ -779,6 +779,9 @@ test("chess: online play is asked first, Lichess is refused without one of its e
   // The witness: the history moved something - the order is not the one with no history at all.
   const noHistory = [...POPULAR, ...REGISTRY.filter((k) => !POPULAR.includes(k) && k !== "generic"), "generic"];
   expect(agreed.filter((k) => REGISTRY.includes(k)), "the organisation's own sports lead, so the order is not the no-history one").not.toEqual(noHistory);
+  // C9 round 3: the builder opens on that first tile - the organisation's latest sport - and on no other.
+  await expect(page.locator(`label[data-sport="${agreed[0]}"] input`), `it opens on the first tile, ${agreed[0]}`).toBeChecked();
+  await expect(page.locator('input[name="division-sport"]:checked')).toHaveCount(1);
   await page.getByTestId("division-builder-sport").screenshot({ path: testInfo.outputPath("sport-order-history-1280.png") });
 });
 

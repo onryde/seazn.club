@@ -3,8 +3,8 @@
 // stage (422 CHESS_INDIVIDUAL_ONLY). The picker renders the sport's offer (format-templates.ts templatesForSport).
 //
 // Same plain-SSR harness as division-builder-format-picker-i18n.test.tsx: the Format step is CSS-hidden, not
-// JS-conditional, so its cards are in a renderToStaticMarkup pass. The builder starts on `sports[0]`, so each render
-// names the sport it is about first. Expected cards come from the ruling (chess loses americano and mexicano) and the
+// JS-conditional, so its cards are in a renderToStaticMarkup pass. The builder starts on the first tile shown (C9 round
+// 3: the organisation's latest sport), so each render names the sport it is about as that history, and checks it. Expected cards come from the ruling (chess loses americano and mexicano) and the
 // en dictionary, never from templatesForSport.
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -30,9 +30,12 @@ const OFFERED = STAGE_TEMPLATES.filter((t) => t.key !== "triple_rr");
 function picker(first: SportOption): string {
   const html = renderToStaticMarkup(
     <DictProvider dict={enUi as Dict} locale="en">
-      <DivisionBuilder competitionId="c1" orgSlug="org" compSlug="comp" sports={[first, first === CHESS ? BADMINTON : CHESS]} viewerPlan="community" />
+      <DivisionBuilder competitionId="c1" orgSlug="org" compSlug="comp" sports={[first, first === CHESS ? BADMINTON : CHESS]} recentSports={[first.key]} viewerPlan="community" />
     </DictProvider>,
   );
+  // The render is about `first`: its tile is the checked one (`checked=""` on the one radio of that value).
+  const opened = [...html.matchAll(/<input[^>]*name="division-sport"[^>]*>/g)].map((m) => m[0]).filter((t) => /\schecked=""/.test(t));
+  if (opened.length !== 1 || !opened[0]!.includes(`value="${first.key}"`)) throw new Error(`the builder did not open on ${first.key}`);
   // The picker's own card grid, bounded as division-builder-format-picker-i18n.test.tsx bounds it.
   const start = html.indexOf('data-testid="division-builder-templates"');
   const end = html.indexOf("</fieldset>", start);

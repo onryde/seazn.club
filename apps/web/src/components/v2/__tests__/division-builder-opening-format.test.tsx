@@ -49,17 +49,26 @@ const ALL: SportOption[] = sportOptionsFrom(
   },
 );
 const sportsFor = (...keys: string[]) => keys.map((k) => ALL.find((s) => s.key === k)!);
-const mount = (sports: SportOption[], over: Partial<Parameters<typeof DivisionBuilder>[0]> = {}) =>
-  renderIsland(DivisionBuilder, {
+/** The builder, opening on `sports[0]` unless a test hands its own history: it opens on the first tile shown (C9 round
+ *  3), so the organisation's history names `sports[0]` - the real path to that opening - and the mount checks it. */
+const mount = (sports: SportOption[], over: Partial<Parameters<typeof DivisionBuilder>[0]> = {}) => {
+  const h = renderIsland(DivisionBuilder, {
     competitionId: "c1",
     orgSlug: "org",
     compSlug: "comp",
     sports,
+    recentSports: sports[0] ? [sports[0].key] : [],
     constraintsAllowed: true,
     archivedSlotsExplainRefusal: false,
     viewerPlan: "pro",
     ...over,
   });
+  if (over.recentSports === undefined && sports[0]) {
+    const opened = h.tree().filter((e) => e.type === "input" && propsOf(e).name === "division-sport" && propsOf(e).checked === true).map((e) => propsOf(e).value);
+    if (opened.length !== 1 || opened[0] !== sports[0].key) throw new Error(`the builder opened on ${opened.join(",")}, not ${sports[0].key}`);
+  }
+  return h;
+};
 type H = ReturnType<typeof mount>;
 async function flush() {
   for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));

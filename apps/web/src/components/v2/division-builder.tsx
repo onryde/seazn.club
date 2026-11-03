@@ -89,6 +89,7 @@ import {
   formatPickerOrder,
   rankTemplates,
   sportPickerOrder,
+  defaultSportKey,
   stepForCreateError,
   SUGGESTED_COUNT,
   type BuilderStep,
@@ -363,7 +364,10 @@ export function DivisionBuilder({
 
   // --- 1 Who plays ---
   const [name, setName] = useState("");
-  const [sportKey, setSportKey] = useState(sports[0]?.key ?? "");
+  // C9 round 3: the builder opens on the first tile the Sport step shows (the organisation's latest sport, else football),
+  // and the kind and match length it opens with are that sport's.
+  const openingSport = sports.find((s) => s.key === defaultSportKey(sports.map((x) => x.key), recentSports));
+  const [sportKey, setSportKey] = useState(openingSport?.key ?? "");
   const sport = useMemo(() => sports.find((s) => s.key === sportKey), [sports, sportKey]);
   // C9 R2: the Sport picker's tiles, in its order (the organisation's own, the popular five, the registry, generic last);
   // five shown until Show more, the picked one never folded away.
@@ -372,7 +376,7 @@ export function DivisionBuilder({
   const sportsShown = collapsedPicks(sportOrder, sportKey);
   const sportFolded = (key: string) => !sportsOpen && !sportsShown.includes(key);
   const sportsFoldedCount = sportOrder.filter(sportFolded).length;
-  const [entrantKind, setEntrantKind] = useState<EntrantKind | null>(() => sports[0]?.entrants?.defaultKind ?? null);
+  const [entrantKind, setEntrantKind] = useState<EntrantKind | null>(() => openingSport?.entrants?.defaultKind ?? null);
   const [entrantKindTouched, setEntrantKindTouched] = useState(false);
   const [eligibilityOpen, setEligibilityOpen] = useState(false);
   const [maxAge, setMaxAge] = useState("");
@@ -431,7 +435,7 @@ export function DivisionBuilder({
   const [courts, setCourts] = useState<string[]>([]);
   // The sport's (or variant's) default until the organiser types one; an online division's control overrides it below.
   const [sportMatchMinutes, setMatchMinutes] = useState(() =>
-    defaultMatchMinutes(sports[0]?.key, sports[0] ? pickVariant(sports[0].key, sports[0].variants) : ""),
+    defaultMatchMinutes(openingSport?.key, openingSport ? pickVariant(openingSport.key, openingSport.variants) : ""),
   );
   // Once the organiser edits the length, stop auto-filling it from the sport.
   const [matchMinutesTouched, setMatchMinutesTouched] = useState(false);

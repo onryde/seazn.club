@@ -10,6 +10,7 @@ import {
   BUILDER_STEPS,
   SUGGESTED_COUNT,
   collapsedPicks,
+  defaultSportKey,
   entrantKindAfterSportChange,
   entrantsConfigFor,
   divisionEntrantKinds,
@@ -447,5 +448,49 @@ describe("the sport picker's order (owner 2026-11-03): the organisation's own, t
       }
     }
     expect(pinned, "some sport sits past the first five, so the pin is exercised").toBeGreaterThan(0);
+  });
+});
+
+// C9 round 3 (controller ruling): the builder opens on the FIRST TILE the Sport step shows - the organisation's most
+// recent sport, else football (the owner's popular order, 2026-11-03) - never on whatever the page listed first.
+describe("the default sport is the first tile shown (C9 round 3)", () => {
+  it("empty case first: no sports listed opens on none; only generic listed opens on generic", () => {
+    expect(defaultSportKey([], [])).toBe("");
+    expect(defaultSportKey([], ["football"])).toBe("");
+    expect(defaultSportKey(["generic"], [])).toBe("generic");
+    expect(defaultSportKey(["generic"], ["generic"])).toBe("generic");
+  });
+
+  it("no history: football, whatever order the page lists the registry in (the registry ships it, and not first)", () => {
+    expect(REGISTRY, "premise: the registry ships football").toContain("football");
+    // The witness: the page lists sports by name (d/new/page.tsx `order by name`; the key stands in), so its first row
+    // is not football - opening on the page's first row would differ.
+    expect([...REGISTRY].sort()[0], "witness: the page's first row is not football").not.toBe("football");
+    expect(defaultSportKey(REGISTRY, [])).toBe("football");
+    expect(defaultSportKey([...REGISTRY].sort(), [])).toBe("football");
+    expect(defaultSportKey([...REGISTRY].reverse(), [])).toBe("football");
+  });
+
+  it("each registry sport as the most recent one opens on it, generic excepted (it stays last, so football opens) (counts)", () => {
+    let checked = 0;
+    for (const k of REGISTRY) {
+      expect(defaultSportKey(REGISTRY, [k, "tennis"]), k).toBe(k === "generic" ? "tennis" : k);
+      checked++;
+    }
+    expect(checked).toBe(REGISTRY.length);
+    expect(defaultSportKey(REGISTRY, ["generic"])).toBe("football");
+  });
+
+  it("a history the page does not list is skipped; without football the next popular sport opens; it is always a listed sport", () => {
+    expect(defaultSportKey(["badminton", "tennis", "generic"], ["hockey"])).toBe("badminton");
+    expect(defaultSportKey(REGISTRY.filter((k) => k !== "football"), [])).toBe(POPULAR[1]);
+    expect(defaultSportKey(["padel", "generic"], [])).toBe("padel");
+    let listed = 0;
+    for (let n = 1; n <= REGISTRY.length; n++) {
+      const keys = REGISTRY.slice(-n);
+      expect(keys, `${n}`).toContain(defaultSportKey(keys, []));
+      listed++;
+    }
+    expect(listed).toBe(REGISTRY.length);
   });
 });

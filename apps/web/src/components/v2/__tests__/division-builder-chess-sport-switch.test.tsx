@@ -34,17 +34,22 @@ const REFUSED_FOR_CHESS = ["americano", "mexicano"];
 // Retired from every sport's offer (owner ruling 2026-11-01, Match Day D1): triple-rr-retired.test.tsx sweeps it.
 const OFFERED_KEYS = STAGE_TEMPLATES.map((t) => t.key).filter((k) => k !== "triple_rr");
 
-/** The builder, opening on `sports[0]`. */
+/** The builder, opening on `sports[0]`: it opens on the first tile shown (C9 round 3), so the organisation's history
+ *  names `sports[0]` - the real path to that opening - and the mount checks it landed there. */
 function mount(sports: SportOption[]) {
-  return renderIsland(DivisionBuilder, {
+  const h = renderIsland(DivisionBuilder, {
     competitionId: "c1",
     orgSlug: "org",
     compSlug: "comp",
     sports,
+    recentSports: [sports[0]!.key],
     constraintsAllowed: true,
     archivedSlotsExplainRefusal: false,
     viewerPlan: "community",
   });
+  const opened = h.tree().filter((e) => e.type === "input" && propsOf(e).name === "division-sport" && propsOf(e).checked === true).map((e) => propsOf(e).value);
+  if (opened.length !== 1 || opened[0] !== sports[0]!.key) throw new Error(`the builder opened on ${opened.join(",")}, not ${sports[0]!.key}`);
+  return h;
 }
 type H = ReturnType<typeof mount>;
 

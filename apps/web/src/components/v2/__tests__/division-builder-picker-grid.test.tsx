@@ -62,8 +62,6 @@ const BY_NAME: SportOption[] = sportOptionsFrom(
     return { kinds: model.kinds, defaultKind: model.defaultKind };
   },
 );
-/** The listed sports with `first` listed first: the builder opens on the first listed sport. */
-const listedFirst = (first: string): SportOption[] => [BY_NAME.find((s) => s.key === first)!, ...BY_NAME.filter((s) => s.key !== first)];
 
 /** The owner's popular five, in his order (brief 2026-11-03). */
 const POPULAR = ["football", "cricket", "badminton", "tennis", "tabletennis"];
@@ -98,6 +96,18 @@ const cells = (h: H, testId: string): ReactElement[] => {
   return flat(kids);
 };
 const isTile = (e: ReactElement, testId: string) => e.type === "button" && propsOf(e)["data-testid"] === testId;
+/** The builder on sport `k`, every registry sport listed: the one it opens on (the first tile, C9 round 3), or else
+ *  picked by its tile - through Show more when it is folded, the grid closed again after. */
+function onSport(k: string): H {
+  const h = mount(BY_NAME);
+  if (checkedSports(h)[0] === k) return h;
+  const folded = !visibleSports(h).includes(k);
+  if (folded) click(h, "division-builder-sport-more");
+  selectSport(h, k);
+  if (folded) click(h, "division-builder-sport-more");
+  if (checkedSports(h)[0] !== k) throw new Error(`could not put the builder on ${k}`);
+  return h;
+}
 
 beforeEach(() => {
   apiV1Mock.mockReset();
@@ -128,7 +138,11 @@ describe("Sport: a tile per sport, five shown, then Show more (mock Sport A)", (
     }
     expect(checked, "one tile per registry sport").toBe(REGISTRY.length);
     expect(checked).toBeGreaterThanOrEqual(10);
-    expect(checkedSports(h), "the first listed sport is picked at open").toEqual([BY_NAME[0]!.key]);
+    // C9 round 3: it opens on the first tile shown - football with no history (the owner's popular order), not the
+    // page's first row (by name: badminton).
+    expect(BY_NAME[0]!.key, "witness: the page's first row is not the first tile").not.toBe(POPULAR[0]);
+    expect(checkedSports(h), "the first tile is picked at open").toEqual([POPULAR[0]]);
+    expect(visibleSports(h)[0]).toBe(POPULAR[0]);
   });
 
   it("generic is the last tile and reads 'Any other game' (the new key), never the catalogue's own name for it", () => {
@@ -172,10 +186,10 @@ describe("Sport: a tile per sport, five shown, then Show more (mock Sport A)", (
     expect(visibleSports(h)).toEqual(POPULAR);
   });
 
-  it("the picked sport never folds away: each registry sport opened on, it is shown; outside the five it is the fifth (counts)", () => {
+  it("the picked sport never folds away: each registry sport picked, it is shown; outside the five it is the fifth (counts)", () => {
     let pinned = 0;
     for (const k of REGISTRY) {
-      const h = mount(listedFirst(k));
+      const h = onSport(k);
       expect(checkedSports(h), k).toEqual([k]);
       const shown = visibleSports(h);
       expect(shown.length, k).toBe(5);
@@ -203,6 +217,11 @@ describe("Sport: a tile per sport, five shown, then Show more (mock Sport A)", (
   it("the organisation's history leads, most recent first; generic stays last however recent", () => {
     const h = mount(BY_NAME, { recentSports: ["carrom", "generic", "volleyball"] });
     expect(visibleSports(h)).toEqual(["carrom", "volleyball", "football", "cricket", "badminton"]);
+    // C9 round 3: it opens on that first tile, the most recent sport, with that sport's own default kind.
+    expect(checkedSports(h)).toEqual(["carrom"]);
+    expect(modelOf("carrom").kinds.length, "premise: carrom offers a kind choice").toBeGreaterThan(1);
+    const kinds = h.tree().filter((e) => e.type === "input" && propsOf(e).name === "division-entrant-kind" && propsOf(e).checked === true);
+    expect(kinds.map((e) => propsOf(e).value), "carrom's own default kind").toEqual([modelOf("carrom").defaultKind]);
     click(h, "division-builder-sport-more");
     expect(visibleSports(h).at(-1)).toBe("generic");
     expect(visibleSports(h).slice(5, 7), "the popular ones the history did not name come next").toEqual(["tennis", "tabletennis"]);
@@ -256,7 +275,7 @@ describe("Format: five cards, then Show more as the sixth cell of the cards' gri
   it("every sport, collapsed: five visible, the Show more tile the grid's last cell naming the rest; opened, every card and Show fewer (counts)", () => {
     let checked = 0;
     for (const k of REGISTRY) {
-      const h = mount(listedFirst(k));
+      const h = onSport(k);
       toFormat(h);
       const offer = templatesForSport(k, modelOf(k).kinds).map((t) => t.key);
       expect([...templateKeys(h)].sort(), k).toEqual([...offer].sort());
@@ -281,7 +300,7 @@ describe("Format: five cards, then Show more as the sixth cell of the cards' gri
     expect([...MINTING].sort(), "premise: the declarations' pair formats are the owner's two").toEqual(["americano", "mexicano"]);
     let offering = 0;
     for (const k of REGISTRY) {
-      const h = mount(listedFirst(k));
+      const h = onSport(k);
       toFormat(h);
       const keys = templateKeys(h);
       const first = keys.findIndex((x) => MINTING.includes(x));
@@ -293,7 +312,7 @@ describe("Format: five cards, then Show more as the sixth cell of the cards' gri
   });
 
   it("collapsed, a pair format shows only as the pick: badminton opens on its top suggestion; another picked, they fold away", () => {
-    const h = mount(listedFirst("badminton"));
+    const h = onSport("badminton");
     toFormat(h);
     const offer = templateKeys(h);
     expect(offer.filter((x) => !MINTING.includes(x)).length, "premise: badminton offers five others or more").toBeGreaterThanOrEqual(5);

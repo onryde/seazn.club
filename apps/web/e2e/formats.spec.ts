@@ -24,6 +24,9 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
   // The builder is in steps; moving forward validates the steps before, so fill
   // the required division name before opening the Format step.
   await page.getByRole("textbox").first().fill(`Formats ${TAG}`);
+  // Badminton, picked: the builder opens on the organisation's latest sport, else football (C9 round 3), and the
+  // assertions below need a sport offered Americano and Mexicano.
+  await pickBuilderSport(page, "badminton");
   await page.getByRole("button", { name: "Format", exact: true }).click();
   // Five formats are suggested for the plan (C9 R2); the rest of the offer is one tap away, on the grid's sixth cell.
   await expect(page.locator("label[data-suggested]")).toHaveCount(5);
@@ -31,7 +34,7 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
 
   // The new presets are visible on the format picker. Americano and Mexicano are
   // named without "(padel)" since Match Day C9: the builder offers them to
-  // badminton too (the default sport here), so the label names no one sport.
+  // badminton too (picked above), so the label names no one sport.
   // Read inside the picker: the builder opens on its top suggestion (owner Q5,
   // Americano here), so the Review receipt names that format too.
   const cards = page.getByTestId("division-builder-templates");

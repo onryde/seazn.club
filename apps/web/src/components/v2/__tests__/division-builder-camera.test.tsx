@@ -54,18 +54,25 @@ const sportsFor = (...keys: string[]): SportOption[] =>
       return { kinds: model.kinds, defaultKind: model.defaultKind };
     },
   );
-const mount = (over: Partial<Parameters<typeof DivisionBuilder>[0]> = {}) =>
-  renderIsland(DivisionBuilder, {
+/** The builder on chess: it opens on the first tile shown (C9 round 3), so the organisation's history names chess - the
+ *  real path to a chess opening - and the mount checks it landed there, so no test runs on badminton unawares. */
+const mount = (over: Partial<Parameters<typeof DivisionBuilder>[0]> = {}) => {
+  const h = renderIsland(DivisionBuilder, {
     competitionId: "c1",
     orgSlug: "org",
     compSlug: "comp",
     sports: sportsFor("boardgame", "badminton"),
+    recentSports: ["boardgame"],
     constraintsAllowed: true,
     archivedSlotsExplainRefusal: false,
     viewerPlan: "pro",
     onlineChessOffered: true,
     ...over,
   });
+  const opened = h.tree().filter((e) => e.type === "input" && propsOf(e).name === "division-sport" && propsOf(e).checked === true).map((e) => propsOf(e).value);
+  if (opened.length !== 1 || opened[0] !== "boardgame") throw new Error(`the builder opened on ${opened.join(",")}, not chess`);
+  return h;
+};
 type H = ReturnType<typeof mount>;
 async function flush() {
   for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
