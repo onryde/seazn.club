@@ -344,20 +344,19 @@ describe.each(LOCALES)("the rail's rounds chip and the More menu's Add a round [
     onFinish: async () => null,
   });
 
-  it("the chip: \"Rounds: N\" with Edit until the first start, a fixed chip after it", () => {
+  it("the chip: \"Rounds: N\" with Edit until the first start; once the count is fixed nothing is drawn in the row (SCF)", () => {
     const editable = renderToStaticMarkup(<SwissRoundsChip stageId="s1" busy={null} rail={rail(control({ field: 6, rounds: 5 }))} onOpen={() => {}} />);
     expect(editable).toMatch(/^<button[^>]*data-testid="stage-rounds"[^>]*data-state="editable"/);
     expect(editable).toContain(fill(D["stage.rounds.chip"]!, { n: 5 }));
     expect(editable).toContain(`>${D["stage.rounds.edit"]}<`);
+    // SCF (owner pick, Option A): a bordered pill that does nothing reads as a button, and the legend line already says "N rounds".
     const fixed = renderToStaticMarkup(
       <SwissRoundsChip stageId="s1" busy={null} rail={rail(control({ field: 6, rounds: 5, started: true }))} onOpen={() => {}} />,
     );
-    expect(fixed).toMatch(/^<span[^>]*data-testid="stage-rounds"[^>]*data-state="fixed"/);
-    expect(fixed).toContain(fill(D["stage.rounds.chip"]!, { n: 5 }));
-    expect(fixed, "nothing to edit once play starts").not.toContain(`>${D["stage.rounds.edit"]}<`);
+    expect(fixed, "nothing to edit, nothing to draw once play starts").toBe("");
   });
 
-  it("a dialog open when the desk refreshes to started stays open over the fixed chip, and closes back to the chip (review m4)", () => {
+  it("a dialog open when the desk refreshes to started stays open, and closing it leaves the row empty (review m4, SCF)", () => {
     const g = globalThis as { document?: unknown };
     const had = "document" in g;
     g.document = {};
@@ -369,12 +368,12 @@ describe.each(LOCALES)("the rail's rounds chip and the More menu's Add a round [
       (propsOf(find("stage-rounds")!).onClick as () => void)();
       expect(dialog(), "premise: the dialog opened").toBeDefined();
       chip.rerender({ stageId: "s1", busy: null, rail: rail(control({ field: 6, rounds: 3, started: true })), onOpen: () => {} });
-      expect(propsOf(find("stage-rounds")!)["data-state"], "the chip is fixed now").toBe("fixed");
-      expect(dialog(), "and the dialog is still open over it").toBeDefined();
+      expect(find("stage-rounds"), "the pill is gone now the count is fixed").toBeUndefined();
+      expect(dialog(), "and the dialog is still open, so the refusal and its recovery are not swept away").toBeDefined();
       expect((propsOf(dialog()!).control as SwissRoundControl).started, "reading the refreshed control").toBe(true);
       (propsOf(dialog()!).onClose as () => void)();
       expect(dialog(), "closed").toBeUndefined();
-      expect(propsOf(find("stage-rounds")!)["data-state"]).toBe("fixed");
+      expect(find("stage-rounds"), "still no pill").toBeUndefined();
     } finally {
       if (had) g.document = undefined;
       else delete g.document;

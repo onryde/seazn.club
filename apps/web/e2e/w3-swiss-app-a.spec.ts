@@ -315,14 +315,19 @@ test.describe("X-SW-21 no Add match on a Swiss stage", () => {
     expect(refused.error?.code).toBe("SWISS_ADHOC_REFUSED");
     expect((await stageFixtures(request, divisionId, stageId)).length, "nothing written").toBe(before.length);
 
-    // The desk: the rail renders its controls, no Add match, and the guidance in its place.
+    // The desk: the rail renders its controls, no Add match, and the guidance in its place. SCF (owner pick, Option A): "in its place" is the
+    // stage's LEGEND line now - information, not an action, so it is read on every width without opening the phone's Stage tools sheet, and
+    // it is not in the rail's row at all.
     await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
     await expect(page.getByTestId("stage-generate")).toBeAttached({ timeout: 20_000 });
-    const trigger = page.getByTestId("stage-rail-trigger");
-    if (await trigger.isVisible()) await trigger.click(); // phone widths fold the rail into a sheet
-    await expect(page.getByTestId("stage-swiss-adhoc-note")).toHaveText(
-      "Swiss rounds are paired by the system. Add friendlies in another stage.",
-    );
+    const note = page.getByTestId("stage-swiss-adhoc-note");
+    await expect(note, "visible with nothing opened - it is not behind the phone's sheet").toBeVisible();
+    await expect(note).toHaveText("Swiss rounds are paired by the system. Add friendlies in another stage.");
+    expect(
+      await note.evaluate((n) => n.parentElement === document.querySelector('[data-testid="stage-swiss-legend"]')?.parentElement),
+      "the sentence shares the legend line's container",
+    ).toBe(true);
+    await expect(page.getByTestId("stage-rail").getByTestId("stage-swiss-adhoc-note"), "and the action row does not hold it").toHaveCount(0);
     await expect(page.getByTestId("stage-add-match")).toHaveCount(0);
   });
 });
@@ -1434,8 +1439,11 @@ test.describe("X-SW-17 edit rounds, then add a round after play", () => {
       // Play starts: one board of round 1.
       await sport.win(request, (await r.boards(1))[0]!, (await r.boards(1))[0]!.home_entrant_id!);
       await page.reload();
-      await expect(chip).toHaveAttribute("data-state", "fixed", { timeout: 20_000 });
-      await expect(chip).toContainText(fill("stage.rounds.chip", { n: 3 }));
+      // SCF (owner pick, Option A): once a board has started the count cannot change, and a bordered pill that does nothing reads as a
+      // button - so the row draws nothing for it; the legend line says "3 rounds". The legend first: it is the positive anchor that the
+      // reloaded desk is on screen, so the absence below is read off a loaded page.
+      await expect(page.getByTestId("stage-swiss-legend")).toContainText(fill("stage.swissLegend.rounds.other", { count: 3 }), { timeout: 20_000 });
+      await expect(chip, "the fixed count is no longer a pill in the row").toHaveCount(0);
       if (sport.key === "boardgame") {
         await expect(chess).toBeDisabled();
         await expect(page.getByTestId("stage-chess-hint")).toHaveText(uiEn["swiss.refusal.SWISS_CHESS_LOCKED"]!);

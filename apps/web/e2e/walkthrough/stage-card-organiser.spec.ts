@@ -30,9 +30,10 @@ import { uiEn, fill } from "../match-room-kit";
  *      "Round N · x of y done" from the matches' own status; a round's rows are in TIME order; a round opened by hand, and one closed
  *      by hand, are exactly as the person left them after a real router.refresh() caused by a write elsewhere on the card (PB1).
  *   2. A knockout: the bracket opens inline, inside the stage's card.
- *   3. A Swiss stage taken from start to finish: Pair next round, Unpair offered, the second round, Complete enabled only when every
- *      match is played, the card folding to its one line - and then the competition page: the finished division is hidden, the
- *      Show finished switch brings it back and puts it away again.
+ *   3. A Swiss stage taken from start to finish: Pair next round, Unpair offered, More and Pair next ▾ opening as popovers over the
+ *      card (SCF: the card does not grow; Escape and a tap elsewhere close them) and the "paired by the system" sentence read off the
+ *      legend line, the second round, Complete enabled only when every match is played, the card folding to its one line - and then
+ *      the competition page: the finished division is hidden, the Show finished switch brings it back and puts it away again.
  *   4. The Entrants tab: the entrant kinds block above the roster - open on an empty division, folded under one row once there is an
  *      entrant, Save lands in the stored config and survives a reload, Reset drops it and the chips follow the sport default.
  *
@@ -164,12 +165,13 @@ test.describe("The stage card, walked", () => {
     const card = stageCardOf(page, stageId);
     await expect(card).toBeVisible();
     await openRail(card);
-    const railIds = ["stage-complete", "stage-delete", "stage-add-match", "stage-controls-divider"];
-    // The rail renders its controls in its source order; the card's settings follow the divider (a declaration in each file).
+    const railIds = ["stage-complete", "stage-delete", "stage-add-match"];
+    // The rail renders its controls in its source order; then the divider, which is the SETTINGS group's first child (SCF, owner pick
+    // Option A: stages-panel.tsx, not the rail), then the card's three settings.
     const declared = railIds
       .filter((id) => RAIL_SRC.includes(`data-testid="${id}"`))
       .sort((x, y) => RAIL_SRC.indexOf(`data-testid="${x}"`) - RAIL_SRC.indexOf(`data-testid="${y}"`));
-    const expectedOrder = [...declared.filter((id) => id !== "stage-controls-divider"), "stage-controls-divider", "stage-tool-format", "stage-tool-points", "stage-tool-tiebreaks"];
+    const expectedOrder = [...declared, "stage-controls-divider", "stage-tool-format", "stage-tool-points", "stage-tool-tiebreaks"];
     const present: string[] = [];
     for (const id of expectedOrder) if ((await card.getByTestId(id).count()) > 0) present.push(id);
     expect(present.length, "anti-vacuity: the card shows its actions, the divider and the three settings").toBeGreaterThanOrEqual(6);
@@ -192,6 +194,9 @@ test.describe("The stage card, walked", () => {
     const [c, d, t] = await Promise.all([card.getByTestId("stage-complete").boundingBox(), card.getByTestId("stage-controls-divider").boundingBox(), card.getByTestId("stage-tool-format").boundingBox()]);
     expect(c!.x + c!.width, "actions, then the divider").toBeLessThanOrEqual(d!.x + 1);
     expect(d!.x + d!.width, "then the settings").toBeLessThanOrEqual(t!.x + 1);
+    // SCF: the divider is the settings group's own - on Match rules' line, right beside it.
+    expect(Math.abs(d!.y + d!.height / 2 - (t!.y + t!.height / 2)), "the divider is on the settings buttons' line").toBeLessThan(t!.height / 2);
+    expect(t!.x - (d!.x + d!.width), "and right beside them").toBeLessThanOrEqual(24);
 
     // Complete is waiting (five matches are not played): tapping it shows the reason on the button itself and completes nothing. No ⓘ.
     const complete = card.getByTestId("stage-complete");
@@ -322,7 +327,7 @@ test.describe("The stage card, walked", () => {
   });
 
   test("a Swiss stage from Pair next to Complete, then the competition page's Show finished switch", async ({ page, request }) => {
-    test.setTimeout(budget(8, 40));
+    test.setTimeout(budget(8, 56));
     const swissEntrants = ["S1", "S2", "S3", "S4"];
     const swissRounds = 2;
     const boards = swissEntrants.length / 2; // a board per pair of entrants, each round
@@ -353,6 +358,36 @@ test.describe("The stage card, walked", () => {
     await expect(card.getByTestId("stage-generate"), "Pair next still leads: there is a round to pair").toHaveText(uiEn["schedule.pairNext"]!);
     await expect(card.getByTestId("stage-complete")).toHaveAttribute("aria-disabled", "true");
     await expectNoHorizontalScroll(page);
+
+    // SCF (owner pick, Option A): round 1 is seated and round 2 waits, so More (Add late player) and the Pair next ▾ are both on the card.
+    // Each opens OVER the content - the card does not grow - and is put away by Escape (focus back on its trigger) or a tap elsewhere.
+    const heightNow = async (): Promise<number> => (await card.boundingBox())!.height;
+    const settled = await heightNow();
+    const more = card.getByTestId("stage-more");
+    const moreMenu = card.getByTestId("stage-more-menu");
+    await more.click();
+    await expect(moreMenu, "More opens").toBeVisible();
+    await expect(moreMenu.getByTestId("stage-add-late-player"), "it offers the late add, in the dictionary's words").toContainText(uiEn["stage.more.addLatePlayer"]!);
+    expect(Math.abs((await heightNow()) - settled), "More floats: the card did not grow").toBeLessThanOrEqual(1);
+    await page.keyboard.press("Escape");
+    await expect(moreMenu, "Escape puts it away").toBeHidden();
+    await expect(more, "and focus is back on More").toBeFocused();
+    const pairToggle = card.getByTestId("stage-pairing-toggle");
+    const pairMenu = card.getByTestId("stage-pairing-menu");
+    await pairToggle.click();
+    await expect(pairMenu, "Pair next ▾ opens").toBeVisible();
+    await expect(pairMenu.getByTestId("stage-pairing-hint"), "round 2 shows its read-only reason").toHaveText(uiEn["schedule.pairing.roundOneOnly"]!);
+    expect(Math.abs((await heightNow()) - settled), "Pair next ▾ floats: the card did not grow").toBeLessThanOrEqual(1);
+    await card.locator("header h3").first().click();
+    await expect(pairMenu, "a tap elsewhere puts it away").toBeHidden();
+    // The "paired by the system" sentence is read on the legend line, beside the round count - not in the action row.
+    const adhocNote = card.getByTestId("stage-swiss-adhoc-note");
+    await expect(adhocNote).toHaveText(uiEn["swiss.refusal.SWISS_ADHOC_REFUSED"]!);
+    expect(
+      await adhocNote.evaluate((n) => n.parentElement === document.querySelector('[data-testid="stage-swiss-legend"]')?.parentElement),
+      "the legend line carries it",
+    ).toBe(true);
+    await expect(card.getByTestId("stage-rail").getByTestId("stage-swiss-adhoc-note"), "and the action row does not").toHaveCount(0);
 
     // Play round 1 (a scorer's pads), pair round 2.
     for (const f of (await fixturesOf(stageId)).filter((x) => x.round_no === 1)) await scoreFixture(request, f.id, 2, 0);

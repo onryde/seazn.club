@@ -79,7 +79,8 @@ import { pointsDiffer, stageTakesPoints } from "@/components/v2/stage-rules/stag
 import { TiebreaksEditor, stageLikeOf } from "@/components/v2/rules/tiebreaks-editor";
 import { DivisionRulesStrip, TOGGLE_OFF, TOGGLE_ON, type DivisionRulesStripProps, type RulesPanel } from "@/components/v2/rules/division-rules-strip";
 import { BracketPanel } from "@/components/v2/bracket-panel";
-import { bracketPlacement } from "@/lib/bracket-view";
+import { WithReasonTip } from "@/components/v2/desk/reason-tip";
+import { bracketAccess, bracketPlacement } from "@/lib/bracket-view";
 import { inheritedOrder as inheritedOrderOf, stagePooled, takesBestNthFrom, tiebreaksDiffer } from "@/components/v2/stage-rules/stage-tiebreaks-model";
 import type { StageTableRules } from "@/server/api-v1/schemas";
 import { isStagePreset, resolvedStageCfg, stageFormatSaveFragment } from "@/components/v2/stage-rules/stage-row-model";
@@ -143,7 +144,7 @@ import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notic
 // Competition Desk W3 (Task 2) — the stage rail takes the three header
 // action controls (Generate/Complete/Delete). See stage-rail.tsx's own
 // header for why it stays presentational (props only, no data hook).
-import { StageRail } from "@/components/v2/desk/stage-rail";
+import { StageRail, stageRailActions } from "@/components/v2/desk/stage-rail";
 import type { SwissRoundsRefusal } from "@/components/v2/desk/swiss-rounds-dialog";
 import { isChessSport } from "@/lib/chess-individual-only-rule";
 import type { SwissRoundControl } from "@/lib/swiss-rounds-edit";
@@ -1248,7 +1249,12 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // card (the page used to draw it above the cards for every viewer). `bracketPlacement` is the one predicate for who draws what:
         // a double-elimination layout or a stepladder is not a card's to draw and keeps its place on the page.
         const bracketInCard = bracketPlacement(stage.kind, stageFixtures) === "card";
-        const settingsTools: { panel: StagePanelKey; label: string }[] = [
+        // SCF fix round 1 (owner 2026-11-03: "every knockout stage card gets a Bracket button"): EVERY bracket-kind card carries the button,
+        // and `bracketAccess` says what it does - open the tree in the card (`toggle`), jump to the page's tree (`link`, the double
+        // elimination layout and the stepladder, whose trees stay on the page), or sit greyed with its reason until there is something to
+        // show (`generate`: no fixtures yet; `unavailable`: fixtures no view can draw - never a button that opens nothing).
+        const bracketKind = bracketAccess(stage.kind, stageFixtures);
+        const settingsTools: { panel: StagePanelKey; label: string; access?: "link" | "generate" | "unavailable" }[] = [
           ...(sportKey === undefined
             ? []
             : [
@@ -1258,8 +1264,75 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   ? [{ panel: "tiebreaks" as const, label: msg("stageTiebreaks.title") }]
                   : []),
               ]),
-          ...(bracketInCard ? [{ panel: "bracket" as const, label: msg("bracket.title") }] : []),
+          ...(bracketKind === null
+            ? []
+            : [{ panel: "bracket" as const, label: msg("bracket.title"), ...(bracketKind === "toggle" ? {} : { access: bracketKind }) }]),
         ];
+        // One tool button, drawn for the header row (`sheet` false) and the phone sheet (true): a toggle that opens its panel, a link to
+        // the page's tree, or a greyed button whose reason rides a bubble (`aria-disabled`, not `disabled`: it stays in the tab order, so
+        // the reason is reachable by keyboard and by finger - the Complete button's pattern). A closure, not a component, on purpose:
+        // `renderIsland` never invokes a nested function component's render (see the legend note below).
+        const toolButton = (tool: (typeof settingsTools)[number], sheet: boolean) => {
+          const prefix = sheet ? "stage-sheet-tool" : "stage-tool";
+          const base = sheet
+            ? "flex min-h-11 w-full items-center rounded-lg border px-3 text-left text-sm font-semibold"
+            : "inline-flex min-h-11 items-center rounded-lg border px-3 text-xs font-semibold";
+          const focus = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600";
+          if (tool.access === "link") {
+            return (
+              <a
+                key={tool.panel}
+                href={`#bracket-${stage.id}`}
+                data-testid={`${prefix}-${tool.panel}`}
+                onClick={sheet ? () => setOpenRailFor(null) : undefined}
+                className={`${base} ${focus} ${TOGGLE_OFF}`}
+              >
+                {tool.label}
+              </a>
+            );
+          }
+          if (tool.access !== undefined) {
+            const hintId = `${prefix}-bracket-hint-${stage.id}`;
+            return (
+              <WithReasonTip
+                key={tool.panel}
+                id={hintId}
+                align="end"
+                // Fix round 2 (controller ruling, review m6): only someone who can generate is told to "Generate fixtures" (`canEdit` is the
+                // rail's own gate for its Generate button); a viewer - including an organiser whose billing froze editing - gets a neutral line.
+                reason={msg(tool.access === "generate" ? (canEdit ? "bracket.generateFirst" : "bracket.appearsOnceGenerated") : "bracket.unavailable")}
+                reasonTestId={`${prefix}-bracket-hint`}
+              >
+                <button
+                  type="button"
+                  aria-disabled="true"
+                  aria-describedby={hintId}
+                  data-testid={`${prefix}-${tool.panel}`}
+                  className={`${base} ${focus} ${TOGGLE_OFF} cursor-help opacity-50`}
+                >
+                  {tool.label}
+                </button>
+              </WithReasonTip>
+            );
+          }
+          const on = panelOpen(stage.id, tool.panel);
+          return (
+            <button
+              key={tool.panel}
+              type="button"
+              data-testid={`${prefix}-${tool.panel}`}
+              aria-expanded={on}
+              aria-controls={`stage-panel-${stage.id}-${tool.panel}`}
+              onClick={() => {
+                togglePanel(stage.id, tool.panel);
+                if (sheet) setOpenRailFor(null);
+              }}
+              className={`${base} ${focus} ${on ? TOGGLE_ON : TOGGLE_OFF}`}
+            >
+              {tool.label}
+            </button>
+          );
+        };
         // Held keeps Complete locked but is not "in play": it waits for the organiser, and the card says so in its own clause.
         const stageHeld = stageFixtures.filter(
           (f) => (f.status === "needs_decision" || awaitingIds.has(f.id)) && !isBye(toRunSheetFixture(f)),
@@ -1376,6 +1449,25 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           stageId: stage.id,
           entrantFirstRounds: entrantSwissFirstRounds,
         });
+        // SCF: the sentence that stands where Add match would be on a Swiss stage (it has none: the system pairs its rounds and the server refuses
+        // the match, SWISS_ADHOC_REFUSED). Same gates the rail drew it under: an editor, a stage that is not finished, one with fixtures.
+        const swissAdhocNote =
+          canEdit && stage.kind === "swiss" && stage.status !== "complete" && stageFixtures.length > 0
+            ? msg(swissRefusalKey("SWISS_ADHOC_REFUSED"))
+            : null;
+        // SCF fix round 1 (review I1): the "Unpair, then Pair next" line batch-4 m2 put beside Unpair for the final round is information too - a
+        // ~105-char sentence in the actions row is what the owner called a mess - so it joins the legend line beside the sentence above, under the
+        // gates the rail drew it under: an editor (the rail is his), a Swiss with Unpair on offer, and `swissUnpairChangeHint` (every round seated,
+        // round 2 on, a running root Swiss). The Pair next menu carries the same copy while a round waits, so it shows in exactly one place.
+        const swissUnpairNote =
+          canEdit && stage.kind === "swiss" && canUnpairSwiss && unpairChangeHint
+            ? msg("schedule.pairing.changeHint")
+            : null;
+        // The sentences after the legend, in reading order; each is one span on the legend line, joined by " · ".
+        const legendNotes = [
+          swissAdhocNote ? { testid: "stage-swiss-adhoc-note", text: swissAdhocNote } : null,
+          swissUnpairNote ? { testid: "stage-unpair-hint", text: swissUnpairNote } : null,
+        ].filter((n): n is { testid: string; text: string } => n !== null);
         // W3 T10 (X-SW-14 UI half) — the pending-latecomer count: entrants stamped for the round the next Pair seats,
         // and any who arrived after the last round had started. A desk notice, so organisers only.
         const swissLatecomers =
@@ -1407,6 +1499,34 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // The stage's actions (Generate / Pair next, Complete stage, Add match, Delete): built once, mounted in the card's HEADER (Match Day E1
         // item 1). From `md` they are the header's actions group, left of a thin divider and the settings buttons; below `md` the same
         // controls are the Stage tools sheet behind its one trigger, which rides the header too. An editor only (a viewer gets none).
+        // W3 T12/T13 + batch-4 (merge with Match Day #1103): the round count's facts and writes for a Swiss stage, built once for the rail's Rounds
+        // button and More and for the divider's question below. Absent for every other kind.
+        const swissRoundsRail =
+          stage.kind === "swiss" && swissRoundControls?.[stage.id]
+            ? {
+                control: swissRoundControls[stage.id]!,
+                fixtures: swissShellFixtures,
+                onSave: saveSwissRounds,
+                onAddRound: addSwissRoundTo,
+                onFinish: finishSwissStage,
+              }
+            : undefined;
+        // SCF (owner pick, Option A): the thin divider between the actions group and the settings buttons belongs to the SETTINGS group (it is
+        // that group's first child, below), so it can never be stranded on a line of its own when the header wraps. It is drawn when the actions
+        // group draws a control - the rail's own answer (`stageRailActions`), asked here with the same facts - because a divider beside nothing
+        // is a stray line. A viewer has no actions group at all.
+        const railHasActions =
+          canEdit &&
+          stageRailActions({
+            stage,
+            counts,
+            fixtureCount: stageFixtures.length,
+            adhoc: ADHOC_STAGE_KINDS.has(stage.kind),
+            swissHasUnseated,
+            canUnpairSwiss,
+            deletable,
+            swissRounds: swissRoundsRail,
+          }).hasActions;
         const railEl = canEdit ? (
           <div data-testid="stage-rail" className="min-w-0 max-md:w-full md:flex md:items-center">
           <StageRail
@@ -1449,44 +1569,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     href: `${routes.division(orgSlug, compSlug, divSlug, "entrants")}#add-entrant`,
                   }
             }
-            swissRounds={
-              stage.kind === "swiss" && swissRoundControls?.[stage.id]
-                ? {
-                    control: swissRoundControls[stage.id]!,
-                    fixtures: swissShellFixtures,
-                    onSave: saveSwissRounds,
-                    onAddRound: addSwissRoundTo,
-                    onFinish: finishSwissStage,
-                  }
-                : undefined
-            }
-            unpairChangeHint={unpairChangeHint}
+            swissRounds={swissRoundsRail}
             toolsSlot={
               settingsTools.length > 0 ? (
                 <div data-testid="stage-sheet-tools" className="flex flex-col gap-2 md:hidden">
-                  {settingsTools.map((tool) => {
-                    const on = panelOpen(stage.id, tool.panel);
-                    return (
-                      <button
-                        key={tool.panel}
-                        type="button"
-                        data-testid={`stage-sheet-tool-${tool.panel}`}
-                        aria-expanded={on}
-                        aria-controls={`stage-panel-${stage.id}-${tool.panel}`}
-                        onClick={() => {
-                          togglePanel(stage.id, tool.panel);
-                          setOpenRailFor(null);
-                        }}
-                        className={`flex min-h-11 w-full items-center rounded-lg border px-3 text-left text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600 ${on ? TOGGLE_ON : TOGGLE_OFF}`}
-                      >
-                        {tool.label}
-                      </button>
-                    );
-                  })}
+                  {settingsTools.map((tool) => toolButton(tool, true))}
                 </div>
               ) : null
             }
-            dividerAfter={settingsTools.length > 0}
           />
           </div>
         ) : null;
@@ -1559,23 +1649,18 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     >
                       {railEl}
                       {settingsTools.length > 0 && (
+                        // SCF: the divider and the settings buttons are ONE group that never splits (`flex`, no wrap): the divider is its first
+                        // child, so wherever the header wraps the group, the divider shares its line with the buttons. The buttons wrap among
+                        // themselves inside `stage-tools`. Not re-indented with what it holds, to keep this change small in a file others edit.
+                        <div data-testid="stage-tools-group" className={`flex min-w-0 items-center gap-3 ${canEdit ? "max-md:hidden" : ""}`}>
+                        {railHasActions && (
+                          // From `xl` (1280) only (fix round 1, review m1; controller ruling): below it the busiest Swiss state wraps this group onto
+                          // its own line, where a rule that leads the line divides nothing from its left - the line break already separates the groups.
+                          <span aria-hidden="true" data-testid="stage-controls-divider" className="hidden h-6 w-px shrink-0 bg-slate-300 xl:block" />
+                        )}
                         <div data-testid="stage-tools" className={`flex min-w-0 flex-wrap items-center gap-2 ${canEdit ? "max-md:hidden" : ""}`}>
-                          {settingsTools.map((tool) => {
-                            const on = panelOpen(stage.id, tool.panel);
-                            return (
-                              <button
-                                key={tool.panel}
-                                type="button"
-                                data-testid={`stage-tool-${tool.panel}`}
-                                aria-expanded={on}
-                                aria-controls={`stage-panel-${stage.id}-${tool.panel}`}
-                                onClick={() => togglePanel(stage.id, tool.panel)}
-                                className={`inline-flex min-h-11 items-center rounded-lg border px-3 text-xs font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600 ${on ? TOGGLE_ON : TOGGLE_OFF}`}
-                              >
-                                {tool.label}
-                              </button>
-                            );
-                          })}
+                          {settingsTools.map((tool) => toolButton(tool, false))}
+                        </div>
                         </div>
                       )}
                     </div>
@@ -1597,13 +1682,26 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       component's render (see stage-rail.tsx's header for the
                       full investigation), so a `<SwissLegend>` here would be
                       invisible to them. */}
-                  {!folded && swissLegend && (
-                    <p
-                      data-testid="stage-swiss-legend"
-                      className="w-full min-w-0 text-xs text-slate-500"
-                    >
-                      {swissLegendText(swissLegend, { t: msg, plural: msgPlural })}
-                    </p>
+                  {!folded && (swissLegend || legendNotes.length > 0) && (
+                    <div className="w-full min-w-0 text-xs text-slate-500">
+                      {swissLegend && (
+                        <p data-testid="stage-swiss-legend" className="inline min-w-0">
+                          {swissLegendText(swissLegend, { t: msg, plural: msgPlural })}
+                        </p>
+                      )}
+                      {/* SCF (owner pick, Option A): the Swiss "paired by the system" sentence (W3 RB3-15 A / X-SW-21, ruling 252 - the copy is
+                          unchanged) moved here from the actions row, where it stood in place of the Add match button the stage cannot have.
+                          It is information, not an action: it joins the legend line, "5 rounds · 3 matches per round · 15 fixtures · Swiss
+                          rounds are paired by the system. Add friendlies in another stage." It shows under the gates it always had (the rail
+                          drew it for an editor of a running Swiss with fixtures), so a viewer and a finished or empty stage see none. The
+                          final round's "Unpair, then Pair next" line (fix round 1, I1) follows it the same way. */}
+                      {legendNotes.map((note, i) => (
+                        <Fragment key={note.testid}>
+                          {(swissLegend || i > 0) && <span aria-hidden="true"> · </span>}
+                          <span data-testid={note.testid}>{note.text}</span>
+                        </Fragment>
+                      ))}
+                    </div>
                   )}
                   {/* W3 T10 — under the legend, in the header (never inside the
                       rail's phone fold): a count that changes what the

@@ -6666,8 +6666,9 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   const sheetFormat = card.getByTestId("stage-sheet-tool-format");
   const folded = await railTrigger.isVisible();
   await expect(card.getByTestId("stage-settings-trigger"), "the retired second phone trigger is gone").toHaveCount(0);
-  // A knockout stage has no table to rank: the one button it carries is Match rules (Points and Tie-breaks are table stages'
-  // buttons) - present once in the header and once as a sheet row (one DOM); the other two are absent, not hidden.
+  // A knockout stage has no table to rank: of the settings buttons it carries Match rules (Points and Tie-breaks are table stages'
+  // buttons) - present once in the header and once as a sheet row (one DOM); the other two are absent, not hidden. (It carries the
+  // Bracket button too - a toggle once its fixtures exist, greyed before - which is the stage-card-bracket-button spec's, not this one's.)
   await expect(card.getByTestId("stage-tool-format")).toBeAttached();
   await expect(sheetFormat).toBeAttached();
   for (const id of ["points", "tiebreaks"]) {

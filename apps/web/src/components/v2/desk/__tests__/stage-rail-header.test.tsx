@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
-import { StageRail, type StageRailProps } from "../stage-rail";
+import { StageRail, stageRailActions, type StageRailProps } from "../stage-rail";
 
 // Match Day E1 item 1 lives in its own file (fix round 1, I3): appended to `stage-rail.test.tsx` it collided with the W3 branch's own tests
 // appended at the same line. Same neutral props as that file: a started stage with four matches still open.
@@ -94,21 +94,59 @@ describe("StageRail - E1 item 1: header actions, the Complete reason, the divide
     expect(busy.disabled, "a press in flight disables outright").toBe(true);
   });
 
-  it("the divider: between the actions and the settings buttons only - needs both, and says nothing to a screen reader", () => {
-    const withBoth = rail({ dividerAfter: true });
-    const divider = tag(withBoth, "stage-controls-divider") ?? "";
-    expect(divider, "drawn when there are actions and settings").not.toBe("");
-    expect(divider).toContain('aria-hidden="true"');
-    expect(divider).toMatch(/\bhidden\b/);
-    expect(divider).toMatch(/\bmd:block\b/);
-    // No settings beside it (the default): a stray line would divide nothing.
-    expect(rail()).not.toContain("stage-controls-divider");
-    // Settings but no action to divide them from: a complete stage with nothing deletable has an empty group.
-    const empty = rail({ stage: complete, dividerAfter: true, counts: { played: 4, inPlay: 0, unplayed: 0 }, deletable: false });
-    expect(empty, "positive pair: the rail itself rendered").toContain('data-testid="stage-rail-sheet"');
-    expect(empty).not.toContain("stage-controls-divider");
-    // Delete alone is an action: the divider is back.
-    expect(rail({ stage: complete, dividerAfter: true, deletable: true, counts: { played: 4, inPlay: 0, unplayed: 0 } })).toContain("stage-controls-divider");
+  // SCF (owner pick, Option A): the divider is the SETTINGS group's, not the rail's - it travels with the rules buttons so it can never be
+  // stranded on a line of its own (stages-panel-stage-card.test.tsx pins where it is drawn, e2e/stage-card-actions.spec.ts pins that it
+  // shares a line with a rules button). What stays here is the rail's half: it draws none itself, and `stageRailActions` - the one answer
+  // the panel asks to know whether a divider has anything to its left - agrees with what the rail actually drew.
+  it("the rail draws no divider of its own; `stageRailActions().hasActions` is true exactly when the rail drew a control", () => {
+    const CONTROLS = ["stage-generate", "stage-complete", "stage-unpair", "stage-delete", "stage-add-match", "stage-rounds"];
+    const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active" } as never;
+    const swissComplete = { ...(swiss as object), status: "complete" } as never;
+    const rounds = (started: boolean) =>
+      ({
+        control: { started, rounds: 3, chess: false, field: 6, addRound: { canAddRound: false, refusal: "over", field: null, hardMax: null }, finish: { canFinish: false, refusal: "over", finishedAfter: 3, inProgress: false, completeInstead: false } },
+        fixtures: [],
+        onSave: async () => null,
+        onAddRound: async () => null,
+        onFinish: async () => null,
+      }) as unknown as NonNullable<StageRailProps["swissRounds"]>;
+    const SETTLED = { played: 4, inPlay: 0, unplayed: 0 };
+    const ROWS: Array<{ name: string; stage: never; over: Partial<StageRailProps>; fixtureCount?: number }> = [
+      { name: "a started league with matches open (Complete waits)", stage: active, over: {} },
+      { name: "a started league, ready to complete", stage: active, over: { counts: SETTLED } },
+      { name: "a pending league (Generate)", stage: { ...(active as object), status: "pending" } as never, over: { counts: { played: 0, inPlay: 0, unplayed: 0 } }, fixtureCount: 0 },
+      { name: "a finished stage with nothing to delete: an empty group", stage: complete, over: { counts: SETTLED } },
+      { name: "a finished stage that can be deleted: Delete alone", stage: complete, over: { counts: SETTLED, deletable: true } },
+      { name: "a finished Swiss whose count is fixed: nothing at all (the Rounds pill is gone)", stage: swissComplete, over: { counts: SETTLED, swissRounds: rounds(true) } },
+      { name: "a pending Swiss, count still editable: Generate plus the Rounds button", stage: { ...(swiss as object), status: "pending" } as never, over: { counts: { played: 0, inPlay: 0, unplayed: 0 }, swissRounds: rounds(false) }, fixtureCount: 0 },
+      { name: "a finished Swiss that can be deleted", stage: swissComplete, over: { counts: SETTLED, swissRounds: rounds(true), deletable: true } },
+    ];
+    let withActions = 0;
+    let without = 0;
+    for (const r of ROWS) {
+      const fixtureCount = r.fixtureCount ?? 4;
+      const html = rail({ stage: r.stage, fixtureCount, ...r.over });
+      expect(html, `${r.name}: positive pair, the rail rendered`).toContain('data-testid="stage-rail-sheet"');
+      expect(html, `${r.name}: the rail draws no divider`).not.toContain("stage-controls-divider");
+      const drew = CONTROLS.some((id) => html.includes(`data-testid="${id}"`));
+      const p = { ...NEUTRAL, ...r.over } as Partial<StageRailProps>;
+      const asked = stageRailActions({
+        stage: r.stage as never,
+        counts: p.counts ?? NEUTRAL.counts,
+        fixtureCount,
+        adhoc: false,
+        swissHasUnseated: false,
+        canUnpairSwiss: false,
+        deletable: p.deletable ?? false,
+        swissRounds: p.swissRounds,
+      }).hasActions;
+      expect(asked, `${r.name}: the panel's question agrees with what the rail drew`).toBe(drew);
+      if (drew) withActions++;
+      else without++;
+    }
+    expect(withActions + without, "anti-vacuity: every row checked").toBe(ROWS.length);
+    expect(withActions, "both answers are in the table").toBeGreaterThan(0);
+    expect(without, "both answers are in the table").toBeGreaterThan(0);
   });
 
   it("the old slots are gone: the rail draws no court tags and no 'to schedule' footer", () => {

@@ -10,7 +10,9 @@ import {
   type BracketFixtureRef,
 } from "@seazn/engine/scheduling/bracket-layout";
 import { generateDoubleElim, generatePagePlayoff, generateSingleElim, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
-import { bracketPlacement } from "../bracket-view";
+import { StageKind } from "@seazn/engine/core";
+import { bracketAccess, bracketPlacement } from "../bracket-view";
+import { BRACKET_STAGE_KINDS } from "../run-sheet-groups";
 
 const field = (n: number): string[] => Array.from({ length: n }, (_, i) => `T${i + 1}`);
 
@@ -97,5 +99,78 @@ describe("bracketPlacement", () => {
     expect(twoSidedBracket(heap).ok).toBe(false);
     expect(doubleElimBracket(heap).ok).toBe(false);
     expect(bracketPlacement("knockout", heap)).toBeNull();
+  });
+});
+
+// SCF fix round 1 (owner 2026-11-03): every bracket-kind stage card has a Bracket button; what it DOES is decided here. The kind set is the
+// one `bracketPlacement` itself tests against (`BRACKET_STAGE_KINDS`), and the rows are the engine's own generator output.
+describe("bracketAccess: what the Bracket button on a stage card does", () => {
+  const generated: { kind: string; rows: BracketFixtureRef[]; access: "toggle" | "link" }[] = [
+    { kind: "knockout", rows: rowsOf(generateSingleElim({ entrants: field(8) })), access: "toggle" },
+    { kind: "page_playoff", rows: rowsOf(generatePagePlayoff({ entrants: field(4) })), access: "toggle" },
+    { kind: "double_elim", rows: rowsOf(generateDoubleElim({ entrants: field(8) }), true), access: "link" },
+    { kind: "stepladder", rows: rowsOf(generateStepladder({ entrants: field(4) })), access: "link" },
+  ];
+
+  it("the sweep covers exactly the bracket kinds the placement predicate knows (no kind added there goes unswept here)", () => {
+    expect(generated.map((g) => g.kind).sort()).toEqual([...BRACKET_STAGE_KINDS].sort());
+    expect(BRACKET_STAGE_KINDS.size, "anti-vacuity: the set is not empty").toBeGreaterThanOrEqual(4);
+  });
+
+  it("with its fixtures generated, a card-placed tree toggles in the card and a page-placed one links to the page (every bracket kind)", () => {
+    let checked = 0;
+    for (const g of generated) {
+      expect(g.rows.length, `premise: ${g.kind} generated rows`).toBeGreaterThan(0);
+      const placement = bracketPlacement(g.kind, g.rows);
+      expect(placement, `premise: ${g.kind} is placed`).not.toBeNull();
+      expect(bracketAccess(g.kind, g.rows), g.kind).toBe(g.access);
+      // The two views agree: a card placement is a toggle, a page placement a link - never the other way round.
+      expect(bracketAccess(g.kind, g.rows) === "toggle", `${g.kind}: toggle iff card`).toBe(placement === "card");
+      expect(bracketAccess(g.kind, g.rows) === "link", `${g.kind}: link iff page`).toBe(placement === "page");
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every bracket kind checked").toBe(BRACKET_STAGE_KINDS.size);
+  });
+
+  it("before Generate (no fixtures) every bracket kind has the button, greyed: 'generate' (the empty case)", () => {
+    let checked = 0;
+    for (const kind of BRACKET_STAGE_KINDS) {
+      expect(bracketPlacement(kind, []), `premise: ${kind} draws nothing yet`).toBeNull();
+      expect(bracketAccess(kind, []), kind).toBe("generate");
+      checked += 1;
+    }
+    expect(checked).toBe(BRACKET_STAGE_KINDS.size);
+  });
+
+  it("a bracket kind WITH fixtures no view can draw is greyed with its own state, never 'generate' and never a button that opens nothing", () => {
+    const heap: BracketFixtureRef[] = [
+      { id: "a", round_no: 1, seq_in_round: 1 },
+      { id: "b", round_no: 1, seq_in_round: 2 },
+      { id: "c", round_no: 1, seq_in_round: 3 },
+    ];
+    // Premise from the engine's own readers: none of the three layouts reads this heap.
+    expect(twoSidedBracket(heap).ok).toBe(false);
+    expect(doubleElimBracket(heap).ok).toBe(false);
+    expect(pagePlayoffBracket(heap).ok).toBe(false);
+    let checked = 0;
+    // A stepladder with any rung draws its list, so it is not in this set; the three tree kinds are.
+    for (const kind of ["knockout", "double_elim", "page_playoff"]) {
+      expect(bracketPlacement(kind, heap), `premise: ${kind} placement is null`).toBeNull();
+      expect(bracketAccess(kind, heap), kind).toBe("unavailable");
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a stage kind that is not a bracket gets no button, whatever rows it holds, with or without fixtures (every kind swept)", () => {
+    const tree = rowsOf(generateSingleElim({ entrants: field(8) }));
+    expect(twoSidedBracket(tree).ok, "premise: the rows are a tree").toBe(true);
+    let checked = 0;
+    for (const kind of StageKind.options.filter((k) => !BRACKET_STAGE_KINDS.has(k))) {
+      expect(bracketAccess(kind, tree), `${kind} with a tree`).toBeNull();
+      expect(bracketAccess(kind, []), `${kind} empty`).toBeNull();
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: non-bracket kinds swept").toBeGreaterThan(2);
   });
 });

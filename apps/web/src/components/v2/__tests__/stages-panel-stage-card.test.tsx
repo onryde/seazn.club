@@ -21,8 +21,11 @@ import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { unitLabelKey } from "@/lib/stage-card/summaries";
+import { bracketAccess } from "@/lib/bracket-view";
+import { BRACKET_STAGE_KINDS } from "@/lib/run-sheet-groups";
 import { generateDoubleElim, generatePagePlayoff, generateSingleElim, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
 import { tableRulesOf } from "../stage-rules/__tests__/_table-rules-fixture";
+import { innerOf, subtreeOf } from "./_markup";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
@@ -106,6 +109,8 @@ function panel(over: Record<string, unknown> = {}, locale: Locale = "en", dict: 
 }
 
 const tag = (html: string, testId: string): string | null => new RegExp(`<[a-z]+[^>]*data-testid="${testId}"[^>]*>`).exec(html)?.[0] ?? null;
+/** Whole-token class test: `/\bmin-h-11\b/` is also satisfied by `max-md:min-h-11` and `md:min-h-11` (a floor on one side only). */
+const hasClass = (openTag: string | null, token: string): boolean => (/class="([^"]*)"/.exec(openTag ?? "")?.[1] ?? "").split(/\s+/).includes(token);
 const count = (html: string, testId: string): number => html.split(`data-testid="${testId}"`).length - 1;
 const text = (html: string): string => html.replace(/<[^>]*>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 // "Locked": a pressed-in-flight button is `disabled`; Complete waiting on an open match is `aria-disabled` (E1 item 1 - it stays focusable
@@ -313,32 +318,181 @@ describe("E1 item 3: the bracket opens from the knockout stage's card", () => {
     expect(tree, "the seat reads as the winner of the other stage's match").toContain(`${winnerOf}R3\u00b72`);
   });
 
-  it("a page playoff is a tree and gets the button; double-elimination, stepladder, a league and a knockout with no bracket yet do not", () => {
-    const cases: { name: string; kind: string; rows: ReturnType<typeof bracketRows>; button: boolean }[] = [
-      { name: "page playoff", kind: "page_playoff", rows: bracketRows(BR, generatePagePlayoff({ entrants: T4 })), button: true },
-      { name: "double elimination", kind: "double_elim", rows: bracketRows(BR, generateDoubleElim({ entrants: T4 }), true), button: false },
-      { name: "stepladder", kind: "stepladder", rows: bracketRows(BR, generateStepladder({ entrants: T4 })), button: false },
-      { name: "league (tree-shaped rows or not)", kind: "league", rows: rows, button: false },
-      { name: "knockout with no bracket yet", kind: "knockout", rows: [], button: false },
-    ];
+  // SCF fix round 1 (owner 2026-11-03): EVERY bracket-kind card has a Bracket button, whatever it holds. What it does follows
+  // `bracketAccess`; the kinds swept are the engine's own `BRACKET_STAGE_KINDS`, the rows its own generators', the greyed state's rows none.
+  const generatedFor: Record<string, ReturnType<typeof bracketRows>> = {
+    knockout: rows,
+    page_playoff: bracketRows(BR, generatePagePlayoff({ entrants: T4 })),
+    double_elim: bracketRows(BR, generateDoubleElim({ entrants: T4 }), true),
+    stepladder: bracketRows(BR, generateStepladder({ entrants: T4 })),
+  };
+  /** Which element carries the testid, and its attributes: the header's and the phone sheet's twin. */
+  const control = (html: string, id: string): { el: "a" | "button" | null; tag: string } => {
+    const t = tag(html, id) ?? "";
+    return { el: t.startsWith("<a ") ? "a" : t.startsWith("<button") ? "button" : null, tag: t };
+  };
+
+  it("the swept set is the engine's bracket kinds without the ladder (a kind the engine adds fails here until someone decides it)", () => {
+    expect([...BRACKET_KINDS].filter((k) => k !== "ladder").sort()).toEqual([...BRACKET_STAGE_KINDS].sort());
+    expect(BRACKET_KINDS.has("ladder"), "premise: the ladder is the engine's one wider kind").toBe(true);
+    expect(BRACKET_STAGE_KINDS.size, "anti-vacuity").toBeGreaterThanOrEqual(4);
+  });
+
+  it("every bracket kind has the button; with its fixtures generated a card tree toggles and a page tree links", () => {
+    expect([...BRACKET_STAGE_KINDS].sort(), "the rows cover exactly the bracket kinds").toEqual(Object.keys(generatedFor).sort());
     let checked = 0;
-    for (const c of cases) {
-      expect(c.kind === "knockout" && c.rows.length === 0 ? true : c.rows.length > 0, `${c.name}: premise, rows exist`).toBe(true);
-      const html = panel(bracketPanelProps(c.kind, c.rows, { initialOpenPanels: ["bracket"] }));
-      expect(count(html, "stage-tool-bracket") > 0, `${c.name}: the header button`).toBe(c.button);
-      expect(count(html, "stage-sheet-tool-bracket") > 0, `${c.name}: the sheet row`).toBe(c.button);
-      expect(count(html, "stage-bracket") > 0, `${c.name}: asked open, the tree container`).toBe(c.button);
+    for (const kind of BRACKET_STAGE_KINDS) {
+      const kindRows = generatedFor[kind]!;
+      expect(kindRows.length, `premise: ${kind} generated rows`).toBeGreaterThan(0);
+      const access = bracketAccess(kind, kindRows);
+      for (const canEdit of [true, false]) {
+        const html = panel(bracketPanelProps(kind, kindRows, { canEdit, initialOpenPanels: ["bracket"] }));
+        const head = control(html, "stage-tool-bracket");
+        expect(head.el, `${kind} canEdit=${canEdit}: the header control`).toBe(access === "toggle" ? "button" : "a");
+        if (access === "toggle") {
+          expect(head.tag, kind).toMatch(/aria-expanded="true"/);
+          expect(count(html, "stage-bracket"), `${kind}: the tree opens in the card`).toBe(1);
+        } else {
+          // A page tree: a same-page link to the tree's own anchor, no disclosure, nothing opened in the card even when asked.
+          expect(head.tag, kind).toContain(`href="#bracket-${BR}"`);
+          expect(head.tag, `${kind}: a link is not a disclosure`).not.toMatch(/aria-expanded|aria-controls/);
+          expect(count(html, "stage-bracket"), `${kind}: the card draws no tree`).toBe(0);
+        }
+        expect(hasClass(head.tag, "min-h-11"), `${kind}: 44px tap floor`).toBe(true);
+        expect(count(html, "stage-tool-bracket-hint"), `${kind}: nothing greyed`).toBe(0);
+        // The phone sheet's twin (an editor only) is the same control.
+        if (canEdit) expect(control(html, "stage-sheet-tool-bracket").el, `${kind}: the sheet row`).toBe(head.el);
+        else expect(count(html, "stage-sheet-tool-bracket"), `${kind}: a viewer has no sheet`).toBe(0);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: every bracket kind x both viewers").toBe(BRACKET_STAGE_KINDS.size * 2);
+  });
+
+  it("before Generate every bracket kind shows the button greyed with its reason: aria-disabled, described by the bubble, in tab order", () => {
+    let checked = 0;
+    for (const [loc, dict] of DICTS) {
+      const reason = (dict as Record<string, string>)["bracket.generateFirst"]!;
+      expect(reason.length, `premise: ${loc} has the copy`).toBeGreaterThan(5);
+      for (const kind of BRACKET_STAGE_KINDS) {
+        const html = panel(bracketPanelProps(kind, []), loc, dict);
+        for (const [btn, hint, id] of [
+          ["stage-tool-bracket", "stage-tool-bracket-hint", `stage-tool-bracket-hint-${BR}`],
+          ["stage-sheet-tool-bracket", "stage-sheet-tool-bracket-hint", `stage-sheet-tool-bracket-hint-${BR}`],
+        ] as const) {
+          const c = control(html, btn);
+          expect(c.el, `${loc} ${kind} ${btn}`).toBe("button");
+          expect(c.tag, `${loc} ${kind}: greyed, not removed from the tab order`).toMatch(/aria-disabled="true"/);
+          expect(c.tag, `${loc} ${kind}: not natively disabled`).not.toMatch(/\sdisabled(=|\s|>)/);
+          expect(c.tag, `${loc} ${kind}: described by its bubble`).toContain(`aria-describedby="${id}"`);
+          expect(c.tag, `${loc} ${kind}: opens nothing`).not.toMatch(/aria-expanded|aria-controls/);
+          expect(hasClass(c.tag, "min-h-11"), `${loc} ${kind}: 44px tap floor`).toBe(true);
+          const bubble = tag(html, hint) ?? "";
+          expect(bubble, `${loc} ${kind}: the bubble`).toContain(`id="${id}"`);
+          expect(bubble).toContain('role="tooltip"');
+          expect(text(html.slice(html.indexOf(bubble), html.indexOf("</span>", html.indexOf(bubble)))), `${loc} ${kind}: the reason`).toContain(reason);
+        }
+        // One DOM: every id on the page is unique (the header's bubble and the sheet's must not share one).
+        const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]!);
+        expect(new Set(ids).size, `${loc} ${kind}: no duplicated id`).toBe(ids.length);
+        expect(count(html, "stage-bracket"), `${loc} ${kind}: no tree`).toBe(0);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 4 locales x every bracket kind").toBe(4 * BRACKET_STAGE_KINDS.size);
+  });
+
+  // Fix round 2 (controller ruling, review m6): someone who cannot generate fixtures must not be told to "Generate fixtures".
+  it("the greyed reason depends on who reads it: an organiser is told to Generate, a viewer gets the neutral line (4 locales x every bracket kind)", () => {
+    const reasonOf = (html: string) => {
+      const bubble = tag(html, "stage-tool-bracket-hint") ?? "";
+      return text(html.slice(html.indexOf(bubble), html.indexOf("</span>", html.indexOf(bubble)))).trim();
+    };
+    let checked = 0;
+    for (const [loc, dict] of DICTS) {
+      const d = dict as Record<string, string>;
+      const organiser = d["bracket.generateFirst"]!;
+      const viewer = d["bracket.appearsOnceGenerated"]!;
+      expect(viewer?.length, `premise: ${loc} has the viewer copy`).toBeGreaterThan(5);
+      expect(viewer, `premise: ${loc} the two lines differ`).not.toBe(organiser);
+      for (const kind of BRACKET_STAGE_KINDS) {
+        const asOrganiser = panel(bracketPanelProps(kind, [], { canEdit: true }), loc, dict);
+        const asViewer = panel(bracketPanelProps(kind, [], { canEdit: false }), loc, dict);
+        expect(reasonOf(asOrganiser), `${loc} ${kind}: an organiser`).toContain(organiser);
+        expect(reasonOf(asViewer), `${loc} ${kind}: a viewer`).toContain(viewer);
+        // A viewer is never told to generate: neither the header's bubble nor any other text on the card carries the organiser's line.
+        expect(text(asViewer), `${loc} ${kind}: the viewer's page never says it`).not.toContain(organiser);
+        expect(count(asViewer, "stage-tool-bracket"), `${loc} ${kind}: a viewer still has the greyed button`).toBe(1);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 4 locales x every bracket kind, both roles").toBe(4 * BRACKET_STAGE_KINDS.size);
+  });
+
+  it("a bracket kind with fixtures no view can draw is greyed with its OWN reason, not 'generate fixtures'", () => {
+    const heap = [fixture(BR, 1), fixture(BR, 2), fixture(BR, 3)].map((f, i) => ({ ...f, round_no: 1, seq_in_round: i + 1 }));
+    let checked = 0;
+    for (const [loc, dict] of DICTS) {
+      const d = dict as Record<string, string>;
+      expect(d["bracket.unavailable"], `premise: ${loc} copy differs from the generate copy`).not.toBe(d["bracket.generateFirst"]);
+      const html = panel(bracketPanelProps("knockout", heap as never), loc, dict);
+      expect(control(html, "stage-tool-bracket").tag, loc).toMatch(/aria-disabled="true"/);
+      const bubble = tag(html, "stage-tool-bracket-hint") ?? "";
+      const reason = text(html.slice(html.indexOf(bubble), html.indexOf("</span>", html.indexOf(bubble))));
+      expect(reason, `${loc}: the unavailable reason`).toContain(d["bracket.unavailable"]!);
+      expect(reason, `${loc}: not the generate reason`).not.toContain(d["bracket.generateFirst"]!);
       checked++;
     }
-    expect(checked).toBe(cases.length);
-    // The kind sets are the engine's own: every kind that is NOT a bracket stage gets no button, whatever it holds (swept).
+    expect(checked).toBe(4);
+  });
+
+  it("the greyed button has no handler of its own (a press only opens its bubble), the live one toggles, and a link has none", () => {
+    const handlers = (kind: string, kindRows: ReturnType<typeof bracketRows>) => {
+      const island = renderIsland(StagesPanel, panelProps(bracketPanelProps(kind, kindRows)) as unknown as ComponentProps<typeof StagesPanel>);
+      const el = island.tree().find((e) => propsOf(e)["data-testid"] === "stage-tool-bracket");
+      return el === undefined ? null : propsOf(el);
+    };
+    const toggle = handlers("knockout", rows);
+    expect(toggle, "premise: the live button is in the tree").not.toBeNull();
+    expect(typeof toggle!.onClick, "the live button toggles its panel").toBe("function");
+    expect(toggle!["aria-expanded"]).toBe(false);
+    // A greyed control sits inside `WithReasonTip`, whose element child the walk does not enter: reach it through the wrapper's props.
+    const island = renderIsland(StagesPanel, panelProps(bracketPanelProps("knockout", [])) as unknown as ComponentProps<typeof StagesPanel>);
+    const wrapper = island.tree().find((e) => propsOf(e).reasonTestId === "stage-tool-bracket-hint");
+    expect(wrapper, "premise: the greyed button is wrapped in the reason bubble").toBeDefined();
+    const inner = propsOf(wrapper!).children as { props: Record<string, unknown> };
+    expect(inner.props["data-testid"]).toBe("stage-tool-bracket");
+    expect(inner.props.onClick, "a press on the greyed button does nothing itself").toBeUndefined();
+    expect(inner.props["aria-disabled"]).toBe("true");
+    expect(propsOf(wrapper!).align, "the bubble hangs from the button's right edge: it is last in a right-aligned group").toBe("end");
+    const link = handlers("double_elim", bracketRows(BR, generateDoubleElim({ entrants: T4 }), true));
+    expect(link, "premise: the link is in the tree").not.toBeNull();
+    expect(link!.href).toBe(`#bracket-${BR}`);
+    expect(link!.onClick, "the header link needs no handler").toBeUndefined();
+    // The phone sheet's twin of the link puts the sheet away on its way (the page scrolls to the tree behind it).
+    const ladderIsland = renderIsland(StagesPanel, panelProps(bracketPanelProps("double_elim", bracketRows(BR, generateDoubleElim({ entrants: T4 }), true))) as unknown as ComponentProps<typeof StagesPanel>);
+    // The sheet's rows ride the rail as its `toolsSlot` (the walk does not enter the rail's own render): read them off that prop.
+    const slot = ladderIsland.tree().map((e) => propsOf(e).toolsSlot as { props?: { children?: unknown } } | undefined).find((v) => v !== undefined && v !== null);
+    expect(slot, "premise: the rail was handed the sheet's rows").toBeDefined();
+    const slotRows = ([] as unknown[]).concat(slot!.props?.children ?? []) as { props: Record<string, unknown> }[];
+    const sheetRow = slotRows.find((r) => r.props?.["data-testid"] === "stage-sheet-tool-bracket");
+    expect(sheetRow, "premise: the double-elimination sheet row is among them").toBeDefined();
+    expect(sheetRow!.props.href).toBe(`#bracket-${BR}`);
+    expect(typeof sheetRow!.props.onClick, "the sheet's link closes the sheet").toBe("function");
+  });
+
+  it("a stage kind that is not a bracket gets no button, whatever it holds or lacks (every kind swept, empty and full)", () => {
     let nonBracket = 0;
-    for (const kind of StageKind.options.filter((k) => !BRACKET_KINDS.has(k))) {
-      const html = panel(bracketPanelProps(kind, rows));
-      expect(count(html, "stage-tool-bracket"), kind).toBe(0);
-      nonBracket++;
+    for (const kind of StageKind.options.filter((k) => !BRACKET_STAGE_KINDS.has(k))) {
+      for (const kindRows of [rows, []]) {
+        const html = panel(bracketPanelProps(kind, kindRows, { initialOpenPanels: ["bracket"] }));
+        expect(count(html, "stage-tool-bracket"), `${kind} (${kindRows.length} rows)`).toBe(0);
+        expect(count(html, "stage-sheet-tool-bracket"), `${kind} sheet`).toBe(0);
+        expect(count(html, "stage-bracket"), `${kind} tree`).toBe(0);
+        nonBracket++;
+      }
     }
-    expect(nonBracket, "anti-vacuity: non-bracket kinds swept").toBeGreaterThan(2);
+    expect(nonBracket, "anti-vacuity: non-bracket kinds swept, twice each").toBeGreaterThan(5);
   });
 });
 
@@ -350,7 +504,7 @@ describe("the header: Match format / Points / Tie-breaks buttons (item 9)", () =
       expect(t, `stage-tool-${id}`).not.toBeNull();
       expect(t).toContain('aria-expanded="false"');
       expect(t).toContain(`aria-controls="stage-panel-${A}-${id}"`);
-      expect(t, "44px tap floor").toMatch(/\bmin-h-11\b/);
+      expect(hasClass(t, "min-h-11"), "44px tap floor").toBe(true);
     }
     expect(text(html)).toContain(UI["rulesStrip.format"]!);
     expect(text(html)).toContain(UI["stagePoints.title"]!);
@@ -541,9 +695,19 @@ describe("E1 item 1: the header is [actions | divider | settings], the footer ro
     expect(count(html, "stage-controls"), "one cluster").toBe(1);
     const cluster = html.slice(html.indexOf('data-testid="stage-controls"'));
     expect(cluster.indexOf('data-testid="stage-rail"'), "the actions group opens the cluster").toBeLessThan(cluster.indexOf('data-testid="stage-tools"'));
-    // The divider is a desktop device: hidden below md, where the actions are the Stage tools sheet.
-    expect(tag(html, "stage-controls-divider"), "bare `hidden`, not `max-md:hidden`").toMatch(/class="(?:[^"]* )?hidden /);
-    expect(tag(html, "stage-controls-divider")).toMatch(/\bmd:block\b/);
+    // The divider is a wide-desktop device (fix round 1, review m1): hidden below xl (1280). Below md the actions are the Stage tools sheet;
+    // from md to xl the busiest Swiss state wraps the settings group onto its own line, where a rule that leads the line divides nothing.
+    // Whole class tokens, so `max-xl:*` or `md:block` can never satisfy it by overlap.
+    const dividerClasses = (/class="([^"]*)"/.exec(tag(html, "stage-controls-divider") ?? "")?.[1] ?? "").split(/\s+/).filter(Boolean);
+    expect(dividerClasses, "bare `hidden`, shown by `xl:block` alone").toEqual(expect.arrayContaining(["hidden", "xl:block"]));
+    expect(dividerClasses.filter((c) => /(^|:)(block|inline-block|flex)$/.test(c)), "and no other display class turns it on earlier").toEqual(["xl:block"]);
+    // SCF (owner pick, Option A): the divider is the SETTINGS group's own first child, not the rail's - so wherever the header wraps, it
+    // shares a line with the buttons it divides. A divider left in the rail (or between the two groups) could be stranded on a line alone.
+    const group = innerOf(html, "stage-tools-group");
+    expect(group, "the settings group is on the card").not.toBeNull();
+    expect(group!, "the divider is the group's FIRST child").toMatch(/^<span[^>]*data-testid="stage-controls-divider"/);
+    expect(group!.indexOf('data-testid="stage-tools"'), "the buttons follow it inside the same group").toBeGreaterThan(group!.indexOf("stage-controls-divider"));
+    expect(subtreeOf(html, "stage-rail"), "the rail holds no divider of its own").not.toContain("stage-controls-divider");
     // The header is the cluster's home: it comes before the counts line and before the rows.
     expect(rail!).toBeLessThan(html.indexOf('data-testid="stage-progress-counts"'));
     expect(rail!).toBeLessThan(html.indexOf('data-testid="stage-run-sheet"'));
@@ -606,6 +770,111 @@ describe("E1 item 1: the header is [actions | divider | settings], the footer ro
     const done = panel({ fixtures: [fixture(A, 1, { status: "decided", outcome: DECIDED })] });
     expect(tag(done, "stage-complete")).not.toBeNull();
     expect(done).not.toContain("stage-complete-hint");
+  });
+});
+
+// SCF (owner pick, Option A, 2026-11-03): the divider is drawn when the ACTIONS group draws a control (the panel asks `stageRailActions`, the
+// rail answers by drawing), and it is the settings group's first child. The oracle for "the group drew a control" is the rail's OWN
+// rendered markup, read here - not the predicate the panel asked - so the two places that must agree are checked against each other.
+// One sport (badminton): the header's geometry does not read the sport; the per-sport rule panels are swept in their own suites.
+describe("SCF: the divider is drawn exactly when the actions group draws a control, and it is the settings group's first child", () => {
+  const RAIL_CONTROLS = ["stage-generate", "stage-complete", "stage-unpair", "stage-delete", "stage-add-match", "stage-rounds", "stage-more"];
+  const swissControl = (started: boolean) => ({
+    started,
+    rounds: 3,
+    chess: false,
+    field: 6,
+    addRound: { canAddRound: false, refusal: "over" as const, field: null, hardMax: null },
+    finish: { canFinish: false, refusal: "over" as const, finishedAfter: 3, inProgress: false, completeInstead: false },
+  });
+  /** Round 1 seated (and `decided` when `played`), round 2 an empty shell: what a Swiss holds mid-event. */
+  const swissRows = (o: { played?: boolean; seatedRounds?: number[] } = {}) =>
+    Array.from({ length: 6 }, (_, i) => {
+      const round = Math.floor(i / 3) + 1;
+      const seated = (o.seatedRounds ?? [1]).includes(round);
+      return {
+        ...fixture(A, i + 1, o.played && round === 1 ? { status: "decided", outcome: DECIDED } : {}),
+        round_no: round,
+        home_entrant_id: seated ? "e1" : null,
+        away_entrant_id: seated ? "e2" : null,
+        ext_key: `sw-r${round}-b${(i % 3) + 1}`,
+      };
+    });
+
+  interface Row {
+    name: string;
+    over: Record<string, unknown>;
+  }
+  const rows = (): Row[] => {
+    const out: Row[] = [];
+    for (const kind of StageKind.options.filter((k) => k !== "swiss")) {
+      for (const status of ["pending", "active", "complete"]) {
+        out.push({
+          name: `${kind}/${status}`,
+          over: {
+            stages: [stageRow({ kind, status })],
+            fixtures: status === "pending" ? [] : MOCK_FIXTURES,
+            stageTableRules: { [A]: tableRulesOf(sport("badminton"), "league") },
+          },
+        });
+      }
+    }
+    const swiss = (status: string) => stageRow({ kind: "swiss", name: "Swiss", status, config: { rounds: 3 } });
+    const ctl = (started: boolean) => ({ swissRoundControls: { [A]: swissControl(started) } });
+    out.push(
+      { name: "swiss/pending, nothing generated, count still editable: Generate + the Rounds button", over: { stages: [swiss("pending")], fixtures: [], ...ctl(false) } },
+      { name: "swiss/active, round 2 waiting: Pair next", over: { stages: [swiss("active")], fixtures: swissRows({ played: true }), ...ctl(true) } },
+      { name: "swiss/active, every round seated: Complete", over: { stages: [swiss("active")], fixtures: swissRows({ played: true, seatedRounds: [1, 2] }), ...ctl(true) } },
+      // The SCF case: a finished Swiss with play on it has nothing to complete or delete, and its fixed Rounds pill is gone - an empty group.
+      { name: "swiss/complete with play on it, count fixed: an EMPTY group", over: { stages: [swiss("complete")], fixtures: swissRows({ played: true, seatedRounds: [1, 2] }), ...ctl(true) } },
+      { name: "swiss/complete with nothing played, count fixed: Delete alone", over: { stages: [swiss("complete")], fixtures: swissRows({ seatedRounds: [1, 2] }), ...ctl(true) } },
+    );
+    return out;
+  };
+
+  it("an editor: one divider per card whose rail drew a control, none beside an empty group; first child of the settings group; never inside the rail", () => {
+    let checked = 0;
+    let withDivider = 0;
+    let without = 0;
+    let withGroup = 0;
+    for (const r of rows()) {
+      const html = panel(r.over);
+      const rail = subtreeOf(html, "stage-rail");
+      expect(rail, `${r.name}: positive pair, the editor's rail is on the card`).not.toBeNull();
+      const drew = RAIL_CONTROLS.some((id) => rail!.includes(`data-testid="${id}"`));
+      const group = innerOf(html, "stage-tools-group");
+      if (group !== null) withGroup++;
+      const expected = drew && group !== null ? 1 : 0;
+      expect(count(html, "stage-controls-divider"), `${r.name}: ${drew ? "the rail drew a control" : "the rail's group is empty"}`).toBe(expected);
+      expect(rail, `${r.name}: never inside the rail`).not.toContain("stage-controls-divider");
+      if (expected === 1) {
+        expect(group!, `${r.name}: the settings group's first child`).toMatch(/^<span[^>]*data-testid="stage-controls-divider"/);
+        withDivider++;
+      } else without++;
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every row checked").toBe(rows().length);
+    expect(withDivider, "both answers are in the table: a divider").toBeGreaterThan(0);
+    expect(without, "both answers are in the table: none beside an empty group").toBeGreaterThan(0);
+    expect(withGroup, "the settings group is really on the cards").toBeGreaterThan(0);
+  });
+
+  it("a finished Swiss that is played and not deletable draws no divider, though its settings buttons are there (the pill that used to earn it is gone)", () => {
+    const row = rows().find((r) => r.name.startsWith("swiss/complete with play"))!;
+    const html = panel({ ...row.over, activeEntrantIds: ["e1", "e2", "e3", "e4", "e5", "e6"] });
+    expect(html, "positive pair: the settings buttons are on the card").toContain('data-testid="stage-tool-format"');
+    expect(text(innerOf(html, "stage-swiss-legend") ?? ""), "positive pair: the legend line still says the round count").toContain("3 rounds");
+    expect(html).not.toContain('data-testid="stage-rounds"');
+    expect(html).not.toContain("stage-controls-divider");
+  });
+
+  it("a viewer: no rail, no divider, but the settings group is still on the card", () => {
+    for (const r of rows().filter((x) => x.name.startsWith("swiss/") || x.name.startsWith("league/"))) {
+      const html = panel({ ...r.over, canEdit: false });
+      expect(html, `${r.name}: positive pair`).toContain('data-testid="stage-tools"');
+      expect(html, `${r.name}: no rail`).not.toContain('data-testid="stage-rail"');
+      expect(html, `${r.name}: no divider`).not.toContain("stage-controls-divider");
+    }
   });
 });
 
@@ -796,7 +1065,7 @@ describe("the phone: the three buttons are the TOP rows of the one 'Stage tools'
     expect(count(html, "stage-settings-menu"), "the retired menu is gone").toBe(0);
     expect(html).not.toContain("stage-settings-");
     expect(count(html, "stage-rail-trigger"), "the card's one phone trigger").toBe(1);
-    expect(tag(html, "stage-rail-trigger")).toMatch(/\bmin-h-11\b/);
+    expect(hasClass(tag(html, "stage-rail-trigger"), "min-h-11"), "44px tap floor").toBe(true);
     expect(text(html)).toContain(UI["schedule.stageTools"]!);
     const group = tag(html, "stage-sheet-tools")!;
     expect(group, "the rows are phone-only: the header's buttons are the desktop twin").toMatch(/\smd:hidden\b/);
@@ -816,7 +1085,7 @@ describe("the phone: the three buttons are the TOP rows of the one 'Stage tools'
       expect(row, `${id}: a row in the sheet`).not.toBeNull();
       expect(row).toContain('aria-expanded="false"');
       expect(row).toContain(`aria-controls="stage-panel-${A}-${id}"`);
-      expect(row, "44px tap floor").toMatch(/\bmin-h-11\b/);
+      expect(hasClass(row, "min-h-11"), "44px tap floor").toBe(true);
       expect(count(html, `stage-tool-${id}`), `${id}: the header's twin exists once`).toBe(1);
       expect(count(html, `stage-sheet-tool-${id}`), `${id}: the sheet's row exists once`).toBe(1);
     }
