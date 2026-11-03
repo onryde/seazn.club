@@ -8,7 +8,6 @@ import { StagesPanel } from "@/components/v2/stages-panel";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
-vi.mock("@/components/ui/tip", () => ({ TipCallout: ({ id }: { id: string }) => <div data-tip={id} /> }));
 
 const stage = (o: Partial<{ id: string; seq: number; kind: string; name: string; status: string }> = {}) => ({
   id: "s1", seq: 1, kind: "league", name: "League", config: {}, progression: null, status: "active", ...o,

@@ -1708,7 +1708,6 @@
   "tips.schedule.health.homeAwayAlternation.body": "Con qué frecuencia cambia de lado cada participante en lugar de repetir el mismo, promediado entre todos — por eso puede salir una puntuación mediocre aunque abajo no se señale a nadie. Solo se puntúa en fases de tabla; un cuadro eliminatorio no tiene patrón local/visitante, así que la barra no aparece en vez de valer cero.",
   "tips.schedule.health.primeSlotFairness.title": "Equidad en horarios estrella",
   "tips.schedule.health.primeSlotFairness.body": "Los horarios estrella son los últimos de cada día en cada pista. Esto comprueba si se reparten en proporción a cuántos partidos juega cada participante, en lugar de tocarle siempre a los mismos.",
-  "tips.dismiss": "Descartar consejo",
   "tips.about": "Acerca de: {title}",
   "persons.search": "Buscar jugadores…",
   "persons.mergingPre": "Combinando",

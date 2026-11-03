@@ -1708,7 +1708,6 @@
   "tips.schedule.health.homeAwayAlternation.body": "À quelle fréquence chaque participant change de côté au lieu de rejouer le même, en moyenne sur tout le monde — d'où un score moyen possible même si personne n'est signalé ci-dessous. Calculé uniquement pour les phases en tableau ; un tableau à élimination n'a pas de schéma domicile/extérieur, la barre est donc absente plutôt que nulle.",
   "tips.schedule.health.primeSlotFairness.title": "Équité des créneaux prisés",
   "tips.schedule.health.primeSlotFairness.body": "Les créneaux prisés sont les derniers de la journée sur chaque terrain. On vérifie s'ils sont répartis proportionnellement au nombre de matchs joués par chaque participant, plutôt que de revenir toujours aux mêmes.",
-  "tips.dismiss": "Ignorer le conseil",
   "tips.about": "À propos : {title}",
   "persons.search": "Rechercher des joueurs…",
   "persons.mergingPre": "Fusion de",

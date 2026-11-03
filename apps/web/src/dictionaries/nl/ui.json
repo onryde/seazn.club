@@ -1708,7 +1708,6 @@
   "tips.schedule.health.homeAwayAlternation.body": "Hoe vaak elke deelnemer van kant wisselt in plaats van steeds dezelfde kant te spelen, gemiddeld over iedereen — daarom kan er een middelmatige score staan terwijl hieronder niemand wordt aangemerkt. Alleen berekend voor tabelfases; een knock-outschema heeft geen thuis/uit-patroon, dus de balk ontbreekt in plaats van nul te zijn.",
   "tips.schedule.health.primeSlotFairness.title": "Eerlijke topmomenten",
   "tips.schedule.health.primeSlotFairness.body": "Topmomenten zijn de laatste tijdvakken van elke baandag. Dit controleert of ze worden verdeeld naar rato van hoeveel wedstrijden elke deelnemer speelt, in plaats van steeds bij dezelfde mensen terecht te komen.",
-  "tips.dismiss": "Tip sluiten",
   "tips.about": "Over: {title}",
   "persons.search": "Zoek spelers…",
   "persons.mergingPre": "Samenvoegen van",

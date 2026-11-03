@@ -8836,7 +8836,6 @@ export type DictionaryKey =
   | "tips.billing.groups.title"
   | "tips.board.filter.body"
   | "tips.board.filter.title"
-  | "tips.dismiss"
   | "tips.division.visibility.body"
   | "tips.division.visibility.title"
   | "tips.entrants.kinds.body"

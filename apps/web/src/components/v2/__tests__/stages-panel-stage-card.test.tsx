@@ -29,7 +29,6 @@ import { innerOf, subtreeOf } from "./_markup";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
-vi.mock("@/components/ui/tip", () => ({ TipCallout: ({ id }: { id: string }) => <div data-tip={id} /> }));
 
 const UI = enUi as Record<string, string>;
 const DICTS: [Locale, Dict][] = [

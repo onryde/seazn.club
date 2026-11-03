@@ -1708,7 +1708,6 @@
   "tips.schedule.health.homeAwayAlternation.body": "How often each entrant swaps sides instead of playing the same side repeatedly, averaged over everyone — so a middling score can appear even when nobody is flagged below. Only scored for table-shaped stages; a knockout bracket has no home/away pattern, so the bar is absent rather than zero.",
   "tips.schedule.health.primeSlotFairness.title": "Prime-slot fairness",
   "tips.schedule.health.primeSlotFairness.body": "Prime slots are the last few of each court's day. This checks whether they are shared out in proportion to how many matches each entrant plays, rather than falling to the same people every time.",
-  "tips.dismiss": "Dismiss tip",
   "tips.about": "About: {title}",
   "persons.search": "Search players…",
   "persons.mergingPre": "Merging",
