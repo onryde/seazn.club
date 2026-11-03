@@ -632,7 +632,7 @@ test("a spectator reads the league stage's own format: on its match page, on the
   await expect(page.getByText(preset!, { exact: true })).toBeVisible();
 });
 
-test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, one that inherits it, and in division settings", async ({
+test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, one that inherits it, and on the Division rules strip (which Settings no longer carries)", async ({
   page,
   request,
 }) => {
@@ -665,6 +665,8 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
   });
   await page.goto(await divisionPath(request, divId, "?tab=fixtures"));
   const finals = stageSheet(page, FINALS_HEADING);
+  // Match Day C2 naming: the card's button for the stage's match format is "Match rules" (the dictionary's `rulesStrip.format`).
+  await expect(finals.getByTestId("stage-tool-format"), "the card's button is called Match rules").toHaveText(L["rulesStrip.format"]!);
   await setBestOfInUi(page, FINALS_HEADING, 1);
 
   await openStagePanel(finals, "format");
@@ -857,4 +859,19 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
       { timeout: POLL_MS },
     )
     .toMatchObject({ bestOf: 1, setTo: BO1_SETTINGS_POINTS, finalSetTo: BO1_SETTINGS_POINTS });
+
+  // --- 4. The rules have MOVED OUT of Settings (Match Day C2) -----------------------------------------------------------------
+  // The strip just edited this division's match format under the name "Match rules". Settings, for the same division, carries none of
+  // it - no strip, no Match rules toggle, no best-of picker, no points field - while the stage structure ("Format", with its rebuild)
+  // is still there: the positive pair, so an empty page cannot pass for a clean one.
+  const MATCH_RULES = L["rulesStrip.format"]!;
+  await expect(rules.getByTestId("division-rules-toggle-format"), "on the strip the block is named Match rules").toHaveText(MATCH_RULES);
+  await page.goto(await divisionPath(request, bo1DivId, "?tab=settings"));
+  await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: STEP_MS });
+  await expect(page.getByRole("button", { name: /^Format/ }), "Settings still carries the stage structure").toBeVisible();
+  await expect(page.getByTestId("division-rules-strip"), "no strip in Settings").toHaveCount(0);
+  await expect(page.getByRole("button", { name: MATCH_RULES }), "no Match rules toggle in Settings").toHaveCount(0);
+  await expect(page.getByText(MATCH_RULES, { exact: true }), "no Match rules heading or label in Settings").toHaveCount(0);
+  await expect(page.getByLabel(BEST_OF_LABEL), "no best-of picker in Settings").toHaveCount(0);
+  await expect(page.getByRole("spinbutton", { name: SINGLE_SET_POINTS_LABEL, exact: true }), "no points field in Settings").toHaveCount(0);
 });
