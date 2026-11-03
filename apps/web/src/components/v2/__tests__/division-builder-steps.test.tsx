@@ -28,6 +28,7 @@ import { selectedTimeControlKey, timeControlRuleValues } from "@/lib/online-time
 import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 import { SUGGESTED_COUNT } from "@/lib/division-builder/model";
 import { ApiV1Error } from "@/lib/client-v1";
+import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import uiEn from "@/dictionaries/en/ui.json";
 import {
   byTestId,
@@ -154,6 +155,19 @@ describe("the four steps", () => {
     expect(currentStep(h)).toBe("who");
   });
 
+  it("the sport select is named Sport alone: its 'set at creation' hint describes it from outside the label", () => {
+    const h = mount(sportsFor("badminton"));
+    const select = h.tree().find((e) => e.type === "select" && propsOf(e)["aria-describedby"] === "division-builder-sport-fixed");
+    expect(select, "the sport select points at its hint").toBeDefined();
+    const label = h.tree().find((e) => e.type === "label" && walk(e).includes(select!));
+    expect(label, "the select sits in its label").toBeDefined();
+    const inLabel = walk(label!).filter((e) => e.type === "span" || e.type === "p").map((e) => textOf(e).trim());
+    expect(inLabel).toEqual([UI["wizard.sport"]]);
+    const hint = h.tree().find((e) => propsOf(e).id === "division-builder-sport-fixed");
+    expect(hint && textOf(hint).trim()).toBe(UI["divBuilder.sportFixed"]);
+    expect(walk(label!).includes(hint!), "the hint is NOT in the label (it would join the select's name)").toBe(false);
+  });
+
   it("Next is refused on an unfinished step with the reason, and goes on once it is done", () => {
     const h = mount(sportsFor("badminton"));
     next(h);
@@ -163,6 +177,23 @@ describe("the four steps", () => {
     next(h);
     expect(currentStep(h)).toBe("format");
     expect(stepError(h), "the refusal goes with the step that raised it").toBeNull();
+  });
+
+  it("a step's own refusal goes the moment what it named is fixed: no stale 'Enter a division name' over a typed name", () => {
+    const h = mount(sportsFor("badminton"));
+    next(h);
+    expect(stepError(h)).toBe(UI["wizard.err.name"]);
+    const flagged = () => walk(byTestId(h, "division-builder-step-who")!).some((e) => /bg-red-600/.test(String(propsOf(e).className)));
+    expect(flagged(), "the step's number is flagged while refused").toBe(true);
+    setName(h, "Open");
+    expect(currentStep(h)).toBe("who");
+    expect(stepError(h), "fixed: the refusal is gone before any Next").toBeNull();
+    expect(flagged(), "and so is the flag").toBe(false);
+    // Emptied again: it is not raised by typing alone - only a Next or a jump asks again.
+    setName(h, "");
+    expect(stepError(h)).toBeNull();
+    next(h);
+    expect(stepError(h)).toBe(UI["wizard.err.name"]);
   });
 
   it("a jump forward stops on the FIRST unfinished step; a jump back is free", () => {
@@ -176,6 +207,35 @@ describe("the four steps", () => {
     goToStep(h, "who");
     expect(currentStep(h)).toBe("who");
     expect(stepError(h)).toBeNull();
+  });
+
+  it("a backwards schedule range stops Division rules with the reason; the same day, or later, goes on (the create's only guard)", () => {
+    const h = mount(sportsFor("badminton"));
+    setName(h, "Open");
+    next(h);
+    next(h);
+    expect(currentStep(h)).toBe("rules");
+    const field = (label: string) => {
+      const el = h.tree().find((e) => e.type === DateTimeField && propsOf(e).label === label);
+      if (!el) throw new Error(`no ${label} field`);
+      return propsOf(el).onChange as (v: string) => void;
+    };
+    field(UI["boardset.startAt"]!)("2026-10-12T09:00");
+    field(UI["boardset.endAt"]!)("2026-10-11");
+    next(h);
+    expect(currentStep(h), "backwards: held on Division rules").toBe("rules");
+    expect(stepError(h)).toBe(UI["boardset.datesError"]);
+    goToStep(h, "review");
+    expect(currentStep(h), "a jump past it stops on it too").toBe("rules");
+    let checked = 0;
+    for (const end of ["2026-10-12", "2026-10-13"]) {
+      goToStep(h, "rules");
+      field(UI["boardset.endAt"]!)(end);
+      next(h);
+      expect(currentStep(h), `end ${end}: on to Review`).toBe("review");
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("nothing typed is lost moving between steps: name, category, age, a format and its knob survive Back and Next", () => {

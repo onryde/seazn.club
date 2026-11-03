@@ -336,8 +336,9 @@ export function DivisionBuilder({
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
-  // One error slot, shown on the step it belongs to.
-  const [error, setError] = useState<{ step: BuilderStep; text: string } | null>(null);
+  // One error slot, shown on the step it belongs to. `check`: raised by the step's own check (Next, a jump, Create), so
+  // it speaks for that check as it stands now - see the render-phase clear below. A server refusal is not a check.
+  const [error, setError] = useState<{ step: BuilderStep; text: string; check?: true } | null>(null);
   // Match Day E1 item 8 (D1): a refusal of a format knob remembers the knob values it was raised for, so it is dropped
   // the moment the organiser changes the box it names (see the render-phase clear below).
   const [formatRefusal, setFormatRefusal] = useState<{ text: string; knobs: string } | null>(null);
@@ -494,13 +495,17 @@ export function DivisionBuilder({
     return null;
   }
   const problems = Object.fromEntries(BUILDER_STEPS.map((s) => [s, stepProblem(s)])) as Record<BuilderStep, string | null>;
+  // A step's own refusal goes the moment what it named is fixed (the name typed after "Enter a division name"), rather
+  // than standing over a field that is now right. Cleared, not hidden: emptying the field again raises nothing until
+  // the next Next or jump asks again. A server refusal (no `check`) stays until the organiser acts on it.
+  if (error !== null && error.check === true && problems[error.step] === null) setError(null);
   const blocked = firstBlockedStep(problems);
   const stepIndex = BUILDER_STEPS.indexOf(step);
 
   /** Raise a refusal on a step. One that is a format-knob refusal is remembered with the knobs it was raised for, so it
    *  goes when they change; any other is never tagged, so a knob change cannot touch it. */
   function refuse(at: BuilderStep, text: string) {
-    setError({ step: at, text });
+    setError({ step: at, text, check: true });
     if (text === formatBoundProblem()) setFormatRefusal({ text, knobs: boundKnobs });
   }
 
@@ -742,7 +747,8 @@ export function DivisionBuilder({
     },
   ];
 
-  const stepError = error !== null && error.step === step ? error.text : null;
+  // A check's refusal reads the check as it stands (the first problem on that step now), never the sentence it was raised with.
+  const stepError = error !== null && error.step === step ? (error.check ? (problems[error.step] ?? error.text) : error.text) : null;
   const section = (s: BuilderStep) => `space-y-4 ${step === s ? "" : "hidden"}`;
 
   return (
@@ -801,19 +807,22 @@ export function DivisionBuilder({
               className="input min-h-11"
             />
           </label>
-          <label className="block">
-            <span className="label">{msg("wizard.sport")}</span>
-            <select value={sportKey} onChange={(e) => selectSport(e.target.value)} className="select min-h-11 w-full md:max-w-xs" aria-describedby="division-builder-sport-fixed">
-              {sports.map((s) => (
-                <option key={s.key} value={s.key}>
-                  {sportLabel(s.key, msg)}
-                </option>
-              ))}
-            </select>
-            <span id="division-builder-sport-fixed" className="mt-1 block text-xs text-slate-500">
+          <div>
+            <label className="block">
+              <span className="label">{msg("wizard.sport")}</span>
+              <select value={sportKey} onChange={(e) => selectSport(e.target.value)} className="select min-h-11 w-full md:max-w-xs" aria-describedby="division-builder-sport-fixed">
+                {sports.map((s) => (
+                  <option key={s.key} value={s.key}>
+                    {sportLabel(s.key, msg)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {/* OUTSIDE the label: the select's description, not part of its name ("Sport"). */}
+            <p id="division-builder-sport-fixed" className="mt-1 text-xs text-slate-500">
               {msg("divBuilder.sportFixed")}
-            </span>
-          </label>
+            </p>
+          </div>
 
           {entrantModel !== undefined && entrantKind !== null && (
             <fieldset data-testid="division-builder-entrant-kind" className="min-w-0">
