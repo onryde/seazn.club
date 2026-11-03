@@ -21,6 +21,49 @@ import {
 
 export const protobufPackage = "seazn.placement.v1";
 
+/** X-SW-31 (W3 Swiss) -- the round-order rule of one round sequence. */
+export enum RoundBarrier {
+  /** ROUND_BARRIER_UNSPECIFIED - Absent. Read as START. */
+  ROUND_BARRIER_UNSPECIFIED = 0,
+  /** ROUND_BARRIER_START - C1's start floor: a later round does not start before an earlier one. */
+  ROUND_BARRIER_START = 1,
+  /** ROUND_BARRIER_END - START, plus: a later round does not start before an earlier one ends. */
+  ROUND_BARRIER_END = 2,
+  UNRECOGNIZED = -1,
+}
+
+export function roundBarrierFromJSON(object: any): RoundBarrier {
+  switch (object) {
+    case 0:
+    case "ROUND_BARRIER_UNSPECIFIED":
+      return RoundBarrier.ROUND_BARRIER_UNSPECIFIED;
+    case 1:
+    case "ROUND_BARRIER_START":
+      return RoundBarrier.ROUND_BARRIER_START;
+    case 2:
+    case "ROUND_BARRIER_END":
+      return RoundBarrier.ROUND_BARRIER_END;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return RoundBarrier.UNRECOGNIZED;
+  }
+}
+
+export function roundBarrierToJSON(object: RoundBarrier): string {
+  switch (object) {
+    case RoundBarrier.ROUND_BARRIER_UNSPECIFIED:
+      return "ROUND_BARRIER_UNSPECIFIED";
+    case RoundBarrier.ROUND_BARRIER_START:
+      return "ROUND_BARRIER_START";
+    case RoundBarrier.ROUND_BARRIER_END:
+      return "ROUND_BARRIER_END";
+    case RoundBarrier.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
 export enum SolveStatus {
   SOLVE_STATUS_UNSPECIFIED = 0,
   SOLVE_STATUS_OPTIMAL = 1,
@@ -99,11 +142,11 @@ export interface Fixture {
     | undefined;
   /**
    * C1 (2026-08-12 round-ordering design) -- this fixture's 1-based position
-   * in ITS OWN round-robin sequence, not a global or cross-stage counter.
+   * in ITS OWN round sequence, not a global or cross-stage counter.
    * `optional`: round 0 would otherwise be indistinguishable from "no round",
-   * and MOST fixtures carry none at all -- bracket/stepladder/swiss fixtures
-   * are already ordered by `dependencies` (winner/loser feed edges) and never
-   * get one; only round-robin-generated fixtures do. Absent means
+   * and MOST fixtures carry none at all -- bracket/stepladder fixtures are
+   * already ordered by `dependencies` (winner/loser feed edges) and never get
+   * one; round-robin and Swiss fixtures do. Absent means
    * unconstrained by the round-order pair scan, not "round 0". The caller
    * (`build.ts`) is responsible for never sending round-bearing fixtures from
    * more than one round sequence in one division -- see
@@ -166,6 +209,59 @@ export interface Fixture {
    * slotless court independently (section 1b).
    */
   allowedCourtIndices: number[];
+  /**
+   * X-SW-31 (W3 Swiss) -- how this fixture's round sequence (its division)
+   * is ordered. Read only beside `round`, and one value per division. END: a
+   * later round's fixture does not start before an earlier round's fixture
+   * ends (`start_j >= start_i + match_minutes`; equality is legal).
+   */
+  roundBarrier: RoundBarrier;
+  /**
+   * Ruling 255 (W3 Swiss) -- an unpaired round slot: a board of a round whose
+   * pairing is not drawn yet. Unlike an undecided knockout slot (C10 above)
+   * it has no feeders, so it has no people either. When true, both
+   * `entrant_indices` and `person_indices` must be empty and `round` must be
+   * set. The fixture takes a court and a time and carries no person
+   * constraint; every other constraint applies, `round_barrier` included. No
+   * person rest applies to it, so any gap between rounds comes from
+   * `round_barrier` and `round_gap_minutes` alone. A Swiss caller sends END; a
+   * START or absent barrier is accepted, not refused, because a refusal would
+   * send the whole request to the greedy fallback.
+   */
+  unpairedRoundSlot: boolean;
+  /**
+   * Ruling 256 (W3 Swiss) -- the round gap: person rest kept as a ROUND
+   * limit, because an unpaired slot has no people for rest to reach. Under
+   * `round_barrier` END, every board of round r starts no earlier than the
+   * last end of EVERY earlier round in the same sequence (the END barrier's
+   * own pair set, not r-1 only) plus this many minutes
+   * (`start_j >= start_i + match_minutes + round_gap_minutes`). 0 or absent is
+   * END exactly. It binds a round-bearing pin in `existing` as the barrier
+   * does, with this sequence's value: a pin carries none of its own. Read only
+   * beside `round`, and one value per division (a division whose round-bearing
+   * fixtures disagree is refused). Under START or no barrier it is ignored,
+   * not refused: the gap is measured from an END.
+   */
+  roundGapMinutes: number;
+  /**
+   * Ruling 256 (W3 Swiss) -- rounds per day: the per-player daily match cap
+   * kept as a ROUND limit (in a Swiss each player plays once per round). In
+   * one sequence, the number of distinct rounds with at least one board on a
+   * calendar day is at most this value. The day is the caller's
+   * `Slot.day_index` -- the org's local day, resolved by the caller in the
+   * org's zone, exactly as for `RuleGroup.max_fixtures_per_day`; this service
+   * has no zone and never buckets in UTC. 0 or absent is no cap. Drawn boards,
+   * unpaired slots and round-bearing pins in `existing` all count. A pin counts
+   * on its `PinnedRow.day_index` (its calendar day) when set; when absent, on
+   * the day whose SLOT range its start falls in, and on none if it falls in
+   * no slot range -- a played round before the day's first offered slot (a
+   * same-day rebuild) is then not counted, so the caller sends `day_index`.
+   * Pins are never constrained:
+   * the cap limits only the rounds MOVABLE boards add to a day, so a day
+   * already over the cap through pins alone stays solvable. Read only beside
+   * `round`, one value per division, under ANY barrier (END, START or none).
+   */
+  roundsPerDayCap: number;
 }
 
 export interface Slot {
@@ -250,7 +346,33 @@ export interface PinnedRow {
    * that division match against the movable round-robin sequence is
    * unambiguous -- the model has no way to re-verify it.
    */
-  round?: number | undefined;
+  round?:
+    | number
+    | undefined;
+  /**
+   * X-SW-31 -- the barrier of the sequence this pin's `round` is forwarded
+   * into; read only beside `round`, same meaning as `Fixture.round_barrier`.
+   * An END pin floors a later round's start and caps an earlier round's end.
+   * A pin's end is taken as `start_at_ms + match_minutes`, which is the end
+   * the app sends today. Two pins are never ordered against each other.
+   */
+  roundBarrier: RoundBarrier;
+  /**
+   * Engine review I2 (W3 Swiss) -- the caller's calendar day of this pin, in
+   * `Slot.day_index`'s index space (the org's local day, resolved by the
+   * caller in the org's zone; a pin earlier on the same calendar day as the
+   * first slot gets that slot's day index). Read only where a pin is
+   * counted on a DAY: `Fixture.rounds_per_day_cap`,
+   * `RuleGroup.max_fixtures_per_day`, the round order's start floor (an
+   * earlier round never starts after a later one on the same day) and the
+   * per-day objective. When set, the pin counts on this day, whatever slot
+   * range its start falls in. Absent, the pin counts on the day whose slot
+   * range its start falls in, or on none -- which is what a same-day
+   * rebuild's morning pins did, since its slots start at "now". `optional`,
+   * because day 0 is a real day; a set value must be >= 0, like
+   * `Slot.day_index`.
+   */
+  dayIndex?: number | undefined;
 }
 
 /**
@@ -446,7 +568,17 @@ export interface SolveBuildResponse {
 }
 
 function createBaseFixture(): Fixture {
-  return { entrantIndices: [], divisionIndex: undefined, round: undefined, personIndices: [], allowedCourtIndices: [] };
+  return {
+    entrantIndices: [],
+    divisionIndex: undefined,
+    round: undefined,
+    personIndices: [],
+    allowedCourtIndices: [],
+    roundBarrier: 0,
+    unpairedRoundSlot: false,
+    roundGapMinutes: 0,
+    roundsPerDayCap: 0,
+  };
 }
 
 export const Fixture: MessageFns<Fixture> = {
@@ -472,6 +604,18 @@ export const Fixture: MessageFns<Fixture> = {
       writer.uint32(v);
     }
     writer.join();
+    if (message.roundBarrier !== 0) {
+      writer.uint32(48).int32(message.roundBarrier);
+    }
+    if (message.unpairedRoundSlot !== false) {
+      writer.uint32(56).bool(message.unpairedRoundSlot);
+    }
+    if (message.roundGapMinutes !== 0) {
+      writer.uint32(64).uint32(message.roundGapMinutes);
+    }
+    if (message.roundsPerDayCap !== 0) {
+      writer.uint32(72).uint32(message.roundsPerDayCap);
+    }
     return writer;
   },
 
@@ -552,6 +696,38 @@ export const Fixture: MessageFns<Fixture> = {
 
           break;
         }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.roundBarrier = reader.int32() as any;
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.unpairedRoundSlot = reader.bool();
+          continue;
+        }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.roundGapMinutes = reader.uint32();
+          continue;
+        }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.roundsPerDayCap = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -584,6 +760,26 @@ export const Fixture: MessageFns<Fixture> = {
         : globalThis.Array.isArray(object?.allowed_court_indices)
         ? object.allowed_court_indices.map((e: any) => globalThis.Number(e))
         : [],
+      roundBarrier: isSet(object.roundBarrier)
+        ? roundBarrierFromJSON(object.roundBarrier)
+        : isSet(object.round_barrier)
+        ? roundBarrierFromJSON(object.round_barrier)
+        : 0,
+      unpairedRoundSlot: isSet(object.unpairedRoundSlot)
+        ? globalThis.Boolean(object.unpairedRoundSlot)
+        : isSet(object.unpaired_round_slot)
+        ? globalThis.Boolean(object.unpaired_round_slot)
+        : false,
+      roundGapMinutes: isSet(object.roundGapMinutes)
+        ? globalThis.Number(object.roundGapMinutes)
+        : isSet(object.round_gap_minutes)
+        ? globalThis.Number(object.round_gap_minutes)
+        : 0,
+      roundsPerDayCap: isSet(object.roundsPerDayCap)
+        ? globalThis.Number(object.roundsPerDayCap)
+        : isSet(object.rounds_per_day_cap)
+        ? globalThis.Number(object.rounds_per_day_cap)
+        : 0,
     };
   },
 
@@ -604,6 +800,18 @@ export const Fixture: MessageFns<Fixture> = {
     if (message.allowedCourtIndices?.length) {
       obj.allowedCourtIndices = message.allowedCourtIndices.map((e) => Math.round(e));
     }
+    if (message.roundBarrier !== 0) {
+      obj.roundBarrier = roundBarrierToJSON(message.roundBarrier);
+    }
+    if (message.unpairedRoundSlot !== false) {
+      obj.unpairedRoundSlot = message.unpairedRoundSlot;
+    }
+    if (message.roundGapMinutes !== 0) {
+      obj.roundGapMinutes = Math.round(message.roundGapMinutes);
+    }
+    if (message.roundsPerDayCap !== 0) {
+      obj.roundsPerDayCap = Math.round(message.roundsPerDayCap);
+    }
     return obj;
   },
 
@@ -617,6 +825,10 @@ export const Fixture: MessageFns<Fixture> = {
     message.round = object.round ?? undefined;
     message.personIndices = object.personIndices?.map((e) => e) || [];
     message.allowedCourtIndices = object.allowedCourtIndices?.map((e) => e) || [];
+    message.roundBarrier = object.roundBarrier ?? 0;
+    message.unpairedRoundSlot = object.unpairedRoundSlot ?? false;
+    message.roundGapMinutes = object.roundGapMinutes ?? 0;
+    message.roundsPerDayCap = object.roundsPerDayCap ?? 0;
     return message;
   },
 };
@@ -726,7 +938,15 @@ export const Slot: MessageFns<Slot> = {
 };
 
 function createBasePinnedRow(): PinnedRow {
-  return { courtIndex: undefined, startAtMs: 0, ruleGroupIndices: [], entrantIndices: [], round: undefined };
+  return {
+    courtIndex: undefined,
+    startAtMs: 0,
+    ruleGroupIndices: [],
+    entrantIndices: [],
+    round: undefined,
+    roundBarrier: 0,
+    dayIndex: undefined,
+  };
 }
 
 export const PinnedRow: MessageFns<PinnedRow> = {
@@ -749,6 +969,12 @@ export const PinnedRow: MessageFns<PinnedRow> = {
     writer.join();
     if (message.round !== undefined) {
       writer.uint32(40).uint32(message.round);
+    }
+    if (message.roundBarrier !== 0) {
+      writer.uint32(48).int32(message.roundBarrier);
+    }
+    if (message.dayIndex !== undefined) {
+      writer.uint32(56).int32(message.dayIndex);
     }
     return writer;
   },
@@ -820,6 +1046,22 @@ export const PinnedRow: MessageFns<PinnedRow> = {
           message.round = reader.uint32();
           continue;
         }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.roundBarrier = reader.int32() as any;
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.dayIndex = reader.int32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -852,6 +1094,16 @@ export const PinnedRow: MessageFns<PinnedRow> = {
         ? object.entrant_indices.map((e: any) => globalThis.Number(e))
         : [],
       round: isSet(object.round) ? globalThis.Number(object.round) : undefined,
+      roundBarrier: isSet(object.roundBarrier)
+        ? roundBarrierFromJSON(object.roundBarrier)
+        : isSet(object.round_barrier)
+        ? roundBarrierFromJSON(object.round_barrier)
+        : 0,
+      dayIndex: isSet(object.dayIndex)
+        ? globalThis.Number(object.dayIndex)
+        : isSet(object.day_index)
+        ? globalThis.Number(object.day_index)
+        : undefined,
     };
   },
 
@@ -872,6 +1124,12 @@ export const PinnedRow: MessageFns<PinnedRow> = {
     if (message.round !== undefined) {
       obj.round = Math.round(message.round);
     }
+    if (message.roundBarrier !== 0) {
+      obj.roundBarrier = roundBarrierToJSON(message.roundBarrier);
+    }
+    if (message.dayIndex !== undefined) {
+      obj.dayIndex = Math.round(message.dayIndex);
+    }
     return obj;
   },
 
@@ -885,6 +1143,8 @@ export const PinnedRow: MessageFns<PinnedRow> = {
     message.ruleGroupIndices = object.ruleGroupIndices?.map((e) => e) || [];
     message.entrantIndices = object.entrantIndices?.map((e) => e) || [];
     message.round = object.round ?? undefined;
+    message.roundBarrier = object.roundBarrier ?? 0;
+    message.dayIndex = object.dayIndex ?? undefined;
     return message;
   },
 };
