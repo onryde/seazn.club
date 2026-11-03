@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import { TAG, apiJson, competitionPath, divisionPath, openBracket, seedVenueWithCourts, withDb } from "./helpers";
+import { TAG, apiJson, competitionPath, divisionPath, openBracket, pickBuilderSport, seedVenueWithCourts, showAllFormats, withDb } from "./helpers";
 import { fill, uiEn } from "./match-room-kit";
 import { closeOpenContexts } from "./spectator-public-helpers";
 import { API_CALL_MS, FLOOR_MS, STEP_MS, spectator } from "./spectator-w2-kit";
@@ -190,8 +190,8 @@ async function readPresent(page: Page, caption: string): Promise<PresentSlide> {
 // ST-G21 (the same ladders on /present at a TV width), X-SW-24 (the seed proposal is the chain's top four, no tie flagged).
 //
 // FALSE PREMISE (recorded; plan step 5): three rounds of a ten-player no-draw Swiss cannot leave 4th and 5th level on points -
-// the scores fall 1-3-4-2 after round 3 whatever the pairings - so the builder's Rounds knob is pinned at what it OPENS AT (3,
-// class 19) and then set to 4. Pairings are lots-driven between runs, so rounds 1-3 follow a fixed policy (the stronger side
+// the scores fall 1-3-4-2 after round 3 whatever the pairings - so the builder's Rounds knob is pinned at what it OPENS AT for
+// the plan's seven entrants (3, class 19; Match Day C9 made the knob follow the plan's entrants box) and then set to 4. Pairings are lots-driven between runs, so rounds 1-3 follow a fixed policy (the stronger side
 // wins: seeds 1-7, then the latecomers in arrival order) and round 4's results are CHOSEN with the oracle: the first of the
 // 2^boards outcomes, fewest upsets first, that leaves 4th and 5th level on points, never met, split by a Buchholz key, and the
 // top four strictly ordered. The search's count is asserted (anti-vacuity: no tie, no test). The "unsplit cut -> flagged" branch
@@ -207,16 +207,18 @@ test.describe("SW-L10 an odd Swiss with three late players and a Buchholz cut in
   const FIELD = 7;
   const LATE = 3;
   const TOP = 4;
-  /** Rulebook §3.2: the recommended rounds for a field up to 8 - what the builder's knob must OPEN AT. */
+  /** Rulebook §3.2: the recommended rounds for a field of seven, min(band up to 8: 3, safe maximum floor(7/2): 3) - what the
+   *  builder's knob must OPEN AT once the plan's entrants box says seven (Match Day C9: the knob follows the plan). */
   const RECOMMENDED_ROUNDS = 3;
   const ROUNDS = 4;
   const BOARDS_PLAYED = 4 + 4 + 5 + 5;
   /** Setup (competition, stage reads, entrants, the knockout's day one, Start, a venue and three courts, three pins), the
    *  boards played, and the reads between steps (rounds, standings, the proposal and its confirm). */
   const API_CALLS = 16 + BOARDS_PLAYED * CALLS_PER_BADMINTON_BOARD + 40;
-  /** The builder (6), four Pairs on the desk, three Add late player paths (4 each), three run-sheet reads, the hub (2),
-   *  /present (2) and the bracket (2). */
-  const UI_STEPS = 6 + 4 + LATE * 4 + 3 + 2 + 2 + 2;
+  /** The builder (11: sport, name, Format, plan, Show more, card, Rounds, Division rules, variant, Review, Create), four
+   *  Pairs on the desk, three Add late player paths (4 each), three run-sheet reads, the hub (2), /present (2) and the
+   *  bracket (2). */
+  const UI_STEPS = 11 + 4 + LATE * 4 + 3 + 2 + 2 + 2;
 
   test("seven seeded, three late, four rounds: the public table and /present print the oracle's ladders, and the knockout takes its top four", async ({ page, request, browser }) => {
     test.setTimeout(Math.max(FLOOR_MS, API_CALLS * API_CALL_MS + UI_STEPS * STEP_MS));
@@ -230,17 +232,34 @@ test.describe("SW-L10 an odd Swiss with three late players and a Buchholz cut in
     expect(comp.status, JSON.stringify(comp.error)).toBe(201);
     const competitionId = comp.data!.id;
     await page.goto(await competitionPath(request, competitionId, "/d/new"));
-    await page.getByRole("textbox").first().fill(`SW-L10 Open ${TAG}`);
-    await page.locator("label", { hasText: "Sport" }).locator("select").selectOption({ label: "Badminton" });
-    // The builder opens badminton on its 3x15 variant; the kit's results are 21-point games.
-    await page.locator("label", { hasText: "Variant" }).locator("select").selectOption({ value: BADMINTON.variant });
-    await page.getByRole("button", { name: "Format", exact: true }).click();
-    await page.getByText("Swiss Knockout", { exact: true }).click();
-    await expect(page.locator("label", { hasText: "Qualify to finals" }).getByRole("spinbutton")).toHaveValue(String(TOP));
-    const roundsKnob = page.getByLabel("Rounds", { exact: true });
-    await expect(roundsKnob, "the Rounds knob opens at the recommended rounds for a field up to 8 (rulebook §3.2)").toHaveValue(String(RECOMMENDED_ROUNDS));
+    // The four-step builder (Match Day C9): Who plays, Format, Division rules, Review. Who plays: the sport is a tile; the
+    // helper proves its radio took (so the page has hydrated) before the name is typed. Badminton opens at Individuals.
+    const builder = page.getByTestId("division-builder");
+    await pickBuilderSport(page, BADMINTON.key);
+    const divisionName = `SW-L10 Open ${TAG}`;
+    await page.getByTestId("division-builder-name").fill(divisionName);
+    await expect(page.getByTestId("division-builder-name")).toHaveValue(divisionName);
+    // Format: the plan's entrants box is the seven seeded, so the Rounds knob opens at the rulebook's recommendation for
+    // them; Swiss Knockout may be folded under Show more.
+    await page.getByTestId("division-builder-step-format").click();
+    await expect(builder).toHaveAttribute("data-step", "format");
+    const formatStep = page.getByTestId("division-builder-format");
+    await page.getByTestId("division-builder-plan-entrants").fill(String(FIELD));
+    await showAllFormats(page);
+    const swissKnockout = page.locator('label[data-template="swiss_knockout"]');
+    await swissKnockout.click();
+    await expect(swissKnockout.locator("input")).toBeChecked();
+    await expect(formatStep.locator("label", { hasText: "Qualify to finals" }).getByRole("spinbutton")).toHaveValue(String(TOP));
+    const roundsKnob = formatStep.getByLabel("Rounds", { exact: true });
+    await expect(roundsKnob, "the Rounds knob opens at the recommended rounds for a planned field of seven (rulebook §3.2)").toHaveValue(String(RECOMMENDED_ROUNDS));
     await roundsKnob.fill(String(ROUNDS));
-    await page.getByRole("button", { name: "Scheduling", exact: true }).click();
+    // Division rules: the builder opens badminton on its 3x15 variant; the kit's results are 21-point games.
+    await page.getByTestId("division-builder-step-rules").click();
+    await expect(builder).toHaveAttribute("data-step", "rules");
+    await page.getByTestId("division-builder-rules").getByTestId("division-rules-strip").getByTestId("division-settings-variant").selectOption({ value: BADMINTON.variant });
+    // Review, then Create.
+    await page.getByTestId("division-builder-step-review").click();
+    await expect(builder).toHaveAttribute("data-step", "review");
     await page.getByRole("button", { name: /create division/i }).click();
     await page.waitForURL(/\/o\/[^/]+\/c\/[^/]+\/d\/(?!new(?:$|[/?]))[^/?]+/, { timeout: 30_000 });
     const divisionSlug = page.url().match(/\/d\/([^/?]+)/)![1]!;
