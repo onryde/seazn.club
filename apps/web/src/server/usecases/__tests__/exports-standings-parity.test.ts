@@ -111,13 +111,16 @@ function fixtures(m: AnySportModule, draw: boolean): TableFixture[] {
     // W3 (engine 2.0.0): a Swiss ledger reads each counted fixture's round (CONFIG_INVALID without one); the league and
     // group folds ignore it. Each fixture is its own round: every entrant plays at most once a round.
     roundNo: Number(id.slice(1)),
+    // …and, on a Swiss ledger, whether the result is a game nobody played (`unplayed`, X-SW-7; final review m3 makes it required
+    // on a counted Swiss result): every fixture here is a played game, so `null` - the value `unplayedSidesOf` answers for one.
+    unplayed: null,
     result: [delta(home, "win", full(true)), delta(away, "loss", loser)] as FixtureResult,
   });
   return [
     win("f1", "A", "B", partial()),
     win("f2", "A", "C", Object.fromEntries(keys.map((k, i) => [k, 2 + i]))),
     ...(draw
-      ? [{ id: "f3", status: "decided", roundNo: 3, result: [delta("B", "draw", partial()), delta("C", "draw", Object.fromEntries(keys.map((k, i) => [k, 3 + i])))] as FixtureResult } satisfies TableFixture]
+      ? [{ id: "f3", status: "decided", roundNo: 3, unplayed: null, result: [delta("B", "draw", partial()), delta("C", "draw", Object.fromEntries(keys.map((k, i) => [k, 3 + i])))] as FixtureResult } satisfies TableFixture]
       : []),
   ];
 }
@@ -131,10 +134,11 @@ function rowsOf(doc: RulesDoc, m: AnySportModule, state: "draw" | "nodraw" | "le
   const rules = tableRulesOf(doc.tiebreakers, doc.points);
   if (state === "level") return rankStandings(foldResults(entrants, []), { cascade: rules.tiebreakers, results: [], countedFixtures: 0 }).rows;
   const base = { id: "s", entrants, rules };
-  // W3 (engine 2.0.0): a Swiss ledger stage names the sport's draw facts under the cfg the order was declared under.
+  // W3 (engine 2.0.0): a Swiss ledger stage names the sport's draw facts under the cfg the order was declared under, and
+  // (final review m3) its unpaired rounds - none here: the four entrants are an abstract ledger, each in the rounds it plays.
   const stage: TableStage =
     kind === "swiss"
-      ? { ...base, kind, swiss: true, swissDraw: swissDrawFactsOf(m, cfg) }
+      ? { ...base, kind, swiss: true, swissDraw: swissDrawFactsOf(m, cfg), swissAbsentRounds: new Map() }
       : { ...base, kind: kind === "americano" ? "league" : kind };
   const done = completeTableStage(stage, fixtures(m, state === "draw"));
   const rows = done.tables.overall;

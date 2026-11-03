@@ -2324,6 +2324,10 @@ function deriveStandings(
     fixtures.push({
       id: fixtureKey(stream.divisionRef, stream.fixtureExtKey),
       ...(swissRound !== undefined ? { roundNo: swissRound } : {}),
+      // W3 T8 (X-SW-7): a Swiss ledger also reads the side(s) each counted result lost WITHOUT playing (`null` = a game played).
+      // Every folded stream is a played fixture (below), so each is `null` - the product's `unplayedSidesOf` answer for a
+      // played game. A pack declares no forfeit; one that wants a walkover's unplayed card needs the pack format to say so.
+      ...(swissRound !== undefined ? { unplayed: null } : {}),
       ...(poolPrefix !== undefined &&
       stream.fixtureExtKey.startsWith(poolPrefix)
         ? { poolId: poolKey }
@@ -2432,7 +2436,15 @@ function deriveStandings(
   // engine's `TableStage` is a union on `swiss`, so the two shapes are two branches, not a conditional spread.
   const tableStage: TableStage =
     stage.kind === "swiss"
-      ? { ...tableFields, swiss: true, swissDraw: swissDrawFactsOf(sport.module, sport.cfg) }
+      ? {
+          ...tableFields,
+          swiss: true,
+          swissDraw: swissDrawFactsOf(sport.module, sport.cfg),
+          // W3 T8 (X-SW-8): the rounds each entrant was in the stage but unpaired (a late entry, a withdrawal). A pack is the
+          // played history of a stage's fixtures and declares no roster timeline, so no entrant has an absence to name: the
+          // engine's "none" is an empty map (and it refuses the field left out, whether or not a round was missed).
+          swissAbsentRounds: new Map<string, readonly number[]>(),
+        }
       : tableFields;
 
   const completed = completeTableStage(tableStage, fixtures);
