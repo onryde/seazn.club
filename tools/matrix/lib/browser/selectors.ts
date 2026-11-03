@@ -82,6 +82,8 @@ export const TESTID = testids({
   builderName: { id: "division-builder-name", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-name"' },
   builderNext: { id: "division-builder-next", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-next"' },
   builderCreate: { id: "division-builder-create", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-create"' },
+  // Match Day C9: the Format step shows four suggested formats; Show all unfolds the rest of the sport's offer.
+  builderShowAll: { id: "division-builder-show-all", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-show-all"' },
   launchStart: { id: "launch-start-division", file: `${V2}/launch-actions.tsx`, needle: 'data-testid="launch-start-division"' },
   startConfirm: { id: "start-confirm-confirm", file: `${V2}/start-confirm-dialog.tsx`, needle: 'testId="start-confirm"', via: CONFIRM_DIALOG },
   gateConfirm: { id: "board-gate-confirm", file: `${V2}/board/schedule-gate-dialog.tsx`, needle: 'testId="board-gate"', via: CONFIRM_DIALOG },
@@ -148,7 +150,8 @@ export const NAME = names({
   addEntrant: dictionary("entrants.add.submit", `${V2}/entrants-panel.tsx`),
   withdrawConfirm: { text: "Withdraw entrant", dictKey: "confirm.withdrawEntrant.label", file: `${V2}/entrants-panel.tsx` },
   sportSelect: { text: "Sport", dictKey: "wizard.sport", file: `${V2}/division-builder.tsx` },
-  variantSelect: { text: "Variant", dictKey: "wizard.variant", file: `${V2}/division-builder.tsx` },
+  // Match Day C9: the builder's variant select is the Division rules strip's own (its Division rules step, draft mode).
+  variantSelect: { text: "Variant", dictKey: "divset.variant", file: `${V2}/rules/division-rules-strip.tsx` },
   formatTab: { text: "Format", dictKey: "wizard.tab.format", file: `${V2}/division-builder.tsx` },
   // The field's label reads "Ends on *" — the required star is the component's,
   // not the dictionary's (review M-4). Match Day C8: the wizard no longer builds a

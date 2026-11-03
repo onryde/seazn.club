@@ -21,7 +21,7 @@ import {
   entrantNameMatcher, exactPath, hydrationState, navBudget, reload, selectorValue, shotLabel, stepBudget, visit,
   type HydrationTarget, type PageCtx, type ReloadPage, type VisitPage,
 } from "../lib/browser/pages/ctx.ts";
-import { BUILDER_TABS, BuiltOtherThanAsked, StagesForAnotherDivision, assertBuiltAsAsked, awaitDivisionAndStages, createDivisionUi } from "../lib/browser/pages/division-builder.ts";
+import { BUILDER_STEP_COUNT, BuiltOtherThanAsked, StagesForAnotherDivision, assertBuiltAsAsked, awaitDivisionAndStages, createDivisionUi } from "../lib/browser/pages/division-builder.ts";
 import { EntrantNotAsTyped, assertEntrantAsTyped } from "../lib/browser/pages/entrants.ts";
 import { ConsoleChoiceNotOffered, FORFEIT_DIALOG_TESTID, FORFEIT_GUIDANCE_NO_NEXT_MATCH_TESTID, FORFEIT_NEITHER_TESTID, ForfeitNeedsBothSides, abandonUi, eventsPath, forfeitBudgets, forfeitSteps, forfeitUi, postForfeit, voidLastUi } from "../lib/browser/pages/fixture-console.ts";
 import { START_UNACKNOWLEDGED, isUnacknowledgedStart } from "../lib/browser/pages/launch.ts";
@@ -695,9 +695,10 @@ describe("the launch and the builder", () => {
     expect(isUnacknowledgedStart(new Error(code))).toBe(false);
   });
 
-  it("the builder has BUILDER_TABS tabs, so the walk to Create is bounded by the product's own tab count", () => {
-    const tabs = literalList(`${V2}/division-builder.tsx`, /const TAB_ORDER = \[([^\]]*)\] as const;/);
-    expect(BUILDER_TABS).toBe(tabs.length);
+  it("the builder has BUILDER_STEP_COUNT steps, so the walk to Create is bounded by the product's own step count", () => {
+    const steps = literalList("apps/web/src/lib/division-builder/model.ts", /export const BUILDER_STEPS = \[([^\]]*)\] as const;/);
+    expect(steps.length, "anti-vacuity: the steps were read").toBeGreaterThan(0);
+    expect(BUILDER_STEP_COUNT).toBe(steps.length);
   });
 
   it("a division stored as another sport or variant than the builder was set to is refused by name, never returned as built", () => {
@@ -801,9 +802,11 @@ describe("awaitDivisionAndStages: the builder's two answers", () => {
 });
 
 // W1c Task 8 (Walkthrough A, H-1): the builder's only picture before Create
-// was taken on its LAST tab, Scheduling, so no picture of the run showed the
-// sport, the variant or the format the organiser picked. Driven here through
-// a recording page: every action and every picture lands in one log, in order.
+// was taken on its LAST tab, so no picture of the run showed the sport, the
+// variant or the format the organiser picked. Since Match Day C9 each lives on
+// its own step (Who plays, Format, Division rules), each pictured there. Driven
+// here through a recording page: every action and every picture lands in one
+// log, in order.
 describe("createDivisionUi: the organiser's picks are pictured before Create", () => {
   const BASE = "http://localhost:3999";
   interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }
@@ -812,7 +815,7 @@ describe("createDivisionUi: the organiser's picks are pictured before Create", (
     const log: string[] = [];
     let screen = 0; // every UI action changes what the page shows, unless inert
     let url = "about:blank";
-    let onLastTab = false;
+    let nexts = 0; // Next presses since the page loaded: Format -> Division rules -> Review
     let built = 0;
     type W = { pred: (r: Resp) => boolean; resolve: (r: Resp) => void; timer: ReturnType<typeof setTimeout> };
     const waiters: W[] = [];
@@ -830,11 +833,12 @@ describe("createDivisionUi: the organiser's picks are pictured before Create", (
       first: () => loc(d),
       elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
       check: async () => act(`check ${d}`),
-      count: async () => (d === `testid:${TESTID.builderCreate.id}` && onLastTab ? 1 : 0),
+      count: async () => (d === `testid:${TESTID.builderCreate.id}` ? (nexts >= 2 ? 1 : 0) : d === `testid:${TESTID.builderShowAll.id}` ? 1 : 0),
+      getAttribute: async () => "false",
       innerText: async () => "",
       click: async () => {
         act(`click ${d}`);
-        if (d === `testid:${TESTID.builderNext.id}`) onLastTab = true;
+        if (d === `testid:${TESTID.builderNext.id}`) nexts++;
         if (d !== `testid:${TESTID.builderCreate.id}`) return;
         built++;
         const division = { id: `div-${built}`, slug: `open-${built}`, sport_key: "badminton", variant_key: "bwf" };
@@ -845,7 +849,7 @@ describe("createDivisionUi: the organiser's picks are pictured before Create", (
       },
     });
     const page = {
-      goto: async (u: string) => { log.push(`goto ${new URL(u).pathname}`); url = u; onLastTab = false; },
+      goto: async (u: string) => { log.push(`goto ${new URL(u).pathname}`); url = u; nexts = 0; },
       url: () => url,
       request: { post: async () => ({ ok: () => true, status: () => 200 }) },
       getByTestId: (id: string) => loc(`testid:${id}`),
@@ -884,11 +888,14 @@ describe("createDivisionUi: the organiser's picks are pictured before Create", (
     `hydrated testid:${TESTID.builderName.id}`,
     `fill testid:${TESTID.builderName.id} = Open`,
     `select ${field(NAME.sportSelect.text)} = badminton`,
-    `select ${field(NAME.variantSelect.text)} = bwf`,
     `shot 02-builder-basics${n}`,
     `click button:${NAME.formatTab.text}`,
+    `click testid:${TESTID.builderShowAll.id}`,
     `check ${template}`,
     `shot 02-builder-format${n}`,
+    `click testid:${TESTID.builderNext.id}`,
+    `select ${field(NAME.variantSelect.text)} = bwf`,
+    `shot 02-builder-rules${n}`,
     `click testid:${TESTID.builderNext.id}`,
     `shot 02-division-built-before${n}`,
     `click testid:${TESTID.builderCreate.id}`,
@@ -896,7 +903,7 @@ describe("createDivisionUi: the organiser's picks are pictured before Create", (
   ];
   const visual = (ev: Evidence) => ev.checks().find((c) => c.id === "visual-evidence")!;
 
-  it("the sport and variant are pictured once picked, the format once checked — both before the walk to Create; a second division numbers its own", async () => {
+  it("the sport is pictured once picked, the format once checked, the variant on Division rules — all before Create; a second division numbers its own", async () => {
     const b = builderPage();
     const first = await createDivisionUi(b.ctx, "comp", "comp-1", INPUT);
     expect(first.division.slug).toBe("open-1");
@@ -905,18 +912,19 @@ describe("createDivisionUi: the organiser's picks are pictured before Create", (
     b.log.length = 0;
     await createDivisionUi(b.ctx, "comp", "comp-1", INPUT);
     expect(b.log).toEqual(walk("-2"));
-    // Each picture must differ from the one before it: basics → format → Scheduling (before Create) → built.
-    expect(visual(b.evidence)).toMatchObject({ verdict: "pass", checked: 8, reason: "8 shot(s) written and non-empty; 6 must-differ pair(s) differ" });
+    // Each picture must differ from the one before it: basics → format → rules → Review (before Create) → built.
+    expect(visual(b.evidence)).toMatchObject({ verdict: "pass", checked: 10, reason: "10 shot(s) written and non-empty; 8 must-differ pair(s) differ" });
   });
 
   it("a builder whose screen never changes is refused picture by picture, format against basics first", async () => {
     const b = builderPage({ inert: true });
     await createDivisionUi(b.ctx, "comp", "comp-1", INPUT);
     const v = visual(b.evidence);
-    expect([v.verdict, v.checked]).toEqual(["fail", 4]);
+    expect([v.verdict, v.checked]).toEqual(["fail", 5]);
     expect(v.evidence.map((e) => e.split(" (sha256")[0])).toEqual([
       "02-builder-format: identical to 02-builder-basics",
-      "02-division-built-before: identical to 02-builder-format",
+      "02-builder-rules: identical to 02-builder-format",
+      "02-division-built-before: identical to 02-builder-rules",
       "02-division-built: identical to 02-division-built-before",
     ]);
   });
