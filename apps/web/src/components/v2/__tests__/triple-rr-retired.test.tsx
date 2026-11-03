@@ -67,8 +67,9 @@ describe("the division builder offers no Triple round robin, for any sport (owne
     for (const m of builtinModules) {
       const grid = builderGrid(m.key);
       expect(grid, m.key).not.toContain(RETIRED_LABEL);
-      // Chess (owner ruling 2026-10-26) and every sport whose ENGINE entrant model holds no individuals or no pairs
-      // (C9 fix round 1, I5) are offered no pair format.
+      // Chess (owner ruling 2026-10-26) and every sport whose ENGINE entrant model holds no individuals (C9 fix round 1,
+      // I5; round 3's rule - the both-kinds check picks the same sports, by format-templates.test.ts's registry
+      // invariant) are offered no pair format.
       const kinds = engineEntrantChoice(m.key).kinds as readonly string[];
       const refused = m.key === CHESS || !kinds.includes("individual") || !kinds.includes("pair") ? REFUSED_FOR_CHESS : [];
       const cards = grid.split('name="template"').length - 1;

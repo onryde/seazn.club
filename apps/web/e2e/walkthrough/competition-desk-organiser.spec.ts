@@ -76,8 +76,8 @@ test("an organiser watches the desk go Setting up → Scheduled → Today (a mat
   await page.goto(compPath);
 
   // 2. One division, made by hand: the row appears with its sport glyph and Setting up.
-  // "generic" explicitly — the wizard's unset default is alphabetically
-  // first ("badminton", individual/pair only) and step 3 needs a TEAM division whose
+  // "generic" explicitly — the wizard's unset default is the org's latest
+  // sport, else football (C9 round 3), and step 3 needs a TEAM division whose
   // fixtures step 6's scoreFixture (event type "generic.result") can settle;
   // "football" satisfies the first but 422s "unknown event type
   // generic.result" on the second (confirmed by running this spec) — the

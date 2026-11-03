@@ -599,7 +599,7 @@ describe("applicability — the cells the product refuses (chess is individual-o
   // refused: the API still takes legs up to 8 and divisions stored as one still play it. So its row stays planned, and the
   // parity below is "refused exactly where the builder does not offer it for a SPORT reason". RETIRED_ROWS is the ruling's
   // literal; the product's own `retired` marks must equal it. Match Day C9 review I5, option 2: the builder offers the pair
-  // formats to no sport whose ENGINE entrant model holds no individuals or no pairs, and the product does not refuse them
+  // formats to no sport whose ENGINE entrant model holds no individuals (round 3's rule), and the product does not refuse them
   // there, so those cells are the matrix's no-organiser-path cells (🚫 in the browser layers), not refused ones.
   const RETIRED_ROWS = ["triple_rr"];
   /** What the division builder's page hands the offer: the engine's own declaration, read here from the engine. */

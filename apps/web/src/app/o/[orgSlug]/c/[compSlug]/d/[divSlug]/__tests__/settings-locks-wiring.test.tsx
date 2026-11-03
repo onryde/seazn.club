@@ -194,7 +194,7 @@ describe("the division page hands the settings form its two locks, each from its
 });
 
 // C9 fix round 1 (I5): the Format select offers no pair format (americano/mexicano) where the division's entrant model
-// holds no individuals or no pairs, so the page must hand the form THIS division's effective model - the engine's
+// holds no individuals (round 3's shared rule), so the page must hand the form THIS division's effective model - the engine's
 // declaration for the sport, narrowed by the division's own `config.entrants`.
 describe("the division page hands the settings form the division's entrant kinds (C9 fix round 1, I5)", () => {
   beforeEach(() => {

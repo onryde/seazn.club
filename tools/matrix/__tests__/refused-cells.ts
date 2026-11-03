@@ -31,7 +31,7 @@ export function offeredRows(rows: readonly string[], sport: string): string[] {
 export const REFUSED_REASON = /chess is individual-only \(owner ruling 2026-10-26\)[\s\S]*CHESS_INDIVIDUAL_ONLY/;
 
 // Match Day C9 review I5, option 2 (controller ruling 2026-11-03): the same two formats are not OFFERED to a sport
-// whose engine entrant model holds no individuals or no pairs - the stage rotates individual players into pair
+// whose engine entrant model holds no individuals (round 3's shared rule) - the stage rotates individual players into pair
 // entrants. Football, cricket, ice hockey and hockey hold teams only and volleyball teams and pairs
 // (`entrantModel.kinds`). The stage create does not refuse them yet, so these cells stay offered and planned: every
 // browser case on them is 🚫 (no screen reaches them) and their HTTP cases run as before.

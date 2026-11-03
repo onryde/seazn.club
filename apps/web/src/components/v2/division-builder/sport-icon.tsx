@@ -1,6 +1,7 @@
 // The Sport picker's icons (Match Day C9 R2, owner 2026-11-03: "Sport A: icon tiles"). One small line drawing per
 // sport, in the format diagrams' own hand (format-shape.tsx): a 1.5 stroke in the current colour, round caps and joins,
-// no fills but the small solid dots that stand for a ball, a pip or a striker. Decorative: the tile's words name the
+// fills only where a small solid shape is the thing itself - the dots for a ball, a pip or a striker, the football's
+// centre panel and the table-tennis handle. Decorative: the tile's words name the
 // sport, so the drawing is hidden from assistive technology.
 import type { ReactNode } from "react";
 

@@ -84,8 +84,8 @@ test("ko_plate template: completing the main draw computes a seed proposal; conf
   const competitionId = comp.data!.id;
   await page.goto(await competitionPath(page.request, competitionId, "/d/new"));
   await page.getByRole("textbox").first().fill(`KoPlate ${TAG}`);
-  // The wizard defaults Sport to the catalog's first entry alphabetically
-  // (division-builder.tsx: `sports[0]?.key`) — never "generic". Scoring the
+  // The wizard opens on the org's latest sport, else football (C9 round 3:
+  // `defaultSportKey`) — never "generic". Scoring the
   // fixtures below with `generic.result` needs the generic/score sport
   // explicitly selected, or the event 422s as unrecognised for whatever
   // sport happened to sort first. C9 R2: the sport is a tile ("Any other

@@ -16,12 +16,12 @@
 // chess americano/mexicano since the follow-up to #1027) is planned in no
 // layer: every scenario drops there with the refusal as its reason. A cell the
 // builder does not OFFER but the product does not refuse (noOrganiserPathCell:
-// americano/mexicano on a sport whose engine entrant model holds no individuals
-// or no pairs, Match Day C9 review I5) stays offered and planned: its browser
+// americano/mexicano on a sport whose engine entrant model holds no individuals,
+// Match Day C9 review I5 and round 3's shared rule) stays offered and planned: its browser
 // cases are 🚫, its HTTP cases still run.
 import { builtinModules } from "@seazn/engine/sports";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
-// The product's own stage-kind rules (chess is individual-only; a pair-minting stage needs individuals and pairs),
+// The product's own stage-kind rules (chess is individual-only; a pair-minting stage needs individual players),
 // import-free so plain node loads them (boundary.test.ts).
 import { entrantKindsRefuseStageKind, sportRefusesStageKind } from "../../../apps/web/src/lib/chess-individual-only-rule.ts";
 import { routeTo, type Route } from "./routing.ts";
@@ -213,7 +213,7 @@ export function sportEntrantKinds(sport: string): readonly string[] {
  *  Match Day C9 review I5 (option 1). Controller ruling 2026-11-03 (option 2). */
 export const NO_ORGANISER_PATH_ROUTE: Route = routeTo(
   "W7",
-  "no organiser path: the division builder does not offer americano or mexicano to a sport whose engine entrant model holds no individuals or no pairs (Match Day C9 review I5, option 2). Owed: the stage create refuses it for team-only sports, the cells become refused, and the evidence is re-recorded on CI",
+  "no organiser path: the division builder does not offer americano or mexicano to a sport whose engine entrant model holds no individuals (Match Day C9 review I5, option 2; round 3's shared rule). Owed: the stage create refuses it for team-only sports, the cells become refused, and the evidence is re-recorded on CI",
 );
 
 const noPathMemo = new Map<string, Route | null>();

@@ -21,7 +21,7 @@ test.describe.serial("pro lifecycle", () => {
   const PLAYERS = ["Ada", "Boole", "Curie", "Dirac", "Euler", "Fermi"];
   let competitionId: string;
   let competitionSlug: string;
-  let uiDivisionId: string; // built through the tabbed builder (default sport)
+  let uiDivisionId: string; // built through the tabbed builder (football, picked: m8)
   let divisionId: string; // generic/score division — scored + published below
   let divisionSlug: string;
   let stageId: string;
@@ -40,7 +40,9 @@ test.describe.serial("pro lifecycle", () => {
     page,
     request,
   }) => {
-    uiDivisionId = await createDivisionViaUi(page, competitionId, "Premier");
+    // m8 (C9 review 3): the sport is picked, not left at the default - the builder opens on the org's latest sport, and
+    // this shared Pro org's latest is whatever a parallel spec created last.
+    uiDivisionId = await createDivisionViaUi(page, competitionId, "Premier", "football");
     expect(uiDivisionId).toBeTruthy();
 
     const div = await apiJson<{ id: string; slug: string }>(

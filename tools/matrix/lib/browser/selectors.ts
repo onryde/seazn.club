@@ -82,7 +82,7 @@ export const TESTID = testids({
   builderName: { id: "division-builder-name", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-name"' },
   builderNext: { id: "division-builder-next", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-next"' },
   builderCreate: { id: "division-builder-create", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-create"' },
-  // Match Day C9: the Format step shows four suggested formats; Show all unfolds the rest of the sport's offer.
+  // Match Day C9 R2: the Format step shows five suggested formats, then this Show more tile as the sixth cell.
   builderShowAll: { id: "division-builder-show-all", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-show-all"' },
   // C9 R2: Sport is a radio tile per sport, five shown and the rest under this Show more tile.
   builderSportMore: { id: "division-builder-sport-more", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-sport-more"' },

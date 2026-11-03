@@ -2567,12 +2567,13 @@ export async function pickBuilderSport(page: Page, sportKey: string): Promise<vo
  * Who plays asks the entrant kind (Match Day C9) and opens at the sport's
  * OWN default (badminton: individuals; football: teams), which this helper
  * leaves alone - so a walkthrough that needs team entrants still picks a team
- * sport here. Sports load `order by name` (d/new/page.tsx), so the unset
- * default is alphabetically first ("badminton"), not whatever the caller
- * assumed.
+ * sport here. The builder opens on the first sport tile shown - the
+ * organisation's most recent sport, else football (C9 round 3) - so the
+ * unset default depends on the org's history, not on the sports' names.
  *
- * Format opens on the suggester's top pick for the sport (owner ruling
- * 2026-11-03, Q5), NOT League - Americano for badminton and generic. A caller
+ * Format opens on the first card shown for the sport (owner rulings
+ * 2026-11-03, Q5 and round 4's I1), NOT League - and never Americano or
+ * Mexicano, which the grid shows after every other card. A caller
  * whose later steps need a particular stage kind (a league to generate team
  * fixtures into) passes `template`: the helper opens Format, shows every
  * format, picks that card and proves it checked before going on to Review.
