@@ -3,8 +3,9 @@
 //           Pair's `fixtures_generated` row (`draw_seed`) so it replays; seeded entrants keep their seed order ahead of it.
 //   BG-SW-1 (SW-H3, REC RB3-10): a boardgame Swiss stage CREATED after this change is stored with `chess: true` (the
 //           create door's default); round 1's colours are by lot (`colour_lot`): board 1's upper player takes the lot's
-//           colour and the boards alternate (FIDE C.04.3 A3 5.1). Home is White. A stage stored before it with `chess`
-//           unset keeps today's colours (orchestrator ruling m5), and an explicit `chess: false` is kept.
+//           colour and the boards alternate (FIDE C.04.3 A3 5.1). Home is White. UI5 fix round 1 (controller ruling I1,
+//           overruling m5 for a stage not yet paired): a boardgame Swiss whose round 1 is unpaired pairs in colour
+//           whatever is stored (`chess` unset or false); one whose round 1 was paired plain keeps today's colours.
 //
 // The defect (SW-H3) on main: a boardgame Swiss stage stored no `chess`, so the pairer gave the upper board White in
 // every round — the stronger player never got Black. And (SW-L6) round 1 paired an unseeded field in the active
@@ -221,11 +222,37 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are on by default for a NEW boardg
     },
   );
 
-  it("BG-SW-1 an EXISTING boardgame Swiss stage with chess unset keeps today's colours", async () => {
+  it("BG-SW-1 an EXISTING boardgame Swiss stage with chess unset, not yet paired, pairs round 1 in colour (UI5 fix round 1, I1)", async () => {
+    // Fix round 1 flipped m5 for this case: it pinned "keeps today's colours"; the owner ruled colours always ON for a
+    // chess Swiss, so a stage that has not paired round 1 is coloured whatever is stored (controller ruling I1).
     const r = await rig({ sport: "boardgame", n: 8, seeded: true, door: "sql-legacy" });
     expect(Object.hasOwn(await stageConfig(r.stageId), "chess"), "premise: stored before W3, no chess key").toBe(false);
     await startDivision(r.auth, r.divisionId);
     await generateStageFixtures(r.auth, r.stageId);
+    const [audit] = await pairAudits(r.divisionId, r.stageId, 1);
+    expect(audit?.colour_lot, "round 1 coloured by the stage's own lot").toBe(swissColourLot(swissDrawSeed(r.stageId)));
+    const upperWhite = (await boards(r.stageId, 1)).map((b) => r.seedOf(b.home)! < r.seedOf(b.away)!);
+    expect(upperWhite, "FIDE C.04.3 A3 5.1: the boards alternate from the lot's colour").toEqual(
+      [0, 1, 2, 3].map((i) => (i % 2 === 0) === (audit?.colour_lot === "white")),
+    );
+    expect(Object.hasOwn(await stageConfig(r.stageId), "chess"), "read-side: Pair never writes the default").toBe(false);
+  });
+
+  it("BG-SW-1 an EXISTING boardgame Swiss stage with chess unset whose round 1 was paired plain keeps today's colours", async () => {
+    const r = await rig({ sport: "boardgame", n: 8, seeded: true, door: "sql-legacy" });
+    expect(Object.hasOwn(await stageConfig(r.stageId), "chess"), "premise: stored before W3, no chess key").toBe(false);
+    await startDivision(r.auth, r.divisionId);
+    await generateStageFixtures(r.auth, r.stageId);
+    // ...re-made as a Pair before the rule left it: every board upper seed at home, and no lot on round 1's row.
+    for (const b of await boards(r.stageId, 1)) {
+      const homeUpper = r.seedOf(b.home)! < r.seedOf(b.away)!;
+      if (!homeUpper) await sql`update fixtures set home_entrant_id = ${b.away}, away_entrant_id = ${b.home} where id = ${b.id}`;
+    }
+    const stripped = await sql`
+      update division_events set payload = payload - 'colour_lot'
+       where division_id = ${r.divisionId} and type = 'fixtures_generated'
+         and payload->>'stage_id' = ${r.stageId} and (payload->>'round')::int = 1 and payload ? 'colour_lot'`;
+    expect(stripped.count, "premise: round 1's row lost its lot").toBe(1);
     const r1 = await boards(r.stageId, 1);
     expect(r1).toHaveLength(4);
     await decideRoundOne(r, r1);
@@ -258,17 +285,14 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are on by default for a NEW boardg
     expect(Object.hasOwn(await stageConfig(r.stageId), "chess"), "Pair never writes the default").toBe(false);
   });
 
-  it("BG-SW-1 an explicit chess: false on a new boardgame stage is kept", async () => {
+  it("BG-SW-1 an explicit chess: false on a new boardgame stage is stored, and round 1 still pairs in colour (UI5 fix round 1, I1)", async () => {
     const r = await rig({ sport: "boardgame", n: 8, seeded: true, door: "createStages", config: { rounds: 3, chess: false } });
     expect((await stageConfig(r.stageId)).chess).toBe(false);
     await startDivision(r.auth, r.divisionId);
     await generateStageFixtures(r.auth, r.stageId);
-    const r1 = await boards(r.stageId, 1);
-    expect(r1).toHaveLength(4);
-    for (const b of r1) expect(r.seedOf(b.home)! < r.seedOf(b.away)!, `${b.ext_key}: upper seed home, no lot`).toBe(true);
+    expect(await boards(r.stageId, 1)).toHaveLength(4);
     const [audit] = await pairAudits(r.divisionId, r.stageId, 1);
-    expect(audit).toBeDefined();
-    expect(audit).not.toHaveProperty("colour_lot");
+    expect(audit?.colour_lot, "colours on whatever is stored: the lot is drawn").toBe(swissColourLot(swissDrawSeed(r.stageId)));
   });
 
   it("BG-SW-1 the lot refuses a round 1 the engine did not seat upper-at-home (its premise, guarded), writing nothing", async () => {
@@ -438,8 +462,9 @@ describe.runIf(HAS_DB)("X-SW-22 / BG-SW-1 sequences", () => {
 // Expected seats are hand-derived from round 1's own SEATS: round 1 folds the draw d1..d8 upper-at-home (board k is
 // d_k v d_k+4), the upper half wins, so round 2's score groups are {d1..d4} and {d5..d8}, each folded by pairing number:
 // d1 v d3, d2 v d4, d5 v d7, d6 v d8. The rig re-mints its stage until registration order would fold a group differently
-// (each stage id is a fresh draw), so registration order cannot pass. Chess colours are OFF here (explicit
-// `chess: false` on the boardgame): a colour preference may transpose a fold, and this witness is the fold's order.
+// (each stage id is a fresh draw), so registration order cannot pass. Chess colours are OFF here: badminton only, since
+// a chess Swiss always pairs round 1 in colour (UI5 fix round 1, ruling I1) and a colour preference may transpose a fold,
+// and this witness is the fold's order (the order code is the stage's, never the sport's).
 // ---------------------------------------------------------------------------------------------------------------------
 
 /** A decisive result through the real append path: chess by resignation, badminton by two 21-10 games. */
@@ -466,7 +491,7 @@ const foldPairs = (group: readonly string[]) => {
 /** `group` re-ordered by `order`. */
 const inOrder = (group: readonly string[], order: readonly string[]) => [...group].sort((a, b) => order.indexOf(a) - order.indexOf(b));
 
-const NO_CHESS: Record<Sport, Record<string, unknown>> = { boardgame: { rounds: 3, chess: false }, badminton: { rounds: 3 } };
+const NO_CHESS: Record<Sport, Record<string, unknown>> = { boardgame: { rounds: 3 }, badminton: { rounds: 3 } };
 
 /** Re-mint the rig's stage (before Start: a new stage, a new id, a new draw) until `premise` holds of its draw over the
  *  active field. Each try is a fresh draw, so a few suffice; the count rides on the assertion. */
@@ -502,7 +527,8 @@ const roundTwoByDraw = (d: readonly string[]) => [
 ];
 
 describe.runIf(HAS_DB)("m7 the draw is the stage's pairing numbers: round 2 breaks a score-group tie by it", () => {
-  it.each(["badminton", "boardgame"] as const)(
+  // single-sport: badminton — a chess Swiss's round 1 is coloured by lot (ruling I1), which moves the seats this reads.
+  it.each(["badminton"] as const)(
     "m7 a round-2 tie inside a score group is ordered by the draw, not registration (%s)",
     async (sport) => {
       const r = await rig({ sport, n: 8, seeded: false, door: "createStages", config: NO_CHESS[sport] });
@@ -574,6 +600,8 @@ describe.runIf(HAS_DB)("m7 the draw is the stage's pairing numbers: round 2 brea
       await restageUntil(r, NO_CHESS[sport], (draw, reg) =>
         [reg.slice(0, 4), reg.slice(4)].some((g) => foldPairs(inOrder(g, draw)).join() !== foldPairs(g).join()),
       );
+      // A legacy chess stage was stored with colours off (the old switch) — by SQL, as no door writes it now.
+      if (sport === "boardgame") await sql`update stages set config = config || ${sql.json({ chess: false })} where id = ${r.stageId}`;
       await startDivision(r.auth, r.divisionId);
       await generateStageFixtures(r.auth, r.stageId); // Pair round 1 (today's code draws it)
       const reg = (await activeOrder(r.divisionId)).map((e) => e.id);
@@ -583,9 +611,10 @@ describe.runIf(HAS_DB)("m7 the draw is the stage's pairing numbers: round 2 brea
       for (const [k, b] of r1.entries()) {
         await sql`update fixtures set home_entrant_id = ${reg[k]!}, away_entrant_id = ${reg[k + 4]!} where id = ${b.id}`;
       }
-      // A pre-T8 row carries neither marker: no `draw_seed`, and no `draw_order` (T9 writes it beside the seed).
+      // A pre-T8 row carries neither marker: no `draw_seed`, and no `draw_order` (T9 writes it beside the seed) — nor a
+      // `colour_lot`: a stage stored off paired round 1 plain before UI5 fix round 1 (ruling I1), so it stays plain.
       const stripped = await sql`
-        update division_events set payload = payload - 'draw_seed' - 'draw_order'
+        update division_events set payload = payload - 'draw_seed' - 'draw_order' - 'colour_lot'
          where division_id = ${r.divisionId} and type = 'fixtures_generated'
            and payload->>'stage_id' = ${r.stageId} and (payload->>'round')::int = 1 and payload ? 'draw_seed'`;
       expect(stripped.count, "premise: round 1's row lost its marker").toBe(1);
@@ -610,7 +639,8 @@ describe.runIf(HAS_DB)("m7 the draw is the stage's pairing numbers: round 2 brea
   // folds both score groups differently, and round 2 must move with the STORED order, not the re-derived one.
   /** d with the last two of each half swapped: d1 d2 d4 d3 | d5 d6 d8 d7 — each group of four folds otherwise. */
   const permuted = (d: readonly string[]) => [d[0]!, d[1]!, d[3]!, d[2]!, d[4]!, d[5]!, d[7]!, d[6]!];
-  it.each(["badminton", "boardgame"] as const)(
+  // single-sport: badminton — a chess Swiss's round 1 is coloured by lot (ruling I1), which moves the seats this reads.
+  it.each(["badminton"] as const)(
     "n1 round 1's Pair records its drawn order, and round 2 ranks by the STORED order (%s)",
     async (sport) => {
       const r = await rig({ sport, n: 8, seeded: false, door: "createStages", config: NO_CHESS[sport] });

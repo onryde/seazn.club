@@ -51,8 +51,9 @@ const withRngSeed = (config: Record<string, unknown>): Record<string, unknown> =
  *  create sends no `chess` (one sent, `false` included, is kept). Here, beside `withRngSeed`, because this is the one door
  *  every create path shares (`createStages` and `replaceStages` through `stageConfigsAtCreate`, and a template's stages
  *  through `instantiateTemplate` — the boardgame `swiss11` template among them), so there is one default, never a second.
- *  Pair reads the STORED value (`cfg.chess === true`), so a stage stored before this default with `chess` unset keeps its
- *  colours off (orchestrator ruling m5). */
+ *  Pair does not read this default back: `swissPairsInColour` (stages.ts; UI5 fix round 1, ruling I1) pairs a chess
+ *  Swiss in colour until its round 1 is paired, whatever is stored, so a stage stored before this default is coloured
+ *  too (read-side, never rewritten). */
 const withSwissChessDefault = (sportKey: string, kind: StageKind, config: Record<string, unknown>): Record<string, unknown> =>
   kind === "swiss" && config.chess === undefined && defaultSwissChess(sportKey) ? { ...config, chess: true } : config;
 

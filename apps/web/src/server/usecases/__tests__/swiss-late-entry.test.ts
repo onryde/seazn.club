@@ -992,6 +992,43 @@ describe.runIf(HAS_DB)("W3 T9 (b) colours (boardgame)", () => {
     expect(coloursLegal(["W", "W", "B"])).toBe(true);
     expect({ home: board.home_entrant_id, away: board.away_entrant_id }).toEqual({ home: late.id, away: H });
   });
+
+  // UI5 fix round 1 (controller ruling I1): the bye check judges colours by the Pair's own read (`swissPairsInColour`),
+  // never a second copy — a stage the old switch stored off pairs in colour from round 1, so its bye check must too.
+  it("UI5 fix round 1 (I1): a stage stored off — the bye check balances colours iff round 1 was paired in colour", async () => {
+    let judged = 0;
+    for (const { plain, want } of [
+      { plain: false, want: true },
+      { plain: true, want: false },
+    ]) {
+      const rig = await swissRig(SPORTS[1], 5, 3);
+      await sql`update stages set config = config || ${sql.json({ chess: false })} where id = ${rig.stageId}`;
+      await pair(rig); // round 1: coloured — round 1 was unpaired, so colours are on whatever is stored
+      if (plain) {
+        // A round 1 paired BEFORE the rule on a stage stored off drew no lot: built by SQL.
+        const n = await sql`
+          update division_events set payload = payload - 'colour_lot'
+          where division_id = ${rig.divisionId} and type = 'fixtures_generated' and payload->>'round' = '1' and payload ? 'colour_lot'`;
+        expect(n.count, "rig: round 1's Pair row had a lot to strip").toBe(1);
+      }
+      await playRound(rig, 1);
+      await pair(rig);
+      await startBoard(rig, boardsOf(await rowsOf(rig.stageId), 2)[0]!);
+      const engine = await import("@seazn/engine/scheduling");
+      const spy = vi.spyOn(engine, "pairRound");
+      try {
+        const late = await addLate(rig, "Late");
+        expect(late.late_entry).toMatchObject({ case: "b", round: 2 });
+        const byeChecks = spy.mock.calls.filter((c) => c[0].length === 2);
+        expect(byeChecks.length, "anti-vacuity: the bye check reached the engine once").toBe(1);
+        expect(byeChecks[0]![2]?.chess === true, plain ? "paired plain: off, as stored" : "paired in colour: on").toBe(want);
+      } finally {
+        spy.mockRestore();
+      }
+      judged++;
+    }
+    expect(judged, "anti-vacuity: both histories judged").toBe(2);
+  }, 120_000);
 });
 
 describe.runIf(HAS_DB)("W3 T9 the locks a late entry takes (badminton)", () => {

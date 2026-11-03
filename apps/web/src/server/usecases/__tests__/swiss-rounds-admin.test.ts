@@ -957,7 +957,9 @@ describe.runIf(HAS_DB)("C11 the offered Add a round never leads to SWISS_ROUNDS_
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Chess colours: always on for a chess Swiss (BG-SW-1; UI5 item 4, owner 2026-11-03 — the desk's switch is gone, and the
-// PATCH refuses turning them off). A stage stored off before this is left as it is (no data migration).
+// PATCH refuses turning them off). UI5 fix round 1 (controller ruling I1): a stage stored off before this pairs in colour
+// until its round 1 is paired — read-side, no data migration; one whose round 1 was already paired keeps what it paired
+// with.
 // ---------------------------------------------------------------------------------------------------------------------
 
 describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", () => {
@@ -975,6 +977,25 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", 
   /** A stage stored with colours off before UI5 (the switch could write it then): the legacy row, by SQL. */
   async function legacyOff(stageId: string) {
     await sql`update stages set config = config || ${sql.json({ chess: false })} where id = ${stageId}`;
+  }
+  /** A round 1 paired BEFORE fix round 1 on a stage stored off was paired plain: its Pair row drew no colour lot. Built
+   *  by SQL — the Pair this file can run today colours it. */
+  async function pairedPlainBeforeTheRule(divisionId: string) {
+    const n = await sql`
+      update division_events set payload = payload - 'colour_lot'
+      where division_id = ${divisionId} and type = 'fixtures_generated' and payload->>'round' = '1' and payload ? 'colour_lot'`;
+    expect(n.count, "rig: round 1's Pair row had a lot to strip").toBe(1);
+  }
+  /** The `chess` option each Pair handed the engine, through the real `pairRound` (spied, never replaced). */
+  async function chessHandedToTheEngine(write: () => Promise<unknown>): Promise<boolean[]> {
+    const engine = await import("@seazn/engine/scheduling");
+    const spy = vi.spyOn(engine, "pairRound");
+    try {
+      await write();
+      return spy.mock.calls.map((c) => c[2]?.chess === true);
+    } finally {
+      spy.mockRestore();
+    }
   }
 
   it("UI5 item 4: switching a chess Swiss's colours off is 422 SWISS_CHESS_ALWAYS_ON before the start, nothing written; Pair draws the colour lot", async () => {
@@ -1001,7 +1022,9 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", 
     expect(await patchSwissStage(other.auth, other.stageId, { chess: false })).toMatchObject({ rounds: 3, chess: false });
   });
 
-  it("UI5 item 4: a chess Swiss stored off before the change is left as it is — Pair keeps it off, a re-Apply carries it, ON goes through", async () => {
+  // Fix round 1 flipped this test (it pinned "Pair keeps a stored off"): the owner ruled colours always ON for a chess
+  // Swiss, so a stage stored off that has not paired round 1 pairs in colour, whatever is stored (controller ruling I1).
+  it("UI5 fix round 1 (I1): a chess Swiss stored off before the change pairs round 1 in colour — read-side, nothing written; ON goes through", async () => {
     const rig = await swissRig(BOARDGAME, 4, 3);
     await legacyOff(rig.stageId);
     // The Format tab's Apply re-sends the template body, which names no `chess`: the legacy off rides StageCarry (T8 m6).
@@ -1010,8 +1033,9 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", 
     expect(again!.config.chess, "the stored off survives the re-Apply").toBe(false);
     rig.stageId = again!.id;
     await pair(rig);
-    await pair(rig); // Pair round 1
-    expect(await roundOnePairRow(rig.divisionId), "left off: no colour lot at Pair").not.toHaveProperty("colour_lot");
+    expect(await chessHandedToTheEngine(() => pair(rig)), "Pair round 1: the engine balances colours").toEqual([true]);
+    expect(await roundOnePairRow(rig.divisionId), "round 1 coloured by lot").toHaveProperty("colour_lot");
+    expect((await storedConfig(rig.stageId)).chess, "read-side: the stored off is not rewritten").toBe(false);
 
     // Switching it ON is the one change left (before play): it goes through and is stored.
     const on = await swissRig(BOARDGAME, 4, 3);
@@ -1024,6 +1048,40 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", 
     const fresh = await swissRig(BOARDGAME, 4, 3);
     const [kept] = await replaceStages(fresh.auth, fresh.divisionId, body);
     expect(kept!.config.chess).toBe(true);
+  });
+
+  it("UI5 fix round 1 (I1): once round 1 is paired the stage keeps what it paired with — plain stays off, coloured stays on (round 2)", async () => {
+    let compared = 0;
+    for (const { plain, want } of [
+      { plain: true, want: false },
+      { plain: false, want: true },
+    ]) {
+      const rig = await swissRig(BOARDGAME, 4, 3);
+      await legacyOff(rig.stageId);
+      await startDivision(rig.auth, rig.divisionId); // mints the shells
+      await pair(rig); // Pair round 1
+      if (plain) await pairedPlainBeforeTheRule(rig.divisionId);
+      await playRound(rig, 1);
+      const label = plain ? "paired plain before the rule: a stage under way keeps its stored off" : "paired in colour: round 2 balances them";
+      expect(await chessHandedToTheEngine(() => pair(rig)), label).toEqual([want]);
+      expect(roundOf(await rowsOf(rig.stageId), 2).length, "rig: round 2 seated").toBeGreaterThan(0);
+      expect((await storedConfig(rig.stageId)).chess, "read-side: nothing written").toBe(false);
+      compared++;
+    }
+    expect(compared, "anti-vacuity: both histories paired round 2").toBe(2);
+  }, 120_000);
+
+  it("UI5 fix round 1 (I1): another sport is untouched — a badminton Swiss stored off pairs round 1 plain", async () => {
+    const rig = await swissRig(BADMINTON, 4, 3);
+    await legacyOff(rig.stageId);
+    await pair(rig);
+    expect(await chessHandedToTheEngine(() => pair(rig)), "badminton: no colours").toEqual([false]);
+    expect(await roundOnePairRow(rig.divisionId), "no colour lot outside chess").not.toHaveProperty("colour_lot");
+    // Its positive pair: badminton stored ON still pairs coloured (the stored on is read as it always was).
+    const on = await swissRig(BADMINTON, 4, 3);
+    await sql`update stages set config = config || ${sql.json({ chess: true })} where id = ${on.stageId}`;
+    await pair(on);
+    expect(await chessHandedToTheEngine(() => pair(on)), "badminton stored on: colours").toEqual([true]);
   });
 });
 
