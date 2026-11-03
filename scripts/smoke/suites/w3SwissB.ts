@@ -21,17 +21,18 @@ import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
  * not a parse that would strip it), and the delta's own DO block is run on it (found by glob, never by number) as the app's
  * tenant role for this organization, so RLS limits it to the rows this run made.
  *
- * T8 (X-SW-7, X-SW-8; FIDE C.07 (2026) art. 16): the two engine inputs the app owes a Swiss table - the side(s) of a result lost
- * WITHOUT playing and the rounds an entrant was in the stage but unpaired - reach the public table. A board game Swiss of three
- * (R = 3), a fourth player added after round 1 (case (c): joins round 2), every board played through the scorer's own events,
- * and the Buchholz cells the anonymous hub document prints equal the hand derivation in the check: the latecomer's missed
- * round 1 is a virtual-opponent round, not a round that never happened.
+ * T8 (X-SW-8; FIDE C.07 (2026) art. 16.2.3): the rounds an entrant was in the stage but unpaired reach the public table. A board
+ * game Swiss of three (R = 3), a fourth player added after round 1 (case (c): joins round 2), every board played through the
+ * scorer's own events, and the Buchholz cells the anonymous hub document prints equal the hand derivation in the check: the
+ * latecomer's missed round 1 is a virtual-opponent round, not a round that never happened. The other input of the same task
+ * (X-SW-7, the side(s) of a result lost without playing) has no smoke check: it is proved against the real forfeit and withdrawal
+ * writers in `swiss-art16-producer.test.ts`.
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissB runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissBSuite(): Promise<void> {
   // T1: 1 (Pair next on a history with no legal round is refused SWISS_NO_LEGAL_PAIRING and seats nobody).
   // T2: 1 (a boardgame division's stored byeScore is gone from the config GET answers, once the V490 delta has run).
-  // T8: 1 (a late entrant's missed round and a bye are virtual-opponent rounds in the Buchholz the anonymous hub prints).
+  // T8: 1 (X-SW-8: a late entrant's missed round is a virtual-opponent round in the Buchholz the anonymous hub prints).
   const EXPECTED_CHECKS = 3;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
@@ -169,7 +170,7 @@ export async function w3SwissBSuite(): Promise<void> {
     );
   }
 
-  // Check 3 - T8 (X-SW-7, X-SW-8). The engine's S4 (late entry), over HTTP, read from the anonymous hub document. A = seed 1,
+  // Check 3 - T8 (X-SW-8). The engine's S4 (late entry), over HTTP, read from the anonymous hub document. A = seed 1,
   // B = seed 2, C = seed 3, L = the latecomer (Add after round 1, case (c): it joins round 2). Boardgame pays 2/1/0 half-points,
   // so D (the draw) = 1 half, the rounds R = 3, and a virtual opponent's cap D x R = 3 half. Every expected number below is
   // derived by hand from FIDE C.07 (2026) 16.2-16.4 and typed here; none is read back from the code under test.

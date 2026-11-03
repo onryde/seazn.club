@@ -557,42 +557,45 @@ describe.runIf(HAS_DB)("W3 T8 — art. 16's two inputs from real data, through t
    * had the two the wrong way round would charge the winner's card instead - and the boardgame draws its colours by a lot,
    * so one run of one seat would prove it half the time.
    */
-  for (const sc of [BOARDGAME, BADMINTON, FOOTBALL]) {
-    for (const side of ["home", "away"] as const) {
-      it(`X-SW-7 a pre-play walkover is unplayed: the loser's Buchholz uses a dummy capped at the opponent's adjusted score (S2, ${sc.sport}, forfeiter ${side})`, async () => {
-        const { W } = declared(sc);
-        const k = unitScale(sc);
-        const rig = await swissRig(sc, ["P1", "P2", "P3", "P4"], 2);
-        await pair(rig);
-        let rows = await boardsOf(rig.stageId);
-        expect(shapeOf(rig, rows, 1), "rig: round 1").toEqual(["P1-P3", "P2-P4"]);
-        const top = boardBetween(rows, 1, rig.id.P1!, rig.id.P3!);
-        const B = side === "home" ? top.home_entrant_id! : top.away_entrant_id!;
-        const A = side === "home" ? top.away_entrant_id! : top.home_entrant_id!;
-        const [C, D] = [rig.id.P2!, rig.id.P4!];
-        await post(rig.auth, top.id, "core.forfeit", { by: B, reason: "walkover" });
-        await sc.win(rig.auth, boardBetween(rows, 1, C, D), C);
-        expect(await sql`select 1 from score_events where fixture_id = ${top.id} and type <> 'core.forfeit'`, "rig: nothing was played on the forfeited board").toHaveLength(0);
-        await pair(rig);
-        rows = await boardsOf(rig.stageId);
-        expect(shapeOf(rig, rows, 2), "rig: round 2 pairs the winners and the losers").toEqual([[rig.name(A), "P2"].sort().join("-"), [rig.name(B), "P4"].sort().join("-")].sort());
-        await sc.win(rig.auth, boardBetween(rows, 2, A, C), A);
-        await sc.win(rig.auth, boardBetween(rows, 2, B, D), B);
+  // A plain-string describe carries the rule id and the brief's title: the rules checker reads only plain-string titles, and the per-sport `it`s below are template literals.
+  describe("X-SW-7 a pre-play walkover is unplayed: the loser's Buchholz uses a dummy capped at the opponent's adjusted score", () => {
+    for (const sc of [BOARDGAME, BADMINTON, FOOTBALL]) {
+      for (const side of ["home", "away"] as const) {
+        it(`X-SW-7 a pre-play walkover is unplayed: the loser's Buchholz uses a dummy capped at the opponent's adjusted score (S2, ${sc.sport}, forfeiter ${side})`, async () => {
+          const { W } = declared(sc);
+          const k = unitScale(sc);
+          const rig = await swissRig(sc, ["P1", "P2", "P3", "P4"], 2);
+          await pair(rig);
+          let rows = await boardsOf(rig.stageId);
+          expect(shapeOf(rig, rows, 1), "rig: round 1").toEqual(["P1-P3", "P2-P4"]);
+          const top = boardBetween(rows, 1, rig.id.P1!, rig.id.P3!);
+          const B = side === "home" ? top.home_entrant_id! : top.away_entrant_id!;
+          const A = side === "home" ? top.away_entrant_id! : top.home_entrant_id!;
+          const [C, D] = [rig.id.P2!, rig.id.P4!];
+          await post(rig.auth, top.id, "core.forfeit", { by: B, reason: "walkover" });
+          await sc.win(rig.auth, boardBetween(rows, 1, C, D), C);
+          expect(await sql`select 1 from score_events where fixture_id = ${top.id} and type <> 'core.forfeit'`, "rig: nothing was played on the forfeited board").toHaveLength(0);
+          await pair(rig);
+          rows = await boardsOf(rig.stageId);
+          expect(shapeOf(rig, rows, 2), "rig: round 2 pairs the winners and the losers").toEqual([[rig.name(A), "P2"].sort().join("-"), [rig.name(B), "P4"].sort().join("-")].sort());
+          await sc.win(rig.auth, boardBetween(rows, 2, A, C), A);
+          await sc.win(rig.auth, boardBetween(rows, 2, B, D), B);
 
-        expect(await pointsOf(rig), "premise: the scores the derivation starts from").toEqual({ [rig.name(A)]: 2 * W, [rig.name(B)]: W, P2: W, P4: 0 });
-        const hasCut1 = (await deskRows(rig)).get("P2")!.metrics.buchholz_cut1 !== undefined;
-        const want: Want = {
-          [rig.name(A)]: { bh: (2 * W) / k, ...(hasCut1 ? { cut1: W / k } : {}) },
-          [rig.name(B)]: { bh: W / k, ...(hasCut1 ? { cut1: 0 } : {}) },
-          P2: { bh: (2 * W) / k, ...(hasCut1 ? { cut1: (2 * W) / k } : {}) },
-          P4: { bh: (2 * W) / k, ...(hasCut1 ? { cut1: W / k } : {}) },
-        };
-        expect(await expectTable(rig, want, `S2 ${sc.sport} ${side}`)).toBe(4);
-        // the differential must be one the numbers can tell: the played reading of B's round would be 2W
-        expect(W / k, "the forfeit reading is not the played reading").not.toBe((2 * W) / k);
-      }, 180_000);
+          expect(await pointsOf(rig), "premise: the scores the derivation starts from").toEqual({ [rig.name(A)]: 2 * W, [rig.name(B)]: W, P2: W, P4: 0 });
+          const hasCut1 = (await deskRows(rig)).get("P2")!.metrics.buchholz_cut1 !== undefined;
+          const want: Want = {
+            [rig.name(A)]: { bh: (2 * W) / k, ...(hasCut1 ? { cut1: W / k } : {}) },
+            [rig.name(B)]: { bh: W / k, ...(hasCut1 ? { cut1: 0 } : {}) },
+            P2: { bh: (2 * W) / k, ...(hasCut1 ? { cut1: (2 * W) / k } : {}) },
+            P4: { bh: (2 * W) / k, ...(hasCut1 ? { cut1: W / k } : {}) },
+          };
+          expect(await expectTable(rig, want, `S2 ${sc.sport} ${side}`)).toBe(4);
+          // the differential must be one the numbers can tell: the played reading of B's round would be 2W
+          expect(W / k, "the forfeit reading is not the played reading").not.toBe((2 * W) / k);
+        }, 180_000);
+      }
     }
-  }
+  });
 
   /**
    * The positive pair of the walkover: a retirement AFTER play is a played game (M3), `forfeitPlayedFacts` true. S2 with B started
@@ -667,41 +670,44 @@ describe.runIf(HAS_DB)("W3 T8 — art. 16's two inputs from real data, through t
    * // differential: today B is read at its real 0: boardgame A = 0 + 4 + 3 = 7 -> 3.5 (football 10); with D = W/2 the football
    * //  A would be 13 (B adjusted 3).
    */
-  for (const sc of [BOARDGAME, FOOTBALL]) {
-    it(`X-SW-7 a withdrawn entrant's opponents read its adjusted score (S3, ${sc.sport}, via withdrawEntrantCascade)`, async () => {
-      const { W, D } = declared(sc);
-      const k = unitScale(sc);
-      const rig = await swissRig(sc, ["P1", "P2", "P3", "P4"], 3);
-      const [A, B, C, Dd] = [rig.id.P1!, rig.id.P3!, rig.id.P2!, rig.id.P4!];
-      await pair(rig);
-      let rows = await boardsOf(rig.stageId);
-      expect(shapeOf(rig, rows, 1), "rig: round 1").toEqual(["P1-P3", "P2-P4"]);
-      await sc.win(rig.auth, boardBetween(rows, 1, A, B), A);
-      await sc.win(rig.auth, boardBetween(rows, 1, C, Dd), C);
-      const out = await withdrawEntrantCascade(rig.auth, B);
-      expect(out, "rig: a withdrawal between rounds walks nothing over").toMatchObject({ status: "withdrawn", walkovers: 0, voided: 0 });
-      await pair(rig);
-      rows = await boardsOf(rig.stageId);
-      expect(shapeOf(rig, rows, 2), "rig: round 2").toEqual(["P1-P2", "P4 bye"]);
-      await sc.win(rig.auth, boardBetween(rows, 2, A, C), A);
-      await pair(rig);
-      rows = await boardsOf(rig.stageId);
-      expect(shapeOf(rig, rows, 3), "rig: round 3").toEqual(["P1-P4", "P2 bye"]);
-      await sc.draw!(rig.auth, boardBetween(rows, 3, A, Dd));
+  // A plain-string describe carries the rule id and the brief's title (the per-sport `it`s below are template literals the rules checker cannot read).
+  describe("X-SW-7 a withdrawn entrant's opponents read its adjusted score", () => {
+    for (const sc of [BOARDGAME, FOOTBALL]) {
+      it(`X-SW-7 a withdrawn entrant's opponents read its adjusted score (S3, ${sc.sport}, via withdrawEntrantCascade)`, async () => {
+        const { W, D } = declared(sc);
+        const k = unitScale(sc);
+        const rig = await swissRig(sc, ["P1", "P2", "P3", "P4"], 3);
+        const [A, B, C, Dd] = [rig.id.P1!, rig.id.P3!, rig.id.P2!, rig.id.P4!];
+        await pair(rig);
+        let rows = await boardsOf(rig.stageId);
+        expect(shapeOf(rig, rows, 1), "rig: round 1").toEqual(["P1-P3", "P2-P4"]);
+        await sc.win(rig.auth, boardBetween(rows, 1, A, B), A);
+        await sc.win(rig.auth, boardBetween(rows, 1, C, Dd), C);
+        const out = await withdrawEntrantCascade(rig.auth, B);
+        expect(out, "rig: a withdrawal between rounds walks nothing over").toMatchObject({ status: "withdrawn", walkovers: 0, voided: 0 });
+        await pair(rig);
+        rows = await boardsOf(rig.stageId);
+        expect(shapeOf(rig, rows, 2), "rig: round 2").toEqual(["P1-P2", "P4 bye"]);
+        await sc.win(rig.auth, boardBetween(rows, 2, A, C), A);
+        await pair(rig);
+        rows = await boardsOf(rig.stageId);
+        expect(shapeOf(rig, rows, 3), "rig: round 3").toEqual(["P1-P4", "P2 bye"]);
+        await sc.draw!(rig.auth, boardBetween(rows, 3, A, Dd));
 
-      expect(await pointsOf(rig), "premise: the scores the derivation starts from").toEqual({ P1: 2 * W + D, P3: 0, P2: 2 * W, P4: W + D });
-      const cap = D * 3;
-      const bAdjusted = 0 + 2 * D;
-      const bh = {
-        P1: bAdjusted + 2 * W + (W + D),
-        P3: 2 * W + D + 0 + 0,
-        P2: W + D + (2 * W + D) + Math.min(2 * W, cap),
-        P4: 2 * W + Math.min(W + D, cap) + (2 * W + D),
-      };
-      const want: Want = Object.fromEntries(Object.entries(bh).map(([n, v]) => [n, { bh: v / k }]));
-      expect(await expectTable(rig, want, `S3 ${sc.sport}`)).toBe(4);
-    }, 240_000);
-  }
+        expect(await pointsOf(rig), "premise: the scores the derivation starts from").toEqual({ P1: 2 * W + D, P3: 0, P2: 2 * W, P4: W + D });
+        const cap = D * 3;
+        const bAdjusted = 0 + 2 * D;
+        const bh = {
+          P1: bAdjusted + 2 * W + (W + D),
+          P3: 2 * W + D + 0 + 0,
+          P2: W + D + (2 * W + D) + Math.min(2 * W, cap),
+          P4: 2 * W + Math.min(W + D, cap) + (2 * W + D),
+        };
+        const want: Want = Object.fromEntries(Object.entries(bh).map(([n, v]) => [n, { bh: v / k }]));
+        expect(await expectTable(rig, want, `S3 ${sc.sport}`)).toBe(4);
+      }, 240_000);
+    }
+  });
 
   /**
    * Every sport, counted: round 1 and round 2 of a four-player Swiss decided BY WALKOVER on every board (nothing played, so no
@@ -772,7 +778,9 @@ describe.runIf(HAS_DB)("W3 T8 — art. 16's two inputs from real data, through t
       expect(await expectTable(rig, want, `walkover sweep ${key}`)).toBe(4);
       seen.sports++;
     });
-    // a sport that cannot run a Swiss is named, with the refusal, and counted - never silently absent
+    // a sport that cannot run a Swiss is named, with the refusal, and counted - never silently absent. Today every registry sport
+    // runs one, so a skip is a REGRESSION (a sport that stopped starting a Swiss), not a tolerated gap: none may skip.
+    expect(skipped, "no registry sport may skip the sweep").toEqual([]);
     expect(seen.sports + skipped.length, "every registry sport was swept or named").toBe(swept);
     expect(swept).toBe(builtinModules.length);
     expect(seen.sports, `anti-vacuity: the sweep ran (skipped: ${skipped.join("; ")})`).toBeGreaterThan(5);

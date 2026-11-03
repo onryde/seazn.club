@@ -2029,6 +2029,60 @@ describe("validatePack — the stage-config mirror is DRIVEN, key by key", () =>
     expectClean(validatePack(pack, UNIT), []);
   });
 
+  it("W3 T8 (X-SW-7): a swiss walkover is an UNPLAYED card - the forfeiter's Buchholz uses the capped dummy, which reorders a points tie", () => {
+    // Round 1: e2 forfeits to e1 with nothing played (a walkover), e3 beats e4. Round 2: e1 beats e3, e2 beats e4. Generic 3/1/0:
+    // scores e1 6, e2 3 (0 + 3), e3 3 (3 + 0), e4 0. Hand derivation (FIDE C.07 2026 16.4.1: a forfeit card is the player's own
+    // score capped by the scheduled opponent's adjusted score):
+    //   e2 = forfeit_loss min(own 3, e1's 6) = 3, + e4 0                 = 3
+    //   e3 = e4 0 + e1 6                                                   = 6
+    // so e3 outranks e2 on the points tie. Read as a PLAYED game e2's round 1 is e1's 6 and e2 = 6 + 0 = 6 - a dead tie with e3,
+    // which falls through to entrant order and puts e2 first. The ranks below therefore hold only with `unplayed` filled.
+    const pack = leaguePack({
+      stageKind: "swiss",
+      stage: { rounds: 2 },
+      tiebreakers: ["points", "buchholz"],
+      entrants: ["e1", "e2", "e3", "e4"],
+      fixtures: [
+        ["sw-r1-b1", "e1", "e2", 0, 0], // replaced below by the walkover
+        ["sw-r1-b2", "e3", "e4", 2, 0],
+        ["sw-r2-b1", "e1", "e3", 2, 0],
+        ["sw-r2-b2", "e2", "e4", 2, 0],
+      ],
+      rows: [
+        row("e1", 1, 2, 2, 0, 0, 6),
+        row("e3", 2, 2, 1, 0, 1, 3),
+        row("e2", 3, 2, 1, 0, 1, 3),
+        row("e4", 4, 2, 0, 0, 2, 0),
+      ],
+    });
+    const streams = pack["streams"] as { events: unknown[] }[];
+    const matches = (pack["expected"] as { matches: { outcome: unknown }[] }).matches;
+    streams[0]!.events = [{ type: "core.forfeit", payload: { by: "@e2", reason: "walkover" } }];
+    matches[0]!.outcome = { kind: "award", winner: "e1", method: "walkover" };
+    expectClean(validatePack(pack, UNIT), []);
+    // the positive pair: the SAME schedule with round 1 PLAYED (e1 beats e2) reads e2 = e1 6 + 0 = 6, tied with e3 and ahead on
+    // entrant order - so the rank order differs from the walkover's, and the test above is not satisfied by any Swiss pack
+    const played = leaguePack({
+      stageKind: "swiss",
+      stage: { rounds: 2 },
+      tiebreakers: ["points", "buchholz"],
+      entrants: ["e1", "e2", "e3", "e4"],
+      fixtures: [
+        ["sw-r1-b1", "e1", "e2", 2, 0],
+        ["sw-r1-b2", "e3", "e4", 2, 0],
+        ["sw-r2-b1", "e1", "e3", 2, 0],
+        ["sw-r2-b2", "e2", "e4", 2, 0],
+      ],
+      rows: [
+        row("e1", 1, 2, 2, 0, 0, 6),
+        row("e2", 2, 2, 1, 0, 1, 3),
+        row("e3", 3, 2, 1, 0, 1, 3),
+        row("e4", 4, 2, 0, 0, 2, 0),
+      ],
+    });
+    expectClean(validatePack(played, UNIT), []);
+  });
+
   it("reds a swiss stream whose ext key names no round, rather than reading it as round 0", () => {
     // The pair of the test above: the SAME stage with ids that follow no `sw-r{round}-…` convention. The engine's Swiss ledger
     // would throw on a fixture with no round, and a guess would silently fold a wrong Buchholz — so the finding names the key.

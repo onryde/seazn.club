@@ -202,6 +202,7 @@ import {
   resolveTableRules,
   setsToWinOf,
   swissDrawFactsOf,
+  unplayedSidesOf,
   type FixtureResult,
   type StandingsRow,
   type TableFixture,
@@ -2293,11 +2294,12 @@ function deriveStandings(
     // the module's own score keys (`awardScoreKeys`) take the awarded score too. W2d T9: the rule ALWAYS pays (the
     // product's standingsDelta fallback is gone) — the stage's own, else the sport's under the stage's format
     // (`fold.cfg`, `stageScopedFoldCfg`: one cfg for every fixture of the stage), as the product pays a stage with no pin.
+    const played = playRecorded(packEnvelopes(stream), fold.module);
     const result = payout(
       fold.outcome,
       decidedInFor(fold.module, fold.outcome),
       pair,
-      playRecorded(packEnvelopes(stream), fold.module),
+      played,
       pointsRule ??
         resolveTableRules({
           module: fold.module,
@@ -2324,10 +2326,10 @@ function deriveStandings(
     fixtures.push({
       id: fixtureKey(stream.divisionRef, stream.fixtureExtKey),
       ...(swissRound !== undefined ? { roundNo: swissRound } : {}),
-      // W3 T8 (X-SW-7): a Swiss ledger also reads the side(s) each counted result lost WITHOUT playing (`null` = a game played).
-      // Every folded stream is a played fixture (below), so each is `null` - the product's `unplayedSidesOf` answer for a
-      // played game. A pack declares no forfeit; one that wants a walkover's unplayed card needs the pack format to say so.
-      ...(swissRound !== undefined ? { unplayed: null } : {}),
+      // W3 T8 (X-SW-7; FIDE C.07 (2026) 16.2.2 / 16.2.4): a Swiss ledger also reads the side(s) each counted result lost WITHOUT
+      // playing (`null` = a game played). A pack folds `core.forfeit` (a walkover, `by: "both"`), so it is the product's own
+      // answer - `unplayedSidesOf` over the same "was anything played" fact `payout` was just handed, and the result's seats.
+      ...(swissRound !== undefined ? { unplayed: unplayedSidesOf(fold.outcome, played, result) } : {}),
       ...(poolPrefix !== undefined &&
       stream.fixtureExtKey.startsWith(poolPrefix)
         ? { poolId: poolKey }
