@@ -149,7 +149,7 @@ async function sportOrderFromRecord(compId: string): Promise<string[]> {
  * C9 R2: a picker grid measured collapsed and opened at every width - no horizontal page scroll, the Show more (or
  * Show fewer) tile the grid's LAST shown cell and the only one, five shown before it when collapsed, every cell a 44px
  * target, the columns the width asks for, and (`rowMatch`) the tile as tall as the card beside it. A shot of each.
- * Leaves the grid collapsed at 1280. Counts what it measured.
+ * Leaves the grid collapsed at 1280. No word in a shown cell breaks across lines. Counts what it measured.
  */
 async function gridSweep(
   page: Page,
@@ -157,6 +157,7 @@ async function gridSweep(
   o: { label: string; section: string; grid: string; more: string; cols: (width: number) => number; rowMatch: boolean },
 ): Promise<void> {
   let checked = 0;
+  let wordsMeasured = 0;
   const more = page.getByTestId(o.more);
   for (const open of [false, true]) {
     await page.setViewportSize({ width: 1280, height: 900 });
@@ -186,6 +187,30 @@ async function gridSweep(
         if (!open) expect(mate, `${at}: the tile shares its row with the fifth card`).toBeDefined();
         if (mate) expect(Math.abs(mate.h - tile.h), `${at}: the tile is as tall as the card beside it`).toBeLessThanOrEqual(1);
       }
+      // No name or line breaks INSIDE a word (a two-column phone tile once printed "Badmint / on"): every word of every
+      // shown cell, measured as a Range, sits on one line. A hyphen or slash is a break the browser may take.
+      const words = await page.getByTestId(o.grid).evaluate((grid) => {
+        let seen = 0;
+        const broken: string[] = [];
+        for (const cell of [...grid.children].filter((c) => c.getClientRects().length > 0)) {
+          const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+          for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+            for (const m of (n.textContent ?? "").matchAll(/[^\s\-–—/]+/g)) {
+              const range = document.createRange();
+              range.setStart(n, m.index);
+              range.setEnd(n, m.index + m[0].length);
+              const lines = new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top)));
+              if (lines.size === 0) continue;
+              seen++;
+              if (lines.size > 1) broken.push(m[0]);
+            }
+          }
+        }
+        return { seen, broken };
+      });
+      expect(words.broken, `${at}: no word breaks across lines`).toEqual([]);
+      expect(words.seen, `${at}: words measured`).toBeGreaterThan(0);
+      wordsMeasured += words.seen;
       await page.getByTestId(o.section).screenshot({ path: testInfo.outputPath(`${o.label}-${open ? "opened" : "collapsed"}-${width}.png`) });
       checked++;
     }
@@ -194,6 +219,8 @@ async function gridSweep(
   await more.click();
   await expect(more).toHaveAttribute("aria-expanded", "false");
   expect(checked).toBe(WIDTHS.length * 2);
+  expect(wordsMeasured, "anti-vacuity: words measured across the sweep").toBeGreaterThan(0);
+  console.info(`[gridSweep] ${o.label}: ${checked} views, ${wordsMeasured} words measured`);
 }
 
 /** Measure the step on screen at every width, then come back to 1280. Counts what it checked: four widths, each with

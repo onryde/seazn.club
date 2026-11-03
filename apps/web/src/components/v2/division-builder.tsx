@@ -980,7 +980,8 @@ export function DivisionBuilder({
           <div>
             {/* C9 R2 (owner 2026-11-03, mock "Sport A"): a tile per sport, an icon and its name, in a radio group - native
                 radios sharing one name, so the arrow keys move between the tiles and the pick is the checked radio. Five
-                shown, then a Show more tile as the next cell; the picked sport is never folded away. */}
+                shown, then a Show more tile as the next cell; the picked sport is never folded away. Below sm the icon
+                sits above the name (the mock's stacked tile): beside it, a 320px column broke "Badminton" mid-word. */}
             <fieldset className="min-w-0" data-testid="division-builder-sport" aria-describedby="division-builder-sport-fixed">
               <legend className="label">{msg("wizard.sport")}</legend>
               <div id="division-builder-sports" className="grid grid-cols-2 gap-2 md:grid-cols-3" data-testid="division-builder-sports">
@@ -990,7 +991,7 @@ export function DivisionBuilder({
                     <label
                       key={key}
                       data-sport={key}
-                      className={`${sportFolded(key) ? "hidden" : "flex"} min-h-14 min-w-0 cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 ${
+                      className={`${sportFolded(key) ? "hidden" : "flex"} min-h-14 min-w-0 cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition max-sm:flex-col max-sm:items-start max-sm:justify-center max-sm:gap-1 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 ${
                         picked ? "border-purple-500 bg-purple-50 font-semibold text-purple-900" : "border-slate-200 bg-white text-slate-700 hover:border-purple-200"
                       }`}
                     >
