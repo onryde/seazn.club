@@ -184,6 +184,12 @@ const REST = [
   // W2e T8c (format matrix): the public standings' net run rate at the division's own over length (CK-RR-1).
   // Begins with "s", so it belongs here rather than in C_GLOBBED; this gate reddened on it in the whole-branch review.
   "src/server/public-site/__tests__/standings-nrr-scale.test.ts",
+  // W3 Swiss App B (T3): the Buchholz Cut-1 witness rig, the Swiss standings display shared by every surface, and the
+  // per-row facts (bye rounds, late-join round) the two tables mark. None begins with "c", so all three belong here
+  // rather than in C_GLOBBED. The batch 1 review caught this gate red on them (listed=66 vs executed=63).
+  "src/server/public-site/__tests__/standings-swiss-cut1.test.ts",
+  "src/server/public-site/__tests__/standings-view-swiss-display.test.ts",
+  "src/server/public-site/__tests__/swiss-row-facts.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 
