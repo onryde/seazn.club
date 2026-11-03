@@ -3,10 +3,11 @@
 // (or dropped the wrong end) passed every rig. This rig gives the witness: a Swiss table whose entrant A met an opponent who
 // scored a NON-ZERO lowest score, so that Cut-1 differs from the plain Buchholz AND from a cut of the highest.
 //
-// The expected numbers are hand-derived from FIDE C.07 (2026) art. 16 (Swiss tie-breaks), never read from the code under
-// test: the Buchholz of a player is the sum of her opponents' final scores (16.4); the Cut-1 variant leaves out the opponent
-// with the LOWEST score (the first of the "cut" variants, art. 16.4.1), and a played game needs no virtual opponent (the
-// 16.4.2 dummy only stands in for an unplayed card - there is none here, nobody is absent: the premise below pins it).
+// The expected numbers are hand-derived from FIDE C.07 (in force from 1 March 2026), never read from the code under test: the
+// Buchholz of a player is the sum of her opponents' final scores (art. 8.1); the Cut-1 variant leaves out the opponent with the
+// LOWEST score (the Cut-1 modifier, art. 14); and a played game needs no dummy opponent (art. 16.4's dummy only stands in for an
+// UNPLAYED round - there is none here, nobody is absent: the premise below pins it). Clause numbers are the W3 rulebook's
+// (`rulebook-W3-swiss.md`, source A4); art. 16 is not where Buchholz or Cut-1 are defined.
 //
 //   six players A..F, three rounds, chess scoring (win 1, draw 1/2, loss 0):
 //     R1  A 1-0 B    C 1/2 D    E 1-0 F
@@ -137,7 +138,7 @@ const cell = (id: string, key: string) => {
   return view.rows.find((r) => r.entrantId === id)!.cells[col];
 };
 
-describe("Buchholz Cut-1 drops the LOWEST opponent score, witnessed with a non-zero lowest (n1, FIDE C.07 (2026) art. 16)", () => {
+describe("Buchholz Cut-1 drops the LOWEST opponent score, witnessed with a non-zero lowest (n1, FIDE C.07 (2026) arts. 8.1 and 14)", () => {
   it("premise: nobody is absent from a round, the stage's order carries the Buchholz family, all six are on the table", () => {
     expect(absent.size, "no absent rounds: every opponent was met over the board").toBe(0);
     expect(CASCADE).toEqual(expect.arrayContaining(["buchholz", "buchholz_cut1"]));

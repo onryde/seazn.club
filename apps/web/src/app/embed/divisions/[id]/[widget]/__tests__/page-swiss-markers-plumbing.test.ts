@@ -128,12 +128,15 @@ function elements(node: unknown, out: ReactElement[] = []): ReactElement[] {
   return out;
 }
 
-async function standingsHtml(fixtures: PublicFixture[]) {
+async function standingsTable(fixtures: PublicFixture[]) {
   embedDivisionData.mockResolvedValue({ ok: true, data: payload(fixtures) });
   const root = await EmbedWidgetPage({ params: Promise.resolve({ id: "d1", widget: "standings" }) });
   const tables = elements(root).filter((el) => el.type === StandingsTable);
   expect(tables, "the standings widget builds one StandingsTable for its one Swiss stage").toHaveLength(1);
-  return renderToStaticMarkup(tables[0]!);
+  return tables[0]!;
+}
+async function standingsHtml(fixtures: PublicFixture[]) {
+  return renderToStaticMarkup(await standingsTable(fixtures));
 }
 
 const nameCell = (html: string, name: string) => {
@@ -150,6 +153,11 @@ describe("embed standings widget - a Swiss bye and a late join reach the table m
     expect(nameCell(html, NAMES.C!)).toContain('data-marker="late"');
     expect(nameCell(html, NAMES.C!)).not.toContain('data-marker="bye"');
     expect(nameCell(html, NAMES.A!), "Ada played every round and sat out none").not.toContain("data-marker=");
+  });
+
+  it("the page names the stage's kind to the table: the Swiss ladders' format is the Swiss table's (`stageKind`, owner Q2 scope)", async () => {
+    const table = await standingsTable(FIXTURES);
+    expect((table.props as { stageKind?: string }).stageKind, "the stage here is a Swiss").toBe("swiss");
   });
 
   it("empty case: a Swiss with no fixtures yet marks nobody", async () => {

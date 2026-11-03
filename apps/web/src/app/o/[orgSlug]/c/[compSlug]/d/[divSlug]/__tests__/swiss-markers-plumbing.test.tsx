@@ -177,14 +177,17 @@ function elements(node: unknown, out: ReactElement[] = []): ReactElement[] {
   return out;
 }
 
-async function standingsHtml() {
+async function standingsTable() {
   const root = await DivisionPage({
     params: Promise.resolve({ orgSlug: "org", compSlug: "comp", divSlug: "div" }),
     searchParams: Promise.resolve({ tab: "standings" }),
   });
   const tables = elements(root).filter((el) => el.type === StandingsTable);
   expect(tables, "one StandingsTable for the one Swiss stage").toHaveLength(1);
-  return renderToStaticMarkup(tables[0]!);
+  return tables[0]!;
+}
+async function standingsHtml() {
+  return renderToStaticMarkup(await standingsTable());
 }
 
 const nameCell = (html: string, name: string) => {
@@ -208,6 +211,12 @@ describe("organiser console - a Swiss bye and a late join reach the standings ma
     expect(nameCell(html, NAMES.C!)).toContain('data-marker="late"');
     expect(nameCell(html, NAMES.C!)).not.toContain('data-marker="bye"');
     expect(nameCell(html, NAMES.A!), "Ada played every round and sat out none").not.toContain("data-marker=");
+  });
+
+  it("the page names the stage's kind to the table: the Swiss ladders' format is the Swiss table's (`stageKind`, owner Q2 scope)", async () => {
+    swissScene(FIXTURES);
+    const table = await standingsTable();
+    expect((table.props as { stageKind?: string }).stageKind, "the stage here is a Swiss").toBe("swiss");
   });
 
   it("empty case: a Swiss with no fixtures yet marks nobody", async () => {

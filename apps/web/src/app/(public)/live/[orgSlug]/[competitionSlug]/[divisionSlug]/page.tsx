@@ -343,6 +343,7 @@ export default async function DivisionHomePage({ params }: Props) {
                     qualification={qualification}
                     rules={stage.table_rules}
                     swissFacts={swissRowFactsFor(stage, fixtures, snap.rows as StandingsRow[])}
+                    stageKind={stage.kind}
                     locale={orgLocale}
                     tz={tz}
                   />

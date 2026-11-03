@@ -3395,6 +3395,25 @@ describe("loadCompetitionHub - W3 app-B T3: a Swiss table marks the bye and the 
     for (const [id, m] of marked) expect(m, id).toBeUndefined();
   });
 
+  it("the loader names the stage's kind to the builder: a Swiss table's Buchholz is spelled in the table's own points (7.5); the same rows on a league keep the engine's text (7½)", async () => {
+    const buchholzCell = async (kind: "swiss" | "league") => {
+      const base = unpinnedRulesDoc({ module: resolveLatestModule("football"), kind, divisionConfig: DIV.config });
+      const st = swissStage({ kind, table_rules: { ...base, tiebreakers: [...new Set([...base.tiebreakers, "buchholz" as const])] } });
+      const standings = [
+        { ...rowsOf(), stage_id: st.id, rows: rowsOf().rows.map((r) => (r.entrantId === "e1" ? { ...r, metrics: { ...r.metrics, buchholz: 7.5 } } : r)) },
+      ];
+      getPublicDivisionMock.mockResolvedValue(divisionDetail({ stages: [st], fixtures: scene(), standings }));
+      const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+      expect(doc.tables, `${kind}: one table`).toHaveLength(1);
+      const table = doc.tables[0]!;
+      const col = table.columns.findIndex((c) => c.key === "buchholz");
+      expect(col, `${kind}: premise - the table has a Buchholz column`).toBeGreaterThanOrEqual(0);
+      return table.rows.find((r) => r.entrantId === "e1")!.cells[col];
+    };
+    expect(await buchholzCell("swiss")).toBe("7.5");
+    expect(await buchholzCell("league")).toBe("7½");
+  });
+
   it("a league table beside a Swiss gets no markers even when its fixtures hold a bye-shaped key", async () => {
     getPublicDivisionMock.mockResolvedValue(
       divisionDetail({

@@ -470,8 +470,8 @@ export async function buildDivisionDocModel(
         });
       }
       case "standings": {
-        const snapshots = await tx<{ stage_id: string; stage_name: string; pool_id: string | null; rows: StandingsRow[] }[]>`
-          select ss.stage_id, s.name as stage_name, ss.pool_id, ss.rows from standings_snapshots ss
+        const snapshots = await tx<{ stage_id: string; stage_name: string; stage_kind: string; pool_id: string | null; rows: StandingsRow[] }[]>`
+          select ss.stage_id, s.name as stage_name, s.kind as stage_kind, ss.pool_id, ss.rows from standings_snapshots ss
           join stages s on s.id = ss.stage_id
           where s.division_id = ${divisionId}
           order by s.seq desc`;
@@ -514,7 +514,8 @@ export async function buildDivisionDocModel(
         // the public table's own (`tableLayoutFor` over the one loader's rules) and the text is its `cellText`. Whole
         // points stay a NUMBER cell, so a spreadsheet's Pts column stays numeric for every other sport.
         const rules = (await stageTableRulesDocs(tx, [snapshot.stage_id]))[snapshot.stage_id];
-        const layout = tableLayoutFor(rules);
+        // owner Q2 (review m1): only a Swiss stage's ladders take the table's points format, so the layout names its stage's kind
+        const layout = tableLayoutFor(rules, snapshot.stage_kind);
         const cascade = tableOrderOf(rules);
         const tables = stageTables.map((table) => {
           // Export every pool (owner, 2026-10-28): THIS table prints the public table's own columns and cells — the pure

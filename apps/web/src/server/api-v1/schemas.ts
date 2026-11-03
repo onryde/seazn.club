@@ -340,7 +340,7 @@ export const TiebreakerKeyS = z.enum([
   // W2d (spec §5.6; Task 4's keys, moved here by PS-2c): the BWF/ITTF/ATP/FIH/IIHF steps and the h2h block modifiers.
   "set_diff", "point_diff", "h2h_two", "h2h_wins", "h2h_set_ratio", "h2h_point_ratio", "h2h_reapply", "h2h_exclusion",
   "matches_played", "field_goals",
-  // W3 app-B T1 (X-SW-9; engine 2.0.0): the Swiss chain's opponents' goal difference.
+  // W3 app-B T1 (X-SW-9; engine 2.0.0): the Swiss chain's opponents' score difference (the sport's own unit).
   "opp_diff",
 ]);
 

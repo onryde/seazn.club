@@ -7,7 +7,7 @@
 //
 // The scene is built the way production builds it: one list of fixture rows (the DB's shape) feeds the marker facts
 // (`swissRowFactsFor`, the page's producer) AND the engine's absent rounds (`swissAbsentRounds`, Task 8's producer), and the
-// engine ranks the table (`completeTableStage`, FIDE C.07 art. 16) - so no fixture stands on both ends of any seam.
+// engine ranks the table (`completeTableStage`: FIDE C.07 arts. 8.1, 9.1 and 14 for the ladders, art. 16.4 for the unplayed-round dummy) - so no fixture stands on both ends of any seam.
 // `environment: "node"`: markup is what is compared (`renderToStaticMarkup`); the paint is the task's screenshot pass.
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
@@ -15,6 +15,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MatchOutcome, type StandingsDelta } from "@seazn/engine/core";
 import {
   completeTableStage,
+  derivedMetricText,
   payout,
   pointsText,
   type FixtureResult,
@@ -130,9 +131,10 @@ const input: TableViewInput = {
   rules: doc,
   dateOf: () => null,
   swissFacts,
+  stageKind: STAGE.kind,
 };
 const divisionPage = renderToStaticMarkup(
-  createElement(StandingsTable, { rows, metricSpecs: bg.metrics as never, cascade: doc.tiebreakers, entrantNames: NAMES, entrantLogos: {}, dict: EN, rules: doc, swissFacts, locale: "en", tz: "UTC" }),
+  createElement(StandingsTable, { rows, metricSpecs: bg.metrics as never, cascade: doc.tiebreakers, entrantNames: NAMES, entrantLogos: {}, dict: EN, rules: doc, swissFacts, stageKind: STAGE.kind, locale: "en", tz: "UTC" }),
 );
 const view = buildTableView(input);
 const hub = renderToStaticMarkup(createElement(StandingsTableView, { view, dict: EN, testid: "t" }));
@@ -232,12 +234,44 @@ describe("owner Q2.5 - the two standings components read one Swiss table the sam
     const plain = { ...input, swissFacts: undefined };
     const plainHub = renderToStaticMarkup(createElement(StandingsTableView, { view: buildTableView(plain), dict: EN, testid: "t" }));
     const plainPage = renderToStaticMarkup(
-      createElement(StandingsTable, { rows, metricSpecs: bg.metrics as never, cascade: doc.tiebreakers, entrantNames: NAMES, entrantLogos: {}, dict: EN, rules: doc, locale: "en", tz: "UTC" }),
+      createElement(StandingsTable, { rows, metricSpecs: bg.metrics as never, cascade: doc.tiebreakers, entrantNames: NAMES, entrantLogos: {}, dict: EN, rules: doc, stageKind: STAGE.kind, locale: "en", tz: "UTC" }),
     );
     expect(plainHub).not.toContain('data-marker="');
     expect(plainPage).not.toContain('data-marker="');
     // …and the cells are the same cells: marking a row changes nothing about its numbers
     expect(read(plainPage).rows.map((r) => r.cells)).toEqual(a.rows.map((r) => r.cells));
     expect(read(plainHub).rows.map((r) => r.cells)).toEqual(b.rows.map((r) => r.cells));
+  });
+
+  it("scope (controller ruling, review m1): the SAME rows on a non-Swiss stage print the engine's text in both components, and the two still agree", () => {
+    // A round-robin or groups table has the same columns; its Sonneborn-Berger is a different measure (pool game points / 4) and
+    // was not part of the owner's Swiss ask. The witness: at least one tie-break cell spells differently under the two rules.
+    const render = (stageKind: string) => ({
+      page: read(
+        renderToStaticMarkup(
+          createElement(StandingsTable, { rows, metricSpecs: bg.metrics as never, cascade: doc.tiebreakers, entrantNames: NAMES, entrantLogos: {}, dict: EN, rules: doc, stageKind, locale: "en", tz: "UTC" }),
+        ),
+      ),
+      hub: read(renderToStaticMarkup(createElement(StandingsTableView, { view: buildTableView({ ...input, stageKind }), dict: EN, testid: "t" }))),
+    });
+    const keys = view.columns.map((c) => c.key);
+    let compared = 0;
+    let differs = 0;
+    for (const kind of ["league", "group"]) {
+      const { page, hub: hubRead } = render(kind);
+      expect(page.rows.map((r) => r.cells), `${kind}: both components print the same cells`).toEqual(hubRead.rows.map((r) => r.cells));
+      for (const [i, rowP] of page.rows.entries()) {
+        const standing = rows.find((r) => NAMES[r.entrantId] === rowP.name)!;
+        for (const [j, key] of keys.entries()) {
+          if (key !== "buchholz" && key !== "buchholz_cut1" && key !== "sberger") continue;
+          compared++;
+          const engine = derivedMetricText(standing, key);
+          expect(rowP.cells[j], `${kind} ${rowP.name} ${key}: the engine's own text`).toBe(engine);
+          if (engine !== a.rows[i]!.cells[j]) differs++;
+        }
+      }
+    }
+    expect(compared, "tie-break cells compared").toBe(2 * entrants.length * 3);
+    expect(differs, "witness: the Swiss spelling and the engine's text are not the same string somewhere").toBeGreaterThan(0);
   });
 });

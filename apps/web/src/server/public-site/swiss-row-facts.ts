@@ -21,7 +21,7 @@ export interface SwissRowFacts {
 
 /** The columns of a fixture row this reads: `swissAbsentRounds`' own, plus the stage and the status (a voided bye is no bye). */
 export interface RowFactsFixture extends AbsentRoundsFixture {
-  stage_id?: string;
+  stage_id: string;
   status?: string;
 }
 

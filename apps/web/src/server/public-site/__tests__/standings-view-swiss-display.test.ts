@@ -8,11 +8,11 @@
 //   3. A bye and a late join are marked: `rowMarkers`, and the hub document's `markers` (the two components' parity is
 //      `components/public-site/__tests__/standings-swiss-parity.test.ts`).
 //
-// Expected values come from the rulebook (FIDE 1 / ½ / 0 in halves; UEFA/FIDE C.07 art. 16 for the Swiss ladders), the
+// Expected values come from the rulebook (FIDE 1 / ½ / 0 in halves; UEFA art. 18 and FIDE C.07 arts. 8.1, 9.1 and 14 for the Swiss ladders), the
 // engine's own declarations (`pointsText`, the sport's `standingsDelta`) and the dictionaries - never from the builder.
 import { describe, expect, it } from "vitest";
-import { DERIVED_METRICS, pointsText, type StandingsRow } from "@seazn/engine/competition";
-import type { AnySportModule } from "@seazn/engine/sport";
+import { DERIVED_METRICS, derivedMetricText, pointsText, type StandingsRow } from "@seazn/engine/competition";
+import type { AnySportModule, TableStageKind } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
 import en from "@/dictionaries/en/public.json";
@@ -75,6 +75,8 @@ const input = (doc: typeof halfDoc, m: AnySportModule, rows: StandingsRow[], ove
   msg: enMsg,
   rules: doc,
   dateOf: () => null,
+  // the stage these tables are of: a Swiss (the one kind the owner's number format applies to - see the scope describe below)
+  stageKind: "swiss",
   ...over,
 });
 
@@ -140,9 +142,9 @@ describe("owner Q2.1 - one number format: the Swiss ladders print in the table's
   it("opp_diff is a difference of scores, never halved: a half-point layout still prints it as the integer it is", () => {
     // Not a reachable table (chess records no goal difference) - the formatter's own contract: a sum of differences has no unit.
     const r = row("A", { metrics: { opp_diff: 6 } });
-    expect(derivedText(r, "opp_diff", tableLayoutFor(halfDoc))).toBe("6");
-    expect(derivedText(r, "opp_diff", tableLayoutFor(wholeDoc))).toBe("6");
-    expect(derivedText(row("A", { metrics: {} }), "opp_diff", tableLayoutFor(wholeDoc)), "no value is a dash").toBe("—");
+    expect(derivedText(r, "opp_diff", tableLayoutFor(halfDoc, "swiss"))).toBe("6");
+    expect(derivedText(r, "opp_diff", tableLayoutFor(wholeDoc, "swiss"))).toBe("6");
+    expect(derivedText(row("A", { metrics: {} }), "opp_diff", tableLayoutFor(wholeDoc, "swiss")), "no value is a dash").toBe("—");
   });
 
   it("the ladders still print a dash for a row with none (Elm has not played), and every other derived column is the engine's text", () => {
@@ -167,7 +169,7 @@ describe("owner Q2.1 - one number format: the Swiss ladders print in the table's
       const layout = tableLayoutFor(doc);
       const rows = [row("A", { rank: 1, played: 1, won: 1, points: 3, metrics: Object.fromEntries([...m.metrics.map((x) => x.key), ...DERIVED_METRICS.map((d) => d.key)].map((k, i) => [k, 2 + i / 2])) })];
       const columns = tableColumns(m.metrics, DERIVED_METRICS.map((d) => d.key), rows, layout);
-      const view = buildTableView(input(doc, m, rows, { cascade: DERIVED_METRICS.map((d) => d.key) }));
+      const view = buildTableView(input(doc, m, rows, { cascade: DERIVED_METRICS.map((d) => d.key), stageKind: "league" }));
       expect(view.columns.map((c) => c.key), m.key).toEqual(columns.map((c) => c.key));
       columns.forEach((c, i) => {
         expect(view.rows[0]!.cells[i], `${m.key} ${c.key}`).toBe(cellText(rows[0]!, c, layout));
@@ -288,6 +290,68 @@ describe("owner Q2.3 - the bye and late-join words (rowMarkers)", () => {
     for (const swissFacts of [undefined, {}] as const) {
       const plain = buildTableView(input(halfDoc, boardgame, rows, { swissFacts }));
       for (const r of plain.rows) expect(Object.hasOwn(r, "markers"), `${r.entrantId} ${JSON.stringify(swissFacts)}`).toBe(false);
+    }
+  });
+});
+
+// Controller ruling (review m1, 2026-11-03): the owner's number format is about the SWISS table. A round-robin or groups table has
+// the same columns, but its Sonneborn-Berger is a different measure (the pool ledger's game points / 4, `tiebreakers.js` in the
+// engine) and re-spelling it is a separate, parked follow-up - so every other stage kind keeps the engine's own text.
+describe("owner Q2 scope - only a Swiss stage's ladders are re-spelled; every other table kind prints the engine's text", () => {
+  // Typed over the engine's own kind list: a new table kind is a compile error here until it is decided.
+  const IS_SWISS: Record<TableStageKind, boolean> = { league: false, group: false, americano: false, swiss: true };
+  const kinds = Object.keys(IS_SWISS) as TableStageKind[];
+
+  it("empty case first: the sweep covers every table kind, exactly one of them Swiss", () => {
+    expect(kinds.length).toBeGreaterThan(1);
+    expect(kinds.filter((k) => IS_SWISS[k])).toEqual(["swiss"]);
+  });
+
+  it("a half-point table (chess): every kind but Swiss prints the engine's text (SB 3.5 stays '3.5'); Swiss spells it '3½' (counted)", () => {
+    const r = row("A", { rank: 1, played: 3, metrics: { buchholz: 2.5, buchholz_cut1: 1.5, sberger: 3.5 } });
+    let checked = 0;
+    for (const kind of kinds) {
+      const layout = tableLayoutFor(halfDoc, kind);
+      for (const key of ["buchholz", "buchholz_cut1", "sberger"] as const) {
+        const engine = derivedMetricText(r, key);
+        const swiss = pointsText(r.metrics[key]! * 2, "half");
+        expect(derivedText(r, key, layout), `${kind} ${key}`).toBe(IS_SWISS[kind] ? swiss : engine);
+        checked++;
+      }
+    }
+    expect(checked, "cells checked").toBe(kinds.length * 3);
+    // the witness: the two spellings are different strings for the value the owner's table prints
+    expect(derivedMetricText(r, "sberger")).toBe("3.5");
+    expect(pointsText(7, "half")).toBe("3½");
+    expect(derivedText(r, "sberger", tableLayoutFor(halfDoc, "league")), "a round-robin SB").toBe("3.5");
+    expect(derivedText(r, "sberger", tableLayoutFor(halfDoc, "swiss")), "a Swiss SB").toBe("3½");
+  });
+
+  it("a whole-point table (football): a Buchholz of 7.5 is the engine's '7½' off Swiss and the plain '7.5' on it", () => {
+    const r = row("A", { rank: 1, played: 3, metrics: { buchholz: 7.5, buchholz_cut1: 5, sberger: 2.5, opp_diff: -3 } });
+    for (const kind of kinds) {
+      const layout = tableLayoutFor(wholeDoc, kind);
+      for (const key of ["buchholz", "buchholz_cut1", "sberger", "opp_diff"] as const) {
+        expect(derivedText(r, key, layout), `${kind} ${key}`).toBe(IS_SWISS[kind] ? pointsText(r.metrics[key]!, "whole") : derivedMetricText(r, key));
+      }
+    }
+    expect(derivedText(r, "buchholz", tableLayoutFor(wholeDoc, "league"))).toBe("7½");
+    expect(derivedText(r, "buchholz", tableLayoutFor(wholeDoc, "swiss"))).toBe("7.5");
+  });
+
+  it("no kind given (a hand-built or cached caller) is not Swiss: the engine's text, as before this task", () => {
+    const r = row("A", { metrics: { sberger: 3.5 } });
+    expect(derivedText(r, "sberger", tableLayoutFor(halfDoc))).toBe("3.5");
+    expect(derivedText(r, "sberger", tableLayoutFor(null, "swiss")), "a Swiss whose rules the loader refused spells in whole points (the plain layout)").toBe("3.5");
+  });
+
+  it("the hub's view applies the same scope: one chess table, three kinds, only the Swiss one re-spells (through buildTableView)", () => {
+    const rows = [row("A", { rank: 1, played: 3, won: 1, points: 3, metrics: { wins: 1, buchholz: 2.5, buchholz_cut1: 1.5, sberger: 3.5 } })];
+    const cellOf = (kind: string | undefined) =>
+      cellsOf(buildTableView(input(halfDoc, boardgame, rows, kind === undefined ? { stageKind: undefined } : { stageKind: kind })), "A");
+    expect(cellOf("swiss")).toMatchObject({ buchholz: "2½", buchholz_cut1: "1½", sberger: "3½" });
+    for (const kind of ["league", "group", undefined]) {
+      expect(cellOf(kind), `kind ${kind}`).toMatchObject({ buchholz: derivedMetricText(rows[0]!, "buchholz"), sberger: "3.5" });
     }
   });
 });

@@ -232,6 +232,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
               qualification={qualificationFor(stage, snap)}
               rules={stage.table_rules}
               swissFacts={swissRowFactsFor(stage, fixtures, snap.rows as StandingsRow[])}
+              stageKind={stage.kind}
               locale={orgLocale}
               tz={tz}
             />

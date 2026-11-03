@@ -1006,6 +1006,8 @@ export async function loadCompetitionHub(
             swissRound,
             // W3 app-B T3 (owner Q2): the bye / late-join marks of a Swiss table, from this stage's real fixtures.
             swissFacts: swissRowFactsFor(stage, fixtures, snap.rows),
+            // owner Q2 is the Swiss table: only a Swiss stage's ladders are spelled in the table's points format
+            stageKind: stage.kind,
           }),
         );
       }

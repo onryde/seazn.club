@@ -1121,6 +1121,7 @@ export default async function DivisionPage({
                         qualification={qualification}
                         rules={stageOrder(stage.id)}
                         swissFacts={swissRowFactsFor(stage, fixtures, snap.rows as StandingsRow[])}
+                        stageKind={stage.kind}
                         locale={locale}
                         tz={scheduleSettings.tz}
                       />

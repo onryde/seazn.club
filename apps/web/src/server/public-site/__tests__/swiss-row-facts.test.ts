@@ -82,16 +82,27 @@ describe("swissRowFacts (X-SW-8 / owner Q2: the bye and the late join, from the 
     expect(swissRowFacts(fixtures, ["Ash", "Birch", "Fern"]).Birch).toEqual({ byeRounds: [], joinedRound: 3 });
   });
 
-  it("a table entrant who holds NO seat in any round was never in the pairing, so she did not 'join' at round N+1", () => {
-    // Gale is on the table (a withdrawn-before-round-1 entrant keeps a row) but no board or bye ever seated her. Every open
-    // round is hers to miss, so the unbroken absent prefix runs to the end: reading it as "joined after it" would print
-    // "From R3" on an entrant who never played a round.
-    const fixtures = [board(S, 1, 1, "Ash", "Birch"), board(S, 2, 1, "Ash", "Birch")];
-    const absent = swissAbsentRounds(fixtures, ["Ash", "Birch", "Gale"]);
-    expect(absent.get("Gale"), "premise: Task 8's producer says Gale missed both rounds").toEqual([1, 2]);
-    const facts = swissRowFacts(fixtures, ["Ash", "Birch", "Gale"]);
-    expect(facts.Gale, "no 'From R3' for an entrant who never took a seat").toBeUndefined();
-    expect(facts, "and nobody else is marked").toEqual({});
+  it("a table entrant who holds NO seat on any Swiss round (only an ad-hoc or round-less row) was never in the pairing, so she did not 'join' at round N+1", () => {
+    // The engine's table lists every entrant holding a seat on ANY fixture of the stage (`engine-db/competition.ts`, the entrant set
+    // built from each fixture's home and away), so a Swiss table can carry an entrant that no Swiss board or bye ever seated: one
+    // whose only row is an ad-hoc fixture (a legacy `addFixture` on a Swiss stage) or a round-less one. An entrant with NO seat at
+    // all is not on the table, so this guard is reachable only through those rows. Every open round is such an entrant's to miss,
+    // so the unbroken absent prefix runs to the end: reading it as "joined after it" would print "From R3" on an entrant who never
+    // played a round. Each way of holding only a non-Swiss seat is a case.
+    const cases: [string, RowFactsFixture][] = [
+      ["an ad-hoc row in a round Swiss never paired", { ...board(S, 9, 2, "Gale", "Ash"), ext_key: `adhoc-${++n}` }],
+      ["a round-less row", { ...board(S, 1, 2, "Gale", "Ash"), round_no: null }],
+    ];
+    for (const [label, seat] of cases) {
+      const fixtures = [board(S, 1, 1, "Ash", "Birch"), board(S, 2, 1, "Ash", "Birch"), seat];
+      const entrants = ["Ash", "Birch", "Gale"];
+      expect(fixtures.some((f) => f.home_entrant_id === "Gale"), `premise (${label}): Gale holds a seat, so the engine's table lists her`).toBe(true);
+      const absent = swissAbsentRounds(fixtures, entrants);
+      expect(absent.get("Gale"), `premise (${label}): Task 8's producer says Gale missed both Swiss rounds`).toEqual([1, 2]);
+      const facts = swissRowFacts(fixtures, entrants);
+      expect(facts.Gale, `${label}: no 'From R3' for an entrant who never took a Swiss seat`).toBeUndefined();
+      expect(facts, `${label}: and nobody else is marked`).toEqual({});
+    }
   });
 
   it("an unseated bye shell, a voided bye and an ad-hoc row mark nobody", () => {

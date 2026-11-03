@@ -110,6 +110,9 @@ interface Props {
   /** W3 app-B T3 (owner Q2): a SWISS stage's per-entrant bye rounds and join round (`swissRowFactsFor`), which become the marks
    *  beside a name ("Bye R3", "From R3"). Absent: nothing is marked - every table but a Swiss one. */
   swissFacts?: Readonly<Record<string, SwissRowFacts>>;
+  /** The stage's kind (`stages.kind`): "swiss" spells the Swiss ladders (Buchholz, Cut-1, Sonneborn-Berger, Opp diff) in the
+   *  table's own points format (`tableLayoutFor`); absent or any other kind prints the engine's text (owner Q2 is the Swiss table). */
+  stageKind?: string;
   /** The locale and zone the page prints a date in (the lots note's "Drawn by lots on {date}"): the org's on the
    *  public page and the embed, the viewer's in the console. Absent: en, UTC. */
   locale?: string;
@@ -128,11 +131,12 @@ export function StandingsTable({
   qualification: qualificationIn,
   rules,
   swissFacts,
+  stageKind,
   locale = "en",
   tz = "UTC",
 }: Props) {
   const msg = (key: TKey, vars?: Record<string, string | number>) => t(dict, key, vars);
-  const layout = tableLayoutFor(rules);
+  const layout = tableLayoutFor(rules, stageKind);
   const columns = tableColumns(metricSpecs, cascade, rows, layout);
   const ranked = [...rows].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
   // X-TB-6 (anti-goal 3): a table with no counted fixture is level — every rank the level dash, no leader row, no

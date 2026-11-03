@@ -210,9 +210,9 @@ describe("buildTableView", () => {
     expect(v.columns[4]!.abbr).toBe("NRR");
     // Row a has a cricket ledger and no Buchholz; row b is its mirror image.
     expect(v.rows[0]!.cells).toEqual(["1", "1", "0", "3", "+1.000", "—"]);
-    // Owner Q2 (2026-11-03): a Buchholz prints in its table's POINTS format. `base` is a whole-point table, so b's 3.5 reads
-    // "3.5" (what a 3.5-point Points cell would read), not the engine's own half-point "3½".
-    expect(v.rows[1]!.cells).toEqual(["1", "0", "1", "0", "—", "3.5"]);
+    // `base` names no stage kind, so this is not a Swiss table: the engine's own text, as before owner Q2 (2026-11-03). The Swiss
+    // table's Buchholz prints in its POINTS format ("3.5" here) - `standings-view-swiss-display.test.ts` pins that, and this scope.
+    expect(v.rows[1]!.cells).toEqual(["1", "0", "1", "0", "—", "3½"]);
   });
 
   it("rows come in rank order with formatted cells, badge urls, the champion flag and a tie-break sentence", () => {
@@ -354,7 +354,7 @@ describe("buildTableView", () => {
     expect(columnHeader({ key: "sets_won", label: "Games won" }, msg)).toEqual({ abbr: "table.col.gamesWon", title: "table.col.gamesWon" });
     expect(columnHeader({ key: "set_ratio", label: "Ratio" }, msg)).toEqual({ abbr: "table.abbr.ratio", title: "table.col.ratio" });
     expect(columnHeader({ key: "nrr", label: "NRR" }, msg)).toEqual({ abbr: "NRR", title: "NRR" });
-    // W3 app-B T1 (X-SW-9): the Swiss chain's opponents' goal difference. The label is READ off the engine's own
+    // W3 app-B T1 (X-SW-9): the Swiss chain's opponents' score difference (sport-neutral). The label is READ off the engine's own
     // `DERIVED_METRICS`, so a relabel there makes the entry unfound (an English label printed in every locale) and this red.
     const oppDiff = DERIVED_METRICS.find((d) => d.key === "opp_diff");
     expect(oppDiff, "premise: the engine declares an opp_diff column").toBeDefined();
