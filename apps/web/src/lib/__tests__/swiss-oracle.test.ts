@@ -17,6 +17,7 @@ import {
   oppDiff,
   rankByChain,
   ratio,
+  sonnebornBerger,
   tablePoints,
   type DeclaredPointsRule,
   type LedgerOpts,
@@ -29,6 +30,8 @@ const CHESS: DeclaredPointsRule = { win: { regulation: 2 }, loss: { regulation: 
 const S5_RULE: DeclaredPointsRule = { win: { regulation: 3 }, loss: { regulation: 0 }, unit: "whole" };
 /** A set sport's table (badminton's shape): every set score pays the winner 2, the loser 0. */
 const SETS: DeclaredPointsRule = { win: { regulation: 2 }, loss: { regulation: 0 }, bySetScore: { "*": [2, 0] }, unit: "whole" };
+/** A set table that pays per score (volleyball's shape): a 2-0 pays 3-0, a 2-1 pays 2-1, and no "*" row. */
+const SET_TABLE: DeclaredPointsRule = { win: { regulation: 3 }, loss: { regulation: 0 }, bySetScore: { "2-0": [3, 0], "2-1": [2, 1] }, unit: "whole" };
 
 const win = (round: number, winner: string, loser: string): OracleFixture => ({ round, home: winner, away: loser, winner });
 const draw = (round: number, a: string, b: string): OracleFixture => ({ round, home: a, away: b, winner: null });
@@ -66,6 +69,20 @@ describe("swiss-oracle: table points (rulebook §4)", () => {
     expect(Object.fromEntries(tablePoints(fx, SETS))).toEqual({ P: 0, Q: 2, R: 2 });
     expect(() => tablePoints([draw(1, "P", "Q")], SETS)).toThrow(OracleRefusal);
     expect(() => tablePoints([win(1, "P", "Q")], SETS), "a set rule needs the board's sets").toThrow(OracleRefusal);
+  });
+
+  it("a set-score table pays per score: a 2-1 pays its own row, not the clean sweep's", () => {
+    const fx: OracleFixture[] = [{ round: 1, home: "P", away: "Q", winner: "Q", sets: [1, 2] }];
+    expect(Object.fromEntries(tablePoints(fx, SET_TABLE))).toEqual({ P: 1, Q: 2 });
+  });
+
+  it("guards: a score the set table does not name (no \"*\"), a bye under a set table without \"*\", a winner not on the board, and a draw under a rule that declares none or under a set table that does are refused", () => {
+    const only20: DeclaredPointsRule = { ...SET_TABLE, bySetScore: { "2-0": [3, 0] } };
+    expect(() => tablePoints([{ round: 1, home: "P", away: "Q", winner: "Q", sets: [1, 2] }], only20), "2-1 unnamed").toThrow(OracleRefusal);
+    expect(() => tablePoints([bye(1, "R")], SET_TABLE), "a bye needs the clean sweep's row").toThrow(OracleRefusal);
+    expect(() => tablePoints([{ round: 1, home: "P", away: "Q", winner: "Z" }], CHESS), "Z is not on the board").toThrow(OracleRefusal);
+    expect(() => tablePoints([draw(1, "P", "Q")], S5_RULE), "S5's rule declares no draw").toThrow(OracleRefusal);
+    expect(() => tablePoints([draw(1, "P", "Q")], { ...SETS, draw: 1 }), "a set result cannot be drawn").toThrow(OracleRefusal);
   });
 
   it("a draw's points: the declared draw where a draw can stand, else half the win (rulebook §4 'Non-chess scaling')", () => {
@@ -128,6 +145,24 @@ describe("swiss-oracle: Buchholz and Cut-1 (C.07 2026 art. 16)", () => {
   });
 });
 
+describe("swiss-oracle: Sonneborn-Berger (A4 9.1 with C.07 16's unplayed rounds)", () => {
+  it("S1: each card's Buchholz contribution weighted by the share of a win scored on it - C = draw D 1/2 x 2 + bye 1 x 3 + E 1 x 2 = 6, shown 3", () => {
+    expect(sonnebornBerger(S1, "C", S1_OPTS)).toBe(6); // differential: an uncapped bye dummy gives 8
+    expect(display(sonnebornBerger(S1, "C", S1_OPTS), CHESS.unit)).toBe(3);
+    expect(sonnebornBerger(S1, "A", S1_OPTS), "A: B 4 + E 2 + half of D 2").toBe(7);
+    expect(sonnebornBerger(S1, "E", S1_OPTS), "E: its bye's dummy 2, two losses").toBe(2);
+  });
+
+  it("S4: a missed round scores nothing, so it weighs nothing - L = 0 x 3 + B 1 + A 4 = 5", () => {
+    expect(sonnebornBerger(S4, "L", S4_OPTS)).toBe(5);
+  });
+
+  it("guards: a win worth nothing cannot weigh a result", () => {
+    const zero: DeclaredPointsRule = { win: { regulation: 0 }, loss: { regulation: 0 }, unit: "whole" };
+    expect(() => sonnebornBerger([win(1, "P", "Q")], "P", { rule: zero, rounds: 1, drawPoints: 0 })).toThrow(OracleRefusal);
+  });
+});
+
 describe("swiss-oracle: the chain's order (rulebook §5, §6.2)", () => {
   const met: OracleFixture[] = [win(1, "P", "Q"), win(1, "R", "S")];
   const row = (entrant: string, values: Record<string, number>) => ({ entrant, values });
@@ -178,8 +213,9 @@ describe("swiss-oracle: opponents' goal difference (rulebook §5, the goals fami
     expect(["P", "Q", "R", "S"].map((id) => oppDiff(FX, id))).toEqual([-2, 2, 2, -2]);
   });
 
-  it("guards: a bye, a board without goals, and an entrant not on the table are refused", () => {
+  it("guards: a bye (with or without goals), a board without goals, and an entrant not on the table are refused", () => {
     expect(() => oppDiff([...FX, bye(3, "P")], "Q")).toThrow(OracleRefusal);
+    expect(() => oppDiff([...FX, { ...bye(3, "P"), goals: [0, 0] }], "Q"), "the bye guard alone").toThrow(OracleRefusal);
     expect(() => oppDiff([win(1, "P", "Q")], "P")).toThrow(OracleRefusal);
     expect(() => oppDiff(FX, "Nobody")).toThrow(OracleRefusal);
   });

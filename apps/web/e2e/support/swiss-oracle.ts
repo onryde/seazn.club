@@ -115,16 +115,18 @@ interface Card {
   readonly round: number;
   readonly kind: CardKind;
   readonly opponent?: string;
+  /** The board or bye the card stands on (none for a missed round). */
+  readonly fixture?: OracleFixture;
 }
 
 /** The entrant's tie-break card in round order (C.07 16.2): played rounds, byes, and missed rounds - a missed round followed
  *  by a played or bye round is 16.2.3 (`absent`), one followed by nothing but missed rounds is 16.2.5 (`absent_last`). */
 function cardOf(fixtures: readonly OracleFixture[], entrant: string, opts: LedgerOpts): Card[] {
-  const cards: { round: number; kind: CardKind | "missed"; opponent?: string }[] = [];
+  const cards: { round: number; kind: CardKind | "missed"; opponent?: string; fixture?: OracleFixture }[] = [];
   for (const f of fixtures) {
     if (f.home !== entrant && f.away !== entrant) continue;
-    if (f.away === null) cards.push({ round: f.round, kind: "bye" });
-    else cards.push({ round: f.round, kind: "played", opponent: f.home === entrant ? f.away : f.home });
+    if (f.away === null) cards.push({ round: f.round, kind: "bye", fixture: f });
+    else cards.push({ round: f.round, kind: "played", opponent: f.home === entrant ? f.away : f.home, fixture: f });
   }
   for (const r of opts.absent?.get(entrant) ?? []) {
     if (!Number.isInteger(r) || r < 1 || r > opts.rounds) refuse(`${entrant}: absent round ${r} is outside 1..${opts.rounds}`);
@@ -152,7 +154,7 @@ function ledger(fixtures: readonly OracleFixture[], opts: LedgerOpts) {
 
 /** Each card's contribution to the entrant's Buchholz: a played round reads the opponent's ADJUSTED score (16.3); an own
  *  unplayed round (a bye, a missed round) scores against a dummy at the entrant's own score, capped at draw points x rounds
- *  (16.4.2; rulebook §4 "Non-chess scaling"). */
+ *  (16.4.2; rulebook §4 "Non-chess scaling"). `fixture` is the board or bye the card stands on (none for a missed round). */
 function contributions(fixtures: readonly OracleFixture[], entrant: string, opts: LedgerOpts) {
   const { scores, cards, adjusted } = ledger(fixtures, opts);
   const own = scores.get(entrant) ?? refuse(`${entrant} is not on the table`);
@@ -160,6 +162,7 @@ function contributions(fixtures: readonly OracleFixture[], entrant: string, opts
   return cards.get(entrant)!.map((c) => ({
     kind: c.kind,
     value: c.kind === "played" ? adjusted.get(c.opponent!)! : Math.min(own, cap),
+    fixture: c.fixture,
   }));
 }
 
@@ -176,6 +179,16 @@ export function buchholzCut1(fixtures: readonly OracleFixture[], entrant: string
   const vurs = parts.filter((p) => p.kind === "absent" || p.kind === "absent_last");
   const cut = Math.min(...(vurs.length > 0 ? vurs : parts).map((p) => p.value));
   return parts.reduce((s, p) => s + p.value, 0) - cut;
+}
+
+/** Sonneborn-Berger (A4 9.1, with C.07 16's unplayed rounds): each card's Buchholz contribution weighted by the share of a win
+ *  the entrant scored on it - the opponents beaten in full, the opponents drawn by half; a bye is a win against its dummy, a
+ *  missed round a loss. In stored table points, like `buchholz` (`display` for the number the table prints). */
+export function sonnebornBerger(fixtures: readonly OracleFixture[], entrant: string, opts: LedgerOpts): number {
+  const win = byePoints(opts.rule);
+  if (!(win > 0)) refuse(`a win worth ${win} table points cannot weigh a result`);
+  // The share of a win the entrant scored on the card: a win 1, a draw 1/2, a loss 0; a bye the win it pays; a missed round 0.
+  return contributions(fixtures, entrant, opts).reduce((s, c) => s + (c.fixture === undefined ? 0 : sidePoints(c.fixture, entrant, opts.rule) / win) * c.value, 0);
 }
 
 /** Opponents' collective goal difference (rulebook §5 "New keys": `opp_diff`, the goals family's UEFA criterion): the sum of
