@@ -7,8 +7,9 @@
 //
 // Anti-vacuity: every absence is paired with the presence beside it; the sweep reports how many panels it opened.
 import { expect, test, type Page } from "@playwright/test";
-import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, openStagePanel, closeStagePanel, seedCompletedLeague, stageCardOf, type StagePanel } from "./helpers";
+import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, openStagePanel, closeStagePanel, scoreFixture, seedCompletedLeague, setDateTime, stageCardOf, withDb, type StagePanel } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { uiEn } from "./match-room-kit";
 import { expectStageToolsSheet } from "./helpers/stage-tools-sheet";
 import { escapeRe, moduleOf, summaryFormatText, summaryPointsText, summaryTiesPrefix } from "./helpers/stage-summary";
 
@@ -194,6 +195,85 @@ test("PB1 item 3: a completed stage is one line - its toggle opens and closes th
   // A reload starts from the defaults again: nothing is remembered (no persistence).
   await page.reload({ waitUntil: "load" });
   await expect(stageCardOf(page, stageId).getByTestId("stage-collapse-toggle")).toHaveAttribute("aria-expanded", "false");
+});
+
+// Match Day PB3 item 5 (PB1 review n2): a round the person opened stays open across a REAL `router.refresh()`. The open/closed choice lives in
+// the run sheet's client state (`roundToggled`), and a server re-render after a write hands the sheet fresh props - so "stays open" is only
+// true if that state survives the new props, which no node-environment test can see. The write is the row's own set-time editor (PATCH the
+// fixture, then `router.refresh()`), and the refresh is witnessed on the wire (the RSC GET that follows the PATCH), not assumed: a write that
+// refreshed nothing would leave the round open for the wrong reason. Anti-vacuity: the refresh's effect is read back too (the row's time
+// cell changed - server data), and a round nobody touched keeps its default beside it.
+test("PB3 item 5: a round opened by hand stays open across a real router.refresh() after a write in another round", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `PB3 refresh ${TAG}`, visibility: "private" });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Mid-way",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const divisionId = div.data!.id;
+  await addEntrantsViaApi(request, divisionId, ["Ana", "Ben", "Cy"].map((n) => `${n} ${TAG}`));
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+  expect(stage.status, `stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+  const stageId = stage.data!.id;
+  const gen = await apiJson<{ fixtures: { id: string }[] }>(request, `/api/v1/stages/${stageId}/generate`, "POST");
+  expect(gen.status, `generate: ${JSON.stringify(gen.error)}`).toBeLessThan(300);
+  const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+  expect(started.status, `division start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+  // One match played: its round is FINISHED (folded by default); the other two rounds still have a match to play (open by default).
+  const rows = await withDb((sql) => sql<{ id: string; round_no: number; fixture_no: number }[]>`
+    select id, round_no, fixture_no from fixtures where stage_id = ${stageId} order by round_no, seq_in_round`);
+  expect(rows, "a league of three plays three matches, one round each").toHaveLength(3);
+  const played = rows[0]!;
+  const waiting = rows.slice(1);
+  await scoreFixture(request, played.id, 2, 1);
+
+  const card = await openCard(page, request, divisionId, stageId);
+  const bar = (round: number) => card.locator(`[aria-controls="run-sheet-rounds-${stageId}-${round}"]`);
+  const rowsOf = (round: number) => card.locator(`#run-sheet-rounds-${stageId}-${round} li[data-fixture-no]:visible`);
+  await expect(card.getByTestId("run-sheet-round-toggle"), "three rounds, a bar each").toHaveCount(3);
+
+  // Defaults first: the finished round is folded, the two with work left are open.
+  await expect(bar(played.round_no), "the finished round starts folded").toHaveAttribute("aria-expanded", "false");
+  for (const w of waiting) await expect(bar(w.round_no), `round ${w.round_no} still has a match to play, so it starts open`).toHaveAttribute("aria-expanded", "true");
+  await expect(rowsOf(played.round_no)).toHaveCount(0);
+
+  // The person opens the finished round.
+  await bar(played.round_no).click();
+  await expect(bar(played.round_no)).toHaveAttribute("aria-expanded", "true");
+  await expect(rowsOf(played.round_no), "its one match is on screen").toHaveCount(1);
+
+  // A write in ANOTHER round: set a time on its match. The PATCH lands, then the client calls router.refresh() - the RSC GET that follows.
+  const target = waiting[0]!;
+  const row = card.locator(`li[data-fixture-no="${target.fixture_no}"]`);
+  // An untimed match's one action is Set time; once it has a time, the time itself is the button that edits it.
+  const setTime = row.locator('[data-row-action="set_time"]');
+  const timeCell = row.getByTestId("run-sheet-edit-time");
+  await expect(setTime, "the unplayed match offers Set time").toBeVisible();
+  await expect(timeCell, "premise: it has no time yet").toHaveCount(0);
+  await setTime.click();
+  const editor = row.getByTestId("run-sheet-set-time-editor");
+  await expect(editor).toBeVisible();
+  await setDateTime(editor, "2030-06-15T16:45");
+  const patched = page.waitForResponse((r) => r.request().method() === "PATCH" && r.url().includes(`/api/v1/fixtures/${target.id}`));
+  // Next fetches the new server tree with `_rsc=` on the page's own URL; a PATCH alone is not a refresh.
+  const refreshed = page.waitForResponse((r) => r.request().method() === "GET" && /[?&]_rsc=/.test(r.url()) && r.url().includes("/d/"));
+  await row.getByRole("button", { name: uiEn["schedule.save"]!, exact: true }).click();
+  expect((await patched).status(), "the write landed").toBeLessThan(300);
+  expect((await refreshed).status(), "and the page was re-rendered by the server").toBe(200);
+
+  // The refresh's EFFECT is on screen (server data: the match now has a time, and Set time is gone) ...
+  await expect(timeCell, "the server's new time is drawn").toBeVisible();
+  await expect(setTime, "and the row no longer offers Set time").toHaveCount(0);
+  // ... and the round opened by hand is STILL open, rows and all. The bar and the list agree.
+  await expect(bar(played.round_no), "the round the person opened survived the refresh").toHaveAttribute("aria-expanded", "true");
+  await expect(rowsOf(played.round_no), "its match is still on screen").toHaveCount(1);
+  // The rounds nobody touched kept their defaults beside it (so 'everything is open' cannot pass for 'the choice was kept').
+  for (const w of waiting) await expect(bar(w.round_no)).toHaveAttribute("aria-expanded", "true");
+  await expectNoHorizontalScroll(page);
 });
 
 test("the phone: the three buttons are the top rows of the ONE Stage tools sheet; choosing one closes the sheet and opens its panel", async ({ page, request }) => {
