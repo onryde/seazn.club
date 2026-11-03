@@ -71,19 +71,22 @@ const GLYPHS: ReadonlyMap<string, ReactNode> = new Map<string, ReactNode>([
   ],
   [
     "hockey",
-    // A field hockey stick, its hook curled up at the foot, and the ball.
+    // A field hockey stick, leaning left into its J-hook toe, and the round ball in front of the hook. Leaning the other
+    // way from ice hockey's, with a hook against a flat blade and a ball against a puck, so the two read apart at 28px.
     <>
-      <path d="M10 3l5.6 16.4c1 3 4 4 6 2" />
-      {dot(7.5, 22)}
+      <path d="M19.5 3l-6.6 15c-1.4 3.2.2 6 3 6 2.2 0 3.4-1.7 2.8-3.5" />
+      {dot(23.3, 21.8, 2.4)}
     </>,
   ],
   [
     "icehockey",
-    // An ice hockey stick, its flat blade along the ice, and the puck.
+    // An ice hockey stick, leaning right into its long flat blade along the ice (drawn as a bar, not a line), and the
+    // flat puck: an ellipse and its edge.
     <>
-      <path d="M11 3l5.4 15.4c.4 1.4 1.4 2.1 2.8 2.1H24" />
-      <ellipse cx={7} cy={20.5} rx={3.5} ry={1.5} />
-      <path d="M3.5 20.5v1.8c0 .8 1.6 1.5 3.5 1.5s3.5-.7 3.5-1.5v-1.8" />
+      <path d="M6.5 3l7.4 16.2" />
+      <path d="M13.2 18.4h9.9a1.7 1.7 0 0 1 0 3.4h-8.6a2 2 0 0 1-1.8-1.2z" />
+      <ellipse cx={6.2} cy={20} rx={3.6} ry={1.4} />
+      <path d="M2.6 20v1.9c0 .8 1.6 1.4 3.6 1.4s3.6-.6 3.6-1.4V20" />
     </>,
   ],
   [
