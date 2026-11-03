@@ -49,7 +49,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: 
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => true) }));
 vi.mock("@/lib/entrant-badge", () => ({ resolveEntrantBadge: () => null }));
 
-type Held = { person_id: string; entrant_id: string; entrant_name: string };
+type Held = { person_id: string; entrant_id: string; entrant_name: string; entrant_kind?: string };
 const api = vi.hoisted(() => ({
   roster: [] as { person_id: string; entrant_id: string; entrant_name: string }[],
   personsLoaded: 0,
@@ -97,6 +97,8 @@ function person(id: string, full_name: string) {
 }
 const modelOf = (kind: EntrantKind): EffectiveEntrantModel => ({ kinds: [kind], defaultKind: kind, squadNumbers: false, captain: false, maxTeamMembers: null });
 const RED: Held = { person_id: "p-ada", entrant_id: "e-red", entrant_name: "Red" };
+/** Ada entered on her own: an individual entrant holds her (the e2e's "Yara is already on Yara"). */
+const SOLO: Held = { person_id: "p-ada", entrant_id: "e-ada", entrant_name: "Ada Shared", entrant_kind: "individual" };
 const heldIn = (rows: Held[]) => (personId: string) => rows.filter((r) => r.person_id === personId);
 
 type Tree = ReturnType<ReturnType<typeof renderIsland>["tree"]>;
@@ -171,6 +173,26 @@ describe("the new-entrant picker: one person, one team per division", () => {
     expect(textOf([note])).toBe(say("fr", "entrants.err.personOnOtherTeam", { name: "Ada Shared", team: "Red" }));
     expect(f.selected()).toEqual([]);
   });
+
+  it("held by an entrant of her own (an individual): the chip says Already entered and New player says she is entered, in every locale", async () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      active.locale = locale;
+      const f = picker("individual", [SOLO]);
+      f.search("ada");
+      const ada = chipOf(f.island.tree(), "p-ada")!;
+      expect(propsOf(ada).disabled, locale).toBe(true);
+      expect(textOf([ada]), locale).toContain(say(locale, "entrants.add.alreadyEntered"));
+      expect(textOf([ada]), `${locale}: never "On <her own name>"`).not.toContain(say(locale, "entrants.add.onOtherTeam", { team: "Ada Shared" }));
+      const byTestId = (id: string): ReactElement | undefined => f.island.tree().find((el) => propsOf(el)["data-testid"] === id);
+      (propsOf(byTestId("new-player-name")!).onChange as (e: unknown) => void)({ target: { value: "ADA SHARED" } });
+      await (propsOf(byTestId("new-player-add")!).onClick as () => Promise<void>)();
+      expect(textOf([byTestId("new-player-note")!]), locale).toBe(say(locale, "entrants.err.personAlreadyEntered", { name: "Ada Shared" }));
+      expect(f.selected(), locale).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
 });
 
 const NO_ELIGIBILITY: EntrantsPanelEligibility = { category: null, age_min: null, age_max: null, eligibility_note: null };
@@ -221,6 +243,18 @@ describe("the roster editor: the old advisory is a block now, translated", () =>
       (propsOf(removes[1]!).onClick as () => void)();
       expect(r.block(), `${locale}: Ada is still held`).toBeDefined();
       expect(propsOf(r.save()).disabled, `${locale}: dirty, and still blocked`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
+
+  it("a member entered on their own (an individual entrant): the block says they are entered, in every locale", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      active.locale = locale;
+      const r = roster([member("p-ada", "Ada Shared"), member("p-bo", "Bo Free")], [SOLO]);
+      expect(textOf([r.block()!]), locale).toBe(say(locale, "entrants.roster.alreadyEntered", { name: "Ada Shared" }));
+      expect(propsOf(r.save()).disabled, locale).toBe(true);
       checked++;
     }
     expect(checked).toBe(LOCALES.length);
@@ -309,6 +343,7 @@ describe("EntrantsPanel: the roster map reaches the picker, and PERSON_ON_OTHER_
         conflicts: [
           { person_id: "p-ada", person_name: "Ada Shared", entrant_id: "e-red", entrant_name: "Red" },
           { person_id: "p-bo", person_name: "Bo Free", entrant_id: "e-gold", entrant_name: "Gold" },
+          { person_id: "p-cy", person_name: "Cy Solo", entrant_id: "e-cy", entrant_name: "Cy Solo", entrant_kind: "individual" },
         ],
       },
     };
@@ -320,6 +355,7 @@ describe("EntrantsPanel: the roster map reaches the picker, and PERSON_ON_OTHER_
       [
         say("es", "entrants.err.personOnOtherTeam", { name: "Ada Shared", team: "Red" }),
         say("es", "entrants.err.personOnOtherTeam", { name: "Bo Free", team: "Gold" }),
+        say("es", "entrants.err.personAlreadyEntered", { name: "Cy Solo" }),
       ].join(" "),
     );
     expect(shown).not.toContain("already on");

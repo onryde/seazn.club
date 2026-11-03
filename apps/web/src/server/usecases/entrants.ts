@@ -215,6 +215,8 @@ export interface HeldMembershipRow {
   person_name: string;
   entrant_id: string;
   entrant_name: string;
+  /** The holder's kind: an `individual` holder is the person's own entry, said as "already entered", never "on <name>". */
+  entrant_kind: string;
 }
 
 /** Who holds whom in a division: every membership of an entrant still in the field. The ONE predicate behind both the
@@ -226,7 +228,7 @@ export interface HeldMembershipRow {
  *  many pairs by design, and those are not teams anyone entered. */
 function heldMemberships(tx: Tx, divisionId: string, personIds?: string[]) {
   return tx<HeldMembershipRow[]>`
-    select em.person_id, p.full_name as person_name, e.id as entrant_id, e.display_name as entrant_name
+    select em.person_id, p.full_name as person_name, e.id as entrant_id, e.display_name as entrant_name, e.kind as entrant_kind
     from entrants e
     join entrant_members em on em.entrant_id = e.id
     join persons p on p.id = em.person_id
@@ -269,7 +271,13 @@ async function insertMembers(
     const conflicts = [...held].sort((a, b) => rank.get(a.person_id)! - rank.get(b.person_id)!);
     throw new HttpError(
       409,
-      conflicts.map((c) => `${c.person_name} is already on ${c.entrant_name} in this division`).join("; "),
+      conflicts
+        .map((c) =>
+          c.entrant_kind === "individual"
+            ? `${c.person_name} is already entered in this division`
+            : `${c.person_name} is already on ${c.entrant_name} in this division`,
+        )
+        .join("; "),
       PERSON_ON_OTHER_TEAM,
       { conflicts },
     );
@@ -567,6 +575,7 @@ export interface DivisionRosterRow {
   person_id: string;
   entrant_id: string;
   entrant_name: string;
+  entrant_kind: string;
 }
 
 /** Every (person → entrant) membership in a division, read by the console's pickers: a person held here is left out of
@@ -577,7 +586,12 @@ export async function divisionRoster(
   divisionId: string,
 ): Promise<DivisionRosterRow[]> {
   return withTenant(auth.orgId, async (tx) =>
-    (await heldMemberships(tx, divisionId)).map(({ person_id, entrant_id, entrant_name }) => ({ person_id, entrant_id, entrant_name })),
+    (await heldMemberships(tx, divisionId)).map(({ person_id, entrant_id, entrant_name, entrant_kind }) => ({
+      person_id,
+      entrant_id,
+      entrant_name,
+      entrant_kind,
+    })),
   );
 }
 

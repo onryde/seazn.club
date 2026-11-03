@@ -62,7 +62,7 @@ const entrantsNamed = async (divisionId: string, name: string): Promise<number> 
   (await sql<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${divisionId} and display_name = ${name}`)[0]!.n;
 
 /** The refusal's shape: 409, the code, and every conflicting person named with the team they are on. */
-const refusedFor = (conflicts: { person_id: string; person_name: string; entrant_id: string; entrant_name: string }[]) => ({
+const refusedFor = (conflicts: { person_id: string; person_name: string; entrant_id: string; entrant_name: string; entrant_kind?: string }[]) => ({
   status: 409,
   code: CODE,
   extra: { conflicts },
@@ -181,7 +181,7 @@ describe.skipIf(!HAS_DB)("one person, one team per division (UI5 item 3)", () =>
     const bo = await person("Bo Pair");
     const [pair] = await createEntrants(auth, div.id, [{ kind: "pair", display_name: "Ada & Bo", members: [member(ada), member(bo)] }]);
     await expect(createEntrants(auth, div.id, [{ kind: "individual", display_name: "Ada Pair", members: [member(ada)] }])).rejects.toMatchObject(
-      refusedFor([{ person_id: ada, person_name: "Ada Pair", entrant_id: pair!.id, entrant_name: "Ada & Bo" }]),
+      refusedFor([{ person_id: ada, person_name: "Ada Pair", entrant_id: pair!.id, entrant_name: "Ada & Bo", entrant_kind: "pair" }]),
     );
     // Several conflicts in one write: every one is named, in the order the roster lists them.
     await expect(createEntrants(auth, div.id, [{ kind: "pair", display_name: "Again", members: [member(bo), member(ada)] }])).rejects.toMatchObject(
@@ -211,9 +211,17 @@ describe.skipIf(!HAS_DB)("one person, one team per division (UI5 item 3)", () =>
     await patchEntrant(auth, solo!.id, { members: [member(ada)] });
     expect(await rosterOf(auth, solo!.id), "the rotation pair is not another team").toEqual([ada]);
     expect((await divisionRoster(auth, div.id)).filter((r) => r.person_id === ada).map((r) => r.entrant_id), "nor in the map").toEqual([solo!.id]);
-    // The positive pair: the individual entrants still count, so entering Ada a second time is refused.
-    await expect(createEntrants(auth, div.id, [{ kind: "individual", display_name: "Ada Again", members: [member(ada)] }])).rejects.toMatchObject(
-      refusedFor([{ person_id: ada, person_name: "Ada Americano", entrant_id: solo!.id, entrant_name: "Ada Americano" }]),
+    // The positive pair: the individual entrants still count, so entering Ada a second time is refused - and, held by an
+    // INDIVIDUAL entrant (herself), the conflict says so by its kind and the sentence says "entered", never "on Ada
+    // Americano" (the copy the e2e caught reading "Yara is already on Yara").
+    const again = createEntrants(auth, div.id, [{ kind: "individual", display_name: "Ada Again", members: [member(ada)] }]);
+    await expect(again).rejects.toMatchObject(
+      refusedFor([{ person_id: ada, person_name: "Ada Americano", entrant_id: solo!.id, entrant_name: "Ada Americano", entrant_kind: "individual" }]),
     );
+    await expect(again).rejects.toThrow("Ada Americano is already entered in this division");
+    expect((await divisionRoster(auth, div.id)).find((r) => r.person_id === ada), "the map carries the holder's kind").toMatchObject({
+      entrant_id: solo!.id,
+      entrant_kind: "individual",
+    });
   });
 });

@@ -150,6 +150,8 @@ interface DivisionRosterRow {
   person_id: string;
   entrant_id: string;
   entrant_name: string;
+  /** `individual`: the person's own entry, said as "already entered", never "on <their own name>". */
+  entrant_kind?: string;
 }
 
 interface Props {
@@ -1206,10 +1208,26 @@ export function ExistingTeamFields({
 /** Nobody held: the picker's default when no roster map is handed in. */
 const NO_ONE_HELD = (): DivisionRosterRow[] => [];
 
-/** "On <team>" beside a person another entrant of the division already holds (UI5 item 3). A plain function, not a
- *  component: it is part of the chip's own text. */
-function heldByNote(msg: (key: MessageKey, vars?: Record<string, string | number>) => string, team: string) {
-  return <span className="ml-1.5 font-medium text-slate-600">{msg("entrants.add.onOtherTeam", { team })}</span>;
+type HeldMsg = (key: MessageKey, vars?: Record<string, string | number>) => string;
+type Holder = { entrant_name: string; entrant_kind?: unknown };
+/** An individual entrant holding the person is the person's own entry: "Yara is already on Yara" is said as "entered". */
+const entersOnTheirOwn = (holder: Holder): boolean => holder.entrant_kind === "individual";
+
+/** "On <team>" (or "Already entered") beside a person another entrant of the division already holds (UI5 item 3). A plain
+ *  function, not a component: it is part of the chip's own text. */
+function heldByNote(msg: HeldMsg, holder: Holder) {
+  return (
+    <span className="ml-1.5 font-medium text-slate-600">
+      {entersOnTheirOwn(holder) ? msg("entrants.add.alreadyEntered") : msg("entrants.add.onOtherTeam", { team: holder.entrant_name })}
+    </span>
+  );
+}
+
+/** The one sentence for a person the division already holds: entered on their own, or on a team. */
+function heldSentence(msg: HeldMsg, name: string, holder: Holder): string {
+  return entersOnTheirOwn(holder)
+    ? msg("entrants.err.personAlreadyEntered", { name })
+    : msg("entrants.err.personOnOtherTeam", { name, team: holder.entrant_name });
 }
 
 /** 409 PERSON_ON_OTHER_TEAM in the organiser's language: one sentence per person the payload names, with the team that
@@ -1220,9 +1238,9 @@ function personOnOtherTeamText(
   msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
 ): string | null {
   if (code !== "PERSON_ON_OTHER_TEAM" || !Array.isArray(extra.conflicts)) return null;
-  const lines = (extra.conflicts as { person_name?: unknown; entrant_name?: unknown }[])
+  const lines = (extra.conflicts as { person_name?: unknown; entrant_name?: unknown; entrant_kind?: unknown }[])
     .filter((c) => typeof c.person_name === "string" && typeof c.entrant_name === "string")
-    .map((c) => msg("entrants.err.personOnOtherTeam", { name: c.person_name as string, team: c.entrant_name as string }));
+    .map((c) => heldSentence(msg, c.person_name as string, { entrant_name: c.entrant_name as string, entrant_kind: c.entrant_kind }));
   return lines.length > 0 ? lines.join(" ") : null;
 }
 
@@ -1343,7 +1361,7 @@ export function NewEntrantFields({
     const existing = findPersonByName(persons, fullName);
     const holder = existing ? heldBy(existing.id)[0] : undefined;
     if (existing && holder) {
-      setNewNote({ tone: "error", text: msg("entrants.err.personOnOtherTeam", { name: existing.full_name, team: holder.entrant_name }) });
+      setNewNote({ tone: "error", text: heldSentence(msg, existing.full_name, holder) });
       return;
     }
     if (existing) {
@@ -1494,7 +1512,7 @@ export function NewEntrantFields({
                 }`}
               >
                 {p.full_name}
-                {holder && heldByNote(msg, holder.entrant_name)}
+                {holder && heldByNote(msg, holder)}
               </button>
             );
           })}
@@ -2219,7 +2237,12 @@ export function RosterEditor({
         >
           {conflicts.map((c) => (
             <p key={c.id}>
-              {msg("entrants.roster.onOtherTeam", { name: c.name, team: c.on.map((o) => o.entrant_name).join(", ") })}
+              {c.on.every(entersOnTheirOwn)
+                ? msg("entrants.roster.alreadyEntered", { name: c.name })
+                : msg("entrants.roster.onOtherTeam", {
+                    name: c.name,
+                    team: c.on.filter((o) => !entersOnTheirOwn(o)).map((o) => o.entrant_name).join(", "),
+                  })}
             </p>
           ))}
         </div>
@@ -2231,7 +2254,7 @@ export function RosterEditor({
         <div key={m.person_id} className="flex flex-wrap items-center gap-2 text-xs">
           <span className="w-40 truncate font-medium text-slate-700">
             {m.full_name}
-            {conflictsFor(m.person_id)[0] && heldByNote(msg, conflictsFor(m.person_id)[0]!.entrant_name)}
+            {conflictsFor(m.person_id)[0] && heldByNote(msg, conflictsFor(m.person_id)[0]!)}
           </span>
           {/* RS011: MISSING_DOB/MISSING_GENDER — amber, advisory, never a
               block (the organiser-side gate treats these two codes as
@@ -2388,7 +2411,7 @@ export function RosterEditor({
                 }`}
               >
                 {holder ? p.full_name : `+ ${p.full_name}`}
-                {holder && heldByNote(msg, holder.entrant_name)}
+                {holder && heldByNote(msg, holder)}
               </button>
             );
           })}

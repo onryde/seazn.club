@@ -1192,12 +1192,13 @@ for (const sport of LATE_SPORTS) {
         timeout: 20_000,
       });
 
-      // A second late arrival with the SAME name, typed in another case: New player selects the existing person, no duplicate.
+      // A second late arrival with the SAME name, typed in another case: New player finds the existing person (no duplicate)
+      // and - UI5 item 3, one person one entry per division - says she is already entered here instead of picking her.
       await page.goto(await divisionPath(request, r.divisionId, "?tab=entrants"));
       const form = page.locator("#add-entrant");
       await form.getByTestId("new-player-name").fill(`  ${late.toUpperCase()}  `);
       await form.getByTestId("new-player-add").click();
-      await expect(form.getByTestId("new-player-note")).toHaveText(uiEn["entrants.add.newPlayer.existing"]!);
+      await expect(form.getByTestId("new-player-note")).toHaveText(uiEn["entrants.err.personAlreadyEntered"]!.replace("{name}", late));
       expect(await personIdsNamed(late), "no duplicate person").toHaveLength(1);
     });
 
