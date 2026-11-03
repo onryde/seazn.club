@@ -66,12 +66,13 @@ export interface FixtureCfgSource {
  * the stage-scoped cfg — chess's tie-break, carrom's extra board — and the
  * overlay wins over the division and the stage (CA-KO-1: a bracket always plays
  * the extra board, whatever the division's `tieBoard`). The V347 freeze then
- * carries it from the first event; a frozen snapshot is returned untouched
+ * carries it from the first event; a frozen snapshot gets no overlay
  * (Review Focus 4: a fixture scored before deploy keeps its cfg and finishes
- * through needs_decision and settle).
+ * through needs_decision and settle) — only the schema's defaults, below.
  *
  * The sport's schema is asked with `safeParse`, never `parse`: this output goes
- * to `foldMatch` UNPARSED and every module tolerates a cfg its schema rejects
+ * to `foldMatch` UNPARSED (its defaults filled, nothing else touched: below)
+ * and every module tolerates a cfg its schema rejects
  * (`match-centre-load.ts`'s safeParse note), so a throwing parse would make the
  * read path of a bracket fixture stricter than the fold itself — a 500 on a
  * config that scores fine. On a refusal the raw cfg is passed; no shipped
@@ -94,20 +95,87 @@ export interface FixtureCfgSource {
  *   driver returns it — the frozen jsonb, or null/undefined when none has been
  *   taken; presence is the test, not truthiness, since `{}` is a legitimate
  *   config for several modules — and `rules_override`.
+ * THE SCHEMA'S DEFAULTS (stg crash, 2026-11-03). The engine never parses the
+ * cfg it folds — `init` stores it as given — yet its kernels read keys the
+ * sport's `configSchema` only DEFAULTS. Engine 041d70653f (S6/#416,
+ * 2026-08-11) moved `records` into the set-based cfg that way, and every
+ * badminton division stored before then crashed every rally ("reading
+ * 'expedite'"), live and frozen alike. So the cfg returned for a fold is the
+ * resolution with the schema's defaults filled in (`withSchemaDefaults`, both
+ * branches): missing keys added, nothing stored changed or dropped, and a cfg
+ * the schema refuses passed on as it is (never stricter than the fold).
+ *
+ * `form: "stored"` is the resolution WITHOUT that fill — what a freeze writes
+ * (this file's V347 snapshot, the Swiss bye's, a staff re-snapshot), so a
+ * snapshot holds exactly what it held before the fill existed and a
+ * comparison against a stored snapshot compares like with like. A cfg that
+ * goes to the engine, the pad included, is always the default "fold" form.
+ *
  * @param stage the fixture's stage row (`kind` and `config`); every caller
  *   selects `s.kind` beside the `config` it already read.
  * @param module the fixture's sport module (its `bracketDeciders`).
+ * @param form "fold" (default): what the engine folds; "stored": what a freeze writes.
  */
 export function resolveFixtureCfg(
   fixture: FixtureCfgSource,
   divisionCfg: unknown,
   stage: FixtureStageSource | null | undefined,
   module: DeciderSource,
+  form: FixtureCfgForm = "fold",
 ): unknown {
-  if (hasFrozenCfg(fixture.config_snapshot)) return fixture.config_snapshot;
+  const stored = hasFrozenCfg(fixture.config_snapshot) ? fixture.config_snapshot : liveResolution(fixture, divisionCfg, stage, module);
+  return form === "stored" ? stored : withSchemaDefaults(module, stored);
+}
+
+/** Which form of a fixture's cfg a caller wants (`resolveFixtureCfg`): "fold" for anything the engine reads, "stored"
+ *  for anything a freeze writes or compares against a stored snapshot. */
+export type FixtureCfgForm = "fold" | "stored";
+
+/** The live branch as stored: `division ⊕ stage.rules ⊕ bracketDeciders ⊕ rules_override`. */
+function liveResolution(
+  fixture: FixtureCfgSource,
+  divisionCfg: unknown,
+  stage: FixtureStageSource | null | undefined,
+  module: DeciderSource,
+): unknown {
   const decided = liveCfg(divisionCfg, stage, module);
   if (!isCfgObject(decided)) return decided;
   return mergeRulesOverride(decided, fixture.rules_override);
+}
+
+/**
+ * The sport's schema defaults filled into a stored cfg, for the ENGINE to fold: every key the schema defaults and the
+ * cfg lacks (at any depth) is added with the value the schema's own parse gives it; every key the cfg has keeps its
+ * stored value, a key the schema does not know included. Where the parse would CHANGE a stored value (a preprocess or a
+ * transform: hockey's shoot-out drops a pre-W2e `suddenDeath`) the stored value wins — the fill only adds.
+ *
+ * `safeParse`, never `parse`: a cfg the schema refuses, and anything that is not an object, comes back as it is, so this
+ * is never stricter than the fold it feeds (ruling 76's rule, above). A cfg missing nothing comes back as the same object.
+ * Never mutates its input. Exported for the one caller that folds a cfg no fixture row holds yet — the live correction's
+ * candidate (`usecases/fixture-rules.ts`); every fixture's own cfg reaches it through `resolveFixtureCfg`.
+ */
+export function withSchemaDefaults(
+  module: { readonly configSchema: { safeParse(v: unknown): { success: boolean; data?: unknown } } },
+  cfg: unknown,
+): unknown {
+  if (!isCfgObject(cfg)) return cfg;
+  const parsed = module.configSchema.safeParse(cfg);
+  if (!parsed.success || !isCfgObject(parsed.data)) return cfg;
+  return fillMissing(cfg, parsed.data);
+}
+
+/** `stored` with every key `parsed` has and `stored` lacks; objects on both sides are filled leaf by leaf; anything
+ *  else stored stands. Returns `stored` itself when nothing was missing. */
+function fillMissing(stored: Record<string, unknown>, parsed: Record<string, unknown>): Record<string, unknown> {
+  let out: Record<string, unknown> | null = null;
+  for (const [k, value] of Object.entries(parsed)) {
+    const own = Object.hasOwn(stored, k) ? stored[k] : undefined;
+    const next = own === undefined ? value : isCfgObject(own) && isCfgObject(value) ? fillMissing(own, value) : own;
+    if (next === own) continue;
+    out ??= { ...stored };
+    put(out, k, next);
+  }
+  return out ?? stored;
 }
 
 const isCfgObject = (v: unknown): v is Record<string, unknown> =>

@@ -445,16 +445,19 @@ export async function appendEventInTx(
   // `fixture-cfg.ts` for the full rationale; it is the single reader of the
   // column, shared with `fold.ts` so the two folds cannot drift apart.
   const cfg = resolveFixtureCfg(fixture, division.config, stage, sportModule);
+  // What the freeze below writes: the same resolution AS STORED, without the schema defaults the fold's `cfg` carries
+  // (fixture-cfg.ts), so a snapshot holds what it always held and the read fold fills it exactly as it filled `cfg`.
+  const frozenCfg = resolveFixtureCfg(fixture, division.config, stage, sportModule, "stored");
   // Take it on the FIRST event only. The advisory lock above is held to
   // commit, so no concurrent appender can interleave between this decision
   // and the write below — the snapshot is taken exactly once.
   //
-  // `cfg != null` is not paranoia: `tx.json(null)` writes a SQL NULL, so a
+  // `frozenCfg != null` is not paranoia: `tx.json(null)` writes a SQL NULL, so a
   // division whose config is a JSON null would stamp `config_snapshot_at`
   // while `config_snapshot` still read as "never frozen" — a row claiming a
   // freeze that did not happen, and a fixture that quietly keeps following
   // live config. Better to leave both columns honestly null.
-  const freezeSnapshot = !hasFrozenCfg(fixture.config_snapshot) && lastSeq === 0 && cfg != null;
+  const freezeSnapshot = !hasFrozenCfg(fixture.config_snapshot) && lastSeq === 0 && frozenCfg != null;
   // W4a (#425) §3.3 — the strict-on-write seam. A refusal computed from cfg
   // cannot tell "the scorer just typed a period this sport does not have"
   // from "an organiser lowered bestOf after the match was scored". The first
@@ -646,7 +649,7 @@ export async function appendEventInTx(
   if (freezeSnapshot) {
     await tx`
       update fixtures
-      set config_snapshot = ${tx.json(cfg as never)}, config_snapshot_at = now()
+      set config_snapshot = ${tx.json(frozenCfg as never)}, config_snapshot_at = now()
       where id = ${fixtureId}
     `;
   }
