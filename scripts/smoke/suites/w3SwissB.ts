@@ -53,12 +53,14 @@ import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
  * group, whose top two by seed are paired - and the overtime winner is seed 1, so it would have met a regulation winner.
  *
  * T7 (X-SW-10; rulebook-W3-swiss.md §3.3 "Prevention"): the one-round look-ahead reaches the wire. A chess Swiss of eight and six
- * rounds (above the safe maximum 4, so rounds 1-5 ask the engine to look ahead) whose first four rounds were found by brute force
+ * rounds (above the safe maximum 4, so every non-final Pair, round 5 included, asks the engine to look ahead) whose first four rounds were found by brute force
  * (seed 8078287; the same history `swiss-look-ahead.test.ts` proves with its oracle: round 5 has legal pairings and every one of
  * them leaves round 6 with none, under the colour limits). The history is written onto the minted shells by SQL and every board
  * is then PLAYED through the scorer's own events, so the table points the pairing reads are real. Pair next seats round 5 and
  * the answer carries `swiss_next_round: "unpairable"` with `swiss_paired_round: 5`; the warning tells the truth: with round 5
- * decided, the next Pair is refused SWISS_NO_LEGAL_PAIRING for round 6.
+ * decided, the next Pair is refused SWISS_NO_LEGAL_PAIRING for round 6. The empty case is its own check (8), read off the SAME
+ * stage: round 1 is Paired for real first (it asks the engine to look ahead, and gets "pairable" back) and the answer carries
+ * neither `swiss_next_round` nor `swiss_paired_round`; the brute-force history is then written over that round by SQL.
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissB runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissBSuite(): Promise<void> {
@@ -69,8 +71,9 @@ export async function w3SwissBSuite(): Promise<void> {
   // T9: 1 (ST-G21: the same stage's anonymous /present board payload carries two tie-break columns, buchholz then opp_diff).
   // T4: 1 (the refusal carries finishAfter 3 and canFinish, and the Finish its notice offers ends the Swiss after round 3).
   // T5: 1 (X-SW-19: an ice hockey Swiss's round 2 is paired in the table's own score groups - regulation winners together, the overtime winner outside).
-  // T7: 1 (X-SW-10: a round whose every legal pairing kills the next is seated, and the Pair's answer says unpairable for round 5; Pair next is then refused for round 6).
-  const EXPECTED_CHECKS = 8;
+  // T7: 2 (X-SW-10: a round whose every legal pairing kills the next is seated, and the Pair's answer says unpairable for round 5; Pair next is then refused for round 6.
+  //        X-SW-10 empty case: a pairable round of the same shape is seated and the answer carries no next-round field).
+  const EXPECTED_CHECKS = 9;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -483,7 +486,11 @@ export async function w3SwissBSuite(): Promise<void> {
   // proved by an oracle in swiss-look-ahead.test.ts (every legal round 5 leaves a round 6 with no legal pairing under the
   // colour limits - never a rematch-only history: none of 6-8 players has a non-last round like that). Round 5 of 6 is above the
   // safe maximum floor(8 / 2) = 4 and is not the last round, so the app asks the engine to look ahead; its verdict rides on the
-  // answer. Differential: a pairable round's answer carries no `swiss_next_round` at all (round 1 of this same stage is the empty case).
+  // answer. The differential (a pairable round's answer carries no `swiss_next_round` at all) is check 8, next: round 1 of THIS
+  // stage is Paired for real just after Start (its answer is kept in `firstPair`) and the history is then written over it by SQL -
+  // rounds 1-4 are otherwise never Paired, so no pairable answer would be read here. (A fresh division is not an option: the
+  // Community plan caps a competition at 4 divisions, and checks 3, 4, 6 and 7 already hold them on this one.)
+  let firstPair: { status: number; json: Record<string, unknown>; divId?: string; stageId?: string; rowsAfter: number } | undefined;
   {
     const HISTORY: readonly (readonly (readonly [number, number, "h" | "a" | "d"])[])[] = [
       [[6, 3, "a"], [4, 1, "h"], [0, 5, "a"], [7, 2, "d"]],
@@ -508,7 +515,10 @@ export async function w3SwissBSuite(): Promise<void> {
     const rows = async () =>
       (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
     const seated = (all: Fx[], r: number) => all.filter((f) => f.round_no === r && f.home_entrant_id !== null && f.away_entrant_id !== null);
-    // The history is SQL-seeded onto the shells (no route seats a board by hand); -1: no DATABASE_URL, so the seed could not be
+    // Round 1 is Paired for real first (check 8 reads the answer: a pairable round, with the look-ahead asked, carries no field)...
+    const realFirst = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    firstPair = { status: realFirst.status, json: realFirst.json, divId, stageId, rowsAfter: seated(await rows(), 1).length };
+    // ...then the history is SQL-seeded over it onto the shells (no route seats a board by hand); -1: no DATABASE_URL, so the seed could not be
     // written and the check cannot be judged (it fails, never skips).
     let seeded = -1;
     if (process.env.DATABASE_URL && stageId !== undefined && ids.length === 8) {
@@ -561,6 +571,24 @@ export async function w3SwissBSuite(): Promise<void> {
     w3Check(
       "w3b X-SW-10: a chess Swiss of eight and six rounds seats round 5 and the Pair's answer says swiss_next_round unpairable (paired round 5) - and round 6 is then refused SWISS_NO_LEGAL_PAIRING, as the warning said" +
         (ok ? "" : ` - division ${divRes.status} ${divId ?? "none"}, stage ${stageId ?? "none"}, players ${made.length}, start ${started.status}, seeded ${seeded === -1 ? "no DATABASE_URL" : seeded}, rows ${before.length}, event statuses ${statuses.join(",")}, pair ${paired.status} ${JSON.stringify(paired.json).slice(0, 240)}, round 5 boards ${round5.length}, round 6 ${sixth.status} ${JSON.stringify(sixth.json).slice(0, 200)}`),
+      ok,
+    );
+  }
+
+  // Check 8 - T7 (X-SW-10), the empty case, read off check 7's stage. Round 1 of that chess Swiss (eight players, six rounds: above
+  // the safe maximum 4, and not the last round, so the Pair asked the engine to look ahead) was Paired for real before the
+  // brute-force history was written over it, and its next round is pairable. The engine's "pairable" verdict is not sent: the
+  // answer has neither `swiss_next_round` nor `swiss_paired_round` (absent - not false and not null: a pairable answer must not
+  // leak a field the desk would have to read) - while check 7's round 5, on the same stage, carries both.
+  {
+    const answer = firstPair === undefined ? undefined : (firstPair.json.data as Record<string, unknown> | undefined);
+    const ok =
+      firstPair !== undefined && firstPair.divId !== undefined && firstPair.stageId !== undefined &&
+      firstPair.status === 200 && answer?.created === 4 && firstPair.rowsAfter === 4 &&
+      !("swiss_next_round" in answer) && !("swiss_paired_round" in answer);
+    w3Check(
+      "w3b X-SW-10 (empty case): round 1 of that chess Swiss is seated with the look-ahead asked and its next round pairable - the Pair's answer carries no swiss_next_round and no swiss_paired_round" +
+        (ok ? "" : ` - division ${firstPair?.divId ?? "none"}, stage ${firstPair?.stageId ?? "none"}, pair ${firstPair?.status ?? "none"} ${JSON.stringify(firstPair?.json ?? null).slice(0, 300)}, round 1 boards ${firstPair?.rowsAfter ?? "none"}`),
       ok,
     );
   }

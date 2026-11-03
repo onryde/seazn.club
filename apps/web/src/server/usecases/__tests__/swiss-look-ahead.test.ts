@@ -442,6 +442,44 @@ describe.runIf(HAS_DB)("X-SW-10 the look-ahead is sent above the safe maximum, o
     }, 240_000);
   }
 
+  for (const sport of SPORTS) {
+    it(`X-SW-10 the safe maximum is measured over THIS round's field, not the whole roster: a player who joins at round 3 does not count for rounds 1 and 2 (${sport.key})`, async () => {
+      // Eight active entrants, four rounds. p7 carries the stamp an automatic arrival leaves in case (c) when it joins while round 2
+      // is paired (`swiss-late-entry.test.ts` pins that exact shape: { swiss_first_round, swiss_first_round_stage_id }), so rounds 1
+      // and 2 are paired over SEVEN and round 3 over EIGHT. The safe maximum is ⌊n/2⌋ (rulebook-W3-swiss.md §3.1): 3 over seven,
+      // 4 over eight. Four rounds are above 3 and are not above 4, so the look-ahead is asked on rounds 1 and 2 and not on round 3
+      // (a non-final round). Three readings of "the field" give three different answers - which is what makes this a witness:
+      //   this round's field   [asked, asked, not asked]   <- the rule
+      //   the whole roster (8) [not asked × 3]
+      //   the first round's field (7) [asked × 3]
+      const r = await startedSwiss(sport, { players: 8, rounds: 4 });
+      const stamped = await sql`
+        update entrants set swiss_first_round = 3, swiss_first_round_stage_id = ${r.stageId} where id = ${r.ids[7]!} returning id`;
+      expect(stamped.length, "rig: p7 carries its first round").toBe(1);
+      const fieldOf = (round: number) => (round >= 3 ? 8 : 7);
+      const rounds = 4;
+      const wanted = [1, 2, 3].map((round) => (round < rounds && rounds > Math.floor(fieldOf(round) / 2) ? true : undefined));
+      expect(wanted, "premise: the rule's answer per round").toEqual([true, true, undefined]);
+      const rosterWide = [1, 2, 3].map((round) => (round < rounds && rounds > Math.floor(8 / 2) ? true : undefined));
+      const firstRoundField = [1, 2, 3].map((round) => (round < rounds && rounds > Math.floor(7 / 2) ? true : undefined));
+      expect(wanted, "premise: the whole-roster reading answers differently").not.toEqual(rosterWide);
+      expect(wanted, "premise: the first-round-field reading answers differently").not.toEqual(firstRoundField);
+
+      const sent: (boolean | undefined)[] = [];
+      for (const round of [1, 2, 3]) {
+        const { call } = await pairOk(r);
+        expect(call.standings.length, `round ${round}: the engine was handed the field of ${fieldOf(round)}`).toBe(fieldOf(round));
+        sent.push(call.constraints?.lookAhead);
+        const seated = (await boardsOf(r.stageId, round)).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]);
+        expect(seated.includes(r.ids[7]!), `round ${round}: p7 ${round >= 3 ? "plays" : "is not yet in the field"}`).toBe(round >= 3);
+        if (round < 3) await decideRound(r, round);
+      }
+      expect(sent.length, "anti-vacuity: three rounds were paired").toBe(3);
+      expect(sent, "the look-ahead follows THIS round's field").toEqual(wanted);
+      ran++;
+    }, 360_000);
+  }
+
   it("X-SW-10 a round whose every legal pairing kills the next returns swiss_next_round unpairable, names the round, and still seats it (UNPAIRABLE_NEXT_N8, chess)", async () => {
     // single-sport: the construction is colour-shaped (no rematch-only history of 6-8 players has a non-last round like it).
     const r = await startedSwiss(CHESS, { players: 8, rounds: 6 });
@@ -500,7 +538,7 @@ describe.runIf(HAS_DB)("X-SW-10 the look-ahead is sent above the safe maximum, o
   }, 180_000);
 
   it("anti-vacuity: every X-SW-10 case ran", () => {
-    expect(ran, "S6 x2, empty x2, last round x2, unpairable, unknown").toBe(8);
+    expect(ran, "S6 x2, empty x2, last round x2, this round's field x2, unpairable, unknown").toBe(10);
   });
 });
 
