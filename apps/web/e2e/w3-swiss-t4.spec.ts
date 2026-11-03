@@ -108,6 +108,15 @@ test.describe("X-SW-3 / X-SW-26 an unpairable round refuses by name and finishes
       const top3 = [...table.data!.rows].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0)).slice(0, 3).map((r) => r.entrantId);
       expect(top3, "premise: three ranked").toHaveLength(3);
 
+      // The knockout's seed proposals, straight from the table. Finish completes the Swiss and the completion computes a DRAFT
+      // proposal for a `timing: "setup"` next stage (propose, never auto-fill), so the proof that Finish seeded the knockout is
+      // THAT row, read here - not a POST to /seed-proposal, which recomputes from the standings as they stand now and would
+      // pass for any consistent table.
+      type Proposal = { id: string; status: string; computed: { qualifiers: { rank: number; entrantId: string }[] } };
+      const proposalsOf = () =>
+        withDb((sql) => sql<Proposal[]>`select id, status, computed from stage_seed_proposals where stage_id = ${koId} order by created_at, id`);
+      expect(await proposalsOf(), "premise: the knockout has no seed proposal before anything is pressed").toEqual([]);
+
       // --- The desk: Pair next is refused and the notice says why.
       await page.setViewportSize({ width: 1280, height: 900 });
       await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
@@ -134,13 +143,17 @@ test.describe("X-SW-3 / X-SW-26 an unpairable round refuses by name and finishes
       expect(body.error!.reason, "premise: the S6 history is a dead end of rematches").toBe("rematch");
       await expect(notice).toContainText("would repeat a match already played");
       await expect(notice).toContainText("finish the Swiss after round 3");
+      // The consequence is the confirm's, in the same words (review m6): the table is recalculated, not final as it stands.
+      await expect(notice).toContainText("recalculated as a 3-round event");
+      await expect(notice).not.toContainText("final as they stand");
       await expect(page.getByText(uiEn["schedule.notice.nothingNew"]!)).toHaveCount(0);
       await expect(page.getByTestId("schedule-error")).toHaveCount(0);
       // Three rounds are decided, so the round count is fixed (rounds lock at the first start): Finish is the only way out
-      // and the notice does not promise a Change rounds it could not deliver.
+      // and the notice does not offer, or promise, a Change rounds it could not deliver.
       const finishBtn = notice.getByTestId("schedule-pairing-finish");
       await expect(finishBtn).toHaveText("Finish after round 3");
       await expect(notice.getByTestId("schedule-pairing-rounds")).toHaveCount(0);
+      await expect(notice).not.toContainText(/change (the number of )?rounds/i);
       expect(await seatedIn4(), "the refusal seats nobody").toEqual([]);
 
       // No horizontal page scroll with the notice up, at the three widths the owner reviews (1280 / 768 / 320).
@@ -160,6 +173,7 @@ test.describe("X-SW-3 / X-SW-26 an unpairable round refuses by name and finishes
       await confirm.getByRole("button", { name: uiEn["schedule.cancel"]! }).click();
       await expect(confirm).toHaveCount(0);
       expect(await roundsIn(), "declined: nothing written").toEqual([1, 2, 3, 4, 5]);
+      expect(await proposalsOf(), "declined: the knockout is not seeded either").toEqual([]);
       await expect(notice, "declined: the notice stays").toBeVisible();
 
       await finishBtn.click();
@@ -168,19 +182,21 @@ test.describe("X-SW-3 / X-SW-26 an unpairable round refuses by name and finishes
       await confirm.getByRole("button", { name: uiEn["stage.finish.confirm.label"]! }).click();
       const finished = await posted;
       expect(finished.status(), "Finish writes once").toBe(200);
-      expect(((await finished.json()) as { data?: unknown }).data).toMatchObject({ finished_after: 3, shells_removed: 6, completed: true });
+      const done = ((await finished.json()) as { data?: { seed_proposal?: { id: string; status: string } } }).data;
+      expect(done).toMatchObject({ finished_after: 3, shells_removed: 6, completed: true, seed_proposal: { status: "draft" } });
       await expect(page.getByText("The Swiss finished after round 3.")).toBeVisible({ timeout: 20_000 });
       await expect(notice, "the refusal is cleared once the Swiss is finished").toHaveCount(0);
       expect(await roundsIn(), "rounds 4 and 5 are gone").toEqual([1, 2, 3]);
 
-      // --- The knockout seeds from round 3's table: the proposal's qualifiers, in rank order, are its top three.
-      const proposal = await apiJson<{ computed: { qualifiers: { rank: number; entrantId: string }[] } }>(
-        request,
-        `/api/v1/stages/${koId}/seed-proposal`,
-        "POST",
-      );
-      expect(proposal.status, JSON.stringify(proposal.error)).toBe(201);
-      expect([...proposal.data!.computed.qualifiers].sort((a, b) => a.rank - b.rank).map((q) => q.entrantId)).toEqual(top3);
+      // --- The knockout seeded from round 3's table: the draft Finish's own completion wrote, read from the database before any
+      // POST. Its qualifiers in rank order are the top three of the table read before anything was pressed.
+      const proposals = await proposalsOf();
+      expect(proposals.map((p) => p.status), "exactly one proposal, a draft: the one Finish computed").toEqual(["draft"]);
+      expect(proposals[0]!.id, "and it is the one Finish's response named").toBe(done!.seed_proposal!.id);
+      expect(
+        [...proposals[0]!.computed.qualifiers].sort((a, b) => a.rank - b.rank).map((q) => q.entrantId),
+        "the knockout's seeds are the top three after round 3",
+      ).toEqual(top3);
     });
   }
 });
