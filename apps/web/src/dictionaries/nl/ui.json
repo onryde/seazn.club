@@ -3016,7 +3016,6 @@
   "entrants.err.personOnOtherTeam": "{name} zit al bij {team} in deze divisie. Een speler kan per divisie maar bij één team zitten.",
   "entrants.err.personAlreadyEntered": "{name} is al ingeschreven in deze divisie. Een speler kan per divisie maar één keer meedoen.",
   "entrants.add.onOtherTeam": "Bij {team}",
-  "entrants.add.alreadyEntered": "Al ingeschreven",
   "entrants.add.noPlayers": "Nog geen spelers — voeg ze toe onder Spelers, of importeer een CSV.",
   "entrants.add.selected.one": "{count} geselecteerd",
   "entrants.add.selected.other": "{count} geselecteerd",

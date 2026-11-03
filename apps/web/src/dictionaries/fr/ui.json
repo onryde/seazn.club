@@ -3069,7 +3069,6 @@
   "entrants.err.personOnOtherTeam": "{name} fait déjà partie de {team} dans cette division. Un joueur ne peut être que dans une équipe par division.",
   "entrants.err.personAlreadyEntered": "{name} est déjà inscrit dans cette division. Un joueur ne peut être inscrit qu'une fois par division.",
   "entrants.add.onOtherTeam": "Dans {team}",
-  "entrants.add.alreadyEntered": "Déjà inscrit",
   "entrants.add.noPlayers": "Aucun joueur pour l'instant — ajoutez-en dans Joueurs, ou importez un CSV.",
   "entrants.add.selected.one": "{count} sélectionné",
   "entrants.add.selected.other": "{count} sélectionnés",
