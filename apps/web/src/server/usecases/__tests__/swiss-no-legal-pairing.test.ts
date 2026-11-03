@@ -418,8 +418,36 @@ describe.runIf(HAS_DB)("X-SW-3 the refusal on the wire carries the recovery's fa
         finishAfter: 3,
         canFinish: true,
       });
-      // The pair: `finishAfter` is the round before the refused one, not a constant: a refusal of round 5 would say 4.
-      expect((out.json.error as { finishAfter: number }).finishAfter, "finishAfter = round - 1").toBe((out.json.error as { round: number }).round - 1);
+      ran++;
+    }, 300_000);
+
+    it(`${sport.key}: X-SW-3 the refusal of round 5 says finishAfter 4 — the round Finish ends at, not a constant — and Finish ends there`, async () => {
+      // The pair for the case above (round 4, finishAfter 3): a refusal of a DIFFERENT round must carry a different
+      // `finishAfter`, or a constant 3 would pass both. Rounds 1-3 are the S6 shape; round 4 REPEATS round 1's boards
+      // (a rig by SQL, so any history is accepted), which adds no new pair — the nine pairs met are unchanged — so round
+      // 5 has no legal pairing either. Five rounds is the most a field of six can hold, and round 5 is its last.
+      const history: typeof HISTORY = [...HISTORY, HISTORY[0]!];
+      const r = await swissStage(sport, 6, 5);
+      await playHistory(r, history);
+      expect(history.length, "rig: four rounds are played").toBe(4);
+      expect(metKeys(history).size, "rig: the repeat adds no pair — still the nine of the S6 shape").toBe(9);
+      expect(hasPerfectMatching([0, 1, 2, 3, 4, 5], metKeys(history)), "rig: round 5 truly has no legal pairing").toBe(false);
+
+      const out = await pairRoute(r);
+      expect(out.status, "409: Finish is the way out").toBe(409);
+      expect(out.json.error, "round 5, and Finish ends the Swiss after round 4").toMatchObject({
+        code: "SWISS_NO_LEGAL_PAIRING",
+        round: 5,
+        field: 6,
+        finishAfter: 4,
+        canFinish: true,
+      });
+      // The recovery the refusal offers is the one Finish does: the k in the body is the k the route ends the Swiss at.
+      const done = await callRoute(r, finishRoute, `/stages/${r.stageId}/swiss/finish`);
+      expect(done.status, `Finish goes through (${done.text})`).toBe(200);
+      const data = done.json.data as { finished_after: number };
+      expect(data.finished_after, "Finish ended the Swiss after the round the refusal named").toBe((out.json.error as { finishAfter: number }).finishAfter);
+      expect(data.finished_after, "and that is round 4, not round 3").toBe(4);
       ran++;
     }, 300_000);
 
@@ -454,7 +482,7 @@ describe.runIf(HAS_DB)("X-SW-3 the refusal on the wire carries the recovery's fa
   }
 
   it("anti-vacuity: both sports drove the wire and the nothing-internal arms", () => {
-    expect(ran, "two cases per sport").toBe(SPORTS.length * 2);
+    expect(ran, "three cases per sport").toBe(SPORTS.length * 3);
     expect(ran).toBeGreaterThan(0);
   });
 });

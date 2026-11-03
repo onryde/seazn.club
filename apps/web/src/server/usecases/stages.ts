@@ -1989,17 +1989,21 @@ export async function swissGen(
   // (STAGE_NOT_READY), so the reason is one of the four a field of two or more can have. The status is the table's: 409
   // when Finish is the way out (`swissFinishDetails` — the same predicate every `canFinish` the server sends reads), else
   // 422.
-  // W3 app-B T4 (SW-H1 on the desk): the body carries the recovery the desk offers — `finishAfter` k = the round before
-  // this one (what "Finish after round k" ends the Swiss at; every earlier round is decided or Pair next would have been
-  // refused STAGE_NOT_READY first) and `canFinish`, THE Finish predicate's answer (the same one `swissFinishDetails` reads
-  // for every other emitter, so an offered Finish always goes through). The five fields are copied BY NAME: the engine's
-  // `SwissRefusal` object is never spread into the body, so nothing it carries (entrant ids, history) can reach the wire.
+  // W3 app-B T4 (SW-H1 on the desk): the body carries the recovery the desk offers — `canFinish`, THE Finish predicate's
+  // answer (the same one `swissFinishDetails` reads for every other emitter, so an offered Finish always goes through), and
+  // `finishAfter` k, READ FROM THE SAME STATE `finishSwissNow` ends the Swiss at (`state.finishedAfter`: the latest round
+  // whose seated boards are all decided), so "Finish after round k" names the round the Finish route will actually keep.
+  // Not `target - 1`: that is only the same number while the round before this one is the latest decided (the
+  // STAGE_NOT_READY check above guards that round), and a second authority for k is a number that can drift from the route's.
+  // The five fields are copied BY NAME: the engine's `SwissRefusal` object is never spread into the body, so nothing it
+  // carries (entrant ids, history) can reach the wire.
   if (!paired.ok) {
     const admin = await import("./swiss-rounds-admin");
-    const finishNow = admin.swissFinishDetails(await admin.swissFinishStateOf(tx, stageId));
+    const finishState = await admin.swissFinishStateOf(tx, stageId);
+    const finishNow = admin.swissFinishDetails(finishState);
     throw swissRefusal(
       "SWISS_NO_LEGAL_PAIRING",
-      { round: target, reason: paired.reason, field: paired.field, finishAfter: target - 1, canFinish: finishNow.canFinish },
+      { round: target, reason: paired.reason, field: paired.field, finishAfter: finishState.finishedAfter, canFinish: finishNow.canFinish },
       { resolvable: finishNow.canFinish },
     );
   }
