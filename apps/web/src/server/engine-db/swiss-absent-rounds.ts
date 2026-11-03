@@ -26,7 +26,7 @@ import { isSwissBoardExtKey, isSwissByeShellExtKey } from "@/lib/swiss-shell";
 /** The columns of a `fixtures` row this reads — the loader's `FixtureRow` satisfies it. */
 export interface AbsentRoundsFixture {
   round_no: number | null;
-  ext_key: string | null;
+  ext_key?: string | null;
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   outcome: unknown;

@@ -12,6 +12,7 @@ import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { publicThemeStyle } from "@/lib/public-theme";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { StandingsTable } from "@/components/public-site/standings-table";
+import { swissRowFactsFor } from "@/server/public-site/swiss-row-facts";
 import { Schedule } from "@/components/public-site/schedule";
 import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
 import { Bracket } from "@/components/public-site/bracket";
@@ -230,6 +231,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
               dict={dict}
               qualification={qualificationFor(stage, snap)}
               rules={stage.table_rules}
+              swissFacts={swissRowFactsFor(stage, fixtures, snap.rows as StandingsRow[])}
               locale={orgLocale}
               tz={tz}
             />

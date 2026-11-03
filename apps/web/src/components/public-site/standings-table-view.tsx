@@ -95,6 +95,7 @@ import { t } from "@/lib/i18n-runtime";
 import { swissRoundKey, type SwissRoundStateName } from "@/lib/swiss-round-state";
 import type { TableColumnT, TableViewT } from "@/server/public-site/competition-hub-schema";
 import { StandingsPopover } from "./standings-popover";
+import { StandingsRowMarkers } from "./standings-row-markers";
 import { QualCutRow, QualLegend, QualMarker, QualPopoverBody, TieNoteText } from "./qualification-bits";
 
 export interface StandingsTableViewProps {
@@ -642,6 +643,9 @@ export function StandingsTableView({
                           {r.name}
                         </span>
                       </span>
+                      {/* W3 app-B T3 (owner Q2): a Swiss bye / late join, on a line of its own under the name (words resolved by the
+                          builder, `rowMarkers`). Nothing for an unmarked row, so every other table's markup is the one it was. */}
+                      <StandingsRowMarkers markers={r.markers} testid={`${testid}-marker-${r.entrantId}`} indented />
                     </th>
                     {view.columns.map((c, i) => {
                       // `cellNotes[i]` pairs with `cells[i]` exactly as the

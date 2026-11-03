@@ -234,6 +234,15 @@ export const QualTable = z.object({
 export type QualRowT = z.infer<typeof QualRowView>;
 export type QualTableT = z.infer<typeof QualTable>;
 
+/** W3 app-B T3 (owner Q2): a mark beside a Swiss row's name - a pairing bye, or a late join (the rounds before it count as
+ *  unplayed). Words already resolved in the org's language (`rowMarkers`, standings-view.ts): `text` is the chip's, `title` the
+ *  sentence a pointer hovers and a screen reader says. */
+export const RowMarkerView = z.object({
+  kind: z.enum(["bye", "late"]),
+  text: z.string(),
+  title: z.string(),
+});
+
 export const TableRow = z.object({
   rank: z.number().nullable(),
   entrantId: z.string(),
@@ -259,6 +268,10 @@ export const TableRow = z.object({
    *  where a status could be wrong). Required, so a builder cannot forget it. */
   qual: QualRowView.nullable(),
   champion: z.boolean(),
+  /** W3 app-B T3 (owner Q2): the Swiss bye / late-join marks beside the name. Only a marked row carries the key; optional
+   *  because a hub document cached before the field existed (Redis 15s, ISR 30s) reaches the client without it - absent reads
+   *  as "nothing to mark", as `cellNotes` above does. */
+  markers: z.array(RowMarkerView).optional(),
 });
 /** W3 T16 (SW-L11): where a Swiss stage stands - `swissRoundState`'s verdict, published as data (the renderer fills the
  *  sentence from the org's dictionary, `swissRoundKey`). `of` is the stage's CURRENT round count. */
@@ -545,6 +558,7 @@ export type HubMatchT = z.infer<typeof HubMatch>;
 export type TableViewT = z.infer<typeof TableView>;
 export type SwissRoundViewT = z.infer<typeof SwissRoundView>;
 export type TableRowT = z.infer<typeof TableRow>;
+export type RowMarkerT = z.infer<typeof RowMarkerView>;
 export type TableColumnT = z.infer<typeof TableColumn>;
 export type KnockoutKindT = z.infer<typeof KnockoutKind>;
 export type KnockoutRoundT = z.infer<typeof KnockoutRound>;

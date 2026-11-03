@@ -210,7 +210,9 @@ describe("buildTableView", () => {
     expect(v.columns[4]!.abbr).toBe("NRR");
     // Row a has a cricket ledger and no Buchholz; row b is its mirror image.
     expect(v.rows[0]!.cells).toEqual(["1", "1", "0", "3", "+1.000", "—"]);
-    expect(v.rows[1]!.cells).toEqual(["1", "0", "1", "0", "—", "3½"]);
+    // Owner Q2 (2026-11-03): a Buchholz prints in its table's POINTS format. `base` is a whole-point table, so b's 3.5 reads
+    // "3.5" (what a 3.5-point Points cell would read), not the engine's own half-point "3½".
+    expect(v.rows[1]!.cells).toEqual(["1", "0", "1", "0", "—", "3.5"]);
   });
 
   it("rows come in rank order with formatted cells, badge urls, the champion flag and a tie-break sentence", () => {

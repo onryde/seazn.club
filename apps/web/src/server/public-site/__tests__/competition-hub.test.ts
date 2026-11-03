@@ -15,6 +15,7 @@
 // is ENUMERATED — over the whole wire status vocabulary, read out of
 // `schemas.ts` so a status added to the wire reds this file.
 import { readFileSync } from "node:fs";
+import { byeAward } from "@/lib/fixture-bye";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -3325,5 +3326,86 @@ describe("loadCompetitionHub — W3 T16: a Swiss table says Round X of N", () =>
     expect(JSON.stringify(doc.knockouts)).not.toContain("swissRound");
     // And the knockout's own fixture never moved the Swiss verdict (it is another stage's row).
     expect(doc.matches.filter((m) => m.stageName === "Knockout")).toHaveLength(1);
+  });
+});
+
+// W3 app-B T3 (owner Q2, 2026-11-03): the hub's Swiss table marks a bye and a late join. Read through `loadCompetitionHub` -
+// the loader hands the stage's REAL fixtures to the table builder, which is the seam a builder-only test cannot see (the
+// builder is green with `swissFacts` undefined; only the loader decides whether it is ever given any). The scene is Task 8's:
+// e1 and e2 start, e3 joins at round 3 (rounds 1-2 are hers to miss), and round 3's odd field gives e2 the pairing bye.
+// The words come from the en dictionary's own templates, not from the builder under test. One sport (football): the markers
+// read seats and shells only, no sport data; `swiss-row-facts.test.ts` and `standings-swiss-parity.test.ts` cover the rest.
+describe("loadCompetitionHub - W3 app-B T3: a Swiss table marks the bye and the late join", () => {
+  const swissStage = (over: Partial<PublicStage> = {}): PublicStage => ({
+    ...STAGE,
+    id: "sw1",
+    kind: "swiss",
+    name: "Swiss",
+    swiss_rounds: 5,
+    table_rules: unpinnedRulesDoc({ module: resolveLatestModule("football"), kind: "swiss", divisionConfig: DIV.config }),
+    ...over,
+  });
+  const board = (id: string, round: number, home: string, away: string) =>
+    F({ id, stage_id: "sw1", round_no: round, status: "decided", home_entrant_id: home, away_entrant_id: away, ext_key: `sw-r${round}-b1`, outcome: { kind: "win", winner: home, loser: away } });
+  const byeRow = (round: number, holder: string, status = "decided") =>
+    F({ id: `bye${round}`, stage_id: "sw1", round_no: round, status, home_entrant_id: holder, away_entrant_id: null, ext_key: `sw-r${round}-bye`, outcome: byeAward(holder) as unknown as PublicFixture["outcome"] }); // the stored row has `loser: null`; the wire type widens it away
+  const scene = (): PublicFixture[] => [board("a", 1, "e1", "e2"), board("b", 2, "e1", "e2"), board("c", 3, "e1", "e3"), byeRow(3, "e2")];
+  const rowsOf = (): PublicStandings => ({
+    ...SNAPSHOT,
+    stage_id: "sw1",
+    rows: [
+      { entrantId: "e1", played: 3, won: 3, drawn: 0, lost: 0, points: 9, metrics: { gf: 6, ga: 1 }, rank: 1 },
+      { entrantId: "e2", played: 2, won: 0, drawn: 0, lost: 2, points: 0, metrics: { gf: 1, ga: 4 }, rank: 3 },
+      { entrantId: "e3", played: 1, won: 0, drawn: 0, lost: 1, points: 0, metrics: { gf: 0, ga: 2 }, rank: 2 },
+    ],
+  });
+  const markersByRow = async (stages: PublicStage[], fixtures: PublicFixture[], onTable = ["e1", "e2", "e3"]) => {
+    const standings = stages.map((st) => ({ ...rowsOf(), stage_id: st.id, rows: rowsOf().rows.filter((r) => onTable.includes(r.entrantId)) }));
+    getPublicDivisionMock.mockResolvedValue(divisionDetail({ stages, fixtures, standings }));
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(CompetitionHubDoc.safeParse(doc).success, "the document still parses").toBe(true);
+    expect(doc.tables, "one table").toHaveLength(1);
+    return new Map(doc.tables[0]!.rows.map((r) => [r.entrantId, r.markers] as const));
+  };
+  const bye3 = enPublic["table.marker.bye"].replace("{rounds}", "3");
+  const from3 = enPublic["table.marker.late"].replace("{round}", "3");
+
+  it("the bye holder and the late entrant are marked in the loader's own document, and the on-time byeless entrant is not (counted)", async () => {
+    const marked = await markersByRow([swissStage()], scene());
+    expect(marked.size, "rows checked").toBe(3);
+    expect(marked.get("e2")?.map((m) => [m.kind, m.text])).toEqual([["bye", bye3]]);
+    expect(marked.get("e3")?.map((m) => [m.kind, m.text])).toEqual([["late", from3]]);
+    expect(marked.get("e1"), "e1 played every round and sat out none: the key is absent, not an empty list").toBeUndefined();
+  });
+
+  it("empty case: a two-player Swiss with no bye and nobody late marks nobody (every row's key absent)", async () => {
+    const marked = await markersByRow([swissStage()], [board("a", 1, "e1", "e2"), board("b", 2, "e2", "e1")], ["e1", "e2"]);
+    expect(marked.size, "rows checked").toBe(2);
+    for (const [id, m] of marked) expect(m, id).toBeUndefined();
+  });
+
+  it("a voided bye is no bye, and another stage's bye marks nobody here", async () => {
+    // e3 holds only a VOIDED bye in round 1: no 'Bye' mark (a void row is excluded from every table).
+    const withVoid = await markersByRow([swissStage()], [board("a", 1, "e1", "e2"), byeRow(1, "e3", "void")]);
+    expect(withVoid.get("e3")?.some((m) => m.kind === "bye") ?? false, "the voided bye").toBe(false);
+    // e3's real bye is in ANOTHER stage's round 1: nothing of it reaches this stage's table.
+    const foreign = [board("a", 1, "e1", "e2"), { ...byeRow(1, "e3"), stage_id: "sw2" }];
+    const marked = await markersByRow([swissStage()], foreign, ["e1", "e2"]);
+    expect(marked.size, "rows checked").toBe(2);
+    for (const [id, m] of marked) expect(m, id).toBeUndefined();
+  });
+
+  it("a league table beside a Swiss gets no markers even when its fixtures hold a bye-shaped key", async () => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        stages: [STAGE],
+        fixtures: [F({ id: "l1", status: "decided", ext_key: "sw-r1-bye", home_entrant_id: "e2", away_entrant_id: null })],
+        standings: [SNAPSHOT],
+      }),
+    );
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(doc.tables).toHaveLength(1);
+    expect(doc.tables[0]!.rows.length, "rows checked").toBeGreaterThan(0);
+    for (const r of doc.tables[0]!.rows) expect(r.markers, r.entrantId).toBeUndefined();
   });
 });

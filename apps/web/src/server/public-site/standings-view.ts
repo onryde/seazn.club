@@ -29,6 +29,7 @@ import {
   derivedMetricText,
   isLevelTable,
   metricKeyOf,
+  pointsText,
   resultColumnText,
   tableLayoutOf,
   tieBreakLabel,
@@ -46,8 +47,9 @@ import { standingsColumns, formatMetric, type MetricSpecLike, type StandingsColu
 import type { TKey } from "@/lib/i18n-runtime";
 import type { DictionaryKey } from "@/lib/i18n-keys";
 import type { SwissRoundState } from "@/lib/swiss-round-state";
-import type { TableViewT } from "./competition-hub-schema";
+import type { RowMarkerT, TableViewT } from "./competition-hub-schema";
 import type { QualificationView } from "./qualification-view";
+import type { SwissRowFacts } from "./swiss-row-facts";
 
 /** The columns a phone shows without asking: played, won, lost, points.
  *  Everything else — draws, the sport's own metrics, the cascade's derived
@@ -427,22 +429,61 @@ export function tableLayoutFor(rules: TableRulesLike | null | undefined): TableL
   return rules === null || rules === undefined ? PLAIN_LAYOUT : tableLayoutOf(rules.points, rules.reachable, rules.ballsPerOver);
 }
 
+/** The Swiss ladders: tie-break columns the engine stores in the table's own POINTS (whole points, `rankStandings` divides the
+ *  stored halves by the unit), so the table's points spelling is theirs. */
+const POINTS_LADDERS: ReadonlySet<string> = new Set(["buchholz", "buchholz_cut1", "sberger"]);
+
+/** A derived column's cell text — THE one expression, read by `cellText` below and by `standings-table.tsx`'s derived cell
+ *  (which also wraps a ratio's breakdown), so the two tables cannot print different text in the same cell.
+ *
+ *  W3 app-B T3 (owner Q2, controller ruling 2026-11-03): the Swiss ladders (Buchholz, Buchholz Cut-1, Sonneborn-Berger) and
+ *  Opp diff print in the SAME spelling as that table's Points column - `pointsText`, the engine's own formatter for it:
+ *    - a HALF-point table (chess, FIDE 1 / ½ / 0) spells a ladder in halves, "1½" like its Points; a total that is not a
+ *      whole number of halves (a Sonneborn-Berger of ¾) keeps its decimal "0.75" - the rule `pointsText` states for a
+ *      fractional points total - never a wrong half;
+ *    - a WHOLE-point table spells it as a plain number, "7" or "7.5", as its Points column does ("7");
+ *    - Opp diff is a sum of score DIFFERENCES, no points unit, so it is never halved (the engine's rule) and always prints as
+ *      the integer it is, in the whole spelling.
+ *  The engine's `derivedMetricText` spelled Buchholz in halves on every table and Sonneborn-Berger as a trimmed decimal, so
+ *  one half-point row read "1½" beside "1.5". Every other derived column keeps the engine's text. */
+export function derivedText(row: StandingsRow, key: string, layout: TableLayout): string {
+  if (POINTS_LADDERS.has(key)) {
+    const value = row.metrics[key];
+    return value === undefined ? "—" : pointsText(layout.unit === "half" ? value * 2 : value, layout.unit);
+  }
+  if (key === "opp_diff") {
+    const value = row.metrics[key];
+    return value === undefined ? "—" : pointsText(value, "whole");
+  }
+  return derivedMetricText(row, key as TiebreakerKey, layout.ballsPerOver) ?? "—";
+}
+
 /** One cell's text — THE cell expression of both standings tables (the hub's view below and `standings-table.tsx`), so
  *  the two cannot print different numbers in the same cell. */
 export function cellText(row: StandingsRow, column: StandingsColumn, layout: TableLayout): string {
-  if (column.kind === "derived") return derivedMetricText(row, column.key as TiebreakerKey, layout.ballsPerOver) ?? "—";
+  if (column.kind === "derived") return derivedText(row, column.key, layout);
   if (column.kind === "structural") return resultColumnText(row, column.key as ResultColumnKey, layout);
   return formatMetric(row.metrics[column.key], column.decimals);
 }
 
-/** The columns a stage's table shows, under its layout (`standingsColumns` plus the engine's DERIVED_METRICS). */
+/** Sport metrics that count what a structural column already counts, and so are not a column of their own. Board games declare
+ *  a visible `wins` metric (the winner's `wins: 1` in `standingsDelta`, forfeits and byes included) beside the table's W - on a
+ *  Swiss table that printed "W" and "Wins" side by side with the same number under both (owner Q2, 2026-11-03). W is the one
+ *  kept: it is on every sport's table, it is in the phone's compact set and the exports' result columns, and it is the number
+ *  the cascade's `wins` step ranks on (`winsOf` reads `row.won`). The test pins that the two are the same count. */
+export const METRIC_REPEATS_STRUCTURAL: Readonly<Record<string, string>> = { wins: "won" };
+
+/** The columns a stage's table shows, under its layout (`standingsColumns` plus the engine's DERIVED_METRICS), less a sport
+ *  metric that repeats a structural column (`METRIC_REPEATS_STRUCTURAL`). */
 export function tableColumns(
   metricSpecs: readonly MetricSpecLike[],
   cascade: readonly string[],
   rows: readonly StandingsRow[],
   layout: TableLayout,
 ): StandingsColumn[] {
-  return standingsColumns(metricSpecs, cascade, rows, DERIVED_METRICS, layout.apart.length > 0);
+  return standingsColumns(metricSpecs, cascade, rows, DERIVED_METRICS, layout.apart.length > 0).filter(
+    (c) => !(c.kind === "metric" && Object.hasOwn(METRIC_REPEATS_STRUCTURAL, c.key)),
+  );
 }
 
 /** W2d follow-up (final review m3, m8; export review I2, round 2, 2026-10-28) — the result columns (P … L) of a table's
@@ -545,6 +586,37 @@ export interface TableViewInput {
   /** W3 T16 (SW-L11): a Swiss stage's "Round X of N" verdict (`swissRoundState`), carried as is. Null/absent = no chip:
    *  every table but a Swiss one, and a Swiss with nothing paired yet. */
   swissRound?: SwissRoundState | null;
+  /** W3 app-B T3 (owner Q2): a Swiss stage's per-entrant bye rounds and join round (`swissRowFactsFor`), which become each
+   *  row's markers. Absent/empty = nothing to mark (every table but a Swiss one, and a Swiss with no bye and no latecomer). */
+  swissFacts?: Readonly<Record<string, SwissRowFacts>>;
+}
+
+/**
+ * W3 app-B T3 (owner Q2, 2026-11-03) - the words beside a Swiss row's name: a pairing bye ("Bye R3") and a late join ("From R3",
+ * whose title says the rounds before it count as unplayed). Resolved here, in the page's language, because the hub's client
+ * table holds no vocabulary - and both components render these same items (`standings-row-markers.tsx`), so the division page
+ * and the hub cannot word a bye differently. Late first (it is the earlier fact), then bye. Empty for a row with no facts.
+ */
+export function rowMarkers(
+  facts: SwissRowFacts | undefined,
+  msg: (key: TKey, vars?: Record<string, string | number>) => string,
+): RowMarkerT[] {
+  if (facts === undefined) return [];
+  const out: RowMarkerT[] = [];
+  if (facts.joinedRound !== null) {
+    const last = facts.joinedRound - 1;
+    const missed = last <= 1 ? "1" : `1\u2013${last}`;
+    out.push({
+      kind: "late",
+      text: msg("table.marker.late", { round: facts.joinedRound }),
+      title: msg("table.marker.lateTitle", { round: facts.joinedRound, missed }),
+    });
+  }
+  if (facts.byeRounds.length > 0) {
+    const rounds = facts.byeRounds.join("/");
+    out.push({ kind: "bye", text: msg("table.marker.bye", { rounds }), title: msg("table.marker.byeTitle", { rounds }) });
+  }
+  return out;
 }
 
 export function buildTableView(input: TableViewInput): TableViewT {
@@ -558,6 +630,10 @@ export function buildTableView(input: TableViewInput): TableViewT {
   // ranking pass's trace, "split on seeding", which would explain a place the table does not print).
   const level = isLevelTable(input.rows);
   const qual = level ? null : (input.qualification ?? null);
+  const markersOf = (entrantId: string): { markers?: RowMarkerT[] } => {
+    const markers = rowMarkers(input.swissFacts?.[entrantId], input.msg);
+    return markers.length > 0 ? { markers } : {};
+  };
 
   return {
     id: input.id,
@@ -591,6 +667,8 @@ export function buildTableView(input: TableViewInput): TableViewT {
       // schema states as a required key (never an absent one).
       qual: qual !== null && Object.hasOwn(qual.rows, r.entrantId) ? qual.rows[r.entrantId]! : null,
       champion: !level && input.championId === r.entrantId,
+      // Only a marked row carries the key (a cached document and a plain table are one shape: absent = nothing to mark).
+      ...markersOf(r.entrantId),
     })),
     qualification: qual?.table ?? null,
     swissRound: input.swissRound ?? null,
