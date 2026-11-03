@@ -63,6 +63,12 @@ for (const key of [
   "NEXT_PUBLIC_POSTHOG_HOST",
   "RESEND_API_KEY",
   "ANTHROPIC_API_KEY",
+  // .env.local points at the STG Supabase project. realtime.ts publishes with
+  // a real fetch whenever both exist, so every DB-backed scoring/schedule
+  // suite fired live broadcasts at stg (~370k/day, 2026-11-03). Absent => it
+  // returns early. Suites that exercise publishing stub both themselves.
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "SUPABASE_SERVICE_ROLE_KEY",
   ...(wantsLiveBilling ? [] : ["STRIPE_SECRET_KEY"]),
 ]) {
   if (fileOnly(key)) delete process.env[key];
