@@ -58,7 +58,7 @@ import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
  * them leaves round 6 with none, under the colour limits). The history is written onto the minted shells by SQL and every board
  * is then PLAYED through the scorer's own events, so the table points the pairing reads are real. Pair next seats round 5 and
  * the answer carries `swiss_next_round: "unpairable"` with `swiss_paired_round: 5`; the warning tells the truth: with round 5
- * decided, the next Pair is refused SWISS_NO_LEGAL_PAIRING for round 6. The empty case is its own check (8), read off the SAME
+ * decided, the next Pair is refused SWISS_NO_LEGAL_PAIRING for round 6. The empty case is its own check (9), read off the SAME
  * stage: round 1 is Paired for real first (it asks the engine to look ahead, and gets "pairable" back) and the answer carries
  * neither `swiss_next_round` nor `swiss_paired_round`; the brute-force history is then written over that round by SQL.
  *
@@ -100,7 +100,7 @@ export async function w3SwissBSuite(): Promise<void> {
     away_entrant_id: string | null;
   };
 
-  /** Check 1's refused stage, kept for check 5 (the recovery runs from the state check 1 left). */
+  /** Check 1's refused stage, kept for check 6 (the recovery runs from the state check 1 left). */
   let refused: { divId?: string; stageId?: string; status: number; error: Record<string, unknown> | undefined } | undefined;
 
   // Check 1 — T1 (X-SW-3). Rounds 1-3 of the S6 shape (the expected shape is typed here from the rulebook's arithmetic: nine
@@ -391,7 +391,7 @@ export async function w3SwissBSuite(): Promise<void> {
     );
   }
 
-  // Check 5 - T4 (SW-H1 on the desk; X-SW-3, X-SW-26). Check 1 left a six-player Swiss refused at round 4 with rounds 1-3 decided.
+  // Check 6 - T4 (SW-H1 on the desk; X-SW-3, X-SW-26). Check 1 left a six-player Swiss refused at round 4 with rounds 1-3 decided.
   // The refusal's body carries the five recovery fields and nothing else beside `code` and `message`; `finishAfter` is 3 (the
   // round before the refused one) and `canFinish` is true (three decided rounds). The desk's "Finish after round 3" posts the
   // stage's finish route: it ends the Swiss after round 3 (200, complete) and the two shell rounds go - 6 rows (two rounds of
@@ -417,7 +417,7 @@ export async function w3SwissBSuite(): Promise<void> {
     );
   }
 
-  // Check 6 - T5 (X-SW-19; SW-M11). An ice hockey Swiss of six teams (seeds 1-6), fifteen scorer events (five a board) on the public competition check 3 opened (the
+  // Check 7 - T5 (X-SW-19; SW-M11). An ice hockey Swiss of six teams (seeds 1-6), fifteen scorer events (five a board) on the public competition check 3 opened (the
   // Community plan caps active competitions at 3). IIHF pays 3 / 2 / 1 / 0 (regulation win 3, overtime win 2, overtime loss 1,
   // regulation loss 0), typed here from the rulebook, never read from the code under test. Round 1 is played through the scorer's
   // own events: the board seed 1 sits on is won by seed 1 IN OVERTIME (level after three periods, then a goal), the other two
@@ -447,7 +447,7 @@ export async function w3SwissBSuite(): Promise<void> {
     const statuses: number[] = [];
     const refusedEvents: string[] = [];
     // The shared helper, since its idempotency key became unique per call (T5 review m6): a board's second and third
-    // `period.advance` are applied, not taken for replays of the first. Check 6 is itself the live witness - on the old
+    // `period.advance` are applied, not taken for replays of the first. Check 7 is itself the live witness - on the old
     // (fixture, type) key those two events answer a success that applied nothing, and the next one is refused.
     const ev = async (fixtureId: string, type: string, payload: unknown) => {
       const res = await appendScoreEvent(owner, fixtureId, type, payload);
@@ -487,13 +487,13 @@ export async function w3SwissBSuite(): Promise<void> {
     );
   }
 
-  // Check 7 - T7 (X-SW-10). A chess Swiss of eight players (seeds 1-8) and six rounds on the public competition check 3 opened (the
+  // Check 8 - T7 (X-SW-10). A chess Swiss of eight players (seeds 1-8) and six rounds on the public competition check 3 opened (the
   // Community plan caps active competitions at 3). Rounds 1-4 are the brute-force history UNPAIRABLE_NEXT_N8 (seed 8078287) as
   // [home index, away index, result] with p0..p7 = seeds 1..8 and `h` / `a` the home / away side winning, `d` a draw; typed here,
   // proved by an oracle in swiss-look-ahead.test.ts (every legal round 5 leaves a round 6 with no legal pairing under the
   // colour limits - never a rematch-only history: none of 6-8 players has a non-last round like that). Round 5 of 6 is above the
   // safe maximum floor(8 / 2) = 4 and is not the last round, so the app asks the engine to look ahead; its verdict rides on the
-  // answer. The differential (a pairable round's answer carries no `swiss_next_round` at all) is check 8, next: round 1 of THIS
+  // answer. The differential (a pairable round's answer carries no `swiss_next_round` at all) is check 9, next: round 1 of THIS
   // stage is Paired for real just after Start (its answer is kept in `firstPair`) and the history is then written over it by SQL -
   // rounds 1-4 are otherwise never Paired, so no pairable answer would be read here. (A fresh division is not an option: the
   // Community plan caps a competition at 4 divisions, and checks 3, 4, 6 and 7 already hold them on this one.)
@@ -522,7 +522,7 @@ export async function w3SwissBSuite(): Promise<void> {
     const rows = async () =>
       (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
     const seated = (all: Fx[], r: number) => all.filter((f) => f.round_no === r && f.home_entrant_id !== null && f.away_entrant_id !== null);
-    // Round 1 is Paired for real first (check 8 reads the answer: a pairable round, with the look-ahead asked, carries no field)...
+    // Round 1 is Paired for real first (check 9 reads the answer: a pairable round, with the look-ahead asked, carries no field)...
     const realFirst = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
     firstPair = { status: realFirst.status, json: realFirst.json, divId, stageId, rowsAfter: seated(await rows(), 1).length };
     // ...then the history is SQL-seeded over it onto the shells (no route seats a board by hand); -1: no DATABASE_URL, so the seed could not be
@@ -582,11 +582,11 @@ export async function w3SwissBSuite(): Promise<void> {
     );
   }
 
-  // Check 8 - T7 (X-SW-10), the empty case, read off check 7's stage. Round 1 of that chess Swiss (eight players, six rounds: above
+  // Check 9 - T7 (X-SW-10), the empty case, read off check 8's stage. Round 1 of that chess Swiss (eight players, six rounds: above
   // the safe maximum 4, and not the last round, so the Pair asked the engine to look ahead) was Paired for real before the
   // brute-force history was written over it, and its next round is pairable. The engine's "pairable" verdict is not sent: the
   // answer has neither `swiss_next_round` nor `swiss_paired_round` (absent - not false and not null: a pairable answer must not
-  // leak a field the desk would have to read) - while check 7's round 5, on the same stage, carries both.
+  // leak a field the desk would have to read) - while check 8's round 5, on the same stage, carries both.
   {
     const answer = firstPair === undefined ? undefined : (firstPair.json.data as Record<string, unknown> | undefined);
     const ok =
@@ -600,7 +600,7 @@ export async function w3SwissBSuite(): Promise<void> {
     );
   }
 
-  // Check 6 - T9b (X-SW-31). The proposal, over the real route the organiser's Auto-schedule button posts to, and the apply
+  // Check 10 - T9b (X-SW-31). The proposal, over the real route the organiser's Auto-schedule button posts to, and the apply
   // behind its Apply button. Every number is typed from the rulebook arithmetic, none read back from the code under test:
   // the match is 30 minutes (the settings below), so a round that starts 09:00 ends 09:30, and the end barrier puts the next
   // round at 09:30 or later where the start floor alone would have allowed 09:00. Reuses the public competition (the org is
