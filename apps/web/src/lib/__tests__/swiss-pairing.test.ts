@@ -1,14 +1,23 @@
 // apps/web/src/lib/__tests__/swiss-pairing.test.ts
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { pairRound, type SwissStanding } from "@seazn/engine/scheduling/swiss";
 import type { EntrantId } from "@seazn/engine/core";
 import {
   effectiveSwissPairing,
   roundOnePairs,
   storedSwissPairing,
+  SwissRoundOnePremiseError,
 } from "@/lib/swiss-pairing";
+
+// The engine's `pairRound` passes straight through, except in the one case below that makes it REFUSE round 1 of a fresh
+// field — an answer the real engine never gives (no meeting, bye or colour is on record), so the guard behind it can only be
+// reached by handing the module a refusal.
+vi.mock("@seazn/engine/scheduling/swiss", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@seazn/engine/scheduling/swiss")>();
+  return { ...real, pairRound: vi.fn(real.pairRound) };
+});
 
 describe("effectiveSwissPairing", () => {
   // Empty case FIRST (AGENTS rule: a ladder states its empty case first).
@@ -64,6 +73,26 @@ describe("roundOnePairs mirrors the engine", () => {
     expect(roundOnePairs(10, "rank_adjacent")[0]).toEqual([1, 2]);
   });
   it("fewer than 2 ⇒ no pairs", () => expect(roundOnePairs(1, "fold")).toEqual([]));
+
+  describe("a refusal of round 1 is a broken premise, raised by name (W3 app-B T1, X-SW-3)", () => {
+    afterEach(() => vi.mocked(pairRound).mockClear());
+    const refusal = { ok: false, code: "SWISS_NO_LEGAL_PAIRING", reason: "rematch", field: 4 } as unknown as ReturnType<typeof pairRound>;
+
+    it("the engine's refusal throws SwissRoundOnePremiseError naming the field and the reason, never an empty hint", () => {
+      vi.mocked(pairRound).mockReturnValueOnce(refusal);
+      expect(() => roundOnePairs(4, "fold"), "a refusal is not read as 'no pairs'").toThrow(SwissRoundOnePremiseError);
+      vi.mocked(pairRound).mockReturnValueOnce(refusal);
+      expect(() => roundOnePairs(4, "fold")).toThrow(/premise: round 1 of a fresh field of 4 pairs, but the engine refused it \(rematch\)/);
+    });
+
+    it("the pair: the same call without the refusal is its four-player hint, and the guard is only in front of a refusal", () => {
+      expect(roundOnePairs(4, "fold"), "the real engine pairs a fresh field of 4").toEqual([
+        [1, 3],
+        [2, 4],
+      ]);
+      expect(vi.mocked(pairRound)).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe("swiss-pairing.ts stays client-safe", () => {

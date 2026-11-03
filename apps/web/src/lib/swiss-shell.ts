@@ -4,7 +4,7 @@
 // must agree on board counts and seated/unseated rules without importing
 // server-only modules.
 
-import { isOneSidedAwardBye } from "@/lib/fixture-bye";
+import { isOneSidedAwardBye } from "./fixture-bye.ts";
 
 /** `HttpError.code` when a swiss stage is created (or a stage graph replaced)
  *  without a usable `config.rounds`. Lives HERE rather than in

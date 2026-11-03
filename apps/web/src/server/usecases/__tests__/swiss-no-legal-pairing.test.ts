@@ -187,6 +187,54 @@ describe.runIf(HAS_DB)("X-SW-3 Pair next on a history with no legal round answer
   });
 });
 
+describe.runIf(HAS_DB)("X-SW-3 the unresolvable arm: a refusal Finish cannot answer is 422, and the same refusal is 409 the moment Finish can", () => {
+  // `swissGen` raises the refusal with `{ resolvable: finishNow.canFinish }`: 409 when Finish after round k is the way out, 422
+  // when it is not. The 409 arm is the test above; this is the other arm, reached with the S6 history once the Swiss is OVER
+  // (ruling 250: a later stage of the division has a fixture under way, so Finish is refused SWISS_OVER and `canFinish` is
+  // false). The pair is the same stage with that later fixture not started — Finish is then the way out and the status flips
+  // to 409 — so the status is the Finish predicate's answer, not a constant. Both sports: the arm does not depend on the sport.
+  let ran = 0;
+  for (const sport of SPORTS) {
+    it(`${sport.key}: the S6 refusal is 422 while the Swiss is over, 409 once the later stage's fixture is not started`, async () => {
+      const r = await swissStage(sport, 6, 5);
+      await playHistory(r);
+      expect(hasPerfectMatching([0, 1, 2, 3, 4, 5], metKeys(HISTORY)), "rig: round 4 truly has no legal pairing").toBe(false);
+      const [ko] = await sql<{ id: string }[]>`
+        insert into stages (division_id, seq, kind, name, config) values (${r.divisionId}, 2, 'knockout', 'KO', '{}') returning id`;
+      const [laid] = await sql<{ id: string }[]>`
+        insert into fixtures (stage_id, division_id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status)
+        values (${ko!.id}, ${r.divisionId}, 1, 1, ${r.ids[0]!}, ${r.ids[1]!}, 'in_play') returning id`;
+
+      const rowsBefore = await stageRows(r.stageId);
+      const asked = () =>
+        generateStageFixtures(r.auth, r.stageId).then(
+          () => null,
+          (e: unknown) => e as { status?: number; code?: string; extra?: unknown },
+        );
+      const over = await asked();
+      expect(over, "Pair next refuses").not.toBeNull();
+      expect(over!.code, "the same named refusal").toBe("SWISS_NO_LEGAL_PAIRING");
+      expect(over!.status, "422: the Swiss is over, so Finish is not the way out").toBe(SWISS_REFUSALS.SWISS_NO_LEGAL_PAIRING.status);
+      expect(over!.status).not.toBe(SWISS_REFUSALS.SWISS_NO_LEGAL_PAIRING.resolvableStatus);
+      expect(over!.extra, "the round, why, the field — the 409 arm's body").toEqual({ round: 4, reason: "rematch", field: 6 });
+      expect(await stageRows(r.stageId), "nothing in the Swiss moved").toEqual(rowsBefore);
+
+      // The pair: the later fixture not started is no start (T9's definition), the Swiss is not over, Finish after round 3 is
+      // the way out, and the SAME refusal is the resolvable 409.
+      await sql`update fixtures set status = 'scheduled' where id = ${laid!.id}`;
+      const open = await asked();
+      expect(open!.code).toBe("SWISS_NO_LEGAL_PAIRING");
+      expect(open!.status, "409: Finish is now the way out").toBe(SWISS_REFUSALS.SWISS_NO_LEGAL_PAIRING.resolvableStatus);
+      ran++;
+    });
+  }
+
+  it("anti-vacuity: both sports reached the unresolvable arm and its pair", () => {
+    expect(ran, "sports that reached both arms").toBe(SPORTS.length);
+    expect(ran).toBeGreaterThan(0);
+  });
+});
+
 describe.runIf(HAS_DB)("X-SW-3 empty case first: a 1-entrant stage is refused by name before the engine is asked, and seats nobody", () => {
   // The brief wrote "refuses field_too_small". `pairRound` does answer that for a field of one, but Pair next never asks:
   // `generateStageFixturesTx` refuses a roster under 2 first (STAGE_NOT_READY, the refusal every format gives, and Start

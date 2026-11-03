@@ -17,6 +17,8 @@ import { boardgame } from "@seazn/engine/sports/boardgame";
 // The product's own stage composition (W2c Task 13b, R-T12-3): an import-free
 // apps/web module (engine barrels only; tools/matrix boundary.test.ts pins it).
 import { decidersOffRules } from "../../../../apps/web/src/lib/stage-decider-off.ts";
+// The product's Swiss key minters: the conformance test below folds THEIR output through the bench's reader.
+import { mintSwissBoardExtKeys, planSwissShells } from "../../../../apps/web/src/lib/swiss-shell.ts";
 import { PackSchema, fixtureKey } from "../pack-schema.ts";
 import { fillPeriodMarkers, reconstructSetRallies } from "../reconstruct.ts";
 import {
@@ -30,6 +32,7 @@ import {
   resolveStatePath,
   sigil,
   stageScopedFoldCfg,
+  swissRoundOfExtKey,
   validatePack,
   type PackFinding,
   type PackValidation,
@@ -2040,6 +2043,34 @@ describe("validatePack — the stage-config mirror is DRIVEN, key by key", () =>
     const finding = onlyError(validatePack(pack, UNIT).findings);
     expect(finding.message).toContain('stream "f1"');
     expect(finding.message).toContain("names no round");
+  });
+
+  it("conformance: the bench reads the round off every ext key the product mints (boards and byes, rounds 1-12), and names none for a key that is not a round's", () => {
+    // `swissRoundOfExtKey`'s regex is a third literal of the product's key format (`swiss-shell.ts` holds two). A key typed here
+    // would only prove the fixture, so these are the product's OWN output: `mintSwissBoardExtKeys` (gapped history, a double-digit
+    // board index) and `planSwissShells` (board shells AND the `sw-r{n}-bye` shells of an odd field; 12 rounds, so rounds 10-12 are
+    // two-digit and a `\d` slip would show).
+    let checked = 0;
+    for (let round = 1; round <= 12; round++) {
+      const minted = mintSwissBoardExtKeys(round, [`sw-r${round}-b1`, `sw-r${round}-b2`, `sw-r${round}-b4`], 8);
+      expect(minted, "premise: eight keys minted past the highest existing index").toHaveLength(8);
+      for (const key of minted) {
+        expect(swissRoundOfExtKey(key), `${key} names round ${round}`).toBe(round);
+        checked++;
+      }
+    }
+    const plan = planSwissShells(12, 7); // 3 boards and one bye a round
+    expect(plan.filter((x) => x.bye), "premise: twelve bye shells").toHaveLength(12);
+    expect(plan.filter((x) => !x.bye), "premise: thirty-six board shells").toHaveLength(36);
+    for (const shell of plan) {
+      expect(swissRoundOfExtKey(shell.extKey), `${shell.extKey} names round ${shell.roundNo}`).toBe(shell.roundNo);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: 96 minted keys and 48 planned shells were read").toBe(96 + 48);
+    // The negative half: a key that is not a Swiss round's names none (a finding in the validator, never round 0).
+    for (const key of ["adhoc-1", "ko-r2-m1", "sw-rX-b1", "swiss-r1-b1", "r1-b1", ""]) {
+      expect(swissRoundOfExtKey(key), `"${key}" names no round`).toBeNull();
+    }
   });
 
   it("carries the stage's rngSeed into a drawing of lots", () => {

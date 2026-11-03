@@ -389,6 +389,16 @@ export function bootRegistry(): typeof registry {
 // Offline mirrors of the product's fold inputs
 // ---------------------------------------------------------------------------
 
+/** The round a Swiss fixture's ext key names, or null when it names none: the first number of the product's
+ *  `sw-r{round}-b{board}` board key and `sw-r{round}-bye` bye key (`mintSwissBoardExtKeys`, `planSwissShells`). The third
+ *  literal of that key format after the product's own two (`swiss-shell.ts`), so the conformance test in
+ *  `__tests__/validate-pack.test.ts` folds the product's output through THIS function — a pack declares no round, and a drifted
+ *  key format would otherwise read a wrong round or none. */
+export function swissRoundOfExtKey(extKey: string): number | null {
+  const m = /^sw-r(\d+)-/.exec(extKey);
+  return m === null ? null : Number(m[1]);
+}
+
 /**
  * A pack payload names entrants and people with the `@` sigil (pack-schema.ts
  * header note 6) because their UUIDs do not exist at authoring time. Offline
@@ -2305,11 +2315,11 @@ function deriveStandings(
     // key the product mints (`sw-r{round}-b{board}`), and a key that does not follow it is a finding, never round 0.
     let swissRound: number | undefined;
     if (tableKind === "swiss") {
-      const m = /^sw-r(\d+)-/.exec(stream.fixtureExtKey);
-      if (m === null) {
+      const round = swissRoundOfExtKey(stream.fixtureExtKey);
+      if (round === null) {
         return `stream "${stream.fixtureExtKey}" is in a swiss stage but its ext key names no round: the engine's Swiss ledger reads each counted fixture's round, so the key must follow the product's sw-r{round}-b{board}`;
       }
-      swissRound = Number(m[1]);
+      swissRound = round;
     }
     fixtures.push({
       id: fixtureKey(stream.divisionRef, stream.fixtureExtKey),

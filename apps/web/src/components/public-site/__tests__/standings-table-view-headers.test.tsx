@@ -62,6 +62,13 @@ const MEASURED: Readonly<Record<string, number>> = {
   "campo": 43.3, "champ": 43, "Veldd.": 41.6, "Saldo": 39.5, "saldo": 39.5, "Game": 34.3, "Diff.": 28.3, "OTW": 26.8,
   "diff": 26.1, "GPr": 24.3, "PPr": 23.4, "pts": 22.3, "OTL": 22.1, "Dif.": 21.3, "WV": 19.7, "VV": 16.6, "GV": 16.5,
   "DP": 16.3, "VP": 15.9, "FG": 15.7, "RJ": 15.5, "G.": 11.6, "B.": 11.2,
+  // W3 T1 (X-SW-31, engine 2.0.0 `opp_diff`): the four new words of table.abbr.oppDiff ("Opp diff", "Dif. rivales",
+  // "Diff. adv.", "Saldo tegenst."), measured the same way on the built app (live prod build of this tree, Geist 11px
+  // uppercase, 0.05em tracking, weight 600, one word at a time, 2026-11-03). The same run re-read "Difference" 72.9,
+  // "Against" 51.2, "Overwinningen" 100, "GD" 16.9, "Pts" 22.3, "diff" 26.1, "Dif." 21.3, "Diff." 28.3, "Saldo" 39.5 and
+  // "Buchholz" 64 - the values above - so the method is the one that produced them. "diff", "Dif.", "Diff." and "Saldo"
+  // were already in the table.
+  "tegenst.": 54.9, "rivales": 48.7, "adv.": 26.5, "Opp": 24.5,
 };
 
 const LOCALES = { en, es, fr, nl } as unknown as Record<string, Dict>;

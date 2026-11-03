@@ -20,6 +20,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql, withTenant } from "@/lib/db";
+import { byeAward } from "@/lib/fixture-bye";
 import { builtinModules } from "@seazn/engine/sports";
 import { entrantKindCap } from "@seazn/engine/sport";
 import { buildTemplateStages } from "@/lib/format-templates";
@@ -373,23 +374,96 @@ describe.runIf(HAS_DB)("X-SW-26 Finish the Swiss now", () => {
       expect(roundsIn(rows), "round 4 dropped with round 5").toEqual([1, 2, 3]);
       expect(rows.some((f) => r4.some((g) => g.id === f.id)), "no round-4 row survives").toBe(false);
       // The stage completed on round 3's table: the snapshot it wrote gives the holder no round-4 bye.
-      const [snap] = await sql<{ rows: { entrantId: string; points: number }[] }[]>`
+      const [snap] = await sql<{ rows: { entrantId: string; points: number; rank: number }[] }[]>`
         select rows from standings_snapshots where stage_id = ${rig.stageId} and pool_id is null`;
       expect(snap?.rows.find((r) => r.entrantId === holder)?.points, "the dropped bye is not counted").toBe(pointsOf(after3, holder));
       const proposal = await draftProposal(rig.koStageId!);
-      // W3 (engine 2.0.0, FIDE C.07 art. 16.4.2): the seeding is the top 4 of the FINISHED table, not of `after3` row by row. A
-      // pairing-allocated bye is an unplayed card whose Buchholz dummy is capped at D x R (the engine's tiebreakers.js), and Finish
-      // writes rounds 5 -> 3 — so the same three rounds order TIED rows differently once the stage's total is 3. Measured on one
-      // ledger read under rounds 5 and then rounds 3: Buchholz 6.5 -> 5.5, and two 4-point rows swap places (the old assertion
-      // held only when no such pair existed: it failed one run in three). So: the four seeded are the finished table's top 4, and
-      // they stand on round 3's points — the dropped round-4 bye added a point to nobody.
-      const finished = await standingsNow(rig);
+      // W3 (engine 2.0.0, FIDE C.07 art. 16.4.2): the seeding is the top 4 of the FINISHED table, not of `after3` row by row —
+      // Finish writes rounds 5 -> 3 and a bye's Buchholz dummy is capped at D x R, so the same three rounds can order TIED rows
+      // differently once the total is 3 (the next case rigs exactly that, by hand, so it holds on every run). Here, on a random
+      // field where such a pair may or may not exist: the four seeded are the PERSISTED snapshot's top 4 by its stored `rank`
+      // (written by Finish, not a second live ranking), in that order, standing on round 3's points — the dropped round-4 bye
+      // added a point to nobody.
+      const finished = [...snap!.rows].sort((a, b) => a.rank - b.rank);
+      expect(finished, "the snapshot holds the whole field, ranked 1..7").toHaveLength(7);
+      expect(finished.map((r) => r.rank), "…each rank stored").toEqual([1, 2, 3, 4, 5, 6, 7]);
       const seeded = [...proposal.computed.qualifiers].sort((a, b) => a.rank - b.rank).map((q) => q.entrantId);
-      expect(seeded, "the seeding is the finished table's top 4").toEqual(finished.slice(0, 4).map((r) => r.entrantId));
+      expect(seeded, "the seeding is the snapshot's top 4, in its order").toEqual(finished.slice(0, 4).map((r) => r.entrantId));
       expect(
-        seeded.map((id) => pointsOf(finished, id)),
+        finished.slice(0, 4).map((r) => r.points),
         "on round 3's points: the dropped bye added none",
       ).toEqual(after3.slice(0, 4).map((r) => r.points));
+    }, 300_000);
+
+    it(`X-SW-26 Finish writes rounds 5 -> 3 and the finished table ranks a tie the bye's dummy decides the other way round: the seeding follows the finished order (${s.sport})`, async () => {
+      // A hand-derived rig, so the reorder is witnessed on EVERY run (FIDE C.07 art. 16.4.2; rulebook-W3 section 4). FIVE players,
+      // three rounds written onto the minted shells ([winner, loser]; the bye holder wins it):
+      //   R1 bye p0   p1 beat p2   p3 beat p4
+      //   R2 bye p1   p3 beat p0   p4 beat p2
+      //   R3 bye p4   p1 beat p0   p3 beat p2
+      // Scores (a win = 1): p1 3 (two wins and a bye), p3 3, p4 2, p0 1, p2 0 — p1 and p3 are level on points and only the
+      // tie-break separates them. Both sports' Swiss order is points, then Buchholz Cut-1. A bye is an unplayed card: its
+      // Buchholz contribution is a dummy at the holder's own score capped at D x R (16.4.2), D a draw = half a win (C.07 7.7:
+      // the rule's draw where one can stand, else half the win points), R the stage's rounds. No card here is a voluntary unplayed round, so a cut drops the LOWEST contribution.
+      //   p1: opponents p2 = 0 and p0 = 1, and the bye dummy min(3, D x R):
+      //       R = 5: min(3, 2.5) = 2.5 -> [0, 1, 2.5], Cut-1 drops 0 -> 3.5      R = 3: min(3, 1.5) = 1.5 -> [0, 1, 1.5] -> 2.5
+      //   p3: opponents p4 = 2, p0 = 1, p2 = 0 -> [0, 1, 2], Cut-1 drops 0 -> 3, whatever R is.
+      // So under the declared 5 rounds p1 (3.5) ranks above p3 (3); once Finish writes 3 rounds p3 (3) ranks above p1 (2.5).
+      // Everyone else is separated by points alone (p4, p0, p2), so no draw of lots is involved.
+      const HISTORY: readonly { bye: number; boards: readonly (readonly [number, number])[] }[] = [
+        { bye: 0, boards: [[1, 2], [3, 4]] },
+        { bye: 1, boards: [[3, 0], [4, 2]] },
+        { bye: 4, boards: [[1, 0], [3, 2]] },
+      ];
+      const rig = await finishRig(s, 5, 5, { q: 4 });
+      const e = rig.entrants;
+      const idxOf = (id: string) => e.indexOf(id);
+      // The boards are SEATED with SQL (the pairer would choose its own) and PLAYED through the real scoring door (`homeWins`:
+      // the winner is the home side), because the table folds a board's recorded state, not a stored outcome; the byes are the
+      // pairing's own award shape.
+      let written = 0;
+      for (const [i, round] of HISTORY.entries()) {
+        for (const [b, [winner, loser]] of round.boards.entries()) {
+          const key = `sw-r${i + 1}-b${b + 1}`;
+          const seated = await sql`
+            update fixtures set home_entrant_id = ${e[winner]!}, away_entrant_id = ${e[loser]!}
+            where stage_id = ${rig.stageId} and ext_key = ${key}
+            returning id`;
+          expect(seated.length, `rig: shell ${key} exists and took its players`).toBe(1);
+          await homeWins(rig, (await rowsOf(rig.stageId)).find((f) => f.ext_key === key)!);
+          written++;
+        }
+        const bye = await sql`
+          update fixtures set home_entrant_id = ${e[round.bye]!}, away_entrant_id = null, status = 'forfeited',
+            outcome = ${sql.json(byeAward(e[round.bye]!) as never)}
+          where stage_id = ${rig.stageId} and ext_key = ${`sw-r${i + 1}-bye`}
+          returning id`;
+        expect(bye.length, `rig: shell sw-r${i + 1}-bye exists and took the bye`).toBe(1);
+        written++;
+      }
+      expect(written, "rig: three rounds of two boards and a bye written").toBe(9);
+      expect(await stageState(rig.stageId), "premise: five rounds are declared").toEqual({ status: "active", rounds: 5 });
+
+      // Before Finish (R = 5): p1 3.5 above p3 3, then p4, p0, p2 on points.
+      const before = await standingsNow(rig);
+      expect(before.map((r) => idxOf(r.entrantId)), "R = 5: Cut-1 3.5 vs 3 puts p1 above p3").toEqual([1, 3, 4, 0, 2]);
+      expect(before[0]!.points, "premise: p1 and p3 are level on points").toBe(before[1]!.points);
+      expect(before[1]!.points, "…and ahead of p4").toBeGreaterThan(before[2]!.points);
+
+      const out = await finishSwissNow(rig.auth, rig.stageId);
+      expect(out).toMatchObject({ finished_after: 3, completed: true });
+
+      // After Finish (R = 3): p3 3 above p1 2.5. The PERSISTED snapshot, then the proposal seeded from it.
+      const [snap] = await sql<{ rows: { entrantId: string; points: number; rank: number }[] }[]>`
+        select rows from standings_snapshots where stage_id = ${rig.stageId} and pool_id is null`;
+      const finished = [...snap!.rows].sort((a, b) => a.rank - b.rank);
+      expect(finished.map((r) => r.rank), "the snapshot ranks the five 1..5").toEqual([1, 2, 3, 4, 5]);
+      expect(finished.map((r) => idxOf(r.entrantId)), "R = 3: Cut-1 3 vs 2.5 puts p3 above p1").toEqual([3, 1, 4, 0, 2]);
+      const proposal = await draftProposal(rig.koStageId!);
+      const seeded = [...proposal.computed.qualifiers].sort((a, b) => a.rank - b.rank).map((q) => idxOf(q.entrantId));
+      expect(seeded, "the seeding follows the finished order, not the one read before the call").toEqual([3, 1, 4, 0]);
+      expect(proposal.computed.ties, "no tie is left to the organiser: Cut-1 decided it").toEqual([]);
+      expect(await stageState(rig.stageId)).toEqual({ status: "complete", rounds: 3 });
     }, 300_000);
 
     it(`X-SW-26 a started round 4 refuses and names its boards (${s.sport})`, async () => {

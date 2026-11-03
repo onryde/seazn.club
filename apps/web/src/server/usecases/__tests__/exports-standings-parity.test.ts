@@ -213,10 +213,27 @@ function ordersOf(m: AnySportModule, kind: TableStageKind): { id: string; cfg: u
 
 const STATES = ["draw", "nodraw", "level", "empty"] as const;
 
+/** The sweep's work, counted by a cheap pre-pass over the SAME loops (no table is built): sport × table stage kind × order ×
+ *  state × locale. The sweep's timeout is derived from it (AGENTS.md class 20 — a flat timeout beside a derived cost is a latent
+ *  red), and the sweep asserts it ran exactly this many scenes, so the budget cannot drift from the work it pays for. */
+const SWEEP_SCENES = (() => {
+  let n = 0;
+  forEachSport((c) => {
+    for (const kind of TABLE_KINDS) n += ordersOf(c.module, kind).length * STATES.length * LOCALES.length;
+  });
+  return n;
+})();
+/** Per scene, 3,648 scenes in all: 0.6 ms alone (2.2-2.6 s, 2026-11-03); 19.7 ms in the 117-file scoped run beside the DB suites
+ *  (71.9 s, the worst measured — 27-38 s in lighter loaded runs). 30 ms is 1.5 times the worst: the machine's load, not the
+ *  sweep, is what moves it, and the budget must hold under the load that CI's shards and the scoped runs bring. */
+const SWEEP_MS_PER_SCENE = 30;
+const SWEEP_BUDGET_MS = Math.max(30_000, 5_000 + SWEEP_SCENES * SWEEP_MS_PER_SCENE);
+
 describe("standings export parity — the exported table is the public table (registry sweep, counted)", () => {
   it("every sport × table stage kind × order × state × locale: the export's header list and each row's cell text equal the public table's", () => {
     const seen = { sports: 0, scenes: 0, headers: 0, rows: 0, cells: 0, derivedColumns: 0, derivedCells: 0, dashCells: 0, wholeNumberCells: 0, renderedHeaders: 0, renderedCells: 0, apartTables: 0, halfTables: 0, halfPointCells: 0, halfPointTextCells: 0, d: 0, noD: 0 };
     const derivedKeysSeen = new Set<string>();
+    expect(SWEEP_SCENES, "premise: the pre-pass counted the sweep's scenes (zero would make the budget a floor over nothing)").toBeGreaterThan(2700);
     seen.sports = forEachSport((c) => {
       const m = c.module;
       for (const kind of TABLE_KINDS) {
@@ -293,6 +310,7 @@ describe("standings export parity — the exported table is the public table (re
     // scenes, 102144 cells, 4416 derived columns, 14848 dash cells), set a quarter under so a sport's departure is a red,
     // not a silent shrink.
     expect(seen.sports, "every built-in sport was swept").toBe(builtinModules.length);
+    expect(seen.scenes, "the sweep ran exactly the scenes its budget was derived from").toBe(SWEEP_SCENES);
     expect(seen.scenes, "scenes compared").toBeGreaterThan(2700);
     expect(seen.cells, "cells compared").toBeGreaterThan(76000);
     expect(seen.renderedCells, "cells read back off the division page's markup").toBeGreaterThan(19000);
@@ -309,10 +327,7 @@ describe("standings export parity — the exported table is the public table (re
     // Every derived column the engine declares was swept at least once: a key no sport's order earns would be unswept.
     expect([...derivedKeysSeen].sort(), "every derived key").toEqual([...DERIVED_KEYS].sort());
     console.log("exports-standings-parity checked:", JSON.stringify({ ...seen, derivedKeys: derivedKeysSeen.size }));
-    // The sweep walks the whole sport registry (2,700+ scenes, 76,000+ cells): 27s alone and 38s beside a loaded scoped run on
-    // the W3 engine (each Swiss scene folds a ledger that reads rounds and Buchholz), against the suite's 30s default. It is
-    // one honest sweep, not a hang — so it carries its own budget rather than being cut down.
-  }, 120_000);
+  }, SWEEP_BUDGET_MS);
 });
 
 // Hand-worked cells. The values are the rulebooks' arithmetic, typed here: the ratio is won ÷ lost and ∞ when unbeaten
