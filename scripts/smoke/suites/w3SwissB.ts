@@ -1,0 +1,109 @@
+// Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
+import { check, newSession, signIn, smokeDb, tag, v1, v1data } from "../harness.ts";
+import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
+
+/**
+ * Format matrix W3 Swiss app-B (plan 2026-10-31-w3-swiss-app-b.md) — the app PR's smoke proof, over real HTTP against a live
+ * server. One counted check per task that owes one, each beside the state it proves.
+ *
+ * T1 (X-SW-3; rulebook-W3-swiss.md §3.1, P-A1/P-A6; engine 2.0.0 `pairRound`): a Swiss round with NO legal pairing is
+ * refused by name, never answered "created 0, up to date". SIX players, five rounds declared, rounds 1-3 written onto the
+ * minted shells by SQL as a round-robin quarter — R1 {p0-p1, p2-p3, p4-p5}, R2 {p0-p5, p1-p2, p3-p4}, R3 {p0-p3, p1-p4,
+ * p2-p5}, each a home win — leave two unplayed triangles, so round 4 has no rematch-free perfect matching. `POST
+ * /api/v1/stages/{id}/generate` answers SWISS_NO_LEGAL_PAIRING at the status the SWISS_REFUSALS row rules (read off the
+ * table, never a typed literal), names the round, the reason and the field, and every round-4 seat stays empty.
+ * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissB runs it alone (SELECTABLE_SUITES).
+ */
+export async function w3SwissBSuite(): Promise<void> {
+  // T1: 1 (Pair next on a history with no legal round is refused SWISS_NO_LEGAL_PAIRING and seats nobody).
+  const EXPECTED_CHECKS = 1;
+  let checked = 0;
+  const w3Check = (label: string, cond: boolean) => {
+    checked++;
+    check(label, cond);
+  };
+
+  const owner = newSession();
+  await signIn(owner, `delivered+w3b_${tag}@resend.dev`);
+
+  type Fx = {
+    id: string;
+    stage_id: string;
+    round_no: number;
+    seq_in_round: number;
+    ext_key?: string | null;
+    home_entrant_id: string | null;
+    away_entrant_id: string | null;
+  };
+
+  // Check 1 — T1 (X-SW-3). Rounds 1-3 of the S6 shape (the expected shape is typed here from the rulebook's arithmetic: nine
+  // distinct pairs met leave two triangles, and a triangle has an odd number of vertices).
+  {
+    const HISTORY: readonly (readonly (readonly [number, number])[])[] = [
+      [[0, 1], [2, 3], [4, 5]],
+      [[0, 5], [1, 2], [3, 4]],
+      [[0, 3], [1, 4], [2, 5]],
+    ];
+    const comp = v1data<{ id: string } | undefined>(
+      await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W3 Swiss B ${tag}`, visibility: "private" }),
+    );
+    const divId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Open", sport_key: "badminton", variant_key: "bwf", config: {} }),
+    )?.id;
+    const entrants =
+      v1data<{ id: string; seed: number | null }[] | undefined>(
+        await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+          Array.from({ length: 6 }, (_, i) => ({ kind: "individual", display_name: `B${i + 1} ${tag}`, seed: i + 1 }))),
+      ) ?? [];
+    // p0..p5 are seeds 1..6, whatever order the POST answered them in.
+    const ids = [...entrants].sort((a, b) => (a.seed ?? 0) - (b.seed ?? 0)).map((e) => e.id);
+    const stageId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 5 } }),
+    )?.id;
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    // The history is SQL-seeded: no route writes a decided board onto a shell without scoring it. -1: no DATABASE_URL, so
+    // the seed could not be written and the check cannot be judged (it fails, never skips).
+    let seeded = -1;
+    if (process.env.DATABASE_URL && stageId !== undefined && ids.length === 6) {
+      const db = smokeDb();
+      try {
+        seeded = 0;
+        for (const [i, round] of HISTORY.entries()) {
+          for (const [b, [home, away]] of round.entries()) {
+            const outcome = { kind: "win", winner: ids[home], loser: ids[away] };
+            seeded += (
+              await db`update fixtures set home_entrant_id = ${ids[home]}, away_entrant_id = ${ids[away]}, status = 'decided',
+                         outcome = ${db.json(outcome)}
+                       where stage_id = ${stageId} and ext_key = ${`sw-r${i + 1}-b${b + 1}`}`
+            ).count;
+          }
+        }
+      } finally {
+        await db.end();
+      }
+    }
+    const fixtures = async () =>
+      (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    const before = await fixtures();
+    const res = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const after = await fixtures();
+    const round4 = after.filter((f) => f.round_no === 4);
+    // The refusal's details ride beside `code` on the v1 envelope (api-v1/http.ts merges HttpError `extra`). Finish is
+    // available after three decided rounds, so the table's RESOLVABLE status (409) is the one that must come back.
+    const err: { code?: string; round?: number; reason?: string; field?: number } | undefined = res.json.error;
+    const row = SWISS_REFUSALS.SWISS_NO_LEGAL_PAIRING;
+    const ok =
+      started.status < 300 && seeded === 9 && before.length === 15 &&
+      res.status === row.resolvableStatus && err?.code === "SWISS_NO_LEGAL_PAIRING" &&
+      err.round === 4 && err.reason === "rematch" && err.field === 6 &&
+      round4.length === 3 && round4.every((f) => f.home_entrant_id === null && f.away_entrant_id === null) &&
+      JSON.stringify(after) === JSON.stringify(before);
+    w3Check(
+      "w3b X-SW-3: Pair next on a Swiss whose round 4 has no legal pairing is refused 409 SWISS_NO_LEGAL_PAIRING (round 4, rematch, field 6), every round-4 seat stays empty and nothing else moves" +
+        (ok ? "" : ` — division ${divId ?? "none"}, stage ${stageId ?? "none"}, players ${ids.length}, start ${started.status}, seeded ${seeded === -1 ? "no DATABASE_URL" : seeded}, rows before ${before.length}, generate ${res.status} (want ${row.resolvableStatus}) ${JSON.stringify(res.json).slice(0, 200)}, round 4 rows ${round4.length}, unchanged ${JSON.stringify(after) === JSON.stringify(before)}`),
+      ok,
+    );
+  }
+
+  check(`w3b: the W3 Swiss app-B suite ran its ${EXPECTED_CHECKS} checks (ran ${checked})`, checked === EXPECTED_CHECKS);
+}

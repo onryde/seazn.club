@@ -18,6 +18,7 @@ import { w2cStageRulesSuite } from "./suites/w2cStageRules.ts";
 import { w2dTablesSuite } from "./suites/w2dTables.ts";
 import { w2eRefusalsSuite } from "./suites/w2eRefusals.ts";
 import { w3SwissASuite } from "./suites/w3SwissA.ts";
+import { w3SwissBSuite } from "./suites/w3SwissB.ts";
 import { divisionSettingsSuite } from "./suites/divisionSettings.ts";
 import { funnelReminderSuite } from "./suites/funnelReminder.ts";
 import { v1Suite } from "./suites/v1.ts";
@@ -57,6 +58,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   funnelReminder: () => funnelReminderSuite(),
   w2eRefusals: () => w2eRefusalsSuite(),
   w3SwissA: () => w3SwissASuite(),
+  w3SwissB: () => w3SwissBSuite(),
   youtubeConnect: () => youtubeConnectSuite(),
 };
 
