@@ -381,7 +381,7 @@ async function assertMissedRoundsScoreZero(rig: Rig, lateId: string, label: stri
   const facts = recordOnRows(rows, lateId);
   const hist = await historyOf(rig);
   const pairScore = (await withTenant(rig.auth.orgId, (tx) => stageTablePoints(tx, rig.swissStageId))).points.get(lateId) ?? 0;
-  expect(pairScore, `${label}: the Pair counts only what was played (0 per missed round)`).toBe(pointsOnRows(rows, lateId, declaredPay(rig)));
+  expect(pairScore, `${label}: the table's points (the Pair's score since T5) count only what was played (0 per missed round)`).toBe(pointsOnRows(rows, lateId, declaredPay(rig)));
   expect(hist.byes.has(lateId), `${label}: a missed round is no bye (P-A4: still bye-eligible)`).toBe(facts.byes > 0);
   const row = (await storedTable(rig.swissStageId)).find((r) => r.entrantId === lateId);
   if (facts.won + facts.lost === 0) {
@@ -771,7 +771,7 @@ describe.runIf(HAS_DB)("X-SW-12 the cut carries a latecomer correctly", () => {
           // implicit-bye path; its record and points below are structural guards.
           const hist = await historyOf(rig);
           const pairScore = (await withTenant(rig.auth.orgId, (tx) => stageTablePoints(tx, rig.swissStageId))).points.get(late.id) ?? 0;
-          expect(pairScore, "the Pair scores the missed round 0").toBe(pointsOnRows(rows, late.id, declaredPay(rig)));
+          expect(pairScore, "the table's points (the Pair's score since T5) give the missed round 0").toBe(pointsOnRows(rows, late.id, declaredPay(rig)));
           expect(hist.byes.has(late.id), "bye-ineligible only for a real bye row, never for the missed round").toBe(facts.byes > 0);
           const table = await storedTable(rig.swissStageId);
           const row = table.find((r) => r.entrantId === late.id);

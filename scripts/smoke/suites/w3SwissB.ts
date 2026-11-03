@@ -427,17 +427,11 @@ export async function w3SwissBSuite(): Promise<void> {
       all.filter((f) => f.round_no === r && !/-bye$/.test(f.ext_key ?? "") && f.home_entrant_id !== null && f.away_entrant_id !== null);
     const statuses: number[] = [];
     const refusedEvents: string[] = [];
-    // Not `appendScoreEvent`: its idempotency key is (fixture, type), so a board's second and third `period.advance` would be
-    // taken for replays of the first and never applied. The key here is unique per event.
-    let evNo = 0;
+    // The shared helper, since its idempotency key became unique per call (T5 review m6): a board's second and third
+    // `period.advance` are applied, not taken for replays of the first. Check 6 is itself the live witness - on the old
+    // (fixture, type) key those two events answer a success that applied nothing, and the next one is refused.
     const ev = async (fixtureId: string, type: string, payload: unknown) => {
-      const seq = v1data<{ last_seq: number }>(await v1(owner, `/api/v1/fixtures/${fixtureId}/state`)).last_seq;
-      const res = await v1(owner, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
-        expected_seq: seq,
-        type,
-        payload,
-        idempotency_key: `smoke-${tag}-${fixtureId}-${type}-${++evNo}`,
-      });
+      const res = await appendScoreEvent(owner, fixtureId, type, payload);
       statuses.push(res.status);
       if (res.status >= 300) refusedEvents.push(`${type} ${JSON.stringify(payload)} -> ${JSON.stringify(res.json).slice(0, 160)}`);
     };

@@ -392,6 +392,12 @@ describe.runIf(HAS_DB)("X-SW-19 the Swiss score groups are the stage's table poi
       const bye = (await boardsOf(r.stageId, 1)).find((f) => f.home_entrant_id !== null && f.away_entrant_id === null);
       expect(bye, "rig: round 1 seats a bye").toBeDefined();
       expect(await decideRound(r, 1, homeWins(r)), "rig: the two boards decided").toBe(2);
+      // T5 review m4: the consumer is the row the PUBLIC table is read from - `standings_snapshots`, written by the scoring
+      // refold after round 1's last board - not `rankedStageStandings`, which runs the same loader and fold as the producer.
+      // Read before the Pair, so round 2's own bye is no part of it.
+      const [snapshot] = await sql<{ rows: { entrantId: string; points: number }[] }[]>`
+        select rows from standings_snapshots where stage_id = ${r.stageId} and pool_id is null`;
+      expect(snapshot?.rows.length, "anti-vacuity: the stored snapshot lists the field").toBeGreaterThan(0);
 
       const { standings } = await pairSpied(r);
       const holder = bye!.home_entrant_id!;
@@ -399,10 +405,9 @@ describe.runIf(HAS_DB)("X-SW-19 the Swiss score groups are the stage's table poi
       expect(mine, "the bye holder is in round 2's field").toBeDefined();
       expect(mine, "the bye is the declared win (a set sport's clean sweep)").toBe(byePoints(sport, rule));
       expect(mine, "and a bye that scores nothing is no bye").toBeGreaterThan(0);
-      // The consumer: the public table's points for the same entrant.
-      const table = await withTenant(r.auth.orgId, (tx) => rankedStageStandings(tx, r.stageId));
-      expect(table.length, "anti-vacuity: the table listed the field").toBeGreaterThan(0);
-      expect(mine, "the very number the published table shows").toBe(table.find((row) => row.entrantId === holder)?.points);
+      expect(mine, "the very number the published table (its stored snapshot) shows").toBe(
+        snapshot!.rows.find((row) => row.entrantId === holder)?.points,
+      );
     }, 120_000);
   }
 
@@ -499,7 +504,7 @@ describe.runIf(HAS_DB)("X-SW-19 the Swiss score groups are the stage's table poi
     // Generate's later refold (a separate transaction, `refoldStageTable`) ranks the table, and stores the draw, either way.
     // Rolled back by a sentinel, so the stage is left as the next assertions expect it.
     const ROLLBACK = new Error("rollback");
-    const inTx: { before: number; after: number; seated: number } = { before: -1, after: -1, seated: -1 };
+    const inTx: { before: number; after: number; seated: number; ranked: number } = { before: -1, after: -1, seated: -1, ranked: -1 };
     const count = (tx: Parameters<Parameters<typeof withTenant>[1]>[0]) =>
       tx<{ n: number }[]>`select count(*)::int as n from stage_lots_draws where stage_id = ${r.stageId}`.then((rows) => rows[0]!.n);
     await withTenant(r.auth.orgId, async (tx) => {
@@ -513,12 +518,17 @@ describe.runIf(HAS_DB)("X-SW-19 the Swiss score groups are the stage's table poi
       const out = await swissGen(tx, r.stageId, stage!.division_id, stage!.config, entrants, existing);
       inTx.seated = out.seatedCount;
       inTx.after = await count(tx);
+      // T5 review m3: the positive pair, counted by THIS counter in THIS transaction (as the tenant role, under FORCE RLS),
+      // so the zeros above are shown to be able to see a row: the table's own ranking stores the draw the level table needs.
+      await rankedStageStandings(tx, r.stageId);
+      inTx.ranked = await count(tx);
       throw ROLLBACK;
     }).catch((e: unknown) => {
       if (e !== ROLLBACK) throw e;
     });
     expect(inTx.seated, "anti-vacuity: the Pair seated round 2 inside that transaction").toBeGreaterThan(0);
     expect([inTx.before, inTx.after], "the Pair's score read stored no lots draw").toEqual([0, 0]);
+    expect(inTx.ranked, "and the in-transaction counter CAN see a stored draw: the table's own ranking stores one there").toBeGreaterThan(0);
     expect(await lotsCount(r.stageId), "and the rolled-back Pair left none behind").toBe(0);
 
     // The positive pair, which gives the zeros above their meaning: the table's own ranking DOES store the draw here.
@@ -547,6 +557,13 @@ describe.runIf(HAS_DB)("X-SW-19 the Swiss score groups are the stage's table poi
     const got = scoresOf(standings);
     const want = await earned(r, PINNED, PINNED.win.regulation, PINNED.draw!, 1);
     expect([...got].sort(), "each score is the pinned rule's").toEqual([...want].sort());
+    // T5 review m1: the `rule` stageTablePoints hands the final-round maximum (T7) is the stage's PINNED rule, the very one
+    // that paid those scores, not a re-read of the sport's declared one.
+    const read = await withTenant(r.auth.orgId, (tx) => stageTablePoints(tx, r.stageId));
+    expect(
+      [read.rule.win.regulation, read.rule.draw, read.rule.unit],
+      "stageTablePoints returns the pinned rule (win 5, draw 2), not the sport's declared 2 / 1 in half-points",
+    ).toEqual([PINNED.win.regulation, PINNED.draw, PINNED.unit]);
     // differential: the sport's declared rule would say 2 / 1; today's formula 1 / 0.5
     expect([...got.values()].sort((a, b) => b - a), "5 / 5 / 2 / 2 / 0 / 0").toEqual([5, 5, 2, 2, 0, 0]);
   }, 120_000);

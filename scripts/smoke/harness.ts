@@ -1275,6 +1275,9 @@ export async function orgDayOf(s: Session, competitionId: string, iso: string): 
   );
 }
 
+/** The calls `appendScoreEvent` has made in this run: part of every idempotency key it sends. */
+let appendNo = 0;
+
 /**
  * S13/W11 — post one score event through the SAME wire contract the v2
  * ScorePad's own transport.ts sends (POST /api/v1/fixtures/{id}/events with
@@ -1282,13 +1285,17 @@ export async function orgDayOf(s: Session, competitionId: string, iso: string): 
  * SEQ_CONFLICT rather than assuming the first attempt lands clean (doc 08
  * §4). `current_seq` rides the 409 body only when the engine error carried a
  * numeric actualSeq (http.ts) — falls back to a fresh GET .../state read
- * exactly like transport.ts's own documented fallback when it does not. A
- * FRESH idempotency_key on every attempt: engine-db/append-event.ts always
- * mints its own randomUUID() for the persisted row id regardless of the key
- * sent (scoring.ts never forwards the client's key as the row id), and the
- * dedup cache in front of it is fail-open Redis with no ledger column — so
- * reusing one key across a retry buys no provable no-op here, and this
- * helper never leans on it for correctness.
+ * exactly like transport.ts's own documented fallback when it does not.
+ *
+ * The idempotency key IS honoured by the server: V413 made `(fixture_id,
+ * idempotency_key)` unique on `score_events`, and scoring.ts answers a repeat
+ * of a key with the FIRST answer (`replayOutcomeFor`), applying nothing. So the
+ * key is unique per CALL (`appendNo`, a module counter) as well as per attempt:
+ * a key of (fixture, type) alone made a second event of one type on one fixture
+ * (ice hockey's three `period.advance`, a second `game.summary`) a silent
+ * replay of the first - reported as a success, never applied (W3 app-B T5
+ * review m6). A 409 attempt wrote nothing (SEQ_CONFLICT fires before the
+ * insert), so the next attempt's fresh key cannot double-apply.
  */
 export async function appendScoreEvent(
   s: Session,
@@ -1296,6 +1303,7 @@ export async function appendScoreEvent(
   type: string,
   payload: unknown,
 ): Promise<V1Res> {
+  const callNo = ++appendNo;
   let expectedSeq = v1data<{ last_seq: number }>(
     await v1(s, `/api/v1/fixtures/${fixtureId}/state`),
   ).last_seq;
@@ -1304,7 +1312,7 @@ export async function appendScoreEvent(
       expected_seq: expectedSeq,
       type,
       payload,
-      idempotency_key: `smoke-${tag}-${fixtureId}-${type}-${attempt}`,
+      idempotency_key: `smoke-${tag}-${fixtureId}-${type}-${callNo}-${attempt}`,
     });
     if (res.status !== 409) return res;
     expectedSeq =
