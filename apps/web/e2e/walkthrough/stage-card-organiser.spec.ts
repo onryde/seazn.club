@@ -39,6 +39,9 @@ import { uiEn, fill } from "../match-room-kit";
  * Every string asserted is read from the dictionary (`uiEn` / `fill`), every count from the database, and the card's action order from
  * the rail's own source (the order it renders them in is a declaration; the test does not retype it). Budgets are derived from the
  * number of navigations and taps, never one flat number (class 20).
+ *
+ * One sport (generic) except where a kind needs another, on purpose: this walks layout and flow, which is sport-agnostic (owner rule: skip
+ * rare cases).
  */
 
 const NAV_MS = 20_000;
@@ -107,12 +110,14 @@ const RAIL_SRC = readFileSync(fileURLToPath(new URL("../../src/components/v2/des
 test.describe("The stage card, walked", () => {
   test("a league mid-way: the rules strip, the card's actions, Complete's reason, round bars, rows in time order, a round left open across a refresh", async ({ page, request }) => {
     test.setTimeout(budget(3, 60));
-    const seed = await seedDivision(request, "League", { entrants: ["Ana", "Ben", "Cy", "Di"] });
+    const leagueEntrants = ["Ana", "Ben", "Cy", "Di"];
+    const seed = await seedDivision(request, "League", { entrants: leagueEntrants });
     const { stageId, divisionId } = seed;
     const all = await fixturesOf(stageId);
-    expect(all, "a league of four plays six matches").toHaveLength(6);
+    const n = leagueEntrants.length;
+    expect(all, "a league plays every pair once").toHaveLength((n * (n - 1)) / 2);
     const rounds = [...new Set(all.map((f) => f.round_no))].sort((a, b) => a - b);
-    expect(rounds, "in three rounds").toHaveLength(3);
+    expect(rounds, "in one round fewer than there are entrants").toHaveLength(n - 1);
     const inRound = (n: number): Fx[] => all.filter((f) => f.round_no === rounds[n - 1]);
     // Round 1: both played. Round 2: one played, one left to play. Round 3: none played - and its two matches TIMED in the reverse of
     // their order in the round, so "rows in time order" differs from "rows in draw order".
@@ -147,7 +152,7 @@ test.describe("The stage card, walked", () => {
       await expect(strip.getByTestId(`division-rules-panel-${id}`), `${id}: its panel is open beside the others`).toBeVisible();
       panels++;
     }
-    expect(panels, "anti-vacuity: three panels open at once").toBe(3);
+    expect(panels, "anti-vacuity: every panel open at once").toBe(toggles.length);
     await expectNoHorizontalScroll(page);
     for (const [id] of toggles) {
       await strip.getByTestId(`division-rules-toggle-${id}`).click();
@@ -201,7 +206,8 @@ test.describe("The stage card, walked", () => {
     await expect(complete).toHaveAccessibleDescription(fill("stageCard.completeHint.other", { count: all.length }));
     const status = await withDb((sql) => sql<{ status: string }[]>`select status from stages where id = ${stageId}`);
     expect(status[0]!.status, "the tap completed nothing").not.toBe("complete");
-    await page.mouse.click(2, 2);
+    // A tap elsewhere: on the rules strip's own title, a heading nothing listens to.
+    await strip.getByRole("heading", { name: uiEn["rulesStrip.title"]! }).click();
     await expect(hint, "a tap elsewhere puts it away").toBeHidden();
 
     // Add match opens its form and closes it again (twice: the sequence, not the click).
@@ -214,30 +220,31 @@ test.describe("The stage card, walked", () => {
     }
     // The card's own settings open and close from their buttons.
     let opened = 0;
-    for (const panel of ["format", "points", "tiebreaks"] as const) {
+    const settingsPanels = ["format", "points", "tiebreaks"] as const;
+    for (const panel of settingsPanels) {
       await openStagePanel(card, panel);
       await expect(card.locator(`#stage-panel-${stageId}-${panel}`)).toBeVisible();
       await closeStagePanel(card, panel);
       await expect(card.locator(`#stage-panel-${stageId}-${panel}`)).toHaveCount(0);
       opened++;
     }
-    expect(opened, "anti-vacuity: three settings panels opened and closed").toBe(3);
+    expect(opened, "anti-vacuity: every settings panel opened and closed").toBe(settingsPanels.length);
 
     // ── round bars: "Round N · x of y done", from the matches' own status ───────────────────────────────────────────────────
     const bars = card.getByTestId("run-sheet-round-toggle");
-    await expect(bars, "three rounds, a bar each").toHaveCount(3);
+    await expect(bars, "a bar per round").toHaveCount(rounds.length);
     // The statuses in `all` were read BEFORE the scoring above; re-read them for the expected counts.
     const nowRows = await fixturesOf(stageId);
     const doneOf = (n: number): number => nowRows.filter((f) => f.round_no === rounds[n - 1] && f.status === "decided").length;
     const expectedDone = [2, 1, 0];
     let barsRead = 0;
-    for (let n = 1; n <= 3; n++) {
-      expect(doneOf(n), `premise: round ${n} has ${expectedDone[n - 1]} played in the database`).toBe(expectedDone[n - 1]);
-      const bar = card.locator(`[aria-controls="run-sheet-rounds-${stageId}-${rounds[n - 1]}"]`);
-      await expect(bar).toHaveText(new RegExp(`^${esc(fill("runsheet.round.heading", { round: n }))}\\s*·\\s*${esc(fill("runsheet.round.done.other", { done: doneOf(n), total: 2 }))}`));
+    for (let r = 1; r <= rounds.length; r++) {
+      expect(doneOf(r), `premise: round ${r} has ${expectedDone[r - 1]} played in the database`).toBe(expectedDone[r - 1]);
+      const roundBar = card.locator(`[aria-controls="run-sheet-rounds-${stageId}-${rounds[r - 1]}"]`);
+      await expect(roundBar).toHaveText(new RegExp(`^${esc(fill("runsheet.round.heading", { round: r }))}\\s*·\\s*${esc(fill("runsheet.round.done.other", { done: doneOf(r), total: inRound(r).length }))}`));
       barsRead++;
     }
-    expect(barsRead, "anti-vacuity: all three bars read").toBe(3);
+    expect(barsRead, "anti-vacuity: every bar read").toBe(rounds.length);
     const bar = (n: number): Locator => card.locator(`[aria-controls="run-sheet-rounds-${stageId}-${rounds[n - 1]}"]`);
     const rowsOf = (n: number): Locator => card.locator(`#run-sheet-rounds-${stageId}-${rounds[n - 1]} li[data-fixture-no]:visible`);
     await expect(bar(1), "round 1 is finished: folded").toHaveAttribute("aria-expanded", "false");
@@ -316,9 +323,13 @@ test.describe("The stage card, walked", () => {
 
   test("a Swiss stage from Pair next to Complete, then the competition page's Show finished switch", async ({ page, request }) => {
     test.setTimeout(budget(8, 40));
-    const seed = await seedDivision(request, "Swiss", { entrants: ["S1", "S2", "S3", "S4"], stage: { kind: "swiss", name: "Swiss", config: { rounds: 2 } } });
+    const swissEntrants = ["S1", "S2", "S3", "S4"];
+    const swissRounds = 2;
+    const boards = swissEntrants.length / 2; // a board per pair of entrants, each round
+    const matches = swissRounds * boards;
+    const seed = await seedDivision(request, "Swiss", { entrants: swissEntrants, stage: { kind: "swiss", name: "Swiss", config: { rounds: swissRounds } } });
     const { stageId, divisionId, competitionId } = seed;
-    expect((await fixturesOf(stageId)).length, "start mints every round's shells: two rounds of two boards").toBe(4);
+    expect((await fixturesOf(stageId)).length, "start mints every round's shells: every round's boards").toBe(matches);
     const paired = async (round: number): Promise<number> =>
       (await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${stageId} and round_no = ${round} and home_entrant_id is not null and away_entrant_id is not null`))[0]!.n;
     let card = await openCard(page, request, divisionId, stageId);
@@ -333,7 +344,7 @@ test.describe("The stage card, walked", () => {
     // Pair round 1.
     expect(await paired(1)).toBe(0);
     await pairNext.click();
-    await expect.poll(() => paired(1), { timeout: 20_000, message: "round 1 is seated" }).toBe(2);
+    await expect.poll(() => paired(1), { timeout: 20_000, message: "round 1 is seated" }).toBe(boards);
     await page.reload({ waitUntil: "load" });
     card = stageCardOf(page, stageId);
     await openRail(card);
@@ -350,7 +361,7 @@ test.describe("The stage card, walked", () => {
     await openRail(card);
     expect(await paired(2)).toBe(0);
     await card.getByTestId("stage-generate").click();
-    await expect.poll(() => paired(2), { timeout: 20_000, message: "round 2 is seated" }).toBe(2);
+    await expect.poll(() => paired(2), { timeout: 20_000, message: "round 2 is seated" }).toBe(boards);
 
     // Play round 2: every match is played, and only then does Complete unlock.
     for (const f of (await fixturesOf(stageId)).filter((x) => x.round_no === 2)) await scoreFixture(request, f.id, 1, 0);
@@ -358,7 +369,7 @@ test.describe("The stage card, walked", () => {
     card = stageCardOf(page, stageId);
     await openRail(card);
     const done = card.getByTestId("stage-complete");
-    await expect(done, "all four matches are played: Complete unlocks").not.toHaveAttribute("aria-disabled", "true");
+    await expect(done, "every match is played: Complete unlocks").not.toHaveAttribute("aria-disabled", "true");
     await expect(card.getByTestId("stage-complete-hint")).toHaveCount(0);
     await expect(card.getByTestId("stage-generate"), "no round left to pair").toHaveCount(0);
     await done.click();
@@ -370,8 +381,8 @@ test.describe("The stage card, walked", () => {
     card = stageCardOf(page, stageId);
     const fold = card.getByTestId("stage-collapse-toggle");
     await expect(fold, "a completed stage's card is folded on arrival").toHaveAttribute("aria-expanded", "false");
-    await expect(card.getByTestId("stage-collapsed-summary")).toHaveText(fill("runsheet.round.done.other", { done: 4, total: 4 }));
-    await expect(card.locator("h3 ~ .badge"), "the status pill").toHaveText(/^Complete/i);
+    await expect(card.getByTestId("stage-collapsed-summary")).toHaveText(fill("runsheet.round.done.other", { done: matches, total: matches }));
+    await expect(card.locator("h3 ~ .badge"), "the status pill").toHaveText(uiEn["schedule.sstatus.complete"]!);
     await expect(card.getByTestId("stage-controls"), "its buttons are away with it").toHaveCount(0);
     await fold.click();
     await expect(fold).toHaveAttribute("aria-expanded", "true");
@@ -420,14 +431,15 @@ test.describe("The stage card, walked", () => {
     await expect(toggle, "an empty division opens the kinds block").toHaveAttribute("aria-expanded", "true");
     await expect(page.getByTestId("entrant-kinds")).toBeVisible();
     const header = await toggle.boundingBox();
-    const addForm = await page.getByRole("heading", { name: "Add entrant" }).boundingBox();
+    const addForm = await page.getByRole("heading", { name: uiEn["entrants.add.title"]! }).boundingBox();
     expect(header!.y, "the kinds sit above the roster").toBeLessThan(addForm!.y);
     let kindChips = 0;
-    for (const kind of ["individual", "pair", "team"]) {
+    const KINDS = ["individual", "pair", "team"];
+    for (const kind of KINDS) {
       await expect(chip(kind), `${kind}: a chip`).toHaveText(uiEn[`divset.entrants.kind.${kind}`]!);
       kindChips++;
     }
-    expect(kindChips, "anti-vacuity: the three kinds are offered").toBe(3);
+    expect(kindChips, "anti-vacuity: every kind is offered").toBe(KINDS.length);
     await expectNoHorizontalScroll(page);
 
     // One entrant in: the block folds under its one row.

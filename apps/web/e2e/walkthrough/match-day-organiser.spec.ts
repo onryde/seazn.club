@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { test, expect, type Locator, type Page, type Route } from "@playwright/test";
+import { test, expect, type Locator, type Page, type Request, type Route } from "@playwright/test";
 import {
   TAG,
   addEntrantsViaApi,
@@ -42,6 +42,8 @@ import { boardRoundCodes, type RoundCodeFixture } from "../../src/components/v2/
  * declarations in lib/match-day/view.ts (the group order, the fold minimum), never typed from the page. The seed plans in the
  * zone where the clock reads midday (e2e/midday-zone.ts), and the ORGANISATION's zone is set to the same one, so the courts' hours
  * (the break, the closed day) sit in the same day as the matches whatever the real hour is.
+ *
+ * One sport (generic), on purpose: this walks layout and flow, which is sport-agnostic (owner rule: skip rare cases).
  */
 
 // ── budget (class 20): a derived ceiling, never one flat number ──────────────────────────────────────────────────────────────────
@@ -104,6 +106,9 @@ const zonedParts = (instant: Date, tz: string): { weekday: number; date: string;
   return { weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(p.weekday!), date: `${p.year}-${p.month}-${p.day}`, minute: Number(p.hour) * 60 + Number(p.minute) };
 };
 
+/** The page's own reads of the day: the poll of the whole view and the candidates' list (both GETs under the competition's match-day API). */
+const matchDayGets = (url: URL): boolean => /\/api\/v1\/competitions\/[^/]+\/match-day(\/|$)/.test(url.pathname);
+
 const row = (page: Page, courtName: string): Locator => page.getByTestId("md-court-row").filter({ hasText: courtName });
 /** Opens the free-courts fold if the page shows one closed (a reload or a fresh visit folds it again). */
 async function openFold(page: Page): Promise<void> {
@@ -113,11 +118,13 @@ async function openFold(page: Page): Promise<void> {
 const courtIdsInList = (page: Page): Promise<string[]> =>
   page.getByTestId("md-court-row").evaluateAll((els) => els.map((e) => e.getAttribute("data-court-id") ?? ""));
 
+/** The points down a control that `hitTest` taps at. */
+const HIT_FRACTIONS = [0.15, 0.5, 0.85];
 /** Whether a tap at three points down the control lands ON it (not on whatever overlays it); returns how many points it tried. */
 async function hitTest(control: Locator, what: string): Promise<number> {
   await control.scrollIntoViewIfNeeded();
   let tried = 0;
-  for (const fraction of [0.15, 0.5, 0.85]) {
+  for (const fraction of HIT_FRACTIONS) {
     const lands = await control.evaluate((el, f) => {
       const r = el.getBoundingClientRect();
       const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height * f);
@@ -140,6 +147,13 @@ test.describe("Match Day - the organiser's day, walked", () => {
     page,
   }) => {
     test.setTimeout(budget(NAVS, ACTS, POLLS));
+    // Every read of the day this page makes, from the first request on: step 7 stalls them and must first know none is still on its way.
+    const inFlight = new Set<Request>();
+    page.on("request", (r) => {
+      if (r.method() === "GET" && matchDayGets(new URL(r.url()))) inFlight.add(r);
+    });
+    page.on("requestfinished", (r) => inFlight.delete(r));
+    page.on("requestfailed", (r) => inFlight.delete(r));
 
     // ── SEED: an organisation of their own, in the zone where the clock reads midday ───────────────────────────────────────────
     const { orgId } = await freshOrg(page, "mdwalk");
@@ -242,10 +256,19 @@ test.describe("Match Day - the organiser's day, walked", () => {
     expect(view.status).toBe(200);
     expect(view.data!.tz, "the page reads the organisation's zone").toBe(zone);
     const z = zonedParts(new Date(view.data!.now), zone);
-    expect(Math.floor(z.minute / 60), "premise: the zone puts the clock at midday").toBe(12);
+    // The zone was picked for `now0` (clock 12:00-12:59 then); the view reads the clock a little later, after the seed's calls, so a run that
+    // started in the last seconds of a local hour sees 13:00 and a fixed "12" is a coin-toss. What the walk needs is ROOM in the day: the view's
+    // clock must be the seed's clock run on by no more than this test's own budget, and the break and the walk must fit before midnight.
+    const budgetMin = Math.ceil(budget(NAVS, ACTS, POLLS) / 60_000);
+    const ranOn = z.minute - zonedParts(new Date(now0), zone).minute;
+    expect(ranOn, "premise: the view's clock is not behind the seed's").toBeGreaterThanOrEqual(0);
+    expect(ranOn, "premise: ... and has run on by no more than the test's own budget").toBeLessThanOrEqual(budgetMin);
+    const BREAK_IN = 25; // the break starts this many minutes from now ...
+    const BREAK_LEN = 30; // ... and lasts this many
+    expect(1440 - z.minute, "premise: today has room left for the break and the whole walk").toBeGreaterThan(BREAK_IN + BREAK_LEN + budgetMin);
     // A3: a break 25 to 55 minutes from now (a call now would still be on when it starts); A4: closed all of today.
-    const breakFrom = z.minute + 25;
-    const breakTo = breakFrom + 30;
+    const breakFrom = z.minute + BREAK_IN;
+    const breakTo = breakFrom + BREAK_LEN;
     await withDb(async (sql) => {
       await sql`insert into court_hours (court_id, org_id, weekday, open_min, close_min) values
         (${a3.id}, ${orgId}, ${z.weekday}, 0, ${breakFrom}), (${a3.id}, ${orgId}, ${z.weekday}, ${breakTo}, 1440)`;
@@ -370,6 +393,10 @@ test.describe("Match Day - the organiser's day, walked", () => {
     expect(links[0]!.n, "hide / show / hide / show never made a second link").toBe(1);
     await expectNoHorizontalScroll(page);
 
+    // The matches that could start on a free court, from the seed: the queue head of each OTHER court (Ana v Cal behind the semi-final on A1,
+    // Ana v Ben, Ben v Cal) and everything with no court (Cal v Dee, Ana v Dee, Ben v Dee, the second semi-final). The in-play semi-final is on court.
+    const waiting = [fx.anaCal, fx.anaBen, fx.benCal, fx.calDee, fx.anaDee, fx.benDee, fx.sf2];
+
     // ── 5. A COURT CLOSED FOR THE REST OF TODAY: Call stays ON, and asks ───────────────────────────────────────────────────────
     await row(page, a4.name).click();
     await expect(focus).toHaveAttribute("data-court-id", a4.id);
@@ -378,17 +405,17 @@ test.describe("Match Day - the organiser's day, walked", () => {
     await expect(focus.getByTestId("md-closure")).toHaveAttribute("data-kind", "now");
     await expect(focus.getByTestId("md-call-paused"), "the retired 'Call paused' state is not there").toHaveCount(0);
     const closedCandidates = focus.getByTestId("md-candidate");
-    // Every match that could be called here: the queue heads of the other courts (A1, A2, B1) and the unplaced (4).
-    await expect(closedCandidates).toHaveCount(7);
+    // Every match that could be called here: the same waiting matches a free court is offered.
+    await expect(closedCandidates).toHaveCount(waiting.length);
     const closedCalls = focus.getByRole("button", { name: fill("matchDay.candidate.call", { court: a4.name }) });
-    await expect(closedCalls).toHaveCount(7);
+    await expect(closedCalls).toHaveCount(waiting.length);
     let tapped = 0;
     for (const b of await closedCalls.all()) {
       await expect(b, "a shut court still takes a call").toBeEnabled();
       await expect(b).not.toHaveAttribute("aria-disabled", "true");
       tapped += await hitTest(b, "Call to the closed court");
     }
-    expect(tapped, "anti-vacuity: seven Call buttons, three points each").toBe(21);
+    expect(tapped, "anti-vacuity: every candidate's Call button, every hit-test point").toBe(waiting.length * HIT_FRACTIONS.length);
     const onClosed = focus.locator(`[data-testid="md-candidate"][data-fixture-id="${fx.anaDee}"]`);
     await onClosed.getByRole("button", { name: fill("matchDay.candidate.call", { court: a4.name }) }).click();
     const closedSheet = page.getByRole("dialog");
@@ -412,9 +439,6 @@ test.describe("Match Day - the organiser's day, walked", () => {
     await expect(focus).toHaveAttribute("data-state", "free");
     await expect(focus).toContainText(fill("matchDay.free.title", { court: a3.name }));
     const candidates = focus.getByTestId("md-candidate");
-    // The matches that could start here: the queue head of each OTHER court (Ana v Cal behind the semi-final on A1, Ana v Ben, Ben v Cal)
-    // and everything with no court (Cal v Dee, Ana v Dee, Ben v Dee, the second semi-final). The in-play semi-final is on court.
-    const waiting = [fx.anaCal, fx.anaBen, fx.benCal, fx.calDee, fx.anaDee, fx.benDee, fx.sf2];
     await expect(candidates).toHaveCount(waiting.length);
     const listed = await candidates.evaluateAll((els) => els.map((e) => e.getAttribute("data-fixture-id") ?? ""));
     expect([...listed].sort(), "exactly the waiting matches").toEqual([...waiting].sort());
@@ -428,7 +452,7 @@ test.describe("Match Day - the organiser's day, walked", () => {
       await expect(li).not.toHaveAttribute("data-blocked", /.+/);
       candidateChips++;
     }
-    expect(candidateChips, "anti-vacuity: every candidate's chip checked").toBe(7);
+    expect(candidateChips, "anti-vacuity: every candidate's chip checked").toBe(waiting.length);
     await expectNoHorizontalScroll(page);
 
     // Pick Cal v Dee (no time, no court) and Call to Court 3: the sheet previews what changes before anything does.
@@ -448,8 +472,9 @@ test.describe("Match Day - the organiser's day, walked", () => {
       fill("matchDay.sheet.warn.crossesClosure", { court: a3.name, from: clock(breakFrom), until: clock(breakTo) }),
     );
     const restText = (await sheet.locator('[data-testid="md-warning"][data-kind="rest_gap"]').textContent())!;
-    expect(restText, "Cal's rest, in the dictionary's words").toMatch(templateRegex("matchDay.sheet.warn.restGap", { person: names.cal, min: MIN_REST }, ["minutes"]));
-    expect(Number(/gets (\d+) min/.exec(restText)![1]), "the rest is under what the division asks").toBeLessThan(MIN_REST);
+    const restRead = templateRegex("matchDay.sheet.warn.restGap", { person: names.cal, min: MIN_REST }, ["minutes"]).exec(restText);
+    if (restRead === null) throw new Error(`the rest warning "${restText}" does not read as the dictionary's matchDay.sheet.warn.restGap (${uiEn["matchDay.sheet.warn.restGap"]}) for ${names.cal}`);
+    expect(Number(restRead[1]), "Cal's rest, in the dictionary's words, is under what the division asks").toBeLessThan(MIN_REST);
     await expect(sheet.getByTestId("md-shift"), "nothing else on Court 3 moves").toHaveCount(0);
     await expect(sheet).toContainText(fill("matchDay.sheet.noShift", { court: a3.name }));
     await expect(sheet).toContainText(uiEn["matchDay.sheet.notify"]!);
@@ -469,27 +494,55 @@ test.describe("Match Day - the organiser's day, walked", () => {
     await expect(candidates).toHaveCount(waiting.length);
     await expect(row(page, a3.name)).toHaveAttribute("data-state", "free");
 
-    // ── 7. PLAYER_BUSY: a stale tab presses Call for a player another desk has just put on a court ─────────────────────────────
-    // This tab's polls (the page's own and the candidates') are stalled, so it still shows Ben v Cal as callable; then another desk calls
-    // Ana v Ben onto B2 through the API (the second actor). The Call pressed on the stale row is refused by the server.
-    const matchDayGets = (url: URL): boolean => /\/api\/v1\/competitions\/[^/]+\/match-day(\/|$)/.test(url.pathname);
+    // ── 7. PLAYER_BUSY: another desk puts a player on a court while this tab's page is out of date ────────────────────────────
+    // This tab's polls (the page's own and the candidates') are stalled, so it keeps showing the picture it has. The stall goes in first and
+    // THEN the reads already on their way are waited out, so no poll can land after the second actor (another desk, through the API) moves.
     const stall = async (route: Route): Promise<void> => {
       if (route.request().method() === "GET") await route.abort();
       else await route.continue();
     };
     await page.route(matchDayGets, stall);
+    await expect.poll(() => inFlight.size, { message: "no read of the day is still on its way once the stall is in" }).toBe(0);
+    await expect(focus).toHaveAttribute("data-court-id", a3.id);
+    await expect(candidates, "the page still offers every waiting match").toHaveCount(waiting.length);
+    const callBenCal = (): Locator =>
+      focus.locator(`[data-testid="md-candidate"][data-fixture-id="${fx.benCal}"]`).getByRole("button", { name: fill("matchDay.candidate.call", { court: a3.name }) });
+    const notice = focus.getByTestId("md-notice");
+    const busyWords = fill("matchDay.refusal.PLAYER_BUSY", { person: names.ben, court: b2.name });
+    const nothingCalled = async (why: string): Promise<void> => {
+      const n = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id = ${fx.benCal}`);
+      expect(n[0]!.n, why).toBe(0);
+    };
+
+    // 7a. Refused at CONFIRM: the sheet is open and its preview passed (nobody is busy yet); THEN the other desk calls Ana v Ben onto B2;
+    // Confirm is the call itself, and the server refuses it there, not at the preview.
+    await callBenCal().click();
+    const busySheet = page.getByRole("dialog");
+    await expect(busySheet).toContainText(fill("matchDay.sheet.title", { court: a3.name }));
+    const busyConfirm = busySheet.getByTestId("md-call-confirm");
+    await expect(busyConfirm, "the preview passed: nobody is busy yet").toBeEnabled();
     const other = await apiJson(request, `/api/v1/fixtures/${fx.anaBen}/call`, "POST", { court_id: b2.id });
     expect(other.status, `the other desk's call: ${JSON.stringify(other.error)}`).toBeLessThan(300);
+    await busyConfirm.click();
+    await expect(notice, "the confirm was refused").toBeVisible();
+    await expect(notice).toHaveAttribute("role", "alert");
+    await expect(notice).toContainText(busyWords);
+    await expect(page.getByRole("dialog"), "the sheet closed on the refusal").toHaveCount(0);
+    await nothingCalled("the call refused at confirm called nothing");
+    await expectNoHorizontalScroll(page);
+    await notice.getByRole("button", { name: uiEn["matchDay.notice.dismiss"]! }).click();
+    await expect(notice).toHaveCount(0);
+
+    // 7b. Refused at PREVIEW: the stale tab still shows Ben v Cal as callable (its polls are stalled), so the tap opens a sheet that is refused
+    // before it shows anything.
     const staleBenCal = focus.locator(`[data-testid="md-candidate"][data-fixture-id="${fx.benCal}"]`);
     await expect(staleBenCal, "the stale tab still offers Ben v Cal").not.toHaveAttribute("data-blocked", /.+/);
-    await staleBenCal.getByRole("button", { name: fill("matchDay.candidate.call", { court: a3.name }) }).click();
-    const notice = focus.getByTestId("md-notice");
-    await expect(notice).toBeVisible();
+    await callBenCal().click();
+    await expect(notice, "the preview was refused").toBeVisible();
     await expect(notice).toHaveAttribute("role", "alert");
-    await expect(notice).toContainText(fill("matchDay.refusal.PLAYER_BUSY", { person: names.ben, court: b2.name }));
+    await expect(notice).toContainText(busyWords);
     await expect(page.getByRole("dialog"), "the sheet closed on the refusal").toHaveCount(0);
-    const benCalCalls = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id = ${fx.benCal}`);
-    expect(benCalCalls[0]!.n, "the refused call called nothing").toBe(0);
+    await nothingCalled("the call refused at preview called nothing");
     await expectNoHorizontalScroll(page);
     // Let the page hear the truth again: the next poll greys every match of the two players on court, each with its reason.
     await page.unroute(matchDayGets, stall);
@@ -501,17 +554,17 @@ test.describe("Match Day - the organiser's day, walked", () => {
       const r = fxRows.find((x) => x.id === id)!;
       return busyPeople.has(r.home_entrant_id ?? "") || busyPeople.has(r.away_entrant_id ?? "");
     });
-    expect(blockedIds, "premise: Ana and Ben's other matches are the blocked ones").toHaveLength(4);
+    expect(new Set(blockedIds), "premise: Ana and Ben's other matches are the blocked ones").toEqual(new Set([fx.anaCal, fx.anaDee, fx.benCal, fx.benDee]));
     await expect(focus.locator('[data-testid="md-candidate"][data-blocked="true"]')).toHaveCount(blockedIds.length, { timeout: POLL_MS });
     let reasons = 0;
     for (const id of blockedIds) {
       const li = focus.locator(`[data-testid="md-candidate"][data-fixture-id="${id}"]`);
       await expect(li).toHaveAttribute("data-blocked", "true");
       await expect(li.getByRole("button"), "a blocked match has nothing to press").toHaveCount(0);
-      await expect(li).toContainText(new RegExp(`(${esc(names.ana)}|${esc(names.ben)}) is on ${esc(b2.name)}`));
+      await expect(li).toContainText(new RegExp(`(${[names.ana, names.ben].map((person) => esc(fill("matchDay.candidate.blocked", { person, court: b2.name }))).join("|")})`));
       reasons++;
     }
-    expect(reasons, "anti-vacuity: four reasons read").toBe(4);
+    expect(reasons, "anti-vacuity: a reason read for every blocked match").toBe(blockedIds.length);
     const calledElsewhere = focus.locator(`[data-testid="md-candidate"][data-fixture-id="${fx.anaBen}"]`);
     await expect(calledElsewhere, "the called match is not blocked by its own call").not.toHaveAttribute("data-blocked", /.+/);
     await expect(calledElsewhere).toContainText(fill("matchDay.candidate.where.calledOn", { court: b2.name }));
@@ -564,7 +617,7 @@ test.describe("Match Day - the organiser's day, walked", () => {
       await expect(focus.locator(`[data-testid="md-candidate"][data-fixture-id="${id}"]`).getByTestId("md-round-chip")).toHaveAttribute("data-round-code", chipOf(id));
       laterChips++;
     }
-    expect(laterChips, "anti-vacuity: seven chips read, the Final's among them").toBe(7);
+    expect(laterChips, "anti-vacuity: every candidate's chip read, the Final's among them").toBe(laterWaiting.length);
     await expect(
       focus.locator(`[data-testid="md-candidate"][data-fixture-id="${fx.final}"]`).getByTestId("md-round-chip"),
       "the Final wears the board's code for it",
