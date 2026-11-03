@@ -5,8 +5,9 @@
 //
 // Expected statuses and sentences come from the product's own refusal table (`SWISS_REFUSALS`), never typed here; the dead
 // end itself is the ENGINE's (`pairRound` over 4 entrants runs out of rematch-free rounds after 3), not a forced refusal.
-// single-sport: the Finish verdict and the dead end are sport-independent (one fold, one pairing); badminton is only the sport the
-// rig scores with. The sport-sweeping proof of the loop is scenarios.test.ts.
+// single-sport: the Finish verdict (judgeFinish) and the dead end (the engine's pairRound over entrants and their meetings) read
+// statuses and pair keys, never a sport's rules, so they are sport-independent; badminton is only the sport the rig scores with.
+// (The harness LOOP's tests in scenarios.test.ts run on generic for the same reason; neither file sweeps sports.)
 import { describe, expect, it } from "vitest";
 import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
 import { newModelState } from "../lib/model/commands.ts";
@@ -77,6 +78,15 @@ describe("the model twin's Finish the Swiss now (finishSwissNow)", () => {
     await expect(d.finishSwiss("s1")).rejects.toMatchObject({ code: over.code, status: over.status, message: expect.stringContaining(over.message) });
     // differential: the first Finish removed rows; the refused second removed none
     expect(Math.max(...d.fixtures.map((f) => f.round_no ?? 0))).toBe(2);
+    // ...and the Pair after it: the budget is now 2, both rounds are seated, so it answers with the rows it has and seats nothing.
+    const seated = () => d.fixtures.filter((f) => f.home_entrant_id !== null);
+    const [rowsBefore, seatedBefore] = [d.fixtures.length, seated().length];
+    expect(seatedBefore, "premise: rounds 1 and 2 are seated (two boards each)").toBe(4);
+    const after = await d.generate();
+    expect(after.created, "a Pair after Finish creates nothing").toBe(0);
+    expect(d.fixtures.length, "...adds no row").toBe(rowsBefore);
+    expect(seated().length, "...seats no one").toBe(seatedBefore);
+    expect(Math.max(...d.fixtures.map((f) => f.round_no ?? 0)), "...and mints no round 3").toBe(2);
   });
 
   it("refused by name, nothing written: before any round is decided (SWISS_FINISH_NOTHING_PLAYED), and while a board past k has a result (SWISS_FINISH_ROUND_UNDECIDED, naming it)", async () => {
