@@ -14,7 +14,7 @@
 // Every step stays mounted (hidden when not current), so moving between steps and Edit from Review never loses what was
 // typed. Create POSTs the division, then its stages, then the schedule seed (non-fatal), exactly as the 4-tab builder
 // did: the inventory in the C9 report maps every input of that builder to its step here.
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { buildRuleOverride } from "./rules/match-format-editor";
 import { divisionPointsDirty, divisionPointsOf, divisionPointsPatch, stagePointsHeadline } from "./rules/points-editor";
@@ -112,6 +112,27 @@ export interface SportOption {
 const NO_RECENT_SPORTS: readonly string[] = Object.freeze([]);
 
 /** The receipt rows the division POST already saved (I1): read-only once the division exists. */
+/** Owner 2026-11-03 (C9 round 4): a sport tile's icon and a format card's diagram are grey at rest and lime when the
+ *  tile is hovered, keyboard-focused or picked; the tile's border and fill do not change. lime-700 is the house's deeper
+ *  lime (lime-700 text across the console): the gantry hairline's --mk-lime reads 1.51:1 on the white tile and 1.41:1 on
+ *  the picked purple-50, under the 3:1 a graphic needs, while lime-700 reads 4.96:1 and 4.63:1. */
+const TILE_ICON_PICKED = "text-lime-700";
+const TILE_ICON_LIVE = "group-hover:text-lime-700 group-has-[:focus-visible]:text-lime-700";
+const TILE_ICON_MOTION = "transition-colors motion-reduce:transition-none";
+/** A total's unit line, each " · " phrase kept whole: a line breaks at the dot, never inside "30-minute" (which the
+ *  browser may split after its hyphen - it printed "30- / minute matches" at 320). A phrase wider than the tile still
+ *  wraps inside itself at a space (`max-w-full`). The text reads as the dictionary's string. */
+function unitPhrases(text: string): ReactNode {
+  const parts = text.split(" · ");
+  return parts.map((p, i) => (
+    <Fragment key={i}>
+      {i > 0 && " "}
+      <span className="inline-block max-w-full" data-unit-phrase>
+        {i < parts.length - 1 ? `${p} ·` : p}
+      </span>
+    </Fragment>
+  ));
+}
 const SAVED_WITH_DIVISION: readonly string[] = ["who", "rules", "points", "tiebreaks"];
 
 /** Who plays and Division rules, once saved: what they show is what the division holds, and where to change it. */
@@ -286,8 +307,9 @@ export function eligibilityPatch(input: { maxAge: string; cutoffMonth: string; c
 }
 
 /** The division POST's `config`: the rule overrides typed on Division rules, the points once a box was touched, online
- *  play only when it is on (absent = over the board, the server's default), and the entrant kind only when it is not
- *  the sport's own default (`entrantsConfigFor`). Everything left alone stays absent, so the server's defaults apply. */
+ *  play only when it is on (absent = over the board, the server's default), and the entrant kind ALWAYS - the default
+ *  included: the division takes exactly the kind shown (n3, `entrantsConfigFor`). Everything else left alone stays absent,
+ *  so the server's defaults apply. */
 export function divisionCreateConfig(input: {
   ruleOverrides: Record<string, unknown>;
   points?: unknown;
@@ -466,6 +488,9 @@ export function DivisionBuilder({
   // C9 fix round 1 (I1): what the division was saved with (Who plays, the Division rules strip) is read-only once it
   // exists; only the stages (Format) and the schedule seed are still to be sent.
   const saved = created !== null;
+  // m9 (C9 review 3): once saved, Who plays is a disabled fieldset - its tiles neither invite a tap nor answer a hover.
+  const tileCursor = saved ? "cursor-default" : "cursor-pointer";
+  const tileHover = saved ? "" : "hover:border-purple-200";
   const rowSaved = (id: string) => saved && SAVED_WITH_DIVISION.includes(id);
 
   function selectSport(key: string) {
@@ -596,6 +621,7 @@ export function DivisionBuilder({
   const hoursText = (minutes: number) =>
     new Intl.NumberFormat(locale, { style: "unit", unit: "hour", unitDisplay: "short", maximumFractionDigits: 1 }).format(Math.round((minutes / 60) * 10) / 10);
   const placesText = (n: number) => msgPlural(`divBuilder.places.${venue}` as "divBuilder.places.court", n, { count: n });
+  const numberText = (n: number) => new Intl.NumberFormat(locale).format(n);
 
   // --- Validation: each step's first problem, said in the reader's words. ---
   function stepProblem(s: BuilderStep): string | null {
@@ -995,12 +1021,12 @@ export function DivisionBuilder({
                     <label
                       key={key}
                       data-sport={key}
-                      className={`${sportFolded(key) ? "hidden" : "flex"} min-h-14 min-w-0 cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition max-sm:flex-col max-sm:items-start max-sm:justify-center max-sm:gap-1 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 ${
-                        picked ? "border-purple-500 bg-purple-50 font-semibold text-purple-900" : "border-slate-200 bg-white text-slate-700 hover:border-purple-200"
+                      className={`${sportFolded(key) ? "hidden" : "flex"} group min-h-14 min-w-0 ${tileCursor} items-center gap-3 rounded-lg border px-3 py-2 text-sm transition max-sm:flex-col max-sm:items-start max-sm:justify-center max-sm:gap-1 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 ${
+                        picked ? "border-purple-500 bg-purple-50 font-semibold text-purple-900" : `border-slate-200 bg-white text-slate-700 ${tileHover}`
                       }`}
                     >
                       <input type="radio" name="division-sport" value={key} checked={picked} onChange={() => selectSport(key)} className="sr-only" />
-                      <SportIcon sportKey={key} className={`shrink-0 ${picked ? "text-purple-600" : "text-slate-500"}`} />
+                      <SportIcon sportKey={key} className={`shrink-0 ${TILE_ICON_MOTION} ${picked ? TILE_ICON_PICKED : `text-slate-500 ${saved ? "" : TILE_ICON_LIVE}`}`} />
                       {/* "Any other game" names the catch-all here only; everywhere else it keeps the catalogue's name. */}
                       <span className="min-w-0 break-words">{key === CATCH_ALL_SPORT ? msg("divBuilder.sport.generic") : sportLabel(key, msg)}</span>
                     </label>
@@ -1035,8 +1061,8 @@ export function DivisionBuilder({
                     <label
                       key={k}
                       data-entrant-kind={k}
-                      className={`inline-flex min-h-11 cursor-pointer items-center rounded-full border px-4 text-sm transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 ${
-                        entrantKind === k ? "border-purple-500 bg-purple-50 font-medium text-purple-800" : "border-slate-200 text-slate-600 hover:border-purple-200"
+                      className={`inline-flex min-h-11 ${tileCursor} items-center rounded-full border px-4 text-sm transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 ${
+                        entrantKind === k ? "border-purple-500 bg-purple-50 font-medium text-purple-800" : `border-slate-200 text-slate-600 ${tileHover}`
                       }`}
                     >
                       <input
@@ -1073,8 +1099,8 @@ export function DivisionBuilder({
                   /* The bench's organiser driver clicks THIS, not the input: the radio is `sr-only`, so a real click on it
                    * is intercepted by this label. The hook lives on exactly one element per value (strict-mode safe). */
                   data-category={c.key}
-                  className={`inline-flex min-h-11 cursor-pointer items-center rounded-full border px-4 text-sm transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 ${
-                    category === c.key ? "border-purple-500 bg-purple-50 font-medium text-purple-800" : "border-slate-200 text-slate-600 hover:border-purple-200"
+                  className={`inline-flex min-h-11 ${tileCursor} items-center rounded-full border px-4 text-sm transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 ${
+                    category === c.key ? "border-purple-500 bg-purple-50 font-medium text-purple-800" : `border-slate-200 text-slate-600 ${tileHover}`
                   }`}
                 >
                   <input type="radio" name="division-category" value={c.key} checked={category === c.key} onChange={() => setCategory(c.key)} className="sr-only" />
@@ -1231,12 +1257,15 @@ export function DivisionBuilder({
                     key={t.key}
                     data-template={t.key}
                     data-suggested={suggested.includes(t.key) ? "" : undefined}
-                    className={`${folded(t.key) ? "hidden" : "flex"} min-h-11 min-w-0 cursor-pointer gap-3 rounded-lg border p-3 text-sm transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 ${
+                    className={`${folded(t.key) ? "hidden" : "flex"} group min-h-11 min-w-0 cursor-pointer gap-3 rounded-lg border p-3 text-sm transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 ${
                       picked ? "border-purple-500 bg-purple-50 text-purple-900" : "border-slate-200 bg-white text-slate-700 hover:border-purple-200"
                     }`}
                   >
                     <input type="radio" name="template" checked={picked} onChange={() => setTemplatePicked(t.key)} className="sr-only" />
-                    <FormatShape stages={t.build({ qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 })} className={`shrink-0 ${picked ? "text-purple-600" : "text-slate-400"}`} />
+                    <FormatShape
+                      stages={t.build({ qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 })}
+                      className={`shrink-0 ${TILE_ICON_MOTION} ${picked ? TILE_ICON_PICKED : `text-slate-400 ${TILE_ICON_LIVE}`}`}
+                    />
                     <span className="min-w-0">
                       <span className="flex flex-wrap items-center gap-x-2">
                         {/* t.key is a plain string, so the key cannot be checked against MessageKey's union without a
@@ -1267,7 +1296,8 @@ export function DivisionBuilder({
                   data-testid="division-builder-show-all"
                   className="flex min-h-20 min-w-0 items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white p-3 text-center text-sm font-medium text-purple-700 transition hover:border-purple-300 hover:bg-purple-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600"
                 >
-                  {showAll ? msg("divBuilder.showFewer") : msg("divBuilder.showAll", { count: foldedCount })}
+                  {/* m5 (C9 review 3): one wording across both pickers, the owner's "show more" - "Show 8 more formats". */}
+                  {showAll ? msg("divBuilder.showFewer") : msgPlural("divBuilder.format.showMore", foldedCount, { count: foldedCount })}
                 </button>
               )}
             </div>
@@ -1554,15 +1584,33 @@ export function DivisionBuilder({
             <h2 className="text-sm font-semibold text-slate-900">{msg("divBuilder.review.title")}</h2>
             <p className="mt-0.5 text-xs text-slate-600">{msg("divBuilder.review.lead", { count: plan.entrants })}</p>
           </div>
-          <dl className="grid grid-cols-2 gap-2 md:grid-cols-4" data-testid="division-builder-totals">
-            {[
-              [msgPlural("divBuilder.review.stages", estimate.stages.length, { count: estimate.stages.length }), "stages"],
-              [estimate.matches === null ? msg("divBuilder.card.noDraw") : msgPlural("divBuilder.card.matches", estimate.matches, { count: estimate.matches }), "matches"],
-              [estimate.rounds === null ? "—" : msgPlural("divBuilder.card.rounds", estimate.rounds, { count: estimate.rounds }), "rounds"],
-              [estimateMins === null ? "—" : msg("divBuilder.review.time", { time: hoursText(estimateMins), places: placesText(plan.venues), minutes: plan.matchMinutes }), "time"],
-            ].map(([text, id]) => (
-              <div key={id} className="min-w-0 rounded-lg bg-slate-50 px-3 py-2" data-total={id}>
-                <dd className="text-sm font-semibold text-slate-900">{text}</dd>
+          {/* C9 round 4 (owner 2026-11-03, "make it center and clean display"): each total a centred stat - the number
+              large, its unit a muted line under it; the time's number is "about 15 hr", its line the places and the
+              match length. Two to a row below md, four from md; every tile one height (auto-rows-fr), content centred. */}
+          <dl className="grid auto-rows-fr grid-cols-2 gap-2 md:grid-cols-4" data-testid="division-builder-totals">
+            {(
+              [
+                ["stages", numberText(estimate.stages.length), msgPlural("divBuilder.review.unit.stages", estimate.stages.length)],
+                estimate.matches === null
+                  ? ["matches", "—", msg("divBuilder.card.noDraw")]
+                  : ["matches", numberText(estimate.matches), msgPlural("divBuilder.review.unit.matches", estimate.matches)],
+                ["rounds", estimate.rounds === null ? "—" : numberText(estimate.rounds), msgPlural("divBuilder.review.unit.rounds", estimate.rounds ?? 0)],
+                [
+                  "time",
+                  estimateMins === null ? "—" : msg("divBuilder.card.about", { time: hoursText(estimateMins) }),
+                  msg("divBuilder.review.timeUnit", { places: placesText(plan.venues), minutes: plan.matchMinutes }),
+                ],
+              ] as const
+            ).map(([id, value, unit]) => (
+              <div key={id} className="flex min-w-0 flex-col justify-center rounded-lg bg-slate-50 px-3 py-3 text-center" data-total={id}>
+                <dd className="flex min-w-0 flex-col items-center">
+                  <span className="text-xl leading-tight font-semibold text-balance text-slate-900 tabular-nums sm:text-2xl" data-total-value>
+                    {value}
+                  </span>
+                  <span className="mt-1 text-xs text-balance text-slate-500" data-total-unit>
+                    {unitPhrases(unit)}
+                  </span>
+                </dd>
               </div>
             ))}
           </dl>

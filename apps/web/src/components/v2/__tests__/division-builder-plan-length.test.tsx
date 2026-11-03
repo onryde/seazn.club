@@ -12,7 +12,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
-import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
 import { sportOptionsFrom } from "@/lib/sport-options";
 import uiEn from "@/dictionaries/en/ui.json";
@@ -82,11 +82,16 @@ function cardTime(h: H): string {
   const parts = textOf(byTestId(h, `division-builder-estimate-${key}`)!).split(" · ");
   return read("divBuilder.card.about", parts.at(-1)!).time!;
 }
-/** Review's time total, read through divBuilder.review.time. */
-function reviewTotal(h: H): { time: string; minutes: number } {
+/** Review's time tile (round 4: a centred stat), its number and its unit line, each read off its own element. */
+function timeTile(h: H): { value: string; unit: string } {
   const cell = h.tree().find((e) => propsOf(e)["data-total"] === "time");
-  const groups = read("divBuilder.review.time", textOf(cell!));
-  return { time: groups.time!, minutes: Number(groups.minutes) };
+  const part = (attr: string) => walk(cell!).find((e) => propsOf(e)[attr] !== undefined);
+  return { value: textOf(part("data-total-value")!), unit: textOf(part("data-total-unit")!) };
+}
+/** Review's time total: the number through divBuilder.card.about, the line under it through divBuilder.review.timeUnit. */
+function reviewTotal(h: H): { time: string; minutes: number } {
+  const tile = timeTile(h);
+  return { time: read("divBuilder.card.about", tile.value).time!, minutes: Number(read("divBuilder.review.timeUnit", tile.unit).minutes) };
 }
 const setLength = (h: H, value: string) =>
   (propsOf(byTestId(h, "division-builder-match-minutes")!).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
@@ -130,8 +135,7 @@ describe("m15: Review names its places with its own keys", () => {
     const h = mount();
     setName(h, "Open");
     goToStep(h, "review");
-    const cell = h.tree().find((e) => propsOf(e)["data-total"] === "time");
-    const places = read("divBuilder.review.time", textOf(cell!)).places!;
+    const places = read("divBuilder.review.timeUnit", timeTile(h).unit).places!;
     // Badminton plays on courts; the plan opens at 2 of them (the Venues box).
     expect(places).toBe(UI["divBuilder.places.court.other"]!.replace("{count}", "2"));
     expect(keysRead).toContain("divBuilder.places.court");

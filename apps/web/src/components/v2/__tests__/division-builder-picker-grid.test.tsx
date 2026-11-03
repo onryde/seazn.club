@@ -21,6 +21,7 @@ import { effectiveEntrantModel } from "@seazn/engine/sport";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
 import { SportIcon, SPORT_ICON_KEYS } from "@/components/v2/division-builder/sport-icon";
+import { FormatShape } from "@/components/v2/division-builder/format-shape";
 import { STAGE_TEMPLATES, templatesForSport } from "@/lib/format-templates";
 import { PAIR_MINTING_STAGE_KINDS } from "@/lib/chess-individual-only-rule";
 import { sportOptionsFrom } from "@/lib/sport-options";
@@ -158,7 +159,7 @@ describe("Sport: a tile per sport, five shown, then Show more (mock Sport A)", (
 
   it("collapsed: the owner's popular five, then the Show more tile as the next cell of the same grid, naming how many more", () => {
     const h = mount(BY_NAME);
-    expect(BY_NAME[0]!.key, "premise: the first listed (picked) sport is one of the popular five").toBe("badminton");
+    expect(BY_NAME[0]!.key, "premise: the page's first row is one of the popular five, so the five shown are those five whatever it opens on").toBe("badminton");
     expect(visibleSports(h)).toEqual(POPULAR);
     const grid = cells(h, "division-builder-sports");
     const more = grid.at(-1)!;
@@ -284,7 +285,8 @@ describe("Format: five cards, then Show more as the sixth cell of the cards' gri
       const last = grid.at(-1)!;
       expect(isTile(last, "division-builder-show-all"), `${k}: Show more is the grid's last cell, not a button under it`).toBe(true);
       expect(String(propsOf(last).className), k).toMatch(/(^|\s)border-dashed(\s|$)/);
-      expect(textOf(last).trim(), k).toBe(UI["divBuilder.showAll"]!.replace("{count}", String(offer.length - 5)));
+      // m5: the Sport tile's wording ("Show N more sports"), for formats.
+      expect(textOf(last).trim(), k).toBe(plural("divBuilder.format.showMore", offer.length - 5));
       expect(propsOf(last)["aria-expanded"], k).toBe(false);
       click(h, "division-builder-show-all");
       expect(visibleTemplateKeys(h).length, k).toBe(offer.length);
@@ -311,16 +313,18 @@ describe("Format: five cards, then Show more as the sixth cell of the cards' gri
     expect(offering, "some sport offers the pair formats").toBeGreaterThan(0);
   });
 
-  it("collapsed, a pair format shows only as the pick: badminton opens on its top suggestion; another picked, they fold away", () => {
+  it("collapsed, a pair format shows only as the pick: badminton opens on its first card shown (I1), not one; picked, each takes the fifth slot", () => {
     const h = onSport("badminton");
     toFormat(h);
     const offer = templateKeys(h);
     expect(offer.filter((x) => !MINTING.includes(x)).length, "premise: badminton offers five others or more").toBeGreaterThanOrEqual(5);
     const opening = pickedTemplate(h)!;
     const shown = visibleTemplateKeys(h);
-    for (const p of MINTING) expect(shown.includes(p), `${p} collapsed (opening pick ${opening})`).toBe(p === opening);
-    if (MINTING.includes(opening)) expect(shown.at(-1), "the picked pair format takes the fifth slot").toBe(opening);
-    pickTemplate(h, offer.find((x) => !MINTING.includes(x))!);
+    // Round 4 (I1, owner "A"): it opens on the first card shown, never on a pair format pinned into the last slot.
+    expect(opening, "the opening is the first card shown").toBe(shown[0]);
+    expect(MINTING, "the opening is not a pair format").not.toContain(opening);
+    for (const p of MINTING) expect(shown, `${p} folded away while another card is picked`).not.toContain(p);
+    pickTemplate(h, offer.find((x) => !MINTING.includes(x) && x !== opening)!);
     for (const p of MINTING) expect(visibleTemplateKeys(h), p).not.toContain(p);
     // Picked, each is shown collapsed, in the fifth slot.
     for (const p of MINTING) {
@@ -328,5 +332,72 @@ describe("Format: five cards, then Show more as the sixth cell of the cards' gri
       expect(visibleTemplateKeys(h).at(-1), p).toBe(p);
       expect(visibleTemplateKeys(h).length, p).toBe(5);
     }
+  });
+});
+
+// C9 round 4 (owner 2026-11-03: "in format and sport icon, when we select, can we change to lime color instead of grey
+// when hover?"): a sport tile's icon and a format card's diagram are grey at rest and lime when the tile is hovered,
+// keyboard-focused or picked; the tile's own border and fill do not change. The lime is lime-700, the house's deeper
+// lime: the gantry's lime is 1.5:1 on these tiles, under the 3:1 a graphic needs (contrast in the round-4 report).
+describe("tile icons: grey at rest, lime on hover, focus and pick (round 4)", () => {
+  const classes = (e: ReactElement) => String(propsOf(e).className).split(/\s+/);
+  const LIME = "text-lime-700";
+  const LIVE = ["group-hover:text-lime-700", "group-has-[:focus-visible]:text-lime-700"];
+  /** The icon's tone, read off its classes: picked (lime), resting (grey, lime only on hover/focus), or neither. */
+  function tone(tile: ReactElement, iconType: unknown, grey: string): "picked" | "resting" | "other" {
+    const icon = walk(tile).find((e) => e.type === iconType);
+    if (!icon) throw new Error(`no icon in ${String(propsOf(tile)["data-sport"] ?? propsOf(tile)["data-template"])}`);
+    const c = classes(icon);
+    expect(classes(tile), "the tile is the hover group").toContain("group");
+    expect(c, "reduced motion: no colour fade").toContain("motion-reduce:transition-none");
+    if (c.includes(LIME) && !c.includes(grey) && !LIVE.some((l) => c.includes(l))) return "picked";
+    if (c.includes(grey) && !c.includes(LIME) && LIVE.every((l) => c.includes(l))) return "resting";
+    return "other";
+  }
+
+  it("empty case first: a builder listing no sport renders no sport tile to tone", () => {
+    expect(sportTiles(mount([]))).toEqual([]);
+  });
+
+  it("every sport picked in turn: its tile's icon is lime, every other tile's grey with lime on hover; the fill stays purple (counts)", () => {
+    let picked = 0;
+    let resting = 0;
+    for (const k of REGISTRY) {
+      const h = onSport(k);
+      for (const tile of sportTiles(h)) {
+        const want = propsOf(tile)["data-sport"] === k ? "picked" : "resting";
+        expect(tone(tile, SportIcon, "text-slate-500"), `${k}: ${String(propsOf(tile)["data-sport"])}`).toBe(want);
+        if (want === "picked") {
+          // The border and fill are the picked tile's as before: only the icon turns lime.
+          expect(classes(tile)).toEqual(expect.arrayContaining(["border-purple-500", "bg-purple-50"]));
+          expect(classes(tile).some((c) => c.includes("lime"))).toBe(false);
+          picked++;
+        } else resting++;
+      }
+    }
+    expect(picked).toBe(REGISTRY.length);
+    expect(resting).toBe(REGISTRY.length * (REGISTRY.length - 1));
+  });
+
+  it("every sport's Format grid: the picked card's diagram is lime, every other card's grey with lime on hover; picking moves it (counts)", () => {
+    let cards = 0;
+    for (const k of REGISTRY) {
+      const h = onSport(k);
+      setName(h, "Open");
+      next(h);
+      const check = () => {
+        const on = pickedTemplate(h);
+        for (const card of h.tree().filter((e) => e.type === "label" && typeof propsOf(e)["data-template"] === "string")) {
+          const key = propsOf(card)["data-template"];
+          expect(tone(card, FormatShape, "text-slate-400"), `${k}: ${String(key)}`).toBe(key === on ? "picked" : "resting");
+          cards++;
+        }
+      };
+      check();
+      // The sequence: another card picked, the lime moves with the pick.
+      pickTemplate(h, templateKeys(h).find((x) => x !== pickedTemplate(h))!);
+      check();
+    }
+    expect(cards).toBeGreaterThan(REGISTRY.length * 10);
   });
 });

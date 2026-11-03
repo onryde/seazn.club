@@ -899,3 +899,157 @@ test("Settings › Format offers a builder-made Individuals Americano division A
   await select.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("settings-format-americano-1280.png"), fullPage: true });
 });
+
+// C9 round 4 (owner 2026-11-03). Three things a person sees, driven in the browser:
+//  - I1 ("A"): badminton's Format step opens on the FIRST card shown - never on Americano pinned into the last slot.
+//  - Lime icons: a sport tile's icon and a format card's diagram are grey at rest and lime when hovered or picked; the
+//    lime is the theme's lime-700 token (the deeper house lime: the gantry's lime is 1.5:1 on these tiles), and reduced
+//    motion drops the colour fade. Colours are read against the theme's own custom properties, never typed here.
+//  - Review's totals: four centred stats, a number over its unit, one height, two to a row below md and four from md.
+test("round 4: Format opens on the first card shown (I1); icons turn lime on hover and pick; Review's totals are centred stats", async ({ page, request }, testInfo) => {
+  test.setTimeout(budget(5, 40, 0));
+  await openBuilderFromCompetition(page, request, "Builder round four");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.getByTestId("division-builder-name").fill(`Round four ${TAG}`);
+  await pickBuilderSport(page, "badminton");
+
+  /** A theme custom property as the browser resolves a colour set to it (the same serialisation as a computed colour). */
+  const token = (name: string) =>
+    page.evaluate((n) => {
+      const probe = document.createElement("span");
+      probe.style.color = `var(${n})`;
+      document.body.append(probe);
+      const c = getComputedStyle(probe).color;
+      probe.remove();
+      return c;
+    }, name);
+  const LIME = await token("--color-lime-700");
+  expect(LIME, "premise: the theme declares lime-700").not.toBe(await token("--color-slate-500"));
+  const iconColour = (tile: Locator) => tile.locator("svg").first().evaluate((el) => getComputedStyle(el).color);
+
+  // ---- Sport: the picked tile's icon lime, a resting tile's grey, a hovered tile's lime; the picked fill unchanged.
+  const picked = page.locator('label[data-sport="badminton"]');
+  const resting = page.locator('label[data-sport="football"]');
+  const hovered = page.locator('label[data-sport="cricket"]');
+  await expect(picked.locator("input")).toBeChecked();
+  await expect.poll(() => iconColour(picked), { message: "the picked sport's icon is lime" }).toBe(LIME);
+  await expect.poll(() => iconColour(resting), { message: "a resting sport's icon is grey" }).toBe(await token("--color-slate-500"));
+  expect(await picked.evaluate((el) => getComputedStyle(el).backgroundColor), "the picked fill is the house purple-50").toBe(
+    await page.evaluate(() => {
+      const p = document.createElement("span");
+      p.style.backgroundColor = "var(--color-purple-50)";
+      document.body.append(p);
+      const c = getComputedStyle(p).backgroundColor;
+      p.remove();
+      return c;
+    }),
+  );
+  await hovered.hover();
+  await expect.poll(() => iconColour(hovered), { message: "a hovered sport's icon turns lime" }).toBe(LIME);
+  await expect.poll(() => iconColour(resting), { message: "and only the hovered one" }).toBe(await token("--color-slate-500"));
+  await page.getByTestId("division-builder-sport").screenshot({ path: testInfo.outputPath("sport-lime-hover-1280.png") });
+  // Reduced motion: no colour fade on the icon.
+  expect(await picked.locator("svg").first().evaluate((el) => getComputedStyle(el).transitionProperty), "the fade, by default").toContain("color");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  expect(await picked.locator("svg").first().evaluate((el) => getComputedStyle(el).transitionProperty), "reduced motion: none").toBe("none");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.mouse.move(0, 0);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await expectNoHorizontalScroll(page);
+  await expect.poll(() => iconColour(picked)).toBe(LIME);
+  await page.getByTestId("division-builder-sport").screenshot({ path: testInfo.outputPath("sport-lime-picked-320.png") });
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  // ---- Format (I1): badminton opens on the first card shown; Americano and Mexicano are not shown collapsed.
+  await next(page);
+  await onStep(page, "format");
+  const shown = await shownTemplates(page);
+  expect(shown.length, "five cards shown").toBe(5);
+  const first = page.locator(`label[data-template="${shown[0]}"]`);
+  await expect(first.locator("input"), `I1: the first card shown, ${shown[0]}, is picked`).toBeChecked();
+  await expect(page.locator('input[name="template"]:checked')).toHaveCount(1);
+  expect(shown.filter((k) => MINTING.includes(k)), "no partner-rotation card in the collapsed five").toEqual([]);
+  // Its diagram is lime, the next card's grey until hovered.
+  const second = page.locator(`label[data-template="${shown[1]}"]`);
+  await expect.poll(() => iconColour(first), { message: "the picked format's diagram is lime" }).toBe(LIME);
+  await expect.poll(() => iconColour(second), { message: "a resting format's diagram is grey" }).toBe(await token("--color-slate-400"));
+  await page.getByTestId("division-builder-format").screenshot({ path: testInfo.outputPath("format-badminton-1280.png") });
+  await second.hover();
+  await expect.poll(() => iconColour(second), { message: "a hovered format's diagram turns lime" }).toBe(LIME);
+  await page.getByTestId("division-builder-templates").screenshot({ path: testInfo.outputPath("format-lime-hover-1280.png") });
+  await page.mouse.move(0, 0);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await expectNoHorizontalScroll(page);
+  await expect(first.locator("input")).toBeChecked();
+  await expect.poll(() => iconColour(first)).toBe(LIME);
+  await page.getByTestId("division-builder-format").screenshot({ path: testInfo.outputPath("format-badminton-320.png") });
+
+  // ---- Review's totals at 320, 768 and 1280.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  for (const step of ["rules", "review"] as const) {
+    await next(page);
+    await onStep(page, step);
+  }
+  let measured = 0;
+  for (const width of [320, 768, 1280]) {
+    await page.setViewportSize({ width, height: width < 768 ? 720 : 900 });
+    await expectNoHorizontalScroll(page);
+    const tiles = await page.getByTestId("division-builder-totals").evaluate((dl) =>
+      [...dl.querySelectorAll("[data-total]")].map((t) => {
+        const r = t.getBoundingClientRect();
+        const value = t.querySelector("[data-total-value]")!;
+        const unit = t.querySelector("[data-total-unit]")!;
+        const v = value.getBoundingClientRect();
+        const u = unit.getBoundingClientRect();
+        // Words broken across lines inside the tile (a Range per word, as the grid sweep measures). A hyphenated
+        // compound counts as ONE word here: the time line once printed "30- / minute matches" at 320.
+        let broken = 0;
+        let words = 0;
+        const walker = document.createTreeWalker(t, NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          for (const m of (n.textContent ?? "").matchAll(/[^\s·]+/g)) {
+            const range = document.createRange();
+            range.setStart(n, m.index);
+            range.setEnd(n, m.index + m[0].length);
+            const lines = new Set([...range.getClientRects()].filter((x) => x.width > 0).map((x) => Math.round(x.top)));
+            if (lines.size === 0) continue;
+            words++;
+            if (lines.size > 1) broken++;
+          }
+        }
+        return {
+          id: t.getAttribute("data-total"),
+          x: Math.round(r.x),
+          y: Math.round(r.y),
+          h: r.height,
+          // Centred: the value's and the unit's centres on the tile's; the content block equally far from top and bottom.
+          dxValue: Math.abs(v.x + v.width / 2 - (r.x + r.width / 2)),
+          dxUnit: Math.abs(u.x + u.width / 2 - (r.x + r.width / 2)),
+          dy: Math.abs(v.top - r.top - (r.bottom - u.bottom)),
+          valueOverUnit: v.bottom <= u.top + 1,
+          bigger: parseFloat(getComputedStyle(value).fontSize) > parseFloat(getComputedStyle(unit).fontSize),
+          broken,
+          words,
+        };
+      }),
+    );
+    const at = `totals @${width}`;
+    expect(tiles.map((t) => t.id), at).toEqual(["stages", "matches", "rounds", "time"]);
+    const perRow = width < 768 ? 2 : 4;
+    expect(tiles.filter((t) => t.y === tiles[0]!.y).length, `${at}: ${perRow} to a row`).toBe(perRow);
+    for (const t of tiles) {
+      expect(Math.abs(t.h - tiles[0]!.h), `${at} ${t.id}: one height`).toBeLessThanOrEqual(1);
+      expect(t.dxValue, `${at} ${t.id}: the number centred`).toBeLessThanOrEqual(2);
+      expect(t.dxUnit, `${at} ${t.id}: the unit centred`).toBeLessThanOrEqual(2);
+      expect(t.dy, `${at} ${t.id}: the content centred top to bottom`).toBeLessThanOrEqual(2);
+      expect(t.valueOverUnit, `${at} ${t.id}: the number over its unit`).toBe(true);
+      expect(t.bigger, `${at} ${t.id}: the number larger than its unit`).toBe(true);
+      expect(t.broken, `${at} ${t.id}: no word broken across lines`).toBe(0);
+      expect(t.words, `${at} ${t.id}: words measured`).toBeGreaterThan(0);
+      measured++;
+    }
+    await page.getByTestId("division-builder-totals").screenshot({ path: testInfo.outputPath(`review-totals-${width}.png`) });
+    await page.getByTestId("division-builder-review").screenshot({ path: testInfo.outputPath(`review-${width}.png`) });
+  }
+  expect(measured, "anti-vacuity: tiles measured").toBe(12);
+});

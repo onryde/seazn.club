@@ -21,6 +21,7 @@ import { effectiveEntrantModel, type EntrantKind } from "@seazn/engine/sport";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { DivisionBuilder, SavedNote, divisionCreateConfig, eligibilityPatch, type SportOption } from "@/components/v2/division-builder";
 import { DivisionRulesStrip } from "@/components/v2/rules/division-rules-strip";
+import { SportIcon } from "@/components/v2/division-builder/sport-icon";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
 import { rulesFor } from "@/lib/match-rules";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -147,6 +148,26 @@ function toStandingsFormat(h: H) {
   next(h);
   pickTemplate(h, "league");
 }
+/** m9: each Who-plays tile (sport, entrant kind, category) and how it answers a pointer - read off its own classes, and
+ *  its icon's for a sport tile. */
+const whoTileTones = (h: H) =>
+  h
+    .tree()
+    .filter((e) => e.type === "label" && ["data-sport", "data-entrant-kind", "data-category"].some((a) => propsOf(e)[a] !== undefined))
+    .map((e) => {
+      const has = (c: string, cls: unknown) => String(cls).split(/\s+/).includes(c);
+      const cls = propsOf(e).className;
+      const icon = walk(e).find((c) => c.type === SportIcon);
+      const p = propsOf(e);
+      return {
+        key: String(p["data-sport"] ?? p["data-entrant-kind"] ?? p["data-category"]),
+        group: p["data-sport"] !== undefined ? "sport" : p["data-entrant-kind"] !== undefined ? "kind" : "category",
+        pointer: has("cursor-pointer", cls),
+        idle: has("cursor-default", cls),
+        hover: has("hover:border-purple-200", cls),
+        iconLive: icon !== undefined && has("group-hover:text-lime-700", propsOf(icon).className),
+      };
+    });
 const reviewRow = (h: H, id: string): string => {
   const row = h.tree().find((e) => e.type === "li" && propsOf(e)["data-review-row"] === id);
   if (!row) throw new Error(`no review row ${id}`);
@@ -456,6 +477,9 @@ describe("Create", () => {
     walkToReview(h, "Open");
     expect(propsOf(byTestId(h, "division-builder-who-fields")!).disabled).toBe(false);
     expect(propsOf(byTestId(h, "division-builder-rules-fields")!).disabled).toBe(false);
+    // m9 (C9 review 3): an editable tile invites the tap - a pointer cursor, and a hover border on the unpicked ones.
+    expect(whoTileTones(h).every((t) => t.pointer && !t.idle), "editable: every Who-plays tile is tappable").toBe(true);
+    expect(whoTileTones(h).filter((t) => t.hover).length, "editable: the unpicked tiles answer a hover").toBeGreaterThan(0);
     for (const id of ["who", "format", "rules", "points", "tiebreaks", "schedule"]) expect(byTestId(h, `division-builder-edit-${id}`), id).toBeDefined();
     expect(h.tree().some((e) => e.type === SavedNote)).toBe(false);
     pressCreate(h);
@@ -464,6 +488,10 @@ describe("Create", () => {
     // Saved: the two steps' controls sit in a disabled fieldset (a browser disables every control inside it).
     expect(propsOf(byTestId(h, "division-builder-who-fields")!).disabled).toBe(true);
     expect(propsOf(byTestId(h, "division-builder-rules-fields")!).disabled).toBe(true);
+    // m9: saved, no Who-plays tile looks tappable - no pointer, no hover border, no lime on hover (counted).
+    const tones = whoTileTones(h);
+    expect(["sport", "kind", "category"].map((g) => tones.filter((t) => t.group === g).length > 0), "a sport, kind and category tile each").toEqual([true, true, true]);
+    for (const t of tones) expect([t.key, t.pointer, t.hover, t.idle, t.iconLive], t.key).toEqual([t.key, false, false, true, false]);
     expect(walk(byTestId(h, "division-builder-who-fields")!).some((e) => propsOf(e)["data-testid"] === "division-builder-name")).toBe(true);
     expect(walk(byTestId(h, "division-builder-rules-fields")!).some((e) => e.type === DivisionRulesStrip)).toBe(true);
     expect(h.tree().filter((e) => e.type === SavedNote).map((e) => propsOf(e).name)).toEqual(["Open", "Open"]);
@@ -658,7 +686,8 @@ describe("chess: online play first, and Lichess plays only its eight controls", 
  * The format offer as the RULINGS and the ENGINE declare it, never as templatesForSport computes it (C9 fix round 1, I5):
  * every template but the retired Triple RR (owner ruling 2026-11-01), less americano and mexicano - the pair formats,
  * whose stage rotates individual players into pair entrants - for chess (owner ruling 2026-10-26) and for every sport
- * whose engine entrant model holds no individuals or no pairs.
+ * whose engine entrant model holds no individuals (round 3's rule; the both-kinds check below picks the same sports,
+ * since every registry sport holding individuals but chess declares pairs - format-templates.test.ts's invariant).
  */
 const PAIR_FORMATS = ["americano", "mexicano"];
 function engineOffer(sportKey: string): string[] {
