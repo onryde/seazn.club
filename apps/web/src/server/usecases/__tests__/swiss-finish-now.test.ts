@@ -189,6 +189,28 @@ const roundOf = (rows: readonly Row[], r: number) => rows.filter((f) => f.round_
 const boardsOf = (rows: readonly Row[], r: number) => roundOf(rows, r).filter((f) => !isBye(f));
 const roundsIn = (rows: readonly Row[]) => [...new Set(rows.map((f) => f.round_no))].sort((a, b) => a - b);
 
+/** Whether round `upTo + 1` of the field `ids` has ANY legal pairing, proved by brute force from the ledger alone (rulebook
+ *  W3 §3.1, P-A1/P-A6): no two players meet twice, and in an odd field the one left out has not had a bye. The premise of
+ *  the refused-round test below is this fact, not a claim read from the engine under test. */
+function hasLegalNextRound(ids: readonly string[], rows: readonly Row[], upTo: number): boolean {
+  const met = new Set<string>();
+  const byed = new Set<string>();
+  for (const f of rows.filter((x) => x.round_no <= upTo)) {
+    if (isBye(f)) {
+      if (f.home_entrant_id !== null) byed.add(f.home_entrant_id);
+    } else if (f.home_entrant_id !== null && f.away_entrant_id !== null) {
+      met.add([f.home_entrant_id, f.away_entrant_id].sort().join("|"));
+    }
+  }
+  const matchable = (left: readonly string[]): boolean => {
+    if (left.length === 0) return true;
+    const [a, ...rest] = left;
+    return rest.some((b, i) => !met.has([a!, b].sort().join("|")) && matchable([...rest.slice(0, i), ...rest.slice(i + 1)]));
+  };
+  if (ids.length % 2 === 0) return matchable(ids);
+  return ids.some((out) => !byed.has(out) && matchable(ids.filter((x) => x !== out)));
+}
+
 async function stageState(stageId: string): Promise<{ status: string; rounds: unknown }> {
   const [s] = await sql<{ status: string; config: Record<string, unknown> }[]>`select status, config from stages where id = ${stageId}`;
   return { status: s!.status, rounds: s!.config.rounds };
@@ -323,11 +345,16 @@ describe.runIf(HAS_DB)("X-SW-26 Finish the Swiss now", () => {
     }, 300_000);
 
     it(`X-SW-26 a paired-but-unstarted round 4 is unpaired and dropped (${s.sport})`, async () => {
-      // 5 entrants (odd: every round has a bye, hard max 5). Round 4 is paired — its bye AWARDED, a point on the table —
+      // 7 entrants (odd: every round has a bye, hard max 7). Round 4 is paired — its bye AWARDED, a point on the table —
       // and nothing in it started. Finish clears its seats and deletes it with round 5; the bye's point goes with it.
-      const rig = await finishRig(s, 5, 5, { q: 4 });
+      // W3 (engine 2.0.0, X-SW-3): this was 5 entrants, whose rounds 1-3 corner themselves — in the boardgame run the five
+      // have met six of their ten pairs and three of them have had the bye, so round 4 has no rematch-free pairing and Pair
+      // is REFUSED (engine 1.x seated a rematch). That refusal has its own test below; here round 4 must be PAIRED, so the
+      // field is large enough that three rounds leave a legal fourth.
+      const rig = await finishRig(s, 7, 5, { q: 4 });
       await playThrough(rig, 3);
       const after3 = await standingsNow(rig); // the table after round 3, before round 4 is even paired
+      expect(hasLegalNextRound(rig.entrants, await rowsOf(rig.stageId), 3), "premise: round 4 has a legal pairing").toBe(true);
       await pair(rig);
       const r4 = roundOf(await rowsOf(rig.stageId), 4);
       const bye = r4.find(isBye)!;
@@ -340,8 +367,8 @@ describe.runIf(HAS_DB)("X-SW-26 Finish the Swiss now", () => {
       await sql`update fixtures set scheduled_at = '2030-06-01T10:00:00Z' where id = ${laid.id}`;
 
       const out = await finishSwissNow(rig.auth, rig.stageId);
-      // Rounds 4 and 5: 2 boards and a bye each (⌊5/2⌋ + 1).
-      expect(out).toMatchObject({ finished_after: 3, shells_removed: 6, slots_freed: 1, completed: true });
+      // Rounds 4 and 5: 3 boards and a bye each (⌊7/2⌋ + 1 = 4 rows).
+      expect(out).toMatchObject({ finished_after: 3, shells_removed: 8, slots_freed: 1, completed: true });
       const rows = await rowsOf(rig.stageId);
       expect(roundsIn(rows), "round 4 dropped with round 5").toEqual([1, 2, 3]);
       expect(rows.some((f) => r4.some((g) => g.id === f.id)), "no round-4 row survives").toBe(false);
@@ -350,9 +377,19 @@ describe.runIf(HAS_DB)("X-SW-26 Finish the Swiss now", () => {
         select rows from standings_snapshots where stage_id = ${rig.stageId} and pool_id is null`;
       expect(snap?.rows.find((r) => r.entrantId === holder)?.points, "the dropped bye is not counted").toBe(pointsOf(after3, holder));
       const proposal = await draftProposal(rig.koStageId!);
-      expect([...proposal.computed.qualifiers].sort((a, b) => a.rank - b.rank).map((q) => q.entrantId)).toEqual(
-        after3.slice(0, 4).map((r) => r.entrantId),
-      );
+      // W3 (engine 2.0.0, FIDE C.07 art. 16.4.2): the seeding is the top 4 of the FINISHED table, not of `after3` row by row. A
+      // pairing-allocated bye is an unplayed card whose Buchholz dummy is capped at D x R (the engine's tiebreakers.js), and Finish
+      // writes rounds 5 -> 3 — so the same three rounds order TIED rows differently once the stage's total is 3. Measured on one
+      // ledger read under rounds 5 and then rounds 3: Buchholz 6.5 -> 5.5, and two 4-point rows swap places (the old assertion
+      // held only when no such pair existed: it failed one run in three). So: the four seeded are the finished table's top 4, and
+      // they stand on round 3's points — the dropped round-4 bye added a point to nobody.
+      const finished = await standingsNow(rig);
+      const seeded = [...proposal.computed.qualifiers].sort((a, b) => a.rank - b.rank).map((q) => q.entrantId);
+      expect(seeded, "the seeding is the finished table's top 4").toEqual(finished.slice(0, 4).map((r) => r.entrantId));
+      expect(
+        seeded.map((id) => pointsOf(finished, id)),
+        "on round 3's points: the dropped bye added none",
+      ).toEqual(after3.slice(0, 4).map((r) => r.points));
     }, 300_000);
 
     it(`X-SW-26 a started round 4 refuses and names its boards (${s.sport})`, async () => {
@@ -565,29 +602,52 @@ describe.runIf(HAS_DB)("X-SW-26 Finish in sequence", () => {
       );
     }, 300_000);
 
-    it(`finish after an "empty success" round (engine 1.x, SW-H1): a round whose only seated row is the bye is not decided — Finish drops it and asks for none of its empty boards (batch-4 ruling 4) (${s.sport})`, async () => {
-      // The T11 finding's sequence. 6 × 5 (hard max 5): round 1 played, two withdraw — a field of 4 (hard max 3); rounds
-      // 2 and 3 pair (shrunk) and are played; round 4 is beyond the field. ONE late player makes round 4's field 5 (hard
-      // max 5), but the four left have met each other and the newcomer can only take the bye: engine 1.x "succeeds",
-      // seating the bye alone with every board vacant (SW-H1 — engine T1 and app-B T4 own the refusal; this guard keeps
-      // Finish honest meanwhile).
+    it(`finish after a REFUSED round (engine 2.0.0, X-SW-3 / SW-H1): a round with no legal pairing seats nobody — Finish drops its empty boards and asks for none of them (batch-4 ruling 4) (${s.sport})`, async () => {
+      // Engine 1.x answered a round with no legal pairing by "succeeding" — seating the bye alone and leaving every board
+      // vacant (SW-H1; a stage Paired under 1.x may still hold such a round, which the planted-rows cases of
+      // `judgeSwissFinish` below keep pinned). Engine 2.0.0 REFUSES it (SWISS_NO_LEGAL_PAIRING) and writes nothing, so the
+      // round is only shells; Finish after round 3 is then the way out, and it must drop those shells without asking for them.
+      //
+      // The history is the S6 shape (rulebook-W3 §3.1; engine plan Task 4b), written onto the minted shells by SQL so it does not
+      // depend on what the pairer chose (a 5-entrant history that corners itself exists, but it moves with the stage's colour
+      // lot, which is drawn from the stage's id): SIX players, rounds 1-3 a round-robin quarter, each a home win —
+      //   R1 {p0-p1, p2-p3, p4-p5}   R2 {p0-p5, p1-p2, p3-p4}   R3 {p0-p3, p1-p4, p2-p5}
+      // — leave two unplayed triangles, so round 4 has no rematch-free perfect matching. That is PROVED below by brute force
+      // (`hasLegalNextRound`), not read from the engine, with its pair: after two rounds the same field still pairs.
       const rig = await finishRig(s, 6, 5);
-      await playThrough(rig, 1);
-      await withdrawEntrantCascade(rig.auth, rig.entrants[4]!);
-      await withdrawEntrantCascade(rig.auth, rig.entrants[5]!);
-      for (const r of [2, 3]) {
-        await pair(rig);
-        await playRound(rig, r);
+      const S6_HISTORY: readonly (readonly (readonly [number, number])[])[] = [
+        [[0, 1], [2, 3], [4, 5]],
+        [[0, 5], [1, 2], [3, 4]],
+        [[0, 3], [1, 4], [2, 5]],
+      ];
+      let written = 0;
+      for (const [i, round] of S6_HISTORY.entries()) {
+        for (const [b, [home, away]] of round.entries()) {
+          const outcome = { kind: "win", winner: rig.entrants[home]!, loser: rig.entrants[away]! };
+          const done = await sql`
+            update fixtures set home_entrant_id = ${rig.entrants[home]!}, away_entrant_id = ${rig.entrants[away]!}, status = 'decided',
+              outcome = ${sql.json(outcome as never)}
+            where stage_id = ${rig.stageId} and ext_key = ${`sw-r${i + 1}-b${b + 1}`}
+            returning id`;
+          expect(done.length, `rig: shell sw-r${i + 1}-b${b + 1} exists and took the result`).toBe(1);
+          written++;
+        }
       }
-      const [late] = await createEntrants(rig.auth, rig.divisionId, [entrantInput(rig.kind, "Late")]);
-      expect(late!.late_entry, "premise: the late player joins round 4").toMatchObject({ case: "c", round: 4 });
-      await pair(rig);
+      expect(written, "rig: three rounds of three boards written").toBe(9);
+      expect(hasLegalNextRound(rig.entrants, await rowsOf(rig.stageId), 2), "premise pair: after two rounds round 3 pairs").toBe(true);
+      expect(hasLegalNextRound(rig.entrants, await rowsOf(rig.stageId), 3), "premise: after three rounds round 4 has NO legal pairing").toBe(false);
+
+      const asked = await pair(rig).then(
+        () => null,
+        (e: unknown) => e as { status?: number; code?: string; extra?: unknown },
+      );
+      expect(asked, "Pair is refused").not.toBeNull();
+      expect(asked!.code).toBe("SWISS_NO_LEGAL_PAIRING");
+      expect(asked!.status, "409: Finish after round 3 is the way out").toBe(409);
+      expect(asked!.extra, "the round, why (every unmet pair is cut off), and the field of six").toEqual({ round: 4, reason: "rematch", field: 6 });
       const r4 = roundOf(await rowsOf(rig.stageId), 4);
-      const seated = r4.filter((f) => f.home_entrant_id !== null || f.away_entrant_id !== null);
-      expect(seated.length, "premise (SW-H1): round 4 seats one row").toBe(1);
-      expect(isBye(seated[0]!), "premise (SW-H1): …the bye").toBe(true);
-      expect(boardsOf(r4, 4).length, "premise (SW-H1): round 4 has boards").toBeGreaterThan(0);
-      expect(boardsOf(r4, 4).every((f) => f.home_entrant_id === null && f.away_entrant_id === null), "premise (SW-H1): every board vacant").toBe(true);
+      expect(r4.length, "round 4's shells are still there").toBeGreaterThan(0);
+      expect(r4.filter((f) => f.home_entrant_id !== null || f.away_entrant_id !== null), "the refusal seats nobody: round 4 is empty shells").toEqual([]);
 
       // The desk offers Finish after round 3 — not "a finished round was reopened", naming boards nobody sits at.
       expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.finish).toEqual({
@@ -598,8 +658,9 @@ describe.runIf(HAS_DB)("X-SW-26 Finish in sequence", () => {
         completeInstead: false,
       });
       const going = (await rowsOf(rig.stageId)).filter((f) => f.round_no > 3).length;
+      expect(going, "rounds 4 and 5 are 3 shells each").toBe(6);
       const out = await finishSwissNow(rig.auth, rig.stageId);
-      expect(out, "round 4 (the bye and its empty boards) and round 5 go").toMatchObject({ finished_after: 3, shells_removed: going, completed: true });
+      expect(out, "rounds 4 and 5 (shells only) go").toMatchObject({ finished_after: 3, shells_removed: going, completed: true });
       expect(roundsIn(await rowsOf(rig.stageId))).toEqual([1, 2, 3]);
       expect(await stageState(rig.stageId)).toEqual({ status: "complete", rounds: 3 });
     }, 300_000);
@@ -1331,7 +1392,9 @@ describe("judgeSwissFinish — the Finish verdict over rows (pure)", () => {
   const cases: { name: string; rows: Spec[]; over?: boolean; rounds?: number; expected: Partial<ReturnType<typeof judgeSwissFinish>> }[] = [
     {
       // Batch-4 ruling 4 (SW-H1, engine 1.x): Pair "succeeded" seating only the bye; both boards are vacant. That round
-      // was never played, so it is not decided: k stays 3 and Finish drops it, never asking for its empty boards.
+      // was never played, so it is not decided: k stays 3 and Finish drops it, never asking for its empty boards. (Engine
+      // 2.0.0 refuses such a round instead, so a new stage never reaches it — but a stage Paired under 1.x may still hold
+      // one, so the PLANTED rows stay: the judge reads stored rows, whoever wrote them.)
       name: "a round whose only seated row is the bye (empty success): not decided — Finish after round 3 drops it",
       rows: [
         decided(1, 1), decided(1, 2), decided(2, 1), decided(2, 2), decided(3, 1), decided(3, 2),
