@@ -344,6 +344,7 @@ export function DivisionBuilder({
       templatesForSport(sportKey).map((t) => t.key),
       defaultMatchMinutes(sportKey, sport ? pickVariant(sport.key, sport.variants) : ""),
       sport?.entrants === undefined ? [] : divisionEntrantKinds(sport.entrants, entrantKind),
+      Object.keys(templateLocks),
     );
   const [qualified, setQualified] = useState(4);
   // C9 fix round 1 (I2): null until the organiser types in the Rounds box; until then the box follows the plan's

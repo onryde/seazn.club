@@ -20,7 +20,7 @@ import { templatesForSport } from "@/lib/format-templates";
 import { rankTemplates } from "@/lib/division-builder/model";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
 import { swissRoundsDefault } from "@/lib/swiss-rounds";
-import { byTestId, goToStep, next, pickTemplate, pickedTemplate, pressCreate, selectSport, setName } from "./_division-builder-driver";
+import { byTestId, currentStep, goToStep, next, pickTemplate, pickedTemplate, pressCreate, selectSport, setName, stepError } from "./_division-builder-driver";
 
 const { apiV1Mock } = vi.hoisted(() => ({ apiV1Mock: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -47,7 +47,7 @@ const ALL: SportOption[] = sportOptionsFrom(
   },
 );
 const sportsFor = (...keys: string[]) => keys.map((k) => ALL.find((s) => s.key === k)!);
-const mount = (sports: SportOption[]) =>
+const mount = (sports: SportOption[], over: Partial<Parameters<typeof DivisionBuilder>[0]> = {}) =>
   renderIsland(DivisionBuilder, {
     competitionId: "c1",
     orgSlug: "org",
@@ -56,6 +56,7 @@ const mount = (sports: SportOption[]) =>
     constraintsAllowed: true,
     archivedSlotsExplainRefusal: false,
     viewerPlan: "pro",
+    ...over,
   });
 type H = ReturnType<typeof mount>;
 async function flush() {
@@ -160,5 +161,63 @@ describe("Q5: the builder opens on the top suggestion", () => {
     selectSport(h, "badminton");
     goToStep(h, "format");
     expect(pickedTemplate(h), "a picked card is kept").toBe("knockout");
+  });
+});
+
+// Found in fix round 1 (a scout audit of every e2e that walks the builder): a Community organisation's plan locks
+// Americano (formats.advanced), so opening on it put a locked card under the organiser and Next refused it until they
+// picked another - division-delete.spec, pricing-v3.spec's Free cap and event-pass's Free rig would all have stopped on
+// Format. The builder opens on the suggester's first that the division can play AND the plan includes. The lock map is
+// the Community one as doc 10 §1 states it (formats.advanced: the americano and ladder kinds; formats.double_elim:
+// double_elim and page_playoff) over the templates carrying those kinds, typed as format-gates.test.ts types it - never
+// read off templateLocksFor.
+describe("Q5 on a plan that locks the top suggestion (Community)", () => {
+  const COMMUNITY_LOCKS: Readonly<Record<string, string>> = {
+    americano: "formats.advanced",
+    mexicano: "formats.advanced",
+    ladder: "formats.advanced",
+    group_playoffs: "formats.double_elim",
+    swiss_playoff: "formats.double_elim",
+    double_elim: "formats.double_elim",
+  };
+  const notLocked = (key: string) => COMMUNITY_LOCKS[key] === undefined;
+
+  it("empty case first: a plan that locks nothing opens where Pro does", () => {
+    const h = mount(sportsFor("badminton"), { templateLocks: {} });
+    setName(h, "Open");
+    next(h);
+    expect(pickedTemplate(h)).toBe(suggestersPick(h, "badminton"));
+  });
+
+  it("every sport opens on the suggester's first it can play and the plan includes, and Next leaves Format (counts)", () => {
+    let checked = 0;
+    let movedByTheLock = 0;
+    for (const m of builtinModules) {
+      const h = mount(sportsFor(m.key), { templateLocks: COMMUNITY_LOCKS, viewerPlan: "community" });
+      setName(h, "Open");
+      next(h);
+      const want = suggestersRanking(h, m.key).find((k) => playableBy(sportKinds(m.key))(k) && notLocked(k));
+      expect(want, `${m.key}: something is open to a Community plan`).toBeDefined();
+      expect(pickedTemplate(h), m.key).toBe(want);
+      if (want !== suggestersPick(h, m.key)) movedByTheLock++;
+      // The step the organiser opens on is never refused: Next leaves Format.
+      next(h);
+      expect(stepError(h), m.key).toBeNull();
+      expect(currentStep(h), m.key).toBe("rules");
+      checked++;
+    }
+    expect(checked).toBe(builtinModules.length);
+    // The defect's own case: sports whose top suggestion a Community plan locks (Americano for badminton, generic, ...).
+    expect(movedByTheLock, "sports whose top suggestion a Community plan locks").toBeGreaterThan(0);
+  });
+
+  it("a locked card the organiser picks is still refused by name (the lock is not lifted, only not opened on)", () => {
+    const h = mount(sportsFor("badminton"), { templateLocks: COMMUNITY_LOCKS, viewerPlan: "community" });
+    setName(h, "Open");
+    next(h);
+    pickTemplate(h, "americano");
+    next(h);
+    expect(currentStep(h)).toBe("format");
+    expect(stepError(h)).not.toBeNull();
   });
 });

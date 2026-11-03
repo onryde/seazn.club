@@ -98,14 +98,19 @@ export function openingKnobs(entrants: number): TemplateKnobs {
 
 /**
  * The format the builder OPENS on (owner ruling 2026-11-03, C9 Q5): the suggester's first for the sport at the opening
- * plan - skipping a format the division's entrant kinds cannot play. At the opening plan the first suggestion is
- * Americano for every sport but chess, and Americano rotates individual players into pairs: a team-only sport (or a
- * division narrowed to teams) opens on the first format it CAN play. Falls back to the offer's first, then League.
+ * plan - skipping a format the division's entrant kinds cannot play (Americano rotates individual players into pairs, so
+ * a division narrowed to teams opens on the first format it CAN play) and a format the organisation's plan locks
+ * (`locked`, the page's templateLocks keys: a Community plan lacks formats.advanced, so it never opens on a locked
+ * Americano that Next would refuse). Falls back to the offer's first, then League.
  */
-export function openingTemplate(offered: readonly string[], matchMinutes: number, entrantKinds: readonly string[]): string {
+export function openingTemplate(offered: readonly string[], matchMinutes: number, entrantKinds: readonly string[], locked: readonly string[]): string {
   const playable = (key: string) => {
     const t = STAGE_TEMPLATES.find((x) => x.key === key);
-    return t !== undefined && !t.build(openingKnobs(OPENING_PLAN.entrants)).some((s) => entrantKindsRefuseStageKind(entrantKinds, s.kind));
+    return (
+      t !== undefined &&
+      !locked.includes(key) &&
+      !t.build(openingKnobs(OPENING_PLAN.entrants)).some((s) => entrantKindsRefuseStageKind(entrantKinds, s.kind))
+    );
   };
   const ranked = rankTemplates(offered, { ...OPENING_PLAN, matchMinutes }, openingKnobs(OPENING_PLAN.entrants));
   return ranked.find((r) => playable(r.key))?.key ?? offered[0] ?? "league";

@@ -229,10 +229,9 @@ test("an organiser gives the league stage its own match format, and the Finals b
   compId = await createCompetitionViaUi(page, `Stage Rules ${TAG}`, "public");
 
   // The division, through the wizard, with the format an organiser picks when
-  // they want two stages: League + Finals. `createDivisionViaUi` cannot express
-  // this — it never picks on the Format step, so it always ships the default
-  // single `league` stage, and a one-stage division has no second stage for the
-  // per-stage lock to be ABOUT.
+  // they want two stages: League + Finals, picked on the Format step by hand
+  // (a one-stage division has no second stage for the per-stage lock to be
+  // ABOUT, and the builder otherwise opens on its top suggestion, owner Q5).
   await page.goto(await competitionPath(request, compId, "/d/new"));
   await page.getByRole("textbox").first().fill(`Singles ${TAG}`);
   await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption(SPORT);

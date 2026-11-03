@@ -172,10 +172,14 @@ describe("steps", () => {
 
 describe("the opening format (owner Q5) and the kinds it is picked for (Q3): the empty cases", () => {
   it("nothing offered opens on League; a division that takes no kind never opens on a pair-rotation format", () => {
-    expect(openingTemplate([], 30, ["individual", "pair"])).toBe("league");
+    expect(openingTemplate([], 30, ["individual", "pair"], [])).toBe("league");
     // Americano/mexicano only: a division with no declared kinds can play neither, so the offer's first is the fallback.
-    expect(openingTemplate(["americano", "mexicano"], 30, [])).toBe("americano");
-    expect(openingTemplate(["americano", "knockout"], 30, [])).toBe("knockout");
+    expect(openingTemplate(["americano", "mexicano"], 30, [], [])).toBe("americano");
+    expect(openingTemplate(["americano", "knockout"], 30, [], [])).toBe("knockout");
+    // A plan that locks the first (Community lacks formats.advanced) opens on the next it includes; a lock on an unranked
+    // key moves nothing.
+    expect(openingTemplate(["americano", "knockout"], 30, ["individual", "pair"], ["americano"])).toBe("knockout");
+    expect(openingTemplate(["americano", "knockout"], 30, ["individual", "pair"], ["not-a-template"])).toBe("americano");
   });
 
   it("the kinds a division takes: none picked is every kind the sport allows; a picked kind is that kind alone (counts)", () => {

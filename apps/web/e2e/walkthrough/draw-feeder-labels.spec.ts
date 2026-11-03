@@ -230,8 +230,9 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   const compId = await createCompetitionViaUi(page, `Draw Feeders ${TAG}`, "public");
 
   // The division through the wizard, on the Format step, picking the template
-  // that ships two stages. `createDivisionViaUi` never picks there and always
-  // ships one `league` stage, which has no sibling-fed seat in it.
+  // that ships two stages. `createDivisionViaUi` picks a card only when given
+  // one (otherwise the builder's opening suggestion, owner Q5) and offers no
+  // way to check the cards in between, so the walk is spelled out here.
   await visit(page, await competitionPath(request, compId, "/d/new"));
   await page.getByRole("textbox").first().fill(`Singles ${TAG}`);
   // `generic` explicitly: the wizard defaults to whichever sport sorts first
