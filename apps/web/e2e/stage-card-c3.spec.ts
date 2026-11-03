@@ -380,6 +380,9 @@ test("E1 (PB1): Complete's reason is a bubble on the greyed button - hover, focu
     const [c, d, t] = await Promise.all([complete.boundingBox(), card.getByTestId("stage-controls-divider").boundingBox(), card.getByTestId("stage-tool-format").boundingBox()]);
     expect(c!.x + c!.width, "actions, then the divider").toBeLessThanOrEqual(d!.x + 1);
     expect(d!.x + d!.width, "then the settings").toBeLessThanOrEqual(t!.x + 1);
+    // SCF (owner pick, Option A): the divider is the settings group's first child - on Match rules' line, right beside it.
+    expect(Math.abs(d!.y + d!.height / 2 - (t!.y + t!.height / 2)), "the divider is on the settings buttons' line").toBeLessThan(t!.height / 2);
+    expect(t!.x - (d!.x + d!.width), "and right beside them").toBeLessThanOrEqual(24);
   } else {
     await railTrigger.click();
     await expect(card.getByTestId("stage-rail-sheet"), "phone: the actions are in the Stage tools sheet").toBeVisible();
