@@ -63,4 +63,4 @@ overrides:
   # W3 Swiss app-B: the engine 2.0.0 PREVIEW (onryde/seazn.club.engine#18's snapshot). The six manifests stay on
   # `npm:@onryde/seazn-engine@^1.1.0`; this ONE entry, keyed on the `@seazn/engine` alias, is the only place the
   # snapshot is named. Task 13 removes it and re-pins the six manifests to ^2.0.0 once 2.0.0 is released.
-  "@seazn/engine": "npm:@onryde/seazn-engine@0.0.0-pr18.5299e928f5126ac5714c092d4f440b30a19121d3"
+  "@seazn/engine": "npm:@onryde/seazn-engine@0.0.0-pr18.5300fe0950cc96d3d549bb417fc6382fea971bde"
