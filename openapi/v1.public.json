@@ -48345,6 +48345,33 @@
                                     },
                                     "champion": {
                                       "type": "boolean"
+                                    },
+                                    "markers": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "bye",
+                                              "late"
+                                            ]
+                                          },
+                                          "text": {
+                                            "type": "string"
+                                          },
+                                          "title": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "text",
+                                          "title"
+                                        ],
+                                        "additionalProperties": false
+                                      }
                                     }
                                   },
                                   "required": [
