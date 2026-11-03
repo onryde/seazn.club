@@ -27,6 +27,7 @@ import { canonicalJson } from "@/lib/canonical-json";
 import { sql, withTenant } from "@/lib/db";
 import { appendEvent } from "@/server/engine-db";
 import { awardedMatchState } from "@/server/engine-db/awarded-state";
+import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
 import { loadFoldInputs } from "@/server/engine-db/fold";
 import { loadLineupPair } from "@/server/engine-db/lineups";
 import { declaredVariant, seedBracket, type SeededBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
@@ -284,8 +285,15 @@ describe.skipIf(!HAS_DB)("X-SR-2 every sport family through the one writer", () 
     // without carrying it when its stored division config predates the key — the shape the resolver and the fold read
     // raw. Made here, so the check below really meets a raw config with no `overtime` in it (mutation t14-parsed-stage).
     await sql`update divisions set config = config - 'overtime' where id = ${b.divisionId}`;
-    const raw = await padCfg(b, id); // the STAGE-resolved format (no override yet): what the match inherits
+    // The STAGE-resolved format (no override yet) as STORED — what the writer's check reads. Its "stored" form: the pad's
+    // cfg is the fold's, which since the stg cfg-defaults fix carries the schema's overtime (asserted just below).
+    const [d] = await sql<{ config: unknown }[]>`select config from divisions where id = ${b.divisionId}`;
+    const [st] = await sql<{ kind: string; config: Record<string, unknown> | null }[]>`select kind, config from stages where id = ${b.stageId}`;
+    const raw = resolveFixtureCfg({ config_snapshot: null, rules_override: null }, d!.config, st, ice, "stored") as Record<string, unknown>;
     expect(Object.hasOwn(raw, "overtime"), "the premise: the stage's resolved format carries no overtime").toBe(false);
+    expect((await padCfg(b, id)).overtime, "the pad folds the schema's overtime the stored row lacks").toEqual(
+      (ice.configSchema.parse(raw) as { overtime: unknown }).overtime,
+    );
     // The bound is the STAGE's overtime as the sport's schema reads it — never the variant's preset.
     const ot = (ice.configSchema.parse(raw) as { overtime: { minutes: number } & Record<string, unknown> }).overtime;
     await expect(writeFixtureRulesOverride(b.auth, [id], { overtime: { ...ot, minutes: ot.minutes + 1 } })).rejects.toMatchObject({

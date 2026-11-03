@@ -11,7 +11,7 @@ import { LOCKED_FIXTURE_STATUSES, hasFrozenCfg, resolveModule } from "@/server/e
 import { awardFit, isScoredAward, loadAward, writeAwardedMatchState } from "@/server/engine-db/awarded-state";
 import { formatStanding } from "@/server/engine-db/format-standing";
 import { bracketOrder } from "@/server/engine-db/fed-seats";
-import { liveCfg, mergeRulesOverride } from "@/server/engine-db/fixture-cfg";
+import { liveCfg, mergeRulesOverride, withSchemaDefaults } from "@/server/engine-db/fixture-cfg";
 import { foldFrom, loadFoldInputs } from "@/server/engine-db/fold";
 import { RefreezeFoldError, freezeCfg, refreezeFixture } from "@/server/engine-db/refreeze";
 import { bumpRulesVersion } from "@/server/engine-db/rules-version";
@@ -223,7 +223,9 @@ const notFit = (id: string, reason: string) =>
 async function assertAwardFits(tx: Tx, row: LockedRow, corrected: unknown): Promise<void> {
   if (!isScoredAward(row.outcome)) throw lockedRefusal(row.id, "decided");
   const award = await loadAward(tx, row.id);
-  const verdict = awardFit(award.module, award.cfg, corrected, award.lineups, award.outcome, {
+  // `corrected` is in the stored form (it is what a re-freeze writes); the award's own cfg is the fold's, defaults filled
+  // (`resolveFixtureCfg`). The fit folds both the same way, or a default one side lacks reads as a different score.
+  const verdict = awardFit(award.module, award.cfg, withSchemaDefaults(award.module, corrected), award.lineups, award.outcome, {
     fixtureId: row.id,
     recordedAt: new Date().toISOString(),
   });
@@ -238,7 +240,9 @@ async function assertFits(tx: Tx, row: LockedRow, corrected: unknown): Promise<v
   const before = foldFrom(row.id, inputs);
   let after;
   try {
-    after = foldFrom(row.id, { ...inputs, cfg: corrected });
+    // The fold's form of the candidate, as `inputs.cfg` is the fold's form of the recorded cfg (fixture-cfg.ts): a cfg
+    // stored before a defaulted key existed would otherwise crash the refold (the stg `records` TypeError, a 500).
+    after = foldFrom(row.id, { ...inputs, cfg: withSchemaDefaults(inputs.module, corrected) });
   } catch (err) {
     if (!EngineError.is(err)) throw err;
     throw new HttpError(

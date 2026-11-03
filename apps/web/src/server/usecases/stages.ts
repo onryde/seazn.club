@@ -1883,11 +1883,13 @@ export async function swissGen(
     // so Unpair, Rebuild, Undo and the format locks read the bye as before.
     // And a bye is not played, so it takes no slot (SW-M13, X-SW-29): time, court, venue and pin go (`holdsSlot`).
     const [shellCfg] = await tx<{ rules_override: unknown }[]>`select rules_override from fixtures where id = ${byeShell.id}`;
+    // "stored": the form append-event.ts freezes (fixture-cfg.ts), never the fold's defaults-filled one.
     const frozen = resolveFixtureCfg(
       { config_snapshot: null, rules_override: shellCfg?.rules_override ?? null },
       division.config,
       { kind: "swiss", config: cfg },
       sportModule,
+      "stored",
     );
     const seated = await tx<{ id: string }[]>`
       update fixtures set

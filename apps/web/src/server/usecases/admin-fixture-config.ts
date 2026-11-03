@@ -131,11 +131,14 @@ export async function fixtureConfigPanel(fixtureId: string): Promise<FixtureConf
   // append would freeze them (fixture-cfg.ts).
   // W2c: and with the fixture's REAL override (the snapshot alone is nulled): the first append froze it too, so a
   // live cfg without it would read "diverged" for every match with an override the moment it started.
+  // "stored": the resolution as a freeze writes it, the form `snapshot` is in — the fold's schema defaults
+  // (fixture-cfg.ts) would read "diverged" for every snapshot taken from a config stored before a defaulted key existed.
   const live = resolveFixtureCfg(
     { config_snapshot: null, rules_override: row.rules_override },
     row.division_config,
     { kind: row.stage_kind, config: row.stage_config },
     resolveModule(row.sport_key, row.module_version),
+    "stored",
   );
   const snapshot = row.config_snapshot;
   return {
@@ -211,11 +214,13 @@ export async function resnapshotFixtureConfig(
       );
     }
 
+    // "stored": a re-snapshot writes what the first event's freeze writes (fixture-cfg.ts).
     const live = resolveFixtureCfg(
       { config_snapshot: null, rules_override: row.rules_override },
       row.division_config,
       { kind: row.stage_kind, config: row.stage_config },
       resolveModule(row.sport_key, row.module_version),
+      "stored",
     );
     // W2c (Task 14, owner P-1): the write, the refold and every cache below are ONE function shared with the organiser's
     // live correction (`refreezeFixture`) — which also bumps `rules_version`, so an open pad learns its cfg moved.
