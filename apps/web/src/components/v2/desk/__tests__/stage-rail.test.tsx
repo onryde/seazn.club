@@ -211,10 +211,12 @@ describe("StageRail", () => {
     expect(nonAdhocHtml).not.toContain('data-testid="stage-add-match"');
   });
 
-  // W3 RB3-15 A (X-SW-21, ruling 252): Swiss rounds are paired by the system, so a Swiss stage offers no Add match; the
-  // rail says why in its place. `adhoc` is passed TRUE for the Swiss stage on purpose: the rail refuses on the KIND,
-  // whatever the panel hands it (the panel's own set is pinned in stages-panel-swiss-pairing.test.tsx).
-  it("a Swiss stage renders no stage-add-match trigger; a league stage does", () => {
+  // W3 RB3-15 A (X-SW-21, ruling 252): Swiss rounds are paired by the system, so a Swiss stage offers no Add match. SCF (owner pick,
+  // Option A): the sentence that says so used to stand in the rail's action row; it now lives on the stage's legend line (the PANEL draws
+  // it - stages-panel-swiss-pairing.test.tsx pins the gates and the place), so the rail's row holds controls only. `adhoc` is passed TRUE
+  // for the Swiss stage on purpose: the rail refuses on the KIND, whatever the panel hands it (the panel's own set is pinned in
+  // stages-panel-swiss-pairing.test.tsx).
+  it("a Swiss stage renders no stage-add-match trigger and no sentence in its row; a league stage renders the trigger", () => {
     const row = (kind: string, status = "active") => ({ id: "s1", name: kind, kind, seq: 1, status }) as never;
     const render = (kind: string, extra: Partial<StageRailProps> = {}) =>
       renderToStaticMarkup(
@@ -226,7 +228,7 @@ describe("StageRail", () => {
     const copy = en["swiss.refusal.SWISS_ADHOC_REFUSED"];
     expect(copy, "premise: the guidance copy exists").toBeTruthy();
 
-    // Positive pair first: the league row renders the trigger and no Swiss note.
+    // Positive pair first: the league row renders the trigger.
     const league = render("league");
     expect(league).toContain('data-testid="stage-add-match"');
     expect(league).not.toContain(NOTE);
@@ -241,21 +243,11 @@ describe("StageRail", () => {
       // stage offers no Generate (`stageActions`), so the control that stands here is Complete (present, waiting on 4 open matches).
       expect(html, `${label}: rail controls`).toContain('data-testid="stage-complete"');
       expect(html, `${label}: no Add match`).not.toContain('data-testid="stage-add-match"');
-      expect(html, `${label}: the guidance line takes its place`).toContain(NOTE);
-      expect(html, `${label}: in the reader's words`).toContain(copy);
+      expect(html, `${label}: the sentence is not in the action row any more`).not.toContain(NOTE);
+      expect(html, `${label}: nor its words`).not.toContain(copy);
       checked++;
     }
     expect(checked, "anti-vacuity: Swiss states rendered").toBe(3);
-
-    // The note stands where the button would: a complete stage, or one with nothing generated, shows neither.
-    // Each with its positive pair: the rail is still rendering.
-    const complete = render("swiss", { stage: row("swiss", "complete") });
-    expect(complete).toContain('data-testid="stage-delete"');
-    expect(complete).not.toContain(NOTE);
-    // Nothing generated yet is a stage that has not started (Match Day C3: a started stage offers no Generate).
-    const empty = render("swiss", { fixtureCount: 0, stage: row("swiss", "pending") });
-    expect(empty).toContain('data-testid="stage-generate"');
-    expect(empty).not.toContain(NOTE);
   });
 
   it("Swiss with zero fixtures labels Generate; with unseated shells labels Pair next", () => {
@@ -785,6 +777,20 @@ describe("StageRail — the rounds chip and Add a round (W3 T12 Phase 2)", () =>
     expect(render(undefined)).toContain('data-testid="stage-generate"');
   });
 
+  // SCF (owner pick, Option A): once the stage has started the count cannot change, and a bordered pill that does nothing reads as a
+  // button - so the row draws nothing for it (the legend line says "N rounds"). Before the start it is a real button, "Rounds: N | Edit".
+  it("SCF: the Rounds control is a real button until the stage starts, and absent from the row after it", () => {
+    const before = render(rounds(false));
+    const after = render(rounds(true));
+    expect(after, "positive pair: the row rendered its other controls").toContain('data-testid="stage-generate"');
+    const editable = /<button[^>]*data-testid="stage-rounds"[^>]*>/.exec(before)?.[0] ?? "";
+    expect(editable, "editable: a button").toContain('data-state="editable"');
+    expect(before).toContain(en["stage.rounds.edit"]);
+    expect(after, "started: nothing in the row").not.toContain('data-testid="stage-rounds"');
+    expect(after, "started: no fixed-state pill either").not.toContain('data-state="fixed"');
+    expect(after, "started: not its words").not.toContain(en["stage.rounds.chip"].replace("{n}", "3"));
+  });
+
   it("Add a round sits in the More menu after Add late player once the stage has started; not before", () => {
     const html = render(rounds(true));
     const menu = html.indexOf('data-testid="stage-more-menu"');
@@ -884,24 +890,24 @@ describe("StageRail — the rounds chip and Add a round (W3 T12 Phase 2)", () =>
     expect(at({ canUnpairSwiss: false, unpairChangeHint: true }), "no Unpair, no line naming it").not.toContain(HINT);
   });
 
-  // Merge with Match Day #1103 (E1 item 1): the rail is now the header's ACTIONS group, and a thin divider stands between it and the
-  // settings buttons only when the group draws a control. W3's chip and More ride the same group, so they count: a FINISHED Swiss
-  // (no Generate, no Complete) that cannot be deleted still draws its fixed "Rounds: N" chip, and the divider must stand beside it.
-  it("Match Day merge: a W3 control alone in the actions group still earns the divider; an empty group still has none", () => {
+  // Merge with Match Day #1103 (E1 item 1), amended by SCF (owner pick, Option A): the rail is the header's ACTIONS group. The divider that
+  // stood beside it is the settings group's now (stages-panel-stage-card.test.tsx), and it is drawn when this group holds a control
+  // (`stageRailActions().hasActions`, pinned against the real render in stage-rail-header.test.tsx). What W3's Swiss controls owe that
+  // question is pinned here: a FINISHED Swiss's count is fixed, so its Rounds pill is no longer drawn and no longer a control that earns
+  // the divider; a finished Swiss that can be deleted still has Delete.
+  it("SCF x Match Day merge: a finished Swiss's fixed Rounds count is not a control any more; Delete still is", () => {
     const done = { ...swiss, status: "complete" };
     const SETTLED = { played: 9, inPlay: 0, unplayed: 0 };
     const at = (props: Partial<StageRailProps>) =>
       renderToStaticMarkup(
         <StageRail stage={done as never} canEdit busy={null} fixtureCount={9} deletable={false}
           onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-          adhoc={false} {...NEUTRAL} counts={SETTLED} dividerAfter {...props} />,
+          adhoc={false} {...NEUTRAL} counts={SETTLED} {...props} />,
       );
-    const DIVIDER = 'data-testid="stage-controls-divider"';
     const rows = [
-      // The finished Swiss: its round count is the one control in the group.
-      { name: "finished Swiss, the chip alone", html: at({ swissRounds: rounds(true) }), chip: true, divider: true },
-      // Positive pair: the same stage without the chip has nothing to divide (Match Day's own empty case, unchanged).
-      { name: "finished stage, no W3 control", html: at({}), chip: false, divider: false },
+      { name: "finished Swiss, count fixed", html: at({ swissRounds: rounds(true) }), chip: false, control: false },
+      { name: "finished Swiss, count fixed, deletable", html: at({ swissRounds: rounds(true), deletable: true }), chip: false, control: true },
+      { name: "finished stage, no W3 control", html: at({}), chip: false, control: false },
     ];
     let checked = 0;
     for (const r of rows) {
@@ -909,8 +915,8 @@ describe("StageRail — the rounds chip and Add a round (W3 T12 Phase 2)", () =>
       expect(r.html, `${r.name}: no Generate on a finished stage`).not.toContain('data-testid="stage-generate"');
       expect(r.html, `${r.name}: no Complete on a finished stage`).not.toContain('data-testid="stage-complete"');
       expect(r.html.includes('data-testid="stage-rounds"'), `${r.name}: chip`).toBe(r.chip);
-      expect(r.html.includes(DIVIDER), `${r.name}: divider`).toBe(r.divider);
-      if (r.chip) expect(r.html.indexOf(DIVIDER), `${r.name}: the divider follows the chip`).toBeGreaterThan(r.html.indexOf('data-testid="stage-rounds"'));
+      expect(r.html.includes('data-testid="stage-delete"'), `${r.name}: Delete`).toBe(r.control);
+      expect(r.html, `${r.name}: the rail draws no divider`).not.toContain("stage-controls-divider");
       checked++;
     }
     expect(checked, "anti-vacuity: rows").toBe(rows.length);

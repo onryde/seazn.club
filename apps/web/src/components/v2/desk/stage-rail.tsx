@@ -7,9 +7,14 @@
 //
 // Match Day E1 item 1 (owner 2026-11-01): the rail no longer sits BELOW the rows. `stages-panel.tsx` mounts it inside the stage card's
 // HEADER: from `md` its sheet is the header's actions group (Generate / Pair next, Unpair, Complete stage, Add match, Delete - the
-// `stageActions` rules unchanged, only their place moved), left of a thin divider and the settings buttons; below `md` the trigger
-// rides the header and the controls are the same bottom sheet as before. Court tags and the old "To schedule in this stage" footer
-// are the panel's now (the first at the card's foot, the second gone: the counts line above the rows says it).
+// `stageActions` rules unchanged, only their place moved), left of the settings buttons; below `md` the trigger rides the header and
+// the controls are the same bottom sheet as before. Court tags and the old "To schedule in this stage" footer are the panel's now (the
+// first at the card's foot, the second gone: the counts line above the rows says it).
+//
+// SCF (owner pick, Option A, 2026-11-03): the row holds CONTROLS and nothing else. The Swiss "paired by the system" sentence moved to the
+// stage's legend line; the fixed "Rounds: N" pill is gone once the count cannot change; More and the Pair next ▾ panel float from `md`
+// (stage-popover.ts); and the divider between this group and the settings buttons is the settings group's own (stages-panel.tsx), asked
+// of `stageRailActions` below, so it can never be stranded on a line of its own.
 //
 // PRESENTATIONAL ONLY, deliberately: this component receives everything it
 // renders as props and calls no `use*` DATA hook of its own (useMsg is a
@@ -80,7 +85,6 @@ import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { stageActions } from "@/lib/stage-card/summaries";
 import { WithReasonTip } from "./reason-tip";
 import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
-import { swissRefusalKey } from "@/lib/swiss-refusals";
 import {
   swissPairingChangeNote,
   swissPairingDrawNote,
@@ -102,6 +106,15 @@ import { swissLateEntryOffered } from "@/lib/open-entry-stages";
 import { SwissAddRoundMenuItem, SwissRoundsChip, type SwissRoundsRail } from "./swiss-rounds-dialog";
 import { SwissFinishMenuItem } from "./swiss-rounds-dialog";
 import { SwissMoreMenu } from "./swiss-rounds-dialog";
+import {
+  alignOf,
+  floatsNow,
+  POPOVER_RAISED,
+  popoverClasses,
+  pressedAnItem,
+  useStagePopover,
+  type PopoverAlign,
+} from "./stage-popover";
 
 interface StageRow {
   id: string;
@@ -172,13 +185,52 @@ export interface StageRailProps {
   /** Batch-4 m2 — T14's "Unpair, then Pair next" line, said beside Unpair when no Pair next menu carries it
    *  (`swissUnpairChangeHint`, lib/swiss-pairing-menu.ts). Absent ⇒ no line. */
   unpairChangeHint?: boolean;
-  /** Match Day E1 item 1: the header has settings buttons to the right of this group, so the group ends in a thin divider (from `md`)
-   *  - but only when it holds a control: a divider beside nothing is a stray line. */
-  dividerAfter?: boolean;
   /** Match Day C3 (review round 1, phone ruling): the stage's Match rules / Points / Tie-breaks rows, built by the panel (it owns which
    *  panel is open) and mounted as the TOP rows of this sheet below `md` - the card's one phone trigger. The slot carries its own
    *  `md:hidden` (the header's buttons are the desktop twin). Absent: nothing, so the rail's other callers are unchanged. */
   toolsSlot?: React.ReactNode;
+}
+
+/**
+ * What the actions group draws, decided once and asked by two places: this rail (which buttons) and the panel (does the settings group
+ * beside it get a divider - a divider beside nothing is a stray line, so it needs `hasActions`).
+ *
+ * `hasActions` is true when the group holds at least one control. Add match is not listed: `stageActions` hands an ad-hoc stage with
+ * fixtures an "add_match" only beside Generate (not started) or Complete (started), so wherever Add match shows, one of those already
+ * counts. W3 (merge with Match Day #1103): the Swiss controls ride this same group. The Rounds control counts only while it is a
+ * BUTTON (before the stage's first start, `control.started` false) - after the start it is no longer drawn at all (SCF, owner pick
+ * Option A: the count is fixed, the legend line says "N rounds", and a pill that does nothing reads as a button). Both Mores are not
+ * listed: the fed-Swiss More needs `swissRounds` too, and the late-add More is offered only on a started stage with a seated round
+ * (`swissLateEntryOffered`), where Complete already counts.
+ */
+export function stageRailActions(p: {
+  stage: Pick<StageRow, "kind" | "status">;
+  counts: StageRailProps["counts"];
+  fixtureCount: number;
+  adhoc: boolean;
+  swissHasUnseated: boolean;
+  canUnpairSwiss: boolean;
+  deletable: boolean;
+  swissRounds?: Pick<SwissRoundsRail, "control">;
+}) {
+  const { primary, secondary } = stageActions({
+    status: p.stage.status,
+    played: p.counts.played,
+    inPlay: p.counts.inPlay,
+    unplayed: p.counts.unplayed,
+    hasFixtures: p.fixtureCount > 0,
+    adhoc: p.adhoc,
+    pairNext: p.stage.kind === "swiss" && p.swissHasUnseated,
+    canUnpair: p.stage.kind === "swiss" && p.canUnpairSwiss,
+  });
+  const showGenerate = primary?.action === "generate" || primary?.action === "pair_next";
+  const completeButton = [primary, ...secondary].find((b) => b?.action === "complete");
+  const hasActions =
+    (p.stage.status !== "complete" &&
+      (showGenerate || (p.stage.kind === "swiss" && p.canUnpairSwiss) || completeButton !== undefined)) ||
+    p.deletable ||
+    (p.swissRounds !== undefined && !p.swissRounds.control.started);
+  return { primary, secondary, showGenerate, completeButton, hasActions };
 }
 
 export function StageRail({
@@ -197,7 +249,6 @@ export function StageRail({
   onToggleOpen,
   adhoc,
   toolsSlot,
-  dividerAfter = false,
   swissHasUnseated,
   canUnpairSwiss,
   swissPairingMenu,
@@ -242,6 +293,22 @@ export function StageRail({
     if (swissPairingMenu) setPairingState({ round: swissPairingMenu.round, open: false, pick: pairingPick });
     pairingToggleRef.current?.focus();
   };
+  // SCF (owner pick, Option A): from `md` the pairing panel and More float under their trigger instead of growing the card. Each menu's
+  // ROOT (trigger + panel) is the element a press is "inside"; a press anywhere else, or Escape, closes it. Escape hands focus back to
+  // the trigger; an outside press leaves focus where the organiser put it. The pick survives a close either way (it is the press
+  // that uses it that clears it), so a menu closed by a stray tap is reopened as it was left.
+  const [pairingAlign, setPairingAlign] = useState<PopoverAlign>("start");
+  const pairingRoot = useStagePopover(pairingOpen, (how) => {
+    if (how === "escape") closePairing();
+    else if (swissPairingMenu) setPairingState({ round: swissPairingMenu.round, open: false, pick: pairingPick });
+  });
+  const moreToggleRef = useRef<HTMLButtonElement>(null);
+  const [moreAlign, setMoreAlign] = useState<PopoverAlign>("start");
+  // Only the late-add More lives in this component's tree; the fed-Swiss More (`SwissMoreMenu`) owns its own dismissal.
+  const moreRoot = useStagePopover(moreOpen && lateEntryOffered, (how) => {
+    setMoreOpen(false);
+    if (how === "escape") moreToggleRef.current?.focus();
+  });
 
   // WHICH action gets the filled primary. Found by driving the product
   // (2026-09-20): on a Swiss stage that had paired nothing, "Complete stage"
@@ -259,31 +326,19 @@ export function StageRail({
   // Match Day C3 (spec §12 item 8): whether the stage offers Generate / Complete, and which one leads, is `stageActions`' answer
   // (C1's pure rule, pinned in `lib/stage-card/__tests__/summaries.test.ts`): Generate is gone once the stage has started,
   // Complete is present but DISABLED while any match is open, with the reason beside it. Pair next, Unpair and Add match keep
-  // their own gates above and below (their decisions are the same as `stageActions`' own).
-  const { primary, secondary } = stageActions({
-    status: stage.status,
-    played: counts.played,
-    inPlay: counts.inPlay,
-    unplayed: counts.unplayed,
-    hasFixtures: fixtureCount > 0,
+  // their own gates above and below (their decisions are the same as `stageActions`' own). The same answer is what the PANEL asks
+  // (`stageRailActions`) to know whether the settings buttons beside this group get their divider.
+  const { primary, showGenerate, completeButton } = stageRailActions({
+    stage,
+    counts,
+    fixtureCount,
     adhoc,
-    pairNext: stage.kind === "swiss" && swissHasUnseated,
-    canUnpair: stage.kind === "swiss" && canUnpairSwiss,
+    swissHasUnseated,
+    canUnpairSwiss,
+    deletable,
+    swissRounds,
   });
-  const showGenerate = primary?.action === "generate" || primary?.action === "pair_next";
-  const completeButton = [primary, ...secondary].find((b) => b?.action === "complete");
   const completeHintId = `stage-complete-hint-${stage.id}`;
-  // Which controls the actions row below draws, read once here so the divider beside the group can tell an empty group from a full one (a
-  // complete stage with nothing to delete draws none). Add match is not listed: `stageActions` hands an ad-hoc stage with fixtures an
-  // "add_match" only beside Generate (not started) or Complete (started), so wherever Add match shows, one of those already counts.
-  // W3 (merge with Match Day #1103): the Swiss controls ride this same group. The Rounds chip draws on every Swiss stage the panel hands
-  // `swissRounds` - a FINISHED one included (a fixed "Rounds: N"), where nothing above counts - so it is listed. Both Mores are not:
-  // the fed-Swiss More needs `swissRounds` too, and the late-add More is offered only on a started stage with a seated round
-  // (`swissLateEntryOffered`), where Complete already counts.
-  const hasActions =
-    (stage.status !== "complete" && (showGenerate || (stage.kind === "swiss" && canUnpairSwiss) || completeButton !== undefined)) ||
-    deletable ||
-    swissRounds !== undefined;
 
   // Review finding M4. Below `md` this sheet BEHAVES modally — a
   // `fixed inset-0` backdrop swallows every tap on the page behind it — but it
@@ -438,6 +493,9 @@ export function StageRail({
                   stretch on its own; in the desktop row the wrapper is
                   content-sized, so it grows into nothing. */}
               {showGenerate && (
+              // The ROOT of the split button's menu: the button, its ▾ and the panel (SCF). A positioned box from `md`, so the panel
+              // hangs from the button; below `md` a plain column, so the panel is the next row of the sheet, as it always was.
+              <div ref={pairingRoot} data-testid="stage-pairing-root" className="flex min-w-0 flex-col gap-2 md:relative">
               <div className="flex items-stretch">
                 <button
                   type="button"
@@ -508,9 +566,11 @@ export function StageRail({
                     aria-label={msg("schedule.pairing.toggle")}
                     data-testid="stage-pairing-toggle"
                     disabled={busy !== null}
-                    onClick={() =>
-                      setPairingState({ round: swissPairingMenu.round, open: !pairingOpen, pick: pairingPick })
-                    }
+                    onClick={() => {
+                      // Which edge the panel hangs from is read where the button is NOW (the header wraps), as it opens.
+                      if (!pairingOpen) setPairingAlign(alignOf(pairingRoot.current));
+                      setPairingState({ round: swissPairingMenu.round, open: !pairingOpen, pick: pairingPick });
+                    }}
                     onKeyDown={(e) => {
                       // Escape closes the menu and stops there: marked
                       // handled, so the phone sheet's own Escape (above)
@@ -529,13 +589,11 @@ export function StageRail({
                   </button>
                 )}
               </div>
-              )}
-              {/* The menu is an inline disclosure directly after its toggle —
-                  in the DOM and on screen — never a floating popover, so
-                  nothing can overflow at 320. In the phone sheet's column it
-                  is the next row; in the desktop row `md:basis-full` breaks
-                  it onto a line of its own, and the buttons after it wrap
-                  below. Tab order therefore matches what the eye sees. */}
+              {/* The menu follows its toggle in the DOM, so the tab order is the reading order. In the phone sheet's column it is an
+                  inline disclosure, the next row - nothing can overflow at 320. From `md` it is a popover hung from the button (SCF,
+                  owner pick Option A): over the content, the card does not grow, and a press elsewhere or Escape closes it. A
+                  pick inside it does NOT close it: the radios are a choice that Pair next then uses, and a menu that put its
+                  checked option away would send a mode the organiser can no longer see. */}
               {swissPairingMenu && pairingOpen && (
                 <SwissPairingMenuPanel
                   stageId={stage.id}
@@ -543,7 +601,10 @@ export function StageRail({
                   pick={pairingPick}
                   onPick={(mode) => setPairingState({ round: swissPairingMenu.round, open: true, pick: mode })}
                   onClose={closePairing}
+                  align={pairingAlign}
                 />
+              )}
+              </div>
               )}
               {stage.kind === "swiss" && canUnpairSwiss && (
                 <button
@@ -613,17 +674,20 @@ export function StageRail({
             </button>
           )}
           {lateEntry && lateEntryOffered && (
-            <>
-              {/* W3 T10 — More: an inline disclosure after the row's buttons,
-                  like the pairing menu (never a floating popover, so nothing
-                  overflows at 320). `hidden` rather than unmounted, as
-                  `desk-tools-more.tsx` does: the item stays in the DOM, so a
-                  test can tell "folded" from "never rendered". */}
+            // W3 T10 — More. The ROOT holds the trigger and its panel (SCF): from `md` the panel is a popover hung from the button, over
+            // the content, closed by a press elsewhere, by Escape (focus back on More) or by choosing an item; below `md` it is the
+            // inline disclosure it always was, the next row of the sheet's column. `hidden` rather than unmounted, as
+            // `desk-tools-more.tsx` does: the item stays in the DOM, so a test can tell "folded" from "never rendered".
+            <div ref={moreRoot} data-testid="stage-more-root" className="flex min-w-0 flex-col gap-2 md:relative">
               <button
+                ref={moreToggleRef}
                 type="button"
                 aria-expanded={moreOpen}
                 aria-controls={`stage-more-menu-${stage.id}`}
-                onClick={() => setMoreOpen((v) => !v)}
+                onClick={() => {
+                  if (!moreOpen) setMoreAlign(alignOf(moreRoot.current));
+                  setMoreOpen((v) => !v);
+                }}
                 data-testid="stage-more"
                 className="btn btn-ghost min-h-11 justify-between gap-1.5 px-3 py-1.5 text-xs"
               >
@@ -634,9 +698,16 @@ export function StageRail({
                 id={`stage-more-menu-${stage.id}`}
                 hidden={!moreOpen}
                 data-testid="stage-more-menu"
-                className="min-w-0 md:basis-full"
+                onClick={(e) => {
+                  // Choosing an item puts the floating menu away (and focus back on More). Below `md` the menu is part of the sheet and
+                  // stays as it was.
+                  if (!floatsNow() || !pressedAnItem(e.target)) return;
+                  setMoreOpen(false);
+                  moreToggleRef.current?.focus();
+                }}
+                className={popoverClasses(moreAlign)}
               >
-                <div className="flex flex-col overflow-hidden rounded-xl border border-purple-200 bg-white md:max-w-md">
+                <div className={`flex flex-col overflow-hidden rounded-xl border border-purple-200 bg-white ${POPOVER_RAISED}`}>
                   <Link
                     href={lateEntry.href}
                     data-testid="stage-add-late-player"
@@ -649,7 +720,7 @@ export function StageRail({
                   {swissRounds && <SwissFinishMenuItem stageId={stage.id} busy={busy} rail={swissRounds} onOpen={() => open && onToggleOpen(stage.id)} />}
                 </div>
               </div>
-            </>
+            </div>
           )}
           {/* Batch-4 ruling 3: a running Swiss with no late-add More above (a fed Swiss) still gets Add a round and Finish
               the Swiss now — its own More, the same toggle and testids, holding just those two. */}
@@ -663,22 +734,11 @@ export function StageRail({
               onFinishOpen={() => open && onToggleOpen(stage.id)}
             />
           )}
-          {stage.status !== "complete" && fixtureCount > 0 && stage.kind === "swiss" && (
-            // W3 RB3-15 A (X-SW-21, ruling 252): no Add match on a Swiss stage,
-            // whatever `adhoc` says — the system pairs its rounds and the server
-            // refuses the match (SWISS_ADHOC_REFUSED). The refusal's own copy
-            // stands where the trigger would, on the same gates, so the
-            // organiser reads where friendlies go instead of finding nothing.
-            // A quiet hint line, not a control: slate-500 xs (the Add match
-            // form's own hint), wrapping freely in the phone sheet's column and
-            // capped at a readable measure in the desktop row.
-            <p
-              data-testid="stage-swiss-adhoc-note"
-              className="min-w-0 text-xs leading-snug text-slate-500 md:max-w-[60ch]"
-            >
-              {msg(swissRefusalKey("SWISS_ADHOC_REFUSED"))}
-            </p>
-          )}
+          {/* W3 RB3-15 A (X-SW-21, ruling 252): no Add match on a Swiss stage, whatever `adhoc` says - the system pairs its rounds and the
+              server refuses the match (SWISS_ADHOC_REFUSED). The refusal's own copy used to stand HERE, in the action row, where the
+              button would be. SCF (owner pick, Option A): it is information, not an action, and a 387px sentence in the row is what pushed the
+              settings buttons onto a second line - so the panel now says it on the stage's legend line (`stage-swiss-adhoc-note`,
+              stages-panel.tsx), under the same gates. The row holds controls only. */}
           {stage.status !== "complete" && adhoc && fixtureCount > 0 && stage.kind !== "swiss" && (
             // Task 3 — trigger only. `AddMatchForm` deliberately stays mounted in
             // stages-panel.tsx: it reads `boardSlotOptions`, which also feeds
@@ -697,9 +757,6 @@ export function StageRail({
             </button>
           )}
         </div>
-        {dividerAfter && hasActions && (
-          <span aria-hidden="true" data-testid="stage-controls-divider" className="hidden h-6 w-px shrink-0 bg-slate-300 md:block" />
-        )}
       </div>
     </>
   );
@@ -724,6 +781,7 @@ export function SwissPairingMenuPanel({
   pick,
   onPick,
   onClose,
+  align = "start",
 }: {
   stageId: string;
   menu: SwissPairingMenu;
@@ -731,6 +789,9 @@ export function SwissPairingMenuPanel({
   onPick: (mode: SwissPairingMode) => void;
   /** Escape: close, and hand focus back to the toggle. */
   onClose: () => void;
+  /** From `md` the panel hangs from the split button's left edge (`start`) or its right edge (`end`, when there is no room to the
+   *  right - `popoverAlign`). Below `md` it is in flow and this changes nothing. */
+  align?: PopoverAlign;
 }) {
   const msg = useMsg();
   const checkedMode = pick ?? menu.defaultPairing;
@@ -741,12 +802,10 @@ export function SwissPairingMenuPanel({
   // X-SW-30 (W3 T14, SW-L12): round 2+ also says the Swiss rules decide the pairing and how to re-derive it (Unpair, then Pair next).
   const changeNote = swissPairingChangeNote(menu, msg);
   return (
-    // The outer box claims the desktop row's whole line (`md:basis-full`),
-    // so the buttons after it wrap below; the group inside keeps a reading
-    // width (`md:max-w-md`) instead of stretching a two-line choice across
-    // the card. Capping the group ITSELF would not do: a flex item's line
-    // break uses its max-clamped size, so the next buttons would sit beside it.
-    <div className="min-w-0 md:basis-full">
+    // The outer box is the positioned part: below `md` nothing (the next row of the sheet's column), from `md` a popover under the
+    // split button (`popoverClasses`, SCF) - so opening it never moves the buttons after it, and the card does not grow. It is a
+    // reading width (`md:w-96`), not the row's whole line.
+    <div className={popoverClasses(align)}>
       <div
         id={`pairing-menu-${stageId}`}
         role="radiogroup"
@@ -761,7 +820,7 @@ export function SwissPairingMenuPanel({
           e.preventDefault();
           onClose();
         }}
-        className="flex w-full min-w-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1.5 text-xs md:max-w-md"
+        className={`flex w-full min-w-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1.5 text-xs ${POPOVER_RAISED}`}
       >
         {menu.choosable ? (
           <>

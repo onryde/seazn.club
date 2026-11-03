@@ -143,7 +143,7 @@ import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notic
 // Competition Desk W3 (Task 2) — the stage rail takes the three header
 // action controls (Generate/Complete/Delete). See stage-rail.tsx's own
 // header for why it stays presentational (props only, no data hook).
-import { StageRail } from "@/components/v2/desk/stage-rail";
+import { StageRail, stageRailActions } from "@/components/v2/desk/stage-rail";
 import type { SwissRoundsRefusal } from "@/components/v2/desk/swiss-rounds-dialog";
 import { isChessSport } from "@/lib/chess-individual-only-rule";
 import type { SwissRoundControl } from "@/lib/swiss-rounds-edit";
@@ -1376,6 +1376,12 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           stageId: stage.id,
           entrantFirstRounds: entrantSwissFirstRounds,
         });
+        // SCF: the sentence that stands where Add match would be on a Swiss stage (it has none: the system pairs its rounds and the server refuses
+        // the match, SWISS_ADHOC_REFUSED). Same gates the rail drew it under: an editor, a stage that is not finished, one with fixtures.
+        const swissAdhocNote =
+          canEdit && stage.kind === "swiss" && stage.status !== "complete" && stageFixtures.length > 0
+            ? msg(swissRefusalKey("SWISS_ADHOC_REFUSED"))
+            : null;
         // W3 T10 (X-SW-14 UI half) — the pending-latecomer count: entrants stamped for the round the next Pair seats,
         // and any who arrived after the last round had started. A desk notice, so organisers only.
         const swissLatecomers =
@@ -1407,6 +1413,34 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // The stage's actions (Generate / Pair next, Complete stage, Add match, Delete): built once, mounted in the card's HEADER (Match Day E1
         // item 1). From `md` they are the header's actions group, left of a thin divider and the settings buttons; below `md` the same
         // controls are the Stage tools sheet behind its one trigger, which rides the header too. An editor only (a viewer gets none).
+        // W3 T12/T13 + batch-4 (merge with Match Day #1103): the round count's facts and writes for a Swiss stage, built once for the rail's Rounds
+        // button and More and for the divider's question below. Absent for every other kind.
+        const swissRoundsRail =
+          stage.kind === "swiss" && swissRoundControls?.[stage.id]
+            ? {
+                control: swissRoundControls[stage.id]!,
+                fixtures: swissShellFixtures,
+                onSave: saveSwissRounds,
+                onAddRound: addSwissRoundTo,
+                onFinish: finishSwissStage,
+              }
+            : undefined;
+        // SCF (owner pick, Option A): the thin divider between the actions group and the settings buttons belongs to the SETTINGS group (it is
+        // that group's first child, below), so it can never be stranded on a line of its own when the header wraps. It is drawn when the actions
+        // group draws a control - the rail's own answer (`stageRailActions`), asked here with the same facts - because a divider beside nothing
+        // is a stray line. A viewer has no actions group at all.
+        const railHasActions =
+          canEdit &&
+          stageRailActions({
+            stage,
+            counts,
+            fixtureCount: stageFixtures.length,
+            adhoc: ADHOC_STAGE_KINDS.has(stage.kind),
+            swissHasUnseated,
+            canUnpairSwiss,
+            deletable,
+            swissRounds: swissRoundsRail,
+          }).hasActions;
         const railEl = canEdit ? (
           <div data-testid="stage-rail" className="min-w-0 max-md:w-full md:flex md:items-center">
           <StageRail
@@ -1449,17 +1483,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     href: `${routes.division(orgSlug, compSlug, divSlug, "entrants")}#add-entrant`,
                   }
             }
-            swissRounds={
-              stage.kind === "swiss" && swissRoundControls?.[stage.id]
-                ? {
-                    control: swissRoundControls[stage.id]!,
-                    fixtures: swissShellFixtures,
-                    onSave: saveSwissRounds,
-                    onAddRound: addSwissRoundTo,
-                    onFinish: finishSwissStage,
-                  }
-                : undefined
-            }
+            swissRounds={swissRoundsRail}
             unpairChangeHint={unpairChangeHint}
             toolsSlot={
               settingsTools.length > 0 ? (
@@ -1486,7 +1510,6 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                 </div>
               ) : null
             }
-            dividerAfter={settingsTools.length > 0}
           />
           </div>
         ) : null;
@@ -1559,6 +1582,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     >
                       {railEl}
                       {settingsTools.length > 0 && (
+                        // SCF: the divider and the settings buttons are ONE group that never splits (`flex`, no wrap): the divider is its first
+                        // child, so wherever the header wraps the group, the divider shares its line with the buttons. The buttons wrap among
+                        // themselves inside `stage-tools`. Not re-indented with what it holds, to keep this change small in a file others edit.
+                        <div data-testid="stage-tools-group" className={`flex min-w-0 items-center gap-3 ${canEdit ? "max-md:hidden" : ""}`}>
+                        {railHasActions && (
+                          <span aria-hidden="true" data-testid="stage-controls-divider" className="hidden h-6 w-px shrink-0 bg-slate-300 md:block" />
+                        )}
                         <div data-testid="stage-tools" className={`flex min-w-0 flex-wrap items-center gap-2 ${canEdit ? "max-md:hidden" : ""}`}>
                           {settingsTools.map((tool) => {
                             const on = panelOpen(stage.id, tool.panel);
@@ -1576,6 +1606,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                               </button>
                             );
                           })}
+                        </div>
                         </div>
                       )}
                     </div>
@@ -1597,13 +1628,25 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       component's render (see stage-rail.tsx's header for the
                       full investigation), so a `<SwissLegend>` here would be
                       invisible to them. */}
-                  {!folded && swissLegend && (
-                    <p
-                      data-testid="stage-swiss-legend"
-                      className="w-full min-w-0 text-xs text-slate-500"
-                    >
-                      {swissLegendText(swissLegend, { t: msg, plural: msgPlural })}
-                    </p>
+                  {!folded && (swissLegend || swissAdhocNote) && (
+                    <div className="w-full min-w-0 text-xs text-slate-500">
+                      {swissLegend && (
+                        <p data-testid="stage-swiss-legend" className="inline min-w-0">
+                          {swissLegendText(swissLegend, { t: msg, plural: msgPlural })}
+                        </p>
+                      )}
+                      {/* SCF (owner pick, Option A): the Swiss "paired by the system" sentence (W3 RB3-15 A / X-SW-21, ruling 252 - the copy is
+                          unchanged) moved here from the actions row, where it stood in place of the Add match button the stage cannot have.
+                          It is information, not an action: it joins the legend line, "5 rounds · 3 matches per round · 15 fixtures · Swiss
+                          rounds are paired by the system. Add friendlies in another stage." It shows under the gates it always had (the rail
+                          drew it for an editor of a running Swiss with fixtures), so a viewer and a finished or empty stage see none. */}
+                      {swissAdhocNote && (
+                        <>
+                          {swissLegend && <span aria-hidden="true"> · </span>}
+                          <span data-testid="stage-swiss-adhoc-note">{swissAdhocNote}</span>
+                        </>
+                      )}
+                    </div>
                   )}
                   {/* W3 T10 — under the legend, in the header (never inside the
                       rail's phone fold): a count that changes what the
