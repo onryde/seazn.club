@@ -89,8 +89,9 @@ const L = {
   saveSponsor: ui("sponsors.save"),
   orgSave: ui("settings.org.save"),
   aboutSave: ui("settings.org.about.save"),
-  aboutBox: ui("settings.org.about.placeholder"),
-  newsBody: ui("news.composer.bodyPlaceholder"),
+  // The editors' ACCESSIBLE NAMES are their on-screen labels (PB3: the grey hint is drawn now, so it is `aria-placeholder`, not the name).
+  aboutBox: ui("settings.org.about"),
+  newsBody: ui("news.composer.body"),
   newsDelete: ui("news.delete"),
   newsArchive: ui("news.archive"),
 } as const;

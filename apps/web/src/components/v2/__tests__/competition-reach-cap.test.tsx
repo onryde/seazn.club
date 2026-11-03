@@ -17,6 +17,7 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import { CompetitionWizard } from "../competition-wizard";
 import { CompetitionReach } from "../competition-reach";
 import { VisibilitySegmented } from "@/components/ui/visibility-segmented";
+import { ShowcaseOptIn } from "../showcase-optin";
 import { DateTimeField, type DateTimeFieldProps } from "../shared/datetime-field";
 import { apiV1 } from "@/lib/client-v1";
 import { t } from "@/lib/i18n-runtime";
@@ -98,6 +99,44 @@ describe("the wizard tells the checklist when this create will come back private
     const island = mount({ limit: LIMIT, left: 0 });
     expect(reachProps(island).visibility).toBe("public");
     expect(reachProps(island).cap).toMatchObject({ limit: LIMIT });
+  });
+
+  // PB3 review m5: the checklist is not the only place the form promises reach. The line under the segments ("Listed ... open to search
+  // engines") and the Showcase switch are told the same thing the checklist is, from the same `cap`.
+  it("m5 (a): the visibility line is told it is capped exactly when the checklist is - every visibility x every count of slots", () => {
+    let checked = 0;
+    let capped = 0;
+    for (const visibility of Visibility.options) {
+      for (const left of [null, 0, 1, LIMIT] as const) {
+        const island = mount(left === null ? null : { limit: LIMIT, left });
+        pick(island, visibility);
+        const want = (visibility === "public" || visibility === "unlisted") && left === 0;
+        expect(propsOf(find(island, VisibilitySegmented)).capped, `${visibility} / left ${left}`).toBe(want);
+        if (want) capped++;
+        checked++;
+      }
+    }
+    expect(checked).toBe(Visibility.options.length * 4);
+    expect(capped, "anti-vacuity: the capped branch was reached").toBe(2);
+  });
+
+  it("m5 (b): the Showcase switch gets 'private' when no slot is left (it cannot apply), the picked visibility otherwise - every cell", () => {
+    let checked = 0;
+    let withheld = 0;
+    for (const visibility of Visibility.options) {
+      for (const left of [null, 0, 1, LIMIT] as const) {
+        const island = mount(left === null ? null : { limit: LIMIT, left });
+        pick(island, visibility);
+        const capped = (visibility === "public" || visibility === "unlisted") && left === 0;
+        const props = propsOf(find(island, ShowcaseOptIn));
+        expect(props.visibility, `${visibility} / left ${left}`).toBe(capped ? "private" : visibility);
+        expect(props.capped, `${visibility} / left ${left}`).toBe(capped);
+        if (capped) withheld++;
+        checked++;
+      }
+    }
+    expect(checked).toBe(Visibility.options.length * 4);
+    expect(withheld, "anti-vacuity: the withheld branch was reached").toBe(2);
   });
 
   it("an org with room, or a plan with no cap, is told nothing - the checklist is today's", () => {
@@ -194,11 +233,59 @@ describe("<CompetitionReach cap> - the checklist says it, and shows only the rea
   });
 });
 
+// ── the two other promises: the visibility line and the Showcase switch ───────────────────────────────────
+
+describe("PB3 m5: the visibility line and the Showcase switch stop promising reach the create will not have", () => {
+  const renderIn = (node: React.ReactNode, d: Dict = en, locale: "en" = "en") =>
+    renderToStaticMarkup(
+      <DictProvider dict={d} locale={locale}>
+        {node}
+      </DictProvider>,
+    );
+
+  // The switch's own tag (its class list says "disabled:..." for every state, so only the attribute counts).
+  const switchTag = (html: string) => html.match(/<input[^>]*role="switch"[^>]*>/)?.[0] ?? "";
+  const isDisabled = (tag: string) => {
+    expect(tag, "the switch rendered").not.toBe("");
+    return / disabled=""/.test(tag);
+  };
+
+  it("capped: Public and Link only say it is created private, and neither promises the listing, the link or search engines", () => {
+    let checked = 0;
+    for (const value of ["public", "unlisted"]) {
+      const capped = text(renderIn(<VisibilitySegmented value={value} onChange={() => {}} capped />));
+      const open = text(renderIn(<VisibilitySegmented value={value} onChange={() => {}} capped={false} />));
+      expect(capped, value).toContain(msg("visibility.capped.consequence"));
+      expect(capped, `${value}: the old promise is gone`).not.toContain(msg(`visibility.${value}.consequence`));
+      // The positive pair: uncapped it still carries the promise, so the line really switched.
+      expect(open, value).toContain(msg(`visibility.${value}.consequence`));
+      expect(open).not.toContain(msg("visibility.capped.consequence"));
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("capped: the Showcase switch is off, and its reason is the cap - not 'set visibility to public' under a Public that is selected", () => {
+    const capped = renderIn(<ShowcaseOptIn visibility="private" checked={false} onChange={() => {}} capped />);
+    expect(isDisabled(switchTag(capped)), "the switch itself is disabled").toBe(true);
+    const words = text(capped);
+    expect(words).toContain(msg("comp.wizard.showcase.capped"));
+    expect(words).not.toContain(msg("showcase.needsPublic"));
+    // The positive pair: not capped and not public keeps the old reason; public and not capped has no reason at all.
+    const needs = text(renderIn(<ShowcaseOptIn visibility="private" checked={false} onChange={() => {}} capped={false} />));
+    expect(needs).toContain(msg("showcase.needsPublic"));
+    expect(needs).not.toContain(msg("comp.wizard.showcase.capped"));
+    const open = renderIn(<ShowcaseOptIn visibility="public" checked={false} onChange={() => {}} capped={false} />);
+    expect(isDisabled(switchTag(open)), "a free public slot: the switch is live").toBe(false);
+    expect(text(open)).not.toContain(msg("comp.wizard.showcase.capped"));
+  });
+});
+
 // ── the words, in every language ─────────────────────────────────────────────
 
 describe("the cap note reads in all four languages", () => {
   const dicts = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as unknown as Record<string, Record<string, string>>;
-  const KEYS = ["title", "body", "bodyNoUpgrade", "upgrade"].map((k) => `comp.wizard.reach.capped.${k}`);
+  const KEYS = [...["title", "body", "bodyNoUpgrade", "upgrade"].map((k) => `comp.wizard.reach.capped.${k}`), "visibility.capped.consequence", "comp.wizard.showcase.capped"];
 
   it("every key exists in every locale, is translated, and the sentences that carry the limit keep {limit}", () => {
     let checked = 0;
@@ -212,6 +299,29 @@ describe("the cap note reads in all four languages", () => {
       expect(d["comp.wizard.reach.capped.bodyNoUpgrade"], locale).toContain("{limit}");
     }
     expect(checked).toBe(4 * KEYS.length);
+  });
+
+  // PB3 review I1. The owner ruled "team" out of the checklist (C8, 2026-11-02: it reads as a playing team in a sports app) and the row
+  // under this note says "Members of your organisation on Seazn". The note must name that same audience, in that row's own words, in
+  // every locale - and the other two new sentences must not bring "team" back either.
+  it("I1: the note names the audience as the row under it does (the members of the organisation), and no capped sentence says 'team'", () => {
+    const BAN = /(?<![\p{L}])(team|teams|équipe|équipes|equipo|equipos)(?![\p{L}])/iu;
+    let checked = 0;
+    for (const [locale, d] of Object.entries(dicts)) {
+      const row = d["comp.wizard.reach.team"]!.toLowerCase();
+      expect(row, `${locale}: the row exists`).toBeTruthy();
+      for (const key of ["comp.wizard.reach.capped.body", "comp.wizard.reach.capped.bodyNoUpgrade"]) {
+        expect(d[key]!.toLowerCase(), `${locale} ${key} names the row's audience: "${row}"`).toContain(row);
+        checked++;
+      }
+      for (const key of [...KEYS]) {
+        expect(BAN.test(d[key]!), `${locale} ${key} says "team": ${d[key]}`).toBe(false);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4 * (2 + KEYS.length));
+    // The guard can fail: the banned words really match the words the owner ruled out, in each locale.
+    for (const w of ["only your team", "solo tu equipo", "seule votre équipe", "alleen je team"]) expect(BAN.test(w), w).toBe(true);
   });
 
   it("the note renders in each locale's own words (and the limit is interpolated, never left as {limit})", () => {

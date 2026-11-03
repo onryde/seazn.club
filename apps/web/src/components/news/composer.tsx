@@ -154,6 +154,7 @@ export function Composer({
             orgId={orgId}
             placeholder={msg("news.composer.bodyPlaceholder")}
             showPlaceholder
+            label={msg("news.composer.body")}
           />
         </div>
       </div>

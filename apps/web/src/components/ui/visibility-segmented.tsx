@@ -28,13 +28,20 @@ const ICON: Record<VisibilityKey, LucideIcon> = {
 export function VisibilitySegmented({
   value,
   onChange,
+  capped,
 }: {
   value: VisibilityKey | string;
   onChange: (next: VisibilityKey) => void;
+  /**
+   * The selected visibility will be created PRIVATE because no public slot is left (Match Day PB3 m5: the form's `cap`). The line
+   * under the segments then stops promising the listing / the link / search engines and says what will really happen, in the lock's
+   * icon. REQUIRED so a caller cannot quietly stop passing it (a literal `false` on the form would put the promise back).
+   */
+  capped: boolean;
 }) {
   const msg = useMsg();
   const selected = VISIBILITY_OPTIONS.find((o) => o.value === value);
-  const SelectedIcon = selected ? ICON[selected.value] : null;
+  const SelectedIcon = selected ? (capped ? Lock : ICON[selected.value]) : null;
   return (
     // min-w-0: a fieldset's UA default is min-inline-size:min-content, which
     // bursts out of a narrow card instead of shrinking.
@@ -93,7 +100,7 @@ export function VisibilitySegmented({
           className="mt-2.5 flex min-h-5 items-start gap-2 text-sm leading-snug text-slate-600"
         >
           <SelectedIcon aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-purple-700" strokeWidth={2} />
-          <span>{msg(selected.consequence)}</span>
+          <span>{msg(capped ? "visibility.capped.consequence" : selected.consequence)}</span>
         </p>
       )}
     </fieldset>

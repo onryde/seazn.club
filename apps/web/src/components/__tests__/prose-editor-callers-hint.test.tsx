@@ -21,7 +21,7 @@ import { join } from "node:path";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
-import { ProseEditor } from "@/components/prose-editor";
+import { ProseEditor, textboxName } from "@/components/prose-editor";
 import { OrgAbout } from "@/components/org-about";
 import { OrgPaymentInstructions } from "@/components/org-payment-instructions";
 import { Composer } from "@/components/news/composer";
@@ -45,6 +45,14 @@ vi.mock("@/lib/client-v1", async () => {
 
 const en = enUi as unknown as Dict;
 const LOCALES = { en: enUi, es: esUi, fr: frUi, nl: nlUi } as Record<string, Record<string, string>>;
+
+/** The key of the on-screen copy that labels each box: its accessible name (PB3 review C1). Reused from the existing field labels. */
+const LABEL_KEYS = {
+  about: "settings.org.about",
+  payment: "pay.cashTitle",
+  news: "news.composer.body",
+  settings: "compset.description",
+} as const;
 
 /** The hint key each caller reads, from the component's own source. */
 const HINT_KEYS = {
@@ -93,6 +101,13 @@ describe("every ProseEditor call site draws its hint", () => {
       .map(({ file }) => file.replace(/^.*\/src\//, "src/"));
     expect(offenders).toEqual([]);
   });
+
+  it("each that draws the hint also names its box with `label` (the hint is not the accessible name)", () => {
+    const drawing = sites.filter(({ attrs }) => /\bshowPlaceholder\b/.test(attrs));
+    expect(drawing.length, "anti-vacuity: the five known callers draw a hint").toBeGreaterThanOrEqual(5);
+    const offenders = drawing.filter(({ attrs }) => !/\blabel=/.test(attrs)).map(({ file }) => file.replace(/^.*\/src\//, "src/"));
+    expect(offenders).toEqual([]);
+  });
 });
 
 // ── layer 2: the real components, driven ─────────────────────────────────────
@@ -106,21 +121,24 @@ const editorOf = (island: Mounted) => {
 };
 
 describe("the four editors that never drew a hint now do", () => {
-  const cases: [string, () => Mounted, string][] = [
+  const cases: [string, () => Mounted, string, string][] = [
     [
       "org About",
       () => renderIsland(OrgAbout, { orgId: "o1", initialValue: null, branding: {} }),
       HINT_KEYS.about,
+      LABEL_KEYS.about,
     ],
     [
       "payment instructions",
       () => renderIsland(OrgPaymentInstructions, { orgId: "o1", initialValue: null }),
       HINT_KEYS.payment,
+      LABEL_KEYS.payment,
     ],
     [
       "news composer",
       () => renderIsland(Composer, { orgId: "o1", competitions: [], onDone: () => {} }),
       HINT_KEYS.news,
+      LABEL_KEYS.news,
     ],
     [
       "competition settings",
@@ -146,10 +164,11 @@ describe("the four editors that never drew a hint now do", () => {
           viewerPlan: "community",
         }),
       HINT_KEYS.settings,
+      LABEL_KEYS.settings,
     ],
   ];
 
-  for (const [label, mount, key] of cases) {
+  for (const [label, mount, key, labelKey] of cases) {
     it(`${label}: opts in, with the catalog's hint for ${key}`, () => {
       const props = editorOf(mount());
       expect(props.showPlaceholder).toBe(true);
@@ -157,7 +176,25 @@ describe("the four editors that never drew a hint now do", () => {
       expect(sentence, "the key must exist (t() returns the key on a miss)").not.toBe(key);
       expect(props.placeholder).toBe(sentence);
     });
+
+    // PB3 review C1: drawing the hint stops it being the accessible name, so each box names ITSELF - with the copy that labels it on
+    // screen - and not with the generic "Description" (a screen reader announced the payment box and the news body as that).
+    it(`${label}: the box is named by its own label ${labelKey}, never the generic "Description"`, () => {
+      const props = editorOf(mount());
+      const name = t(en, labelKey as never);
+      expect(name, "the label key must exist").not.toBe(labelKey);
+      expect(props.label).toBe(name);
+      expect(props.label, "the hint is not the name").not.toBe(props.placeholder);
+      // The generic fallback is for a box that names nothing; only competition settings' OWN label happens to read the same.
+      if (labelKey !== LABEL_KEYS.settings) expect(props.label).not.toBe(t(en, "editor.description"));
+    });
   }
+
+  it("the four labels are four different names (a sweep: zero checked is a failure)", () => {
+    const names = Object.values(LABEL_KEYS).map((k) => t(en, k as never));
+    expect(names).toHaveLength(4);
+    expect(new Set(names).size, `the boxes share a name: ${names.join(" | ")}`).toBe(4);
+  });
 
   it("competition settings read-only (frozen) mounts no editor, so there is no hint to draw", () => {
     // The negative pair: the opt-in lives on the editable branch only.
@@ -170,6 +207,21 @@ describe("the four editors that never drew a hint now do", () => {
       orgId: "o1", canEdit: true, discoveryBranding: false, viewerPlan: "community",
     });
     expect(island.tree().filter((el) => el.type === ProseEditor)).toHaveLength(0);
+  });
+});
+
+// ── the accessible name's precedence ─────────────────────────────────────────
+
+describe("textboxName: an explicit label is the name; the hint is not", () => {
+  it("label wins over the placeholder, with the hint drawn or not", () => {
+    expect(textboxName({ label: "Story", placeholder: "Write the report…", showPlaceholder: true }, "Description")).toBe("Story");
+    expect(textboxName({ label: "Story", placeholder: "Write the report…", showPlaceholder: false }, "Description")).toBe("Story");
+  });
+
+  it("no label: the hint drawn falls back to the generic name; the hint not drawn keeps the placeholder as the name (as it always was)", () => {
+    expect(textboxName({ placeholder: "Write the report…", showPlaceholder: true }, "Description")).toBe("Description");
+    expect(textboxName({ placeholder: "Write the report…", showPlaceholder: false }, "Description")).toBe("Write the report…");
+    expect(textboxName({ showPlaceholder: false }, "Description")).toBe("Description");
   });
 });
 

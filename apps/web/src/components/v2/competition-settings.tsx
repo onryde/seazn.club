@@ -276,6 +276,7 @@ export function CompetitionSettings({
                     orgId={orgId}
                     placeholder={msg("compset.descriptionPlaceholder")}
                     showPlaceholder
+                    label={msg("compset.description")}
                     previewStyle={publicThemeStyleChain(competition.branding, orgBranding)}
                   />
                 )}

@@ -318,7 +318,7 @@ export function CompetitionWizard({
           {/* From `lg` the footer's own rule closes the card, so this group drops its
               bottom rule (two hairlines 25px apart read as a mistake). */}
           <div className="space-y-5 border-y border-purple-100 py-5 lg:border-b-0 lg:pb-0">
-            <VisibilitySegmented value={visibility} onChange={pickVisibility} />
+            <VisibilitySegmented value={visibility} onChange={pickVisibility} capped={cap !== null} />
             <CompetitionReach
               visibility={visibility}
               discoverable={showcaseOn}
@@ -326,7 +326,12 @@ export function CompetitionWizard({
               billingHref={routes.billing(orgSlug)}
             />
             <div className="border-t border-dashed border-purple-200 pt-4">
-              <ShowcaseOptIn visibility={visibility} checked={showcaseOn} onChange={setDiscoverable} />
+              <ShowcaseOptIn
+                visibility={cap ? "private" : visibility}
+                checked={showcaseOn}
+                onChange={setDiscoverable}
+                capped={cap !== null}
+              />
             </div>
           </div>
 
@@ -347,6 +352,7 @@ export function CompetitionWizard({
             touch
             fill
             showPlaceholder
+            label={msg("editor.description")}
           />
         </div>
 

@@ -471,6 +471,7 @@ export function OrgPaymentInstructions({
           orgId={orgId}
           placeholder={msg("pay.cashPlaceholder")}
           showPlaceholder
+          label={msg("pay.cashTitle")}
         />
         <div className="mt-2 flex items-center gap-3">
           <button
