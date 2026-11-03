@@ -9,6 +9,8 @@ import type { ReactNode } from "react";
 import { renderIsland, propsOf, walk } from "@/components/__tests__/_hook-harness";
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
+import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
+import { builtinModules } from "@seazn/engine/sports";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -25,6 +27,7 @@ function mount(sport_key: string, variant_key: string, stages: Stage[]) {
   return renderIsland(DivisionSettings, {
     division: { id: "d1", name: "Open", sport_key, variant_key, config: {}, logo_url: null, logo_storage_path: null },
     orgId: "org1",
+    entrantKinds: engineEntrantKinds(sport_key),
     structureLocked: false,
     lockedFields: [],
     stages,
@@ -82,5 +85,32 @@ describe("division Settings offers a chess division no americano or mexicano (fo
     const s = formatSelect(mount("badminton", "bwf", [LEAGUE]));
     expect(s.values).toEqual(OFFERED_KEYS);
     for (const k of REFUSED_FOR_CHESS) expect(s.values).toContain(k);
+  });
+});
+
+// C9 fix round 1 (I5): the same two formats are offered to no division whose ENGINE entrant model holds no individuals
+// or no pairs - an americano stage rotates individual players into pair entrants. The expected list is derived from the
+// engine's declaration (engineEntrantKinds), never from templatesForSport.
+describe("division Settings offers no pair format where the entrant model cannot play it (C9 fix round 1, I5)", () => {
+  it("every registered sport: the format select lists every live template, less americano and mexicano where the engine's kinds lack individuals or pairs (counts)", () => {
+    let swept = 0;
+    let refusing = 0;
+    for (const m of builtinModules) {
+      const kinds = engineEntrantKinds(m.key);
+      const playsPairs = m.key !== "boardgame" && kinds.includes("individual") && kinds.includes("pair");
+      const s = formatSelect(mount(m.key, Object.keys(m.variants)[0] ?? "standard", [LEAGUE]));
+      expect(s.values, `${m.key} (${kinds.join("/")})`).toEqual(playsPairs ? OFFERED_KEYS : OFFERED_KEYS.filter((k) => !REFUSED_FOR_CHESS.includes(k)));
+      if (!playsPairs) refusing++;
+      swept++;
+    }
+    expect(swept).toBe(builtinModules.length);
+    expect(refusing).toBeGreaterThan(1);
+    expect(refusing).toBeLessThan(swept);
+  });
+
+  it("a football division stored with americano still shows it, listed and selected - and mexicano stays absent", () => {
+    const a = formatSelect(mount("football", "standard", [AMERICANO]));
+    expect(a.value).toBe("americano");
+    expect(a.values).toEqual(OFFERED_KEYS.filter((k) => k !== "mexicano"));
   });
 });

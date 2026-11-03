@@ -28,6 +28,8 @@ import { FORMAT_BOUNDS, type FormatBoundKey, withinFormatBounds } from "@/lib/fo
 import { STAGE_TEMPLATES, buildTemplateStages, templatesForSport } from "@/lib/format-templates";
 import { CreateStage, StageConfig } from "@/server/api-v1/schemas";
 import uiEn from "@/dictionaries/en/ui.json";
+import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
+import { engineEntrantChoice } from "@/lib/__tests__/_engine-entrant-kinds";
 
 const { apiV1Mock } = vi.hoisted(() => ({ apiV1Mock: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -49,7 +51,7 @@ beforeEach(() => {
 });
 
 const SPORT = "generic";
-const SPORTS: SportOption[] = [{ key: SPORT, name: "Generic", variants: [{ key: "score", name: "Score", system: true }] }];
+const SPORTS: SportOption[] = [{ key: SPORT, name: "Generic", variants: [{ key: "score", name: "Score", system: true }], entrants: engineEntrantChoice(SPORT) }];
 const BOUND_KEYS = Object.keys(FORMAT_BOUNDS).sort() as FormatBoundKey[];
 
 /** The rendered tree, with the shared legs control opened into its radios (it reads copy through `useMsg`, a read-only
@@ -96,6 +98,7 @@ function mountSettings(stages: StageProp[] = []): Island {
         logo_storage_path: null,
       },
       orgId: "org1",
+      entrantKinds: engineEntrantKinds(SPORT),
       structureLocked: false,
       lockedFields: [],
       stages,
@@ -142,7 +145,7 @@ function sweep(h: Island, pick: (h: Island, key: string) => void) {
   let checked = 0;
   const seen = new Set<string>();
   const mismatches: string[] = [];
-  for (const { key: template } of templatesForSport(SPORT)) {
+  for (const { key: template } of templatesForSport(SPORT, engineEntrantKinds(SPORT))) {
     pick(h, template);
     for (const el of h.tree().filter((e) => typeof propsOf(e)["data-format-bound"] === "string")) {
       const field = propsOf(el)["data-format-bound"] as string;
@@ -214,7 +217,7 @@ describe("FORMAT_BOUNDS — the owner's legs ruling", () => {
 describe("both forms offer exactly FORMAT_BOUNDS", () => {
   it("the division builder's Format step: every bounded field of every template", () => {
     const { checked, seen, mismatches } = sweep(mountBuilder(), pickBuilderTemplate);
-    console.info(`[format-bounds] builder: ${checked} bounded fields checked over ${templatesForSport(SPORT).length} templates`);
+    console.info(`[format-bounds] builder: ${checked} bounded fields checked over ${templatesForSport(SPORT, engineEntrantKinds(SPORT)).length} templates`);
     expect(mismatches).toEqual([]);
     expect(seen, "the builder reaches every bounded field").toEqual(BOUND_KEYS);
     expect(checked).toBeGreaterThan(0);
@@ -222,7 +225,7 @@ describe("both forms offer exactly FORMAT_BOUNDS", () => {
 
   it("the Settings Format group: every bounded field of every template", () => {
     const { checked, seen, mismatches } = sweep(mountSettings(), pickSettingsTemplate);
-    console.info(`[format-bounds] settings: ${checked} bounded fields checked over ${templatesForSport(SPORT).length} templates`);
+    console.info(`[format-bounds] settings: ${checked} bounded fields checked over ${templatesForSport(SPORT, engineEntrantKinds(SPORT)).length} templates`);
     expect(mismatches).toEqual([]);
     expect(seen, "Settings reaches every bounded field").toEqual(BOUND_KEYS);
     expect(checked).toBeGreaterThan(0);

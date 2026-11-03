@@ -83,7 +83,7 @@ describe("suggested formats", () => {
   it("every sport gets exactly four distinct suggestions, all from its own offer (counts)", () => {
     let checked = 0;
     for (const m of builtinModules) {
-      const offered = templatesForSport(m.key).map((t) => t.key);
+      const offered = templatesForSport(m.key, modelOf(m.key).kinds).map((t) => t.key);
       const picks = suggestTemplates(offered, plan, KNOBS);
       expect(picks.length, m.key).toBe(Math.min(SUGGESTED_COUNT, offered.length));
       expect(new Set(picks).size, m.key).toBe(picks.length);
@@ -97,7 +97,7 @@ describe("suggested formats", () => {
   it("the full ranking is a permutation of the offer: Show all loses no format (counts)", () => {
     let checked = 0;
     for (const m of builtinModules) {
-      const offered = templatesForSport(m.key).map((t) => t.key);
+      const offered = templatesForSport(m.key, modelOf(m.key).kinds).map((t) => t.key);
       expect(rankTemplates(offered, plan, KNOBS).map((r) => r.key).sort(), m.key).toEqual([...offered].sort());
       checked += offered.length;
     }

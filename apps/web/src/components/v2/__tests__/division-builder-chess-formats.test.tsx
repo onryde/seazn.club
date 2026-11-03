@@ -13,6 +13,7 @@ import { STAGE_TEMPLATES } from "@/lib/format-templates";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
+import { engineEntrantChoice } from "@/lib/__tests__/_engine-entrant-kinds";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -20,8 +21,8 @@ vi.mock("next/navigation", () => ({
 }));
 
 const en = enUi as Record<string, string>;
-const CHESS: SportOption = { key: "boardgame", name: "Chess", variants: [{ key: "blitz", name: "Blitz", system: true }] };
-const BADMINTON: SportOption = { key: "badminton", name: "Badminton", variants: [{ key: "bwf", name: "BWF", system: true }] };
+const CHESS: SportOption = { key: "boardgame", name: "Chess", variants: [{ key: "blitz", name: "Blitz", system: true }], entrants: engineEntrantChoice("boardgame") };
+const BADMINTON: SportOption = { key: "badminton", name: "Badminton", variants: [{ key: "bwf", name: "BWF", system: true }], entrants: engineEntrantChoice("badminton") };
 const REFUSED_FOR_CHESS = ["americano", "mexicano"];
 // Retired from every sport's offer (owner ruling 2026-11-01, Match Day D1): triple-rr-retired.test.tsx sweeps it.
 const OFFERED = STAGE_TEMPLATES.filter((t) => t.key !== "triple_rr");

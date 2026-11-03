@@ -37,13 +37,16 @@ export function sportRefusesStageKind(sportKey: string | null | undefined, kind:
   return isChessSport(sportKey) && PAIR_MINTING_STAGE_KINDS.includes(kind);
 }
 
-/** What a pair-minting stage needs the division's entrant model to hold: the INDIVIDUAL players it rotates (americanoGen
- *  pairs individual players) and the PAIR entrants it mints (pairEntrantsFor). Match Day C9 fix round 1: the builder
- *  never OPENS on a format the division cannot play (owner Q5); the offer itself is the parked review-I5 change. */
+/** What a pair-minting stage needs an entrant model (`entrantModel.kinds`) to hold: the INDIVIDUAL players it rotates
+ *  (americanoGen pairs individual players) and the PAIR entrants it mints (pairEntrantsFor). Match Day C9 fix round 1:
+ *  a sport whose ENGINE model lacks either is not offered the format (review I5: football, cricket, hockey and ice
+ *  hockey hold teams only, volleyball teams and pairs, and chess individuals only, so the engine says what the chess
+ *  ruling says), and the builder never OPENS on a format the division's own kinds cannot play (owner Q5, with Q3's
+ *  narrowing). */
 export const PAIR_MINTING_NEEDS_KINDS: readonly string[] = Object.freeze(["individual", "pair"]);
 
-/** Can a division whose entrant model holds these kinds NOT play this stage kind? Only a pair-minting kind needs
- *  anything; an empty model holds neither kind, so it is refused every pair-minting kind. */
+/** Can an entrant model holding these kinds (a sport's, or a division's) NOT play this stage kind? Only a pair-minting
+ *  kind needs anything; an empty model (nothing declared) holds neither kind, so it is refused every pair-minting kind. */
 export function entrantKindsRefuseStageKind(entrantKinds: readonly string[], kind: string): boolean {
   return PAIR_MINTING_STAGE_KINDS.includes(kind) && !PAIR_MINTING_NEEDS_KINDS.every((k) => entrantKinds.includes(k));
 }

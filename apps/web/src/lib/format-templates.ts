@@ -40,7 +40,7 @@
 import type { TakeRule } from "@seazn/engine/competition";
 // A relative `.ts` import, never `@/`: tools/matrix loads this file under plain node (catalogue.ts), and the rule file
 // imports nothing, so node can follow it (tools/matrix/__tests__/boundary.test.ts pins both).
-import { sportRefusesStageKind } from "./chess-individual-only-rule.ts";
+import { entrantKindsRefuseStageKind, sportRefusesStageKind } from "./chess-individual-only-rule.ts";
 
 export type StandingsCarry = "none" | "points" | "full";
 
@@ -313,27 +313,33 @@ const KIND_PROBE_KNOBS: TemplateKnobs = { qualified: 4, swissRounds: 5, poolCoun
 
 /** The templates the division builder and the Settings format select OFFER for a sport, in STAGE_TEMPLATES order: a
  *  `retired` template is left out for every sport (Triple round robin, owner ruling 2026-11-01), and so is a template
- *  any of whose stages is a kind the sport refuses (chess is individual-only, owner ruling 2026-10-26, follow-up to
- *  #1027: americano and mexicano mint pair entrants, so chess is offered neither). The refusal is read off each
- *  template's OWN stage graph, never a list of keys, so a later template carrying such a stage is left out too.
- *  `current` (Settings: the structure the division already plays) is kept either way, so a division stored before a
- *  ruling still shows what it is. Re-applying a refused kind is refused by the server (assertStageKindsAllowed); a
- *  retired template re-applies as it is stored. */
+ *  any of whose stages is a kind the sport refuses - by KEY (chess is individual-only, owner ruling 2026-10-26,
+ *  follow-up to #1027: americano and mexicano mint pair entrants, so chess is offered neither) or by its ENGINE entrant
+ *  model (Match Day C9 fix round 1, review I5: a pair-minting stage needs individual players and pair entrants, so a
+ *  sport whose `entrantKinds` lacks either - the team sports, volleyball - is offered neither format either).
+ *  `entrantKinds` is the sport's own declaration (`effectiveEntrantModel(module.entrantModel, null).kinds`), required so
+ *  no caller can forget it. The refusal is read off each template's OWN stage graph, never a list of keys, so a later
+ *  template carrying such a stage is left out too. `current` (Settings: the structure the division already plays) is
+ *  kept either way, so a division stored before a ruling still shows what it is. Re-applying a kind refused by KEY is
+ *  refused by the server (assertStageKindsAllowed); a retired template re-applies as it is stored. */
 export function templatesForSport(
   sportKey: string | null | undefined,
+  entrantKinds: readonly string[],
   current: string | null = null,
 ): typeof STAGE_TEMPLATES {
   return STAGE_TEMPLATES.filter(
     (t) =>
       t.key === current ||
-      (!t.retired && !t.build(KIND_PROBE_KNOBS).some((s) => sportRefusesStageKind(sportKey, s.kind))),
+      (!t.retired &&
+        !t.build(KIND_PROBE_KNOBS).some((s) => sportRefusesStageKind(sportKey, s.kind) || entrantKindsRefuseStageKind(entrantKinds, s.kind))),
   );
 }
 
 /** The builder's template after the organiser picks another sport: kept when the new sport is offered it, else the
- *  builder's own default (`league`), so a chess division can never be submitted with an americano picked for padel. */
-export function templateAfterSportChange(template: string, sportKey: string): string {
-  return templatesForSport(sportKey).some((t) => t.key === template) ? template : "league";
+ *  builder's own default (`league`), so a chess or football division can never be submitted with an americano picked
+ *  for padel. */
+export function templateAfterSportChange(template: string, sportKey: string, entrantKinds: readonly string[]): string {
+  return templatesForSport(sportKey, entrantKinds).some((t) => t.key === template) ? template : "league";
 }
 
 /** Clamps a knob (poolCount, qualified) into [min,max] — called at both UI

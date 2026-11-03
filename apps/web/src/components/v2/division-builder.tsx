@@ -110,6 +110,13 @@ export function SavedNote({ name }: { name: string }) {
   );
 }
 
+/** The entrant kinds the format offer reads (templatesForSport, C9 fix round 1 I5): the engine's declaration the page
+ *  passes. A sport with no model passed holds nothing as far as the offer knows, so it is offered no pair format -
+ *  never one it might not be able to play. */
+function offerKinds(sport: SportOption | undefined): readonly string[] {
+  return sport?.entrants?.kinds ?? [];
+}
+
 /** The plan boxes' bounds (the inputs' own min/max). */
 const PLAN_BOUNDS = {
   entrants: { min: 2, max: 64, whole: true },
@@ -341,7 +348,7 @@ export function DivisionBuilder({
   const template =
     templatePicked ??
     openingTemplate(
-      templatesForSport(sportKey).map((t) => t.key),
+      templatesForSport(sportKey, offerKinds(sport)).map((t) => t.key),
       defaultMatchMinutes(sportKey, sport ? pickVariant(sport.key, sport.variants) : ""),
       sport?.entrants === undefined ? [] : divisionEntrantKinds(sport.entrants, entrantKind),
       Object.keys(templateLocks),
@@ -424,9 +431,10 @@ export function DivisionBuilder({
     setCameraChoice(CAMERA_INHERIT);
     // A kind the organiser never picked follows the sport; a picked one is kept where the new sport allows it.
     setEntrantKind(next?.entrants && entrantKind !== null ? entrantKindAfterSportChange(entrantKind, entrantKindTouched, next.entrants) : (next?.entrants?.defaultKind ?? null));
-    // Chess is offered no americano/mexicano (templatesForSport): a pick the new sport is not offered falls back to
-    // league rather than staying selected behind a card that is no longer rendered.
-    setTemplatePicked((t) => (t === null ? null : templateAfterSportChange(t, key)));
+    // Chess and the team sports are offered no americano/mexicano (templatesForSport): a pick the new sport is not
+    // offered falls back to league rather than staying selected behind a card that is no longer rendered. Untouched, the
+    // opening format follows the sport (Q5).
+    setTemplatePicked((t) => (t === null ? null : templateAfterSportChange(t, key, offerKinds(next))));
     if (!matchMinutesTouched) setMatchMinutes(defaultMatchMinutes(key, firstVariant));
   }
 
@@ -508,7 +516,7 @@ export function DivisionBuilder({
   const matchMinutes = (!matchMinutesTouched ? timeControlMatchMinutes(timeControlKey) : undefined) ?? sportMatchMinutes;
   const venue = venueNoun(sportKey); // "pitch" / "table" / "court" / "board" / "rink"
   const VenueCap = venueLabel(sportKey);
-  const offered = templatesForSport(sportKey);
+  const offered = templatesForSport(sportKey, offerKinds(sport));
   const planMinutes = matchMinutes >= 1 ? matchMinutes : 30;
   const plan = {
     entrants: planEntrantCount,

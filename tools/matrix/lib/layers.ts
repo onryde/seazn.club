@@ -14,7 +14,9 @@
 //    L1 (planL1Grid, `--layer L1 --scope grid`) is one LIFECYCLE case per
 //    OFFERED catalogue cell at 1280 — 229 of the 231: a builder row and every
 //    API-only cell a catalog template reaches are driven, the rest are 🚫
-//    naming their wave, and a cell the product refuses (catalogue.ts
+//    naming their wave (so is a builder row the builder does not offer the
+//    sport: catalogue.ts noOrganiserPathCell, Match Day C9 review I5; in L2
+//    every run on such a cell is 🚫 too), and a cell the product refuses (catalogue.ts
 //    refusedCell: chess americano/mexicano) has no case at all.
 //    L2 (`--layer L2 --scope grid`) is planL2 over every cell, i.e. every run of
 //    l2-pairs.json (1,729), each driven, 🚫 or ░ exactly as the slice's are.
@@ -43,7 +45,7 @@
 // run.ts value-imports this module, so its static closure must stay clear of
 // lib/browser and lib/pads (boundary.test.ts): the D7 wave table comes from
 // the leaf api-only-ui.ts, never from browser-driver.ts.
-import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, cellId, refusedCell, type ApiOnlyRowKey, type RowKey } from "./catalogue.ts";
+import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, cellId, noOrganiserPathCell, refusedCell, type ApiOnlyRowKey, type RowKey } from "./catalogue.ts";
 import { apiOnlyUiPath } from "./api-only-ui.ts";
 import { onTemplate, templateField, templateRow } from "./templates.ts";
 import { loadL2Pairs, type L2Run } from "./pairs.ts";
@@ -158,6 +160,13 @@ export function planL2(pairs: { readonly runs: readonly L2Run[] }, cells: Readon
     if (atom === undefined) throw new UnknownL2Atom(run);
     const identity: CaseIdentity = { caseId: l2CaseId(run), row: run.row, sport: run.sport, variant: run.preset, scenario: run.scenario };
     const base = { layer: "L2", width: run.width, run } as const;
+    // A cell the builder does not offer (catalogue.ts noOrganiserPathCell, Match Day C9 review I5): no screen reaches
+    // it, so every run there is 🚫 - never driven, never ░ "to be driven".
+    const cellRoute = noOrganiserPathCell(run.row, run.sport);
+    if (cellRoute !== null) {
+      out.push({ ...base, spec: null, identity, noPath: { wave: cellRoute.wave, reason: cellRoute.why }, notRun: null });
+      continue;
+    }
     const script = scriptFor(run.scenario);
     if (script !== null) {
       if (run.bound !== null) throw new L2BoundRun(run);
@@ -236,7 +245,8 @@ const refuseGridFilters = (label: string, cli: PlannerCli): void => {
  *  × SPORT_KEYS order. A builder row drives with variantFor's variant; an API-only
  *  cell a catalog template reaches drives through that template (its own sport and
  *  variant, D11, as planW1DrivingL1 does); every other API-only cell is 🚫 naming
- *  the wave that owes its organiser control (api-only-ui.ts). A cell the product
+ *  the wave that owes its organiser control (api-only-ui.ts), and so is a builder-row
+ *  cell the builder does not offer (catalogue.ts noOrganiserPathCell). A cell the product
  *  refuses (catalogue.ts refusedCell) is left out: no wave owes it a path, so it is
  *  neither driven nor 🚫 — the committed drop list records it, with its reason. */
 export function planL1Grid(variantFor: (sport: string) => string): LayerCase[] {
@@ -244,7 +254,11 @@ export function planL1Grid(variantFor: (sport: string) => string): LayerCase[] {
   return ROW_KEYS.flatMap((row) => SPORT_KEYS.filter((sport) => refusedCell(row, sport) === null).map((sport): LayerCase => {
     if (!isApiOnly(row)) {
       const variant = variantFor(sport);
-      return at({ caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE, canary: false });
+      const identity = { caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE };
+      // Offered, but the builder does not offer it (catalogue.ts noOrganiserPathCell): 🚫, with the driven case's id.
+      const cellRoute = noOrganiserPathCell(row, sport);
+      if (cellRoute !== null) return { spec: null, identity, layer: "L1", width: L1_WIDTH, noPath: { wave: cellRoute.wave, reason: cellRoute.why }, notRun: null, run: null };
+      return at({ ...identity, canary: false });
     }
     const p = apiOnlyUiPath(row, sport);
     if (p.reachable) return at(onTemplate({ row, sport, scenario: LIFECYCLE, canary: false }, p.template));

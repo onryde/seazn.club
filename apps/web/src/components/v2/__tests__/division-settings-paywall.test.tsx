@@ -43,6 +43,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { ApiV1Error } from "@/lib/client-v1";
+import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 const baseProps = {
   division: {
@@ -55,6 +56,7 @@ const baseProps = {
     logo_storage_path: null,
   },
   orgId: "org1",
+  entrantKinds: engineEntrantKinds("football"),
   variants: [{ key: "standard", name: "Standard" }],
   structureLocked: false,
   lockedFields: [],

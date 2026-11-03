@@ -6,10 +6,11 @@
 // opening knobs the ranking declares. Every sport, counted; League (the old default) is never the top suggestion at the
 // opening plan, so every row is a case where the old answer and the right one differ.
 //
-// One guard on top of the ruling (reported to the owner): at the opening plan the suggester's first is Americano for
-// every sport but chess, and Americano rotates INDIVIDUAL players into PAIR entrants (the engine's americanoGen). A
-// division whose kinds lack either - the team sports, volleyball, or a division narrowed to teams on Who plays (Q3) -
-// opens on the first ranked format it can play instead.
+// One guard on top of the ruling (accepted by the owner 2026-11-03): Americano rotates INDIVIDUAL players into PAIR
+// entrants (the engine's americanoGen), so a division whose kinds lack either opens on the first ranked format it can
+// play instead. Since review I5 the SPORT's offer already leaves Americano out where the sport's engine model cannot play
+// it (the team sports, volleyball, chess), so every sport opens on the suggester's very first; the guard is reached by a
+// division narrowed to teams on Who plays (Q3), whose sport is still offered Americano.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
@@ -80,7 +81,8 @@ function suggestersRanking(h: H, sportKey: string): string[] {
     hours: boxNumber(h, "division-builder-plan-hours"),
     matchMinutes: boxNumber(h, "division-builder-match-minutes"),
   };
-  const offered = templatesForSport(sportKey).map((t) => t.key);
+  // The offer as the page asks for it: the sport's ENGINE entrant kinds (review I5).
+  const offered = templatesForSport(sportKey, sportKinds(sportKey)).map((t) => t.key);
   return rankTemplates(offered, plan, { qualified: 4, swissRounds: swissRoundsDefault(plan.entrants), poolCount: 2, legs: 1 }).map((r) => r.key);
 }
 /** The suggester's first that a division taking these kinds can play. */
@@ -93,11 +95,11 @@ beforeEach(() => {
 });
 
 describe("Q5: the builder opens on the top suggestion", () => {
-  it("every sport: the picked card on Format is the suggester's first it can play, and never League (counts)", () => {
+  it("every sport: the picked card on Format is the suggester's first, and never League (counts)", () => {
     let checked = 0;
     let differsFromLeague = 0;
     let topIsTheSuggestersFirst = 0;
-    let guardSkippedTheFirst = 0;
+    let offerLacksAmericano = 0;
     for (const m of builtinModules) {
       const h = mount(sportsFor(m.key));
       setName(h, "Open");
@@ -106,15 +108,16 @@ describe("Q5: the builder opens on the top suggestion", () => {
       expect(pickedTemplate(h), m.key).toBe(want);
       if (want !== "league") differsFromLeague++;
       if (want === suggestersRanking(h, m.key)[0]) topIsTheSuggestersFirst++;
-      else guardSkippedTheFirst++;
+      if (!suggestersRanking(h, m.key).includes("americano")) offerLacksAmericano++;
       checked++;
     }
     expect(checked).toBe(builtinModules.length);
     expect(checked).toBeGreaterThan(0);
     expect(differsFromLeague, "League, the old default, is not the top suggestion").toBe(checked);
-    // Both branches reached: sports that open on the suggester's very first, and sports the guard moved on from it.
-    expect(topIsTheSuggestersFirst, "sports opening on the suggester's first").toBeGreaterThan(0);
-    expect(guardSkippedTheFirst, "sports whose kinds cannot play the suggester's first").toBeGreaterThan(0);
+    // The sport's offer (I5) already holds only what the sport can play, so every sport opens on the very first - including
+    // the sports whose offer lost Americano, which before I5 the guard had to move on from.
+    expect(topIsTheSuggestersFirst, "sports opening on the suggester's very first").toBe(checked);
+    expect(offerLacksAmericano, "sports whose engine model cannot play Americano (I5)").toBeGreaterThan(0);
   });
 
   it("Q3 with Q5: a generic division narrowed to Teams on Who plays opens on a format teams can play", () => {
@@ -123,6 +126,7 @@ describe("Q5: the builder opens on the top suggestion", () => {
     next(h);
     const opensOn = pickedTemplate(h);
     expect(opensOn).toBe(suggestersPick(h, "generic"));
+    expect(opensOn, "premise: generic opens on its offer's very first").toBe(suggestersRanking(h, "generic")[0]);
     goToStep(h, "who");
     const teams = h.tree().find((e) => e.type === "input" && propsOf(e).type === "radio" && propsOf(e).value === "team");
     (propsOf(teams!).onChange as () => void)();
@@ -142,7 +146,7 @@ describe("Q5: the builder opens on the top suggestion", () => {
     await flush();
     const stagesCall = apiV1Mock.mock.calls.filter(([url]) => /\/stages$/.test(String(url))).at(-1);
     const sent = (stagesCall![1] as { json: { kind: string }[] }).json.map((s) => s.kind);
-    const kinds = templatesForSport("badminton").find((t) => t.key === want)!.build({ qualified: 4, swissRounds: 4, poolCount: 2, legs: 1 }).map((s) => s.kind);
+    const kinds = STAGE_TEMPLATES.find((t) => t.key === want)!.build({ qualified: 4, swissRounds: 4, poolCount: 2, legs: 1 }).map((s) => s.kind);
     expect(sent).toEqual(kinds);
   });
 

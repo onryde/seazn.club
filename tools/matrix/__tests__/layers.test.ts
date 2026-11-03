@@ -21,6 +21,7 @@ import { decideState } from "../lib/results.ts";
 import { ATOMIC, HARNESS_SCENARIO, l2NoPathFor } from "../lib/scenario-catalogue.ts";
 import { SLICE_ROWS, SLICE_SPORTS, UnknownFilter } from "../lib/slice.ts";
 import { BROWSER_WIDTHS, L2_WIDTHS, type BrowserWidth } from "../lib/widths.ts";
+import { isNoOrganiserPathCell } from "./refused-cells.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 /** The committed file, read as plain JSON: never through layers.ts or pairs.ts. */
@@ -172,17 +173,22 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
 
   // W2e Task 32 (B2-3): the committed M12b runs, planned per sport. The four sports whose pad gained the control are no
   // longer 🚫 ("no screen sends it" is false for them); they are ░ until a scenario script drives the control. Cricket and
-  // generic keep 🚫 W2 (dispositions CK-DV-3, GN-DV-1).
+  // generic keep 🚫 W2 (dispositions CK-DV-3, GN-DV-1). Match Day C9 review I5, option 2: a run on a cell the builder does
+  // not offer (americano/mexicano on those sports) is 🚫 W7 whatever its atom - the cell has no organiser path at all.
   it("W2e T32: M12b is ░ in football, volleyball, hockey and ice hockey and still 🚫 W2 in every other sport, run by committed run", () => {
     const m12b = RAW.runs.filter((r) => r.scenario === "M12b");
     const cells = new Set(m12b.map((r) => cellId(r.row, r.sport)));
     const byN = new Map(planL2(committed, cells).map((c) => [c.run!.n, c]));
     const built = new Set(["football", "volleyball", "hockey", "icehockey"]);
-    const seen = { built: 0, owing: 0 };
+    const seen = { built: 0, owing: 0, noPathCell: 0 };
     for (const r of m12b) {
       const c = byN.get(r.n)!;
       expect(c, `n ${r.n}`).toBeDefined();
-      if (built.has(r.sport)) {
+      if (isNoOrganiserPathCell(cellId(r.row, r.sport))) {
+        expect(c.noPath, `n ${r.n} ${r.row}|${r.sport}: the builder does not offer the cell`).toMatchObject({ wave: "W7" });
+        expect(c.notRun).toBeNull();
+        seen.noPathCell += 1;
+      } else if (built.has(r.sport)) {
         expect(c.noPath, `n ${r.n} ${r.sport}: the screen path exists`).toBeNull();
         expect(c.notRun, `n ${r.n} ${r.sport}`).toBe("no scenario script yet (atom M12b)");
         seen.built += 1;
@@ -195,7 +201,7 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
     // Anti-vacuity: both branches have committed runs (football 16, volleyball/hockey/icehockey 1 each; cricket, generic).
     expect(seen.built, "built-sport runs checked").toBeGreaterThan(0);
     expect(seen.owing, "cricket / generic runs checked").toBeGreaterThan(0);
-    expect(seen.built + seen.owing).toBe(m12b.length);
+    expect(seen.built + seen.owing + seen.noPathCell).toBe(m12b.length);
   });
 
   it("🚫 and ░ both set is impossible: planL2 never produces both, and decideState throws if handed both (T3's guard, reached from a real planner output)", () => {

@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
+import { engineEntrantChoice } from "@/lib/__tests__/_engine-entrant-kinds";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -23,9 +24,10 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => ({
   useLocale: () => "en" as const,
 }));
 
-const BADMINTON: SportOption = { key: "badminton", name: "Badminton", variants: [{ key: "bwf", name: "BWF", system: true }] };
-const CHESS: SportOption = { key: "boardgame", name: "Chess", variants: [{ key: "blitz", name: "Blitz", system: true }] };
-const FOOTBALL: SportOption = { key: "football", name: "Football", variants: [{ key: "score", name: "Score", system: true }] };
+const BADMINTON: SportOption = { key: "badminton", name: "Badminton", variants: [{ key: "bwf", name: "BWF", system: true }], entrants: engineEntrantChoice("badminton") };
+const CHESS: SportOption = { key: "boardgame", name: "Chess", variants: [{ key: "blitz", name: "Blitz", system: true }], entrants: engineEntrantChoice("boardgame") };
+const FOOTBALL: SportOption = { key: "football", name: "Football", variants: [{ key: "score", name: "Score", system: true }], entrants: engineEntrantChoice("football") };
+const GENERIC: SportOption = { key: "generic", name: "Generic", variants: [{ key: "score", name: "Score", system: true }], entrants: engineEntrantChoice("generic") };
 const REFUSED_FOR_CHESS = ["americano", "mexicano"];
 // Retired from every sport's offer (owner ruling 2026-11-01, Match Day D1): triple-rr-retired.test.tsx sweeps it.
 const OFFERED_KEYS = STAGE_TEMPLATES.map((t) => t.key).filter((k) => k !== "triple_rr");
@@ -107,14 +109,26 @@ describe("the division builder: switching Sport to Chess drops an americano/mexi
     for (const r of REFUSED_FOR_CHESS) expect(cards(h).map((c) => c.key)).toContain(r);
   });
 
-  it("the positive pair: a pick the new sport IS offered survives the switch (americano, badminton → football; swiss, badminton → chess)", () => {
-    const a = mount([BADMINTON, FOOTBALL]);
+  it("the positive pair: a pick the new sport IS offered survives the switch (americano, badminton → generic; swiss, badminton → chess)", () => {
+    // generic's engine model holds individuals and pairs, so it is offered americano (C9 fix round 1, I5).
+    expect(GENERIC.entrants!.kinds).toEqual(expect.arrayContaining(["individual", "pair"]));
+    const a = mount([BADMINTON, GENERIC]);
     pickTemplate(a, "americano");
-    selectSport(a, "badminton", "football");
+    selectSport(a, "badminton", "generic");
     expect(checked(a)).toEqual(["americano"]);
     const s = mount([BADMINTON, CHESS]);
     pickTemplate(s, "swiss");
     selectSport(s, "badminton", "boardgame");
     expect(checked(s)).toEqual(["swiss"]);
+  });
+
+  it("C9 fix round 1 (I5): a team sport drops the pick too - americano on badminton, then Sport → Football, lands on league and football renders no pair format", () => {
+    // The engine holds football as teams only: an americano stage has no individual players to rotate.
+    expect(FOOTBALL.entrants!.kinds).not.toContain("individual");
+    const h = mount([BADMINTON, FOOTBALL]);
+    pickTemplate(h, "americano");
+    selectSport(h, "badminton", "football");
+    expect(checked(h)).toEqual(["league"]);
+    for (const r of REFUSED_FOR_CHESS) expect(cards(h).map((c) => c.key), r).not.toContain(r);
   });
 });

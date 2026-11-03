@@ -35,6 +35,7 @@ import { createCourt, createVenue, deleteCourt } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedRegistration } from "./_registration-fixtures";
 import { seedOrg } from "./_seed";
+import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -226,7 +227,7 @@ async function registerAndConfirm(rig: Rig, name: string): Promise<string> {
 describe.runIf(HAS_DB)("X-SW-17 the round count is editable until the first fixture starts", () => {
   it("X-SW-17 rounds edit after shells exist and before any start: 5 → 3 deletes rounds 4–5 shells; 3 → 4 mints round 4 (every sport offering a Swiss)", async () => {
     const { auth } = await seedOrg("pro");
-    const offered = builtinModules.filter((m) => templatesForSport(m.key).some((t) => t.key === "swiss"));
+    const offered = builtinModules.filter((m) => templatesForSport(m.key, engineEntrantKinds(m.key)).some((t) => t.key === "swiss"));
     expect(offered.length, "premise: the registry offers a Swiss").toBeGreaterThan(1);
     let checked = 0;
     for (const m of offered) {

@@ -21,6 +21,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
+import { engineEntrantChoice } from "@/lib/__tests__/_engine-entrant-kinds";
 
 // The builder offers every template but the Triple round robin, retired from every sport's offer (owner ruling
 // 2026-11-01, Match Day D1); its copy still renders in Settings for a division stored as one.
@@ -45,8 +46,10 @@ const NON_ENGLISH: [Locale, Dict][] = [
   ["nl", nlUi as Dict],
 ];
 
+// The sport as the page hands it over, with the ENGINE's entrant model (`entrants`): the offer reads its kinds (C9 fix
+// round 1, I5), and generic's model holds individuals and pairs, so every live template - Americano too - is offered.
 const SPORTS: SportOption[] = [
-  { key: "generic", name: "Generic", variants: [{ key: "score", name: "Score", system: true }] },
+  { key: "generic", name: "Generic", variants: [{ key: "score", name: "Score", system: true }], entrants: engineEntrantChoice("generic") },
 ];
 
 function renderBuilder(dict: Dict, locale: Locale): string {
