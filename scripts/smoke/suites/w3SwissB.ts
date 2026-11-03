@@ -45,6 +45,12 @@ import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
  * three rounds are decided) beside `code` and `message`, nothing else - and the Finish that notice's button posts goes through
  * from that same refused state: `POST /api/v1/stages/{id}/swiss/finish` ends the Swiss after round 3 and the two shell rounds go.
  * It reuses check 1's stage (the Community plan caps active competitions at 3, and checks 1-3 already hold three).
+ *
+ * T5 (X-SW-19; SW-M11): the pairing score groups are the stage's own table points. An ice hockey Swiss (IIHF pays 3 / 2 / 1 / 0:
+ * a regulation win 3, an overtime win 2) is paired, round 1 is played through the scorer's own events with one overtime win and two
+ * regulation wins, and round 2 is paired: the two regulation winners (3 points each, a group of their own) are seated against
+ * each other and the overtime winner (2 points) is not seated against either. The old +1 per win put all three winners in one
+ * group, whose top two by seed are paired - and the overtime winner is seed 1, so it would have met a regulation winner.
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissB runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissBSuite(): Promise<void> {
@@ -54,7 +60,8 @@ export async function w3SwissBSuite(): Promise<void> {
   // T3: 1 (a football Swiss's hub table carries an Opp diff column with its words, over the wire a visitor reads).
   // T9: 1 (ST-G21: the same stage's anonymous /present board payload carries two tie-break columns, buchholz then opp_diff).
   // T4: 1 (the refusal carries finishAfter 3 and canFinish, and the Finish its notice offers ends the Swiss after round 3).
-  const EXPECTED_CHECKS = 6;
+  // T5: 1 (X-SW-19: an ice hockey Swiss's round 2 is paired in the table's own score groups - regulation winners together, the overtime winner outside).
+  const EXPECTED_CHECKS = 7;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -387,6 +394,82 @@ export async function w3SwissBSuite(): Promise<void> {
     w3Check(
       "w3b X-SW-3/X-SW-26: the refusal carries finishAfter 3 and canFinish true beside round, reason and field and nothing more, and the Finish its notice offers ends the Swiss after round 3 (200, complete, rounds 4 and 5 removed)" +
         (ok ? "" : ` - stage ${stageId ?? "none"}, refusal ${JSON.stringify(body ?? null)}, extra keys ${JSON.stringify(extraKeys)}, finish ${finish.status} ${JSON.stringify(finish.json).slice(0, 200)}, rows left ${left.length}, rounds ${JSON.stringify([...new Set(left.map((f) => f.round_no))].sort())}`),
+      ok,
+    );
+  }
+
+  // Check 6 - T5 (X-SW-19; SW-M11). An ice hockey Swiss of six teams (seeds 1-6), fifteen scorer events (five a board) on the public competition check 3 opened (the
+  // Community plan caps active competitions at 3). IIHF pays 3 / 2 / 1 / 0 (regulation win 3, overtime win 2, overtime loss 1,
+  // regulation loss 0), typed here from the rulebook, never read from the code under test. Round 1 is played through the scorer's
+  // own events: the board seed 1 sits on is won by seed 1 IN OVERTIME (level after three periods, then a goal), the other two
+  // boards by their better seed in regulation (a goal, then the three periods to full time). Round 2 is then paired:
+  //   the two regulation winners hold 3 points, a group of their own that has not met -> they are seated against each other;
+  //   the overtime winner holds 2, so it is NOT seated against either of them.
+  // Differential: under the old +1 a win all three winners hold 1 point in ONE group of three, whose lowest-ranked (by seed)
+  // floats down and whose top two are paired - seed 1, the overtime winner, would have met the better regulation winner.
+  {
+    const comp = publicComp;
+    const divRes = await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Ice hockey", sport_key: "icehockey", variant_key: "iihf", config: {} });
+    const divId = v1data<{ id: string } | undefined>(divRes)?.id;
+    const made =
+      v1data<{ id: string; seed: number | null }[] | undefined>(
+        await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+          Array.from({ length: 6 }, (_, i) => ({ kind: "team", display_name: `HC ${i + 1} ${tag}`, seed: i + 1 }))),
+      ) ?? [];
+    const seedOf = new Map(made.map((e) => [e.id, e.seed ?? 0]));
+    const stageId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 } }),
+    )?.id;
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    const rows = async () =>
+      (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    const boardsOf = (all: Fx[], r: number) =>
+      all.filter((f) => f.round_no === r && !/-bye$/.test(f.ext_key ?? "") && f.home_entrant_id !== null && f.away_entrant_id !== null);
+    const statuses: number[] = [];
+    const refusedEvents: string[] = [];
+    // Not `appendScoreEvent`: its idempotency key is (fixture, type), so a board's second and third `period.advance` would be
+    // taken for replays of the first and never applied. The key here is unique per event.
+    let evNo = 0;
+    const ev = async (fixtureId: string, type: string, payload: unknown) => {
+      const seq = v1data<{ last_seq: number }>(await v1(owner, `/api/v1/fixtures/${fixtureId}/state`)).last_seq;
+      const res = await v1(owner, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+        expected_seq: seq,
+        type,
+        payload,
+        idempotency_key: `smoke-${tag}-${fixtureId}-${type}-${++evNo}`,
+      });
+      statuses.push(res.status);
+      if (res.status >= 300) refusedEvents.push(`${type} ${JSON.stringify(payload)} -> ${JSON.stringify(res.json).slice(0, 160)}`);
+    };
+    const paired1 = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const round1 = boardsOf(await rows(), 1);
+    const better = (f: Fx) => (seedOf.get(f.home_entrant_id!)! < seedOf.get(f.away_entrant_id!)! ? f.home_entrant_id! : f.away_entrant_id!);
+    const seed1Id = [...seedOf].find(([, seed]) => seed === 1)?.[0];
+    const otBoard = round1.find((f) => f.home_entrant_id === seed1Id || f.away_entrant_id === seed1Id);
+    const regBoards = round1.filter((f) => f !== otBoard);
+    for (const f of regBoards) {
+      await ev(f.id, "core.start", {});
+      await ev(f.id, "icehockey.goal", { by: better(f) });
+      for (const to of ["P2", "P3", "FT"]) await ev(f.id, "icehockey.period.advance", { to });
+    }
+    if (otBoard !== undefined) {
+      await ev(otBoard.id, "core.start", {});
+      for (const to of ["P2", "P3", "FT"]) await ev(otBoard.id, "icehockey.period.advance", { to });
+      await ev(otBoard.id, "icehockey.goal", { by: better(otBoard) });
+    }
+    const regWinners = regBoards.map(better);
+    const paired2 = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const round2 = boardsOf(await rows(), 2);
+    const meet = (a: string, b: string) => round2.some((f) => [f.home_entrant_id, f.away_entrant_id].sort().join() === [a, b].sort().join());
+    const otMeetsRegulation = regWinners.some((w) => meet(seed1Id ?? "", w));
+    const ok =
+      made.length === 6 && stageId !== undefined && started.status < 300 && paired1.status === 200 && round1.length === 3 &&
+      otBoard !== undefined && regBoards.length === 2 && regWinners.every((w) => w !== seed1Id) &&
+      statuses.length === 15 && statuses.every((st) => st > 0 && st < 300) &&
+      paired2.status === 200 && round2.length === 3 && meet(regWinners[0], regWinners[1]) && !otMeetsRegulation;
+    w3Check(
+      "w3b X-SW-19: an ice hockey Swiss's round 2 is paired in the table's own score groups - the two regulation winners (IIHF 3 points) meet each other, the overtime winner (2 points) meets neither" +
+        (ok ? "" : ` - division ${divRes.status} ${divId ?? "none"}, entrants ${made.length}, start ${started.status}, pair ${paired1.status}/${paired2.status}, round 1 boards ${round1.length}, event statuses ${statuses.join(",")} ${refusedEvents.slice(0, 2).join(" ; ")}, round 2 boards ${JSON.stringify(round2.map((f) => [seedOf.get(f.home_entrant_id!), seedOf.get(f.away_entrant_id!)]))} (seeds), regulation winners ${JSON.stringify(regWinners.map((w) => seedOf.get(w)))}, OT winner seed 1 meets a regulation winner ${otMeetsRegulation}`),
       ok,
     );
   }
