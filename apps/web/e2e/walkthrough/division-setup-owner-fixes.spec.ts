@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, stageCardOf } from "../helpers";
+import { TAG, addEntrantsViaApi, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, stageCardOf } from "../helpers";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
 import { uiEn } from "../match-room-kit";
 import { escapeRe } from "../helpers/stage-summary";
@@ -16,6 +16,9 @@ import { escapeRe } from "../helpers/stage-summary";
  *   3. One person, one team per division. Ada is on Red: the add form's picker does not suggest her, a search shows her
  *      disabled and labelled "On Red", and a team with someone else saves. The server refuses the write the picker would not
  *      offer (409 PERSON_ON_OTHER_TEAM), and another division takes her.
+ *   5. The builder's default sport follows the organisation's most recent sport, generic INCLUDED: after a generic division
+ *      the builder opens on "Any other game" (picked, so shown among the five; still the last tile); after a badminton one,
+ *      on badminton.
  *
  * Every string asserted is read from the dictionary (`uiEn`), except the removed banner's own title, which no dictionary holds
  * any more (that is the point) and is spelled out once below. Budgets are derived from the navigations and taps (class 20).
@@ -180,5 +183,50 @@ test.describe("UI5: the division page's owner fixes, walked", () => {
     await expect(page.locator(`[data-person="${ada.id}"]`)).toBeDisabled({ timeout: NAV_MS });
     const listed = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${divisionId}/entrants`);
     expect(listed.data?.length, "the refused Blue was never written").toBe(1);
+  });
+
+  test("5. the builder opens on the organisation's latest sport, generic included: Any other game after a generic division, badminton after a badminton one", async ({ page, request }) => {
+    test.setTimeout(budget(8, 8));
+    const { competitionId } = await seedDivision(request, "Latest");
+    const newDivision = await competitionPath(request, competitionId, "/d/new");
+    const checkedSport = () => page.locator('input[name="division-sport"]:checked').getAttribute("value");
+    const tiles = () => page.locator("label[data-sport]").evaluateAll((els) => els.map((el) => el.getAttribute("data-sport") ?? ""));
+    const shown = () => page.locator("label[data-sport]").evaluateAll((els) => els.filter((el) => el.getClientRects().length > 0).map((el) => el.getAttribute("data-sport") ?? ""));
+
+    // This organisation is shared with every other spec, so "latest" is made true right before the builder is read: a
+    // division of `sport` is created, the builder loaded, and the pair retried while a parallel spec's newer division got
+    // in between (the builder then rightly opens on THAT one).
+    const opensOnAfterCreating = async (sport: string, variant: string, config?: Record<string, unknown>) => {
+      await expect
+        .poll(
+          async () => {
+            const made = await apiJson(request, `/api/v1/competitions/${competitionId}/divisions`, "POST", {
+              name: `Latest ${sport} ${Date.now()}`,
+              sport_key: sport,
+              variant_key: variant,
+              ...(config ? { config } : {}),
+            });
+            if (made.status >= 300) return `create ${sport}: ${made.status} ${JSON.stringify(made.error)}`;
+            await page.goto(newDivision, { waitUntil: "load" });
+            await expect(page.getByTestId("division-builder-name")).toBeVisible({ timeout: NAV_MS });
+            return checkedSport();
+          },
+          { message: `the builder opens on ${sport}`, timeout: 4 * NAV_MS, intervals: [0, 500, 1_000] },
+        )
+        .toBe(sport);
+    };
+
+    await opensOnAfterCreating("generic", "score", { points: { w: 3, d: 1, l: 0 }, progressScore: false });
+    await dismissCookieBanner(page);
+    const generic = page.locator('label[data-sport="generic"]');
+    await expect(generic, "picked, Any other game is shown").toBeVisible();
+    await expect(generic).toHaveText(uiEn["divBuilder.sport.generic"]!);
+    expect(await shown(), "five shown, the picked catch-all among them").toHaveLength(5);
+    expect((await tiles()).at(-1), "and it is still the last tile").toBe("generic");
+    await expectNoHorizontalScroll(page);
+
+    // A mixed organisation opens on its latest, whichever that is.
+    await opensOnAfterCreating("badminton", "bwf");
+    await expect(generic, "not picked: the catch-all folds back under Show more").toBeHidden();
   });
 });
