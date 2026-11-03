@@ -468,7 +468,10 @@ test.describe("X-SW-29 a bye has no court and no sheet", () => {
     for (const b of boards) await expect(page.locator(`[data-fixture-no="${b.fixture_no}"]`).first()).toBeAttached();
     for (const b of byes) await expect(page.locator(`[data-fixture-no="${b.fixture_no}"]`)).toHaveCount(0);
 
-    // The auto pass. Midday UTC, so the day is the same date on any org clock within eleven hours of UTC.
+    // The auto pass. Which planner answers is not this test's business: the placement service lays a board from the
+    // window's first org-local midnight (so a board can sit at 00:00 on 2030-06-18), the greedy fallback from the 11:00Z
+    // start. Either way the boards land on the window's first day, and the print-day list below names that day in the
+    // same org zone the window is read in, so the day assertion holds for both.
     const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
       tz: "UTC",
       config: {

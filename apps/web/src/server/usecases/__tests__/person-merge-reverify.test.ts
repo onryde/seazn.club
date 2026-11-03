@@ -10,7 +10,7 @@
 //
 // Real Postgres required: the board, its entrants and the repointed
 // entrant_members rows are all database state.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -18,7 +18,8 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { mergePersons } from "../person-merge";
-import { publishSchedule } from "../schedule";
+import * as schedule from "../schedule";
+import { getScheduleSettings, publishSchedule } from "../schedule";
 import { createStages, generateStageFixtures } from "../stages";
 import { createCourt, createVenue } from "../venues";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
@@ -140,6 +141,10 @@ async function joinEntrant(entrantId: string, personId: string): Promise<void> {
 // further down both go red if person-merge.ts's filter is reverted to
 // `court_label !== null` — that is this scenario's regression coverage.
 describe.skipIf(!HAS_DB)("#404 re-verify published boards after a merge", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("reports the person overlap the merge created on a published board", async () => {
     const { auth } = await seedOrg("pro");
     const { divisionId, first, second } = await seedBoard(auth, { minutesApart: 0, publish: true });
@@ -163,6 +168,28 @@ describe.skipIf(!HAS_DB)("#404 re-verify published boards after a merge", () => 
     expect(
       overlap.every((c) => c.details?.otherFixtureId === (c.fixtureId === first.id ? second.id : first.id)),
     ).toBe(true);
+  });
+
+  // X-SW-31 (task 9b review, m5). `reverifyBoards` loads the board's settings once and hands them to
+  // `roundRobinStageIds`, which otherwise reads them a second time for any division with a Swiss stage. Observable at
+  // the seam: the call carries the settings (a call with none is the second read).
+  it("reads a board's settings once: roundRobinStageIds is handed the settings reverifyBoards already loaded", async () => {
+    const seen = vi.spyOn(schedule, "roundRobinStageIds"); // called through
+    const { auth } = await seedOrg("pro");
+    const { divisionId, first, second } = await seedBoard(auth, { minutesApart: 0, publish: true });
+    const survivor = await person(auth.orgId, "Ida Once");
+    const absorbed = await person(auth.orgId, "Ida Once");
+    await joinEntrant(first.home_entrant_id, survivor);
+    await joinEntrant(second.home_entrant_id, absorbed);
+
+    const res = await mergePersons(auth, survivor, absorbed, { confirmedBy: auth.userId! });
+
+    expect(res.revealed.find((r) => r.division_id === divisionId), "premise: the published board was re-verified").toBeTruthy();
+    const calls = seen.mock.calls.filter((c) => c[1] === divisionId);
+    expect(calls.length, "anti-vacuity: the board's round-robin lookup ran, once").toBe(1);
+    const handed = calls[0]![2];
+    expect(handed, "the lookup was handed settings, not left to read them again").toBeDefined();
+    expect(handed!.config, "and they are the board's own").toEqual((await getScheduleSettings(auth, divisionId)).config);
   });
 
   it("still commits the merge that revealed it", async () => {

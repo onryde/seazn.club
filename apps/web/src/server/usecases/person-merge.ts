@@ -447,7 +447,7 @@ async function reverifyBoards(auth: AuthCtx, survivorId: string): Promise<Reveal
       // surface (see its own doc comment — "reported, never enforced").
       // Wired the same way `autoSchedule`/`applySchedule` were (`schedule.ts`,
       // the reference implementation).
-      const roundRobin = await roundRobinStageIds(tx, board.id);
+      const roundRobin = await roundRobinStageIds(tx, board.id, settings);
       // P9 cutover: `court_id` is the real identity `toAssignment` reads
       // (schedule.ts) — the frozen `court_label` is never written for a
       // fixture scheduled after pass 3a, so gating on it here silently
