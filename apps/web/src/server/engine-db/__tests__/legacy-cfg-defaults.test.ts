@@ -204,6 +204,70 @@ describe.skipIf(!HAS_DB)("volleyball beach keeps its own records through the wri
   });
 });
 
+/** Review m1: badminton is not the only sport the set-based kernel scores. Every other sport declaring `records` (the
+ *  engine's own variants, parsed, with `records` cut) is stored the legacy way and scored through `appendEvent`: the
+ *  first rally folds the LIVE branch and freezes, the second folds the FROZEN one. */
+const SET_SPORTS_WITHOUT_RECORDS = [
+  ["tabletennis", "bo5"],
+  ["volleyball", "indoor"],
+] as const;
+describe.skipIf(!HAS_DB)("the other set-based sports stored without records score through the real write path", () => {
+  it.each(SET_SPORTS_WITHOUT_RECORDS)(
+    "%s/%s: a rally on the live branch scores 1-0 and freezes the row as stored, a second rally on the frozen branch scores 2-0, the read fold and the pad agree",
+    async (sport, variant) => {
+      const m = mod(sport);
+      const { records, ...legacy } = m.configSchema.parse(m.variants[variant]) as Cfg;
+      expect(records, "premise: the sport declares records").toBeDefined();
+      expect(() => m.padSpec?.(legacy as never), "premise: the raw row crashes the pad's spec").toThrow(TypeError);
+      const b = await seedBracket({ sport, variant, stageKind: "league", entrants: 2, stageRules: "division" });
+      await storeDivisionCfg(b.divisionId, legacy);
+      const id = b.fixtureIds[0]!;
+      const { home } = await row(id);
+      expect((await row(id)).config_snapshot, "premise: nothing frozen yet (the live branch)").toBeNull();
+      await appendEvent(b.auth.orgId, id, 0, { type: "core.start", payload: {} });
+      const first = await appendEvent(b.auth.orgId, id, 1, { type: `${sport}.rally`, payload: { wonBy: home } });
+      expect(points(first.summary)).toEqual({ home: 1, away: 0 });
+      expect((await row(id)).config_snapshot, "the first event froze the row as stored").toEqual(legacy);
+      const second = await appendEvent(b.auth.orgId, id, 2, { type: `${sport}.rally`, payload: { wonBy: home } });
+      expect(points(second.summary)).toEqual({ home: 2, away: 0 });
+      expect(await readPoints(b.auth.orgId, id)).toEqual({ home: 2, away: 0 });
+      expect(((await loadFixturePadCfg(b.auth, id)).cfg as Cfg).records, "the pad's cfg carries the engine's records").toEqual(records);
+    },
+  );
+});
+
+/** Review m2: stg holds hockey (1) and ice hockey (5) divisions stored before `setPieceKinds` existed, and the pad's
+ *  `padSpec` reads its `.length` - the pad would not open on them. The stored row is the engine's variant, parsed, with
+ *  only `setPieceKinds` cut, so nothing but that key's default can make the spec answer. */
+const PERIOD_SPORTS_WITHOUT_SET_PIECES = [
+  ["hockey", "fih-outdoor"],
+  ["icehockey", "iihf"],
+] as const;
+describe.skipIf(!HAS_DB)("hockey and ice hockey stored without setPieceKinds: the pad's payload opens", () => {
+  it.each(PERIOD_SPORTS_WITHOUT_SET_PIECES)(
+    "%s/%s: loadFixturePadCfg carries the engine's setPieceKinds, live and frozen, every stored key kept, and padSpec answers on it",
+    async (sport, variant) => {
+      const m = mod(sport);
+      const { setPieceKinds, ...legacy } = m.configSchema.parse(m.variants[variant]) as Cfg;
+      expect(setPieceKinds, "premise: the engine defaults setPieceKinds").toBeDefined();
+      expect(() => m.padSpec?.(legacy as never), "premise: the raw row crashes the pad's spec").toThrow(TypeError);
+      const b = await seedBracket({ sport, variant, stageKind: "league", entrants: 3, stageRules: "division" });
+      await storeDivisionCfg(b.divisionId, legacy);
+      const [live, frozen] = b.fixtureIds;
+      await sql`update fixtures set config_snapshot = ${sql.json(legacy as never)}, config_snapshot_at = now() where id = ${frozen!}`;
+      let checked = 0;
+      for (const id of [live!, frozen!]) {
+        const { cfg } = await loadFixturePadCfg(b.auth, id);
+        expect((cfg as Cfg).setPieceKinds, id).toEqual(setPieceKinds);
+        expect(cfg, id).toMatchObject(legacy);
+        expect(m.padSpec?.(cfg as never)?.panels.length, "the spec has panels").toBeGreaterThan(0);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    },
+  );
+});
+
 describe.skipIf(!HAS_DB)("a Swiss bye on a legacy division freezes what a board's first event freezes", () => {
   it("the bye's snapshot and a board's are both the cfg as stored, and the board then scores a rally through scoreEvent", async () => {
     const { auth } = await seedOrg("pro");
