@@ -518,6 +518,7 @@ export function TemplateGallery({
   orgId,
   templates,
   publicDashboardUpgrade,
+  publicSlots,
   viewerPlan,
 }: {
   orgSlug: string;
@@ -531,6 +532,9 @@ export function TemplateGallery({
    *  blank wizard degrade identically, and a figure that reached only one of
    *  them would be worse than none at all. */
   publicDashboardUpgrade: PublicDashboardUpgrade | null;
+  /** The org's remaining public slots, for the blank form's cap-aware "Who will find it" (Match Day PB3). Only the blank form reads
+   *  it: a template card has no such checklist. See `CompetitionWizard`'s prop of the same name. */
+  publicSlots: { limit: number; left: number } | null;
   viewerPlan: ViewerPlan;
 }) {
   const msg = useT();
@@ -543,6 +547,7 @@ export function TemplateGallery({
         orgSlug={orgSlug}
         orgId={orgId}
         publicDashboardUpgrade={publicDashboardUpgrade}
+        publicSlots={publicSlots}
         viewerPlan={viewerPlan}
       />
     );

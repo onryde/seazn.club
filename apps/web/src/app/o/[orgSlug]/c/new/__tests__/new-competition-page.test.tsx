@@ -28,12 +28,23 @@ const h = vi.hoisted(() => ({
   calls: [] as unknown[][],
   rows: [] as { int_value: number | null }[],
   fail: false,
+  /** Match Day PB3: what `publicSlotsLeft` answers (a database read, so doubled here; its own suite holds it to the create). */
+  slots: { limit: 2, left: 0 } as { limit: number; left: number } | null,
+  slotsFail: false,
+  slotsAsked: [] as string[],
 }));
 
 vi.mock("@/lib/db", () => ({
   sql: (_strings: TemplateStringsArray, ...values: unknown[]) => {
     h.calls.push(values);
     return h.fail ? Promise.reject(new Error("db down")) : Promise.resolve(h.rows);
+  },
+}));
+vi.mock("@/server/usecases/competitions", () => ({
+  publicSlotsLeft: async (orgId: string) => {
+    h.slotsAsked.push(orgId);
+    if (h.slotsFail) throw new Error("db down");
+    return h.slots;
   },
 }));
 vi.mock("@/server/page-auth", () => ({
@@ -74,6 +85,9 @@ beforeEach(() => {
   h.calls = [];
   h.rows = [{ int_value: 10 }];
   h.fail = false;
+  h.slots = { limit: 2, left: 0 };
+  h.slotsFail = false;
+  h.slotsAsked = [];
 });
 
 describe("the create page hands the gallery the org the description editor uploads to", () => {
@@ -81,6 +95,31 @@ describe("the create page hands the gallery the org the description editor uploa
     const props = await galleryProps();
     expect(props.orgId).toBe("org1");
     expect(props.orgSlug).toBe("riverside");
+  });
+});
+
+// Match Day PB3 item 6: `publicSlots` is a required prop, so a literal `null` compiles, renders, and silently takes the cap warning
+// off the form. This is the witness that the page ASKS, for THIS org, and hands the answer down.
+describe("the create page supplies the org's public slots (PB3 item 6)", () => {
+  it("asks for the signed-in org's slots and hands the answer to the gallery as-is", async () => {
+    h.slots = { limit: 2, left: 0 };
+    expect((await galleryProps()).publicSlots).toEqual({ limit: 2, left: 0 });
+    expect(h.slotsAsked, "asked once, about the signed-in org's id (not its slug)").toEqual(["org1"]);
+    h.slots = { limit: 10, left: 7 };
+    expect((await galleryProps()).publicSlots).toEqual({ limit: 10, left: 7 });
+  });
+
+  it("a plan with no public cap reads null and the gallery is handed null (no warning)", async () => {
+    h.slots = null;
+    expect((await galleryProps()).publicSlots).toBeNull();
+  });
+
+  it("fails soft: a read that throws renders the form with no cap warning, not an error page", async () => {
+    h.slotsFail = true;
+    const props = await galleryProps();
+    expect(props.publicSlots).toBeNull();
+    expect(h.slotsAsked, "the read WAS attempted - the null is a fallback, not a skipped call").toEqual(["org1"]);
+    expect(props.orgId, "the page still rendered the gallery").toBe("org1");
   });
 });
 
@@ -135,6 +174,7 @@ describe("the page's wide-page selector is held to the components that carry it"
     orgSlug: "riverside",
     orgId: "org1",
     publicDashboardUpgrade: null,
+    publicSlots: null,
     viewerPlan: "community" as const,
   };
 

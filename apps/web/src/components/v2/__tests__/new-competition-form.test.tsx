@@ -87,7 +87,7 @@ const expandFields = (node: ReactNode): ReactElement[] =>
 const mount = () =>
   renderIsland(
     CompetitionWizard,
-    { orgSlug: "riverside", orgId: "org-1", publicDashboardUpgrade: null, viewerPlan: "community" },
+    { orgSlug: "riverside", orgId: "org-1", publicDashboardUpgrade: null, publicSlots: null, viewerPlan: "community" },
     expandFields,
   );
 type Island = ReturnType<typeof mount>;
@@ -733,11 +733,14 @@ describe("TemplateGallery hands the wizard the org id the editor uploads to", ()
       orgId: "org-1",
       templates: [],
       publicDashboardUpgrade: null,
+      publicSlots: { limit: 2, left: 0 },
       viewerPlan: "community" as const,
     });
     const blank = island.tree().find((el) => propsOf(el)["data-testid"] === "template-start-blank")!;
     (propsOf(blank).onClick as () => void)();
     const wizard = island.tree().find((el) => el.type === CompetitionWizard)!;
     expect(propsOf(wizard)).toMatchObject({ orgSlug: "riverside", orgId: "org-1" });
+    // Match Day PB3: and the org's public slots, so the blank form's checklist can say the create will come back private.
+    expect(propsOf(wizard).publicSlots).toEqual({ limit: 2, left: 0 });
   });
 });

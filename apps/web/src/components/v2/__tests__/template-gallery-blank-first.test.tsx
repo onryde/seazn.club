@@ -33,6 +33,7 @@ function gallery() {
         orgId="org-1"
         templates={TEMPLATES}
         publicDashboardUpgrade={null}
+        publicSlots={null}
         viewerPlan="community"
       />
     </DictProvider>,

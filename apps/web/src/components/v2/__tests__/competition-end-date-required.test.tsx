@@ -100,7 +100,7 @@ const mountWizard = () =>
     CompetitionWizard,
     // The public-dashboard upgrade figure is required (see the component)
     // but irrelevant here — these tests never reach the degrade card.
-    { orgSlug: "riverside", orgId: "org-1", publicDashboardUpgrade: null, viewerPlan: "community" },
+    { orgSlug: "riverside", orgId: "org-1", publicDashboardUpgrade: null, publicSlots: null, viewerPlan: "community" },
     expandFields,
   );
 
