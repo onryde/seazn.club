@@ -52,6 +52,28 @@ one action, and brainstorm only the format-specific rule:
 - Prove it per format × entrant kind × case, counted, through the real usecases (W3 Task 10c is the template).
 Rule to settle with the owner here: where a late entrant can be placed in a bracket that is already drawn (an open bye slot, an unplayed first-round match, a qualifier), and what happens when none is free.
 
+## Carry from Match Day follow-ups: Knockout + Plate at odd entrant counts (owner 2026-11-04)
+
+The owner moved this defect into W4 (2026-11-04: "there is a W4 going to do Knockout + Plate, can you update the W4 to handle it?"). It is the concrete face of **FX-G14** plus the owed decision "plate eligibility with byes" below. Facts were found by a read-only scout on main abddafd140 (controller scout notes, not in git). Re-pin every line before building on it.
+
+- **The plate's feed.** It draws round-1 losers, count q (`lib/format-templates.ts:282`). The new-division builder hides the Top N control and always sends q=4 (`components/v2/division-builder.tsx:558`).
+- **Byes.** A bye produces no loser, so round 1 has fewer than 4 losers whenever the bracket has byes. Completing the plate's source then fails with `QUALIFICATION_INVALID`, surfaced as 409 `STAGE_COMPLETED_SEEDING_FAILED` (`server/usecases/stages.ts:5472`), and the plate stays empty.
+  - Confirmed by a run at n=5.
+  - By arithmetic it also fails at n=2–7, 9–11 and 17–19.
+- **Offered everywhere.** Knockout + Plate is offered at every n, with no gate. `lib/format-estimate.ts:44` already computes the real round-1 loser count, so it can serve as the source of truth.
+- **No reusable feed.** The only "first loss" feed anywhere is double-elim's losers bracket. Nothing else implements a consolation or plate feed.
+- **Matrix coverage is thin.** The triage rule is `ko-plate-seeding-failed`. Its sweep allowlists only n=5, because its seeded pass runs n=5 and n=8. Widen the sweep to every n the builder offers, and count it: zero checked is a failure.
+
+**Decision owed (put to the owner as a recommendation), and it must be settled before the plan:**
+- **A.** The plate holds whoever actually loses in round 1 (q = the real loser count). Knockout + Plate is not offered, or is refused with a named reason, when that count is under 2. App-only; quick.
+- **B.** The plate holds everyone's *first* loss: round-1 losers plus bye-holders who lose their first match in round 2. This is the usual intent of a plate (everyone plays at least twice). It needs a new engine feed, which is a cross-repo change to onryde/seazn.club.engine, and a plate that seeds after round 2.
+- The controller recommended A as an interim on 2026-11-04 and B as the better product. The owner has not chosen; ask again at the W4 rulebook sign-off.
+
+**Done when:**
+- Every n the builder offers for ko_plate either completes the plate through the real usecases, or is refused up front with copy in 4 locales.
+- Neither outcome is a 409 at Complete.
+- The sweep reports its count, and n=5, 6, 7, 9 and 17 are named cases.
+
 ## Lifecycle (design §10)
 
 1. Rulebook `rulebook-W4-knockout.md` (drafted when the wave starts; BWF, ITF,
@@ -68,7 +90,7 @@ Rule to settle with the owner here: where a late entrant can be placed in a brac
   unfit cells, `offered-matrix.md` reason b; the root cause is W2's SC-O1) and
   generic standalone page_playoff (reason c, W2's SC-O2),
   shared 3rd vs a played third place, joint winners when a final is not played
-  (Q4, a known 🚫 in §4), plate eligibility with byes, and any other 🚫.
+  (Q4, a known 🚫 in §4), plate eligibility with byes (A/B in "Carry from Match Day follow-ups" above), and any other 🚫.
 - The third-place control is new UI — ≥2 options shown first (R24).
 
 ## Done when
