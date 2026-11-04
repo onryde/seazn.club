@@ -618,6 +618,10 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
  * competition is a public draft reachable by link and open to register.
  * Re-approved again the same day (review item 8): "Public and published" read
  * as if a live or finished competition dropped off the page, which it does not.
+ * Re-approved 2026-11-04 (LIVE1): the public page moved from `/shared/your-org`
+ * to `/live/your-org` (`routes.publicHub(org)`; the org home under the
+ * moved `(public)/live` tree still lists through `listOrgHomeCompetitions`
+ * in `server/public-site/data.ts`); only the path changed, the claim did not.
  */
 export const APPROVED_CREATE_ORG_INVENTORY: string[] = [
   "5a9aee8c75f74828",
@@ -630,6 +634,6 @@ export const APPROVED_CREATE_ORG_INVENTORY: string[] = [
   "7e96998f849cb38b",
   "09c784bdca897d29",
   "98cabe982ddf445c",
-  "0d85d012e856d80e",
+  "3b7f53eba6ec307f",
   "ec33da78b550dcac"
 ];
