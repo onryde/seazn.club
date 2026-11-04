@@ -5,10 +5,13 @@
  *   1. Build: a division with entrants and no stage. The card says "No format yet"; Format opens the builder's own picker,
  *      its estimates worked out for the division's REAL entrants; League saves with no confirm (nothing to clear), and the
  *      chip names it.
- *   2. Generate and schedule: the league's fixtures, some of them given a time on a court.
+ *   2. Generate and schedule: the league's fixtures, some of them given a time on a court, and Remote scoring links on two
+ *      of them through the real routes, one of them then revoked and reissued (so three links stand and two are live).
  *   3. The old Settings › Format address lands on the Fixtures tab with the Format dialog open.
  *   4. Format again: the confirm names what the change clears, counted from the board (the stage by name, the unplayed
- *      fixtures, the time slots on courts); Clear and change rebuilds the stages, and the fixtures and their schedule are gone.
+ *      fixtures, the time slots on courts, the LIVE remote-scoring links that stop working - fix round 1, controller ruling
+ *      I1: never the revoked one); Clear and change rebuilds the stages, and the fixtures, their schedule and every link are
+ *      gone.
  *   5. One result: the Format button is greyed and says why ("Format is locked once scoring starts"), the old address opens
  *      no dialog, and the server refuses even a preview.
  *
@@ -69,6 +72,17 @@ const fixturesOf = (divisionId: string) =>
     return row!;
   });
 
+/** The division's Remote scoring links (or, once its fixtures are gone, the links of `fixtureIds`), and how many are revoked. */
+const linksOf = (divisionId: string, fixtureIds: readonly string[] = []) =>
+  withDb(async (sql) => {
+    const [row] = await sql<{ n: number; revoked: number }[]>`
+      select count(*)::int as n, count(*) filter (where dl.revoked_at is not null)::int as revoked
+        from device_links dl
+       where dl.fixture_id in (select id from fixtures where division_id = ${divisionId})
+          or dl.fixture_id = any(${[...fixtureIds]}::uuid[])`;
+    return row!;
+  });
+
 /** Shoot `name` at every width, with no horizontal page scroll at any of them. `prepare` runs after each resize. */
 async function shoot(page: Page, testInfo: TestInfo, name: string, prepare?: () => Promise<void>): Promise<void> {
   for (const width of WIDTHS) {
@@ -82,7 +96,7 @@ async function shoot(page: Page, testInfo: TestInfo, name: string, prepare?: () 
 
 test.describe("FMT5: the format, changed from the Division rules card", () => {
   test("build, generate and schedule, then change the format behind a confirm that names what it clears; one result locks it", async ({ page, request }, testInfo) => {
-    test.setTimeout(budget(10, 24, 5));
+    test.setTimeout(budget(10, 27, 5));
     const { divisionId } = await seedDivision(request);
     const base = (await divisionPath(request, divisionId)).split("?")[0]!;
     await page.setViewportSize({ width: 1280, height: 900 });
@@ -125,6 +139,17 @@ test.describe("FMT5: the format, changed from the Division rules card", () => {
       expect(res.status, `schedule fixture ${i}: ${JSON.stringify(res.error)}`).toBeLessThan(300);
     }
     expect(await fixturesOf(divisionId), "premise: the board the confirm must name").toEqual({ n: roundRobin(ENTRANTS.length), timed: SCHEDULED });
+    // Remote scoring links, through the routes the console calls: Remote scoring on boards 0 and 1, then Revoke & reissue on
+    // board 0 (its first link dies, a new one is minted). So three links stand, and two of them work.
+    const linked = [gen.data!.fixtures[0]!.id, gen.data!.fixtures[1]!.id];
+    for (const [i, fixtureId] of linked.entries()) {
+      const minted = await apiJson<{ id: string }>(request, `/api/v1/fixtures/${fixtureId}/device-links`, "POST", { label: `FMT5 phone ${i + 1}` });
+      expect(minted.status, `link ${i + 1}: ${JSON.stringify(minted.error)}`).toBeLessThan(300);
+    }
+    const reissued = await apiJson<{ id: string }>(request, `/api/v1/fixtures/${linked[0]!}/device-links/reissue`, "POST", { label: "FMT5 phone 1b" });
+    expect(reissued.status, `reissue: ${JSON.stringify(reissued.error)}`).toBeLessThan(300);
+    const LIVE_LINKS = linked.length;
+    expect(await linksOf(divisionId), "premise: three links, the reissued board's first one revoked").toEqual({ n: LIVE_LINKS + 1, revoked: 1 });
 
     // ---- 3. The old Settings › Format address lands on the Fixtures tab with the dialog open.
     await page.goto(`${base}?tab=settings&section=format`);
@@ -140,12 +165,21 @@ test.describe("FMT5: the format, changed from the Division rules card", () => {
     await saveFormatDialog(landed).click();
     const clears = landed.getByTestId("division-format-clears");
     await expect(clears).toBeVisible({ timeout: NAV_MS });
-    expect(await clears.locator("li").evaluateAll((ls) => ls.map((l) => l.getAttribute("data-clear"))), "what it clears, and nothing else").toEqual(["stages", "fixtures", "slots"]);
+    expect(await clears.locator("li").evaluateAll((ls) => ls.map((l) => l.getAttribute("data-clear"))), "what it clears, and nothing else").toEqual([
+      "stages",
+      "fixtures",
+      "slots",
+      "remoteLinks",
+    ]);
     await expect(clears.locator('[data-clear="stages"]')).toHaveText(plural("formatChange.confirm.stages", 1, { names: league[0]!.name }));
     await expect(clears.locator('[data-clear="fixtures"]')).toHaveText(plural("formatChange.confirm.fixtures", roundRobin(ENTRANTS.length)));
     await expect(clears.locator('[data-clear="slots"]')).toHaveText(
       plural("formatChange.confirm.slots", SCHEDULED, { places: plural("divBuilder.places.court", courts.length) }),
     );
+    await expect(clears.locator('[data-clear="remoteLinks"]'), "the live links only, never the revoked one").toHaveText(
+      plural("formatChange.confirm.remoteLinks", LIVE_LINKS),
+    );
+    await expect(landed.getByText(uiEn["formatChange.confirm.sheetsStop"]!)).toBeVisible();
     await expect(landed.getByTestId("division-format-clear")).toHaveText(uiEn["formatChange.confirm.clear"]!);
     await shoot(page, testInfo, "3-clear-confirm", async () => {
       await expect(clears).toBeVisible();
@@ -160,6 +194,7 @@ test.describe("FMT5: the format, changed from the Division rules card", () => {
     expect(rebuilt.length, "groups then a knockout").toBe(2);
     expect(rebuilt.map((st) => st.id), "new stages, not the league").not.toContain(league[0]!.id);
     expect(await fixturesOf(divisionId), "the fixtures and their schedule went with it").toEqual({ n: 0, timed: 0 });
+    expect(await linksOf(divisionId, linked), "every link went with its board, the revoked one too").toEqual({ n: 0, revoked: 0 });
 
     // ---- 5. One result: the format locks.
     const groupGen = await apiJson<{ fixtures: { id: string }[] }>(request, `/api/v1/stages/${rebuilt[0]!.id}/generate`, "POST");
