@@ -44,7 +44,8 @@ const W1D_DIR = `${TRUTH_RUNS}/w1d-baseline`;
 /** The W1d record's own third dispatch (run 37346206686, tag matrix-truth/w1d-baseline): the run the ruling's evidence reads from. */
 const W1D_THIRD_RUN = 37346206686;
 /** What the live reader says of any `ruling70` key (Task 12 brief, pr-sample.ts BaselineFile). */
-const RETIRED = /owner ruling 70 retired by the SW-H1 fix \(W3\); a re-baseline never carries it/;
+// No wave literal: the Q-A guard (scenario-catalogue.test.ts) refuses a bare wave token in a shipped literal outside routeTo.
+const RETIRED = /owner ruling 70 retired by the SW-H1 fix; a re-baseline never carries it/;
 /** The SW-H1 reason, as the committed triage rules key it (catalogue/triage-rules.json, the swiss-round-paired-nobody-* rules). */
 const PAIRED_NOBODY = /paired nobody/;
 

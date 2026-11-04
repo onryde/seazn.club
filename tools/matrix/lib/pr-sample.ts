@@ -166,8 +166,9 @@ export interface Ruling70Overrides {
 }
 
 /** What the live reader says of a `ruling70` key, whatever it holds (W3 Task 12): the SW-H1 fix retired the ruling, and a re-baseline
- *  that carried the block forward would hold cells red that the product no longer fails. */
-export const RULING_70_RETIRED = "owner ruling 70 retired by the SW-H1 fix (W3); a re-baseline never carries it";
+ *  that carried the block forward would hold cells red that the product no longer fails. The text names no wave: a wave token in a
+ *  shipped literal is a route to the Q-A guard (scenario-catalogue.test.ts), and this is no route. */
+export const RULING_70_RETIRED = "owner ruling 70 retired by the SW-H1 fix; a re-baseline never carries it";
 
 const BaselineFile = z.object({ L3: z.string() });
 
