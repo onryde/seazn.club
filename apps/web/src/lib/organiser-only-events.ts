@@ -1,5 +1,6 @@
-// X-ST-2 (ruling 77, widened by owner ruling D-O1 2026-10-08): only an organiser (owner/admin, or an org API key —
-// not a device link, not an official scorer) may settle, forfeit or abandon a match, or record a forfeit or walkover
+// X-ST-2 (ruling 77, widened by owner ruling D-O1 2026-10-08): only an organiser (owner/admin, or a `manage`-scoped org
+// API key — SEC1, server/api-v1/key-scopes.ts `keyScopeForEvent`; not a device link, not an official scorer, not a
+// `score` key) may settle, forfeit or abandon a match, or record a forfeit or walkover
 // through a sport's own result event. ONE module: the server's refusal (usecases/scoring.ts) reads the predicate, and
 // the pad (scorepad/v3/pad-host.tsx) reads it too — its tile filter the core set `ORGANISER_ONLY` by identity, its
 // dock filter the predicate — so the two cannot drift on the core types or on a dock chip. The tile filter has no

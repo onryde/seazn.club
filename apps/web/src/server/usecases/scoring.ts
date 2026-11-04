@@ -33,6 +33,7 @@ import {
   invalidateDiscoveryCache,
 } from "@/server/public-site/revalidate";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { keyEventScopeRefusal, keyScopeForEvent, scopeSatisfies } from "@/server/api-v1/key-scopes";
 import type { AppendEventRequest } from "@/server/api-v1/schemas";
 import { subjectToScorerCapabilityGates } from "./scorers";
 import { isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
@@ -568,10 +569,11 @@ async function assertEntitledToScore(
   // X-ST-2 (ruling 77, widened by owner ruling D-O1): settle, forfeit and abandon — and a sport event that records a
   // forfeit or walkover (chess `boardgame.result` method forfeit/double_forfeit) — end or decide a match, so only an
   // organiser may record them: never a device link, never an official scorer (subjectToScorerCapabilityGates: a
-  // session that is not owner/admin). An org API key is an organiser credential and passes, as it does for finalize
-  // and void. Placed before the device and scorer branches so neither can let one through; 403 → FORBIDDEN on the
-  // wire. The pad reads the same predicate (pad-host.tsx), so the two cannot drift. The authority is this request's
-  // AuthCtx, resolved once at the door: a role change lands on the next request.
+  // session that is not owner/admin). An org API key passes THIS gate; its SCOPE is judged by the next one (SEC1): only
+  // a `manage` key, the organiser-level one, records these or finalizes. Placed before the device and scorer branches
+  // so neither can let one through; 403 → FORBIDDEN on the wire. The pad reads the same predicate (pad-host.tsx), so
+  // the two cannot drift. The authority is this request's AuthCtx, resolved once at the door: a role change lands on
+  // the next request.
   // ONE exception, D13 (spec 2026-10-28 §5.2, rule X-SE-3): a scorer — a device link or an official scorer alike — may
   // record the ENDING of the side's own match-ending sanction, `core.forfeit` right after it (`isOwnSanctionEnding`
   // below). Every other scorer forfeit stays organiser-only.
@@ -589,6 +591,20 @@ async function assertEntitledToScore(
             ? "abandon"
             : "record a forfeit in";
     throw new HttpError(403, `Only an organiser can ${verb} a match`);
+  }
+
+  // SEC1 (owner OK 2026-11-03): an API key's scope gates the EVENT, not only the route. The door matched this request at
+  // `score` (POST /fixtures/:id/events), so without this a scoreboard key could finalize — whose own door is `manage` —
+  // or settle, forfeit or abandon a match. ONE table, key-scopes.ts `keyScopeForEvent`, which the batch importer reads
+  // too. A ctx with no scopes holds none (fail closed). The D13 exception the scorers above get holds for the
+  // scorer-level key as well: the forfeit that ends its side's own match-ending sanction. 403 → FORBIDDEN, the route
+  // refusal's shape.
+  if (auth.via === "api_key") {
+    const needs = keyScopeForEvent(input.type, input.payload);
+    const held = auth.keyScopes ?? [];
+    if (!scopeSatisfies(held, needs) && !(await isOwnSanctionEnding(auth.orgId, fixtureId, sport, input))) {
+      throw new HttpError(403, keyEventScopeRefusal(held, needs, input.type));
+    }
   }
 
   // Device-link capabilities (doc 13 §7): strictly ⊂ scorer. Append + void

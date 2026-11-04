@@ -9,6 +9,9 @@
 // whole management surface. Structurally excluded (never key-accessible):
 // api-key management, Stripe connect, refunds, device-link minting, and the
 // session-bound /me surface.
+// Relative, with its extension: openapi.ts imports this file, and scripts/openapi-gen.ts runs under bare
+// `node --experimental-strip-types`, which resolves no `@/` alias (schemas.ts imports lib/ the same way).
+import { ORGANISER_ONLY_EVENT_TYPES, isOrganiserOnlyEvent } from "../../lib/organiser-only-events.ts";
 
 export type KeyScope = "read" | "score" | "manage";
 
@@ -576,3 +579,31 @@ export function matchKeyRoute(method: string, urlOrPath: string): RouteMatch | n
 
 /** Exported for the enumeration test only. */
 export const KEY_ROUTE_RULES: readonly RouteRule[] = RULES;
+
+// SEC1 (owner OK 2026-11-03): what a key may SEND, not only where. The table above is per (method, path) and never reads a
+// body, and two doors write the score ledger at `score`: `POST /fixtures/:id/events` and `POST /divisions/:id/events/import`.
+// So a `score` key could post `core.finalize` there, the one event whose own door, `POST /fixtures/:id/finalize`, is
+// `manage`. An event is therefore gated on its own scope at both doors (usecases/scoring.ts `assertEntitledToScore`,
+// usecases/event-import.ts `importEvents`), and this is the ONE table of the events a key needs `manage` to send:
+//  - `core.finalize` — its own door is `manage` (above); the same event through a ledger door is gated equally.
+//  - `core.settle`, `core.forfeit`, `core.abandon` — organiser-only (X-ST-2, ruling 77 / D-O1, lib/organiser-only-events.ts):
+//    refused to a device link and to an official scorer. `score` is the scorer-level key, `manage` the organiser-level one;
+//    every dedicated door that writes one is `manage` (POST /entrants/:id/withdraw, PATCH /entrants/:id) or never-key
+//    (POST /fixtures/:id/external-play/resolve).
+//  - any sport event the organiser-only predicate flags by its payload (`ORGANISER_ONLY_SPORT_EVENTS`, empty since W2b).
+// Everything else is `score`: every other core type and every sport event — what a scorer records. One exception lives at
+// the live door only, because it needs the ledger: the forfeit that ENDS the side's own match-ending sanction (D13, X-SE-3),
+// which a scorer may record, so the scorer-level key may too. The per-type decisions are pinned against the engine's
+// CORE_EVENT_SCHEMAS in api-v1/__tests__/key-event-scope.test.ts, so a new core type reds until it is decided.
+export const MANAGE_KEY_EVENT_TYPES: ReadonlySet<string> = new Set(["core.finalize", ...ORGANISER_ONLY_EVENT_TYPES]);
+
+/** The scope a key needs to send `(type, payload)` through a ledger door — `score` (the doors' own) or `manage`. */
+export function keyScopeForEvent(type: string, payload: unknown): KeyScope {
+  return MANAGE_KEY_EVENT_TYPES.has(type) || isOrganiserOnlyEvent(type, payload) ? "manage" : "score";
+}
+
+/** The 403's message: the route refusal's shape (api-v1/auth.ts `apiKeyAuth`), naming the event instead of the endpoint. */
+export function keyEventScopeRefusal(scopes: readonly string[], required: KeyScope, type: string): string {
+  const held = scopes.length > 0 ? `is limited to '${scopes.join("', '")}'` : "has no scope";
+  return `This key ${held} — sending ${type} needs the '${required}' scope. Create a key with the right scope in org settings.`;
+}

@@ -33,6 +33,7 @@ import { EVENTS } from "@/lib/analytics-events";
 import { log } from "@/server/logger";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { keyEventScopeRefusal, keyScopeForEvent, scopeSatisfies } from "@/server/api-v1/key-scopes";
 import type { EventImportRequest } from "@/server/api-v1/schemas";
 
 // The caps live in `import-caps.ts` — a module free of `server-only` — so that
@@ -677,6 +678,7 @@ export async function importEvents(
   divisionId: string,
   input: EventImportRequest,
 ): Promise<ImportReport> {
+  assertKeyMaySendEvents(auth, input);
   return withLock(
     () => acquireImportLock(divisionId, input.import_id, auth.orgId),
     (holder) => releaseImportLock(divisionId, input.import_id, auth.orgId, holder),
@@ -689,6 +691,26 @@ export async function importEvents(
     },
     (holder) => runImport(auth, divisionId, input, holder),
   );
+}
+
+/**
+ * SEC1 (owner OK 2026-11-03): an API key's scope gates the EVENTS it imports, as the live door gates the one it appends
+ * (scoring.ts `assertEntitledToScore`) — the same table, key-scopes.ts `keyScopeForEvent`. This door is `score`, so without
+ * this a scoreboard key could import a stream that finalizes, settles, forfeits or abandons a match. CALL-level and FIRST,
+ * before the lock and before any stream runs: it is an authorization refusal, so — like the 413/402/409 call-level checks
+ * in `runImport` — it means no stream ran, and nothing is written (no events, no receipt, no lock row). A ctx with no
+ * scopes holds none (fail closed). The live door's D13 exception (a scorer's own sanction-ending forfeit) is NOT carried
+ * here: it reads the ledger's last live event, and a backfill that ends in a forfeit is a result the manage key imports.
+ */
+function assertKeyMaySendEvents(auth: AuthCtx, input: EventImportRequest): void {
+  if (auth.via !== "api_key") return;
+  const held = auth.keyScopes ?? [];
+  for (const stream of input.streams) {
+    for (const ev of stream.events) {
+      const needs = keyScopeForEvent(ev.type, ev.payload);
+      if (!scopeSatisfies(held, needs)) throw new HttpError(403, keyEventScopeRefusal(held, needs, ev.type));
+    }
+  }
 }
 
 async function runImport(
