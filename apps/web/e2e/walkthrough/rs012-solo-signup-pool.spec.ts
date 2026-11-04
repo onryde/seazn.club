@@ -110,8 +110,10 @@ test.afterAll(async () => {
  * fetch-pool-summary.test.ts's own `seedCustomTeamDivision` uses (see
  * .claude/agent-memory/implementer/reference_custom_sport_key_needs_direct_division_insert.md).
  * `registration_settings` is written through the REAL PUT API afterward:
- * `putRegistrationSettings` never touches the sport module, so nothing here
- * needs to be faked for it — the settings save is genuinely real.
+ * since Match Day FU1 `putRegistrationSettings` resolves the sport module (via
+ * `entrantShapeOf`) to check the kind; this minted sport has none, the lookup's
+ * MODULE_NOT_FOUND is caught and every kind is allowed, so `team` is accepted
+ * and nothing here needs to be faked — the settings save is genuinely real.
  */
 async function seedCustomTeamDivision(
   request: APIRequestContext,

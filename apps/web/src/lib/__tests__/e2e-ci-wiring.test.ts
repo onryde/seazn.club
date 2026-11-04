@@ -207,6 +207,8 @@ const WALKTHROUGH_SPECS: string[] = [
   "rs010-registration-cross-flow.spec.ts",
   "rs011-eligibility-gates.spec.ts",
   "rs012-solo-signup-pool.spec.ts",
+  // Match Day FU1: a division narrowed after its registration opened offers, accepts and seats only the kinds it takes.
+  "registration-entrant-kinds.spec.ts",
 
   // ScoringPad v3 — a whole match played by hand, per sport and per decider.
   "scorepad-v3-badminton-match.spec.ts",

@@ -431,7 +431,11 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     const src = readFileSync(resolve(REPO, "apps/web/src/server/usecases/divisions.ts"), "utf8");
     expect(src).toContain("select distinct kind from entrants");
     expect(src).toContain("status not in ('withdrawn', 'disqualified')");
-    expect(src).toMatch(/new HttpError\(\s*422,[\s\S]{0,120}"ENTRANT_KIND_IN_USE"/);
+    // FU1 throws the shared constant, not a literal; pin the identifier here and its wire value below, so the fake's
+    // code (fake-driver.ts) still matches what the product sends.
+    expect(src).toMatch(/new HttpError\(\s*422,[\s\S]{0,120}\bENTRANT_KIND_IN_USE\b/);
+    const codes = readFileSync(resolve(REPO, "apps/web/src/lib/entrant-kind-refusal.ts"), "utf8");
+    expect(codes).toMatch(/export const ENTRANT_KIND_IN_USE = "ENTRANT_KIND_IN_USE";/);
   });
   it("I-2: a product that 409s the entrants-only save reds life-entrants-edit-accepted, and only that", async () => {
     class LocksEntrantsToo extends FakeLeagueDriver {
