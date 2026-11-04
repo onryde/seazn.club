@@ -29,6 +29,7 @@
 //
 // Every wait is derived from the product's constants (AGENTS class 20;
 // browser-budget.test.ts scans this file for a flat timeout).
+import type { GeneratePath } from "../generate-path.ts";
 import type { LedgerRow } from "../../../bench/lib/ledger.ts";
 import { API_ONLY_UI_WAVE, apiOnlyUiPath } from "../api-only-ui.ts";
 import { API_ONLY_ROWS, type ApiOnlyRowKey, type StagePostBody } from "../catalogue.ts";
@@ -886,7 +887,13 @@ export class BrowserDriver implements OrganiserDriver {
     }
     const where = this.#whereOfStage(stageId);
     this.#ledger.record("generate", "browser");
-    const out = await this.#write(() => this.#ui((p) => p.generateUi(this.#ctx, where, stageId, { ...this.#railHooks(where), onGenerate: (path) => this.#ledger.generatePath(path) })));
+    let path: GeneratePath | null = null;
+    const page = await this.#write(() => this.#ui((p) => p.generateUi(this.#ctx, where, stageId, { ...this.#railHooks(where), onGenerate: (taken) => { path = taken; this.#ledger.generatePath(taken); } })));
+    // A stage Start already drew answers as the product's own repeat Generate does: nothing created, every existing
+    // fixture listed. The page only sees rows, so the list is READ (never written) here, for the scenario to score.
+    const out: GenerateOut = path === "generated-by-start"
+      ? await this.#http.listFixtures(where.divisionId).then((all) => { const mine = all.filter((f) => f.stage_id === stageId); return { created: 0, existing: mine.length, fixtures: mine }; })
+      : page;
     // O-1: generate keeps the browser's turn until one of its calls here has
     // created fixtures, so generateUi's create branch runs live, not only its no-op.
     this.#ledger.created("generate", out.created);
