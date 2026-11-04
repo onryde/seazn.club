@@ -44,6 +44,7 @@ import {
   refoldStageTable,
   swissActiveEntrants,
   swissGen,
+  swissPairsInColour,
   type SwissExistingFixture,
 } from "./stages";
 
@@ -310,6 +311,8 @@ export async function admitSwissLateEntrant(
       e.id === entrantId ? { ...e, swiss_first_round: latest } : e,
     );
     const active = new Set(field.map((e) => e.id));
+    // The Pair's own colours read (UI5 fix round 1, ruling I1) — never a second copy of it.
+    const chess = await swissPairsInColour(tx, divisionId, stage, division!.sport_key, rows);
     canPlayBye = (holder) => {
       // T9 review I2: a holder who has LEFT is no opponent. A withdrawal after the round was paired keeps the bye seated
       // and its point awarded (`forfeited` is a played status for the cascade, lib/table-withdrawal.ts), so the bye row is
@@ -324,7 +327,7 @@ export async function admitSwissLateEntrant(
           { entrantId, score: 0, rank: 2 },
         ],
         { played: hist.played, colours: hist.colours, byes: hist.byes },
-        { chess: stage.config.chess === true },
+        { chess },
       );
       if (paired.pairings.length !== 1) return false;
       byePairing = paired.pairings[0]!;

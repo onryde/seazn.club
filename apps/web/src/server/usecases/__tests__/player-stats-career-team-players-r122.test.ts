@@ -229,8 +229,11 @@ describe.skipIf(!HAS_DB)("ruling 122: a team match counts on a career record onl
       };
       const squad = [p.rosterPlayer, p.starter, p.bench, p.sheetCoach, p.coach, p.staff, p.leaver, p.dual];
       const mine = await entrant(auth, d.divisionId, "team", `${m.key} Mine`, squad);
-      // Dual is on BOTH teams of the division.
-      const theirs = await entrant(auth, d.divisionId, "team", `${m.key} Theirs`, [p.oppPlayer, p.oppCoach, p.dual]);
+      // Dual is on BOTH teams of the division. Since UI5 item 3 no roster write can put one person on two teams of a
+      // division (and Mine's roster edit below would be refused for keeping them), so Dual's row on Theirs is written
+      // straight to the table, after that edit: data from before the rule, which every reader must still count once. The
+      // readers read rosters when asked (`settle` is SQL and folds nothing), so the row's timing changes no answer.
+      const theirs = await entrant(auth, d.divisionId, "team", `${m.key} Theirs`, [p.oppPlayer, p.oppCoach]);
 
       // F1: no lineup on either side. F2: Mine records a sheet — a starter, a bench player, a squad player the sheet
       // names as coach, the registered coach on the bench as coach, staff as staff, and the leaver as a starter;
@@ -249,6 +252,7 @@ describe.skipIf(!HAS_DB)("ruling 122: a team match counts on a career record onl
       await settle(f1);
       await settle(f2);
       await patchEntrant(auth, mine, { members: [...squad.filter((id) => id !== p.leaver), p.late].map(member) } as never);
+      await sql`insert into entrant_members (entrant_id, person_id, is_captain) values (${theirs}, ${p.dual}, false)`;
       const f3 = await scheduledFixture(d.stageId, d.divisionId, mine, theirs);
       await sheet(auth, f3, mine, [
         { personId: p.starter, slot: "starting", role: "player" },

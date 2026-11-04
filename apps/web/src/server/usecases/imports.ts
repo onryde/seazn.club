@@ -42,6 +42,7 @@ import {
   type EligibilityRosterPlayer,
 } from "./registration-eligibility";
 import { admitSwissLateEntrant } from "./swiss-late-entry";
+import { heldMemberships, personOnOtherTeamError, type HeldMembershipRow } from "./entrants";
 
 type Tx = postgres.TransactionSql;
 
@@ -448,6 +449,8 @@ export async function commitImport(
     const rosterCandidates = await collectImportRosterCandidates(tx, plan.ops);
     // Before the eligibility gate: this refusal cannot be overridden, so the organiser should not be walked through an override first.
     await assertImportRostersPlayOnline(tx, seatGate, rosterCandidates);
+    // UI5 fix round 1 (ruling Q3): one person, one entrant per division — no override either.
+    await assertImportRostersOneTeam(tx, rosterCandidates);
     if (rosterCandidates.length > 0) {
       const divisionIds = [...new Set(rosterCandidates.map((c) => c.divisionId))];
       const divisions = await loadEligibilityDivisions(tx, divisionIds);
@@ -634,6 +637,40 @@ async function assertImportRostersPlayOnline(
       });
     }
   }
+}
+
+/** UI5 fix round 1 (controller ruling Q3) — the one-team rule (UI5 item 3) over a plan's roster adds, with the roster
+ *  write's own predicate (`heldMemberships`, entrants.ts): a person the file puts on an entrant of a division that another
+ *  entrant of it already holds, or that the file itself puts on two entrants of one division. The whole commit is refused,
+ *  409 PERSON_ON_OTHER_TEAM, naming the stored holders (`conflicts`), the real people (`person_ids`) and the FILE ROWS that
+ *  put them there (`rows`), the shape `assertImportRostersPlayOnline` answers in. A team's own player re-imported is no
+ *  conflict because the planner plans no `roster.add` for a membership the snapshot already holds; were one ever planned,
+ *  it is refused here loudly (as `insertMembers` refuses a caller that forgot to clear a roster), never passed silently. */
+async function assertImportRostersOneTeam(tx: Tx, candidates: readonly RosterEligibilityCandidate[]): Promise<void> {
+  const byDivision = new Map<string, RosterEligibilityCandidate[]>();
+  for (const c of candidates) byDivision.set(c.divisionId, [...(byDivision.get(c.divisionId) ?? []), c]);
+  const conflicts: HeldMembershipRow[] = [];
+  const refused: RosterEligibilityCandidate[] = [];
+  let inFile = false;
+  for (const [divisionId, group] of byDivision) {
+    const real = [...new Set(group.filter((c) => !c.isNewPerson).map((c) => c.personKey))];
+    const held: readonly HeldMembershipRow[] = real.length === 0 ? [] : await heldMemberships(tx, divisionId, real);
+    for (const c of group) {
+      const others = held.filter((h) => h.person_id === c.personKey);
+      const twice = group.some((o) => o.personKey === c.personKey && o.entrantKey !== c.entrantKey);
+      if (others.length === 0 && !twice) continue;
+      refused.push(c);
+      inFile ||= twice;
+      for (const h of others) if (!conflicts.some((x) => x.person_id === h.person_id && x.entrant_id === h.entrant_id)) conflicts.push(h);
+    }
+  }
+  if (refused.length === 0) return;
+  const rows = [...new Set(refused.flatMap((c) => c.sourceRows))].sort((a, b) => a - b);
+  throw personOnOtherTeamError(
+    conflicts,
+    { person_ids: [...new Set(refused.filter((c) => !c.isNewPerson).map((c) => c.personKey))], rows },
+    inFile ? [`rows ${rows.join(", ")} put one person on more than one entrant of a division`] : [],
+  );
 }
 
 // Execute ops in bucket order (clubs → teams → persons → entrants → rosters,

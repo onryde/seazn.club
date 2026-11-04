@@ -31,6 +31,7 @@ export type SwissRefusalCode =
   | "SWISS_ROUNDS_ABOVE_MAX"
   | "SWISS_ROUNDS_LOCKED"
   | "SWISS_CHESS_LOCKED"
+  | "SWISS_CHESS_ALWAYS_ON"
   | "SWISS_ROUNDS_BELOW_SEATED"
   | "SWISS_FINISH_ROUND_UNDECIDED"
   | "SWISS_FINISH_NOTHING_PLAYED"
@@ -131,6 +132,14 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
     status: 422,
     message: "Chess colours are fixed once play starts or a match is called to a court. If it was only called, use Undo call on Match Day.",
     key: "swiss.refusal.SWISS_CHESS_LOCKED",
+  },
+  // UI5 item 4 (owner 2026-11-03): a chess Swiss always balances colours - the desk's switch is gone, and turning them off
+  // is refused at the door, started or not (asked first, so a started stage is told the permanent reason). 422 by the rule
+  // above: it can never succeed as sent. A stage stored off before this is left as it is; switching it ON still goes through.
+  SWISS_CHESS_ALWAYS_ON: {
+    status: 422,
+    message: "Chess colours are always balanced in a chess Swiss, so they can't be switched off.",
+    key: "swiss.refusal.SWISS_CHESS_ALWAYS_ON",
   },
   // W3 T12 (RB3-5): a round count below a round already paired. 409 by the rule above (batch-1 review): a state of the
   // stage the organiser resolves another way — Unpair the paired round, then the lower count goes through.

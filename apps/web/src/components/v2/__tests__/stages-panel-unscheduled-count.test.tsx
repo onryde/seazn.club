@@ -9,7 +9,6 @@ import nlUi from "@/dictionaries/nl/ui.json";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
-vi.mock("@/components/ui/tip", () => ({ TipCallout: ({ id }: { id: string }) => <div data-tip={id} /> }));
 
 // Competition Desk W2, max-effort review finding 11 - "two competing 'unscheduled' headings on one tab, over three disagreeing counts of
 // one fact". Match Day E1 item 1 (owner 2026-11-01) removed one of the two competitors: the card's footer row ("To schedule in this

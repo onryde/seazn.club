@@ -334,7 +334,7 @@ describe("StagesPanel threads the map and the arbiter link to the run sheet", ()
   const props = {
     divisionId: "d1", competitionId: "c1", orgSlug: "org", compSlug: "comp", divSlug: "div",
     stages: [stage], fixtures: [fixture], entrantNames: { e1: "Alpha", e2: "Bravo" },
-    canEdit: true, tz: "UTC", orgTz: "UTC", canExport: false, viewerPlan: "community" as const, phase: "scheduled" as const,
+    canEdit: true, tz: "UTC", orgTz: "UTC", canExport: false, viewerPlan: "community" as const,
   };
 
   it("an entry for the row ⇒ its chips, the camera chip leading to the arbiter panel for THAT fixture when the page offers the panel; no map ⇒ none", () => {

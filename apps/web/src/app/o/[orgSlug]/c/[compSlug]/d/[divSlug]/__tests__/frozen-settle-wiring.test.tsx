@@ -143,7 +143,6 @@ function find(node: ReactNode, type: unknown): ReactElement | null {
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
-vi.mock("@/components/ui/tip", () => ({ TipCallout: ({ id }: { id: string }) => <div data-tip={id} /> }));
 
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";

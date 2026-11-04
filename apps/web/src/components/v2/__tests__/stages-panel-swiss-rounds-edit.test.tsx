@@ -11,7 +11,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
-import { StagesPanel } from "@/components/v2/stages-panel";
+import { StagesPanel, swissStageRefusal } from "@/components/v2/stages-panel";
 import { StageRail } from "@/components/v2/desk/stage-rail";
 import { ApiV1Error } from "@/lib/client-v1";
 import enUi from "@/dictionaries/en/ui.json";
@@ -123,7 +123,7 @@ function isWrite(path: unknown, init: unknown): boolean {
 }
 const writes = () => apiV1Mock.mock.calls.filter(([path, init]) => isWrite(path, init));
 
-describe.each(LOCALES)("StagesPanel — Swiss rounds and chess colours (X-SW-17, BG-SW-1) [%s]", (locale) => {
+describe.each(LOCALES)("StagesPanel — Swiss rounds, and no chess colours switch (X-SW-17, BG-SW-1, UI5 item 4) [%s]", (locale) => {
   const D = DICTS[locale];
   beforeEach(() => {
     active.locale = locale;
@@ -209,15 +209,11 @@ describe.each(LOCALES)("StagesPanel — Swiss rounds and chess colours (X-SW-17,
         extra,
         text: said,
       });
-      // More → Add a round, and the chess switch: said in the panel's own error line.
+      // More → Add a round: said in the panel's own error line.
       const more = await mount({ swissRoundControls: { s1: control({ started: true }) } }, refuse);
       await (propsOf(railOf(more.tree(), "s1")).swissRounds as SwissRoundsRail).onAddRound("s1", "more");
       await flush();
       expect(errors(more.tree()), `${code} Add a round`).toEqual([said]);
-      const chess = await mount({ swissRoundControls: { s1: control({ chess: true }) } }, refuse);
-      (propsOf(chess.tree().find((e) => propsOf(e)["data-testid"] === "stage-chess-switch")!).onClick as () => void)();
-      await flush();
-      expect(errors(chess.tree()), `${code} chess`).toEqual([said]);
       expect(said, "premise: not the server's words").not.toContain("server English");
       checked++;
     }
@@ -245,54 +241,28 @@ describe.each(LOCALES)("StagesPanel — Swiss rounds and chess colours (X-SW-17,
     expect(errors(fromDialog.tree())).toEqual([]);
   });
 
-  it("BG-SW-1 the chess switch: on a boardgame Swiss for an organiser, on/off before the first start, PATCH { chess } on press", async () => {
-    const island = await mount({ swissRoundControls: { s1: control({ chess: true }) } }, async () => ({ rounds: 3, chess: false }));
-    const sw = island.tree().find((e) => propsOf(e)["data-testid"] === "stage-chess-switch")!;
-    expect(sw, "the switch rendered").toBeDefined();
-    expect(propsOf(sw).role).toBe("switch");
-    expect(propsOf(sw)["aria-checked"]).toBe(true);
-    expect(propsOf(sw).disabled).toBe(false);
-    expect(textOf(sw)).toContain(D["stage.chess.label"]);
-    expect(textOf(sw)).toContain(D["stage.chess.hint"]);
-    (propsOf(sw).onClick as () => void)();
-    await flush();
-    expect(writes().map(([path, init]) => [path, init])).toEqual([["/api/v1/stages/s1", { method: "PATCH", json: { chess: false } }]]);
-    expect(notices(island.tree())).toEqual([D["schedule.notice.chessOff"]]);
-  });
-
-  it("BG-SW-1 after the first start the switch is fixed and says so in the chess sentence — never the rounds one", async () => {
-    const island = await mount({ swissRoundControls: { s1: control({ chess: true, started: true }) } }, async () => ({}));
-    const sw = island.tree().find((e) => propsOf(e)["data-testid"] === "stage-chess-switch")!;
-    expect(propsOf(sw).disabled).toBe(true);
-    expect(propsOf(sw)["aria-checked"], "it still says what is set").toBe(true);
-    expect(textOf(sw)).toContain(D["swiss.refusal.SWISS_CHESS_LOCKED"]);
-    expect(textOf(sw)).not.toContain(D["swiss.refusal.SWISS_ROUNDS_LOCKED"]);
-    expect(D["swiss.refusal.SWISS_CHESS_LOCKED"], "premise: two different sentences").not.toBe(D["swiss.refusal.SWISS_ROUNDS_LOCKED"]);
-
-    // A press that races the first start: the server's SWISS_CHESS_LOCKED is said by ITS code, in the reader's language.
-    const raced = await mount({ swissRoundControls: { s1: control({ chess: true }) } }, async () => {
-      throw new ApiV1Error("server English", 422, "SWISS_CHESS_LOCKED", {});
-    });
-    (propsOf(raced.tree().find((e) => propsOf(e)["data-testid"] === "stage-chess-switch")!).onClick as () => void)();
-    await flush();
-    expect(errors(raced.tree())).toEqual([D["swiss.refusal.SWISS_CHESS_LOCKED"]]);
-  });
-
-  it("no chess switch for another sport, for a viewer, without the server's row, or on a league stage", async () => {
-    const has = (t: ReactElement[]) => t.some((e) => propsOf(e)["data-testid"] === "stage-chess-switch");
+  it("UI5 item 4: no chess colours switch on a chess Swiss card - colours on, a legacy stage stored off, or started", async () => {
+    // The owner, 2026-11-03: a chess Swiss always balances colours, so the desk offers no switch. Swept over the states
+    // the switch used to draw in; the card itself (its rail) is the positive premise, and nothing is PATCHed.
+    const chessParts = (t: ReactElement[]) =>
+      t.filter((e) => String(propsOf(e)["data-testid"] ?? "").startsWith("stage-chess") || propsOf(e).role === "switch");
     let checked = 0;
-    // The positive pair first, so each absence below is the gate's.
-    expect(has((await mount({ swissRoundControls: { s1: control() } }, async () => ({}))).tree())).toBe(true);
-    for (const props of [
-      { sportKey: "badminton", swissRoundControls: { s1: control() } },
-      { canEdit: false, swissRoundControls: { s1: control() } },
-      {},
-      { stages: [LEAGUE], swissRoundControls: { s2: control() } },
-    ]) {
-      expect(has((await mount(props, async () => ({}))).tree()), JSON.stringify(Object.keys(props))).toBe(false);
+    for (const c of [control({ chess: true }), control({ chess: false }), control({ chess: true, started: true })]) {
+      const island = await mount({ swissRoundControls: { s1: c } }, async () => ({}));
+      expect(railOf(island.tree(), "s1"), "premise: the organiser's Swiss card and its rail are drawn").toBeDefined();
+      expect(chessParts(island.tree()), JSON.stringify({ chess: c.chess, started: c.started })).toEqual([]);
       checked++;
     }
-    expect(checked, "anti-vacuity: absent cases").toBe(4);
+    expect(checked, "anti-vacuity: card states").toBe(3);
+    expect(writes(), "nothing written").toEqual([]);
+  });
+
+  it("UI5 item 4: SWISS_CHESS_ALWAYS_ON (another client's PATCH) is said in the reader's words, never the server's", () => {
+    const err = new ApiV1Error("server English", 422, "SWISS_CHESS_ALWAYS_ON", {});
+    const said = swissStageRefusal(err, MSG[locale], PLURAL[locale], locale).text;
+    expect(said).toBe(D["swiss.refusal.SWISS_CHESS_ALWAYS_ON"]);
+    expect(said, "premise: the key resolved").not.toBe("swiss.refusal.SWISS_CHESS_ALWAYS_ON");
+    expect(said).not.toContain("server English");
   });
 
   // -------------------------------------------------------------------------------------------------------------------

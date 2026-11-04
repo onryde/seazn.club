@@ -132,7 +132,7 @@ const shownTemplates = (page: Page) =>
  * popular five; then the registry's order; then any other listed sport by name; "generic" last. Only the sports the
  * catalogue lists (the page's own `sports` rows) appear.
  */
-async function sportOrderFromRecord(compId: string): Promise<string[]> {
+async function sportOrderFromRecord(compId: string): Promise<{ order: string[]; latest: string | null }> {
   const { listed, runs } = await withDb(async (sql) => {
     const listed = await sql<{ key: string }[]>`select key from sports order by name`;
     const runs = await sql<{ sport_key: string; created_at: Date }[]>`
@@ -142,7 +142,8 @@ async function sportOrderFromRecord(compId: string): Promise<string[]> {
   const recent = runs.sort((a, b) => b.created_at.getTime() - a.created_at.getTime()).map((r) => r.sport_key);
   const out: string[] = [];
   for (const k of [...recent, ...POPULAR, ...REGISTRY, ...listed]) if (k !== "generic" && listed.includes(k) && !out.includes(k)) out.push(k);
-  return listed.includes("generic") ? [...out, "generic"] : out;
+  // UI5 item 5 (owner, 2026-11-03): the builder opens on the organisation's most recent listed sport, generic included.
+  return { order: listed.includes("generic") ? [...out, "generic"] : out, latest: recent.find((k) => listed.includes(k)) ?? null };
 }
 
 /**
@@ -376,6 +377,11 @@ test("an organiser makes a division in four steps, edits it from Review, and the
       const el = document.activeElement as HTMLInputElement | null;
       return el?.name === "division-sport" ? el.value : null;
     });
+  // Walked from the head of the grid: the opening sport is the organisation's latest (UI5 item 5), which on this shared
+  // organisation may be the catch-all, pinned last among the five and folded away once the arrow leaves it.
+  const head = (await shownSports(page))[0]!;
+  await page.locator(`label[data-sport="${head}"]`).click();
+  await expect(page.locator(`label[data-sport="${head}"] input`)).toBeChecked();
   const shownBefore = await shownSports(page);
   await page.getByTestId("division-builder-name").focus();
   await page.keyboard.press("Tab");
@@ -763,6 +769,7 @@ test("chess: online play is asked first, Lichess is refused without one of its e
   await page.goto(await competitionPath(request, compId, "/d/new"));
   await expect(page.getByTestId("division-builder-name")).toBeVisible({ timeout: NAV_MS });
   let agreed: string[] = [];
+  let latest: string | null = null;
   await expect
     .poll(
       async () => {
@@ -771,7 +778,8 @@ test("chess: online play is asked first, Lichess is refused without one of its e
         const shown = await sportTilesInOrder(page);
         const want = await sportOrderFromRecord(compId);
         agreed = shown;
-        return shown.join(",") === want.join(",") ? "agree" : `page ${shown.join(",")} | record ${want.join(",")}`;
+        latest = want.latest;
+        return shown.join(",") === want.order.join(",") ? "agree" : `page ${shown.join(",")} | record ${want.order.join(",")}`;
       },
       { message: "the Sport picker's order is the organisation's history, then the popular five, then the registry, generic last", timeout: 4 * NAV_MS, intervals: [500, 1_000, 2_000] },
     )
@@ -779,9 +787,14 @@ test("chess: online play is asked first, Lichess is refused without one of its e
   // The witness: the history moved something - the order is not the one with no history at all.
   const noHistory = [...POPULAR, ...REGISTRY.filter((k) => !POPULAR.includes(k) && k !== "generic"), "generic"];
   expect(agreed.filter((k) => REGISTRY.includes(k)), "the organisation's own sports lead, so the order is not the no-history one").not.toEqual(noHistory);
-  // C9 round 3: the builder opens on that first tile - the organisation's latest sport - and on no other.
-  await expect(page.locator(`label[data-sport="${agreed[0]}"] input`), `it opens on the first tile, ${agreed[0]}`).toBeChecked();
+  // C9 round 3, then UI5 item 5: the builder opens on the organisation's latest sport - generic included, so it may be
+  // the LAST tile, pinned into the five shown - and on no other. This organisation has run divisions, so there is one.
+  expect(latest, "premise: the organisation has a latest listed sport").not.toBeNull();
+  const opening = page.locator(`label[data-sport="${latest}"]`);
+  await expect(opening.locator("input"), `it opens on the organisation's latest sport, ${latest}`).toBeChecked();
+  await expect(opening, "picked, it is shown").toBeVisible();
   await expect(page.locator('input[name="division-sport"]:checked')).toHaveCount(1);
+  expect(agreed.at(-1), "generic still listed last").toBe("generic");
   await page.getByTestId("division-builder-sport").screenshot({ path: testInfo.outputPath("sport-order-history-1280.png") });
 });
 

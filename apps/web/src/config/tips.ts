@@ -16,11 +16,6 @@ export const TIPS = {
     body: "A division follows its competition: Private is team-only, Link only means anyone with the link, Public is listed and findable on Google once the competition is published.",
     helpSlug: "sharing/visibility",
   },
-  "division.start-locks": {
-    title: "Starting locks the setup",
-    body: "Once scoring starts, entrants and format are locked so results stay fair. Finish seeding and structure first.",
-    helpSlug: "divisions/lifecycle",
-  },
   "scoring.seq-conflict": {
     title: "Someone else scored first",
     body: "Two scorers updated the same match at once. The app refreshed to the latest score — re-enter your point if it's still missing.",

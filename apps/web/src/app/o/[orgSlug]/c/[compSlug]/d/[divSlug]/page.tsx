@@ -44,7 +44,7 @@ import { listVenues } from "@/server/usecases/venues";
 import { omit } from "@/lib/omit";
 import { openStreamStates } from "@/server/usecases/stream-sessions";
 import { resolveVenueTz } from "@/lib/tz";
-import { divisionScoringClosed, fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
+import { divisionScoringClosed } from "@/lib/division-phase";
 import { defaultMatchMinutes, listFixturesAwaitingSettle } from "@/server/usecases/competition-desk";
 import { competitionFixturesToday, findCourtForDivision } from "@/server/usecases/match-day";
 import { findCourtHref } from "@/lib/match-day/view";
@@ -184,114 +184,18 @@ export default async function DivisionPage({
     // and venue-qualified on the board — the same court, two labels.
     listVenues(auth, { includeArchived: true }),
     orgPlanKey(auth.orgId),
-    // W2a (addendum 9): READ by `resolvePhase` (unlike the stubs below) — a bracket whose final was abandoned and
-    // awaits the organiser's settle is not finished. The desk's own predicate, so the two pages cannot disagree.
+    // W2a fix round 1 (M10): a bracket's final abandoned and awaiting the organiser's settle — the run sheet holds its
+    // row (chip + Settle). The desk's own predicate, so the two pages cannot disagree.
     listFixturesAwaitingSettle(auth, id),
   ]);
   const viewerPlan = viewerPlanFrom(planKey);
   // How long a match is assumed to last on THIS division — resolved once,
-  // here, and used twice: by `resolvePhase`'s fixture shape below and by the
-  // run sheet's "Needs result" filter (`StagesPanel`'s `matchMinutes` prop).
+  // here, for the run sheet's "Needs result" filter (`StagesPanel`'s
+  // `matchMinutes` prop).
   // The panel cannot resolve it itself — its own schedule-settings fetch runs
   // only `if (canEdit)`, so a viewer would never have it, and `ScheduleConfig`
   // lives under `@/server` where a client component cannot import it.
   const matchMinutes = scheduleSettings.config.matchMinutes ?? defaultMatchMinutes();
-  // Competition Desk (2026-09-02, task 6): the division's derived phase
-  // (`resolvePhase`, division-phase.ts) — this page needs only the phase
-  // itself (gates the StagesPanel start-locks tip); ATTENTION is the
-  // competition page's job, so eventCount/awaitingRegistrations are stubbed
-  // at 0 rather than fetched here.
-  const phase = resolvePhase({
-    divisionStatus: division.status as DivisionStatus,
-    // K3 (fix round G) / M1 (fix round I): the "does this stage owe a draw"
-    // predicate used to be a HAND-COPIED twin of competition-desk.ts's own
-    // expression — written out in two files, drifting independently, and
-    // untested at every layer (mutating either copy to a constant left
-    // 137/137 green). This page now ships only the raw FACTS and the
-    // predicate lives once, in division-phase.ts's `stageOwesDraw`, pinned
-    // against a real database in competition-desk.test.ts. `hasFixtures` is
-    // computed once here too — it was evaluated twice per stage.
-    stages: stages.map((s) => {
-      const hasFixtures = fixtures.some((f) => f.stage_id === s.id);
-      const timing = (s.progression as { timing?: string } | null)?.timing ?? null;
-      return {
-        id: s.id,
-        name: s.name,
-        seq: s.seq,
-        status: s.status,
-        hasFixtures,
-        timing,
-        // M1 (fix round I, Critical — instance TWELVE). `stageOwesDraw` now
-        // asks the panel's OWN visibility gate, so this page has to answer
-        // it too or the two authorities disagree about one division: the
-        // desk would read `setting_up` (a bracket generated and never drawn)
-        // where this page read `scheduled`, and the start-locks tip is gated
-        // on exactly that word. It is the same `seedingSourceReady` this
-        // file already imports for the ProgressionPanel below, over the same
-        // in-memory `stages` — no extra query, no second expression.
-        sourceReady:
-          timing === "setup" && s.progression !== null
-            ? seedingSourceReady(stages, s, s.progression as unknown as Pick<ProgressionSpec, "sources">)
-            : false,
-        // Unread by `resolvePhase` — it feeds only the `needs_draw` row's
-        // action LABEL, and ATTENTION is the competition page's job (see the
-        // `eventCount`/`hasScorer` stubs below for the same reason). Pinned:
-        // division-phase.test.ts's "resolvePhase never reads `proposal`"
-        // mutates all four states and gets the same phase, so this constant
-        // cannot silently become load-bearing.
-        proposal: "none" as const,
-      };
-    }),
-    fixtures: fixtures.map((f) => ({
-      id: f.id,
-      status: f.status,
-      scheduledAt: f.scheduled_at,
-      // Same stub reasoning as `eventCount`/`hasScorer` below: this page reads
-      // the PHASE, and the kick-off clock exists only for the competition
-      // page's live-recording attentions. A stub here cannot silently become
-      // load-bearing — `resolvePhase` never reads it.
-      startedAt: null,
-      stageId: f.stage_id,
-      // M1: the draw fact, read off the fixture's own entrants, slot labels
-      // and outcome — through the SAME shared derivation the desk uses, so
-      // the two authorities cannot drift. It was a bare "either entrant is
-      // null" in both files, which is also true of every round after the
-      // first of a fully drawn bracket.
-      awaitsSeedDraw: fixtureAwaitsSeedDraw(f),
-      awaitsSettle: awaitingSettle.has(f.id),
-      // T16 fix round 1, R4: unread by `resolvePhase` (only `resolveAttention`'s result_missing reads it, and this
-      // page calls only the former) — pinned by division-phase.test.ts's "resolvePhase never reads awaitsRoundOpen".
-      awaitsRoundOpen: false,
-      eventCount: 0,
-      // Final review minor fix: was a bare `?? 60`, retyping a number that
-      // had already drifted from the desk's own schema-derived default (30).
-      // `resolvePhase` never reads `matchMinutes` (only `resolveAttention`
-      // does, and this page only calls the former — see the comment above),
-      // so this is inert HERE either way; the same resolved value is what the
-      // run sheet's "Needs result" filter counts on, which is not inert at
-      // all, and sharing the one derivation keeps this page from silently
-      // disagreeing with competition-desk.ts.
-      matchMinutes,
-      // Same reason as `eventCount` above: unread by `resolvePhase`, stubbed
-      // rather than fetched (a fixture_officials lookup belongs to the
-      // competition desk's ATTENTION computation, not this page's phase-only
-      // one).
-      hasScorer: false,
-    })),
-    now: new Date().toISOString(),
-    // H1 fix (final review round 3, Critical — corrected ruling): this used
-    // to be the bare org zone (`resolveVenueTz(null, page.org.timezone)`) —
-    // the same bucket-vs-print split competition-desk.ts had, one level up.
-    // `scheduleSettings.tz` IS the resolved venue zone for THIS division
-    // (`ScheduleSettingsWire.tz` = `loadSettings`'s `displayTz`: the
-    // division's own schedule_settings.tz override, falling back to the
-    // org's timezone only when the division has none) — the same single
-    // value this page already passes to `StagesPanel`'s `tz` prop below.
-    tz: scheduleSettings.tz,
-    awaitingRegistrations: 0,
-    // Unread by `resolvePhase` (attention only) — the tab's own dot below carries this page's bans signal.
-    bansToReview: 0,
-  });
   // Review wave 3: the panel gets court IDENTITY and display only — same trim
   // the schedule page does, and for the same reason. `listVenues` rows carry
   // every court's weekly `hours` and dated `exceptions` (the Directory calendar
@@ -909,9 +813,8 @@ export default async function DivisionPage({
             {/* Match Day C4 (owner, 2026-10-31): the entrant kinds left Settings for the top of this tab, organiser only - they decide
                 what the add-entrant form below offers. `canEdit` here is the PAGE-level organiser (a viewer never gets the block);
                 the block itself is handed `editable`, so a billing-frozen club's organiser sees it read-only, as Settings showed it.
-                Match Day E1 item 7 (owner): it opens by default on a division with NO entrants - the organiser is about to add the
-                first one and this is what the form offers - and stays folded under its one summary row once there is a roster. A row
-                counts whatever its status (a withdrawn entrant keeps its row): this asks "has anyone been added", not "who is playing". */}
+                UI5 item 2 (owner, 2026-11-03): it starts CLOSED, always - folded under its one summary row, an empty division
+                included (Match Day E1 item 7 had opened it on a division with no entrants; the owner reversed that). */}
             {canEdit && (
               <EntrantKindsSettings
                 divisionId={id}
@@ -919,7 +822,6 @@ export default async function DivisionPage({
                 config={division.config}
                 entrantModel={entrantModel}
                 canEdit={editable}
-                defaultOpen={entrants.length === 0}
               />
             )}
             <EntrantsPanel
@@ -1071,7 +973,6 @@ export default async function DivisionPage({
               // zone override (#448).
               orgTz={resolveVenueTz(null, page.org.timezone)}
               canExport={canExport}
-              phase={phase}
               matchMinutes={matchMinutes}
               viewerPlan={viewerPlan}
               streamStates={streamStates}

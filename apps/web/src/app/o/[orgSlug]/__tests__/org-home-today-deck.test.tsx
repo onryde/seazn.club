@@ -33,6 +33,10 @@ type Stats = {
   total: number;
   sports: string[];
   next: NextFixture | null;
+  in_play: number;
+  registration_open: boolean;
+  divisions_active: number;
+  divisions_completed: number;
 };
 
 const h = vi.hoisted(() => ({
@@ -103,6 +107,10 @@ const stats = (slug: string, over: Partial<Stats> = {}): Stats => ({
   total: 6,
   sports: ["badminton"],
   next: { home: "Ann", away: "Bob", court_label: "Court 2", scheduled_at: "2026-11-08T14:10:00.000Z", in_play: false },
+  in_play: 0,
+  registration_open: false,
+  divisions_active: 0,
+  divisions_completed: 0,
   ...over,
 });
 
@@ -458,3 +466,54 @@ describe("Show finished", () => {
     expect(html).not.toContain("org-home-today-empty");
   });
 });
+
+// UI5 item 6 (owner, 2026-11-03: "why does it saying registration open even though no registration opened in division
+// level"). The card's chip is read off the card stats' division signals, not `competitions.status`: the page hands them to
+// the ladder (`competitionChipState`, its rungs pinned in ui-system.test.ts), and this is that join.
+describe("the card's chip is read off its divisions (UI5 item 6)", () => {
+  const chipOf = (html: string, slug: string) => {
+    const card = blocks(html, "org-home-card").find((b) => slugOf(b) === slug);
+    expect(card, `a quiet card for ${slug}`).toBeDefined();
+    return /data-chip="([^"]+)"/.exec(card!)?.[1];
+  };
+
+  it("the owner's case: published, under way, no division window open - In progress, never Registration open", async () => {
+    seed([[comp("summer", "published"), stats("summer", { played: 5, divisions_active: 1 }), 0]]);
+    const html = await render();
+    expect(chipOf(html, "summer")).toBe("in_progress");
+    expect(html).toContain(`>${en["chip.inProgress"]}<`);
+    expect(html).not.toContain(en["chip.registration"]);
+  });
+
+  it("each rung the page can reach, from the stats alone (the status held the same, published)", async () => {
+    const rows: [string, Partial<Stats>, string][] = [
+      ["quiet", {}, "draft"],
+      ["window", { registration_open: true }, "registration"],
+      ["on-court", { in_play: 1, divisions_active: 1, played: 2 }, "live"],
+      ["running", { divisions_active: 1 }, "in_progress"],
+      ["done", { divisions_completed: 1, played: 6 }, "completed"],
+    ];
+    seed(rows.map(([slug, over]) => [comp(slug, "published"), stats(slug, over), 0]));
+    const html = await render({ finished: "1" });
+    let checked = 0;
+    for (const [slug, , want] of rows) {
+      expect(chipOf(html, slug), slug).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+
+  it("the chip's words in every locale: In progress is translated, never English", async () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      if (locale !== "en" && locale !== "fr") continue; // the page's resolveLocale mock speaks en and fr
+      h.locale = locale as "en" | "fr";
+      seed([[comp("summer", "live"), stats("summer", { divisions_active: 1, played: 3 }), 0]]);
+      expect(await render(), locale).toContain(`>${dict["chip.inProgress"]}<`);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(fr["chip.inProgress"]).not.toBe(en["chip.inProgress"]);
+  });
+});
+

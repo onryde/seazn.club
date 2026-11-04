@@ -464,8 +464,12 @@ async function seed(): Promise<Scene> {
     { kind: "team", display_name: "Blazers", seed: 1, members: [h1, h2, h3, h4].map(member) },
     { kind: "team", display_name: "Rovers", seed: 2, members: rovers.map(member) },
     { kind: "team", display_name: "Comets", seed: 3, members: comets.map(member) },
-    { kind: "team", display_name: "Dingoes", seed: 4, members: [...dingoes, h4].map(member) },
+    { kind: "team", display_name: "Dingoes", seed: 4, members: dingoes.map(member) },
   ] as never);
+  // Hal is ALSO on the Dingoes roster (the transfer below nobody cleaned up). Since UI5 item 3 no roster write can put one
+  // person on two teams of a division, so the row is written straight to the table: data from before the rule, which every
+  // reader below must still place.
+  await sql`insert into entrant_members (entrant_id, person_id, is_captain) values (${dingoesE!.id}, ${h4}, false)`;
   const [cricketStage] = await createStages(auth, cricketDivision.id, { seq: 1, kind: "league", name: "League", config: {} });
   await generateStageFixtures(auth, cricketStage!.id);
   await startDivision(auth, cricketDivision.id);
@@ -633,8 +637,11 @@ async function seed(): Promise<Scene> {
   const [eaglesE, foxesE, gullsE] = await createEntrants(auth, extra.id, [
     { kind: "team", display_name: "Eagles", seed: 1, members: [ivy, ben, dual].map(member) },
     { kind: "team", display_name: "Foxes", seed: 2, members: [jon].map(member) },
-    { kind: "team", display_name: "Gulls", seed: 3, members: [gil, dual].map(member) },
+    { kind: "team", display_name: "Gulls", seed: 3, members: [gil].map(member) },
   ] as never);
+  // Dee's row on Gulls is data from before UI5 item 3 (no roster write can put one person on two teams of a division any
+  // more), so it is written straight to the table; the readers must still place her.
+  await sql`insert into entrant_members (entrant_id, person_id, is_captain) values (${gullsE!.id}, ${dual}, false)`;
   const [extraStage] = await createStages(auth, extra.id, { seq: 1, kind: "league", name: "Extra", config: {} });
   await generateStageFixtures(auth, extraStage!.id);
   await startDivision(auth, extra.id);

@@ -44,6 +44,13 @@ export interface CompetitionCardStats {
    *  two named, three or more as "N sports"). Empty for a competition with no division. */
   sports: string[];
   next: NextFixture | null;
+  /** UI5 item 6: what the card's chip is read off (`competitionChipState`). Matches on court now. */
+  in_play: number;
+  /** Any division's registration window open - the SAME predicate as `DivisionCardStats.registration_open`. */
+  registration_open: boolean;
+  /** Divisions started and not finished (`status = 'active'`). */
+  divisions_active: number;
+  divisions_completed: number;
 }
 
 export interface DivisionCardStats {
@@ -111,6 +118,15 @@ const REGISTERED_STATUSES = ["pending", "paid", "confirmed", "waitlisted"] as co
 // yet) — never treated as "done", never as zero.
 const AWAITING_CONFIRMATION_STATUSES = ["pending", "paid", "waitlisted"] as const;
 
+type Tx = Parameters<Parameters<typeof withTenant>[1]>[0];
+/** A division's registration window is open: intake on, opened, not yet closed - over `registration_settings rs`. ONE
+ *  predicate for the competition page's per-division Registration count and the org dashboard's chip (UI5 item 6), so the
+ *  two never disagree. (`windowOpen` in registrations.ts is the submit path's twin over a fetched row.) */
+const registrationWindowOpen = (tx: Tx) => tx`
+  coalesce(rs.enabled, false)
+    and (rs.opens_at is null or rs.opens_at <= now())
+    and (rs.closes_at is null or rs.closes_at > now())`;
+
 export async function listCompetitionCardStats(
   auth: AuthCtx,
 ): Promise<Map<string, CompetitionCardStats>> {
@@ -137,6 +153,20 @@ export async function listCompetitionCardStats(
           from (select d.sport_key, count(*) as n from divisions d
                  where d.competition_id = c.id and d.archived_at is null
                  group by d.sport_key) x), '{}') as sports,
+        (select count(*)::int from fixtures f
+          join divisions d on d.id = f.division_id
+          where d.competition_id = c.id and d.archived_at is null
+            and f.status = 'in_play') as in_play,
+        exists (select 1 from divisions d
+          join registration_settings rs on rs.division_id = d.id
+          where d.competition_id = c.id and d.archived_at is null
+            and ${registrationWindowOpen(tx)}) as registration_open,
+        (select count(*)::int from divisions d
+          where d.competition_id = c.id and d.archived_at is null
+            and d.status = 'active') as divisions_active,
+        (select count(*)::int from divisions d
+          where d.competition_id = c.id and d.archived_at is null
+            and d.status = 'completed') as divisions_completed,
         nf.next
       from competitions c
       left join lateral (
@@ -190,9 +220,7 @@ export async function listDivisionCardStats(
         (select count(*)::int from suspensions s
           where s.division_id = d.id and s.status = 'pending') as bans_to_review,
         rs.capacity,
-        coalesce(rs.enabled, false)
-          and (rs.opens_at is null or rs.opens_at <= now())
-          and (rs.closes_at is null or rs.closes_at > now()) as registration_open,
+        ${registrationWindowOpen(tx)} as registration_open,
         coalesce((select array_agg(distinct s.kind order by s.kind)
           from stages s where s.division_id = d.id), '{}') as stage_kinds,
         (select count(*)::int from fixtures f

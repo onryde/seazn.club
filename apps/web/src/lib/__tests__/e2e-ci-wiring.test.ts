@@ -244,6 +244,10 @@ const WALKTHROUGH_SPECS: string[] = [
   // competition page to the new division's Fixtures tab: Edit from Review,
   // chess with a Lichess clock, and every field read back from the database.
   "division-builder.spec.ts",
+  // Match Day UI5 — the owner's division-setup fixes, tapped: no start-locks
+  // banner, Entrant kinds closed, one person per division, no chess colours
+  // switch, the builder's default sport, and the dashboard chip.
+  "division-setup-owner-fixes.spec.ts",
 
   // Settings W2 — the organisation and news panels, the four people-facing
   // tabs (team, api, preferences, account), and the five-org support cap.

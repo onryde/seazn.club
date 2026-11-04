@@ -183,10 +183,13 @@ export function sportPickerOrder(keys: readonly string[], recent: readonly strin
   return out;
 }
 
-/** The sport a new division opens on (C9 round 3, controller ruling): the FIRST TILE the Sport step shows - the
- *  organisation's most recent sport, else the popular order's first listed (football) - never the page's first row. */
+/** The sport a new division opens on: the organisation's most recent sport that the page lists, generic INCLUDED (UI5
+ *  item 5, owner 2026-11-03: an organisation whose latest division is "Any other game" opens on it - picked, it is pinned
+ *  into the five tiles shown, and it is still listed last); with no history, the picker's first tile (football, C9 round
+ *  3) - never the page's first row. */
 export function defaultSportKey(keys: readonly string[], recent: readonly string[]): string {
-  return sportPickerOrder(keys, recent)[0] ?? "";
+  const listed = new Set(keys);
+  return recent.find((k) => listed.has(k)) ?? sportPickerOrder(keys, recent)[0] ?? "";
 }
 
 /** The earliest step (in step order) holding a problem, or null when every step is clear. */

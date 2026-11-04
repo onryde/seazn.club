@@ -27,6 +27,8 @@ const PLAN_CODES = [
   "SWISS_ROUNDS_LOCKED",
   // T12 Phase 2 (controller ruling: chess colours lock at the first start with their OWN copy, never the rounds sentence).
   "SWISS_CHESS_LOCKED",
+  // UI5 item 4 (owner 2026-11-03): a chess Swiss always balances colours; switching them off is refused by name.
+  "SWISS_CHESS_ALWAYS_ON",
   "SWISS_ROUNDS_BELOW_SEATED",
   "SWISS_FINISH_ROUND_UNDECIDED",
   "SWISS_FINISH_NOTHING_PLAYED",
@@ -85,7 +87,7 @@ describe("SWISS_REFUSALS (W3 app-A)", () => {
       expect(isSwissRefusalCode(code), code).toBe(true);
       yes++;
     }
-    expect(yes, "anti-vacuity: every plan code judged").toBe(15);
+    expect(yes, "anti-vacuity: every plan code judged").toBe(16);
     const others = ["SEQ_CONFLICT", "SCHEDULE_LOCKED", "FORMAT_LOCKED", "swiss_undo_round_started", "", "toString", "__proto__", "constructor", undefined, null, 409];
     for (const other of others) expect(isSwissRefusalCode(other), String(other)).toBe(false);
     expect(others.length).toBe(11);

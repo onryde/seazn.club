@@ -4,10 +4,9 @@ import en from "@/dictionaries/en/ui.json";
 import { PhasePill, AttentionChip } from "@/components/v2/desk/phase-pill";
 import { needsYouItems } from "@/components/v2/desk/needs-you";
 import { ProgressionPanel, type SeedProposal } from "@/components/v2/progression-panel";
-import { StagesPanel } from "@/components/v2/stages-panel";
 import { statusLine } from "@/lib/division-status-line";
 import { leadingAttention,
-  ATTENTION_SEVERITY, DIVISION_PHASES, DRAW_DOORS, hasPlayedFixture, resolveAttention, resolvePhase,
+  ATTENTION_SEVERITY, DIVISION_PHASES, DRAW_DOORS, resolveAttention, resolvePhase,
   type Attention, type DivisionPhase, type DrawDoor, type PhaseFixture, type PhaseInput, type PhaseStage,
 } from "@/lib/division-phase";
 import { competitionPhase, type CompetitionDesk, type DeskDivision } from "@/server/usecases/competition-desk";
@@ -15,7 +14,6 @@ import type { DeskInPlayFixture } from "@/server/usecases/competition-desk";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
-vi.mock("@/components/ui/tip", () => ({ TipCallout: ({ id }: { id: string }) => <div data-tip={id} /> }));
 
 /**
  * ENUMERATION 2 (fix round I): every RENDERING x every reachable
@@ -24,16 +22,18 @@ vi.mock("@/components/ui/tip", () => ({ TipCallout: ({ id }: { id: string }) => 
  * Instances 9 through 12 of this wave's signature defect are one class —
  * reachability asserted from a TYPE or a WORD rather than from the SCREEN —
  * and every one of them was a rendering that disagreed with another
- * rendering of the SAME division. Five surfaces state a division's condition:
+ * rendering of the SAME division. Four surfaces state a division's condition:
  *
  *   1. the competition masthead pill   (competitionPhase + PhasePill)
  *   2. the ledger row pill             (PhasePill)
  *   3. the row's status line           (statusLine)
  *   4. the Needs-you item              (needsYouItems)
- *   5. the division page's start-locks tip (StagesPanel)
+ *
+ * (A fifth, the division page's start-locks tip in StagesPanel, was removed
+ * with the banner itself in UI5, 2026-11-03.)
  *
  * They were fixed one at a time, in rounds F, G and H, each time by finding
- * the ONE surface that had not learned the rule. This file asks all five at
+ * the ONE surface that had not learned the rule. This file asks all of them at
  * once, for every pair that can actually occur.
  *
  * WHY IT FAILS WHEN A ROW IS DROPPED: the expectation is anchored OUTSIDE the
@@ -315,7 +315,7 @@ function resolve(shape: Shape) {
   return { input, phase, attention, leading, desk, played };
 }
 
-describe("enumeration 2: the five renderings agree on every reachable phase/attention pair", () => {
+describe("enumeration 2: the four renderings agree on every reachable phase/attention pair", () => {
   const resolved = SHAPES.map((s) => ({ shape: s, ...resolve(s) }));
 
   it("the table covers exactly the reachable cross product — a dropped row leaves a pair uncovered", () => {
@@ -378,7 +378,7 @@ const inPlayFixtures = (n: number, divisionId = "d1"): DeskInPlayFixture[] =>
       };
       const cp = competitionPhase(desk);
       // Review 7, Minor 9: this rendered the masthead with `attention={[]}`,
-      // so the file written to make five renderings AGREE did not exercise the
+      // so the file written to make the renderings AGREE did not exercise the
       // masthead's own attention wiring at all and could not see a regression
       // in it. It mirrors the page now — the phase pill, plus the separate
       // attention chip beside it (page.tsx).
@@ -442,36 +442,6 @@ const inPlayFixtures = (n: number, divisionId = "d1"): DeskInPlayFixture[] =>
         expect(item?.action.href.startsWith("/o/org/c/comp"), `${a.kind} href`).toBe(true);
       }
       if (red) expect(items[0]?.kind).toBe(red.kind);
-    });
-
-    it("5: the start-locks tip shows only while nothing has been played", () => {
-      const html = renderToStaticMarkup(
-        <StagesPanel divisionId="d1" competitionId="c1" orgSlug="org" compSlug="comp" divSlug="div"
-          stages={r.shape.stages.map((s) => ({ id: s.id, seq: s.seq, kind: "league", name: s.name, config: {}, progression: null, status: s.status }))}
-          fixtures={r.shape.fixtures.map((f, i) => ({
-            id: f.id, stage_id: f.stageId, pool_id: null, round_no: 1, seq_in_round: i + 1, fixture_no: i + 1,
-            // An awaiting-draw fixture is an EMPTY, LABELLED pair of seats —
-            // both halves, or the row disagrees with the `awaitsSeedDraw` it
-            // was built from and stops being the same division in two
-            // renderings, which is the one thing this sweep exists to check.
-            home_entrant_id: f.awaitsSeedDraw ? null : "e1", away_entrant_id: f.awaitsSeedDraw ? null : "e2",
-            home_slot_label: f.awaitsSeedDraw ? { key: "slot.rank", params: { rank: 1 }, seed: 1 } : null,
-            away_slot_label: f.awaitsSeedDraw ? { key: "slot.rank", params: { rank: 2 }, seed: 2 } : null,
-            scheduled_at: f.scheduledAt, venue: null, court_label: null, court_id: null, court_name: null,
-            status: f.status, outcome: null,
-          }))}
-          entrantNames={{ e1: "Alpha", e2: "Bravo" }} canEdit tz={TZ} orgTz={TZ} canExport={false} phase={r.phase} viewerPlan="community" />,
-      );
-      const shown = html.includes('data-tip="division.start-locks"');
-      // `stages.length > 0` is the panel's own earlier gate — with no stage
-      // graph at all it renders "no stages yet" and nothing else, which is
-      // why it is part of the expectation rather than a surprise.
-      expect(shown, `phase ${r.phase}, played ${r.played}, stages ${r.shape.stages.length}`).toBe(
-        r.phase === "setting_up" && !hasPlayedFixture(r.shape.fixtures) && r.shape.stages.length > 0,
-      );
-      // The invariant the tip exists to respect, stated independently of its
-      // own gate: it must never appear beside a played fixture.
-      if (r.played > 0) expect(shown).toBe(false);
     });
   });
 });
