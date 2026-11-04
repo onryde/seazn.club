@@ -12,13 +12,14 @@ import {
   setTargetBelowFloor,
 } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { ApiError } from "@/lib/client";
 import { ApiV1Error } from "@/lib/client-v1";
 import { msg, type MessageKey } from "@/lib/messages";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
-import { LOCALIZED_CONFIG_ISSUES, configIssueText, configIssuesOf, settingsSaveErrorText } from "../config-issue-copy";
+import { LOCALIZED_CONFIG_ISSUES, configIssueText, configIssuesOf, rulesWriteErrorText, settingsSaveErrorText } from "../config-issue-copy";
 
 const invalid = (issues: unknown) => new ApiV1Error("invalid carrom config", 422, "CONFIG_INVALID", { issues });
 
@@ -176,5 +177,96 @@ describe("the config refusals this app owns are localized in all four locales (n
     expect(settingsSaveErrorText(new ApiV1Error("nope", 409, "STAGE_FORMAT_LOCKED", { issues: [{ message: SHARE_NEEDS_DRAWS }] }), msg, "fallback")).toBe("nope");
     expect(settingsSaveErrorText("boom", msg, "fallback")).toBe("fallback");
     expect(settingsSaveErrorText(undefined, msg, "fallback")).toBe("fallback");
+  });
+});
+
+// FU5 (owner-approved, 2026-11-04): a save that never reaches the server used to end `settingsSaveErrorText` with
+// `err.message`, so the BROWSER's English leaked onto a Dutch screen - Chrome "Failed to fetch", Safari "Load failed",
+// Firefox "NetworkError when attempting to fetch resource.". Neither client wrapper catches a fetch rejection (`api()` and
+// `apiV1()` let the TypeError out), so the error that arrives is a bare TypeError. The rule is by CLASS: a server answer is
+// an `ApiError` or an `ApiV1Error`; anything else that is an Error did not come from the server.
+describe("settingsSaveErrorText: a save that never reached the server", () => {
+  const KEY = "save.err.unreachable" as const satisfies MessageKey;
+  const LOCALES = [["en", en], ["es", es], ["fr", fr], ["nl", nl]] as const;
+  const reader = (dict: unknown) => (key: MessageKey, vars?: Record<string, string | number>) =>
+    (dict as Record<string, string>)[key]!.replace(/\{(\w+)\}/g, (h, name: string) => (vars !== undefined && name in vars ? String(vars[name]) : h));
+  /** What each browser's fetch throws when the request never leaves (offline, DNS, a dropped connection). */
+  const BROWSER_TEXTS = ["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."];
+
+  it("the new copy exists in all four locales, says something, and the three locales are not the English", () => {
+    let checked = 0;
+    for (const [loc, dict] of LOCALES) {
+      const copy = (dict as Record<string, string>)[KEY];
+      expect(copy, loc).toBeTruthy();
+      expect(copy, `${loc}: no placeholder to leave unfilled`).not.toMatch(/\{\w+\}/);
+      for (const text of BROWSER_TEXTS) expect(copy, `${loc} is not the browser's text`).not.toContain(text);
+      if (loc !== "en") expect(copy, `${loc} is translated`).not.toBe((en as Record<string, string>)[KEY]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("each browser's fetch TypeError reads the new copy, in every locale (counted)", () => {
+    let checked = 0;
+    for (const [loc, dict] of LOCALES) {
+      const m = reader(dict);
+      for (const text of BROWSER_TEXTS) {
+        const got = settingsSaveErrorText(new TypeError(text), m, "fallback");
+        expect(got, `${loc} / ${text}`).toBe((dict as Record<string, string>)[KEY]);
+        expect(got, `${loc}: the browser's English is gone`).not.toContain(text);
+        checked++;
+      }
+    }
+    expect(checked).toBe(LOCALES.length * BROWSER_TEXTS.length);
+  });
+
+  it("decided by CLASS, not by the browser's words: any TypeError or Error that is not a server answer reads the copy, whatever it says", () => {
+    const m = reader(nl);
+    for (const err of [new TypeError("x is not a function"), new Error("anything at all"), new DOMException("signal is aborted", "AbortError")]) {
+      expect(settingsSaveErrorText(err, m, "fallback"), String(err)).toBe(nl[KEY]);
+    }
+  });
+
+  it("the positive pair: a server answer keeps its own message even when it says the browser's words (decided by class, so the words do not matter)", () => {
+    const m = reader(nl);
+    expect(settingsSaveErrorText(new ApiError("Failed to fetch", 502), m, "fallback")).toBe("Failed to fetch");
+    expect(settingsSaveErrorText(new ApiError("Request failed (500)", 500), m, "fallback")).toBe("Request failed (500)");
+    expect(settingsSaveErrorText(new ApiV1Error("Load failed", 502, "UNKNOWN"), m, "fallback")).toBe("Load failed");
+    expect(settingsSaveErrorText(new ApiV1Error("The server said no", 403, "FORBIDDEN"), m, "fallback")).toBe("The server said no");
+  });
+
+  it("a CONFIG_INVALID still lists its issues, and a rule refusal is still said off its code (the new branch never reaches them)", () => {
+    const m = reader(nl);
+    const refused = invalid([
+      { path: ["abandonPolicy"], message: SHARE_NEEDS_DRAWS },
+      { path: ["gameTo"], message: "gameTo must be at least 1" },
+    ]);
+    expect(settingsSaveErrorText(refused, m, "fallback")).toBe(`${nl["rules.err.shareNeedsDraws"]} gameTo must be at least 1`);
+    const locked = new ApiV1Error("Match 3: x", 409, "FORMAT_DOES_NOT_FIT_PLAY", { fixture_id: "f", fixture_no: 3, fit_reason: "score" });
+    expect(settingsSaveErrorText(locked, m, "fallback")).not.toBe(nl[KEY]);
+    expect(settingsSaveErrorText(locked, m, "fallback")).not.toBe("Match 3: x");
+  });
+
+  it("a non-Error still reads the caller's fallback (a string, undefined, null, a plain object)", () => {
+    const m = reader(es);
+    for (const thrown of ["boom", undefined, null, { message: "Failed to fetch" }, 7]) {
+      expect(settingsSaveErrorText(thrown, m, "fallback"), String(thrown)).toBe("fallback");
+    }
+  });
+
+  it("sequence: unreachable, then a server refusal, then unreachable again, then a fallback - no state carried between calls", () => {
+    const m = reader(fr);
+    expect(settingsSaveErrorText(new TypeError("Failed to fetch"), m, "fb")).toBe(fr[KEY]);
+    expect(settingsSaveErrorText(new ApiV1Error("nope", 409, "STAGE_FORMAT_LOCKED"), m, "fb")).toBe("nope");
+    expect(settingsSaveErrorText(new TypeError("Load failed"), m, "fb")).toBe(fr[KEY]);
+    expect(settingsSaveErrorText(undefined, m, "fb")).toBe("fb");
+  });
+
+  it("rulesWriteErrorText (the schedule and rules saves) says it too, and its non-Error fallback is still the generic failure", () => {
+    for (const [loc, dict] of LOCALES) {
+      const m = reader(dict);
+      expect(rulesWriteErrorText(new TypeError("Failed to fetch"), m), loc).toBe((dict as Record<string, string>)[KEY]);
+      expect(rulesWriteErrorText("x", m), `${loc} fallback`).toBe(m("schedule.error.failed"));
+    }
   });
 });

@@ -557,6 +557,11 @@ test("an organiser makes a division in four steps, edits it from Review, and the
   // The refusal lands on Format, the step whose stages were refused.
   await onStep(page, "format");
   await expect(page.getByTestId("division-builder-error")).toBeVisible();
+  // FU5: the request never got an answer, so the error is the browser's bare fetch TypeError - not a server answer. It reads
+  // as the reader's own words ("Couldn't reach Seazn..."), never Chrome's "Failed to fetch" / Safari's "Load failed" /
+  // Firefox's "NetworkError when attempting to fetch resource.". The positive (our copy is up) pairs the negative.
+  await expect(page.getByTestId("division-builder-error")).toContainText(L["save.err.unreachable"]!);
+  await expect(page.locator("body")).not.toContainText(/Failed to fetch|Load failed|NetworkError when attempting to fetch/);
   await page.screenshot({ path: testInfo.outputPath("stages-refused-1280.png"), fullPage: true });
   // Who plays and Division rules were saved with the division: read-only now, and said so by name.
   await stepButton(page, "who").click();

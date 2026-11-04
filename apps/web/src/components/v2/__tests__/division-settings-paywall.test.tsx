@@ -17,6 +17,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { msg } from "@/lib/messages";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -120,8 +121,8 @@ describe("DivisionSettings — run()'s PAYMENT_REQUIRED branch (F5 task 5b)", ()
     expect(errorBanner(island.tree())).toBeUndefined();
   });
 
-  it("regression: a non-PAYMENT_REQUIRED failure still renders the plain red banner, not the paywall card", async () => {
-    net.impl = () => Promise.reject(new Error("network down"));
+  it("regression: a non-PAYMENT_REQUIRED server answer still renders the plain red banner with its own message, not the paywall card", async () => {
+    net.impl = () => Promise.reject(new ApiV1Error("The server said no", 500, "UNKNOWN"));
     const island = renderIsland(DivisionSettings, baseProps);
 
     clickButton(island.tree(), "Save name");
@@ -130,6 +131,22 @@ describe("DivisionSettings — run()'s PAYMENT_REQUIRED branch (F5 task 5b)", ()
     expect(paywallCard(island.tree())).toBeUndefined();
     const err = errorBanner(island.tree());
     expect(err).toBeDefined();
-    expect(propsOf(err!).children).toBe("network down");
+    expect(propsOf(err!).children).toBe("The server said no");
+  });
+
+  // FU5: the request that never reaches the server rejects with the browser's bare TypeError. The banner says it in our
+  // words (the reader's language), never "Failed to fetch" - and it is still the plain banner, not the paywall card.
+  it("a save that never reached the server renders the plain red banner with the 'couldn't reach Seazn' copy, not the browser's text", async () => {
+    net.impl = () => Promise.reject(new TypeError("Failed to fetch"));
+    const island = renderIsland(DivisionSettings, baseProps);
+
+    clickButton(island.tree(), "Save name");
+    await flush();
+
+    expect(paywallCard(island.tree())).toBeUndefined();
+    const err = errorBanner(island.tree());
+    expect(err).toBeDefined();
+    expect(propsOf(err!).children).toBe(msg("save.err.unreachable"));
+    expect(propsOf(err!).children).not.toBe("Failed to fetch");
   });
 });

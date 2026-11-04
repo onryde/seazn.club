@@ -2733,6 +2733,7 @@
   "compset.saving": "Guardando…",
   "compset.save": "Guardar ajustes",
   "divset.failed": "Error",
+  "save.err.unreachable": "No se pudo conectar con Seazn. Revisa tu conexión e inténtalo de nuevo.",
   "rules.err.shareNeedsDraws": "Compartir los puntos requiere que se permitan los empates: activa primero 'Permitir empates'.",
   "rules.err.shareNeedsDrawnGame": "Compartir los puntos requiere que sea posible una partida empatada: primero cambia 'Partida empatada en el máximo de tableros' a 'Partida empatada'.",
   "rules.err.setTargetBelowFloor": "Un set debe jugarse a un mínimo de {min} puntos.",

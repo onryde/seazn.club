@@ -2733,6 +2733,7 @@
   "compset.saving": "Opslaan…",
   "compset.save": "Instellingen opslaan",
   "divset.failed": "Mislukt",
+  "save.err.unreachable": "Seazn is niet bereikbaar. Controleer je verbinding en probeer het opnieuw.",
   "rules.err.shareNeedsDraws": "Punten delen vereist dat gelijkspel is toegestaan: zet eerst 'Gelijkspel toestaan' aan.",
   "rules.err.shareNeedsDrawnGame": "Punten delen vereist dat een gelijkspel mogelijk is: zet eerst 'Partij gelijk bij het maximum aantal borden' op 'Remisepartij'.",
   "rules.err.setTargetBelowFloor": "Een set moet tot minstens {min} punten gespeeld worden.",

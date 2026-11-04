@@ -38,11 +38,13 @@ describe("rulesWriteErrorText", () => {
     expect(checked).toBe(4);
   });
 
-  it("an error that is not a rule refusal keeps its message; a non-Error says the generic failure in the reader's language (counted)", () => {
+  it("a server answer that is not a rule refusal keeps its message; an error that never reached the server says so; a non-Error says the generic failure in the reader's language (counted)", () => {
     let checked = 0;
     for (const [loc, dict] of LOCALES) {
       const m = reader(dict as Dict);
-      expect(rulesWriteErrorText(new Error("boom"), m), loc).toBe("boom");
+      expect(rulesWriteErrorText(new ApiV1Error("boom", 500, "UNKNOWN"), m), loc).toBe("boom");
+      // FU5: a bare Error (the fetch TypeError the wrappers let out) is not a server answer - the reader's language, not "boom".
+      expect(rulesWriteErrorText(new Error("boom"), m), `${loc} unreachable`).toBe((dict as Dict)["save.err.unreachable"]);
       expect(rulesWriteErrorText("x", m), `${loc} fallback`).toBe(m("schedule.error.failed"));
       checked++;
     }

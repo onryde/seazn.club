@@ -6763,6 +6763,7 @@ export type DictionaryKey =
   | "sanction.penalty"
   | "sanction.point_penalty"
   | "sanction.warning"
+  | "save.err.unreachable"
   | "sched.board.and"
   | "sched.board.court"
   | "sched.board.courtEmpty"

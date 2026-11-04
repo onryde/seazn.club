@@ -2786,6 +2786,7 @@
   "disc.pad.dismiss": "Dismiss",
   "disc.me.title": "Suspensions",
   "divset.failed": "Failed",
+  "save.err.unreachable": "Couldn't reach Seazn. Check your connection and try again.",
   "rules.err.shareNeedsDraws": "Sharing the points needs draws to be allowed — set 'Allow draws' to on first.",
   "rules.err.shareNeedsDrawnGame": "Sharing the points needs a drawn game to be possible — set 'Game tied at max boards' to 'Drawn game' first.",
   "rules.err.setTargetBelowFloor": "A set must be played to at least {min} points.",

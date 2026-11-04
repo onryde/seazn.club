@@ -95,9 +95,10 @@ describe("the editors' failed-save text goes through it (settingsSaveErrorText)"
     expect(settingsSaveErrorText(own, m, "fallback")).toBe(m(RULE_ERROR_SUPPORT_KEYS.formatDoesNotFitPlayBecause, { reason: `Match 3: ${ENGINE_REASON}` }));
   });
 
-  it("an error that is not a rule refusal still reads as before (CONFIG_INVALID issues, a plain Error, a non-Error)", () => {
+  it("an error that is not a rule refusal still reads as before (CONFIG_INVALID issues, a server answer, a non-Error); a bare Error is no server answer (FU5)", () => {
     const m = reader(en as Dict);
-    expect(settingsSaveErrorText(new Error("boom"), m, "fallback")).toBe("boom");
+    expect(settingsSaveErrorText(new ApiV1Error("boom", 500, "UNKNOWN"), m, "fallback")).toBe("boom");
+    expect(settingsSaveErrorText(new Error("boom"), m, "fallback")).toBe((en as Dict)["save.err.unreachable"]);
     expect(settingsSaveErrorText("x", m, "fallback")).toBe("fallback");
     expect(settingsSaveErrorText(new ApiV1Error("bad", 422, "CONFIG_INVALID", { issues: [{ path: ["a"], message: "a is wrong" }] }), m, "fallback")).toBe("a is wrong");
   });

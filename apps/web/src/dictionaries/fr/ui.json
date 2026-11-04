@@ -2786,6 +2786,7 @@
   "disc.pad.dismiss": "Ignorer",
   "disc.me.title": "Suspensions",
   "divset.failed": "Échec",
+  "save.err.unreachable": "Impossible de joindre Seazn. Vérifiez votre connexion et réessayez.",
   "rules.err.shareNeedsDraws": "Partager les points nécessite d'autoriser les matchs nuls : activez d'abord « Autoriser les nulles ».",
   "rules.err.shareNeedsDrawnGame": "Partager les points nécessite qu'une partie nulle soit possible : réglez d'abord « Partie à égalité au maximum de plateaux » sur « Partie nulle ».",
   "rules.err.setTargetBelowFloor": "Un set doit se jouer en au moins {min} points.",
