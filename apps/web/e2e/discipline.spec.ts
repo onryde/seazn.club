@@ -116,7 +116,7 @@ test.describe.serial("discipline suspensions", () => {
     await expect(page.getByTestId("suspension-chip").first()).toBeVisible();
 
     // Public "Suspensions" strip under the Standings tab.
-    await page.goto(`/shared/${orgSlug}/${compSlug}/${divSlug}`);
+    await page.goto(`/live/${orgSlug}/${compSlug}/${divSlug}`);
     await page.getByRole("tab", { name: /standings/i }).click();
     await expect(page.getByTestId("public-suspensions")).toBeVisible();
 

@@ -27,7 +27,7 @@ export async function credentialPages(): Promise<{ name: string; url: string; se
   const login = await createLoginLink(USER_ID);
   const verify = await createVerificationToken(USER_ID);
   const room = await mintMatchRoomToken({ fixtureId: randomUUID(), personId: randomUUID(), roundOpenId: randomUUID(), roundOpenedAt: new Date().toISOString() });
-  const play = routes.sharedFixturePlay("chess-club", "autumn-open", "open", randomUUID(), room);
+  const play = routes.publicFixturePlay("chess-club", "autumn-open", "open", randomUUID(), room);
   const pages = [
     { name: "device-link scorer page", url: `${ORIGIN}/score/${TOKEN}`, secrets: [TOKEN] },
     { name: "profile claim", url: `${ORIGIN}${routes.claim(claim)}`, secrets: [claim] },

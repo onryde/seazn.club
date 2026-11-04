@@ -152,7 +152,7 @@ export async function hubKnockoutSuite(): Promise<void> {
   // established (the same expiry from `PATCH /api/orgs/{id}` did re-render the
   // landing on the next load) — an open finding, so this check pins the bound
   // and says how many stale loads it saw rather than promising the next load.
-  const hubPage = `/shared/${orgSlug}/${compRow.slug}`;
+  const hubPage = `/live/${orgSlug}/${compRow.slug}`;
   const NOINDEX = `name="robots" content="noindex`;
   const draftLive = await inPlay();
   const draftHub = await html(newSession(), hubPage);
@@ -202,7 +202,7 @@ export async function hubKnockoutSuite(): Promise<void> {
   );
   const liveUnknown = await v1(newSession(), `/api/v1/public/orgs/no-such-org-${tag}/live`);
   check("org live: an unknown org is a 404, not a 500", liveUnknown.status === 404);
-  const orgHome = await html(newSession(), `/shared/${orgSlug}`);
+  const orgHome = await html(newSession(), `/live/${orgSlug}`);
   check(
     "org live: the org home renders this competition's live chip",
     orgHome.status === 200 && orgHome.body.includes(`data-testid="mh-org-chip-${compRow.id}"`),

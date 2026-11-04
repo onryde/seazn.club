@@ -37,7 +37,7 @@ export function VisibilityPicker({
   value: VisibilityKey | string;
   onChange: (next: VisibilityKey) => void;
   disabled?: boolean;
-  /** Site-relative public path (e.g. /shared/org/comp) — shown as a full URL
+  /** Site-relative public path (e.g. /live/org/comp) — shown as a full URL
    *  with a copy button once the choice is shareable. */
   sharePath?: string | null;
   /** v3/11 gap 8: raises the guardian-consent interstitial when leaving Private. */

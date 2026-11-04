@@ -4,7 +4,7 @@
 // desk", "ADMIT ONE" and an English status stamp in every locale.
 //
 // satori's pixels cannot be read, but the element handed to `ImageResponse`
-// is markup: it is captured here, rendered, and put through the /shared
+// is markup: it is captured here, rendered, and put through the /live
 // sweep's own classifier — every text node must be data (a `zq` marker),
 // punctuation, or a value of THAT locale's dictionaries.
 import { describe, expect, it, vi } from "vitest";
@@ -17,7 +17,7 @@ import {
   extractSegments,
   formatFinding,
   type Finding,
-} from "@/app/(public)/shared/__tests__/_english-sweep";
+} from "@/app/(public)/live/__tests__/_english-sweep";
 import { createElement } from "react";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";

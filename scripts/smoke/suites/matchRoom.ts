@@ -14,7 +14,7 @@ import { BASE, type Session, newSession, cookieHeader, check, signIn, tag, v1 } 
  */
 export async function matchRoomSuite(): Promise<void> {
   const fixtureId = crypto.randomUUID();
-  const fixturePath = `/shared/smoke-room-${tag}/open/rapid/fixtures/${fixtureId}`;
+  const fixturePath = `/live/smoke-room-${tag}/open/rapid/fixtures/${fixtureId}`;
   const junk = `junk-${tag}`;
   const stranger = newSession();
   await signIn(stranger, `delivered+smoke-room-${tag}@resend.dev`);

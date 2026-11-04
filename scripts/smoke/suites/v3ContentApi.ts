@@ -57,7 +57,7 @@ export async function v3ContentApiSuite(
   });
   check("v3: division description via PATCH", patchedDiv.status === 200);
 
-  const publicComp = await html(newSession(), `/shared/${proOrgSlug}/${compData.slug}`);
+  const publicComp = await html(newSession(), `/live/${proOrgSlug}/${compData.slug}`);
   check("v3: public page renders markdown h2", publicComp.body.includes("<h2>Welcome</h2>"));
   check("v3: CTA button rendered", publicComp.body.includes("prose-cta"));
   check("v3: XSS neutralised on public page", !publicComp.body.includes("<script>alert"));
@@ -145,7 +145,7 @@ export async function v3ContentApiSuite(
   check("v3: page exposes og:image", !!ogPath);
   const og = await bin(ogPath ?? "/missing");
   check("v3: competition OG card is a PNG", og.status === 200 && og.type.includes("image/png"));
-  const poster = await bin(`/shared/${proOrgSlug}/${compData.slug}/poster.pdf`);
+  const poster = await bin(`/live/${proOrgSlug}/${compData.slug}/poster.pdf`);
   check(
     "v3: QR poster is a PDF",
     poster.status === 200 &&
@@ -169,7 +169,7 @@ export async function v3ContentApiSuite(
     url: "https://strip.example",
   });
   check("v3: sponsor row created for strip", stripRow.status === 201);
-  const compPage2 = await html(newSession(), `/shared/${proOrgSlug}/${compData.slug}`);
+  const compPage2 = await html(newSession(), `/live/${proOrgSlug}/${compData.slug}`);
   check("v3: sponsor strip on pro dashboard", compPage2.body.includes(`Strip ${tag}`));
   check(
     "v3: blob sponsor stays shim-only once rows exist",
@@ -206,7 +206,7 @@ export async function v3ContentApiSuite(
   });
   const freeDivId = v1data<{ id: string }>(freeDiv).id;
 
-  const freePage = await html(newSession(), `/shared/${freeSlug}/${freeCompData.slug}`);
+  const freePage = await html(newSession(), `/live/${freeSlug}/${freeCompData.slug}`);
   check("v3: free public page renders markdown", freePage.body.includes("<h2>Free words</h2>"));
   const freeOg = await bin(ogUrl(freePage.body) ?? "/missing");
   check(
@@ -228,7 +228,7 @@ export async function v3ContentApiSuite(
   // v10 policy change: the un-tiered partner strip is free — a community
   // org's sponsors (here via the blob shim: no table rows yet) render
   // publicly, flat, with no tier labels.
-  const freePage2 = await html(newSession(), `/shared/${freeSlug}/${freeCompData.slug}`);
+  const freePage2 = await html(newSession(), `/live/${freeSlug}/${freeCompData.slug}`);
   check(
     "v3→v10: free sponsor strip renders publicly, un-tiered",
     freePage2.body.includes(`Acme Free ${tag}`) && !freePage2.body.includes("Presented by"),

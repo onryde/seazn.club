@@ -1,5 +1,5 @@
 // What the /games share images DRAW — the element tree handed to next/og's
-// ImageResponse, captured and rendered to markup (the technique of the /shared
+// ImageResponse, captured and rendered to markup (the technique of the /live
 // opengraph-image-locale tests). The sibling opengraph-image.test.tsx proves
 // the real PNGs; this file proves their content: the copy of the approved
 // mockups (games-canvas gen.py og_hub / og_game) and that the game tiles come

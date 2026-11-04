@@ -224,7 +224,7 @@ export interface PlanSql {
    * declares `org.slug: "bench-tiny-club"`, and nothing ever writes it.
    *
    * That matters because every PUBLIC surface is addressed by slug:
-   * `/shared/{orgSlug}/{competitionSlug}/register` and the organiser hub at
+   * `/live/{orgSlug}/{competitionSlug}/register` and the organiser hub at
    * `/o/{orgSlug}/...`. Using the pack's declared slug sent the browser driver
    * to a 404 that renders HTTP 200 chrome with no wizard on it, so the run
    * failed 30s later as `locator.fill: Timeout waiting for '#reg-who-name'` —
@@ -693,7 +693,7 @@ export function createRealPlanSql(): RealPlanSqlHandle {
       // it silently — the run would go on and fail 30s later inside Playwright,
       // pointing at a selector instead of at the URL.
       if (slug === undefined || slug === "") {
-        throw new Error(`plan: organizations.slug is empty for org ${orgId} — cannot address any public /shared/ URL`);
+        throw new Error(`plan: organizations.slug is empty for org ${orgId} — cannot address any public /live/ URL`);
       }
       return slug;
     },

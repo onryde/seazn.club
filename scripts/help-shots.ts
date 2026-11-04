@@ -24,7 +24,7 @@ const BASE = process.env.SHOTS_BASE ?? "http://localhost:3000";
 const EMAIL = process.env.SHOTS_EMAIL ?? "ashokhein+demo1@gmail.com";
 const OUT = join(root, "apps", "web", "public", "help-shots");
 
-/** name → path. Console paths resolve after login; /shared works logged out. */
+/** name → path. Console paths resolve after login; /live works logged out. */
 const SHOTS: { name: string; path: string; loggedIn: boolean }[] = [
   { name: "dashboard", path: "/dashboard", loggedIn: true },
   { name: "org-settings", path: "/settings", loggedIn: true },

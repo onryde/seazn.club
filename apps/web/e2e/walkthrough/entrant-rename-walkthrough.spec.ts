@@ -156,8 +156,8 @@ test("an organiser renames a pair three ways, and every screen that names it fol
   await scoreFixture(page.request, played!.id, 2, 1);
   expect((await leagueFixtures(page.request, mixed.id)).length, "Mixed has a fixture").toBeGreaterThan(0);
 
-  const publicDoubles = `/shared/${org.slug}/${comp.slug}/${doubles.slug}`;
-  const publicMixed = `/shared/${org.slug}/${comp.slug}/${mixed.slug}`;
+  const publicDoubles = `/live/${org.slug}/${comp.slug}/${doubles.slug}`;
+  const publicMixed = `/live/${org.slug}/${comp.slug}/${mixed.slug}`;
   const doublesEntrants = await divisionPath(page.request, doubles.id, "?tab=entrants");
   const doublesFixtures = await divisionPath(page.request, doubles.id, "?tab=fixtures");
   const doublesStandings = await divisionPath(page.request, doubles.id, "?tab=standings");

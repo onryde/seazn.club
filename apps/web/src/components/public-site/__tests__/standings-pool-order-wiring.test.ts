@@ -39,7 +39,7 @@ import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
 import nlPublic from "@/dictionaries/nl/public.json";
 import EmbedWidgetPage from "@/app/embed/divisions/[id]/[widget]/page";
-import DivisionHomePage from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
+import DivisionHomePage from "@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
 import { StandingsTable } from "../standings-table";
 import { builtinModules } from "@seazn/engine/sports";
 import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
@@ -228,7 +228,7 @@ describe("pool order on the pages that draw one standings table per pool", () =>
 
   it("no surface sorts pools by id any more", () => {
     for (const file of [
-      "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
+      "src/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
       "src/app/embed/divisions/[id]/[widget]/page.tsx",
       "src/server/public-site/competition-hub.ts",
       "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",

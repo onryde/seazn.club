@@ -332,7 +332,7 @@ export async function readPlayerMatchSeeds(sql: Sql, args: MatchArgs): Promise<P
     const opponentId = r.my_entrant_id === r.home_entrant_id ? r.away_entrant_id : r.home_entrant_id;
     return {
       fixtureId: r.id,
-      href: routes.sharedFixture(orgSlug, compSlug, r.division_slug, r.id),
+      href: routes.publicFixture(orgSlug, compSlug, r.division_slug, r.id),
       divisionName: r.division_name,
       divisionSlug: r.division_slug,
       scheduledAt: isoDateTime(r.scheduled_at),
@@ -658,7 +658,7 @@ export async function readPlayerUpcoming(sql: Sql, args: UpcomingArgs): Promise<
     const named = opponentId !== null ? names.get(opponentId) : undefined;
     return {
       fixtureId: r.id,
-      href: routes.sharedFixture(orgSlug, r.competition_slug, r.division_slug, r.id),
+      href: routes.publicFixture(orgSlug, r.competition_slug, r.division_slug, r.id),
       scheduledAt: isoDateTime(r.scheduled_at),
       tz: resolveVenueTz(r.division_tz, r.org_tz),
       venue: r.venue_name,

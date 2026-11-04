@@ -273,7 +273,7 @@ test.beforeAll(async ({ browser }) => {
   expect(dq.data!.status, "the roster editor's own patch is what removed her").toBe("disqualified");
 
   seed = {
-    divisionPath: `/shared/${org.slug}/${competition.slug}/${div.slug}`,
+    divisionPath: `/live/${org.slug}/${competition.slug}/${div.slug}`,
     divisionId: div.id,
     quitterId,
     expelledId,

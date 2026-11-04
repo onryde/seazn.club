@@ -41,7 +41,7 @@ export const metadata: Metadata = {
     type: "website",
     siteName: "Seazn Club",
     // og:image comes from the root opengraph-image.tsx file convention —
-    // per-segment cards (the /shared tree) override it automatically.
+    // per-segment cards (the /live tree) override it automatically.
   },
   twitter: {
     card: "summary_large_image",

@@ -312,7 +312,7 @@ test("setup: a hub with a live and a decided cricket match, a generic league and
   console.log(`seeded: ${org.slug}/${comp.slug} cricket=${cricketSlug} A=${matchA} B=${matchB} C=${matchC} generic=${genericSlug}`);
 });
 
-const hubPath = (query = "") => `/shared/${org.slug}/${comp.slug}${query}`;
+const hubPath = (query = "") => `/live/${org.slug}/${comp.slug}${query}`;
 
 async function openTab(page: Page, id: string, extra = ""): Promise<void> {
   await page.goto(hubPath(`?tab=${id}${extra}`));
@@ -437,7 +437,7 @@ test("HB6: the Stats tab's top runs row is the ledger's top scorer, live match A
   const first = board.locator('li[data-testid*="-row-"]').first();
   await expect(first).toHaveAttribute("data-testid", `mh-leaders-${cricketSlug}-runs-row-${topId}`);
   await expect(first.locator("span.font-display.tabular-nums")).toHaveText(String(topRuns));
-  await expect(first.locator(`a[href="/shared/${org.slug}/${comp.slug}/players/${topId}"]`)).toHaveCount(1);
+  await expect(first.locator(`a[href="/live/${org.slug}/${comp.slug}/players/${topId}"]`)).toHaveCount(1);
 });
 
 // HB12L — axe while a match is LIVE. HB12 scans after HB2 has ended match A,
@@ -466,12 +466,12 @@ test("HB12L: axe finds no serious or critical violation at 320 on the Overview, 
   await expect(page.getByTestId(`mh-match-${matchA}`).getByTestId("mh-match-live"), "the Overview shows A's live label").toBeVisible();
   await axeScan(page, "HB12L", "overview, A live");
 
-  await page.goto(`/shared/${org.slug}/${comp.slug}/${cricketSlug}`, { waitUntil: "load" });
+  await page.goto(`/live/${org.slug}/${comp.slug}/${cricketSlug}`, { waitUntil: "load" });
   const row = page.locator(`#panel-schedule a[href*="${matchA}"]`);
   await expect(row.locator(".animate-live-pulse"), "the Schedule shows A's row live").toBeVisible();
   await axeScan(page, "HB12L", "division schedule, A live");
 
-  await page.goto(`/shared/${org.slug}/${comp.slug}/players/${teams.kestrels.order[0]}`);
+  await page.goto(`/live/${org.slug}/${comp.slug}/players/${teams.kestrels.order[0]}`);
   await expect(page.getByTestId(`mh-player-match-${matchA}`).getByTestId("mh-player-slab-live"), "the player card leads with A live").toBeVisible();
   await axeScan(page, "HB12L", "player card, A live");
 });
@@ -680,7 +680,7 @@ test("HB4/HB5: a Teams card opens the squad in place, consent-correct, readable 
     throw new Error(`no squad line titled "${shown}" (for ${full})`);
   };
   const consenting = await lineFor(falcons.order[0]!, `Ethan Price ${TAG}`);
-  await expect(consenting.locator("a")).toHaveAttribute("href", `/shared/${org.slug}/${comp.slug}/players/${falcons.order[0]}`);
+  await expect(consenting.locator("a")).toHaveAttribute("href", `/live/${org.slug}/${comp.slug}/players/${falcons.order[0]}`);
   const maskedName = maskDisplayName(masked.name, "first_initial");
   expect(maskedName).not.toBe(masked.name);
   const maskedLine = await lineFor(masked.name, maskedName);
@@ -883,7 +883,7 @@ test("HB9c: at 320 the division page's Standings tab has no sideways page scroll
 }) => {
   test.setTimeout(Math.max(FLOOR_MS, 2 * STEP_MS));
   const phone = await spectator(browser, { width: 320 });
-  await phone.goto(`/shared/${org.slug}/${comp.slug}/${cricketSlug}?tab=standings`, { waitUntil: "load" });
+  await phone.goto(`/live/${org.slug}/${comp.slug}/${cricketSlug}?tab=standings`, { waitUntil: "load" });
   const panel = phone.locator("#panel-standings");
   await expect(panel).toBeVisible();
   const scroll = panel.locator("div.overflow-x-auto").filter({ has: phone.locator("table") }).first();
@@ -909,7 +909,7 @@ test("HB9d: at 320 the division page's Schedule filter and Entrants cards hold a
 }) => {
   test.setTimeout(Math.max(FLOOR_MS, 3 * STEP_MS));
   const phone = await spectator(browser, { width: 320 });
-  const base = `/shared/${org.slug}/${comp.slug}/${cricketSlug}`;
+  const base = `/live/${org.slug}/${comp.slug}/${cricketSlug}`;
   const expectHeld = async (panel: string) => {
     const { clipped, scrollable, truncatedByDesign } = await overflowingIn(
       phone,
@@ -1013,7 +1013,7 @@ test("HB14: the division page's Present and Share actions stay on screen at 320 
     const shareName = uiString(locale, "share.whatsapp");
     for (const width of widths) {
       const page = await spectator(browser, { width });
-      await page.goto(`/shared/${langOrg.slug}/${langComp.slug}/${langDiv.slug}`, { waitUntil: "load" });
+      await page.goto(`/live/${langOrg.slug}/${langComp.slug}/${langDiv.slug}`, { waitUntil: "load" });
       await expect(page.locator("html")).toHaveAttribute("lang", locale);
       const heading = page.getByRole("heading", { level: 1 });
       const present = page.getByRole("link", { name: presentName, exact: true });
@@ -1100,7 +1100,7 @@ test("HB15: the Full division link and the results-grid toggle each clear the 44
   // grid is in the markup and invisible. CI caught exactly that, with the
   // locator RESOLVED and "Received: hidden"; a local run that read green had
   // skipped this test behind an earlier serial failure.
-  await page.goto(`/shared/${org.slug}/${comp.slug}/${genericSlug}?tab=standings`, { waitUntil: "load" });
+  await page.goto(`/live/${org.slug}/${comp.slug}/${genericSlug}?tab=standings`, { waitUntil: "load" });
   await expect(page.locator("#panel-standings"), "?tab=standings opens the Standings panel").toBeVisible();
   const toggle = page
     .locator("summary")
@@ -1127,7 +1127,7 @@ test("HB10: a completed card's result sentence equals the match centre's status 
   const result = page.getByTestId(`mh-match-${genericDone}`).getByTestId("mh-match-result");
   await expect(result).toBeVisible();
   const cardText = (await result.textContent())!.trim();
-  await page.goto(`/shared/${org.slug}/${comp.slug}/${genericSlug}/fixtures/${genericDone}`);
+  await page.goto(`/live/${org.slug}/${comp.slug}/${genericSlug}/fixtures/${genericDone}`);
   const status = page.getByTestId("mc-status-line");
   await expect(status).toBeVisible();
   console.log(`HB10 card="${cardText}" centre="${(await status.textContent())?.trim()}"`);
@@ -1183,7 +1183,7 @@ test("HB12: axe finds no serious or critical violation at 320 on Overview, Match
   await openTab(page, "teams", `&division=${cricketSlug}`);
   await page.getByTestId(`mh-team-${teams.falcons.entrantId}`).locator("summary").click();
   await scan("teams, card open");
-  await page.goto(`/shared/${org.slug}/${comp.slug}/players/${teams.ospreys.order[0]}`);
+  await page.goto(`/live/${org.slug}/${comp.slug}/players/${teams.ospreys.order[0]}`);
   await expect(page.getByTestId("mh-player-matches")).toBeVisible();
   await scan("player card");
 });
@@ -1222,7 +1222,7 @@ test("HB13: screens of every tab state and a player card at 320, 390, 768, 1024 
     } },
     { name: "info", open: (p) => openTab(p, "info") },
     { name: "player", open: async (p) => {
-      await p.goto(`/shared/${org.slug}/${comp.slug}/players/${teams.ospreys.order[0]}`);
+      await p.goto(`/live/${org.slug}/${comp.slug}/players/${teams.ospreys.order[0]}`);
       await expect(p.locator('[data-slab="true"]')).toBeVisible();
     } },
   ];

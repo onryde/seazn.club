@@ -85,7 +85,7 @@ export async function entrantRenameSuite(): Promise<void> {
   await v1(free, `/api/v1/stages/${stage.id}/generate`, "POST");
   await v1(free, `/api/v1/divisions/${div.id}/start`, "POST");
 
-  const path = `/shared/${org.slug}/${comp.slug}/${div.slug}`;
+  const path = `/live/${org.slug}/${comp.slug}/${div.slug}`;
   // React escapes "&" in text; match what the page actually serves.
   const served = (name: string) => name.replaceAll("&", "&amp;");
   const warm = await html(newSession(), path);

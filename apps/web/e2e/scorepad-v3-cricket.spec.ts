@@ -1481,7 +1481,7 @@ test(
     const org = await activeOrg(page);
     const comp = await apiJson<{ slug: string }>(page.request, `/api/v1/competitions/${fx.competitionId}`);
     const division = await apiJson<{ slug: string }>(page.request, `/api/v1/divisions/${fx.divisionId}`);
-    const publicPath = `/shared/${org.slug}/${comp.data!.slug}/${division.data!.slug}/fixtures/${fx.fixtureId}`;
+    const publicPath = `/live/${org.slug}/${comp.data!.slug}/${division.data!.slug}/fixtures/${fx.fixtureId}`;
     await page.goto(publicPath);
     // The winner is named AND the method — never the raw "super_over" token.
     await expect(page.getByText(/won on the super over/)).toBeVisible({ timeout: 20_000 });

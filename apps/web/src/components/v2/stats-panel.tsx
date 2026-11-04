@@ -44,7 +44,7 @@ export function StatsPanel({
   viewerPlan,
 }: {
   divisionId: string;
-  /** PROMPT-65: `/shared/{org}/{comp}` when the competition is public —
+  /** PROMPT-65: `/live/{org}/{comp}` when the competition is public —
    *  consented rows link to the player profile. */
   publicBase?: string | null;
   viewerPlan: ViewerPlan;

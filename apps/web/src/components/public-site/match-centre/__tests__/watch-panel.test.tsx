@@ -557,7 +557,7 @@ describe("the fixture page (a server component) calls nothing from a client modu
   // call answered 500 — "Attempted to call showWatchPanel() from the server". A node render never sees it.
   it("every binding it imports from a \"use client\" module is a component (or a type)", () => {
     const SRC = join(__dirname, "..", "..", "..", "..");
-    const page = readFileSync(join(SRC, "app", "(public)", "shared", "[orgSlug]", "[competitionSlug]", "[divisionSlug]", "fixtures", "[fixtureId]", "page.tsx"), "utf8");
+    const page = readFileSync(join(SRC, "app", "(public)", "live", "[orgSlug]", "[competitionSlug]", "[divisionSlug]", "fixtures", "[fixtureId]", "page.tsx"), "utf8");
     const imports = [...page.matchAll(/^import (type )?\{([^}]*)\} from "@\/([^"]+)";$/gm)];
     let clientModules = 0;
     const offenders: string[] = [];

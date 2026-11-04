@@ -29,6 +29,7 @@ import { baseUrlFromHeaders } from "@/lib/base-url";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
+import { routes } from "@/lib/routes";
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
@@ -64,7 +65,7 @@ export default async function RefStatusPage({ params, searchParams }: Props) {
     margin: 1,
     width: 224,
   });
-  const competitionHref = `/shared/${view.org_slug}/${view.competition_slug}`;
+  const competitionHref = routes.publicHub(view.org_slug, view.competition_slug);
   const locale = await resolveLocale();
   const ui = await getDictionary(locale, "ui");
 

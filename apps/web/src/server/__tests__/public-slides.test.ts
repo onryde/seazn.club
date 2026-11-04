@@ -143,7 +143,7 @@ describe("buildPublicDivisionSlides — the pool label is the org's locale's, fr
   });
 });
 
-// RS008 review fix #2 — the anonymous public kiosk (/shared/{org}/{comp}/
+// RS008 review fix #2 — the anonymous public kiosk (/live/{org}/{comp}/
 // present) had NO masking at all, not even by youth: buildDivisionSlides
 // (the AUTHED /slideshow/competitions/[id] twin) already masked by both
 // youth and consent, but this "pure public twin" never did. Standings slides

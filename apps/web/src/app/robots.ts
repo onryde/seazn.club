@@ -1,6 +1,7 @@
 import type { MetadataRoute } from "next";
 import { siteOrigin } from "@/lib/site-origin";
 import { AI_CRAWLERS } from "@/lib/robots-policy";
+import { routes } from "@/lib/routes";
 
 export default function robots(): MetadataRoute.Robots {
   return {
@@ -12,9 +13,11 @@ export default function robots(): MetadataRoute.Robots {
           "/o/", "/dashboard", "/admin", "/api/", "/settings", "/competitions/", "/divisions/", "/fixtures/", "/directory", "/streaming", "/players", "/people", "/clubs", "/orgs/",
           // PostHog's first-party proxy (next.config.js rewrites): beacons, not pages.
           "/ingest/",
-          // Public player profiles, /shared/{org}/{competition}/players/{personId}:
-          // a named person's page. `*` is the Google/Bing path wildcard.
-          "/shared/*/*/players/",
+          // Public player profiles, /live/{org}/{competition}/players/{personId}
+          // (routes.publicPlayer): a named person's page. `*` is the Google/Bing
+          // path wildcard. An old /shared/… profile URL 308s here, and a crawler
+          // checks the target against these rules.
+          routes.publicPlayer("*", "*", ""),
         ],
       },
       // One rule per AI crawler, refusing the whole site (see AI_CRAWLERS).

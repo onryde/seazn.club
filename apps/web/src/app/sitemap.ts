@@ -3,6 +3,7 @@ import { cachedPublicSitemapEntries } from "@/server/public-site/sitemap-cache";
 import { listDiscoverySports } from "@/server/public-site/discovery";
 import { liveGames } from "@/games/registry";
 import { siteOrigin } from "@/lib/site-origin";
+import { routes } from "@/lib/routes";
 
 // Request-time, never prerendered. A sitemap.ts is "cached by default unless
 // it uses a Request-time API or dynamic config option" (node_modules/next/dist/
@@ -51,12 +52,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     const competitions = await cachedPublicSitemapEntries();
     publicEntries = competitions.flatMap((c) => [
       {
-        url: `${BASE}/shared/${c.orgSlug}/${c.compSlug}`,
+        url: `${BASE}${routes.publicHub(c.orgSlug, c.compSlug)}`,
         changeFrequency: "hourly" as const,
         priority: 0.7,
       },
       ...c.divisionSlugs.map((div) => ({
-        url: `${BASE}/shared/${c.orgSlug}/${c.compSlug}/${div}`,
+        url: `${BASE}${routes.publicHub(c.orgSlug, c.compSlug, div)}`,
         changeFrequency: "hourly" as const,
         priority: 0.6,
       })),

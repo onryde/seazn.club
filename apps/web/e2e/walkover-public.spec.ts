@@ -10,7 +10,7 @@ import { dismissCookieBanner } from "./scorepad-a11y-kit";
 // bracket's tile) show the short tag beside the credited score, with the sentence as the tag's accessible name. At 320
 // the tile keeps the score and the tag on one row and the page never scrolls sideways.
 //
-// The rig records through the API (the console's write); the reading is a spectator's, on /shared. Every word is the
+// The rig records through the API (the console's write); the reading is a spectator's, on /live. Every word is the
 // real en public.json; the credited score is the engine's own declaration (football's `awardScore.goals`, FB-WO-1).
 // Whole file, never a -g slice (AGENTS.md rule 21). Crops land in `T13_SHOTS` when it is set (never committed).
 
@@ -110,7 +110,7 @@ test.describe("W2b — a credited result says which one, on every public surface
     const sentence = say("forfeit.sentence.walkover", { loser: ko.nameOf.get(loser)! });
     const tag = say("forfeit.tag.walkover");
     expect(tag, "UI-2 option A's walkover tag").toBe("w/o");
-    const base = `/shared/${org.slug}/${ko.compSlug}`;
+    const base = `/live/${org.slug}/${ko.compSlug}`;
 
     let screens = 0;
     for (const w of WIDTHS) {
@@ -254,7 +254,7 @@ test.describe("W2b — a credited result says which one, on every public surface
     let banners = 0;
     for (const w of WIDTHS) {
       await page.setViewportSize({ width: w, height: 900 });
-      await page.goto(`/shared/${org.slug}/${ko.compSlug}?tab=knockout`);
+      await page.goto(`/live/${org.slug}/${ko.compSlug}?tab=knockout`);
       await dismissCookieBanner(page);
       const chip = page.getByTestId("mh-knockout-champion-forfeit");
       await expect(chip, `${w}: the DQ tag beside the line`).toHaveText(say("forfeit.tag.disqualified"), { timeout: STEP_MS });
@@ -301,7 +301,7 @@ test.describe("W2b — a credited result says which one, on every public surface
     let banners = 0;
     for (const w of WIDTHS) {
       await page.setViewportSize({ width: w, height: 900 });
-      await page.goto(`/shared/${org.slug}/${ko.compSlug}?tab=knockout`);
+      await page.goto(`/live/${org.slug}/${ko.compSlug}?tab=knockout`);
       await dismissCookieBanner(page);
       const banner = page.locator('[data-testid^="mh-knockout-champion-"]').first();
       await expect(banner, `${w}: the unplayed final's line`).toContainText(walkoverLine, { timeout: STEP_MS });
@@ -326,7 +326,7 @@ test.describe("W2b — a credited result says which one, on every public surface
     const [dw, other] = ko.semis;
     await post(request, dw!.id, "core.forfeit", { by: "both", reason: "walkover" });
     expect((await read(request, dw!.id)).outcome).toEqual({ kind: "double_walkover" });
-    const base = `/shared/${org.slug}/${ko.compSlug}/${ko.divSlug}`;
+    const base = `/live/${org.slug}/${ko.compSlug}/${ko.divSlug}`;
     const bare = say("forfeit.sentence.doubleWalkover");
     const dwTag = say("forfeit.tag.doubleWalkover");
 
@@ -360,7 +360,7 @@ test.describe("W2b — a credited result says which one, on every public surface
 
       // Audit 3.1: the hub's results card reads no 0 / 0 for the double walkover; the same probe finds the other semi's
       // lone "0".
-      await hubResults(page, `/shared/${org.slug}/${ko.compSlug}?tab=matches`);
+      await hubResults(page, `/live/${org.slug}/${ko.compSlug}?tab=matches`);
       const dwCard = page.getByTestId(`mh-match-${dw!.id}`);
       await expect(dwCard, `${w}: the double walkover's results card`).toBeVisible({ timeout: STEP_MS });
       await expect(dwCard.getByText("0", { exact: true }), `${w}: the results card reads no 0 / 0`).toHaveCount(0);
@@ -371,7 +371,7 @@ test.describe("W2b — a credited result says which one, on every public surface
 
       // The knockout draw (drawn from 1024 up; the phone reads the cards above): its node reads no 0 / 0 either.
       if (w >= 1024) {
-        await page.goto(`/shared/${org.slug}/${ko.compSlug}?tab=knockout&view=draw`);
+        await page.goto(`/live/${org.slug}/${ko.compSlug}?tab=knockout&view=draw`);
         await dismissCookieBanner(page);
         const node = page.getByTestId(`mh-knockout-node-${dw!.id}`);
         await expect(node, `${w}: the double walkover's draw node`).toBeVisible({ timeout: STEP_MS });
@@ -509,7 +509,7 @@ test.describe("W2b — a credited result says which one, on every public surface
     expect(withdrew.status, JSON.stringify(withdrew.error)).toBeLessThan(300);
     const waiting = await read(request, ko.final.id);
     expect([waiting.home_entrant_id, waiting.away_entrant_id, waiting.status], "her final seat is emptied; the final waits").toEqual([null, null, "scheduled"]);
-    const base = `/shared/${org.slug}/${ko.compSlug}`;
+    const base = `/live/${org.slug}/${ko.compSlug}`;
     const finalRow = (panel: string) => page.locator(`#panel-${panel} a[href$="/fixtures/${ko.final.id}"]`);
 
     // The positive pair: before the arrival, her dead seat reads the bye word — on the schedule row and the tile.
@@ -1269,7 +1269,7 @@ test.describe("W2b loop H F4 — the hub's results card does not call a final ab
     expect([after.status, after.outcome], "abandoned for replay").toEqual(["abandoned", null]);
     const [ENDED, ABANDONED] = [say("matchesHub.ended"), say("matchCentre.status.abandoned")];
     const sentence = say("forfeit.sentence.abandonedBare", { reason: "rain" });
-    const base = `/shared/${org.slug}/${ko.compSlug}`;
+    const base = `/live/${org.slug}/${ko.compSlug}`;
 
     let screens = 0;
     for (const w of WIDTHS) {
@@ -1312,7 +1312,7 @@ test.describe("design audit 3.8 — a long result wraps inside the hub card", ()
     let wrapped = 0;
     for (const w of WIDTHS) {
       await page.setViewportSize({ width: w, height: 900 });
-      await hubResults(page, `/shared/${org.slug}/${lg.compSlug}?tab=matches`);
+      await hubResults(page, `/live/${org.slug}/${lg.compSlug}?tab=matches`);
       const card = page.getByTestId(`mh-match-${f.id}`);
       await expect(card).toBeVisible({ timeout: STEP_MS });
       const slot = card.getByTestId("mh-match-forfeit");
@@ -1396,7 +1396,7 @@ test.describe("W2c Task 16b — a walkover under a stage points rule reads the r
     const loser = fx.away_entrant_id!;
     await post(request, fx.id, "core.forfeit", { by: loser, reason: "walkover" });
     expect((await read(request, fx.id)).outcome).toEqual({ kind: "award", winner: fx.home_entrant_id, loser, reason: "walkover" });
-    const base = `/shared/${org.slug}/${pool.compSlug}`;
+    const base = `/live/${org.slug}/${pool.compSlug}`;
     const clause = say("format.points.forfeitScore", { winner: String(AWARD[0]), loser: String(AWARD[1]) });
     expect(clause, "the clause carries the rule's two figures in the en copy").toContain(`${AWARD[0]}‑${AWARD[1]}`);
 

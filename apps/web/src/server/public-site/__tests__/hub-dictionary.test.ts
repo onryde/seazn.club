@@ -151,7 +151,7 @@ export const W2_KEYS = [
   "player.opponent",
   // org home + layout + share
   "org.live.one", "org.live.other", "layout.tagline", "layout.poweredBy", "share.share", "share.whatsapp", "share.whatsappAria", "share.copy", "share.copied",
-  // Task 16 — the /shared leaf surfaces' sweep, one block: `shareLabels`' short
+  // Task 16 — the /live leaf surfaces' sweep, one block: `shareLabels`' short
   // WhatsApp label (read by every public ShareBar, and asserted nowhere until
   // now), the QR poster page, the player page's meta description
   // (`lib/public-meta.ts`), the share images' footer tagline and free-tier

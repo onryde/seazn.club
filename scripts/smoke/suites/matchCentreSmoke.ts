@@ -62,16 +62,16 @@ export async function matchCentreSmoke(): Promise<void> {
   const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
   const orgSlug = orgs[0]?.slug ?? "";
   const divSlug = v1data<{ slug: string }>(await v1(owner, `/api/v1/divisions/${fx.divisionId}`)).slug;
-  const path = `/shared/${orgSlug}/${comp.slug}/${divSlug}/fixtures/${fx.fixtureId}`;
+  const path = `/live/${orgSlug}/${comp.slug}/${divSlug}/fixtures/${fx.fixtureId}`;
   // Fix round 1 (task-15-review.md I3): the whole point of this check is
   // that an ANONYMOUS spectator can read the page -- `owner`'s session
-  // cookies would still pass if `/shared` silently started requiring auth,
+  // cookies would still pass if `/live` silently started requiring auth,
   // exactly the regression this check exists to catch. `newSession()` here
   // (moved up from below, now shared with the JSON check too) carries none.
   const anon = newSession();
   const page = await html(anon, path);
   check(
-    "match centre smoke: GET /shared/.../fixtures/{id} renders the match centre (mc-court-card), read ANONYMOUSLY",
+    "match centre smoke: GET /live/.../fixtures/{id} renders the match centre (mc-court-card), read ANONYMOUSLY",
     page.status === 200 && page.body.includes('data-testid="mc-court-card"'),
   );
 

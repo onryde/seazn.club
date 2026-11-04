@@ -138,10 +138,10 @@ const NAVIGATIONS = [
   "…and the division page it lands on",
   "?tab=fixtures — drawn and unplayed",
   "?tab=fixtures — after the seeding is confirmed",
-  "/shared/… — the same draw, read by an anonymous spectator (both tabs)",
-  "/shared/…/fixtures/<final> — the match centre a share link lands on",
+  "/live/… — the same draw, read by an anonymous spectator (both tabs)",
+  "/live/…/fixtures/<final> — the match centre a share link lands on",
   "/embed/divisions/<id>/bracket — the same draw in somebody else's page",
-  "/shared/<org>/<comp>?tab=matches — the hub's own card for that match",
+  "/live/<org>/<comp>?tab=matches — the hub's own card for that match",
   "?tab=fixtures — after the first semi is decided",
 ] as const;
 /** The API reaches this journey makes that cost real time: six league matches
@@ -428,7 +428,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
     /^\/o\/([^/]+)\/c\/([^/]+)\/d\/([^/]+)$/,
   )!;
   const spectator = await anonPage(browser, { width: 1280, height: 900 });
-  await visit(spectator, `/shared/${orgSlug}/${compSlug}/${pubDivSlug}`);
+  await visit(spectator, `/live/${orgSlug}/${compSlug}/${pubDivSlug}`);
   // The share link lands on Schedule; the DRAW is one tab across. Tapping is
   // what a spectator does and costs no page load — and the panels are all in
   // the ISR payload, so the bracket is ATTACHED from the first byte and only
@@ -540,7 +540,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   // `?tab=matches` deliberately: that tab is the one built from `hubSides`,
   // the hub's own naming path. The hub lands on Overview, which shows a
   // selection rather than every match.
-  await visit(spectator, `/shared/${orgSlug}/${compSlug}?tab=matches`);
+  await visit(spectator, `/live/${orgSlug}/${compSlug}?tab=matches`);
   const hubFinal = spectator.locator(`a[href$="/fixtures/${finalRow.id}"]`).first();
   await expect(hubFinal, "the hub never showed the final").toBeVisible({ timeout: STEP_MS });
   await expect(hubFinal, "the hub's final lost its first feeder").toContainText(publicR1_1);
@@ -560,7 +560,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   //      it. This one cost a run: the calendar was already right.
   // Undo both, in that order, before asserting.
   const ics = await spectator.request.get(
-    `/shared/${orgSlug}/${compSlug}/${pubDivSlug}/calendar.ics`,
+    `/live/${orgSlug}/${compSlug}/${pubDivSlug}/calendar.ics`,
   );
   expect(ics.status(), "the public calendar did not serve").toBe(200);
   const unfolded = (await ics.text()).replace(/\r\n /g, "").replace(/\\([,;\\])/g, "$1");

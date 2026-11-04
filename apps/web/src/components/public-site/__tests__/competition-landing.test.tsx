@@ -511,7 +511,7 @@ describe("activeTab — which tab wins, and what happens when its data disappear
     // So: one window whose `history.replaceState` really rewrites
     // `location.search`, the way a browser does, and then the actual
     // `writeTabParam` / `readTabParam` pair.
-    const loc = { href: "https://seazn.club/shared/riverside/autumn-cup", search: "" };
+    const loc = { href: "https://seazn.club/live/riverside/autumn-cup", search: "" };
     vi.stubGlobal("window", {
       location: loc,
       history: {
@@ -630,7 +630,7 @@ describe("CompetitionLanding — a poll re-renders the ACTIVE tab in place", () 
     vi.useFakeTimers();
     replaceState = vi.fn();
     vi.stubGlobal("window", {
-      location: { href: "https://seazn.club/shared/riverside/autumn-cup", search: "" },
+      location: { href: "https://seazn.club/live/riverside/autumn-cup", search: "" },
       history: { replaceState },
       addEventListener: () => {},
       removeEventListener: () => {},

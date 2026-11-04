@@ -282,7 +282,7 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
       expect(yt.description, `${locale} site link has no trailing slash (owner 2026-10-30)`).not.toMatch(/\/$/);
       const paragraphs = yt.description.split("\n\n");
       expect(paragraphs, `${locale} paragraphs`).toHaveLength(2);
-      expect(paragraphs[0], `${locale} first paragraph still carries the match URL`).toContain(`${origin}/shared/`);
+      expect(paragraphs[0], `${locale} first paragraph still carries the match URL`).toContain(`${origin}/live/`);
       poweredChecked++;
       if (locale !== "en") {
         expect(poweredBy, `${locale} words differ from en`).not.toBe(en["streaming.youtube.broadcast.poweredBy"]);
@@ -322,7 +322,7 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
       expect(await branded(w.orgId), `${why}: the premise (dashboard.branding)`).toBe(wantBranded);
       const p = await must(prep(w, f));
       const d = w.fake.inspectBroadcast((await row(p.broadcastId)).yt_broadcast_id!)!.description;
-      expect(d.startsWith(`${line} ${origin}/shared/`), why).toBe(true);
+      expect(d.startsWith(`${line} ${origin}/live/`), why).toBe(true);
       expect(d.endsWith(powered), why).toBe(true);
       expect(d.split("\n\n"), why).toHaveLength(2);
       checked++;

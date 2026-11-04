@@ -33,7 +33,7 @@ describe("LiveWall (/live)", () => {
     );
     expect(html).toContain("3 EN DIRECT");
     expect(html).toContain("WATCH-XX");
-    expect(html).toContain("/shared/harbor/cup-2/a/fixtures/f2");
+    expect(html).toContain("/live/harbor/cup-2/a/fixtures/f2");
     expect(html).toContain("141/3 (12.4)");
     expect(html).toContain("Harbor Cup 3");
   });
@@ -50,6 +50,6 @@ describe("LiveWall (/live)", () => {
     expect(html).toContain("EMPTY-XX");
     expect(html).toContain('href="/fr/discover"');
     expect(html).toContain('href="/fr/start"');
-    expect(html).not.toContain("/shared/");
+    expect(html).not.toContain("/live/");
   });
 });

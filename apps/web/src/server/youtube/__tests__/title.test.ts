@@ -117,7 +117,7 @@ describe("broadcastTitle (spec §6.5, plan P11)", () => {
 });
 
 describe("broadcastDescription (spec §6.5)", () => {
-  const url = "https://seazn.club/shared/club/cup/open/fixtures/abc";
+  const url = "https://seazn.club/live/club/cup/open/fixtures/abc";
   const site = "https://seazn.club";
   const base = { line: "Live score and results:", matchUrl: url, poweredBy: "Powered by Seazn Club", siteUrl: site };
 

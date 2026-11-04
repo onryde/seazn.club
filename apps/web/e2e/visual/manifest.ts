@@ -126,7 +126,7 @@ const RowSchema = z.object({
     .default(null),
   /** CSS selector the page must render before the shot — the state proven.
    *  Must be something ONLY the intended page renders: `main h1` also matches
-   *  the branded 404 (`shared/[orgSlug]/not-found.tsx` renders an `<h1>`
+   *  the branded 404 (`live/[orgSlug]/not-found.tsx` renders an `<h1>`
    *  inside the layout's `<main>`), on which every check passes and both
    *  cross-row comparisons still hold (fix round 1, Important 1). */
   awaitSelector: z.string().min(1),
@@ -204,7 +204,7 @@ export function parseManifest(json: unknown): VisualManifest {
   return m;
 }
 
-/** `/shared/{orgSlug}/…` → the seed's values. A placeholder the seed did not
+/** `/live/{orgSlug}/…` → the seed's values. A placeholder the seed did not
  *  provide throws with its name; the harness must never fetch a literal
  *  `{fixtureId}` and photograph a 404 as if it were the page. */
 export function resolveRoute(template: string, params: Record<string, string>): string {

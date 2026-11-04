@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { DiscoveryLiveFixture } from "@/server/public-site/discovery";
+import { routes } from "@/lib/routes";
 
 /** LIVE ticker under the hero (design/v3/12 §4.3). Real fixtures only —
  *  collapses when nothing is live. Marquee duplicates the row for a seamless
@@ -12,7 +13,7 @@ export function LiveTicker({ fixtures }: { fixtures: DiscoveryLiveFixture[] }) {
       {fixtures.map((f) => (
         <Link
           key={`${dup ? "d-" : ""}${f.id}`}
-          href={`/shared/${f.org_slug}/${f.comp_slug}/${f.division_slug}/fixtures/${f.id}`}
+          href={routes.publicFixture(f.org_slug, f.comp_slug, f.division_slug, f.id)}
           tabIndex={dup ? -1 : 0}
           className="mk-display flex items-center gap-2 whitespace-nowrap text-sm font-semibold text-[var(--mk-night)]"
         >

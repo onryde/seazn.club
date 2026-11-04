@@ -72,7 +72,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
       createElement(Schedule, {
         fixtures,
         entrantNames,
-        divisionPath: "/shared/org/comp/div",
+        divisionPath: "/live/org/comp/div",
         tz: "UTC",
         roundLabels: ROUND_LABELS,
         copy: COPY,
@@ -95,7 +95,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
       createElement(Schedule, {
         fixtures,
         entrantNames,
-        divisionPath: "/shared/org/comp/div",
+        divisionPath: "/live/org/comp/div",
         tz: "UTC",
         roundLabels: ROUND_LABELS,
         copy: COPY,
@@ -115,7 +115,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
       createElement(Schedule, {
         fixtures,
         entrantNames,
-        divisionPath: "/shared/org/comp/div",
+        divisionPath: "/live/org/comp/div",
         tz: "UTC",
         roundLabels: ROUND_LABELS,
         copy: COPY,
@@ -134,7 +134,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
       createElement(Schedule, {
         fixtures,
         entrantNames,
-        divisionPath: "/shared/org/comp/div",
+        divisionPath: "/live/org/comp/div",
         tz: "UTC",
         roundLabels: ROUND_LABELS,
         copy: COPY,
@@ -168,7 +168,7 @@ describe("public Schedule — court_name/venue_name, never the frozen court_labe
       createElement(Schedule, {
         fixtures,
         entrantNames,
-        divisionPath: "/shared/org/comp/div",
+        divisionPath: "/live/org/comp/div",
         tz: "UTC",
         roundLabels: ROUND_LABELS,
         copy: COPY,
@@ -219,7 +219,7 @@ describe("public Schedule — the round view reads stage by stage, then round (N
       createElement(Schedule, {
         fixtures,
         entrantNames,
-        divisionPath: "/shared/org/comp/div",
+        divisionPath: "/live/org/comp/div",
         tz: "UTC",
         slotLabels: {},
         roundLabels,
@@ -358,7 +358,7 @@ describe("public Schedule — a held match reads Ended with its score (W2a fix r
           }),
         ],
         entrantNames: { e1: "Riverside", e2: "Summit" },
-        divisionPath: "/shared/org/comp/div",
+        divisionPath: "/live/org/comp/div",
         tz: "UTC",
         roundLabels: ROUND_LABELS,
         copy: COPY,

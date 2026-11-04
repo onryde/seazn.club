@@ -98,7 +98,7 @@ describe("e2e/visual/manifest.json", () => {
   });
 
   it("no row awaits a selector the branded 404 also satisfies", () => {
-    // `shared/[orgSlug]/not-found.tsx` renders an <h1> inside the SAME
+    // `live/[orgSlug]/not-found.tsx` renders an <h1> inside the SAME
     // `<main>` the fixture page's layout provides, so `main h1` matched a
     // 404 — on which every check passes (no clips, no rails, few controls)
     // and both cross-row comparisons still hold. The whole group would have

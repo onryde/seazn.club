@@ -12,7 +12,7 @@
 // hand-written prop.
 //
 // Same mocking shape as the sibling public fixture page's own page.test.ts
-// (`(public)/shared/.../fixtures/[fixtureId]/__tests__/page.test.ts`):
+// (`(public)/live/.../fixtures/[fixtureId]/__tests__/page.test.ts`):
 // server-only data reads are mocked, everything pure (`resolveTheme`,
 // `getDictionary`, `overlayStartLabel`) stays real.
 import { describe, expect, it, vi } from "vitest";

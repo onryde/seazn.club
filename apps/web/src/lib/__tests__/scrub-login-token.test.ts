@@ -239,7 +239,7 @@ describe.each(LINKS_WITH_NEXT)("the link the real $name route emails, with a nex
   it("with the Lichess start as its next (the match-room token two encodings deep): BOTH tokens are scrubbed, nothing else changes", async () => {
     const claims = { fixtureId: randomUUID(), personId: randomUUID(), roundOpenId: randomUUID(), roundOpenedAt: new Date().toISOString() };
     const room = await mintMatchRoomToken(claims);
-    const startHref = lichessLinkStartHref("chess-club", routes.sharedFixturePlay("chess-club", "autumn-open", "open", claims.fixtureId, room));
+    const startHref = lichessLinkStartHref("chess-club", routes.publicFixturePlay("chess-club", "autumn-open", "open", claims.fixtureId, room));
     const { link, token } = await drive(route, pathname, table, body(startHref));
     expect(link, "premise: the room token is carried, encoded twice").toContain(`%253Ft%253D${room}`);
     const out = scrubScoreUrl(link);
@@ -300,7 +300,7 @@ describe("every emailed ?token= link is scrubbed, or is knowingly not a one-time
     );
     expect(builders.size).toBeGreaterThanOrEqual(6);
     for (const route of builders.keys()) {
-      // "/register/status" is the tail of /shared/<org>/<comp>/register/status: a real page, under a dynamic prefix.
+      // "/register/status" is the tail of /live/<org>/<comp>/register/status: a real page, under a dynamic prefix.
       if (route in NOT_ONE_TIME) continue;
       expect(hasRoute(route), `${route} (built in ${builders.get(route)}) is a real route`).toBe(true);
     }
@@ -397,7 +397,7 @@ describe("a token= that is not on a one-time route is left alone", () => {
   // Every URL here ALSO names a one-time route (plain or encoded) somewhere harmless, so the scrubber's cheap pre-check
   // passes and the PATTERN has to refuse the `token=`: a URL with no route in it would be waved through by the pre-check alone.
   const cases: [string, (t: string) => string][] = [
-    ["the registration status page's access token", (t) => `${ORIGIN}/shared/org/cup/register/status?rid=r1&token=${t}&back=%2Fmagic-link`],
+    ["the registration status page's access token", (t) => `${ORIGIN}/live/org/cup/register/status?rid=r1&token=${t}&back=%2Fmagic-link`],
     ["a public registration API read", (t) => `${ORIGIN}/api/v1/public/registrations/abc?token=${t}&from=/verify-email`],
     ["a route that only starts with a one-time route's name", (t) => `${ORIGIN}/magic-linkage?token=${t}`],
     ["a hyphenated route that begins with a one-time route's name", (t) => `${ORIGIN}/x/magic-link-old?token=${t}`],
@@ -552,7 +552,7 @@ describe("Sentry's request.query_string (no `?`) is scrubbed when the event is o
   });
 
   it("the positive pair: the SAME query string on any other route is kept, and so is an event with no request", () => {
-    for (const url of [`${ORIGIN}/api/v1/public/registrations/abc`, `${ORIGIN}/shared/o/c/register/status`, `${ORIGIN}/magic-linkage`, `${ORIGIN}/dashboard`]) {
+    for (const url of [`${ORIGIN}/api/v1/public/registrations/abc`, `${ORIGIN}/live/o/c/register/status`, `${ORIGIN}/magic-linkage`, `${ORIGIN}/dashboard`]) {
       const event: Event = { event_id: "e", request: { url, query_string: `token=${T()}` } };
       expect(scrubSentryEvent(event).request?.query_string, url).toBe(`token=${T()}`);
     }

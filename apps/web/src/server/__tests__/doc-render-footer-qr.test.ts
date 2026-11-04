@@ -63,7 +63,7 @@ async function render(m: DocModel) {
 // finder pattern is a QR that phones refuse to read.
 describe("doc-render footer — QR and attribution", () => {
   it("keeps the attribution clear of the QR when one is drawn", async () => {
-    const r = await render(model("https://seazn.club/shared/o/c/d"));
+    const r = await render(model("https://seazn.club/live/o/c/d"));
     expect(r.images).toHaveLength(1);
     const qr = r.images[0]!;
     const qrLeft = qr.x;
@@ -77,7 +77,7 @@ describe("doc-render footer — QR and attribution", () => {
   });
 
   it("still uses the full width when there is no QR", async () => {
-    // Private competitions get no QR (the /shared page 404s), and the
+    // Private competitions get no QR (the /live page 404s), and the
     // attribution should not be needlessly indented on those.
     const r = await render(model());
     expect(r.images).toHaveLength(0);
@@ -86,7 +86,7 @@ describe("doc-render footer — QR and attribution", () => {
   });
 
   it("draws the QR inside the page, above the footer baseline", async () => {
-    const r = await render(model("https://seazn.club/shared/o/c/d"));
+    const r = await render(model("https://seazn.club/live/o/c/d"));
     const qr = r.images[0]!;
     expect(qr.x + (qr.width ?? 0)).toBeLessThanOrEqual(PAGE_W - MARGIN);
     expect(qr.y).toBeGreaterThan(0);

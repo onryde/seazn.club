@@ -3,20 +3,24 @@ import { negotiateLocale } from "@/lib/i18n-negotiate";
 import { hasLocale } from "@/lib/i18n-constants";
 import { SESSION_HINT_COOKIE, SESSION_MAX_AGE_S, hasSessionHint } from "@/lib/session-hint";
 import { RELAY_PHASE_PORT } from "@/lib/relay-phase";
+import { isPublicHubPath } from "@/lib/routes";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 // ISR/CDN-cacheable public surfaces (spec 2026-07-12 P5): nonce CSP forces
 // dynamic rendering, so these trees stay Report-Only permanently — flipping
 // CSP_MODE=enforce hardens the app surface without un-caching spectator pages.
-// Cacheable trees: /shared and /embed. /r (registration-ref tree, /r/[ref]) is
-// deliberately excluded because it is force-dynamic and processes self-withdraw
-// tokens; excluding it from the carve-out costs no caching but keeps enforce
-// active on a token-bearing page.
-const CACHEABLE_PUBLIC = /^\/(shared|embed)(\/|$)/;
+// Cacheable trees: the public hub (`/live/…`, routes.publicHub) and /embed. A
+// bare `/live` is the marketing wall (LIVE1 option A) and keeps the app's
+// nonce CSP like every other marketing page. /r (registration-ref tree,
+// /r/[ref]) is deliberately excluded because it is force-dynamic and processes
+// self-withdraw tokens; excluding it from the carve-out costs no caching but
+// keeps enforce active on a token-bearing page. The pre-LIVE1 `/shared/…` tree
+// never reaches here: next.config.js's redirects run before the proxy.
+const EMBED_TREE = /^\/embed(\/|$)/;
 
 export function isCacheablePublicPath(pathname: string): boolean {
-  return CACHEABLE_PUBLIC.test(pathname);
+  return isPublicHubPath(pathname) || EMBED_TREE.test(pathname);
 }
 
 /** The `/overlay` tree (`/overlay` or `/overlay/…`, never `/overlayx…`): the stream overlay a club adds to OBS, and the

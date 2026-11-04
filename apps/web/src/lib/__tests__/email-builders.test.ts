@@ -175,7 +175,7 @@ function makeBuilders(
           sponsorName: "Court & Co <Ltd>",
           amountCents: 25_000,
           currency: "gbp",
-          publicUrl: "https://seazn.club/shared/riverside",
+          publicUrl: "https://seazn.club/live/riverside",
         },
         dict,
       ),

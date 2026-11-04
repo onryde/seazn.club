@@ -242,7 +242,7 @@ test.describe("player accounts (PROMPT-53)", () => {
     request,
   }) => {
     const cardUrl = (personId: string) =>
-      `/shared/${orgSlug}/${compSlug}/players/${personId}`;
+      `/live/${orgSlug}/${compSlug}/players/${personId}`;
 
     // Before consent: both cards 404 (public_players_v is consent-gated).
     expect((await request.get(cardUrl(ada.id))).status()).toBe(404);

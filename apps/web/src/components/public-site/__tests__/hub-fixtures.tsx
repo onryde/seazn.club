@@ -284,8 +284,8 @@ export function tableView(
     // NOT byte-identical to what the builder emits, and the first version of
     // this comment claimed it was (review F4). `competition-hub.ts:584` builds
     // `${divHref}?tab=standings` where `divHref` is `${base}/${d.slug}` and
-    // `base` is `/shared/${org}/${comp}` (`:372`, `:440`) — so production
-    // hrefs carry a `/shared` prefix these fixtures do not. That is this
+    // `base` is `/live/${org}/${comp}` (`:372`, `:440`) — so production
+    // hrefs carry a `/live` prefix these fixtures do not. That is this
     // file's inherited convention rather than Task 9's invention (`m()` and
     // `division()` above, and `server/public-site/__tests__/_hub-doc.ts`, all
     // drop it), so it is left alone here rather than diverged from in one
@@ -426,10 +426,10 @@ export function board(
  *   team("e1", "Southend Blue Blazers", "https://x/b.png", null)
  *   team("e2", "Rochford Ramblers CC", null, "#123456")
  *
- * `href` follows this file's inherited convention and DROPS the `/shared`
+ * `href` follows this file's inherited convention and DROPS the `/live`
  * prefix production carries — the same caveat `tableView()` writes up below
  * its own `fullHref`. `competition-hub.ts:608` emits
- * `${base}/${d.slug}?tab=entrants` with `base = /shared/${org}/${comp}`.
+ * `${base}/${d.slug}?tab=entrants` with `base = /live/${org}/${comp}`.
  */
 export function team(
   entrantId: string,

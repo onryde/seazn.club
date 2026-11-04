@@ -71,6 +71,7 @@ import {
   CompetitionHubDoc,
   type CompetitionHubDocT,
 } from "@/server/public-site/competition-hub-schema";
+import { routes } from "@/lib/routes";
 
 // s-maxage=30 at the edge (doc 08 §6); Redis mirrors that window.
 export const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=300";
@@ -763,7 +764,7 @@ async function loadFixtureMatchCentreCtx(
       ? undefined
       : { name: row.stage_name!, config: row.stage_config, kind: row.stage_kind! };
   const locale = toLocale(row.org_default_locale);
-  const basePath = `/shared/${row.org_slug}/${row.competition_slug}/${row.division_slug}`;
+  const basePath = routes.publicHub(row.org_slug, row.competition_slug, row.division_slug);
   return {
     orgTz: row.org_tz,
     division: {
@@ -780,7 +781,7 @@ async function loadFixtureMatchCentreCtx(
       playerNameDisplay: row.player_name_display,
     },
     locale,
-    hrefs: { division: basePath, competition: `/shared/${row.org_slug}/${row.competition_slug}`, calendar: `${basePath}/calendar.ics` },
+    hrefs: { division: basePath, competition: routes.publicHub(row.org_slug, row.competition_slug), calendar: routes.publicCalendar(row.org_slug, row.competition_slug, row.division_slug) },
     stage: stageRow ? { name: stageRow.name, roundLabel: null } : null,
     slotLabelLookup: (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars),
     configRows: {

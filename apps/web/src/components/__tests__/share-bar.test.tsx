@@ -15,12 +15,12 @@ describe("shareLinks (ShareBar pure helper)", () => {
   it("builds an absolute url and a wa.me link with the encoded title + url", () => {
     const { url, wa } = shareLinks(
       "https://seazn.club",
-      "/shared/riverside/spring-cup",
+      "/live/riverside/spring-cup",
       "Spring Cup",
     );
-    expect(url).toBe("https://seazn.club/shared/riverside/spring-cup");
+    expect(url).toBe("https://seazn.club/live/riverside/spring-cup");
     expect(wa).toBe(
-      `https://wa.me/?text=${encodeURIComponent("Spring Cup — https://seazn.club/shared/riverside/spring-cup")}`,
+      `https://wa.me/?text=${encodeURIComponent("Spring Cup — https://seazn.club/live/riverside/spring-cup")}`,
     );
   });
 });

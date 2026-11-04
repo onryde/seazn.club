@@ -140,7 +140,7 @@ test("R115-4: /me and the public card refold an old-version snapshot after the f
   const anonCtx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const anon = await anonCtx.newPage();
   await anon.setViewportSize({ width: 1280, height: 900 });
-  const url = `/shared/${orgSlug}/${b.comp.slug}/players/${b.pat}`;
+  const url = `/live/${orgSlug}/${b.comp.slug}/players/${b.pat}`;
   const tile = () => anon.getByTestId("player-stats").locator("div", { has: anon.getByRole("link", { name: "Gen", exact: true }) }).last();
   await anon.goto(url, { waitUntil: "load" });
   await expect(tile()).toBeVisible({ timeout: 20_000 });
@@ -162,7 +162,7 @@ test("R115-4: /me and the public card refold an old-version snapshot after the f
   const second = await visit();
   // The bound the product does promise: the page's own declared `revalidate` (read from the page, not typed here),
   // then one stale-while-revalidate visit to start the regeneration, then the fresh one.
-  const pageSrc = readFileSync(fileURLToPath(new URL("../src/app/(public)/shared/[orgSlug]/[competitionSlug]/players/[personId]/page.tsx", import.meta.url)), "utf8");
+  const pageSrc = readFileSync(fileURLToPath(new URL("../src/app/(public)/live/[orgSlug]/[competitionSlug]/players/[personId]/page.tsx", import.meta.url)), "utf8");
   const revalidateS = Number(/^export const revalidate = (\d+);/m.exec(pageSrc)?.[1]);
   expect(revalidateS, "the card page declares its ISR window").toBeGreaterThan(0);
   const visits: string[] = [`${Math.round((Date.now() - t1) / 1000)}s:${second}`];

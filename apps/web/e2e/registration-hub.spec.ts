@@ -514,7 +514,7 @@ test.describe("RS004 registration hub", () => {
     await expect(row).toBeVisible({ timeout: 20_000 });
 
     const origin = new URL(page.url()).origin;
-    const expectedUrl = `${origin}/shared/${org.slug}/${competitionSlug}/register`;
+    const expectedUrl = `${origin}/live/${org.slug}/${competitionSlug}/register`;
 
     // The readonly input carries the same `url` CopyLink's own copy()
     // writes to the clipboard — assert the FULL origin+path, not a suffix

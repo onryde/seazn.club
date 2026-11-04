@@ -14,6 +14,7 @@ import { kindEyebrow } from "@/lib/news-presentation";
 import { Composer } from "@/components/news/composer";
 import { PlanBadge } from "@/components/plan-badge";
 import type { OrgPost, PostKind } from "@/server/usecases/org-posts";
+import { routes } from "@/lib/routes";
 
 const KIND_CHIP: Record<
   ReturnType<typeof kindEyebrow>["tone"],
@@ -239,7 +240,7 @@ export function NewsTab({
               <li key={p.id} className="flex flex-wrap items-center gap-2 px-4 py-3" data-testid="published-row">
                 <KindChip kind={p.kind} label={kindLabel(p.kind)} />
                 <a
-                  href={`/shared/${orgSlug}/news/${p.slug}`}
+                  href={routes.publicNewsPost(orgSlug, p.slug)}
                   target="_blank"
                   rel="noreferrer"
                   className="min-w-0 flex-1 truncate text-sm font-medium text-slate-700 hover:text-purple-700"
@@ -247,7 +248,7 @@ export function NewsTab({
                   {p.title}
                 </a>
                 <a
-                  href={`/shared/${orgSlug}/news/${p.slug}`}
+                  href={routes.publicNewsPost(orgSlug, p.slug)}
                   target="_blank"
                   rel="noreferrer"
                   className="btn btn-ghost px-2 py-1 text-xs"

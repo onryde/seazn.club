@@ -211,7 +211,7 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
       }
     });
 
-    await anon.goto(`/shared/${org.slug}/${comp.data!.slug}/register`, { waitUntil: "load" });
+    await anon.goto(`/live/${org.slug}/${comp.data!.slug}/register`, { waitUntil: "load" });
     await anon.getByRole("button", { name: /^accept$/i }).click({ timeout: 3000 }).catch(() => {});
     await expect(anon.locator("#reg-who-name")).toBeVisible({ timeout: 20_000 });
 

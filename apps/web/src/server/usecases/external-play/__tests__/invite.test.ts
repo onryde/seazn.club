@@ -207,7 +207,7 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
       const sent = mail.sent.find((m) => m.to === player.email)!;
       const link = new URL(sent.fixtureUrl);
       expect(link.origin).toBe(new URL(ORIGIN).origin);
-      expect(link.pathname).toMatch(new RegExp(`^/shared/[^/]+/[^/]+/[^/]+/fixtures/${b.fixtureId}/play$`));
+      expect(link.pathname).toMatch(new RegExp(`^/live/[^/]+/[^/]+/[^/]+/fixtures/${b.fixtureId}/play$`));
       const t = link.searchParams.get("t");
       expect(t, "a personal link token").toBeTruthy();
       const byLink = await readRoom({ kind: "token", token: t! }, b.fixtureId);

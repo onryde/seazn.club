@@ -1,6 +1,7 @@
 import path from "node:path";
 import { withSentryConfig } from "@sentry/nextjs";
 import { posthogIngestHosts } from "./src/lib/posthog-proxy.mjs";
+import { LEGACY_PUBLIC_HUB_ROOT, PUBLIC_HUB_ROOT } from "./src/lib/public-hub-root.mjs";
 
 // Permissions-Policy. The camera is off everywhere but one document: the
 // player's match room, which joins its board's meeting with the player's own
@@ -13,7 +14,8 @@ import { posthogIngestHosts } from "./src/lib/posthog-proxy.mjs";
 // A path the room rule does not match keeps camera=(): it fails closed.
 // T17B fix 1; permissions-policy-headers.test.ts and match-room.spec.ts pin it.
 const PERMISSIONS_POLICY = "Permissions-Policy";
-const MATCH_ROOM_SOURCE = "/shared/:orgSlug/:competitionSlug/:divisionSlug/fixtures/:fixtureId/play";
+// The room is routes.publicFixturePlay's shape, over the same root (LIVE1).
+const MATCH_ROOM_SOURCE = `${PUBLIC_HUB_ROOT}/:orgSlug/:competitionSlug/:divisionSlug/fixtures/:fixtureId/play`;
 
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -100,6 +102,27 @@ const nextConfig = {
   // instrumentation-client). skipTrailingSlashRedirect keeps PostHog's
   // trailing-slash API paths from being 308'd.
   skipTrailingSlashRedirect: true,
+  // LIVE1 (owner ruling 2026-11-03): the public spectator tree moved from
+  // /shared/… to /live/…. Every old URL — a printed poster's QR code, an email
+  // already sent, a bookmark, a search result — answers a PERMANENT 308 to the
+  // same path under /live, query string kept (Next passes the request's query
+  // through to the destination). Kept FOREVER: paper does not expire. Redirects
+  // run before proxy.ts and before the filesystem, so the old root never
+  // reaches the app; nothing we render links to it (routes.* builds every
+  // spectator URL, and lib/__tests__/public-hub-links.test.ts reds on a
+  // hand-written one), so the app's own client-side `?_rsc` navigation never
+  // goes through it either. A bare /shared lands on /live, the marketing wall.
+  // Pinned by lib/__tests__/public-hub-redirect.test.ts (Next's own matcher)
+  // and e2e/walkthrough/live-public-path.spec.ts (a prod server).
+  async redirects() {
+    return [
+      {
+        source: `${LEGACY_PUBLIC_HUB_ROOT}/:path*`,
+        destination: `${PUBLIC_HUB_ROOT}/:path*`,
+        permanent: true,
+      },
+    ];
+  },
   async rewrites() {
     // Region-derived from NEXT_PUBLIC_POSTHOG_HOST (see posthog-proxy). Must be
     // set at build time — these rewrite destinations bake into the server.

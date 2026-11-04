@@ -25,14 +25,14 @@ describe("the Switch account href, scrubbed", () => {
     const token = await realToken();
     expect(segments(token), "premise: a real JWT").toHaveLength(3);
     expect(token.length, "premise: the long token the owner saw (~370 chars)").toBeGreaterThan(200);
-    const next = `/shared/org/comp/div/fixtures/${randomUUID()}/play?t=${encodeURIComponent(token)}`;
+    const next = `/live/org/comp/div/fixtures/${randomUUID()}/play?t=${encodeURIComponent(token)}`;
     const href = switchAccountHref(next);
     expect(href, "premise: the href holds the token before the scrub").toContain(token);
     const scrubbed = scrubScoreUrl(href);
     expect(scrubbed).not.toContain(token);
     for (const seg of segments(token)) expect(scrubbed, `segment ${seg.slice(0, 8)}…`).not.toContain(seg);
     expect(scrubbed, "and says where it was").toContain("[token]");
-    expect(scrubbed, "the rest of the URL is left alone: the login page and where it lands").toMatch(/^\/login\?next=%2Fshared%2Forg%2Fcomp%2Fdiv%2Ffixtures%2F[0-9a-f-]{36}%2Fplay%3Ft%3D\[token\]$/);
+    expect(scrubbed, "the rest of the URL is left alone: the login page and where it lands").toMatch(/^\/login\?next=%2Flive%2Forg%2Fcomp%2Fdiv%2Ffixtures%2F[0-9a-f-]{36}%2Fplay%3Ft%3D\[token\]$/);
   });
 
   it("the same, with the token somewhere other than last in the query, and through the JSON walk the SDKs use", async () => {
@@ -51,7 +51,7 @@ describe("the Switch account href, scrubbed", () => {
     for (const token of [a, b]) {
       expect(scrubScoreUrl(switchAccountHref(`/play?t=${encodeURIComponent(token)}`))).not.toContain(segments(token)[2]!);
     }
-    const plain = switchAccountHref("/shared/org/comp/div/fixtures/f1/play");
+    const plain = switchAccountHref("/live/org/comp/div/fixtures/f1/play");
     expect(scrubScoreUrl(plain), "no token, nothing to change").toBe(plain);
   });
 });

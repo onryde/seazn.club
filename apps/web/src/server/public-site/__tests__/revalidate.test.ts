@@ -142,8 +142,8 @@ describe("fireScoreRevalidate (a scoring write)", () => {
 describe("firePostRevalidate (news post status flips)", () => {
   it("purges the post page and the feed by path", () => {
     firePostRevalidate("riverside", "summer-schedule");
-    expect(revalidatePath).toHaveBeenCalledWith("/shared/riverside/news/summer-schedule");
-    expect(revalidatePath).toHaveBeenCalledWith("/shared/riverside/news");
+    expect(revalidatePath).toHaveBeenCalledWith("/live/riverside/news/summer-schedule");
+    expect(revalidatePath).toHaveBeenCalledWith("/live/riverside/news");
   });
 
   it("swallows revalidatePath throwing outside a request scope, still purges CDN", () => {

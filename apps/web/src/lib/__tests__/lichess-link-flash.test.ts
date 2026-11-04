@@ -49,7 +49,7 @@ describe("the Lichess linking flash", () => {
   it("lands on next — keeping its own query — or on /me", () => {
     expect(lichessLanding(null, "unavailable")).toBe("/me?lichess=unavailable");
     expect(lichessLanding("/settings?tab=account", "unavailable")).toBe("/settings?tab=account&lichess=unavailable");
-    expect(lichessLanding("/shared/o/c/d/fixtures/f1/play", "linked")).toBe("/shared/o/c/d/fixtures/f1/play?lichess=linked");
+    expect(lichessLanding("/live/o/c/d/fixtures/f1/play", "linked")).toBe("/live/o/c/d/fixtures/f1/play?lichess=linked");
   });
 });
 
@@ -61,7 +61,7 @@ describe("lichessLanding carries the outcome code alone", () => {
   it("every code: the landing's query is next's own plus one lichess=<code> (no username, no id, no email)", () => {
     let checked = 0;
     for (const code of LICHESS_FLASH_CODES) {
-      for (const next of [null, "/settings?tab=account", "/shared/o/c/d/fixtures/f1/play?t=tok.en"]) {
+      for (const next of [null, "/settings?tab=account", "/live/o/c/d/fixtures/f1/play?t=tok.en"]) {
         const before = new URL(next ?? "/me", "http://x");
         const after = new URL(lichessLanding(next, code), "http://x");
         expect(after.pathname, `${code} ${next}`).toBe(before.pathname);
@@ -133,7 +133,7 @@ describe("lichessFlashNextKey - the next step a failure owes the player", () => 
 describe("withoutLichessParam - the address bar after the outcome has been read", () => {
   const TOKEN = "eyJhbGciOiJIUzI1NiJ9.payload-with_chars.sig";
   it("drops lichess= and keeps t= byte for byte (the personal link is the room's only way in)", () => {
-    const room = `/shared/o/c/d/fixtures/f1/play?t=${encodeURIComponent(TOKEN)}`;
+    const room = `/live/o/c/d/fixtures/f1/play?t=${encodeURIComponent(TOKEN)}`;
     expect(withoutLichessParam(`${room}&lichess=already_linked`)).toBe(room);
     // Param first: the rest keeps its order and its own encoding.
     expect(withoutLichessParam(`/p?lichess=linked&t=${TOKEN}&x=a%20b+c`)).toBe(`/p?t=${TOKEN}&x=a%20b+c`);

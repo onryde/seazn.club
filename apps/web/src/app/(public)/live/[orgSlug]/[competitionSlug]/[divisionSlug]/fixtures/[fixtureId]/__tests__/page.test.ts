@@ -1,0 +1,858 @@
+// P6 fix round 1, finding #2 (CRITICAL, addition beyond the review's literal
+// 4-file list): this fixture detail PAGE has the exact same bug pattern as
+// bracket.tsx/schedule.tsx/og-model.ts/slideshow-data.ts (a hardcoded-English
+// msg() with no way to reach a real locale) and is explicitly named as an
+// affected "fixture" surface in the finding's own text, even though the
+// dispatch's file list cites og/model.ts (the OG card) for that word. Same
+// bug, same fix: resolve via the org's own default_locale.
+//
+// generateMetadata is a plain async function (no render) — the cheapest,
+// highest-confidence way to prove the fix, and it computes home/away with
+// the exact same formula the default export's page body duplicates.
+import { describe, expect, it, vi } from "vitest";
+import { isValidElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MatchCentreDoc, type MatchCentreDocT } from "@/server/public-site/match-centre-schema";
+import { startTimeText } from "@/server/public-site/match-centre";
+import publicEn from "@/dictionaries/en/public.json";
+import publicEs from "@/dictionaries/es/public.json";
+import publicFr from "@/dictionaries/fr/public.json";
+import publicNl from "@/dictionaries/nl/public.json";
+import uiEn from "@/dictionaries/en/ui.json";
+import { posterFileName } from "@/lib/poster-file-name";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
+import { msgFor } from "@/lib/messages-i18n";
+import { t } from "@/lib/i18n-runtime";
+import { resolveSlotLabel } from "@/lib/slot-label";
+import { toLocale } from "@/lib/i18n-constants";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
+
+// Real dictionaries, not a table typed into this test (rule 19/reference_
+// html_grep_for_dictionary_copy...): Dutch's own `matchCentre.status.live`
+// is "Live" too (an accepted loanword), so a hardcoded ">Live<" absence
+// check would be a FALSE positive for nl — the assertions below compare
+// against each locale's OWN real dictionary value instead.
+const PUBLIC_DICTS: Record<string, Record<string, unknown>> = { en: publicEn, es: publicEs, fr: publicFr, nl: publicNl };
+const UI_DICTS: Record<string, Record<string, unknown>> = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl };
+
+const getPublicFixture = vi.fn();
+vi.mock("@/server/public-site/data", () => ({
+  getPublicFixture: (...a: unknown[]) => getPublicFixture(...a),
+}));
+
+// Task 14d — the page itself no longer reads `searchParams` (the ISR
+// contract, public-isr-contract.test.ts, forbids it); the `?tab=` deep link
+// is read client-side instead, inside `<MatchCentreWithTabParam>`
+// (`useSearchParams`, next/navigation). `notFound` stays REAL — nothing
+// here exercises the `!data` branch, and a full replacement would silently
+// swallow a future accidental use of it.
+const useSearchParams = vi.fn(() => new URLSearchParams());
+vi.mock("next/navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/navigation")>();
+  return { ...actual, useSearchParams: () => useSearchParams() };
+});
+
+const baseData = (
+  locale: string,
+  fixtureOver: Record<string, unknown> = {},
+  entrantNamesOver: Record<string, string> = {},
+) => {
+  const fixture = {
+    id: "f1", division_id: "d1", stage_id: "s1", pool_id: null, round_no: 1, seq_in_round: 1,
+    home_entrant_id: null, away_entrant_id: null, home_slot_label: null, away_slot_label: null,
+    scheduled_at: null, venue: null, court_label: null, venue_name: null, court_name: null,
+    status: "scheduled", outcome: null, summary: null, last_seq: null,
+    ...fixtureOver,
+  };
+  return {
+    org: { id: "o1", name: "Test Org", slug: "test-org", branded: false, branding: {}, logo: null, about: null, default_locale: locale, card_payments: false },
+    competition: { id: "c1", org_id: "o1", name: "Test Comp", slug: "test-comp", description: null, starts_on: null, ends_on: null, branding: {}, status: "active", visibility: "public" },
+    division: { id: "d1", competition_id: "c1", name: "Open", slug: "open", description: null, sport_key: "generic", variant_key: "score", status: "active", module_version: "1.0.0", tiebreakers: null, sport_name: null, entrant_count: 2 },
+    fixture,
+    entrantNames: entrantNamesOver,
+    realtime: false,
+    // N1 fix round 1 (I1): `getPublicFixture` always returns `matchCentre`,
+    // and the page names a WAITING side from it rather than resolving the slot
+    // label a second time. See `docNaming` below.
+    matchCentre: docNaming(locale, fixture),
+    // T16 — `getPublicFixture` always carries these (null / false when the
+    // division does not play online): the watch panel reads them.
+    externalPlay: null,
+    // T16 — the YouTube replay parts (none unless a broadcast completed for this fixture).
+    parts: [],
+    roundOpened: false,
+    roundOpenedAt: null,
+    pairedWhiteSide: null,
+    venueTz: "UTC",
+  };
+};
+
+/**
+ * The match-centre document a bare `baseData()` fixture comes with:
+ * `cricketDocFor`'s, with each side named the way `loadMatchCentre` names it —
+ * the entrant's side as is, a waiting side by its stored slot label. The labels
+ * these tests store are group-finish labels, not feeder labels, and for those
+ * `publicSlotLabel` is exactly `resolveSlotLabel` in the org's locale. The
+ * fixture page's own real-loader case is `page-waiting-side.test.ts`.
+ */
+function docNaming(
+  locale: string,
+  fixture: {
+    home_entrant_id: unknown;
+    away_entrant_id: unknown;
+    home_slot_label: unknown;
+    away_slot_label: unknown;
+    scheduled_at: unknown;
+    venue_name: unknown;
+    court_name: unknown;
+  },
+): MatchCentreDocT {
+  const doc = cricketDocFor("in_play");
+  const inLocale = (key: Parameters<typeof msgFor>[1], vars?: Record<string, string | number>) =>
+    msgFor(toLocale(locale), key, vars);
+  const waiting = (side: MatchCentreDocT["header"]["sides"][0], label: unknown) => ({
+    ...side,
+    entrantId: "",
+    name: resolveSlotLabel(label as SlotLabel | null, inLocale, "schedule.tbd"),
+  });
+  const [home, away] = doc.header.sides;
+  return {
+    ...doc,
+    // M1 k2 — `loadMatchCentre` carries the fixture's start time and its
+    // DERIVED venue/court names onto the document (that is what lets the
+    // page's subheading line move when a match is rescheduled), so this
+    // fixture carries them too — from the same row, through the same
+    // `startTimeText`, rather than as a second hand-typed idea of the format.
+    startTime: startTimeText((fixture.scheduled_at as string | null) ?? null, locale, "UTC"),
+    venueName: (fixture.venue_name as string | null) ?? null,
+    courtName: (fixture.court_name as string | null) ?? null,
+    header: {
+      ...doc.header,
+      sides: [
+        fixture.home_entrant_id ? home : waiting(home, fixture.home_slot_label),
+        fixture.away_entrant_id ? away : waiting(away, fixture.away_slot_label),
+      ],
+    },
+  };
+}
+
+// Task 14 — `getPublicFixture` now also returns `matchCentre` (Task 9); a
+// full band-3 cricket document exercises the REAL `<MatchCentre>` tree (tab
+// rail + court card + scorecard tab), not the `LiveScoreBody` fallback the
+// bare `baseData()` fixture above still takes (no `matchCentre` field —
+// `MatchCentre` degrades to its own documented `mc-fallback`, unaffected by
+// this task's page-wiring change, which is why the pre-existing tests above
+// needed no update).
+const baseDataWithMC = (
+  locale: string,
+  matchCentre: MatchCentreDocT,
+  fixtureOver: Record<string, unknown> = {},
+  entrantNamesOver: Record<string, string> = {},
+) => ({
+  ...baseData(locale, fixtureOver, entrantNamesOver),
+  matchCentre,
+});
+
+function cricketDocFor(status: "in_play" | "decided"): MatchCentreDocT {
+  const doc: MatchCentreDocT = {
+    fixtureId: "f1",
+    sportKey: "cricket",
+    derivedComplete: true,
+    header: {
+      live: status === "in_play",
+      status,
+      sides: [
+        { entrantId: "home", name: "Home XI", short: "HOM", colour: null, badgeUrl: null },
+        { entrantId: "away", name: "Away XI", short: "AWY", colour: null, badgeUrl: null },
+      ],
+      scoreLines: status === "decided" ? ["245/6", "180"] : ["156/4", null],
+      subLines: [null, null],
+      battingIndex: status === "in_play" ? 0 : null,
+      statusLine:
+        status === "decided"
+          ? // The builder's decided shape since 2026-09-16: the unit and plural
+            // form in the KEY, the bare count as a param — never English prose.
+            { key: "matchCentre.result.runs.other", params: { winner: "Home XI", runs: 65 } }
+          : null,
+      rateLine: null,
+      phase: null,
+      strength: null,
+      pillNote: null,
+      metaLine: null,
+      updatedAt: new Date().toISOString(),
+    },
+    tabs: ["summary", "scorecard", "info"],
+    // `cricket.live`/`topPerformers`/`innings` all-empty is SummaryTab's own
+    // "pre-play" case (`summary-tab.tsx`'s `isPrePlay`), which falls back to
+    // `LiveScoreBody` — exactly the OLD path this test proves the page no
+    // longer takes for a fixture that IS actually in play or decided, so
+    // each status gets the minimal real content that keeps it out of that
+    // fallback: an (empty) live block while in play, a top performer once
+    // decided.
+    cricket: {
+      band: 3,
+      toss: null,
+      innings: [],
+      live:
+        status === "in_play"
+          ? { striker: null, nonStriker: null, bowler: null, batters: [], bowling: [], thisOver: [], partnership: null, lastWicket: null }
+          : null,
+      topPerformers:
+        status === "decided"
+          ? [
+              {
+                role: "batter",
+                person: { personId: "p1", name: "A. Batter", masked: false },
+                side: { entrantId: "home", name: "Home XI", short: "HOM", colour: null, badgeUrl: null },
+                line: "82 (54)",
+                detail: null,
+                innings: 1,
+              },
+            ]
+          : [],
+    },
+    timeline: null,
+    sets: null,
+    info: { rows: [], calendarHref: "/d/cal.ics", divisionHref: "/d", competitionHref: "/c" },
+  };
+  MatchCentreDoc.parse(doc); // fails loudly if this literal fixture drifts from the schema
+  return doc;
+}
+
+const meta = async (locale: string, fixtureOver: Record<string, unknown> = {}) => {
+  getPublicFixture.mockResolvedValue(baseData(locale, fixtureOver));
+  const { generateMetadata } = await import("../page");
+  return generateMetadata({
+    params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
+  });
+};
+
+// Owner decision 2026-09-27: a DRAFT is unlisted until published, so its match
+// centre is link-only exactly as an unlisted competition's is.
+describe("FixturePage generateMetadata — link-only robots", () => {
+  const robotsFor = async (competition: { visibility: string; status: string }) => {
+    const d = baseData("en");
+    getPublicFixture.mockResolvedValue({ ...d, competition: { ...d.competition, ...competition } });
+    const { generateMetadata } = await import("../page");
+    const m = await generateMetadata({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
+    });
+    return m.robots;
+  };
+
+  it("keeps a public DRAFT's fixture out of the index like an unlisted one; a published or archived public one stays in it", async () => {
+    expect(await robotsFor({ visibility: "public", status: "draft" })).toEqual({ index: false, follow: false });
+    expect(await robotsFor({ visibility: "unlisted", status: "published" })).toEqual({ index: false, follow: false });
+    expect(await robotsFor({ visibility: "public", status: "published" })).toBeUndefined();
+    expect(await robotsFor({ visibility: "public", status: "archived" })).toBeUndefined();
+  });
+});
+
+describe("FixturePage generateMetadata — org-locale slot labels (P6 finding #2)", () => {
+  it("resolves both slots via the org's default_locale, not hardcoded English", async () => {
+    const m = await meta("es", {
+      home_slot_label: { key: "slot.winner_group", params: { g: "A" } },
+      away_slot_label: { key: "slot.winner_group", params: { g: "B" } },
+    });
+    expect(m.title).toBe("Ganador del Grupo A vs Ganador del Grupo B — Open");
+  });
+
+  it("English org still reads exactly as before (back-compat)", async () => {
+    const m = await meta("en", {
+      home_slot_label: { key: "slot.winner_group", params: { g: "A" } },
+      away_slot_label: { key: "slot.winner_group", params: { g: "B" } },
+    });
+    expect(m.title).toBe("Winner of Group A vs Winner of Group B — Open");
+  });
+});
+
+// Task 14, Step 1(a) — the match-centre document is now the ONE source for
+// the decided fixture's score+result, so the title stops going stale the
+// moment a spectator shares it (the pre-Task-14 title never carried a score
+// at all).
+describe("FixturePage generateMetadata — score + result in the title (Task 14)", () => {
+  it("a decided cricket fixture's title carries both raw score lines AND the localised result phrase", async () => {
+    getPublicFixture.mockResolvedValue(
+      baseDataWithMC(
+        "en",
+        cricketDocFor("decided"),
+        { status: "decided", home_entrant_id: "home", away_entrant_id: "away" },
+        { home: "Home XI", away: "Away XI" },
+      ),
+    );
+    const { generateMetadata } = await import("../page");
+    const m = await generateMetadata({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
+    });
+    expect(m.title).toContain("HOM 245/6"); // score line 1
+    expect(m.title).toContain("AWY 180"); // score line 2
+    expect(m.title).toContain("Home XI won by 65 runs"); // the result phrase, resolved from header.statusLine
+  });
+
+  it("a SCHEDULED fixture's title is untouched — no bare, empty parentheses", async () => {
+    getPublicFixture.mockResolvedValue(
+      baseDataWithMC(
+        "en",
+        cricketDocFor("in_play"),
+        { status: "scheduled", home_entrant_id: "home", away_entrant_id: "away" },
+        { home: "Home XI", away: "Away XI" },
+      ),
+    );
+    const { generateMetadata } = await import("../page");
+    const m = await generateMetadata({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
+    });
+    expect(m.title).toBe("Home XI vs Away XI — Open");
+    expect(m.title).not.toContain("(");
+  });
+});
+
+// P9 pass 3c-3: fixture.venue/court_label are frozen since pass 3a — this
+// page's default export (subheading text + SportsEvent JSON-LD) must render
+// venue_name/court_name (data.ts's derived, join-backed fields) instead.
+//
+// M1 k2 — the element-tree walk that used to live here (`collectText`) has no
+// caller left: the subheading is now a client island, and a tree walk only
+// goes one level into a component, so that test renders real HTML like the
+// `<MatchCentre>` describes below already do. `findScript` stays — the JSON-LD
+// tag IS on the page's own tree.
+
+function findScript(node: unknown): { props: Record<string, unknown> } | null {
+  if (!isValidElement(node)) return null;
+  if (node.type === "script") return node as unknown as { props: Record<string, unknown> };
+  const children = (node.props as { children?: unknown }).children;
+  if (Array.isArray(children)) {
+    for (const c of children) {
+      const hit = findScript(c);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  return findScript(children);
+}
+
+// Task 14 — `matchCentre`/`entrantNamesOver`/`locale` are new, optional, and
+// additive: every PRE-EXISTING call site (`render({...fixtureOver})`) keeps
+// its exact original behaviour (`baseData`, English, no document).
+//
+// Task 14d — `tab` no longer reaches `FixturePage` itself (it took a
+// `searchParams` prop pre-14d; the page component now takes only `params` —
+// see page.tsx's own history). It's threaded through the `useSearchParams`
+// MOCK instead, so this helper still proves the deep link end-to-end: page
+// → `<MatchCentreWithTabParam>` → `useSearchParams` → the real `<MatchCentre>`
+// tab selection, the same path a real browser takes once hydrated.
+const render = async (
+  fixtureOver: Record<string, unknown> = {},
+  matchCentre?: MatchCentreDocT,
+  entrantNamesOver: Record<string, string> = {},
+  locale: string = "en",
+  tab?: string,
+) => {
+  getPublicFixture.mockResolvedValue(
+    matchCentre
+      ? baseDataWithMC(locale, matchCentre, fixtureOver, entrantNamesOver)
+      : baseData(locale, fixtureOver, entrantNamesOver),
+  );
+  useSearchParams.mockReturnValue(new URLSearchParams(tab ? { tab } : {}));
+  const { default: FixturePage } = await import("../page");
+  return FixturePage({
+    params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
+  });
+};
+
+describe("FixturePage default export — derived court/venue name (P9 cutover)", () => {
+  // M1 k2 — real HTML, not `collectText`. The subheading is no longer a `<p>`
+  // the page composes: it is a client island fed from the LIVE document
+  // (`<MatchCentreSubheading>`), so that the line moves with a reschedule
+  // instead of freezing at page load, and `collectText` only walks one level
+  // into a component. The ASSERTION is unchanged in substance — the derived,
+  // join-backed names must reach the reader and the frozen columns must not —
+  // and it is now pinned to the line's own testid rather than to the whole
+  // page's text, so a venue name that reached some other element could not
+  // satisfy it.
+  it("subheading shows venue_name/court_name, never the stale venue/court_label", async () => {
+    const tree = await render({
+      venue: "Stale Building",
+      court_label: "Stale Court",
+      venue_name: "Riverside Sports Hall",
+      court_name: "Court 3",
+    });
+    const html = renderToStaticMarkup(tree);
+    const line = /<p data-testid="mc-subheading"[^>]*>(.*?)<\/p>/.exec(html)?.[1] ?? "";
+    expect(line, "the subheading line is rendered at all").not.toBe("");
+    expect(line).toContain("Riverside Sports Hall");
+    expect(line).toContain("Court 3");
+    expect(html).not.toContain("Stale Building");
+    expect(html).not.toContain("Stale Court");
+  });
+
+  it("SportsEvent JSON-LD location is the derived venue_name, not the stale venue", async () => {
+    const tree = await render({ venue: "Stale Building", venue_name: "Riverside Sports Hall" });
+    const script = findScript(tree);
+    expect(script).not.toBeNull();
+    const html = (script!.props.dangerouslySetInnerHTML as { __html: string }).__html;
+    const ld = JSON.parse(html) as { location?: { name?: string } };
+    expect(ld.location?.name).toBe("Riverside Sports Hall");
+    expect(html).not.toContain("Stale Building");
+  });
+
+  it("no venue_name at all omits JSON-LD location, never a blank/undefined placeholder", async () => {
+    const tree = await render({});
+    const script = findScript(tree);
+    const html = (script!.props.dangerouslySetInnerHTML as { __html: string }).__html;
+    const ld = JSON.parse(html) as { location?: unknown };
+    expect(ld.location).toBeUndefined();
+  });
+});
+
+// Task 14, Step 1(b) — the match centre replaces the legacy bare scorebug.
+// Real HTML (`renderToStaticMarkup`), not `collectText`: `<MatchCentre>` is a
+// separate component the tree-walk above only sees one level into (by
+// design — see `_hook-harness`'s own doc comment), so proving its INSIDE
+// needs an actual render.
+describe("FixturePage default export — the match centre replaces the legacy scorebug (Task 14)", () => {
+  it("a band-3 cricket fixture's HTML has the tab rail (mc-tab-scorecard) and the court card, never the old bare `font-display text-5xl` headline block", async () => {
+    const tree = await render(
+      { status: "in_play", home_entrant_id: "home", away_entrant_id: "away" },
+      cricketDocFor("in_play"),
+      { home: "Home XI", away: "Away XI" },
+    );
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('data-testid="mc-tab-scorecard"');
+    expect(html).toContain('data-testid="mc-court-card"');
+    // live-score.tsx:193 (pre-Task-14) — LiveScoreBody's own bare headline,
+    // now only ever reachable from MatchCentre's fallback/non-cricket path.
+    expect(html).not.toContain("font-display text-5xl");
+  });
+
+  // `mc-tab-scorecard` above is the TAB RAIL's own button testid
+  // (`tab-rail.tsx`), rendered from `doc.tabs` regardless of what
+  // `TAB_PANELS` maps that tab id to — it would pass even against a
+  // placeholder. This selects the tab via `?tab=` and asserts the REAL
+  // `ScorecardTab`'s own root (`data-testid="mc-scorecard"`, present even
+  // with zero innings — `scorecard-tab.tsx`), which only a wired real panel
+  // renders.
+  it("selecting the scorecard tab via ?tab= renders the REAL ScorecardTab panel, not an empty placeholder", async () => {
+    const tree = await render(
+      { status: "in_play", home_entrant_id: "home", away_entrant_id: "away" },
+      cricketDocFor("in_play"),
+      { home: "Home XI", away: "Away XI" },
+      "en",
+      "scorecard",
+    );
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('data-testid="mc-tab-panel-scorecard"');
+    expect(html).toContain('data-testid="mc-scorecard"');
+  });
+});
+
+// Task 14, Step 1(c) — every literal string on the page goes through the
+// request locale's dictionary. Both an in-play and a decided render per
+// locale: "Live"/"Ended" are two DIFFERENT dictionary keys (CourtCard's
+// status chip), so one fixture state cannot prove both are localised.
+describe("FixturePage — no hardcoded English leaks outside lang=en (Task 14)", () => {
+  for (const locale of ["en", "es", "fr", "nl"] as const) {
+    it(`locale=${locale}`, async () => {
+      const liveTree = await render(
+        { status: "in_play", scheduled_at: null, home_entrant_id: "home", away_entrant_id: "away" },
+        cricketDocFor("in_play"),
+        { home: "Home XI", away: "Away XI" },
+        locale,
+      );
+      const liveHtml = renderToStaticMarkup(liveTree);
+
+      const decidedTree = await render(
+        { status: "decided", home_entrant_id: "home", away_entrant_id: "away" },
+        cricketDocFor("decided"),
+        { home: "Home XI", away: "Away XI" },
+        locale,
+      );
+      const decidedHtml = renderToStaticMarkup(decidedTree);
+
+      // These three are never reachable from a band-3 cricket document with
+      // real tabs — `LiveScoreBody` (Discipline/Goals by period/Winner:) is
+      // only MatchCentre's own fallback for a missing/non-cricket document
+      // — so this holds in EVERY locale, English included; a real
+      // regression in any of the three would show here as much as in
+      // fr/es/nl.
+      for (const html of [liveHtml, decidedHtml]) {
+        expect(html).not.toContain("Discipline");
+        expect(html).not.toContain("Goals by period");
+        expect(html).not.toContain("Winner:");
+      }
+
+      // The other two ARE real, translated copy — the assertion is that
+      // THIS locale's own dictionary value shows up, derived from the
+      // dictionaries themselves (never a table typed into the test — one
+      // locale's translation can legitimately equal English, e.g. Dutch's
+      // own "matchCentre.status.live" is "Live" too, an accepted loanword;
+      // hardcoding ">Live<" absence for every non-English locale would be a
+      // false positive there).
+      const publicDict = PUBLIC_DICTS[locale]!;
+      const uiDict = UI_DICTS[locale]!;
+      expect(liveHtml).toContain(`>${publicDict["matchCentre.status.live"]}<`);
+      expect(decidedHtml).toContain(`>${publicDict["matchCentre.status.decided"]}<`);
+      // `ShareButton`'s aria-label now resolves through the `<DictProvider>`
+      // this task wraps the page in (it had none before — the label was
+      // always English regardless of locale).
+      expect(liveHtml).toContain(uiDict["share.whatsapp"] as string);
+
+      if (publicDict["matchCentre.status.live"] !== publicEn["matchCentre.status.live"]) {
+        expect(liveHtml).not.toContain(">Live<");
+      }
+      if (locale !== "en") {
+        expect(decidedHtml).not.toContain(">Ended<"); // "Ended" differs in es/fr/nl
+        expect(liveHtml).not.toContain("Share on WhatsApp");
+      }
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Stream overlay W1, Task 7 — the public match page's link to the club's own
+// broadcast (design §3.9). The unit layer here is `environment: "node"`, so
+// these drive the REAL page component and read its REAL HTML: the seam that
+// matters is `getPublicFixture().fixture.stream_url` → an anchor on this page,
+// and a test of `streamLinkLabelKey` alone could not see whether anything
+// mounts it (recurring class 1, the inert seam).
+//
+// Two different URLs on purpose: an implementation that hardcoded one of them
+// would satisfy a single-sample test (rule 19 — "prefer at least one case
+// where the right answer differs from the wrong one's constant").
+// ---------------------------------------------------------------------------
+const TWITCH = "https://www.twitch.tv/seaznclub";
+const YOUTUBE = "https://www.youtube.com/live/abc123";
+
+const streamHtml = async (fixtureOver: Record<string, unknown>, locale = "en") =>
+  renderToStaticMarkup(
+    await render(
+      { home_entrant_id: "home", away_entrant_id: "away", ...fixtureOver },
+      cricketDocFor(fixtureOver.status === "in_play" ? "in_play" : "decided"),
+      { home: "Home XI", away: "Away XI" },
+      locale,
+    ),
+  );
+
+describe("FixturePage — the public stream link (stream overlay W1, §3.9)", () => {
+  it("a live fixture with a saved link renders it, opening at that exact URL", async () => {
+    const html = await streamHtml({ status: "in_play", stream_url: TWITCH });
+    expect(html).toContain('data-testid="public-stream-link"');
+    // The value, not merely the attribute: `href="` anchors it (a bare
+    // `data-*`/attribute probe passes against React's own `"$undefined"`).
+    expect(html).toContain(`href="${TWITCH}"`);
+    expect(html).toContain('target="_blank"');
+    // R16's second, independent guard: `target="_blank"` without `noopener`
+    // hands the opened tab a `window.opener` handle to this page, and the
+    // href is organiser-supplied.
+    expect(html).toMatch(/rel="[^"]*\bnoopener\b[^"]*"/);
+    expect(html).toContain(`>${publicEn["overlay.watchLive"]}</a>`);
+  });
+
+  it("a DIFFERENT saved link opens at that one — the href is the fixture's, not a constant", async () => {
+    const html = await streamHtml({ status: "in_play", stream_url: YOUTUBE });
+    expect(html).toContain(`href="${YOUTUBE}"`);
+    expect(html).not.toContain(TWITCH);
+  });
+
+  it("the link sits under the headline and above the match centre, never inside it", async () => {
+    const html = await streamHtml({ status: "in_play", stream_url: TWITCH });
+    const link = html.indexOf('data-testid="public-stream-link"');
+    const headline = html.indexOf("<h1");
+    const centre = html.indexOf('data-testid="mc-court-card"');
+    expect(headline, "the headline is rendered at all").toBeGreaterThanOrEqual(0);
+    expect(centre, "the match centre is rendered at all").toBeGreaterThanOrEqual(0);
+    expect(link).toBeGreaterThan(headline);
+    expect(link).toBeLessThan(centre);
+  });
+
+  for (const status of ["scheduled", "in_play"] as const) {
+    it(`${status} reads "Watch live", never "Replay"`, async () => {
+      const html = await streamHtml({ status, stream_url: TWITCH });
+      expect(html).toContain(`>${publicEn["overlay.watchLive"]}</a>`);
+      expect(html).not.toContain(`>${publicEn["overlay.replay"]}</a>`);
+    });
+  }
+
+  for (const status of ["decided", "finalized"] as const) {
+    it(`${status} reads "Replay", never "Watch live"`, async () => {
+      const html = await streamHtml({ status, stream_url: TWITCH });
+      expect(html).toContain(`>${publicEn["overlay.replay"]}</a>`);
+      expect(html).not.toContain(`>${publicEn["overlay.watchLive"]}</a>`);
+    });
+  }
+
+  // The positive assertions above are each satisfied by "render the anchor
+  // always"; these two are the negative half of the pair.
+  it("no saved link renders NO anchor at all — not an empty or dead one", async () => {
+    const html = await streamHtml({ status: "in_play", stream_url: null });
+    expect(html).not.toContain("public-stream-link");
+    expect(html).not.toContain(publicEn["overlay.watchLive"] as string);
+  });
+
+  for (const status of ["cancelled", "abandoned", "forfeited"] as const) {
+    it(`a ${status} fixture shows no link even with one saved (§3.9 VOID_STATUSES)`, async () => {
+      const html = await streamHtml({ status, stream_url: TWITCH });
+      expect(html).not.toContain("public-stream-link");
+      expect(html).not.toContain(TWITCH);
+    });
+  }
+
+  // A key-existence check passes whether the label is wired or hardcoded
+  // English; only a locale differential can tell the two apart.
+  for (const locale of ["es", "fr", "nl"] as const) {
+    it(`locale=${locale} labels the link from ITS OWN dictionary, not English`, async () => {
+      const dict = PUBLIC_DICTS[locale]!;
+      const live = await streamHtml({ status: "in_play", stream_url: TWITCH }, locale);
+      const ended = await streamHtml({ status: "decided", stream_url: TWITCH }, locale);
+      expect(live).toContain(`>${dict["overlay.watchLive"]}</a>`);
+      expect(ended).toContain(`>${dict["overlay.replay"]}</a>`);
+      expect(live).not.toContain(`>${publicEn["overlay.watchLive"]}</a>`);
+      expect(ended).not.toContain(`>${publicEn["overlay.replay"]}</a>`);
+    });
+  }
+});
+
+
+describe("FixturePage — the Poster button (Spectator Surface Boards §match-centre)", () => {
+  // The board draws TWO actions in this row, `Poster` then `Share`. A MOUNT
+  // test, because the button itself cannot see whether anything mounts it —
+  // the inert-seam class this repo keeps paying for.
+  const posterHtml = (fixtureOver: Record<string, unknown> = {}, locale = "en") =>
+    streamHtml({ status: "decided", ...fixtureOver }, locale);
+
+  it("renders beside Share, pointing at this fixture's own poster.png", async () => {
+    const html = await posterHtml();
+    expect(html).toContain('data-testid="match-poster-download"');
+    // The VALUE, not the attribute: React serialises an omitted prop as
+    // `"$undefined"`, so a bare `href` probe passes in both states.
+    expect(html).toContain('href="/live/test-org/test-comp/open/fixtures/f1/poster.png"');
+    // Beside, not instead of — the share action is still there.
+    expect(html).toContain(uiEn["share.whatsapp"] as string);
+  });
+
+  it("names the saved file, so a download arrives with an extension", async () => {
+    // The route path already ends in `poster.png` and that is NOT enough: the
+    // browser names the file from the download attribute / the disposition.
+    const html = await posterHtml();
+    expect(html).toContain(`download="${posterFileName("Home XI", "Away XI")}"`);
+  });
+
+  it("is offered for a fixture nobody has played yet, not only a finished one", async () => {
+    // A poster of an upcoming match is the one a club posts to fill a ground.
+    expect(await posterHtml({ status: "scheduled" })).toContain(
+      'data-testid="match-poster-download"',
+    );
+  });
+
+  for (const locale of ["es", "fr", "nl"] as const) {
+    it(`locale=${locale} labels the button from ITS OWN dictionary, not English`, async () => {
+      // A key-existence check passes whether the label is wired or hardcoded
+      // English; only a locale differential can tell the two apart.
+      const dict = UI_DICTS[locale]!;
+      const html = await posterHtml({}, locale);
+      expect(html).toContain(dict["matchPoster.downloadAria"] as string);
+      expect(html).not.toContain(uiEn["matchPoster.downloadAria"] as string);
+    });
+  }
+});
+
+// W2a Task 13 (spec §5.5) — the share/search description is built by `decidedLineFor`, the page's own composition of
+// the decided sentence. A chess tie-break's recorded score must reach it (the page reads `detail.tiebreak` through
+// `tiebreakScoreFromDetail`), and the board's level headline stays in front of it.
+describe("FixturePage generateMetadata — W2a chess tie-break description", () => {
+  it("names the tie-break with its score after the level headline", async () => {
+    getPublicFixture.mockResolvedValue(
+      baseData(
+        "en",
+        {
+          status: "decided",
+          home_entrant_id: "e1",
+          away_entrant_id: "e2",
+          outcome: { kind: "win", winner: "e2", loser: "e1", method: "tiebreak_rapid" },
+          summary: { headline: "½ — ½", detail: { tiebreak: { rung: "rapid", score: "1½–½" } } },
+        },
+        { e1: "Anand Viswanathan", e2: "Bela Nakamura" },
+      ),
+    );
+    const { generateMetadata } = await import("../page");
+    const m = await generateMetadata({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
+    });
+    expect(m.description).toBe("½ — ½ — Bela Nakamura won on rapid tie-break (1½–½)");
+  });
+});
+
+// W2b Task 13 fix round 1 (review M-4) — the share/search text of a credited result. It said "{winner} won" for a
+// walkover (and, the fixture being `forfeited` rather than `decided`, the share text invited the reader to "follow it
+// live") and nothing at all for a double walkover. It now reads the match centre's OWN sentence — the document's
+// status line, which the builder words from `forfeitTag` (match-centre-forfeit.test.ts) — so one match is described
+// one way on the page, in the preview and in the share.
+describe("FixturePage — a credited result's share and search text (W2b T13 review M-4)", () => {
+  const forfeitDoc = (statusLine: { key: string; params?: Record<string, string> }, scoreLines: [string, string]): MatchCentreDocT => {
+    const doc = cricketDocFor("decided");
+    return { ...doc, header: { ...doc.header, status: "other", statusLine, scoreLines } };
+  };
+  const meta = async (fixtureOver: Record<string, unknown>, doc: MatchCentreDocT) => {
+    getPublicFixture.mockResolvedValue(baseDataWithMC("en", doc, { home_entrant_id: "home", away_entrant_id: "away", ...fixtureOver }, { home: "Home XI", away: "Away XI" }));
+    const { generateMetadata } = await import("../page");
+    return generateMetadata({ params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }) });
+  };
+  /** The ShareButton's `text` — a client prop that never reaches markup, read off the page's own element tree. */
+  const shareText = async (fixtureOver: Record<string, unknown>, doc: MatchCentreDocT): Promise<string> => {
+    const { ShareButton } = await import("@/components/share-button");
+    const find = (node: unknown): string | null => {
+      if (Array.isArray(node)) {
+        for (const c of node) {
+          const hit = find(c);
+          if (hit !== null) return hit;
+        }
+        return null;
+      }
+      if (!isValidElement(node)) return null;
+      const props = node.props as { children?: unknown; text?: string };
+      if (node.type === ShareButton) return props.text ?? null;
+      return find(props.children);
+    };
+    const text = find(await render({ home_entrant_id: "home", away_entrant_id: "away", ...fixtureOver }, doc, { home: "Home XI", away: "Away XI" }));
+    expect(text, "the page mounts a ShareButton").not.toBeNull();
+    return text!;
+  };
+  const say = (key: string, params?: Record<string, string>) => t(publicEn as never, key, params);
+  const WALKOVER = { status: "forfeited", outcome: { kind: "award", winner: "home", loser: "away", reason: "walkover" }, summary: { headline: "3 — 0" } };
+  const DW = { status: "forfeited", outcome: { kind: "double_walkover" }, summary: { headline: "0 — 0" } };
+
+  it("a walkover: the description and the title carry the sentence naming the side that did not show, never \"won\"", async () => {
+    const sentence = say("forfeit.sentence.walkover", { loser: "Away XI" });
+    const m = await meta(WALKOVER, forfeitDoc({ key: "forfeit.sentence.walkover", params: { loser: "Away XI" } }, ["3", "0"]));
+    expect(m.description).toBe(`3 — 0 — ${sentence}`);
+    expect(String(m.title)).toContain(sentence);
+    expect(String(m.description)).not.toMatch(/ won\b/);
+  });
+
+  it("a walkover's share text is a result's, with the sentence — never \"follow it live\"", async () => {
+    const sentence = say("forfeit.sentence.walkover", { loser: "Away XI" });
+    const text = await shareText(WALKOVER, forfeitDoc({ key: "forfeit.sentence.walkover", params: { loser: "Away XI" } }, ["3", "0"]));
+    expect(text).toContain(sentence);
+    expect(text).not.toContain(t(uiEn as never, "fixture.share.live", { home: "Home XI", away: "Away XI", division: "Open", competition: "Test Comp" }));
+  });
+
+  it("a double walkover says so — and never prints its unplayed 0 — 0", async () => {
+    const sentence = say("forfeit.sentence.doubleWalkover");
+    const doc = forfeitDoc({ key: "forfeit.sentence.doubleWalkover" }, ["0", "0"]);
+    const m = await meta(DW, doc);
+    expect(m.description).toBe(sentence);
+    expect(String(m.title)).toContain(sentence);
+    expect(String(m.title)).not.toContain("HOM 0");
+    const text = await shareText(DW, doc);
+    expect(text).toContain(sentence);
+    expect(text).not.toContain("0 — 0");
+  });
+});
+
+// W2a Task 13 (addendum 6) — schema.org's eventStatus says whether the EVENT took place. A held fixture
+// (`needs_decision`) was played — only the verdict waits on the organiser — so it is completed, like a decided one.
+describe("FixturePage JSON-LD — a held fixture (W2a)", () => {
+  const eventStatusOf = async (status: string) => {
+    const html = renderToStaticMarkup(await render({ status }));
+    const json = /<script type="application\/ld\+json">(.*?)<\/script>/.exec(html)?.[1];
+    expect(json, `${status}: the JSON-LD is rendered`).toBeDefined();
+    return (JSON.parse(json!) as { eventStatus: string }).eventStatus;
+  };
+
+  it("empty case first: a scheduled fixture is EventScheduled", async () => {
+    expect(await eventStatusOf("scheduled")).toBe("https://schema.org/EventScheduled");
+  });
+
+  it("a held fixture is completed, like a decided one", async () => {
+    expect(await eventStatusOf("needs_decision")).toBe("https://schema.org/EventCompleted");
+    expect(await eventStatusOf("decided")).toBe("https://schema.org/EventCompleted");
+  });
+});
+
+// T16 (controller ruling 2026-10-12) — the page is ISR: one HTML for every
+// viewer, so it carries no player's door. It mounts the "Your board" island
+// for a fixture of a division that plays online; the island asks the lobby
+// route after hydration (your-board*.test.tsx). The island is found on the
+// page's own tree (a static render of a client island is empty by design).
+describe("FixturePage — the 'Your board' island (T16)", () => {
+  function findAll(node: unknown, type: unknown, out: { props: Record<string, unknown> }[] = []) {
+    if (Array.isArray(node)) {
+      for (const c of node) findAll(c, type, out);
+      return out;
+    }
+    if (!isValidElement(node)) return out;
+    if (node.type === type) out.push(node as unknown as { props: Record<string, unknown> });
+    findAll((node.props as { children?: unknown }).children, type, out);
+    return out;
+  }
+  const renderDivision = async (division: Record<string, unknown>, over: Record<string, unknown> = {}) => {
+    const data = baseData("en");
+    getPublicFixture.mockResolvedValue({ ...data, ...over, division: { ...data.division, ...division } });
+    useSearchParams.mockReturnValue(new URLSearchParams());
+    const { default: FixturePage } = await import("../page");
+    return FixturePage({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
+    });
+  };
+
+  it("the empty case first: no island where nothing is played online — another sport, chess over the board", async () => {
+    const { YourBoard } = await import("@/components/public-site/your-board");
+    const cells: [string, Record<string, unknown>][] = [
+      ["generic sport", {}],
+      ["another sport claiming online play", { sport_key: "badminton", variant_key: "standard", config: { onlinePlay: "lichess" } }],
+      ["chess over the board", { sport_key: "boardgame", variant_key: "chess", config: { onlinePlay: "off" } }],
+      ["chess, no setting", { sport_key: "boardgame", variant_key: "chess", config: {} }],
+    ];
+    let checked = 0;
+    for (const [label, division] of cells) {
+      expect(findAll(await renderDivision(division), YourBoard), label).toHaveLength(0);
+      checked += 1;
+    }
+    expect(checked).toBe(cells.length);
+  });
+
+  it("an online chess division mounts it once, for THIS fixture — and the shared HTML carries no room path and no Lichess link", async () => {
+    const { YourBoard } = await import("@/components/public-site/your-board");
+    const tree = await renderDivision({ sport_key: "boardgame", variant_key: "chess", config: { onlinePlay: "lichess" } });
+    const found = findAll(tree, YourBoard);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.props.fixtureId).toBe("f1");
+    // Beside it, the spectators' watch panel — this fixture's, from the page's own doc.
+    const { WatchPanel } = await import("@/components/public-site/match-centre/watch-panel");
+    const watch = findAll(tree, WatchPanel);
+    expect(watch).toHaveLength(1);
+    expect(watch[0]!.props).toMatchObject({ fixtureId: "f1", initial: { roundOpened: false, externalPlay: null } });
+    // Option B: the start position's colours come from the page's own read of the pairing.
+    expect(watch[0]!.props.pairedWhiteSide, "no read here").toBeNull();
+    const paired = findAll(
+      await renderDivision({ sport_key: "boardgame", variant_key: "chess", config: { onlinePlay: "lichess" } }, { pairedWhiteSide: "away" }),
+      WatchPanel,
+    );
+    expect(paired[0]!.props.pairedWhiteSide, "the pairing's White reaches the panel").toBe("away");
+    const html = renderToStaticMarkup(tree);
+    expect(html).not.toMatch(/="[^"]*\/fixtures\/f1\/play/);
+    expect(html).not.toContain("lichess.org");
+  });
+  // T17 fix round 2, V1: the line under the title says when an ONLINE board's round opened — the page hands the
+  // subheading its own instant, the venue's zone and the page's locale; any other board gets none (its old line).
+  it("V1: the subheading carries the round-open facts for an online board only — counted", async () => {
+    const { MatchCentreSubheading } = await import("../subheading");
+    const AT = "2026-10-13T10:42:00.000Z";
+    const online = findAll(
+      await renderDivision({ sport_key: "boardgame", variant_key: "chess", config: { onlinePlay: "lichess" } }, { roundOpenedAt: AT, venueTz: "Europe/Paris" }),
+      MatchCentreSubheading,
+    );
+    expect(online).toHaveLength(1);
+    expect(online[0]!.props.roundOpen).toEqual({ at: AT, timeZone: "Europe/Paris", locale: "en" });
+    let checked = 0;
+    for (const division of [{}, { sport_key: "boardgame", variant_key: "chess", config: { onlinePlay: "off" } }]) {
+      const found = findAll(await renderDivision(division, { roundOpenedAt: AT }), MatchCentreSubheading);
+      expect(found).toHaveLength(1);
+      expect(found[0]!.props.roundOpen, JSON.stringify(division)).toBeUndefined();
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+});

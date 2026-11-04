@@ -78,7 +78,7 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
   );
   expect(settings.status).toBeLessThan(300);
 
-  const registerUrl = `/shared/${org.slug}/${comp.data!.slug}/register`;
+  const registerUrl = `/live/${org.slug}/${comp.data!.slug}/register`;
 
   // A registrant is not logged in. Drive the whole journey from a context
   // with no auth state, or the page under test is not the one the public

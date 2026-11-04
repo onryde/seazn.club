@@ -1144,7 +1144,7 @@ test("football v3: a shoot-out decision names the winner and the method — publ
   const org = await activeOrg(page);
   const comp = await apiJson<{ slug: string }>(page.request, `/api/v1/competitions/${fx.competitionId}`);
   const division = await apiJson<{ slug: string }>(page.request, `/api/v1/divisions/${fx.divisionId}`);
-  const publicPath = `/shared/${org.slug}/${comp.data!.slug}/${division.data!.slug}/fixtures/${fx.fixtureId}`;
+  const publicPath = `/live/${org.slug}/${comp.data!.slug}/${division.data!.slug}/fixtures/${fx.fixtureId}`;
 
   // Public fixture page — the winner AND the score-qualified method, never
   // the raw "shootout" token.
@@ -1210,7 +1210,7 @@ test("football v3: the public page's decided sentence updates live while already
   const org = await activeOrg(page);
   const comp = await apiJson<{ slug: string }>(page.request, `/api/v1/competitions/${fx.competitionId}`);
   const division = await apiJson<{ slug: string }>(page.request, `/api/v1/divisions/${fx.divisionId}`);
-  const publicPath = `/shared/${org.slug}/${comp.data!.slug}/${division.data!.slug}/fixtures/${fx.fixtureId}`;
+  const publicPath = `/live/${org.slug}/${comp.data!.slug}/${division.data!.slug}/fixtures/${fx.fixtureId}`;
 
   // Open the page BEFORE a single event has been posted (seedRosteredFixture
   // never emits core.start unless asked), and never navigate again.

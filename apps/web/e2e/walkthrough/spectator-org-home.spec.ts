@@ -203,7 +203,7 @@ test("OH1: a match starting lifts an older competition to the top with '1 live n
   // The island's mount fetch fires right after hydration: wait for it from
   // BEFORE the navigation, so the write below lands after a known poll.
   const mounted = lineUpOnPoll(page, liveApi, mountMs);
-  await page.goto(`/shared/${en.slug}`);
+  await page.goto(`/live/${en.slug}`);
   expect(await mounted, "the org home's mount fetch of /live never came back").toBe(true);
   const samePage = await noReloadGuard(page);
 
@@ -295,7 +295,7 @@ test("OH2: the ES chip reads '2 en vivo ahora' on one line inside its card at 32
 
   for (const width of [320, 1280]) {
     const page = await spectator(browser, { width });
-    await page.goto(`/shared/${es.slug}`);
+    await page.goto(`/live/${es.slug}`);
     const chip = page.getByTestId(testid);
     await expect(chip).toHaveAttribute("data-chip", "on-now");
     await expect(chip).toHaveText(twoLive);
@@ -340,7 +340,7 @@ test("OH2: the ES chip reads '2 en vivo ahora' on one line inside its card at 32
     {
       name: "org-home-es-2-live",
       open: async (p) => {
-        await p.goto(`/shared/${es.slug}`);
+        await p.goto(`/live/${es.slug}`);
         const chip = p.getByTestId(testid);
         await expect(chip).toHaveAttribute("data-chip", "on-now");
         await expect(chip).toHaveText(twoLive);
@@ -350,7 +350,7 @@ test("OH2: the ES chip reads '2 en vivo ahora' on one line inside its card at 32
     {
       name: "hub-es-matches-live",
       open: async (p) => {
-        await p.goto(`/shared/${es.slug}/${esComp.slug}?tab=matches`);
+        await p.goto(`/live/${es.slug}/${esComp.slug}?tab=matches`);
         await expect(p.getByTestId("mh-filter-live")).toHaveAttribute("aria-pressed", "true");
         for (const id of esLiveFixtures) await expect(p.getByTestId(`mh-match-${id}`)).toBeVisible();
       },
@@ -384,14 +384,14 @@ test("OH3: an ES org's home, hub and player page speak Spanish with <html lang='
   const page = await spectator(browser, { width: 320 });
 
   // Org home.
-  await page.goto(`/shared/${es.slug}`);
+  await page.goto(`/live/${es.slug}`);
   await expectLang(page, "es", "es org home");
   await expectFooter(page, "es", "es org home");
   await expect(page.getByRole("heading", { name: dictString("es", "section.competitions") })).toBeVisible();
 
   // Hub: every tab label is the Spanish one, and no English label that differs
   // from its Spanish one is on screen ("Info" is the same word in both).
-  await page.goto(`/shared/${es.slug}/${esComp.slug}`);
+  await page.goto(`/live/${es.slug}/${esComp.slug}`);
   await expectLang(page, "es", "es hub");
   await expectFooter(page, "es", "es hub");
   const tabIds = await page
@@ -407,7 +407,7 @@ test("OH3: an ES org's home, hub and player page speak Spanish with <html lang='
   }
 
   // Player page: the section heading, the live pill and the opponent line.
-  await page.goto(`/shared/${es.slug}/${esComp.slug}/players/${esPlayer.id}`);
+  await page.goto(`/live/${es.slug}/${esComp.slug}/players/${esPlayer.id}`);
   await expectLang(page, "es", "es player page");
   await expectFooter(page, "es", "es player page");
   await expect(page.getByRole("heading", { name: dictString("es", "player.matches"), exact: true })).toBeVisible();
@@ -417,7 +417,7 @@ test("OH3: an ES org's home, hub and player page speak Spanish with <html lang='
   await expect(page.getByRole("heading", { name: dictString("en", "player.matches"), exact: true })).toHaveCount(0);
 
   // The pair: the English club.
-  await page.goto(`/shared/${en.slug}`);
+  await page.goto(`/live/${en.slug}`);
   await expectLang(page, "en", "en org home");
   await expectFooter(page, "en", "en org home");
 });

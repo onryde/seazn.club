@@ -49,7 +49,7 @@ describe("CookieConsent on the overlay segment", () => {
     // the second pass `.tree()` is read from. (Both cases run in hydrate mode:
     // in the default server-snapshot mode nothing renders anywhere, and the
     // overlay case above would pass vacuously.)
-    pathname.current = "/shared/acme/summer-cup/div-a/fixtures/1";
+    pathname.current = "/live/acme/summer-cup/div-a/fixtures/1";
     expect(renderIsland(CookieConsent, {}, undefined, { hydrate: true }).tree().length).toBeGreaterThan(0);
   });
 });

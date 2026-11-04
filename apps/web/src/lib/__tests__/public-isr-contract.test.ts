@@ -25,19 +25,19 @@ interface Case {
 const CASES: Case[] = [
   {
     name: "org landing",
-    file: join(SRC_ROOT, "app/(public)/shared/[orgSlug]/page.tsx"),
+    file: join(SRC_ROOT, "app/(public)/live/[orgSlug]/page.tsx"),
     revalidate: 30,
   },
   {
     name: "competition home",
-    file: join(SRC_ROOT, "app/(public)/shared/[orgSlug]/[competitionSlug]/page.tsx"),
+    file: join(SRC_ROOT, "app/(public)/live/[orgSlug]/[competitionSlug]/page.tsx"),
     revalidate: 30,
   },
   {
     name: "division home",
     file: join(
       SRC_ROOT,
-      "app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
+      "app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
     ),
     revalidate: 30,
   },
@@ -45,18 +45,18 @@ const CASES: Case[] = [
     name: "fixture page",
     file: join(
       SRC_ROOT,
-      "app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
+      "app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
     ),
     revalidate: 30,
   },
   {
     name: "player card",
-    file: join(SRC_ROOT, "app/(public)/shared/[orgSlug]/[competitionSlug]/players/[personId]/page.tsx"),
+    file: join(SRC_ROOT, "app/(public)/live/[orgSlug]/[competitionSlug]/players/[personId]/page.tsx"),
     revalidate: 300, // REVALIDATE_SLOW — keep the value, just add generateStaticParams
   },
   {
     name: "poster page",
-    file: join(SRC_ROOT, "app/(public)/shared/[orgSlug]/[competitionSlug]/poster/page.tsx"),
+    file: join(SRC_ROOT, "app/(public)/live/[orgSlug]/[competitionSlug]/poster/page.tsx"),
     revalidate: 300,
   },
   {

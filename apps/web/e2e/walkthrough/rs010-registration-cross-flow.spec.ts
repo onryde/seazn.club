@@ -167,7 +167,7 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
     "the division row must read OPEN once registration is enabled with no window set",
   ).toBeVisible({ timeout: 15_000 });
 
-  const registerUrl = `/shared/${org.slug}/${compSlug}/register`;
+  const registerUrl = `/live/${org.slug}/${compSlug}/register`;
 
   /** One full public-stepper team submission, ending on the status page.
    *  Shared by the captain (step 2) and the overflow captain (step 4) — the
@@ -425,7 +425,7 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
     // Polled, not read once: this page is ISR-cached (REVALIDATE_FAST=30s,
     // tag-invalidated by the approve step above via fireDivisionRevalidate)
     // — a single read right after approve can race that regeneration.
-    const divisionUrl = `/shared/${org.slug}/${compSlug}/${divisionSlug}`;
+    const divisionUrl = `/live/${org.slug}/${compSlug}/${divisionSlug}`;
     const activePanel = () => captainPage.locator('[role="tabpanel"]:not([hidden])');
     await expect(async () => {
       await captainPage.goto(divisionUrl, { waitUntil: "load" });

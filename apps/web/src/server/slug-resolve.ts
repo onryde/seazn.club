@@ -141,7 +141,7 @@ export const breadcrumbNames = cache(async (orgId: string): Promise<BreadcrumbNa
   };
 });
 
-/** Public /shared fallback (v3/01 §2): a renamed slug's old URL 301s to the
+/** Public /live fallback (v3/01 §2): a renamed slug's old URL 301s to the
  *  new one at the same depth. Returns null when nothing to redirect. */
 export async function sharedRenameTarget(
   orgSlug: string,
@@ -149,12 +149,12 @@ export async function sharedRenameTarget(
   divSlug?: string,
 ): Promise<string | null> {
   const org = await orgBySlug(orgSlug);
-  if (org && "renamedTo" in org) return routes.shared(org.renamedTo, compSlug, divSlug);
+  if (org && "renamedTo" in org) return routes.publicHub(org.renamedTo, compSlug, divSlug);
   if (!org || !compSlug) return null;
   const comp = await compBySlug(org.id, compSlug);
-  if (comp && "renamedTo" in comp) return routes.shared(orgSlug, comp.renamedTo, divSlug);
+  if (comp && "renamedTo" in comp) return routes.publicHub(orgSlug, comp.renamedTo, divSlug);
   if (!comp || !divSlug) return null;
   const div = await divBySlug(comp.id, divSlug);
-  if (div && "renamedTo" in div) return routes.shared(orgSlug, compSlug, div.renamedTo);
+  if (div && "renamedTo" in div) return routes.publicHub(orgSlug, compSlug, div.renamedTo);
   return null;
 }

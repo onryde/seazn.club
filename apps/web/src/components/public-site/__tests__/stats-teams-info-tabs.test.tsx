@@ -1084,7 +1084,7 @@ describe("TeamsTab — squads, bans and the team calendar (division-page parity,
   });
 
   it("a chip tap narrows the cards and writes `division=` back; All takes it out", () => {
-    const loc = { href: "https://seazn.club/shared/riverside/autumn-cup?tab=teams", search: "?tab=teams" };
+    const loc = { href: "https://seazn.club/live/riverside/autumn-cup?tab=teams", search: "?tab=teams" };
     const replaced: string[] = [];
     vi.stubGlobal("window", {
       location: loc,
@@ -1107,10 +1107,10 @@ describe("TeamsTab — squads, bans and the team calendar (division-page parity,
       (propsOf(island.tree().find((x: ReactElement) => propsOf(x)["data-testid"] === testid)!).onClick as () => void)();
     expect(cards()).toEqual(["mh-team-e1", "mh-team-e2", "mh-team-e3"]);
     tap("mh-teams-division-premier");
-    expect(replaced).toEqual(["https://seazn.club/shared/riverside/autumn-cup?tab=teams&division=premier"]);
+    expect(replaced).toEqual(["https://seazn.club/live/riverside/autumn-cup?tab=teams&division=premier"]);
     expect(cards()).toEqual(["mh-team-e3"]);
     tap("mh-teams-division-all");
-    expect(replaced.at(-1)).toBe("https://seazn.club/shared/riverside/autumn-cup?tab=teams");
+    expect(replaced.at(-1)).toBe("https://seazn.club/live/riverside/autumn-cup?tab=teams");
     expect(cards()).toEqual(["mh-team-e1", "mh-team-e2", "mh-team-e3"]);
   });
 });
@@ -1403,7 +1403,7 @@ describe("TeamsTab — a card holds a real team name at every width from 320 (R1
 
   /** The page's content column: the `<main>` of the org layout the hub renders in. */
   const contentPx = (viewport: number): number => {
-    const layout = readFileSync(path.join(WEB, "src/app/(public)/shared/[orgSlug]/layout.tsx"), "utf8");
+    const layout = readFileSync(path.join(WEB, "src/app/(public)/live/[orgSlug]/layout.tsx"), "utf8");
     const main = /<main className="([^"]*)"/.exec(layout)?.[1]?.split(" ") ?? [];
     const maxW = main.find((c) => /^max-w-/.test(c));
     const px = main.find((c) => /^px-\d+$/.test(c));

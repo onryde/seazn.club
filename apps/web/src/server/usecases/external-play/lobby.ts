@@ -39,7 +39,7 @@ export async function readExternalPlayLobby(userId: string, fixtureId: string, d
   if (!f) throw new HttpError(404, "This match room could not be found", "NOT_FOUND");
   return {
     state: stateOf(s),
-    roomPath: routes.sharedFixturePlay(f.orgSlug, f.competitionSlug, f.divisionSlug, f.fixtureId),
+    roomPath: routes.publicFixturePlay(f.orgSlug, f.competitionSlug, f.divisionSlug, f.fixtureId),
     opensAt: s.opensAt,
     deadline: s.deadline,
   };

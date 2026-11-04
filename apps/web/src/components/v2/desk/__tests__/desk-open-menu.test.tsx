@@ -14,7 +14,7 @@ import { routes } from "@/lib/routes";
 import { t } from "@/lib/i18n-runtime";
 import en from "@/dictionaries/en/ui.json";
 
-const PUBLIC_PATH = routes.shared("riverside", "summer-league");
+const PUBLIC_PATH = routes.publicHub("riverside", "summer-league");
 const ITEMS: DeskOpenItem[] = [
   {
     id: "slideshow",

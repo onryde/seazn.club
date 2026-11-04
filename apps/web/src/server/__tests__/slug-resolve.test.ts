@@ -186,12 +186,12 @@ describe.skipIf(!HAS_DB)("sharedRenameTarget keeps the path tail at every depth"
     await invalidateSlugCache("org", null, orgSlug, newOrgSlug);
 
     expect(await sharedRenameTarget(orgSlug, comp.slug, div.slug)).toBe(
-      `/shared/${newOrgSlug}/${comp.slug}/${div.slug}`,
+      `/live/${newOrgSlug}/${comp.slug}/${div.slug}`,
     );
-    expect(await sharedRenameTarget(orgSlug, comp.slug)).toBe(`/shared/${newOrgSlug}/${comp.slug}`);
+    expect(await sharedRenameTarget(orgSlug, comp.slug)).toBe(`/live/${newOrgSlug}/${comp.slug}`);
     // The tail-less answer is not wrong, it is the only one a LAYOUT can ask
     // for — which is F2, and why the kiosk decision moved down to the page.
-    expect(await sharedRenameTarget(orgSlug)).toBe(`/shared/${newOrgSlug}`);
+    expect(await sharedRenameTarget(orgSlug)).toBe(`/live/${newOrgSlug}`);
   });
 
   it("a renamed COMPETITION answers at competition depth and keeps /{div}", async () => {
@@ -200,9 +200,9 @@ describe.skipIf(!HAS_DB)("sharedRenameTarget keeps the path tail at every depth"
     expect(renamed.slug).not.toBe(comp.slug);
 
     expect(await sharedRenameTarget(orgSlug, comp.slug, div.slug)).toBe(
-      `/shared/${orgSlug}/${renamed.slug}/${div.slug}`,
+      `/live/${orgSlug}/${renamed.slug}/${div.slug}`,
     );
-    expect(await sharedRenameTarget(orgSlug, comp.slug)).toBe(`/shared/${orgSlug}/${renamed.slug}`);
+    expect(await sharedRenameTarget(orgSlug, comp.slug)).toBe(`/live/${orgSlug}/${renamed.slug}`);
   });
 
   it("a renamed DIVISION answers at division depth", async () => {
@@ -211,7 +211,7 @@ describe.skipIf(!HAS_DB)("sharedRenameTarget keeps the path tail at every depth"
     expect(renamed.slug).not.toBe(div.slug);
 
     expect(await sharedRenameTarget(orgSlug, comp.slug, div.slug)).toBe(
-      `/shared/${orgSlug}/${comp.slug}/${renamed.slug}`,
+      `/live/${orgSlug}/${comp.slug}/${renamed.slug}`,
     );
     // A division rename says nothing about the path above it: the competition
     // board asks at its own depth and must be told there is nothing to do.

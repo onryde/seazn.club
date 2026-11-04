@@ -30,8 +30,8 @@ import type { RoomActBody } from "../room-api";
 const LOCALES = { en, es, fr, nl } as const;
 type Locale = keyof typeof LOCALES;
 const T0 = Date.parse("2026-10-12T10:00:00.000Z");
-const FIXTURE = "/shared/org/comp/div/fixtures/f1";
-const RELINK = "/api/auth/lichess?org=org&next=%2Fshared%2Forg%2Fcomp%2Fdiv%2Ffixtures%2Ff1%2Fplay%3Ft%3Dtok";
+const FIXTURE = "/live/org/comp/div/fixtures/f1";
+const RELINK = "/api/auth/lichess?org=org&next=%2Flive%2Forg%2Fcomp%2Fdiv%2Ffixtures%2Ff1%2Fplay%3Ft%3Dtok";
 /** The Lichess account T9 recorded for the viewer's seat (re-review 6, N-2). */
 const RECORDED = "ada_recorded";
 
@@ -82,7 +82,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     roundOpenedAt: new Date(T0).toISOString(),
     opensAt: new Date(T0).toISOString(),
     deadline: new Date(T0 + 20 * 60_000).toISOString(),
-    links: { fixture: FIXTURE, standings: "/shared/org/comp/div" },
+    links: { fixture: FIXTURE, standings: "/live/org/comp/div" },
     meta: { divisionName: "Open Rapid", roundNo: 3, boardNo: 2, limitSeconds: 600, incrementSeconds: 5 },
     orgSlug: "org",
     you: { colour: "white", name: "Bo Lind", checkedIn: true },

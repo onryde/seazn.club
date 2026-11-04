@@ -506,8 +506,8 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps, identity: RoomIde
     ...windowWire(anchor),
     heldUntil: heldUntil?.toISOString() ?? null,
     links: {
-      fixture: routes.sharedFixture(f.orgSlug, f.competitionSlug, f.divisionSlug, f.fixtureId),
-      standings: routes.shared(f.orgSlug, f.competitionSlug, f.divisionSlug),
+      fixture: routes.publicFixture(f.orgSlug, f.competitionSlug, f.divisionSlug, f.fixtureId),
+      standings: routes.publicHub(f.orgSlug, f.competitionSlug, f.divisionSlug),
     },
     meta: {
       divisionName: facts.divisionName,

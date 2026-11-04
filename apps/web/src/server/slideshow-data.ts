@@ -100,7 +100,7 @@ interface StandingsShapeInput {
 }
 
 /** Resolves a division's pinned module's metrics the way the division page does
- *  (`(public)/shared/.../[divisionSlug]/page.tsx`): a module this build no
+ *  (`(public)/live/.../[divisionSlug]/page.tsx`): a module this build no
  *  longer carries degrades to structural columns only — it never throws. The
  *  cascade is each stage's own (`stageShape`). */
 function divisionMetrics(division: StandingsShapeInput): readonly MetricSpecLike[] {

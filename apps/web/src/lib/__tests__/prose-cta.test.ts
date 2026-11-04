@@ -182,7 +182,7 @@ describe("one authority: every public surface draws organiser prose through rend
   it("the help centre's renderer draws help articles only — news posts go through renderProse like every organiser box", () => {
     const helpUsers = files.filter(([, text]) => /\brenderHelpMarkdown\b/.test(text)).map(([p]) => p).sort();
     expect(helpUsers).toEqual(["app/help/[...slug]/page.tsx", "server/help-content.ts"]);
-    const news = files.find(([p]) => p === "app/(public)/shared/[orgSlug]/news/[postSlug]/page.tsx");
+    const news = files.find(([p]) => p === "app/(public)/live/[orgSlug]/news/[postSlug]/page.tsx");
     expect(news, "the news post page exists where this test looks").toBeDefined();
     expect(news![1]).toMatch(/\brenderProse\(post\.bodyMd/);
   });

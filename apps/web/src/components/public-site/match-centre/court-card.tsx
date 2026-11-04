@@ -224,7 +224,7 @@ export function CourtCard({ header, dict, replay }: CourtCardProps) {
                     Latent until now (short seeded names never reached the
                     threshold) and found by the streaming-T1 visual gate's
                     `truncate-chain` check, which reds on this span without
-                    it. `(public)/shared/[orgSlug]/layout.tsx:83` already
+                    it. `(public)/live/[orgSlug]/layout.tsx:83` already
                     pairs the two the same way. */}
                 {/* THE CREST TILE, in the side's own colour.
                     `Side.colour` and `Side.badgeUrl` have been on the wire

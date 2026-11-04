@@ -66,7 +66,7 @@ export async function regQueueSuite(admin: Session): Promise<void> {
     regSettings.currency === "gbp",
   );
 
-  const registerPage = await html(newSession(), `/shared/${orgSlug}/${comp.slug}/register`);
+  const registerPage = await html(newSession(), `/live/${orgSlug}/${comp.slug}/register`);
   // RS010 fix — the ORIGINAL assertion here also required the closed string
   // to be ABSENT, which is not a reliable signal on this page: the literal
   // "Registration is not open for this competition." string is present in

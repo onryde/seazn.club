@@ -66,7 +66,7 @@ const args = (rows: LeaderInputRow[]) => ({
   modelFor: (d: LeaderDivision) => modelFor(d.sportKey),
   label: (spec: { key: string; engineLabel: string | undefined }, d: LeaderDivision) =>
     `${d.sportKey}:${spec.key}`,
-  personHref: (personId: string) => `/shared/o/c/players/${personId}`,
+  personHref: (personId: string) => `/live/o/c/players/${personId}`,
 });
 
 // ---------------------------------------------------------------------------
@@ -291,7 +291,7 @@ describe("buildLeaderBoards", () => {
     expect(masked!.person).toEqual({ personId: "m1", name: "A. B.", masked: true });
     expect(masked!.personHref).toBeNull();
     // Positive pair — the absence above is a decision, not a broken link builder.
-    expect(open!.personHref).toBe("/shared/o/c/players/p2");
+    expect(open!.personHref).toBe("/live/o/c/players/p2");
     expect(open!.person).toEqual({ personId: "p2", name: expect.any(String), masked: false });
   });
 

@@ -63,6 +63,6 @@ test.describe("social cards (SEO meta)", () => {
     await createCompetitionViaUi(page, `SEO Card ${TAG}`);
     const org = await activeOrg(page);
     const slug = page.url().match(/\/c\/([^/?]+)$/)![1]!;
-    await expectFullSocialCard(request, `/shared/${org.slug}/${slug}`);
+    await expectFullSocialCard(request, `/live/${org.slug}/${slug}`);
   });
 });

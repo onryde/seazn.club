@@ -36,7 +36,7 @@ const HELD_AT = "2026-09-05T12:00:00.000Z";
 
 const line = (fixtureId: string, figures: string, over: Partial<PlayerMatchLineT> = {}): PlayerMatchLineT => ({
   fixtureId,
-  href: `/shared/riverside/autumn-cup/premier/fixtures/${fixtureId}`,
+  href: `/live/riverside/autumn-cup/premier/fixtures/${fixtureId}`,
   divisionName: "Premier",
   divisionSlug: "premier",
   scheduledAt: "2026-09-05T10:00:00.000Z",

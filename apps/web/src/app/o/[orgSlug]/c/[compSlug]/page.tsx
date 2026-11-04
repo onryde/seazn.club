@@ -155,7 +155,7 @@ export default async function CompetitionPage({
   // attention here either.
   const mastheadAttention = leadingAttention(ledgerRows.map((r) => r.desk));
   const publicPath =
-    competition.visibility !== "private" ? routes.shared(orgSlug, competition.slug) : null;
+    competition.visibility !== "private" ? routes.publicHub(orgSlug, competition.slug) : null;
   // Match Day C5 (owner request 2026-11-01): the "Open" menu in the tool row. Gated exactly as the three buttons it replaced were
   // — Slideshow always; View Public Page and the QR poster only with a public page (a private competition has none) — and none
   // of it on `canEdit`, so a view-only member sees what they always saw. The QR poster is v3/10 #3: an A4 PDF with a big QR to

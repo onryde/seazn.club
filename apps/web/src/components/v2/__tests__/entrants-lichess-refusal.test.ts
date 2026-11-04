@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { HttpError } from "@/lib/errors";
 import { assertPersonIdsLinkedForOnlinePlay, type LichessLinkState } from "@/server/usecases/external-accounts";
-import { classifyJoinFailure } from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/register/join/view-model";
+import { classifyJoinFailure } from "@/app/(public)/live/[orgSlug]/[competitionSlug]/register/join/view-model";
 import { LOCALES } from "@/lib/i18n-constants";
 import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";

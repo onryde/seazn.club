@@ -395,7 +395,7 @@ export async function v1Suite(admin: Session, orgId: string, orgSlug: string): P
     branding: { colors: { primary: "#0f766e" } },
   });
   check("v1 branding patch accepted", branded.status === 200);
-  const freePage = await fetch(`${BASE}/shared/${orgSlug}/${compSlug}`);
+  const freePage = await fetch(`${BASE}/live/${orgSlug}/${compSlug}`);
   const freeHtml = await freePage.text();
   check(
     "public competition page renders (community)",
@@ -416,7 +416,7 @@ export async function v1Suite(admin: Session, orgId: string, orgSlug: string): P
     branding: { colors: { primary: "#0f766e" } },
   });
   check("org branding patch accepted", orgBrand.status === 200);
-  const freeOrgHtml = await (await fetch(`${BASE}/shared/${orgSlug}`)).text();
+  const freeOrgHtml = await (await fetch(`${BASE}/live/${orgSlug}`)).text();
   check("community org landing keeps default theme", !freeOrgHtml.includes("--ps-accent:#0f766e"));
 
   // Entitlement gate: community org → 402; Pro override → key works via Bearer.

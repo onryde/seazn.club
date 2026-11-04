@@ -234,7 +234,7 @@ async function rig(page: Page, parts: number, streamUrl: "first-part" | "club" |
   });
   // The organiser's session has done its job; the visitor is anonymous.
   await page.context().clearCookies();
-  return { orgId, fixtureId, publicPath: `/shared/${orgSlug}/${comp.data.slug}/${div.data.slug}/fixtures/${fixtureId}`, sides, ids };
+  return { orgId, fixtureId, publicPath: `/live/${orgSlug}/${comp.data.slug}/${div.data.slug}/fixtures/${fixtureId}`, sides, ids };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

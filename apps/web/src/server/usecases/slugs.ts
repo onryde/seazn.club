@@ -1,7 +1,7 @@
 // Slug hygiene for console URLs (PROMPT-30, v3/01 §2). Generated slugs never
 // 409 — collisions suffix "-2", "-3", …; "new" is reserved because the static
 // /c/new and /d/new routes win over the dynamic [slug] segments. Renames keep
-// the old slug redirecting via slug_history (console /o/... and /shared).
+// the old slug redirecting via slug_history (console /o/... and /live).
 import type postgres from "postgres";
 
 export function slugify(name: string): string {

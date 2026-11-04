@@ -191,7 +191,7 @@ export async function queueFixtureInvite(
           roundOpenId: a.roundOpenId,
           roundOpenedAt: a.roundOpenedAt.toISOString(),
         });
-  const fixtureUrl = `${origin}${routes.sharedFixturePlay(f.orgSlug, f.competitionSlug, f.divisionSlug, f.fixtureId, token)}`;
+  const fixtureUrl = `${origin}${routes.publicFixturePlay(f.orgSlug, f.competitionSlug, f.divisionSlug, f.fixtureId, token)}`;
   const w = windowFor(a.anchor);
   const deadline = w.deadline;
   // A later batch's check-in that has not opened YET when this is sent: the mail says when (externalPlayInvite.bodyLater). Batch 0

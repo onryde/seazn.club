@@ -64,7 +64,7 @@ describe("a slug named like a secret route is not a secret (probes built by the 
     expect(withWord.length).toBeGreaterThanOrEqual(80);
     // The shapes the review found: a slug `join` below a competition, and below a public page.
     expect(all.some((p) => p.word === "join" && p.url.includes("/c/join/d/join"))).toBe(true);
-    expect(all.some((p) => p.word === "claim" && p.url.startsWith("/shared/claim/claim"))).toBe(true);
+    expect(all.some((p) => p.word === "claim" && p.url.startsWith("/live/claim/claim"))).toBe(true);
   });
 
   it("scrubScoreUrl leaves each URL alone: bare, after an origin, with a query, in a login next= at every depth and hex case, in a transaction name", () => {
@@ -222,7 +222,7 @@ describe("the anchor still finds a real secret at a route root, in every context
     const failures: string[] = [];
     let checked = 0;
     for (const { path: p } of await cases()) {
-      for (const prefix of ["/o/x", "/shared/org/comp", "/api/v1/x", "/c/y"]) {
+      for (const prefix of ["/o/x", "/live/org/comp", "/api/v1/x", "/c/y"]) {
         // `/api/...` twins are routes of their own; a prefix before `/api` is a different route entirely.
         // `/api/orgs/<id>/invites/` is anchored at `/api/orgs`, so only a prefix before THAT is off the root.
         const inputs = [

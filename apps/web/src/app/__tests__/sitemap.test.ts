@@ -116,8 +116,8 @@ describe("sitemap.xml: reads and fallback", () => {
     vi.mocked(listDiscoverySports).mockResolvedValueOnce([]);
     const out = urls(await sitemap());
     expect(cache.invoked).toContain(SITEMAP_ENTRIES_CACHE_KEY.join("|"));
-    expect(out).toContain(`${BASE}/shared/acme-club/summer-cup`);
-    expect(out).toContain(`${BASE}/shared/acme-club/summer-cup/open`);
+    expect(out).toContain(`${BASE}/live/acme-club/summer-cup`);
+    expect(out).toContain(`${BASE}/live/acme-club/summer-cup/open`);
   });
 
   it("no entry carries lastmod: not the static pages, the sport landings, a competition hub or a division", async () => {
@@ -139,15 +139,15 @@ describe("sitemap.xml: reads and fallback", () => {
     // has somewhere to show.
     expect(out).toContain(`${BASE}/pricing`);
     expect(out).toContain(`${BASE}/discover/badminton`);
-    expect(out).toContain(`${BASE}/shared/acme-club/summer-cup`);
-    expect(out).toContain(`${BASE}/shared/acme-club/summer-cup/open`);
-    expect(out).toContain(`${BASE}/shared/acme-club/winter-cup`);
+    expect(out).toContain(`${BASE}/live/acme-club/summer-cup`);
+    expect(out).toContain(`${BASE}/live/acme-club/summer-cup/open`);
+    expect(out).toContain(`${BASE}/live/acme-club/winter-cup`);
 
     expect(entries.filter((e) => e.lastModified !== undefined).map((e) => e.url)).toEqual([]);
     // Through the serialiser the route itself uses, so a key spelled any other
     // way that still reaches the XML is caught too.
     const xml = resolveRouteData(entries, "sitemap");
-    expect(xml).toContain(`<loc>${BASE}/shared/acme-club/summer-cup/open</loc>`);
+    expect(xml).toContain(`<loc>${BASE}/live/acme-club/summer-cup/open</loc>`);
     expect(xml).not.toContain("<lastmod>");
   });
 
@@ -157,7 +157,7 @@ describe("sitemap.xml: reads and fallback", () => {
     const out = urls(await sitemap());
     expect(out).toContain(BASE);
     expect(out).toContain(`${BASE}/pricing`);
-    expect(out.filter((u) => u.includes("/shared/") || u.includes("/discover/"))).toEqual([]);
+    expect(out.filter((u) => u.includes("/live/") || u.includes("/discover/"))).toEqual([]);
   });
 });
 
@@ -251,9 +251,9 @@ describe.skipIf(!HAS_DB)("sitemap.xml: a seeded database", () => {
 
     const entries = await sitemap();
     const out = urls(entries);
-    expect(out).toContain(`${BASE}/shared/${scene.orgSlug}/${scene.listed.slug}`);
-    expect(out).toContain(`${BASE}/shared/${scene.orgSlug}/${scene.listed.slug}/${scene.listed.divisionSlug}`);
-    expect(out.filter((u) => u.includes(`/shared/${scene.orgSlug}/${scene.unlisted.slug}`))).toEqual([]);
+    expect(out).toContain(`${BASE}/live/${scene.orgSlug}/${scene.listed.slug}`);
+    expect(out).toContain(`${BASE}/live/${scene.orgSlug}/${scene.listed.slug}/${scene.listed.divisionSlug}`);
+    expect(out.filter((u) => u.includes(`/live/${scene.orgSlug}/${scene.unlisted.slug}`))).toEqual([]);
     // And from real rows too — the query's own `updated`, not a fixture's —
     // nothing is dated.
     expect(entries.filter((e) => e.lastModified !== undefined).map((e) => e.url)).toEqual([]);

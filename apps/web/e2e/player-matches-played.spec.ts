@@ -203,7 +203,7 @@ test("R115-1: /me, the public player card and the console count only matches pla
   const orgSlug = orgs.data!.find((o) => o.id === comp.data!.org_id)!.slug;
   const anonCtx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const anon = await anonCtx.newPage();
-  await anon.goto(`/shared/${orgSlug}/${comp.data!.slug}/players/${pat}`, { waitUntil: "load" });
+  await anon.goto(`/live/${orgSlug}/${comp.data!.slug}/players/${pat}`, { waitUntil: "load" });
   await anon.getByTestId("cookie-accept").click();
   for (const width of [1280, 768, 320]) {
     await anon.setViewportSize({ width, height: 900 });
@@ -394,7 +394,7 @@ test("ruling 122: the coach is listed with no team match; a bench row follows th
     ["Ben", ben, { lines: 1, rollup: null }],
     ["Leo", leo, { lines: 2, rollup: "2 matches" }],
   ] as const) {
-    await anon.goto(`/shared/${orgSlug}/${comp.data!.slug}/players/${id}`, { waitUntil: "load" });
+    await anon.goto(`/live/${orgSlug}/${comp.data!.slug}/players/${id}`, { waitUntil: "load" });
     if (banner) {
       await anon.getByTestId("cookie-accept").click();
       banner = false;

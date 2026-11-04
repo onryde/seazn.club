@@ -1,0 +1,148 @@
+// SPEC-2 public news feed — a night-mode matchday programme, paginated 20.
+// Server component over publicPosts (published + visibility-guarded in the
+// usecase). Cards read against markup targets (public pages test markup, not
+// labels — v5 lesson).
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import type { Metadata } from "next";
+import { ChevronRight } from "lucide-react";
+import { getPublicOrg } from "@/server/public-site/data";
+import { publicPosts } from "@/server/usecases/org-posts";
+import { postHeroUrl } from "@/server/news/public-view";
+import { kindEyebrow, scoreboardFor } from "@/lib/news-presentation";
+import { PostCard, type PostCardView } from "@/components/news/post-card";
+import { getDictionary, t } from "@/lib/i18n";
+import { hasLocale, DEFAULT_LOCALE, type Locale } from "@/lib/i18n-constants";
+import { intlLocaleFor } from "@/lib/public-date-locale";
+import { routes } from "@/lib/routes";
+
+// No ISR here: the feed paginates via ?page= and reading searchParams is
+// request-bound — under `revalidate` the prod render throws
+// DYNAMIC_SERVER_USAGE (500). The per-post page keeps ISR (no searchParams).
+export const dynamic = "force-dynamic";
+
+type Props = {
+  params: Promise<{ orgSlug: string }>;
+  searchParams: Promise<{ page?: string }>;
+};
+
+function orgLocale(defaultLocale: string): Locale {
+  return hasLocale(defaultLocale) ? defaultLocale : DEFAULT_LOCALE;
+}
+
+// publishedAt is a timestamptz — a real instant, not a calendar day an organiser
+// typed — so the pinned zone is about DETERMINISM, not day-correctness. This is a
+// server render: a zone-less format follows whatever zone the Node host happens
+// to run in, which is never the reader's zone, so two hosts print two different
+// days for the same post. UTC makes it one day everywhere.
+// In the org's locale through `intlLocaleFor` (owner ruling 2026-09-16): bare
+// "en" is a US format to `Intl` ("Mar 2, 2026"); English public dates are
+// day-month.
+function fmtDate(iso: string, locale: Locale): string {
+  return new Date(iso).toLocaleDateString(intlLocaleFor(locale), {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { orgSlug } = await params;
+  const data = await getPublicOrg(orgSlug);
+  if (!data) return {};
+  const dict = await getDictionary(orgLocale(data.org.default_locale), "public");
+  return {
+    title: `${t(dict, "news.title")} · ${data.org.name}`,
+    description: t(dict, "news.feedIntro", { org: data.org.name }),
+  };
+}
+
+export default async function NewsFeedPage({ params, searchParams }: Props) {
+  const { orgSlug } = await params;
+  const { page: rawPage } = await searchParams;
+  const data = await getPublicOrg(orgSlug);
+  if (!data) notFound();
+  const { org } = data;
+  const locale = orgLocale(org.default_locale);
+  const dict = await getDictionary(locale, "public");
+
+  const page = Math.max(0, Number(rawPage) || 0);
+  const { posts, hasMore } = await publicPosts(orgSlug, page);
+
+  const views: PostCardView[] = posts.map((p) => ({
+    href: routes.publicNewsPost(orgSlug, p.slug),
+    kind: p.kind,
+    eyebrow: t(dict, kindEyebrow(p.kind).labelKey),
+    title: p.title,
+    date: p.publishedAt ? fmtDate(p.publishedAt, locale) : "",
+    heroUrl: postHeroUrl(p),
+    scoreline: scoreboardFor(p.kind, p.title),
+  }));
+
+  return (
+    <div>
+      <Link
+        href={routes.publicHub(orgSlug)}
+        data-testid="news-back"
+        className="mb-4 inline-flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-ink-muted hover:text-accent-strong"
+      >
+        <ChevronRight aria-hidden className="h-3.5 w-3.5 rotate-180" />
+        {org.name}
+      </Link>
+      <section className="mb-6">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-accent-strong">
+          {t(dict, "news.eyebrow")}
+        </p>
+        <h1 className="mt-1 font-display text-4xl font-bold uppercase leading-none tracking-tight text-ink sm:text-5xl">
+          {t(dict, "news.title")}
+        </h1>
+      </section>
+
+      {views.length === 0 ? (
+        <p
+          data-testid="news-empty"
+          className="rounded-xl border border-dashed border-zinc-300 bg-surface p-6 text-center text-sm text-ink-muted"
+        >
+          {t(dict, "news.empty")}
+        </p>
+      ) : (
+        <ul className="grid gap-4 sm:grid-cols-2">
+          {views.map((v) => (
+            <li key={v.href}>
+              <PostCard post={v} />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {(hasMore || page > 0) && (
+        <nav className="mt-8 flex items-center justify-between text-sm" aria-label={t(dict, "news.pagination")}>
+          {page > 0 ? (
+            <Link
+              href={`${routes.publicNews(orgSlug)}${page - 1 > 0 ? `?page=${page - 1}` : ""}`}
+              className="inline-flex items-center gap-1.5 text-accent-strong hover:underline"
+            >
+              <ChevronRight aria-hidden className="h-4 w-4 rotate-180" />
+              {t(dict, "news.newer")}
+            </Link>
+          ) : (
+            <span />
+          )}
+          {hasMore ? (
+            <Link
+              href={`${routes.publicNews(orgSlug)}?page=${page + 1}`}
+              data-testid="news-older"
+              className="inline-flex items-center gap-1.5 text-accent-strong hover:underline"
+            >
+              {t(dict, "news.older")}
+              <ChevronRight aria-hidden className="h-4 w-4" />
+            </Link>
+          ) : (
+            <span />
+          )}
+        </nav>
+      )}
+    </div>
+  );
+}

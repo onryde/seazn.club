@@ -132,7 +132,7 @@ test.describe("W2b — a withdrawal walks a held knockout line over (X-WD-1)", (
     expect(UI["forfeit.tag.walkover"], "the organiser and the spectator read one abbreviation").toBe(tag);
     const runSheetLine = ui("schedule.outcome.wonTagged").replace("{name}", nameOf.get(staying)!).replace("{tag}", tag);
     const sentence = say("forfeit.sentence.withdrew", { loser: nameOf.get(leaving)! });
-    const base = `/shared/${org.slug}/${compSlug}`;
+    const base = `/live/${org.slug}/${compSlug}`;
     let widths = 0;
     for (const w of [1280, 768, 320]) {
       await page.setViewportSize({ width: w, height: 900 });

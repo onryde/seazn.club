@@ -1,7 +1,7 @@
 // Spectator surface W2, Task 4 — the ONE division champion rule.
 //
 // PURE: no `sql`, no `server-only`, no React. It was an inline IIFE inside the
-// division page (`app/(public)/shared/[orgSlug]/[competitionSlug]/
+// division page (`app/(public)/live/[orgSlug]/[competitionSlug]/
 // [divisionSlug]/page.tsx`), which is the only place it existed and therefore
 // the only place it could be read from. The hub needs the same crown on every
 // table it publishes, so the rule moves here and the page imports it — one

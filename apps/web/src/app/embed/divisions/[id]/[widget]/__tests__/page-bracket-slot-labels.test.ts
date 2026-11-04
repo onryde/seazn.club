@@ -223,7 +223,7 @@ describe("embed bracket widget — its card footers are in the org's locale (B1)
       const live = t(await getDictionary(locale, "public"), "matchesHub.live");
       const tbd = msgFor(locale, "schedule.tbd");
       const footers = footersOf(html);
-      const at = (id: string) => footers[`/shared/test-org/test-comp/open/fixtures/${id}`];
+      const at = (id: string) => footers[`/live/test-org/test-comp/open/fixtures/${id}`];
       expect({ live: at("semi-1"), timeless: at("final") }).toEqual({ live: attr(live), timeless: attr(tbd) });
       expect(at("semi-2"), "the dated semi-final renders a footer").toBeTruthy();
       expect([attr(live), attr(tbd)], "the dated semi-final reads neither word").not.toContain(at("semi-2"));
@@ -248,7 +248,7 @@ describe("embed bracket widget — its card footers are in the org's locale (B1)
 
     expect(footersOf(await bracketMarkup())).toEqual(
       Object.fromEntries(
-        ["semi-1", "semi-2", "final"].map((id) => [`/shared/test-org/test-comp/open/fixtures/${id}`, "25 Sept, 05:00"]),
+        ["semi-1", "semi-2", "final"].map((id) => [`/live/test-org/test-comp/open/fixtures/${id}`, "25 Sept, 05:00"]),
       ),
     );
   });

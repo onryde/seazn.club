@@ -632,7 +632,7 @@ describe.skipIf(!HAS_DB)("patchCompetition rename: the old URL redirects and the
     ).toEqual([{ expire: 0 }]);
     expect(await getPublicCompetition(s.orgSlug, s.oldSlug), "the old URL's shell").toBeNull();
     expect(await sharedRenameTarget(s.orgSlug, s.oldSlug), "the redirect the page issues").toBe(
-      routes.shared(s.orgSlug, s.newSlug),
+      routes.publicHub(s.orgSlug, s.newSlug),
     );
   });
 

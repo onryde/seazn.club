@@ -109,6 +109,7 @@ import type {
   TableViewT,
   TeamCardT,
 } from "./competition-hub-schema";
+import { routes } from "@/lib/routes";
 
 // ---------------------------------------------------------------- liveness
 
@@ -720,7 +721,7 @@ export async function loadCompetitionHub(
   const dict = await getDictionary(locale, "public");
   const msg = (key: TKey, vars?: Record<string, string | number>) => t(dict, key, vars);
   const ui = (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars);
-  const base = `/shared/${org.slug}/${competition.slug}`;
+  const base = routes.publicHub(org.slug, competition.slug);
   const generatedAt = now.toISOString();
 
   // BOTH entitlement reads go through the pooled `hasFeature`, with the

@@ -123,7 +123,7 @@ describe("OrgLiveChips — first paint", () => {
 
   it("each card links to its competition and carries the date line it was handed", () => {
     const html = renderToStaticMarkup(<OrgLiveChips {...props([comp("a", "published", 0, { dateLine: "1 sept 2026" })])} />);
-    expect(html).toMatch(/href="\/shared\/riverside\/a-cup"/);
+    expect(html).toMatch(/href="\/live\/riverside\/a-cup"/);
     expect(html).toContain(">1 sept 2026<");
     expect(html).toContain(">A Cup<");
   });
@@ -274,7 +274,7 @@ describe("OrgLiveChips — the poll (R10)", () => {
     expect(chips(island.tree())).toEqual({ b: "on-now" });
     // The whole card goes, not just its chip.
     const hrefs = island.tree().map((e) => propsOf(e).href).filter(Boolean);
-    expect(hrefs).toEqual(["/shared/riverside/b-cup"]);
+    expect(hrefs).toEqual(["/live/riverside/b-cup"]);
   });
 
   // Owner ruling 2026-09-17: the org home lists its competitions in three tiers
@@ -296,13 +296,13 @@ describe("OrgLiveChips — the poll (R10)", () => {
       OrgLiveChips,
       props([comp("a", "published", 0), comp("b", "published", 0), comp("c", "published", 0)]),
     );
-    expect(hrefs(island.tree())).toEqual(["/shared/riverside/a-cup", "/shared/riverside/b-cup", "/shared/riverside/c-cup"]);
+    expect(hrefs(island.tree())).toEqual(["/live/riverside/a-cup", "/live/riverside/b-cup", "/live/riverside/c-cup"]);
 
     await vi.advanceTimersByTimeAsync(0);
 
     // c (in play, oldest) above b ("On now") above a (newest, idle) — the whole
     // card moves, its chip with it.
-    expect(hrefs(island.tree())).toEqual(["/shared/riverside/c-cup", "/shared/riverside/b-cup", "/shared/riverside/a-cup"]);
+    expect(hrefs(island.tree())).toEqual(["/live/riverside/c-cup", "/live/riverside/b-cup", "/live/riverside/a-cup"]);
     expect(chipText(island.tree(), "c")).toBe(liveNow(DICT, "one", 1));
     expect(chipText(island.tree(), "b")).toBe(t(DICT, "chip.onNow"));
     expect(Object.keys(chips(island.tree())), "the chips moved with their cards").toEqual(["c", "b", "a"]);
@@ -310,7 +310,7 @@ describe("OrgLiveChips — the poll (R10)", () => {
     await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
 
     // Nothing live any more: one tier, the incoming (date) order.
-    expect(hrefs(island.tree())).toEqual(["/shared/riverside/a-cup", "/shared/riverside/b-cup", "/shared/riverside/c-cup"]);
+    expect(hrefs(island.tree())).toEqual(["/live/riverside/a-cup", "/live/riverside/b-cup", "/live/riverside/c-cup"]);
     expect(chips(island.tree())).toEqual({ a: "upcoming", b: "upcoming", c: "upcoming" });
   });
 

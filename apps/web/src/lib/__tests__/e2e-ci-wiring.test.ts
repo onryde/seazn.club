@@ -349,6 +349,13 @@ const WALKTHROUGH_SPECS: string[] = [
   // settings Status select publishing it puts it on the org home within the
   // page's revalidate window — the only test that crosses that seam.
   "draft-unlisted-org-home.spec.ts",
+  // LIVE1 — the public tree moved from /shared to /live (owner ruling
+  // 2026-11-03, option A). An old printed link landing on the hub through one
+  // permanent 308 with its query kept, every old shape's 308 off a prod server,
+  // and the clash option A resolves: a bare /live (and /fr/live) is still the
+  // marketing wall while /live/<org>/… is the spectator tree. The only test
+  // that reads the redirect off a real server rather than Next's matcher.
+  "live-public-path.spec.ts",
 
   // Per-stage match rules — one organiser's path through the three things that
   // branch shipped, in the order they happen to them: a stage given its own

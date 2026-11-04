@@ -20,7 +20,7 @@ import { type Session, newSession, check, tag, ledger, timedFixture, html, v1, v
  * `[data-testid=mc-score-0]` and `table`), so a 200 whose body lacks them is
  * the inert page the harness would otherwise photograph as "fine" and sign
  * off on. `mc-score-0` rather than a heading deliberately: the branded 404
- * (`shared/[orgSlug]/not-found.tsx`) renders an `<h1>` inside the same
+ * (`live/[orgSlug]/not-found.tsx`) renders an `<h1>` inside the same
  * `<main>`, so a heading probe passes on a page that is not the fixture.
  *
  * The fixture is driven to FULL TIME on purpose, and that was measured rather
@@ -89,7 +89,7 @@ export async function visualSeedRoutesSuite(owner: Session, orgSlug: string): Pr
   const div = v1data<{ slug: string }>(await v1(owner, `/api/v1/divisions/${fx.divisionId}`));
   const page = await html(
     newSession(),
-    `/shared/${orgSlug}/${comp.slug}/${div.slug}/fixtures/${fx.fixtureId}`,
+    `/live/${orgSlug}/${comp.slug}/${div.slug}/fixtures/${fx.fixtureId}`,
   );
   check(
     "visual gate: public fixture page renders the match-centre score the manifest awaits",

@@ -2,7 +2,7 @@
 //
 // Every test is the same journey an organiser makes: set the stage's order in the stage editor (Tie-breaks section, the
 // division page's `?tab=fixtures`), generate (the pin, X-TB-2), score through the pad or the console, and read the PUBLIC
-// table a visitor reads (`/shared/{org}/{comp}/{div}?tab=standings`): its order, its columns, its cells. Setup that is not
+// table a visitor reads (`/live/{org}/{comp}/{div}?tab=standings`): its order, its columns, its cells. Setup that is not
 // the step under test goes through the API (results the pad already has its own walkthrough for, a field, a stage).
 //
 // WHERE THE EXPECTED VALUES COME FROM. Every table below is hand arithmetic from the rulebook rows of spec §5.10 (the
@@ -192,7 +192,7 @@ async function rig(
   expect(stageIds.length, `${o.label}: every stage was created`).toBe(o.stages.length);
   const read = await apiJson<{ config: Record<string, unknown> }>(request, `/api/v1/divisions/${div.id}`);
   expect(read.status).toBe(200);
-  return { divisionId: div.id, stageIds, field, path: `/shared/${org.slug}/${comp.slug}/${div.slug}?tab=standings`, cfg: read.data!.config };
+  return { divisionId: div.id, stageIds, field, path: `/live/${org.slug}/${comp.slug}/${div.slug}?tab=standings`, cfg: read.data!.config };
 }
 
 async function servedRules(request: APIRequestContext, stageId: string): Promise<ServedRules> {

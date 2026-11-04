@@ -181,23 +181,23 @@ vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 const RootOg = (await import("@/app/opengraph-image")).default;
 const JoinOg = (await import("@/app/join/[token]/opengraph-image")).default;
 const TicketPng = (await import("@/app/(public)/r/[ref]/ticket.png/route")).GET;
-const CompetitionOg = (await import("@/app/(public)/shared/[orgSlug]/[competitionSlug]/opengraph-image"))
+const CompetitionOg = (await import("@/app/(public)/live/[orgSlug]/[competitionSlug]/opengraph-image"))
   .default;
 const DivisionOg = (
-  await import("@/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/opengraph-image")
+  await import("@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/opengraph-image")
 ).default;
 const FixtureOg = (
   await import(
-    "@/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/opengraph-image"
+    "@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/opengraph-image"
   )
 ).default;
 const PosterPng = (
   await import(
-    "@/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/poster.png/route"
+    "@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/poster.png/route"
   )
 ).GET;
-const NewsOg = (await import("@/app/(public)/shared/[orgSlug]/news/[postSlug]/opengraph-image")).default;
-const StoryPng = (await import("@/app/(public)/shared/[orgSlug]/news/[postSlug]/story.png/route")).GET;
+const NewsOg = (await import("@/app/(public)/live/[orgSlug]/news/[postSlug]/opengraph-image")).default;
+const StoryPng = (await import("@/app/(public)/live/[orgSlug]/news/[postSlug]/story.png/route")).GET;
 const GamesOg = (await import("@/app/games/opengraph-image")).default;
 const GameOg = (await import("@/app/games/[slug]/opengraph-image")).default;
 
@@ -262,24 +262,24 @@ const DRIVERS: Record<string, Surface> = {
   "app/(public)/r/[ref]/ticket.png/route.tsx": {
     render: () => TicketPng(req("/r/SCC-1234/ticket.png"), { params }),
   },
-  "app/(public)/shared/[orgSlug]/[competitionSlug]/opengraph-image.tsx": {
+  "app/(public)/live/[orgSlug]/[competitionSlug]/opengraph-image.tsx": {
     render: async () => (await CompetitionOg({ params })) as Response,
   },
-  "app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/opengraph-image.tsx": {
+  "app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/opengraph-image.tsx": {
     render: async () => (await DivisionOg({ params })) as Response,
   },
-  "app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/opengraph-image.tsx":
+  "app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/opengraph-image.tsx":
     {
       render: async () => (await FixtureOg({ params })) as Response,
     },
-  "app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/poster.png/route.tsx":
+  "app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/poster.png/route.tsx":
     {
       render: () => PosterPng(req("/poster.png"), { params }),
     },
-  "app/(public)/shared/[orgSlug]/news/[postSlug]/opengraph-image.tsx": {
+  "app/(public)/live/[orgSlug]/news/[postSlug]/opengraph-image.tsx": {
     render: async () => (await NewsOg({ params })) as Response,
   },
-  "app/(public)/shared/[orgSlug]/news/[postSlug]/story.png/route.tsx": {
+  "app/(public)/live/[orgSlug]/news/[postSlug]/story.png/route.tsx": {
     render: () => StoryPng(req("/story.png"), { params }),
   },
   "app/games/opengraph-image.tsx": {

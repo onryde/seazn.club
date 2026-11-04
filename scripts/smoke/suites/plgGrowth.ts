@@ -21,7 +21,7 @@ export async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlu
       visibility: "public",
     }),
   );
-  const proShared = await html(newSession(), `/shared/${proOrgSlug}/${proComp.slug}`);
+  const proShared = await html(newSession(), `/live/${proOrgSlug}/${proComp.slug}`);
   check(
     "plg pro page keeps the fan ShareBar",
     // The ARIA name, not the visible label. The button shows the brand alone
@@ -63,7 +63,7 @@ export async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlu
     JSON.stringify(emptyHub?.tabs) === JSON.stringify(["overview", "info"]) && emptyHub?.matches?.length === 0,
   );
 
-  // --- RS007: the `/shared/[orgSlug]` segment must MISS with a 404, never a
+  // --- RS007: the `/live/[orgSlug]` segment must MISS with a 404, never a
   // 500. `not-found.tsx` there once called `resolveLocale()`, which reads
   // cookies/headers; every page in that segment is statically generated
   // (`revalidate = 30`), and a static page whose not-found boundary reads
@@ -76,14 +76,14 @@ export async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlu
   // PR-only gate. It also cannot be a unit test — the failure needs a real
   // request against a production build, which is exactly what smoke does and
   // what `tsc`, vitest and `next build` all missed.
-  const orgRoot = await html(newSession(), `/shared/${proOrgSlug}`);
+  const orgRoot = await html(newSession(), `/live/${proOrgSlug}`);
   check("public org page renders (not a 500)", orgRoot.status === 200);
-  const missingOrg = await html(newSession(), `/shared/no-such-org-${tag}`);
+  const missingOrg = await html(newSession(), `/live/no-such-org-${tag}`);
   check(
     `nonexistent org 404s rather than 500ing (got ${missingOrg.status})`,
     missingOrg.status === 404,
   );
-  const missingComp = await html(newSession(), `/shared/${proOrgSlug}/no-such-comp-${tag}`);
+  const missingComp = await html(newSession(), `/live/${proOrgSlug}/no-such-comp-${tag}`);
   check(
     `nonexistent competition under a real org 404s rather than 500ing (got ${missingComp.status})`,
     missingComp.status === 404,
@@ -104,7 +104,7 @@ export async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlu
       visibility: "public",
     }),
   );
-  const freeShared = await html(newSession(), `/shared/${freeOrg.slug}/${freeComp.slug}`);
+  const freeShared = await html(newSession(), `/live/${freeOrg.slug}/${freeComp.slug}`);
   check(
     "plg free page carries the Seazn attribution CTA",
     freeShared.status === 200 && freeShared.body.includes("Run your own free"),

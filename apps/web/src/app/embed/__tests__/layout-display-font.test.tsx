@@ -1,8 +1,8 @@
-// The embeddable widgets render the SAME components as the /shared public
+// The embeddable widgets render the SAME components as the /live public
 // tree, and those components ask for the display face through
 // `font-display` -> `var(--ps-font-display, var(--font-geist-sans))`
 // (globals.css, `@theme inline`, so the var is resolved on the element, not at
-// :root). Only the /shared org layout used to set `--ps-font-display`, so an
+// :root). Only the /live org layout used to set `--ps-font-display`, so an
 // embedded widget fell back to the body sans — which is how the schedule
 // widget's fixed 52px rail ended up painting "Finalizado" / "Afgelopen" /
 // "déterminer" over the entrant name (spectator N1f f1, review-n1e I1).
@@ -30,9 +30,9 @@ vi.mock("@/server/public-site/data", () => ({ getPublicOrg: vi.fn() }));
 vi.mock("@/server/slug-resolve", () => ({ sharedRenameTarget: async () => null }));
 
 import EmbedLayout from "../layout";
-// Imported for its module-scope font call only — the /shared org layout is the
+// Imported for its module-scope font call only — the /live org layout is the
 // surface the embed has to match.
-import "../../(public)/shared/[orgSlug]/layout";
+import "../../(public)/live/[orgSlug]/layout";
 
 const embedHtml = (): string =>
   renderToStaticMarkup(
@@ -50,7 +50,7 @@ describe("/embed mounts the public tree's display face (N1f f1)", () => {
     expect(html.indexOf("--ps-font-display")).toBeLessThan(html.indexOf("(widget)"));
   });
 
-  it("asks for the same face as the /shared org layout, weight 600 included", () => {
+  it("asks for the same face as the /live org layout, weight 600 included", () => {
     expect(fontCalls.length).toBe(2);
     // The rail's status line is `font-semibold`; a layout that mounted only
     // 500/700 would paint it in a synthesised or substituted weight, and the

@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-vi.mock("next/navigation", () => ({ usePathname: () => "/shared/acme/summer-cup" }));
+vi.mock("next/navigation", () => ({ usePathname: () => "/live/acme/summer-cup" }));
 
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { CookieConsent } from "../cookie-consent";
@@ -30,7 +30,7 @@ beforeEach(() => {
       listeners.get(t)!.add(fn);
     },
     removeEventListener: (t: string, fn: () => void) => listeners.get(t)?.delete(fn),
-    location: { pathname: "/shared/acme/summer-cup" },
+    location: { pathname: "/live/acme/summer-cup" },
   });
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true } as Response)));
 });

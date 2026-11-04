@@ -92,9 +92,9 @@ export type SeededRoom = {
   competitionId: string;
   divisionId: string;
   stageId: string;
-  /** `/shared/…/fixtures/{id}` — the canonical fixture page. */
+  /** `/live/…/fixtures/{id}` — the canonical fixture page. */
   fixturePath: string;
-  /** `/shared/…/fixtures/{id}/play` — the room, no link. */
+  /** `/live/…/fixtures/{id}/play` — the room, no link. */
   roomPath: string;
   standingsPath: string;
   white: RoomPlayer;
@@ -243,8 +243,8 @@ export async function seedMatchRoom(
           join competitions c on c.id = d.competition_id join organizations o on o.id = c.org_id
          where f.id = ${fixtureId}`;
       return {
-        fixture: `/shared/${row!.org}/${row!.comp}/${row!.div}/fixtures/${fixtureId}`,
-        standings: `/shared/${row!.org}/${row!.comp}/${row!.div}`,
+        fixture: `/live/${row!.org}/${row!.comp}/${row!.div}/fixtures/${fixtureId}`,
+        standings: `/live/${row!.org}/${row!.comp}/${row!.div}`,
       };
     });
   }
@@ -367,7 +367,7 @@ export type SeededRound = {
    *  (`arbiterPath`); the tab keeps the run-sheet chips and the `arbiter-entry` card that leads there. */
   fixturesTab: string;
   arbiterPath: string;
-  /** `/shared/{org}/{comp}/{div}` — prefix of every public fixture page. */
+  /** `/live/{org}/{comp}/{div}` — prefix of every public fixture page. */
   publicBase: string;
   /** The slug chain, for `routes.*` builders (T17 review M10: never retyped). */
   slugs: { org: string; comp: string; div: string };
@@ -492,7 +492,7 @@ export async function seedOnlineRound(
       stageId,
       fixturesTab: `${base}?tab=fixtures`,
       arbiterPath: `${base}/arbiter`,
-      publicBase: `/shared/${slug!.org}/${slug!.comp}/${slug!.div}`,
+      publicBase: `/live/${slug!.org}/${slug!.comp}/${slug!.div}`,
       slugs: { org: slug!.org, comp: slug!.comp, div: slug!.div },
       boards: rows.map((r) => ({ fixtureId: r.id, home: byEntrant.get(r.home)!, away: byEntrant.get(r.away)! })),
     };

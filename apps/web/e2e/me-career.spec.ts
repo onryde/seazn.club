@@ -275,7 +275,7 @@ test("career rollup: /me sums across competitions, the public card stays scoped 
     `/api/v1/competitions/${a.competitionId}`,
   );
   const orgSlug = orgs.data!.find((o) => o.id === compA.data!.org_id)!.slug;
-  await page.goto(`/shared/${orgSlug}/${compA.data!.slug}/players/${playerId}`);
+  await page.goto(`/live/${orgSlug}/${compA.data!.slug}/players/${playerId}`);
 
   const publicCareer = page.getByTestId("player-career");
   await expect(publicCareer).toBeVisible({ timeout: 20_000 });

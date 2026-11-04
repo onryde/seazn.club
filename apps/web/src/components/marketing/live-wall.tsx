@@ -7,6 +7,7 @@ import { sportEmoji } from "@/components/discovery-cards";
 import { t, type Dict } from "@/lib/i18n";
 import { plural } from "@/lib/i18n-runtime";
 import type { Locale } from "@/lib/i18n-constants";
+import { routes } from "@/lib/routes";
 
 export function LiveWall({
   fixtures,
@@ -55,7 +56,7 @@ export function LiveWall({
             {fixtures.map((f) => (
               <li key={f.id}>
                 <Link
-                  href={`/shared/${f.org_slug}/${f.comp_slug}/${f.division_slug}/fixtures/${f.id}`}
+                  href={routes.publicFixture(f.org_slug, f.comp_slug, f.division_slug, f.id)}
                   className="block rounded-2xl border border-cream/10 bg-cream/[0.05] p-4 transition hover:border-lime-400/50 hover:bg-cream/10"
                 >
                   <p className="flex items-center gap-2 text-[11px] uppercase tracking-widest text-cream/50">

@@ -85,7 +85,7 @@ vi.mock("@/lib/client-v1", () => ({
 // test actually calls usePathname(), by which point this module's top-level
 // `const pathname = ...` has long since run) — the same ordering
 // cookie-consent-overlay-segment.test.tsx's own header comment relies on.
-const pathname = { current: "/shared/acme/summer-cup/div-a/fixtures/1" };
+const pathname = { current: "/live/acme/summer-cup/div-a/fixtures/1" };
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
   usePathname: () => pathname.current,
@@ -527,7 +527,7 @@ describe("cookie consent: Accept carries a stable hook", () => {
     vi.stubGlobal("window", {
       addEventListener: () => {},
       removeEventListener: () => {},
-      location: { pathname: "/shared/acme/summer-cup/div-a/fixtures/1" },
+      location: { pathname: "/live/acme/summer-cup/div-a/fixtures/1" },
     });
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true } as Response)));
     try {
