@@ -93,20 +93,35 @@ describe("venueWords: the translations are not the English word", () => {
     expect(differing).toBe(VENUE_NOUNS.length * 2);
   });
 
-  it("French differs from English wherever French has its own word, and keeps 'court' for the court (owner ruling 2026-11-04)", () => {
+  it("French says 'terrain' for the court too (controller ruling, fix round 1: it overrides 'French keeps court')", () => {
     const fr = (n: VenueNoun) => venueWords(msgIn("fr"), n);
     const en = (n: VenueNoun) => venueWords(msgIn("en"), n);
-    expect(fr("court").singular).toBe("court");
-    expect(fr("court").plural).toBe("courts");
-    // The football pitch, the board and the rink are not spelt like the English words.
+    expect(fr("court").singular).toBe("terrain");
+    expect(fr("court").plural).toBe("terrains");
+    // Every noun but the table (a French word too) is spelt differently from the English one.
     let differing = 0;
-    for (const n of ["pitch", "board", "rink"] as const) {
+    for (const n of VENUE_NOUNS.filter((v) => v !== "table")) {
       expect(fr(n).singularCap, n).not.toBe(en(n).singularCap);
       differing++;
     }
-    expect(differing).toBe(3);
-    // A real sport reaches one of them: football's pitch is a "terrain".
+    expect(differing).toBe(VENUE_NOUNS.length - 1);
+    // Real sports reach them: badminton's court and football's pitch are both a "terrain".
+    expect(fr(venueNoun("badminton")).singular).toBe("terrain");
     expect(fr(venueNoun("football")).singular).toBe("terrain");
+  });
+
+  it("the nouns agree with what Match Day's own keys already say, in every locale (one word per thing across the file)", () => {
+    let checked = 0;
+    for (const l of ["es", "fr", "nl"] as const) {
+      const dict = DICT[l] as unknown as Record<string, string>;
+      for (const noun of VENUE_NOUNS) {
+        const w = venueWords(msgIn(l), noun);
+        expect(w.singularCap, `${l}/${noun} vs matchDay.noun.${noun}`).toBe(dict[`matchDay.noun.${noun}`]);
+        expect(w.plural, `${l}/${noun} vs divBuilder.places.${noun}.other`).toBe(dict[`divBuilder.places.${noun}.other`]!.replace("{count} ", ""));
+        checked++;
+      }
+    }
+    expect(checked).toBe(3 * VENUE_NOUNS.length);
   });
 
   it("the pitch is a different word in each locale (a case where the right answer differs from the wrong one's constant)", () => {
@@ -145,10 +160,10 @@ describe("the seven keys that took {venue} carry the localised noun and no Engli
     "board.grid.unassignedCol",
     "schedule.capacity.suggestion.addCourt",
   ] as const satisfies readonly MessageKey[];
-  // English words a non-English string must not hold. 'court' and 'table' are also real French words.
+  // English words a non-English string must not hold. 'table' is also a real French word.
   const ENGLISH: Record<Exclude<L, "en">, RegExp> = {
     es: /\b(court|pitch|table|board|rink)(e?s)?\b/i,
-    fr: /\b(pitch|board|rink)(e?s)?\b/i,
+    fr: /\b(court|pitch|board|rink)(e?s)?\b/i,
     nl: /\b(court|pitch|table|board|rink)(e?s)?\b/i,
   };
 
