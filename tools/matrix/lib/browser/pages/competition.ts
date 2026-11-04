@@ -9,9 +9,14 @@
 //    picker (:203; ui/visibility-picker.tsx) is a radio per option inside its
 //    <label>, "unlisted" labelled visibility.unlisted.label; submit is the
 //    comp.wizard.create button (:265-266), disabled until a name is typed.
-//  - Submit POSTs /api/v1/competitions with no slug (:84-98): the PRODUCT picks
-//    the slug, so the caller reads it from the answer. On success it
-//    router.push(routes.competition(org, created.slug)) (:117).
+//  - Submit POSTs /api/v1/competitions with no slug: the PRODUCT picks the slug,
+//    so the caller reads it from the answer. On success (Match Day C8, 133b6f4890)
+//    it does NOT navigate: it sets `created` and renders FirstDivisionPrompt in
+//    place of the form (competition-wizard.tsx `if (created) return
+//    <FirstDivisionPrompt …/>`), still on /c/new. That screen's "Add your first
+//    division" and "Later" are links; Later (`first-division-later`) goes to
+//    routes.competition(org, created.slug) (first-division-prompt.tsx). Before
+//    C8 the wizard router.push()ed straight to the competition.
 import type { FromTemplateAnswer } from "../../driver/types.ts";
 import { actAndAwait } from "../respond.ts";
 import { DATA, NAME, TESTID, templateCardTestid } from "../selectors.ts";
@@ -27,7 +32,14 @@ export interface CompetitionOut { id: string; org_id: string; name: string; slug
 /** Creates the competition through the wizard, Unlisted as HttpDriver creates
  *  it (public reads work, and the public-dashboard cap cannot degrade it). The
  *  answer is the product's own row — the DRIVER checks its org and its
- *  applied visibility (OrgMismatch, VisibilityDegraded), as HttpDriver does. */
+ *  applied visibility (OrgMismatch, VisibilityDegraded), as HttpDriver does.
+ *
+ *  After Create the organiser sees the "Add your first division" screen, not
+ *  the competition: it is waited for and pictured, then Later is tapped (the
+ *  organiser's way on to the competition page), so the page is left where it
+ *  always was for a caller — on the new competition's page. The division
+ *  builder (createDivisionUi) visits its own route, so it does not depend on
+ *  which of the screen's two links was taken. */
 export async function createCompetitionUi(c: PageCtx, input: { name: string }): Promise<CompetitionOut> {
   const { page } = c;
   const t = actBudget(c, 1);
@@ -41,10 +53,16 @@ export async function createCompetitionUi(c: PageCtx, input: { name: string }): 
   const before = await shoot(c, "01-competition-created-before");
   const { data } = await actAndAwait<CompetitionOut>(page, { method: "POST", path: /^\/api\/v1\/competitions$/ },
     () => page.getByRole("button", { name: NAME.createCompetition.text, exact: true }).click({ timeout: t }), t);
-  const landing = paths.competition(c.orgSlug, data.slug);
+  // The product stays on /c/new and shows the first-division screen (C8): that, not a landing, is what Create brings.
   const nav = navBudget(c);
+  const firstDivision = page.getByTestId(TESTID.firstDivisionPrompt.id);
+  await awaitScreen(() => firstDivision.waitFor({ state: "visible", timeout: nav }), "the first-division screen (Add your first division) after Create", nav);
+  const prompt = await shoot(c, "01-competition-first-division", before);
+  // Later is a link to the competition page, hydrated or not (the screen is client-rendered after the POST, so it is both).
+  await page.getByTestId(TESTID.firstDivisionLater.id).click({ timeout: t });
+  const landing = paths.competition(c.orgSlug, data.slug);
   await awaitScreen(() => page.waitForURL((u) => u.pathname === landing, { timeout: nav }), `the new competition's page ${landing}`, nav);
-  await shoot(c, "01-competition-created", before);
+  await shoot(c, "01-competition-created", prompt);
   return data;
 }
 

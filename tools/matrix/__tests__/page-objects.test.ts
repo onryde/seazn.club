@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { NoProductResponse } from "../lib/browser/respond.ts";
-import { COMPETITION_ENDS_ON, createFromTemplateUi } from "../lib/browser/pages/competition.ts";
+import { COMPETITION_ENDS_ON, createCompetitionUi, createFromTemplateUi } from "../lib/browser/pages/competition.ts";
 import { FINALIZE_TESTID, FORFEIT_CONFIRM_TESTID, FORFEIT_TESTID, FORFEIT_WHO_TESTID_PREFIX, FORFEIT_WHY_TESTID_PREFIX, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, START_MATCH_TESTID, TAP_WAIT_TIMEOUT_MS } from "../../bench/lib/drivers/scorer.ts";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
 import {
@@ -1728,6 +1728,146 @@ describe("createFromTemplateUi: the card, the sheet, the product's answer", () =
     }
     expect(refused).toBe(keys.length);
     expect(g.log).toEqual([]);
+  });
+});
+
+// Match Day C8 (133b6f4890, 2026-11-02): a blank-wizard create no longer redirects to the competition. The wizard replaces its form
+// with the "Add your first division" screen and stays on /c/new; the competition page is one click away (its Later link). The
+// driver waited for a landing that never came, so every blank-wizard L1/L2 case died ScreenNeverShowed at its first screen.
+describe("createCompetitionUi: the blank wizard, the first-division screen the product now shows in place, then the competition", () => {
+  const BASE = "http://localhost:3999";
+  interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }
+  interface Loc { d: string; [k: string]: unknown }
+  type Shown = "form" | "prompt" | "competition";
+  const SLUG = "matrix-league-generic-score-lifecycle";
+  const NAME_IN = "Matrix league|generic|score|LIFECYCLE";
+  const FIRST_DIVISION = `testid:${TESTID.firstDivisionPrompt.id}`;
+  const LATER = `testid:${TESTID.firstDivisionLater.id}`;
+  const START_BLANK = `testid:${TESTID.templateStartBlank.id}`;
+  const CREATE = `role:button:${NAME.createCompetition.text}`;
+  const answer = { id: "c-1", org_id: "org-1", name: NAME_IN, slug: SLUG, visibility: "unlisted", status: "draft" };
+
+  /** A fake of the product's blank wizard: Create answers 201 and the page then shows the first-division screen (`prompt: true`)
+   *  while the URL stays /c/new, or - `prompt: false` - never shows it. Its Later link is the only way on, to the competition page. */
+  function wizardPage(o: { prompt: boolean }) {
+    const log: string[] = [];
+    let shown: Shown = "form";
+    let acts = 0;
+    let url = "about:blank";
+    type W = { pred: (r: Resp) => boolean; resolve: (r: Resp) => void; timer: ReturnType<typeof setTimeout> };
+    const waiters: W[] = [];
+    const emit = (r: Resp) => { for (const w of [...waiters]) if (w.pred(r)) { clearTimeout(w.timer); waiters.splice(waiters.indexOf(w), 1); w.resolve(r); } };
+    const resp = (path: string, data: unknown): Resp => ({ request: () => ({ method: () => "POST" }), url: () => `${BASE}${path}`, status: () => 201, json: () => Promise.resolve({ ok: true, data }) });
+    const timeout = (what: string) => { const e = new Error(`fake: ${what}`); e.name = "TimeoutError"; return e; };
+    const act = (line: string) => { log.push(line); acts++; };
+    const loc = (d: string): Loc => ({
+      d,
+      first: () => loc(d),
+      filter: (f: { has: Loc }) => loc(`${d} >> has(${f.has.d})`),
+      getByText: (t: string, n: { exact: boolean }) => loc(`text:${t}${n.exact ? "" : " (inexact)"}`),
+      fill: async (v: string) => act(`fill ${d} = ${v}`),
+      check: async () => act(`check ${d}`),
+      elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
+      waitFor: async (w: { state?: string } = {}) => {
+        if (d !== FIRST_DIVISION) return;
+        if (shown === "form") throw timeout("the first-division screen is not on screen");
+        log.push(`wait ${d} ${w.state}`);
+      },
+      click: async () => {
+        act(`click ${d}`);
+        if (d === CREATE) {
+          emit(resp("/api/v1/competitions", answer));
+          if (o.prompt) shown = "prompt";
+        }
+        if (d === LATER) {
+          if (shown !== "prompt") throw new Error("fake: there is no Later link on this screen");
+          shown = "competition";
+          url = `${BASE}${paths.competition("org", SLUG)}`;
+        }
+      },
+    });
+    const page = {
+      goto: async (u: string) => { log.push(`goto ${new URL(u).pathname}`); url = u; },
+      url: () => url,
+      request: { post: async () => ({ ok: () => true, status: () => 200 }) },
+      getByTestId: (id: string) => loc(`testid:${id}`),
+      getByPlaceholder: (t: string, n: { exact: boolean }) => loc(`placeholder:${t}${n.exact ? "" : " (inexact)"}`),
+      getByLabel: (t: string, n: { exact: boolean }) => loc(`label:${t}${n.exact ? "" : " (inexact)"}`),
+      getByText: (t: string, n: { exact: boolean }) => loc(`text:${t}${n.exact ? "" : " (inexact)"}`),
+      getByRole: (r: string, n: { name: string; exact: boolean }) => loc(`role:${r}:${n.name}${n.exact ? "" : " (inexact)"}`),
+      locator: (sel: string) => loc(sel),
+      waitForResponse: (pred: (r: Resp) => boolean, t: { timeout: number }): Promise<Resp> => new Promise((resolveW, reject) => {
+        const w: W = { pred, resolve: resolveW, timer: setTimeout(() => { waiters.splice(waiters.indexOf(w), 1); reject(timeout("no response")); }, t.timeout) };
+        waiters.push(w);
+      }),
+      waitForURL: async (pred: (u: URL) => boolean) => { log.push("waitForURL"); if (!pred(new URL(url))) throw timeout(`the URL never became the competition's (at ${url})`); },
+      waitForFunction: async (fn: (a: unknown) => unknown, arg: { els: { d: string }[] }) => {
+        const v = fn(arg);
+        log.push(`${String(v)} ${arg.els.map((e) => e.d).join(",")}`);
+        return { jsonValue: async () => v, dispose: async () => undefined };
+      },
+      evaluate: async () => ({ scrollWidth: 1280, clientWidth: 1280 }),
+      // What is on screen: it changes with every act, so each picture differs from the one before it.
+      screenshot: async () => new TextEncoder().encode(`screen ${acts} ${shown}`),
+    };
+    const files = new Map<string, Uint8Array>();
+    const fs: EvidenceFs = {
+      mkdir: () => undefined,
+      writeFile: (p, data) => { log.push(`shot ${p.split("/").pop()!.replace(/\.png$/, "")}`); files.set(p, data); },
+      readFile: (p) => { const f = files.get(p); if (f === undefined) throw new Error(`ENOENT ${p}`); return f; },
+    };
+    const evidence = new Evidence("/r", "case-1", fs);
+    const ctx = { page: page as unknown as PageCtx["page"], base: BASE, orgSlug: "org", holdMs: 3000, evidence };
+    return { log, ctx, evidence, shown: () => shown, url: () => url };
+  }
+  const visual = (ev: Evidence) => ev.checks().find((c) => c.id === "visual-evidence")!;
+
+  it("the walk: Start blank, the wizard's fields, Create - answered by the product - then the first-division screen is waited for and pictured, and Later reaches the competition page", async () => {
+    const g = wizardPage({ prompt: true });
+    const out = await createCompetitionUi(g.ctx, { name: NAME_IN });
+    expect(out).toEqual(answer);
+    expect(g.log).toEqual([
+      `goto ${paths.competitionNew("org")}`,
+      `hydrated ${START_BLANK}`,
+      `click ${START_BLANK}`,
+      `fill placeholder:${NAME.competitionNamePlaceholder.text} = ${NAME_IN}`,
+      `fill label:${NAME.endsOn.text} = ${COMPETITION_ENDS_ON}`,
+      `check label >> has(text:${NAME.visibilityUnlisted.text})`,
+      "shot 01-competition-created-before",
+      `click ${CREATE}`,
+      `wait ${FIRST_DIVISION} visible`,
+      "shot 01-competition-first-division",
+      `click ${LATER}`,
+      "waitForURL",
+      "shot 01-competition-created",
+    ]);
+    // The page is where every caller expects it: on the created competition's own page.
+    expect(g.shown()).toBe("competition");
+    expect(new URL(g.url()).pathname).toBe(paths.competition("org", out.slug));
+    // Three pictures of three different screens (the form, the first-division screen, the competition); each pair that must differ does.
+    expect(visual(g.evidence)).toMatchObject({ verdict: "pass", checked: 3 });
+  });
+
+  it("a product that never shows the first-division screen is ScreenNeverShowed, naming that screen - the page object does not wait for a landing that cannot come, and never taps Later", async () => {
+    const g = wizardPage({ prompt: false });
+    const e = await createCompetitionUi(g.ctx, { name: NAME_IN }).then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(ScreenNeverShowed);
+    expect((e as ScreenNeverShowed).what).toMatch(/first-division/i);
+    expect(g.log).not.toContain("waitForURL");
+    expect(g.log.some((l) => l.startsWith("click") && l.includes(LATER))).toBe(false);
+    expect(g.shown()).toBe("form");
+  });
+
+  it("the product facts the walk rests on, read from its text: Create swaps the form for the first-division screen in place, and Later is a link to the competition page", () => {
+    const wizard = readFileSync(resolve(REPO, `${V2}/competition-wizard.tsx`), "utf8");
+    expect(wizard).toContain("if (created) return <FirstDivisionPrompt orgSlug={orgSlug} created={created} />;");
+    // The success branch sets `created`; it pushes nowhere (a push would make the first-division screen unreachable).
+    const submit = wizard.slice(wizard.indexOf("async function submit"), wizard.indexOf("if (degraded) {"));
+    expect(submit).toContain("setCreated({");
+    expect(submit).not.toContain("router.push");
+    const prompt = readFileSync(resolve(REPO, TESTID.firstDivisionLater.file), "utf8");
+    const later = /<Link\s+href=\{([^}]+)\}\s+data-testid="first-division-later"/.exec(prompt)?.[1];
+    expect(later, "the Later link was not found in first-division-prompt.tsx").toBe("routes.competition(orgSlug, created.slug)");
   });
 });
 
