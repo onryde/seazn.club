@@ -275,7 +275,7 @@ describe("the Format dialog: the picker over the division's own format", () => {
     expect(mountDialog({ stages: stagesOf("league") }).h.text()).not.toContain(say("formatChange.customNote"));
   });
 
-  it("a stored Swiss opens at its rounds; an unpicked Swiss at the field's recommendation, under the field's guidance", () => {
+  it("a stored Swiss opens at its rounds; an unpicked Swiss at the field's recommendation, under the field's guidance (X-SW-16)", () => {
     const { h } = mountDialog({ stages: stagesOf("swiss", { swissRounds: 7 }), entrants: 20 });
     expect(Number(propsOf(boundInput(h, "swissRounds")!).value)).toBe(7);
     // 20 players: ceil(log2 20) = 5 rounds (the Swiss rule of thumb: rounds enough to separate one unbeaten player).
