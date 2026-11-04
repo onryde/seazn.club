@@ -19,10 +19,16 @@
 import { useEffect, useRef, useState } from "react";
 import { TIP_CLOSED, tipEscape, tipLeft, tipOutside, tipToggle, type TipState } from "./reason-tip-state";
 
-/** Is the pointer over the wrapper, or focus inside it? Read from the DOM when asked (CSS is what shows the bubble for either), never
- *  mirrored in state - so it cannot go stale. */
+/** Below `md` hover reveals nothing (the bubble's `md:group-hover/tip:block`): the same breakpoint, asked of the browser. */
+const BELOW_MD = "(max-width: 767.98px)";
+
+/** Is the bubble held up by the pointer over the wrapper, or by focus inside it? Read from the DOM when asked (CSS is what shows the
+ *  bubble for either), never mirrored in state - so it cannot go stale. Below `md` only FOCUS counts: hover shows nothing there, so a
+ *  pointer resting on the control (where a tap left it, once a bottom sheet opened under it) holds nothing up - and counting it would
+ *  spend the Escape on an invisible bubble, leaving the sheet around it open (FMT5 CI red, mobile-430). */
 function isEngaged(root: Element | null): boolean {
-  return root?.matches(":hover, :focus-within") === true;
+  const hoverShows = typeof window === "undefined" || typeof window.matchMedia !== "function" || !window.matchMedia(BELOW_MD).matches;
+  return root?.matches(hoverShows ? ":hover, :focus-within" : ":focus-within") === true;
 }
 
 export function WithReasonTip({

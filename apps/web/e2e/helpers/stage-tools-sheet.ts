@@ -48,7 +48,14 @@ export async function expectStageToolsSheet(page: Page, card: Locator, stageId: 
       rows++;
     }
     expect(rows, "anti-vacuity: every row measured").toBe(PANELS.length);
-    // Escape puts the sheet away without opening anything, and hands focus back to the trigger.
+    // Escape puts the sheet away without opening anything, and hands focus back to the trigger - with the pointer RESTING on the sheet's
+    // greyed Complete, which is where the trigger tap leaves it whenever the sheet opens under it (430x932, no scroll: FMT5's CI red).
+    // Below md hover shows no reason bubble, so nothing is held up and the Escape is the sheet's; resting there on purpose makes every
+    // phone width witness it, not only the one whose geometry happens to land the pointer on the button.
+    const complete = card.getByTestId("stage-complete");
+    await expect(complete, "premise: matches are open, so Complete is greyed with its reason").toHaveAttribute("aria-disabled", "true");
+    await complete.hover();
+    await expect(card.getByTestId("stage-complete-hint"), "a resting pointer shows no bubble below md").toBeHidden();
     await page.keyboard.press("Escape");
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
     await expect(trigger, "focus returns to the control that opened the sheet").toBeFocused();
