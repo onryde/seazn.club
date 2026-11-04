@@ -3,7 +3,7 @@
 // immutable once a stage that inherits it has STARTED (W2c X-SR-4: 409
 // DIVISION_FORMAT_LOCKED / DIVISION_TABLE_RULES_LOCKED, by stage name; before
 // W2c it was "once any stage owns fixtures", 409 FORMAT_LOCKED — which
-// `replaceStages` still is), while non-format fields keep patching. Real
+// `replaceStages` was until FMT5, now on a result), while non-format fields keep patching. Real
 // Postgres; skipped without DATABASE_URL (same convention as
 // registrations.test.ts).
 import { afterAll, describe, expect, it } from "vitest";
@@ -15,7 +15,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision, getDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { createStages, generateStageFixtures, replaceStages } from "../stages";
+import { createStages, generateStageFixtures, previewReplaceStages, replaceStages } from "../stages";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { hasFeature, invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -538,7 +538,7 @@ describe.skipIf(!HAS_DB)("cricket pairs-6-a-side removal (#431 ruling 3)", () =>
 });
 
 describe.skipIf(!HAS_DB)("replaceStages — format structure swap (v8)", () => {
-  it("swaps league → groups+knockout until fixtures exist, then 409 FORMAT_LOCKED", async () => {
+  it("swaps league → groups+knockout freely before fixtures, behind a confirm once they exist, and 409 FORMAT_LOCKED once a result does (FMT5)", async () => {
     const owner = await seedOwner();
     const { division } = await rig(owner);
     await createStages(owner, division.id, {
@@ -586,7 +586,7 @@ describe.skipIf(!HAS_DB)("replaceStages — format structure swap (v8)", () => {
     ]);
     expect(swapped.map((s) => s.kind)).toEqual(["group", "knockout"]);
 
-    // Generate fixtures on the new structure → structure is history too.
+    // Generate fixtures on the new structure: a swap now CLEARS them, so it asks for the confirm first (FMT5).
     await createEntrants(owner, division.id, [
       { kind: "individual", display_name: "A", seed: 1, members: [] },
       { kind: "individual", display_name: "B", seed: 2, members: [] },
@@ -594,29 +594,36 @@ describe.skipIf(!HAS_DB)("replaceStages — format structure swap (v8)", () => {
       { kind: "individual", display_name: "D", seed: 4, members: [] },
     ]);
     await generateStageFixtures(owner, swapped[0]!.id);
+    const leagueBody = [{ seq: 1, kind: "league" as const, name: "L", config: {}, progression: null }];
 
-    await expect(
-      replaceStages(owner, division.id, [
-        { seq: 1, kind: "league", name: "L", config: {}, progression: null },
-      ]),
-    ).rejects.toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
+    await expect(replaceStages(owner, division.id, leagueBody)).rejects.toMatchObject({
+      status: 409,
+      code: "FORMAT_CHANGE_CONFIRM",
+    });
+
+    // A result on the board: the structure is history — locked outright, the confirm token no longer opens it.
+    const { token } = await previewReplaceStages(owner, division.id, leagueBody);
+    await startFirstFixture(owner, swapped[0]!.id);
+    await expect(replaceStages(owner, division.id, leagueBody, { clear: token! })).rejects.toMatchObject({
+      status: 409,
+      code: "FORMAT_LOCKED",
+    });
   });
 });
 
-// F2b (P7 follow-up, 2026-08-14), narrowed by W2c X-SR-4 (owner P-2 "A", 2026-10-13).
-// `replaceStages`' FORMAT_LOCKED is still division-WIDE
-//   select 1 from fixtures f join stages s on s.id = f.stage_id
-//   where s.division_id = $1 limit 1
-// — generating stage 1's fixtures freezes the stage graph, untouched later
-// stages included (spec §4.3: W2c leaves that door alone, and the first half
-// of the test below keeps pinning it). `patchDivision` used to run the
+// F2b (P7 follow-up, 2026-08-14), narrowed by W2c X-SR-4 (owner P-2 "A", 2026-10-13), and by FMT5 (2026-11-03).
+// `replaceStages`' FORMAT_LOCKED is still division-WIDE, but on a RESULT
+// (`fixtureHasResultSql` over every stage of the division), not on any fixture:
+// generating stage 1's fixtures makes a replace of the whole graph, untouched
+// later stages included, a confirmed CLEAR (FORMAT_CHANGE_CONFIRM without the
+// token), and stage 1's first result locks it, stage 2 included. `patchDivision` used to run the
 // identical check; it no longer does. It refuses a field only while a STARTED
 // stage that inherits it exists, and names that stage (division-locks.test.ts
 // holds the full table; this block is the F2b regression home for the pair).
 describe.skipIf(!HAS_DB)(
   "F2b — replaceStages stays division-wide; patchDivision narrowed to started inheriting stages (W2c X-SR-4)",
   () => {
-    it("generating stage 1's fixtures 409s a later, untouched stage's replaceStages, but locks patchDivision only once a stage STARTS — and then names it, never the untouched stage", async () => {
+    it("generating stage 1's fixtures makes a replace of the untouched stage 2 a confirmed clear, and stage 1's first result locks it; patchDivision locks only once a stage STARTS — and then names it, never the untouched stage", async () => {
       const owner = await seedOwner();
       const { division } = await rig(owner);
 
@@ -637,13 +644,13 @@ describe.skipIf(!HAS_DB)(
         select count(*)::text from fixtures where stage_id = ${stage2.id}`;
       expect(Number(stage2Fixtures)).toBe(0);
 
-      // replaceStages on the whole graph — including the untouched stage 2 — 409s.
-      await expect(
-        replaceStages(owner, division.id, [
-          { seq: 1, kind: "league", name: "L1", config: {}, progression: null },
-          { seq: 2, kind: "knockout", name: "L2 changed", config: {}, progression: null },
-        ]),
-      ).rejects.toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
+      // replaceStages on the whole graph — including the untouched stage 2 — asks to clear stage 1's board first.
+      const graph = [
+        { seq: 1, kind: "league" as const, name: "L1", config: {}, progression: null },
+        { seq: 2, kind: "knockout" as const, name: "L2 changed", config: {}, progression: null },
+      ];
+      await expect(replaceStages(owner, division.id, graph)).rejects.toMatchObject({ status: 409, code: "FORMAT_CHANGE_CONFIRM" });
+      const { token } = await previewReplaceStages(owner, division.id, graph);
 
       // patchDivision: generation alone no longer locks the division's format.
       const generated = await patchDivision(owner, division.id, { variant_key: "sets" });
@@ -653,6 +660,8 @@ describe.skipIf(!HAS_DB)(
       // Stage 1 starts: the format is locked on stage 1's account, by its name.
       // Stage 2 has no fixtures at all and is never the one named.
       await startFirstFixture(owner, stage1.id);
+      // And the structure: a result in stage 1 locks the whole graph, the untouched stage 2 included — the token no longer opens it.
+      await expect(replaceStages(owner, division.id, graph, { clear: token! })).rejects.toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
       await expect(patchDivision(owner, division.id, { variant_key: "score" })).rejects.toMatchObject({
         status: 409,
         code: "DIVISION_FORMAT_LOCKED",

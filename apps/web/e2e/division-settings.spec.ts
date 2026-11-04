@@ -3,12 +3,15 @@ import AxeBuilder from "@axe-core/playwright";
 import { TAG, addEntrantsViaApi, apiJson, activeOrg, expectNoHorizontalScroll, linkPersonToUserBySql, loginUi, withDb } from "./helpers";
 import { seedOnlineRound, seedUser } from "./match-room-kit";
 import { closeOpenContexts } from "./spectator-public-helpers";
-import { openDivisionRules, saveFormat, savePoints } from "./helpers/rules-strip";
+import { formatButton, openDivisionRules, openFormatDialog, pickFormat, saveFormat, saveFormatDialog, savePoints } from "./helpers/rules-strip";
 import { dictString, publicJson, spectator, uiString, type W2Locale } from "./spectator-w2-kit";
 
 // v8 acceptance (spec 2026-07-13): the division Settings tab collects
-// general/format/sharing/danger; the stage STRUCTURE locks once fixtures exist
-// (UI note + PUT 409 FORMAT_LOCKED) while the match RULES lock per field once a
+// general/sharing/danger (FMT5 moved its format group onto the Fixtures tab's
+// Division rules card); the stage STRUCTURE changes until the first result,
+// clearing unplayed fixtures only behind a confirm (PUT 409
+// FORMAT_CHANGE_CONFIRM without its preview's token, FORMAT_LOCKED once a
+// result exists) while the match RULES lock per field once a
 // stage that plays by them has STARTED (W2c Task 20: UI lock line + PATCH 409
 // DIVISION_FORMAT_LOCKED naming the field); cards wear their identity — sport
 // banner on competitions. Divisions on the competition page moved off that
@@ -38,7 +41,7 @@ test.afterEach(async () => {
   await closeOpenContexts();
 });
 
-test("settings tab: sections render, rename works, structure locks with fixtures, rules lock once a stage has started", async ({
+test("settings tab: sections render, rename works; the format changes from the rules card until a result, rules lock once a stage has started", async ({
   page,
   request,
 }) => {
@@ -48,9 +51,11 @@ test("settings tab: sections render, rename works, structure locks with fixtures
 
   await page.goto(`${base}?tab=settings`);
   await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: 20_000 });
-  for (const section of ["General", "Format", "Sharing & embed", "Danger zone"]) {
+  for (const section of ["General", "Sharing & embed", "Danger zone"]) {
     await expect(page.getByRole("button", { name: new RegExp(section) })).toBeVisible();
   }
+  // FMT5: Settings has no Format section any more.
+  await expect(page.getByTestId("division-settings").getByRole("button", { name: /^Format/ }), "no Format section in Settings").toHaveCount(0);
 
   // Rename from General persists — and the client follows the regenerated
   // slug WITHOUT losing the settings tab (demo-caught regression).
@@ -59,22 +64,25 @@ test("settings tab: sections render, rename works, structure locks with fixtures
   await page.waitForURL(/\/d\/tile-open-renamed\?tab=settings/, { timeout: 15_000 });
   await expect(page.getByTestId("division-settings")).toBeVisible();
 
-  // Format editor is live pre-fixtures — structured fields, no JSON needed.
-  await page.getByRole("button", { name: /Format/ }).click();
-
-  // Competition format: pick Groups + Knockout, apply, structure rebuilds.
-  await page.getByTestId("format-template").selectOption("groups_ko");
-  await page.getByRole("spinbutton", { name: "Top N advance" }).fill("2");
-  await page.getByTestId("apply-structure").click();
-  await expect(page.getByText("Format changed — stages rebuilt.")).toBeVisible();
-  await expect(page.getByTestId("stage-structure")).toContainText("Group stage");
-  await expect(page.getByTestId("stage-structure")).toContainText("Knockout");
-
-  // Match Day C2: the match rules left Settings for the Division rules strip on the Fixtures tab; Settings says where.
+  // Match Day C2 + FMT5: the match rules AND the format left Settings for the Division rules card on the Fixtures tab;
+  // Settings says where.
   await expect(page.getByTestId("division-rules-moved")).toBeVisible();
+  await expect(page.getByTestId("division-rules-moved")).toContainText(uiString("en", "divset.rulesMoved"));
   await expect(page.getByRole("button", { name: "Save match rules" }), "no rules Save left in Settings").toHaveCount(0);
-  // The points still apply independently of the structure - from the strip's Points panel.
   const renamedBase = page.url().split("?")[0]!;
+
+  // The format is live pre-fixtures: pick Groups + Knockout in the card's Format dialog; Save rebuilds the structure.
+  const formatDialog = await openFormatDialog(page, renamedBase);
+  await pickFormat(formatDialog, "groups_ko");
+  await formatDialog.getByRole("spinbutton", { name: uiString("en", "wizard.qualify"), exact: true }).fill("2");
+  await saveFormatDialog(formatDialog).click();
+  await expect(formatDialog, "nothing generated: Save replaces the stages with no confirm").toHaveCount(0, { timeout: 15_000 });
+  await expect(page.getByTestId("division-rules-format-chip")).toHaveText(uiString("en", "format.template.groups_ko.label"));
+  const rebuilt = await apiJson<{ name: string }[]>(request, `/api/v1/divisions/${rig.divisionId}/stages`);
+  expect(rebuilt.data!.map((st) => st.name).join(" / ")).toContain("Group stage");
+  expect(rebuilt.data!.map((st) => st.name).join(" / ")).toContain("Knockout");
+
+  // The points still apply independently of the structure - from the strip's Points panel.
   const rules = await openDivisionRules(page, renamedBase, "points");
   await rules.getByTestId("division-rules-panel-points").getByRole("spinbutton", { name: "Win", exact: true }).fill("5");
   await savePoints(rules).click();
@@ -88,9 +96,10 @@ test("settings tab: sections render, rename works, structure locks with fixtures
   await expect(page.getByTestId("division-settings")).toHaveCount(0);
   await expect(page.getByText("Danger zone")).toHaveCount(0);
 
-  // Generate fixtures on the new structure. W2c Task 20 (S4): that locks the STRUCTURE (replaceStages refuses on any fixture
-  // row) and nothing else - the match rules lock per field and per STARTED stage that inherits them, so until a match is
-  // started they stay editable. (This test used to pin "fixtures exist => PATCH 409 FORMAT_LOCKED".)
+  // Generate fixtures on the new structure. FMT5: that locks nothing - the structure still changes until the first result
+  // (behind a confirm naming what it clears), and the match rules lock per field and per STARTED stage that inherits them
+  // (W2c Task 20, S4), so until a match is started they stay editable. (This test used to pin "fixtures exist => PATCH 409
+  // FORMAT_LOCKED", then "fixtures exist => the structure is locked".)
   await apiJson(
     request,
     `/api/v1/divisions/${rig.divisionId}/entrants`,
@@ -107,12 +116,32 @@ test("settings tab: sections render, rename works, structure locks with fixtures
   const divisionUrl = `/o/${org.slug}/c/${rig.compSlug}/d/${fresh.data!.slug}`;
   const settingsUrl = `${divisionUrl}?tab=settings`;
   const lockLines = page.locator('[data-testid^="division-locked-"]');
+  // FMT5: fixtures exist but nothing is played, so the format still changes - and the dialog names what a change would
+  // clear BEFORE it clears anything. Kept here (the rest of the test plays on these fixtures).
+  const divisionFixtures = await withDb(async (sql) => {
+    const [row] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where division_id = ${rig.divisionId}`;
+    return row!.n;
+  });
+  expect(divisionFixtures, "premise: the division has unplayed fixtures").toBeGreaterThan(0);
+  const liveDialog = await openFormatDialog(page, divisionUrl);
+  await pickFormat(liveDialog, "league");
+  await saveFormatDialog(liveDialog).click();
+  const clears = liveDialog.getByTestId("division-format-clears");
+  await expect(clears.locator('[data-clear="stages"]')).toHaveText(
+    uiString("en", `formatChange.confirm.stages.${stagesNow.data!.length === 1 ? "one" : "other"}`, {
+      count: stagesNow.data!.length,
+      names: stagesNow.data!.map((st) => st.name).join(", "),
+    }),
+  );
+  await expect(clears.locator('[data-clear="fixtures"]')).toHaveText(
+    uiString("en", `formatChange.confirm.fixtures.${divisionFixtures === 1 ? "one" : "other"}`, { count: divisionFixtures }),
+  );
+  await liveDialog.getByTestId("division-format-keep").click();
+  await expect(liveDialog).toHaveCount(0);
+  const keptStages = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${rig.divisionId}/stages`);
+  expect(keptStages.data!.map((st) => st.id), "Keep changed nothing").toEqual(stagesNow.data!.map((st) => st.id));
   await page.goto(settingsUrl);
-  await page.getByRole("button", { name: /Format/ }).click();
-  // The structure is locked and says so; the structure controls are gone.
-  await expect(page.getByTestId("format-locked")).toBeVisible();
-  await expect(page.getByTestId("format-locked")).toContainText(uiString("en", "divset.lockedNotePre").split("(")[0]!.trim());
-  await expect(page.getByTestId("format-template")).toHaveCount(0);
+  await expect(page.getByTestId("division-rules-moved")).toBeVisible({ timeout: 20_000 });
   // Fixtures exist but no stage has started: the RULES are open (on the strip) - no lock line, the variant is editable...
   const strip = await openDivisionRules(page, divisionUrl, "format", "points");
   await expect(lockLines, "no stage has started: nothing is locked").toHaveCount(0);
@@ -125,12 +154,11 @@ test("settings tab: sections render, rename works, structure locks with fixtures
   const afterSave = await apiJson<{ variant_key: string }>(request, `/api/v1/divisions/${rig.divisionId}`);
   expect(afterSave.data!.variant_key, "the new variant landed").toBe("win_loss");
 
-  // The structure door is shut for good.
-  const swap = await page.request.put(`/api/v1/divisions/${rig.divisionId}/stages`, {
-    data: [{ seq: 1, kind: "league", name: "L", config: {}, progression: null }],
-  });
+  // A plain swap with fixtures on the board is refused until it carries a preview's token: nothing is cleared unasked.
+  const swapBody = [{ seq: 1, kind: "league", name: "L", config: {}, progression: null }];
+  const swap = await page.request.put(`/api/v1/divisions/${rig.divisionId}/stages`, { data: swapBody });
   expect(swap.status()).toBe(409);
-  expect(((await swap.json()) as { error?: { code?: string } }).error?.code).toBe("FORMAT_LOCKED");
+  expect(((await swap.json()) as { error?: { code?: string } }).error?.code).toBe("FORMAT_CHANGE_CONFIRM");
 
   // Start the division, then a match: the stage that plays it now holds the rules. The page says so BEFORE anyone types...
   const divStarted = await apiJson(request, `/api/v1/divisions/${rig.divisionId}/start`, "POST");
@@ -141,6 +169,19 @@ test("settings tab: sections render, rename works, structure locks with fixtures
     payload: {},
   });
   expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
+  // A match in play is a result: the structure door is shut for good - the card's Format button is greyed and says why,
+  // and the server refuses even a previewed swap.
+  const lockedFormat = await formatButton(page, divisionUrl);
+  await expect(lockedFormat).toHaveAttribute("aria-disabled", "true");
+  // `force`: the button is aria-disabled on purpose (Playwright reads that as "not enabled" and would wait forever).
+  await lockedFormat.click({ force: true });
+  const lockedReason = page.getByTestId("division-rules-format-reason");
+  await expect(lockedReason, "a press on the greyed button shows its reason").toBeVisible();
+  await expect(lockedReason).toHaveText(uiString("en", "formatChange.err.FORMAT_LOCKED"));
+  await expect(page.getByRole("dialog"), "a greyed Format opens nothing").toHaveCount(0);
+  const lockedPreview = await page.request.put(`/api/v1/divisions/${rig.divisionId}/stages?dry_run=1`, { data: swapBody });
+  expect(lockedPreview.status()).toBe(409);
+  expect(((await lockedPreview.json()) as { error?: { code?: string } }).error?.code).toBe("FORMAT_LOCKED");
   // The started stage plays the variant and every rule field, so the Match rules section reads (C2 fix round 1, I1): ONE
   // line naming the stage, no variant picker, no field and no Save.
   const lockedStrip = await openDivisionRules(page, divisionUrl, "format");
@@ -416,7 +457,7 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     const org = await activeOrg(page);
     const plain = await seedRig(request);
     await gotoSettings(page, `/o/${org.slug}/c/${plain.compSlug}/d/${plain.divSlug}?tab=settings`);
-    await expect(page.getByRole("button", { name: /Format/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /General/ })).toBeVisible();
     await expect(cameraToggle(page)).toHaveCount(0);
 
     // 2. A chess division with online play OFF: the group is there, the select and Save are disabled, and it says why.
@@ -509,13 +550,17 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     expect(errors).toEqual([]);
   });
 
-  test("a division WITH fixtures: the Format group is read-only, the camera group still edits and saves (6)", async ({ page, request }) => {
+  test("a division WITH fixtures: the camera group still edits and saves (6)", async ({ page, request }) => {
     test.setTimeout(150_000);
     const round = await seedOnlineRound(request, ["Cam Fix A", "Cam Fix B"], { open: false });
+    // The premise (it used to be Settings' read-only Format note, gone with FMT5): the division has fixtures.
+    const fixtures = await withDb(async (sql) => {
+      const [row] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where division_id = ${round.divisionId}`;
+      return row!.n;
+    });
+    expect(fixtures, "premise: the division has fixtures").toBeGreaterThan(0);
     const settings = round.fixturesTab.replace("?tab=fixtures", "?tab=settings");
     await gotoSettings(page, settings);
-    await page.getByRole("button", { name: /Format/ }).click();
-    await expect(page.getByTestId("format-locked")).toBeVisible();
     await openCameraGroup(page);
     await expect(page.getByTestId("division-camera-policy")).toBeEnabled();
     // No round is open, so tightening is still allowed (D9).
@@ -880,12 +925,14 @@ test("entrant kinds: on the Entrants tab above the roster, not in Settings; Save
   const storedEntrants = async () =>
     (await apiJson<{ config: { entrants?: { kinds?: string[] } } }>(request, `/api/v1/divisions/${rig.divisionId}`)).data!.config.entrants;
 
-  // Settings: none of it - no group, no chips, no Save - while Format (with its rebuild) is still there.
+  // Settings: none of it - no group, no chips, no Save - while its own sections are there (Format left too, for the Fixtures
+  // tab's Division rules card: FMT5).
   await page.goto(`${base}?tab=settings`);
   await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: 20_000 });
   await expect(toggle, "no entrant kinds group in Settings").toHaveCount(0);
   await expect(page.locator("[data-kind]"), "no kind chip in Settings").toHaveCount(0);
-  await expect(page.getByRole("button", { name: /^Format/ }), "Format stays in Settings").toBeVisible();
+  await expect(page.getByRole("button", { name: /^General/ }), "Settings' own sections are there").toBeVisible();
+  await expect(page.getByTestId("division-settings").getByRole("button", { name: /^Format/ }), "and Format is not").toHaveCount(0);
 
   // Entrants tab: the group is there and sits ABOVE the roster's add form. UI5 item 2 (owner, 2026-11-03): it starts CLOSED, always -
   // this rig has NO entrants yet, the case Match Day E1 item 7 used to open, and it is folded under its one summary row. Both

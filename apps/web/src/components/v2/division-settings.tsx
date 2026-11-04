@@ -1,14 +1,13 @@
 "use client";
 
-// Division Settings tab (v8 spec §2): General → Format → Sharing & embed →
-// Danger zone, tap-per-section. The stage STRUCTURE (template, knobs) hides behind a note once fixtures exist -
-// `replaceStages` refuses on any fixture row, so `structureLocked` is "fixtures exist" (formatAlreadyLocked).
+// Division Settings tab (v8 spec §2): General → Sharing & embed → Danger zone, tap-per-section.
 // Match Day C2 (owner, 2026-10-31): the match RULES - variant, online play and its clock, points, every rule field, the
-// tie-break order - left this tab for the Division rules strip on the Fixtures tab (`components/v2/rules/`); the Format
-// group keeps the structure and points the organiser there. `lockedFields` is still read for the group's summary (a variant
-// a started stage plays reads "(locked)").
+// tie-break order - left this tab for the Division rules strip on the Fixtures tab (`components/v2/rules/`).
 // Match Day C4 (owner, 2026-10-31): the entrant kinds moved to the top of the Entrants tab (`entrant-kinds-settings.tsx`) and the
-// Advanced overrides JSON is gone for good; "Format" - the structure above - stays here with its rebuild.
+// Advanced overrides JSON is gone for good.
+// FMT5 (owner-approved mock, 2026-11-03): the FORMAT - the stage structure and its knobs - left too, for the Format button on
+// the same Division rules card (`rules/division-format.tsx`); one line here points there, and the page sends an old
+// `?tab=format` link to the Fixtures tab with the Format dialog open.
 import { useEffect, useState, type ReactNode } from "react";
 import { SettingsGroup } from "@/components/v2/settings-group";
 import Link from "@/components/ui/console-link";
@@ -16,34 +15,13 @@ import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { settingsSaveErrorText } from "@/lib/config-issue-copy";
 import { divisionAccent, monogram } from "@/lib/division-hue";
-import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
 import { ONLINE_CHESS_DISABLED_CODE, onlinePlayShown } from "@/lib/online-chess";
-import { CHESS_INDIVIDUAL_ONLY } from "@/lib/chess-individual-only";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
-import { lockLineFor } from "./division-settings-locks";
-import type { RefusedField } from "@/lib/rule-errors";
-import {
-  STAGE_TEMPLATES,
-  applyStandingsCarry,
-  buildTemplateStages,
-  clampKnob,
-  detectTemplate,
-  templateHasProgression,
-  templatesForSport,
-  type StageDraft,
-  type StandingsCarry,
-  type TemplateKnobs,
-} from "@/lib/format-templates";
 import { UpgradeGate } from "@/components/upgrade-gate";
-import { LegsChoice } from "@/components/v2/legs-choice";
-import { FORMAT_BOUNDS } from "@/lib/format-bounds";
-import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
-import { sportLabel } from "@/lib/scoring-vocab";
-import { variantWord } from "@/lib/variant-label-keys";
+import { useMsg } from "@/components/i18n/dict-provider";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
 import type { MessageKey } from "@/lib/messages";
 import type { ViewerPlan } from "@/lib/viewer-plan";
-import { swissRoundsDefault, swissRoundsGuidanceLine } from "@/lib/swiss-rounds";
 
 // One option label per declared camera policy (lib/camera-policy.ts is the
 // vocabulary; camera-policy-copy.test.ts sweeps it against all four locales).
@@ -164,119 +142,10 @@ async function fileToWebp(file: File, max: number): Promise<Blob> {
   return blob;
 }
 
-/** Reverse-derives the picker's "how many qualify" knob from a division's
- *  stored stages, to pre-fill the Top-N-advance control when editing an
- *  existing format. Pure, so it's unit-testable without opening the
- *  "Format" Group (defaults closed — its children, including the control
- *  this feeds, never reach a static render or the interactive harness).
- *
- *  F2 (unified progression field): was `.qualification` (`topN` |
- *  `take.length`); now reads the FIRST stage's `.progression`, matching
- *  whichever TakeRule kind format-templates.ts's real specs emit —
- *  rankRange -> to-from+1 (league_ko/group_stepladder/group_playoffs/
- *  qualifying_main), roundLosers -> count (ko_plate), picks -> picks.length
- *  (a hand-built custom graph only — no current template emits it since
- *  ruling 11's groups_ko conversion).
- *
- *  A3 (round-4 review, MAJOR): groups_ko emits topNPerGroup (+ a bestNth
- *  remainder), never picks — this used to fall through every branch above
- *  and hit the `4` fallback for EVERY groups_ko division, regardless of its
- *  real qualifier count. topNPerGroup -> n × the group stage's pool count
- *  (config.pools.count on whichever earlier stage is kind:"group" — the take
- *  rule itself is pool-count-agnostic, so the count has to come from the
- *  sibling stage); bestNth -> its count. Summed, not early-returned, because
- *  groups_ko's real shape carries BOTH in the same take array (the
- *  cross-pool remainder — format-templates.ts) — every other template still
- *  emits exactly one recognised rule per take, so summing changes nothing
- *  for them. Falls back to 4, same default as before. */
-export function currentQualifiedFromStages(
-  stages: {
-    kind?: string;
-    config?: Record<string, unknown> | null;
-    progression: Record<string, unknown> | null;
-  }[],
-): number {
-  const stageIdx = stages.findIndex((st) => st.progression);
-  const stage = stageIdx === -1 ? undefined : stages[stageIdx];
-  const sources = (stage?.progression as { sources?: { take?: unknown[] }[] } | undefined)?.sources;
-  const take = sources?.flatMap((s) => s.take ?? []) ?? [];
-  // F3 ultrareview finding 8 — was `stages.find((st) => st.kind === "group")`,
-  // the FIRST group stage in the division regardless of which stage this
-  // progression actually reads. In a graph with two group phases (a
-  // qualifying pool round into a main group stage, then a knockout) that
-  // sized the knockout off the QUALIFYING round's pool count. Every template
-  // this reads today declares `stage: "previous"`, so the correct source is
-  // the stage immediately before the one carrying the progression — search
-  // backwards from there rather than forwards from the start of the graph.
-  // (An explicit `{stageId}` source is not resolvable here: these props are
-  // draft/unsaved stages with no ids. Nearest-earlier remains the best
-  // available answer for one, and is the exactly-right answer for the
-  // "previous" every shipped template emits.)
-  const poolCount =
-    (stages
-      .slice(0, stageIdx === -1 ? 0 : stageIdx)
-      .reverse()
-      .find((st) => st.kind === "group")?.config as { pools?: { count?: number } } | undefined)?.pools
-      ?.count ?? 1;
-  let total = 0;
-  let matched = false;
-  for (const t of take) {
-    const rule = t as { kind?: string; from?: number; to?: number; count?: number; picks?: unknown[]; n?: number };
-    if (rule.kind === "rankRange" && typeof rule.from === "number" && typeof rule.to === "number") {
-      total += rule.to - rule.from + 1;
-      matched = true;
-    } else if (rule.kind === "picks" && Array.isArray(rule.picks)) {
-      total += rule.picks.length;
-      matched = true;
-    } else if (rule.kind === "roundLosers" && typeof rule.count === "number") {
-      total += rule.count;
-      matched = true;
-    } else if (rule.kind === "topNPerGroup" && typeof rule.n === "number") {
-      total += rule.n * poolCount;
-      matched = true;
-    } else if (rule.kind === "bestNth" && typeof rule.count === "number") {
-      total += rule.count;
-      matched = true;
-    }
-  }
-  return matched ? total : 4;
-}
-
-/** Reverse-derives the carry knob from stored progression stages. Pure. */
-export function currentStandingsCarryFromStages(
-  stages: { progression: StageDraft["progression"] }[],
-): StandingsCarry {
-  for (const st of stages) {
-    if (!st.progression) continue;
-    const carry = st.progression.carry;
-    if (carry === "points" || carry === "full") return carry;
-  }
-  return "none";
-}
-
-/** Stage drafts applyStructure submits — pure mirror of its build path. */
-export function structureDraftsForApply(
-  templateKey: string,
-  knobs: TemplateKnobs,
-  carry: StandingsCarry,
-): StageDraft[] {
-  return applyStandingsCarry(
-    buildTemplateStages(templateKey, {
-      qualified: clampKnob(knobs.qualified, FORMAT_BOUNDS.qualify.min, FORMAT_BOUNDS.qualify.max),
-      swissRounds: knobs.swissRounds,
-      poolCount: clampKnob(knobs.poolCount, FORMAT_BOUNDS.pools.min, FORMAT_BOUNDS.pools.max),
-      legs: knobs.legs,
-    }),
-    carry,
-  );
-}
 
 export function DivisionSettings({
   division,
   orgId,
-  structureLocked,
-  lockedFields,
-  stages,
   canEdit,
   divisionPathPrefix,
   fixturesHref,
@@ -287,30 +156,11 @@ export function DivisionSettings({
   showSeeds,
   viewerPlan,
   onlineChessOffered,
-  swissField,
-  entrantKinds,
 }: {
   division: DivisionSettingsInfo;
   /** Org id, for the tag-suggestions fetch only (the division PATCH itself
    *  is not org-scoped in its URL) — see saveRequiredCourtTags below. */
   orgId: string;
-  /** Fixtures exist - the stage structure cannot be replaced (`formatAlreadyLocked`, the page). NOT the rules: those lock
-   *  per started stage (`lockedFields`), so a division with fixtures and no started stage keeps its rules editable. */
-  structureLocked: boolean;
-  /** Every field a started stage locks (`divisionLockedFields`): the Format group's summary says a locked variant. */
-  lockedFields: RefusedField[];
-  /** Stage structure (kind + name) — shown so group/top sections are visible
-   *  here; structure itself is edited on the Fixtures tab. */
-  stages: {
-    name: string;
-    kind: string;
-    config: Record<string, unknown> | null;
-    /** F2 — shaped enough for detectTemplate/currentQualifiedFromStages to
-     *  read take-rule kinds without a cast at either call site below; the
-     *  page passes this through from StageRow's untyped JSONB column, so the
-     *  narrowing cast belongs there, at the actual DB-read boundary. */
-    progression: StageDraft["progression"];
-  }[];
   canEdit: boolean;
   /** "/o/{org}/c/{comp}/d/" — renames regenerate the slug, and the client
    *  must follow it without losing the settings tab. */
@@ -331,56 +181,17 @@ export function DivisionSettings({
   /** T20: the club is offered online chess (the PostHog flag `online-chess`, asked by the page). Off ⇒ the camera control
    *  is not rendered at all (the Online play select itself is in the Division rules strip, Match Day C2). */
   onlineChessOffered: boolean;
-  /** W3 T11 (X-SW-16): the field a root Swiss would pair — the division's active entrants (the page's
-   *  `activeEntrantIds`). Read only where the Rounds box renders, i.e. before Start (`structureLocked` hides it), when no
-   *  late-entry stamp can exist yet. Under 2 (or absent) ⇒ no guidance line, and a switch to a Swiss seeds the band for a
-   *  field of up to 8. */
-  swissField?: number;
-  /** C9 fix round 1 (review I5): the entrant kinds the division's ENGINE model holds (the page's effective model: the
-   *  sport's declaration with this division's `config.entrants` override, chess read without it). The Format select
-   *  offers no pair format (americano/mexicano) where it lacks individuals (templatesForSport; C9 round 3: the rule the builder reads). Required, so a
-   *  mount cannot leave the offer unchecked. */
-  entrantKinds: readonly string[];
 }) {
   const msg = useMsg();
-  // W3 T11 (X-SW-16): the Swiss Rounds field's guidance line is counted ("for 6 entrants").
-  const plural = useMsgPlural();
-  // The Format section names the division's sport and variant as WORDS (`sport.<key>`, `variant.<sport>.<variant>`),
-  // never the stored keys: the key is the identity (`boardgame`), the word is what the organiser reads ("Chess").
-  const sportName = sportLabel(division.sport_key, msg);
-  const variantName = variantWord(division.sport_key, division.variant_key, msg);
   const router = useRouter();
   const [name, setName] = useState(division.name);
   const [logoUrl, setLogoUrl] = useState(division.logo_url);
-  // Competition format = the stage structure (League / Groups + Knockout…).
-  const detected = detectTemplate(stages);
-  const [template, setTemplate] = useState(detected ?? "league");
-  // F3 Task 6: hoisted out of the JSX so the format <select>'s help caption
-  // (:597) doesn't re-run STAGE_TEMPLATES.find for the same lookup the
-  // <option> loop already keys off of.
-  const selectedTemplate = STAGE_TEMPLATES.find((t) => t.key === template);
-  const [qualified, setQualified] = useState(currentQualifiedFromStages(stages));
-  const [poolCount, setPoolCount] = useState(
-    ((stages.find((st) => st.kind === "group")?.config as { pools?: { count?: number } } | null)?.pools?.count) ?? 2,
-  );
-  const [swissRounds, setSwissRounds] = useState(
-    ((stages.find((st) => st.kind === "swiss")?.config as { rounds?: number } | null)?.rounds) ??
-      swissRoundsDefault(swissField),
-  );
-  const swissGuidance = swissField === undefined ? null : swissRoundsGuidanceLine(swissField, plural);
-  const templateHasSwissRounds = ["swiss", "swiss_playoff", "swiss_knockout"].includes(template);
-  const [legs, setLegs] = useState(
-    ((stages.find((st) => st.kind === "league" || st.kind === "group")?.config as { legs?: number } | null)?.legs) ?? 1,
-  );
-  const [standingsCarry, setStandingsCarry] = useState<StandingsCarry>(() =>
-    currentStandingsCarryFromStages(stages),
-  );
   const cfg = (division.config ?? {}) as { onlinePlay?: string };
   // T6 camera policy. The control shows the EFFECTIVE value (own, else the
   // competition's, else off); `ownCamera === null` is surfaced as inherited
   // rather than collapsed into "off" — the server keeps that distinction.
   // Online play gates the control on its SAVED value: the camera has its own
-  // Save, so an unsaved choice in the Format group must not unlock it.
+  // Save, so an unsaved choice in the Division rules card must not unlock it.
   // M-4: the select carries "use the competition setting" as its own choice,
   // so a pinned division can go back to inheriting (saved as null).
   const ownCamera: CameraPolicy | null = division.camera_policy ?? null;
@@ -410,9 +221,6 @@ export function DivisionSettings({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // The Format group's summary says the variant is locked while a started stage plays it (W2c Task 20, S4); the variant
-  // itself is chosen in the Division rules strip (Match Day C2).
-  const variantLock = lockLineFor("variant_key", lockedFields);
   const [paywallFeature, setPaywallFeature] = useState<string | null>(null);
   const fileInputId = `division-logo-${division.id}`;
   const hue = divisionAccent(division.id);
@@ -457,13 +265,6 @@ export function DivisionSettings({
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywallFeature(String(err.extra.feature_key ?? ""));
-      } else if (err instanceof ApiV1Error && err.code === SWISS_ROUNDS_REQUIRED_CODE) {
-        // Reachable from the Rounds box right on this screen: it is a
-        // `type="number"` bound through `Number(e.target.value)`, and an
-        // emptied box is `Number("") === 0` — below the server's floor of 1.
-        // The server's message is English-only (no server-side i18n in this
-        // repo), so the CODE is what gets localised here rather than shown raw.
-        setError(msg("stage.err.swissRoundsRequired"));
       } else if (err instanceof ApiV1Error && err.code === "POLICY_LOCKED") {
         // Server English otherwise (no server-side i18n): localise the code.
         setError(msg("divset.err.cameraPolicyLocked"));
@@ -472,12 +273,6 @@ export function DivisionSettings({
         // the same in every locale; only the sentence around them is ours.
         const controls = Array.isArray(err.extra.controls) ? err.extra.controls.map(String).join(", ") : "";
         setError(msg("divset.err.timeControlUnsupported", { controls }));
-      } else if (err instanceof ApiV1Error && err.code === CHESS_INDIVIDUAL_ONLY) {
-        // Server English otherwise (no server-side i18n): localise the code. Reached by the format Apply on a chess
-        // division stored with americano/mexicano before the ruling: that structure stays listed and selected
-        // (templatesForSport `current`), so re-applying it - even to change only rounds or courts - is refused by the
-        // stage writers (follow-up to #1027). The entrant-kinds save, which met it here too, moved to the Entrants tab.
-        setError(msg("divset.err.chessIndividualOnly"));
       } else if (err instanceof ApiV1Error && err.code === ONLINE_CHESS_DISABLED_CODE) {
         // T20 (fix round 1, m6): turning online play on while the club is not offered online chess — a save racing a
         // flag change, a kept answer gone stale, PostHog down. Server English otherwise: localise the code.
@@ -549,18 +344,6 @@ export function DivisionSettings({
       setLogoUrl(null);
     }, msg("divset.notice.logoRemoved"));
 
-  const applyStructure = () =>
-    run(async () => {
-      const drafts = structureDraftsForApply(
-        template,
-        { qualified, swissRounds, poolCount, legs },
-        standingsCarry,
-      );
-      await apiV1(`/api/v1/divisions/${division.id}/stages`, {
-        method: "PUT",
-        json: drafts.map((d, i) => ({ ...d, seq: i + 1 })),
-      });
-    }, msg("divset.notice.formatChanged"));
 
 
   // Sends ONLY camera_policy, so it works on a format-locked division (any
@@ -699,185 +482,18 @@ export function DivisionSettings({
         </div>
       </SettingsGroup>
 
-      <SettingsGroup
-        title={msg("divset.format")}
-        // T16 (canvas SettingsPhone): the summary states that the division plays online — a fact, shown whatever the
-        // flag and even when the format is locked (the select itself is hidden then).
-        summary={`${sportName} · ${variantLock ? msg("divset.variantLocked", { variant: variantName }) : variantName}${
-          division.sport_key === "boardgame" && onlinePlaySaved ? ` · ${msg("divset.onlinePlay.summaryOn")}` : ""
-        }`}
-      >
-        {structureLocked ? (
-          <div data-testid="format-locked" className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">
-            <p className="font-medium text-slate-700">
-              {sportName} · {variantName}
-            </p>
-            <p className="mt-1">
-              {msg("divset.lockedNotePre")}
-              <Link href={fixturesHref} className="text-purple-700 underline">{msg("divset.fixtures")}</Link>
-              {msg("divset.lockedNotePost")}
-            </p>
-          </div>
-        ) : (
-            <div className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                {msg("divset.competitionFormat")}
-              </p>
-              <label className="block text-xs text-slate-500">
-                {msg("divset.structure")}
-                <select
-                  disabled={!canEdit}
-                  value={template}
-                  onChange={(e) => setTemplate(e.target.value)}
-                  className="input mt-1 w-full"
-                  data-testid="format-template"
-                >
-                  {/* F3 Task 6: t.key is a plain `string` (STAGE_TEMPLATES
-                      isn't narrowed to a literal-key union — see
-                      format-templates.ts), so this template-literal lookup
-                      can't be checked against MessageKey's literal union
-                      without a cast. Narrow, not `as any`: a typo in the
-                      "format.template."/".label" literals themselves would
-                      still fail to compile. format-templates.test.ts's
-                      dictionary-coverage test backstops every t.key actually
-                      resolving. */}
-                  {/* The sport's offer (templatesForSport): chess, and any division whose entrant model holds no
-                      individuals (the team sports, volleyball, a Pairs or Teams division), lists no americano/mexicano, except the
-                      structure the division already plays, so it still shows what it is. */}
-                  {templatesForSport(division.sport_key, entrantKinds, detected).map((t) => (
-                    <option key={t.key} value={t.key}>
-                      {msg(`format.template.${t.key}.label` as MessageKey)}
-                    </option>
-                  ))}
-                </select>
-                <span className="mt-0.5 block text-[11px] text-slate-500">
-                  {selectedTemplate && msg(`format.template.${selectedTemplate.key}.help` as MessageKey)}
-                </span>
-              </label>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {["league_ko", "groups_ko", "group_stepladder", "swiss_knockout"].includes(
-                  template,
-                ) && (
-                  <label className="block text-xs text-slate-500">
-                    {msg("divset.topN")}
-                    <input type="number" data-format-bound="qualify" min={FORMAT_BOUNDS.qualify.min} max={FORMAT_BOUNDS.qualify.max} disabled={!canEdit} value={qualified}
-                      onChange={(e) => setQualified(Number(e.target.value))} className="input mt-1 w-full" />
-                  </label>
-                )}
-                {template === "groups_ko" && (
-                  <label className="block text-xs text-slate-500">
-                    {msg("divset.groups")}
-                    <input type="number" data-format-bound="pools" min={FORMAT_BOUNDS.pools.min} max={FORMAT_BOUNDS.pools.max} disabled={!canEdit} value={poolCount}
-                      onChange={(e) => setPoolCount(Number(e.target.value))} className="input mt-1 w-full" />
-                  </label>
-                )}
-                {templateHasSwissRounds && (
-                  <div>
-                    <label className="block text-xs text-slate-500">
-                      {msg("divset.rounds")}
-                      <input
-                        type="number"
-                        data-format-bound="swissRounds"
-                        min={FORMAT_BOUNDS.swissRounds.min}
-                        max={FORMAT_BOUNDS.swissRounds.max}
-                        disabled={!canEdit}
-                        value={swissRounds}
-                        data-testid="division-settings-swiss-rounds"
-                        onChange={(e) => setSwissRounds(Number(e.target.value))}
-                        {...(swissGuidance !== null ? { "aria-describedby": "division-settings-swiss-rounds-guidance" } : {})}
-                        className="input mt-1 w-full"
-                      />
-                    </label>
-                    {/* W3 T11 (X-SW-16): the field's guidance, OUTSIDE the label so it describes the box rather than
-                        joining its accessible name. */}
-                    {swissGuidance !== null && (
-                      <p
-                        id="division-settings-swiss-rounds-guidance"
-                        data-testid="division-settings-swiss-rounds-guidance"
-                        className="mt-0.5 text-[11px] text-slate-500"
-                      >
-                        {swissGuidance}
-                      </p>
-                    )}
-                  </div>
-                )}
-                {["league", "league_ko", "groups_ko"].includes(template) && (
-                  // Match Day D1: the builder's Once / Home & away control (legs-choice.tsx). A stored value past the
-                  // bounds is shown with a note and kept as it is until the organiser picks one, never clamped.
-                  <div className="col-span-2">
-                    <LegsChoice
-                      legend={msg("divset.legs")}
-                      legendClassName="block text-xs text-slate-500"
-                      value={legs}
-                      onChange={setLegs}
-                      disabled={!canEdit}
-                    />
-                  </div>
-                )}
-                {templateHasProgression(template) && (
-                  <label className="block text-xs text-slate-500">
-                    {msg("format.carry.label")}
-                    <select
-                      data-testid="division-settings-carry"
-                      disabled={!canEdit}
-                      value={standingsCarry}
-                      onChange={(e) => setStandingsCarry(e.target.value as StandingsCarry)}
-                      className="input mt-1 w-full"
-                    >
-                      <option value="none">{msg("format.carry.none")}</option>
-                      <option value="points">{msg("format.carry.points")}</option>
-                      <option value="full">{msg("format.carry.full")}</option>
-                    </select>
-                    <span className="mt-0.5 block text-[11px] text-slate-500">{msg("format.carry.help")}</span>
-                  </label>
-                )}
-              </div>
-              {canEdit && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={applyStructure}
-                  className="btn btn-primary text-xs"
-                  data-testid="apply-structure"
-                >
-                  {stages.length > 0 ? msg("divset.changeFormat") : msg("divset.setFormat")}
-                </button>
-              )}
-              {detected === null && stages.length > 0 && (
-                <p className="text-[11px] text-amber-600">{msg("divset.customStructure")}</p>
-              )}
-            </div>
-        )}
-
-        {/* Match Day C2: the match format, points and tie-breaks left Settings for the Division rules strip on the Fixtures
-            tab (owner, 2026-10-31: "Rules" leave Settings; "Format" - the structure above - stays). */}
-        <p className="border-t border-slate-100 pt-3 text-xs text-slate-600" data-testid="division-rules-moved">
-          {msg(onlinePlayShown(division.sport_key, onlineChessOffered) ? "divset.rulesMovedOnline" : "divset.rulesMoved")}{" "}
-          <Link href={fixturesHref} className="font-semibold text-purple-700 underline underline-offset-2">
-            {msg("divset.rulesMovedLink")}
-          </Link>
-        </p>
-
-        {stages.length > 0 && (
-          <p className="rounded-md bg-slate-50 p-3 text-xs text-slate-500" data-testid="stage-structure">
-            {msg("divset.structureLabel")}{" "}
-            {stages.map((st, i) => (
-              <span key={i}>
-                {i > 0 && " → "}
-                <span className="font-medium text-slate-700">{st.name}</span> ({st.kind})
-              </span>
-            ))}
-            {" · "}
-            <Link href={fixturesHref} className="text-purple-700 underline">
-              {msg("divset.editStages")}
-            </Link>
-          </p>
-        )}
-      </SettingsGroup>
+      {/* FMT5: the format, with the match rules, points and tie-breaks (Match Day C2), is set on the Fixtures tab's
+          Division rules card; Settings keeps one line pointing there. */}
+      <p className="card min-w-0 px-4 py-3 text-xs text-slate-600" data-testid="division-rules-moved">
+        {msg(onlinePlayShown(division.sport_key, onlineChessOffered) ? "divset.rulesMovedOnline" : "divset.rulesMoved")}{" "}
+        <Link href={fixturesHref} className="inline-flex min-h-11 items-center font-semibold text-purple-700 underline underline-offset-2 md:min-h-0">
+          {msg("divset.rulesMovedLink")}
+        </Link>
+      </p>
 
       {/* T6 — its own group, OUTSIDE the format lock: the camera requirement
           is edited mostly on divisions that already have fixtures, where the
-          Format group above is read-only. T20: only while the club is offered online chess. */}
+          format is read-only. T20: only while the club is offered online chess. */}
       {division.sport_key === "boardgame" && onlineChessOffered && (
         <SettingsGroup
           title={msg("divset.camera.label")}

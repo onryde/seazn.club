@@ -8,12 +8,15 @@
 // test (see .superpowers/sdd/2026-08-14-p7-multi-stage-templates-plan/
 // f2-brief.md for the full analysis; no production code changes here).
 //
-// 1. replaceStages (usecases/stages.ts:260-285) is the ONLY writer that
-//    mutates kind/seeding/structural config on an existing stage row, and it
-//    refuses with 409 FORMAT_LOCKED while ANY fixture exists in the
-//    division, under an advisory xact lock taken in the same transaction —
-//    so it cannot be raced. Every other rules-edit route is
-//    delete-and-recreate.
+// 1. replaceStages (usecases/stages.ts) is the ONLY writer that
+//    mutates kind/seeding/structural config on an existing stage row. FMT5
+//    (2026-11-03): it no longer refuses on any fixture. A division with
+//    unplayed fixtures is cleared and rebuilt — fixtures DELETED with the
+//    stages they belong to, in the same transaction, behind a confirm token —
+//    and one with a result refuses 409 FORMAT_LOCKED, under an advisory xact
+//    lock taken in the same transaction, so neither can be raced. No path
+//    leaves a fixture standing beside stages that replaced its own. Every other
+//    rules-edit route is delete-and-recreate.
 // 2. fixtures.stage_id is `on delete cascade`
 //    (db/migration/v2-engine/tables/V214__fixtures.sql:6) — the
 //    delete-and-recreate routes above take a stage's fixtures WITH it
@@ -29,7 +32,8 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { createStages, deleteStage, generateStageFixtures, replaceStages } from "../stages";
+import { createStages, deleteStage, generateStageFixtures, previewReplaceStages, replaceStages } from "../stages";
+import { appendEvent } from "@/server/engine-db";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -98,18 +102,30 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("F2 — the orphaned-fixture hazard P6 recorded is unreachable", () => {
-  it("property 1: replaceStages refuses 409 FORMAT_LOCKED once a fixture exists in the division", async () => {
+  it("property 1: replaceStages never leaves a fixture behind — unconfirmed it moves nothing, confirmed it deletes every fixture with its stage, and a result refuses 409 FORMAT_LOCKED", async () => {
     const { auth } = await seedOrg();
-    const { divisionId } = await seedDivisionWithFixtures(auth);
+    const { divisionId, stageId } = await seedDivisionWithFixtures(auth);
+    const body = [{ seq: 1, kind: "league" as const, name: "L2", config: {}, progression: null }];
+    const fixtureIds = async () =>
+      (await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by id`).map((r) => r.id);
+    const before = await fixtureIds();
+    expect(before.length, "premise: the division has fixtures").toBeGreaterThan(0);
 
-    try {
-      await replaceStages(auth, divisionId, [
-        { seq: 1, kind: "league", name: "L2", config: {}, progression: null },
-      ]);
-      expect.unreachable("expected replaceStages to throw FORMAT_LOCKED");
-    } catch (err) {
-      expect(err).toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
-    }
+    await expect(replaceStages(auth, divisionId, body)).rejects.toMatchObject({ status: 409, code: "FORMAT_CHANGE_CONFIRM" });
+    expect(await fixtureIds(), "unconfirmed: nothing moved").toEqual(before);
+
+    const { token } = await previewReplaceStages(auth, divisionId, body);
+    const [replaced] = await replaceStages(auth, divisionId, body, { clear: token! });
+    expect(await fixtureIds(), "confirmed: no fixture survives the stages it belonged to").toEqual([]);
+    expect(replaced!.id).not.toBe(stageId);
+
+    // And once a result exists the structure is locked outright.
+    await generateStageFixtures(auth, replaced!.id);
+    const [first] = await fixtureIds();
+    await appendEvent(auth.orgId, first!, 0, { type: "core.start", payload: {} });
+    const played = await fixtureIds();
+    await expect(replaceStages(auth, divisionId, body, { clear: token! })).rejects.toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
+    expect(await fixtureIds()).toEqual(played);
   });
 
   it("property 2: deleting a stage cascades its fixtures away instead of orphaning them (ON DELETE CASCADE)", async () => {

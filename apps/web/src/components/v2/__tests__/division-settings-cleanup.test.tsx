@@ -1,10 +1,10 @@
-// Match Day C4 (spec 2026-10-31 §12 Phase C) - the division Settings clean-up. Owner, 2026-10-31: "Format" (the stage structure:
-// league / swiss / playoff ...) STAYS in Settings with rebuild-stages; "Rules" (match format, points, tie-breaks) LEFT in C2;
-// the entrant kinds move to the Entrants tab (`entrant-kinds-settings.tsx`, its own suite); the Advanced overrides JSON is hidden.
+// Match Day C4 (spec 2026-10-31 §12 Phase C) - the division Settings clean-up. Owner, 2026-10-31: "Rules" (match format, points,
+// tie-breaks) LEFT in C2; the entrant kinds move to the Entrants tab (`entrant-kinds-settings.tsx`, its own suite); the Advanced
+// overrides JSON is hidden. FMT5 (owner-approved 2026-11-03): "Format" (the stage structure: league / swiss / playoff ...) left
+// too, for the Format button on the Fixtures tab's Division rules card (components/v2/rules/__tests__/division-format.test.tsx).
 //
 // What this file pins on the Settings tab itself, for EVERY sport in the registry (counted; zero swept is a failure):
-//   - no Match rules, Standings points, Advanced overrides (JSON) or entrant-kind control is rendered, in any state;
-//   - the Format group still carries the structure picker and the rebuild button (open), or the locked note;
+//   - no Match rules, Standings points, Advanced overrides (JSON), entrant-kind control or Format group is rendered, in any state;
 //   - the pointer that replaced the rules names ONLINE PLAY only where the division's sport offers it (the strip draws that
 //     control for a chess division in a club offered online chess - `onlinePlayShown`), in all four locales.
 // The static render cannot open a collapsed Group, so the tree is read through the hook harness, which walks a Group's children.
@@ -26,7 +26,6 @@ import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
-import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -56,10 +55,6 @@ function props(over: Partial<ComponentProps<typeof DivisionSettings>> & { sportK
       logo_storage_path: null,
     },
     orgId: "org1",
-    entrantKinds: engineEntrantKinds(sportKey),
-    structureLocked: false,
-    lockedFields: [],
-    stages: [],
     canEdit: true,
     divisionPathPrefix: "/o/org/c/comp/d/",
     fixturesHref: "/o/org/c/comp/d/div/fixtures",
@@ -102,46 +97,41 @@ const REMOVED_PHRASES = [
 beforeEach(() => vi.clearAllMocks());
 
 describe("Settings has no rules, points, JSON overrides or entrant kinds - every sport, every state", () => {
-  it("swept over the registry x editor/viewer x structure open/locked: none of it is drawn, the Format group is", () => {
+  it("swept over the registry x editor/viewer: none of it is drawn, nor the Format group (FMT5)", () => {
     let checked = 0;
     for (const m of builtinModules) {
       for (const canEdit of [true, false]) {
-        for (const structureLocked of [false, true]) {
-          const island = renderIsland(DivisionSettings, props({ sportKey: m.key, canEdit, structureLocked }));
-          const text = surfaceOf(island);
-          const ids = testIds(island.tree());
-          const where = `${m.key} canEdit=${canEdit} locked=${structureLocked}`;
-          // E1 item 2: the pointer's own sentence now opens "Match rules, points and tie-breaks are set on the Fixtures tab", so the removed
-          // block's title can only be told apart OUTSIDE it. The pointer is cut out first (and must exist: the cut is the guard's premise).
-          const pointerEl = island.tree().find((e) => propsOf(e)["data-testid"] === "division-rules-moved");
-          expect(pointerEl, `${where}: premise: the pointer is on the page`).toBeDefined();
-          const outsidePointer = text.split(textOf(pointerEl!)).join("");
-          expect(outsidePointer.length, `${where}: premise: the cut left the rest of the page`).toBeGreaterThan(100);
-          for (const phrase of REMOVED_PHRASES) expect(outsidePointer, `${where}: no "${phrase}"`).not.toContain(phrase);
-          expect(text, `${where}: no entrant-kind words`).not.toContain(EN["divset.entrants.kinds"]);
-          expect(ids.filter((id) => /^entrants-|rules-(format|points|tiebreaks)|division-rules-panel|advanced|override/i.test(id)), `${where}: no moved or removed test id`).toEqual([]);
-          const kindChips = island.tree().filter((e) => propsOf(e)["data-kind"] !== undefined);
-          expect(kindChips, `${where}: no entrant-kind chip`).toHaveLength(0);
-          // The positive pair: Format stays, with its rebuild.
-          expect(text, `${where}: the Format group`).toContain(EN["divset.format"]);
-          if (structureLocked) {
-            expect(ids, `${where}: the locked note`).toContain("format-locked");
-            expect(ids, `${where}: no rebuild once fixtures exist`).not.toContain("apply-structure");
-          } else if (canEdit) {
-            expect(ids, `${where}: the structure picker`).toContain("format-template");
-            expect(ids, `${where}: the rebuild button`).toContain("apply-structure");
-          }
-          checked++;
+        const island = renderIsland(DivisionSettings, props({ sportKey: m.key, canEdit }));
+        const text = surfaceOf(island);
+        const ids = testIds(island.tree());
+        const where = `${m.key} canEdit=${canEdit}`;
+        // E1 item 2: the pointer's own sentence now opens "Match rules, points and tie-breaks are set on the Fixtures tab", so the removed
+        // block's title can only be told apart OUTSIDE it. The pointer is cut out first (and must exist: the cut is the guard's premise).
+        const pointerEl = island.tree().find((e) => propsOf(e)["data-testid"] === "division-rules-moved");
+        expect(pointerEl, `${where}: premise: the pointer is on the page`).toBeDefined();
+        const outsidePointer = text.split(textOf(pointerEl!)).join("");
+        expect(outsidePointer.length, `${where}: premise: the cut left the rest of the page`).toBeGreaterThan(100);
+        for (const phrase of REMOVED_PHRASES) expect(outsidePointer, `${where}: no "${phrase}"`).not.toContain(phrase);
+        expect(text, `${where}: no entrant-kind words`).not.toContain(EN["divset.entrants.kinds"]);
+        expect(ids.filter((id) => /^entrants-|rules-(format|points|tiebreaks)|division-rules-panel|advanced|override/i.test(id)), `${where}: no moved or removed test id`).toEqual([]);
+        const kindChips = island.tree().filter((e) => propsOf(e)["data-kind"] !== undefined);
+        expect(kindChips, `${where}: no entrant-kind chip`).toHaveLength(0);
+        // FMT5: the Format group left with its picker, its rebuild and its locked note; no group is titled Format.
+        for (const id of ["format-template", "apply-structure", "format-locked", "stage-structure"]) {
+          expect(ids, `${where}: no ${id}`).not.toContain(id);
         }
+        const titles = island.tree().filter((e) => e.type === SettingsGroup).map((e) => propsOf(e).title);
+        expect(titles, `${where}: no Format group`).not.toContain(EN["formatChange.button"]);
+        checked++;
       }
     }
-    expect(checked, "anti-vacuity: renders swept").toBe(builtinModules.length * 4);
+    expect(checked, "anti-vacuity: renders swept").toBe(builtinModules.length * 2);
     expect(builtinModules.length, "premise: the registry is not empty").toBeGreaterThan(1);
   });
 
   it("the other groups survive the clean-up (the positive pair for the removals)", () => {
     const text = surfaceOf(renderIsland(DivisionSettings, props()));
-    for (const key of ["divset.general", "divset.format", "divset.requiredTags.title", "divset.news.title", "divset.publicPage.title", "divset.sharing", "divset.danger"]) {
+    for (const key of ["divset.general", "divset.requiredTags.title", "divset.news.title", "divset.publicPage.title", "divset.sharing", "divset.danger"]) {
       expect(text, key).toContain(EN[key]);
     }
   });

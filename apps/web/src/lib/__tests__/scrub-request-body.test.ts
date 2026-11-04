@@ -132,6 +132,7 @@ const BODY_VERDICTS: Record<string, true | string> = {
   "api/users/me": "the body is a profile patch or the delete confirmation; `token` is a comment about a sealed Lichess token held server-side",
   "api/internal/relay/sessions/[sid]/heartbeat": "the relay token is the Bearer header; the body is heartbeat metrics",
   "api/v1/competitions/[id]/schedule/apply": "`token` is the plan's sequence token (a concurrency check); the body is the plan",
+  "api/v1/divisions/[id]/stages": "`?clear=` carries a format-change preview's token, a digest of the board it named (a staleness check, like schedule/apply's), in the query; the body is the stage list",
   "api/v1/fixtures/[id]/external-play/arbiter": "the body names the entrant side; the arbiter's token is minted and returned, never received",
   "api/v1/fixtures/[id]/external-play/room/act": "the body is the move; the player's token stays server-side",
   "api/v1/fixtures/[id]/external-play/room": "the body is the held participant's id; `token` is a comment about the seat's token",

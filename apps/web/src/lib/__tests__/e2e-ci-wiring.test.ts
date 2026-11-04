@@ -248,6 +248,11 @@ const WALKTHROUGH_SPECS: string[] = [
   // banner, Entrant kinds closed, one person per division, no chess colours
   // switch, the builder's default sport, and the dashboard chip.
   "division-setup-owner-fixes.spec.ts",
+  // Match Day FMT5 — the division's format changed from the Fixtures tab's
+  // Division rules card: build, generate and schedule, the old Settings
+  // address landing on the dialog, a confirm naming what it clears, and one
+  // result locking it.
+  "division-format-change.spec.ts",
 
   // Settings W2 — the organisation and news panels, the four people-facing
   // tabs (team, api, preferences, account), and the five-org support cap.

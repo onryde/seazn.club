@@ -269,8 +269,9 @@ describe("selectors are pinned to the product's text", () => {
     for (const row of TEMPLATE_ROW_KEYS) expect(templateLabel(row)).toBe(JSON.parse(src("apps/web/src/dictionaries/en/ui.json"))[`format.template.${row}.label`]);
     expect(TEMPLATE_ROW_KEYS.length).toBe(16);
     expect(templateLabel("league")).toBe("League");
-    // The key shape is the builder's own (division-builder.tsx renders the radio's label from it).
-    expect(src("apps/web/src/components/v2/division-builder.tsx")).toContain("msg(`format.template.${t.key}.label` as MessageKey)");
+    // The key shape is the builder's own (its picker, format-picker.tsx since FMT5, renders the radio's label from it).
+    expect(src("apps/web/src/components/v2/division-builder.tsx")).toContain("{formatPickerFields({");
+    expect(src("apps/web/src/components/v2/format-picker.tsx")).toContain("msg(`format.template.${t.key}.label` as MessageKey)");
   });
 
   it("templateLabel refuses a row the dictionary has no label for, by name", () => {

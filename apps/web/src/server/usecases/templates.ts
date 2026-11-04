@@ -387,10 +387,10 @@ export async function instantiateTemplate(
           // the existing Generate action (stages.ts's
           // generateProgressionSetupFixtures, which already handles them).
           // This split matters, not just defers work: a fixture row
-          // anywhere in the division trips replaceStages' structure lock
-          // (`formatAlreadyLocked`, stages.ts) - generating eagerly here
-          // would freeze the division's stage structure before a single
-          // entrant exists. (patchDivision no longer locks on a fixture row:
+          // anywhere in the division turns a format change into a
+          // clear-and-rebuild the organiser has to confirm (replaceStages,
+          // FMT5) - generating eagerly here would make the first format
+          // change ask before a single entrant exists. (patchDivision no longer locks on a fixture row:
           // the rules lock per field and per STARTED stage that inherits them,
           // `divisionRefusals`, rule-locks.ts - W2c.)
           stageResults.push({ id: stage!.id, fixtureCount: 0 });

@@ -111,6 +111,35 @@ describe("WithReasonTip - the bubble on a greyed control (PB1)", () => {
     expect(r.klass(), "neither engaged any more: the dismissal ended").toContain("group-hover/tip:block");
   });
 
+  // FMT5 CI red (mobile-430, Stage tools sheet): below `md` hover reveals NOTHING (`md:group-hover/tip:block`), so a pointer that merely
+  // rests on the greyed control - where the trigger tap left it, once the bottom sheet opened under it - holds no bubble up, and the
+  // Escape is the sheet's. From `md` the same hover does show the bubble, and Escape is spent on it. Focus shows it at every width.
+  it("a resting pointer below md holds nothing up: Escape is left to the sheet; from md, and focus at any width, it is spent", () => {
+    const at = (phone: boolean, held: ":hover" | ":focus-within") => {
+      vi.stubGlobal("window", { matchMedia: (q: string) => ({ matches: phone && q === "(max-width: 767.98px)" }) });
+      const r = rig();
+      (propsOf(r.root()).ref as { current: unknown }).current = {
+        matches: (sel: string) => sel.split(",").some((s) => s.trim() === held),
+        contains: () => true,
+      };
+      const spent = r.escape();
+      vi.unstubAllGlobals();
+      return spent;
+    };
+    const cases: [boolean, ":hover" | ":focus-within", number][] = [
+      [true, ":hover", 0],
+      [false, ":hover", 1],
+      [true, ":focus-within", 1],
+      [false, ":focus-within", 1],
+    ];
+    let checked = 0;
+    for (const [phone, held, spent] of cases) {
+      expect(at(phone, held), `${phone ? "below md" : "from md"}, ${held}`).toBe(spent);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every width x engagement").toBe(4);
+  });
+
   it("a press outside closes a tapped-open bubble; a press inside the wrapper does not", () => {
     const r = rig();
     r.tap();

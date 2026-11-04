@@ -418,8 +418,12 @@ describe.skipIf(!HAS_DB)("/api/v1 service layer", () => {
       },
     ]);
 
-    // Not the last stage → refused; the graph would lose its middle.
-    await expect(deleteStage(auth, league.id)).rejects.toMatchObject({ status: 409 });
+    // Not the last stage → refused; the graph would lose its middle. FMT5: the refusal sends the organiser to the format,
+    // never to deleting stage after stage from the end.
+    const notLast = await deleteStage(auth, league.id).then(() => null, (err: unknown) => err as { status?: number; message?: string });
+    expect(notLast).toMatchObject({ status: 409 });
+    expect(notLast!.message).toMatch(/change the division's format/);
+    expect(notLast!.message).not.toMatch(/later stages first/);
 
     // Last stage, nothing played → gone (cascade removes its fixtures/pools).
     await deleteStage(auth, finals.id);

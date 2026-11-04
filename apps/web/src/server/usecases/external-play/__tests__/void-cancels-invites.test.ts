@@ -97,7 +97,7 @@ import { createEntrants, deleteEntrant, patchEntrant } from "../../entrants";
 import { undoDivision } from "../../history";
 import { startDivision } from "../../schedule";
 import { scoreEvent } from "../../scoring";
-import { createStages, deleteStage, generateStageFixtures, rebuildStageFixtures, replaceStages, unpairSwissRound } from "../../stages";
+import { createStages, deleteStage, generateStageFixtures, previewReplaceStages, rebuildStageFixtures, replaceStages, unpairSwissRound } from "../../stages";
 import { withdrawEntrantCascade } from "../../withdrawal";
 import { finishSwissNow } from "../../swiss-rounds-admin";
 
@@ -823,7 +823,8 @@ describe.skipIf(!HAS_DB)("a deleted fixture takes its queued invites with it (G-
 // ---------------------------------------------------------------------------------------------------------------------------
 // T6 review m1. Three paths that WOULD delete the fixtures of an opened, invited round were found unreachable and are not patched
 // (no cancel is wired there). That holds only while each one refuses, so each refusal is pinned here over a round the real open
-// invited: the refusal itself, and that nothing it guards moved - the invites, the boards, the bridge rows.
+// invited: the refusal itself, and that nothing it guards moved - the invites, the boards, the bridge rows. FMT5 made one of them,
+// replacing the stage graph, reachable behind a confirm; it is wired (`cancelBoardInvites`) and its pin below says both halves.
 describe.skipIf(!HAS_DB)("the paths that would delete an opened, invited round's boards refuse it, and leave its invites alone (T6 review m1)", () => {
   /** Everything a refused delete must leave as it found it. */
   async function stateOf(s: SeedOnlineSwissResult) {
@@ -837,17 +838,24 @@ describe.skipIf(!HAS_DB)("the paths that would delete an opened, invited round's
     };
   }
 
-  it("replacing the stage graph is refused FORMAT_LOCKED once the round's boards exist", async () => {
+  // FMT5: no longer an unreachable path. Replacing the stage graph clears an unplayed board (behind a confirm), so it is WIRED:
+  // unconfirmed it moves nothing; confirmed, the round's queued invites end fixture_deleted with their boards.
+  it("replacing the stage graph: unconfirmed, FORMAT_CHANGE_CONFIRM moves nothing; confirmed, the round's invites end fixture_deleted with its boards", async () => {
     const s = await openedSwiss(4);
-    await expectQueuedRows(s.orgId, 4);
+    const queued = await expectQueuedRows(s.orgId, 4);
     const before = await stateOf(s);
     expect(before.bridges, "premise: the open bound the round's boards").toBeGreaterThan(0);
+    const ko = { seq: 1, kind: "knockout" as const, name: "KO", config: {}, progression: null };
 
-    await expect(
-      replaceStages(s.owner, s.divisionId, { seq: 1, kind: "knockout", name: "KO", config: {}, progression: null }),
-    ).rejects.toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
-
+    await expect(replaceStages(s.owner, s.divisionId, ko)).rejects.toMatchObject({ status: 409, code: "FORMAT_CHANGE_CONFIRM" });
     expect(await stateOf(s), "no invite, board, bridge row or stage moved").toEqual(before);
+
+    const { token } = await previewReplaceStages(s.owner, s.divisionId, ko);
+    await replaceStages(s.owner, s.divisionId, ko, { clear: token! });
+    expect(await bridgeCount(before.fixtures), "the boards went, and their bridge rows with them").toBe(0);
+    const after = await rowsOf(s.orgId);
+    expect(after.map((x) => x.id)).toEqual(queued.map((x) => x.id));
+    expect(expectVoided(after, FIXTURE_DELETED), "every queued invite ended with its board").toBe(queued.length);
   });
 
   it("Pair next while the opened round's boards are undecided is refused STAGE_NOT_READY and moves nothing (the entry refusal, ahead of the shell reconcile)", async () => {

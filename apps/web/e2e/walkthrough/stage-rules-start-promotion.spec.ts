@@ -414,7 +414,7 @@ test("publishing, then Start: the confirmation states its four consequences, and
   ).toHaveText([
     L["launch.confirm.entrants"],
     L["launch.confirm.competition"],
-    L["launch.confirm.format"],
+    L["launch.confirm.formatOpen"],
     L["launch.confirm.rules"],
   ]);
   // And each conditional line is the one its own testid claims: the two above
@@ -425,6 +425,11 @@ test("publishing, then Start: the confirmation states its four consequences, and
   );
   await expect(confirm.getByTestId("start-confirm-competition")).toHaveText(
     L["launch.confirm.competition"],
+  );
+  // FMT5: the format line is conditional too - fixtures exist here, so it says the format still changes until scoring
+  // starts, not that Start generates fixtures.
+  await expect(confirm.getByTestId("start-confirm-format-open")).toHaveText(
+    L["launch.confirm.formatOpen"],
   );
 
   await page.getByTestId("start-confirm-confirm").click();
@@ -866,13 +871,16 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
 
   // --- 4. The rules have MOVED OUT of Settings (Match Day C2) -----------------------------------------------------------------
   // The strip just edited this division's match format under the name "Match rules". Settings, for the same division, carries none of
-  // it - no strip, no Match rules toggle, no best-of picker, no points field - while the stage structure ("Format", with its rebuild)
-  // is still there: the positive pair, so an empty page cannot pass for a clean one.
+  // it - no strip, no Match rules toggle, no best-of picker, no points field - while its own General section is still there: the
+  // positive pair, so an empty page cannot pass for a clean one. FMT5 moved the stage structure ("Format") out of Settings too, onto
+  // the same strip, beside Match rules.
   const MATCH_RULES = L["rulesStrip.format"]!;
   await expect(rules.getByTestId("division-rules-toggle-format"), "on the strip the block is named Match rules").toHaveText(MATCH_RULES);
+  await expect(rules.getByTestId("division-rules-format"), "the strip carries Format").toHaveText(L["formatChange.button"]!);
   await page.goto(await divisionPath(request, bo1DivId, "?tab=settings"));
   await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: STEP_MS });
-  await expect(page.getByRole("button", { name: /^Format/ }), "Settings still carries the stage structure").toBeVisible();
+  await expect(page.getByRole("button", { name: /^General/ }), "Settings still carries its own General section").toBeVisible();
+  await expect(page.getByTestId("division-settings").getByRole("button", { name: /^Format/ }), "and no Format section").toHaveCount(0);
   await expect(page.getByTestId("division-rules-strip"), "no strip in Settings").toHaveCount(0);
   await expect(page.getByRole("button", { name: MATCH_RULES }), "no Match rules toggle in Settings").toHaveCount(0);
   await expect(page.getByText(MATCH_RULES, { exact: true }), "no Match rules heading or label in Settings").toHaveCount(0);

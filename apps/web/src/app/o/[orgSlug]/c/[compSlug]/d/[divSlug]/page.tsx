@@ -14,7 +14,14 @@ import { requireDivisionPage } from "@/server/page-auth";
 import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
 import { getCompetition } from "@/server/usecases/competitions";
-import { listStages, listStagesWithTableRules, getStandings, getSeedProposal, getStageRosterDrift } from "@/server/usecases/stages";
+import {
+  divisionFormatLocked,
+  listStages,
+  listStagesWithTableRules,
+  getStandings,
+  getSeedProposal,
+  getStageRosterDrift,
+} from "@/server/usecases/stages";
 import { listPinnedStagePoints, listStageQualificationMeta, type StageQualMetaRow } from "@/server/usecases/stage-qualification";
 import { stageTakesPoints } from "@/components/v2/stage-rules/stage-points-model";
 import { divisionQualification, qualificationFixtures } from "@/server/public-site/division-qualification";
@@ -65,9 +72,13 @@ import { sql, withTenant } from "@/lib/db";
 import { DivisionDangerZone } from "@/components/v2/division-danger-zone";
 import { EmbedSnippet } from "@/components/v2/embed-snippet";
 import { DivisionSettings } from "@/components/v2/division-settings";
+import type { DivisionFormatProps } from "@/components/v2/rules/division-format";
 import { competitionCameraPolicy } from "@/server/external-play/camera-policy";
-import type { StageDraft } from "@/lib/format-templates";
-import { formatAlreadyLocked } from "@/lib/format-already-locked";
+import { detectTemplate, templatesForSport, type StageDraft } from "@/lib/format-templates";
+import { divisionFormatOffer, OPENING_PLAN } from "@/lib/division-builder/model";
+import { formatDialogAsked, formatDialogHref, isOldFormatAddress } from "@/lib/division-format-url";
+import { templateLocksFor } from "@/server/usecases/format-gates";
+import { redirect } from "next/navigation";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
 import { EntrantKindsSettings } from "@/components/v2/entrant-kinds-settings";
@@ -122,15 +133,19 @@ export default async function DivisionPage({
   searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string; divSlug: string }>;
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; format?: string; section?: string }>;
 }) {
   const [
     { orgSlug, compSlug, divSlug },
-    { tab: rawTab },
+    query,
   ] = await Promise.all([
     params,
     searchParams,
   ]);
+  const rawTab = query.tab;
+  // FMT5: Settings › Format moved to the Fixtures tab's Division rules card; an address that asked for it by name lands on
+  // the card with the Format dialog open. Before any read, and outside every try: `redirect` throws NEXT_REDIRECT.
+  if (isOldFormatAddress(query)) redirect(formatDialogHref(orgSlug, compSlug, divSlug));
   const page = await requireDivisionPage(orgSlug, compSlug, divSlug);
   const { auth, canEdit } = page;
   const id = page.division.id;
@@ -607,6 +622,50 @@ export default async function DivisionPage({
     }
   }
 
+  // FMT5: the Division rules card's Format button and the chip naming the format, an editor's on the fixtures tab only. The
+  // offer is the new-division builder's own (the sport's templates over its engine kinds, less what this division's kinds
+  // cannot play), keeping the stored format in it even where it is retired. Locked is "a result exists", the one predicate
+  // `replaceStages` refuses on. The estimates count the division's own field and courts: the schedule's courts, else the
+  // club's live ones, else the builder's opening plan.
+  let formatCard: DivisionFormatProps | undefined;
+  if (tab === "fixtures" && editable) {
+    const savedStages = stages.map((st) => ({
+      name: st.name,
+      kind: st.kind,
+      config: (st.config ?? null) as Record<string, unknown> | null,
+      // StageRow.progression is untyped JSONB; asserted into the picker's shape at this DB-read boundary (stages.ts's own
+      // `as unknown as ProgressionSpec` precedent).
+      progression: (st.progression ?? null) as unknown as StageDraft["progression"],
+    }));
+    const current = savedStages.length === 0 ? null : detectTemplate(savedStages);
+    const sportKinds = effectiveEntrantModel(sportModule.entrantModel ?? null, null).kinds;
+    const [locked, doubleElimAllowed, advancedAllowed, carryAllowed] = await Promise.all([
+      divisionFormatLocked(auth, id),
+      hasFeature(auth.orgId, "formats.double_elim", competition.id),
+      hasFeature(auth.orgId, "formats.advanced", competition.id),
+      hasFeature(auth.orgId, "standings.carry_over"),
+    ]);
+    const clubCourts = venues
+      .filter((v) => v.archived_at === null)
+      .reduce((n, v) => n + v.courts.filter((c) => c.archived_at === null).length, 0);
+    formatCard = {
+      divisionId: id,
+      sportKey: division.sport_key,
+      stages: savedStages,
+      offer: divisionFormatOffer(templatesForSport(division.sport_key, sportKinds, current).map((t) => t.key), entrantModel.kinds),
+      entrantKinds: entrantModel.kinds,
+      templateLocks: templateLocksFor({ doubleElim: doubleElimAllowed, advanced: advancedAllowed }),
+      carryAllowed,
+      viewerPlan,
+      entrants: activeEntrantIds.length,
+      places: scheduleSettings.config.courts.length || clubCourts || OPENING_PLAN.venues,
+      matchMinutes,
+      locked,
+      canEdit: editable,
+      initialOpen: formatDialogAsked(query),
+    };
+  }
+
   // T15: the way into the arbiter panel - the entry card and every link into it, only where it would answer. The card says ONE
   // thing: the attention count is the column title's own function over the same two lists (C6), and the phase is the column's
   // own reader of the open rounds.
@@ -1004,6 +1063,8 @@ export default async function DivisionPage({
                 lockedFields: editable ? await divisionLockedFields(auth, id) : [],
                 onlineChessOffered: onlineChessOn,
                 lichessGaps,
+                // FMT5: the Format button and the current format's chip (an editor's; a reader sees neither).
+                format: formatCard,
               }}
             />
           </>
@@ -1191,24 +1252,6 @@ export default async function DivisionPage({
             }}
             orgId={auth.orgId}
             onlineChessOffered={onlineChessOn}
-            swissField={activeEntrantIds.length}
-            // C9 fix round 1 (I5), round 3: the Format select offers no pair format where this model holds no individuals.
-            entrantKinds={entrantModel.kinds}
-            // W2c Task 20 (S4): two locks, two sources. The stage STRUCTURE locks on any fixture row (replaceStages); the
-            // RULES lock per field and per STARTED stage that inherits them - the same read the save asks (patchDivision).
-            structureLocked={formatAlreadyLocked(fixtures.length)}
-            lockedFields={await divisionLockedFields(auth, id)}
-            stages={stages.map((st) => ({
-              name: st.name,
-              kind: st.kind,
-              config: (st.config ?? null) as Record<string, unknown> | null,
-              // StageRow.progression is untyped JSONB (Record<string,
-              // unknown> | null) — this is the DB-read boundary where that
-              // gets asserted into DivisionSettings's stricter shape,
-              // mirroring stages.ts's own `as unknown as ProgressionSpec`
-              // read-site precedent rather than casting again downstream.
-              progression: (st.progression ?? null) as unknown as StageDraft["progression"],
-            }))}
             canEdit={editable}
             divisionPathPrefix={`/o/${orgSlug}/c/${compSlug}/d/`}
             fixturesHref={routes.division(orgSlug, compSlug, divSlug, "fixtures")}

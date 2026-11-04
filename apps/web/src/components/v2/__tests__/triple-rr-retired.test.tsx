@@ -1,22 +1,21 @@
 // Owner ruling 2026-11-01 (Match Day D1, legs Option A): the "Triple round robin" template is no longer offered — not by
-// the division builder's picker for any sport, not by the Settings format select for a division that is not already one.
+// the division builder's picker for any sport, not by the Format dialog for a division that is not already one.
 // The server keeps legs up to 8 (Jul3/08), and a division STORED as a triple round robin keeps showing what it is, picked,
 // and a format save keeps its legs as they are: hidden from the offer, never clamped.
+// FMT5 moved the second half with Settings › Format to the Division rules card's Format dialog: the offer is the page's
+// (d/[divSlug]/__tests__/format-card-wiring.test.tsx) and the stored-and-kept case the dialog's
+// (components/v2/rules/__tests__/division-format.test.tsx). This file keeps the builder's half.
 //
 // Expected values come from the ruling (the retired key is `triple_rr`; chess also loses americano and mexicano, owner
 // ruling 2026-10-26) and the en dictionary, never from templatesForSport. Every registered sport is swept.
-import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
-import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
-import { DivisionSettings } from "@/components/v2/division-settings";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
 import enUi from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
-import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 import { engineEntrantChoice } from "@/lib/__tests__/_engine-entrant-kinds";
 
 const { apiV1Mock } = vi.hoisted(() => ({ apiV1Mock: vi.fn() }));
@@ -80,82 +79,5 @@ describe("the division builder offers no Triple round robin, for any sport (owne
     expect(swept).toBe(builtinModules.length);
     expect(swept).toBeGreaterThanOrEqual(11);
     expect(cardsSeen).toBeGreaterThan(0);
-  });
-});
-
-type StageProp = Parameters<typeof DivisionSettings>[0]["stages"][number];
-
-function mountSettings(stages: StageProp[]) {
-  return renderIsland(DivisionSettings, {
-    division: {
-      id: "d1",
-      name: "Open",
-      sport_key: "badminton",
-      variant_key: "bwf",
-      config: {},
-      logo_url: null,
-      logo_storage_path: null,
-    },
-    orgId: "org1",
-    entrantKinds: engineEntrantKinds("badminton"),
-    structureLocked: false,
-    lockedFields: [],
-    stages,
-    canEdit: true,
-    divisionPathPrefix: "/o/org/c/comp/d/",
-    fixturesHref: "/o/org/c/comp/d/div/fixtures",
-    embed: createElement("div"),
-    danger: createElement("div"),
-    autoPosts: false,
-    canAutoPost: false,
-    showSeeds: true,
-    viewerPlan: "community",
-    onlineChessOffered: true,
-  });
-}
-type Settings = ReturnType<typeof mountSettings>;
-
-function formatSelect(h: Settings): ReactElement {
-  const select = h.tree().find((e) => propsOf(e)["data-testid"] === "format-template");
-  if (!select) throw new Error("no Settings format select");
-  return select;
-}
-const optionKeys = (h: Settings) =>
-  walk(propsOf(formatSelect(h)).children as ReactElement).filter((e) => e.type === "option").map((e) => String(propsOf(e).value));
-
-async function flush() {
-  for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-/** A division stored as a triple round robin, as the template wrote it before the ruling. */
-const STORED_TRIPLE: StageProp[] = [{ kind: "league", name: "Triple RR", config: { legs: 3 }, progression: null }];
-
-describe("Settings: the format select offers no Triple round robin, except to a division that already is one", () => {
-  it("empty case: a division with no stages yet is not offered it", () => {
-    const h = mountSettings([]);
-    const keys = optionKeys(h);
-    expect(keys.length).toBeGreaterThan(0);
-    expect(keys).not.toContain(RETIRED);
-  });
-
-  it("a stored league at Once is not offered it either", () => {
-    const h = mountSettings([{ kind: "league", name: "League", config: { legs: 1 }, progression: null }]);
-    expect(propsOf(formatSelect(h)).value).toBe("league");
-    expect(optionKeys(h)).not.toContain(RETIRED);
-  });
-
-  it("a stored triple round robin still shows what it is, picked, and a format save keeps its 3 legs (never clamped)", async () => {
-    const h = mountSettings(STORED_TRIPLE);
-    expect(propsOf(formatSelect(h)).value).toBe(RETIRED);
-    expect(optionKeys(h).filter((k) => k === RETIRED), "listed once").toEqual([RETIRED]);
-
-    const apply = h.tree().find((e) => propsOf(e)["data-testid"] === "apply-structure");
-    (propsOf(apply!).onClick as () => void)();
-    await flush();
-    const puts = apiV1Mock.mock.calls.filter(([url]) => /\/divisions\/d1\/stages$/.test(String(url)));
-    type Sent = { kind: string; config: { legs?: number } }[];
-    const json = (puts.at(-1)?.[1] as { json: Sent | { stages: Sent } } | undefined)?.json;
-    const sent = Array.isArray(json) ? json : json?.stages;
-    expect(sent?.map((s) => [s.kind, s.config.legs])).toEqual([["league", 3]]);
   });
 });

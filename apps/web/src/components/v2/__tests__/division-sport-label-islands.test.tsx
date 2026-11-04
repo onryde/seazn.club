@@ -1,20 +1,20 @@
 // Owner staging test 2026-10-19: chess divisions read "Boardgame" because three client islands printed the stored
 // sport key and `.chip { capitalize }` dressed it up as a label. The page header is covered beside the page
 // (d/[divSlug]/__tests__/division-header-sport-label.test.tsx); this suite is the other two places:
-//   - Settings → Format: the group's summary line and, once fixtures exist, the locked note;
+//   - Settings: Settings → Format named them in its summary line and locked note until FMT5 moved the format to the
+//     Division rules card; Settings now names neither, and must not leak the raw key anywhere either;
 //   - Competition settings → Archived divisions: the row's sport chip.
 // Every word is read from the dictionary the island reads (per locale), so a rename moves the test with it.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { SettingsGroup } from "@/components/v2/settings-group";
 import { ArchivedDivisions } from "@/components/v2/archived-divisions";
 import { DivisionSettings } from "@/components/v2/division-settings";
-import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
-import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -43,15 +43,7 @@ const DICT = {
 } as const;
 const LOCALES = Object.keys(DICT) as (keyof typeof DICT)[];
 
-const INDIVIDUAL_ONLY: EffectiveEntrantModel = {
-  kinds: ["individual"],
-  defaultKind: "individual",
-  squadNumbers: false,
-  captain: false,
-  maxTeamMembers: null,
-};
-
-function settings(locked: boolean) {
+function settings() {
   return renderIsland(DivisionSettings, {
     division: {
       id: "d1",
@@ -65,65 +57,35 @@ function settings(locked: boolean) {
       inherited_camera_policy: "off",
     },
     orgId: "org1",
-    entrantKinds: engineEntrantKinds("boardgame"),
-    variants: [{ key: "classical", name: "Classical" }],
-    structureLocked: locked,
-    // W2c: fixtures lock the structure; the variant locks once a stage that plays it has started. "Locked" is both.
-    lockedFields: locked ? [{ field: "variant_key", code: "DIVISION_FORMAT_LOCKED" as const, stageId: "s1", stageName: "Round 1" }] : [],
-    stages: [],
     canEdit: true,
     divisionPathPrefix: "/o/org/c/comp/d/",
     fixturesHref: "/o/org/c/comp/d/div/fixtures",
     embed: null,
     danger: null,
-    entrantModel: INDIVIDUAL_ONLY,
-    entrantModelSource: "sport",
     autoPosts: false,
     canAutoPost: true,
     showSeeds: true,
     viewerPlan: "community",
     onlineChessOffered: false,
-  } as Parameters<typeof DivisionSettings>[0]).tree();
+  } as Parameters<typeof DivisionSettings>[0]);
 }
 
 beforeEach(() => {
   activeDict.current = DICT.en;
 });
 
-describe("Settings → Format names the sport and variant as words", () => {
-  it("the group summary reads the dictionary's sport and variant words, in every locale — never the keys", () => {
+describe("Settings never prints the stored sport or variant key (FMT5: the Format group that named them is gone)", () => {
+  it("in every locale: no raw key in the text, the group titles or their summaries - and no Format group", () => {
     let checked = 0;
     for (const locale of LOCALES) {
       activeDict.current = DICT[locale];
-      const sport = DICT[locale]["sport.boardgame"]!;
-      const variant = DICT[locale]["variant.boardgame.classical"]!;
-      const groups = settings(false).filter((n) => propsOf(n).title === DICT[locale]["divset.format"]);
-      expect(groups, `${locale}: the Format group renders once`).toHaveLength(1);
-      const summary = String(propsOf(groups[0]!).summary);
-      expect(summary, locale).toBe(`${sport} · ${variant}`);
-      expect(summary, `${locale}: no raw key`).not.toContain("boardgame");
-      expect(summary, `${locale}: no raw variant key`).not.toContain("classical");
-      checked++;
-    }
-    expect(checked).toBe(LOCALES.length);
-  });
-
-  it("once fixtures exist and a stage has started, the locked note says the same words and the summary marks the variant locked", () => {
-    let checked = 0;
-    for (const locale of LOCALES) {
-      activeDict.current = DICT[locale];
-      const sport = DICT[locale]["sport.boardgame"]!;
-      const variant = DICT[locale]["variant.boardgame.classical"]!;
-      const tree = settings(true);
-      const locked = tree.filter((n) => propsOf(n)["data-testid"] === "format-locked");
-      expect(locked, `${locale}: the locked note renders`).toHaveLength(1);
-      // textOf joins every string child with a space; collapse runs so `{sport} · {variant}` reads as one line.
-      const line = textOf(propsOf(locked[0]!).children as ReactElement).replace(/\s+/g, " ").trim();
-      expect(line.startsWith(`${sport} · ${variant}`), `${locale}: "${line}"`).toBe(true);
-      const group = tree.find((n) => propsOf(n).title === DICT[locale]["divset.format"])!;
-      expect(String(propsOf(group).summary), locale).toBe(
-        `${sport} · ${DICT[locale]["divset.variantLocked"]!.replace("{variant}", variant)}`,
-      );
+      const island = settings();
+      const groups = island.tree().filter((n) => n.type === SettingsGroup);
+      expect(groups.length, `${locale}: premise: Settings renders its groups`).toBeGreaterThan(3);
+      const surface = [island.text(), ...groups.flatMap((g) => [propsOf(g).title, propsOf(g).summary]).filter((v): v is string => typeof v === "string")].join("\n");
+      expect(surface, `${locale}: no raw sport key`).not.toMatch(/\bboardgame\b/i);
+      expect(surface, `${locale}: no raw variant key`).not.toMatch(/\bclassical\b/);
+      expect(island.tree().some((n) => propsOf(n)["data-testid"] === "format-locked"), `${locale}: no format lock note`).toBe(false);
       checked++;
     }
     expect(checked).toBe(LOCALES.length);

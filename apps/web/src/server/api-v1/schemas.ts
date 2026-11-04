@@ -38,7 +38,7 @@ import { patchOf } from "../../lib/zod-patch.ts";
 import { ENTRANT_NAME_MAX } from "../../lib/entrant-roster-name.ts";
 // The player name limit, shared with the directory's rename field (persons-panel.tsx).
 import { PERSON_NAME_MAX } from "../../lib/person-name.ts";
-// Match Day D1: the format fields' bounds, shared with the division builder and the Settings Format group. Import-free,
+// Match Day D1: the format fields' bounds, shared with the division builder and the Format dialog (FMT5). Import-free,
 // so the standalone generator loads it like the files above.
 import { FORMAT_BOUNDS } from "../../lib/format-bounds.ts";
 // Task 9 (spectator surface W1) — the match-centre document schema, reused
@@ -1542,6 +1542,23 @@ export type StageTableRules = z.infer<typeof StageTableRules>;
 /** A stage with its table rules: null where the stage's rules do not read (a build this server no longer carries, a
  *  cfg its sport cannot read) — the reader shows no order rather than a guessed one. */
 export const StageWithTableRules = Stage.extend({ tableRules: StageTableRules.nullable() });
+
+/** FMT5 — `PUT /divisions/{id}/stages?dry_run=1`: what the format change would clear (`FormatChangePreview`,
+ *  lib/format-change.ts), every count read from the rows the delete takes. Also the `preview` of a FORMAT_CHANGE_CONFIRM /
+ *  FORMAT_CHANGE_STALE refusal. */
+export const FormatChangePreview = z.object({
+  dry_run: z.literal(true),
+  stages: z.array(z.object({ id: Uuid, name: z.string() })),
+  fixtures: z.number().int(),
+  slots: z.number().int(),
+  courts: z.number().int(),
+  officials: z.number().int(),
+  lineups: z.number().int(),
+  device_links: z.number().int(),
+  calls: z.number().int(),
+  voided_scores: z.number().int(),
+  token: z.string().nullable(),
+});
 
 /** A tie-break reason on a standings row: a cascade key, or `fewest_played` (a partial schedule's step, IIHF RBG). */
 export const TieBreakKeyS = z.enum([...TiebreakerKeyS.options, "fewest_played"]);

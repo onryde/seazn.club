@@ -43,14 +43,15 @@ export function StartConfirmDialog({
    *  Omitted, never softened, for the same reason as the entrants line: for a
    *  draft or an already-live competition it is simply untrue. */
   competitionPromotes,
-  /** Is the format ALREADY locked — i.e. do fixtures exist yet?
-   *  `lib/format-already-locked.ts` mirrors `replaceStages`'s own guard. This
-   *  one is NOT omitted when false, it is REPLACED: on the quick-start path
-   *  `/start` is what generates the fixtures, so the format locks a moment
-   *  later rather than not at all, and the organiser is owed that either way.
-   *  Saying "already locked — fixtures exist" over a page reading "No fixtures
-   *  yet" was a live defect found by driving the product on 2026-09-20. */
-  formatLocked,
+  /** Do fixtures exist yet? The format no longer locks with them (FMT5: it locks at the first result that stands). Before
+   *  Start no result can be recorded, so the format is still open whenever this dialog shows - held by two named
+   *  refusals, not by this comment: live scoring's phase gate (scoring.ts, `divisionScoringClosed` → WRONG_PHASE
+   *  "division has not started — scoring is closed") and the import's (event-import.ts, `import.division_not_started`).
+   *  The Division rules card reads the lock itself (`divisionFormatLocked`); this dialog does not. On the quick-start path `/start` is what
+   *  generates the fixtures, so the line says that too; it is REPLACED, never omitted, because the organiser is owed the
+   *  format's state either way. Saying "fixtures exist" over a page reading "No fixtures yet" was a live defect found by
+   *  driving the product on 2026-09-20. */
+  fixturesExist,
   /** Is the parent competition a PUBLIC DRAFT — unlisted now, listed the
    *  moment it is published (`publishWouldList`)? Owner decision 2026-09-27: a
    *  draft is unlisted until published, and Start never publishes it (the
@@ -68,7 +69,7 @@ export function StartConfirmDialog({
   open: boolean;
   entrantsLine: StartEntrantsLine;
   competitionPromotes: boolean;
-  formatLocked: boolean;
+  fixturesExist: boolean;
   unlistedDraft: boolean;
   settingsHref: string;
   busy?: boolean;
@@ -110,8 +111,8 @@ export function StartConfirmDialog({
         {competitionPromotes && (
           <li data-testid="start-confirm-competition">{msg("launch.confirm.competition")}</li>
         )}
-        <li data-testid={formatLocked ? "start-confirm-format-locked" : "start-confirm-format-locks"}>
-          {msg(formatLocked ? "launch.confirm.format" : "launch.confirm.formatLocksNow")}
+        <li data-testid={fixturesExist ? "start-confirm-format-open" : "start-confirm-format-generates"}>
+          {msg(fixturesExist ? "launch.confirm.formatOpen" : "launch.confirm.formatGenerates")}
         </li>
         <li>{msg("launch.confirm.rules")}</li>
       </ul>

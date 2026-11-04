@@ -2,7 +2,7 @@ import "server-only";
 // Stage use-cases (doc 08 §3): define the stage graph, generate fixtures
 // (idempotent — regeneration diffs against what exists, keyed by the pure
 // generator's stable ids), guarded completion, standings reads.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { SWISS_ABANDONED_BOARDS_REASON } from "@/lib/swiss-abandoned-refusal";
@@ -150,9 +150,11 @@ import {
   type SlotDescriptor,
   type SlotLabel,
 } from "./stage-seeding";
-import { fixtureEvidenceSql, fixtureHasResultSql } from "./fixture-results-sql";
+import { fixtureEvidenceSql, fixtureHasResultSql, fixtureHoldsStandingResultSql } from "./fixture-results-sql";
 import { carriedSlotCounts, carrySlots, chooseDoomedBoards } from "@/lib/rebuild-slots";
-import { firstOwnFormat, ownFormatLoss, refuseOwnFormatLoss } from "./fixture-override-guards";
+import { firstOwnFormat, matchName, ownFormatLoss, refuseOwnFormatLoss } from "./fixture-override-guards";
+import { FORMAT_CHANGE_REFUSALS, type FormatChangePreview } from "@/lib/format-change";
+import { ACTIVE_STATES } from "@/server/relay/domain/session";
 
 type Tx = postgres.TransactionSql;
 type StageInput = z.infer<typeof CreateStage>;
@@ -680,19 +682,103 @@ async function insertStageBatch(
   return rows;
 }
 
-/** FORMAT_LOCKED (409): a stage of the division owns fixtures, so its stage graph is the format being played. */
-async function assertFormatUnlocked(tx: Tx, divisionId: string): Promise<void> {
-  const [locked] = await tx`
+/** FMT5: a fixture of the division's stages that holds a result that STANDS (`fixtureHoldsStandingResultSql`: a status
+ *  of play, an abandonment with an outcome, an event no void took back, an event-less award, a report, a mark or a
+ *  suspension; a generation-time bye and the F14 walkover are none). Fix round 1 (controller ruling I2): a board whose
+ *  only events were all voided is no result, so the format opens again - unlike history's played set
+ *  (`fixtureHasResultSql`), which keeps it. Scoped through the stages, the set the change replaces. */
+function formatResultSql(tx: Tx, divisionId: string) {
+  return tx`
     select 1 from fixtures f join stages s on s.id = f.stage_id
-    where s.division_id = ${divisionId} limit 1`;
-  if (locked) throw new HttpError(409, "Format is locked — fixtures exist", "FORMAT_LOCKED");
+     where s.division_id = ${divisionId} and ${fixtureHoldsStandingResultSql(tx)}
+     limit 1`;
 }
 
-/** Replace the division's whole stage graph (v8 Settings → Format: League /
- *  Knockout / Groups + Knockout…). Allowed only while no stage owns fixtures
- *  - FORMAT_LOCKED, division-wide, on ANY fixture row. That is the STRUCTURE's lock only: patchDivision's variant/config
- *  guard is a different, narrower one (per field and per STARTED stage that inherits it - `divisionRefusals`,
- *  rule-locks.ts), so a division with fixtures and no started stage can still change its rules.
+/** FORMAT_LOCKED (409): a result exists in the division, so its stage graph is the format being played (FMT5: the lock
+ *  used to be ANY fixture row; generated and scheduled fixtures alone no longer lock it, they are cleared on confirm). */
+async function assertFormatUnlocked(tx: Tx, divisionId: string): Promise<void> {
+  const [locked] = await formatResultSql(tx, divisionId);
+  if (locked) {
+    const r = FORMAT_CHANGE_REFUSALS.FORMAT_LOCKED;
+    throw new HttpError(r.status, r.message, "FORMAT_LOCKED");
+  }
+}
+
+/** Is the division's format locked (a standing result exists)? The Division rules card's Format button reads it (the
+ *  division page, `formatCard`); the same predicate `replaceStages` refuses on. */
+export async function divisionFormatLocked(auth: AuthCtx, divisionId: string): Promise<boolean> {
+  return withTenant(auth.orgId, async (tx) => (await formatResultSql(tx, divisionId)).length > 0);
+}
+
+/** What the change would clear, read under the division lock from the rows the delete takes. The token is a digest of
+ *  exactly those rows (stages, fixtures with their slot and court, and the setup counted), so a confirm made against an
+ *  older board is refused FORMAT_CHANGE_STALE instead of clearing something it never named. */
+async function formatChangePreview(tx: Tx, divisionId: string): Promise<FormatChangePreview> {
+  const stages = await tx<{ id: string; name: string }[]>`
+    select id, name from stages where division_id = ${divisionId} order by seq`;
+  const fixtures = await tx<{ id: string; scheduled_at: Date | null; court_id: string | null }[]>`
+    select f.id, f.scheduled_at, f.court_id from fixtures f join stages s on s.id = f.stage_id
+     where s.division_id = ${divisionId} order by f.id`;
+  const counts = { officials: 0, lineups: 0, device_links: 0, calls: 0, voided_scores: 0 };
+  if (fixtures.length > 0) {
+    const ids = fixtures.map((f) => f.id);
+    // Fix round 1 (controller ruling I1): `device_links` counts the LIVE remote-scoring links only - not revoked, not
+    // expired (device-links.ts `getActiveDeviceLink`). Every link cascades with its board; a dead one stops nothing, so
+    // the confirm does not name it. Re-review r1-m1: `voided_scores` counts the recorded entries a void took back (a voided
+    // Start or score; never the void rows themselves). It counts every non-void entry: the lock asked above (same tx,
+    // `fixtureHoldsStandingResultSql`) refuses any entry no void took back, so past it every one IS voided - a second
+    // "and a void names it" clause would be an equivalent mutant nothing can kill. These are the only recorded play the
+    // clear deletes, and the confirm must not call that "nothing played".
+    const [c] = await tx<typeof counts[]>`
+      select
+        (select count(*) from fixture_officials where fixture_id in ${tx(ids)})::int as officials,
+        (select count(*) from lineups where fixture_id in ${tx(ids)})::int as lineups,
+        (select count(*) from device_links
+          where fixture_id in ${tx(ids)} and revoked_at is null and (expires_at is null or expires_at > now()))::int as device_links,
+        (select count(*) from fixture_calls where fixture_id in ${tx(ids)})::int as calls,
+        (select count(*) from score_events where fixture_id in ${tx(ids)} and type <> 'core.void')::int as voided_scores`;
+    Object.assign(counts, c);
+  }
+  const slots = fixtures.filter((f) => f.scheduled_at !== null).length;
+  const courts = new Set(fixtures.flatMap((f) => (f.court_id === null ? [] : [f.court_id]))).size;
+  const token =
+    fixtures.length === 0
+      ? null
+      : createHash("sha256")
+          .update(
+            JSON.stringify({
+              stages: stages.map((st) => st.id),
+              fixtures: fixtures.map((f) => [f.id, f.scheduled_at?.toISOString() ?? null, f.court_id]),
+              counts,
+            }),
+          )
+          .digest("hex")
+          .slice(0, 32);
+  return { dry_run: true, stages, fixtures: fixtures.length, slots, courts, ...counts, token };
+}
+
+/** The rollback a dry run ends in, carrying its answer out of the transaction. */
+class FormatChangeDryRun extends Error {
+  constructor(readonly preview: FormatChangePreview) {
+    super("format change dry run");
+  }
+}
+
+/** Replace the division's whole stage graph (FMT5: the Format dialog on the Fixtures tab's Division rules card).
+ *  Refused FORMAT_LOCKED, division-wide, once a result exists (`assertFormatUnlocked`). That is the STRUCTURE's lock only:
+ *  patchDivision's variant/config guard is a different, narrower one (per field and per STARTED stage that inherits it -
+ *  `divisionRefusals`, rule-locks.ts), so a division with fixtures and no started stage can still change its rules.
+ *
+ *  Fixtures but no result (FMT5): the change CLEARS them - the fixtures, their schedule and the setup that cascades with
+ *  them (officials, lineups, device links, Match Day calls) - and rebuilds the stages, in this one transaction, but only
+ *  with the token of a preview (`opts.clear`, `previewReplaceStages`): without it 409 FORMAT_CHANGE_CONFIRM, with an
+ *  older board's 409 FORMAT_CHANGE_STALE (a sent token is checked even when nothing is left to clear), each carrying the
+ *  fresh preview. A live remote-scoring link is not refused (controller ruling I1, the owner's one-confirm mock): it
+ *  goes with its board, and the preview counts the live ones so the confirm names them. Refused outright while a stream session is
+ *  active on a board (FORMAT_STREAM_LIVE), an online game stands behind one (ONLINE_GAME_EXISTS), a match carries its own
+ *  format (FIXTURE_HAS_OWN_FORMAT) or the schedule is frozen (422 SCHEDULE_LOCKED). No fixtures: the stages are replaced
+ *  as before, with no token and no freeze check.
+ *
  *  The delete and every insert run in ONE transaction (R-T13-3): any refusal
  *  the recreate raises — a rules or points fragment (`stageConfigsAtCreate`),
  *  the frozen competition, the stage cap, a database CHECK, a progression
@@ -700,18 +786,39 @@ async function assertFormatUnlocked(tx: Tx, divisionId: string): Promise<void> {
  *  division keeps the stages it had. The pooled gates (`assertStageBatchGates`,
  *  R-T13-2) and the frozen lookup are asked before that transaction opens,
  *  after one short tenant read that answers a missing (or another org's)
- *  division 404 and a locked one FORMAT_LOCKED ahead of any 402. */
+ *  division 404 and a locked one FORMAT_LOCKED ahead of any 402. The token is asked LAST, after the rebuild, so every
+ *  refusal the change can raise answers before a confirm is asked for (and the preview, which is this same path rolled
+ *  back, raises them at Save). */
 export async function replaceStages(
   auth: AuthCtx,
   divisionId: string,
   input: CreateStages,
+  opts: { clear?: string } = {},
 ): Promise<StageRow[]> {
+  const out = await runReplaceStages(auth, divisionId, input, { dryRun: false, clear: opts.clear });
+  return out as StageRow[];
+}
+
+/** FMT5 (`PUT /divisions/{id}/stages?dry_run=1`): the whole change, every refusal included, rolled back - answering what
+ *  it would clear. The counts are read from the rows the delete takes, so the confirm never says a number the client
+ *  computed. */
+export async function previewReplaceStages(auth: AuthCtx, divisionId: string, input: CreateStages): Promise<FormatChangePreview> {
+  const out = await runReplaceStages(auth, divisionId, input, { dryRun: true });
+  return out as FormatChangePreview;
+}
+
+async function runReplaceStages(
+  auth: AuthCtx,
+  divisionId: string,
+  input: CreateStages,
+  mode: { dryRun: true } | { dryRun: false; clear: string | undefined },
+): Promise<StageRow[] | FormatChangePreview> {
   const inputs: StageInput[] = Array.isArray(input) ? input : [input];
   // The swiss round-count guard: pure, asked before any read. This is the PUT
-  // the Format tab's Apply calls, so a bad round count refuses before anything.
+  // the Format dialog's Save calls, so a bad round count refuses before anything.
   assertSwissRoundsDeclared(inputs);
   // Fix round 2 (c): one short tenant read before the gates. RLS scopes it to the caller's org, so another org's
-  // division is a missing one (404 — a gate's 402 would confirm it exists). A division whose fixtures exist answers
+  // division is a missing one (404 — a gate's 402 would confirm it exists). A division holding a result answers
   // FORMAT_LOCKED, the refusal the organiser can act on, ahead of any plan gate or frozen 402. The lock is asked
   // again under the advisory lock below: this read decides the ORDER of the refusals, that one is the guard.
   const divComp = await withTenant(auth.orgId, async (tx) => {
@@ -728,59 +835,138 @@ export async function replaceStages(
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
-  return withTenant(auth.orgId, async (tx) => {
+  let write: { rows: StageRow[]; clearedIds: string[] };
+  // FMT5: the board being streamed, read in the privileged prelude - `fixture_stream_sessions` is sealed (no app_user
+  // grant), and a pooled read would be a second connection. Under the division lock, which the transaction's own
+  // `pg_advisory_xact_lock` below then re-enters. Org-scoped by hand: RLS does not run here.
+  let streaming: { fixture_id: string; fixture_no: number | null } | undefined;
+  const streamGate = async (tx: Tx) => {
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
-    await assertFormatUnlocked(tx, divisionId);
-    // Per-stage match-rules overrides survive the delete (design 2026-09-17,
-    // owner ruling 2026-09-18). The Format tab's Apply is a delete-and-recreate
-    // from the template body, which carries no rules, so the carry-forward has
-    // to happen HERE, server-side, rather than by asking the client to re-issue
-    // a PUT afterwards: it then holds for every caller of this function, not
-    // just the one screen we happened to fix. W2c Task 12 (Review Focus 5): the
-    // body's own rules are laid over the carry, key by key (`withStageDefaults`).
-    // Fix round 2 (R-T12-4): a matched slot's stored rules are its WHOLE format,
-    // so the carry REPLACES the slot's preset rather than sitting over it: a
-    // preset key the organiser removed stays removed, and a slot with no stored
-    // rules ("Same as division") is carried as `{}`, never re-seeded. Only a
-    // genuinely new slot (no entry here) starts from its preset.
-    const rows = await tx<{ seq: number; kind: string; config: Record<string, unknown> }[]>`
-      select seq, kind, config from stages where division_id = ${divisionId}`;
-    const keep = new Map<string, StageCarry>();
-    for (const r of rows) {
-      const rules = r.config?.rules;
-      // Keyed on seq AND kind. A format override belongs to a stage SLOT, and
-      // "the knockout is Best-of-5" does not mean "whatever now sits at seq 2
-      // is Best-of-5" — an Apply that turns seq 2 from knockout into league is
-      // a different competition shape, and silently dressing the new stage in
-      // the old stage's format is the kind of invisible carry nobody audits.
-      // A slot whose kind changed starts from ITS OWN kind's preset instead,
-      // which is a visible, correctable state; carrying it wrongly is not. Note
-      // this is a JUDGEMENT, not a validity constraint: the allowlist is per
-      // sport, kind and variant, and none of them changes for a matched slot.
-      // No stored rules object is the organiser's clear: carried as `{}`.
-      const cleared = rules === null || rules === undefined || typeof rules !== "object" || Array.isArray(rules);
-      // R-T13-1: the slot's own points ride the same carry (an organiser's choice on the same screen, not the
-      // template's), and are re-asked below with the body; a slot that has none carries none.
-      const points = r.config?.points;
-      // W2d Task 10: and its own orders, the same way (a slot with none carries none, and inherits).
-      const tiebreakers = r.config?.tiebreakers;
-      const crossGroupTiebreakers = r.config?.crossGroupTiebreakers;
-      // W3 T12 (T8 review m6): a Swiss slot's chess switch, the organiser's (the default is re-seeded only for a slot
-      // that stores none — `withSwissChessDefault`).
-      const chess = r.config?.chess;
-      keep.set(`${r.seq}:${r.kind}`, {
-        rules: cleared ? {} : (rules as Record<string, unknown>),
-        ...(points !== undefined && points !== null ? { points } : {}),
-        ...(tiebreakers !== undefined && tiebreakers !== null ? { tiebreakers } : {}),
-        ...(crossGroupTiebreakers !== undefined && crossGroupTiebreakers !== null ? { crossGroupTiebreakers } : {}),
-        ...(typeof chess === "boolean" ? { chess } : {}),
-      });
-    }
-    await tx`delete from stages where division_id = ${divisionId}`;
-    // R-T13-3: the recreate runs in THIS transaction, so every refusal it raises — the body's and the carry's rules and
-    // points, the 404, the frozen 402, the cap, a CHECK, SEEDING_RULES_MISSING — rolls the delete above back with it.
-    return insertStageBatch(tx, divisionId, inputs, stageCap, frozen, keep);
-  });
+    [streaming] = await tx<{ fixture_id: string; fixture_no: number | null }[]>`
+      select f.id as fixture_id, f.fixture_no
+        from fixture_stream_sessions ss join fixtures f on f.id = ss.fixture_id join stages s on s.id = f.stage_id
+       where s.division_id = ${divisionId} and f.org_id = ${auth.orgId} and ss.state = any(${[...ACTIVE_STATES]}::text[])
+       order by f.fixture_no nulls last, f.id limit 1`;
+  };
+  try {
+    write = await withTenant(auth.orgId, async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+      // FMT5: the append lock of every board the clear would take, BEFORE the result read (the one lock order,
+      // `division:` -> `fixture:`, append-event.ts). Scoring serialises on the fixture, never the division, so without it
+      // a first score committing between the read and the delete would be cascaded away with its board. With it a scorer
+      // in flight either commits first (and the read below refuses FORMAT_LOCKED) or waits and finds the board gone.
+      // Generation holds the division lock, so no board appears after this read.
+      const boardIds = (
+        await tx<{ id: string }[]>`
+          select f.id from fixtures f join stages s on s.id = f.stage_id where s.division_id = ${divisionId}`
+      ).map((r) => r.id);
+      await lockSwissBoardAppends(tx, boardIds);
+      await assertFormatUnlocked(tx, divisionId);
+      const preview = await formatChangePreview(tx, divisionId);
+      let clearedIds: string[] = [];
+      if (preview.fixtures > 0) {
+        // The clear is the widest board write there is, so a frozen schedule refuses it on the same terms and with the same
+        // code as every other board write (deleteStage, rebuild, applySchedule), read under the same lock.
+        if ((await divisionLockState(tx, divisionId)).frozen) {
+          throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+        }
+        // A board being streamed is a match the audience is watching: its session would be unbound (SET NULL) mid-stream
+        // (`streamGate`, above).
+        if (streaming) {
+          const r = FORMAT_CHANGE_REFUSALS.FORMAT_STREAM_LIVE;
+          throw new HttpError(r.status, r.message.replace("{match}", matchName(streaming.fixture_no)), "FORMAT_STREAM_LIVE", {
+            fixture_id: streaming.fixture_id,
+            fixture_no: streaming.fixture_no,
+          });
+        }
+        // The delete CASCADEs into fixture_external_play, and no result guard can see an online game in progress.
+        await lockBoardsRefusingOnlineGames(tx, boardIds);
+        // W2c Task 14: a match's own format would vanish with its row — refused by name instead, as a rebuild refuses it.
+        await refuseOwnFormatLoss(tx, tx`id in ${tx(boardIds)}`);
+        // Phase 3 wave 1 (G-1): the boards go, and their queued invites with them.
+        await cancelBoardInvites(tx, boardIds, FIXTURE_DELETED_REASON);
+        clearedIds = (
+          await tx<{ id: string }[]>`delete from fixtures where id in ${tx(boardIds)} returning id`
+        ).map((r) => r.id);
+        // Structural ledger + division watermark (deleteStage's pattern; a non-registry type, so history neither undoes nor
+        // replays it — an older step of the cleared board restores nothing: its stage is gone, `restoreFixtures`).
+        const [{ seq: last }] = await tx<{ seq: number }[]>`
+          select coalesce(max(seq), 0)::int as seq from division_events where division_id = ${divisionId}`;
+        await tx`
+          insert into division_events (division_id, seq, type, payload)
+          values (${divisionId}, ${last + 1}, 'stages_replaced',
+                  ${tx.json({ stages: preview.stages, fixtures: clearedIds.length, slots: preview.slots, courts: preview.courts } as never)})`;
+        await tx`update divisions set seq = ${last + 1} where id = ${divisionId}`;
+      }
+      // Per-stage match-rules overrides survive the delete (design 2026-09-17,
+      // owner ruling 2026-09-18). The Format tab's Apply is a delete-and-recreate
+      // from the template body, which carries no rules, so the carry-forward has
+      // to happen HERE, server-side, rather than by asking the client to re-issue
+      // a PUT afterwards: it then holds for every caller of this function, not
+      // just the one screen we happened to fix. W2c Task 12 (Review Focus 5): the
+      // body's own rules are laid over the carry, key by key (`withStageDefaults`).
+      // Fix round 2 (R-T12-4): a matched slot's stored rules are its WHOLE format,
+      // so the carry REPLACES the slot's preset rather than sitting over it: a
+      // preset key the organiser removed stays removed, and a slot with no stored
+      // rules ("Same as division") is carried as `{}`, never re-seeded. Only a
+      // genuinely new slot (no entry here) starts from its preset.
+      const rows = await tx<{ seq: number; kind: string; config: Record<string, unknown> }[]>`
+        select seq, kind, config from stages where division_id = ${divisionId}`;
+      const keep = new Map<string, StageCarry>();
+      for (const r of rows) {
+        const rules = r.config?.rules;
+        // Keyed on seq AND kind. A format override belongs to a stage SLOT, and
+        // "the knockout is Best-of-5" does not mean "whatever now sits at seq 2
+        // is Best-of-5" — an Apply that turns seq 2 from knockout into league is
+        // a different competition shape, and silently dressing the new stage in
+        // the old stage's format is the kind of invisible carry nobody audits.
+        // A slot whose kind changed starts from ITS OWN kind's preset instead,
+        // which is a visible, correctable state; carrying it wrongly is not. Note
+        // this is a JUDGEMENT, not a validity constraint: the allowlist is per
+        // sport, kind and variant, and none of them changes for a matched slot.
+        // No stored rules object is the organiser's clear: carried as `{}`.
+        const cleared = rules === null || rules === undefined || typeof rules !== "object" || Array.isArray(rules);
+        // R-T13-1: the slot's own points ride the same carry (an organiser's choice on the same screen, not the
+        // template's), and are re-asked below with the body; a slot that has none carries none.
+        const points = r.config?.points;
+        // W2d Task 10: and its own orders, the same way (a slot with none carries none, and inherits).
+        const tiebreakers = r.config?.tiebreakers;
+        const crossGroupTiebreakers = r.config?.crossGroupTiebreakers;
+        // W3 T12 (T8 review m6): a Swiss slot's chess switch, the organiser's (the default is re-seeded only for a slot
+        // that stores none — `withSwissChessDefault`).
+        const chess = r.config?.chess;
+        keep.set(`${r.seq}:${r.kind}`, {
+          rules: cleared ? {} : (rules as Record<string, unknown>),
+          ...(points !== undefined && points !== null ? { points } : {}),
+          ...(tiebreakers !== undefined && tiebreakers !== null ? { tiebreakers } : {}),
+          ...(crossGroupTiebreakers !== undefined && crossGroupTiebreakers !== null ? { crossGroupTiebreakers } : {}),
+          ...(typeof chess === "boolean" ? { chess } : {}),
+        });
+      }
+      await tx`delete from stages where division_id = ${divisionId}`;
+      // R-T13-3: the recreate runs in THIS transaction, so every refusal it raises — the body's and the carry's rules and
+      // points, the 404, the frozen 402, the cap, a CHECK, SEEDING_RULES_MISSING — rolls the delete above back with it.
+      const created = await insertStageBatch(tx, divisionId, inputs, stageCap, frozen, keep);
+      // FMT5: the dry run ends here, rolled back, with every refusal above already asked.
+      if (mode.dryRun) throw new FormatChangeDryRun(preview);
+      // The confirm, asked last: a change that clears fixtures goes through only with the token of the board it named.
+      // Fix round 1 (review m2): a token sent is checked even when the board now has nothing to clear - a confirm made
+      // against fixtures someone else's change has since removed would otherwise replace THEIR stages with a body whose
+      // confirm named different ones.
+      if (mode.clear === undefined ? preview.token !== null : mode.clear !== preview.token) {
+        const code = mode.clear === undefined ? "FORMAT_CHANGE_CONFIRM" : "FORMAT_CHANGE_STALE";
+        const r = FORMAT_CHANGE_REFUSALS[code];
+        throw new HttpError(r.status, r.message, code, { preview });
+      }
+      return { rows: created, clearedIds };
+    }, { privilegedPrelude: streamGate });
+  } catch (err) {
+    if (err instanceof FormatChangeDryRun) return err.preview;
+    throw err;
+  }
+  // After the commit: the cleared boards leave the hub and any open match centre (deleteStage's publish).
+  if (write.clearedIds.length > 0) afterScheduleWrite(divisionId, divComp.competition_id, "schedule", write.clearedIds);
+  return write.rows;
 }
 
 /**
@@ -791,6 +977,12 @@ export async function replaceStages(
  * non-power-of-two field holds them. Pools, fixtures, snapshots go via
  * ON DELETE CASCADE.
  */
+/** A stage that is not the last in the graph cannot be deleted (the graph would lose its middle). FMT5: the way to change the
+ *  stages before it is the division's Format (the Division rules card), which rebuilds the whole graph until the first result;
+ *  the sentence sends the organiser there, never to delete stage after stage from the end. */
+export const DELETE_STAGE_NOT_LAST_MESSAGE =
+  "only the last stage can be deleted — to change the stages before it, change the division's format on the Fixtures tab";
+
 export async function deleteStage(auth: AuthCtx, stageId: string): Promise<{ deleted: true }> {
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
@@ -828,7 +1020,7 @@ export async function deleteStage(auth: AuthCtx, stageId: string): Promise<{ del
     const [later] = await tx`
       select 1 from stages where division_id = ${stage.division_id} and seq > ${stage.seq} limit 1`;
     if (later) {
-      throw new HttpError(409, "only the last stage can be deleted — remove later stages first");
+      throw new HttpError(409, DELETE_STAGE_NOT_LAST_MESSAGE);
     }
     const [played] = await tx`
       select 1 from fixtures
@@ -2785,7 +2977,15 @@ async function lockBoardsRefusingOnlineGames(tx: Tx, ids: readonly string[]): Pr
  * caller of `clearSwissFixtureSeats` takes it: the pre-Start entrant delete, Unpair and Undo of Pair next.
  */
 export async function lockSwissBoardAppends(tx: Tx, ids: readonly string[]): Promise<void> {
-  for (const id of [...ids].sort()) await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + id}))`;
+  if (ids.length === 0) return;
+  // FMT5 fix round 1 (review m3): ONE round-trip for the lot, in the same sorted order - the keys go in as one sorted array
+  // and are locked row by row in its order (`with ordinality`, ordered by it), each the `fixture:<id>` key an append takes.
+  // A key already held by a scorer parks the statement there, with every key before it held, as the loop did.
+  const keys = [...new Set(ids)].sort().map((id) => "fixture:" + id);
+  await tx`
+    select count(*)::int from (
+      select pg_advisory_xact_lock(hashtext(k.key)) from unnest(${keys}::text[]) with ordinality as k(key, n) order by k.n
+    ) locked`;
 }
 
 export async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<string[]> {

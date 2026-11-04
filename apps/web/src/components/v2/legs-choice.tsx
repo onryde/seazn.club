@@ -1,5 +1,5 @@
 // The Legs field of a division's format: how many times each pair meets in a league or group stage. ONE control for
-// both forms that set it — the division builder's Format tab and the Settings Format group — so the two cannot offer
+// both forms that set it — the division builder's Format tab and the Format dialog on the Division rules card (FMT5) — so the two cannot offer
 // different values again (Match Day D1). Owner ruling 2026-10-31: 1 or 2 only, named "Once" and "Home & away".
 //
 // Two options read better as a pair of buttons than as a select: both choices are visible at once and each is a 44px

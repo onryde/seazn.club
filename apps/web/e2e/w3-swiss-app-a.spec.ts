@@ -13,6 +13,7 @@ import {
   withDb,
 } from "./helpers";
 import { closeOpenContexts } from "./spectator-public-helpers";
+import { openFormatDialog } from "./helpers/rules-strip";
 import { spectator } from "./spectator-w2-kit";
 import { fill, seedOnlineRound, uiEn } from "./match-room-kit";
 import type { Page } from "@playwright/test";
@@ -338,7 +339,7 @@ test.describe("X-SW-21 no Add match on a Swiss stage", () => {
 // The Settings tab's Rounds box names the same guidance before the organiser presses anything. Generic sport: the bounds
 // are arithmetic on the field, which no sport field reaches (swiss-rounds-cap.test.ts sweeps every sport on the server).
 test.describe("X-SW-16 rounds above the hard max are refused at Start", () => {
-  test("4 entrants × 5 rounds: Start is refused with the field's guidance, the division stays in setup, and Settings names the guidance", async ({
+  test("4 entrants × 5 rounds: Start is refused with the field's guidance, the division stays in setup, and the Format dialog names the guidance", async ({
     page,
     request,
   }) => {
@@ -395,13 +396,14 @@ test.describe("X-SW-16 rounds above the hard max are refused at Start", () => {
     expect(refused.status).toBe(422);
     expect(refused.error).toMatchObject({ code: "SWISS_ROUNDS_ABOVE_MAX", rounds: 5, field: 4, hardMax: 3, canFinish: false });
 
-    // Settings, before Start: the Rounds box takes 1 and names the field's guidance under it.
-    await page.goto(await divisionPath(request, divisionId, "?tab=settings"));
-    await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("button", { name: /Format/ }).click();
-    await expect(page.getByTestId("division-settings-swiss-rounds")).toHaveAttribute("min", "1");
-    await expect(page.getByTestId("division-settings-swiss-rounds")).toHaveValue("5");
-    await expect(page.getByTestId("division-settings-swiss-rounds-guidance")).toHaveText(guidance);
+    // The Format dialog (FMT5: Settings › Format moved onto the Fixtures tab's Division rules card), before Start: it opens on
+    // the stored Swiss, its Rounds box takes 1 and names the field's guidance under it.
+    const formatDialog = await openFormatDialog(page, (await divisionPath(request, divisionId)).split("?")[0]!);
+    const rounds = formatDialog.getByRole("spinbutton", { name: uiEn["wizard.rounds"]!, exact: true });
+    await expect(rounds).toHaveAttribute("min", "1");
+    await expect(rounds).toHaveValue("5");
+    await expect(formatDialog.getByTestId("builder-swiss-rounds-guidance")).toHaveText(guidance);
+    await expect(rounds, "the guidance is the box's description").toHaveAccessibleDescription(guidance);
   });
 });
 

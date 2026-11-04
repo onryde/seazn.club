@@ -8,7 +8,7 @@ If you're moving a club's history in from another system, or catching up a divis
 
 ## Before you import
 
-**Start the division first.** [Starting a division](/help/divisions/lifecycle) locks its structure and moves it out of setup — a division that's still in setup, or scheduled but not yet started, refuses the whole import call outright.
+**Start the division first.** [Starting a division](/help/divisions/lifecycle) locks its entrants and moves it out of setup — a division that's still in setup, or scheduled but not yet started, refuses the whole import call outright.
 
 **But leave the fixtures themselves untouched.** Every fixture you import into must still show no recorded events at all — not from a previous import, and not from a stray tap on its live pad. The moment a fixture has even one event on it, it's permanently out of reach for import; the only way to change something already on the record is the normal [correction flow](/help/scoring/corrections).
 

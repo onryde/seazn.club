@@ -26,6 +26,7 @@ vi.mock("@/server/usecases/stages", () => ({
   listStagesWithTableRules: vi.fn(async () => []),
   getStandings: vi.fn(async () => ({ rows: [] })),
   getSeedProposal: vi.fn(),
+  divisionFormatLocked: vi.fn(async () => false),
   getStageRosterDrift: vi.fn(async () => ({ ghosts: [], unplaced: [] })),
 }));
 vi.mock("@/server/usecases/competitions", () => ({
@@ -60,7 +61,7 @@ vi.mock("@/server/usecases/entrants", async (importOriginal) => {
   return { ...actual, listEntrants: vi.fn(async () => state.entrants) };
 });
 vi.mock("@/server/usecases/schedule", () => ({
-  getScheduleSettings: vi.fn(async () => ({ config: {}, tz: "UTC" })),
+  getScheduleSettings: vi.fn(async () => ({ config: { courts: [] }, tz: "UTC" })),
 }));
 vi.mock("@/lib/entitlements", () => ({
   hasFeature: vi.fn(async () => true),
@@ -233,9 +234,11 @@ describe("division page: the entrant kinds block (Match Day C4)", () => {
     const settings = findAll(await renderPage("settings"), (el) => el.type === DivisionSettings);
     expect(settings, "premise: Settings rendered").toHaveLength(1);
     const keys = Object.keys(settings[0]!.props as object);
-    expect(keys, "premise: the props were read").toContain("structureLocked");
+    expect(keys, "premise: the props were read").toContain("fixturesHref");
     expect(keys).not.toContain("entrantModel");
     expect(keys).not.toContain("entrantModelSource");
+    // FMT5: nor the format's kinds - Settings › Format left with the rest of the format (the Division rules card has it).
+    expect(keys).not.toContain("entrantKinds");
   });
 
   // UI5 item 2 (owner, 2026-11-03): the block starts CLOSED, always - an empty division included (Match Day E1 item 7 had opened
