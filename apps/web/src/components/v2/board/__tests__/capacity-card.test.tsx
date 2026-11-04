@@ -9,6 +9,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { Dict } from "@/lib/i18n-constants";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import en from "@/dictionaries/en/ui.json";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
 import type { CapacityReport } from "@seazn/engine/scheduling/capacity";
 import { CapacityCard } from "../capacity-card";
 
@@ -215,6 +218,38 @@ describe("CapacityCard", () => {
       const html = render(<CapacityCard report={baseReport()} stale failed={false} />);
       expect(html).not.toContain(en["schedule.capacity.checkFailed"]);
       expect(html).toContain(en["schedule.capacity.stale"]);
+    });
+  });
+
+  // FU2: with no `venueLabel` the add_court suggestion used to say the English "court" in every locale. Absent now means
+  // "the court, in the reader's language" - the dictionary's own `venue.noun.court.singular`, lowercased, in the sentence.
+  describe("the default venue word (no venueLabel handed down)", () => {
+    const LOCALES = [["en", en], ["es", es], ["fr", fr], ["nl", nl]] as const;
+    const impossible = baseReport({ verdict: "impossible", suggestions: [{ kind: "add_court", amount: 1, flipsVerdict: true }] });
+    const escape = (text: string) => text.replace(/&/g, "&amp;").replace(/'/g, "&#x27;");
+
+    it("says the locale's own court noun in the add_court suggestion, in every locale (counted)", () => {
+      let checked = 0;
+      for (const [loc, dict] of LOCALES) {
+        const d = dict as Record<string, string>;
+        const word = d["venue.noun.court.singular"]!.toLowerCase();
+        const expected = d["schedule.capacity.suggestion.addCourt"]!.replace("{venue}", word);
+        const html = renderToStaticMarkup(
+          <DictProvider dict={dict as unknown as Dict} locale={loc}>
+            <CapacityCard report={impossible} />
+          </DictProvider>,
+        );
+        expect(html, loc).toContain(escape(expected));
+        if (loc !== "en") expect(html, `${loc}: not the English noun`).not.toMatch(/\bcourt\b/i);
+        checked++;
+      }
+      expect(checked).toBe(LOCALES.length);
+    });
+
+    it("the positive pair: a venueLabel handed down still wins over the default", () => {
+      const html = render(<CapacityCard report={impossible} venueLabel="pitch" />);
+      expect(html).toContain(en["schedule.capacity.suggestion.addCourt"].replace("{venue}", "pitch"));
+      expect(html).not.toContain(en["schedule.capacity.suggestion.addCourt"].replace("{venue}", "court"));
     });
   });
 });
