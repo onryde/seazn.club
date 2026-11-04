@@ -2085,10 +2085,6 @@ describe("the swiss branch of playStage on the swiss fake", () => {
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
-// single-sport: the loop reads a refusal's code and `canFinish` and calls Finish; none of it reads a sport's rules, so the whole
-// block runs on generic (ctxFor's default) - except the real dead end, which is the ENGINE's pairRound over entrants and their
-// meetings, again sport-independent. The sport-dependent parts of the same task (what a played loser is paid, who played) are swept
-// or pinned in model-fake-swiss-score.test.ts and fold.test.ts.
 // W3 app-B Task 6 (premise 5): a Swiss Pair the product REFUSES by name - SWISS_NO_LEGAL_PAIRING, no round left that repeats
 // nobody - is a refusal, not "paired nobody"; and the loop takes the organiser's recovery, "Finish the Swiss now"
 // (POST /swiss/finish), which ends the Swiss after its last complete round AND completes the stage.
@@ -2157,6 +2153,10 @@ class SwissThenKnockout extends FakeMultiStageDriver {
 }
 
 describe("W3 app-B Task 6: the Swiss loop reads SWISS_NO_LEGAL_PAIRING as a refusal and takes the organiser's recovery", () => {
+  // single-sport: the loop reads a refusal's code and `canFinish` and calls Finish; none of it reads a sport's rules, so the whole
+  // block runs on generic (ctxFor's default) - except the real dead end, which is the ENGINE's pairRound over entrants and their
+  // meetings, again sport-independent. The sport-dependent parts of the same task (what a played loser is paid, who played) are swept
+  // or pinned in model-fake-swiss-score.test.ts and fold.test.ts.
   it("the Swiss loop on SWISS_NO_LEGAL_PAIRING finishes the Swiss and the knockout is reached", async () => {
     const driver = new SwissThenKnockout({ deadEnd: 2, budget: 3 });
     const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "league_ko" });

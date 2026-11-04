@@ -5,9 +5,6 @@
 //
 // Expected statuses and sentences come from the product's own refusal table (`SWISS_REFUSALS`), never typed here; the dead
 // end itself is the ENGINE's (`pairRound` over 4 entrants runs out of rematch-free rounds after 3), not a forced refusal.
-// single-sport: the Finish verdict (judgeFinish) and the dead end (the engine's pairRound over entrants and their meetings) read
-// statuses and pair keys, never a sport's rules, so they are sport-independent; badminton is only the sport the rig scores with.
-// (The harness LOOP's tests in scenarios.test.ts run on generic for the same reason; neither file sweeps sports.)
 import { describe, expect, it } from "vitest";
 import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
 import { newModelState } from "../lib/model/commands.ts";
@@ -16,24 +13,27 @@ import { generateStream } from "../lib/streams/index.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { ModelFakeDriver } from "./model-fake-driver.ts";
 
-const SPORT = "badminton";
 const BUDGET = 12; // far more rounds than 4 entrants can play without a rematch
 
-/** A started 4-entrant Swiss with a `BUDGET`-round budget, nothing paired yet. */
+/** A started 4-entrant Swiss with a `BUDGET`-round budget, nothing paired yet; `sport` and `cfg` are what its boards score with. */
 async function started(row: "swiss" | "league" = "swiss") {
+  // single-sport: the Finish verdict (judgeFinish) and the dead end (the engine's pairRound over entrants and their meetings) read
+  // statuses and pair keys, never a sport's rules, so they are sport-independent; badminton is only the sport the rig scores with.
+  // (The harness LOOP's tests in scenarios.test.ts run on generic for the same reason; neither file sweeps sports.)
+  const sport = "badminton";
   const d = new ModelFakeDriver({});
-  const variant = offlineBuilderDefault(SPORT);
-  await newModelState({ driver: d, row, sport: SPORT, variant, entrants: 4, tag: "t6-finish" });
+  const variant = offlineBuilderDefault(sport);
+  await newModelState({ driver: d, row, sport, variant, entrants: 4, tag: "t6-finish" });
   if (row === "swiss") d.stage!.config = { ...d.stage!.config, rounds: BUDGET };
   await d.start();
-  const cfg = stageCfg(SPORT, resolveSportCfg(SPORT, variant), "swiss", variant, undefined);
+  const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "swiss", variant, undefined);
   const boards = (round: number) => d.fixtures.filter((f) => f.round_no === round && f.home_entrant_id !== null && f.away_entrant_id !== null);
   const decide = async (round: number) => {
-    for (const f of boards(round)) await d.postStream(f.id, generateStream({ sportKey: SPORT, cfg, stageKind: "swiss", home: f.home_entrant_id!, away: f.away_entrant_id!, outcome: { kind: "win", winner: "home" } }));
+    for (const f of boards(round)) await d.postStream(f.id, generateStream({ sportKey: sport, cfg, stageKind: "swiss", home: f.home_entrant_id!, away: f.away_entrant_id!, outcome: { kind: "win", winner: "home" } }));
   };
   /** Pair round `round` and decide it. */
   const play = async (round: number) => { await d.generate(); expect(boards(round).length, `rig: round ${round} seated two boards`).toBe(2); await decide(round); };
-  return { d, boards, decide, play };
+  return { d, boards, decide, play, sport, cfg };
 }
 
 const refusal = (code: keyof typeof SWISS_REFUSALS) => ({ code, status: SWISS_REFUSALS[code].status, message: SWISS_REFUSALS[code].message });
@@ -90,7 +90,7 @@ describe("the model twin's Finish the Swiss now (finishSwissNow)", () => {
   });
 
   it("refused by name, nothing written: before any round is decided (SWISS_FINISH_NOTHING_PLAYED), and while a board past k has a result (SWISS_FINISH_ROUND_UNDECIDED, naming it)", async () => {
-    const { d, boards, decide } = await started();
+    const { d, boards, decide, sport, cfg } = await started();
     await d.generate(); // round 1 seated, undecided
     const nothing = refusal("SWISS_FINISH_NOTHING_PLAYED");
     const rows = d.fixtures.length;
@@ -103,7 +103,7 @@ describe("the model twin's Finish the Swiss now (finishSwissNow)", () => {
     const [first] = boards(2);
     // one board of round 2 STARTS (a result in its ledger), the other does not: round 2 is past k=1 and in progress
     await d.postStream(first!.id, generateStream({
-      sportKey: SPORT, cfg: stageCfg(SPORT, resolveSportCfg(SPORT, offlineBuilderDefault(SPORT)), "swiss", offlineBuilderDefault(SPORT), undefined),
+      sportKey: sport, cfg,
       stageKind: "swiss", home: first!.home_entrant_id!, away: first!.away_entrant_id!, outcome: { kind: "win", winner: "home" },
     }));
     const undecided = refusal("SWISS_FINISH_ROUND_UNDECIDED");
