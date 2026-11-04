@@ -14,7 +14,8 @@
 import type { Locator, Page } from "playwright";
 import { assertWaitMs } from "../budget.ts";
 import { actAndAwait } from "../respond.ts";
-import { TESTID } from "../selectors.ts";
+import { DATA, TESTID } from "../selectors.ts";
+import { classifyGenerateRail, type GeneratePath } from "../../generate-path.ts";
 import type { CompleteOut, FixtureRow, GenerateOut } from "../../driver/types.ts";
 import { actBudget, awaitScreen, exactPath, navBudget, selectorValue, shoot, visit, type DivisionWhere, type PageCtx } from "./ctx.ts";
 import { paths } from "./paths.ts";
@@ -88,7 +89,7 @@ export interface RailSeen { readonly fold: RailFold; readonly defaultFilter: Def
 /** The page object's callbacks into its driver: `readDefaultFilter` asks for the sheet's default (run-sheet.ts
  *  readDefaultFilter) before it is widened; `onRail` is told what the visit saw. Both optional, so a caller that
  *  wants neither is unchanged. */
-export interface RailHooks { readonly readDefaultFilter?: boolean; readonly onRail?: (seen: RailSeen) => void | Promise<void> }
+export interface RailHooks { readonly readDefaultFilter?: boolean; readonly onRail?: (seen: RailSeen) => void | Promise<void>; readonly onGenerate?: (path: GeneratePath) => void }
 
 /** The fixtures tab with `stageId`'s rail open, every run-sheet row showing. */
 async function railFor(c: PageCtx, where: DivisionWhere, stageId: string, hooks: RailHooks): Promise<Locator> {
@@ -135,8 +136,22 @@ export async function generateUi(c: PageCtx, where: DivisionWhere, stageId: stri
   const { page } = c;
   const sheet = await railFor(c, where, stageId, hooks);
   const before = await shoot(c, "05-generated-before");
+  // Read the rail BEFORE acting: Start may already have generated this stage, and then the product offers no Generate.
+  const path = classifyGenerateRail({
+    stageId,
+    generateOffered: (await sheet.getByTestId(TESTID.stageGenerate.id).count()) > 0,
+    completeOffered: (await sheet.getByTestId(TESTID.stageComplete.id).count()) > 0,
+    fixtureRows: await page.locator(DATA.fixtureRow.selector).count(),
+  });
+  if (path === "generated-by-start") {
+    hooks.onGenerate?.(path);
+    const rows = await page.locator(DATA.fixtureRow.selector).count();
+    await shoot(c, "05-generated", before);
+    return { created: 0, existing: rows, fixtures: [] };
+  }
   const { data } = await actAndAwait<GenerateOut>(page, { method: "POST", path: exactPath(`/api/v1/stages/${stageId}/generate`) },
     () => sheet.getByTestId(TESTID.stageGenerate.id).click({ timeout: actBudget(c, 1) }), actBudget(c, 1));
+  hooks.onGenerate?.(path);
   // The screen proves it once the refresh draws the NEWEST row. Nothing
   // created, nothing new to draw — and nothing to differ.
   const newest = newestCreatedFixtureNo(data);

@@ -28,6 +28,7 @@ import { START_UNACKNOWLEDGED, isUnacknowledgedStart } from "../lib/browser/page
 import { ORGANISER_TABS, PUBLIC_TABS, paths } from "../lib/browser/pages/paths.ts";
 import { PUBLIC_STANDINGS_TAB, championFrom, publicPanelSelector, publicTabSelector } from "../lib/browser/pages/public-division.ts";
 import { ALL_FILTER, CONSOLE_MOUNTED_TESTIDS, RUN_SHEET_FILTER_OPTIONS, type DefaultFilterSeen, fixtureLinkSelector, fixtureRowSelector, showAllFixtures } from "../lib/browser/pages/run-sheet.ts";
+import { StageNotGeneratable } from "../lib/generate-path.ts";
 import { GeneratedWithoutFixtureNumbers, MD_BREAKPOINT_PX, completeStageUi, completionShots, expectedFoldBranch, generateUi, judgeFoldBranch, newestCreatedFixtureNo, openFold, openFoldIfFolded, railSheetSelector, railTriggerSelector } from "../lib/browser/pages/stage-rail.ts";
 import { NEEDS_DECISION } from "../lib/browser/pages/needs-decision.ts";
 import { UnreadableStandingsRow, standingsCellsOf, tablesFromCells } from "../lib/browser/pages/standings.ts";
@@ -1885,7 +1886,8 @@ describe("completeStageUi: the completion shot names the stage's place in its di
   /** A fixtures tab with one rail per stage id: a click on a stage's Complete answers that stage's /complete.
    *  `width`: the viewport; `folded`: the rails' triggers are visible (below md, where the rail folds behind them);
    *  `defaultFilter`: the filter the run sheet opens pressed on, with the rows it draws. */
-  function railPage(stageIds: readonly string[], o: { width?: number; folded?: boolean; defaultFilter?: { filter: string; rows: number[] } } = {}) {
+  function railPage(stageIds: readonly string[], o: { width?: number; folded?: boolean; defaultFilter?: { filter: string; rows: number[] }; rail?: { generate: boolean; complete: boolean; rows: number } } = {}) {
+    const rail = o.rail ?? { generate: true, complete: true, rows: 1 };
     const log: string[] = [];
     let screen = 0;
     let url = "about:blank";
@@ -1901,7 +1903,12 @@ describe("completeStageUi: the completion shot names the stage's place in its di
       locator: (sel: string) => loc(`${d} >> ${sel}`),
       getByTestId: (id: string) => loc(`${d} >> testid:${id}`),
       waitFor: async () => undefined,
-      count: async () => (o.defaultFilter !== undefined && d === `${RUN_SHEET_FILTER_OPTIONS}[aria-pressed="true"]` ? 1 : 0),
+      count: async () => {
+        if (d.endsWith(`>> testid:${TESTID.stageGenerate.id}`)) return rail.generate ? 1 : 0;
+        if (d.endsWith(`>> testid:${TESTID.stageComplete.id}`)) return rail.complete ? 1 : 0;
+        if (d === DATA.fixtureRow.selector) return rail.rows;
+        return o.defaultFilter !== undefined && d === `${RUN_SHEET_FILTER_OPTIONS}[aria-pressed="true"]` ? 1 : 0;
+      },
       getAttribute: async (a: string) => (a === "data-filter" && o.defaultFilter !== undefined ? o.defaultFilter.filter : null),
       evaluateAll: async (fn: (els: { getAttribute: (n: string) => string | null }[]) => unknown) => {
         log.push(`read rows ${d}`);
@@ -1988,6 +1995,34 @@ describe("completeStageUi: the completion shot names the stage's place in its di
     await generateUi(not.ctx, WHERE, "st-1", { onRail: (r) => { none.push(r.defaultFilter); } });
     expect(none).toEqual([null]);
     expect(not.log.some((l) => l.startsWith("read rows"))).toBe(false);
+  });
+
+  // F2: Start generates stage 1, so the rail offers no Generate there. The driver reads the rail and names the path.
+  it("generateUi: Generate offered is clicked live and reported as live-click", async () => {
+    const g = railPage(["st-1"], { rail: { generate: true, complete: false, rows: 0 } });
+    const paths: string[] = [];
+    await generateUi(g.ctx, WHERE, "st-1", { onGenerate: (p) => { paths.push(p); } });
+    expect(g.log.filter((l) => l.startsWith("click ")).map((l) => l.endsWith(`testid:${TESTID.stageGenerate.id}`))).toEqual([true]);
+    expect(paths).toEqual(["live-click"]);
+  });
+
+  it("generateUi: no Generate on an active stage with fixtures is generated-by-start: no click, nothing created, rows reported, named", async () => {
+    const g = railPage(["st-1"], { rail: { generate: false, complete: true, rows: 6 } });
+    const paths: string[] = [];
+    const out = await generateUi(g.ctx, WHERE, "st-1", { onGenerate: (p) => { paths.push(p); } });
+    expect(g.log.some((l) => l.startsWith("click "))).toBe(false);
+    expect(out).toEqual({ created: 0, existing: 6, fixtures: [] });
+    expect(paths).toEqual(["generated-by-start"]);
+  });
+
+  it("generateUi: no Generate and not an active stage with fixtures is a fault, never a pass (pending stage; Complete but no rows)", async () => {
+    for (const rail of [{ generate: false, complete: false, rows: 0 }, { generate: false, complete: false, rows: 4 }, { generate: false, complete: true, rows: 0 }]) {
+      const g = railPage(["st-1"], { rail });
+      const paths: string[] = [];
+      await expect(generateUi(g.ctx, WHERE, "st-1", { onGenerate: (p) => { paths.push(p); } }), JSON.stringify(rail)).rejects.toThrow(StageNotGeneratable);
+      expect(paths).toEqual([]);
+      expect(g.log.some((l) => l.startsWith("click "))).toBe(false);
+    }
   });
 
   it("a caller that passes no hooks is unchanged: the visit completes as it always did", async () => {
