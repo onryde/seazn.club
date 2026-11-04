@@ -146,7 +146,8 @@ export async function generateUi(c: PageCtx, where: DivisionWhere, stageId: stri
   if (path === "generated-by-start") {
     hooks.onGenerate?.(path);
     const rows = await page.locator(DATA.fixtureRow.selector).count();
-    await shoot(c, "05-generated", before);
+    // Nothing happens on screen here (Start drew the stage), so the picture owes no difference from the one before it.
+    await shoot(c, "05-generated");
     return { created: 0, existing: rows, fixtures: [] };
   }
   const { data } = await actAndAwait<GenerateOut>(page, { method: "POST", path: exactPath(`/api/v1/stages/${stageId}/generate`) },

@@ -2013,6 +2013,8 @@ describe("completeStageUi: the completion shot names the stage's place in its di
     expect(g.log.some((l) => l.startsWith("click "))).toBe(false);
     expect(out).toEqual({ created: 0, existing: 6, fixtures: [] });
     expect(paths).toEqual(["generated-by-start"]);
+    // The screen did not change, and the picture must not be judged as if it had.
+    expect(g.evidence.checks().find((c) => c.id === "visual-evidence")).toMatchObject({ verdict: "pass", checked: 2 });
   });
 
   it("generateUi: no Generate and not an active stage with fixtures is a fault, never a pass (pending stage; Complete but no rows)", async () => {
