@@ -1219,7 +1219,6 @@ export type DictionaryKey =
   | "board.week.noFixtures"
   | "board.weekView"
   | "board.when"
-  | "boardset.addVenue"
   | "boardset.close"
   | "boardset.customWindows"
   | "boardset.datesError"
@@ -9302,7 +9301,6 @@ export type DictionaryKey =
   | "wizard.divisionName"
   | "wizard.divisionNamePlaceholder"
   | "wizard.endDateHint"
-  | "wizard.err.addVenue"
   | "wizard.err.formatBound"
   | "wizard.err.matchLength"
   | "wizard.err.maxAge"
@@ -9335,5 +9333,4 @@ export type DictionaryKey =
   | "wizard.showExample"
   | "wizard.sport"
   | "wizard.tab.format"
-  | "wizard.venueCount"
   | "wizard.venuesProHint";
