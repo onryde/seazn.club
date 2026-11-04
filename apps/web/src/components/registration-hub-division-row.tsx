@@ -136,10 +136,14 @@ export function RegistrationHubDivisionRow({
 }) {
   const { dict } = context;
 
-  const status = deriveRegistrationStatus(
-    { enabled: row.enabled, opens_at: row.opens_at, closes_at: row.closes_at },
-    context.now,
-  );
+  // FU1: a stored kind the division no longer takes - the public panel does not open it (closed_reason
+  // entry_kind_unavailable), so the organiser scanning rows must see it here, not only inside the config panel.
+  const kindRefused = row.entrant_kind !== null && !divisionTakesKind(row.allowed_kinds, row.entrant_kind);
+  // FU1 fix round 1 (m1): and the row says what the public meets - Closed, with no Copy/Open/QR for a link that only ever
+  // refuses (showLinkControls below). The chip on the second line says why.
+  const status: RegistrationHubStatus = kindRefused
+    ? "closed"
+    : deriveRegistrationStatus({ enabled: row.enabled, opens_at: row.opens_at, closes_at: row.closes_at }, context.now);
 
   const windowLabel = formatRegistrationWindow(row.opens_at, row.closes_at, context.orgTz);
   const windowText =
@@ -184,9 +188,6 @@ export function RegistrationHubDivisionRow({
           : null;
 
   const entrantKindText = row.entrant_kind ? t(dict, `divset.entrants.kind.${row.entrant_kind}`) : "—";
-  // FU1: a stored kind the division no longer takes - the public panel does not open it (closed_reason
-  // entry_kind_unavailable), so the organiser scanning rows must see it here, not only inside the config panel.
-  const kindRefused = row.entrant_kind !== null && !divisionTakesKind(row.allowed_kinds, row.entrant_kind);
   const approvalText = row.approval ? t(dict, `reg.hub.row.approval.${row.approval}`) : "—";
 
   // Finding 3: a closed division's public register link would only ever

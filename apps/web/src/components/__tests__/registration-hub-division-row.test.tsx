@@ -456,6 +456,42 @@ describe("RegistrationHubDivisionRow — badges and dash fallbacks", () => {
     expect(flag({ ...BASE_ROW, entrant_kind: null, allowed_kinds: effectiveEntrantModel(null, { entrants: { kinds: ["team"] } }).kinds })).toHaveLength(0);
   });
 
+  // FU1 fix round 1 (m1): the row says what the PUBLIC meets. A refused kind keeps the public out (closed_reason
+  // entry_kind_unavailable), so the pill reads Closed - never "Open now" - and the Copy/Open/QR controls go, as on any closed
+  // division. The positive pair is the same open window with an allowed kind.
+  it("a refused kind on an otherwise open division reads Closed with no link controls; an allowed one stays Open with them - swept", () => {
+    const view = (row: RegistrationHubRowData) => {
+      const tree = walk(RegistrationHubDivisionRow({ row, context: { ...BASE_CONTEXT, showRegisterLink: true } }));
+      const pill = tree.find((e) => propsOf(e)["data-registration-hub-status"] !== undefined)!;
+      return { status: propsOf(pill)["data-registration-hub-status"], pillText: textOf(pill), links: tree.some((e) => e.type === CopyLink) };
+    };
+    let closed = 0;
+    let open = 0;
+    for (const only of ALL_KINDS) {
+      const allowed = effectiveEntrantModel(null, { entrants: { kinds: [only] } }).kinds;
+      for (const kind of ALL_KINDS) {
+        const label = `${kind} on ${only}-only`;
+        const seen = view({ ...BASE_ROW, enabled: true, opens_at: null, closes_at: null, entrant_kind: kind, allowed_kinds: allowed });
+        if (kind === only) {
+          expect(seen, label).toEqual({ status: "open", pillText: t(uiEn, "reg.hub.row.status.open"), links: true });
+          open++;
+        } else {
+          expect(seen, label).toEqual({ status: "closed", pillText: t(uiEn, "reg.hub.row.status.closed"), links: false });
+          closed++;
+        }
+      }
+    }
+    expect({ closed, open }).toEqual({ closed: ALL_KINDS.length * (ALL_KINDS.length - 1), open: ALL_KINDS.length });
+    const teamsOnly = effectiveEntrantModel(null, { entrants: { kinds: ["team"] } }).kinds;
+    // A SCHEDULED window does not outrank it: the link would refuse everyone once the window opened too.
+    expect(view({ ...BASE_ROW, opens_at: "2026-07-01T00:00:00Z", entrant_kind: "individual", allowed_kinds: teamsOnly })).toMatchObject({
+      status: "closed",
+      links: false,
+    });
+    // An unconfigured row registers the division's own default, so nothing is refused.
+    expect(view({ ...BASE_ROW, entrant_kind: null, allowed_kinds: teamsOnly })).toMatchObject({ status: "open", links: true });
+  });
+
   it("renders the approval mode label when set", () => {
     const text = textOf(RegistrationHubDivisionRow({ row: { ...BASE_ROW, approval: "manual" }, context: BASE_CONTEXT }));
     expect(text).toContain(t(uiEn, "reg.hub.row.approval.manual"));
