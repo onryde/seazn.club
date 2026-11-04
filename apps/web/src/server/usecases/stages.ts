@@ -2053,8 +2053,10 @@ export async function swissGen(
   );
   // W3 app-B T1 (X-SW-3; rulebook-W3 §3.1, P-A1/P-A6; engine 2.0.0): a round with no legal pairing is REFUSED, not seated
   // empty. Engine 1.x answered with an empty round, so Pair next read "up to date" for a round that could not be played.
-  // Nothing above wrote anything (the reads are the only I/O so far), and this throws BEFORE the reshape and the seats, so
-  // the whole press — shells, events, seats — stays as it was, and the whole Generate is one transaction besides.
+  // This throws BEFORE the reshape and the seats. The one write above it is a rank_adjacent round's lots draw
+  // (`rankedStageStandings` stores any draw its ranking makes, `persistLotsDraws`); the whole Generate is one transaction,
+  // so the throw rolls that draw back with the rest and the press — shells, events, seats, draws — stays as it was (final
+  // review m3). Keep the refusal inside that transaction: caught, or moved outside it, it would leave the draw stored.
   // `field_too_small` cannot reach here: `refuseSwissFieldUnderTwo` above refuses a round's field under two first
   // (STAGE_NOT_READY), so the reason is one of the four a field of two or more can have. The status is the table's: 409
   // when Finish is the way out (`swissFinishDetails` — the same predicate every `canFinish` the server sends reads), else
