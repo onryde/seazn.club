@@ -8,15 +8,19 @@
 // The seam is driven through its REAL producer and consumer, not a fixture on both ends: the division's kinds are
 // narrowed through the Entrants door (PATCH config.entrants), and every assertion reads what a person sees -
 //   1. the public register page: the division's card says entries are unavailable and offers no Add control;
-//   2. the organiser's registration hub: the row is flagged, and the config panel keeps the stored kind selected but
-//      marked not allowed, offers only the kinds the division takes, and refuses the save on the page (no PUT);
-//   3. picking an offered kind saves, the flag goes, and the public card opens with that kind's Add control.
+//   2. the organiser's registration hub: the row is flagged and reads Closed with no Copy/Open/QR (fix round 1, m1), and
+//      the config panel keeps the stored kind selected but marked not allowed, offers only the kinds the division takes,
+//      and refuses the save on the page (no PUT);
+//   3. picking an offered kind saves, the flag goes, the row reads Open with its link again, and the public card opens
+//      with that kind's Add control.
 // Every changed screen is shot at 1280 / 768 / 320 with no horizontal page scroll; the entrant-type select keeps a 44px
-// target at each width.
+// target at each width. A second test (fix round 1, m6) MEASURES, in a real browser, that the longest not-allowed label
+// fits the select at 320 in every locale. A third (fix round 1, I1) drives the narrowing guard through its real producer
+// and consumer: the Entrants tab's Save, refused while a live registration holds the kind, said in the reader's language.
 //
 // Setup uses the API to REACH that state (the walkthrough charter permits it); the fix is made through the UI.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { activeOrg, apiJson, expectNoHorizontalScroll, screenshotAtWidths, TAG } from "../helpers";
 import { routes } from "../../src/lib/routes";
@@ -25,14 +29,19 @@ const GENERIC_CONFIG = { points: { w: 3, d: 1, l: 0 }, progressScore: false };
 const WIDTHS = [1280, 768, 320];
 
 /** Copy read from the dictionary the page renders from, never retyped here. */
-const UI_EN: Record<string, string> = JSON.parse(
-  readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
-);
-function ui(key: string, vars: Record<string, string> = {}): string {
-  const raw = UI_EN[key];
-  if (raw === undefined) throw new Error(`missing en ui dictionary key: ${key}`);
+const LOCALES = ["en", "es", "fr", "nl"] as const;
+const UI: Record<(typeof LOCALES)[number], Record<string, string>> = Object.fromEntries(
+  LOCALES.map((loc) => [
+    loc,
+    JSON.parse(readFileSync(fileURLToPath(new URL(`../../src/dictionaries/${loc}/ui.json`, import.meta.url)), "utf8")),
+  ]),
+) as never;
+function uiIn(loc: (typeof LOCALES)[number], key: string, vars: Record<string, string> = {}): string {
+  const raw = UI[loc][key];
+  if (raw === undefined) throw new Error(`missing ${loc} ui dictionary key: ${key}`);
   return Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, v), raw);
 }
+const ui = (key: string, vars: Record<string, string> = {}) => uiIn("en", key, vars);
 
 test.describe.configure({ mode: "serial" });
 
@@ -164,11 +173,23 @@ test("a division narrowed after its registration was set up: the public card clo
 
     // ------------------------------------------- 2. the organiser's hub, before the fix
     await page.goto(routes.competitionRegistration(org.slug, comp.data!.slug), { waitUntil: "load" });
-    const flagOf = (id: string) =>
-      page.locator(`[data-registration-hub-row][data-division-id="${id}"] [data-testid="row-kind-not-allowed"]`);
+    const rowOf = (id: string) => page.locator(`[data-registration-hub-row][data-division-id="${id}"]`);
+    const flagOf = (id: string) => rowOf(id).locator('[data-testid="row-kind-not-allowed"]');
+    const statusOf = (id: string) => rowOf(id).locator("[data-registration-hub-status]");
+    // The register link's readonly field - CopyLink's Copy/Open/QR row is present exactly when it is.
+    const linkOf = (id: string) => rowOf(id).locator("input[readonly]");
     await expect(flagOf(narrowedId)).toHaveText(ui("reg.hub.row.kindNotAllowed"), { timeout: 20_000 });
     await expect(flagOf(openId)).toHaveCount(0);
     await expect(flagOf(pairsId)).toHaveCount(0);
+    // m1: the row says what the public meets - Closed, and no link to share - while its window is open; the rows beside it
+    // (the positive pair) say Open now and keep their link.
+    await expect(statusOf(narrowedId)).toHaveAttribute("data-registration-hub-status", "closed");
+    await expect(statusOf(narrowedId)).toHaveText(ui("reg.hub.row.status.closed"));
+    await expect(linkOf(narrowedId)).toHaveCount(0);
+    for (const id of [openId, pairsId]) {
+      await expect(statusOf(id)).toHaveText(ui("reg.hub.row.status.open"));
+      await expect(linkOf(id)).toHaveCount(1);
+    }
     await screenshotAtWidths(page, testInfo, "02-hub-row-flagged", WIDTHS, async (p) => {
       await expect(flagOf(narrowedId)).toBeVisible();
       await expectNoHorizontalScroll(p);
@@ -180,10 +201,15 @@ test("a division narrowed after its registration was set up: the public card clo
     // The stored kind stays selected - never silently swapped - but is marked not allowed and cannot be picked again;
     // the only choice offered is the kind the division takes.
     await expect(select).toHaveValue("team");
+    // Fix round 1 (m6): the refused option shows the kind's own word; its accessible name carries "(not allowed)".
     expect(await optionsOf(select)).toEqual([
-      { value: "team", label: ui("reg.settings.entrant.notAllowedOption", { kind: teamName }), disabled: true },
+      { value: "team", label: teamName, disabled: true },
       { value: "individual", label: ui("reg.settings.entrant.individual"), disabled: false },
     ]);
+    await expect(select.locator('option[value="team"]')).toHaveAttribute(
+      "aria-label",
+      ui("reg.settings.entrant.notAllowedOption", { kind: teamName }),
+    );
     const hint = panel.getByTestId("entrant-kind-not-allowed");
     await expect(hint).toHaveText(ui("reg.settings.entrant.notAllowedHint", { kind: teamName }));
     await screenshotAtWidths(page, testInfo, "03-panel-kind-not-allowed", WIDTHS, async (p) => {
@@ -220,6 +246,8 @@ test("a division narrowed after its registration was set up: the public card clo
     const saved = await apiJson<{ entrant_kind: string }>(request, `/api/v1/divisions/${narrowedId}/registration-settings`, "GET");
     expect(saved.data?.entrant_kind).toBe("individual");
     await expect(flagOf(narrowedId)).toHaveCount(0, { timeout: 20_000 });
+    await expect(statusOf(narrowedId)).toHaveText(ui("reg.hub.row.status.open"), { timeout: 20_000 });
+    await expect(linkOf(narrowedId)).toHaveCount(1);
 
     // The public card opens, offering the kind the division takes.
     await toEntries();
@@ -230,4 +258,215 @@ test("a division narrowed after its registration was set up: the public card clo
   } finally {
     await anonCtx.close();
   }
+});
+
+// Fix round 1 (m6): the review ESTIMATED from a screenshot that the not-allowed label might clip at 320 in fr, es and nl.
+// Measured here instead, in the browser that draws it: a width:auto clone of the select holding only the option asks the
+// browser how wide the control must be to show that text whole - arrow, padding and border included - and that is held
+// against the select's own width. Every option is measured and written to fit.json; the refused one is asserted.
+// "individual" on a teams-only division is the longest such kind in every locale (and the likeliest legacy row, m5).
+// Measured before the fix: "{kind} (not allowed)" needed 219px of a 202px select in en already, so the option now shows
+// the kind's own word and the reason lives in the hint beneath it.
+test("the not-allowed option fits the entrant-type select at 320 in every locale, measured in the browser", async ({ page, request }, testInfo) => {
+  test.setTimeout(180_000);
+  const org = await activeOrg(page);
+  const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+    name: `Kinds Fit ${TAG}`,
+    visibility: "public",
+    ends_on: "2030-12-31",
+  });
+  expect(comp.status, JSON.stringify(comp.error)).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: `Squads ${TAG}`,
+    sport_key: "generic",
+    variant_key: "score",
+    config: GENERIC_CONFIG,
+  });
+  expect(div.status, JSON.stringify(div.error)).toBeLessThan(300);
+  const id = div.data!.id;
+  const put = await apiJson(request, `/api/v1/divisions/${id}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "individual",
+    capacity: 10,
+    fee_cents: 0,
+    form_fields: [],
+  });
+  expect(put.status, JSON.stringify(put.error)).toBeLessThan(300);
+  // Teams only, with no registration yet - the narrowing door allows it (I1 refuses only under live registrations).
+  const narrowed = await apiJson(request, `/api/v1/divisions/${id}`, "PATCH", {
+    config: { ...GENERIC_CONFIG, entrants: { kinds: ["team"], defaultKind: "team" } },
+  });
+  expect(narrowed.status, JSON.stringify(narrowed.error)).toBeLessThan(300);
+
+  const origin = new URL((testInfo.project.use.baseURL as string | undefined) ?? process.env.PLAYWRIGHT_BASE ?? "http://localhost:3000").origin;
+  await page.setViewportSize({ width: 320, height: 800 });
+  const fits: { locale: string; text: string; need: number; have: number; selected: boolean; probe: boolean }[] = [];
+  let asserted = 0;
+  try {
+    for (const loc of LOCALES) {
+      // `seazn_locale` is the explicit switcher pick and outranks the user's and the org's locale.
+      await page.context().addCookies([{ name: "seazn_locale", value: loc, url: origin }]);
+      await page.goto(routes.competitionRegistration(org.slug, comp.data!.slug), { waitUntil: "load" });
+      const panel = await openConfigPanel(page, id);
+      const select = panel.locator('[data-field="entrant_kind"]');
+      await expect(select).toHaveValue("individual");
+      const label = uiIn(loc, "divset.entrants.kind.individual");
+      // Also probed, not asserted (recorded for the report): the pre-fix label, and the offered "Individual (creates a
+      // player)" label every individual division shows - so the table says what clipped before and what still does.
+      const probes = [
+        uiIn(loc, "reg.settings.entrant.notAllowedOption", { kind: label }),
+        uiIn(loc, "reg.settings.entrant.individual"),
+      ];
+      const measured = await select.evaluate((el, extra) => {
+        const sel = el as HTMLSelectElement;
+        const fit = (text: string) => {
+          const probe = sel.cloneNode(false) as HTMLSelectElement;
+          const opt = document.createElement("option");
+          opt.textContent = text;
+          probe.appendChild(opt);
+          probe.style.cssText += ";width:auto;min-width:0;max-width:none;position:absolute;left:0;top:0;visibility:hidden";
+          sel.parentElement!.appendChild(probe);
+          const need = probe.getBoundingClientRect().width;
+          probe.remove();
+          return need;
+        };
+        const have = sel.getBoundingClientRect().width;
+        return [
+          ...Array.from(sel.options).map((opt, i) => {
+            const text = (opt.textContent ?? "").trim();
+            return { text, need: fit(text), have, selected: i === sel.selectedIndex, probe: false };
+          }),
+          ...extra.map((text) => ({ text, need: fit(text), have, selected: false, probe: true })),
+        ];
+      }, probes);
+      for (const m of measured) fits.push({ locale: loc, ...m });
+      const chosen = measured.find((m) => m.selected);
+      expect(chosen?.text, `${loc}: the selected option is the refused kind, in this locale's word`).toBe(label);
+      await expect(select.locator("option:checked")).toHaveAttribute(
+        "aria-label",
+        uiIn(loc, "reg.settings.entrant.notAllowedOption", { kind: label }),
+      );
+      await expect(panel.getByTestId("entrant-kind-not-allowed")).toHaveText(
+        uiIn(loc, "reg.settings.entrant.notAllowedHint", { kind: label }),
+      );
+      expect.soft(chosen!.need, `${loc} "${chosen!.text}" needs ${chosen!.need}px; the select is ${chosen!.have}px`).toBeLessThanOrEqual(chosen!.have);
+      const box = await select.boundingBox();
+      expect(box!.height, `${loc}: the 44px target`).toBeGreaterThanOrEqual(44);
+      await expectNoHorizontalScroll(page);
+      await panel.getByTestId("entrant-kind-not-allowed").scrollIntoViewIfNeeded();
+      await page.screenshot({ path: `${testInfo.outputPath()}/05-panel-not-allowed-${loc}-320.png` });
+      asserted++;
+    }
+  } finally {
+    await page.context().clearCookies({ name: "seazn_locale" });
+    writeFileSync(`${testInfo.outputPath()}/fit.json`, JSON.stringify(fits, null, 1));
+  }
+  expect(asserted, "every locale measured").toBe(LOCALES.length);
+});
+
+// Fix round 1 (I1, owner 2026-11-04; m2): a pending team registration holds "team", so the Entrants tab may not take team
+// out. The refusal travels server -> route -> client error -> the tab's reader, and the organiser reads it in their own
+// language with the kind and the count - never the server's English. Withdrawing the entry lets the SAME save land.
+test("the Entrants tab refuses to take out a kind a live registration holds, in the organiser's language, and saves once it is withdrawn", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  const org = await activeOrg(page);
+  const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+    name: `Kinds Guard ${TAG}`,
+    visibility: "public",
+    ends_on: "2030-12-31",
+  });
+  expect(comp.status, JSON.stringify(comp.error)).toBeLessThan(300);
+  const div = await apiJson<{ id: string; slug: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: `Guarded Teams ${TAG}`,
+    sport_key: "generic",
+    variant_key: "score",
+    config: GENERIC_CONFIG,
+  });
+  expect(div.status, JSON.stringify(div.error)).toBeLessThan(300);
+  const put = await apiJson(request, `/api/v1/divisions/${div.data!.id}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "team",
+    approval: "manual",
+    capacity: 10,
+    fee_cents: 0,
+    form_fields: [],
+  });
+  expect(put.status, JSON.stringify(put.error)).toBeLessThan(300);
+  // A real public sign-up (reach, not the thing under test): manual approval leaves it pending, with no entrant.
+  const entry = await apiJson<{ entries: { registration_id: string; status: string }[] }>(
+    request,
+    `/api/v1/public/orgs/${org.slug}/competitions/${comp.data!.slug}/register`,
+    "POST",
+    {
+      contact: { name: `Guard Captain ${TAG}`, email: `delivered+kinds-guard-${TAG}@resend.dev` },
+      privacy_consent: true,
+      entries: [
+        {
+          division_id: div.data!.id,
+          entrant_kind: "team",
+          team_name: `Guard FC ${TAG}`,
+          players: [{ full_name: `Guard Captain ${TAG}` }],
+          answers: {},
+        },
+      ],
+    },
+  );
+  expect(entry.status, JSON.stringify(entry.error)).toBeLessThan(300);
+  expect(entry.data!.entries[0]!.status, "premise: the entry is live and unseated").toBe("pending");
+
+  const origin = new URL((testInfo.project.use.baseURL as string | undefined) ?? process.env.PLAYWRIGHT_BASE ?? "http://localhost:3000").origin;
+  const entrantsUrl = `/o/${org.slug}/c/${comp.data!.slug}/d/${div.data!.slug}?tab=entrants`;
+  /** Open the folded Entrant kinds block, untick team, Save. */
+  const untickTeamAndSave = async (loc: (typeof LOCALES)[number]) => {
+    await page.goto(entrantsUrl, { waitUntil: "load" });
+    const title = uiIn(loc, "divset.entrants.kinds").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    await page.getByRole("button", { name: new RegExp(`^${title}`) }).click({ timeout: 20_000 });
+    const block = page.getByTestId("entrant-kinds");
+    await expect(block).toBeVisible();
+    const team = block.locator('[data-kind="team"]');
+    await expect(team).toHaveAttribute("aria-pressed", "true");
+    await team.click();
+    await expect(team).toHaveAttribute("aria-pressed", "false");
+    await block.getByRole("button", { name: uiIn(loc, "divset.entrants.save"), exact: true }).click();
+  };
+  const refusalIn = (loc: (typeof LOCALES)[number]) =>
+    uiIn(loc, "divset.err.registrationKindInUse.one", { kind: uiIn(loc, "divset.entrants.kind.team").toLocaleLowerCase() });
+
+  let refusals = 0;
+  try {
+    for (const loc of ["en", "fr"] as const) {
+      await page.context().addCookies([{ name: "seazn_locale", value: loc, url: origin }]);
+      await untickTeamAndSave(loc);
+      const error = page.getByTestId("entrant-kinds-error");
+      await expect(error).toHaveText(refusalIn(loc), { timeout: 20_000 });
+      await expect(error, `${loc}: not the server's English`).not.toContainText("live registration(s)");
+      await expect(page.getByTestId("entrant-kinds-notice")).toHaveCount(0);
+      if (loc === "en") {
+        await screenshotAtWidths(page, testInfo, "06-entrants-tab-kind-in-use", WIDTHS, async (p) => {
+          await error.scrollIntoViewIfNeeded();
+          await expect(error).toBeVisible();
+          await expectNoHorizontalScroll(p);
+        });
+      }
+      refusals++;
+    }
+  } finally {
+    await page.context().clearCookies({ name: "seazn_locale" });
+  }
+  expect(refusals).toBe(2);
+  // Nothing was written: the division still takes team.
+  const stored = await apiJson<{ config: { entrants?: unknown } }>(request, `/api/v1/divisions/${div.data!.id}`, "GET");
+  expect(stored.data?.config.entrants, "a refused save writes no override").toBeUndefined();
+
+  // The organiser does what the sentence says - withdraws the entry - and the same save lands.
+  const withdrawn = await apiJson(request, `/api/v1/registrations/${entry.data!.entries[0]!.registration_id}/withdraw`, "POST", {});
+  expect(withdrawn.status, JSON.stringify(withdrawn.error)).toBeLessThan(300);
+  await untickTeamAndSave("en");
+  await expect(page.getByTestId("entrant-kinds-notice")).toHaveText(ui("divset.entrants.saved"), { timeout: 20_000 });
+  await expect(page.getByTestId("entrant-kinds-error")).toHaveCount(0);
+  const after = await apiJson<{ config: { entrants?: { kinds: string[] } } }>(request, `/api/v1/divisions/${div.data!.id}`, "GET");
+  expect(after.data?.config.entrants?.kinds).not.toContain("team");
 });
