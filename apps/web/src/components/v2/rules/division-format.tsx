@@ -180,7 +180,8 @@ export function DivisionFormatDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [paywall, setPaywall] = useState<string | null>(null);
-  const url = `/api/v1/divisions/${divisionId}/stages`;
+  // The three PUTs spell their path out in full (no shared `url`): components/__tests__/api-v1-call-paths.test.ts reads each
+  // apiV1 target as a literal and checks it is an absolute /api path.
 
   function refused(err: unknown) {
     if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(String(err.extra.feature_key ?? ""));
@@ -203,10 +204,10 @@ export function DivisionFormatDialog({
     const body = drafts.map((d, i) => ({ ...d, seq: i + 1 }));
     setBusy(true);
     try {
-      const asked = await apiV1<FormatChangePreview>(`${url}?dry_run=1`, { method: "PUT", json: body });
+      const asked = await apiV1<FormatChangePreview>(`/api/v1/divisions/${divisionId}/stages?dry_run=1`, { method: "PUT", json: body });
       if (asked.token === null) {
         // Nothing generated: nothing to clear, so nothing to confirm.
-        await apiV1(url, { method: "PUT", json: body });
+        await apiV1(`/api/v1/divisions/${divisionId}/stages`, { method: "PUT", json: body });
         finish();
         return;
       }
@@ -228,7 +229,7 @@ export function DivisionFormatDialog({
     setBusy(true);
     try {
       const clear = preview.token === null ? "" : `?clear=${encodeURIComponent(preview.token)}`;
-      await apiV1(`${url}${clear}`, { method: "PUT", json: sent.body });
+      await apiV1(`/api/v1/divisions/${divisionId}/stages${clear}`, { method: "PUT", json: sent.body });
       finish();
     } catch (err) {
       // The board moved under the open confirm: the refusal carries the fresh counts, shown here for a second look.
