@@ -13,13 +13,14 @@ import {
 } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { ApiError } from "@/lib/client";
+import { isServerAnswer } from "@/lib/is-server-answer";
 import { ApiV1Error } from "@/lib/client-v1";
 import { msg, type MessageKey } from "@/lib/messages";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
-import { LOCALIZED_CONFIG_ISSUES, configIssueText, configIssuesOf, isServerAnswer, rulesWriteErrorText, settingsSaveErrorText } from "../config-issue-copy";
+import { LOCALIZED_CONFIG_ISSUES, configIssueText, configIssuesOf, rulesWriteErrorText, settingsSaveErrorText } from "../config-issue-copy";
 
 const invalid = (issues: unknown) => new ApiV1Error("invalid carrom config", 422, "CONFIG_INVALID", { issues });
 

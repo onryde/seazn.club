@@ -12,6 +12,7 @@ import {
   SHARE_NEEDS_DRAWS,
 } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
+import { isServerAnswer } from "@/lib/is-server-answer";
 import { ruleRefusalSentence } from "@/lib/rule-errors";
 import { divisionKindRefusalText } from "@/lib/entrant-kind-refusal";
 
@@ -76,17 +77,6 @@ export function configIssueText(issue: ConfigIssue, msg: Msg): string {
     if (found !== null) return found.groups === undefined ? msg(key) : msg(key, { ...found.groups });
   }
   return issue.message;
-}
-
-/** Did this error come back from the server? Both client wrappers' errors (`ApiError`, lib/client.ts, and `ApiV1Error`,
- *  lib/client-v1.ts) carry the HTTP `status` they were thrown for, as a number; the TypeError `fetch` rejects with when
- *  the request never leaves (offline, DNS, a dropped connection) has none. It is told apart by that SHAPE, never by the
- *  browser's words, which differ per browser and per language.
- *
- *  Structural on purpose: this module is also imported by server code (`configIssuesOf`), and both wrappers are
- *  `"use client"` - importing them here would turn them into client references in the server graph. */
-export function isServerAnswer(err: unknown): err is Error & { status: number } {
-  return err instanceof Error && typeof (err as { status?: unknown }).status === "number";
 }
 
 /** What a failed settings save says. A rule-lock refusal says itself first (`ruleRefusalSentence`); a CONFIG_INVALID that names its problems says them (all of them, in order); any
