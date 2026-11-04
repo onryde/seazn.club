@@ -1,7 +1,7 @@
 // A player who is not signed in cannot link Lichess from their personal match-room link.
 //
 // Staging, 2026-10-19. The match room's "Link Lichess" goes to /api/auth/lichess?org=<club>&next=<the room path>,
-// the room path being /shared/<club>/<comp>/<div>/fixtures/<id>/play?t=<match-room JWT>. Signed out, the start sends
+// the room path being /live/<club>/<comp>/<div>/fixtures/<id>/play?t=<match-room JWT>. Signed out, the start sends
 // the person to /login?next=<that whole URL, encoded again>, and the login page's form (it is a magic-link form)
 // POSTs that `next` to /api/auth/magic-link, which answered 400 {"error":"Invalid input","issues":[{"code":"too_big",
 // "maximum":500,"path":["next"]}]}. The `next` is the room link with its ~370-character token nested one level deep,
@@ -120,7 +120,7 @@ async function roomLink(slugs: Slugs = SLUGS) {
     roundOpenedAt: new Date().toISOString(),
   };
   const token = await mintMatchRoomToken(claims);
-  const selfPath = routes.sharedFixturePlay(slugs.org, slugs.comp, slugs.div, claims.fixtureId, token);
+  const selfPath = routes.publicFixturePlay(slugs.org, slugs.comp, slugs.div, claims.fixtureId, token);
   return { claims, token, selfPath, startHref: lichessLinkStartHref(slugs.org, selfPath) };
 }
 type RoomLink = Awaited<ReturnType<typeof roomLink>>;
@@ -326,10 +326,10 @@ async function magicLinkSignIn(email: string, next?: string) {
 describe("the real nested URL (no database)", () => {
   it("the room path the page hands the shell is the path the invite mail carries, and the start nests it exactly once", async () => {
     const link = await roomLink();
-    // page.tsx builds `${snapshot.links.fixture}/play?t=<token>`, and room.ts sets links.fixture to routes.sharedFixture.
+    // page.tsx builds `${snapshot.links.fixture}/play?t=<token>`, and room.ts sets links.fixture to routes.publicFixture.
     const claims = link.claims;
     expect(link.selfPath).toBe(
-      `${routes.sharedFixture(SLUGS.org, SLUGS.comp, SLUGS.div, claims.fixtureId)}/play?t=${encodeURIComponent(link.token)}`,
+      `${routes.publicFixture(SLUGS.org, SLUGS.comp, SLUGS.div, claims.fixtureId)}/play?t=${encodeURIComponent(link.token)}`,
     );
     const loginNext = await startSignedOut(link.startHref);
     expect(loginNext, "the login URL carries the whole start, query included").toBe(link.startHref);

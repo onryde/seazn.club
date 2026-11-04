@@ -21,7 +21,7 @@ const doc = {
   matches: [
     {
       fixtureId: "f1",
-      href: "/shared/riverside/cup/premier/fixtures/f1",
+      href: "/live/riverside/cup/premier/fixtures/f1",
       divisionName: "Premier",
       divisionSlug: "premier",
       scheduledAt: null,

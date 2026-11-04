@@ -458,7 +458,7 @@ export async function submitRegistrationGroup(
 
   const first = divisionCtxById.get(distinctDivisionIds[0]!)!;
   for (const dc of divisionCtxById.values()) {
-    // A cart is scoped to ONE competition (route: /shared/[org]/[comp]/register)
+    // A cart is scoped to ONE competition (route: /live/[org]/[comp]/register)
     // — cross-competition/cross-org division ids are rejected the same way
     // old submitRegistration 404'd an org/comp slug mismatch.
     if (

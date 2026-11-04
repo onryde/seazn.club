@@ -63,7 +63,7 @@ const ORDINARY_PAGES = [
   `${ORIGIN}/claim/`,
   `${ORIGIN}/magic-link`,
   `${ORIGIN}/magic-link?next=%2Fdashboard`,
-  `${ORIGIN}/shared/chess-club/autumn-open/open/fixtures/00000000-0000-4000-8000-000000000003`,
+  `${ORIGIN}/live/chess-club/autumn-open/open/fixtures/00000000-0000-4000-8000-000000000003`,
   `${ORIGIN}/o/acme/c/spring/d/open/join/claim`,
   "/dashboard",
   "/",

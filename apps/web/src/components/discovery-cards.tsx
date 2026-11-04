@@ -11,6 +11,7 @@ import type { Locale } from "@/lib/i18n-constants";
 // drifted from the onboarding wizard's (F8). `lib/sport-emoji.ts` is the one
 // source, and its test reds when the sport catalog grows past it.
 import { SPORT_EMOJI, sportEmoji } from "@/lib/sport-emoji";
+import { routes } from "@/lib/routes";
 export { SPORT_EMOJI, sportEmoji };
 
 function formatDates(startsOn: string | null, endsOn: string | null, lang: Locale): string | null {
@@ -41,7 +42,7 @@ function jsonLd(entry: DiscoveryEntry): string {
         }
       : {}),
     organizer: { "@type": "Organization", name: entry.org_name },
-    url: `https://seazn.club/shared/${entry.org_slug}/${entry.slug}`,
+    url: `https://seazn.club${routes.publicHub(entry.org_slug, entry.slug)}`,
   });
 }
 
@@ -68,7 +69,7 @@ export function LiveNowStrip({
           {fixtures.map((f) => (
             <Link
               key={f.id}
-              href={`/shared/${f.org_slug}/${f.comp_slug}/${f.division_slug}/fixtures/${f.id}`}
+              href={routes.publicFixture(f.org_slug, f.comp_slug, f.division_slug, f.id)}
               className="card block p-4 transition hover:border-purple-300 hover:shadow-md"
             >
               <p className="mb-1 flex items-center gap-2 text-xs text-slate-500">
@@ -102,7 +103,7 @@ export function DiscoveryCard({
   const location = [entry.city, entry.country].filter(Boolean).join(", ");
   return (
     <Link
-      href={`/shared/${entry.org_slug}/${entry.slug}`}
+      href={routes.publicHub(entry.org_slug, entry.slug)}
       className="card relative block overflow-hidden p-5 transition hover:border-purple-300 hover:shadow-md"
     >
       {withJsonLd && (

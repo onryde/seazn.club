@@ -31,7 +31,7 @@ export const NEW_COMPETITION_STATUS = UNLISTED_STATUS;
 /**
  * Visibilities a stranger can OPEN by direct link — the cap's "publicly
  * READABLE", not the listing rule's "LISTED". `private` is outside it: the view
- * does not admit it and the `/shared/...` page 404s.
+ * does not admit it and the `/live/...` page 404s.
  *
  * Lives here, and is re-exported by `server/usecases/entitlement-freeze.ts`
  * (which keeps the long rationale for why the cap counts this set), because the

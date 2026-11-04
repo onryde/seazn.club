@@ -144,7 +144,7 @@ describe("resolvePostSubmitNavigation", () => {
       "riverside",
       "summer-smash",
     );
-    expect(nav).toEqual({ kind: "status", url: "/shared/riverside/summer-smash/register/status?rid=g1&token=tok" });
+    expect(nav).toEqual({ kind: "status", url: "/live/riverside/summer-smash/register/status?rid=g1&token=tok" });
   });
 
   it("URL-encodes the access token in the status link", () => {

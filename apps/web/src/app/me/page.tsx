@@ -430,7 +430,7 @@ export default async function MePage({
                       </p>
                       {s.public_card && (
                         <Link
-                          href={`/shared/${s.org_slug}/${s.competition_slug}/players/${s.person_id}`}
+                          href={routes.publicPlayer(s.org_slug, s.competition_slug, s.person_id)}
                           className="text-xs font-medium text-purple-700 hover:underline"
                         >
                           {t(ui, "me.stats.publicProfile")}
@@ -498,7 +498,7 @@ function FixtureContext({ f }: { f: MyFixture }) {
 /** Spectator link — only competitions with a public page get one. */
 function publicHref(f: MyFixture): string | null {
   if (f.competition_visibility !== "public" && f.competition_visibility !== "unlisted") return null;
-  return routes.sharedFixture(f.org_slug, f.competition_slug, f.division_slug, f.id);
+  return routes.publicFixture(f.org_slug, f.competition_slug, f.division_slug, f.id);
 }
 
 /** The stored headline, home first. */

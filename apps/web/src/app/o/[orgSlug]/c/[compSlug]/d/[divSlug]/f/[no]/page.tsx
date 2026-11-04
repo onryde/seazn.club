@@ -48,6 +48,7 @@ import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
 import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
 import { doubleWalkoverRefused } from "@/lib/double-walkover-next-match";
+import { routes } from "@/lib/routes";
 
 /** A search param as `URLSearchParams.get` reads it: the first value of a repeated key. */
 const first = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
@@ -329,7 +330,7 @@ export default async function FixturePage({
             // Share needs a page strangers can open (v3/10 #2) — private
             // competitions have none.
             competition.visibility !== "private"
-              ? `/shared/${orgSlug}/${competition.slug}/${division.slug}/fixtures/${fixture.id}`
+              ? routes.publicFixture(orgSlug, competition.slug, division.slug, fixture.id)
               : null
           }
           scorePadV2={scorePadV2}

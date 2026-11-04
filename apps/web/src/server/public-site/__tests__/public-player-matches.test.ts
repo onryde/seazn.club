@@ -905,7 +905,7 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
     expect(line.line).toBe(`${bat!.runs} (${bat!.balls}) & ${bowl!.wickets}/${bowl!.runs}`);
     expect(line.result).toBe("won");
     expect(line).toMatchObject({
-      href: `/shared/${scene.orgSlug}/${scene.compSlug}/${scene.cricketSlug}/fixtures/${scene.won.fixtureId}`,
+      href: `/live/${scene.orgSlug}/${scene.compSlug}/${scene.cricketSlug}/fixtures/${scene.won.fixtureId}`,
       divisionName: "T20 Open",
       divisionSlug: scene.cricketSlug,
       opponentName: "Rovers",
@@ -1117,7 +1117,7 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
     const chandra = (await linesFor(scene.persons.chandra)).find((l) => l.fixtureId === scene.genericFixtureId)!;
     expect(chandra).toMatchObject({ line: "1 — 2", result: "lost" });
     expect(line.href).toBe(
-      `/shared/${scene.orgSlug}/${scene.compSlug}/${scene.genericSlug}/fixtures/${scene.genericFixtureId}`,
+      `/live/${scene.orgSlug}/${scene.compSlug}/${scene.genericSlug}/fixtures/${scene.genericFixtureId}`,
     );
   });
 

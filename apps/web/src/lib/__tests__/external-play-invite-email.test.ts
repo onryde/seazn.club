@@ -22,7 +22,7 @@ const ARGS = {
   opponentName: "Alice Opponent",
   roundNo: 3,
   deadlineLabel: "Wed 1 Oct, 12:30 UTC",
-  fixtureUrl: "https://example.test/shared/org/comp/div/fixtures/abc/play?t=TOKEN-123_abc",
+  fixtureUrl: "https://example.test/live/org/comp/div/fixtures/abc/play?t=TOKEN-123_abc",
 };
 const OPENS = "Wed 1 Oct, 12:20 UTC";
 

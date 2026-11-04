@@ -27,7 +27,7 @@ const MARKED = {
   "organiser console division page":
     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
   "public division page":
-    "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
+    "src/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
   "embed widget": "src/app/embed/divisions/[id]/[widget]/page.tsx",
 } as const;
 

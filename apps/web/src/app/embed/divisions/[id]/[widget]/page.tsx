@@ -26,10 +26,11 @@ import { msgFor } from "@/lib/messages-i18n";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { byPoolOrder } from "@/lib/pool-order";
 import { poolLabel } from "@/lib/pool-label";
+import { routes } from "@/lib/routes";
 
 export const revalidate = 30;
 
-// ISR (task-8): same fix as the /shared tree — empty-array generateStaticParams
+// ISR (task-8): same fix as the /live tree — empty-array generateStaticParams
 // is required for on-demand ISR on a dynamic segment in this Next version
 // (docs: api-reference/functions/generate-static-params.md).
 export async function generateStaticParams() {
@@ -98,7 +99,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
   // A pool is named from its KEY in the org's locale, never by its stored
   // English name (`lib/pool-label.ts`).
   const poolKey = new Map(pools.map((p) => [p.id, p.key]));
-  const publicPath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
+  const publicPath = routes.publicHub(org.slug, competition.slug, division.slug);
 
   // P6 fix round 1, finding #2 (CRITICAL) — same treatment as the public
   // division page: the org's own default_locale, never resolveLocale()

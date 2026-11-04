@@ -35,7 +35,7 @@ const policyKeys = (h: Record<string, string>) => Object.keys(h).filter((k) => k
 // joins with `audio: false`) and no location, anywhere.
 const ROOM = "camera=(self), microphone=(), geolocation=()";
 const ELSEWHERE = "camera=(), microphone=(), geolocation=()";
-const ROOM_PATH = routes.sharedFixturePlay("club", "spring-open", "open", "0b9a4c1e-5d2f-4c1a-9e1e-1f2a3b4c5d6e");
+const ROOM_PATH = routes.publicFixturePlay("club", "spring-open", "open", "0b9a4c1e-5d2f-4c1a-9e1e-1f2a3b4c5d6e");
 
 describe("Permissions-Policy (T17B fix 1): the camera is the match room's, and only the room's", () => {
   it("the room's path is served camera=(self) — one Permissions-Policy header, never a second, stricter one beside it — and keeps every other security header", async () => {
@@ -50,14 +50,14 @@ describe("Permissions-Policy (T17B fix 1): the camera is the match room's, and o
   it("every other path keeps the camera off: the site, the board's own public page, the arbiter panel (it only receives), an embed, the room's API, and paths that merely look like the room — counted", async () => {
     const others = [
       "/",
-      "/shared/club/spring-open/open/fixtures/0b9a4c1e-5d2f-4c1a-9e1e-1f2a3b4c5d6e",
-      routes.sharedFixturePlay("club", "spring-open", "open", "f1").replace("/play", "/players"),
+      "/live/club/spring-open/open/fixtures/0b9a4c1e-5d2f-4c1a-9e1e-1f2a3b4c5d6e",
+      routes.publicFixturePlay("club", "spring-open", "open", "f1").replace("/play", "/players"),
       "/o/club/c/spring-open/d/open/arbiter",
       "/embed/club/spring-open",
       "/api/v1/fixtures/0b9a4c1e-5d2f-4c1a-9e1e-1f2a3b4c5d6e/external-play/room",
       `${ROOM_PATH}/extra`,
       `${ROOM_PATH}x`,
-      "/shared/club/spring-open/fixtures/f1/play",
+      "/live/club/spring-open/fixtures/f1/play",
     ];
     let checked = 0;
     for (const path of others) {

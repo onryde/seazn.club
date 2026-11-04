@@ -628,7 +628,7 @@ export function StandingsTableView({
                             opts into browser hyphenation (owner ruling (a),
                             2026-09-24: "Northgat / e BC" broke mid-letter at
                             62px), by the rules of `<html lang>` — the org's
-                            locale, set by the /shared org layout. Safari
+                            locale, set by the /live org layout. Safari
                             (WebKit) draws "North- / gate"; Chromium never
                             hyphenates a word that starts with a capital, so
                             there `break-words` stays the fallback — which is

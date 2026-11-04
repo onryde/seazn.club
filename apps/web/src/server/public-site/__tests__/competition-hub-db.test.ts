@@ -234,7 +234,7 @@ describe.skipIf(!HAS_DB)("loadCompetitionHub — against real Postgres", () => {
     for (const match of doc.matches) {
       expect(match.divisionSlug).toBe(scene.divisionSlug);
       expect(match.href).toBe(
-        `/shared/${scene.orgSlug}/${scene.compSlug}/${scene.divisionSlug}/fixtures/${match.fixtureId}`,
+        `/live/${scene.orgSlug}/${scene.compSlug}/${scene.divisionSlug}/fixtures/${match.fixtureId}`,
       );
       // Names come from the masked entrant read, never a raw column, and are
       // never blank.
@@ -253,7 +253,7 @@ describe.skipIf(!HAS_DB)("loadCompetitionHub — against real Postgres", () => {
       "Red Rockets",
     ]);
     expect(doc.tables[0]!.fullHref).toBe(
-      `/shared/${scene.orgSlug}/${scene.compSlug}/${scene.divisionSlug}?tab=standings`,
+      `/live/${scene.orgSlug}/${scene.compSlug}/${scene.divisionSlug}?tab=standings`,
     );
   });
 
@@ -590,7 +590,7 @@ describe.skipIf(!HAS_DB)("loadCompetitionHub — squads, bans and division prose
 
     const doc = (await loadCompetitionHub(scene.orgSlug, competition.slug))!;
     expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
-    const base = `/shared/${scene.orgSlug}/${competition.slug}`;
+    const base = `/live/${scene.orgSlug}/${competition.slug}`;
     const team = (id: string) => doc.teams.find((t) => t.entrantId === id)!;
 
     expect(team(alpha).members).toEqual([

@@ -1,0 +1,129 @@
+export const dynamic = "force-dynamic";
+// Public register flow (RS006 — design doc
+// `2026-08-16-registration-redesign-design.md` §4). Server component
+// wrapper: resolves the existence/visibility gate and fetches the register
+// panel data exactly as the closed-state stub did, then hands it to the
+// client stepper (register-stepper.tsx) for the interactive part. A
+// competition with NO enabled divisions keeps the closed/"not open" state
+// this route has shown since the RS001 demolition — register-page-closed
+// test.tsx pins that exact markup, unchanged by this session.
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import type { Metadata } from "next";
+import { publicRegistrationInfo } from "@/server/usecases/registrations";
+import { HttpError } from "@/lib/errors";
+import { resolveLocale } from "@/lib/resolve-locale";
+import { getDictionary, t } from "@/lib/i18n";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import { RegisterStepper } from "@/components/public-site/register/register-stepper";
+import type { RegisterLichessState } from "@/components/public-site/register/register-lichess-card";
+import { getCurrentUser } from "@/lib/auth";
+import { lichessFlashCode } from "@/lib/lichess-link";
+import { lichessConfigured } from "@/lib/oauth";
+import { getLichessLink, lichessGrantPlays } from "@/server/usecases/external-accounts";
+import { routes } from "@/lib/routes";
+
+type Props = {
+  params: Promise<{ orgSlug: string; competitionSlug: string }>;
+  // RS007's join-link deep-link (`?join=<CODE>`, design §4) — read here so
+  // the seam is real, not built: RegisterStepper accepts and ignores it
+  // (see that file's header) until RS007 lands the join flow.
+  searchParams: Promise<{ join?: string; lichess?: string }>;
+};
+
+/** I5 (T16 fix round 1): this viewer's Lichess link state for the consent step's card — read ONLY when a division
+ *  plays online (`online_play`, true only while the club is offered online chess), so no other registration reads the
+ *  session or a link. `lichess` is the outcome a return from the link start carried (lib/lichess-link.ts); anything
+ *  that is not one of ours is ignored. */
+async function lichessStateFor(
+  divisions: readonly { online_play?: boolean }[],
+  flash: string | undefined,
+): Promise<RegisterLichessState | null> {
+  if (!divisions.some((d) => d.online_play === true)) return null;
+  const user = await getCurrentUser();
+  const link = user ? await getLichessLink(user.id) : null;
+  return {
+    configured: lichessConfigured(),
+    linkedUsername: link?.username ?? null,
+    // The seat gate's own predicate (and `/me`'s): a link it refuses is refused at registration too, so the card says
+    // "reconnect" up front instead of ticking a link the submit then turns away.
+    needsReconsent: link !== null && !lichessGrantPlays(link),
+    flash: lichessFlashCode(flash),
+  };
+}
+
+export const metadata: Metadata = { robots: { index: false, follow: false } };
+
+export default async function RegisterPage({ params, searchParams }: Props) {
+  const { orgSlug, competitionSlug } = await params;
+  const { join, lichess } = await searchParams;
+  // Existence/visibility check only — still the real gate a bad slug hit
+  // before (competitions.visibility in public/unlisted, org active).
+  let info;
+  try {
+    info = await publicRegistrationInfo(orgSlug, competitionSlug);
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) notFound();
+    throw err;
+  }
+
+  const locale = await resolveLocale();
+  const ui = await getDictionary(locale, "ui");
+
+  // `divisions` is filtered on rs.enabled only (registrations.ts) — a
+  // division can be enabled but window-closed/payments-unavailable, so
+  // `.length === 0` alone let an all-closed competition fall through to the
+  // live stepper (fix wave finding #1: stranded on ENTRIES behind a generic
+  // "add an entry" error, never told registration had closed). `.every(!open)`
+  // is true both for zero divisions AND for one-or-more that are all
+  // closed — the empty-array case is vacuously true, so this subsumes the
+  // original check rather than adding a second branch.
+  if (info.divisions.every((d) => !d.open)) {
+    return (
+      <DictProvider dict={ui} locale={locale}>
+        <div className="mx-auto max-w-2xl">
+          <p className="text-xs text-ink-muted">
+            <Link
+              href={routes.publicHub(orgSlug, competitionSlug)}
+              className="hover:text-accent-strong hover:underline"
+            >
+              {info.competition.name}
+            </Link>{" "}
+            / {t(ui, "register.title")}
+          </p>
+          <h1 className="mt-1 font-display text-4xl font-bold uppercase tracking-tight text-ink">
+            {t(ui, "register.title")}
+          </h1>
+          <p className="mt-4 text-sm text-zinc-500">{t(ui, "register.notOpen")}</p>
+        </div>
+      </DictProvider>
+    );
+  }
+
+  return (
+    <DictProvider dict={ui} locale={locale}>
+      <div className="mx-auto max-w-4xl">
+        <p className="text-xs text-ink-muted">
+          <Link
+            href={routes.publicHub(orgSlug, competitionSlug)}
+            className="hover:text-accent-strong hover:underline"
+          >
+            {info.competition.name}
+          </Link>{" "}
+          / {t(ui, "register.title")}
+        </p>
+        <h1 className="mt-1 mb-4 font-display text-4xl font-bold uppercase tracking-tight text-ink">
+          {t(ui, "register.title")}
+        </h1>
+        <RegisterStepper
+          orgSlug={orgSlug}
+          competitionSlug={competitionSlug}
+          info={info}
+          locale={locale}
+          joinCode={join ?? null}
+          lichess={await lichessStateFor(info.divisions, lichess)}
+        />
+      </div>
+    </DictProvider>
+  );
+}

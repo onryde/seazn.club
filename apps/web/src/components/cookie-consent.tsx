@@ -15,12 +15,13 @@ import {
 import { readActiveLocale, clientCommon } from "@/lib/client-dict";
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { subscribeToStorage } from "@/lib/use-client-snapshot";
+import { isPublicHubPath } from "@/lib/routes";
 
 /** The one route prefix that renders no chrome at all. Named rather than
  *  inlined so a future overlay route cannot forget it. */
 const OVERLAY_SEGMENT = "/overlay/";
 
-/** The kiosk board's own last segment (`/shared/<org>/<comp>[/<div>]/present`). */
+/** The kiosk board's own last segment (`/live/<org>/<comp>[/<div>]/present`). */
 const KIOSK_SEGMENT = "present";
 
 /**
@@ -36,12 +37,12 @@ const KIOSK_SEGMENT = "present";
  * A visitor who taps through to the hub gets the banner there, as before.
  *
  * Matched on the SHAPE of the path, not a bare suffix: a competition slugged
- * "present" is `/shared/<org>/present`, a hub page that must keep its banner.
+ * "present" is `/live/<org>/present`, a hub page that must keep its banner.
  */
 function isKioskBoard(pathname: string | null | undefined): boolean {
   const parts = pathname?.split("/").filter(Boolean) ?? [];
-  // shared / org / comp / present, or shared / org / comp / division / present
-  return parts[0] === "shared" && parts.at(-1) === KIOSK_SEGMENT && (parts.length === 4 || parts.length === 5);
+  // live / org / comp / present, or live / org / comp / division / present
+  return isPublicHubPath(pathname ?? "") && parts.at(-1) === KIOSK_SEGMENT && (parts.length === 4 || parts.length === 5);
 }
 
 const noPromptOnServer = () => false;

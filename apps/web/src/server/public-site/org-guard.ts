@@ -1,6 +1,6 @@
-// The /shared org door (doc 09 §1), shared by the two org layouts: the
-// chrome one (`(public)/shared/[orgSlug]/layout.tsx`, every public page) and
-// the bare kiosk one (`(public)/shared/(kiosk)/[orgSlug]/layout.tsx`, the
+// The /live org door (doc 09 §1), shared by the two org layouts: the
+// chrome one (`(public)/live/[orgSlug]/layout.tsx`, every public page) and
+// the bare kiosk one (`(public)/live/(kiosk)/[orgSlug]/layout.tsx`, the
 // /present boards). One copy, so the two trees cannot drift apart on who 404s.
 //
 // Reserved slugs 404 before the DB is touched; a missing org 404s identically
@@ -9,7 +9,7 @@
 // The two trees diverge on exactly ONE thing, deliberately (K fix round, F2):
 // WHO answers for an org slug that nothing live matches. A layout only ever
 // receives its own param, so the redirect it can build is `sharedRenameTarget(
-// orgSlug)` = `/shared/<new>` — and `/shared/<old>/<comp>/present` was measured
+// orgSlug)` = `/live/<new>` — and `/live/<old>/<comp>/present` was measured
 // landing on the org hub instead of the board, which kills a printed or QR'd
 // kiosk URL on a rename. The kiosk layout therefore takes `publicOrgOrNull` and
 // decides nothing; its board pages hold the whole path and redirect with the

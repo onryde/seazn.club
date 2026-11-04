@@ -107,7 +107,7 @@ describe.skipIf(!HAS_DB)("Your board ← the real lobby route", () => {
     expect(off.html).toContain('data-state="online_chess_off"');
     // No door into a room; D14's Player home link is in every state, so "no <a> at all" no longer holds.
     expect(off.html).not.toContain('data-testid="your-board-link"');
-    expect(off.html).not.toContain('="/shared/');
+    expect(off.html).not.toContain('="/live/');
     expect(off.html).toContain('data-testid="your-board-home"');
 
     await gameOnFile(s);

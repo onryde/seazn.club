@@ -107,13 +107,13 @@ const EXEMPT: readonly Exemption[] = [
     via: [{ file: "src/server/public-site/competition-hub.ts", decl: "hubSides" }],
   },
   {
-    file: "src/app/(public)/shared/[orgSlug]/[competitionSlug]/poster.pdf/route.ts",
+    file: "src/app/(public)/live/[orgSlug]/[competitionSlug]/poster.pdf/route.ts",
     fn: "seatText", sites: 1,
     reason: "buildDrawModel's `seatText` names only a seat with no id, after `id ?? unseatedForfeitLoser(...)`",
     via: [{ file: "src/lib/poster-draw.ts", decl: "buildDrawModel" }],
   },
   {
-    file: "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
+    file: "src/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
     fn: "DivisionHomePage", sites: 2,
     reason: "`slotLabels` feeds <Schedule>/<Bracket>, which ask the reader before reading it",
     via: PUBLIC_VIA,

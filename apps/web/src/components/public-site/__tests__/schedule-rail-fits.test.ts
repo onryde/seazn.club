@@ -49,7 +49,7 @@ const SCHEDULE_SRC = readFileSync(path.join(HERE, "../schedule.tsx"), "utf8");
 
 // The faces the rail actually paints in, filed by family and CSS weight.
 // `font-display` resolves to `var(--ps-font-display, …)` (globals.css
-// `@theme inline`), which both the /shared org layout and the /embed layout
+// `@theme inline`), which both the /live org layout and the /embed layout
 // set to Barlow Condensed; the rest of the rail inherits the body sans, Geist.
 // `next/font` fetches both at build time and commits nothing, so these are the
 // repo's own copies of the faces the build ships (provenance and the accepted

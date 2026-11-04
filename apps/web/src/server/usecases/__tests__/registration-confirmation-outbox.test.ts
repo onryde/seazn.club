@@ -254,7 +254,7 @@ async function tickNow(ids: string[]): Promise<void> {
 }
 
 const statusUrlOf = (w: Pick<World, "orgSlug" | "competition">, groupId: string, token: string): string =>
-  `${ORIGIN}/shared/${w.orgSlug}/${w.competition.slug}/register/status?rid=${groupId}&token=${encodeURIComponent(token)}`;
+  `${ORIGIN}/live/${w.orgSlug}/${w.competition.slug}/register/status?rid=${groupId}&token=${encodeURIComponent(token)}`;
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // 1. The submit

@@ -107,13 +107,13 @@ const start = (next?: string) => new Request(`http://localhost${lichessLinkStart
 
 describe("GET /api/auth/lichess — start", () => {
   it("redirects with code_challenge S256 and stores verifier + state + next cookies", async () => {
-    const res = await GET(start("/shared/o/c/d/fixtures/f1/play"));
+    const res = await GET(start("/live/o/c/d/fixtures/f1/play"));
     const loc = new URL(res.headers.get("location")!);
     expect(loc.origin + loc.pathname).toBe("https://lichess.org/oauth");
     expect(loc.searchParams.get("code_challenge_method")).toBe("S256");
     expect(loc.searchParams.get("code_challenge")).toBe(pkceChallenge(cookieJar.get(VERIFIER_COOKIE)!));
     expect(loc.searchParams.has("client_secret")).toBe(false);
-    expect(cookieJar.get(NEXT_COOKIE)).toBe("/shared/o/c/d/fixtures/f1/play");
+    expect(cookieJar.get(NEXT_COOKIE)).toBe("/live/o/c/d/fixtures/f1/play");
   });
 
   it("asks for exactly board:play, challenge:write and challenge:read — the grant that submits moves and recovers a crashed create", async () => {
@@ -139,9 +139,9 @@ describe("GET /api/auth/lichess — start", () => {
   it("I5: a registration's own path is kept as next; an off-site one in its place is dropped", async () => {
     const back = registerReturnPath("club", "autumn-rapid", "AB12");
     await GET(start(back));
-    expect(cookieJar.get(NEXT_COOKIE)).toBe("/shared/club/autumn-rapid/register?join=AB12");
+    expect(cookieJar.get(NEXT_COOKIE)).toBe("/live/club/autumn-rapid/register?join=AB12");
     let checked = 0;
-    for (const hostile of ["https://evil.example/shared/club/autumn-rapid/register", "//evil.example/register", "/\\evil.example", "/\tevil", "javascript:alert(1)"]) {
+    for (const hostile of ["https://evil.example/live/club/autumn-rapid/register", "//evil.example/register", "/\\evil.example", "/\tevil", "javascript:alert(1)"]) {
       cookieJar.clear();
       const res = await GET(start(hostile));
       expect(new URL(res.headers.get("location")!).origin, hostile).toBe("https://lichess.org");
@@ -299,8 +299,8 @@ describe("GET /api/auth/lichess — online chess must be offered to the club", (
     vi.stubEnv("LICHESS_CLIENT_ID", undefined);
     flagIs(FLAG_STATES[0]!);
     const cases: [string | undefined, { pathname: string; query: Record<string, string> }][] = [
-      ["/shared/o/c/d/fixtures/f1/play", { pathname: "/shared/o/c/d/fixtures/f1/play", query: { lichess: "not_configured" } }],
-      ["/shared/o/c/d/fixtures/f1/play?t=tok", { pathname: "/shared/o/c/d/fixtures/f1/play", query: { t: "tok", lichess: "not_configured" } }],
+      ["/live/o/c/d/fixtures/f1/play", { pathname: "/live/o/c/d/fixtures/f1/play", query: { lichess: "not_configured" } }],
+      ["/live/o/c/d/fixtures/f1/play?t=tok", { pathname: "/live/o/c/d/fixtures/f1/play", query: { t: "tok", lichess: "not_configured" } }],
       [undefined, { pathname: "/me", query: { lichess: "not_configured" } }],
     ];
     let checked = 0;
@@ -318,7 +318,7 @@ describe("GET /api/auth/lichess/callback", () => {
   it("sends code_verifier (no secret), reads account, KEEPS the token, returns to next", async () => {
     cookieJar.set(STATE_COOKIE, "st");
     cookieJar.set(VERIFIER_COOKIE, "ver");
-    cookieJar.set(NEXT_COOKIE, "/shared/o/c/d/fixtures/f1/play");
+    cookieJar.set(NEXT_COOKIE, "/live/o/c/d/fixtures/f1/play");
     const calls: [string, RequestInit][] = [];
     vi.stubGlobal(
       "fetch",
@@ -350,7 +350,7 @@ describe("GET /api/auth/lichess/callback", () => {
         token: "tok",
       }),
     );
-    expect(path(res.headers.get("location")!).pathname).toBe("/shared/o/c/d/fixtures/f1/play");
+    expect(path(res.headers.get("location")!).pathname).toBe("/live/o/c/d/fixtures/f1/play");
     // The verifier/state/next cookies are single-use.
     expect(cookieJar.has(STATE_COOKIE)).toBe(false);
     expect(cookieJar.has(VERIFIER_COOKIE)).toBe(false);
@@ -500,7 +500,7 @@ describe("GET /api/auth/lichess/callback", () => {
   it("already_linked lands with the code alone: next's own query plus lichess=, never the Lichess username or any id of the other account", async () => {
     cookieJar.set(STATE_COOKIE, "st");
     cookieJar.set(VERIFIER_COOKIE, "ver");
-    cookieJar.set(NEXT_COOKIE, "/shared/o/c/d/fixtures/f1/play?t=tok.en");
+    cookieJar.set(NEXT_COOKIE, "/live/o/c/d/fixtures/f1/play?t=tok.en");
     upsertLichessLink.mockRejectedValueOnce(
       new HttpError(409, "That Lichess account is already linked to a different Seazn account (user u-other-9, mallory@other.example).", "LICHESS_ALREADY_LINKED"),
     );
@@ -518,7 +518,7 @@ describe("GET /api/auth/lichess/callback", () => {
 
     const raw = res.headers.get("location")!;
     const loc = path(raw);
-    expect(loc.pathname).toBe("/shared/o/c/d/fixtures/f1/play");
+    expect(loc.pathname).toBe("/live/o/c/d/fixtures/f1/play");
     expect([...loc.searchParams.keys()].sort(), "the personal link's own t= and the outcome, nothing else").toEqual(["lichess", "t"]);
     expect(loc.searchParams.get("t")).toBe("tok.en");
     expect(loc.searchParams.get("lichess")).toBe("already_linked");
@@ -536,7 +536,7 @@ describe("GET /api/auth/lichess/callback", () => {
       cookieJar.clear();
       cookieJar.set(STATE_COOKIE, "st");
       cookieJar.set(VERIFIER_COOKIE, "ver");
-      cookieJar.set(NEXT_COOKIE, "/shared/o/c/d/fixtures/f1/play");
+      cookieJar.set(NEXT_COOKIE, "/live/o/c/d/fixtures/f1/play");
       if (value === undefined) vi.stubEnv("LICHESS_TOKEN_KEK", undefined as unknown as string);
       else vi.stubEnv("LICHESS_TOKEN_KEK", value);
       upsertLichessLink.mockImplementationOnce(async (_userId: string, link: { token: string }) => {
@@ -560,7 +560,7 @@ describe("GET /api/auth/lichess/callback", () => {
       expect(res.status, `${label}: a redirect, never a 500`).toBeGreaterThanOrEqual(300);
       expect(res.status, label).toBeLessThan(400);
       const loc = path(res.headers.get("location")!);
-      expect(loc.pathname, `${label}: back where the flow started`).toBe("/shared/o/c/d/fixtures/f1/play");
+      expect(loc.pathname, `${label}: back where the flow started`).toBe("/live/o/c/d/fixtures/f1/play");
       expect(loc.searchParams.get("lichess"), label).toBe("key_unavailable");
       expect(calls.some(([u, i]) => u.endsWith("/api/token") && i.method === "DELETE"), `${label}: the unstored grant is revoked`).toBe(true);
       expect(logged.error, `${label}: logged once`).toHaveBeenCalledTimes(1);

@@ -10,7 +10,7 @@ import { join } from "node:path";
 const DIR = join(__dirname, "..");
 const PAGE = join(
   __dirname,
-  "../../../../app/(public)/shared/(kiosk)/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/play/page.tsx",
+  "../../../../app/(public)/live/(kiosk)/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/play/page.tsx",
 );
 const KEY = /"((?:externalPlay|onlineChess|method)\.[A-Za-z0-9_.]+)"/g;
 

@@ -1,7 +1,7 @@
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 
-// Meta-description builders for the public /shared tree. A page must always
+// Meta-description builders for the public /live tree. A page must always
 // return a non-empty description: this Next build does not fall back to the
 // root layout's description, so `undefined` here means NO meta description,
 // og:description or twitter:description at all (caught by a link-preview

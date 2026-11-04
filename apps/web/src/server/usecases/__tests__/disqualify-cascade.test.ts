@@ -26,7 +26,7 @@ import { t } from "@/lib/i18n-runtime";
 import type { MessageKey } from "@/lib/messages";
 import { msgFor } from "@/lib/messages-i18n";
 import { Schedule } from "@/components/public-site/schedule";
-import DivisionHomePage from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
+import DivisionHomePage from "@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
 import { loadCompetitionHub } from "@/server/public-site/competition-hub";
 import { getPublicDivision, type PublicFixture } from "@/server/public-site/data";
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";

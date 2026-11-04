@@ -2,7 +2,7 @@
 // ESLint bans string-built console paths; if a URL shape changes, it changes
 // here and nowhere else.
 import { describe, expect, it } from "vitest";
-import { routes } from "@/lib/routes";
+import { isPublicHubPath, routes } from "@/lib/routes";
 
 describe("routes", () => {
   it("builds the /o hierarchy from slugs", () => {
@@ -42,15 +42,61 @@ describe("routes", () => {
   it("keeps id-based slideshow and slug-based public builders", () => {
     expect(routes.slideshowCompetition("abc-123")).toBe("/slideshow/competitions/abc-123");
     expect(routes.slideshowDivision("def-456")).toBe("/slideshow/divisions/def-456");
-    expect(routes.shared("acme")).toBe("/shared/acme");
-    expect(routes.shared("acme", "summer-smash", "u16-boys")).toBe(
-      "/shared/acme/summer-smash/u16-boys",
+    expect(routes.publicHub("acme")).toBe("/live/acme");
+    expect(routes.publicHub("acme", "summer-smash", "u16-boys")).toBe(
+      "/live/acme/summer-smash/u16-boys",
     );
+  });
+
+  // LIVE1 (owner ruling 2026-11-03): every spectator URL is one of these, under /live. Each expected value is TYPED from
+  // the route tree's folders (app/(public)/live/…), never derived from the builder.
+  it("builds every public spectator shape under /live — counted", () => {
+    const fx = "0b9a4c1e-5d2f-4c1a-9e1e-1f2a3b4c5d6e";
+    const cases: [string, string][] = [
+      [routes.publicHub("acme", "summer-smash"), "/live/acme/summer-smash"],
+      [routes.publicNews("acme"), "/live/acme/news"],
+      [routes.publicNewsPost("acme", "opening-day"), "/live/acme/news/opening-day"],
+      [routes.publicNewsStory("acme", "opening-day"), "/live/acme/news/opening-day/story.png"],
+      [routes.publicRegisterStatus("acme", "summer-smash"), "/live/acme/summer-smash/register/status"],
+      [routes.publicRegisterJoin("acme", "summer-smash"), "/live/acme/summer-smash/register/join"],
+      [routes.publicPlayer("acme", "summer-smash", "p-1"), "/live/acme/summer-smash/players/p-1"],
+      [routes.publicPresent("acme", "summer-smash"), "/live/acme/summer-smash/present"],
+      [routes.publicPresent("acme", "summer-smash", "u16-boys"), "/live/acme/summer-smash/u16-boys/present"],
+      [routes.publicPosterPdf("acme", "summer-smash"), "/live/acme/summer-smash/poster.pdf"],
+      [routes.publicCalendar("acme", "summer-smash", "u16-boys"), "/live/acme/summer-smash/u16-boys/calendar.ics"],
+      [routes.publicFixture("acme", "summer-smash", "u16-boys", fx), `/live/acme/summer-smash/u16-boys/fixtures/${fx}`],
+      [routes.publicFixturePlay("acme", "summer-smash", "u16-boys", fx), `/live/acme/summer-smash/u16-boys/fixtures/${fx}/play`],
+      [routes.publicFixturePlay("acme", "summer-smash", "u16-boys", fx, "a+b/c"), `/live/acme/summer-smash/u16-boys/fixtures/${fx}/play?t=a%2Bb%2Fc`],
+      // robots.ts's player-profile disallow is built from the same builder.
+      [routes.publicPlayer("*", "*", ""), "/live/*/*/players/"],
+    ];
+    let checked = 0;
+    for (const [built, expected] of cases) {
+      expect(built).toBe(expected);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: shapes").toBe(cases.length);
+  });
+
+  it("isPublicHubPath: /live/<x> is the spectator tree; a bare /live (the marketing wall, option A), /live/, /livex and the old /shared are not", () => {
+    const cases: [string, boolean][] = [
+      ["/live/acme", true],
+      ["/live/acme/summer-smash/u16-boys/present", true],
+      ["/live", false],
+      ["/live/", false],
+      ["/livex/acme", false],
+      ["/shared/acme", false],
+      ["/en/live", false],
+      ["/", false],
+      ["", false],
+    ];
+    for (const [path, expected] of cases) expect(isPublicHubPath(path), path).toBe(expected);
+    expect(cases.length).toBe(9);
   });
 
   it("builds the public register page — the registration hub's per-row copy link target", () => {
     expect(routes.publicRegister("acme", "summer-smash")).toBe(
-      "/shared/acme/summer-smash/register",
+      "/live/acme/summer-smash/register",
     );
   });
 

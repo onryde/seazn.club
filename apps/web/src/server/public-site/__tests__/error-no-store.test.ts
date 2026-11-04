@@ -8,7 +8,7 @@
 // collected revalidate; send-payload.js writes `getCacheControlHeader` for
 // it). The guard rewrites the header at the one point every response passes,
 // `ServerResponse.prototype.writeHead`, and only for an error status on the
-// cacheable public trees (/shared, /embed — the proxy's own predicate).
+// cacheable public trees (/live, /embed — the proxy's own predicate).
 //
 // Through a real node HTTP server and a real client: what the guard does is
 // only visible on the wire.
@@ -72,23 +72,26 @@ async function serve(
 
 const CASES: Array<{ name: string; path: string; status: number; write: Write; owed: string | null }> = [
   // An error on a cacheable public tree: never stored, whatever was written.
-  { name: "/shared 404 (notFound) — Next's own setHeader", path: "/shared/no-org/no-cup", status: 404, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
-  { name: "/shared RSC 404 (query string)", path: "/shared/o/c?_rsc=abc", status: 404, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
+  { name: "/live 404 (notFound) — Next's own setHeader", path: "/live/no-org/no-cup", status: 404, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
+  { name: "/live RSC 404 (query string)", path: "/live/o/c?_rsc=abc", status: 404, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
   { name: "/embed 404", path: "/embed/divisions/x/standings", status: 404, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
-  { name: "/shared 500 with no header", path: "/shared/o/c", status: 500, write: { how: "setHeader" }, owed: ERROR_NO_STORE },
+  { name: "/live 500 with no header", path: "/live/o/c", status: 500, write: { how: "setHeader" }, owed: ERROR_NO_STORE },
   { name: "/embed 503", path: "/embed/x", status: 503, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
-  { name: "/shared 410", path: "/shared/o", status: 410, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
-  { name: "/shared (bare) 404", path: "/shared", status: 404, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
-  { name: "/shared 404 — writeHead(object)", path: "/shared/o/c", status: 404, write: { how: "writeHead-object", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
-  { name: "/shared 404 — writeHead(flat raw)", path: "/shared/o/c", status: 404, write: { how: "writeHead-flat", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
+  { name: "/live 410", path: "/live/o", status: 410, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
+  { name: "/live/ (the tree's root, one segment) 404", path: "/live/x", status: 404, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
+  { name: "/live 404 — writeHead(object)", path: "/live/o/c", status: 404, write: { how: "writeHead-object", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
+  { name: "/live 404 — writeHead(flat raw)", path: "/live/o/c", status: 404, write: { how: "writeHead-flat", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
   // Everything else is untouched.
-  { name: "/shared 200 (found page)", path: "/shared/o/c", status: 200, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: FOUND_PAGE },
+  { name: "/live 200 (found page)", path: "/live/o/c", status: 200, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: FOUND_PAGE },
   { name: "/embed 200", path: "/embed/divisions/x/standings", status: 200, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: FOUND_PAGE },
-  { name: "/shared 308 (rename redirect)", path: "/shared/o/old", status: 308, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: FOUND_PAGE },
-  { name: "/shared 200 — writeHead(object)", path: "/shared/o/c", status: 200, write: { how: "writeHead-object", cacheControl: FOUND_PAGE }, owed: FOUND_PAGE },
+  { name: "/live 308 (rename redirect)", path: "/live/o/old", status: 308, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: FOUND_PAGE },
+  { name: "/live 200 — writeHead(object)", path: "/live/o/c", status: 200, write: { how: "writeHead-object", cacheControl: FOUND_PAGE }, owed: FOUND_PAGE },
   { name: "/api 404 (API headers are not this guard's)", path: "/api/v1/public/orgs/x/live", status: 404, write: { how: "setHeader", cacheControl: "public, max-age=5" }, owed: "public, max-age=5" },
   { name: "/api 500 with no header", path: "/api/v1/x", status: 500, write: { how: "setHeader" }, owed: null },
-  { name: "/sharedx 404 (not the tree)", path: "/sharedx/o", status: 404, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: FOUND_PAGE },
+  { name: "/livex 404 (not the tree)", path: "/livex/o", status: 404, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: FOUND_PAGE },
+  // LIVE1 option A: a bare /live is the MARKETING wall, not the spectator tree, so it is no more this guard's than
+  // any other marketing page (it never was: before LIVE1 it was a marketing page too, under its own name).
+  { name: "/live (bare: the marketing wall, option A) 404 (not the tree)", path: "/live", status: 404, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: FOUND_PAGE },
   { name: "/dashboard 404", path: "/dashboard/x", status: 404, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: FOUND_PAGE },
 ];
 
@@ -129,7 +132,7 @@ describe("an error on a public page is never stored: the wire header", () => {
 });
 
 describe("instrumentation installs the guard in the node runtime, before the server takes a request", () => {
-  it("after register(), a /shared 404 goes out no-store and a found page keeps its header", async () => {
+  it("after register(), a /live 404 goes out no-store and a found page keeps its header", async () => {
     const proto = http.ServerResponse.prototype;
     const original = proto.writeHead;
     const runtime = process.env.NEXT_RUNTIME;
@@ -137,8 +140,8 @@ describe("instrumentation installs the guard in the node runtime, before the ser
     try {
       await register();
       expect(proto.writeHead, "premise: register() patched writeHead").not.toBe(original);
-      const missing = await serve("/shared/no-org", 404, { how: "setHeader", cacheControl: FOUND_PAGE });
-      const found = await serve("/shared/o", 200, { how: "setHeader", cacheControl: FOUND_PAGE });
+      const missing = await serve("/live/no-org", 404, { how: "setHeader", cacheControl: FOUND_PAGE });
+      const found = await serve("/live/o", 200, { how: "setHeader", cacheControl: FOUND_PAGE });
       expect([missing.cacheControl, found.cacheControl]).toEqual([ERROR_NO_STORE, FOUND_PAGE]);
     } finally {
       proto.writeHead = original;

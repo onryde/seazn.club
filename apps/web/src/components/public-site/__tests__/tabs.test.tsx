@@ -96,7 +96,7 @@ describe("the division page's own call (source contract)", () => {
   // whatever it is handed.
   const SRC = join(
     process.cwd(),
-    "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
+    "src/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
   );
   const src = readFileSync(SRC, "utf8");
 

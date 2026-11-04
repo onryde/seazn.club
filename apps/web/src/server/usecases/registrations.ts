@@ -1764,7 +1764,7 @@ async function buildCartMail(
   }
 
   const statusUrl = token
-    ? `${origin}/shared/${ctx.org_slug}/${ctx.comp_slug}/register/status?rid=${groupId}&token=${encodeURIComponent(token)}`
+    ? `${origin}${routes.publicRegisterStatus(ctx.org_slug, ctx.comp_slug)}?rid=${groupId}&token=${encodeURIComponent(token)}`
     : `${origin}/r/${group.ref_code}`;
 
   return {
@@ -2609,7 +2609,7 @@ async function createRegistrationCheckout(
   // not by the vitest suites, which never typecheck.
   const destination = org.stripe_account_id;
   const returnBase = token
-    ? `${origin}/shared/${ctx.org_slug}/${ctx.comp_slug}/register/status` +
+    ? `${origin}${routes.publicRegisterStatus(ctx.org_slug, ctx.comp_slug)}` +
       `?rid=${groupId}&token=${encodeURIComponent(token)}`
     : `${origin}/r/${firstEntry.ref_code}?src=email`;
   // The rate this charge uses: the competition's locked rate if it has one,

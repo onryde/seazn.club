@@ -172,8 +172,8 @@ describe("the positive pair: queries that are not a one-time token are left alon
   const cart = "rg_" + randomBytes(24).toString("base64url");
   it("the reusable cart token's status page (NOT_ONE_TIME) keeps its query", () => {
     expect(Object.keys(NOT_ONE_TIME)).toEqual(["/register/status"]);
-    const url = `${ORIGIN}/shared/o/c/register/status?rid=abc&token=${cart}`;
-    const event = transaction({ name: "GET /shared/[orgSlug]/[competitionSlug]/register/status", traceData: otelTraceData(url), spans: [{ description: `GET ${url}`, data: clientSpanDetails(url).data }] });
+    const url = `${ORIGIN}/live/o/c/register/status?rid=abc&token=${cart}`;
+    const event = transaction({ name: "GET /live/[orgSlug]/[competitionSlug]/register/status", traceData: otelTraceData(url), spans: [{ description: `GET ${url}`, data: clientSpanDetails(url).data }] });
     const result = out(event);
     expect(result.contexts.trace.data["http.query"]).toBe(`?rid=abc&token=${cart}`);
     expect(result.spans[0]!.data["url.query"]).toBe(`?rid=abc&token=${cart}`);

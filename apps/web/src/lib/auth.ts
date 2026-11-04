@@ -212,7 +212,7 @@ export async function resolveActiveOrg(
   return orgs[0];
 }
 
-/** Readable, name-derived org slug (PROMPT-30): `/o/[slug]` and `/shared/
+/** Readable, name-derived org slug (PROMPT-30): `/o/[slug]` and `/live/
  *  [slug]` are user-facing URLs. Globally unique; app routes stay reserved. */
 export async function generateOrgSlug(name: string, excludeOrgId?: string): Promise<string> {
   return uniqueSlug(slugify(name), async (s) => {

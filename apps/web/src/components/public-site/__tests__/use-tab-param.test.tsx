@@ -178,24 +178,24 @@ describe("readDivisionParam", () => {
 
 describe("writeDivisionParam", () => {
   it("sets the division and KEEPS the tab — a chip tap must not throw the spectator off Matches", () => {
-    const { replaced, pushed } = stubHistory("https://seazn.test/shared/o/c?tab=matches");
+    const { replaced, pushed } = stubHistory("https://seazn.test/live/o/c?tab=matches");
     writeDivisionParam("premier");
-    expect(replaced).toEqual(["https://seazn.test/shared/o/c?tab=matches&division=premier"]);
+    expect(replaced).toEqual(["https://seazn.test/live/o/c?tab=matches&division=premier"]);
     expect(pushed).toEqual([]);
   });
 
   it("All REMOVES the parameter rather than writing an empty one", () => {
     // `?division=` would read back as "" — handled, but a URL a spectator
     // copies should not carry a parameter that means nothing.
-    const { replaced } = stubHistory("https://seazn.test/shared/o/c?tab=matches&division=premier");
+    const { replaced } = stubHistory("https://seazn.test/live/o/c?tab=matches&division=premier");
     writeDivisionParam(null);
-    expect(replaced).toEqual(["https://seazn.test/shared/o/c?tab=matches"]);
+    expect(replaced).toEqual(["https://seazn.test/live/o/c?tab=matches"]);
   });
 
   it("replaces an existing division rather than appending a second one", () => {
-    const { replaced } = stubHistory("https://seazn.test/shared/o/c?division=open&tab=matches");
+    const { replaced } = stubHistory("https://seazn.test/live/o/c?division=open&tab=matches");
     writeDivisionParam("premier");
-    expect(replaced).toEqual(["https://seazn.test/shared/o/c?division=premier&tab=matches"]);
+    expect(replaced).toEqual(["https://seazn.test/live/o/c?division=premier&tab=matches"]);
   });
 });
 
@@ -291,25 +291,25 @@ describe("readSearchParam", () => {
 describe("writeSearchParam", () => {
   it("sets the named parameter with replaceState and KEEPS every other one", () => {
     const { replaced, pushed } = stubHistory(
-      "https://seazn.test/shared/o/c?tab=knockout&division=premier",
+      "https://seazn.test/live/o/c?tab=knockout&division=premier",
     );
     writeSearchParam("view", "draw");
     expect(replaced).toEqual([
-      "https://seazn.test/shared/o/c?tab=knockout&division=premier&view=draw",
+      "https://seazn.test/live/o/c?tab=knockout&division=premier&view=draw",
     ]);
     expect(pushed).toEqual([]);
   });
 
   it("null REMOVES the parameter — Rounds is the default, so a link carries no `view=rounds`", () => {
-    const { replaced } = stubHistory("https://seazn.test/shared/o/c?tab=knockout&view=draw");
+    const { replaced } = stubHistory("https://seazn.test/live/o/c?tab=knockout&view=draw");
     writeSearchParam("view", null);
-    expect(replaced).toEqual(["https://seazn.test/shared/o/c?tab=knockout"]);
+    expect(replaced).toEqual(["https://seazn.test/live/o/c?tab=knockout"]);
   });
 
   it("the named writers still write their own names through it (the wrapper cannot be pointed at another)", () => {
-    const { replaced } = stubHistory("https://seazn.test/shared/o/c?view=draw");
+    const { replaced } = stubHistory("https://seazn.test/live/o/c?view=draw");
     writeTabParam("knockout");
-    expect(replaced).toEqual(["https://seazn.test/shared/o/c?view=draw&tab=knockout"]);
+    expect(replaced).toEqual(["https://seazn.test/live/o/c?view=draw&tab=knockout"]);
   });
 });
 

@@ -61,7 +61,7 @@ const KEY = keyAt("g1");
 
 const line = (fixtureId: string, figures: string, over: Partial<PlayerMatchLine> = {}): PlayerMatchLine => ({
   fixtureId,
-  href: `/shared/riverside/autumn-cup/premier/fixtures/${fixtureId}`,
+  href: `/live/riverside/autumn-cup/premier/fixtures/${fixtureId}`,
   divisionName: "Premier",
   divisionSlug: "premier",
   scheduledAt: "2026-09-05T10:00:00.000Z",

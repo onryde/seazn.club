@@ -1,7 +1,7 @@
 // Spectator surface W2, Task 4 — the ONE champion rule.
 //
 // Lifted verbatim from the division page's inline IIFE
-// (`app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx`),
+// (`app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx`),
 // which now imports it. The value was unchanged by that move; this suite is
 // what pinned it, so the refactor could not quietly move a crown.
 //

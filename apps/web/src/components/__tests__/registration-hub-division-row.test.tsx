@@ -47,7 +47,7 @@ const BASE_CONTEXT: RegistrationHubRowContext = {
   now: NOW,
   orgTz: "UTC",
   currency: "usd",
-  registerHref: "/shared/riverside/summer-league/register",
+  registerHref: "/live/riverside/summer-league/register",
   registerQrFileName: "register-summer-league.png",
   showRegisterLink: true,
   onOpen: vi.fn(),

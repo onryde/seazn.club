@@ -37,6 +37,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { applicationFeeCents, feePercentFor } from "./registrations";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./dispute-recovery";
 import { orgOwnerRecipient } from "./org-owner";
+import { routes } from "@/lib/routes";
 
 export const SPONSOR_TIERS = ["title", "gold", "silver", "partner"] as const;
 export type SponsorTier = (typeof SPONSOR_TIERS)[number];
@@ -524,7 +525,7 @@ export async function startSponsorCheckout(
     return row!;
   });
 
-  const returnBase = `${origin}/shared/${org.slug}`;
+  const returnBase = `${origin}${routes.publicHub(org.slug)}`;
   const session = await getStripe().checkout.sessions.create(
     {
       mode: "payment",
@@ -697,7 +698,7 @@ export async function queueSponsorReceipt(
       sponsorName: order.sponsor_name,
       amountCents: order.amount_cents,
       currency: order.currency,
-      publicUrl: org ? `${sponsorEmailOrigin()}/shared/${org.slug}` : null,
+      publicUrl: org ? `${sponsorEmailOrigin()}${routes.publicHub(org.slug)}` : null,
     },
     locale,
   );
@@ -897,7 +898,7 @@ export async function queueSponsorRefundReceipt(
 /** Origin for sponsor emails fired from webhook (request-less) paths — the
  *  same override order as registrations' fallbackOrigin. NEXT_PUBLIC_APP_URL
  *  (the previous source) is not set in any environment, so receipts went out
- *  with relative "/shared/…" links no mail client could open. */
+ *  with relative "/live/…" links no mail client could open. */
 function sponsorEmailOrigin(): string {
   return (
     process.env.OAUTH_BASE_URL ||
@@ -1225,7 +1226,7 @@ export async function buildSponsorDisputeEvidence(
 
   // The receipt, reconstructed with the exact sender inputs, in the language
   // it was sent in: the org's (queueSponsorReceipt resolves it the same way).
-  const publicUrl = org ? `${origin}/shared/${org.slug}` : null;
+  const publicUrl = org ? `${origin}${routes.publicHub(org.slug)}` : null;
   const locale = await recipientLocale(sql, { pick: null, userId: null, orgDefault: org?.default_locale ?? null });
   const emailText = (
     await sponsorReceiptEmail(

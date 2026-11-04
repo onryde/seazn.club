@@ -5,7 +5,7 @@
 // on it, and no unit anywhere else notices (AGENTS.md #1, the inert seam).
 //
 // Same shape as the division page's plumbing test beside `page.tsx` in
-// `/shared`: the data door (`embedDivisionData`) is mocked in the REAL payload
+// `/live`: the data door (`embedDivisionData`) is mocked in the REAL payload
 // shape — a V414 stage row, the division's `config` and pinned module,
 // `PublicFixture`s with outcomes — the page is called, and the `StandingsTable`
 // it returns is read for its prop and rendered to markup. The scene is the

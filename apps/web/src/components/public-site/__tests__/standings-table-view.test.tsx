@@ -64,7 +64,7 @@ const view: TableViewT = {
   divisionSlug: "div",
   divisionName: "Div",
   caption: "League",
-  fullHref: "/shared/o/c/div?tab=standings",
+  fullHref: "/live/o/c/div?tab=standings",
   updatedAt: "2026-09-05T10:00:00Z",
   columns: [
     { key: "played", abbr: "P", title: "Played", compact: true },
@@ -321,7 +321,7 @@ describe("StandingsTableView — phone composition", () => {
     expect(previewed).toContain(`data-testid="${TESTID}-row-a"`);
     expect(previewed).not.toContain(`data-testid="${TESTID}-row-b"`);
     expect(previewed).toContain(`data-testid="${TESTID}-full"`);
-    expect(previewed).toContain('href="/shared/o/c/div?tab=standings"');
+    expect(previewed).toContain('href="/live/o/c/div?tab=standings"');
     // Positive pair: with no preview every row renders.
     expect(html().match(new RegExp(`data-testid="${TESTID}-row-`, "g"))?.length).toBe(2);
     expect(html({ showFullLink: false })).not.toContain(`data-testid="${TESTID}-full"`);

@@ -1,0 +1,91 @@
+export const revalidate = 30;
+// Public presentation mode — competition (v13/PROMPT-64): rotates every
+// division's slides (standings / fixtures / live-pinned / bracket) on one
+// no-login kiosk URL. Public read models only; private competitions 404.
+import type { Metadata } from "next";
+import { notFound, permanentRedirect } from "next/navigation";
+import { getPublicCompetition } from "@/server/public-site/data";
+import { readEveryPublicDivision } from "@/server/public-site/read-every-division";
+import { sharedRenameTarget } from "@/server/slug-resolve";
+import { buildPublicDivisionSlides, type Slide } from "@/server/slideshow-data";
+import { slideshowLabels } from "@/server/slideshow-labels";
+import { Slideshow } from "@/components/v2/slideshow";
+import { kioskHubHref } from "@/components/public-site/kiosk-phone-card-logic";
+import { publicThemeStyle } from "@/lib/public-theme";
+import { toLocale } from "@/lib/i18n-constants";
+import { getDictionary, t } from "@/lib/i18n";
+import { routes } from "@/lib/routes";
+
+// Every field a page's metadata leaves out is INHERITED from the root layout,
+// whose title and description are English (`app/layout.tsx`), so this page
+// sets both in the org's language (Task 16 review, I2).
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ orgSlug: string; competitionSlug: string }>;
+}): Promise<Metadata> {
+  const robots = { index: false };
+  const { orgSlug, competitionSlug } = await params;
+  const shell = await getPublicCompetition(orgSlug, competitionSlug);
+  if (!shell) return { robots };
+  const dict = await getDictionary(toLocale(shell.org.default_locale), "public");
+  return {
+    title: t(dict, "kiosk.metaTitle", { name: shell.competition.name }),
+    description: t(dict, "landing.metaDescription", {
+      competition: shell.competition.name,
+      org: shell.org.name,
+    }),
+    robots,
+  };
+}
+
+export default async function PresentCompetitionPage({
+  params,
+}: {
+  params: Promise<{ orgSlug: string; competitionSlug: string }>;
+}) {
+  const { orgSlug, competitionSlug } = await params;
+  const shell = await getPublicCompetition(orgSlug, competitionSlug);
+  if (!shell) {
+    // K fix round, F2 + F3: a kiosk URL gets printed on a poster and stuck to a
+    // wall, so it has to survive a rename that the hub link already survives.
+    // The whole path is passed, not just the org slug — `sharedRenameTarget`
+    // walks org then competition and answers at the same depth, so a renamed
+    // org keeps `/{comp}` instead of collapsing to the org hub (that collapse
+    // IS F2, and it happened because the layout above had no other param to
+    // give). Its answer is the CHROME path, so the board's own `/present` goes
+    // back on. Null means nothing in the rename history and a 404 is honest.
+    // A renamed PRIVATE competition now 308s where it used to 404 — this reads
+    // the base tables while `public_competitions_v` (V397) filters visibility.
+    // Deliberately CONSISTENT with the chrome page, which already answers that
+    // way on main; a follow-up is owed covering BOTH surfaces at once.
+    const renamed = await sharedRenameTarget(orgSlug, competitionSlug);
+    if (renamed) permanentRedirect(`${renamed}/present`);
+    notFound();
+  }
+  // Every division at once, each one query at a time (see `readEveryPublicDivision`).
+  const divisions = await readEveryPublicDivision(orgSlug, competitionSlug, shell.divisions);
+  const decks = await Promise.all(
+    divisions.map(async (data) =>
+      // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, not
+      // English by construction: the builder has no request scope, and since
+      // N1c c3 it loads the org-locale dictionaries itself (async, no database).
+      data === null ? [] : await buildPublicDivisionSlides({ ...data, orgLocale: data.org.default_locale }),
+    ),
+  );
+  const slides: Slide[] = decks.flat();
+  return (
+    <Slideshow
+      title={shell.competition.name}
+      slides={slides}
+      backHref={routes.publicHub(orgSlug, competitionSlug)}
+      // C1 (OWNER RULING 2026-09-15): a phone gets a "made for a TV" card whose
+      // Open the live page goes to the competition's hub.
+      liveHref={kioskHubHref(orgSlug, competitionSlug)}
+      themeStyle={publicThemeStyle(shell.competition.branding)}
+      // R10e u1: the board's own strings (the card's too) in the org's locale,
+      // the same one every division deck above is built in.
+      labels={slideshowLabels(shell.org.default_locale)}
+    />
+  );
+}

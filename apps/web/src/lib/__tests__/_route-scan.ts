@@ -4,10 +4,12 @@
 //
 //  - `secretRoutes()` + `VERDICTS`: every `app/**` directory named like a secret (`[token]`, `[code]`, `[secret]`, `[ref]`),
 //    the URLs and the route HANDLERS beneath it, and the verdict on each (a credential, or why it is knowingly public).
-//  - `linkBuilders()` + `NOT_ONE_TIME`: every `<path>?…token=${…}` link the app builds, and the one that is knowingly reusable.
+//  - `linkBuilders()` + `NOT_ONE_TIME`: every `<path>?…token=${…}` link the app builds (hand-written, or through a
+//    `routes.*` builder), and the one that is knowingly reusable.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { routes } from "../routes";
 
 export const SRC_DIR = fileURLToPath(new URL("../../", import.meta.url));
 export const APP_DIR = path.join(SRC_DIR, "app");
@@ -81,12 +83,31 @@ export const VERDICTS: Record<string, true | string> = {
   "api/v1/public/registrations/by-ref/[ref]": "the same reference; the withdrawal token rides the request body",
 };
 
+/** The literal path at the END of a URL: what a `<path>?token=` template's route is keyed by (`/register/status`
+ *  for `/live/<org>/<comp>/register/status`, the dynamic prefix dropped). */
+const LITERAL_TAIL = /(\/[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*)$/;
+
+/** The route a `${routes.<name>(…)}?…token=${…}` template is built for: the builder run with placeholder slugs, keyed
+ *  by its literal tail exactly as a hand-written path is (LIVE1 moved the spectator links onto routes.*, so the
+ *  register-status link no longer spells its path in the template). An unknown or non-function name is a scan bug and
+ *  throws, never a silent skip. */
+function builderRoute(name: string, file: string): string {
+  const fn = (routes as Record<string, unknown>)[name];
+  if (typeof fn !== "function") throw new Error(`linkBuilders: ${file} builds a ?token= link with routes.${name}, which is not a builder`);
+  const url = String((fn as (...a: string[]) => unknown)(...Array.from({ length: 6 }, () => "\u0001")));
+  const tail = LITERAL_TAIL.exec(url.split("?")[0]!)?.[1];
+  if (!tail) throw new Error(`linkBuilders: routes.${name} (${file}) built ${JSON.stringify(url)}, which ends in no literal path`);
+  return tail;
+}
+
 /** Every `<path>?…token=${…}` template the app builds: the route a link is built FOR, mapped to where it is built. */
 let scanned: Map<string, string> | undefined;
 export function linkBuilders(): Map<string, string> {
   if (scanned) return scanned;
   const found = new Map<string, string>();
   const builder = /(\/[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*)\?(?:[^`\s]*&)?token=\$\{/g;
+  // The same link built through the one URL builder: `${routes.publicRegisterStatus(org, comp)}?rid=…&token=${…}`.
+  const viaRoutes = /\$\{routes\.(\w+)\([^`]*?\)\}\?(?:[^`\s]*&)?token=\$\{/g;
   const walk = (dir: string) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
@@ -95,7 +116,12 @@ export function linkBuilders(): Map<string, string> {
       } else if (/\.tsx?$/.test(entry.name) && !/\.(test|spec)\./.test(entry.name) && entry.name !== "scrub-score-url.ts") {
         const text = fs.readFileSync(full, "utf8");
         if (!text.includes("token=${")) continue;
-        for (const m of text.matchAll(builder)) if (!found.has(m[1]!)) found.set(m[1]!, path.relative(SRC_DIR, full));
+        const rel = path.relative(SRC_DIR, full);
+        for (const m of text.matchAll(builder)) if (!found.has(m[1]!)) found.set(m[1]!, rel);
+        for (const m of text.matchAll(viaRoutes)) {
+          const route = builderRoute(m[1]!, rel);
+          if (!found.has(route)) found.set(route, rel);
+        }
       }
     }
   };

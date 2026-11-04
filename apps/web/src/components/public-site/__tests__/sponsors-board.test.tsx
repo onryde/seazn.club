@@ -276,7 +276,7 @@ describe("SponsorsBoard — links and logos", () => {
   // contract, because the repo has no render harness for CLS.
   //
   // That file lives in `src/lib/__tests__`, which THIS wave's test gate
-  // (`"src/app/(public)/shared"` + `src/components/public-site`) does not
+  // (`"src/app/(public)/live"` + `src/components/public-site`) does not
   // select. Lifting the board here reddened it, and that was found only by
   // running wider than the dispatch asked for — luck, not process. So the
   // pointer is a test rather than a comment: if the contract is repointed away

@@ -35,7 +35,7 @@ import { fmtZoneAbbrev } from "@/lib/format";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import type { PublicFixture, PublicEntrant } from "@/server/public-site/data";
 import EmbedWidgetPage from "@/app/embed/divisions/[id]/[widget]/page";
-import DivisionHomePage from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
+import DivisionHomePage from "@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
 import { Schedule } from "../schedule";
 
 const TZ = "UTC";

@@ -94,7 +94,7 @@ function viewWith(columns: TableColumnT[], cells: string[]): TableViewT {
     divisionSlug: "div",
     divisionName: "Div",
     caption: "League",
-    fullHref: "/shared/o/c/div?tab=standings",
+    fullHref: "/live/o/c/div?tab=standings",
     updatedAt: "2026-09-23T10:00:00Z",
     columns,
     rows: [

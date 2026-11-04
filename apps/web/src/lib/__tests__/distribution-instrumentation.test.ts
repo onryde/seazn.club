@@ -21,7 +21,7 @@ const read = (p: string) => readFileSync(join(SRC, p), "utf8");
 describe("distribution events have real producers", () => {
   it.each([
     ["EMBED_RENDERED", "app/embed/divisions/[id]/[widget]/page.tsx"],
-    ["PUBLIC_PROFILE_VIEWED", "app/(public)/shared/[orgSlug]/page.tsx"],
+    ["PUBLIC_PROFILE_VIEWED", "app/(public)/live/[orgSlug]/page.tsx"],
     ["POST_AUTO_DRAFTED", "server/usecases/org-posts.ts"],
     ["POST_AUTO_DRAFTED", "server/usecases/scoring.ts"],
   ])("%s is captured in %s", (event, file) => {

@@ -36,7 +36,7 @@ import { EMPTY_CART } from "../types";
 const esc = (s: string) => s.replaceAll("&", "&amp;").replaceAll("'", "&#x27;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 const s = (loc: Loc, key: string) => String(DICTS[loc][key]);
 const UNLINKED: RegisterLichessState = { configured: true, linkedUsername: null, needsReconsent: false, flash: null };
-const NEXT = "/shared/northfield/autumn-rapid/register";
+const NEXT = "/live/northfield/autumn-rapid/register";
 const render = (o: Partial<Parameters<typeof RegisterLichessCard>[0]> = {}, locale: Loc = "en") => {
   current.locale = locale;
   return renderToStaticMarkup(
@@ -49,7 +49,7 @@ describe("registerReturnPath — where the link start comes back to", () => {
     expect(registerReturnPath("northfield", "autumn-rapid", null)).toBe(NEXT);
     expect(registerReturnPath("northfield", "autumn-rapid", "AB12")).toBe(`${NEXT}?join=AB12`);
     // Encoded, so a code (or slug) holding a separator stays one value: the start's own `next` is not split.
-    expect(registerReturnPath("north field", "autumn/rapid", "x&next=y")).toBe("/shared/north%20field/autumn%2Frapid/register?join=x%26next%3Dy");
+    expect(registerReturnPath("north field", "autumn/rapid", "x&next=y")).toBe("/live/north%20field/autumn%2Frapid/register?join=x%26next%3Dy");
     // Whatever a slug or code holds, the path stays ours: each part is encoded, so nothing escapes the origin.
     let checked = 0;
     for (const [org, comp, join] of [

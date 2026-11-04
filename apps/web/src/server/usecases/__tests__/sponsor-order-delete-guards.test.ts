@@ -192,7 +192,7 @@ describe.skipIf(!HAS_DB)("sponsor order delete protection (V299)", () => {
     expect(pack.html).toContain("dp_ev_test"); // dispute id
     expect(pack.html).toContain("parked by this dispute"); // placement state
     expect(pack.html).toContain(">7<"); // click count as delivery proof
-    expect(pack.html).toContain("https://ev.test/shared/"); // absolute public page
+    expect(pack.html).toContain("https://ev.test/live/"); // absolute public page
     expect(pack.html).toMatch(/Receipt email/); // reconstruction section
     await expect(
       buildSponsorDisputeEvidence(auth, randomUUID(), "https://ev.test"),

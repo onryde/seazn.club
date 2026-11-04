@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { useT } from "@/components/i18n/dict-provider";
 import { apiV1 } from "@/lib/client-v1";
 import { LOBBY_STATES, type ExternalPlayLobby } from "@/lib/external-play-lobby";
+import { isPublicHubPath } from "@/lib/routes";
 import { routes } from "@/lib/routes";
 import { hasSessionHint } from "@/lib/session-hint";
 
@@ -27,7 +28,7 @@ export async function loadYourBoard(fixtureId: string, get: Get = apiV1): Promis
   const a = body as Partial<ExternalPlayLobby> | null;
   if (a === null || typeof a !== "object" || !(LOBBY_STATES as readonly unknown[]).includes(a.state)) return null;
   if (a.state === "online_chess_off") return a.roomPath === null ? { state: a.state, roomPath: null } : null;
-  if (typeof a.roomPath !== "string" || !a.roomPath.startsWith("/shared/")) return null;
+  if (typeof a.roomPath !== "string" || !isPublicHubPath(a.roomPath)) return null;
   return a as ExternalPlayLobby;
 }
 

@@ -7,7 +7,7 @@ const START = "https://seazn.club/start";
  *  brand line + a tracked "Run your own free →" link back to /start.
  *
  *  `label` is REQUIRED and has no English default, like `ShareBar`'s labels:
- *  this link sat in the footer of every /shared page as English in all four
+ *  this link sat in the footer of every /live page as English in all four
  *  locales, because the component owned its words. The caller passes
  *  `layout.attribution` in the page's language; the arrow is a glyph and stays
  *  out of the dictionary. */

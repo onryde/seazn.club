@@ -84,7 +84,7 @@ const base: Omit<TableViewInput, "rows"> = {
   // W2d T17: no stage rules (a plain whole-point layout) and no date — these suites pin the rest of the view
   rules: null,
   dateOf: () => null,
-  fullHref: "/shared/o/c/div?tab=standings",
+  fullHref: "/live/o/c/div?tab=standings",
   metricSpecs: [
     { key: "gf", label: "GF" },
     { key: "ga", label: "GA" },
@@ -117,7 +117,7 @@ describe("buildTableView", () => {
       divisionSlug: "div",
       divisionName: "Div",
       caption: "League",
-      fullHref: "/shared/o/c/div?tab=standings",
+      fullHref: "/live/o/c/div?tab=standings",
       updatedAt: "2026-09-05T10:00:00Z",
     });
   });
@@ -526,7 +526,7 @@ describe("qualification (spec 2026-09-22)", () => {
       divisionSlug: "div",
       divisionName: "Div",
       caption: "League",
-      fullHref: "/shared/o/c/div?tab=standings",
+      fullHref: "/live/o/c/div?tab=standings",
       updatedAt: "2026-09-05T10:00:00Z",
       columns: [
         { key: "played", abbr: "table.abbr.played", title: "table.col.played", compact: true },

@@ -54,7 +54,7 @@ const ROOT_LANG = "en";
  * stale two ways, and an authoritative (`lang`) instance answers both:
  *
  * - It RE-ASSERTS on every pathname change. Moving from a page whose own
- *   `<DictProvider>` wrote another locale (/shared's register flow is in the
+ *   `<DictProvider>` wrote another locale (/live's register flow is in the
  *   visitor's) back to a page of the same layout leaves nothing else to write
  *   it back. The effect runs before that page's provider (an earlier sibling
  *   of the layout's children), so a page that does write its own still wins.

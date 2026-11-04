@@ -101,7 +101,7 @@ function render(entrant: string): string {
       createElement(Schedule, {
         fixtures: FIXTURES,
         entrantNames: ENTRANTS,
-        divisionPath: "/shared/org/comp/div",
+        divisionPath: "/live/org/comp/div",
         tz: "UTC",
         slotLabels: {},
         roundLabels: ROUND_LABELS,

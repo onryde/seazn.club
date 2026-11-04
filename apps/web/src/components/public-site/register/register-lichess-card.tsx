@@ -11,6 +11,7 @@
 import { useLocaleOrDefault, usePlural, useT } from "@/components/i18n/dict-provider";
 import { LichessFlashNotice } from "@/components/lichess-flash-notice";
 import { lichessLinkStartHref, type LichessFlashCode } from "@/lib/lichess-link";
+import { routes } from "@/lib/routes";
 
 /** What the page knows for this viewer: whether this server can link at all, the linked Lichess name (null when
  *  signed out or not linked), whether that link cannot play (`lichessGrantPlays` refuses it: identity-only, or short of a
@@ -26,7 +27,7 @@ export type RegisterLichessState = {
 
 /** This competition's registration, the join code kept — every part encoded, so the path can only ever be ours. */
 export function registerReturnPath(orgSlug: string, competitionSlug: string, joinCode: string | null): string {
-  const base = `/shared/${encodeURIComponent(orgSlug)}/${encodeURIComponent(competitionSlug)}/register`;
+  const base = routes.publicRegister(encodeURIComponent(orgSlug), encodeURIComponent(competitionSlug));
   return joinCode ? `${base}?join=${encodeURIComponent(joinCode)}` : base;
 }
 

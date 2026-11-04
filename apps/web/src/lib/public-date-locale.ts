@@ -7,7 +7,7 @@
  * this repo's display locale for the same reason. Every other org locale is
  * used as given; only bare "en" is ambiguous.
  *
- * ONE rule, in one place: the org home (`app/(public)/shared/[orgSlug]`), the
+ * ONE rule, in one place: the org home (`app/(public)/live/[orgSlug]`), the
  * public schedule (`components/public-site/schedule.tsx`), the match centre's
  * start time (`server/public-site/match-centre.ts`), and the player card's
  * Matches (`components/public-site/player-matches.tsx`) and Upcoming

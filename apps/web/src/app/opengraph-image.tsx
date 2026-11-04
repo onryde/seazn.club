@@ -1,5 +1,5 @@
 // Site-wide share card: home, marketing pages, /live, the console and the
-// slideshow all inherit this unless a segment ships its own (the /shared
+// slideshow all inherit this unless a segment ships its own (the /live
 // public tree does — v3/10 #1). Stadium-night brand frame: floodlit slab,
 // the line-and-ball mark, the promise.
 import { ImageResponse } from "next/og";

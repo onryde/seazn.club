@@ -141,8 +141,8 @@ const KINDS: Kind[] = ["request", "isr"];
  *  (Next awaits `pendingRevalidates` once the render resolves). */
 async function render<T>(kind: Kind, read: () => Promise<T>): Promise<T> {
   const workStore = {
-    route: "/shared/[orgSlug]/[competitionSlug]",
-    page: "/shared/[orgSlug]/[competitionSlug]/page",
+    route: "/live/[orgSlug]/[competitionSlug]",
+    page: "/live/[orgSlug]/[competitionSlug]/page",
     incrementalCache,
     isStaticGeneration: kind === "isr",
     isOnDemandRevalidate: false,
@@ -152,7 +152,7 @@ async function render<T>(kind: Kind, read: () => Promise<T>): Promise<T> {
   } as unknown as WorkStore & { pendingRevalidates?: Record<string, Promise<unknown>> };
   const unitStore = (
     kind === "request"
-      ? { type: "request", phase: "render", url: { pathname: "/shared/probe", search: "" } }
+      ? { type: "request", phase: "render", url: { pathname: "/live/probe", search: "" } }
       : { type: "prerender-legacy", phase: "render", revalidate: 30, tags: null }
   ) as unknown as WorkUnitStore;
   return workAsyncStorage.run(workStore, () =>
