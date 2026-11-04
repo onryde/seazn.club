@@ -911,8 +911,14 @@ export function OpenCloseSection({
                 {storedKindName}
               </option>
             )}
+            {/* FU1 fix round 2: every option's visible text must fit the 202px select at 320 in every locale (measured by
+                the walkthrough), so "Individual" is the kind's word alone; "(creates a player)" stays its accessible name. */}
             {offeredKinds.map((k) => (
-              <option key={k} value={k}>
+              <option
+                key={k}
+                value={k}
+                aria-label={k === "individual" ? msg("reg.settings.entrant.individualAria") : undefined}
+              >
                 {msg(`reg.settings.entrant.${k}`)}
               </option>
             ))}

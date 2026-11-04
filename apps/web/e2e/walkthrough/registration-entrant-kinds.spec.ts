@@ -14,8 +14,8 @@
 //   3. picking an offered kind saves, the flag goes, the row reads Open with its link again, and the public card opens
 //      with that kind's Add control.
 // Every changed screen is shot at 1280 / 768 / 320 with no horizontal page scroll; the entrant-type select keeps a 44px
-// target at each width. A second test (fix round 1, m6) MEASURES, in a real browser, that the longest not-allowed label
-// fits the select at 320 in every locale. A third (fix round 1, I1) drives the narrowing guard through its real producer
+// target at each width. A second test (fix rounds 1-2, m6) MEASURES, in a real browser, that every option of the select
+// fits at 320 in every locale. A third (fix round 1, I1) drives the narrowing guard through its real producer
 // and consumer: the Entrants tab's Save, refused while a live registration holds the kind, said in the reader's language.
 //
 // Setup uses the API to REACH that state (the walkthrough charter permits it); the fix is made through the UI.
@@ -260,15 +260,18 @@ test("a division narrowed after its registration was set up: the public card clo
   }
 });
 
-// Fix round 1 (m6): the review ESTIMATED from a screenshot that the not-allowed label might clip at 320 in fr, es and nl.
-// Measured here instead, in the browser that draws it: a width:auto clone of the select holding only the option asks the
-// browser how wide the control must be to show that text whole - arrow, padding and border included - and that is held
-// against the select's own width. Every option is measured and written to fit.json; the refused one is asserted.
-// "individual" on a teams-only division is the longest such kind in every locale (and the likeliest legacy row, m5).
-// Measured before the fix: "{kind} (not allowed)" needed 219px of a 202px select in en already, so the option now shows
-// the kind's own word and the reason lives in the hint beneath it.
-test("the not-allowed option fits the entrant-type select at 320 in every locale, measured in the browser", async ({ page, request }, testInfo) => {
-  test.setTimeout(180_000);
+// Fix round 1 (m6) and fix round 2: EVERY option of the entrant-type select must show its text whole at 320, in every
+// locale. A select cannot wrap, and a clipped value is what the organiser reads. The review first ESTIMATED this from a
+// screenshot; it is measured here instead, in the browser that draws it. A width:auto clone of the select, holding only
+// the option, asks the browser how wide the control must be to show that text whole (arrow, padding and border
+// included). That width is held against the select's own width.
+// Two selects cover every option label there is:
+//   - a teams-only division storing individual: the refused option (the kind's word) plus Team;
+//   - an all-kinds division: Individual, Team and Pair.
+// Measured before the fixes, at a 202px select: "{kind} (not allowed)" needed 219-259px and "Individual (creates a
+// player)" needed 239-302px, in all four locales. Every measurement is written to fit.json.
+test("every entrant-type option fits the select at 320 in every locale, measured in the browser", async ({ page, request }, testInfo) => {
+  test.setTimeout(240_000);
   const org = await activeOrg(page);
   const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
     name: `Kinds Fit ${TAG}`,
@@ -276,92 +279,98 @@ test("the not-allowed option fits the entrant-type select at 320 in every locale
     ends_on: "2030-12-31",
   });
   expect(comp.status, JSON.stringify(comp.error)).toBeLessThan(300);
-  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
-    name: `Squads ${TAG}`,
-    sport_key: "generic",
-    variant_key: "score",
-    config: GENERIC_CONFIG,
+  const mkDivision = async (name: string, entrants: { kinds: string[]; defaultKind: string } | null) => {
+    const d = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name,
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    expect(d.status, JSON.stringify(d.error)).toBeLessThan(300);
+    const put = await apiJson(request, `/api/v1/divisions/${d.data!.id}/registration-settings`, "PUT", {
+      enabled: true,
+      entrant_kind: "individual",
+      capacity: 10,
+      fee_cents: 0,
+      form_fields: [],
+    });
+    expect(put.status, JSON.stringify(put.error)).toBeLessThan(300);
+    if (entrants) {
+      // No registration yet, so the narrowing door allows it (I1 refuses only under live registrations).
+      const narrowed = await apiJson(request, `/api/v1/divisions/${d.data!.id}`, "PATCH", {
+        config: { ...GENERIC_CONFIG, entrants },
+      });
+      expect(narrowed.status, JSON.stringify(narrowed.error)).toBeLessThan(300);
+    }
+    return d.data!.id;
+  };
+  const refusedId = await mkDivision(`Squads ${TAG}`, { kinds: ["team"], defaultKind: "team" });
+  const allKindsId = await mkDivision(`Everyone ${TAG}`, null);
+  /** The option labels each select must show, from the locale's dictionary - never from the page. */
+  const expectedLabels = (loc: (typeof LOCALES)[number]) => ({
+    [refusedId]: [uiIn(loc, "divset.entrants.kind.individual"), uiIn(loc, "reg.settings.entrant.team")],
+    [allKindsId]: ["individual", "team", "pair"].map((k) => uiIn(loc, `reg.settings.entrant.${k}`)),
   });
-  expect(div.status, JSON.stringify(div.error)).toBeLessThan(300);
-  const id = div.data!.id;
-  const put = await apiJson(request, `/api/v1/divisions/${id}/registration-settings`, "PUT", {
-    enabled: true,
-    entrant_kind: "individual",
-    capacity: 10,
-    fee_cents: 0,
-    form_fields: [],
-  });
-  expect(put.status, JSON.stringify(put.error)).toBeLessThan(300);
-  // Teams only, with no registration yet - the narrowing door allows it (I1 refuses only under live registrations).
-  const narrowed = await apiJson(request, `/api/v1/divisions/${id}`, "PATCH", {
-    config: { ...GENERIC_CONFIG, entrants: { kinds: ["team"], defaultKind: "team" } },
-  });
-  expect(narrowed.status, JSON.stringify(narrowed.error)).toBeLessThan(300);
 
   const origin = new URL((testInfo.project.use.baseURL as string | undefined) ?? process.env.PLAYWRIGHT_BASE ?? "http://localhost:3000").origin;
   await page.setViewportSize({ width: 320, height: 800 });
-  const fits: { locale: string; text: string; need: number; have: number; selected: boolean; probe: boolean }[] = [];
-  let asserted = 0;
+  const fits: { locale: string; division: string; text: string; need: number; have: number }[] = [];
+  let measuredOptions = 0;
   try {
     for (const loc of LOCALES) {
       // `seazn_locale` is the explicit switcher pick and outranks the user's and the org's locale.
       await page.context().addCookies([{ name: "seazn_locale", value: loc, url: origin }]);
-      await page.goto(routes.competitionRegistration(org.slug, comp.data!.slug), { waitUntil: "load" });
-      const panel = await openConfigPanel(page, id);
-      const select = panel.locator('[data-field="entrant_kind"]');
-      await expect(select).toHaveValue("individual");
-      const label = uiIn(loc, "divset.entrants.kind.individual");
-      // Also probed, not asserted (recorded for the report): the pre-fix label, and the offered "Individual (creates a
-      // player)" label every individual division shows - so the table says what clipped before and what still does.
-      const probes = [
-        uiIn(loc, "reg.settings.entrant.notAllowedOption", { kind: label }),
-        uiIn(loc, "reg.settings.entrant.individual"),
-      ];
-      const measured = await select.evaluate((el, extra) => {
-        const sel = el as HTMLSelectElement;
-        const fit = (text: string) => {
-          const probe = sel.cloneNode(false) as HTMLSelectElement;
-          const opt = document.createElement("option");
-          opt.textContent = text;
-          probe.appendChild(opt);
-          probe.style.cssText += ";width:auto;min-width:0;max-width:none;position:absolute;left:0;top:0;visibility:hidden";
-          sel.parentElement!.appendChild(probe);
-          const need = probe.getBoundingClientRect().width;
-          probe.remove();
-          return need;
-        };
-        const have = sel.getBoundingClientRect().width;
-        return [
-          ...Array.from(sel.options).map((opt, i) => {
+      for (const id of [refusedId, allKindsId]) {
+        await page.goto(routes.competitionRegistration(org.slug, comp.data!.slug), { waitUntil: "load" });
+        const panel = await openConfigPanel(page, id);
+        const select = panel.locator('[data-field="entrant_kind"]');
+        await expect(select).toHaveValue("individual");
+        const measured = await select.evaluate((el) => {
+          const sel = el as HTMLSelectElement;
+          const have = sel.getBoundingClientRect().width;
+          return Array.from(sel.options).map((opt) => {
             const text = (opt.textContent ?? "").trim();
-            return { text, need: fit(text), have, selected: i === sel.selectedIndex, probe: false };
-          }),
-          ...extra.map((text) => ({ text, need: fit(text), have, selected: false, probe: true })),
-        ];
-      }, probes);
-      for (const m of measured) fits.push({ locale: loc, ...m });
-      const chosen = measured.find((m) => m.selected);
-      expect(chosen?.text, `${loc}: the selected option is the refused kind, in this locale's word`).toBe(label);
-      await expect(select.locator("option:checked")).toHaveAttribute(
-        "aria-label",
-        uiIn(loc, "reg.settings.entrant.notAllowedOption", { kind: label }),
-      );
-      await expect(panel.getByTestId("entrant-kind-not-allowed")).toHaveText(
-        uiIn(loc, "reg.settings.entrant.notAllowedHint", { kind: label }),
-      );
-      expect.soft(chosen!.need, `${loc} "${chosen!.text}" needs ${chosen!.need}px; the select is ${chosen!.have}px`).toBeLessThanOrEqual(chosen!.have);
-      const box = await select.boundingBox();
-      expect(box!.height, `${loc}: the 44px target`).toBeGreaterThanOrEqual(44);
-      await expectNoHorizontalScroll(page);
-      await panel.getByTestId("entrant-kind-not-allowed").scrollIntoViewIfNeeded();
-      await page.screenshot({ path: `${testInfo.outputPath()}/05-panel-not-allowed-${loc}-320.png` });
-      asserted++;
+            const probe = sel.cloneNode(false) as HTMLSelectElement;
+            const only = document.createElement("option");
+            only.textContent = text;
+            probe.appendChild(only);
+            probe.style.cssText += ";width:auto;min-width:0;max-width:none;position:absolute;left:0;top:0;visibility:hidden";
+            sel.parentElement!.appendChild(probe);
+            const need = probe.getBoundingClientRect().width;
+            probe.remove();
+            return { text, need, have };
+          });
+        });
+        const label = id === refusedId ? "refused" : "all-kinds";
+        expect(measured.map((m) => m.text), `${loc} ${label}: the options are the dictionary's`).toEqual(expectedLabels(loc)[id]);
+        for (const m of measured) {
+          fits.push({ locale: loc, division: label, ...m });
+          expect.soft(m.need, `${loc} ${label} "${m.text}" needs ${m.need}px; the select is ${m.have}px`).toBeLessThanOrEqual(m.have);
+          measuredOptions++;
+        }
+        const box = await select.boundingBox();
+        expect(box!.height, `${loc} ${label}: the 44px target`).toBeGreaterThanOrEqual(44);
+        await expectNoHorizontalScroll(page);
+        if (id === refusedId) {
+          const hint = panel.getByTestId("entrant-kind-not-allowed");
+          await expect(hint).toHaveText(uiIn(loc, "reg.settings.entrant.notAllowedHint", { kind: uiIn(loc, "divset.entrants.kind.individual") }));
+          // The hint DESCRIBES the select and marks it invalid (fix round 2), read off the live DOM.
+          await expect(select).toHaveAttribute("aria-invalid", "true");
+          await expect(select).toHaveAttribute("aria-describedby", (await hint.getAttribute("id"))!);
+          await hint.scrollIntoViewIfNeeded();
+        } else {
+          await expect(select).not.toHaveAttribute("aria-invalid", /.*/);
+          await select.scrollIntoViewIfNeeded();
+        }
+        await page.screenshot({ path: `${testInfo.outputPath()}/05-panel-${label}-${loc}-320.png` });
+      }
     }
   } finally {
     await page.context().clearCookies({ name: "seazn_locale" });
     writeFileSync(`${testInfo.outputPath()}/fit.json`, JSON.stringify(fits, null, 1));
   }
-  expect(asserted, "every locale measured").toBe(LOCALES.length);
+  // Anti-vacuity: 4 locales x (2 + 3) options, every one measured.
+  expect(measuredOptions, "every option in every locale measured").toBe(LOCALES.length * 5);
 });
 
 // Fix round 1 (I1, owner 2026-11-04; m2): a pending team registration holds "team", so the Entrants tab may not take team

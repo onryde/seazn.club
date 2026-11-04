@@ -6101,6 +6101,7 @@ export type DictionaryKey =
   | "reg.settings.entrant.chessLegacy"
   | "reg.settings.entrant.chessOnly"
   | "reg.settings.entrant.individual"
+  | "reg.settings.entrant.individualAria"
   | "reg.settings.entrant.notAllowedError"
   | "reg.settings.entrant.notAllowedHint"
   | "reg.settings.entrant.notAllowedOption"

@@ -1601,6 +1601,7 @@ describe("RegistrationHubConfigPanel — only the division's allowed entrant kin
     const HOUSE_ORDER = ["individual", "team", "pair"] as const;
     let checked = 0;
     let reordered = 0;
+    let individualChecked = 0;
     for (const allowed of [...ALL_KINDS.map((k) => kindsOf([k])), PAIRS_OR_INDIVIDUAL, ALL_KINDS]) {
       // The stored kind is one the division takes, so nothing is flagged.
       net.getResponse = { ...RESPONSE, entrant_kind: allowed[0]!, allow_free_agents: false };
@@ -1618,11 +1619,21 @@ describe("RegistrationHubConfigPanel — only the division's allowed entrant kin
       // Fix round 2: the positive pair of the refused case - a valid kind is not invalid and is described by nothing.
       expect(select["aria-invalid"], allowed.join(",")).toBeUndefined();
       expect(select["aria-describedby"], allowed.join(",")).toBeUndefined();
+      // The individual option shows the kind's word (it must fit at 320); "creates a player" is its accessible name.
+      const individual = ((select.children as unknown[]).flat() as ReactElement[]).find(
+        (k) => typeof k === "object" && k !== null && propsOf(k).value === "individual",
+      );
+      if (allowed.includes("individual")) {
+        expect(expandedText([individual!])).toBe(t(uiEn, "reg.settings.entrant.individual"));
+        expect(propsOf(individual!)["aria-label"]).toBe(t(uiEn, "reg.settings.entrant.individualAria"));
+        individualChecked++;
+      }
       checked++;
     }
     expect(checked).toBe(ALL_KINDS.length + 2);
     // The case that tells house order from engine order: without it the array assertion is as order-blind as a Set.
     expect(reordered).toBeGreaterThan(0);
+    expect(individualChecked).toBeGreaterThan(0);
   });
 
   it("a stored kind the division refuses stays selected, marked not allowed, with the fix-it hint - and is never offered as a choice", async () => {
