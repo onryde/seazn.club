@@ -12,7 +12,8 @@ import {
 } from "@/lib/chess-individual-only";
 import { assertWithinLimit, getLimit, requireFeature, passLockReason } from "@/lib/entitlements";
 import { EngineError, type StageKind } from "@seazn/engine/core";
-import { effectiveEntrantModel, fixtureKeysFor, type EntrantKind, type TiebreakerKey } from "@seazn/engine/sport";
+import { effectiveEntrantModel, fixtureKeysFor, type TiebreakerKey } from "@seazn/engine/sport";
+import { divisionTakesKind } from "@/lib/division-entrant-kinds";
 import { resolveModule } from "@/server/engine-db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
@@ -1273,7 +1274,7 @@ export async function patchDivision(
           select distinct kind from entrants
           where division_id = ${id} and status not in ('withdrawn', 'disqualified')`;
         for (const { kind } of inUse) {
-          if (!nextModel.kinds.includes(kind as EntrantKind)) {
+          if (!divisionTakesKind(nextModel.kinds, kind)) {
             throw new HttpError(
               422,
               `entrants of kind '${kind}' already exist — withdraw them first`,

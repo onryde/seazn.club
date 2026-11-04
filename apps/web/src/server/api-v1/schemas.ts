@@ -4307,7 +4307,9 @@ export type RegistrationFormField = z.infer<typeof RegistrationFormField>;
 export const PutRegistrationSettings = z
   .object({
     enabled: z.boolean(),
-    entrant_kind: EntrantKind.default("individual"),
+    /** Omitted = the division's own default kind (FU1: its effective entrant model), never a fixed 'individual' the division
+     *  may not take. A kind outside the division's Entrant kinds is 422 ENTRANT_KIND_NOT_ALLOWED. */
+    entrant_kind: EntrantKind.optional(),
     opens_at: z.iso.datetime({ offset: true }).nullish(),
     closes_at: z.iso.datetime({ offset: true }).nullish(),
     capacity: z.number().int().min(1).max(10000).nullish(),
@@ -4565,7 +4567,8 @@ export const PublicRegistrationDivision = z.object({
   /** Spots taken — the masthead capacity meter (v3/05 §2). */
   taken: z.number().int(),
   open: z.boolean(),
-  /** 'window' | 'full' (waitlist only) | 'payments_unavailable' | null */
+  /** 'window' | 'full' (waitlist only) | 'payments_unavailable' | 'entry_kind_unavailable' (the settings' entrant kind is
+   *  one the division's own entrant kinds do not include) | null */
   closed_reason: z.string().nullable(),
   /** V364 first-class columns (RS006 W1): the ENTRIES step badges these and
    *  greys a self-ineligible division using the same category/age-band

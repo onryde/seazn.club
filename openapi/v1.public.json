@@ -53791,7 +53791,7 @@
         ]
       },
       "put": {
-        "summary": "Upsert registration settings (entry fees are gated by `registration.paid`, free on every plan). A chess division takes individual players only: an entrant_kind other than individual, allow_free_agents, or a free_agent_fee_cents is 422 CHESS_INDIVIDUAL_ONLY",
+        "summary": "Upsert registration settings (entry fees are gated by `registration.paid`, free on every plan). A chess division takes individual players only: an entrant_kind other than individual, allow_free_agents, or a free_agent_fee_cents is 422 CHESS_INDIVIDUAL_ONLY. An entrant_kind the division's own entrant kinds (its sport, narrowed by config.entrants) do not include is 422 ENTRANT_KIND_NOT_ALLOWED; omitted, it is the division's default kind",
         "tags": [
           "registration"
         ],
@@ -53818,7 +53818,6 @@
                     "type": "boolean"
                   },
                   "entrant_kind": {
-                    "default": "individual",
                     "type": "string",
                     "enum": [
                       "team",
@@ -53988,7 +53987,6 @@
                 },
                 "required": [
                   "enabled",
-                  "entrant_kind",
                   "fee_cents",
                   "form_fields",
                   "payment_method",
@@ -61978,7 +61976,7 @@
     },
     "/api/v1/public/orgs/{orgSlug}/competitions/{slug}/register": {
       "post": {
-        "summary": "Public group registration submit: a club rep's whole cart (one or more entries) in one transaction — capacity, eligibility, waitlist and payment-method coherence enforced; checkout_url is a Stripe URL when the cart has a payable subtotal, otherwise null",
+        "summary": "Public group registration submit: a club rep's whole cart (one or more entries) in one transaction — capacity, eligibility, waitlist and payment-method coherence enforced; an entry of a kind its division's entrant kinds do not include is 422 ENTRANT_KIND_NOT_ALLOWED; checkout_url is a Stripe URL when the cart has a payable subtotal, otherwise null",
         "tags": [
           "public"
         ],

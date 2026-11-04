@@ -126,6 +126,12 @@ async function world(kind: Kind, online: boolean, over: { approval?: "auto" | "m
     update registration_settings
        set entrant_kind = ${kind}, allow_free_agents = ${kind === "team"}
      where division_id = ${division.id}`;
+  // FU1: registration seats only a kind the DIVISION takes, and the chess module declares individual only - so a legacy
+  // team/pair chess division is one whose Entrant kinds override was widened before the ruling too (the only way such a
+  // division ever held a team). Written directly for the same reason as the settings row above.
+  await sql`
+    update divisions set config = config || ${sql.json({ entrants: { kinds: [kind], defaultKind: kind } })}
+     where id = ${division.id}`;
   const [saved] = await sql<{ entrant_kind: string }[]>`
     select entrant_kind from registration_settings where division_id = ${division.id}`;
   expect(saved?.entrant_kind, "premise: the division is stored as a " + kind + " division").toBe(kind);

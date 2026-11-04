@@ -78,6 +78,8 @@ import { effectivePolicy, readCameraPolicy, type CameraPolicy } from "@/server/e
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { isLichessRosterRefusal } from "./external-accounts";
 import { openRegistrationSeatGate, type RegistrationSeatGate, type SeatGate } from "./online-seat-gate";
+import { assertDivisionTakesKind, entrantShapeOf, loadEntrantShape, type EntrantShapeSource } from "./entrant-shape";
+import { divisionTakesKind } from "@/lib/division-entrant-kinds";
 import { submitterAccounts } from "./registration-submitter-account";
 
 type Tx = postgres.TransactionSql;
@@ -1012,6 +1014,11 @@ export async function materialise(
     await clearExpiresIfNoLongerNeeded(tx, reg.group_id, reg.id);
     return null;
   }
+  // FU1 ruling 4: the entrant must be of a kind the division takes - the same refusal `createEntrants` makes. The kind
+  // was allowed at submit, but the organiser can narrow Entrant kinds while an entry waits for approval or payment. Refused
+  // with the named code BEFORE any write, so nothing is inserted; the caller's transaction rolls back whatever it wrote
+  // before this call (a webhook's `status = 'paid'` included: Stripe redelivers, see confirmPaidRegistration).
+  assertDivisionTakesKind(await loadEntrantShape(tx, reg.division_id), entrantKind);
   const [entrant] = await tx<{ id: string }[]>`
     insert into entrants (division_id, kind, display_name, status)
     values (${reg.division_id}, ${entrantKind}, ${reg.display_name}, 'confirmed')
@@ -1229,6 +1236,17 @@ export async function promoteOldestWaitlisted(
   excludeId?: string,
   seatGate?: RegistrationSeatGate,
 ): Promise<RegistrationWithGroupRow | null> {
+  // FU1: where a promotion SEATS the next in line (free, auto approval), it seats them as the settings' kind - and a kind
+  // the division no longer takes (Entrant kinds narrowed since they joined) would be refused by `materialise`, failing the
+  // withdrawal / expiry / lapse that freed the spot. Nobody can be seated as that kind, so nobody is promoted: the queue
+  // stays exactly as it is until the organiser fixes the kind. Asked once - every candidate here is seated as that kind.
+  if (promotionSeats(settings) && !divisionTakesKind((await loadEntrantShape(tx, divisionId)).kinds, settings.entrant_kind)) {
+    log.warn(
+      { divisionId, entrantKind: settings.entrant_kind },
+      "registrations: waitlist promotion held - the division no longer takes the registration kind",
+    );
+    return null;
+  }
   // `skipped`: the candidates this call has passed over - `excludeId`, and (with a seat gate) every registrant whose seat the gate
   // refused. A passed-over entry is left exactly as it was: still waitlisted, in its place, picked again by the NEXT freed spot.
   const skipped: string[] = excludeId ? [excludeId] : [];
@@ -2011,10 +2029,14 @@ export async function getRegistrationSettings(
 ): Promise<RegistrationSettingsRow & OrgPaymentDefaults> {
   const org = await orgPaymentDefaults(auth.orgId);
   return withTenant(auth.orgId, async (tx) => {
-    const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
+    const [division] = await tx<EntrantShapeSource[]>`
+      select sport_key, module_version, config from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
     const row = await loadSettings(tx, divisionId);
-    return { division_id: divisionId, ...DEFAULT_SETTINGS, ...(row ?? {}), ...org };
+    // FU1 ruling 3: an unconfigured division registers its OWN default kind (the engine's effective model), never an
+    // 'individual' the division may not take. A stored row keeps what it holds, allowed or not - the panel names it.
+    const defaults = { ...DEFAULT_SETTINGS, entrant_kind: entrantShapeOf(division).defaultKind };
+    return { division_id: divisionId, ...defaults, ...(row ?? {}), ...org };
   });
 }
 
@@ -2024,8 +2046,10 @@ export async function putRegistrationSettings(
   input: PutRegistrationSettings,
 ): Promise<RegistrationSettingsRow & OrgPaymentDefaults> {
   await requireFeature(auth.orgId, "registration.enabled");
-  const [regDiv] = await sql<{ competition_id: string; sport_key: string }[]>`
-    select competition_id, sport_key from divisions where id = ${divisionId}`;
+  const [regDiv] = await sql<({ competition_id: string } & EntrantShapeSource)[]>`
+    select competition_id, sport_key, module_version, config from divisions where id = ${divisionId}`;
+  // FU1: the division's allowed kinds - what the save below is judged against, and where an omitted kind defaults to.
+  const shape = regDiv ? entrantShapeOf(regDiv) : null;
   const org = await orgPaymentDefaults(auth.orgId);
 
   // Offline (cash/bank) fees are free on every plan — they fill the funnel.
@@ -2036,7 +2060,7 @@ export async function putRegistrationSettings(
   // defaulted fields, so normalise exactly like the schema does.
   const method = input.payment_method ?? "offline";
   const feeCents = input.fee_cents ?? 0;
-  const entrantKind = input.entrant_kind ?? "individual";
+  const entrantKind = input.entrant_kind ?? shape?.defaultKind ?? "individual";
   const formFields = input.form_fields ?? [];
   const approval = input.approval ?? "auto";
   const allowFreeAgents = input.allow_free_agents ?? false;
@@ -2057,6 +2081,10 @@ export async function putRegistrationSettings(
   ) {
     throw chessIndividualOnlyError();
   }
+  // FU1 ruling 2: registration takes only a kind the division itself allows (its Entrant kinds). After the chess rule, so a
+  // chess division hears that rule; before the free-agent rules below, which are about a kind that must first be allowed.
+  // An unknown division falls through to the 404 inside the transaction.
+  if (shape) assertDivisionTakesKind(shape, entrantKind);
   // Free agents (an entry with no roster yet, RS004/V364) only make sense
   // where there IS a roster to join later — registration-submit.ts's own
   // guard already refuses a free-agent submit outside entrant_kind 'team';
@@ -2189,7 +2217,7 @@ export interface PublicDivisionInfo {
   /** Spots already taken — drives the masthead capacity meter (v3/05 §2). */
   taken: number;
   open: boolean;
-  /** 'window' | 'full' | 'payments_unavailable' | null */
+  /** 'window' | 'full' | 'payments_unavailable' | 'entry_kind_unavailable' | null */
   closed_reason: string | null;
   /** V364 first-class columns (RS006 W1), alongside the derived booleans
    *  below — the ENTRIES step badges these directly and runs the SAME
@@ -2285,6 +2313,7 @@ export async function publicRegistrationInfo(
       waitlisted: number;
       eligibility_note: string | null;
       config: unknown;
+      module_version: string;
       division_camera_policy: unknown;
       competition_camera_policy: unknown;
     })[]
@@ -2292,7 +2321,7 @@ export async function publicRegistrationInfo(
     select rs.*, d.name, d.slug, d.sport_key, d.category, d.age_min, d.age_max, d.youth,
            d.age_cutoff_month, d.age_cutoff_day,
            d.eligibility_note,
-           d.config, d.camera_policy as division_camera_policy, c.camera_policy as competition_camera_policy,
+           d.config, d.module_version, d.camera_policy as division_camera_policy, c.camera_policy as competition_camera_policy,
            -- RS012 ruling 1: capacity/active counts TEAM entries only — a
            -- solo sign-up ("free agent") never occupies a team slot, here or
            -- at the submit-time gate this display must agree with
@@ -2333,8 +2362,17 @@ export async function publicRegistrationInfo(
     const paymentsBroken =
       r.payment_method === "stripe" && r.fee_cents > 0 &&
       (!comp.charges_enabled || !paidEntitled);
-    const open = windowOpen(r, now) && !paymentsBroken;
-    let reason: string | null = open ? null : paymentsBroken ? "payments_unavailable" : "window";
+    // FU1 ruling 3: a stored kind the division does not take (a row saved before the check, or Entrant kinds narrowed
+    // since) never opens to the public - submit would refuse every entry. Named first: it outlasts the window and payments.
+    const kindTaken = divisionTakesKind(entrantShapeOf(r).kinds, r.entrant_kind);
+    const open = kindTaken && windowOpen(r, now) && !paymentsBroken;
+    let reason: string | null = open
+      ? null
+      : !kindTaken
+        ? "entry_kind_unavailable"
+        : paymentsBroken
+          ? "payments_unavailable"
+          : "window";
     if (open && remaining === 0) reason = "full"; // still open — joins the waitlist
     return {
       division_id: r.division_id,

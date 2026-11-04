@@ -566,6 +566,13 @@ describe.skipIf(!HAS_DB)("gate: the Lichess link demanded at sign-up", () => {
         (division_id, enabled, entrant_kind, fee_cents, capacity, payment_method, approval, allow_free_agents,
          opens_at, closes_at, form_fields)
       values (${division.id}, true, ${entrantKind}, 0, null, 'offline', ${approval}, false, null, null, ${sql.json([])})`;
+    // FU1: registration takes only a kind the DIVISION takes, and chess declares individual only - a team chess division is
+    // one whose Entrant kinds override was widened before the individual-only ruling. Written directly, like the row above.
+    if (entrantKind === "team") {
+      await sql`
+        update divisions set config = config || ${sql.json({ entrants: { kinds: ["team"], defaultKind: "team" } })}
+         where id = ${division.id}`;
+    }
     const [org] = await sql<{ slug: string }[]>`select slug from organizations where id = ${owner.orgId}`;
     return { owner, orgSlug: org!.slug, compSlug: competition.slug, divisionId: division.id };
   }
