@@ -1585,7 +1585,11 @@ describe("RegistrationHubConfigPanel — only the division's allowed entrant kin
     island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
 
   it("offers exactly the division's kinds, in the house order, for every one-kind division and a two-kind one", async () => {
+    // The house order of the select (individual, team, pair - the order this panel has always listed them, and the chess
+    // tests pin). Typed here as the design states it; NOT the engine's order, which leads with team (review m8).
+    const HOUSE_ORDER = ["individual", "team", "pair"] as const;
     let checked = 0;
+    let reordered = 0;
     for (const allowed of [...ALL_KINDS.map((k) => kindsOf([k])), PAIRS_OR_INDIVIDUAL, ALL_KINDS]) {
       // The stored kind is one the division takes, so nothing is flagged.
       net.getResponse = { ...RESPONSE, entrant_kind: allowed[0]!, allow_free_agents: false };
@@ -1593,11 +1597,16 @@ describe("RegistrationHubConfigPanel — only the division's allowed entrant kin
       await flush();
       const offered = optionsOf(island.tree());
       expect(offered.every((o) => !o.disabled), allowed.join(",")).toBe(true);
-      expect(new Set(offered.map((o) => o.value)), allowed.join(",")).toEqual(new Set(allowed));
+      const want = HOUSE_ORDER.filter((k) => allowed.includes(k));
+      expect(want, `premise: ${allowed.join(",")} is all of the division's kinds`).toHaveLength(allowed.length);
+      expect(offered.map((o) => o.value), allowed.join(",")).toEqual(want);
+      if (want.join() !== allowed.join()) reordered++;
       expect(testId(island.tree(), "entrant-kind-not-allowed")).toBeUndefined();
       checked++;
     }
     expect(checked).toBe(ALL_KINDS.length + 2);
+    // The case that tells house order from engine order: without it the array assertion is as order-blind as a Set.
+    expect(reordered).toBeGreaterThan(0);
   });
 
   it("a stored kind the division refuses stays selected, marked not allowed, with the fix-it hint - and is never offered as a choice", async () => {
