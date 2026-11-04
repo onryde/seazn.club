@@ -3,6 +3,7 @@ import { TAG, apiJson, competitionPath, divisionPath, openBracket, pickBuilderSp
 import { fill, uiEn } from "./match-room-kit";
 import { closeOpenContexts } from "./spectator-public-helpers";
 import { API_CALL_MS, FLOOR_MS, STEP_MS, spectator } from "./spectator-w2-kit";
+import { routes } from "../src/lib/routes";
 import {
   BADMINTON_GAME,
   LATE_SPORTS,
@@ -88,11 +89,19 @@ const standingBye = (rows: readonly SwissRow[]) => rows.filter((f) => isByeRow(f
 const seatsOf = (rows: readonly SwissRow[]) =>
   rows.map((f) => [f.id, f.home_entrant_id, f.away_entrant_id] as const).sort((a, b) => a[0].localeCompare(b[0]));
 
-/** The public twin of an organiser path: `/o/{org}/c/{comp}` -> `/shared/{org}/{comp}`. */
-async function sharedPath(request: APIRequestContext, competitionId: string) {
-  const path = (await competitionPath(request, competitionId)).replace(/^\/o\/([^/]+)\/c\//, "/shared/$1/");
-  expect(path, "premise: the organiser path became the public one").toMatch(/^\/shared\/[^/]+\/[^/?]+$/);
-  return path;
+/** A competition's org and competition slugs, read back off its organiser path `/o/{org}/c/{comp}`, so every spectator URL
+ *  below is built by `routes.public*` (LIVE1) - never by hand. */
+async function publicSlugs(request: APIRequestContext, competitionId: string) {
+  const organiser = await competitionPath(request, competitionId);
+  const m = /^\/o\/([^/]+)\/c\/([^/?]+)$/.exec(organiser);
+  expect(m, `premise: an organiser competition path, got ${organiser}`).not.toBeNull();
+  return { org: m![1]!, comp: m![2]! };
+}
+
+/** The public hub of a competition (the spectator tree): `routes.publicHub(org, comp)`. */
+async function publicHubPath(request: APIRequestContext, competitionId: string) {
+  const { org, comp } = await publicSlugs(request, competitionId);
+  return routes.publicHub(org, comp);
 }
 
 /** Pair next round on the desk - the Swiss rail's own button - answered off the wire. */
@@ -490,8 +499,8 @@ test.describe("SW-L10 an odd Swiss with three late players and a Buchholz cut in
 
     // (7) The public table, read by an anonymous visitor: every row's points and both ladders are the oracle's, the order is
     // the chain's (the members of a level group in any order), and the cut pair is split by a Buchholz ladder.
-    const shared = await sharedPath(request, competitionId);
-    const hubUrl = `${shared}?tab=table`;
+    const slugs = await publicSlugs(request, competitionId);
+    const hubUrl = `${routes.publicHub(slugs.org, slugs.comp)}?tab=table`;
     const visitor = await spectator(browser, { width: 1280, height: 900 });
     const want = Object.fromEntries(rank.order.map((id) => [names.get(id)!, ladderOf(id)]));
     let hub: HubRow[] = [];
@@ -522,7 +531,7 @@ test.describe("SW-L10 an odd Swiss with three late players and a Buchholz cut in
 
     // (8) ST-G21: the anonymous division board at a TV width prints the same two ladders for the cut pair (t9 owns the fold).
     const tv = await spectator(browser, { width: 1920, height: 1080 });
-    await tv.goto(`${shared}/${divisionSlug}/present`);
+    await tv.goto(routes.publicPresent(slugs.org, slugs.comp, divisionSlug));
     await expect
       .poll(
         async () => {
@@ -719,7 +728,7 @@ test.describe("X-SW-12 chess: the three late-entry cases on one boardgame Swiss"
     const made = await apiJson<{ visibility: string }>(request, `/api/v1/competitions/${div.data!.competition_id}`, "PATCH", { visibility: "public" });
     expect([made.status, made.data?.visibility], JSON.stringify(made.error)).toEqual([200, "public"]);
     const visitor = await spectator(browser, { width: 1280, height: 900 });
-    const hubUrl = `${await sharedPath(request, div.data!.competition_id)}?tab=table`;
+    const hubUrl = `${await publicHubPath(request, div.data!.competition_id)}?tab=table`;
     await expect
       .poll(
         async () => {
@@ -913,7 +922,7 @@ test.describe("football Swiss: Opp diff and Buchholz on the public table", () =>
     expect(new Set(Object.values(want).map((w) => w.buchholz)).size, "premise: the Buchholz values differ").toBeGreaterThan(1);
 
     const visitor = await spectator(browser, { width: 1280, height: 900 });
-    const hubUrl = `${await sharedPath(request, comp.data!.id)}?tab=table`;
+    const hubUrl = `${await publicHubPath(request, comp.data!.id)}?tab=table`;
     await expect
       .poll(
         async () => {

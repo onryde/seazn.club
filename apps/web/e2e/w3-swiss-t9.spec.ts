@@ -5,6 +5,7 @@ import { apiJson, addEntrantsViaApi, competitionPath, createStageAndGenerate } f
 import { LATE_SPORTS, startedSwiss, type Seated } from "./support/swiss-app-a-kit";
 import { closeOpenContexts } from "./spectator-public-helpers";
 import { spectator } from "./spectator-w2-kit";
+import { routes } from "../src/lib/routes";
 
 // W3 Swiss app-B Task 9 (ST-G21, plan 2026-10-31-w3-swiss-app-b.md) - the TV board and the public table show a Swiss stage's
 // tie-break columns. Judged as a WHOLE file, never with `-g`; the describe sets serial mode for itself only (AGENTS.md class 21).
@@ -171,8 +172,11 @@ test.describe("ST-G21 the board and the public table show Buchholz for a Swiss",
       const competitionId = div.data!.competition_id;
       const made = await apiJson<{ visibility: string }>(request, `/api/v1/competitions/${competitionId}`, "PATCH", { visibility: "public" });
       expect([made.status, made.data?.visibility], `a spectator can only read a public competition: ${JSON.stringify(made.error)}`).toEqual([200, "public"]);
-      const hubUrl = (await competitionPath(request, competitionId)).replace(/^\/o\/([^/]+)\/c\//, "/shared/$1/") + "?tab=table";
-      expect(hubUrl, "premise: the organiser path became the public one").toMatch(/^\/shared\/[^/]+\/[^/?]+\?tab=table$/);
+      // The spectator hub, built by `routes.publicHub` (LIVE1) off the slugs in the organiser path `/o/{org}/c/{comp}`.
+      const organiser = await competitionPath(request, competitionId);
+      const slugs = /^\/o\/([^/]+)\/c\/([^/?]+)$/.exec(organiser);
+      expect(slugs, `premise: an organiser competition path, got ${organiser}`).not.toBeNull();
+      const hubUrl = `${routes.publicHub(slugs![1]!, slugs![2]!)}?tab=table`;
 
       // Round 1, both boards decided through the scorer's events: the losers' opponents scored, so their Buchholz is not zero.
       const boards = (await g.boards(1)) as Seated[];

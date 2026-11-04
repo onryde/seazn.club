@@ -35,7 +35,7 @@ import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
  * column is there with no tie-break configuration at all.
  *
  * T9 (ST-G21; rulebook-W3 §8 T9): the TV board shows the Swiss tie-break columns. The same football Swiss shape as T3 (round 1
- * paired, nothing played), read from the anonymous division board `/shared/{org}/{comp}/{div}/present` - the page that builds the
+ * paired, nothing played), read from the anonymous division board `/live/{org}/{comp}/{div}/present` - the page that builds the
  * slides from the public read models and hands them to the client as RSC props (there is no HTTP slides document; this payload is
  * the wire a venue screen reads). The standings slide carries `tiebreakColumns` with exactly two keys, in the stage's cascade
  * order: football's Swiss chain (FB-TB-5) is points, diff, for, wins, buchholz, opp_diff, direct, lots, so the two are buchholz
@@ -394,7 +394,7 @@ export async function w3SwissBSuite(): Promise<void> {
     const paired = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
     const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
     const orgSlug = orgs.find((o) => o.id === who.org_id)?.slug ?? "";
-    const boardRes = await fetch(`${BASE}/shared/${orgSlug}/${comp?.slug}/${div?.slug}/present`);
+    const boardRes = await fetch(`${BASE}/live/${orgSlug}/${comp?.slug}/${div?.slug}/present`);
     const html = boardRes.status === 200 ? await boardRes.text() : "";
     // The flight payload quotes its JSON inside a JS string, so the quotes arrive as \" (anchored on them, not on a bare word).
     const block = /\\"tiebreakColumns\\":\[((?:\{[^\]}]*\},?)+)\]/.exec(html)?.[1] ?? "";
