@@ -31,7 +31,7 @@ import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { Tip } from "@/components/ui/tip";
 import { useMsg, useLocale } from "@/components/i18n/dict-provider";
 import { settingsErrorText } from "@/lib/schedule-error";
-import { pluralizeVenue } from "@/lib/venue";
+import { venueNounOf, venueWords } from "@/lib/venue";
 // P9 scope item 5: the court multi-picker replaces the free-text court list
 // below. `venues` is fetched server-side (`listVenues`) and threaded down —
 // see the component's own header for why it isn't fetched client-side here.
@@ -271,17 +271,11 @@ export function CourtsPanel({
   const msg = useMsg();
   const [courts, setCourts] = useState<string[]>([...config.courts]);
   const [saving, setSaving] = useState(false);
-  // Singular, lowercase — `removeVenue` ("Remove {venue} {n}") reads it as
-  // one court's own name.
-  const venue = venueCap.toLowerCase();
-  // Plural, CAPITALISED — `venuesLabel` is a heading ("{venue}" alone, e.g.
-  // "Pitches"). `venueCap` alone is singular ("Court", "Pitch"), and naively
-  // suffixing "s" in the old template broke on "Pitch" -> "Pitchs" instead of
-  // "Pitches" (`pluralizeVenue` handles that).
-  const venuePluralCap = pluralizeVenue(venueCap);
-  // Plural, lowercase — `venuesDesc` reads `{venue}` mid-sentence ("Pick the
-  // {venue} this schedule can use…").
-  const venuePlural = venuePluralCap.toLowerCase();
+  // The sport's playing-area noun in the reader's language, from the dictionary (`venueCap` is the English label the
+  // schedule page hands down; `venueNounOf` maps it back onto the closed noun set). `removeVenue` ("Remove {venue} {n}")
+  // reads the singular, lowercase, as one court's own name; `venuesLabel` is a heading ("{venue}" alone), so the
+  // CAPITALISED plural ("Pitches", "Velden"); `venuesDesc` reads the lowercase plural mid-sentence.
+  const words = venueWords(msg, venueNounOf(venueCap));
 
   async function save() {
     setSaving(true);
@@ -311,8 +305,8 @@ export function CourtsPanel({
           value={courts}
           onChange={setCourts}
           disabled={!canEdit}
-          label={msg("boardset.venuesLabel", { venue: venuePluralCap })}
-          description={msg("boardset.venuesDesc", { venue: venuePlural })}
+          label={msg("boardset.venuesLabel", { venue: words.pluralCap })}
+          description={msg("boardset.venuesDesc", { venue: words.plural })}
           emptyTitle={msg("courtPicker.emptyTitle")}
           emptyBody={msg("courtPicker.emptyBody")}
           directoryLinkLabel={msg("courtPicker.directoryLink")}
@@ -321,7 +315,7 @@ export function CourtsPanel({
           unknownCourtLabel={msg("courtPicker.unknownCourt")}
           moveUpLabel={msg("venues.court.moveUp")}
           moveDownLabel={msg("venues.court.moveDown")}
-          removeLabelFor={(n) => msg("boardset.removeVenue", { venue, n })}
+          removeLabelFor={(n) => msg("boardset.removeVenue", { venue: words.singular, n })}
         />
       </div>
 
@@ -430,6 +424,9 @@ export function SettingsPanel({
   viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
+  // The sport's noun in the reader's language - see CourtsPanel's `words`. Read by the collapsed summary below as well as
+  // the expanded form, so it is resolved before the early return.
+  const words = venueWords(msg, venueNounOf(venueCap));
   const [open, setOpen] = useState(defaultOpen);
   const [startAt, setStartAt] = useState(
     config.startAt
@@ -544,7 +541,7 @@ export function SettingsPanel({
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)} className="text-xs text-purple-600 hover:underline">
-        {msg("boardset.title")} ({config.courts.length} {venueCap.toLowerCase()}{config.courts.length === 1 ? "" : "s"}, {msg("boardset.sum.matches", { n: config.matchMinutes })}
+        {msg("boardset.title")} ({config.courts.length} {config.courts.length === 1 ? words.singular : words.plural}, {msg("boardset.sum.matches", { n: config.matchMinutes })}
         {config.gapMinutes > 0 ? msg("boardset.sum.gap", { n: config.gapMinutes }) : ""}
         {config.perEntrantMinRest > 0 ? msg("boardset.sum.rest", { n: config.perEntrantMinRest }) : ""}
         {daily ? msg("boardset.sum.play", { from: daily.from, to: daily.to }) : customWindows ? msg("boardset.sum.custom") : ""})
@@ -640,11 +637,6 @@ export function SettingsPanel({
   }
 
   const constrained = !constraintsAllowed;
-  const venue = venueCap.toLowerCase();
-  // See CourtsPanel's own doc comments on these two — `venuesLabel` is a
-  // heading (capitalised), `venuesDesc` reads mid-sentence (lowercase).
-  const venuePluralCap = pluralizeVenue(venueCap);
-  const venuePlural = venuePluralCap.toLowerCase();
   // Field markup mirrors the division-creation wizard — one input system
   // everywhere (default-size .input, wizard hint lines, courts as a list).
   return (
@@ -665,7 +657,7 @@ export function SettingsPanel({
         stale={capacityStale}
         failed={capacityFailed}
         onApply={applyCapacitySuggestion}
-        venueLabel={venue}
+        venueLabel={words.singular}
       />
 
       {constrained && <UpgradeGate feature="scheduling.constraints" compact viewerPlan={viewerPlan} />}
@@ -748,7 +740,7 @@ export function SettingsPanel({
         <label className="block">
           <span className="label">{msg("boardset.gap")}</span>
           <input data-testid="settings-gap-minutes" type="number" min={0} inputMode="numeric" value={gapMinutes} onChange={(e) => setGapMinutes(sanitizeNonNegativeInt(e.target.value))} className="input w-full" disabled={!canEdit} />
-          <span className="mt-0.5 block text-xs text-slate-400">{msg("boardset.gapHint", { venue })}</span>
+          <span className="mt-0.5 block text-xs text-slate-400">{msg("boardset.gapHint", { venue: words.singular })}</span>
         </label>
         {/* A <div> with an explicit htmlFor rather than a wrapping <label>:
             `Tip` renders a <button>, and a button inside a <label> forwards its
@@ -801,8 +793,8 @@ export function SettingsPanel({
             value={courts}
             onChange={setCourts}
             disabled={!canEdit}
-            label={msg("boardset.venuesLabel", { venue: venuePluralCap })}
-            description={msg("boardset.venuesDesc", { venue: venuePlural })}
+            label={msg("boardset.venuesLabel", { venue: words.pluralCap })}
+            description={msg("boardset.venuesDesc", { venue: words.plural })}
             emptyTitle={msg("courtPicker.emptyTitle")}
             emptyBody={msg("courtPicker.emptyBody")}
             directoryLinkLabel={msg("courtPicker.directoryLink")}
@@ -811,7 +803,7 @@ export function SettingsPanel({
             unknownCourtLabel={msg("courtPicker.unknownCourt")}
             moveUpLabel={msg("venues.court.moveUp")}
             moveDownLabel={msg("venues.court.moveDown")}
-            removeLabelFor={(n) => msg("boardset.removeVenue", { venue, n })}
+            removeLabelFor={(n) => msg("boardset.removeVenue", { venue: words.singular, n })}
           />
         </div>
       )}

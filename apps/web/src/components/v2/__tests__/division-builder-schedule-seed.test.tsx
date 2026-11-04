@@ -221,6 +221,15 @@ describe("DivisionBuilder — scheduling step date/time controls", () => {
 });
 
 describe("DivisionBuilder — venue list gate", () => {
+  // The hint's two nouns come from the dictionary's own `venue.noun.*` entries (the test sport is football: a pitch). It
+  // used to be asserted with `{ venue: "pitch" }` alone, which matched the copy's baked-in English "s" - "parallel
+  // pitchs" - and so froze that defect as the expected value.
+  const proHint = () =>
+    msg("wizard.venuesProHint", {
+      venue: msg("venue.noun.pitch.singular").toLowerCase(),
+      venues: msg("venue.noun.pitch.plural").toLowerCase(),
+    });
+
   // P9 scope item 5: the free-text "+ Add venue" button is gone — the court
   // multi-picker's own checkboxes are how an organiser adds a court now. The
   // gate survives as a SELECTION CAP (maxSelected={1}) plus the same hint +
@@ -228,12 +237,12 @@ describe("DivisionBuilder — venue list gate", () => {
   // is granted on every plan, so the gate is the override-only card (V471).
   it("shows no switched-off hint when the org has scheduling.constraints", () => {
     const html = render(true);
-    expect(html).not.toContain(msg("wizard.venuesProHint", { venue: "pitch" }));
+    expect(html).not.toContain(proHint());
   });
 
   it("shows the switched-off hint + override-only gate without the feature", () => {
     const html = render(false);
-    expect(html).toContain(msg("wizard.venuesProHint", { venue: "pitch" }));
+    expect(html).toContain(proHint());
     // The same gate component the schedule settings panel uses — its
     // override-only arm, which sells nothing: no plan sells this key back.
     expect(html).toContain('data-feature="scheduling.constraints"');

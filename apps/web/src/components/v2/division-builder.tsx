@@ -35,7 +35,7 @@ import { routes } from "@/lib/routes";
 import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
-import { venueNoun, venueLabel, pluralizeVenue } from "@/lib/venue";
+import { venueNoun, venueWords } from "@/lib/venue";
 import { defaultMatchMinutes, timeControlMatchMinutes } from "@/lib/match-length";
 import { pickVariant } from "@/lib/preferred-variant";
 import { FormatExplainerPanel } from "@/components/v2/format-explainer-panel";
@@ -534,7 +534,7 @@ export function DivisionBuilder({
   // spent) - until the organiser types a length, which always stands. The seed, the estimates and Review all read this.
   const matchMinutes = (!matchMinutesTouched ? timeControlMatchMinutes(timeControlKey) : undefined) ?? sportMatchMinutes;
   const venue = venueNoun(sportKey); // "pitch" / "table" / "court" / "board" / "rink"
-  const VenueCap = venueLabel(sportKey);
+  const venueText = venueWords(msg, venue); // the same noun in the reader's language (dictionary, not the English label)
   const offered = formatOffer;
   const planMinutes = matchMinutes >= 1 ? matchMinutes : 30;
   const plan = {
@@ -1371,8 +1371,8 @@ export function DivisionBuilder({
                 value={courts}
                 onChange={setCourts}
                 maxSelected={constraintsAllowed ? undefined : 1}
-                label={msg("boardset.venuesLabel", { venue: pluralizeVenue(VenueCap) })}
-                description={msg("boardset.venuesDesc", { venue: pluralizeVenue(venue) })}
+                label={msg("boardset.venuesLabel", { venue: venueText.pluralCap })}
+                description={msg("boardset.venuesDesc", { venue: venueText.plural })}
                 emptyTitle={msg("courtPicker.emptyTitle")}
                 emptyBody={msg("courtPicker.emptyBody")}
                 directoryLinkLabel={msg("courtPicker.directoryLink")}
@@ -1381,11 +1381,11 @@ export function DivisionBuilder({
                 unknownCourtLabel={msg("courtPicker.unknownCourt")}
                 moveUpLabel={msg("venues.court.moveUp")}
                 moveDownLabel={msg("venues.court.moveDown")}
-                removeLabelFor={(n) => msg("boardset.removeVenue", { venue, n })}
+                removeLabelFor={(n) => msg("boardset.removeVenue", { venue: venueText.singular, n })}
               />
               {!constraintsAllowed && (
                 <div className="mt-2 space-y-1">
-                  <p className="text-xs text-slate-500">{msg("wizard.venuesProHint", { venue })}</p>
+                  <p className="text-xs text-slate-500">{msg("wizard.venuesProHint", { venue: venueText.singular, venues: venueText.plural })}</p>
                   <UpgradeGate feature="scheduling.constraints" compact viewerPlan={viewerPlan} />
                 </div>
               )}

@@ -8,6 +8,7 @@ import { windowsToDailyHours, type FeedLabelPair } from "@/lib/schedule-board";
 import { isoFromZonedDateTime, zonedDateTimeInput, zonedTimeInput } from "@/lib/zoned-datetime";
 import { cardTitle, type BoardConfig, type BoardFixture } from "./types";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { venueNounOf, venueWords } from "@/lib/venue";
 import { DateTimeField } from "../shared/datetime-field";
 import { boardSlotTimes } from "../shared/time-options";
 
@@ -150,7 +151,7 @@ export function MovePanel({
         />
       </div>
       <label className="block">
-        <span className="label">{venueCap}</span>
+        <span className="label">{venueWords(msg, venueNounOf(venueCap)).singularCap}</span>
         {/* `.select`'s own padding loses to `px-2 py-1 text-xs` under
             Tailwind's utilities layer (S13/#422 W11). `min-h-11` survives it. */}
         <select value={court} onChange={(e) => setCourt(e.target.value)} className="input min-h-11 px-2 py-1 text-xs">

@@ -19,6 +19,7 @@
 import { Gauge } from "lucide-react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
+import { venueWords } from "@/lib/venue";
 import type { CapacityReport, CapacitySuggestion, CapacitySuggestionKind } from "@seazn/engine/scheduling/capacity";
 
 const VERDICT_STYLE: Record<CapacityReport["verdict"], { chip: string; bar: string; track: string; key: MessageKey }> = {
@@ -66,9 +67,9 @@ export interface CapacityCardProps {
    *  `raise_cap` has no entry here — that knob lives on the Constraints
    *  tab, not this panel — so its row renders with no Apply button. */
   onApply?: Partial<Record<CapacitySuggestionKind, (s: CapacitySuggestion) => void>>;
-  /** "Court" / "Field" / "Pitch" — the sport-specific venue word the rest of
-   *  this panel already uses (`venueCap` prop), so the add_court suggestion
-   *  says the same word the courts list above it does. */
+  /** "court" / "pitch" / "veld" — the sport-specific venue word, lowercase and already in the reader's language
+   *  (`venueWords(msg, noun).singular`, which SettingsPanel passes), so the add_court suggestion says the same word
+   *  the courts list above it does. Absent = the court, in the reader's language. */
   venueLabel?: string;
   /** P10 §4/Task 6 (useCapacityReport): true while `report` is the last
    *  RESOLVED number set, but a debounced edit is pending or its refetch is
@@ -89,8 +90,10 @@ export interface CapacityCardProps {
   failed?: boolean;
 }
 
-export function CapacityCard({ report, onApply, venueLabel = "court", stale = false, failed = false }: CapacityCardProps) {
+export function CapacityCard({ report, onApply, venueLabel, stale = false, failed = false }: CapacityCardProps) {
   const msg = useMsg();
+  // No label handed down = the court, in the reader's language (it used to default to the English "court").
+  const venueText = venueLabel ?? venueWords(msg, "court").singular;
   // Nothing to assess AND nothing failed either — the pre-existing "not
   // applicable" contract (see `report`'s own doc comment). A FAILED check
   // still renders below, even with zero numbers ever received: a silently
@@ -195,7 +198,7 @@ export function CapacityCard({ report, onApply, venueLabel = "court", stale = fa
                     <li key={s.kind} className="flex items-center justify-between gap-2 text-xs text-slate-600">
                       <span className="flex items-center gap-1.5">
                         {s.flipsVerdict && <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />}
-                        {suggestionLabel(msg, s, venueLabel)}
+                        {suggestionLabel(msg, s, venueText)}
                       </span>
                       {apply && (
                         <button

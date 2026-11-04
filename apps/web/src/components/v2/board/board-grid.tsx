@@ -13,6 +13,7 @@ import { UNASSIGNED, type BoardConfig, type BoardConflict, type BoardFixture, ty
 import type { BoardRoundCode } from "./round-codes";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
+import { venueNounOf, venueWords } from "@/lib/venue";
 import { overlaps, toMs } from "./use-disruption-signals";
 import { Plus } from "lucide-react";
 
@@ -155,7 +156,7 @@ export function BoardGrid({
                 key={c ?? UNASSIGNED}
                 className="app-display sticky top-0 z-10 min-w-36 border-b-2 border-purple-200 border-l border-l-slate-200 bg-slate-50 px-2 py-2 text-left text-[11px] font-bold text-slate-800"
               >
-                {c ? (courtNames?.[c] ?? c) : msg("board.grid.unassignedCol", { venue: venueCap.toLowerCase() })}
+                {c ? (courtNames?.[c] ?? c) : msg("board.grid.unassignedCol", { venue: venueWords(msg, venueNounOf(venueCap)).singular })}
               </th>
             ))}
           </tr>
