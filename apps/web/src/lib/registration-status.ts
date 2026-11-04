@@ -11,6 +11,12 @@
 /** Statuses that hold a capacity spot. */
 export const SPOT_HOLDERS = ["pending", "paid", "confirmed"] as const;
 
+/** FU1 fix round 1 (I1): statuses of a LIVE registration that has no entrant yet - one a later door may still seat
+ *  (pending, paid) or promote (waitlisted). A `confirmed` row with no entrant (a solo sign-up waiting for a team) is
+ *  live too; callers add that case beside this list (`status = 'confirmed' and entrant_id is null`). A confirmed row
+ *  WITH an entrant is the entrant's business (ENTRANT_KIND_IN_USE), and the terminal statuses below hold nothing. */
+export const LIVE_UNSEATED_STATUSES = ["pending", "paid", "waitlisted"] as const;
+
 /** Statuses no writer moves a registration OUT of.
  *
  *  `rejected` is terminal by RS002's RULING A (terminal from EVERY writer, no

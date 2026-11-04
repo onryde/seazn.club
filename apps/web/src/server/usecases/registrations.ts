@@ -78,7 +78,13 @@ import { effectivePolicy, readCameraPolicy, type CameraPolicy } from "@/server/e
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { isLichessRosterRefusal } from "./external-accounts";
 import { openRegistrationSeatGate, type RegistrationSeatGate, type SeatGate } from "./online-seat-gate";
-import { assertDivisionTakesKind, entrantShapeOf, loadEntrantShape, type EntrantShapeSource } from "./entrant-shape";
+import {
+  assertDivisionTakesKind,
+  entrantShapeOf,
+  loadEntrantShape,
+  registrationDefaultKind,
+  type EntrantShapeSource,
+} from "./entrant-shape";
 import { divisionTakesKind } from "@/lib/division-entrant-kinds";
 import { submitterAccounts } from "./registration-submitter-account";
 
@@ -2034,8 +2040,9 @@ export async function getRegistrationSettings(
     if (!division) throw new HttpError(404, "division not found");
     const row = await loadSettings(tx, divisionId);
     // FU1 ruling 3: an unconfigured division registers its OWN default kind (the engine's effective model), never an
-    // 'individual' the division may not take. A stored row keeps what it holds, allowed or not - the panel names it.
-    const defaults = { ...DEFAULT_SETTINGS, entrant_kind: entrantShapeOf(division).defaultKind };
+    // 'individual' the division may not take - chess always individual (fix round 1 m4). A stored row keeps what it
+    // holds, allowed or not - the panel names it.
+    const defaults = { ...DEFAULT_SETTINGS, entrant_kind: registrationDefaultKind(division) };
     return { division_id: divisionId, ...defaults, ...(row ?? {}), ...org };
   });
 }
@@ -2060,7 +2067,9 @@ export async function putRegistrationSettings(
   // defaulted fields, so normalise exactly like the schema does.
   const method = input.payment_method ?? "offline";
   const feeCents = input.fee_cents ?? 0;
-  const entrantKind = input.entrant_kind ?? shape?.defaultKind ?? "individual";
+  // An omitted kind is the division's default (chess: individual, m4). An unknown division has no default; it 404s in
+  // the transaction below, so this last fallback only keeps the type and is never saved.
+  const entrantKind = input.entrant_kind ?? (regDiv ? registrationDefaultKind(regDiv) : "individual");
   const formFields = input.form_fields ?? [];
   const approval = input.approval ?? "auto";
   const allowFreeAgents = input.allow_free_agents ?? false;

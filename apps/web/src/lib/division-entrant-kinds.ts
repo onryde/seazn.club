@@ -2,10 +2,14 @@
 //
 // A division's allowed kinds are the engine's effective entrant model: the sport module's declaration narrowed by the
 // division's `config.entrants` override (`effectiveEntrantModel`, @seazn/engine/sport). The server resolves that model in
-// one place (server/usecases/entrant-shape.ts) and every door asks THIS predicate of it: creating an entrant, a registration
-// settings save, the public register panel, a registration submit, and materialising a registration into an entrant. The
-// organiser's registration settings panel asks it too, of the allowed kinds the page resolved on the server, so the select
-// offers exactly what a save would take.
+// one place (server/usecases/entrant-shape.ts) and these doors ask THIS predicate of it: creating an entrant, a registration
+// settings save, the public register panel, a registration submit, materialising a registration into an entrant, and a
+// division save that would take a kind out from under entrants or live registrations (divisions.ts). The organiser's
+// registration settings panel asks it too, of the allowed kinds the page resolved on the server, so the select offers
+// exactly what a save would take.
+//
+// NOT every door: bulk import (server/usecases/imports.ts, `entrant.create`) inserts `team` entrants with no kind check.
+// That predates FU1 and lies outside registration; it is a follow-up, not covered here (FU1 review m9).
 //
 // Pure and client-safe: no server imports.
 

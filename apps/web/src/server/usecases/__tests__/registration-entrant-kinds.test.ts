@@ -81,6 +81,24 @@ async function setKinds(owner: AuthCtx, divisionId: string, kinds: EntrantKind[]
   await patchDivision(owner, divisionId, { config: { ...d!.config, entrants: { kinds, defaultKind: kinds[0] } } } as never);
 }
 
+/** Narrow a division's kinds straight in the table. Since fix round 1 (I1) the real door refuses to take a kind out from
+ *  under live registrations, so a door that must MEET such a division - one narrowed before the guard, the m5 legacy
+ *  rows - reaches that state here, as the seat-gate fixtures do. */
+async function narrowBySql(divisionId: string, kinds: EntrantKind[]) {
+  const entrants = { kinds, defaultKind: kinds[0] };
+  await sql`update divisions set config = config || ${sql.json({ entrants } as never)} where id = ${divisionId}`;
+}
+
+const configOf = async (divisionId: string) =>
+  (await sql<{ config: Record<string, unknown> }[]>`select config from divisions where id = ${divisionId}`)[0]!.config;
+
+/** The narrowing refusal (I1), with the facts the Entrants tab says it from. */
+const KIND_IN_USE = (kind: EntrantKind, count: number) => ({
+  status: 422,
+  code: "REGISTRATION_KIND_IN_USE",
+  extra: { kind, count },
+});
+
 const entrantsOf = (divisionId: string) =>
   sql<{ kind: string }[]>`select kind from entrants where division_id = ${divisionId}`;
 
@@ -92,6 +110,11 @@ function entryFor(divisionId: string, kind: EntrantKind): SubmitGroupEntryInput 
   return { division_id: divisionId, entrant_kind: kind, team_name: "Tide FC", players: [{ full_name: "Tom Cap" }], answers: {} };
 }
 
+// One sport for the refusal sweeps (save, public, submit, the doors, the webhook, the narrowing guard): `generic` with a
+// `config.entrants` override, because the override is the only narrowing door there is (PatchDivision cannot change
+// sport_key or module_version) and a module's own declaration reaches every door through the same
+// `effectiveEntrantModel` call; the module path itself is swept over the registry by the default test and, for the
+// narrowing guard, by the multi-kind sweep below (review m7).
 describe.skipIf(!HAS_DB)("FU1 registration takes only the division's allowed entrant kinds", () => {
   it("settings save: every kind on every division shape is taken iff the division allows it, refused 422 ENTRANT_KIND_NOT_ALLOWED otherwise", async () => {
     const { orgId, ownerId } = await seedOrg();
@@ -319,9 +342,14 @@ describe.skipIf(!HAS_DB)("FU1 registration takes only the division's allowed ent
         { fee_cents: door.settings.fee_cents ?? 0, currency: "gbp", payment_method: door.settings.payment_method ?? "offline" },
         { status: door.status, displayName: "Tide FC", players: [{ name: "Tom Cap" }] },
       );
-      await setKinds(owner, division.id, ["individual"]);
+      // By SQL: the real door refuses this narrowing while the live entry holds team (I1, tested below).
+      await narrowBySql(division.id, ["individual"]);
 
-      await expect(door.run(owner, division.id, registration.id), door.name).rejects.toMatchObject(REFUSAL);
+      // The refusal names the kind (fix round 1 m2): the hub says it in the organiser's language from that, not the English.
+      await expect(door.run(owner, division.id, registration.id), door.name).rejects.toMatchObject({
+        ...REFUSAL,
+        extra: { kind: "team" },
+      });
       expect(await entrantsOf(division.id), door.name).toEqual([]);
       const after = await loadWithGroup(registration.id);
       expect(after.entrant_id, door.name).toBeNull();
@@ -349,7 +377,8 @@ describe.skipIf(!HAS_DB)("FU1 registration takes only the division's allowed ent
       { fee_cents: 500, currency: "gbp", payment_method: "stripe" },
       { displayName: "Tide FC", players: [{ name: "Tom Cap" }] },
     );
-    await setKinds(owner, division.id, ["individual"]);
+    // By SQL: the real door refuses this narrowing while the pending entry holds team (I1, tested below).
+    await narrowBySql(division.id, ["individual"]);
 
     // The webhook handler throws, so billing_events.processed_at stays null and Stripe redelivers (report: FU1).
     for (let delivery = 0; delivery < 2; delivery++) {
@@ -385,7 +414,8 @@ describe.skipIf(!HAS_DB)("FU1 registration takes only the division's allowed ent
         displayName: "Queue FC",
         players: [{ name: "Quin" }],
       });
-      if (narrowed) await setKinds(owner, division.id, ["individual"]);
+      // By SQL: the real door refuses this narrowing while the queued entry holds team (I1, tested below).
+      if (narrowed) await narrowBySql(division.id, ["individual"]);
 
       const withdrawn = await withdrawRegistrationOrganiser(owner, holder.registration.id);
       expect(withdrawn.status).toBe("withdrawn");
@@ -401,5 +431,156 @@ describe.skipIf(!HAS_DB)("FU1 registration takes only the division's allowed ent
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  // ---- Fix round 1 -------------------------------------------------------------------------------------------------
+
+  // I1 (owner 2026-11-04): a division save may not take out the kind its registration takes while LIVE registrations of it
+  // exist. Live = pending, paid or waitlisted, or confirmed with no entrant yet (a solo sign-up) - the owner's list, not
+  // the guard's. Terminal statuses, and a confirmed entry already seated, hold nothing for this guard (a seated entry's
+  // ENTRANT is the entrants guard's business, so its entrant here is withdrawn to keep that guard out of the way).
+  const HOLDERS: { name: string; seed: { status: "pending" | "paid" | "waitlisted" | "confirmed" | "withdrawn" | "rejected" | "expired"; seated?: true }[]; live: number }[] = [
+    { name: "pending", seed: [{ status: "pending" }], live: 1 },
+    { name: "paid", seed: [{ status: "paid" }], live: 1 },
+    { name: "waitlisted", seed: [{ status: "waitlisted" }], live: 1 },
+    { name: "confirmed solo sign-up (no entrant yet)", seed: [{ status: "confirmed" }], live: 1 },
+    { name: "two live (pending + waitlisted)", seed: [{ status: "pending" }, { status: "waitlisted" }], live: 2 },
+    { name: "withdrawn", seed: [{ status: "withdrawn" }], live: 0 },
+    { name: "rejected", seed: [{ status: "rejected" }], live: 0 },
+    { name: "expired", seed: [{ status: "expired" }], live: 0 },
+    { name: "confirmed and seated (its entrant since withdrawn)", seed: [{ status: "confirmed", seated: true }], live: 0 },
+  ];
+
+  it("narrowing (I1): taking out the registration's kind while live registrations hold it is 422 REGISTRATION_KIND_IN_USE with their count and writes nothing - twice; terminal and seated entries do not hold it; once the live ones are withdrawn the same save lands", async () => {
+    let refused = 0;
+    let landed = 0;
+    for (const holder of HOLDERS) {
+      const { orgId, ownerId } = await seedOrg();
+      const owner = asOwner(orgId, ownerId);
+      const { competition } = await rig(owner);
+      const division = await generic(owner, competition.id, null);
+      await storeSettings(division.id, "team");
+      const money = { fee_cents: 0, currency: "gbp", payment_method: "offline" as const };
+      const regIds: string[] = [];
+      for (const [i, seed] of holder.seed.entries()) {
+        const { registration } = await seedRegistration(competition.id, division.id, money, {
+          status: seed.status,
+          displayName: `Tide ${i} FC`,
+          players: [{ name: `Tom ${i}` }],
+        });
+        regIds.push(registration.id);
+        if (seed.seated) {
+          const [entrant] = await sql<{ id: string }[]>`
+            insert into entrants (division_id, kind, display_name, status)
+            values (${division.id}, 'team', ${`Tide ${i} FC`}, 'withdrawn') returning id`;
+          await sql`update registrations set entrant_id = ${entrant!.id} where id = ${registration.id}`;
+        }
+      }
+      const before = await configOf(division.id);
+      if (holder.live > 0) {
+        for (let call = 0; call < 2; call++) {
+          await expect(setKinds(owner, division.id, ["individual"]), `${holder.name} call ${call}`).rejects.toMatchObject(
+            KIND_IN_USE("team", holder.live),
+          );
+          expect(await configOf(division.id), holder.name).toEqual(before);
+        }
+        // The organiser does what the refusal says - withdraws them (latest first, so no queued entry is promoted into
+        // the freed spot) - and the same save lands.
+        for (const id of [...regIds].reverse()) await withdrawRegistrationOrganiser(owner, id);
+        refused++;
+      }
+      await setKinds(owner, division.id, ["individual"]);
+      expect((await configOf(division.id)).entrants, holder.name).toEqual({ kinds: ["individual"], defaultKind: "individual" });
+      landed++;
+    }
+    expect(refused).toBe(HOLDERS.filter((h) => h.live > 0).length);
+    expect(refused).toBeGreaterThan(0);
+    expect(landed).toBe(HOLDERS.length);
+    expect(landed - refused).toBeGreaterThan(0);
+  });
+
+  it("narrowing (I1): only a kind the save TAKES OUT is asked - widening, a narrowing that keeps the registration's kind, and an unrelated save on a division already holding a mismatched kind all land under live registrations", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition } = await rig(owner);
+    const money = { fee_cents: 0, currency: "gbp", payment_method: "offline" as const };
+
+    // A legacy mismatch (m5): registration stores team, the division already takes individuals only. Every Entrants and
+    // format save re-sends the whole config, so refusing here would lock the organiser out of an unrelated change.
+    const legacy = await generic(owner, competition.id, { kinds: ["individual"] });
+    await storeSettings(legacy.id, "team");
+    await seedRegistration(competition.id, legacy.id, money, { displayName: "Tide FC", players: [{ name: "Tom Cap" }] });
+    const cfg = await configOf(legacy.id);
+    await patchDivision(owner, legacy.id, { config: { ...cfg, points: { w: 2, d: 1, l: 0 } } } as never);
+    expect((await configOf(legacy.id)).points).toEqual({ w: 2, d: 1, l: 0 });
+    // Widening to take team back lands; a narrowing that KEEPS team lands; taking team out again is refused.
+    await setKinds(owner, legacy.id, ["individual", "team"]);
+    await setKinds(owner, legacy.id, ["team"]);
+    expect(((await configOf(legacy.id)).entrants as { kinds: string[] }).kinds).toEqual(["team"]);
+    await expect(setKinds(owner, legacy.id, ["individual"])).rejects.toMatchObject(KIND_IN_USE("team", 1));
+  });
+
+  it("narrowing (I1), swept over every sport that declares more than one kind: an override that takes out the registered kind is refused while a pending entry holds it, and lands once it is withdrawn", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition } = await rig(owner);
+    const money = { fee_cents: 0, currency: "gbp", payment_method: "offline" as const };
+    let checked = 0;
+    for (const mod of builtinModules) {
+      const declared = effectiveEntrantModel(mod.entrantModel ?? null).kinds;
+      if (mod.entrantModel == null || declared.length < 2) continue;
+      const removed = declared[declared.length - 1]!;
+      const kept = declared.filter((k) => k !== removed);
+      await sql`
+        insert into sports (key, name, module_version, position_catalog)
+        values (${mod.key}, ${mod.key}, ${mod.version}, ${sql.json((mod.positions ?? { groups: [] }) as never)})
+        on conflict (key) do nothing`;
+      // Raw insert, as the default sweep does: the plan caps divisions per competition and this sweep needs one per sport.
+      const [division] = await sql<{ id: string }[]>`
+        insert into divisions (competition_id, org_id, name, slug, sport_key, variant_key, config, module_version)
+        values (${competition.id}, ${orgId}, ${mod.key}, ${"n-" + mod.key + "-" + randomUUID().slice(0, 6)},
+                ${mod.key}, ${Object.keys(mod.variants)[0] ?? "default"}, '{}'::jsonb, ${mod.version})
+        returning id`;
+      await storeSettings(division!.id, removed);
+      const { registration } = await seedRegistration(competition.id, division!.id, money, {
+        displayName: `${mod.key} entry`,
+        players: [{ name: "Ada One" }, { name: "Ben Two" }],
+      });
+      await expect(setKinds(owner, division!.id, kept), mod.key).rejects.toMatchObject(KIND_IN_USE(removed, 1));
+      await withdrawRegistrationOrganiser(owner, registration.id);
+      await setKinds(owner, division!.id, kept);
+      expect(((await configOf(division!.id)).entrants as { kinds: string[] }).kinds, mod.key).toEqual(kept);
+      checked++;
+    }
+    expect(checked).toBe(builtinModules.filter((m) => m.entrantModel != null && m.entrantModel.kinds.length > 1).length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  // m4: a chess division carrying a legacy `config.entrants` override whose defaultKind is team. Chess takes individuals
+  // only (owner ruling 2026-10-26), so its registration default is individual whatever the override says.
+  it("chess default (m4): a legacy override that defaults to team still registers individual - GET reports it and a save that names no kind lands on it, never 422", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition } = await rig(owner);
+    const chess = builtinModules.find((m) => m.key === "boardgame")!;
+    const override = { kinds: ["individual", "team"] as EntrantKind[], defaultKind: "team" as EntrantKind };
+    // The precondition that makes this case bite: the engine's own default for the division IS team.
+    expect(effectiveEntrantModel(chess.entrantModel ?? null, { entrants: override }).defaultKind).toBe("team");
+    await sql`
+      insert into sports (key, name, module_version, position_catalog)
+      values (${chess.key}, ${chess.key}, ${chess.version}, ${sql.json((chess.positions ?? { groups: [] }) as never)})
+      on conflict (key) do nothing`;
+    const [division] = await sql<{ id: string }[]>`
+      insert into divisions (competition_id, org_id, name, slug, sport_key, variant_key, config, module_version)
+      values (${competition.id}, ${orgId}, 'Chess legacy', ${"c-" + randomUUID().slice(0, 8)}, ${chess.key},
+              ${Object.keys(chess.variants)[0] ?? "default"}, ${sql.json({ entrants: override } as never)}, ${chess.version})
+      returning id`;
+    expect((await getRegistrationSettings(owner, division!.id)).entrant_kind).toBe("individual");
+    const withoutKind: Partial<typeof SETTINGS_BASE> = { ...SETTINGS_BASE };
+    delete withoutKind.entrant_kind;
+    for (let call = 0; call < 2; call++) {
+      const saved = await putRegistrationSettings(owner, division!.id, withoutKind as never);
+      expect(saved.entrant_kind, `call ${call}`).toBe("individual");
+    }
   });
 });

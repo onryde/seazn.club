@@ -6,8 +6,9 @@ import "server-only";
 import type postgres from "postgres";
 import { HttpError } from "@/lib/errors";
 import { ENTRANT_KIND_NOT_ALLOWED, divisionTakesKind } from "@/lib/division-entrant-kinds";
+import { isChessSport } from "@/lib/chess-individual-only";
 import { resolveModule } from "@/server/engine-db/registry";
-import { effectiveEntrantModel, type EffectiveEntrantModel } from "@seazn/engine/sport";
+import { effectiveEntrantModel, type EffectiveEntrantModel, type EntrantKind } from "@seazn/engine/sport";
 
 /** The columns the model is resolved from. */
 export interface EntrantShapeSource {
@@ -36,9 +37,18 @@ export async function loadEntrantShape(tx: postgres.TransactionSql, divisionId: 
   return entrantShapeOf(d);
 }
 
-/** Throw 422 ENTRANT_KIND_NOT_ALLOWED unless the division takes `kind`. */
+/** Throw 422 ENTRANT_KIND_NOT_ALLOWED unless the division takes `kind`. The kind rides along (`kind`) so a reader can say
+ *  the refusal in its own language (lib/entrant-kind-refusal.ts) rather than show this English. */
 export function assertDivisionTakesKind(eff: Pick<EffectiveEntrantModel, "kinds">, kind: string): void {
   if (!divisionTakesKind(eff.kinds, kind)) {
-    throw new HttpError(422, `this division doesn't take '${kind}' entrants`, ENTRANT_KIND_NOT_ALLOWED);
+    throw new HttpError(422, `this division doesn't take '${kind}' entrants`, ENTRANT_KIND_NOT_ALLOWED, { kind });
   }
+}
+
+/** The kind registration uses when none is stored or sent: the division's own default (FU1 ruling 3) - except chess,
+ *  which takes individual players only (owner ruling 2026-10-26) whatever a legacy `config.entrants` override's
+ *  `defaultKind` says (FU1 fix round 1 m4: such an override's `team` default made a save that named no kind 422
+ *  CHESS_INDIVIDUAL_ONLY). */
+export function registrationDefaultKind(division: EntrantShapeSource): EntrantKind {
+  return isChessSport(division.sport_key) ? "individual" : entrantShapeOf(division).defaultKind;
 }
