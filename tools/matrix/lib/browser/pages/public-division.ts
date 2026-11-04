@@ -1,5 +1,5 @@
 // The public division page, read as a visitor sees it (Task 5). Product
-// facts, read at Step 0 (app/(public)/shared/[orgSlug]/[competitionSlug]/
+// facts, read at Step 0 (app/(public)/live/[orgSlug]/[competitionSlug]/
 // [divisionSlug]/page.tsx):
 //  - :44 `export const revalidate = 30` — the page is ISR, so what it shows can
 //    trail the API by up to 30 s (a concern routed to Task 6's comparison).

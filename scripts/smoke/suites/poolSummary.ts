@@ -117,7 +117,7 @@ export async function poolSummarySuite(): Promise<void> {
   // convention this file already uses for every other rendered-page check.
   const statusPage = await html(
     newSession(),
-    `/shared/${orgSlug}/${comp.slug}/register/status?rid=${out.group_id}&token=${out.access_token}`,
+    `/live/${orgSlug}/${comp.slug}/register/status?rid=${out.group_id}&token=${out.access_token}`,
   );
   check(
     "pool: the unassigned solo sign-up's status page says it's waiting for a team",

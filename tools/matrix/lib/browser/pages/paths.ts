@@ -22,7 +22,7 @@ export const paths = Object.freeze({
     tab ? `/o/${org}/c/${comp}/d/${div}?tab=${tab}` : `/o/${org}/c/${comp}/d/${div}`,
   fixture: (org: string, comp: string, div: string, no: number): string => `/o/${org}/c/${comp}/d/${div}/f/${no}`,
   publicDivision: (org: string, comp: string, div: string, tab?: PublicTab): string => {
-    const page = ["/shared", org, comp, div].join("/");
+    const page = ["/live", org, comp, div].join("/");
     return tab ? `${page}?tab=${tab}` : page;
   },
 });

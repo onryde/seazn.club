@@ -381,7 +381,7 @@ async function run(show: Showcase): Promise<void> {
   const full = await call<Named>(`/api/v1/competitions/${competitionId}`);
   console.log(`${state.summary?.headline ?? "(no headline)"}`);
   console.log(
-    `  ${BASE}/shared/${org?.slug ?? "<org>"}/${full.slug ?? "<competition>"}` +
+    `  ${BASE}/live/${org?.slug ?? "<org>"}/${full.slug ?? "<competition>"}` +
       `/${division.slug ?? "<division>"}/fixtures/${fx.id}`,
   );
 }

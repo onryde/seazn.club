@@ -44,7 +44,7 @@ export async function sitemapSuite(): Promise<void> {
 
   // Paths closed by `</loc>`: the XML carries the server's configured origin,
   // and the hub's entry must not be satisfied by its division's.
-  const hub = `/shared/${orgSlug}/${compRow.slug}`;
+  const hub = `/live/${orgSlug}/${compRow.slug}`;
   const listed = (xml: string) => xml.includes(`${hub}</loc>`) && xml.includes(`${hub}/${divSlug}</loc>`);
   const windowS = sitemapWindowOverride(process.env.SITEMAP_REVALIDATE_SECONDS);
   const deadline = Date.now() + (windowS === undefined ? 0 : (2 * windowS + 10) * 1000);

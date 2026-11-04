@@ -133,7 +133,7 @@ export async function publicQualificationStandingsSuite(): Promise<void> {
   const standingsRows = (body: string) =>
     count(/<div role="region"[^>]*>([\s\S]*?)<\/table>/.exec(body)?.[1] ?? "", /<th scope="row"/g);
 
-  const swissPage = await html(newSession(), `/shared/${org.slug}/${comp.slug}/${swissDiv.slug}?tab=standings`);
+  const swissPage = await html(newSession(), `/live/${org.slug}/${comp.slug}/${swissDiv.slug}?tab=standings`);
   check(
     `qualification board: the Swiss page is 200 and draws exactly ONE cut line and one legend (status=${swissPage.status})`,
     swissPage.status === 200 &&
@@ -155,7 +155,7 @@ export async function publicQualificationStandingsSuite(): Promise<void> {
     count(swissPage.body, /data-qual-marker="/g) === 4 + 3,
   );
 
-  const plainPage = await html(newSession(), `/shared/${org.slug}/${comp.slug}/${plainDiv.slug}?tab=standings`);
+  const plainPage = await html(newSession(), `/live/${org.slug}/${comp.slug}/${plainDiv.slug}?tab=standings`);
   check(
     `qualification board: a league with no next stage draws its table (${standingsRows(plainPage.body)} rows) and no cut line, legend, status or marker`,
     plainPage.status === 200 &&
@@ -255,7 +255,7 @@ export async function publicQualificationStandingsSuite(): Promise<void> {
       !hubCaptions.some((c) => c.includes("Pool")),
   );
 
-  const esPage = await html(newSession(), `/shared/${esOrg.slug}/${esComp.slug}/${esDiv.slug}?tab=standings`);
+  const esPage = await html(newSession(), `/live/${esOrg.slug}/${esComp.slug}/${esDiv.slug}?tab=standings`);
   // The standings table's <caption class="…">TEXT</caption>: anchored on `="`
   // and on the text node itself, so a prop or a flight-payload copy of the
   // string cannot satisfy it.

@@ -99,7 +99,7 @@ export async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: st
   const pubData = v1data<{ status: string; slug: string }>(pub);
   check("news pro: draft publishes", pub.status === 200 && pubData.status === "published");
 
-  const feed = await html(newSession(), `/shared/${proOrgSlug}/news`);
+  const feed = await html(newSession(), `/live/${proOrgSlug}/news`);
   check(
     "news pro: public feed 200 + shows a post card",
     feed.status === 200 && feed.body.includes("news-card"),
@@ -108,9 +108,9 @@ export async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: st
     "news pro: feed carries the back-to-org link",
     feed.body.includes('data-testid="news-back"'),
   );
-  const postPage = await html(newSession(), `/shared/${proOrgSlug}/news/${pubData.slug}`);
+  const postPage = await html(newSession(), `/live/${proOrgSlug}/news/${pubData.slug}`);
   check("news pro: public post page 200", postPage.status === 200);
-  const story = await fetch(`${BASE}/shared/${proOrgSlug}/news/${pubData.slug}/story.png`);
+  const story = await fetch(`${BASE}/live/${proOrgSlug}/news/${pubData.slug}/story.png`);
   check(
     "news pro: story PNG 200 image/png",
     story.status === 200 && (story.headers.get("content-type") ?? "").includes("image/png"),
@@ -125,7 +125,7 @@ export async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: st
     "news pro: publish\u2192archive flips status",
     arch.status === 200 && v1data<{ status: string }>(arch).status === "archived",
   );
-  const gonePage = await html(newSession(), `/shared/${proOrgSlug}/news/${pubData.slug}`);
+  const gonePage = await html(newSession(), `/live/${proOrgSlug}/news/${pubData.slug}`);
   check("news pro: archived post page 404s publicly", gonePage.status === 404);
   const archList = v1data<{ id: string }[]>(
     await v1(admin, `/api/v1/orgs/${proOrgId}/posts?status=archived`),
@@ -143,7 +143,7 @@ export async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: st
     "news pro: republish restores published at the frozen slug",
     repub.status === "published" && repub.slug === pubData.slug,
   );
-  const backPage = await html(newSession(), `/shared/${proOrgSlug}/news/${pubData.slug}`);
+  const backPage = await html(newSession(), `/live/${proOrgSlug}/news/${pubData.slug}`);
   check("news pro: republished page 200 again", backPage.status === 200);
 
   // P3 (D7) — the weekly digest button. Same news.auto entitlement as the
@@ -183,7 +183,7 @@ export async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: st
     }),
   );
   check("news free: manual post publishes", manualPub.status === "published");
-  const freePost = await html(newSession(), `/shared/${commOrg.slug}/news/${manualPub.slug}`);
+  const freePost = await html(newSession(), `/live/${commOrg.slug}/news/${manualPub.slug}`);
   check("news free: manual post public page 200", freePost.status === 200);
 
   const freeComp = v1data<{ id: string }>(

@@ -255,8 +255,8 @@ export async function passGrantsSuite(): Promise<void> {
   // 200 and a 404 is the pass. Do not "restore" the free cell on the strength
   // of design §2's prose — that prose is now the older decision, and §2's own
   // table has been amended.
-  const passCard = await fetch(`${BASE}/shared/${org.slug}/${passComp.slug}/players/${person.id}`);
-  const plainCard = await fetch(`${BASE}/shared/${org.slug}/${plainComp.slug}/players/${person.id}`);
+  const passCard = await fetch(`${BASE}/live/${org.slug}/${passComp.slug}/players/${person.id}`);
+  const plainCard = await fetch(`${BASE}/live/${org.slug}/${plainComp.slug}/players/${person.id}`);
   check(
     "pass grants/profiles: the public player card renders on the passed competition (200)",
     passCard.status === 200,

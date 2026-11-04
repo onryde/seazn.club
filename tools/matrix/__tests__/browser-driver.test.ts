@@ -54,7 +54,7 @@ import { modelPage, twoInningsModel } from "./pad-model.ts";
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const src = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
 const ORG_DIV_PAGE = "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx";
-const PUBLIC_DIV_PAGE = "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx";
+const PUBLIC_DIV_PAGE = "apps/web/src/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx";
 const ORG = "org-case";
 const ORG_SLUG = "m-run-1";
 /** What the fake product answers for slugs — deliberately NOT what the scenario asks for. */

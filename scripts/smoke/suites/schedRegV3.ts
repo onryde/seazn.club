@@ -260,7 +260,7 @@ export async function schedRegV3Suite(
   );
 
   // F4/P2: the subscribed calendar had no smoke coverage at all.
-  const ics = await fetch(`${BASE}/shared/${proOrgSlug}/${comp.slug}/${div.slug}/calendar.ics`);
+  const ics = await fetch(`${BASE}/live/${proOrgSlug}/${comp.slug}/${div.slug}/calendar.ics`);
   const icsBody = await ics.text();
   check(
     "public .ics serves as text/calendar",
@@ -285,7 +285,7 @@ export async function schedRegV3Suite(
   // final is what the fix must add back to THEIR feed.
   const dayOneSemi = dayOneGen.fixtures.find((f) => f.home_entrant_id !== null);
   const entrantIcs = await fetch(
-    `${BASE}/shared/${proOrgSlug}/${comp.slug}/${div.slug}/calendar.ics?entrant=${dayOneSemi?.home_entrant_id}`,
+    `${BASE}/live/${proOrgSlug}/${comp.slug}/${div.slug}/calendar.ics?entrant=${dayOneSemi?.home_entrant_id}`,
   );
   const entrantIcsBody = await entrantIcs.text();
   check(

@@ -37,7 +37,7 @@ export async function uiSystemSuite(admin: Session, proOrgSlug: string): Promise
     visibility: "unlisted",
   });
   check("visibility flips to Link only (pro)", flip.status === 200);
-  const shared = await html(newSession(), `/shared/${proOrgSlug}/${comp.slug}`);
+  const shared = await html(newSession(), `/live/${proOrgSlug}/${comp.slug}`);
   check("link-only page serves (pro)", shared.status === 200);
   check("link-only page keeps noindex", shared.body.includes("noindex"));
 
@@ -69,7 +69,7 @@ export async function uiSystemSuite(admin: Session, proOrgSlug: string): Promise
     visibility: "unlisted",
   });
   check("visibility flips to Link only (free)", freeFlip.status === 200);
-  const freeShared = await html(newSession(), `/shared/${freeOrg.slug}/${freeComp.slug}`);
+  const freeShared = await html(newSession(), `/live/${freeOrg.slug}/${freeComp.slug}`);
   check(
     "link-only page serves + noindex (free)",
     freeShared.status === 200 && freeShared.body.includes("noindex"),

@@ -45,7 +45,7 @@ const reactDomClient = (channel: string) => `apps/web/node_modules/next/dist/com
 const PRODUCT_PROPS_KEY = /\binternalPropsKey = "([^"]+)" \+ randomKey/.exec(src(reactDomClient("react-dom")))?.[1] ?? "(React's props key: unread)";
 const V2 = "apps/web/src/components/v2";
 const ORG_DIV_PAGE = "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx";
-const PUBLIC_DIV_PAGE = "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx";
+const PUBLIC_DIV_PAGE = "apps/web/src/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx";
 
 /** The template literal routes.ts returns for `name`, filled with `vars` — the
  *  product's own route, never a string typed here. `nth` picks among several
@@ -89,8 +89,8 @@ describe("paths: the routes the product serves", () => {
   it("paths: the organiser and public routes the product serves (text-pinned to the app router folders)", () => {
     expect(paths.division("o", "c", "d", "fixtures")).toBe("/o/o/c/c/d/d?tab=fixtures");
     expect(paths.fixture("o", "c", "d", 7)).toBe("/o/o/c/c/d/d/f/7");
-    expect(paths.publicDivision("o", "c", "d", "standings")).toBe("/shared/o/c/d?tab=standings");
-    for (const dir of ["apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]", "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]"]) expect(existsSync(join(REPO, dir))).toBe(true);
+    expect(paths.publicDivision("o", "c", "d", "standings")).toBe("/live/o/c/d?tab=standings");
+    for (const dir of ["apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]", "apps/web/src/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]"]) expect(existsSync(join(REPO, dir))).toBe(true);
   });
 
   it("every builder is routes.ts's own template, in both of division's arms; every folder exists", () => {
@@ -105,9 +105,11 @@ describe("paths: the routes the product serves", () => {
     ];
     for (const [ours, product] of pairs) expect(ours).toBe(product);
     expect(pairs.length).toBe(6);
-    // The public division page is routes.shared's join, with the tab the page's Tabs read on the client.
-    expect(src("apps/web/src/lib/routes.ts")).toContain('["/shared", orgSlug, compSlug, divSlug].filter(Boolean).join("/")');
-    expect(paths.publicDivision("o", "c", "d")).toBe("/shared/o/c/d");
+    // The public division page is routes.publicHub's join over the hub's root (LIVE1: lib/public-hub-root.mjs), with
+    // the tab the page's Tabs read on the client.
+    expect(src("apps/web/src/lib/routes.ts")).toContain('[PUBLIC_HUB_ROOT, orgSlug, compSlug, divSlug].filter(Boolean).join("/")');
+    expect(src("apps/web/src/lib/public-hub-root.mjs")).toContain('export const PUBLIC_HUB_ROOT = "/live";');
+    expect(paths.publicDivision("o", "c", "d")).toBe("/live/o/c/d");
     expect(src("apps/web/src/components/public-site/use-tab-param.ts")).toContain('useSearchParam("tab")');
     const dirs = ["o/[orgSlug]/c/new", "o/[orgSlug]/c/[compSlug]", "o/[orgSlug]/c/[compSlug]/d/new", "o/[orgSlug]/c/[compSlug]/d/[divSlug]", "o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]"];
     for (const d of dirs) expect(existsSync(join(REPO, "apps/web/src/app", d, "page.tsx")), d).toBe(true);
