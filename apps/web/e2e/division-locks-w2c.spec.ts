@@ -3,7 +3,8 @@
 //
 // Match Day C2: the match rules and the standings points moved from Settings' Match rules block to the Division rules strip on
 // the Fixtures tab (`components/v2/rules/division-rules-strip.tsx`) - the same form and notices, each panel with its own Save.
-// The STRUCTURE note (`format-locked`) stays in Settings' Format group. C2 fix round 1, I1 (ruling: spec §12 items 4 and 13
+// FMT5 moved the STRUCTURE there too: the strip's Format button, live until the first result, then greyed with its reason
+// (Settings' Format group and its `format-locked` note are gone). C2 fix round 1, I1 (ruling: spec §12 items 4 and 13
 // over W2c S4): a section says its lock ONCE (`division-locked-format`, naming the stage), never a line per field; a section
 // whose every control is locked reads - its chips, no field and no Save; a partly locked one keeps its form, the locked
 // controls read-only.
@@ -109,14 +110,24 @@ async function openFormat(page: Page, request: APIRequestContext, divisionId: st
   await openPanels(strip, "format", "points");
 }
 
-/** Settings' Format group still says the STRUCTURE is locked once fixtures exist (that note did not move). */
-async function expectStructureLocked(page: Page, request: APIRequestContext, divisionId: string): Promise<void> {
+/** FMT5: Settings points at the strip for the rules and the format, and has no Format group of its own; the strip's Format
+ *  button is live until the first result (`open`), then greyed with its reason (`locked`). */
+async function expectStructure(page: Page, request: APIRequestContext, divisionId: string, state: "open" | "locked"): Promise<void> {
   await page.goto(await divisionPath(request, divisionId, "?tab=settings"), { waitUntil: "load" });
   await dismissCookieBanner(page);
   await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: STEP_MS });
-  await page.getByRole("button", { name: /^Format/ }).click();
-  await expect(page.getByTestId("format-locked")).toBeVisible();
   await expect(page.getByTestId("division-rules-moved"), "Settings points at the strip for the rules").toBeVisible();
+  await expect(page.getByTestId("division-settings").getByRole("button", { name: /^Format/ }), "no Format group in Settings").toHaveCount(0);
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  const button = page.getByTestId("division-rules-format");
+  await expect(button).toBeVisible({ timeout: STEP_MS });
+  if (state === "locked") {
+    await expect(button, "a result exists: Format is greyed").toHaveAttribute("aria-disabled", "true");
+    await expect(page.getByTestId("division-rules-format-reason")).toHaveText(L["formatChange.err.FORMAT_LOCKED"]!);
+  } else {
+    await expect(button, "no result yet: Format is live").not.toHaveAttribute("aria-disabled", "true");
+    await expect(page.getByTestId("division-rules-format-reason")).toHaveCount(0);
+  }
 }
 
 /** The Match rules panel's Save. */
@@ -155,8 +166,8 @@ test("badminton: a started stage locks every field and the variant before typing
   const rig = await seedLeague(request, "badminton", "short", "badminton-lines");
   const lockLines = page.locator('[data-testid^="division-locked-"]');
 
-  // Fixtures exist, nothing has started: the structure note is up, every rule is open.
-  await expectStructureLocked(page, request, rig.divisionId);
+  // Fixtures exist, nothing has started: the format still changes, every rule is open.
+  await expectStructure(page, request, rig.divisionId, "open");
   await openFormat(page, request, rig.divisionId);
   await expect(lockLines, "generated but not started: nothing is locked").toHaveCount(0);
   for (const f of SPORT_RULES.badminton!) await expect(fieldControl(page, "badminton", f.key), `${f.key} is editable`).toBeEnabled();
@@ -164,10 +175,12 @@ test("badminton: a started stage locks every field and the variant before typing
 
   // The division starts and a match starts.
   await startDivision(request, rig.divisionId);
-  await expectStructureLocked(page, request, rig.divisionId);
+  await expectStructure(page, request, rig.divisionId, "open");
   await openFormat(page, request, rig.divisionId);
   await expect(lockLines, "starting the DIVISION locks no rule: only a started stage does").toHaveCount(0);
   await startMatch(request, rig.fixtureIds[0]!);
+  // A match in play is a result: the format is locked now.
+  await expectStructure(page, request, rig.divisionId, "locked");
   await openFormat(page, request, rig.divisionId);
 
   // A started league stage plays every field the section draws and the variant: the section says so ONCE, naming the stage,

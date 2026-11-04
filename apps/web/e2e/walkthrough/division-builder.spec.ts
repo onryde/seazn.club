@@ -8,6 +8,7 @@ import { PAIR_MINTING_STAGE_KINDS } from "../../src/lib/chess-individual-only-ru
 import { TAG, apiJson, competitionPath, expectNoHorizontalScroll, pickBuilderSport, showAllFormats, withDb } from "../helpers";
 import { fill, uiEn as L } from "../match-room-kit";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
+import { openFormatDialog } from "../helpers/rules-strip";
 
 /**
  * Match Day C9 — an organiser makes a division through the four-step builder
@@ -866,7 +867,7 @@ test("the entrant kind: Format offers a Pairs division no Americano (N1), and a 
   expect(division.config.entrants, "the untouched default, alone").toEqual({ kinds: ["team"], defaultKind: "team" });
 });
 
-test("Settings › Format offers a builder-made Individuals Americano division Americano and Mexicano, Americano selected (C9 round 3)", async ({ page, request }, testInfo) => {
+test("the Format dialog offers a builder-made Individuals Americano division Americano and Mexicano, Americano selected (C9 round 3; FMT5 moved it off Settings)", async ({ page, request }, testInfo) => {
   test.setTimeout(budget(4, 60, 0));
   expect([...MINTING].sort(), "premise: the partner-rotation formats are the owner's two").toEqual(["americano", "mexicano"]);
   const badminton = effectiveEntrantModel(mod("badminton").entrantModel ?? null, null);
@@ -897,20 +898,16 @@ test("Settings › Format offers a builder-made Individuals Americano division A
   expect(division.config.entrants, "n3: an Individuals division stores that kind alone").toEqual({ kinds: ["individual"], defaultKind: "individual" });
   expect(stages.map((s) => s.kind), "one americano stage").toEqual(["americano"]);
 
-  // ---- Settings › Format: the structure the division plays is selected, and both partner-rotation formats are offered.
-  await page.goto(page.url().replace(/\?tab=fixtures$/, "?tab=settings"));
-  const settings = page.getByTestId("division-settings");
-  await expect(settings).toBeVisible({ timeout: NAV_MS });
-  await settings.getByRole("button", { name: /Format/ }).first().click();
-  const select = page.getByTestId("format-template");
-  await expect(select).toBeVisible();
-  await expect(select, "Americano selected").toHaveValue("americano");
-  const offered = await select.locator("option").evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
-  expect(offered.filter((k) => MINTING.includes(k)).sort(), `Settings offers both: ${offered.join(",")}`).toEqual([...MINTING].sort());
+  // ---- The Format dialog (Fixtures tab › Division rules › Format, the builder's own picker): the structure the division
+  // plays is selected, and both partner-rotation formats are offered, after every other format.
+  const dialog = await openFormatDialog(page, page.url().split("?")[0]!);
+  await expect(dialog.locator('label[data-template="americano"] input'), "Americano selected").toBeChecked();
+  const offered = await dialog.locator("label[data-template]").evaluateAll((ls) => ls.map((l) => l.getAttribute("data-template")!));
+  expect(offered.filter((k) => MINTING.includes(k)).sort(), `the dialog offers both: ${offered.join(",")}`).toEqual([...MINTING].sort());
+  expect(offered.slice(-MINTING.length).sort(), `Americano and Mexicano last: ${offered.join(",")}`).toEqual([...MINTING].sort());
   expect(offered.length, "and the rest of the offer").toBeGreaterThan(MINTING.length);
   await expectNoHorizontalScroll(page);
-  await select.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath("settings-format-americano-1280.png"), fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("format-dialog-americano-1280.png"), fullPage: true });
 });
 
 // C9 round 4 (owner 2026-11-03). Three things a person sees, driven in the browser:

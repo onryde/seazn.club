@@ -87,13 +87,14 @@ test.describe("UI5: the division page's owner fixes, walked", () => {
     await expectNoHorizontalScroll(page);
 
     // The lock is still said where it belongs: the Start dialog names it, before anything is started. The league's fixtures
-    // are already generated, so the dialog says the stage structure is locked already (`launch.confirm.format`), and that
-    // the entrant list closes.
+    // are already generated, so the dialog says the format can still change until scoring starts (FMT5:
+    // `launch.confirm.formatOpen`; it used to say the structure was locked already), and that the entrant list closes.
     await page.getByTestId("launch-start-division").click();
     const dialog = page.getByTestId("start-confirm");
     await expect(dialog).toBeVisible();
     await expect(dialog.getByTestId("start-confirm-entrants")).toHaveText(uiEn["launch.confirm.entrants"]!);
-    await expect(dialog.getByTestId("start-confirm-format-locked")).toHaveText(uiEn["launch.confirm.format"]!);
+    await expect(dialog.getByTestId("start-confirm-format-open")).toHaveText(uiEn["launch.confirm.formatOpen"]!);
+    await expect(dialog.getByTestId("start-confirm-format-generates"), "fixtures exist: Start generates none").toHaveCount(0);
     await dialog.getByTestId("start-confirm-confirm").click();
     await expect(page.getByTestId("launch-start-division"), "started: no Start button").toHaveCount(0, { timeout: NAV_MS });
 

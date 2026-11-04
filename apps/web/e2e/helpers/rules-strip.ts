@@ -31,3 +31,39 @@ export async function openPanels(strip: Locator, ...panels: RulesPanel[]): Promi
 export const saveFormat = (strip: Locator): Locator => strip.getByTestId("division-rules-format-save");
 /** The Points panel's Save (offered once a box differs from what is stored). */
 export const savePoints = (strip: Locator): Locator => strip.getByTestId("division-points-save");
+
+// FMT5: the division's FORMAT (its stage structure) moved from Settings › Format onto the same card, behind its Format
+// button (`components/v2/rules/division-format.tsx`), which opens a dialog holding the builder's own picker
+// (`components/v2/format-picker.tsx`, so its cards and knobs wear the builder's testids).
+
+/** The card's Format button on the division's Fixtures tab (`divisionUrl` without a query). */
+export async function formatButton(page: Page, divisionUrl: string): Promise<Locator> {
+  await page.goto(`${divisionUrl}?tab=fixtures`);
+  const button = page.getByTestId("division-rules-format");
+  await expect(button).toBeVisible({ timeout: 20_000 });
+  return button;
+}
+
+/** The Format dialog, opened from the card's Format button. */
+export async function openFormatDialog(page: Page, divisionUrl: string): Promise<Locator> {
+  const button = await formatButton(page, divisionUrl);
+  const dialog = page.getByRole("dialog");
+  // A click before hydration is a no-op: retry the click until the dialog is up.
+  await expect(async () => {
+    if ((await dialog.count()) === 0) await button.click();
+    await expect(dialog.getByTestId("division-format-dialog")).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+  return dialog;
+}
+
+/** Pick `template` in the open dialog's picker, unfolding "Show all" first when the card is folded away. */
+export async function pickFormat(dialog: Locator, template: string): Promise<void> {
+  const card = dialog.locator(`label[data-template="${template}"]`);
+  await expect(card, `the picker offers ${template}`).toHaveCount(1);
+  if (!(await card.isVisible())) await dialog.getByTestId("division-builder-show-all").click();
+  await card.click();
+  await expect(card.locator('input[type="radio"]')).toBeChecked();
+}
+
+/** The Format dialog's Save ("Save format"). */
+export const saveFormatDialog = (dialog: Locator): Locator => dialog.getByTestId("division-format-save");
