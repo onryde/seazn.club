@@ -83,7 +83,8 @@ export const TESTID = testids({
   builderNext: { id: "division-builder-next", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-next"' },
   builderCreate: { id: "division-builder-create", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-create"' },
   // Match Day C9 R2: the Format step shows five suggested formats, then this Show more tile as the sixth cell.
-  builderShowAll: { id: "division-builder-show-all", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-show-all"' },
+  // FMT5: the format picker is shared with the Format dialog (format-picker.tsx), its testids unchanged.
+  builderShowAll: { id: "division-builder-show-all", file: `${V2}/format-picker.tsx`, needle: 'data-testid="division-builder-show-all"' },
   // C9 R2: Sport is a radio tile per sport, five shown and the rest under this Show more tile.
   builderSportMore: { id: "division-builder-sport-more", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-sport-more"' },
   launchStart: { id: "launch-start-division", file: `${V2}/launch-actions.tsx`, needle: 'data-testid="launch-start-division"' },
@@ -196,7 +197,7 @@ export const DATA = data({
   rowAction: { selector: "[data-row-action]", file: `${V2}/desk/run-sheet-row.tsx`, needle: "data-row-action={action.kind}" },
   fixtureRow: { selector: "li[data-fixture-no]", file: `${V2}/desk/run-sheet-row.tsx`, needle: "<li data-fixture-no={" },
   // Task 5.
-  templateRadio: { selector: '[name="template"]', file: `${V2}/division-builder.tsx`, needle: 'name="template"' },
+  templateRadio: { selector: '[name="template"]', file: `${V2}/format-picker.tsx`, needle: 'name="template"' },
   // C9 R2: a sport's tile, the <label> around its sr-only radio.
   sportTile: { selector: "[data-sport]", file: `${V2}/division-builder.tsx`, needle: "data-sport={key}" },
   entrantKind: { selector: "[data-kind]", file: `${V2}/entrants-panel.tsx`, needle: "data-kind={k}" },
@@ -272,7 +273,7 @@ export function markText(needle: string): string {
   return text;
 }
 
-/** The builder's label for a template row (division-builder.tsx renders
+/** The builder's label for a template row (its picker, format-picker.tsx, renders
  *  `format.template.<row>.label`), from the en dictionary. */
 export function templateLabel(row: TemplateRowKey): string {
   return enLabel(`format.template.${row}.label`);

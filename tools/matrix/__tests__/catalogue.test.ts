@@ -21,6 +21,10 @@ import {
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const BUILDER = readFileSync(resolve(REPO, "apps/web/src/components/v2/division-builder.tsx"), "utf8");
 const MODEL = readFileSync(resolve(REPO, "apps/web/src/lib/division-builder/model.ts"), "utf8");
+/** FMT5: the builder's format picker state (`useFormatKnobs`) and its drafts (`formatStagesFor`) are shared with the
+ *  Division rules card's Format dialog, so the knob defaults and the clamps are read where they now live. */
+const PICKER = readFileSync(resolve(REPO, "apps/web/src/components/v2/format-picker.tsx"), "utf8");
+const CHOICE = readFileSync(resolve(REPO, "apps/web/src/lib/division-builder/format-choice.ts"), "utf8");
 /** The table the builder AND the /start funnel pick a new division's variant from (W2e: moved out of the builder). */
 const PREFERRED = readFileSync(resolve(REPO, "apps/web/src/lib/preferred-variant.ts"), "utf8");
 /** The product's one group → group → knockout shape (server/templates/catalog). */
@@ -408,13 +412,15 @@ describe("API-only rows — bodies derived from product authorities", () => {
 });
 
 describe("catalogue — builder parity (text pins; a builder change reds here)", () => {
-  it("knob defaults match division-builder.tsx's useState literals; Swiss rounds open at swissRoundsDefault of the plan's opening entrants", () => {
-    const pick = (name: string) => Number(new RegExp(`const \\[${name}, set\\w+\\] = useState\\((\\d+)\\)`).exec(BUILDER)?.[1]);
+  it("knob defaults match the picker's useState literals the builder opens at; Swiss rounds open at swissRoundsDefault of the plan's opening entrants", () => {
+    // FMT5: the builder opens the shared picker's state with no init, so each knob opens at the picker's own default.
+    expect(BUILDER).toContain("const formatKnobs = useFormatKnobs();");
+    const pick = (name: string) => Number(new RegExp(`const \\[${name}, set\\w+\\] = useState\\(init\\.${name} \\?\\? (\\d+)\\)`).exec(PICKER)?.[1]);
     // Match Day C9 fix round 1 (review I2): the Rounds box has no literal. Untouched it follows the plan's entrants box
     // (swissRoundsDefault), and the page object never types in either, so the rounds the builder sends are
     // swissRoundsDefault of the entrants box's opening value (model.ts OPENING_PLAN). Each link is read off the source,
     // and the expected count comes from the helper the builder calls, never a number typed here.
-    expect(BUILDER).toContain("const [swissRoundsPicked, setSwissRoundsPicked] = useState<number | null>(null);");
+    expect(PICKER).toContain("const [swissRoundsPicked, setSwissRoundsPicked] = useState<number | null>(init.swissRounds ?? null);");
     expect(BUILDER).toContain("const swissRounds = swissRoundsPicked ?? swissRoundsDefault(planEntrantCount);");
     expect(BUILDER).toContain("const planEntrantCount = planNumber(planEntrants, PLAN_BOUNDS.entrants);");
     expect(BUILDER).toContain("const [planEntrants, setPlanEntrants] = useState(String(OPENING_PLAN.entrants));");
@@ -428,14 +434,15 @@ describe("catalogue — builder parity (text pins; a builder change reds here)",
 
   // Match Day D1: the builder clamps against FORMAT_BOUNDS (apps/web/src/lib/format-bounds.ts), the one set of bounds it
   // shares with Settings and the validator, so the pin reads the builder's calls by NAME and the mirror by VALUE.
-  it("clamp bounds match division-builder.tsx's clampKnob calls", () => {
-    expect(BUILDER).toContain("clampKnob(qualified, FORMAT_BOUNDS.qualify.min, FORMAT_BOUNDS.qualify.max)");
-    expect(BUILDER).toContain("clampKnob(poolCount, FORMAT_BOUNDS.pools.min, FORMAT_BOUNDS.pools.max)");
+  it("clamp bounds match the builder's drafts' clampKnob calls (format-choice.ts formatStagesFor, FMT5)", () => {
+    expect(BUILDER).toContain("return formatStagesFor(template, { qualified, swissRounds, poolCount, legs, standingsCarry });");
+    expect(CHOICE).toContain("clampKnob(knobs.qualified, FORMAT_BOUNDS.qualify.min, FORMAT_BOUNDS.qualify.max)");
+    expect(CHOICE).toContain("clampKnob(knobs.poolCount, FORMAT_BOUNDS.pools.min, FORMAT_BOUNDS.pools.max)");
     expect(BUILDER_KNOB_BOUNDS).toEqual({ qualified: FORMAT_BOUNDS.qualify, poolCount: FORMAT_BOUNDS.pools });
   });
 
   it("the standings carry defaults to 'none' (what stagesForRow applies)", () => {
-    expect(BUILDER).toMatch(/useState<StandingsCarry>\("none"\)/);
+    expect(PICKER).toMatch(/useState<StandingsCarry>\(init\.standingsCarry \?\? "none"\)/);
   });
 
   it("PREFERRED_VARIANT matches the product's literal, and the builder reads it from there", () => {
