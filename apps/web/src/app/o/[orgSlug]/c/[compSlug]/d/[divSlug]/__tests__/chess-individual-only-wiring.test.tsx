@@ -238,33 +238,38 @@ describe("division page: the entrant kinds block (Match Day C4)", () => {
     expect(keys).not.toContain("entrantModelSource");
   });
 
-  // Match Day E1 item 7 (owner): the block opens by default on an EMPTY division - the organiser is about to add entrants and this decides
-  // what the form offers - and stays folded once there is a roster. The page owns the decision (the component's `defaultOpen` seam),
-  // so it is read off the page's own tree, both directions, over the whole sport registry.
+  // UI5 item 2 (owner, 2026-11-03): the block starts CLOSED, always - an empty division included (Match Day E1 item 7 had opened
+  // it on an empty division; the owner reversed that). The page owns the decision through the component's `defaultOpen` seam, so
+  // it is read off the page's own tree, over the whole sport registry and three roster sizes: the EMPTY one first (the case that
+  // changed), then one entrant and three. The component's own default is pinned closed in entrant-kinds-settings.test.tsx.
   const entrantRow = (n: number) => ({ id: `e${n}`, display_name: `Entrant ${n}`, status: "active", seed: n, kind: "individual" });
-  it("an empty division opens the kinds block; one with entrants leaves it folded - every sport in the registry (counted)", async () => {
+  it("the kinds block starts closed on every division - empty or not - for every sport in the registry (counted)", async () => {
     let checked = 0;
+    let empty = 0;
     for (const m of builtinModules) {
       state.sport_key = m.key;
       state.config = {};
       state.moduleEntrantModel = m.entrantModel ?? null;
-      for (const [roster, open] of [[[], true], [[entrantRow(1)], false], [[entrantRow(1), entrantRow(2), entrantRow(3)], false]] as const) {
+      for (const roster of [[], [entrantRow(1)], [entrantRow(1), entrantRow(2), entrantRow(3)]]) {
         state.entrants = [...roster];
         const kinds = findAll(await renderPage("entrants"), (el) => el.type === EntrantKindsSettings);
         expect(kinds, `${m.key} / ${roster.length} entrants`).toHaveLength(1);
-        expect((kinds[0]!.props as { defaultOpen?: boolean }).defaultOpen, `${m.key} / ${roster.length} entrants`).toBe(open);
+        // Absent or false: either way the component opens on its own default, which is closed.
+        expect((kinds[0]!.props as { defaultOpen?: boolean }).defaultOpen ?? false, `${m.key} / ${roster.length} entrants`).toBe(false);
+        if (roster.length === 0) empty++;
         checked++;
       }
     }
     expect(checked).toBe(builtinModules.length * 3);
+    expect(empty, "anti-vacuity: the empty division was asked for every sport").toBe(builtinModules.length);
     expect(checked).toBeGreaterThan(3);
   });
 
-  it("a division whose only entrant has withdrawn is not empty: the block stays folded", async () => {
+  it("a division whose only entrant has withdrawn: the block stays closed", async () => {
     state.entrants = [{ ...entrantRow(1), status: "withdrawn" }];
     const kinds = findAll(await renderPage("entrants"), (el) => el.type === EntrantKindsSettings);
     expect(kinds).toHaveLength(1);
-    expect((kinds[0]!.props as { defaultOpen?: boolean }).defaultOpen).toBe(false);
+    expect((kinds[0]!.props as { defaultOpen?: boolean }).defaultOpen ?? false).toBe(false);
   });
 
   it("every sport in the registry gets the block on its Entrants tab, handed its own sport key (counted)", async () => {

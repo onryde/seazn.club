@@ -10364,7 +10364,7 @@
         ]
       },
       "post": {
-        "summary": "Register entrant(s) — object or bulk array. After Start a division whose Swiss is running takes a late player (W3, ruling 250): the reply's late_entry says whether the unstarted round was re-paired (a), the newcomer plays the round's bye holder (b), or joins the next round (c); with the last round started it is 409 SWISS_NO_ROUND_LEFT (details.canAddRound, and details.stageId — the Swiss to `POST /stages/{id}/swiss/add-round` on), and a finished Swiss is 422 SWISS_OVER. A pair or team entrant in a chess division is 422 CHESS_INDIVIDUAL_ONLY (chess takes individual players only). A multipart CSV/XLSX upload is the division-pinned import preview; its plan lists a blocking CHESS_INDIVIDUAL_ONLY issue for each row that would enter a team into a chess division",
+        "summary": "Register entrant(s) — object or bulk array. After Start a division whose Swiss is running takes a late player (W3, ruling 250): the reply's late_entry says whether the unstarted round was re-paired (a), the newcomer plays the round's bye holder (b), or joins the next round (c); with the last round started it is 409 SWISS_NO_ROUND_LEFT (details.canAddRound, and details.stageId — the Swiss to `POST /stages/{id}/swiss/add-round` on), and a finished Swiss is 422 SWISS_OVER. A pair or team entrant in a chess division is 422 CHESS_INDIVIDUAL_ONLY (chess takes individual players only). A multipart CSV/XLSX upload is the division-pinned import preview; its plan lists a blocking CHESS_INDIVIDUAL_ONLY issue for each row that would enter a team into a chess division. A person already on another entrant of the division (in the field) is 409 PERSON_ON_OTHER_TEAM, its error.conflicts naming each person and the entrant that holds them, and nothing of the batch is written: one person, one entrant per division (an americano division's rotation pairs excepted)",
         "tags": [
           "entrants"
         ],
@@ -11813,7 +11813,7 @@
         ]
       },
       "patch": {
-        "summary": "Set status, seed, name or members. A status change is a plain write (no fixture surgery — see /withdraw), with one exception: status disqualified on an entrant still in the field runs the withdrawal's fixture surgery (W3 T15, RB3-17: a disqualification is a withdrawal from that moment) — played results stand, her open matches are walked over (or a table's expunged) as /withdraw does them, and the reply carries that report as `cascade` (`left_to_organiser` names an abandoned board still the organiser's to settle). The rest of such a patch is written first, so a field it refuses (422 ENTRANT_ROSTER_TOO_BIG) changes nothing. A members-only patch also renames an ad-hoc entrant whose name was derived from its people (e.g. 'A & B' − B + C → 'A & C'); a custom name, a team-linked entrant or an explicit display_name in the same patch is never renamed",
+        "summary": "Set status, seed, name or members. A status change is a plain write (no fixture surgery — see /withdraw), with one exception: status disqualified on an entrant still in the field runs the withdrawal's fixture surgery (W3 T15, RB3-17: a disqualification is a withdrawal from that moment) — played results stand, her open matches are walked over (or a table's expunged) as /withdraw does them, and the reply carries that report as `cascade` (`left_to_organiser` names an abandoned board still the organiser's to settle). The rest of such a patch is written first, so a field it refuses (422 ENTRANT_ROSTER_TOO_BIG) changes nothing. A members-only patch also renames an ad-hoc entrant whose name was derived from its people (e.g. 'A & B' − B + C → 'A & C'); a custom name, a team-linked entrant or an explicit display_name in the same patch is never renamed. Members naming a person already on another entrant of the division is 409 PERSON_ON_OTHER_TEAM (error.conflicts), the roster unchanged",
         "tags": [
           "entrants"
         ],
@@ -12256,6 +12256,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -12869,7 +12913,7 @@
     },
     "/api/v1/entrants/{id}/roster/sync": {
       "post": {
-        "summary": "Replace the entrant roster with the linked team's current squad (enrollment snapshots once — this is the explicit re-sync; sport filter + kind cap apply)",
+        "summary": "Replace the entrant roster with the linked team's current squad (enrollment snapshots once — this is the explicit re-sync; sport filter + kind cap apply). A squad holding a person already on another entrant of the division is 409 PERSON_ON_OTHER_TEAM (error.conflicts), the roster unchanged",
         "tags": [
           "entrants"
         ],
@@ -13189,6 +13233,50 @@
               }
             }
           },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "422": {
             "description": "Rejected by the engine",
             "content": {
@@ -13246,7 +13334,7 @@
     },
     "/api/v1/divisions/{id}/roster": {
       "get": {
-        "summary": "Every (person → team entrant) membership in the division (same-division double-roster warning)",
+        "summary": "Every (person → entrant) membership of an entrant still in the division's field, of every kind, with `entrant_kind` (a withdrawn or disqualified entrant holds no one, nor do an americano division's rotation pairs). The console's one-team-per-division read: a person listed here is refused on any other entrant of the division (409 PERSON_ON_OTHER_TEAM, the roster write's own predicate)",
         "tags": [
           "entrants"
         ],
@@ -22412,7 +22500,7 @@
         ]
       },
       "post": {
-        "summary": "Define the stage graph. Each stage is created with its kind's PRESET match rules in `config.rules` (W2c X-SR-6: a bracket stage starts with the deciders its sport presets for its kind and the division's variant — extra time and a shoot-out, overtime, a super over; the engine's `stageDefaults` decides which and their values; a table stage with none), every one the organiser's to switch off. `config.rules` sent with a create is laid over that preset key by key (a null removes the preset key: the stage inherits the division's value; `false` switches OFF a decider the sport turns off with no value at all, ice-hockey `overtime` and `shootout` and the hockey `shootout`). Unlike the stage PUT, `config.rules` that is absent, null or `{}` at create KEEPS the whole preset (a create has nothing stored to clear; to start from the division's own rules, send each preset key as null, or PUT `{}` afterwards). The rules are validated as `PUT /stages/{id}/rules` validates a save: 400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (`field`), 422 CONFIG_INVALID (`issues`), 422 TIEBREAK_KEY_INVALID (`refusals`, `stage_id`, `stage_name`) for the INHERITED tie-break order (the division's) the new stage's kind refuses — a stage's own order is not part of this body (`config.tiebreakers` is an unknown key of the strict stage config: 400 VALIDATION); nothing in the batch is written. A stage's own `config.points` (the engine's PointsRule) is asked what the stage PUT asks of it, and `config.points: null` means no points for this slot (as `points: null` does on the stage PUT): nothing is asked and nothing is stored. A non-null value: a bracket stage (no table) 400 RULE_NOT_SETTABLE (`field` `points`); a walkover `awardScore` on a sport whose table never reads it 400 RULE_NOT_SETTABLE (`field` `points.forfeit.awardScore`); a rule that does not pay an outcome the stage can end in 422 POINTS_OUTCOME_UNCOVERED (`uncovered`, `stage_name`); a bonus reading a score the sport does not emit 422 CONFIG_INVALID; a FLAT rule (one amount per win and per loss: no overtime, shoot-out or not-played split, no set-score table, a shoot-out booked as a result) on a stage whose sport pays one of those apart (IIHF's overtime 2/1, a 3-2 volleyball result, a table-tennis loss not played, FIH's shoot-out bonus) 422 POINTS_SPLIT_FLATTENED (`splits` naming each: `otWin`, `otLoss`, `shootoutWin`, `shootoutLoss`, `soBonus`, `unplayed`, `pointsMap`, `stage_name`, `stage_kind`) — no flat rule pays such a stage as its sport does (a retirement after play pays a flat rule's loss, never the sport's loss not played), so state the split in the rule to set it. A stage's own points ask no plan feature (bonuses and a forfeit row are free on every plan); a plan feature the body's stages need (a double-elimination or an advanced-format kind, carry-over) or the stage cap is 402 PAYMENT_REQUIRED. A decider at the config's TOP level (any whole decider a sport declares, e.g. `config.shootout`, `config.overtime`, `config.superOver`) is refused 400 VALIDATION naming the key (`field`) and where it goes (`config.rules.<key>`). A requested half-point or zero-point bye has no path yet (RB3-7(c), deferred): `config.requestedByes`, with any value, is refused 400 SWISS_REQUESTED_BYES_DEFERRED naming the key (`field`) and the way out — record a walkover on the player's board. 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size. Chess divisions take individual players only: an americano or mexicano stage (it mints pair entrants) is 422 CHESS_INDIVIDUAL_ONLY, asked before any plan gate, and the whole batch writes nothing",
+        "summary": "Define the stage graph. Each stage is created with its kind's PRESET match rules in `config.rules` (W2c X-SR-6: a bracket stage starts with the deciders its sport presets for its kind and the division's variant — extra time and a shoot-out, overtime, a super over; the engine's `stageDefaults` decides which and their values; a table stage with none), every one the organiser's to switch off. `config.rules` sent with a create is laid over that preset key by key (a null removes the preset key: the stage inherits the division's value; `false` switches OFF a decider the sport turns off with no value at all, ice-hockey `overtime` and `shootout` and the hockey `shootout`). Unlike the stage PUT, `config.rules` that is absent, null or `{}` at create KEEPS the whole preset (a create has nothing stored to clear; to start from the division's own rules, send each preset key as null, or PUT `{}` afterwards). The rules are validated as `PUT /stages/{id}/rules` validates a save: 400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (`field`), 422 CONFIG_INVALID (`issues`), 422 TIEBREAK_KEY_INVALID (`refusals`, `stage_id`, `stage_name`) for the INHERITED tie-break order (the division's) the new stage's kind refuses — a stage's own order is not part of this body (`config.tiebreakers` is an unknown key of the strict stage config: 400 VALIDATION); nothing in the batch is written. A stage's own `config.points` (the engine's PointsRule) is asked what the stage PUT asks of it, and `config.points: null` means no points for this slot (as `points: null` does on the stage PUT): nothing is asked and nothing is stored. A non-null value: a bracket stage (no table) 400 RULE_NOT_SETTABLE (`field` `points`); a walkover `awardScore` on a sport whose table never reads it 400 RULE_NOT_SETTABLE (`field` `points.forfeit.awardScore`); a rule that does not pay an outcome the stage can end in 422 POINTS_OUTCOME_UNCOVERED (`uncovered`, `stage_name`); a bonus reading a score the sport does not emit 422 CONFIG_INVALID; a FLAT rule (one amount per win and per loss: no overtime, shoot-out or not-played split, no set-score table, a shoot-out booked as a result) on a stage whose sport pays one of those apart (IIHF's overtime 2/1, a 3-2 volleyball result, a table-tennis loss not played, FIH's shoot-out bonus) 422 POINTS_SPLIT_FLATTENED (`splits` naming each: `otWin`, `otLoss`, `shootoutWin`, `shootoutLoss`, `soBonus`, `unplayed`, `pointsMap`, `stage_name`, `stage_kind`) — no flat rule pays such a stage as its sport does (a retirement after play pays a flat rule's loss, never the sport's loss not played), so state the split in the rule to set it. A stage's own points ask no plan feature (bonuses and a forfeit row are free on every plan); a plan feature the body's stages need (a double-elimination or an advanced-format kind, carry-over) or the stage cap is 402 PAYMENT_REQUIRED. A decider at the config's TOP level (any whole decider a sport declares, e.g. `config.shootout`, `config.overtime`, `config.superOver`) is refused 400 VALIDATION naming the key (`field`) and where it goes (`config.rules.<key>`). A requested half-point or zero-point bye has no path yet (RB3-7(c), deferred): `config.requestedByes`, with any value, is refused 400 SWISS_REQUESTED_BYES_DEFERRED naming the key (`field`) and the way out — record a walkover on the player's board. 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size. Chess divisions take individual players only: an americano or mexicano stage (it mints pair entrants) is 422 CHESS_INDIVIDUAL_ONLY, asked before any plan gate, and the whole batch writes nothing. A Swiss stage in a chess division always balances colours: it is stored with `config.chess: true` when none is sent, and `chess: false` is 422 SWISS_CHESS_ALWAYS_ON, the whole batch writing nothing",
         "tags": [
           "stages"
         ],
@@ -23784,7 +23872,7 @@
         ]
       },
       "put": {
-        "summary": "Replace the stage graph (v8 Settings format; 409 FORMAT_LOCKED once fixtures exist). Each stage is written as for POST, then the body's `config.rules` over it — except that a slot whose `seq` keeps the same `kind` keeps the rules it already stored IN PLACE OF its preset (a preset key the organiser removed stays removed, and a stage set to the division's rules stays so); a new slot, or one whose kind changed, starts from its own kind's preset. A matched slot also keeps its own `points` (the stage's PointsRule) unless the body sends its own, which replaces it whole, or sends `points: null`, which drops it and stores none; a new slot, or one whose kind changed, has none. Every refusal POST can raise from the body or the carry (400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE, 400 SWISS_REQUESTED_BYES_DEFERRED for a `config.requestedByes` — a requested half-point or zero-point bye is deferred, RB3-7(c) — 402 PAYMENT_REQUIRED for a plan feature or the stage cap, 409 for a `seq` the body names twice, 422 CONFIG_INVALID / TIEBREAK_KEY_INVALID / POINTS_OUTCOME_UNCOVERED / POINTS_SPLIT_FLATTENED / STAGE_SWISS_ROUNDS_REQUIRED — a carried `points` is asked as a sent one — and 422 CHESS_INDIVIDUAL_ONLY for an americano or mexicano stage in a chess division) refuses the whole save: a refused save leaves the existing stages untouched",
+        "summary": "Replace the stage graph (v8 Settings format; 409 FORMAT_LOCKED once fixtures exist). Each stage is written as for POST, then the body's `config.rules` over it — except that a slot whose `seq` keeps the same `kind` keeps the rules it already stored IN PLACE OF its preset (a preset key the organiser removed stays removed, and a stage set to the division's rules stays so); a new slot, or one whose kind changed, starts from its own kind's preset. A matched slot also keeps its own `points` (the stage's PointsRule) unless the body sends its own, which replaces it whole, or sends `points: null`, which drops it and stores none; a new slot, or one whose kind changed, has none. Every refusal POST can raise from the body or the carry (400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE, 400 SWISS_REQUESTED_BYES_DEFERRED for a `config.requestedByes` — a requested half-point or zero-point bye is deferred, RB3-7(c) — 402 PAYMENT_REQUIRED for a plan feature or the stage cap, 409 for a `seq` the body names twice, 422 CONFIG_INVALID / TIEBREAK_KEY_INVALID / POINTS_OUTCOME_UNCOVERED / POINTS_SPLIT_FLATTENED / STAGE_SWISS_ROUNDS_REQUIRED — a carried `points` is asked as a sent one — 422 CHESS_INDIVIDUAL_ONLY for an americano or mexicano stage in a chess division, and 422 SWISS_CHESS_ALWAYS_ON for a Swiss stage's `chess: false` in a chess division — a slot's stored off is not carried there: it takes the default, on) refuses the whole save: a refused save leaves the existing stages untouched",
         "tags": [
           "stages"
         ],
@@ -29670,7 +29758,7 @@
         ]
       },
       "patch": {
-        "summary": "W3 T12 (SW-M10, #838; X-SW-17, BG-SW-1) — a Swiss stage's round count (`rounds`) and chess colours (`chess`), editable until the stage's FIRST START (a result or any recorded data, an online game, a decided board other than the bye; a bye alone and a device link are not a start). At least one key; unknown keys 400, and `requestedByes` (a requested half-point or zero-point bye, deferred — RB3-7(c)) is 400 SWISS_REQUESTED_BYES_DEFERRED with the way out: record a walkover on the player's board. Before that start: rounds above the new count lose their shells (`shells.removed`, and `slots_freed` of them held a laid-out slot), rounds added are minted for each round's own field once the stage holds shells (`shells.added`), and a moved count appends `swiss_rounds_changed` (an undo barrier: Undo across it is 422 SWISS_ROUNDS_CHANGE_NOT_UNDOABLE); the same count again writes nothing. `swiss_rounds` judges the count against the field its next Pair seats (verdict ok or warn above the safe maximum ⌊n/2⌋; null when `rounds` is not sent or there is no pairable field). Refused, nothing written: 422 STAGE_NOT_SWISS; 422 SCHEDULE_LOCKED (frozen timetable); 409 SWISS_ROUNDS_LOCKED `{canFinish, canAddRound}` after the first start when `rounds` is sent (Finish the Swiss, or `POST /stages/{id}/swiss/add-round`), and 422 SWISS_OVER `{canFinish: false, canAddRound: false}` instead once the stage is complete or a later stage is under way; 422 SWISS_CHESS_LOCKED after the first start for a body that sends `chess` alone (the colours never move once play starts); 422 SWISS_ROUNDS_ABOVE_MAX `{rounds, field, hardMax, canFinish: false}` above the field's hard maximum (n − 1 even, n odd); 409 SWISS_ROUNDS_BELOW_SEATED below a paired round (Unpair it first); 409 FIXTURE_HAS_OWN_FORMAT for a removed shell carrying its own format",
+        "summary": "W3 T12 (SW-M10, #838; X-SW-17, BG-SW-1) — a Swiss stage's round count (`rounds`) and chess colours (`chess`), editable until the stage's FIRST START (a result or any recorded data, an online game, a decided board other than the bye; a bye alone and a device link are not a start). At least one key; unknown keys 400, and `requestedByes` (a requested half-point or zero-point bye, deferred — RB3-7(c)) is 400 SWISS_REQUESTED_BYES_DEFERRED with the way out: record a walkover on the player's board. Before that start: rounds above the new count lose their shells (`shells.removed`, and `slots_freed` of them held a laid-out slot), rounds added are minted for each round's own field once the stage holds shells (`shells.added`), and a moved count appends `swiss_rounds_changed` (an undo barrier: Undo across it is 422 SWISS_ROUNDS_CHANGE_NOT_UNDOABLE); the same count again writes nothing. `swiss_rounds` judges the count against the field its next Pair seats (verdict ok or warn above the safe maximum ⌊n/2⌋; null when `rounds` is not sent or there is no pairable field). Refused, nothing written: 422 STAGE_NOT_SWISS; 422 SCHEDULE_LOCKED (frozen timetable); 422 SWISS_CHESS_ALWAYS_ON for `chess: false` on a chess (boardgame) division, before or after the first start (a chess Swiss always balances colours: a stage stored off earlier still pairs in colour until its round 1 is paired, keeps what round 1 was paired with after that, and `chess: true` still switches it on); 409 SWISS_ROUNDS_LOCKED `{canFinish, canAddRound}` after the first start when `rounds` is sent (Finish the Swiss, or `POST /stages/{id}/swiss/add-round`), and 422 SWISS_OVER `{canFinish: false, canAddRound: false}` instead once the stage is complete or a later stage is under way; 422 SWISS_CHESS_LOCKED after the first start for a body that sends `chess` alone (the colours never move once play starts); 422 SWISS_ROUNDS_ABOVE_MAX `{rounds, field, hardMax, canFinish: false}` above the field's hard maximum (n − 1 even, n odd); 409 SWISS_ROUNDS_BELOW_SEATED below a paired round (Unpair it first); 409 FIXTURE_HAS_OWN_FORMAT for a removed shell carrying its own format",
         "tags": [
           "stages"
         ],
@@ -42987,7 +43075,7 @@
     },
     "/api/v1/divisions/{id}/events/import": {
       "post": {
-        "summary": "Batch-import score events into unstarted fixtures (D6)",
+        "summary": "Batch-import score events into unstarted fixtures (D6). 403 FORBIDDEN for an API key whose scope is below an imported EVENT's: core.finalize, core.settle, core.forfeit and core.abandon need the `manage` scope; the whole call is refused before any stream runs, and nothing is written",
         "tags": [
           "scoring"
         ],
@@ -58354,7 +58442,7 @@
     },
     "/api/v1/fixtures/{id}/events": {
       "post": {
-        "summary": "Append a score event (THE scoring endpoint). 403 RESULT_CARRIED_FORWARD: a device link writing to a fixture whose settled result has already moved the competition on (its winner or loser feed seated, the next Swiss round paired, or its stage complete) — corrections are then the organiser's. A keyed retry of a write the ledger already holds still gets its original answer. 409 FIXTURE_RULES_CHANGED (W2c X-SR-7): the request sent a `rules_version` that is not the match's — its format was corrected since; nothing was written, and the error carries the match's `rules_version` and `format` (its rules line, en: the format, how a tied match ends, an abandon policy the stage changed; null when none). Checked only when sent, and before `expected_seq`. Every 201 carries the match's `rules_version`. 426 ENGINE_OUTDATED: the request carries an engine_epoch lower than the minimum epoch the server accepts for the fixture's sport now (normally its fold epoch) — update the client; nothing was written and the idempotency key is not consumed (an absent or higher engine_epoch is accepted; a retry of an already-accepted key answers its original event even after the epoch has moved). This 426 carries no Upgrade header (it is not a protocol upgrade): key on error.code ENGINE_OUTDATED, never on the status alone",
+        "summary": "Append a score event (THE scoring endpoint). 403 RESULT_CARRIED_FORWARD: a device link writing to a fixture whose settled result has already moved the competition on (its winner or loser feed seated, the next Swiss round paired, or its stage complete), or an API key below `manage` voiding an event there — corrections are then the organiser's. A keyed retry of a write the ledger already holds still gets its original answer. 403 FORBIDDEN for an API key whose scope is below the EVENT's: core.finalize, core.settle, core.forfeit and core.abandon need the `manage` scope (a `score` key may still record the forfeit that ends a side's match-ending sanction, recorded right after it), and a core.void needs the scope of the event it undoes; nothing was written. 409 FIXTURE_RULES_CHANGED (W2c X-SR-7): the request sent a `rules_version` that is not the match's — its format was corrected since; nothing was written, and the error carries the match's `rules_version` and `format` (its rules line, en: the format, how a tied match ends, an abandon policy the stage changed; null when none). Checked only when sent, and before `expected_seq`. Every 201 carries the match's `rules_version`. 426 ENGINE_OUTDATED: the request carries an engine_epoch lower than the minimum epoch the server accepts for the fixture's sport now (normally its fold epoch) — update the client; nothing was written and the idempotency key is not consumed (an absent or higher engine_epoch is accepted; a retry of an already-accepted key answers its original event even after the epoch has moved). This 426 carries no Upgrade header (it is not a protocol upgrade): key on error.code ENGINE_OUTDATED, never on the status alone",
         "tags": [
           "scoring"
         ],

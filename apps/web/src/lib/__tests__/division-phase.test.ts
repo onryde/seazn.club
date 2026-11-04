@@ -900,8 +900,9 @@ describe("openStages is the ordering authority — Minor 1 (fix round H)", () =>
 });
 
 /**
- * L1 (fix round H, Critical). The progress predicate the fixtures tab's
- * start-locks tip, and rule 6, both ask instead of reading the phase WORD.
+ * L1 (fix round H, Critical). The progress predicate rule 6 asks instead of
+ * reading the phase WORD (the fixtures tab's start-locks tip asked it too,
+ * until UI5 removed the tip, 2026-11-03).
  */
 describe("hasPlayedFixture", () => {
   it("counts only a recorded RESULT — never a terminal-but-unplayed fixture", () => {
@@ -1172,19 +1173,25 @@ describe("fixtureAwaitsSeedDraw — an unfilled SEED slot, not just an empty sid
   // cannot drift" — stated as a test: hardcoding either side to a literal
   // (`awaitsSeedDraw: false`) otherwise survives the entire suite, which is
   // how the ORIGINAL two-copy `tbd` expression drifted in the first place.
-  it("both producers derive the fact through this one helper, never a literal", () => {
+  // UI5 item 1 (2026-11-03): the division page was the second producer, for the start-locks banner only; the banner
+  // went and the page's phase with it, so the desk is the one producer left. The page is asserted to build no phase at
+  // all, so a phase brought back to it has to come back through this test (and re-join the list above).
+  it("the producer derives the fact through this one helper, never a literal; the division page builds no phase", () => {
     const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-    for (const producer of [
-      "server/usecases/competition-desk.ts",
-      "app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
-    ]) {
+    let checked = 0;
+    for (const producer of ["server/usecases/competition-desk.ts"]) {
       const src = readFileSync(path.join(web, producer), "utf8");
       expect(src, `${producer} does not import fixtureAwaitsSeedDraw`).toContain("fixtureAwaitsSeedDraw");
       expect(
         src.match(/awaitsSeedDraw:\s*fixtureAwaitsSeedDraw\(/g)?.length ?? 0,
         `${producer} must build PhaseFixture.awaitsSeedDraw by calling the helper`,
       ).toBe(1);
+      checked++;
     }
+    expect(checked, "anti-vacuity: a producer was read").toBe(1);
+    const page = readFileSync(path.join(web, "app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx"), "utf8");
+    expect(page, "premise: the division page was read").toContain("StagesPanel");
+    expect(page).not.toMatch(/resolvePhase\(/);
   });
 
   // ── and the same facts through the real consumer ────────────────────────

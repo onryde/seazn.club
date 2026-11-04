@@ -540,10 +540,27 @@ test("two fixtures sharing only a person, under different entrants, are never pl
   const other0 = await createPerson(request, `SP Other0 ${TAG}`);
   const other1 = await createPerson(request, `SP Other1 ${TAG}`);
   const other2 = await createPerson(request, `SP Other2 ${TAG}`);
+  // UI5 item 3 refuses the second entrant at the door: one person, one entrant per division, 409 PERSON_ON_OTHER_TEAM.
+  // The state this test guards is still reachable in the product, because person merge folds two records into one
+  // and deliberately does not refuse (person-merge.ts reports what it reveals and never enforces). So "SP Ent 2" enters
+  // under its own record, and that record is merged into `shared` through the real route.
+  const sharedTwin = await createPerson(request, `SP Shared Twin ${TAG}`);
   const e0 = await createEntrantWithPerson(request, divisionId, `SP Ent 0${TAG}`, shared, 1);
   const e1 = await createEntrantWithPerson(request, divisionId, `SP Ent 1${TAG}`, other0, 2);
-  const e2 = await createEntrantWithPerson(request, divisionId, `SP Ent 2${TAG}`, shared, 3);
+  const e2 = await createEntrantWithPerson(request, divisionId, `SP Ent 2${TAG}`, sharedTwin, 3);
   const e3 = await createEntrantWithPerson(request, divisionId, `SP Ent 3${TAG}`, other1, 4);
+  const merged = await apiJson(request, `/api/v1/persons/${shared}/merge`, "POST", {
+    duplicate_id: sharedTwin,
+    confirmed: true,
+  });
+  expect(merged.status, `merge: ${JSON.stringify(merged.error)}`).toBe(200);
+  // The precondition: one human behind both entrants. Without it, the assertions below hold for two people.
+  const rosterOf = async (entrantId: string) =>
+    (await apiJson<{ members: { person_id: string }[] }>(request, `/api/v1/entrants/${entrantId}`)).data!.members.map(
+      (m) => m.person_id,
+    );
+  expect(await rosterOf(e0), "SP Ent 0 is shared").toEqual([shared]);
+  expect(await rosterOf(e2), "SP Ent 2 is shared, after the merge").toEqual([shared]);
   // A fifth, unrelated entrant/person keeps the division's entrant COUNT the
   // same shape addEntrantsViaApi-based boards use elsewhere in this file,
   // without touching the two fixtures under test.

@@ -6,21 +6,76 @@ import {
   competitionChipState,
   divisionChipState,
   CHIP_SORT,
+  type CompetitionChipSignals,
 } from "@/components/ui/status-chip";
+import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 import { initials } from "@/components/ui/entity-logo";
 import { isConfirmArmed } from "@/lib/typed-confirm";
 import { msg, messages } from "@/lib/messages";
 import { divisionHue, divisionAccent } from "@/lib/division-hue";
 import { nextLine } from "@/components/v2/org-home/home-rules";
 
+/** A competition whose divisions say nothing yet: none in play, no window open, none started or finished, nothing played. */
+const QUIET: CompetitionChipSignals = { inPlay: 0, registrationOpen: false, divisions: 2, divisionsActive: 0, divisionsCompleted: 0, played: 0 };
+const sig = (over: Partial<CompetitionChipSignals>): CompetitionChipSignals => ({ ...QUIET, ...over });
+// Every competition status the schema allows (competitions.status check).
+const COMPETITION_STATUSES = ["draft", "published", "live", "completed", "archived"] as const;
+
 describe("status chip vocabulary (v3/03 §1)", () => {
-  it("maps competition statuses to the five chip states", () => {
-    expect(competitionChipState("draft")).toBe("draft");
-    expect(competitionChipState("published")).toBe("registration");
-    expect(competitionChipState("live")).toBe("live");
-    expect(competitionChipState("completed")).toBe("completed");
-    expect(competitionChipState("archived")).toBe("archived");
-    expect(competitionChipState("live", { archived: true })).toBe("archived");
+  // UI5 item 6 (owner, 2026-11-03: "why does it saying registration open even though no registration opened in division
+  // level"). The card's chip is read off its DIVISIONS, never off `competitions.status` alone: "published" means public, not
+  // taking sign-ups. Ladder (controller, given to the owner): archived; a match in play -> Live; a division's registration
+  // window open -> Registration open; every division completed -> Completed; a division started or a result in -> In
+  // progress; else Draft.
+  it("the empty case first: a competition whose divisions say nothing is Draft, whatever its status but the two terminal ones", () => {
+    let checked = 0;
+    for (const status of COMPETITION_STATUSES) {
+      if (status === "archived" || status === "completed") continue;
+      expect(competitionChipState(status, QUIET), status).toBe("draft");
+      checked++;
+    }
+    expect(competitionChipState("draft", sig({ divisions: 0 })), "no division at all").toBe("draft");
+    expect(checked).toBe(3);
+  });
+
+  it("the owner's case: published, under way, no division's window open - In progress, never Registration open", () => {
+    const underWay = sig({ divisionsActive: 1, played: 3 });
+    expect(competitionChipState("published", underWay)).toBe("in_progress");
+    expect(competitionChipState("live", underWay)).toBe("in_progress");
+    // ...and "published" with nothing started and no window is not a sign-up either.
+    expect(competitionChipState("published", QUIET)).not.toBe("registration");
+  });
+
+  it("one rung each: Live, Registration open, Completed, In progress, Archived", () => {
+    expect(competitionChipState("published", sig({ inPlay: 1, divisionsActive: 1 })), "a match in play").toBe("live");
+    expect(competitionChipState("draft", sig({ registrationOpen: true })), "a window open").toBe("registration");
+    expect(competitionChipState("live", sig({ divisionsCompleted: 2, played: 9 })), "every division completed").toBe("completed");
+    expect(competitionChipState("completed", QUIET), "the organiser wrapped it up").toBe("completed");
+    expect(competitionChipState("published", sig({ divisionsActive: 1 })), "a division started, nothing played yet").toBe("in_progress");
+    expect(competitionChipState("published", sig({ played: 1 })), "a result in, no division active").toBe("in_progress");
+    expect(competitionChipState("archived", sig({ inPlay: 2, registrationOpen: true })), "archived").toBe("archived");
+    expect(competitionChipState("live", sig({ inPlay: 2 }), { archived: true }), "archived by option").toBe("archived");
+  });
+
+  it("precedence, each pair where the two rungs disagree", () => {
+    // Live beats a window open, and a window open beats under way: a running competition still taking entries says so.
+    expect(competitionChipState("live", sig({ inPlay: 1, registrationOpen: true, divisionsActive: 1 }))).toBe("live");
+    expect(competitionChipState("live", sig({ registrationOpen: true, divisionsActive: 1, played: 4 }))).toBe("registration");
+    // Completed needs EVERY division: one of two finished, the other still running, is in progress.
+    expect(competitionChipState("live", sig({ divisionsCompleted: 1, divisionsActive: 1, played: 6 }))).toBe("in_progress");
+    expect(competitionChipState("live", sig({ divisionsCompleted: 1, played: 6 })), "one finished, one not started").toBe("in_progress");
+    // A match in play outranks the organiser's "completed" (the public chip's rule: in play is on now, whatever the status).
+    expect(competitionChipState("completed", sig({ inPlay: 1, divisionsCompleted: 1, divisionsActive: 1 }))).toBe("live");
+  });
+
+  it("refuses signals no read can produce, rather than print a chip off them", () => {
+    expect(() => competitionChipState("live", sig({ divisionsCompleted: 3 }))).toThrow(RangeError);
+    expect(() => competitionChipState("live", sig({ divisionsActive: 2, divisionsCompleted: 1 }))).toThrow(RangeError);
+    expect(() => competitionChipState("live", sig({ inPlay: -1 }))).toThrow(RangeError);
+    expect(() => competitionChipState("live", sig({ played: 0.5 }))).toThrow(RangeError);
   });
 
   it("maps division statuses; a registration window promotes setup", () => {
@@ -32,10 +87,23 @@ describe("status chip vocabulary (v3/03 §1)", () => {
     expect(divisionChipState("active", { archived: true })).toBe("archived");
   });
 
-  it("sorts Live first, then Registration open, Draft, Completed, Archived", () => {
-    const order = ["archived", "draft", "live", "completed", "registration"] as const;
+  it("sorts Live first, then Registration open, In progress, Draft, Completed, Archived", () => {
+    const order = ["archived", "draft", "in_progress", "live", "completed", "registration"] as const;
     const sorted = [...order].sort((a, b) => CHIP_SORT[a] - CHIP_SORT[b]);
-    expect(sorted).toEqual(["live", "registration", "draft", "completed", "archived"]);
+    expect(sorted).toEqual(["live", "registration", "in_progress", "draft", "completed", "archived"]);
+  });
+
+  it("every chip state has a label in all four locales, In progress included", () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries({ en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string, Record<string, string>>)) {
+      for (const state of Object.keys(CHIP_SORT)) {
+        const key = state === "in_progress" ? "chip.inProgress" : `chip.${state}`;
+        expect(dict[key], `${locale} ${key}`).toBeTruthy();
+        checked++;
+      }
+      if (locale !== "en") expect(dict["chip.inProgress"], `${locale} is translated`).not.toBe(uiEn["chip.inProgress" as keyof typeof uiEn]);
+    }
+    expect(checked).toBe(4 * Object.keys(CHIP_SORT).length);
   });
 });
 

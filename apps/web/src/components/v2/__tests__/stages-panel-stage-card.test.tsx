@@ -29,7 +29,6 @@ import { innerOf, subtreeOf } from "./_markup";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
-vi.mock("@/components/ui/tip", () => ({ TipCallout: ({ id }: { id: string }) => <div data-tip={id} /> }));
 
 const UI = enUi as Record<string, string>;
 const DICTS: [Locale, Dict][] = [
@@ -943,8 +942,8 @@ describe("the stage's fixtures are in the card (item 9)", () => {
 
   it("the filter that leaves no row anywhere says so ONCE, with the way back (and the stage sheets stay quiet)", () => {
     // Every fixture is unscheduled or far in the future, so "Today" keeps none of them. The panel mounts on "All" whatever the
-    // day (PB1), so the filter is chosen the way a person chooses it: through the bar's own onFilter, on a match-day division.
-    const island = renderIsland(StagesPanel, panelProps({ phase: "match_day" }) as unknown as ComponentProps<typeof StagesPanel>);
+    // day (PB1), so the filter is chosen the way a person chooses it: through the bar's own onFilter.
+    const island = renderIsland(StagesPanel, panelProps() as unknown as ComponentProps<typeof StagesPanel>);
     const ofId = (id: string) => island.tree().filter((el) => propsOf(el)["data-testid"] === id);
     expect(ofId("run-sheet-empty"), "premise: on All the rows are there, so nothing is empty").toHaveLength(0);
     const bar = island.tree().filter((el) => el.type === RunSheetFilterBar);

@@ -479,6 +479,10 @@ function stageConfigsAtCreate(
     for (const key of ["points", "tiebreakers", "crossGroupTiebreakers", "chess"] as const) {
       if (carry?.[key] !== undefined && sent[key] === undefined) config[key] = carry[key];
     }
+    // UI5 fix round 1 (ruling Q2): the old desk switch's off is not carried onto a chess Swiss. The door below refuses
+    // an off (SWISS_CHESS_ALWAYS_ON), and a replaced slot is unpaired, so it would pair in colour anyway (ruling I1):
+    // the slot takes the default instead. A body's own off is still sent, and still refused.
+    if (sent.chess === undefined && config.chess === false && isChessSport(division.sport_key)) delete config.chess;
     return validatedStageConfig(
       sportModule,
       division.sport_key,
@@ -1564,6 +1568,35 @@ async function swissRoundOneDrawOrder(
   return roundOne.some((e) => e.seed === null) ? swissRoundOneOrder(swissDrawSeed(stageId), roundOne) : null;
 }
 
+/** UI5 fix round 1 (controller ruling I1; owner 2026-11-03: chess colours are always on in a chess Swiss): whether a Pair
+ *  balances chess colours — THE one read, for `swissGen` and the late-entry bye check (`swiss-late-entry.ts`) alike.
+ *  - Stored on → on (any sport, as it always was).
+ *  - Any sport but chess → as stored (off).
+ *  - A chess Swiss whose round 1 seats nobody yet → on, whatever is stored: a stage the old desk switch stored off pairs
+ *    in colour from its first Pair. Read-side only: the stored value is never rewritten (no data migration).
+ *  - A chess Swiss whose round 1 is paired keeps what round 1 was paired with: on when round 1's newest pairing row (its
+ *    Pair, or an "Add late player" that re-paired it — the rows `swissRoundOneDrawOrder` reads) drew the colour lot, so
+ *    a stage first paired under this rule stays coloured; otherwise the stored off — a stage already under way when the
+ *    rule shipped does not change colours mid-event. */
+export async function swissPairsInColour(
+  tx: Tx,
+  divisionId: string,
+  stage: { id: string; config: Record<string, unknown> },
+  sportKey: string,
+  existing: readonly Pick<SwissExistingFixture, "round_no" | "home_entrant_id" | "away_entrant_id">[],
+): Promise<boolean> {
+  if (stage.config.chess === true) return true;
+  if (!isChessSport(sportKey)) return false;
+  const roundOnePaired = existing.some((f) => f.round_no === 1 && (f.home_entrant_id !== null || f.away_entrant_id !== null));
+  if (!roundOnePaired) return true;
+  const [roundOnePair] = await tx<{ coloured: boolean }[]>`
+    select payload ? 'colour_lot' as coloured from division_events
+     where division_id = ${divisionId} and payload->>'stage_id' = ${stage.id} and payload->>'round' = '1'
+       and (type = 'fixtures_generated' or (type = 'swiss_late_entry' and payload->>'case' = 'a'))
+     order by seq desc limit 1`;
+  return roundOnePair?.coloured === true;
+}
+
 // Swiss shell fixtures (2026-09-18 programme): first Generate mints empty rows for
 // every round the organiser declared in `config.rounds`; Pair next (a later
 // Generate when shells already exist) seats one round at a time onto those
@@ -1750,7 +1783,7 @@ export async function swissGen(
     score: score.get(e.id) ?? 0,
     rank: cascadeRank.get(e.id) ?? cascadeRank.size + seedRank(e, i),
   }));
-  const chess = cfg.chess === true;
+  const chess = await swissPairsInColour(tx, divisionId, { id: stageId, config: cfg }, division.sport_key, existing);
   const paired = pairRound(
     standings,
     { played, colours, byes },
@@ -1758,8 +1791,8 @@ export async function swissGen(
   );
   // W3 T8 (BG-SW-1; SW-H3, REC RB3-10): with chess colours on, round 1's colours are by lot (FIDE C.04.3 A3 5.1): board
   // 1's upper player takes the lot's colour and the boards alternate. Swapped HERE, before the seats are written, so the
-  // stored fixtures carry it (home = White) and round 2's colour history reads it. The read stays `cfg.chess === true`:
-  // the boardgame default is stamped at creation only, so a stage stored before it keeps today's colours (ruling m5).
+  // stored fixtures carry it (home = White) and round 2's colour history reads it. Whether colours are on is
+  // `swissPairsInColour` (UI5 fix round 1, ruling I1): a chess Swiss not yet paired is always coloured.
   // A round 1 always holds a board: `refuseSwissFieldUnderTwo` (above) refuses THIS round's field — the T6-narrowed one,
   // not the roster — under two (STAGE_NOT_READY) before this runs, and two or more with no history always pair.
   const colourLot = target === 1 && chess ? swissColourLot(swissDrawSeed(stageId)) : null;

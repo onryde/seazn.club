@@ -11,6 +11,7 @@ import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { lichessImportRefusalText } from "@/components/v2/entrants-lichess-refusal";
+import { importPersonOnOtherTeamText } from "@/components/v2/import-refusal-text";
 // RS011 review round 3, finding 2: `commitImport` (server/usecases/
 // imports.ts) runs the SAME eligibility gate `putLineup`/roster-write
 // endpoints do and can 422 ELIGIBILITY_VIOLATION, but `commit()` had no
@@ -242,7 +243,7 @@ export function ImportWizard({ viewerPlan }: { viewerPlan: ViewerPlan }) {
           message?: string;
           feature_key?: string;
           violations?: EligibilityIssue[];
-          /** LICHESS_*_REQUIRED: the file rows (the preview's "Row n") whose players cannot be seated. */
+          /** LICHESS_*_REQUIRED and PERSON_ON_OTHER_TEAM: the file rows (the preview's "Row n") the refusal names. */
           rows?: number[];
         };
       };
@@ -260,16 +261,15 @@ export function ImportWizard({ viewerPlan }: { viewerPlan: ViewerPlan }) {
         // preview stays, so the same file imports again once those players have linked or reconnected.
         if (payload.error) {
           const { code, rows } = payload.error;
-          const lichess = lichessImportRefusalText(
-            { code, extra: { rows } },
-            {
-              list: (labels) => new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(labels),
-              plural: msgPlural,
-              text: (key) => msg(key as MessageKey),
-            },
-          );
-          if (lichess) {
-            setError(lichess);
+          const deps = {
+            list: (labels: string[]) => new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(labels),
+            plural: msgPlural,
+            text: (key: string) => msg(key as MessageKey),
+          };
+          // UI5 fix round 1 (ruling Q3): a player the division already holds (one person, one entrant per division), by row.
+          const refusal = lichessImportRefusalText({ code, extra: { rows } }, deps) ?? importPersonOnOtherTeamText({ code, extra: { rows } }, deps);
+          if (refusal) {
+            setError(refusal);
             return;
           }
         }

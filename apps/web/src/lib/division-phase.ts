@@ -470,8 +470,8 @@ const PLAYED_STATUSES = new Set(["decided", "finalized", "needs_decision"]);
  * separately — the pill (a red attention outranks the phase,
  * phase-pill.tsx), the masthead (`competitionPhase`'s `nothingHasHappened`,
  * competition-desk.ts) and the fixtures tab's start-locks tip
- * (stages-panel.tsx) — and the third was still asking the phase word alone
- * after the first two were fixed. The predicate lives here, once, rather than
+ * (stages-panel.tsx; the tip itself was removed in UI5, 2026-11-03) — and the
+ * third was still asking the phase word alone after the first two were fixed. The predicate lives here, once, rather than
  * being written out a fourth time: a hand-copied predicate is a recorded
  * drift class in this wave (see `stageOwesDraw`, K3/M1).
  *
@@ -638,9 +638,9 @@ function stageOwesWork(s: PhaseStage, fixtures: readonly PhaseFixture[]): boolea
  * the caller's own in-memory stage list, and "does this bracket still owe its
  * draw?" is read off the fixtures' own entrants, slot labels and outcomes
  * (`fixtureAwaitsSeedDraw`) rather than a `stage_seed_proposals` row,
- * so BOTH callers (the desk and `d/[divSlug]/page.tsx`, which computes the
- * phase for the start-locks tip) can answer it identically without a
- * viewer-gated read. Two authorities disagreeing about one division is this
+ * so every caller (the desk; `d/[divSlug]/page.tsx` computed the phase for
+ * the start-locks tip until UI5 removed it, 2026-11-03) can answer it
+ * identically without a viewer-gated read. Two authorities disagreeing about one division is this
  * wave's other recurring defect.
  */
 function stageOwesDraw(stage: PhaseStage, fixtures: readonly PhaseFixture[]): boolean {

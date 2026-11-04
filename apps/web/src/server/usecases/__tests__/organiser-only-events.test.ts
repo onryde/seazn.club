@@ -564,7 +564,9 @@ async function asAuthority(s: SeededBracket, fixtureId: string, who: Who): Promi
       return { ...base, via: "session", userId, role: who };
     }
     case "api_key":
-      return { orgId: s.auth.orgId, via: "api_key", userId: null, role: null, keyId: randomUUID() };
+      // A `manage` key: the organiser-level credential (SEC1 — a `score` key is the scorer-level one, refused these rows
+      // by its scope; api-key-event-scope.test.ts). The scopes ride on the ctx exactly as the key door (apiKeyAuth) sets them.
+      return { orgId: s.auth.orgId, via: "api_key", userId: null, role: null, keyId: randomUUID(), keyScopes: ["manage"] };
     case "official": {
       const userId = await makeUser("official");
       await acceptOfficial(s.auth.orgId, userId, fixtureId);

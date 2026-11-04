@@ -150,6 +150,8 @@ interface DivisionRosterRow {
   person_id: string;
   entrant_id: string;
   entrant_name: string;
+  /** `individual`: the person's own entry, said as "already entered", never "on <their own name>". */
+  entrant_kind?: string;
 }
 
 interface Props {
@@ -266,9 +268,9 @@ export function EntrantsPanel({
   // picker. Empty for orgs that never imported — the form then shows only the
   // "new entrant" mode, exactly as before.
   const [teams, setTeams] = useState<TeamOption[]>([]);
-  // Division-wide (person → team entrant) map, for the same-division
-  // double-roster warning (advisory: a person on two teams here is flagged,
-  // not blocked).
+  // Division-wide (person → entrant) map. UI5 item 3: one person, one team per division - the pickers leave a held person
+  // out of the suggestions (a search shows them disabled, "On <team>"), and a roster that still holds one cannot save. The
+  // server refuses the same rows (`divisionRoster` and the write share one predicate).
   const [rosterIndex, setRosterIndex] = useState<DivisionRosterRow[]>([]);
   // Bumped after every mutation to force a roster-map refetch.
   const [rosterBump, setRosterBump] = useState(0);
@@ -322,6 +324,8 @@ export function EntrantsPanel({
       rosterIndex.filter((r) => r.person_id === personId && r.entrant_id !== exceptEntrantId),
     [rosterIndex],
   );
+  // A new entrant is no one yet: every entrant holding the person is another team.
+  const heldBy = useCallback((personId: string) => rosterIndex.filter((r) => r.person_id === personId), [rosterIndex]);
 
   useEffect(() => {
     if (!clubFilter) return; // cleared in the select's onChange
@@ -351,6 +355,13 @@ export function EntrantsPanel({
       setFinishFor(plan && err instanceof ApiV1Error && typeof err.extra.stageId === "string" ? { stageId: err.extra.stageId, plan } : null);
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywallFeature(String(err.extra.feature_key ?? ""));
+        return;
+      }
+      // UI5 item 3: a person already on another team of this division, said per person in the organiser's language from the
+      // payload's names (the server's message is English-only).
+      const held = err instanceof ApiV1Error ? personOnOtherTeamText(err.code, err.extra, msg) : null;
+      if (held !== null) {
+        setError(held);
         return;
       }
       // W3 T10 — a late add refused (no round left, the Swiss is over): said by its code in the organiser's language.
@@ -544,6 +555,7 @@ export function EntrantsPanel({
             }
             teams={teams}
             enteredTeamIds={enteredTeamIds}
+            heldBy={heldBy}
             entrantModel={entrantModel}
             busy={busy}
             onSubmit={(payload) =>
@@ -932,6 +944,7 @@ function AddEntrantForm({
   onPersonCreated,
   teams,
   enteredTeamIds,
+  heldBy,
   entrantModel,
   busy,
   onSubmit,
@@ -947,6 +960,8 @@ function AddEntrantForm({
   onPersonCreated?: (person: Person) => void;
   teams: TeamOption[];
   enteredTeamIds: Set<string>;
+  /** The entrants of this division already holding a person (UI5 item 3: one team per division). */
+  heldBy?: (personId: string) => DivisionRosterRow[];
   entrantModel: EffectiveEntrantModel;
   busy: boolean;
   onSubmit: (
@@ -1006,6 +1021,7 @@ function AddEntrantForm({
           personsFailed={personsFailed}
           onRetryPersons={onRetryPersons}
           onPersonCreated={onPersonCreated}
+          heldBy={heldBy}
           entrantModel={entrantModel}
           busy={busy}
           onSubmit={onSubmit}
@@ -1189,17 +1205,60 @@ export function ExistingTeamFields({
  *  follows the division's effective entrant model: it offers only the allowed
  *  kinds, and individual/pair entrants derive their display name from the
  *  picked people instead of a free-text box. Exported for the markup test. */
+/** Nobody held: the picker's default when no roster map is handed in. */
+const NO_ONE_HELD = (): DivisionRosterRow[] => [];
+
+type HeldMsg = (key: MessageKey, vars?: Record<string, string | number>) => string;
+type Holder = { entrant_name: string; entrant_kind?: unknown };
+/** An individual entrant holding the person is the person's own entry: "Yara is already on Yara" is said as "entered". */
+const entersOnTheirOwn = (holder: Holder): boolean => holder.entrant_kind === "individual";
+
+/** "On <team>" (or "Already entered") beside a person another entrant of the division already holds (UI5 item 3). A plain
+ *  function, not a component: it is part of the chip's own text. */
+function heldByNote(msg: HeldMsg, holder: Holder) {
+  return (
+    <span className="ml-1.5 font-medium text-slate-600">
+      {entersOnTheirOwn(holder) ? msg("entrants.add.alreadyEntered") : msg("entrants.add.onOtherTeam", { team: holder.entrant_name })}
+    </span>
+  );
+}
+
+/** The one sentence for a person the division already holds: entered on their own, or on a team. */
+function heldSentence(msg: HeldMsg, name: string, holder: Holder): string {
+  return entersOnTheirOwn(holder)
+    ? msg("entrants.err.personAlreadyEntered", { name })
+    : msg("entrants.err.personOnOtherTeam", { name, team: holder.entrant_name });
+}
+
+/** 409 PERSON_ON_OTHER_TEAM in the organiser's language: one sentence per person the payload names, with the team that
+ *  holds them. Null for any other refusal, or a payload that names nobody (the caller keeps the server's message). */
+function personOnOtherTeamText(
+  code: string | undefined,
+  extra: Record<string, unknown>,
+  msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): string | null {
+  if (code !== "PERSON_ON_OTHER_TEAM" || !Array.isArray(extra.conflicts)) return null;
+  const lines = (extra.conflicts as { person_name?: unknown; entrant_name?: unknown; entrant_kind?: unknown }[])
+    .filter((c) => typeof c.person_name === "string" && typeof c.entrant_name === "string")
+    .map((c) => heldSentence(msg, c.person_name as string, { entrant_name: c.entrant_name as string, entrant_kind: c.entrant_kind }));
+  return lines.length > 0 ? lines.join(" ") : null;
+}
+
 export function NewEntrantFields({
   persons: directory,
   personsReady = true,
   personsFailed = false,
   onRetryPersons,
   onPersonCreated,
+  heldBy = NO_ONE_HELD,
   entrantModel,
   busy,
   onSubmit,
 }: {
   persons: Person[];
+  /** UI5 item 3: the entrants of this division already holding a person. A held person is left out of the suggestions;
+   *  a search shows them disabled, "On <team>"; the pick path ignores them. Default: nobody is held. */
+  heldBy?: (personId: string) => DivisionRosterRow[];
   /** False while Players is still loading: New player waits, or its duplicate check would miss people. */
   personsReady?: boolean;
   /** Players failed to load: say so, offer Retry, and keep New player off. */
@@ -1238,11 +1297,13 @@ export function NewEntrantFields({
   const atCap = memberIds.length >= cap;
   const singleKind = entrantModel.kinds.length === 1;
 
+  // A suggestion is someone the organiser can pick: a person on another team of the division is not suggested (they would
+  // take a slot of the eight), and a search, which is the organiser asking for them by name, shows them disabled.
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    if (!q) return persons.slice(0, 8);
+    if (!q) return persons.filter((p) => heldBy(p.id).length === 0).slice(0, 8);
     return persons.filter((p) => p.full_name.toLowerCase().includes(q)).slice(0, 8);
-  }, [persons, filter]);
+  }, [persons, filter, heldBy]);
   // A picked person always has a chip, even past the first eight (a New player lands at the end of Players).
   const shown = useMemo(() => {
     const extra = memberIds
@@ -1280,6 +1341,8 @@ export function NewEntrantFields({
   }
 
   function togglePick(id: string) {
+    // A held person is never picked, whatever reached here (a disabled chip's stale handler, a New player name).
+    if (heldBy(id).length > 0) return;
     setMemberIds((prev) => {
       if (prev.includes(id)) return prev.filter((x) => x !== id);
       if (isIndividual) return [id]; // single seat — a new pick replaces
@@ -1296,6 +1359,11 @@ export function NewEntrantFields({
       return;
     }
     const existing = findPersonByName(persons, fullName);
+    const holder = existing ? heldBy(existing.id)[0] : undefined;
+    if (existing && holder) {
+      setNewNote({ tone: "error", text: heldSentence(msg, existing.full_name, holder) });
+      return;
+    }
     if (existing) {
       if (!memberIds.includes(existing.id)) togglePick(existing.id);
       setNewName("");
@@ -1421,6 +1489,7 @@ export function NewEntrantFields({
         <div className="mt-2 flex flex-wrap gap-1.5">
           {shown.map((p) => {
             const selected = memberIds.includes(p.id);
+            const holder = heldBy(p.id)[0];
             // Pair/team seats are finite: once full, unpicked people are
             // disabled. Individual always allows a replacing pick.
             const blocked = !selected && atCap && !isIndividual;
@@ -1428,18 +1497,22 @@ export function NewEntrantFields({
               <button
                 key={p.id}
                 type="button"
-                disabled={blocked}
+                data-person={p.id}
+                disabled={blocked || holder !== undefined}
                 aria-pressed={selected}
                 onClick={() => togglePick(p.id)}
                 className={`max-w-full truncate rounded-full border px-2.5 py-0.5 text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-300 ${
                   selected
                     ? "border-purple-500 bg-purple-50 text-purple-700"
-                    : blocked
-                      ? "cursor-not-allowed border-slate-200 text-slate-300"
-                      : "border-slate-200 text-slate-500 hover:border-purple-200"
+                    : holder
+                      ? "cursor-not-allowed border-dashed border-slate-300 bg-slate-50 text-slate-500"
+                      : blocked
+                        ? "cursor-not-allowed border-slate-200 text-slate-300"
+                        : "border-slate-200 text-slate-500 hover:border-purple-200"
                 }`}
               >
                 {p.full_name}
+                {holder && heldByNote(msg, holder)}
               </button>
             );
           })}
@@ -2112,7 +2185,8 @@ export function RosterEditor({
    *  below (`requiresDob`/`requiresGender`, `@/lib/registration-rules` — the
    *  SAME predicates the server-side gate evaluates against). */
   eligibility: EntrantsPanelEligibility;
-  /** Other team entrants IN THIS DIVISION a person is already on. */
+  /** Other entrants IN THIS DIVISION a person is already on (UI5 item 3: one team per division - a held member blocks
+   *  Save until removed, and a held candidate is not suggested). */
   conflictsFor: (personId: string) => DivisionRosterRow[];
   onSave: (members: Member[]) => void;
 }) {
@@ -2136,15 +2210,17 @@ export function RosterEditor({
   }
 
   const memberIds = new Set(members.map((m) => m.person_id));
+  // The picker's rule (UI5 item 3): a person on another team of the division is not suggested; a search finds them,
+  // disabled and labelled with the team.
   const candidates = persons
     .filter((p) => !memberIds.has(p.id))
-    .filter((p) => !filter || p.full_name.toLowerCase().includes(filter.toLowerCase()))
+    .filter((p) => (filter ? p.full_name.toLowerCase().includes(filter.toLowerCase()) : conflictsFor(p.id).length === 0))
     .slice(0, 6);
 
-  // Advisory: people also rostered to another team in this division. Not
-  // blocked — the organiser may knowingly double-roster (guest, correction).
+  // UI5 item 3 (owner, 2026-11-03): one person, one team per division. A member still on another team here (a roster
+  // saved before the rule) blocks Save until they are removed - the server refuses that save (409 PERSON_ON_OTHER_TEAM).
   const conflicts = members
-    .map((m) => ({ name: m.full_name, on: conflictsFor(m.person_id) }))
+    .map((m) => ({ id: m.person_id, name: m.full_name, on: conflictsFor(m.person_id) }))
     .filter((c) => c.on.length > 0);
 
   return (
@@ -2154,12 +2230,21 @@ export function RosterEditor({
     // exactly how enroll.spec.ts once asserted a roster that was empty.
     <div className="space-y-3" data-testid="entrant-roster">
       {conflicts.length > 0 && (
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          <span className="font-medium">Also on another team in this division:</span>{" "}
-          {conflicts
-            .map((c) => `${c.name} (${c.on.map((o) => o.entrant_name).join(", ")})`)
-            .join("; ")}
-          . You can still save.
+        <div
+          data-testid="entrant-roster-held"
+          role="alert"
+          className="space-y-1 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800"
+        >
+          {conflicts.map((c) => (
+            <p key={c.id}>
+              {c.on.every(entersOnTheirOwn)
+                ? msg("entrants.roster.alreadyEntered", { name: c.name })
+                : msg("entrants.roster.onOtherTeam", {
+                    name: c.name,
+                    team: c.on.filter((o) => !entersOnTheirOwn(o)).map((o) => o.entrant_name).join(", "),
+                  })}
+            </p>
+          ))}
         </div>
       )}
       {members.length === 0 && (
@@ -2169,16 +2254,7 @@ export function RosterEditor({
         <div key={m.person_id} className="flex flex-wrap items-center gap-2 text-xs">
           <span className="w-40 truncate font-medium text-slate-700">
             {m.full_name}
-            {conflictsFor(m.person_id).length > 0 && (
-              <span
-                className="ml-1 text-amber-600"
-                title={`Also on ${conflictsFor(m.person_id)
-                  .map((o) => o.entrant_name)
-                  .join(", ")} in this division`}
-              >
-                ⚠
-              </span>
-            )}
+            {conflictsFor(m.person_id)[0] && heldByNote(msg, conflictsFor(m.person_id)[0]!)}
           </span>
           {/* RS011: MISSING_DOB/MISSING_GENDER — amber, advisory, never a
               block (the organiser-side gate treats these two codes as
@@ -2296,17 +2372,15 @@ export function RosterEditor({
             />
           )}
           {!atCap && candidates.map((p) => {
-            const onOther = conflictsFor(p.id);
+            const holder = conflictsFor(p.id)[0];
             return (
               <button
                 key={p.id}
                 type="button"
-                title={
-                  onOther.length > 0
-                    ? `Already on ${onOther.map((o) => o.entrant_name).join(", ")} in this division`
-                    : undefined
-                }
+                data-person={p.id}
+                disabled={holder !== undefined}
                 onClick={() => {
+                  if (holder) return; // held by another team: never added, whatever reached the handler
                   setMembers((prev) => {
                     // A rapid double-click (or a stale `candidates` list mid-render)
                     // can fire this before the person drops out of the suggestions —
@@ -2330,21 +2404,21 @@ export function RosterEditor({
                   });
                   setDirty(true);
                 }}
-                className={`rounded-full border px-2 py-0.5 text-xs hover:border-purple-300 ${
-                  onOther.length > 0
-                    ? "border-amber-300 text-amber-700"
-                    : "border-slate-200 text-slate-500"
+                className={`rounded-full border px-2 py-0.5 text-xs ${
+                  holder
+                    ? "cursor-not-allowed border-dashed border-slate-300 bg-slate-50 text-slate-500"
+                    : "border-slate-200 text-slate-500 hover:border-purple-300"
                 }`}
               >
-                + {p.full_name}
-                {onOther.length > 0 && " ⚠"}
+                {holder ? p.full_name : `+ ${p.full_name}`}
+                {holder && heldByNote(msg, holder)}
               </button>
             );
           })}
           <div className="flex-1" />
           <button
             type="button"
-            disabled={busy || !dirty}
+            disabled={busy || !dirty || conflicts.length > 0}
             onClick={() => onSave(members)}
             className="btn btn-primary px-3 py-1 text-xs"
           >

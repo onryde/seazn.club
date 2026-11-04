@@ -1192,12 +1192,13 @@ for (const sport of LATE_SPORTS) {
         timeout: 20_000,
       });
 
-      // A second late arrival with the SAME name, typed in another case: New player selects the existing person, no duplicate.
+      // A second late arrival with the SAME name, typed in another case: New player finds the existing person (no duplicate)
+      // and - UI5 item 3, one person one entry per division - says she is already entered here instead of picking her.
       await page.goto(await divisionPath(request, r.divisionId, "?tab=entrants"));
       const form = page.locator("#add-entrant");
       await form.getByTestId("new-player-name").fill(`  ${late.toUpperCase()}  `);
       await form.getByTestId("new-player-add").click();
-      await expect(form.getByTestId("new-player-note")).toHaveText(uiEn["entrants.add.newPlayer.existing"]!);
+      await expect(form.getByTestId("new-player-note")).toHaveText(uiEn["entrants.err.personAlreadyEntered"]!.replace("{name}", late));
       expect(await personIdsNamed(late), "no duplicate person").toHaveLength(1);
     });
 
@@ -1382,12 +1383,14 @@ for (const sport of LATE_SPORTS) {
   });
 }
 
-// X-SW-17 (W3 T12, SW-M10, #838, RB3-5; owner pick B, "the edit dialog") and BG-SW-1's switch. Before the stage's first
+// X-SW-17 (W3 T12, SW-M10, #838, RB3-5; owner pick B, "the edit dialog") and BG-SW-1's colours. Before the stage's first
 // start the rail's "Rounds: N · Edit" opens a dialog that names exactly which unplayed rounds a new count removes, and
 // Save writes it once; after the first start the count is a fixed chip, a PATCH is refused (409 SWISS_ROUNDS_LOCKED,
 // and the chess colours by their OWN code, 422 SWISS_CHESS_LOCKED), and the More menu's "Add a round" mints round N + 1.
 // The expected numbers are the rulebook's (§3.1: a field of 6 has hard max 5, safe max 3, 3 boards a round), never read
-// off the code. Every sport in LATE_SPORTS (a racket sport and chess); the chess switch shows on the chess Swiss only.
+// off the code. Every sport in LATE_SPORTS (a racket sport and chess). UI5 item 4 (owner 2026-11-03): no card draws a chess
+// colours switch any more — a chess Swiss always balances colours, and the door refuses `chess: false` (422
+// SWISS_CHESS_ALWAYS_ON) before the first start and after it.
 test.describe("X-SW-17 edit rounds, then add a round after play", () => {
   for (const sport of LATE_SPORTS) {
     test(`5 → 3 in the dialog before play; after the first start the count is fixed and Add a round mints round 4 (${sport.key})`, async ({
@@ -1405,16 +1408,14 @@ test.describe("X-SW-17 edit rounds, then add a round after play", () => {
       await expect(chip).toHaveAttribute("data-state", "editable", { timeout: 20_000 });
       await expect(chip).toContainText(fill("stage.rounds.chip", { n: 5 }));
 
-      // The chess colours switch: on the chess Swiss only, on by default (BG-SW-1), switchable before the first start.
+      // UI5 item 4: no chess colours switch on the card (the chip above is the loaded-page anchor), and on chess the door
+      // refuses switching the colours off.
       const chess = page.getByTestId("stage-chess-switch");
+      await expect(chess, "no chess colours switch").toHaveCount(0);
+      const codeOf = (res: { error?: unknown }) => (res.error as { code?: string } | undefined)?.code;
       if (sport.key === "boardgame") {
-        await expect(chess).toHaveAttribute("aria-checked", "true");
-        const switched = page.waitForResponse((res) => res.url().endsWith(`/api/v1/stages/${r.stageId}`) && res.request().method() === "PATCH");
-        await chess.click();
-        expect((await switched).status(), "the switch writes").toBe(200);
-        await expect(chess).toHaveAttribute("aria-checked", "false", { timeout: 20_000 });
-      } else {
-        await expect(chess).toHaveCount(0);
+        const off = await apiJson(request, `/api/v1/stages/${r.stageId}`, "PATCH", { chess: false });
+        expect([off.status, codeOf(off)], "colours off, before play").toEqual([422, "SWISS_CHESS_ALWAYS_ON"]);
       }
 
       // The dialog: the field's guidance, then 5 → 3 names rounds 4 to 5 and their 6 unplayed matches before Save.
@@ -1444,9 +1445,10 @@ test.describe("X-SW-17 edit rounds, then add a round after play", () => {
       // reloaded desk is on screen, so the absence below is read off a loaded page.
       await expect(page.getByTestId("stage-swiss-legend")).toContainText(fill("stage.swissLegend.rounds.other", { count: 3 }), { timeout: 20_000 });
       await expect(chip, "the fixed count is no longer a pill in the row").toHaveCount(0);
+      await expect(chess, "still no chess colours switch once play has started").toHaveCount(0);
       if (sport.key === "boardgame") {
-        await expect(chess).toBeDisabled();
-        await expect(page.getByTestId("stage-chess-hint")).toHaveText(uiEn["swiss.refusal.SWISS_CHESS_LOCKED"]!);
+        const off = await apiJson(request, `/api/v1/stages/${r.stageId}`, "PATCH", { chess: false });
+        expect([off.status, codeOf(off)], "colours off, after play: the permanent reason, not the start lock").toEqual([422, "SWISS_CHESS_ALWAYS_ON"]);
       }
       const lockedRounds = await apiJson(request, `/api/v1/stages/${r.stageId}`, "PATCH", { rounds: 2 });
       expect([lockedRounds.status, (lockedRounds.error as { code?: string } | undefined)?.code]).toEqual([409, "SWISS_ROUNDS_LOCKED"]);

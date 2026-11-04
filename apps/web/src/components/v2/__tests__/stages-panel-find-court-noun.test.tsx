@@ -10,7 +10,6 @@ import { VENUE_NOUNS, venueNoun } from "@/lib/venue";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
-vi.mock("@/components/ui/tip", () => ({ TipCallout: ({ id }: { id: string }) => <div data-tip={id} /> }));
 
 // Match Day B2, fix round 1 (I1): "Find a court" read "court" for every sport. The run sheet is mounted by the stage panel, and
 // the panel knows the division's sport (`sportKey`), so the noun is chosen HERE (`lib/venue.ts`'s `venueNoun`, the convention

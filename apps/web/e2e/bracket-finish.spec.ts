@@ -1623,8 +1623,8 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
       widths++;
     }
     expect(widths).toBe(3);
-    // M3 (fix round 1): the DIVISION page agrees. It renders no phase pill (its phase gates only the start-locks tip; the
-    // run sheet's default filter stopped following it in PB1 — finding, fix round 1), so what it shows of the hold is the run sheet's row: the
+    // M3 (fix round 1): the DIVISION page agrees. It renders no phase pill (it computed a phase only for the start-locks tip,
+    // removed in UI5; the run sheet's default filter stopped following it in PB1), so what it shows of the hold is the run sheet's row: the
     // held chip and the Settle action on the abandoned final, never a plain abandoned row.
     await page.setViewportSize({ width: 1280, height: 900 });
     const path = await fixturePath(request, ko.sf.id);

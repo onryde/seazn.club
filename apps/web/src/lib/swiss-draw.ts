@@ -82,7 +82,7 @@ export function swissColourLot(seed: number): "white" | "black" {
 }
 
 /** BG-SW-1 / RB3-10 — whether a NEW Swiss stage on this sport is stored with `chess: true`. Read ONLY where a stage is
- *  created (`validatedStageConfig`); Pair reads the stored `cfg.chess === true` (orchestrator ruling m5). */
+ *  created (`validatedStageConfig`); Pair reads `swissPairsInColour` (stages.ts; UI5 fix round 1, ruling I1). */
 export function defaultSwissChess(sportKey: string): boolean {
   return isChessSport(sportKey);
 }

@@ -25,6 +25,10 @@ export interface AuthCtx {
   userId: string | null;
   role: OrgRole | null;
   keyId: string | null;
+  /** Set only for via='api_key': the key's stored scopes (`api_keys.scopes`), so a use-case can gate on what the key
+   *  SENDS as well as the route the door matched (SEC1 — key-scopes.ts `keyScopeForEvent`). An api_key ctx without it
+   *  holds no scope: the gates read it fail-closed. */
+  keyScopes?: readonly string[];
   /** Set only for via='device_link' — rides onto score_events.device_link_id. */
   deviceLinkId?: string;
 }
@@ -174,7 +178,7 @@ async function apiKeyAuth(req: Request, token: string, orgId: string | null): Pr
   await apiKeyRateLimit(key);
   // Observability only — never block the request on it.
   void sql`update api_keys set last_used_at = now() where id = ${key.id}`.catch(() => null);
-  return recordAuthContext({ orgId: key.org_id, via: "api_key", userId: null, role: null, keyId: key.id });
+  return recordAuthContext({ orgId: key.org_id, via: "api_key", userId: null, role: null, keyId: key.id, keyScopes: key.scopes });
 }
 
 function bearerToken(req: Request): string | null {

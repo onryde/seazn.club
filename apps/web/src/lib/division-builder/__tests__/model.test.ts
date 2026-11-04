@@ -386,6 +386,8 @@ describe("Americano and Mexicano sort after every other format (owner 2026-11-03
 /** The owner's popular sports, in his order (brief 2026-11-03): football, cricket, badminton, tennis, table tennis. */
 const POPULAR = ["football", "cricket", "badminton", "tennis", "tabletennis"];
 const REGISTRY = builtinModules.map((m) => m.key);
+/** "Any other game", the picker's catch-all tile (owner's word, C9 R2). */
+const CATCH_ALL = "generic";
 
 describe("the sport picker's order (owner 2026-11-03): the organisation's own, the popular five, the registry, generic last", () => {
   it("empty case first: no sports listed orders to nothing, whatever the history", () => {
@@ -473,14 +475,29 @@ describe("the default sport is the first tile shown (C9 round 3)", () => {
     expect(defaultSportKey([...REGISTRY].reverse(), [])).toBe("football");
   });
 
-  it("each registry sport as the most recent one opens on it, generic excepted (it stays last, so football opens) (counts)", () => {
+  // UI5 item 5 (owner, 2026-11-03: "yes"; C9 review-FINAL m2): the default follows the organisation's most recent sport,
+  // generic INCLUDED. It used to skip generic (the catch-all stays the picker's last tile) and open on the next one.
+  it("each registry sport as the most recent one opens on it, generic included (counts)", () => {
     let checked = 0;
     for (const k of REGISTRY) {
-      expect(defaultSportKey(REGISTRY, [k, "tennis"]), k).toBe(k === "generic" ? "tennis" : k);
+      expect(defaultSportKey(REGISTRY, [k, "tennis"]), k).toBe(k);
       checked++;
     }
     expect(checked).toBe(REGISTRY.length);
-    expect(defaultSportKey(REGISTRY, ["generic"])).toBe("football");
+    expect(REGISTRY, "premise: the registry ships generic").toContain("generic");
+  });
+
+  it("a generic-only organisation opens on generic; a mixed one on its latest, whichever that is", () => {
+    expect(defaultSportKey(REGISTRY, ["generic"]), "generic-only").toBe("generic");
+    expect(defaultSportKey(REGISTRY, ["generic", "badminton"]), "latest generic, badminton before").toBe("generic");
+    expect(defaultSportKey(REGISTRY, ["badminton", "generic"]), "latest badminton, generic before").toBe("badminton");
+    // Picked, generic is pinned into the five shown (the picked-pin rule); with nothing picked it is still listed last.
+    const order = sportPickerOrder(REGISTRY, ["generic", "badminton"]);
+    expect(order.at(-1), "still the last tile").toBe(CATCH_ALL);
+    expect(order.indexOf(CATCH_ALL), "premise: beyond the first five").toBeGreaterThanOrEqual(SUGGESTED_COUNT);
+    expect(collapsedPicks(order, defaultSportKey(REGISTRY, ["generic", "badminton"])), "opened on it: shown").toContain(CATCH_ALL);
+    expect(collapsedPicks(order, defaultSportKey(REGISTRY, ["generic", "badminton"]))).toHaveLength(SUGGESTED_COUNT);
+    expect(collapsedPicks(order, null), "nothing picked: folded").not.toContain(CATCH_ALL);
   });
 
   it("a history the page does not list is skipped; without football the next popular sport opens; it is always a listed sport", () => {

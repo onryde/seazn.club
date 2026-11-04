@@ -223,7 +223,7 @@ describe.skipIf(!HAS_DB)("enroll an existing team", () => {
     expect(crossMembers.find((m) => m.person_id === p1.id)!.default_position_key).toBeNull(); // key dropped
   });
 
-  it("divisionRoster maps every (person → team entrant) for the double-roster warning, org-scoped", async () => {
+  it("divisionRoster maps every (person → entrant) the pickers read, org-scoped, a legacy double-roster included", async () => {
     const { auth } = await seedOrg("pro");
     const other = await seedOrg("pro");
     const comp = await createCompetition(auth, {
@@ -241,7 +241,9 @@ describe.skipIf(!HAS_DB)("enroll an existing team", () => {
       external_ref: null,
     });
 
-    // Same person on two team entrants in this division.
+    // Same person on two team entrants in this division. Since UI5 item 3 no roster write can produce this (the second
+    // is refused, entrants-one-team-per-division.test.ts), so Blue's row is written straight to the table: data from
+    // before the rule, which the map still names both ways so the console can block the roster that holds it.
     const [red] = await createEntrants(auth, div.id, [
       {
         kind: "team",
@@ -249,13 +251,8 @@ describe.skipIf(!HAS_DB)("enroll an existing team", () => {
         members: [{ person_id: p.id, is_captain: false, roles: [] }],
       },
     ]);
-    const [blue] = await createEntrants(auth, div.id, [
-      {
-        kind: "team",
-        display_name: "Blue",
-        members: [{ person_id: p.id, is_captain: false, roles: [] }],
-      },
-    ]);
+    const [blue] = await createEntrants(auth, div.id, [{ kind: "team", display_name: "Blue", members: [] }]);
+    await sql`insert into entrant_members (entrant_id, person_id, is_captain) values (${blue!.id}, ${p.id}, false)`;
 
     const roster = await divisionRoster(auth, div.id);
     const forShared = roster

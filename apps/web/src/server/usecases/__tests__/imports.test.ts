@@ -735,3 +735,84 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
     expect(re.plan.ops).toEqual([]);
   });
 });
+
+// UI5 fix round 1 (controller ruling Q3): the CSV import is an `entrant_members` writer that bypassed the one-team rule
+// (UI5 item 3). Its commit now asks it with the roster write's own predicate, and answers in FILE ROWS, as its other
+// roster refusals do (the seat gate's `rows`): 409 PERSON_ON_OTHER_TEAM, the whole commit refused, nothing written.
+describe.skipIf(!HAS_DB)("bulk import: one person, one team per division (UI5 fix round 1, Q3)", () => {
+  const HEADER = "Club,Team,Player,DOB,Number,Position,Captain,Division";
+  const csv = (...lines: string[]) => [HEADER, ...lines].join("\r\n");
+  /** The file rows the preview puts `fullName` on a roster by — the planner's own numbering ("Row n"). */
+  const rosterRowsOf = (plan: { ops: unknown[] }, personKey: string) =>
+    (plan.ops as { kind: string; person?: { id?: string; ref?: string }; sourceRows?: number[] }[])
+      .filter((op) => op.kind === "roster.add" && (op.person?.id === personKey || op.person?.ref === personKey))
+      .flatMap((op) => op.sourceRows ?? []);
+  const entrantsIn = async (divisionId: string) =>
+    (await sql<{ display_name: string; status: string }[]>`
+      select display_name, status from entrants where division_id = ${divisionId} order by display_name`).map((e) => `${e.display_name}:${e.status}`);
+  const personsOf = async (orgId: string) => (await sql<{ n: number }[]>`select count(*)::int as n from persons where org_id = ${orgId}`)[0]!.n;
+
+  it("a file naming a person already on another team of the division is refused by row; re-importing their own team is not", async () => {
+    const { auth } = await seedOrg();
+    const { division } = await seedDivision(auth);
+    const first = await createImport(auth, csvUpload(csv("Acme SC,Acme U12,Ada One,2014-01-01,1,,,u12")));
+    await commitImport(auth, first.importId, null);
+    const [ada] = await sql<{ id: string }[]>`select id from persons where org_id = ${auth.orgId} and full_name = 'Ada One'`;
+    const [acme] = await sql<{ id: string }[]>`select id from entrants where division_id = ${division.id} and display_name = 'Acme U12'`;
+
+    const second = await createImport(auth, csvUpload(csv("Borough FC,Borough U12,Gus Seven,2014-01-07,7,,,u12", "Borough FC,Borough U12,Ada One,2014-01-01,9,,,u12")));
+    const adaRows = rosterRowsOf(second.plan, ada!.id);
+    expect(adaRows.length, "premise: the planner matched Ada to her existing person, on one row").toBe(1);
+    const entrantsBefore = await entrantsIn(division.id);
+    const personsBefore = await personsOf(auth.orgId);
+    let refusal: unknown;
+    try {
+      await commitImport(auth, second.importId, null);
+    } catch (err) {
+      refusal = err;
+    }
+    expect(refusal).toMatchObject({
+      status: 409,
+      code: "PERSON_ON_OTHER_TEAM",
+      extra: {
+        rows: adaRows,
+        person_ids: [ada!.id],
+        conflicts: [{ person_id: ada!.id, person_name: "Ada One", entrant_id: acme!.id, entrant_name: "Acme U12" }],
+      },
+    });
+    expect(await entrantsIn(division.id), "nothing written: no Borough U12").toEqual(entrantsBefore);
+    expect(await personsOf(auth.orgId), "nothing written: Gus was not created").toBe(personsBefore);
+
+    // The second call of the first file: Ada's own team is never a conflict (an idempotent re-import).
+    const again = await createImport(auth, csvUpload(csv("Acme SC,Acme U12,Ada One,2014-01-01,1,,,u12")));
+    await commitImport(auth, again.importId, null);
+    // After a withdrawal: Acme U12 withdrawn holds no one, so the same refused file now commits.
+    await sql`update entrants set status = 'withdrawn' where id = ${acme!.id}`;
+    const third = await createImport(auth, csvUpload(csv("Borough FC,Borough U12,Gus Seven,2014-01-07,7,,,u12", "Borough FC,Borough U12,Ada One,2014-01-01,9,,,u12")));
+    await commitImport(auth, third.importId, null);
+    expect(await entrantsIn(division.id)).toEqual(["Acme U12:withdrawn", "Borough U12:registered"]);
+  });
+
+  it("another division takes the same person; one file putting a person on two teams of one division is refused naming both rows", async () => {
+    const { auth } = await seedOrg();
+    const { division } = await seedDivision(auth);
+    const u14 = await createDivision(auth, division.competition_id, { name: "U14", slug: "u14", sport_key: "football", variant_key: "default", config: {} });
+    // The same person in two divisions: allowed (the rule is per division).
+    const split = await createImport(auth, csvUpload(csv("Acme SC,Acme U12,Ada One,2014-01-01,1,,,u12", "Acme SC,Acme U14,Ada One,2014-01-01,1,,,u14")));
+    await commitImport(auth, split.importId, null);
+    expect(await entrantsIn(u14.id)).toEqual(["Acme U14:registered"]);
+
+    // Two teams of ONE division in one file: no stored holder, so the file is the clash.
+    const twice = await createImport(auth, csvUpload(csv("Borough FC,Borough U14,Hal Eight,2014-01-08,8,,,u14", "City Rovers,City U14,Hal Eight,2014-01-08,8,,,u14")));
+    const halRef = (twice.plan.ops as { kind: string; ref?: string; after?: { fullName?: string } }[]).find((op) => op.kind === "person.create" && op.after?.fullName === "Hal Eight")?.ref;
+    expect(halRef, "premise: the file creates Hal once").toBeDefined();
+    const halRows = rosterRowsOf(twice.plan, halRef!).sort((a, b) => a - b);
+    expect(halRows.length, "premise: Hal is rostered by two rows").toBe(2);
+    await expect(commitImport(auth, twice.importId, null)).rejects.toMatchObject({
+      status: 409,
+      code: "PERSON_ON_OTHER_TEAM",
+      extra: { rows: halRows, person_ids: [], conflicts: [] },
+    });
+    expect(await entrantsIn(u14.id), "nothing written").toEqual(["Acme U14:registered"]);
+  });
+});

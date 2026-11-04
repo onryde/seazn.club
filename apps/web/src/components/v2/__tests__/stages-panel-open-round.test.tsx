@@ -11,7 +11,6 @@ import type { RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
-vi.mock("@/components/ui/tip", () => ({ TipCallout: ({ id }: { id: string }) => <div data-tip={id} /> }));
 
 const stage = (id: string, seq: number) => ({ id, seq, kind: "swiss", name: `Stage ${seq}`, config: {}, progression: null, status: "active" });
 const fixture = (stageId: string, no: number) => ({

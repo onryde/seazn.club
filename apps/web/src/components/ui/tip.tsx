@@ -1,17 +1,16 @@
 "use client";
 
 // Tips framework (v3/03 §4): <Tip id> renders an inline ⓘ whose popover
-// explains one concept in 1–3 sentences; <TipCallout id> is the dismissible
-// first-run banner variant (dismissal remembered per browser). All copy
-// comes from config/tips.ts; "Learn more →" renders only when the /help
-// article actually resolves (PROMPT-35) — never a dead link.
+// explains one concept in 1–3 sentences. All copy comes from config/tips.ts;
+// "Learn more →" renders only when the /help article actually resolves
+// (PROMPT-35) — never a dead link. (The dismissible banner variant,
+// TipCallout, went with its last consumer: UI5 item 1, fix round 1 m6.)
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { Info, X } from "lucide-react";
+import { Info } from "lucide-react";
 import { TIPS, type TipId } from "@/config/tips";
 import { helpUrl } from "@/lib/help";
 import { useMsg } from "@/components/i18n/dict-provider";
-import { useHydrated, useLocalStorageItem, writeLocalStorageItem } from "@/lib/use-client-snapshot";
 
 export function Tip({
   id,
@@ -87,54 +86,5 @@ export function Tip({
         </span>
       )}
     </span>
-  );
-}
-
-export function TipCallout({ id, className = "" }: { id: TipId; className?: string }) {
-  const msg = useMsg();
-  const { helpSlug } = TIPS[id];
-  const title = msg(`tips.${id}.title`);
-  const body = msg(`tips.${id}.body`);
-  const href = helpUrl(helpSlug);
-  const storageKey = `seazn.tip.${id}`;
-  // Hidden on the server and through hydration (the server cannot see the
-  // dismissal), then shown from the render after unless dismissed — so a
-  // dismissed callout never flashes. Read through a store rather than copied
-  // into state by a mount effect. `dismissedNow` covers a browser that
-  // refuses the write: the ✕ still closes it for this page view.
-  const stored = useLocalStorageItem(storageKey);
-  const hydrated = useHydrated();
-  const [dismissedNow, setDismissedNow] = useState(false);
-  const visible = hydrated && stored !== "1" && !dismissedNow;
-
-  if (!visible) return null;
-
-  return (
-    <div
-      role="note"
-      className={`flex items-start gap-3 rounded-xl border border-purple-100 bg-purple-50/60 px-4 py-3 ${className}`}
-    >
-      <Info aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-purple-500" strokeWidth={2} />
-      <div className="min-w-0 flex-1 text-sm">
-        <p className="font-medium text-purple-900">{title}</p>
-        <p className="mt-0.5 text-purple-800/80">{body}</p>
-        {href && (
-          <Link href={href} className="mt-1 inline-block text-xs font-medium text-purple-700 hover:underline">
-            {msg("tips.learnMore")} →
-          </Link>
-        )}
-      </div>
-      <button
-        type="button"
-        aria-label={msg("tips.dismiss")}
-        onClick={() => {
-          writeLocalStorageItem(storageKey, "1");
-          setDismissedNow(true);
-        }}
-        className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-purple-400 transition hover:bg-purple-100 hover:text-purple-700"
-      >
-        <X className="h-3.5 w-3.5" strokeWidth={2} />
-      </button>
-    </div>
   );
 }

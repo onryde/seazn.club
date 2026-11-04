@@ -142,10 +142,24 @@ export default async function OrgHomePage({
   // upgrade page it links to (v17 #294).
   const passLabel = formatMinor(lowestPassRung(currency).amountMinor, currency);
 
-  // Live first, then Registration open, Draft, Completed (v3/03 §2);
-  // secondary = the query's recency order, kept by stable sort.
+  // The card's chip is read off its divisions (UI5 item 6, owner 2026-11-03: a published competition said "Registration
+  // open" with no division window open). The signals ride on the card stats' one query for the whole list. A card with no
+  // stats row (a competition deleted between the two reads) says nothing about its divisions.
+  // Live first, then Registration open, In progress, Draft, Completed (v3/03 §2); secondary = the query's recency order,
+  // kept by stable sort.
+  const chipOf = (c: (typeof competitions)[number]) => {
+    const s = stats.get(c.id);
+    return competitionChipState(c.status, {
+      inPlay: s?.in_play ?? 0,
+      registrationOpen: s?.registration_open ?? false,
+      divisions: s?.divisions ?? 0,
+      divisionsActive: s?.divisions_active ?? 0,
+      divisionsCompleted: s?.divisions_completed ?? 0,
+      played: s?.played ?? 0,
+    });
+  };
   const sorted = competitions
-    .map((c) => ({ c, chip: competitionChipState(c.status) }))
+    .map((c) => ({ c, chip: chipOf(c) }))
     .sort((a, b) => CHIP_SORT[a.chip] - CHIP_SORT[b.chip]);
 
   const sportName = (k: string) => sportLabel(k, (key) => msgFor(locale, key));
@@ -202,7 +216,14 @@ export default async function OrgHomePage({
     const s = stats.get(e.c.id);
     return {
       e,
-      group: homeGroupOf({ status: e.c.status, played: s?.played ?? 0, fixturesToday: today.counts.get(e.c.id) ?? 0 }),
+      group: homeGroupOf({
+        status: e.c.status,
+        played: s?.played ?? 0,
+        fixturesToday: today.counts.get(e.c.id) ?? 0,
+        // The chip's own division counts (`chipOf` above), so the band and the chip agree on "finished" (UI5 fix round 1, m5).
+        divisions: s?.divisions ?? 0,
+        divisionsCompleted: s?.divisions_completed ?? 0,
+      }),
     };
   });
   const finishedCount = banded.filter((b) => b.group === "finished").length;

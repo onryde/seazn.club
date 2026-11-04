@@ -209,7 +209,10 @@ test.describe("a player renamed from the directory", () => {
     const asha = await seedPlayer(page.request, "Asha");
     const custom = `Smash Bros ${TAG}`;
     await seedPair(page.request, divisionId, [sankar, ritwik]);
-    await seedPair(page.request, divisionId, [asha, sankar], custom);
+    // UI5 item 3: one person, one entry per division (409 PERSON_ON_OTHER_TEAM), so Sankar's second pair - the one the
+    // organiser named - sits in another division. The rename still reaches every pair he is on.
+    const otherDivisionId = await seedDivision(page.request, "Player Rename Other");
+    await seedPair(page.request, otherDivisionId, [asha, sankar], custom);
 
     const patches: string[] = [];
     page.on("request", (r) => {
@@ -278,6 +281,7 @@ test.describe("a player renamed from the directory", () => {
     await expect(rowToggle(page, derivedFrom(renamed, ritwik))).toBeVisible();
     await expect(page.getByRole("cell", { name: derivedFrom(sankar, ritwik) })).toHaveCount(0);
     // The organiser's own name for the other pair is untouched.
+    await page.goto(await divisionPath(page.request, otherDivisionId, "?tab=entrants"));
     await expect(rowToggle(page, custom)).toBeVisible();
   });
 });
