@@ -60,3 +60,7 @@ overrides:
   "baseline-browser-mapping@<2.11.0": "^2.11.26"
   "fflate@>=0.4.5 <0.4.9": "^0.4.9"
   "@ai-sdk/provider-utils@>=4.0.0-beta.10 <4.0.33": "^4.0.54"
+  # W3 Swiss app-B: the engine 3.0.0 PREVIEW (onryde/seazn.club.engine#20's snapshot, the `day_rank` tier). The six manifests
+  # stay on `npm:@onryde/seazn-engine@^2.0.0`; this ONE entry, keyed on the `@seazn/engine` alias, is the only place the
+  # snapshot is named. Remove it and re-pin the six manifests to ^3.0.0 once 3.0.0 is released.
+  "@seazn/engine": "npm:@onryde/seazn-engine@0.0.0-pr20.219e2cbd12779b966f2c43f3e972bff51091e5c8"

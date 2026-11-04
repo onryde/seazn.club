@@ -2484,11 +2484,11 @@ export function boundSolverWindow<T extends SlotConfig & VerifyConfig>(
  * calendar days used, which packs harder but no longer says WHICH day. Either
  * way a wide window and a tight one behave identically without a day cap
  * forcing the difference: a seven-day window and a one-day window both pile
- * every match onto ONE day, not necessarily the first. Every rung is
- * shift-invariant, so a whole-day shift ties on all of them and the solver may
- * pick any day the lattice reaches (W3 T11 finding: a board landed on the
- * window's second day under `boundSolverWindow`'s slack day; owner decision
- * pending, see the W3 App B task-11 report).
+ * every match onto ONE day. The other rungs are shift-invariant, so the LAST
+ * rung, `day_rank` (owner ruling 2026-11-04), breaks a whole-day tie toward the
+ * earliest day; before it the solver picked whichever day the lattice reached
+ * (W3 T11 / X-SW-29: a board landed on the window's second day under
+ * `boundSolverWindow`'s slack day). It prefers early days, it does not spread.
  *
  * `max_fixtures_per_day` is the one hard rule that already does this, fully
  * wired end to end (`build-encode.ts` groups by `dayKeyInTz` and encodes an
