@@ -13,6 +13,7 @@ import {
 } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import { ruleRefusalSentence } from "@/lib/rule-errors";
+import { divisionKindRefusalText } from "@/lib/entrant-kind-refusal";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -92,6 +93,9 @@ export function settingsSaveErrorText(err: unknown, msg: Msg, fallback: string):
     );
     if (said !== null) return said;
   }
+  // FU1 fix round 1 (m2, I1): taking a kind out while entrants, or live registrations, still hold it.
+  const kindRefusal = divisionKindRefusalText(err, msg);
+  if (kindRefusal !== null) return kindRefusal;
   const extra = (err as { code?: unknown; extra?: unknown } | null)?.code === "CONFIG_INVALID" ? (err as { extra?: unknown }).extra : undefined;
   const issues = configIssuesOf(extra);
   if (issues !== null) return issues.map((i) => configIssueText(i, msg)).join(" ");
