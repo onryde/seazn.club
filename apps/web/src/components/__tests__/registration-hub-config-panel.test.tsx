@@ -1602,6 +1602,7 @@ describe("RegistrationHubConfigPanel — only the division's allowed entrant kin
       expect(offered.map((o) => o.value), allowed.join(",")).toEqual(want);
       if (want.join() !== allowed.join()) reordered++;
       expect(testId(island.tree(), "entrant-kind-not-allowed")).toBeUndefined();
+      expect(String(propsOf(findField(island.tree(), "entrant_kind")!).className), "no amber ring").not.toContain("border-amber");
       checked++;
     }
     expect(checked).toBe(ALL_KINDS.length + 2);
@@ -1620,7 +1621,15 @@ describe("RegistrationHubConfigPanel — only the division's allowed entrant kin
       { value: "team", disabled: false },
     ]);
     const kindName = t(uiEn, "divset.entrants.kind.individual");
-    expect(expandedText(tree)).toContain(t(uiEn, "reg.settings.entrant.notAllowedOption", { kind: kindName }));
+    // Fix round 1 (m6): the option reads the kind's own word (the "(not allowed)" suffix did not fit at 320); the full
+    // sentence is its accessible name, and the hint below carries the reason.
+    const refusedOption = (propsOf(findField(tree, "entrant_kind")!).children as unknown[])
+      .flat()
+      .find((k): k is ReactElement => typeof k === "object" && k !== null && "props" in k && propsOf(k as ReactElement).disabled === true);
+    expect(refusedOption, "premise: the refused option is drawn").toBeDefined();
+    expect(expandedText([refusedOption!])).toBe(kindName);
+    expect(propsOf(refusedOption!)["aria-label"]).toBe(t(uiEn, "reg.settings.entrant.notAllowedOption", { kind: kindName }));
+    expect(String(propsOf(findField(tree, "entrant_kind")!).className)).toContain("border-amber-400");
     expect(expandedText([testId(tree, "entrant-kind-not-allowed")!])).toBe(
       t(uiEn, "reg.settings.entrant.notAllowedHint", { kind: kindName }),
     );

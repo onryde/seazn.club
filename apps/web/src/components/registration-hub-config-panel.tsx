@@ -879,7 +879,7 @@ export function OpenCloseSection({
         {msg("reg.settings.entrantType")}
         <select
           data-field="entrant_kind"
-          className="input min-h-11 mt-1"
+          className={`input min-h-11 mt-1${storedKindRefused ? " border-amber-400" : ""}`}
           value={state.entrant_kind}
           disabled={individualOnly}
           onChange={(e) => {
@@ -890,9 +890,17 @@ export function OpenCloseSection({
             patch({ entrant_kind: v, allow_free_agents: v === "team" ? state.allow_free_agents : false });
           }}
         >
+          {/* FU1 fix round 1 (m6): the option shows the kind's own word only. "(not allowed)" beside it was measured not
+              to fit this select at 320 in ANY locale (en needs 219px of a 202px control; nl far more), and a select cannot
+              wrap. The reason is the amber hint directly beneath (inside this label, so it is part of the select's name);
+              the full sentence stays the option's accessible name for the open picker. */}
           {storedKindRefused && (
-            <option value={state.entrant_kind} disabled>
-              {msg("reg.settings.entrant.notAllowedOption", { kind: storedKindName })}
+            <option
+              value={state.entrant_kind}
+              disabled
+              aria-label={msg("reg.settings.entrant.notAllowedOption", { kind: storedKindName })}
+            >
+              {storedKindName}
             </option>
           )}
           {offeredKinds.map((k) => (
