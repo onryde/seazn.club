@@ -7,8 +7,11 @@
 //    token of a preview (`?clear=<token>`). The preview (`?dry_run=1`) runs the whole change — every refusal it can
 //    raise, the body's included — and rolls it back, answering what the change would clear. Its counts are read from
 //    the rows the delete takes, never computed by the client.
-//  - A result anywhere in the division: 409 FORMAT_LOCKED (`fixtureHasResultSql`, the one "a result exists" set that
-//    rebuild and history read).
+//  - A result anywhere in the division that STANDS: 409 FORMAT_LOCKED (`fixtureHoldsStandingResultSql`). Fix round 1
+//    (controller ruling I2): a board whose only events were all voided holds none, so the format opens again; history
+//    and rebuild's played set (`fixtureHasResultSql`) still keep such a board.
+//  - A live remote-scoring link is not refused (controller ruling I1): it goes with its board, and the preview counts
+//    the live ones (`device_links`) so the confirm names them.
 //
 // No runtime import: `import type` only, like `swiss-refusals.ts`.
 import type { MessageKey } from "@/lib/messages";
@@ -63,10 +66,13 @@ export interface FormatChangePreview {
   /** Organiser setup that goes with the fixtures (`ON DELETE CASCADE`). */
   officials: number;
   lineups: number;
+  /** The LIVE remote-scoring links on those fixtures (not revoked, not expired): they stop working. A dead link goes
+   *  with its board too, uncounted - it stops nothing. */
   device_links: number;
   /** Match Day calls on those fixtures. */
   calls: number;
-  /** The token the change must send back as `?clear=` — null when no fixture exists and there is nothing to confirm. */
+  /** The token the change must send back as `?clear=` — null when no fixture exists and there is nothing to confirm. A
+   *  token sent over a board that now has nothing to clear is still refused FORMAT_CHANGE_STALE (review m2). */
   token: string | null;
 }
 

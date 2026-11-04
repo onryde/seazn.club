@@ -150,7 +150,7 @@ import {
   type SlotDescriptor,
   type SlotLabel,
 } from "./stage-seeding";
-import { fixtureEvidenceSql, fixtureHasResultSql } from "./fixture-results-sql";
+import { fixtureEvidenceSql, fixtureHasResultSql, fixtureHoldsStandingResultSql } from "./fixture-results-sql";
 import { carriedSlotCounts, carrySlots, chooseDoomedBoards } from "@/lib/rebuild-slots";
 import { firstOwnFormat, matchName, ownFormatLoss, refuseOwnFormatLoss } from "./fixture-override-guards";
 import { FORMAT_CHANGE_REFUSALS, type FormatChangePreview } from "@/lib/format-change";
@@ -682,13 +682,15 @@ async function insertStageBatch(
   return rows;
 }
 
-/** FMT5: a fixture of the division's stages that holds a result (`fixtureHasResultSql`, the one played set rebuild and
- *  history read: a status of play, an abandonment with an outcome, or anything recorded; a generation-time bye and the
- *  F14 walkover are none). Scoped through the stages, the set the change replaces. */
+/** FMT5: a fixture of the division's stages that holds a result that STANDS (`fixtureHoldsStandingResultSql`: a status
+ *  of play, an abandonment with an outcome, an event no void took back, an event-less award, a report, a mark or a
+ *  suspension; a generation-time bye and the F14 walkover are none). Fix round 1 (controller ruling I2): a board whose
+ *  only events were all voided is no result, so the format opens again - unlike history's played set
+ *  (`fixtureHasResultSql`), which keeps it. Scoped through the stages, the set the change replaces. */
 function formatResultSql(tx: Tx, divisionId: string) {
   return tx`
     select 1 from fixtures f join stages s on s.id = f.stage_id
-     where s.division_id = ${divisionId} and ${fixtureHasResultSql(tx)}
+     where s.division_id = ${divisionId} and ${fixtureHoldsStandingResultSql(tx)}
      limit 1`;
 }
 
@@ -702,8 +704,8 @@ async function assertFormatUnlocked(tx: Tx, divisionId: string): Promise<void> {
   }
 }
 
-/** Is the division's format locked (a result exists)? The Division rules card's Format button and the Start dialog read
- *  it; the same predicate `replaceStages` refuses on. */
+/** Is the division's format locked (a standing result exists)? The Division rules card's Format button reads it (the
+ *  division page, `formatCard`); the same predicate `replaceStages` refuses on. */
 export async function divisionFormatLocked(auth: AuthCtx, divisionId: string): Promise<boolean> {
   return withTenant(auth.orgId, async (tx) => (await formatResultSql(tx, divisionId)).length > 0);
 }
@@ -720,11 +722,15 @@ async function formatChangePreview(tx: Tx, divisionId: string): Promise<FormatCh
   const counts = { officials: 0, lineups: 0, device_links: 0, calls: 0 };
   if (fixtures.length > 0) {
     const ids = fixtures.map((f) => f.id);
+    // Fix round 1 (controller ruling I1): `device_links` counts the LIVE remote-scoring links only - not revoked, not
+    // expired (device-links.ts `getActiveDeviceLink`). Every link cascades with its board; a dead one stops nothing, so
+    // the confirm does not name it.
     const [c] = await tx<typeof counts[]>`
       select
         (select count(*) from fixture_officials where fixture_id in ${tx(ids)})::int as officials,
         (select count(*) from lineups where fixture_id in ${tx(ids)})::int as lineups,
-        (select count(*) from device_links where fixture_id in ${tx(ids)})::int as device_links,
+        (select count(*) from device_links
+          where fixture_id in ${tx(ids)} and revoked_at is null and (expires_at is null or expires_at > now()))::int as device_links,
         (select count(*) from fixture_calls where fixture_id in ${tx(ids)})::int as calls`;
     Object.assign(counts, c);
   }
@@ -761,7 +767,9 @@ class FormatChangeDryRun extends Error {
  *  Fixtures but no result (FMT5): the change CLEARS them - the fixtures, their schedule and the setup that cascades with
  *  them (officials, lineups, device links, Match Day calls) - and rebuilds the stages, in this one transaction, but only
  *  with the token of a preview (`opts.clear`, `previewReplaceStages`): without it 409 FORMAT_CHANGE_CONFIRM, with an
- *  older board's 409 FORMAT_CHANGE_STALE, each carrying the fresh preview. Refused outright while a stream session is
+ *  older board's 409 FORMAT_CHANGE_STALE (a sent token is checked even when nothing is left to clear), each carrying the
+ *  fresh preview. A live remote-scoring link is not refused (controller ruling I1, the owner's one-confirm mock): it
+ *  goes with its board, and the preview counts the live ones so the confirm names them. Refused outright while a stream session is
  *  active on a board (FORMAT_STREAM_LIVE), an online game stands behind one (ONLINE_GAME_EXISTS), a match carries its own
  *  format (FIXTURE_HAS_OWN_FORMAT) or the schedule is frozen (422 SCHEDULE_LOCKED). No fixtures: the stages are replaced
  *  as before, with no token and no freeze check.
@@ -937,7 +945,10 @@ async function runReplaceStages(
       // FMT5: the dry run ends here, rolled back, with every refusal above already asked.
       if (mode.dryRun) throw new FormatChangeDryRun(preview);
       // The confirm, asked last: a change that clears fixtures goes through only with the token of the board it named.
-      if (preview.token !== null && mode.clear !== preview.token) {
+      // Fix round 1 (review m2): a token sent is checked even when the board now has nothing to clear - a confirm made
+      // against fixtures someone else's change has since removed would otherwise replace THEIR stages with a body whose
+      // confirm named different ones.
+      if (mode.clear === undefined ? preview.token !== null : mode.clear !== preview.token) {
         const code = mode.clear === undefined ? "FORMAT_CHANGE_CONFIRM" : "FORMAT_CHANGE_STALE";
         const r = FORMAT_CHANGE_REFUSALS[code];
         throw new HttpError(r.status, r.message, code, { preview });
@@ -2961,7 +2972,15 @@ async function lockBoardsRefusingOnlineGames(tx: Tx, ids: readonly string[]): Pr
  * caller of `clearSwissFixtureSeats` takes it: the pre-Start entrant delete, Unpair and Undo of Pair next.
  */
 export async function lockSwissBoardAppends(tx: Tx, ids: readonly string[]): Promise<void> {
-  for (const id of [...ids].sort()) await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + id}))`;
+  if (ids.length === 0) return;
+  // FMT5 fix round 1 (review m3): ONE round-trip for the lot, in the same sorted order - the keys go in as one sorted array
+  // and are locked row by row in its order (`with ordinality`, ordered by it), each the `fixture:<id>` key an append takes.
+  // A key already held by a scorer parks the statement there, with every key before it held, as the loop did.
+  const keys = [...new Set(ids)].sort().map((id) => "fixture:" + id);
+  await tx`
+    select count(*)::int from (
+      select pg_advisory_xact_lock(hashtext(k.key)) from unnest(${keys}::text[]) with ordinality as k(key, n) order by k.n
+    ) locked`;
 }
 
 export async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<string[]> {

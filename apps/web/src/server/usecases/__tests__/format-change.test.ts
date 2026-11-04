@@ -21,7 +21,16 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { applySchedule, putScheduleSettings, startDivision } from "../schedule";
-import { createStages, divisionFormatLocked, generateStageFixtures, previewReplaceStages, replaceStages } from "../stages";
+import {
+  createStages,
+  DELETE_STAGE_NOT_LAST_MESSAGE,
+  deleteStage,
+  divisionFormatLocked,
+  generateStageFixtures,
+  previewReplaceStages,
+  replaceStages,
+} from "../stages";
+import { fixtureHasResultSql } from "../fixture-results-sql";
 import { createCourt, createVenue } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { rigTarget } from "@/server/relay/__tests__/_session-rig";
@@ -363,10 +372,17 @@ describe.skipIf(!HAS_DB)("FMT5 — what refuses the clear even with a token, and
     const [home] = await sql<{ home_entrant_id: string }[]>`select home_entrant_id from fixtures where id = ${a!}`;
     await sql`insert into lineups (fixture_id, entrant_id, person_id, org_id, slot, order_no)
               values (${a!}, ${home!.home_entrant_id}, ${p2}, ${rig.auth.orgId}, 'starting', 1)`;
-    for (const f of [a!, b!]) {
-      await sql`insert into device_links (org_id, fixture_id, token_hash, issued_by)
-                values (${rig.auth.orgId}, ${f}, ${createHash("sha256").update(randomUUID()).digest("hex")}, ${rig.auth.userId})`;
-    }
+    // Controller ruling I1 (fix round 1): two LIVE remote-scoring links, plus a revoked one and an expired one. All four go
+    // with their boards; only the two live ones stop anything, so only they are counted.
+    const link = (f: string, dead: "revoked" | "expired" | null) => sql`
+      insert into device_links (org_id, fixture_id, token_hash, issued_by, revoked_at, expires_at)
+      values (${rig.auth.orgId}, ${f}, ${createHash("sha256").update(randomUUID()).digest("hex")}, ${rig.auth.userId},
+              ${dead === "revoked" ? sql`now() - interval '1 hour'` : null},
+              ${dead === "expired" ? sql`now() - interval '1 minute'` : sql`now() + interval '1 day'`})`;
+    const LIVE = [a!, b!];
+    for (const f of LIVE) await link(f, null);
+    await link(a!, "revoked");
+    await link(b!, "expired");
     const [placed] = await sql<{ court_id: string; scheduled_at: Date }[]>`select court_id, scheduled_at from fixtures where id = ${b!}`;
     await sql`insert into fixture_calls (fixture_id, org_id, court_id, called_at)
               values (${b!}, ${rig.auth.orgId}, ${placed!.court_id}, ${placed!.scheduled_at})`;
@@ -389,7 +405,10 @@ describe.skipIf(!HAS_DB)("FMT5 — what refuses the clear even with a token, and
     // The counts the confirm named are the rows it took.
     expect(preview.officials).toBe(had.fixture_officials - left.fixture_officials);
     expect(preview.lineups).toBe(had.lineups - left.lineups);
-    expect(preview.device_links).toBe(had.device_links - left.device_links);
+    // Live links only: the two inserted live, never the revoked or the expired one - which went all the same.
+    expect(had.device_links, "premise: live, revoked and expired links stood").toBe(LIVE.length + 2);
+    expect(preview.device_links, "the live remote-scoring links the confirm names").toBe(LIVE.length);
+    expect(had.device_links - left.device_links, "every link went with its board").toBe(had.device_links);
     expect(preview.calls).toBe(had.fixture_calls - left.fixture_calls);
     // The official survives (only the appointment goes), and so does the person.
     expect(await sql`select 1 from officials where id = ${official!.id}`).toHaveLength(1);
@@ -556,6 +575,130 @@ describe.skipIf(!HAS_DB)("FMT5 — sequences", () => {
   });
 });
 
+describe.skipIf(!HAS_DB)("FMT5 fix round 1 — the lock is a result that STANDS (controller ruling I2), and its edges", () => {
+  /** Standing / voided events on one fixture, as the ledger holds them. */
+  async function ledger(fixtureId: string) {
+    const rows = await sql<{ id: string; seq: number; type: string; voids: string | null }[]>`
+      select id, seq::int, type, voids_event_id as voids from score_events where fixture_id = ${fixtureId} order by seq`;
+    const voided = new Set(rows.flatMap((r) => (r.voids === null ? [] : [r.voids])));
+    return { rows, standing: rows.filter((r) => r.type !== "core.void" && !voided.has(r.id)) };
+  }
+  /** History's played set over one fixture (`fixtureHasResultSql`): the monotonic one the format lock no longer follows. */
+  async function inHistorysPlayedSet(fixtureId: string): Promise<boolean> {
+    const [row] = await sql<{ r: boolean }[]>`
+      select ${fixtureHasResultSql(sql as never)} as r from fixtures f where f.id = ${fixtureId}`;
+    return row!.r;
+  }
+
+  it("the empty case first: a division with no stage and no fixture is not locked, and its preview names nothing", async () => {
+    const rig = await seedDivision({ entrants: 4 });
+    expect((await board(rig.divisionId)).stages, "premise: no stage").toEqual([]);
+    expect(await divisionFormatLocked(rig.auth, rig.divisionId)).toBe(false);
+    const p = await previewReplaceStages(rig.auth, rig.divisionId, [league(1)]);
+    expect(p).toMatchObject({ stages: [], fixtures: 0, slots: 0, courts: 0, device_links: 0, token: null });
+  });
+
+  it("score, void, score again: locked, then open (the deleteStage copy's way out works), then locked; voided again, the change clears the voided ledger", async () => {
+    const rig = await seedDivision({ entrants: 4 });
+    const [s1, s2] = await createStages(rig.auth, rig.divisionId, [league(1), league(2, "Second")]);
+    await generateStageFixtures(rig.auth, s1!.id);
+    const [fx] = await sql<{ id: string; home_entrant_id: string }[]>`
+      select id, home_entrant_id from fixtures where stage_id = ${s1!.id} and home_entrant_id is not null
+         and away_entrant_id is not null order by fixture_no limit 1`;
+    const id = fx!.id;
+    const locked = { status: 409, code: "FORMAT_LOCKED" };
+
+    // Score: a Start and a rally.
+    await appendEvent(rig.auth.orgId, id, 0, { type: "core.start", payload: {} });
+    await appendEvent(rig.auth.orgId, id, 1, { type: "badminton.rally", payload: { wonBy: fx!.home_entrant_id } });
+    expect((await ledger(id)).standing.map((e) => e.type), "premise: two standing events").toEqual(["core.start", "badminton.rally"]);
+    expect(await divisionFormatLocked(rig.auth, rig.divisionId), "scored: locked").toBe(true);
+    expect(await refusal(previewReplaceStages(rig.auth, rig.divisionId, [knockout(1)]))).toMatchObject(locked);
+
+    // Void the rally only: the Start still stands, so it is still a result.
+    const rally = (await ledger(id)).standing.find((e) => e.type === "badminton.rally")!;
+    await appendEvent(rig.auth.orgId, id, 2, { type: "core.void", payload: {}, voids: rally.id });
+    expect(await divisionFormatLocked(rig.auth, rig.divisionId), "the Start still stands: locked").toBe(true);
+
+    // Void the Start too: nothing stands.
+    const start = (await ledger(id)).standing.find((e) => e.type === "core.start")!;
+    await appendEvent(rig.auth.orgId, id, 3, { type: "core.void", payload: {}, voids: start.id });
+    const after = await ledger(id);
+    expect(after.standing, "premise: every event was taken back").toEqual([]);
+    expect(after.rows.length, "premise: the ledger keeps all four rows").toBe(4);
+    const [row] = await sql<{ status: string; snapshot: boolean }[]>`
+      select status, config_snapshot is not null as snapshot from fixtures where id = ${id}`;
+    expect(row, "premise: the fold walked the status back; the snapshot stays frozen").toEqual({ status: "scheduled", snapshot: true });
+    // The differential: history's played set still holds this board (its evidence is monotonic); the format lock does not.
+    expect(await inHistorysPlayedSet(id), "history still holds it").toBe(true);
+    expect(await divisionFormatLocked(rig.auth, rig.divisionId), "all voided: open again").toBe(false);
+    // The deleteStage refusal points at Format (DELETE_STAGE_NOT_LAST_MESSAGE) - and in this state Format is open: its
+    // dry run answers, with a token for the board it would clear.
+    expect(s2, "premise: a later stage makes the first undeletable").toBeDefined();
+    expect(await refusal(deleteStage(rig.auth, s1!.id))).toMatchObject({ status: 409, message: DELETE_STAGE_NOT_LAST_MESSAGE });
+    const open = await previewReplaceStages(rig.auth, rig.divisionId, [knockout(1)]);
+    expect(open.fixtures).toBe((await board(rig.divisionId)).fixtures.length);
+    expect(typeof open.token).toBe("string");
+
+    // Score again: locked again, and the open preview's token is refused with it.
+    await appendEvent(rig.auth.orgId, id, 4, { type: "core.start", payload: {} });
+    expect(await divisionFormatLocked(rig.auth, rig.divisionId), "scored again: locked").toBe(true);
+    expect(await refusal(replaceStages(rig.auth, rig.divisionId, [knockout(1)], { clear: open.token! }))).toMatchObject(locked);
+
+    // Voided again: the change goes through, and the voided ledger goes with its board.
+    const again = (await ledger(id)).standing.find((e) => e.type === "core.start")!;
+    await appendEvent(rig.auth.orgId, id, 5, { type: "core.void", payload: {}, voids: again.id });
+    expect(await divisionFormatLocked(rig.auth, rig.divisionId)).toBe(false);
+    const p = await previewReplaceStages(rig.auth, rig.divisionId, [knockout(1)]);
+    const rows = await replaceStages(rig.auth, rig.divisionId, [knockout(1)], { clear: p.token! });
+    expect(rows.map((r) => r.kind)).toEqual(["knockout"]);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${id}`;
+    expect(n, "the voided ledger cascaded with its board").toBe(0);
+  });
+
+  it("a stale token over a board that now has nothing to clear is refused STALE (review m2); the other change's stages stand", async () => {
+    const rig = await seedDivision({ entrants: 4 });
+    const [stage] = await createStages(rig.auth, rig.divisionId, [league(1)]);
+    await generateStageFixtures(rig.auth, stage!.id);
+    // A opens the confirm for a knockout ...
+    const a = await previewReplaceStages(rig.auth, rig.divisionId, [knockout(1)]);
+    // ... while B changes the format to Groups and generates nothing.
+    const b = await previewReplaceStages(rig.auth, rig.divisionId, [league(1, "Groups")]);
+    await replaceStages(rig.auth, rig.divisionId, [league(1, "Groups")], { clear: b.token! });
+    const before = await board(rig.divisionId);
+    expect(before.fixtures, "premise: nothing left to clear").toEqual([]);
+    const stale = await refusal(replaceStages(rig.auth, rig.divisionId, [knockout(1)], { clear: a.token! }));
+    expect(stale).toMatchObject({ status: 409, code: "FORMAT_CHANGE_STALE" });
+    const fresh = stale.extra?.preview as FormatChangePreview;
+    expect(fresh).toMatchObject({ fixtures: 0, token: null });
+    expect(fresh.stages.map((st) => st.name), "the fresh preview names B's stages").toEqual(["Groups"]);
+    expect(await board(rig.divisionId), "B's stages stand").toEqual(before);
+    // The positive pair: with no token (the fresh preview's null), the change is a plain replace.
+    expect((await replaceStages(rig.auth, rig.divisionId, [knockout(1)])).map((r) => r.kind)).toEqual(["knockout"]);
+  });
+
+  // Before Start a withdrawal is a status flip and writes nothing (the "after a withdrawal" sequence above). After Start it
+  // writes to the ledger of every board the entrant still had - a walkover, or an expunge's abandon (spec 05 §5, whichever
+  // the policy picks) - and an event that stands is a result: the format locks.
+  it("after a withdrawal AFTER Start (review m7b): what it records on the boards stands, so the format locks", async () => {
+    const rig = await seedDivision({ entrants: 5 });
+    const [stage] = await createStages(rig.auth, rig.divisionId, [league(1)]);
+    await generateStageFixtures(rig.auth, stage!.id);
+    await startDivision(rig.auth, rig.divisionId);
+    expect(await divisionFormatLocked(rig.auth, rig.divisionId), "started, nothing played: open").toBe(false);
+    const out = await withdrawEntrantCascade(rig.auth, rig.entrantIds[0]!);
+    const written = await sql<{ type: string; n: number }[]>`
+      select e.type, count(*)::int as n from score_events e join fixtures f on f.id = e.fixture_id
+       where f.stage_id = ${stage!.id} and e.type <> 'core.void'
+         and not exists (select 1 from score_events v where v.voids_event_id = e.id)
+       group by e.type order by e.type`;
+    expect(written.length, `premise: the ${out.policy} withdrawal recorded standing events`).toBeGreaterThan(0);
+    expect(out.policy, "premise: a policy that writes").not.toBe("none");
+    expect(await divisionFormatLocked(rig.auth, rig.divisionId), `recorded (${written.map((w) => w.type).join(", ")}): locked`).toBe(true);
+    expect(await refusal(previewReplaceStages(rig.auth, rig.divisionId, [knockout(1)]))).toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
+  });
+});
+
 /** Backends waiting on a lock `pid` holds. */
 async function waitersOn(pid: number): Promise<number[]> {
   const rows = await sql<{ pid: number }[]>`select pid from pg_locks where not granted and ${pid} = any(pg_blocking_pids(pid))`;
@@ -607,7 +750,7 @@ describe.skipIf(!HAS_DB)("FMT5 — every table that points at a fixture, a stage
   // given a decision.
   const DECLARED: Record<string, { action: "c" | "n"; handling: string }> = {
     "capture_records(fixture_id)->fixtures": { action: "c", handling: "cascade (a capture that reached the ledger is evidence: FORMAT_LOCKED)" },
-    "device_links(fixture_id)->fixtures": { action: "c", handling: "cascade, counted (preview.device_links)" },
+    "device_links(fixture_id)->fixtures": { action: "c", handling: "cascade, the LIVE ones counted (preview.device_links; ruling I1: never refused)" },
     "entrants(swiss_first_round_stage_id)->stages": { action: "n", handling: "set null: the entrant stays" },
     "event_imports(fixture_id)->fixtures": { action: "c", handling: "cascade (an import that appended is evidence: FORMAT_LOCKED)" },
     "fixture_availability(fixture_id)->fixtures": { action: "c", handling: "cascade" },
@@ -628,19 +771,19 @@ describe.skipIf(!HAS_DB)("FMT5 — every table that points at a fixture, a stage
     "fixtures(winner_to_fixture)->fixtures": { action: "n", handling: "set null (every fixture goes)" },
     "lineups(fixture_id)->fixtures": { action: "c", handling: "cascade, counted (preview.lineups)" },
     "match_reports(fixture_id)->fixtures": { action: "c", handling: "evidence: FORMAT_LOCKED" },
-    "match_states(fixture_id)->fixtures": { action: "c", handling: "evidence (but a generator's seq-0 award): FORMAT_LOCKED" },
+    "match_states(fixture_id)->fixtures": { action: "c", handling: "an event-less award (seq 0, but the generator's own) is a result: FORMAT_LOCKED; a row folding events cascades - the ledger speaks for it" },
     "official_marks(fixture_id)->fixtures": { action: "c", handling: "evidence: FORMAT_LOCKED" },
     "officials(home_pool_id)->pools": { action: "n", handling: "set null: the official stays" },
     "online_chess_audit(fixture_id)->fixtures": { action: "c", handling: "cascade (a live game refuses first)" },
     "pools(stage_id)->stages": { action: "c", handling: "cascade with its stage" },
-    "score_events(fixture_id)->fixtures": { action: "c", handling: "evidence: FORMAT_LOCKED" },
+    "score_events(fixture_id)->fixtures": { action: "c", handling: "an event no void took back is a result: FORMAT_LOCKED; a ledger voided whole cascades (ruling I2)" },
     "stage_lots_draws(stage_id,org_id)->stages": { action: "c", handling: "cascade with its stage" },
     "stage_round_court_tags(stage_id,org_id)->stages": { action: "c", handling: "cascade with its stage" },
     "stage_round_opens(stage_id,org_id)->stages": { action: "c", handling: "cascade with its stage" },
     "stage_seed_proposals(stage_id)->stages": { action: "c", handling: "cascade with its stage" },
     "standings_snapshots(stage_id)->stages": { action: "c", handling: "cascade with its stage (derived)" },
     "suspensions(fixture_id)->fixtures": { action: "n", handling: "evidence: FORMAT_LOCKED (else set null)" },
-    "youtube_broadcasts(fixture_id)->fixtures": { action: "c", handling: "cascade (a live broadcast has an active session: FORMAT_STREAM_LIVE)" },
+    "youtube_broadcasts(fixture_id)->fixtures": { action: "c", handling: "cascade (one being streamed has an active session: FORMAT_STREAM_LIVE; one still open in its post-Stop grace window goes with its board - review m4, deleteStage's existing gap)" },
   };
 
   it("the catalog's foreign keys are exactly the declared ones, each with its declared delete action", async () => {

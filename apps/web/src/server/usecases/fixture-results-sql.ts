@@ -35,6 +35,10 @@
 //     - swiss-cut-drift.ts (W3 T17, RB3-19): `getSwissCutDrift`'s "the knockout has begun" read - a fixture of the stage after
 //       a complete Swiss that holds a result, on every Fixtures-tab render for an organiser and on GET /stages/{id}/swiss-cut.
 //       The evidence half is monotonic, so taking a knockout result back does not un-begin the bracket (the warning stays)
+//   `fixtureHoldsStandingResultSql` (FMT5 fix round 1, controller ruling I2: the format's lock)
+//     - stages.ts: `formatResultSql`, which `replaceStages` refuses FORMAT_LOCKED on and the Division rules card's
+//       Format button reads (`divisionFormatLocked`). It is NOT the played set above, on purpose: a board whose only
+//       events a void took back is no result here (the format opens again), where history and rebuild still hold it
 //   `fixtureEvidenceSql` alone, beside the caller's own status clause
 //     - stages.ts: the Swiss shell reconcile, unseat and Unpair
 //   `systemByeSql` (W3 T3; defined in engine-db/system-bye-sql.ts, below every
@@ -132,6 +136,38 @@ export function fixtureHasResultSql(tx: Tx, on = "f") {
     ${f}.status in ('in_play', 'decided', 'finalized', 'needs_decision')
     or (${f}.status = 'abandoned' and ${f}.outcome is not null)
     or (${fixtureEvidenceSql(tx, on)})
+  )`;
+}
+
+/**
+ * FMT5 fix round 1 (controller ruling I2, 2026-11-04): a fixture holding a result that STANDS - the division's format lock.
+ * "The lock means a non-voided result exists": a division whose only results were all taken back (a mis-tapped Start,
+ * then voided) opens again, and a new score locks it again.
+ *
+ * So the evidence is read the way a void reads it, not the monotonic way `fixtureEvidenceSql` does:
+ *   - a status of play, or an abandonment with an outcome (the fold walks both back when their events are voided);
+ *   - an event of the ledger that is not a `core.void` and that no `core.void` took back (voids are not voidable, so
+ *     this is the ledger's live half - `decidedWithoutPlaySql`, `ledgerOf`'s `standing`);
+ *   - an award no event recorded (`match_states` at seq 0) - but not the generator's own walkover over two seated sides
+ *     (F14, line N2 of `fixtureEvidenceSql`): a bye or a departed qualifier is no result;
+ *   - a match report, an official's mark or a suspension: records no void reaches.
+ * NOT `config_snapshot` (frozen at the first event and never cleared, so it would keep a voided board locked) and NOT a
+ * `match_states` row that folds events (it outlives their void; the ledger arm above speaks for them).
+ */
+export function fixtureHoldsStandingResultSql(tx: Tx, on = "f") {
+  const f = tx(on);
+  return tx`(
+    ${f}.status in ('in_play', 'decided', 'finalized', 'needs_decision')
+    or (${f}.status = 'abandoned' and ${f}.outcome is not null)
+    or exists (select 1 from score_events e
+                where e.fixture_id = ${f}.id and e.type <> 'core.void'
+                  and not exists (select 1 from score_events v where v.fixture_id = e.fixture_id and v.voids_event_id = e.id))
+    or exists (select 1 from match_states ms where ms.fixture_id = ${f}.id and ms.last_seq = 0
+                 and not (coalesce(${f}.outcome ->> 'kind' = 'award', false)
+                          and ${f}.home_entrant_id is not null and ${f}.away_entrant_id is not null))
+    or exists (select 1 from match_reports mr where mr.fixture_id = ${f}.id)
+    or exists (select 1 from official_marks om where om.fixture_id = ${f}.id)
+    or exists (select 1 from suspensions s where s.fixture_id = ${f}.id)
   )`;
 }
 
