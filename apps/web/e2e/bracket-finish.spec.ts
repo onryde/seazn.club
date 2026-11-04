@@ -1503,7 +1503,7 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
     await post(request, sf.id, "football.period", { phase: "HT" });
     await post(request, sf.id, "football.period", { phase: "FT" });
     expect((await read(request, sf.id)).status, "the rig must actually hold the fixture").toBe("needs_decision");
-    const base = `/shared/${org.slug}/${ko.compSlug}/${ko.divSlug}`;
+    const base = `/live/${org.slug}/${ko.compSlug}/${ko.divSlug}`;
     const matchUrl = `${base}/fixtures/${sf.id}`;
 
     // Held: the match page says so and names no winner; the bracket marks the match.
@@ -1537,7 +1537,7 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
     await post(request, sf.id, RESULT_DRAWN.type, RESULT_DRAWN.payload);
     await post(request, sf.id, "boardgame.tiebreak", { rung: "rapid", winner: sf.home_entrant_id, score: "1½–½" });
     expect((await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: sf.home_entrant_id, method: "tiebreak_rapid" });
-    await page.goto(`/shared/${org.slug}/${ko.compSlug}/${ko.divSlug}/fixtures/${sf.id}`);
+    await page.goto(`/live/${org.slug}/${ko.compSlug}/${ko.divSlug}/fixtures/${sf.id}`);
     await dismissCookieBanner(page);
     const winner = ko.nameOf.get(sf.home_entrant_id!)!;
     await expect(page.getByTestId("mc-status-line")).toHaveText(
@@ -1644,7 +1644,7 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
     await post(request, sf.id, "core.start");
     await post(request, sf.id, "football.period", { phase: "HT" });
     await post(request, sf.id, "football.period", { phase: "FT" });
-    const base = `/shared/${org.slug}/${ko.compSlug}/${ko.divSlug}`;
+    const base = `/live/${org.slug}/${ko.compSlug}/${ko.divSlug}`;
     let shots = 0;
     for (const w of [1280, 768, 320]) {
       await page.setViewportSize({ width: w, height: 900 });

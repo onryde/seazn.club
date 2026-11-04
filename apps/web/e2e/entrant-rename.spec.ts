@@ -324,7 +324,7 @@ test("a renamed pair reads the same on the fixtures tab and the public page, str
     fixtures.filter((f) => f.home_entrant_id === pairId || f.away_entrant_id === pairId).length,
     "the pair plays at least one fixture",
   ).toBeGreaterThan(0);
-  const publicPath = `/shared/${org.slug}/${comp.slug}/${div.slug}`;
+  const publicPath = `/live/${org.slug}/${comp.slug}/${div.slug}`;
   const consoleEntrants = await divisionPath(page.request, div.id, "?tab=entrants");
   const consoleFixtures = await divisionPath(page.request, div.id, "?tab=fixtures");
 

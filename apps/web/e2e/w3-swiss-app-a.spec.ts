@@ -1731,8 +1731,8 @@ test.describe("public Swiss shows Round X of N", () => {
       const competitionId = div.data!.competition_id;
       const made = await apiJson<{ visibility: string }>(request, `/api/v1/competitions/${competitionId}`, "PATCH", { visibility: "public" });
       expect([made.status, made.data?.visibility], `a spectator can only read a public competition: ${JSON.stringify(made.error)}`).toEqual([200, "public"]);
-      const hubUrl = (await competitionPath(request, competitionId)).replace(/^\/o\/([^/]+)\/c\//, "/shared/$1/") + "?tab=table";
-      expect(hubUrl, "premise: the organiser path became the public one").toMatch(/^\/shared\/[^/]+\/[^/?]+\?tab=table$/);
+      const hubUrl = (await competitionPath(request, competitionId)).replace(/^\/o\/([^/]+)\/c\//, "/live/$1/") + "?tab=table";
+      expect(hubUrl, "premise: the organiser path became the public one").toMatch(/^\/live\/[^/]+\/[^/?]+\?tab=table$/);
 
       const page = await spectator(browser, { width: 1280, height: 900 });
       const reads = (want: string) =>

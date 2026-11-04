@@ -325,17 +325,17 @@ test.describe.serial("pro lifecycle", () => {
     await expect(
       page
         .getByTestId("desk-open-menu")
-        .locator(`a[href="/shared/${orgSlug}/${competitionSlug}?tab=matches&division=${divisionSlug}"]`),
+        .locator(`a[href="/live/${orgSlug}/${competitionSlug}?tab=matches&division=${divisionSlug}"]`),
     ).toBeVisible({ timeout: 20_000 });
 
     // Public competition page lists the division.
-    await page.goto(`/shared/${orgSlug}/${competitionSlug}`);
+    await page.goto(`/live/${orgSlug}/${competitionSlug}`);
     await expect(page.getByText("Open").first()).toBeVisible({ timeout: 20_000 });
 
     // Division page defaults to the schedule tab — results show as links
     // ("Boole vs Ada 3 — 1"); the bare name also hides in a filter <option>,
     // so anchor on the visible fixture links, then the standings tab.
-    await page.goto(`/shared/${orgSlug}/${competitionSlug}/${divisionSlug}`);
+    await page.goto(`/live/${orgSlug}/${competitionSlug}/${divisionSlug}`);
     await expect(
       page.getByRole("link", { name: new RegExp(`\\b${PLAYERS[0]!}\\b`) }).first(),
     ).toBeVisible({ timeout: 20_000 });
@@ -359,7 +359,7 @@ test.describe.serial("pro lifecycle", () => {
       "POST",
       { ends_on: "2030-12-31", name: `Secret ${TAG}`, visibility: "private" },
     );
-    const res = await page.request.get(`/shared/${orgSlug}/${comp.data!.slug}`);
+    const res = await page.request.get(`/live/${orgSlug}/${comp.data!.slug}`);
     expect(res.status()).toBe(404);
   });
 
@@ -373,7 +373,7 @@ test.describe.serial("pro lifecycle", () => {
       "POST",
       { ends_on: "2030-12-31", name: `Backdoor ${TAG}`, visibility: "unlisted" },
     );
-    await page.goto(`/shared/${orgSlug}/${comp.data!.slug}`);
+    await page.goto(`/live/${orgSlug}/${comp.data!.slug}`);
     await expect(page.getByRole("heading", { name: `Backdoor ${TAG}` })).toBeVisible({
       timeout: 20_000,
     });

@@ -119,11 +119,11 @@ test.describe.serial("org news", () => {
 
   test("public feed card, post scorebug, share bar + downloadable story card", async ({ page }) => {
     // Feed lists the published post as a card.
-    await page.goto(`/shared/${orgSlug}/news`);
+    await page.goto(`/live/${orgSlug}/news`);
     await expect(page.getByTestId("news-card").first()).toBeVisible();
 
     // Post page: the scorebug hero + the share bar, and a working story.png.
-    await page.goto(`/shared/${orgSlug}/news/${postSlug}`);
+    await page.goto(`/live/${orgSlug}/news/${postSlug}`);
     await expect(page.getByTestId("post-scorebug")).toBeVisible();
     await expect(page.getByRole("link", { name: /whatsapp/i })).toBeVisible();
 

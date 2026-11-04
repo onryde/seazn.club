@@ -1034,7 +1034,7 @@ export async function linkLichessBySql(
 }
 
 /** The personal match-room path for one player of one fixture —
- *  `/shared/{org}/{comp}/{div}/fixtures/{id}/play?t=<link>` — with the link
+ *  `/live/{org}/{comp}/{div}/fixtures/{id}/play?t=<link>` — with the link
  *  bound to the round's OPEN (T14), as invite.ts mints it. The plan's
  *  `/play/<token>` path and schedule-bound (`sat`) token went with T14.
  *  A round nobody opened has no link to mint: that is refused by name, so a
@@ -1059,7 +1059,7 @@ export async function matchRoomPathBySql(fixtureId: string, personId: string): P
   }
   const token = await mintMatchRoomLink({ fixtureId, personId, roundOpenId: row.open_id, openedAt: new Date(row.opened_at) });
   // The builder invite.ts mints the emailed link with (T17 review M10).
-  return routes.sharedFixturePlay(row.org, row.comp, row.div, fixtureId, token);
+  return routes.publicFixturePlay(row.org, row.comp, row.div, fixtureId, token);
 }
 
 /** `stage_round_opens.opened_at` for one (stage, round), or null — the D12
@@ -2006,7 +2006,7 @@ export interface OrgInfo {
 }
 
 /** The signed-in user's active org (id from the seazn_org cookie, joined with
- *  the membership list for slug/name — needed to build public /shared URLs). */
+ *  the membership list for slug/name — needed to build public /live URLs). */
 export async function activeOrg(page: Page): Promise<OrgInfo> {
   const { data: orgs } = await apiJson<OrgInfo[]>(page.request, "/api/orgs");
   if (!orgs?.length) throw new Error("no org memberships for the current user");

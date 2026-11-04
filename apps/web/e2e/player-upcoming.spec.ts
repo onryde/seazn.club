@@ -87,7 +87,7 @@ const sibCompName = () => `${LONG} Invitational ${tag}`;
 const sibDivName = `${LONG} Premier Division`;
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-const card = (compSlug: string) => `/shared/${org.slug}/${compSlug}/players/${ada}`;
+const card = (compSlug: string) => `/live/${org.slug}/${compSlug}/players/${ada}`;
 const adaRows = (rows: FixtureRow[], entrantId: string) =>
   rows.filter((f) => f.home_entrant_id === entrantId || f.away_entrant_id === entrantId);
 const rowsIn = (page: Page) => page.getByTestId("mh-player-upcoming").locator('[data-testid^="mh-player-upcoming-row-"]');
@@ -241,7 +241,7 @@ test("the other competition's row is the accented one; its link opens under the 
   await expect(row(page, expected[0]!)).toHaveAccessibleName(new RegExp(`${esc(curName())}\\W+Singles`));
   await expect(row(page, sibFixture)).toHaveAccessibleName(new RegExp(`Invitational ${esc(tag)}\\W+${esc(LONG)} Premier`));
 
-  const href = `/shared/${org.slug}/${sib.slug}/${sibDiv.slug}/fixtures/${sibFixture}`;
+  const href = `/live/${org.slug}/${sib.slug}/${sibDiv.slug}/fixtures/${sibFixture}`;
   await expect(row(page, sibFixture)).toHaveAttribute("href", href);
   await Promise.all([page.waitForURL(`**${href}`), row(page, sibFixture).click()]);
   expect((await page.request.get(href)).status()).toBe(200);

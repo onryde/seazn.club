@@ -231,7 +231,7 @@ async function putSettings(
 // ---------------------------------------------------------------------------
 
 async function openMatches(page: Page): Promise<void> {
-  await page.goto(`/shared/${rig.orgSlug}/${rig.compSlug}?tab=matches`);
+  await page.goto(`/live/${rig.orgSlug}/${rig.compSlug}?tab=matches`);
   await expect(
     page.getByTestId("mh-tab-panel-matches"),
     "?tab=matches did not open the Matches tab",

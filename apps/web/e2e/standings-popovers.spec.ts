@@ -1,7 +1,7 @@
 // The standings popovers, driven in a browser on BOTH surfaces that print a
 // standings table: the division page (`standings-table.tsx`, here as the
-// public `/shared/…/<division>?tab=standings`) and the competition hub's Table
-// tab (`standings-table-view.tsx`, `/shared/…/<competition>?tab=table`).
+// public `/live/…/<division>?tab=standings`) and the competition hub's Table
+// tab (`standings-table-view.tsx`, `/live/…/<competition>?tab=table`).
 //
 // Two owner-approved changes, both about a tap that explains a number:
 //
@@ -148,8 +148,8 @@ test.beforeAll(async ({ browser }) => {
   }
 
   seed = {
-    hubPath: `/shared/${org.slug}/${competition.slug}`,
-    divisionPath: `/shared/${org.slug}/${competition.slug}/${div.slug}`,
+    hubPath: `/live/${org.slug}/${competition.slug}`,
+    divisionPath: `/live/${org.slug}/${competition.slug}/${div.slug}`,
     ids,
   };
 });
@@ -895,7 +895,7 @@ test.describe("carrom board ratio over the frozen rank column", () => {
         }
       }
     }
-    carromPath = `/shared/${org.slug}/${competition.slug}/${div.slug}?tab=standings`;
+    carromPath = `/live/${org.slug}/${competition.slug}/${div.slug}?tab=standings`;
   });
 
   test.afterAll(async () => {
@@ -1027,7 +1027,7 @@ test.describe("W2d T17: the lots note, the level table and the head-to-head note
       };
       await play(fx, ids);
       const stageId = (fixtures[0] as unknown as { stage_id: string }).stage_id;
-      seeded[key] = { path: `/shared/${org.slug}/${competition.slug}/${div.slug}?tab=standings`, hub: `/shared/${org.slug}/${competition.slug}?tab=table`, ids, stageId };
+      seeded[key] = { path: `/live/${org.slug}/${competition.slug}/${div.slug}?tab=standings`, hub: `/live/${org.slug}/${competition.slug}?tab=table`, ids, stageId };
     };
     const generic = { sport_key: "generic", variant_key: "score" };
     const genericResult = async (f: { id: string; home: string }, x: string, xs: number, ys: number) => {

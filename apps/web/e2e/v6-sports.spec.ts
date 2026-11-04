@@ -735,7 +735,7 @@ test("public fixture page: phase + strength chip live, goals-by-period + discipl
     ? divList.data
     : (divList.data as { items?: { slug: string }[] }).items ?? [];
   const divSlug = divisions[0]!.slug;
-  const publicPath = `/shared/${org.slug}/${compSlug}/${divSlug}/fixtures/${fixtureId}`;
+  const publicPath = `/live/${org.slug}/${compSlug}/${divSlug}/fixtures/${fixtureId}`;
 
   await page.goto(publicPath);
   // W1 replaced this page's bare scorebug with the match centre, so the

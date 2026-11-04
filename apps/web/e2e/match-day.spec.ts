@@ -851,12 +851,12 @@ async function storedSummary(fixtureId: string): Promise<{ perSide: { line: stri
 
 const levelsOf = (page: Page) => page.getByTestId("md-score-large");
 
-/** The public match page of a fixture of the signed-in org: `/shared/{org}/{competition}/{division}/fixtures/{id}`. */
+/** The public match page of a fixture of the signed-in org: `/live/{org}/{competition}/{division}/fixtures/{id}`. */
 async function publicFixturePath(request: APIRequestContext, page: Page, fixtureId: string): Promise<string> {
   const fx = await apiJson<{ division_id: string }>(request, `/api/v1/fixtures/${fixtureId}`);
   const div = await apiJson<{ slug: string; competition_id: string }>(request, `/api/v1/divisions/${fx.data!.division_id}`);
   const comp = await apiJson<{ slug: string }>(request, `/api/v1/competitions/${div.data!.competition_id}`);
-  return `/shared/${(await activeOrg(page)).slug}/${comp.data!.slug}/${div.data!.slug}/fixtures/${fixtureId}`;
+  return `/live/${(await activeOrg(page)).slug}/${comp.data!.slug}/${div.data!.slug}/fixtures/${fixtureId}`;
 }
 
 /** What the public court card sets beside a side's big score (`mc-score-{i}`): the span that follows it. */

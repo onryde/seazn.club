@@ -37,7 +37,7 @@ export const CTA_MD = `**[${CTA.label}](${CTA.url})**`;
  * from the Link prompt stays a plain link.
  */
 export async function expectPublicCta(page: Page, orgSlug: string, compSlug: string) {
-  await page.goto(`/shared/${orgSlug}/${compSlug}`);
+  await page.goto(`/live/${orgSlug}/${compSlug}`);
   const main = page.getByRole("main");
   const button = main.locator("a.prose-cta");
   await expect(button, "the public page draws exactly one sponsor button").toHaveCount(1, { timeout: 20_000 });

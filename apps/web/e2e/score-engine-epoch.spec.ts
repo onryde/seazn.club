@@ -50,7 +50,7 @@ async function rig(page: Page): Promise<Rig> {
   return {
     fixtureId,
     home: fx.data!.home_entrant_id,
-    publicPath: `/shared/${org.slug}/${comp.data!.slug}/${div.data!.slug}/fixtures/${fixtureId}`,
+    publicPath: `/live/${org.slug}/${comp.data!.slug}/${div.data!.slug}/fixtures/${fixtureId}`,
   };
 }
 

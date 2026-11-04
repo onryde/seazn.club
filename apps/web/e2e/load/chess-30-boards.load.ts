@@ -289,7 +289,7 @@ type Snapshot = {
 type Player = {
   info: RoundPlayer;
   board: LoadBoard;
-  path: string; // /shared/.../play?t=...
+  path: string; // /live/.../play?t=...
   token: string;
   roomUrl: string;
   arriveAfterMs: number;

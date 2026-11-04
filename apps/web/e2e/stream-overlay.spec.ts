@@ -418,7 +418,7 @@ test.describe("the overlay route", () => {
       // The positive half, in the SAME context: the banner is absent because
       // the segment suppresses it, not because this browser had already
       // dismissed it or because the testid moved.
-      await page.goto(`/shared/${rig.orgSlug}/${rig.compSlug}/${rig.divSlug}`);
+      await page.goto(`/live/${rig.orgSlug}/${rig.compSlug}/${rig.divSlug}`);
       await expect(
         page.locator('[data-testid="cookie-consent"]'),
         "the same fresh context must still be offered the banner off the overlay segment",
@@ -1451,7 +1451,7 @@ test.describe("the public match page's stream link", () => {
     const anon = await anonPage(browser);
     try {
       await signInAs(ownerPage, rig.ownerEmail);
-      const path = `/shared/${rig.orgSlug}/${rig.compSlug}/${rig.divSlug}/fixtures/${rig.fixtureId}`;
+      const path = `/live/${rig.orgSlug}/${rig.compSlug}/${rig.divSlug}/fixtures/${rig.fixtureId}`;
       await anon.goto(path);
       const link = anon.locator('[data-testid="public-stream-link"]');
       await expect(link).toHaveCount(1);

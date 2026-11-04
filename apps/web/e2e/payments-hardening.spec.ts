@@ -689,7 +689,7 @@ test.describe("T6 · sponsor package disputes pull the placement", () => {
     const { compId, compSlug } = await seedComp(org.orgId);
     const { sponsorName } = await seedSponsorRig(org.orgId, compId, intent);
 
-    await page.goto(`/shared/${org.orgSlug}/${compSlug}`);
+    await page.goto(`/live/${org.orgSlug}/${compSlug}`);
     await expect(page.getByText(sponsorName)).toBeVisible();
 
     const did = uid("dp");
@@ -712,7 +712,7 @@ test.describe("T6 · sponsor package disputes pull the placement", () => {
       "one sponsor_dispute_alert row for the dispute",
     ).toHaveLength(1);
 
-    await expectSponsorOnPage(page, `/shared/${org.orgSlug}/${compSlug}`, sponsorName, false);
+    await expectSponsorOnPage(page, `/live/${org.orgSlug}/${compSlug}`, sponsorName, false);
   });
 
   test("closed lost writes off the order and keeps the placement pulled", async ({
@@ -760,7 +760,7 @@ test.describe("T6 · sponsor package disputes pull the placement", () => {
       "one sponsor_dispute_lost row for the dispute",
     ).toHaveLength(1);
 
-    await expectSponsorOnPage(page, `/shared/${org.orgSlug}/${compSlug}`, sponsorName, false);
+    await expectSponsorOnPage(page, `/live/${org.orgSlug}/${compSlug}`, sponsorName, false);
   });
 
   test("closed won restores the placement", async ({ page, request }) => {
@@ -782,7 +782,7 @@ test.describe("T6 · sponsor package disputes pull the placement", () => {
       }),
     );
     // Parked → not on the page.
-    await expectSponsorOnPage(page, `/shared/${org.orgSlug}/${compSlug}`, sponsorName, false);
+    await expectSponsorOnPage(page, `/live/${org.orgSlug}/${compSlug}`, sponsorName, false);
 
     const won = await postSignedEvent(
       request,
@@ -803,7 +803,7 @@ test.describe("T6 · sponsor package disputes pull the placement", () => {
       "one sponsor_dispute_won row for the dispute",
     ).toHaveLength(1);
 
-    await expectSponsorOnPage(page, `/shared/${org.orgSlug}/${compSlug}`, sponsorName, true);
+    await expectSponsorOnPage(page, `/live/${org.orgSlug}/${compSlug}`, sponsorName, true);
   });
 });
 
@@ -1239,7 +1239,7 @@ test.describe("T10 · a pass lifts the entrant cap on its own comp only", () => 
 
     // Both card divisions render OPEN now (registration.paid holds on community),
     // so the register page alone proves nothing — the cap is what separates them.
-    await page.goto(`/shared/${org.orgSlug}/${passed.compSlug}/register`);
+    await page.goto(`/live/${org.orgSlug}/${passed.compSlug}/register`);
     await expect(page.locator("#reg-who-name")).toBeVisible();
 
     const onPlain = await submitPublicRegistration(

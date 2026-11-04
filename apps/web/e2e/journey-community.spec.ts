@@ -126,7 +126,7 @@ test.describe.serial("community lifecycle", () => {
     // page defaults to the schedule tab; names as bare text hide in a filter
     // <option>, so anchor on the visible fixture links.
     const orgSlug = (await activeOrg(page)).slug;
-    await page.goto(`/shared/${orgSlug}/${competitionSlug}/${divisionSlug}`);
+    await page.goto(`/live/${orgSlug}/${competitionSlug}/${divisionSlug}`);
     await expect(
       page.getByRole("link", { name: new RegExp(`\\b${PLAYERS[0]!}\\b`) }).first(),
     ).toBeVisible({ timeout: 20_000 });

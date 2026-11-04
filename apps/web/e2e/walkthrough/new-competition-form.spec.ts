@@ -43,7 +43,7 @@ import {
  * ## The "description rendered" step reads the PUBLIC page
  *
  * The organiser's competition page does not print the description; the public
- * page (`/shared/{org}/{competition}`) does. So the step lands on the organiser
+ * page (`/live/{org}/{competition}`) does. So the step lands on the organiser
  * page via "Later", then opens the public page the organiser would share and
  * reads the typed sentence AND the bold run off it: markdown went in as
  * markdown and came out as markup.
@@ -562,7 +562,7 @@ for (const width of WIDTHS) {
         await expectNoHorizontalScroll(page);
 
         // The description, rendered where the public reads it.
-        await page.goto(`/shared/${org.slug}/${slug}`);
+        await page.goto(`/live/${org.slug}/${slug}`);
         const main = page.getByRole("main");
         await expect(main).toContainText(description.plain.trim());
         await expect(main.locator("strong", { hasText: description.bold })).toBeVisible();

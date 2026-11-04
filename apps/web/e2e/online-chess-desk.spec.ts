@@ -1574,7 +1574,7 @@ test.describe("online chess — registration (I5)", () => {
     return withDb(async (sql) => {
       const [row] = await sql<{ org: string; comp: string }[]>`
         select o.slug as org, c.slug as comp from competitions c join organizations o on o.id = c.org_id where c.id = ${comp.data!.id}`;
-      return { divisionName: name, orgSlug: row!.org, registerPath: `/shared/${row!.org}/${row!.comp}/register` };
+      return { divisionName: name, orgSlug: row!.org, registerPath: `/live/${row!.org}/${row!.comp}/register` };
     });
   }
 

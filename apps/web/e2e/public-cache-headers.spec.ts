@@ -2,11 +2,11 @@ import { expect, test } from "@playwright/test";
 import { TAG, apiJson, activeOrg } from "./helpers";
 
 // Guards spec 2026-07-12 P1/P5 (Task 7): the public tree must stay
-// ISR-cacheable — a stray cookies()/nonce read on a /shared page would flip
+// ISR-cacheable — a stray cookies()/nonce read on a /live page would flip
 // it to `private, no-cache, no-store` and silently detach any CDN sitting in
 // front of it (node_modules/next/dist/docs/01-app/02-guides/cdn-caching.md:
 // "Dynamic pages (no caching): private, no-cache, no-store, max-age=0,
-// must-revalidate"). /shared/[orgSlug]/[competitionSlug]/page.tsx pins
+// must-revalidate"). /live/[orgSlug]/[competitionSlug]/page.tsx pins
 // `export const revalidate = 30`.
 //
 // Runtime probe, not an environment assumption: this suite's webServer
@@ -40,7 +40,7 @@ test("public competition page emits s-maxage for CDN caching", async ({ page, re
   expect(comp.status).toBeLessThan(300);
   const orgSlug = (await activeOrg(page)).slug;
 
-  const res = await request.get(`/shared/${orgSlug}/${comp.data!.slug}`);
+  const res = await request.get(`/live/${orgSlug}/${comp.data!.slug}`);
   expect(res.status()).toBe(200);
   const cc = res.headers()["cache-control"] ?? "";
   test.skip(

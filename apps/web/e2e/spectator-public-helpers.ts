@@ -252,7 +252,7 @@ export async function divisionSlug(request: APIRequestContext, divisionId: strin
 }
 
 export function publicFixturePath(orgSlug: string, compSlug: string, divSlug: string, fixtureId: string): string {
-  return `/shared/${orgSlug}/${compSlug}/${divSlug}/fixtures/${fixtureId}`;
+  return `/live/${orgSlug}/${compSlug}/${divSlug}/fixtures/${fixtureId}`;
 }
 
 export async function makeCricketDivision(

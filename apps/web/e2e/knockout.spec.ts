@@ -153,7 +153,7 @@ test("double-elim division renders the two-lane bracket on the fixtures tab (con
 // bracket shape F1 (#606) left with no round captions at all — it was missed
 // by every prior naming sweep because it rendered no text to be wrong. This
 // division must be PUBLIC (unlike seedKnockoutDivision's private one, which
-// 404s off /shared/*) to reach the surface the fix actually touched.
+// 404s off /live/*) to reach the surface the fix actually touched.
 test("public bracket page names each round (Quarter/Semi/Final captions)", async ({
   page,
   request,
@@ -182,7 +182,7 @@ test("public bracket page names each round (Quarter/Semi/Final captions)", async
   const compData = await apiJson<{ slug: string }>(request, `/api/v1/competitions/${comp.data!.id}`);
   const divData = await apiJson<{ slug: string }>(request, `/api/v1/divisions/${divisionId}`);
 
-  await page.goto(`/shared/${orgSlug}/${compData.data!.slug}/${divData.data!.slug}`);
+  await page.goto(`/live/${orgSlug}/${compData.data!.slug}/${divData.data!.slug}`);
   // The bracket tree lives under the "Standings" tab (Schedule is the default).
   await page.getByRole("tab", { name: "Standings" }).click();
   // SCOPED to that panel, and EXACT. `tabs.tsx` server-renders EVERY panel and

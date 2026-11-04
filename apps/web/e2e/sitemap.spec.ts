@@ -70,7 +70,7 @@ async function publishedCompetition(request: APIRequestContext, name: string): P
   expect(orgSlug, "the competition's org is one this context belongs to").toBeTruthy();
   // Paths, closed by `</loc>`: the XML carries the server's configured origin,
   // and the hub's own entry must not be satisfied by its division's.
-  const hub = `/shared/${orgSlug}/${comp.data!.slug}`;
+  const hub = `/live/${orgSlug}/${comp.data!.slug}`;
   return { hub: `${hub}</loc>`, division: `${hub}/${div.data!.slug}</loc>` };
 }
 
