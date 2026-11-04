@@ -29,7 +29,10 @@ export async function fileToWebp(file: File, max: number, msg: Msg): Promise<Blo
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(img.width * scale));
   canvas.height = Math.max(1, Math.round(img.height * scale));
-  canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+  // getContext can return null under canvas memory pressure; say "conversion failed", not a TypeError that reads as "unreachable".
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error(msg("divset.logo.convertFailed"));
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", 0.88));
   if (!blob) throw new Error(msg("divset.logo.convertFailed"));
   return blob;

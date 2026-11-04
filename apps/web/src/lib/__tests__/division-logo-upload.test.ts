@@ -28,11 +28,11 @@ const UNREACHABLE = "save.err.unreachable" as const satisfies MessageKey;
 const reader = (dict: Dict) => (key: MessageKey) => dict[key]!;
 
 /** One knob per browser API `fileToWebp` touches. */
-const browser = { readFails: false, imageFails: false, blobFails: false, width: 1024, height: 512 };
+const browser = { readFails: false, imageFails: false, blobFails: false, ctxFails: false, width: 1024, height: 512 };
 const drawn: { w: number; h: number; type?: string; quality?: number }[] = [];
 
 beforeEach(() => {
-  Object.assign(browser, { readFails: false, imageFails: false, blobFails: false, width: 1024, height: 512 });
+  Object.assign(browser, { readFails: false, imageFails: false, blobFails: false, ctxFails: false, width: 1024, height: 512 });
   drawn.length = 0;
   vi.stubGlobal(
     "FileReader",
@@ -71,7 +71,7 @@ beforeEach(() => {
       const canvas = {
         width: 0,
         height: 0,
-        getContext: () => ({ drawImage: () => undefined }),
+        getContext: () => (browser.ctxFails ? null : { drawImage: () => undefined }),
         toBlob: (done: (b: Blob | null) => void, type?: string, quality?: number) => {
           drawn.push({ w: canvas.width, h: canvas.height, type, quality });
           done(browser.blobFails ? null : new Blob(["webp"], { type }));
@@ -102,7 +102,7 @@ describe("the three logo-upload failures read in the organiser's language", () =
     expect(checked).toBe(LOCALES.length * Object.keys(KEYS).length);
   });
 
-  it("an image that will not decode, a file the reader cannot read, a failed conversion and a refused PUT each say their own sentence, through settingsSaveErrorText, in every locale (counted)", async () => {
+  it("an image that will not decode, a file the reader cannot read, a failed conversion, a null canvas context and a refused PUT each say their own sentence, through settingsSaveErrorText, in every locale (counted)", async () => {
     let checked = 0;
     for (const [loc, dict] of LOCALES) {
       const m = reader(dict as Dict);
@@ -117,6 +117,9 @@ describe("the three logo-upload failures read in the organiser's language", () =
       browser.blobFails = true;
       const convert = await caught(fileToWebp(file(), 512, m));
       browser.blobFails = false;
+      browser.ctxFails = true;
+      const noCanvas = await caught(fileToWebp(file(), 512, m));
+      browser.ctxFails = false;
       vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 403 })));
       const refused = await caught(putLogo("https://storage.invalid/put", new Blob(["x"]), m));
 
@@ -124,6 +127,7 @@ describe("the three logo-upload failures read in the organiser's language", () =
         ["bad image", badImage, KEYS.badImage],
         ["unreadable file", unreadable, KEYS.badImage],
         ["conversion", convert, KEYS.convertFailed],
+        ["no 2d canvas context", noCanvas, KEYS.convertFailed],
         ["refused PUT", refused, KEYS.uploadFailed],
       ] as const) {
         expect(err, `${loc} ${what}`).toBeInstanceOf(Error);
@@ -135,7 +139,7 @@ describe("the three logo-upload failures read in the organiser's language", () =
         checked++;
       }
     }
-    expect(checked).toBe(LOCALES.length * 4);
+    expect(checked).toBe(LOCALES.length * 5);
   });
 
   it("the positive pairs: a good file converts to a downscaled WebP, an ok PUT resolves, and a PUT that never reaches the server still reads 'unreachable'", async () => {
