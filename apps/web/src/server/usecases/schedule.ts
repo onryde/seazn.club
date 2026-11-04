@@ -2495,8 +2495,8 @@ export function boundSolverWindow<T extends SlotConfig & VerifyConfig>(
  * `AtMost` per day) — an organiser can already set it through the AI parser
  * or the constraints panel. This only fills the gap for a run that set
  * neither: `ceil(fixtures / availableDays)` spreads them roughly evenly
- * across the window's own dates instead of leaving day two onward empty by
- * default. An explicit whole-division rule from either surface always wins
+ * across the window's own dates instead of leaving every board on one day
+ * (not necessarily the first) by default. An explicit whole-division rule from either surface always wins
  * untouched — this never overwrites one.
  */
 export function withDefaultDaySpread<T extends SlotConfig & VerifyConfig>(
