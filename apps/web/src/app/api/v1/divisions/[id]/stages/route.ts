@@ -1,9 +1,12 @@
-import { v1, reply, parseBody } from "@/server/api-v1/http";
+import { v1, reply, parseBody, assertOneOf } from "@/server/api-v1/http";
 import { requireResourceAuth } from "@/server/api-v1/auth";
 import { CreateStages } from "@/server/api-v1/schemas";
 import { listStagesWithTableRules, createStages, previewReplaceStages, replaceStages } from "@/server/usecases/stages";
 
 type Ctx = { params: Promise<{ id: string }> };
+
+/** `?dry_run=`'s one value (OpenAPI `enum: ["1"]`). */
+const DRY_RUN = ["1"] as const;
 
 /** The division's stages in board order, each with its table rules (W2d: `tableRules`, null where they do not read). */
 export async function GET(req: Request, { params }: Ctx) {
@@ -23,7 +26,11 @@ export async function PUT(req: Request, { params }: Ctx) {
     const body = await parseBody(req, CreateStages);
     const auth = await requireResourceAuth(req, "division", id, "write");
     const query = new URL(req.url).searchParams;
-    if (query.get("dry_run") === "1") return previewReplaceStages(auth, id, body);
+    // Fix round 1 (review m1): `dry_run` takes only its documented value (`assertOneOf`). Any other one is a 400, never
+    // the write - a preview flag that falls through to a real change on `?dry_run=true` fails open.
+    const dryRun = query.get("dry_run");
+    assertOneOf(dryRun, DRY_RUN, "dry_run");
+    if (dryRun === "1") return previewReplaceStages(auth, id, body);
     const clear = query.get("clear");
     return replaceStages(auth, id, body, clear === null ? {} : { clear });
   });

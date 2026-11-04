@@ -70,10 +70,20 @@ describe("PUT /api/v1/divisions/{id}/stages — FMT5 dry run and clear", () => {
     expect(replaceMock).not.toHaveBeenCalled();
   });
 
-  it("?dry_run= anything but 1 is the write, not the preview", async () => {
-    await PUT(put("?dry_run=0"), ctx);
+  // Fix round 1 (review m1): a preview flag that fell through to the write failed OPEN - `?dry_run=true` on a division with
+  // no fixtures replaced its stages. Every value but the documented one is a 400 that reaches neither usecase.
+  it("?dry_run= anything but 1 is a 400: neither the preview nor the write", async () => {
+    const values = ["0", "true", "yes", ""];
+    for (const v of values) {
+      const res = await PUT(put(`?dry_run=${v}`), ctx);
+      expect(res.status, `dry_run=${v}`).toBe(400);
+      const body = (await res.json()) as { ok: false; error: { code: string; message: string } };
+      expect(body.error.code, `dry_run=${v}`).toBe("VALIDATION");
+      expect(body.error.message).toBe("dry_run must be one of 1");
+    }
+    expect(values.length, "anti-vacuity: values checked").toBe(4);
     expect(previewMock).not.toHaveBeenCalled();
-    expect(replaceMock).toHaveBeenCalledTimes(1);
+    expect(replaceMock).not.toHaveBeenCalled();
   });
 
   it("?clear=<token> reaches replaceStages verbatim", async () => {
