@@ -172,6 +172,24 @@ describe.skipIf(!HAS_DB)("FU1 registration takes only the division's allowed ent
     expect(checked).toBeGreaterThan(0);
     // The case where the right answer differs from the old constant ('individual') - without it this test cannot see the defect.
     expect(notIndividual).toBeGreaterThan(0);
+
+    // A division its organiser narrowed to ONE kind (config.entrants) registers that kind - pairs-only has no sport that
+    // declares it, so only the override reaches it.
+    // Its own org: the registry rows above already fill this competition past the plan's division cap.
+    const second = await seedOrg();
+    const owner2 = asOwner(second.orgId, second.ownerId);
+    const { competition: comp2 } = await rig(owner2);
+    let narrowed = 0;
+    for (const shape of SHAPES.filter((sh) => allowedOf(sh.entrants).length === 1)) {
+      const [only] = allowedOf(shape.entrants);
+      const division = await generic(owner2, comp2.id, shape.entrants);
+      expect((await getRegistrationSettings(owner2, division.id)).entrant_kind, shape.name).toBe(only);
+      const withoutKind: Partial<typeof SETTINGS_BASE> = { ...SETTINGS_BASE };
+      delete withoutKind.entrant_kind;
+      expect((await putRegistrationSettings(owner2, division.id, withoutKind as never)).entrant_kind, shape.name).toBe(only);
+      narrowed++;
+    }
+    expect(narrowed).toBe(3);
   });
 
   it("public panel: a stored kind the division refuses does not open (closed_reason entry_kind_unavailable); an allowed one opens", async () => {
