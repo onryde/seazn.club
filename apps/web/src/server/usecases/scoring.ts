@@ -33,6 +33,7 @@ import {
   invalidateDiscoveryCache,
 } from "@/server/public-site/revalidate";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { keyEventScopeRefusal, keyScopeForEvent, scopeSatisfies } from "@/server/api-v1/key-scopes";
 import type { AppendEventRequest } from "@/server/api-v1/schemas";
 import { subjectToScorerCapabilityGates } from "./scorers";
 import { isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
@@ -568,10 +569,11 @@ async function assertEntitledToScore(
   // X-ST-2 (ruling 77, widened by owner ruling D-O1): settle, forfeit and abandon — and a sport event that records a
   // forfeit or walkover (chess `boardgame.result` method forfeit/double_forfeit) — end or decide a match, so only an
   // organiser may record them: never a device link, never an official scorer (subjectToScorerCapabilityGates: a
-  // session that is not owner/admin). An org API key is an organiser credential and passes, as it does for finalize
-  // and void. Placed before the device and scorer branches so neither can let one through; 403 → FORBIDDEN on the
-  // wire. The pad reads the same predicate (pad-host.tsx), so the two cannot drift. The authority is this request's
-  // AuthCtx, resolved once at the door: a role change lands on the next request.
+  // session that is not owner/admin). An org API key passes THIS gate; its SCOPE is judged by the next one (SEC1): only
+  // a `manage` key, the organiser-level one, records these or finalizes. Placed before the device and scorer branches
+  // so neither can let one through; 403 → FORBIDDEN on the wire. The pad reads the same predicate (pad-host.tsx), so
+  // the two cannot drift. The authority is this request's AuthCtx, resolved once at the door: a role change lands on
+  // the next request.
   // ONE exception, D13 (spec 2026-10-28 §5.2, rule X-SE-3): a scorer — a device link or an official scorer alike — may
   // record the ENDING of the side's own match-ending sanction, `core.forfeit` right after it (`isOwnSanctionEnding`
   // below). Every other scorer forfeit stays organiser-only.
@@ -591,49 +593,52 @@ async function assertEntitledToScore(
     throw new HttpError(403, `Only an organiser can ${verb} a match`);
   }
 
+  // SEC1 (owner OK 2026-11-03): an API key's scope gates the EVENT, not only the route. The door matched this request at
+  // `score` (POST /fixtures/:id/events), so without this a scoreboard key could finalize — whose own door is `manage` —
+  // or settle, forfeit or abandon a match. ONE table, key-scopes.ts `keyScopeForEvent`, which the batch importer reads
+  // too. A ctx with no scopes holds none (fail closed). The D13 exception the scorers above get holds for the
+  // scorer-level key as well — the forfeit that ends a side's match-ending sanction — and only for a key that holds that
+  // level (fix round 1, m1: a scope-less ctx is no scorer). 403 → FORBIDDEN, the route refusal's shape.
+  if (auth.via === "api_key") {
+    const held = auth.keyScopes ?? [];
+    const needs = keyScopeForEvent(input.type, input.payload);
+    if (
+      !scopeSatisfies(held, needs) &&
+      !(scopeSatisfies(held, "score") && (await isOwnSanctionEnding(auth.orgId, fixtureId, sport, input)))
+    ) {
+      throw new HttpError(403, keyEventScopeRefusal(held, needs, input.type));
+    }
+    // Fix round 1 (controller rulings): a key below `manage` voids only what it may send. A void is judged by the event
+    // it undoes — voiding an organiser's settle, forfeit or abandon needs `manage` (ruling 1; a finalized ledger takes no
+    // append at all, append-event.ts ALREADY_DECIDED) — and once the result has moved the competition on, the scorer-level
+    // key gets the device link's refusal for any void (m7): corrections are then the organiser's. Every void, not only the
+    // deciding event's: voiding an earlier event re-folds the carried result just the same.
+    if (input.type === "core.void" && !scopeSatisfies(held, "manage")) {
+      const target = await voidTargetOf(auth.orgId, fixtureId, input.payload);
+      const undoes = target ? keyScopeForEvent(target.type, target.payload) : "score";
+      if (target && !scopeSatisfies(held, undoes)) {
+        throw new HttpError(403, keyEventScopeRefusal(held, undoes, input.type, target.type));
+      }
+      const replay = await refuseIfCarriedForward(auth.orgId, ctx.fixture_status, fixtureId, input);
+      if (replay) return { replay, sport };
+    }
+  }
+
   // Device-link capabilities (doc 13 §7): strictly ⊂ scorer. Append + void
   // OWN-LINK events pre-finalize; finalizing needs a human with a name.
   if (auth.via === "device_link") {
     if (input.type === "core.finalize") {
       throw new HttpError(403, "Finalizing needs an organiser or scorer account");
     }
-    // Scorer sheets §4.3: once a settled result has moved the competition on —
-    // a feed seated, the next Swiss round seated, the stage complete — a
-    // device link may do nothing more with this fixture; corrections are the
-    // organiser's. Evaluated LIVE (unpairing re-opens it), and only for a
-    // settled fixture, so a live tap never pays for the query.
-    // ONE status gate on this path, and it is this one: the facts are read
-    // without resultCarriedForward's own status check, so neither guard
-    // covers for the other (pre-flight A15).
-    if (SETTLED_OPEN_STATUSES.has(ctx.fixture_status)) {
-      const loaded = await withTenant(auth.orgId, (tx) => carriedForwardFacts(tx, fixtureId));
-      if (loaded && isCarriedForward(loaded.facts)) {
-        // Review I1: a keyed RETRY of a write the ledger already holds is a
-        // replay, not a new write. The device's own deciding tap is what
-        // carries a knockout SF, so a lost ack's retry lands here; with Redis
-        // down (or the retry beating the cacheSet) the fast path misses, and
-        // appendEvent's catch — the durable replay — is behind this throw.
-        // Ask the ledger first. Only a settled, carried fixture pays for it.
-        if (input.idempotency_key) {
-          const replayed = await replayOutcomeFor(auth.orgId, fixtureId, input.idempotency_key);
-          if (replayed) return { replay: replayed, sport };
-        }
-        throw new HttpError(403, RESULT_CARRIED_FORWARD_MESSAGE, RESULT_CARRIED_FORWARD);
-      }
-    }
+    // Scorer sheets §4.3: once a settled result has moved the competition on, a device link may do nothing more with
+    // this fixture (`refuseIfCarriedForward`, which the scorer-level API key's void reads too).
+    const replay = await refuseIfCarriedForward(auth.orgId, ctx.fixture_status, fixtureId, input);
+    if (replay) return { replay, sport };
     if (input.type === "core.void") {
       if (ctx.fixture_status === "finalized") {
         throw new HttpError(403, "This fixture is finalized — ask the organiser");
       }
-      const eventId = (input.payload as { event_id?: unknown } | null)?.event_id;
-      const isUuid =
-        typeof eventId === "string" &&
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(eventId);
-      const [target] = isUuid
-        ? await withTenant(auth.orgId, (tx) => tx<{ device_link_id: string | null }[]>`
-            select device_link_id from score_events
-            where id = ${eventId} and fixture_id = ${fixtureId}`)
-        : [];
+      const target = await voidTargetOf(auth.orgId, fixtureId, input.payload);
       if (!target || target.device_link_id !== auth.deviceLinkId) {
         throw new HttpError(403, "A device link can only undo its own events");
       }
@@ -660,6 +665,54 @@ async function assertEntitledToScore(
     await requireFeature(auth.orgId, "cricket.dls");
   }
   return { replay: null, sport };
+}
+
+/**
+ * Scorer sheets §4.3: once a settled result has moved the competition on — a feed seated, the next Swiss round seated,
+ * the stage complete — corrections are the organiser's. Asked by the device-link path for every write and by a
+ * below-`manage` API key for a void (SEC1 fix round 1, m7): ONE refusal, so the two cannot drift. Evaluated LIVE
+ * (unpairing re-opens it), and only for a settled fixture, so a live tap never pays for the query. ONE status gate on
+ * this path, and it is this one: the facts are read without resultCarriedForward's own status check, so neither guard
+ * covers for the other (pre-flight A15).
+ *
+ * Review I1: a keyed RETRY of a write the ledger already holds is a replay, not a new write. The device's own deciding
+ * tap is what carries a knockout SF, so a lost ack's retry lands here; with Redis down (or the retry beating the
+ * cacheSet) the fast path misses, and appendEvent's catch — the durable replay — is behind this throw. So the ledger is
+ * asked first, and its answer returned; only a settled, carried fixture pays for it.
+ */
+async function refuseIfCarriedForward(
+  orgId: string,
+  fixtureStatus: string,
+  fixtureId: string,
+  input: AppendEventRequest,
+): Promise<ScoreOutcome | null> {
+  if (!SETTLED_OPEN_STATUSES.has(fixtureStatus)) return null;
+  const loaded = await withTenant(orgId, (tx) => carriedForwardFacts(tx, fixtureId));
+  if (!loaded || !isCarriedForward(loaded.facts)) return null;
+  if (input.idempotency_key) {
+    const replayed = await replayOutcomeFor(orgId, fixtureId, input.idempotency_key);
+    if (replayed) return replayed;
+  }
+  throw new HttpError(403, RESULT_CARRIED_FORWARD_MESSAGE, RESULT_CARRIED_FORWARD);
+}
+
+/** The row a `core.void` names (`payload.event_id`) on THIS fixture's ledger, or null when it names none (a missing or
+ *  malformed id, or another fixture's event — the engine refuses those). Read by the device-link path (its own events
+ *  only) and by a below-`manage` API key (the scope of what it undoes). Ledger rows are append-only, so reading it ahead
+ *  of the append cannot go stale. */
+async function voidTargetOf(
+  orgId: string,
+  fixtureId: string,
+  payload: unknown,
+): Promise<{ device_link_id: string | null; type: string; payload: unknown } | null> {
+  const eventId = (payload as { event_id?: unknown } | null)?.event_id;
+  const isUuid =
+    typeof eventId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(eventId);
+  if (!isUuid) return null;
+  const [target] = await withTenant(orgId, (tx) => tx<{ device_link_id: string | null; type: string; payload: unknown }[]>`
+    select device_link_id, type, payload from score_events
+    where id = ${eventId} and fixture_id = ${fixtureId}`);
+  return target ?? null;
 }
 
 /** The fixture's sport as its division pins it: what `assertEntitledToScore` already loaded, handed on for the epoch gate. */
