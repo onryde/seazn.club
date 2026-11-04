@@ -16,6 +16,22 @@ import { spectatorBoard, type PublicBoardPush } from "@/server/external-play/pub
 export const BROADCAST_TIMEOUT_MS = 3_000;
 
 /**
+ * Where a server-side broadcast goes, or null when publishing is off.
+ *
+ * `REALTIME_PUBLISH=off` is the kill switch: local servers load the main
+ * checkout's .env.local, whose Supabase URL + service-role key point at the STG
+ * project, so every local e2e/smoke score event posted a real broadcast there
+ * (~370k/day, 2026-11-03). Blanking the key instead would break
+ * `supabaseAdmin()` storage uploads, which read the same variables.
+ */
+function publishTarget(): { url: string; key: string } | null {
+  if (process.env.REALTIME_PUBLISH === "off") return null;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  return url && key ? { url, key } : null;
+}
+
+/**
  * Broadcast a state_changed event on `fixture:{id}` after a v2 scoring write
  * (doc 08 §4 — publish after commit). Same transport as tournaments; fire-and-
  * forget, never throws.
@@ -35,9 +51,9 @@ export async function publishFixtureUpdate(
   fixtureId: string,
   reason: "event" | "finalize" | "schedule",
 ): Promise<void> {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return;
+  const target = publishTarget();
+  if (!target) return;
+  const { url, key } = target;
   try {
     const payload = { v: Date.now(), reason, at: new Date().toISOString() };
     const topic = `fixture:${fixtureId}`;
@@ -72,9 +88,9 @@ export async function publishDivisionUpdate(
   divisionId: string,
   reason: "schedule" | "publish" | "start" | "score",
 ): Promise<void> {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return;
+  const target = publishTarget();
+  if (!target) return;
+  const { url, key } = target;
   try {
     const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
       method: "POST",
@@ -270,9 +286,9 @@ export async function mintExternalPlayLobbyToken(
 
 /** Tell the other lobby screen that Ready changed. Fire-and-forget. */
 export async function publishExternalPlayLobby(fixtureId: string): Promise<void> {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return;
+  const target = publishTarget();
+  if (!target) return;
+  const { url, key } = target;
   try {
     const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
       method: "POST",
@@ -320,9 +336,9 @@ export type RoomBroadcast = {
  *  admits a seated player, so no new policy — plus the timeout that
  *  `publishFixtureUpdate` carries. Fire-and-forget: never throws. */
 export async function publishRoomBroadcast(fixtureId: string, body: RoomBroadcast): Promise<void> {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return;
+  const target = publishTarget();
+  if (!target) return;
+  const { url, key } = target;
   // A board the spectators' copy cannot read (not a FEN, a status nobody
   // declared) costs the spectators one push — never the players theirs.
   let spectator: PublicBoardPush | null = null;
