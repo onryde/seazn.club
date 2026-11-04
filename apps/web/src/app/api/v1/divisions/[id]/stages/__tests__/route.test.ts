@@ -94,6 +94,17 @@ describe("PUT /api/v1/divisions/{id}/stages — FMT5 dry run and clear", () => {
     expect(previewMock).not.toHaveBeenCalled();
   });
 
+  // Re-review r1-m2: an empty `?clear=` names no dry run - a 400 that reaches neither usecase.
+  it("an empty ?clear= is a 400: neither the preview nor the write", async () => {
+    const res = await PUT(put("?clear="), ctx);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: false; error: { code: string; message: string } };
+    expect(body.error.code).toBe("VALIDATION");
+    expect(body.error.message).toBe("clear must be a dry run's token");
+    expect(previewMock).not.toHaveBeenCalled();
+    expect(replaceMock).not.toHaveBeenCalled();
+  });
+
   it("no query: replaceStages without a token (the no-fixture PUT, and the confirm refusal otherwise)", async () => {
     await PUT(put(""), ctx);
     expect(replaceMock).toHaveBeenCalledTimes(1);

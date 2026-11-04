@@ -1,3 +1,4 @@
+import { HttpError } from "@/lib/errors";
 import { v1, reply, parseBody, assertOneOf } from "@/server/api-v1/http";
 import { requireResourceAuth } from "@/server/api-v1/auth";
 import { CreateStages } from "@/server/api-v1/schemas";
@@ -32,6 +33,8 @@ export async function PUT(req: Request, { params }: Ctx) {
     assertOneOf(dryRun, DRY_RUN, "dry_run");
     if (dryRun === "1") return previewReplaceStages(auth, id, body);
     const clear = query.get("clear");
+    // Re-review r1-m2: an empty `?clear=` names no dry run. A 400, never a token compared against the board.
+    if (clear === "") throw new HttpError(400, "clear must be a dry run's token");
     return replaceStages(auth, id, body, clear === null ? {} : { clear });
   });
 }

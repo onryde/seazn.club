@@ -23904,9 +23904,10 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1
             },
-            "description": "The dry run's token, confirming the clear of the fixtures it named"
+            "description": "The dry run's token, confirming the clear of the fixtures it named. An empty value is 400."
           }
         ],
         "requestBody": {
