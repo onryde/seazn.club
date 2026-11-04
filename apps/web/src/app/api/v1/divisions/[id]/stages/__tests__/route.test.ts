@@ -27,8 +27,8 @@ const PREVIEW: FormatChangePreview = {
   token: "t0k",
 };
 
-const replaceMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => [] as unknown[]));
-const previewMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({}) as unknown));
+const replaceMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown[]>>(async () => []));
+const previewMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({})));
 const authMock = vi.hoisted(() => vi.fn(async () => AUTH));
 vi.mock("@/server/usecases/stages", () => ({
   replaceStages: replaceMock,
@@ -98,7 +98,7 @@ describe("PUT /api/v1/divisions/{id}/stages — FMT5 dry run and clear", () => {
     expect(body.error.code).toBe("FORMAT_CHANGE_CONFIRM");
     expect(body.error.message).toBe(r.message);
     // What the dialog reads: the client keeps every member past code/message as `extra` (client-v1.ts).
-    const { code: _code, message: _message, ...extra } = body.error;
+    const extra = Object.fromEntries(Object.entries(body.error).filter(([k]) => k !== "code" && k !== "message"));
     expect(previewOf(extra)).toEqual(PREVIEW);
   });
 });
