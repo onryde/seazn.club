@@ -2422,7 +2422,7 @@
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING": "This round can't be paired: no legal pairing is left for these players.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.rematch": "Round {round} can't be paired: every remaining pairing would repeat a match already played.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.colour": "Round {round} can't be paired: every remaining pairing would break the colour limits.",
-  "swiss.refusal.SWISS_NO_LEGAL_PAIRING.no_bye_candidate": "Round {round} can't be paired: the round needs a bye and every player has already had the bye.",
+  "swiss.refusal.SWISS_NO_LEGAL_PAIRING.no_bye_candidate": "Round {round} can't be paired: the round needs a bye, but every player has already had a bye or won a match by walkover.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.search_limit": "Round {round} can't be paired: no legal pairing was found within the search limit. Pairing again gives the same answer; changing the players in the field may help.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.field_too_small": "Round {round} needs at least two players.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.tail.finish": "You can finish the Swiss after round {finishAfter}; the table is then recalculated as a {finishAfter}-round event.",

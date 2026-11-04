@@ -2422,7 +2422,7 @@
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING": "Deze ronde kan niet worden gekoppeld: er is geen geldige koppeling meer over voor deze spelers.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.rematch": "Ronde {round} kan niet worden gekoppeld: elke resterende koppeling zou een al gespeelde wedstrijd herhalen.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.colour": "Ronde {round} kan niet worden gekoppeld: elke resterende koppeling zou de kleurlimieten overschrijden.",
-  "swiss.refusal.SWISS_NO_LEGAL_PAIRING.no_bye_candidate": "Ronde {round} kan niet worden gekoppeld: er is een bye nodig en alle spelers hebben al een bye gehad.",
+  "swiss.refusal.SWISS_NO_LEGAL_PAIRING.no_bye_candidate": "Ronde {round} kan niet worden gekoppeld: er is een bye nodig, maar alle spelers hebben al een bye gehad of een wedstrijd door een walk-over gewonnen.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.search_limit": "Ronde {round} kan niet worden gekoppeld: binnen de zoeklimiet is geen geldige koppeling gevonden. Opnieuw koppelen geeft hetzelfde resultaat; de spelers in het deelnemersveld wijzigen kan helpen.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.field_too_small": "Ronde {round} heeft minstens twee spelers nodig.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.tail.finish": "Je kunt de Zwitserse fase afronden na ronde {finishAfter}; de stand wordt dan herberekend als een evenement van {finishAfter} rondes.",

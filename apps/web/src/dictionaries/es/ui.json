@@ -2422,7 +2422,7 @@
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING": "No se puede emparejar esta ronda: no queda ningún emparejamiento válido para estos jugadores.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.rematch": "No se puede emparejar la ronda {round}: todos los emparejamientos restantes repetirían una partida ya jugada.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.colour": "No se puede emparejar la ronda {round}: todos los emparejamientos restantes romperían los límites de color.",
-  "swiss.refusal.SWISS_NO_LEGAL_PAIRING.no_bye_candidate": "No se puede emparejar la ronda {round}: hace falta un descanso y todos los jugadores ya han descansado.",
+  "swiss.refusal.SWISS_NO_LEGAL_PAIRING.no_bye_candidate": "No se puede emparejar la ronda {round}: hace falta un descanso, pero todos los jugadores ya han descansado o han ganado una partida por incomparecencia.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.search_limit": "No se puede emparejar la ronda {round}: no se encontró ningún emparejamiento válido dentro del límite de búsqueda. Volver a emparejar da el mismo resultado; cambiar los jugadores del campo puede ayudar.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.field_too_small": "La ronda {round} necesita al menos dos jugadores.",
   "swiss.refusal.SWISS_NO_LEGAL_PAIRING.tail.finish": "Puedes terminar la fase suiza tras la ronda {finishAfter}; la clasificación se recalcula entonces como un evento de {finishAfter} rondas.",

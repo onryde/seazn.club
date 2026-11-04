@@ -22,7 +22,9 @@ import { swissRefusalText } from "../swiss-refusal-text";
 const REASON_WORDS: Record<SwissRefusalReason, string> = {
   rematch: "would repeat a match already played",
   colour: "would break the colour limits",
-  no_bye_candidate: "every player has already had the bye",
+  // Both bye bars (P-A4; FIDE C.04.1(d)): a bye already had, or a win by walkover (the engine's `byes` holds both; final
+  // review m2 - the sentence used to name only the first).
+  no_bye_candidate: "every player has already had a bye or won a match by walkover",
   search_limit: "no legal pairing was found within the search limit",
   field_too_small: "needs at least two players",
 };
@@ -75,6 +77,21 @@ describe("X-SW-3 noPairingNotice: the refusal's sentence and its recovery", () =
       checked++;
     }
     expect(checked, "five reasons at round 1 and at round 4").toBe(REASONS.length * 2);
+  });
+
+  it("final review m2: no_bye_candidate names BOTH bye bars in every locale, the walkover in that locale's own word for it", () => {
+    // The engine bars the bye for a bye already had AND for a win by walkover (FIDE C.04.1(d)); a field where one player is
+    // barred by a walkover win alone must not read "everyone already had the bye". The walkover word is each catalog's own
+    // (`forfeit.tagFull.walkover`), so the sentence uses the house term, not a synonym a reader would not recognise.
+    let checked = 0;
+    for (const [locale, dict] of Object.entries({ en, es, fr, nl }) as [string, Record<string, string>][]) {
+      const sentence = dict["swiss.refusal.SWISS_NO_LEGAL_PAIRING.no_bye_candidate"];
+      const walkover = dict["forfeit.tagFull.walkover"];
+      expect(walkover, `${locale} has its walkover word`).toBeTruthy();
+      expect(sentence!.toLowerCase(), `${locale}: names the walkover bar`).toContain(walkover!.toLowerCase());
+      checked++;
+    }
+    expect(checked, "anti-vacuity: four locales").toBe(4);
   });
 
   it("X-SW-3 the five reasons read as five different sentences (a reason cannot collapse onto another's)", () => {
