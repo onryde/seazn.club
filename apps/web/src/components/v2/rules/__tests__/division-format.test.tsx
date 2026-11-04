@@ -278,11 +278,34 @@ describe("the Format dialog: the picker over the division's own format", () => {
   it("a stored Swiss opens at its rounds; an unpicked Swiss at the field's recommendation, under the field's guidance (X-SW-16)", () => {
     const { h } = mountDialog({ stages: stagesOf("swiss", { swissRounds: 7 }), entrants: 20 });
     expect(Number(propsOf(boundInput(h, "swissRounds")!).value)).toBe(7);
-    // 20 players: ceil(log2 20) = 5 rounds (the Swiss rule of thumb: rounds enough to separate one unbeaten player).
-    const { h: fresh } = mountDialog({ stages: stagesOf("league"), entrants: 20 });
-    pickTemplate(fresh as never, "swiss");
-    expect(Number(propsOf(boundInput(fresh, "swissRounds")!).value)).toBe(5);
-    expect(textOf(byId(fresh, "builder-swiss-rounds-guidance")!)).toContain("20");
+
+    // X-SW-16 (engine rulebook row, signed 252): the recommended count is the smaller of the field-size band and the safe
+    // maximum floor(n/2); the hard maximum is n-1 for an even field, n for an odd one. Written here from the row's text,
+    // never read back from lib/swiss-rounds.ts or the dialog.
+    const band = (n: number) => (n <= 8 ? 3 : n <= 16 ? 4 : n <= 32 ? 5 : n <= 64 ? 6 : 7);
+    const safeMax = (n: number) => Math.floor(n / 2);
+    const hardMax = (n: number) => (n % 2 === 0 ? n - 1 : n);
+    // n=2..5 are the cap's witnesses: the safe maximum is BELOW the band, so only min(band, floor(n/2)) answers (n=5: band 3,
+    // safe maximum 2 -> 2; the bare band, or ceil(log2 5) = 3, would say 3). The rest sit on the band edges and past the
+    // last one, where the band is the smaller (n=20: band 5, safe maximum 10 -> 5).
+    const fields = [2, 3, 4, 5, 8, 9, 16, 17, 20, 32, 33, 64, 65];
+    let capped = 0;
+    let banded = 0;
+    for (const n of fields) {
+      const want = Math.min(band(n), safeMax(n));
+      if (safeMax(n) < band(n)) capped += 1;
+      else banded += 1;
+      const { h: fresh } = mountDialog({ stages: stagesOf("league"), entrants: n });
+      pickTemplate(fresh as never, "swiss");
+      expect(Number(propsOf(boundInput(fresh, "swissRounds")!).value), `n=${n}: the Rounds box opens at the recommendation`).toBe(want);
+      expect(textOf(byId(fresh, "builder-swiss-rounds-guidance")!), `n=${n}: the guidance line says it`).toBe(
+        sayN("swiss.rounds.guidance", want, { n, hardMax: hardMax(n) }),
+      );
+    }
+    // Anti-vacuity: the sweep ran every field, and both sides of the min() were reached.
+    expect(capped + banded).toBe(fields.length);
+    expect(capped, "fields where the cap bites (n=2..5)").toBe(4);
+    expect(banded, "fields where the band is the smaller").toBeGreaterThan(0);
   });
 });
 
