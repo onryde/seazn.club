@@ -17,7 +17,7 @@ import enPublic from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import type { RefusedField } from "@/lib/rule-errors";
 import { rulesFor } from "@/lib/match-rules";
-import { rulesLineDict } from "@/lib/rules-line";
+import { rulesChipText, rulesLineDict } from "@/lib/rules-line";
 import { foldTiebreaks, unitLabelKey } from "@/lib/stage-card/summaries";
 import { MatchFormatEditor, type MatchFormatEditorProps } from "../match-format-editor";
 import { PointsEditor, divisionPointsKeys, divisionPointsOf, hydrateDivisionPoints, type PointsEditorProps } from "../points-editor";
@@ -298,6 +298,70 @@ describe("the Division rules strip", () => {
     expect(h).not.toContain('aria-expanded="true"');
     expect(has(h, "division-rules-panel-format")).toBe(false);
     expect(has(h, "division-rules-summary")).toBe(true);
+  });
+
+  // Owner 2026-11-04 ("just remove abandoned match is replayed only from division text"): the card's summary line does not say
+  // a replay - the product has no one-step replay (an abandoned match keeps its partial score; `core.start` is refused after).
+  // The other abandon policies stay on it. Words come from the en dictionary; the sports from the registry's `abandonOptions`.
+  const summaryOf = (m: AnySportModule, cfg: Record<string, unknown>): string => {
+    const h = html(
+      <DivisionRulesStrip
+        divisionId={ID}
+        sportKey={m.key}
+        variantKey={null}
+        divisionConfig={cfg}
+        divisionTiebreakers={null}
+        tableKinds={["league"]}
+        canEdit
+        ruleDict={RULE_DICT}
+        variants={[]}
+        lockedFields={[]}
+        onlineChessOffered={false}
+      />,
+    );
+    return text(/data-testid="division-rules-summary">([^<]*)</.exec(h)?.[1] ?? "").toLowerCase();
+  };
+  const abandonWords = (policy: string): string => rulesChipText(RULE_DICT, { key: `format.rules.abandon.${policy}` }).toLowerCase();
+  /** The division cfg with this policy, as the schema accepts it (carrom / generic share only under a drawn game). */
+  const withPolicy = (m: AnySportModule, policy: string): Record<string, unknown> => {
+    for (const extra of [{}, { allowDraws: true }, { tieBoard: "draw" }]) {
+      const candidate = { ...divisionCfg(m), ...extra, abandonPolicy: policy };
+      if (m.configSchema.safeParse(candidate).success) return candidate;
+    }
+    throw new Error(`${m.key}: no division cfg the schema accepts for ${policy}`);
+  };
+
+  it("the summary line never says a replay: set explicitly, or absent (which plays a replay) - every sport that offers it (counted)", () => {
+    const replay = abandonWords("replay");
+    expect(replay, "premise: the dictionary still has words for replay").toBe("an abandoned match is replayed");
+    let explicit = 0;
+    let absent = 0;
+    for (const m of SPORTS) {
+      if (!(m.abandonOptions ?? []).includes("replay")) continue;
+      const set = summaryOf(m, withPolicy(m, "replay"));
+      expect(set, `${m.key}: the card has a summary`).not.toBe("");
+      expect(set, `${m.key}: replay set`).not.toContain(replay);
+      explicit++;
+      const bare = divisionCfg(m);
+      if ((m.configSchema.parse(bare) as Record<string, unknown>).abandonPolicy !== undefined) continue;
+      const unset = summaryOf(m, bare);
+      expect(unset, `${m.key}: the card has a summary`).not.toBe("");
+      expect(unset, `${m.key}: policy absent`).not.toContain(replay);
+      absent++;
+    }
+    expect(explicit, "sports that offer replay").toBe(SPORTS.filter((m) => (m.abandonOptions ?? []).includes("replay")).length);
+    expect(explicit).toBeGreaterThan(0);
+    expect(absent, "sports whose division leaves the policy absent (carrom, generic)").toBeGreaterThan(0);
+  });
+
+  it("every other abandon policy still shows on the summary line - award, share, the 4th-quarter rule (counted)", () => {
+    const shown = new Set<string>();
+    for (const m of SPORTS)
+      for (const policy of (m.abandonOptions ?? []).filter((p) => p !== "replay")) {
+        expect(summaryOf(m, withPolicy(m, policy)), `${m.key}/${policy}`).toContain(abandonWords(policy));
+        shown.add(policy);
+      }
+    expect([...shown].sort(), "the kept policies, each checked on some sport").toEqual(["award", "q4_stands", "share"]);
   });
 
   // Fix round 1, I1 (ruling: spec §12 items 4 and 13 over W2c S4) - the strip must not repeat the owner-rejected Settings lock
