@@ -24,6 +24,7 @@ const PREVIEW: FormatChangePreview = {
   lineups: 0,
   device_links: 1,
   calls: 0,
+  voided_scores: 0,
   token: "t0k",
 };
 

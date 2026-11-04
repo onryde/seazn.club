@@ -330,7 +330,13 @@ export function DivisionFormatDialog({
               {msg(FORMAT_CHANGE_REFUSALS.FORMAT_CHANGE_STALE.key)}
             </p>
           )}
-          <p className="text-slate-800">{msg("formatChange.confirm.safe")}</p>
+          {/* Re-review r1-m1: a board whose only scores were all voided is unlocked (ruling I2), but the clear deletes those
+              voided entries - so the lead names them instead of saying nothing has been played. */}
+          <p className="text-slate-800" data-testid="division-format-safe">
+            {preview.voided_scores > 0
+              ? msgPlural("formatChange.confirm.safeVoided", preview.voided_scores, { count: preview.voided_scores })
+              : msg("formatChange.confirm.safe")}
+          </p>
           <ul className="list-disc space-y-1 pl-5 text-slate-800" data-testid="division-format-clears">
             {cleared.map((c) => (
               <li key={c.key} data-clear={c.key} className="min-w-0 [overflow-wrap:anywhere]">

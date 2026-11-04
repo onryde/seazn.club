@@ -12,8 +12,10 @@
  *      fixtures, the time slots on courts, the LIVE remote-scoring links that stop working - fix round 1, controller ruling
  *      I1: never the revoked one); Clear and change rebuilds the stages, and the fixtures, their schedule and every link are
  *      gone.
- *   5. One result: the Format button is greyed and says why ("Format is locked once scoring starts"), the old address opens
- *      no dialog, and the server refuses even a preview.
+ *   5. A result taken back (re-review r1-m1): Format is open again, and the confirm names the one voided score the change
+ *      deletes instead of "Nothing has been played yet"; Keep closes it and changes nothing.
+ *      Then one result that stands: the Format button is greyed and says why ("Format is locked once scoring starts"), the
+ *      old address opens no dialog, and the server refuses even a preview.
  *
  * Every state the owner looks at is shot at 320, 768, 1024 and 1280 with no horizontal page scroll. Every sentence asserted
  * is read from the dictionary (`uiEn`); every count is derived from the board the test built (a single round robin of n
@@ -96,7 +98,7 @@ async function shoot(page: Page, testInfo: TestInfo, name: string, prepare?: () 
 
 test.describe("FMT5: the format, changed from the Division rules card", () => {
   test("build, generate and schedule, then change the format behind a confirm that names what it clears; one result locks it", async ({ page, request }, testInfo) => {
-    test.setTimeout(budget(10, 27, 5));
+    test.setTimeout(budget(11, 36, 6));
     const { divisionId } = await seedDivision(request);
     const base = (await divisionPath(request, divisionId)).split("?")[0]!;
     await page.setViewportSize({ width: 1280, height: 900 });
@@ -180,6 +182,7 @@ test.describe("FMT5: the format, changed from the Division rules card", () => {
       plural("formatChange.confirm.remoteLinks", LIVE_LINKS),
     );
     await expect(landed.getByText(uiEn["formatChange.confirm.sheetsStop"]!)).toBeVisible();
+    await expect(landed.getByTestId("division-format-safe"), "nothing recorded: the plain lead").toHaveText(uiEn["formatChange.confirm.safe"]!);
     await expect(landed.getByTestId("division-format-clear")).toHaveText(uiEn["formatChange.confirm.clear"]!);
     await shoot(page, testInfo, "3-clear-confirm", async () => {
       await expect(clears).toBeVisible();
@@ -201,7 +204,38 @@ test.describe("FMT5: the format, changed from the Division rules card", () => {
     expect(groupGen.status, `generate groups: ${JSON.stringify(groupGen.error)}`).toBeLessThan(300);
     const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
     expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
-    await scoreFixture(request, groupGen.data!.fixtures[0]!.id, 2, 1);
+    // ---- 5a. A result taken back: Format is open again (ruling I2), and the confirm names the voided score the change deletes
+    // (re-review r1-m1), never "Nothing has been played yet".
+    const board0 = groupGen.data!.fixtures[0]!.id;
+    const at = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${board0}/state`);
+    const result = await apiJson<{ seq: number; event_id: string }>(request, `/api/v1/fixtures/${board0}/events`, "POST", {
+      expected_seq: at.data!.last_seq,
+      type: "generic.result",
+      payload: { p1Score: 2, p2Score: 1 },
+    });
+    expect(result.status, `result: ${JSON.stringify(result.error)}`).toBe(201);
+    const takenBack = await apiJson(request, `/api/v1/fixtures/${board0}/events`, "POST", {
+      expected_seq: result.data!.seq,
+      type: "core.void",
+      payload: { event_id: result.data!.event_id },
+    });
+    expect(takenBack.status, `void: ${JSON.stringify(takenBack.error)}`).toBe(201);
+    const VOIDED = 1;
+    const reopened = await openFormatDialog(page, base);
+    await pickFormat(reopened, "league");
+    await saveFormatDialog(reopened).click();
+    const safe = reopened.getByTestId("division-format-safe");
+    await expect(safe).toBeVisible({ timeout: NAV_MS });
+    await expect(safe, "the voided score is named, never 'nothing has been played'").toHaveText(plural("formatChange.confirm.safeVoided", VOIDED));
+    await shoot(page, testInfo, "6-voided-confirm", async () => {
+      await expect(safe).toBeVisible();
+    });
+    await reopened.getByTestId("division-format-keep").click();
+    await expect(reopened, "Keep: the dialog closes").toHaveCount(0, { timeout: NAV_MS });
+    expect((await stagesOf(request, divisionId)).map((st) => st.id), "Keep changed nothing").toEqual(rebuilt.map((st) => st.id));
+
+    // ---- 5b. Scored again: the format locks.
+    await scoreFixture(request, board0, 2, 1);
 
     const locked = await formatButton(page, base);
     await expect(locked, "a result exists: Format is greyed").toHaveAttribute("aria-disabled", "true");

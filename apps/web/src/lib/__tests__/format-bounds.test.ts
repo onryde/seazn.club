@@ -123,6 +123,7 @@ const NOTHING_GENERATED: FormatChangePreview = {
   lineups: 0,
   device_links: 0,
   calls: 0,
+  voided_scores: 0,
   token: null,
 };
 const answerDryRun = () => apiV1Mock.mockImplementation(async (url: string) => (String(url).includes("dry_run=1") ? NOTHING_GENERATED : []));

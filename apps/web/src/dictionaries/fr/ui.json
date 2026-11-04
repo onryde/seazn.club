@@ -7422,6 +7422,8 @@
   "formatChange.save": "Enregistrer le format",
   "formatChange.confirm.title": "Passer au format {format} ?",
   "formatChange.confirm.safe": "Rien n'a encore été joué, c'est donc sans risque. Cela effacera :",
+  "formatChange.confirm.safeVoided.one": "Rien de ce qui compte n'a été joué, mais {count} score annulé sera supprimé. Cela effacera :",
+  "formatChange.confirm.safeVoided.other": "Rien de ce qui compte n'a été joué, mais {count} scores annulés seront supprimés. Cela effacera :",
   "formatChange.confirm.stages.one": "{count} phase ({names})",
   "formatChange.confirm.stages.other": "{count} phases ({names})",
   "formatChange.confirm.fixtures.one": "{count} match non joué",

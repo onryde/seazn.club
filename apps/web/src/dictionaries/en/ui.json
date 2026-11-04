@@ -7422,6 +7422,8 @@
   "formatChange.save": "Save format",
   "formatChange.confirm.title": "Change format to {format}?",
   "formatChange.confirm.safe": "Nothing has been played yet, so this is safe. It will clear:",
+  "formatChange.confirm.safeVoided.one": "Nothing that counts has been played, but {count} voided score will be deleted. It will clear:",
+  "formatChange.confirm.safeVoided.other": "Nothing that counts has been played, but {count} voided scores will be deleted. It will clear:",
   "formatChange.confirm.stages.one": "{count} stage ({names})",
   "formatChange.confirm.stages.other": "{count} stages ({names})",
   "formatChange.confirm.fixtures.one": "{count} unplayed fixture",

@@ -50,7 +50,7 @@ describe("FORMAT_CHANGE_REFUSALS (FMT5)", () => {
   });
 
   it("previewOf reads a refusal's preview, and refuses a body without one", () => {
-    const preview = { dry_run: true, stages: [], fixtures: 0, slots: 0, courts: 0, officials: 0, lineups: 0, device_links: 0, calls: 0, token: null };
+    const preview = { dry_run: true, stages: [], fixtures: 0, slots: 0, courts: 0, officials: 0, lineups: 0, device_links: 0, calls: 0, voided_scores: 0, token: null };
     expect(previewOf({ code: "FORMAT_CHANGE_CONFIRM" satisfies FormatChangeCode, preview })).toBe(preview);
     expect(previewOf({ code: "FORMAT_LOCKED" })).toBeNull();
     expect(previewOf({ preview: { ...preview, dry_run: false } })).toBeNull();

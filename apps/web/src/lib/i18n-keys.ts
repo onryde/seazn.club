@@ -3332,6 +3332,8 @@ export type DictionaryKey =
   | "formatChange.confirm.remoteLinks.one"
   | "formatChange.confirm.remoteLinks.other"
   | "formatChange.confirm.safe"
+  | "formatChange.confirm.safeVoided.one"
+  | "formatChange.confirm.safeVoided.other"
   | "formatChange.confirm.sheetsStop"
   | "formatChange.confirm.slots.one"
   | "formatChange.confirm.slots.other"

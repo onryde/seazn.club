@@ -7422,6 +7422,8 @@
   "formatChange.save": "Guardar formato",
   "formatChange.confirm.title": "¿Cambiar el formato a {format}?",
   "formatChange.confirm.safe": "Aún no se ha jugado nada, así que es seguro. Se borrará:",
+  "formatChange.confirm.safeVoided.one": "No se ha jugado nada que cuente, pero se eliminará {count} puntuación anulada. Se borrará:",
+  "formatChange.confirm.safeVoided.other": "No se ha jugado nada que cuente, pero se eliminarán {count} puntuaciones anuladas. Se borrará:",
   "formatChange.confirm.stages.one": "{count} fase ({names})",
   "formatChange.confirm.stages.other": "{count} fases ({names})",
   "formatChange.confirm.fixtures.one": "{count} enfrentamiento sin jugar",

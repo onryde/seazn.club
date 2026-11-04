@@ -1556,6 +1556,7 @@ export const FormatChangePreview = z.object({
   lineups: z.number().int(),
   device_links: z.number().int(),
   calls: z.number().int(),
+  voided_scores: z.number().int(),
   token: z.string().nullable(),
 });
 

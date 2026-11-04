@@ -71,6 +71,10 @@ export interface FormatChangePreview {
   device_links: number;
   /** Match Day calls on those fixtures. */
   calls: number;
+  /** Recorded entries a void took back (a voided Start or score) on those fixtures - deleted with them. Any entry that
+   *  still stands refuses FORMAT_LOCKED, so above 0 the confirm says "N voided scores will be deleted", never "nothing
+   *  has been played". */
+  voided_scores: number;
   /** The token the change must send back as `?clear=` — null when no fixture exists and there is nothing to confirm. A
    *  token sent over a board that now has nothing to clear is still refused FORMAT_CHANGE_STALE (review m2). */
   token: string | null;

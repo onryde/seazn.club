@@ -410,6 +410,7 @@ describe.skipIf(!HAS_DB)("FMT5 — what refuses the clear even with a token, and
     expect(preview.device_links, "the live remote-scoring links the confirm names").toBe(LIVE.length);
     expect(had.device_links - left.device_links, "every link went with its board").toBe(had.device_links);
     expect(preview.calls).toBe(had.fixture_calls - left.fixture_calls);
+    expect(preview.voided_scores, "nothing was recorded, so nothing voided").toBe(0);
     // The official survives (only the appointment goes), and so does the person.
     expect(await sql`select 1 from officials where id = ${official!.id}`).toHaveLength(1);
   });
@@ -595,7 +596,7 @@ describe.skipIf(!HAS_DB)("FMT5 fix round 1 — the lock is a result that STANDS 
     expect((await board(rig.divisionId)).stages, "premise: no stage").toEqual([]);
     expect(await divisionFormatLocked(rig.auth, rig.divisionId)).toBe(false);
     const p = await previewReplaceStages(rig.auth, rig.divisionId, [league(1)]);
-    expect(p).toMatchObject({ stages: [], fixtures: 0, slots: 0, courts: 0, device_links: 0, token: null });
+    expect(p).toMatchObject({ stages: [], fixtures: 0, slots: 0, courts: 0, device_links: 0, voided_scores: 0, token: null });
   });
 
   it("score, void, score again: locked, then open (the deleteStage copy's way out works), then locked; voided again, the change clears the voided ledger", async () => {
@@ -639,6 +640,11 @@ describe.skipIf(!HAS_DB)("FMT5 fix round 1 — the lock is a result that STANDS 
     const open = await previewReplaceStages(rig.auth, rig.divisionId, [knockout(1)]);
     expect(open.fixtures).toBe((await board(rig.divisionId)).fixtures.length);
     expect(typeof open.token).toBe("string");
+    // Re-review r1-m1: the clear deletes the voided entries, and the preview names how many - the ledger's recorded rows
+    // that are not voids (the Start and the rally), never the void rows themselves.
+    const voidedEntries = after.rows.filter((r) => r.type !== "core.void").length;
+    expect(voidedEntries, "premise: a Start and a rally were taken back").toBe(2);
+    expect(open.voided_scores).toBe(voidedEntries);
 
     // Score again: locked again, and the open preview's token is refused with it.
     await appendEvent(rig.auth.orgId, id, 4, { type: "core.start", payload: {} });
@@ -650,6 +656,9 @@ describe.skipIf(!HAS_DB)("FMT5 fix round 1 — the lock is a result that STANDS 
     await appendEvent(rig.auth.orgId, id, 5, { type: "core.void", payload: {}, voids: again.id });
     expect(await divisionFormatLocked(rig.auth, rig.divisionId)).toBe(false);
     const p = await previewReplaceStages(rig.auth, rig.divisionId, [knockout(1)]);
+    const final = await ledger(id);
+    expect(p.voided_scores, "three entries taken back: Start, rally, the second Start").toBe(final.rows.filter((r) => r.type !== "core.void").length);
+    expect(p.voided_scores).toBe(3);
     const rows = await replaceStages(rig.auth, rig.divisionId, [knockout(1)], { clear: p.token! });
     expect(rows.map((r) => r.kind)).toEqual(["knockout"]);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${id}`;

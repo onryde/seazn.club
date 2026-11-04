@@ -719,19 +719,24 @@ async function formatChangePreview(tx: Tx, divisionId: string): Promise<FormatCh
   const fixtures = await tx<{ id: string; scheduled_at: Date | null; court_id: string | null }[]>`
     select f.id, f.scheduled_at, f.court_id from fixtures f join stages s on s.id = f.stage_id
      where s.division_id = ${divisionId} order by f.id`;
-  const counts = { officials: 0, lineups: 0, device_links: 0, calls: 0 };
+  const counts = { officials: 0, lineups: 0, device_links: 0, calls: 0, voided_scores: 0 };
   if (fixtures.length > 0) {
     const ids = fixtures.map((f) => f.id);
     // Fix round 1 (controller ruling I1): `device_links` counts the LIVE remote-scoring links only - not revoked, not
     // expired (device-links.ts `getActiveDeviceLink`). Every link cascades with its board; a dead one stops nothing, so
-    // the confirm does not name it.
+    // the confirm does not name it. Re-review r1-m1: `voided_scores` counts the recorded entries a void took back (a voided
+    // Start or score; never the void rows themselves). It counts every non-void entry: the lock asked above (same tx,
+    // `fixtureHoldsStandingResultSql`) refuses any entry no void took back, so past it every one IS voided - a second
+    // "and a void names it" clause would be an equivalent mutant nothing can kill. These are the only recorded play the
+    // clear deletes, and the confirm must not call that "nothing played".
     const [c] = await tx<typeof counts[]>`
       select
         (select count(*) from fixture_officials where fixture_id in ${tx(ids)})::int as officials,
         (select count(*) from lineups where fixture_id in ${tx(ids)})::int as lineups,
         (select count(*) from device_links
           where fixture_id in ${tx(ids)} and revoked_at is null and (expires_at is null or expires_at > now()))::int as device_links,
-        (select count(*) from fixture_calls where fixture_id in ${tx(ids)})::int as calls`;
+        (select count(*) from fixture_calls where fixture_id in ${tx(ids)})::int as calls,
+        (select count(*) from score_events where fixture_id in ${tx(ids)} and type <> 'core.void')::int as voided_scores`;
     Object.assign(counts, c);
   }
   const slots = fixtures.filter((f) => f.scheduled_at !== null).length;

@@ -135,6 +135,7 @@ const PREVIEW: FormatChangePreview = {
   lineups: 0,
   device_links: 0,
   calls: 0,
+  voided_scores: 0,
   token: "t0k",
 };
 const NOTHING: FormatChangePreview = { ...PREVIEW, stages: [], fixtures: 0, slots: 0, courts: 0, token: null };
@@ -338,6 +339,24 @@ describe("Save: the dry run, then the write (FMT5)", () => {
     expect(textOf(items[5]!)).toBe(sayN("formatChange.confirm.remoteLinks", 4));
     expect(textOf(items[6]!)).toBe(sayN("formatChange.confirm.calls", 1));
     expect(h.text()).toContain(say("formatChange.confirm.sheetsStop"));
+  });
+
+  // Re-review r1-m1: a board whose only scores were all voided is open (ruling I2), but the clear deletes those entries.
+  // The lead then names them instead of "Nothing has been played yet"; at none, the plain lead stands.
+  it("voided scores: the lead says how many will be deleted, never 'nothing has been played'; none: the plain lead", async () => {
+    for (const n of [3, 1]) {
+      apiV1Mock.mockResolvedValueOnce({ ...PREVIEW, voided_scores: n });
+      const { h } = mountDialog({ stages: stagesOf("league") });
+      click(h, "division-format-save");
+      await flush();
+      expect(textOf(byId(h, "division-format-safe")!), `${n} voided`).toBe(sayN("formatChange.confirm.safeVoided", n));
+      expect(h.text(), `${n} voided`).not.toContain(say("formatChange.confirm.safe"));
+    }
+    apiV1Mock.mockResolvedValueOnce({ ...PREVIEW, voided_scores: 0 });
+    const { h } = mountDialog({ stages: stagesOf("league") });
+    click(h, "division-format-save");
+    await flush();
+    expect(textOf(byId(h, "division-format-safe")!)).toBe(say("formatChange.confirm.safe"));
   });
 
   // Controller ruling I1 (fix round 1): a live remote-scoring link is not refused; the confirm says how many stop working,

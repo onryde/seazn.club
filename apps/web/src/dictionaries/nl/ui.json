@@ -7422,6 +7422,8 @@
   "formatChange.save": "Formaat opslaan",
   "formatChange.confirm.title": "Formaat wijzigen naar {format}?",
   "formatChange.confirm.safe": "Er is nog niets gespeeld, dus dit is veilig. Dit wist:",
+  "formatChange.confirm.safeVoided.one": "Er is niets gespeeld dat telt, maar {count} geannuleerde score wordt verwijderd. Dit wist:",
+  "formatChange.confirm.safeVoided.other": "Er is niets gespeeld dat telt, maar {count} geannuleerde scores worden verwijderd. Dit wist:",
   "formatChange.confirm.stages.one": "{count} fase ({names})",
   "formatChange.confirm.stages.other": "{count} fases ({names})",
   "formatChange.confirm.fixtures.one": "{count} ongespeelde wedstrijd",
