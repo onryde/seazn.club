@@ -1,14 +1,24 @@
 // apps/web/src/lib/__tests__/swiss-pairing.test.ts
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { pairRound, type SwissStanding } from "@seazn/engine/scheduling/swiss";
 import type { EntrantId } from "@seazn/engine/core";
 import {
   effectiveSwissPairing,
   roundOnePairs,
   storedSwissPairing,
+  SwissRoundOnePremiseError,
 } from "@/lib/swiss-pairing";
+
+// The engine's `pairRound` passes straight through, except in the one case below that makes it REFUSE round 1 of a fresh
+// field — an answer the real engine never gives (no meeting, bye or colour is on record), so the guard behind it can only be
+// reached by handing the module a refusal.
+vi.mock("@seazn/engine/scheduling/swiss", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@seazn/engine/scheduling/swiss")>();
+  return { ...real, pairRound: vi.fn(real.pairRound) };
+});
 
 describe("effectiveSwissPairing", () => {
   // Empty case FIRST (AGENTS rule: a ladder states its empty case first).
@@ -47,8 +57,11 @@ describe("roundOnePairs mirrors the engine", () => {
       score: 0,
       rank: i + 1,
     }));
-    return pairRound(standings, { played: new Set() }, pairing === "rank_adjacent" ? { pairing } : {})
-      .pairings.map((p) => [Number(p.home), Number(p.away)].sort((a, b) => a - b) as [number, number])
+    const round = pairRound(standings, { played: new Set() }, pairing === "rank_adjacent" ? { pairing } : {});
+    // W3 (engine 2.0.0): a round or a refusal. A fresh field of n has a legal round 1, so a refusal is a broken premise.
+    if (!round.ok) throw new Error(`premise: round 1 of ${n} fresh players is pairable (${round.reason})`);
+    return round.pairings
+      .map((p) => [Number(p.home), Number(p.away)].sort((a, b) => a - b) as [number, number])
       .sort((a, b) => a[0] - b[0]);
   }
   // Odd sizes 3/7/11 are what kill a rank-order mutation, because the bye moves.
@@ -61,6 +74,26 @@ describe("roundOnePairs mirrors the engine", () => {
     expect(roundOnePairs(10, "rank_adjacent")[0]).toEqual([1, 2]);
   });
   it("fewer than 2 ⇒ no pairs", () => expect(roundOnePairs(1, "fold")).toEqual([]));
+
+  describe("a refusal of round 1 is a broken premise, raised by name (W3 app-B T1, X-SW-3)", () => {
+    afterEach(() => vi.mocked(pairRound).mockClear());
+    const refusal = { ok: false, code: "SWISS_NO_LEGAL_PAIRING", reason: "rematch", field: 4 } as unknown as ReturnType<typeof pairRound>;
+
+    it("the engine's refusal throws SwissRoundOnePremiseError naming the field and the reason, never an empty hint", () => {
+      vi.mocked(pairRound).mockReturnValueOnce(refusal);
+      expect(() => roundOnePairs(4, "fold"), "a refusal is not read as 'no pairs'").toThrow(SwissRoundOnePremiseError);
+      vi.mocked(pairRound).mockReturnValueOnce(refusal);
+      expect(() => roundOnePairs(4, "fold")).toThrow(/premise: round 1 of a fresh field of 4 pairs, but the engine refused it \(rematch\)/);
+    });
+
+    it("the pair: the same call without the refusal is its four-player hint, and the guard is only in front of a refusal", () => {
+      expect(roundOnePairs(4, "fold"), "the real engine pairs a fresh field of 4").toEqual([
+        [1, 3],
+        [2, 4],
+      ]);
+      expect(vi.mocked(pairRound)).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe("swiss-pairing.ts stays client-safe", () => {
@@ -78,5 +111,26 @@ describe("swiss-pairing.ts stays client-safe", () => {
     // Positive half first, so a broken extractor cannot pass the negative vacuously.
     expect(specifiers).toContain("@seazn/engine/scheduling/swiss");
     expect(specifiers).not.toContain("@seazn/engine/scheduling");
+  });
+});
+
+describe("swiss-pairing.ts loads under node --experimental-strip-types", () => {
+  // scripts/smoke/suites/swissKnockout.ts imports this file with no build step, and index.ts imports every suite, so one
+  // construct strip-only mode cannot erase (a constructor parameter property, an enum) stops the WHOLE smoke at load with
+  // ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX. vitest transforms TypeScript itself and tsc accepts it: only the real loader sees it.
+  it("importing it with the smoke's loader answers its exports, and the premise error keeps its fields", () => {
+    const file = join(__dirname, "..", "swiss-pairing.ts");
+    const out = execFileSync(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        "--input-type=module",
+        "-e",
+        `const m = await import(${JSON.stringify(file)}); const e = new m.SwissRoundOnePremiseError(4, "rematch"); ` +
+          `console.log(JSON.stringify([typeof m.roundOnePairs, e.fieldSize, e.reason, e.name, e instanceof Error]));`,
+      ],
+      { cwd: join(__dirname, "..", "..", ".."), encoding: "utf8", timeout: 60_000 },
+    );
+    expect(JSON.parse(out.trim().split("\n").pop()!)).toEqual(["function", 4, "rematch", "SwissRoundOnePremiseError", true]);
   });
 });

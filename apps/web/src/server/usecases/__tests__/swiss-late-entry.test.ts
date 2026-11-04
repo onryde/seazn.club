@@ -21,6 +21,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
 import { appendEventInTx } from "@/server/engine-db/append-event";
 import { forfeitPlayedFacts } from "@/server/engine-db/forfeit-played";
+import { stageTablePoints } from "@/server/engine-db/competition";
 import type { StandingsSnapshotRow } from "@/server/public-site/data";
 import { createCompetition } from "../competitions";
 import { ensureDeviceLinks } from "../device-links";
@@ -451,6 +452,8 @@ for (const s of SPORTS) {
         ],
         { played: new Set(), byes: hist.byes },
       );
+      // W3 (engine 2.0.0): a round or a refusal; three players with one bye on record still have a legal round.
+      if (!odd.ok) throw new Error(`premise: the three-player field is pairable (${odd.reason})`);
       expect(odd.bye).toBe(holder);
     });
 
@@ -711,13 +714,17 @@ for (const s of SPORTS) {
       expect(await rowsOf(rig.stageId)).toEqual(before);
       expect(await ledgerState(rig.divisionId)).toEqual(ledger);
       // Withdraw is the way back: the board walks over to the holder.
-      const scoreBefore = (await historyOf(rig)).score.get(holder) ?? 0;
+      // W3 app-B T5 (X-SW-19): the Pair's score is the stage's table points (since T5), and this reads them AS the table's, not
+      // through the Pair: the holder's walkover is read there.
+      const pairPoints = async (id: string) => (await withTenant(rig.auth.orgId, (tx) => stageTablePoints(tx, rig.stageId))).points.get(id) ?? 0;
+      const scoreBefore = await pairPoints(holder);
       await withdrawEntrantCascade(rig.auth, late.id);
       const board = (await rowsOf(rig.stageId)).find((f) => f.id === late.late_entry!.new_board!.fixture_id)!;
       expect(board.outcome).toMatchObject({ kind: "award", winner: holder });
       // A win without play bars the pairing-allocated bye (P-A4, FIDE C.04.1(d)), and the walkover pays the win.
       const hist = await historyOf(rig);
-      expect(hist.score.get(holder), "the walkover pays the holder a win (rulebook §4: 1 point)").toBe(scoreBefore + 1);
+      const win = mod(s.sport).tablePointsRule(mod(s.sport).configSchema.parse(mod(s.sport).variants[s.variant]), "swiss").win.regulation;
+      expect(await pairPoints(holder), "the table's points: the walkover pays the holder the win (rulebook §4: a bye / walkover is a win)").toBe(scoreBefore + win);
       expect(hist.byes.has(holder)).toBe(true);
     });
 

@@ -26,7 +26,7 @@ import type {
   SolveBuildRequest,
   SolveBuildResponse,
 } from "./generated/scheduler.ts";
-import { SchedulerServiceClient, SolveStatus } from "./generated/scheduler.ts";
+import { RoundBarrier, SchedulerServiceClient, SolveStatus } from "./generated/scheduler.ts";
 import { log } from "./logger.ts";
 import { PlacementError, type PlacementFailure } from "./placement-error.ts";
 
@@ -161,6 +161,14 @@ function newClientFor(host: string): SchedulerServiceClientType {
   return new SchedulerServiceClient(host, grpc.credentials.createInsecure());
 }
 
+/** The engine's `"start" | "end"` barrier -> the wire enum. Absent is UNSPECIFIED, which the service reads as the C1 start
+ *  floor (the proto's own comment), so a sequence that carries no key and one that says `"start"` place alike. */
+function roundBarrierToWire(barrier: "start" | "end" | undefined): RoundBarrier {
+  if (barrier === "end") return RoundBarrier.ROUND_BARRIER_END;
+  if (barrier === "start") return RoundBarrier.ROUND_BARRIER_START;
+  return RoundBarrier.ROUND_BARRIER_UNSPECIFIED;
+}
+
 /**
  * Build a fully-populated request. Every field is set explicitly: the generated
  * encoder reads the message directly, so a `SolveBuildInput` cast at the call
@@ -180,7 +188,7 @@ function toRequest(input: SolveBuildInput, requestId: string, indices: IndexSpac
     // C10. Declared bound for every `personIndices` value below, exactly
     // `entrantCount`'s role one namespace over.
     personCount: indices.personCount,
-    fixtures: input.fixtures.map(({ entrantIds, divisionId, roundNo, people, allowedCourts }) => ({
+    fixtures: input.fixtures.map(({ entrantIds, divisionId, roundNo, people, allowedCourts, roundBarrier, unpairedRoundSlot, roundGapMinutes, roundsPerDayCap }) => ({
       entrantIndices: entrantIds.map((entrantId) => indices.entrantIndexOf(entrantId)),
       divisionIndex: indices.divisionIndexOf(divisionId),
       // C1. Straight passthrough — `round` is an opaque ordering key, not an
@@ -196,6 +204,16 @@ function toRequest(input: SolveBuildInput, requestId: string, indices: IndexSpac
       // absent: an empty repeated field is what the wire reads as
       // unconstrained.
       allowedCourtIndices: (allowedCourts ?? []).map((court) => indices.courtIndexOf(court)),
+      // X-SW-31 / rulings 255-256 (W3 Swiss). Straight passthrough, the engine's `build.ts` being the one place that
+      // decides whether a sequence carries any of these (see `SolveBuildInput.fixtures`): `roundBarrier` beside a
+      // forwarded `roundNo` only, the gap only beside an END above 0, the cap only beside a zone above 0, the flag only
+      // on a Swiss shell with no entrant and no person. Absent stays the proto3 default (UNSPECIFIED / false / 0), which
+      // the service reads as "no key" - a request from a caller that sets none of them is byte-identical to one sent
+      // before these fields existed.
+      roundBarrier: roundBarrierToWire(roundBarrier),
+      unpairedRoundSlot: unpairedRoundSlot ?? false,
+      roundGapMinutes: roundGapMinutes ?? 0,
+      roundsPerDayCap: roundsPerDayCap ?? 0,
     })),
     slots: input.grid.slots.map(({ court, startAtMs, dayIndex }) => ({
       courtIndex: indices.courtIndexOf(court),
@@ -218,7 +236,7 @@ function toRequest(input: SolveBuildInput, requestId: string, indices: IndexSpac
     // every other id on this type, and `entrantIndexOf` resolves them exactly
     // as `fixtures[].entrantIds` are resolved above (see `buildIndexSpace`,
     // which registers `existing[].entrantIds` into the same total map).
-    existing: input.existing.map(({ court, startAtMs, entrantIds, ruleGroupIndices, roundNo }) => ({
+    existing: input.existing.map(({ court, startAtMs, entrantIds, ruleGroupIndices, roundNo, roundBarrier, dayIndex }) => ({
       courtIndex: indices.courtIndexOf(court),
       startAtMs,
       ruleGroupIndices: [...(ruleGroupIndices ?? [])],
@@ -226,6 +244,11 @@ function toRequest(input: SolveBuildInput, requestId: string, indices: IndexSpac
       // C1 (2026-08-12 round-order design). Straight passthrough, same as
       // `fixtures[].round` above.
       round: roundNo,
+      // X-SW-31: the barrier of the sequence this pin's round was forwarded into (a pin carries no gap or cap of its own;
+      // it binds by its sequence's, read off the fixtures), and the pin's calendar day in `slots[].dayIndex`'s space.
+      // `dayIndex` is `optional` on the wire because day 0 is a real day: absent stays absent, never 0.
+      roundBarrier: roundBarrierToWire(roundBarrier),
+      dayIndex,
     })),
     dependencies: input.dependencies.map(({ beforeFixtureId, afterFixtureId }) => ({
       beforeIndex: indices.fixtureIndexOf(beforeFixtureId),

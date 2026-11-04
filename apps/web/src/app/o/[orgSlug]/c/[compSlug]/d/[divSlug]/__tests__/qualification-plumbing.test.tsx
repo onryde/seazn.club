@@ -132,9 +132,21 @@ import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rul
 
 /** The division's live cfg (the `getDivision` mock's). */
 const DIVISION_CFG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 } };
+const GENERIC_MODULE = builtinModules.find((m) => m.key === "generic")!;
+
+/** The en word the ui catalog gives the engine's tie-break rule `key`. `diff` and `for` take the sport's ledger word:
+ *  `suffix` "" is the plain "difference" / "total scored", "Goals" the "goal difference" / "goals scored". The ORDER a
+ *  test expects is never typed: it is `defaultOrderOf(module, "swiss")` (the engine's own declaration — engine pr18
+ *  moved Buchholz Cut-1 ahead of difference and the 1.1.0 list this file once typed went stale), worded through here. */
+const ruleWord = (key: string, suffix = ""): string => {
+  const catalogKey = `div.detail.tiebreak.rule.${key}${key === "diff" || key === "for" ? suffix : ""}`;
+  const word = (enUi as Record<string, string>)[catalogKey];
+  expect(word, `premise: the ui catalog words the engine's rule "${key}" (${catalogKey})`).toBeTruthy();
+  return word!;
+};
 /** The rules the one loader serves for a stage of `kind` (W2d Task 9, `listStageQualificationMeta` → `table_rules`):
  *  the order the console ranks, captions and qualifies the table by. */
-const rulesFor = (kind: string, module_: AnySportModule = builtinModules.find((m) => m.key === "generic")!, divisionConfig: unknown = DIVISION_CFG) =>
+const rulesFor = (kind: string, module_: AnySportModule = GENERIC_MODULE, divisionConfig: unknown = DIVISION_CFG) =>
   unpinnedRulesDoc({ module: module_, kind, divisionConfig });
 
 /** The en captions of pools A and B under `stage`: `table.poolLabel` over the
@@ -322,12 +334,16 @@ describe("organiser console — the standings tables get the same qualification 
     expect(statuses(qualification!)).toEqual({ A: "win_k", B: "needs_help", C: "needs_help", D: "needs_help" });
     // The popover's what-if names the RIVAL by the page's entrant names — an
     // entrant id here means the page handed the builder no names.
-    expect(qualification!.rows.A!.whatIf).toBe(
-      "If you finish level on points with Cy Swiss, you stay ahead on difference even after a heavy defeat.",
-    );
-    expect(qualification!.rows.C!.whatIf).toBe(
-      "If you finish level on points with Bo Swiss, difference decides. Now: you -1, Bo Swiss 0.",
-    );
+    // The rule it names is the first one after points in the engine's own Swiss order for this module (derived, not
+    // typed). Premise: that rule is not a goal ledger one — Buchholz Cut-1 has no per-row margin, so the builder says the
+    // plain "{rule} decides" sentence; a ledger rule would be the margin sentences instead and this test would say so.
+    const order = defaultOrderOf(GENERIC_MODULE, "swiss");
+    expect(order[0], "premise: points first").toBe("points");
+    expect(["diff", "for"], "premise: the second rule is not a ledger rule").not.toContain(order[1]);
+    const decides = (rival: string) =>
+      enPublic["table.qual.whatIf.rule"].replace("{rival}", rival).replace("{rule}", ruleWord(order[1]!));
+    expect(qualification!.rows.A!.whatIf).toBe(decides(NAMES.C!));
+    expect(qualification!.rows.C!.whatIf).toBe(decides(NAMES.B!));
     // …and the table draws it.
     expect(html).toContain('data-testid="qual-cut"');
     expect(html).toContain('data-testid="qual-legend"');
@@ -561,10 +577,14 @@ describe("organiser console — the tie-break cascade caption says the sport's w
   it("generic: plain 'difference' and 'total scored', never the goal/run catch-all", async () => {
     swissScene();
     captionMeta(GENERIC, DIVISION_CFG);
-    expect(defaultOrderOf(GENERIC), "premise: generic splits on diff then for").toEqual(
-      expect.arrayContaining(["diff", "for"]),
-    );
-    expect(await cascadeCaption()).toEqual(["points", "difference", "total scored", "head-to-head", "drawing of lots"]);
+    const order = defaultOrderOf(GENERIC, "swiss");
+    expect(order, "premise: generic splits on diff and for").toEqual(expect.arrayContaining(["diff", "for"]));
+    const caption = await cascadeCaption();
+    // the sport's word, whatever the order: plain "difference" / "total scored", never the goal/run catch-all
+    expect(caption[order.indexOf("diff")]).toBe("difference");
+    expect(caption[order.indexOf("for")]).toBe("total scored");
+    // and the whole cascade is the engine's own Swiss order, rule for rule
+    expect(caption).toEqual(order.map((key) => ruleWord(key)));
   });
 
   it("hockey: 'goal difference' and 'goals scored'", async () => {
@@ -572,7 +592,12 @@ describe("organiser console — the tie-break cascade caption says the sport's w
     const hockey = builtinModules.find((m) => m.key === "hockey")!;
     vi.mocked(resolveModule).mockImplementation(() => hockey);
     captionMeta(hockey, variantCfg(hockey));
-    expect(await cascadeCaption()).toEqual(["points", "goal difference", "goals scored", "head-to-head", "seeding"]);
+    const order = defaultOrderOf(hockey, "swiss");
+    expect(order, "premise: hockey splits on diff and for").toEqual(expect.arrayContaining(["diff", "for"]));
+    const caption = await cascadeCaption();
+    expect(caption[order.indexOf("diff")]).toBe("goal difference");
+    expect(caption[order.indexOf("for")]).toBe("goals scored");
+    expect(caption).toEqual(order.map((key) => ruleWord(key, "Goals")));
   });
 
   it("a French viewer of a hockey division reads the French sport word", async () => {
@@ -582,6 +607,9 @@ describe("organiser console — the tie-break cascade caption says the sport's w
     vi.mocked(resolveModule).mockImplementation(() => hockey);
     captionMeta(hockey, variantCfg(hockey));
     const caption = await cascadeCaption();
-    expect(caption.slice(1, 3)).toEqual(["différence de buts", "buts marqués"]);
+    const order = defaultOrderOf(hockey, "swiss");
+    expect(order, "premise: hockey splits on diff and for").toEqual(expect.arrayContaining(["diff", "for"]));
+    expect(caption[order.indexOf("diff")]).toBe("différence de buts");
+    expect(caption[order.indexOf("for")]).toBe("buts marqués");
   });
 });

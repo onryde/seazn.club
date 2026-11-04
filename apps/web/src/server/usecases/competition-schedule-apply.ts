@@ -129,12 +129,14 @@ import {
   peopleByEntrant,
   roundRobinSequenceKey,
   roundRobinSequenceSiblings,
+  roundFieldsOf,
   roundRobinStageIds,
   scopeLocked,
   siblingAssignments,
   toAssignment,
   type FixtureLite,
   type LockedScope,
+  type RoundFields,
   type ScheduleSettingsOut,
 } from "./schedule";
 import { isBlocking, schedulingAiModel, type PackSettings } from "./schedule-ai";
@@ -509,9 +511,11 @@ export async function applyCompetitionSchedule(
     // Resolved once, up front, and looked up per fixture below (mirrors
     // `applySchedule`'s single-division `roundRobin` binding — see
     // `schedule.ts`, the reference implementation for this wiring).
-    const roundRobinByDivision = new Map<string, ReadonlySet<string>>(
+    // Each division's Map carries its Swiss stages' round rules (X-SW-31, rulings 255-256) from that division's
+    // OWN settings, so the divisions of one run never read each other's rest or cap.
+    const roundRobinByDivision = new Map<string, ReadonlyMap<string, RoundFields>>(
       await Promise.all(
-        order.map(async (d) => [d.id, await roundRobinStageIds(tx, d.id)] as const),
+        order.map(async (d) => [d.id, await roundRobinStageIds(tx, d.id, d.settings)] as const),
       ),
     );
 
@@ -557,7 +561,7 @@ export async function applyCompetitionSchedule(
           // one — same defect this whole field exists to prevent, one level
           // up.
           stageId: f.stage_id,
-          ...(roundRobinByDivision.get(d.id)?.has(f.stage_id) ? { roundNo: f.round_no } : {}),
+          ...roundFieldsOf(roundRobinByDivision.get(d.id), f),
         };
       }),
     );

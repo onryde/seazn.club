@@ -23,6 +23,7 @@ import { publicScheduleCopy, publicWatchCopy } from "@/server/public-site/schedu
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import { loadDivisionWatch } from "@/server/usecases/external-play-read";
 import { StandingsTable } from "@/components/public-site/standings-table";
+import { swissRowFactsFor } from "@/server/public-site/swiss-row-facts";
 import { inTheField } from "@/lib/entrant-field";
 import { Bracket } from "@/components/public-site/bracket";
 import { ResultsMatrix } from "@/components/public-site/results-matrix";
@@ -341,6 +342,8 @@ export default async function DivisionHomePage({ params }: Props) {
                     dict={dict}
                     qualification={qualification}
                     rules={stage.table_rules}
+                    swissFacts={swissRowFactsFor(stage, fixtures, snap.rows as StandingsRow[])}
+                    stageKind={stage.kind}
                     locale={orgLocale}
                     tz={tz}
                   />

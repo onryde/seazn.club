@@ -305,6 +305,8 @@ export const TIEBREAKER_KEYS = [
   "h2h_exclusion",
   "matches_played",
   "field_goals",
+  // W3 (engine 2.0.0): a Swiss tie-break — the opponents' goal difference.
+  "opp_diff",
 ] as const;
 
 // Compile-time, BIDIRECTIONAL. Left as declarations rather than assertions in

@@ -36,7 +36,8 @@ export type SwissRefusalCode =
   | "SWISS_FINISH_ROUND_UNDECIDED"
   | "SWISS_FINISH_NOTHING_PLAYED"
   | "STAGE_NOT_SWISS"
-  | "SWISS_REQUESTED_BYES_DEFERRED";
+  | "SWISS_REQUESTED_BYES_DEFERRED"
+  | "SWISS_NO_LEGAL_PAIRING";
 
 /** W3 T18 (RB3-7(c), X-SW-18): the sentence a stage config naming `requestedByes` is refused with. A constant of its own
  *  because `api-v1/schemas.ts` puts it on the key's `z.never({ error })` and `api-v1/http.ts` recognises the zod issue by
@@ -173,6 +174,17 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
     status: 400,
     message: SWISS_REQUESTED_BYES_DEFERRED_MESSAGE,
     key: "swiss.refusal.SWISS_REQUESTED_BYES_DEFERRED",
+  },
+  // W3 app-B T1 (X-SW-3, engine 2.0.0 `pairRound`'s `{ ok: false, code: "SWISS_NO_LEGAL_PAIRING" }`): Pair next on a round
+  // with no legal pairing seats nobody and says so, instead of the "nothing new" the empty round used to read as. 422 as
+  // sent (re-pressing Pair next changes nothing), 409 when Finish is the way out (`swissRefusal(code, details,
+  // { resolvable: finishState.canFinish })`) — the `SWISS_ROUNDS_ABOVE_MAX` split. This sentence names no reason and no
+  // recovery: the reason-specific sentences and the Finish action are Task 4's.
+  SWISS_NO_LEGAL_PAIRING: {
+    status: 422,
+    resolvableStatus: 409,
+    message: "This round can't be paired: no legal pairing is left for these players.",
+    key: "swiss.refusal.SWISS_NO_LEGAL_PAIRING",
   },
 };
 

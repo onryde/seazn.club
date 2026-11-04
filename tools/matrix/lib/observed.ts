@@ -34,6 +34,12 @@ export interface ObservedFixture {
   extKey?: string | null;
   /** W1-driving Task 6: the product flagged this row its stage's final. */
   isFinal?: boolean;
+  /** W3 app-B Task 6 (rulebook P-A2, X-SW-15): the engine reads this two-seated board as NOT PLAYED - a double walkover,
+   *  or a forfeit `isUnplayedForfeit` calls unplayed (a walkover whatever was played, any other forfeit only before
+   *  play) - so its pair has not met and may legally be paired again. An engine-derived verdict carried as data, like
+   *  `declared`, set where the board is observed (scenarios/common.ts snapshot, model/state.ts) so I6 stays type-only.
+   *  Absent on a board that was played, and on one the observer could not read. */
+  unplayed?: true;
 }
 
 /** `rank`: null on a level table's rows, as the wire serves it (W2e Task 27, D11 b). */
@@ -42,7 +48,14 @@ export interface StandingsRowObs { entrantId: string; rank: number | null; point
  *  RefusedCall carries it (redacted) — the evidence a 5xx's cause is read
  *  from. Absent on an answered generate (and on the model's). */
 export interface GenerateObs { status: number; code: string | null; total: number; created: number; message?: string }
-export interface PairRoundObs { roundNo: number; seated: number }
+/** `refused` (W3 app-B Task 6): the code of the named refusal the product answered this round's Pair with
+ *  (SWISS_NO_LEGAL_PAIRING) - the round was REFUSED, not paired empty. Absent on every round the product answered 2xx,
+ *  so `seated === 0` with no `refused` is still the engine's empty success (SW-H1). */
+export interface PairRoundObs { roundNo: number; seated: number; refused?: string }
+/** W3 app-B Task 6: the organiser's recovery from a refused Swiss Pair - `POST /stages/{id}/swiss/finish` (finishSwissNow),
+ *  the answer or the refusal, redacted like a generate's. `finishedAfter` is k, the round whose standings became final
+ *  (null on a refusal). */
+export interface FinishObs { status: number; code: string | null; finishedAfter: number | null; shellsRemoved: number | null; message?: string }
 /** `seedProposal` (W1-driving Task 6): the next stage's draft proposal the
  *  /complete minted (usecases/stages.ts progressCompletedStage) — null when
  *  none was (the last stage, a refusal, a seeding failure). Optional so the
@@ -64,8 +77,12 @@ export interface CompleteObs { status: number; code: string | null; completed: b
  *  "short_plan" (W1-driving Task 8, T8-R2): an americano whose Start planned
  *  fewer rounds than the engine's planner lays out for its field and
  *  config.rounds — or none — every planned round decided: a format played
- *  short, never "drained". */
-export type LoopExit = "drained" | "cap" | "refused_generate" | "empty_pair_round" | "not_reached" | "refused_challenge" | "stalled_rounds" | "short_plan";
+ *  short, never "drained".
+ *  "finished_early" (W3 app-B Task 6): a Swiss whose Pair was refused SWISS_NO_LEGAL_PAIRING and whose organiser took the
+ *  recovery - Finish - which the product answered 2xx: the Swiss ended after its last complete round and the stage is
+ *  complete. A loop that ran to the end the product allows, so life-loop-bounded accepts it beside "drained". A Finish
+ *  that was refused is NOT this exit: the organiser is stuck, and that stays "refused_generate". */
+export type LoopExit = "drained" | "finished_early" | "cap" | "refused_generate" | "empty_pair_round" | "not_reached" | "refused_challenge" | "stalled_rounds" | "short_plan";
 
 export interface ObservedStage {
   id: string;
@@ -83,6 +100,8 @@ export interface ObservedStage {
   standings: { poolId: string | null; rows: StandingsRowObs[] }[];
   generates: GenerateObs[];
   pairRounds: PairRoundObs[];
+  /** W3 app-B Task 6: the Finish the play loop took after a refused Swiss Pair; absent when it took none. */
+  finish?: FinishObs;
   complete: CompleteObs | null;
   /** W1-driving Task 6 (PF-6): how this stage's play loop ended; null when it
    *  never ran. Optional: the model (lib/model/state.ts) has no play loop. */

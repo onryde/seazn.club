@@ -358,7 +358,9 @@ export function stageCompleted(observed: ObservedRun): CheckResult {
 export function loopBounded(rec: Recorder, observed: ObservedRun): CheckResult {
   const open = observed.stages.flatMap((s) => s.fixtures).filter((f) => !isTerminal(f.status));
   return assertion("life-loop-bounded", [
-    { ok: rec.exit === "drained", note: `play loop exited ${rec.exit ?? "never"}` },
+    // W3 app-B Task 6: a Swiss finished by the organiser (its Pair refused SWISS_NO_LEGAL_PAIRING, Finish answered 2xx) ran to the
+    // end the product allows. A Finish the product refused is "refused_generate" and stays red.
+    { ok: rec.exit === "drained" || rec.exit === "finished_early", note: `play loop exited ${rec.exit ?? "never"}` },
     { ok: open.length === 0, note: `${open.length} fixture(s) left unfinished: ${open.slice(0, 8).map((f) => `${f.id} ${f.status}`).join(", ")}` },
   ]);
 }

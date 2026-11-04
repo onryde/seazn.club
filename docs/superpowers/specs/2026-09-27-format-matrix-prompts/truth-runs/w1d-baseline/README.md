@@ -83,6 +83,8 @@ The two `swiss_playoff` cells `swiss_playoff|boardgame|blitz|R4` and `swiss_play
 
 The override is bound to this baseline and retires at the re-baseline that follows the fix (the guards below fire then, not when the fix merges). The block records the workflow run, the tag and the tag's commit it was written for (`workflowRun`, `tag`, `tagCommit`), and `catalogue/baseline.json` refuses it (`BaselineUnreadable`, exit 2 from `judge regression`) when the L3 it sits beside is another run, so a re-baselined L3 cannot silently keep forcing the three cells red; handed any other `--baseline`, the judge forces nothing. It also refuses any id list but ruling 70's exact three. A test fails once none of the three cells is red in the committed baseline. **The fix for SW-H1 removes `ruling70` (and `RULING_70_IDS` in `lib/pr-sample.ts`) and re-baselines L3.**
 
+**Retired 2026-11-04** (W3 Swiss App B, PR #1121): the SW-H1 fix landed (engine 2.x `pairRound` looks ahead; `swissGen` refuses a round it cannot pair with `SWISS_NO_LEGAL_PAIRING`), and truth run 41818942253 (`truth-runs/w3-final/`) reads "paired nobody" on no case, with all three cells `works`. `catalogue/baseline.json` now names `w3-final/ci/L3/results.json` and carries no `ruling70`; the live reader refuses the key by name. This record's own `baseline.json` keeps its block, byte for byte, as the history the ruling was made on.
+
 ## Screenshots
 
 The merged artifact carries no pictures by design. Each browser shard's own artifact does: `shard-L1-1` to `shard-L1-8` and `shard-L2-1`, `shard-L2-2` of workflow run 37346206686 (and the same names for the other two runs), until 2027-01-03:

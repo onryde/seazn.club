@@ -16,7 +16,8 @@ import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 // contract between a schedule-lock refusal and this panel; the SENTENCE is not.
 import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
-import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
+import { isSwissRefusalCode } from "@/lib/swiss-refusals";
+import { swissRefusalText } from "@/lib/swiss-refusal-text";
 import type { MessageKey } from "@/lib/messages";
 
 interface HistoryRow {
@@ -184,8 +185,10 @@ export function HistoryPanel({
       } else if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) {
         // W3 T5 (X-SW-28): an Undo, Redo or Restore over a Swiss round with a
         // started match, or across an undo barrier (a late player the organiser
-        // added, a change to the round count). Said off the code, like the rest.
-        setError(msg(swissRefusalKey(err.code)));
+        // added, a change to the round count). Said off the code, like the rest, through the one text function every other
+        // door uses (`swissRefusalText`), so a Swiss refusal whose body carries details (SWISS_NO_LEGAL_PAIRING names the
+        // round and the reason) says them here too instead of the generic sentence.
+        setError(swissRefusalText(err.code, err.extra, msg, plural));
       } else {
         // Deliberately NOT blanket-suppressed. Every refusal this client can
         // recognise now has its own sentence; what is left is the unanticipated

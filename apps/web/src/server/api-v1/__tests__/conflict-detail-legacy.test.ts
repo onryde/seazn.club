@@ -144,6 +144,26 @@ const CASES: Record<ConflictDetailKind, { detail: ConflictDetail; expected: stri
     detail: { kind: "round_order_same_day", roundNo: 2, otherRoundNo: 1, day: "2026-08-01" },
     expected: "round 2 starts before round 1 on the same day (2026-08-01)",
   },
+  // W3 app-B T1 (X-SW-31; engine 2.0.0's 29th-32nd kinds): the Swiss round barrier and the rounds-per-day cap.
+  // Each kind's fields are the ones the engine sets (calendar.ts: `roundEndConflicts`, `roundsPerDayConflicts`, and the
+  // placer's `no_slot_round_barrier` / `no_slot_rounds_per_day` refusals). Like court_tag_mismatch, they postdate the
+  // pre-C3 baseline, so this is new prose with nothing historical to reproduce.
+  round_order_end: {
+    detail: { kind: "round_order_end", roundNo: 2, otherRoundNo: 1 },
+    expected: "round 2 starts before round 1 has ended",
+  },
+  no_slot_round_barrier: {
+    detail: { kind: "no_slot_round_barrier", roundNo: 2, otherRoundNo: 3, otherFixtureId: "f9" },
+    expected: "no slot where round 2 ends before round 3's f9 starts",
+  },
+  rounds_per_day: {
+    detail: { kind: "rounds_per_day", day: "2026-08-01", requiredCount: 2 },
+    expected: "more than 2 rounds on 2026-08-01",
+  },
+  no_slot_rounds_per_day: {
+    detail: { kind: "no_slot_rounds_per_day", roundNo: 3, requiredCount: 2 },
+    expected: "no day left for round 3 within the 2 rounds/day cap",
+  },
   no_slot_lattice: {
     detail: { kind: "no_slot_lattice" },
     expected: "no legal slot in the lattice",
@@ -263,6 +283,23 @@ describe("ScheduleConflict / AiPlanConflict — details round-trips through zod 
   });
 });
 
+describe("measured_count / measuredCount - a rounds_per_day breach's size survives both wire schemas (X-SW-31, ruling 256)", () => {
+  // zod strips an undeclared key silently (see the C3 comment above), so a count the usecase computes but a schema does not
+  // declare reaches no client: the sweep in schedule-swiss-round-barrier.test.ts reads the usecase's object, not the wire.
+  it("ScheduleConflict keeps measured_count, and leaves the key off a conflict that has none", () => {
+    const base = { fixture_id: "11111111-1111-4111-8111-111111111111", code: "warn.order" as const, blocking: true };
+    expect(ScheduleConflict.parse({ ...base, measured_count: 3 }).measured_count).toBe(3);
+    expect(Object.keys(ScheduleConflict.parse(base))).not.toContain("measured_count");
+  });
+
+  it("AiPlanConflict keeps measuredCount, and leaves the key off a conflict that has none", () => {
+    const element = AiPlanResponse.shape.warnings.element;
+    const base = { fixtureId: "11111111-1111-1111-1111-111111111111", reason: "order" };
+    expect(element.parse({ ...base, measuredCount: 3 }).measuredCount).toBe(3);
+    expect(Object.keys(element.parse(base))).not.toContain("measuredCount");
+  });
+});
+
 // ===========================================================================
 // 3. legacyVerifierConflict — the model's copy never carries `details`
 // ===========================================================================
@@ -295,6 +332,15 @@ describe("legacyVerifierConflict — the AI repair round's byte-identical copy",
     expect(out.rule).toBe("H6");
     expect(out.shortfallMinutes).toBe(15);
     expect(out.detail).toBe("starts before feeder f0 ends");
+  });
+
+  it("carries a `rounds_per_day` conflict's measuredCount (X-SW-31, ruling 256) to the model like the shortfall - and adds no key to a conflict without one", () => {
+    // The count is MEASURED beside the key (it is not part of identity), so the repair round must read it to tell a
+    // breach of three rounds from a breach of four. Taken from the rulebook's own example: cap 2, a day with 3 rounds.
+    const withCount = legacyVerifierConflict({ fixtureId: "f1", reason: "order" as const, measuredCount: 3 });
+    expect(withCount.measuredCount).toBe(3);
+    const withoutCount = legacyVerifierConflict({ fixtureId: "f1", reason: "order" as const, shortfallMinutes: 15 });
+    expect(Object.keys(withoutCount)).toEqual(["fixtureId", "reason", "shortfallMinutes"]);
   });
 
   it("rebuilds the pre-C3 key order — `detail` sits where it always did, not wherever the destructure left it (review finding 4)", () => {

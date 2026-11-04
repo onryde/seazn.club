@@ -15,7 +15,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { AUDIT_DIR, OUTCOMES, REPO_ROOT, buildLedger, parseVerdicts, readAudit, type Ledger, type LedgerEntry } from "./audit-ledger.ts";
-import { BaselineUnreadable, baselineOverrides, ruling70AppliesTo } from "./pr-sample.ts";
+import { ruling70AppliesTo, type Ruling70Overrides } from "./pr-sample.ts";
 import { redact } from "./redact.ts";
 import { GLYPH, LAYERS } from "./results.ts";
 import { CATALOGUE_DIR, isClean, loadCatalogue, parseTriage, routeOf, type GapRouting, type NewGaps, type TriageJson, type TriageRules } from "./triage.ts";
@@ -30,7 +30,7 @@ export const DEFAULT_DESIGN = resolve(REPO_ROOT, "docs/superpowers/specs/2026-09
 export const BACKLOG_REFUSALS = [
   // the writer, over its input
   "NoCases", "TriageInconsistent", "LedgerHasFindings", "DesignRowMissing", "UnknownWave", "NewGapUnbacked", "NewGapWaveDisagrees",
-  "CarryUnknown", "CarryMissing", "CarryPlaceholder", "CarryWaveDisagrees", "CarrySourceMissing", "CarrySourcesDisagree", "CarryEmpty", "CarryShapeUnknown",
+  "CarryUnknown", "CarryMissing", "CarryPlaceholder", "CarryWaveDisagrees", "CarrySourceMissing", "CarrySourcesDisagree", "CarryEmpty",
   // the loader, over the files
   "TriageUnreadable", "TriageNotBaseline", "ShaNotBaseline", "BaselineUnreadable", "CatalogueUnreadable", "DesignUnreadable",
 ] as const;
@@ -112,9 +112,10 @@ export interface BacklogInput {
   cuts: Cuts;
   /** Every case of the three committed layers: where it ran, the state it ended in and (a 🚫) why. The cut is a subset of L3's. */
   cases: BaselineCase[];
-  /** Owner ruling 70's cells: the `ruling70.ids` of catalogue/baseline.json, in its order, which is the list `judge regression` applies (and
-   *  the weekly diff marks). Empty once the SW-H1 fix retires the block. The held set and its figure derive from THIS and the committed L3,
-   *  never from the dispatch cut's state flips (PR-B review m3): the two are different sources and the judge reads this one. */
+  /** Owner ruling 70's cells: the `ruling70.ids` of the baseline.json this backlog's baseline directory carries (the W1d record: the list
+   *  `judge regression` applied to the W1d L3), in its order. W3 retired the live block with the SW-H1 fix; the record keeps its own, as
+   *  history. Empty for a baseline directory whose record carries none. The held set and its figure derive from THIS and the committed L3,
+   *  never from the dispatch cut's state flips (PR-B review m3): the two are different sources and the judge read this one. */
   ruling70: readonly string[];
   /** The design document's text: section 8 is read by designWaves. */
   design: string;
@@ -239,21 +240,11 @@ function groupOf(triage: TriageJson, gap: string, carry: string): TriageJson["ga
   return g;
 }
 
-/** The triage rows of the named cases, or the refusal that one of them is keyed to nothing. */
-function rowsOf(triage: TriageJson, ids: readonly string[], carry: string): TriageJson["rows"] {
-  return ids.map((id) => {
-    const row = triage.rows.find((r) => r.caseId === id);
-    if (row === undefined) throw refuse("CarrySourceMissing", carry, `the triage keys ${id} to no gap`);
-    return row;
-  });
-}
-
-/** Owner ruling 70's cells (the list `judge regression` applies), and those of them the committed L3 does not have red: only `judge regression`
- *  holds those red, so the triage counts none of them. The list is baseline.json's, never the dispatch cut's flips (PR-B review m3): the held
- *  figure describes what the judge applies. But the carry says these cells "flipped between works and red across the dispatches", a claim about
- *  the cut made from the list, so the two must name the same cells or the writer refuses (PR-B re-review I2): a sentence that names a cell the
- *  cut never flipped, or leaves out one it did, is a lie the writer will not print. An empty list is left to the carry's own CarryEmpty.
- *  `label` names the reader in a refusal. */
+/** Owner ruling 70's cells (the list `judge regression` applied to the W1d L3), and those of them the committed L3 does not have red: only
+ *  `judge regression` held those red, so the triage counts none of them. The list is the record's baseline.json, never the dispatch cut's
+ *  flips (PR-B review m3): the held figure describes what the judge applied. The ruling was made on the cut ("flipped between works and red
+ *  across the dispatches"), so the two must name the same cells or the writer refuses (PR-B re-review I2): a record that names a cell the cut
+ *  never flipped, or leaves out one it did, is not the record of that ruling. `label` names the reader in a refusal. */
 function ruledCells(input: BacklogInput, label: string): { cells: readonly string[]; held: { id: string; state: string }[] } {
   const cells = input.ruling70;
   if (cells.length > 0) {
@@ -266,7 +257,7 @@ function ruledCells(input: BacklogInput, label: string): { cells: readonly strin
         ...cutOnly.map((id) => `the dispatch cut flips ${code(id)}, which baseline.json's ruling70 does not list`),
         ...listOnly.map((id) => `baseline.json's ruling70 lists ${code(id)}, which the dispatch cut does not flip`),
       ];
-      throw refuse("CarrySourcesDisagree", label, `${said.join("; ")} (ruling70: ${list(cells.map(code))}; flipped in the cut: ${list(flipping.map(code))}); the carry says the ruling's cells flipped across the dispatches, so the two must name the same cells`);
+      throw refuse("CarrySourcesDisagree", label, `${said.join("; ")} (ruling70: ${list(cells.map(code))}; flipped in the cut: ${list(flipping.map(code))}); the ruling was made on the cells the dispatches flipped, so the two must name the same cells`);
     }
   }
   const l3 = new Map(input.cases.filter((c) => c.layer === "L3").map((c) => [c.caseId, c.state]));
@@ -292,82 +283,12 @@ const routedWave = (reason: string): string => reason.split(": ")[0];
 
 /** A mexicano R4 cell: the one family the intermittent-500 carry is about. */
 const MEXICANO_R4 = /^mexicano\|[^|]+\|[^|]+\|R4$/;
-/** A swiss_playoff R4 cell: the family whose reason flips between two classes while its state and failing set stay put. */
-const SWISS_PLAYOFF_R4 = /^swiss_playoff\|[^|]+\|[^|]+\|R4$/;
-
-type ReasonClass = "SW-H1" | "stall" | null;
-/** The swiss_playoff R4 cells of the dispatch cut that stay red with ONE failing set while their reason flips between the two classes, and
- *  each cell's class per dispatch. A cell that also changes its state or its failing set is no cell of this shape, and a reason of a third
- *  class is not printed as a guess: each is refused by name. `carry` is the reader named in a refusal. */
-function swissFlips(cuts: Cuts, carry: string): { flips: string[]; classes: Map<string, ReasonClass[]> } {
-  const classOf = (reason: string): ReasonClass => (/\(SW-H1\)|paired nobody/.test(reason) ? "SW-H1" : /did not complete/.test(reason) ? "stall" : null);
-  const steady = cuts.ids.filter((id) => SWISS_PLAYOFF_R4.test(id));
-  // The carry says these cells change only their reason: a cell that also changes its state or its failing set is no cell of it.
-  for (const id of steady) {
-    const cs = perDispatch(cuts, id, carry);
-    if (!cs.every((c) => c.state === "red") || new Set(cs.map(failingOf)).size !== 1) {
-      throw refuse("CarryShapeUnknown", carry, `${id} changes its state or its failing-check set between the dispatches: this carry describes cells that change only their reason`);
-    }
-  }
-  const classes = new Map(steady.map((id) => [id, perDispatch(cuts, id, carry).map((c) => classOf(c.reason))]));
-  const flips = steady.filter((id) => classes.get(id)!.includes("SW-H1") && classes.get(id)!.includes("stall"));
-  if (flips.length === 0) throw refuse("CarryEmpty", carry, "no swiss_playoff R4 cell of the dispatch cut is red in every dispatch with one failing set and two reasons");
-  for (const id of steady) {
-    if (classes.get(id)!.includes(null)) throw refuse("CarryShapeUnknown", carry, `${id} has a reason that is neither the SW-H1 shape (paired nobody) nor the stall shape (did not complete): say which it is before the carry prints it`);
-  }
-  return { flips, classes };
-}
-
 const DERIVERS: Record<string, Deriver> = {
   // SC-P4: the ledger's own reading of the id the W2 prompt's trap 2 cites.
   "sc-p4-oracle": ({ input, anchor }) => {
     const e = input.ledger.entries.find((x) => x.id === anchor);
     if (e === undefined || e.outcome === null || e.evidence === null || e.wave === null) throw refuse("CarrySourceMissing", "sc-p4-oracle", `the ledger holds no outcome for ${anchor}`);
     return { values: { outcome: e.outcome, evidence: e.evidence }, waves: [e.wave] };
-  },
-
-  // Ruling 70: the cells of baseline.json's list, where the committed run keys SW-H1, and which of them it holds red that the committed run
-  // does not have red (T22 review m3; the list is the judge's, not the dispatch cut's flips: PR-B review m3).
-  "ruling-70": ({ input, anchor }) => {
-    const { cells, held } = ruledCells(input, "ruling-70");
-    if (cells.length === 0) throw refuse("CarryEmpty", "ruling-70", "baseline.json carries no ruling70 list, so `judge regression` holds nothing: remove this carry with the block");
-    const g = groupOf(input.triage, anchor, "ruling-70");
-    const keyedCells = g.caseIds.filter((id) => cells.includes(id));
-    const keyed = `${g.caseIds.length} cases of the committed run (${list(g.caseIds.map(code))}), of which ${keyedCells.length === 0 ? "none is" : `${list(keyedCells.map(code))} ${keyedCells.length === 1 ? "is" : "are"}`} one of the ruling's cells`;
-    const many = held.length > 1;
-    const rest = held.length === 0
-      ? "Every cell of the ruling is red in the committed run."
-      : `The ruling's other ${held.length} cell${many ? "s" : ""} (${list(held.map((h) => code(h.id)))}) ${many ? "are" : "is"} ${list([...new Set(held.map((h) => code(h.state)))])} in the committed run: the triage counts ${many ? "none of them" : "it nowhere"}, and only \`judge regression\` holds ${many ? "them" : "it"} red until the re-baseline.`;
-    return { values: { cells: list(cells.map(code)), keyed, held: rest }, waves: [g.wave] };
-  },
-
-  // The recommendation is prose with no number to derive; it still hangs on its anchor.
-  "p6-recommendation": () => ({ values: {}, waves: [] }),
-
-  // swiss_playoff R4: red in every dispatch with one failing set, the reason flips between two classes.
-  "swiss-playoff-reason-flip": ({ input }) => {
-    const { cuts, triage } = input;
-    const { flips, classes } = swissFlips(cuts, "swiss-playoff-reason-flip");
-    const ns = cuts.dispatches.map((d) => d.n);
-    const pattern = (id: string): string => classes.get(id)!.map((c, i) => `dispatch ${ns[i]} ${c}`).join(", ");
-    const patterns = [...new Set(flips.map(pattern))];
-    const flipsText = patterns.length === 1 ? patterns[0] : flips.map((id) => `${code(id)}: ${pattern(id)}`).join("; ");
-    const keyed = list(rowsOf(triage, flips, "swiss-playoff-reason-flip").map((row) => `${row.gap} (${code(row.caseId)})`));
-    return { values: { cells: list(flips.map(code)), flips: flipsText, keyed, committed: String(ns[ns.length - 1]) }, waves: [] };
-  },
-
-  // The same cells seen from the wave that owns the gaps the committed run keys them to (T22 review m8): a count of those gaps moves with
-  // the dispatch, and the carry that explains it sits in another wave's section. The owner wave and the carry's title are the carry's own.
-  "swiss-playoff-keyed-here": ({ input, waveOf }) => {
-    const { flips } = swissFlips(input.cuts, "swiss-playoff-keyed-here");
-    const rows = rowsOf(input.triage, flips, "swiss-playoff-keyed-here");
-    // The carry this one points at is in the file: DERIVERS holds its id, and deriveCarries refuses (CarryMissing) a file without it
-    // before any derivation runs (a test reaches that refusal).
-    const flip = input.carries.carries.find((c) => c.id === "swiss-playoff-reason-flip")!;
-    return {
-      values: { keyed: list(rows.map((r) => `${r.gap} (${code(r.caseId)})`)), gaps: list([...new Set(rows.map((r) => r.gap))]), owner: waveOf.get(flip.id)!, flipTitle: flip.title },
-      waves: rows.map((r) => r.wave),
-    };
   },
 
   // ST-G5: the field the rule's note describes, from the note itself.
@@ -643,28 +564,56 @@ const HarnessRunSchema = z.object({
   cases: z.array(z.object({ caseId: z.string().min(1), state: z.string().min(1), reason: z.string().optional() })),
 });
 
-/** baseline.json's ruling-70 ids, read by the baseline's own reader (the one `judge regression` applies, which refuses a block written for another
- *  run or tag), and held to the L3 run this backlog counts: a list that does not qualify that run holds nothing there. Empty when the file
- *  carries no block (retired with the SW-H1 fix). */
-function ruling70Of(catalogue: string, l3RunId: string): string[] {
-  let block: ReturnType<typeof baselineOverrides>;
-  try { block = baselineOverrides({ catalogue }); } catch (e) {
-    if (e instanceof BaselineUnreadable) throw new BacklogRefused("BaselineUnreadable", e.message);
-    throw e;
+/** A baseline record's ruling-70 block (W1d Task 21): the shape the live catalogue/baseline.json carried until W3 retired it. Only a RECORD
+ *  carries one now (truth-runs/w1d-baseline/baseline.json, byte for byte what the live file held before W2e), and the record is history: its
+ *  ids are held to the L3 the record counts, never to a constant (the ruling's list in code went with the live block). */
+const RecordBlock = z.strictObject({
+  note: z.string().min(1),
+  state: z.literal("red"),
+  cause: z.string().min(1),
+  gap: z.string().min(1),
+  wave: z.string().min(1),
+  workflowRun: z.number().int().positive(),
+  tag: z.string().min(1),
+  tagCommit: z.string().regex(/^[0-9a-f]{40}$/, "a full 40-hex commit"),
+  ids: z.array(z.string().min(1)).min(1),
+}) satisfies z.ZodType<Ruling70Overrides>;
+const RecordFile = z.object({ L3: z.string().min(1), ruling70: RecordBlock.optional() });
+
+/** The ruling-70 ids of the baseline record in `dir` (its baseline.json), held to the L3 run this backlog counts: the block must have been
+ *  written for that run (workflow run and tag commit), and every id must be a case of it, listed once — a block that qualifies another run,
+ *  or names a cell that run does not hold, holds nothing there. Empty when the record carries no block. */
+function ruling70Of(dir: string, l3: z.infer<typeof HarnessRunSchema>): string[] {
+  const file = join(dir, "baseline.json");
+  const say = (why: string): BacklogRefused => new BacklogRefused("BaselineUnreadable", `${file}: ${why}`);
+  let text: string;
+  try { text = readFileSync(file, "utf8"); } catch { throw say("it cannot be read"); }
+  let json: unknown;
+  try { json = JSON.parse(text); } catch { throw say("it is not JSON"); }
+  const parsed = RecordFile.safeParse(json);
+  if (!parsed.success) throw say(`the record's schema refuses it: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ")}`);
+  const block = parsed.data.ruling70;
+  if (block === undefined) return [];
+  if (!ruling70AppliesTo(block, l3.runId)) {
+    throw say(`its ruling70 was written for workflow run ${block.workflowRun} (tag ${block.tag}), and the L3 this backlog counts is ${l3.runId}: the held figure would describe a hold the judge did not apply to it`);
   }
-  if (block === null) return [];
-  if (!ruling70AppliesTo(block, l3RunId)) {
-    throw new BacklogRefused("BaselineUnreadable", `baseline.json's ruling70 was written for workflow run ${block.workflowRun}, and the L3 this backlog counts is ${l3RunId}: the held figure would describe a hold the judge does not apply to it`);
+  if (!block.tagCommit.startsWith(l3.harnessCommit)) {
+    throw say(`its ruling70 names tag ${block.tag} at ${block.tagCommit}, and the L3 this backlog counts was run from ${l3.harnessCommit}`);
+  }
+  const cases = new Set(l3.cases.map((c) => c.caseId));
+  const absent = block.ids.filter((id) => !cases.has(id));
+  const twice = block.ids.filter((id, i) => block.ids.indexOf(id) !== i);
+  if (absent.length + twice.length > 0) {
+    throw say(`its ruling70 lists ${[...absent.map((id) => `${code(id)}, which is no case of the L3 this backlog counts (${l3.runId})`), ...twice.map((id) => `${code(id)} twice`)].join("; ")}`);
   }
   return [...block.ids];
 }
 
 export interface LoadOptions { triage: string; sha: string; baseline?: string; design?: string; catalogue?: string }
 
-/** Where this backlog reads the ruling-70 block from. An explicit `catalogue` is the caller's (a test's fake, or a retired block). Else
- *  the baseline directory it COUNTS, when that directory carries the `baseline.json` it was the baseline under (the W1d baseline does:
- *  W2e Task 35 re-baselined the live catalogue/baseline.json to the W2e truth run, and this backlog is the W1d record, which the live
- *  block no longer qualifies); else the live catalogue's. Either way the block must qualify the L3 counted (`ruling70Of`). */
+/** Where this backlog reads the ruling-70 record from. An explicit `catalogue` is the caller's (a test's fake). Else the baseline directory it
+ *  COUNTS, when that directory carries the `baseline.json` it was the baseline under (the W1d baseline does); else the live catalogue's, which
+ *  carries no block since W3 (pr-sample.ts refuses one), so the list is empty. Either way the block must qualify the L3 counted (`ruling70Of`). */
 function ruling70Dir(baseline: string, catalogue: string | undefined): string {
   if (catalogue !== undefined) return catalogue;
   return existsSync(join(baseline, "baseline.json")) ? baseline : CATALOGUE_DIR;
@@ -709,5 +658,5 @@ export function loadBacklogInput(opts: LoadOptions): BacklogInput {
     throw new BacklogRefused("DesignUnreadable", `${design}: ${e instanceof Error ? e.message : String(e)}`);
   }
   const cases = runs.flatMap(({ layer, run }) => run.cases.map((c) => ({ layer, caseId: c.caseId, state: c.state, reason: c.reason ?? "" })));
-  return { sha: opts.sha, triage, ledger, newGaps: cat.newGaps, routing: cat.routing, rules: cat.rules, carries, cuts, cases, ruling70: ruling70Of(ruling70Dir(baseline, opts.catalogue), runs.find((r) => r.layer === "L3")!.run.runId), design: designText };
+  return { sha: opts.sha, triage, ledger, newGaps: cat.newGaps, routing: cat.routing, rules: cat.rules, carries, cuts, cases, ruling70: ruling70Of(ruling70Dir(baseline, opts.catalogue), runs.find((r) => r.layer === "L3")!.run), design: designText };
 }

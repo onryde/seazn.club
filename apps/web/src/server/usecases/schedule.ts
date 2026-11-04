@@ -32,6 +32,7 @@ import {
   dayKeyInTz,
   deltaConflicts,
   isBlockingConflict,
+  restFloor,
   roundOrderConflicts,
   slotFixtures,
   TIER_COUNT,
@@ -693,15 +694,137 @@ export const ROUND_SEQUENCE_STAGE_KINDS: readonly string[] = [...ROUND_ROBIN_STA
  * this set are still never compared with each other: the order key is
  * `(division, stage, pool)` (`roundRobinSequenceKey`, calendar.ts).
  *
- * WHAT IT ENFORCES is C1's rule and nothing stronger: a later round starts
- * no earlier than an earlier round STARTS (ties legal). A Swiss round really
- * needs the previous round to have ENDED; that end floor needs the engine's
- * three placement sides (CP-SAT model, greedy, verifier) and is not here.
+ * WHAT IT ENFORCES is C1's rule, and for a Swiss stage (X-SW-31) one rule more:
+ * a later round starts no earlier than an earlier round STARTS (ties legal) -
+ * and a SWISS round starts no earlier than the previous round ENDS, plus the
+ * division's minimum rest, with at most the per-player daily match cap in
+ * rounds on one day (owner rulings 255-256). The second half rides the SAME
+ * rows as the first: the value for each stage is its {@link RoundFields}, and
+ * every producer that stamps `roundNo` spreads them from this map in the same
+ * breath ({@link roundFieldsOf}), so no producer can carry the round and forget
+ * the barrier. That matters beyond the rule itself: the engine reads the three
+ * fields per row but requires them CONSTANT PER SEQUENCE and refuses a mixed
+ * sequence with CONFIG_INVALID (`roundRulesBySequence`), so one producer that
+ * forgot would turn every Swiss edit into a 422.
+ *
+ * Returns a Map (stage id -> fields, `{}` for league/group) rather than the Set
+ * it used to: `.has` and `.size` answer as before, and the value is what
+ * the Swiss stage's rows carry. `settings` is the division's schedule settings
+ * when the caller already holds them; read here when omitted and a Swiss stage
+ * needs them (the gap and the cap are division settings).
  */
-export async function roundRobinStageIds(tx: Tx, divisionId: string): Promise<Set<string>> {
-  const rows = await tx<{ id: string }[]>`
-    select id from stages where division_id = ${divisionId} and kind in ${tx(ROUND_SEQUENCE_STAGE_KINDS)}`;
-  return new Set(rows.map((r) => r.id));
+export async function roundRobinStageIds(
+  tx: Tx,
+  divisionId: string,
+  settings?: Pick<ScheduleSettingsOut, "config">,
+): Promise<Map<string, RoundFields>> {
+  const rows = await tx<{ id: string; kind: string }[]>`
+    select id, kind from stages where division_id = ${divisionId} and kind in ${tx(ROUND_SEQUENCE_STAGE_KINDS)}`;
+  // Read only when a stage needs it: a division with no Swiss stage never pays the second query.
+  const config =
+    rows.some((r) => roundBarrierFor(r.kind) !== undefined) ? (settings ?? (await loadSettings(tx, divisionId))).config : undefined;
+  return new Map(rows.map((r) => [r.id, roundFieldsFor(r.kind, config, divisionId)] as const));
+}
+
+/**
+ * X-SW-31, THE one helper: how a stage kind's round sequence is ordered. A Swiss
+ * stage's rounds are separated by an END barrier (round r+1 starts after round
+ * r's last board ends: each round seats every player once, so a later round
+ * cannot be paired, let alone played, before the earlier one is over); a
+ * league's or a group's rounds keep the C1 start floor (absent = "start"),
+ * because a round-robin's later boards are drawn up front and may overlap.
+ * Read by {@link roundFieldsFor} and nowhere else; a producer never branches on
+ * a stage kind itself.
+ */
+export function roundBarrierFor(stageKind: string): "end" | undefined {
+  return stageKind === "swiss" ? "end" : undefined;
+}
+
+/** What a round sequence's rows carry beside `roundNo` (all three optional on the engine's `Assignment` and
+ *  `SchedulableFixture`). `{}` for a start-floor sequence. */
+export type RoundFields = Pick<Assignment, "roundBarrier" | "roundGapMinutes" | "roundsPerDayCap">;
+
+/**
+ * The per-player daily match cap, from the division's DURABLE hard rules: the
+ * `max_fixtures_per_day` rules that count each player (or each person)
+ * separately (`every_entrant` / `every_person`, which the engine's
+ * `entityKeysFor` tallies one counter per entity), the smallest of them; 0 when
+ * there is none. The "Max matches per day" box on the division's constraints
+ * panel writes a DIVISION-scoped rule, one counter for the whole division (the
+ * count of matches that day across everybody), which is a different quantity and
+ * is deliberately not read here. A Swiss round seats each player once, so rounds
+ * per day IS matches per player per day.
+ */
+export function perPlayerDailyCap(hard: readonly HardConstraint[] | undefined): number {
+  const caps = (hard ?? []).flatMap((h) =>
+    h.type === "max_fixtures_per_day" && (h.scope.kind === "every_entrant" || h.scope.kind === "every_person") ? [h.count] : [],
+  );
+  return caps.length === 0 ? 0 : Math.min(...caps);
+}
+
+/**
+ * Ruling 256: the fields a round sequence of kind `stageKind` carries in
+ * division `divisionId` whose settings are `config`. `{}` for a start-floor kind
+ * (the sweep test pins that a league row carries NO key at all, not a zero). For
+ * an end-barrier kind: the barrier, the gap (the division's minimum rest, the
+ * strictest of the four sources the placer and verifier already take, via the
+ * engine's own `restFloor`) and the cap - both 0 when unset, which the engine
+ * reads as none. Stamped as numbers on EVERY row of the sequence, 0 included, so
+ * the rows agree.
+ */
+export function roundFieldsFor(
+  stageKind: string,
+  config: Pick<ScheduleConfig, "perEntrantMinRest" | "gapMinutes" | "matchMinutes" | "constraints"> | undefined,
+  divisionId: string,
+): RoundFields {
+  const barrier = roundBarrierFor(stageKind);
+  if (barrier === undefined) return {};
+  const c = config?.constraints;
+  const rest =
+    config === undefined
+      ? 0
+      : restFloor(
+          {
+            perEntrantMinRest: config.perEntrantMinRest,
+            gapMinutes: config.gapMinutes,
+            matchMinutes: config.matchMinutes,
+            ...(c !== undefined
+              ? {
+                  constraints: {
+                    ...(c.restMin !== undefined ? { restMin: c.restMin } : {}),
+                    ...(c.restByGroup !== undefined ? { restByGroup: c.restByGroup } : {}),
+                    noBackToBack: c.noBackToBack,
+                  },
+                }
+              : {}),
+          },
+          { divisionId },
+        ).minutes;
+  return { roundBarrier: barrier, roundGapMinutes: rest, roundsPerDayCap: perPlayerDailyCap(c?.hard) };
+}
+
+/** The round-sequence stages a producer asks about: the Map {@link roundRobinStageIds} returns, or (a caller that only
+ *  needs the ordering, not the fields) a bare id set. */
+export type RoundSequenceStages = ReadonlyMap<string, RoundFields> | ReadonlySet<string>;
+
+/** A round-sequence stage's rules alone (`{}` for a stage outside every sequence or a start-floor kind): what a packed
+ *  (serialised) producer stores per fixture, since it cannot hold the Map. */
+export function roundRulesOf(stages: RoundSequenceStages | undefined, stageId: string): RoundFields {
+  return stages instanceof Map ? (stages.get(stageId) ?? {}) : {};
+}
+
+/**
+ * THE seam every producer of a scheduling row reads: `{ roundNo, ...barrier fields }` for a row of a round-sequence
+ * stage, `{}` for a row of any other (a bracket's `round_no` is display only), and `{}` when no stages were passed
+ * (round order inert, as before). A producer spreads this and nothing else, so the round and its rules travel
+ * together; the sweep test (schedule-swiss-round-barrier.test.ts) judges what each producer actually emitted.
+ */
+export function roundFieldsOf(
+  stages: RoundSequenceStages | undefined,
+  row: { stage_id: string; round_no: number },
+): { roundNo?: number } & RoundFields {
+  if (stages === undefined || !stages.has(row.stage_id)) return {};
+  return { roundNo: row.round_no, ...roundRulesOf(stages, row.stage_id) };
 }
 
 /** C1 fix-loop (G2/3rd instance). The same "sequence" identity `calendar.ts`'s
@@ -939,7 +1062,7 @@ export function toAssignment(
   f: FixtureLite,
   matchMinutes: number,
   people: Map<string, string[]>,
-  roundRobinStageIds?: ReadonlySet<string>,
+  roundRobinStageIds?: RoundSequenceStages,
 ): Assignment {
   const start = ms(f.scheduled_at as string | Date);
   return {
@@ -960,7 +1083,7 @@ export function toAssignment(
     ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
     divisionId: f.division_id,
     stageId: f.stage_id,
-    ...(roundRobinStageIds?.has(f.stage_id) && !isSwissByeShellExtKey(f.ext_key) ? { roundNo: f.round_no } : {}),
+    ...(isSwissByeShellExtKey(f.ext_key) ? {} : roundFieldsOf(roundRobinStageIds, f)),
     movable: !f.schedule_locked,
   };
 }
@@ -1342,6 +1465,7 @@ function mapConflicts(
       // repair round cite the same token (#399).
       ...(c.rule !== undefined ? { rule: c.rule } : {}),
       ...(c.shortfallMinutes !== undefined ? { shortfall_minutes: c.shortfallMinutes } : {}),
+      ...(c.measuredCount !== undefined ? { measured_count: c.measuredCount } : {}),
       blocking: isBlockingConflict(c),
       // Structured (additive) and the deprecated derived English (back-compat,
       // C3 2026-08-13 design amendment) — both from the SAME `details`, so they
@@ -1579,7 +1703,7 @@ export async function autoSchedule(
     // without this a stepladder's own round_no (display numbering, not a
     // round-robin sequence) would ride along and get compared against this
     // stage's round-robin rounds as if they were one sequence.
-    const roundRobin = await roundRobinStageIds(tx, stage.division_id);
+    const roundRobin = await roundRobinStageIds(tx, stage.division_id, settings);
     const entrantIds = [
       ...new Set(all.flatMap((f) => [f.home_entrant_id, f.away_entrant_id])),
     ].filter((e): e is string => e !== null);
@@ -1713,7 +1837,7 @@ export async function autoSchedule(
       // not merely an ordering hint, so a bracket/stepladder stage's own
       // display-numbering round_no must not ride along as if it meant
       // round order; the set is league, group and swiss — W3 T3b).
-      ...(roundRobin.has(f.stage_id) ? { roundNo: f.round_no } : {}),
+      ...roundFieldsOf(roundRobin, f),
       ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
       divisionId: f.division_id,
       // C1 fix-loop (Finding 2). Unconditional, same as `divisionId` — see
@@ -2356,19 +2480,23 @@ export function boundSolverWindow<T extends SlotConfig & VerifyConfig>(
  * multi-day window, and the 2026-08-13 day-aware rungs made that MORE true,
  * not less. It used to be that T1 minimised `makespanMinutes`, which pulled
  * every fixture toward the earliest reachable day; T1 is now
- * `days → day_span → day_start`, and its FIRST rung minimises the count of
- * calendar days used, which pulls in the same direction harder. Either way a
- * wide window and a tight one behave identically without a day cap forcing
- * the difference: a seven-day window and a one-day window both pile every
- * match onto day one.
+ * `days → day_span → day_start`, and its FIRST rung minimises the COUNT of
+ * calendar days used, which packs harder but no longer says WHICH day. Either
+ * way a wide window and a tight one behave identically without a day cap
+ * forcing the difference: a seven-day window and a one-day window both pile
+ * every match onto ONE day. The other rungs are shift-invariant, so the LAST
+ * rung, `day_rank` (owner ruling 2026-11-04), breaks a whole-day tie toward the
+ * earliest day; before it the solver picked whichever day the lattice reached
+ * (W3 T11 / X-SW-29: a board landed on the window's second day under
+ * `boundSolverWindow`'s slack day). It prefers early days, it does not spread.
  *
  * `max_fixtures_per_day` is the one hard rule that already does this, fully
  * wired end to end (`build-encode.ts` groups by `dayKeyInTz` and encodes an
  * `AtMost` per day) — an organiser can already set it through the AI parser
  * or the constraints panel. This only fills the gap for a run that set
  * neither: `ceil(fixtures / availableDays)` spreads them roughly evenly
- * across the window's own dates instead of leaving day two onward empty by
- * default. An explicit whole-division rule from either surface always wins
+ * across the window's own dates instead of leaving every board on one day
+ * (not necessarily the first) by default. An explicit whole-division rule from either surface always wins
  * untouched — this never overwrites one.
  */
 export function withDefaultDaySpread<T extends SlotConfig & VerifyConfig>(
@@ -2711,7 +2839,7 @@ export async function applySchedule(
     // place a disordered board actually gets refused rather than merely
     // proposed — so round order has to be judged here, not only on the
     // auto-schedule preview. See `toAssignment`'s own doc comment.
-    const roundRobin = await roundRobinStageIds(tx, stage.division_id);
+    const roundRobin = await roundRobinStageIds(tx, stage.division_id, settings);
     const byId = new Map(all.map((f) => [f.id, f]));
     // A `scheduled` row that holds a result is SKIPPED, not refused
     // (`heldInPlace`), the way a rain-delay shift skips it: neither the board
@@ -2788,7 +2916,7 @@ export async function applySchedule(
         // is actively choosing, whatever lock state it ends up carrying
         // (`a.schedule_locked` below is the state AFTER this write, not a
         // fact about whether this apply itself may act on it).
-        ...(roundRobin.has(f.stage_id) ? { roundNo: f.round_no } : {}),
+        ...roundFieldsOf(roundRobin, f),
         movable: true,
       };
     });
@@ -3172,7 +3300,7 @@ export async function moveFixture(
       // C1 (2026-08-12 round-order design). Same reason `applySchedule` reads
       // it: round order has to be judged HERE, on the write gate — see
       // `toAssignment`'s own doc comment.
-      const roundRobin = await roundRobinStageIds(tx, fixture.division_id);
+      const roundRobin = await roundRobinStageIds(tx, fixture.division_id, settings);
       const start = ms(nextAt);
       const proposed: Assignment = {
         fixtureId: fixture.id,
@@ -3199,7 +3327,7 @@ export async function moveFixture(
         // skipped outright — so widening the sibling set below would still
         // catch nothing.
         stageId: fixture.stage_id,
-        ...(roundRobin.has(fixture.stage_id) ? { roundNo: fixture.round_no } : {}),
+        ...roundFieldsOf(roundRobin, fixture),
         movable: true,
       };
       // C1 fix-loop (G2/3rd instance, re-scoped by the round-order-widening
@@ -3615,7 +3743,7 @@ async function validateScheduleIn(
   // start with a genuine round-order violation and nothing would show it.
   // Wired the same way `autoSchedule`/`applySchedule`/`reverifyBoards`
   // already are (`schedule.ts`'s own reference wiring; `person-merge.ts`).
-  const roundRobin = await roundRobinStageIds(tx, divisionId);
+  const roundRobin = await roundRobinStageIds(tx, divisionId, settings);
   const assignments = all
     .filter((f) => f.scheduled_at !== null && f.court_id !== null)
     .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));

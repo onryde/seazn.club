@@ -76,26 +76,71 @@ const NO_DRAW_COLS = "grid-cols-[4rem_minmax(0,1fr)_repeat(3,4rem)_7rem]";
 const NO_DRAW_COLS_WITH_RATIO = "grid-cols-[4rem_minmax(0,1fr)_repeat(3,4rem)_7rem_6rem]";
 const SPLIT_NO_DRAW_COLS = "grid-cols-[4rem_minmax(0,1fr)_4rem_7rem] lg:grid-cols-[4rem_minmax(0,1fr)_repeat(5,4rem)_7rem]";
 
+// W3 app-B T9 (ST-G21): a Swiss slide's tie-break columns (Buchholz Cut-1, Buchholz, Opp diff - at most two) are fixed tracks after
+// Pts and the ratio, from `2xl` (1536px) up - owner ruling 2026-11-03: the board is a TV surface, and a 1920 TV is the screen
+// that has the room. 9rem each: the widest header any locale prints (the Buchholz notation, and Dutch "Saldo tegenst.") is 138px
+// at the header's own size and tracking, so it stays on one line (slideshow-tv-rows.test.tsx prices it). Below `2xl` they fold
+// (`max-2xl:hidden`) and the template is the one the slide had without them, so 1280, 1024 and 768 are exactly the board they
+// were: two 9rem tracks cost the entrant 288px, which at 1280 cut names to 140-224px on every Swiss shape (T9 review I1). From
+// `2xl` the slide is also wider (`2xl:max-w-[100rem]`, K-2), so the entrant keeps 344px (IIHF) to 596px at 1536. The tracks
+// are whole class strings, for Tailwind's scanner.
 /** The slide's grid template, keyed by its result columns and the columns still shown below `lg`. A shape with no
  *  template is refused rather than drawn misaligned: the builder's columns are the public table's declaration, which
  *  makes exactly these four — with a draw on the table and without, split and not (swept for every sport in
  *  slideshow-point-ratio.test.ts). The split has no ratio template:
  *  a table splits only when OT pays apart (IIHF ice hockey), and the cascade refuses `point_ratio` for every such sport
  *  — none records points won and lost (standings-view-w2d.test.ts proves it for every sport and declared cfg). So a
- *  split slide with a ratio is refused by name, not drawn. */
-const STANDINGS_TEMPLATES: Readonly<Record<string, { plain: string; ratio?: string }>> = {
-  "4/4": { plain: STANDINGS_COLS, ratio: STANDINGS_COLS_WITH_RATIO },
-  "3/3": { plain: NO_DRAW_COLS, ratio: NO_DRAW_COLS_WITH_RATIO },
-  "6/1": { plain: SPLIT_COLS },
-  "5/1": { plain: SPLIT_NO_DRAW_COLS },
+ *  split slide with a ratio is refused by name, not drawn. Each holds a template for 0, 1 and 2 tie-break columns
+ *  (index = the count; a slide never carries more, `SLIDE_TIEBREAK_MAX`). */
+const STANDINGS_TEMPLATES: Readonly<Record<string, { plain: readonly string[]; ratio?: readonly string[] }>> = {
+  "4/4": {
+    plain: [
+      STANDINGS_COLS,
+      `${STANDINGS_COLS} 2xl:grid-cols-[4rem_minmax(0,1fr)_repeat(4,4rem)_7rem_9rem]`,
+      `${STANDINGS_COLS} 2xl:grid-cols-[4rem_minmax(0,1fr)_repeat(4,4rem)_7rem_9rem_9rem]`,
+    ],
+    ratio: [
+      STANDINGS_COLS_WITH_RATIO,
+      `${STANDINGS_COLS_WITH_RATIO} 2xl:grid-cols-[4rem_minmax(0,1fr)_repeat(4,4rem)_7rem_6rem_9rem]`,
+      `${STANDINGS_COLS_WITH_RATIO} 2xl:grid-cols-[4rem_minmax(0,1fr)_repeat(4,4rem)_7rem_6rem_9rem_9rem]`,
+    ],
+  },
+  "3/3": {
+    plain: [
+      NO_DRAW_COLS,
+      `${NO_DRAW_COLS} 2xl:grid-cols-[4rem_minmax(0,1fr)_repeat(3,4rem)_7rem_9rem]`,
+      `${NO_DRAW_COLS} 2xl:grid-cols-[4rem_minmax(0,1fr)_repeat(3,4rem)_7rem_9rem_9rem]`,
+    ],
+    ratio: [
+      NO_DRAW_COLS_WITH_RATIO,
+      `${NO_DRAW_COLS_WITH_RATIO} 2xl:grid-cols-[4rem_minmax(0,1fr)_repeat(3,4rem)_7rem_6rem_9rem]`,
+      `${NO_DRAW_COLS_WITH_RATIO} 2xl:grid-cols-[4rem_minmax(0,1fr)_repeat(3,4rem)_7rem_6rem_9rem_9rem]`,
+    ],
+  },
+  "6/1": {
+    plain: [
+      SPLIT_COLS,
+      `${SPLIT_COLS} 2xl:grid-cols-[4rem_minmax(0,1fr)_repeat(6,4rem)_7rem_9rem]`,
+      `${SPLIT_COLS} 2xl:grid-cols-[4rem_minmax(0,1fr)_repeat(6,4rem)_7rem_9rem_9rem]`,
+    ],
+  },
+  "5/1": {
+    plain: [
+      SPLIT_NO_DRAW_COLS,
+      `${SPLIT_NO_DRAW_COLS} 2xl:grid-cols-[4rem_minmax(0,1fr)_repeat(5,4rem)_7rem_9rem]`,
+      `${SPLIT_NO_DRAW_COLS} 2xl:grid-cols-[4rem_minmax(0,1fr)_repeat(5,4rem)_7rem_9rem_9rem]`,
+    ],
+  },
 };
-export function standingsTemplate(columns: readonly StandingsSlideColumn[], ratio: boolean): string {
+export function standingsTemplate(columns: readonly StandingsSlideColumn[], ratio: boolean, tiebreaks = 0): string {
   const shape = `${columns.length}/${columns.filter((c) => c.compact).length}`;
   const template = STANDINGS_TEMPLATES[shape];
   if (template === undefined) throw new Error(`standings slide: no grid template for ${shape} result columns`);
-  if (!ratio) return template.plain;
-  if (template.ratio === undefined) throw new Error(`standings slide: no grid template for ${shape} result columns with a ratio column`);
-  return template.ratio;
+  const byCount = ratio ? template.ratio : template.plain;
+  if (byCount === undefined) throw new Error(`standings slide: no grid template for ${shape} result columns with a ratio column`);
+  const found = byCount[tiebreaks];
+  if (found === undefined) throw new Error(`standings slide: no grid template for ${shape} result columns with ${tiebreaks} tie-break columns`);
+  return found;
 }
 /** A cell the board folds below `lg` (the builder's `compact: false`). */
 const foldBelowLg = (shown: boolean) => (shown ? "" : " max-lg:hidden");
@@ -238,7 +283,9 @@ export function Slideshow({
   // The builder sets `pointRatio` on every row of a slide whose division ranks
   // on it, and on none otherwise; the column follows the rows.
   const ratioColumn = slide?.kind === "standings" && slide.rows.some((r) => r.pointRatio !== undefined);
-  const standingsCols = slide?.kind === "standings" ? standingsTemplate(slide.columns, ratioColumn) : STANDINGS_COLS;
+  // W3 app-B T9 (ST-G21): a Swiss slide's tie-break columns, paired by index with each row's `tiebreaks`.
+  const tiebreakColumns = slide?.kind === "standings" ? (slide.tiebreakColumns ?? []) : [];
+  const standingsCols = slide?.kind === "standings" ? standingsTemplate(slide.columns, ratioColumn, tiebreakColumns.length) : STANDINGS_COLS;
   const liveCount = slides.reduce(
     (n, s) =>
       s.kind === "fixtures" ? n + s.items.filter((i) => i.status === "in_play").length : n,
@@ -338,6 +385,11 @@ export function Slideshow({
                   ))}
                   <span className="text-right">{labels.points}</span>
                   {ratioColumn && <span className="text-right">{labels.pointRatio}</span>}
+                  {tiebreakColumns.map((c) => (
+                    <span key={c.key} className="text-right max-2xl:hidden">
+                      {c.header}
+                    </span>
+                  ))}
                 </div>
                 <div className="space-y-2">
                   {slide.rows.slice(0, 10).map((r, i) => (
@@ -382,6 +434,11 @@ export function Slideshow({
                           {r.pointRatio ?? "—"}
                         </span>
                       )}
+                      {tiebreakColumns.map((c, j) => (
+                        <span key={c.key} className="text-right font-display text-2xl tabular-nums text-court-muted max-2xl:hidden">
+                          {r.tiebreaks?.[j] ?? "—"}
+                        </span>
+                      ))}
                     </div>
                   ))}
                 </div>

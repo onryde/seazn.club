@@ -768,6 +768,29 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch gate (D31)", () => {
       warn.mockRestore();
     }
   });
+
+  // W3 App B Task 2 (X-SW-6; boardgame FOLD_EPOCH 4 → 5). The epoch bump's gate half: after the deploy a native capture client
+  // still on engine 1.x sends `engine_epoch: 4` for a boardgame fixture and is refused 426; the web pad sends none and writes.
+  // The floor is the engine's declaration (`foldEpochOf`, with no bump set the mock answers the real table), never the literal 5.
+  // A PIN, not a regression: the app owns no boardgame epoch of its own, so this passes before the migration task and keeps
+  // passing; it reds only if the app grows a second source for the floor or the gate stops comparing.
+  it("17. boardgame's floor is the engine's declared epoch: engine_epoch = foldEpochOf(\"boardgame\") − 1 is refused 426; the web pad (no engine_epoch) writes", async () => {
+    const SPORT = "boardgame";
+    const s = await seed(SPORT);
+    const floor = foldEpochOf(SPORT);
+    expect(bump.get(SPORT), "premise: the real table's value, no bump").toBeUndefined();
+    expect(floor, "premise: boardgame has moved off epoch 1, so a phone one behind is a valid (>= 1) epoch").toBeGreaterThan(1);
+    const err = await refusal(start(s, { engine_epoch: floor - 1 }));
+    expect(err.status).toBe(426);
+    expect(err.code).toBe("ENGINE_OUTDATED");
+    expect(err.extra).toEqual({ sport: SPORT, required: floor, got: floor - 1 });
+    expect(await rows(s.fixtureId), "the refused write left nothing").toBe(0);
+    const web = await start(s);
+    expect(web.seq, "the web pad sends no engine_epoch and writes").toBe(1);
+    const atFloor = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: "core.note", payload: { text: "at the floor" }, engine_epoch: floor });
+    expect(atFloor.seq, "and a phone AT the floor writes too").toBe(2);
+    expect(await rows(s.fixtureId)).toBe(2);
+  });
 });
 
 // ENGINE_EPOCH_FLOOR_OVERRIDE (engine-split spec §5.6; owner ruling 2026-10-15): the default-off emergency lever. The parser, the

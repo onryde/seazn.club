@@ -616,7 +616,7 @@ describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration 
   // Fix round 2, I-2. What a stage PointsRule replaces is a fact about the engine (competition/points.ts: `payout`
   // re-derives `points` and leaves the sport's metrics ledger untouched), so it is checked against the engine, not against
   // the lock's own constant.
-  it("I-2 STAGE_POINTS_REPLACES names only declared table keys, and the three other points keys a module declares are the ones left locked (counted)", () => {
+  it("I-2 STAGE_POINTS_REPLACES names only declared table keys, and the two other points keys a module declares are the ones left locked (counted)", () => {
     const declared = new Set<string>();
     let cells = 0;
     for (const m of builtinModules)
@@ -628,7 +628,9 @@ describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration 
     for (const key of STAGE_POINTS_REPLACES) expect(declared.has(key), `${key} is a table key some module declares`).toBe(true);
     // A new points key a module declares must be classified deliberately: it is locked until someone shows the rule replaces it.
     // W2c Task 9 addendum: a board game's `scoring` also writes the game's own headline, so a stage rule does not replace it.
-    expect([...declared].filter((k) => !STAGE_POINTS_REPLACES.has(k)).sort()).toEqual(["awardScore", "byeScore", "scoring"]);
+    // W3 (X-SW-6, ruling 251; engine 2.0.0): a board game's `byeScore` is no longer declared — a pairing-allocated bye always
+    // pays the win — so only `awardScore` and `scoring` are left to classify.
+    expect([...declared].filter((k) => !STAGE_POINTS_REPLACES.has(k)).sort()).toEqual(["awardScore", "scoring"]);
   });
 
   it("I-2 awardScore reaches the table through the sport's own forfeit credit AFTER play, which a stage PointsRule — even one carrying its own award score — leaves in place (engine differential, every module that declares it)", () => {
@@ -1025,7 +1027,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
     const r = await rig("boardgame", "classical");
     await sql`update stages set config = config || ${sql.json({ points: { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] } } as never)} where id = ${r.s1.id}`;
     await start(r.auth, r.fixtureId);
-    const before = (await getDivision(r.auth, r.divisionId)).config as { scoring: { win: number; draw: number; loss: number }; byeScore: number };
+    const before = (await getDivision(r.auth, r.divisionId)).config as { scoring: { win: number; draw: number; loss: number } };
     const out = await patchDivision(r.auth, r.divisionId, {
       name: "Renamed",
       config: { ...before, scoring: { ...before.scoring, win: before.scoring.win + 1 } } as never,
@@ -1034,18 +1036,27 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
     expect((out.config as typeof before).scoring.win, "scoring was not written").toBe(before.scoring.win);
   });
 
-  it("I-2 …and `byeScore` (the other points key chess declares) beside it: both refused, neither written", async () => {
+  it("X-SW-6 a stored byeScore is not a declared key: a config carrying it saves, and the key is not written back", async () => {
     const r = await rig("boardgame", "classical");
     await sql`update stages set config = config || ${sql.json({ points: { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] } } as never)} where id = ${r.s1.id}`;
     await start(r.auth, r.fixtureId);
-    const before = (await getDivision(r.auth, r.divisionId)).config as { scoring: { win: number; draw: number; loss: number }; byeScore: number };
+    const before = (await getDivision(r.auth, r.divisionId)).config as { scoring: { win: number; draw: number; loss: number } };
+    // W3 (X-SW-6, ruling 251; engine 2.0.0): a pairing-allocated bye always pays the win, so a board game declares no
+    // `byeScore`. The division's config carries no such key...
+    expect(before, "the stored config declares no byeScore").not.toHaveProperty("byeScore");
+    // ...and a config that still carries one (a client built against 1.x) SAVES: the key is no lock's business, the parse
+    // drops it, and it is not written back. (Under engine 1.x this was refused beside `scoring` once play had started.)
+    const stale = await patchDivision(r.auth, r.divisionId, { name: "Renamed", config: { ...before, byeScore: 7 } as never });
+    expect(stale.refused, "a stale byeScore is not refused").toEqual([]);
+    expect(stale.config, "the key is not written back").not.toHaveProperty("byeScore");
+    // The pair: `scoring` is still locked beside it, and is the ONLY field refused — the lock still bites.
     const out = await patchDivision(r.auth, r.divisionId, {
-      name: "Renamed",
-      config: { ...before, scoring: { ...before.scoring, win: before.scoring.win + 1 }, byeScore: before.byeScore + 1 } as never,
+      name: "Renamed again",
+      config: { ...before, scoring: { ...before.scoring, win: before.scoring.win + 1 }, byeScore: 7 } as never,
     });
-    expect(out.refused.map((x) => x.field).sort()).toEqual(["byeScore", "scoring"]);
+    expect(out.refused.map((x) => x.field)).toEqual(["scoring"]);
     expect((out.config as typeof before).scoring.win, "scoring was not written").toBe(before.scoring.win);
-    expect((out.config as typeof before).byeScore, "byeScore was not").toBe(before.byeScore);
+    expect(out.config, "the key is not written back").not.toHaveProperty("byeScore");
   });
 
   it("W2d T10 (spec §5.4, §10): the same league PINNED: points save (the pin pays the stage) and awardScore keeps W2c's lock (the goal credit after play)", async () => {

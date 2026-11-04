@@ -11,7 +11,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9",
-    "@seazn/engine": "npm:@onryde/seazn-engine@^1.1.0",
+    "@seazn/engine": "npm:@onryde/seazn-engine@^3.0.2",
     "@types/node": "^26",
     "eslint": "^9",
     "fast-check": "^3",

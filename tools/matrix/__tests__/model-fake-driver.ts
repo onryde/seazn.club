@@ -41,20 +41,25 @@
 // feeds stay the league path's: only Start, Generate, Rebuild and the
 // withdrawal policy branch on the stage kind. Not modelled: the implicit-bye
 // inference for a round a late entrant missed (only a pairing ORDER changes),
-// the rank_adjacent cascade rank, and chess colours.
-import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
-import { EngineError, type StageKind } from "@seazn/engine/core";
+// the rank_adjacent cascade rank, and chess colours. The pairing SCORE is the declared points rule (W3 app-B T5, X-SW-19):
+// the product reads the stage's table points; this twin has no table, so it pays each played board the way the table would -
+// the board's folded ledger paid by the sport's Swiss rule (fold.ts tableContribution), a bye the rule's win - not 1 and ½.
+// Not modelled: a points rule PINNED on the stage (the harness posts none) and a team's lineups at the fold.
+import { BRACKET_STAGE_KINDS, swissDrawFactsOf } from "@seazn/engine/competition";
+import { EngineError, playRecorded, type StageKind } from "@seazn/engine/core";
 import { generateRoundRobin, pairKey as swissPairKey, pairRound, type SwissStanding } from "@seazn/engine/scheduling";
 import { feedsNextMatch } from "../../../apps/web/src/lib/bracket-next-match.ts";
 import { isRunningRootSwiss } from "../../../apps/web/src/lib/open-entry-stages.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
-import { stageCfg } from "../lib/sport-cfg.ts";
-import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantRow, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
+import { envelopes, tableContribution, unplayedBoard } from "../lib/fold.ts";
+import { sportModule, stageCfg } from "../lib/sport-cfg.ts";
+import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantRow, type FinishSwissOut, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { FakeLeagueDriver, bracketWithdrawalActs, bracketWithdrawalPolicy, rulesOfConfig, type FakeFixture } from "./fake-driver.ts";
 import { nextMatchStartedText, rosterLockText, withdrawalReason } from "./product-text.ts";
 import { fixtureStatusFromFold } from "./w2a-status.ts";
+import { finishRefusal, finishRowsOf, judgeFinish, swissRefusedCall, type FinishRow } from "./swiss-finish-twin.ts";
 
 export interface ModelFakeOpts {
   /** #879: after an entrant is added while the stage has fixtures, the next Generate seats every pair again. */
@@ -641,22 +646,61 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     if (this.#divisionStatus === "setup") {
       for (const r of [...new Set(this.fixtures.map((f) => f.round_no ?? 0))].filter((x) => x > target)) this.#reconcile(r, "skip");
     }
+    // W3 app-B T5 (X-SW-19), T5 review m2: the pairing score is what the stage's table would pay. A played board is paid by the
+    // harness's one table implementation (fold.ts tableContribution: the board's own ledger, folded by the engine, paid by the
+    // sport's declared Swiss rule through `payout`) - so a played loser is paid what the rule pays HIM (table tennis 1, an IIHF
+    // overtime loss 1, a volleyball 3-2 loser 1), a set sport's winner what its set score earns, a forfeit what the rule pays
+    // an unplayed result, and a draw the rule's draw. Only the bye has no ledger: a one-sided award, paid the rule's win (a set
+    // sport's clean sweep, "W-0"), as the product's table pays it. The twin has no table of its own - the product's
+    // `stageTablePoints` is that fold.
+    const module = sportModule(this.sport);
+    const swissCfg = stageCfg(this.sport, this.cfg, "swiss", this.variant, rulesOfConfig(this.stage?.config));
+    const rule = module.tablePointsRule(swissCfg, "swiss");
+    const facts = swissDrawFactsOf(module, swissCfg);
+    const winPair = rule.bySetScore === undefined ? undefined : (rule.bySetScore[`${facts.setsToWin}-0`] ?? rule.bySetScore["*"]);
+    if (rule.bySetScore !== undefined && winPair === undefined) throw new Error(`fake: the ${this.sport} Swiss rule pays by set score but names no clean sweep or catch-all`);
+    const byePoints = winPair === undefined ? rule.win.regulation : winPair[0];
     const score = new Map(this.#active().map((id) => [id, 0]));
     const played = new Set<string>();
     const byes = new Set<string>();
+    const pay = (id: string, points: number) => score.set(id, (score.get(id) ?? 0) + points);
     for (const f of this.fixtures) {
       const o = f.outcome as { kind?: string; winner?: string } | null | undefined;
-      if (f.home_entrant_id !== null && f.away_entrant_id !== null) played.add(swissPairKey(f.home_entrant_id, f.away_entrant_id));
-      if (o?.kind === "award" && o.winner !== undefined) byes.add(o.winner);
-      if ((o?.kind === "win" || o?.kind === "award") && o.winner !== undefined) score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
-      else if ((o?.kind === "draw" || o?.kind === "tie") && f.home_entrant_id !== null && f.away_entrant_id !== null) {
-        score.set(f.home_entrant_id, (score.get(f.home_entrant_id) ?? 0) + 0.5);
-        score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + 0.5);
+      if (f.home_entrant_id !== null && f.away_entrant_id !== null) {
+        const events = this.tableEvents(f);
+        const paid = tableContribution(module, swissCfg, { kind: "swiss", roundNo: f.round_no ?? 0 }, f.home_entrant_id, f.away_entrant_id, events);
+        // A guard, not a comment: a decided two-sided board always has a ledger the fold decides (the twin writes its outcomes
+        // only through one), so an outcome the fold cannot see would be paid nothing - silently.
+        if (paid === null && o != null) throw new Error(`fake: swiss fixture ${f.id} holds an outcome (${o.kind}) its ledger does not fold to`);
+        if (paid !== null) {
+          pay(f.home_entrant_id, paid.pair[0].points);
+          pay(f.away_entrant_id, paid.pair[1].points);
+        }
+        // The pairing history, as the product's `buildSwissHistory` reads it (T6 review m4). Only a ONE-seat award is a bye; a
+        // two-seated board that was NOT PLAYED - a double walkover, a walkover, a forfeit before any play (`unplayedBoard`, the
+        // engine's one rule) - is no meeting (P-A2: the pair may meet again), and its winner, who scored a win without play,
+        // may not take the pairing-allocated bye (P-A4, FIDE C.04.1(d)). A win by retirement after play is a played game and
+        // bars nobody. Every other seated board, decided or not, is a meeting.
+        if (o != null && unplayedBoard(o, playRecorded(envelopes("matrix", events), module))) {
+          if (o.winner !== undefined) byes.add(o.winner);
+        } else played.add(swissPairKey(f.home_entrant_id, f.away_entrant_id));
+      } else if (o?.kind === "award" && o.winner !== undefined) {
+        byes.add(o.winner);
+        pay(o.winner, byePoints);
       }
     }
     const standings: SwissStanding[] = this.#active().map((id, i) => ({ entrantId: id, score: score.get(id) ?? 0, rank: i + 1 }));
     const cfg = this.stage?.config ?? {};
     const round = pairRound(standings, { played, byes }, { chess: cfg.chess === true, ...(cfg.pairing === "rank_adjacent" ? { pairing: "rank_adjacent" as const } : {}) });
+    // W3 (engine 2.0.0): `pairRound` answers a round or a refusal VALUE; the product's Pair answers a refusal with the named
+    // SWISS_NO_LEGAL_PAIRING and seats nobody. The twin refuses before it touches a shell, as the product does. The status and
+    // the body are swissGen's (stages.ts, W3 app-B T4): 409 when Finish is the way out, else 422 (the table row's
+    // `resolvableStatus`), and the five fields `{ round, reason, field, finishAfter, canFinish }` - `finishAfter` and `canFinish`
+    // read from THE Finish predicate (swiss-finish-twin.ts), the one `finishSwiss` below judges by.
+    if (!round.ok) {
+      const finish = judgeFinish(this.#finishRows(), Number(this.stage?.config.rounds), this.completed);
+      throw swissRefusedCall("POST", "/api/v1/stages/s1/generate", round.code, { round: target, reason: round.reason, field: round.field, finishAfter: finish.finishedAfter, canFinish: finish.canFinish }, finish.canFinish);
+    }
     const shells = this.#roundOf(target);
     const boards = shells.filter((f) => !this.byeShells.has(f.id));
     round.pairings.forEach((p, i) => {
@@ -670,6 +714,49 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       Object.assign(byeShell, { home_entrant_id: round.bye, away_entrant_id: null, status: "forfeited", outcome: { kind: "award", winner: round.bye, loser: null, reason: "bye" } });
     }
     return { created: 0, existing: this.fixtures.length, fixtures: this.rows() };
+  }
+
+  /** The stage's rows as the Finish predicate reads them. `started` is swissBoardStartedSql: a result (fixtureHasResultSql: a
+   *  result status, an abandoned row with an outcome, or score events), or a decided board that is not the bye shell. */
+  #finishRows(): FinishRow[] {
+    return finishRowsOf(this.fixtures, {
+      bye: (f) => this.byeShells.has(f.id),
+      seated: swissSeated,
+      result: (f) => (this.ledgers.get(f.id) ?? []).length > 0 || RESULT_STATUSES.has(f.status) || (f.status === "abandoned" && f.outcome !== null),
+    });
+  }
+  /** `POST /stages/{id}/swiss/finish` (swiss-rounds-admin.ts finishSwissNow, W3 T13, X-SW-26): end the Swiss after k, the latest
+   *  round whose seated boards are all decided, and complete the stage. Refused, nothing written: STAGE_NOT_SWISS (422); SWISS_OVER
+   *  (422) once the stage is complete; SWISS_FINISH_NOTHING_PLAYED (409) before any round is complete; SWISS_FINISH_ROUND_UNDECIDED
+   *  (409) when a board past k has started. Written: every row past k is deleted, `config.rounds := k`, and the stage completes
+   *  through the twin's own completeStage (finishSwissNow's `completeStage`) - its answer, the next-stage fields included,
+   *  plus `finished_after`, `shells_removed` and `slots_freed` (the twin lays no slots out, so 0).
+   *
+   *  Not modelled (the product refuses these too; this list is the twin's complete gap, T6 review m7):
+   *   - SCHEDULE_LOCKED 422, the frozen timetable, first and outside the predicate: the twin has no timetable to lock.
+   *   - FIXTURE_HAS_OWN_FORMAT: a removed shell carrying its own format; the twin's rows carry none.
+   *   - STAGE_NOT_READY from `tableStageCompletable`, raised INSIDE the transaction after the delete so it rolls the delete back.
+   *     The twin deletes first and completes after, which is safe only because `judgeFinish` guarantees every row up to k is
+   *     decided, so its completeStage cannot refuse here; a twin whose completion could refuse would need the rollback.
+   *   - `over` for "a later stage is under way": the twin is one stage, so `over` is only "this stage is complete".
+   *  And in the Pair above: SWISS_ROUNDS_ABOVE_MAX (a field shrunk under the target round, judgeSwissPairAt) is not raised: the twin pairs
+   *  the active field and never compares the round count with that field's hard maximum, so the loop's handling of that refusal
+   *  is proved against a hand-built body of the product's shape (scenarios.test.ts), not against this twin. */
+  async finishSwiss(_stageId: string): Promise<FinishSwissOut> {
+    this.log("finishSwiss");
+    const path = "/api/v1/stages/s1/swiss/finish";
+    if (this.stage === null) throw new Error("fake: finishSwiss before postStages");
+    if (!this.#swiss) throw swissRefusedCall("POST", path, "STAGE_NOT_SWISS", {});
+    const state = judgeFinish(this.#finishRows(), Number(this.stage.config.rounds), this.completed);
+    const refused = finishRefusal(path, state);
+    if (refused !== null) throw refused;
+    const k = state.finishedAfter;
+    const doomed = new Set(this.fixtures.filter((f) => (f.round_no ?? 0) > k).map((f) => f.id));
+    this.fixtures = this.fixtures.filter((f) => !doomed.has(f.id));
+    for (const id of doomed) { this.byeShells.delete(id); this.ledgers.delete(id); }
+    if (k !== state.rounds) this.stage.config = { ...this.stage.config, rounds: k };
+    const complete = await this.completeStage();
+    return { ...complete, finished_after: k, shells_removed: doomed.size, slots_freed: 0 };
   }
 
   /** A test hook for stages.ts addFixture (PROMPT-66): an ad-hoc match on a

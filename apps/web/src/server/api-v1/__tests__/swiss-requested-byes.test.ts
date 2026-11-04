@@ -339,10 +339,9 @@ function requestByeNames(doc: Doc): { operations: number; withRequestSurface: nu
 
 /** The only /bye/i request property names the API may carry (spec §12 RB3-7(c); the brief):
  *  `byes` — the knockout draw's seeded byes (entrant ids placed on a bracket, not a request for a bye);
- *  `byeScore` — until App B removes it (no request schema carries it today);
  *  `requestedByes` — W3 T18's own refusal slot (controller ruling C8): allowed ONLY as the never-schema `{"not":{}}`,
  *  i.e. a key that accepts no value at all, which `StageConfig` / `PatchSwissStage` emit so the spec documents it. */
-const ALLOWED = new Set(["byes", "byeScore", "requestedByes"]);
+const ALLOWED = new Set(["byes", "requestedByes"]);
 const NEVER = JSON.stringify({ not: {} });
 
 function offenders(matches: Match[]): Match[] {

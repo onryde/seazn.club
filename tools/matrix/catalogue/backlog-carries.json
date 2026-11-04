@@ -18,30 +18,6 @@
       "text": "`W2-scoring-fidelity.md` trap 2 names SC-P4 as the model of a collectable field that loses to the engine: \"the declared 3/0 loses to the FIH 2/1 the rulebook adopts (§7.1), so the case is ❌ until fixed\". Two other sources say otherwise. The SC-P4 entry of \"False premises found\" in this file: \"FIH 2/1 shoot-out split\" is the FIH Pro League rule only; FIH tournament regulations use 3/1/0 with draws standing and no pool shoot-outs, which the product already does by default, and the gap narrows to \"no points fields when shoot-outs are switched on\". And design §8's row for this wave: \"FIH 2/1 is Pro League only\". The goals-and-boards rulebook's RB2B-7 recommends seeding 2/1 when shoot-outs are on for a table stage, but that rulebook says \"None is a ruling\", and at W1d no entry of this file's \"Owner rulings\" signed it. The baseline cannot settle it: the ledger reads SC-P4 `{outcome}`: {evidence} The planner of this wave resolves which oracle the SC-P4 case takes, with the rulebook's sign-off, before the case is written; a case written from the trap alone asserts a split the other two sources call a Pro League rule. This is false premise 20 of the W1d plan, and not W1d's to fix. W2d settled both at its fold (2026-10-28): owner ruling 186 (W2d D10(f), 2026-10-20) makes the FIH default 3/1/0 with draws the SC-P4 oracle and tests the shoot-out case on the 3/2/1/0 preset, and ruling 189 (W2d B2) signs RB2B-7: a shoot-out is a draw plus a bonus to its winner."
     },
     {
-      "id": "ruling-70",
-      "anchor": "SW-H1",
-      "title": "Owner ruling 70: three cells held red, and the re-baseline that retires the hold",
-      "text": "Across the three dispatches the cells {cells} flipped between works and red. Every red reads \"round 5 paired nobody (SW-H1)\", and the cause is the product's `lots` tiebreak (a UUID-hashed draw, by design) exposing P6 (SW-H1: an empty Swiss round reported as success). Ruling 70 (2026-10-05) records the three RED, cause P6, whatever the baseline run showed: the `ruling70` block of `catalogue/baseline.json`, applied by `judge regression`. **The SW-H1 fix must remove that block and `RULING_70_IDS` (`lib/pr-sample.ts`) and re-baseline L3 in the same change** (`W3-swiss.md`, \"Output and handoff\"). The guards that notice a stale block fire at the re-baseline, not when the fix merges, so a fix merged alone leaves the override live, where it can hide a regression on those three cells only. In this baseline SW-H1 is keyed on {keyed}. {held}"
-    },
-    {
-      "id": "p6-recommendation",
-      "anchor": "SW-H1",
-      "title": "Recommendation (the controller's, not an owner ruling): move P6 up",
-      "text": "Within this wave, take SW-H1 (P6) early: a real Swiss-into-knockout after a withdrawal can strand on an empty round 5 that says it succeeded. This is the controller's recommendation, as owner ruling 70's entry words it; the owner has not ruled on it."
-    },
-    {
-      "id": "swiss-playoff-reason-flip",
-      "anchor": "SW-H1",
-      "title": "The swiss_playoff R4 reason flip: red in all three dispatches, two reasons",
-      "text": "{cells} are red in all three dispatches with the same failing checks, but the reason flips: {flips}. SW-H1 is `round 5 paired nobody (SW-H1)`; stall is `stage 2: did not complete`, the drawn-game stall. The triage separates the two by reason, so the committed run (dispatch {committed}) keys them to {keyed}. The SW-H1 fix does not turn these cells green: the stall reason stays with the gap that owns it, and a re-baseline that reads the SW-H1 reason on them again moves them back to SW-H1."
-    },
-    {
-      "id": "swiss-playoff-keyed-here",
-      "title": "swiss_playoff R4 cells the committed run keys to this wave",
-      "anchor": "SC-O1",
-      "text": "The committed run keys these swiss_playoff R4 cells to this wave: {keyed}. Their reason is not stable: it flips between the stall and SW-H1 across the dispatches (the {owner} carry \"{flipTitle}\" lists the reason per dispatch). Read them there before counting a move in {gaps} as progress or as a regression: a drop here that comes with a matching rise under SW-H1 is the reason flipping, not a fix."
-    },
-    {
       "id": "st-g5-pool-of-one",
       "anchor": "ST-G5",
       "title": "ST-G5 pool of one: a product decision, owned here",

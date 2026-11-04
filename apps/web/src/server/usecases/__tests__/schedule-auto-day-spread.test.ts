@@ -1,7 +1,9 @@
 // The production bug this pins: a 3-day window, 2 courts, 15 fixtures — the
-// solver's own objective minimizes makespan (build.ts T1), so with no day cap
-// it piles every fixture onto day one (day one alone has capacity for all 15)
-// and never touches day two or three. `withDefaultDaySpread` (schedule.ts)
+// solver's own objective packs days (build.ts T1: the count of calendar days
+// used first, every rung shift-invariant), so with no day cap it piles every
+// fixture onto ONE day (any one day has capacity for all 15), not necessarily
+// the first (W3 T11; see `withDefaultDaySpread`'s doc), and leaves the other
+// two empty. `withDefaultDaySpread` (schedule.ts)
 // injects a `max_fixtures_per_day` hard rule sized to the window whenever the
 // organiser set none of their own, so the auto pass spreads by default.
 //

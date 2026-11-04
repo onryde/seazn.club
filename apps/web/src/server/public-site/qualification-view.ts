@@ -38,6 +38,7 @@ import type { TKey } from "@/lib/i18n-runtime";
 import type { DictionaryKey } from "@/lib/i18n-keys";
 import { CUT_SKIPS_DEPARTED_KINDS, tableWithdrawalInputs } from "@/lib/table-withdrawal";
 import { completionEngineStatus, rowAwaitsSettle } from "@/server/engine-db/recorded-abandon";
+import { swissAbsentRounds } from "@/server/engine-db/swiss-absent-rounds";
 import { EVERY_OUTCOME } from "@/server/engine-db/table-rules";
 import type { QualRowT, QualTableT } from "./competition-hub-schema";
 import { tieBreakRule } from "./standings-view";
@@ -104,6 +105,12 @@ export interface QualFixture {
   /** Rebase ruling D3: that abandon is the organiser's online No result (`PublicFixture.no_result`) - already the
    *  settle, never held. Absent reads as a plain abandon. */
   no_result?: boolean;
+  /** W3 app-B final review I1 (ruling R17): the generator's stable id (`fixtures.ext_key`; `PublicFixture.ext_key`). A Swiss
+   *  SHELL's (`sw-r{n}-b{k}` / `sw-r{n}-bye`) seat opens its round for absence, which is how a latecomer's missed rounds
+   *  are read (`swissAbsentRounds`). Null: the row has none (not a shell). Absent (`undefined`): the loader did not select
+   *  it, so whether the row is a shell is UNKNOWN - `buildQualificationView` shows no Swiss status where that could hide
+   *  a missed round. */
+  ext_key?: string | null;
   /** W2c X-PT-1: was anything played before its forfeit — `playRecorded` of its ledger under the division's module, the
    *  fact the standings fold hands `payout` (`engine-db/forfeit-played.ts`, read by `qualificationFixtures`).
    *  Loaded only under a stage rule that scores forfeits, for a two-seated forfeit; false where it is not loaded (and a
@@ -500,9 +507,10 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // F3: a cut that takes every row still playing is no contest.
   if (cut >= [...active.values()].filter(Boolean).length) return null;
 
-  // P2: Swiss remaining = rounds declared − rounds with a SETTLED fixture
-  // seating the entrant (a bye is one); seated-but-unplayed rounds are not
-  // played. League/group: the unsettled fixtures seating the entrant.
+  // P2: Swiss remaining = rounds declared − rounds BEHIND the entrant: those
+  // with a SETTLED fixture seating it (a bye is one) and those it MISSED;
+  // seated-but-unplayed rounds are not played. League/group: the unsettled
+  // fixtures seating the entrant.
   //
   // A DEPARTED entrant is not frozen (final review I1): a status-only
   // departure (a `withdrawn` status PATCH, a registrant's self-cancel, a disqualification from before W3 T15 made one cascade)
@@ -515,10 +523,29 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // only the field (usecases/stages.ts generateStageFixturesWrite's `active`
   // read), so no later round will seat it.
   const unplayed = (id: string): number => tableFx.filter((f) => !settled(f) && seats(f, id)).length;
+  // W3 app-B final review I1 (ruling R17, progress.md:8; app-A final review m3: a badge may arrive early, never false): a
+  // round an entrant MISSED is behind it, not left - a latecomer's before its first round (round_no < swiss_first_round),
+  // and a reinstated entrant's while it was away. Each is an unplayed 0-point round on its card (FIDE C.07 (2026) art.
+  // 16.2.3). Counted as left, a latecomer at round 3 of 5 had 4 rounds where it has 2, and the engine could print "Win 3".
+  // They are read where the engine's Buchholz and the table's "joined round N" marker read them - the stage's Swiss shells
+  // (`swissAbsentRounds`) - so the badge, the marker and the tie-break read one fact. A row whose ext_key the loader did
+  // not select (`undefined`) could be a shell: if reading a key-less seated row as one would leave an entrant still in the
+  // field without a seat in its round, that entrant may have missed it, and its count is unknown - no status (R3).
+  const fieldIds = i.rows.filter((r) => active.get(r.entrantId) === true).map((r) => r.entrantId);
+  const missed: ReadonlyMap<string, readonly number[]> = isSwiss ? swissAbsentRounds(tableFx, fieldIds) : new Map();
+  if (isSwiss) {
+    const unknownKeyRounds = new Set(
+      tableFx.filter((f) => f.ext_key === undefined && (f.home_entrant_id !== null || f.away_entrant_id !== null)).map((f) => f.round_no),
+    );
+    for (const n of unknownKeyRounds) {
+      const inRound = tableFx.filter((f) => f.round_no === n);
+      if (fieldIds.some((id) => !inRound.some((f) => seats(f, id)))) return null;
+    }
+  }
+  const behind = (id: string): number =>
+    new Set([...tableFx.filter((f) => settled(f) && seats(f, id)).map((f) => f.round_no), ...(missed.get(id) ?? [])]).size;
   const remainingOf = (id: string): number =>
-    isSwiss && active.get(id) === true
-      ? Math.max(0, meta.swissRounds! - new Set(tableFx.filter((f) => settled(f) && seats(f, id)).map((f) => f.round_no)).size)
-      : unplayed(id);
+    isSwiss && active.get(id) === true ? Math.max(0, meta.swissRounds! - behind(id)) : unplayed(id);
 
   const ordered = [...i.rows].sort(
     (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),

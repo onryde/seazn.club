@@ -37,6 +37,7 @@ import { w2cStageRulesSuite } from "./suites/w2cStageRules.ts";
 import { w2dTablesSuite } from "./suites/w2dTables.ts";
 import { w2eRefusalsSuite } from "./suites/w2eRefusals.ts";
 import { w3SwissASuite } from "./suites/w3SwissA.ts";
+import { w3SwissBSuite } from "./suites/w3SwissB.ts";
 import { w4aTimeModelSuite } from "./suites/w4aTimeModel.ts";
 import { cricketDlsSuite } from "./suites/cricketDls.ts";
 import { configSnapshotSuite } from "./suites/configSnapshot.ts";
@@ -1249,6 +1250,12 @@ export async function main() {
   // After youtubeConnect only because the plan places every new suite after the last one: it opens no stream session, so
   // youtubeConnect's "last on purpose" still holds. Own fresh owner; keyless.
   await suite("w3SwissA", () => w3SwissASuite());
+
+  // Format matrix W3 Swiss app-B: counted checks for the tasks that owe one (T1: a round with no legal pairing is refused
+  // by name and seats nobody; T2: a boardgame division's stored byeScore is gone once the V490 delta has run); the suite's
+  // own header lists each. After w3SwissA, as the plan places it. Own fresh owner; keyless; SQL seeds (the S6 history, the
+  // 1.x byeScore) and the delta's own block through DATABASE_URL.
+  await suite("w3SwissB", () => w3SwissBSuite());
 }
 
 async function smokePlanMatrix(): Promise<void> {

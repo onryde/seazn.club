@@ -50,7 +50,7 @@ const EXEMPT: readonly { file: string; pattern: RegExp; text: string; reason: st
   {
     file: "server/slideshow-data.ts",
     pattern: READS[1]!,
-    text: "cascade: rules?.tiebreakers ?? [],",
+    text: "const cascade = rules?.tiebreakers ?? [];",
     reason:
       "reads the loader's own output (`stageTableRulesDocs` / `PublicStage.table_rules`); `?? []` is a refused or absent stage's empty cascade, never the division's or the module's default",
   },

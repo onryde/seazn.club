@@ -323,13 +323,17 @@ export async function admitSwissLateEntrant(
       if (hist.played.has(pairKey(holder, entrantId))) return false;
       const paired = pairRound(
         [
-          { entrantId: holder, score: hist.score.get(holder) ?? 0, rank: 1 },
+          // W3 app-B T5 (X-SW-19): the history holds no score any more (the pairing score is the table's), and none is
+          // needed here: this question is the pair's rematch and colours, and the holder is the upper standing by rank — on
+          // level scores, which is what two entrants asked about alone are, rank is the order.
+          { entrantId: holder, score: 0, rank: 1 },
           { entrantId, score: 0, rank: 2 },
         ],
         { played: hist.played, colours: hist.colours, byes: hist.byes },
         { chess },
       );
-      if (paired.pairings.length !== 1) return false;
+      // W3 app-B T1 (X-SW-3; engine 2.0.0): a refused pairing (`ok: false`) seats nobody, so the holder cannot be played.
+      if (!paired.ok || paired.pairings.length !== 1) return false;
       byePairing = paired.pairings[0]!;
       return true;
     };
@@ -442,6 +446,8 @@ async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<LateEntryResult> {
       ...(gen.drawSeed !== null ? { draw_seed: gen.drawSeed } : {}),
       ...(gen.drawOrder !== null ? { draw_order: gen.drawOrder } : {}),
       ...(gen.colourLot !== null ? { colour_lot: gen.colourLot } : {}),
+      // W3 app-B T7 (X-SW-11): a re-pair of the final round sends the topscorer line too, and records it like a Pair does.
+      ...(gen.finalRoundMaxScore !== null ? { final_round_max_score: gen.finalRoundMaxScore } : {}),
     },
     ctx.actorId,
   );

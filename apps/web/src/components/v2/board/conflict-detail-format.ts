@@ -257,6 +257,24 @@ export function formatConflictDetail(d: ConflictDetail, ctx: ConflictDetailCtx):
         otherRound: d.otherRoundNo ?? 0,
         day: d.day ?? "",
       });
+    case "round_order_end":
+      // W3 app-B T1 (X-SW-31). How far the board starts too early is MEASURED and rides outside the
+      // detail (`Conflict.shortfallMinutes`), so the sentence names only the two rounds.
+      return msg("board.conflict.detail.round_order_end", {
+        round: d.roundNo ?? 0,
+        otherRound: d.otherRoundNo ?? 0,
+      });
+    case "no_slot_round_barrier":
+      return msg("board.conflict.detail.no_slot_round_barrier", {
+        round: d.roundNo ?? 0,
+        otherRound: d.otherRoundNo ?? 0,
+        other: fixtureLabel(d.otherFixtureId, fixtureTitles),
+      });
+    case "rounds_per_day":
+      // The day's count is MEASURED (`Conflict.measuredCount`); the detail carries the day and the cap.
+      return msg("board.conflict.detail.rounds_per_day", { cap: d.requiredCount ?? 0, day: d.day ?? "" });
+    case "no_slot_rounds_per_day":
+      return msg("board.conflict.detail.no_slot_rounds_per_day", { round: d.roundNo ?? 0, cap: d.requiredCount ?? 0 });
     case "no_slot_lattice":
       return msg("board.conflict.detail.no_slot_lattice");
     case "no_slot_budget":

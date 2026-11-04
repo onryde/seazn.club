@@ -128,7 +128,12 @@
 //    nothing else in a pack records which pool a fixture sat in.
 //  * ROUND NUMBER. `StageCtx.roundNo` is a fixture fact and is likewise
 //    undeclared, so `standingsDelta` is called without one. No shipped module
-//    reads it, but a future one could.
+//    reads it, but a future one could. ONE exception, W3 (engine 2.0.0): a
+//    SWISS table's ledger reads each counted fixture's round (the engine
+//    throws without one), and the only carrier a pack has is the ext key, as
+//    for a pool — the product keys a Swiss board `sw-r{round}-b{board}`
+//    (`usecases/stages.ts`, `mintSwissBoardExtKeys`). A Swiss stream whose
+//    key does not follow that convention is reported, not guessed at.
 //
 // ---------------------------------------------------------------------------
 // PARITY WITH THE PRODUCT'S BATCH IMPORT (session prompt item 2)
@@ -196,6 +201,8 @@ import {
   PointsRule,
   resolveTableRules,
   setsToWinOf,
+  swissDrawFactsOf,
+  unplayedSidesOf,
   type FixtureResult,
   type StandingsRow,
   type TableFixture,
@@ -382,6 +389,16 @@ export function bootRegistry(): typeof registry {
 // ---------------------------------------------------------------------------
 // Offline mirrors of the product's fold inputs
 // ---------------------------------------------------------------------------
+
+/** The round a Swiss fixture's ext key names, or null when it names none: the first number of the product's
+ *  `sw-r{round}-b{board}` board key and `sw-r{round}-bye` bye key (`mintSwissBoardExtKeys`, `planSwissShells`). The third
+ *  literal of that key format after the product's own two (`swiss-shell.ts`), so the conformance test in
+ *  `__tests__/validate-pack.test.ts` folds the product's output through THIS function — a pack declares no round, and a drifted
+ *  key format would otherwise read a wrong round or none. */
+export function swissRoundOfExtKey(extKey: string): number | null {
+  const m = /^sw-r(\d+)-/.exec(extKey);
+  return m === null ? null : Number(m[1]);
+}
 
 /**
  * A pack payload names entrants and people with the `@` sigil (pack-schema.ts
@@ -2277,11 +2294,12 @@ function deriveStandings(
     // the module's own score keys (`awardScoreKeys`) take the awarded score too. W2d T9: the rule ALWAYS pays (the
     // product's standingsDelta fallback is gone) — the stage's own, else the sport's under the stage's format
     // (`fold.cfg`, `stageScopedFoldCfg`: one cfg for every fixture of the stage), as the product pays a stage with no pin.
+    const played = playRecorded(packEnvelopes(stream), fold.module);
     const result = payout(
       fold.outcome,
       decidedInFor(fold.module, fold.outcome),
       pair,
-      playRecorded(packEnvelopes(stream), fold.module),
+      played,
       pointsRule ??
         resolveTableRules({
           module: fold.module,
@@ -2295,8 +2313,23 @@ function deriveStandings(
       setsToWinOf(fold.module, fold.cfg),
     );
     gamePoints.set(result, [pair[0].points, pair[1].points]);
+    // W3 (engine 2.0.0): a Swiss ledger reads each counted fixture's round; a pack declares none, so it is read off the ext
+    // key the product mints (`sw-r{round}-b{board}`), and a key that does not follow it is a finding, never round 0.
+    let swissRound: number | undefined;
+    if (tableKind === "swiss") {
+      const round = swissRoundOfExtKey(stream.fixtureExtKey);
+      if (round === null) {
+        return `stream "${stream.fixtureExtKey}" is in a swiss stage but its ext key names no round: the engine's Swiss ledger reads each counted fixture's round, so the key must follow the product's sw-r{round}-b{board}`;
+      }
+      swissRound = round;
+    }
     fixtures.push({
       id: fixtureKey(stream.divisionRef, stream.fixtureExtKey),
+      ...(swissRound !== undefined ? { roundNo: swissRound } : {}),
+      // W3 T8 (X-SW-7; FIDE C.07 (2026) 16.2.2 / 16.2.4): a Swiss ledger also reads the side(s) each counted result lost WITHOUT
+      // playing (`null` = a game played). A pack folds `core.forfeit` (a walkover, `by: "both"`), so it is the product's own
+      // answer - `unplayedSidesOf` over the same "was anything played" fact `payout` was just handed, and the result's seats.
+      ...(swissRound !== undefined ? { unplayed: unplayedSidesOf(fold.outcome, played, result) } : {}),
       ...(poolPrefix !== undefined &&
       stream.fixtureExtKey.startsWith(poolPrefix)
         ? { poolId: poolKey }
@@ -2359,7 +2392,7 @@ function deriveStandings(
   const stageConfig = stage.config as Record<string, unknown>;
   const carry = stageConfig["carry_deltas"];
   const overrides = stageConfig["rank_overrides"];
-  const tableStage: TableStage = {
+  const tableFields = {
     id: stage.ref,
     // americano rides the league fold (competition.ts:333, "Jul3/08 §3").
     kind: (stage.kind === "americano"
@@ -2383,7 +2416,6 @@ function deriveStandings(
     ...(stageConfig["rounds"] != null
       ? { rounds: stageConfig["rounds"] as number }
       : {}),
-    ...(stage.kind === "swiss" ? { swiss: true } : {}),
     ...(Array.isArray(carry)
       ? { openingDeltas: carry as readonly StandingsDelta[] }
       : {}),
@@ -2401,6 +2433,21 @@ function deriveStandings(
       ? { h2hScope: "overall" as const }
       : {}),
   };
+  // W3 (ruling R4; engine 2.0.0), as the product's `toTableStage`: a Swiss ledger stage names the sport's draw facts under
+  // the stage's merged cfg — the one cfg the rules above resolved under — and the engine refuses one that names none. The
+  // engine's `TableStage` is a union on `swiss`, so the two shapes are two branches, not a conditional spread.
+  const tableStage: TableStage =
+    stage.kind === "swiss"
+      ? {
+          ...tableFields,
+          swiss: true,
+          swissDraw: swissDrawFactsOf(sport.module, sport.cfg),
+          // W3 T8 (X-SW-8): the rounds each entrant was in the stage but unpaired (a late entry, a withdrawal). A pack is the
+          // played history of a stage's fixtures and declares no roster timeline, so no entrant has an absence to name: the
+          // engine's "none" is an empty map (and it refuses the field left out, whether or not a round was missed).
+          swissAbsentRounds: new Map<string, readonly number[]>(),
+        }
+      : tableFields;
 
   const completed = completeTableStage(tableStage, fixtures);
   // `PoolTable.pool` is the engine's own field name (`competition/stage.ts:232`

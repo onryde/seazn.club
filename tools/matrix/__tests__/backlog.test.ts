@@ -5,10 +5,12 @@
 // Where an expected value comes from (never from the writer under test):
 //   - a wave's name and scope words: design section 8's own table, typed here from it;
 //   - an example case, a count, a layer: the triage's own groups, re-counted here from the rows;
-//   - a carry's facts (ruling 70's cells, the flips, the mexicano counts): the committed dispatch cut, re-counted here;
+//   - a carry's facts (the flips, the mexicano counts) and the intro's held cells (ruling 70's, the W1d record's list): the committed
+//     dispatch cut and the record, re-counted here;
 //   - a refusal: the guard's own NAME, never only an exit code (a catch-all would hide a deleted guard).
 // Every sweep reports how many items it checked, and zero is a failure.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -336,8 +338,9 @@ describe("the section over the committed baseline: structure and counts, re-coun
 const rawCases = (layer: string): { caseId: string; state: string; reason?: string }[] => (JSON.parse(readFileSync(resolve(BASE, layer, "results.json"), "utf8")) as { cases: { caseId: string; state: string; reason?: string }[] }).cases;
 const RAW: Record<string, { caseId: string; state: string; reason?: string }[]> = Object.fromEntries(LAYERS.map((l) => [l, rawCases(l)]));
 const stateOf = (layer: string, id: string): string | undefined => RAW[layer]!.find((c) => c.caseId === id)?.state;
-/** Owner ruling 70's cells, as baseline.json's own block lists them (the writer finds them from the dispatch cut instead). */
-const RULING_70: string[] = (JSON.parse(readFileSync(resolve(CATALOGUE_DIR, "baseline.json"), "utf8")) as { ruling70: { ids: string[] } }).ruling70.ids;
+/** Owner ruling 70's cells, as the W1d record's baseline.json lists them. W3 retired the live block (catalogue/baseline.json carries none);
+ *  the record keeps its own, byte for byte, as the history the ruling was made on. */
+const RULING_70: string[] = (JSON.parse(readFileSync(join(BASE, "baseline.json"), "utf8")) as { ruling70: { ids: string[] } }).ruling70.ids;
 const fmt = (n: number): string => n.toLocaleString("en-US");
 /** "L1 53 and L2 164, 217 in all" (one layer: "L2 1,505"): per layer in layer order, the total only when there is more than one. */
 function byLayer(count: Record<string, number>): string {
@@ -402,19 +405,15 @@ describe("the section says what the ❌ count leaves out, counted from the commi
   });
 });
 
-describe("the ruling-70 held set is baseline.json's list, never the dispatch cut's state flips (PR-B review m3)", () => {
-  /** The "What the ❌ count leaves out" paragraph of a rendered section, and the ruling-70 carry's sentence about the cells it holds. */
-  const parts = (i: BacklogInput): { intro: string; held: string } => {
-    const doc = renderBacklog(i);
-    return {
-      intro: doc.split("\n\n").find((p) => p.startsWith("What the ❌ count leaves out"))!,
-      held: waveSection(doc, "W3").split("\n").find((l) => l.startsWith("- **Owner ruling 70"))!.split("The ruling's other")[1] ?? "(no `The ruling's other` sentence)",
-    };
-  };
+describe("the ruling-70 held set is the W1d record's list, never the dispatch cut's state flips (PR-B review m3)", () => {
+  /** The "What the ❌ count leaves out" paragraph of a rendered section: the one place the held cells are printed since W3 removed the carry. */
+  const introOf = (i: BacklogInput): string => renderBacklog(i).split("\n\n").find((p) => p.startsWith("What the ❌ count leaves out"))!;
+  /** The label the intro's reader refuses under. */
+  const INTRO = /carry the intro \(ruling 70's cells\): /;
   const l3Reds = (): number => RAW["L3"]!.filter((c) => c.state === "red").length;
   const heldIds = (): string[] => RULING_70.filter((id) => stateOf("L3", id) !== "red");
 
-  it("the loader reads the list the judge applies: baseline.json's ids, in its order (and the committed run has both kinds of cell)", () => {
+  it("the loader reads the list the judge applied to the W1d L3: the record's ids, in its order (and the committed run has both kinds of cell)", () => {
     expect(real.ruling70).toEqual(RULING_70);
     // On the committed data the two sources agree today (that is why the list is safe to follow): the cut's flipping cells are the list.
     const flipping = real.cuts.ids.filter((id) => new Set(real.cuts.dispatches.map((d) => d.cases.find((c) => c.caseId === id)!.state)).size > 1);
@@ -434,15 +433,15 @@ describe("the ruling-70 held set is baseline.json's list, never the dispatch cut
   };
   const code = (id: string): string => `\`${id}\``;
 
-  // The carry says the ruling's cells "flipped between works and red across the dispatches": a claim about the cut, made from baseline.json's
-  // list. The figure follows the list (the judge applies it); the writer refuses what would make the sentence lie (PR-B re-review I2).
+  // The ruling was made on the cells that "flipped between works and red across the dispatches": a claim about the cut, recorded as the
+  // record's list. The figure follows the list (the judge applied it); the writer refuses a list that is not that ruling's (PR-B re-review I2).
   it("the two sources DISAGREE, the list narrower: the cut still flips a cell the list lacks, and the writer refuses it by name, naming both sides", () => {
     const i = copy();
     const [dropped] = heldIds();
     i.ruling70 = i.ruling70.filter((id) => id !== dropped);
     expect(i.cuts.ids, "the cut still flips the dropped cell").toContain(dropped);
     const r = refused(i);
-    expect(r).toMatchObject({ name: "CarrySourcesDisagree", message: expect.stringMatching(/ruling-70: /) });
+    expect(r).toMatchObject({ name: "CarrySourcesDisagree", message: expect.stringMatching(INTRO) });
     expect(r.message).toContain(`the dispatch cut flips ${code(dropped!)}, which baseline.json's ruling70 does not list`);
     expect(i.ruling70.length, "the other side lists cells").toBeGreaterThan(0);
     for (const id of i.ruling70) expect(r.message, "the list's side is named too").toContain(code(id));
@@ -453,7 +452,7 @@ describe("the ruling-70 held set is baseline.json's list, never the dispatch cut
     const still = heldIds()[0]!;
     steadied(i, still);
     const r = refused(i);
-    expect(r).toMatchObject({ name: "CarrySourcesDisagree", message: expect.stringMatching(/ruling-70: /) });
+    expect(r).toMatchObject({ name: "CarrySourcesDisagree", message: expect.stringMatching(INTRO) });
     expect(r.message).toContain(`baseline.json's ruling70 lists ${code(still)}, which the dispatch cut does not flip`);
   });
 
@@ -479,26 +478,26 @@ describe("the ruling-70 held set is baseline.json's list, never the dispatch cut
     expect(kept, "two held cells, or dropping one proves nothing").toBeDefined();
     i.ruling70 = i.ruling70.filter((id) => id !== dropped);
     steadied(i, dropped!);
-    const { intro, held } = parts(i);
+    const intro = introOf(i);
     expect(intro).toContain(`${code(kept!)} (1 cell, `);
     expect(intro).toContain(`it holds ${fmt(l3Reds() + 1)} red cases, not the ${fmt(l3Reds())} of the committed L3`);
     expect(intro, "the dropped cell is no part of the hold").not.toContain(dropped!);
-    expect(held.startsWith(" 1 cell ("), held).toBe(true);
-    expect(held).not.toContain(dropped!);
   });
 
-  it("a list that names no cell is refused by name (the hold the carry describes is gone: remove the carry with it), and a cell the committed L3 lacks is refused", () => {
+  it("a record with no list holds nothing (the intro says `none`, nothing is refused: the carry that refused an empty list went with ruling 70), and a listed cell the committed L3 lacks is refused by name", () => {
     const none = copy();
     none.ruling70 = [];
-    expect(refused(none)).toMatchObject({ name: "CarryEmpty", message: expect.stringMatching(/ruling-70: baseline\.json carries no ruling70 list/) });
+    expect(refused(none)).toEqual({ name: "no refusal", message: "" });
+    expect(introOf(none)).toContain("`judge regression`: none.");
+    expect(introOf(real), "the positive pair: the real list holds cells").not.toContain("`judge regression`: none.");
     const lacks = copy();
     const gone = RULING_70[0]!;
     lacks.cases = lacks.cases.filter((c) => !(c.layer === "L3" && c.caseId === gone));
-    expect(refused(lacks)).toMatchObject({ name: "CarrySourceMissing", message: expect.stringMatching(/ruling-70: the committed L3 holds no case .*which baseline\.json's ruling70 lists/) });
+    expect(refused(lacks)).toMatchObject({ name: "CarrySourceMissing", message: expect.stringMatching(/carry the intro \(ruling 70's cells\): the committed L3 holds no case .*which baseline\.json's ruling70 lists/) });
   });
 
-  it("the loader holds baseline.json's block to the committed L3 (stale, or no file) and says so by name", () => {
-    const base = JSON.parse(readFileSync(resolve(CATALOGUE_DIR, "baseline.json"), "utf8")) as { ruling70: { workflowRun: number } };
+  it("the loader holds the record's block to the L3 it counts (stale run, another tag commit, an id that is no case, an id twice, no file) and says so by name", () => {
+    const base = JSON.parse(readFileSync(join(BASE, "baseline.json"), "utf8")) as { L3: string; ruling70: { workflowRun: number; tagCommit: string; ids: string[] } };
     const catalogue = (name: string, baselineJson: string | null): string => {
       const dir = join(scratch, name);
       mkdirSync(dir, { recursive: true });
@@ -506,20 +505,34 @@ describe("the ruling-70 held set is baseline.json's list, never the dispatch cut
       if (baselineJson !== null) writeFileSync(join(dir, "baseline.json"), baselineJson);
       return dir;
     };
-    const stale = structuredClone(base);
-    stale.ruling70.workflowRun += 1;
     const attempt = (dir: string): BacklogRefused | null => {
       try { loadBacklogInput({ triage: triageJsonPath(), sha: SHA, catalogue: dir }); } catch (e) { if (e instanceof BacklogRefused) return e; throw e; }
       return null;
     };
+    // The positive pair: the record itself, handed in as the catalogue, loads with its own list.
+    expect(attempt(catalogue("cat-record", JSON.stringify(base)))).toBeNull();
+    expect(loadBacklogInput({ triage: triageJsonPath(), sha: SHA, catalogue: join(scratch, "cat-record") }).ruling70).toEqual(base.ruling70.ids);
+    const stale = structuredClone(base);
+    stale.ruling70.workflowRun += 1;
     expect(attempt(catalogue("cat-stale", JSON.stringify(stale)))).toMatchObject({ name: "BaselineUnreadable", message: expect.stringContaining("ruling70 was written for workflow run") });
+    const tag = structuredClone(base);
+    tag.ruling70.tagCommit = (tag.ruling70.tagCommit[0] === "0" ? "1" : "0") + tag.ruling70.tagCommit.slice(1);
+    expect(attempt(catalogue("cat-tag", JSON.stringify(tag)))).toMatchObject({ name: "BaselineUnreadable", message: expect.stringContaining(`and the L3 this backlog counts was run from ${SHA}`) });
+    const stray = structuredClone(base);
+    const nonCase = "swiss_knockout|nonesuch|nonesuch|R4";
+    stray.ruling70.ids = [...stray.ruling70.ids.slice(0, -1), nonCase];
+    expect(attempt(catalogue("cat-stray", JSON.stringify(stray)))).toMatchObject({ name: "BaselineUnreadable", message: expect.stringContaining(`\`${nonCase}\`, which is no case of the L3 this backlog counts`) });
+    const twice = structuredClone(base);
+    twice.ruling70.ids = [...twice.ruling70.ids, twice.ruling70.ids[0]!];
+    expect(attempt(catalogue("cat-twice", JSON.stringify(twice)))).toMatchObject({ name: "BaselineUnreadable", message: expect.stringContaining(`\`${base.ruling70.ids[0]!}\` twice`) });
     expect(attempt(catalogue("cat-nofile", null))).toMatchObject({ name: "BaselineUnreadable", message: expect.stringContaining("cannot be read") });
-    // The list must also qualify the L3 THIS backlog counts, not only the one baseline.json names: handed another evidence directory whose L3
-    // is another run (the triage written from it, so the triage check passes), the loader refuses the list by name.
+    // The list must also qualify the L3 THIS backlog counts: handed another evidence directory whose L3 is another run (the triage written
+    // from it, so the triage check passes) and the record beside it, the loader refuses the list by name.
     const other = join(scratch, "baseline-other-l3");
     mkdirSync(join(other, "L3"), { recursive: true });
     for (const layer of ["L1", "L2"]) { mkdirSync(join(other, layer), { recursive: true }); symlinkSync(join(DEFAULT_BASELINE, layer, "results.json"), join(other, layer, "results.json")); }
     symlinkSync(join(DEFAULT_BASELINE, "dispatch-cuts.json"), join(other, "dispatch-cuts.json"));
+    symlinkSync(join(DEFAULT_BASELINE, "baseline.json"), join(other, "baseline.json"));
     const l3 = JSON.parse(readFileSync(join(DEFAULT_BASELINE, "L3", "results.json"), "utf8")) as { runId: string };
     const otherRun = l3.runId.replace(/^ci-(\d+)-/, (_m, n: string) => `ci-${Number(n) + 1}-`);
     expect(otherRun, "the run id changed").not.toBe(l3.runId);
@@ -531,22 +544,21 @@ describe("the ruling-70 held set is baseline.json's list, never the dispatch cut
     let seen: BacklogRefused | null = null;
     try { loadBacklogInput({ triage, sha: SHA, baseline: other }); } catch (e) { if (e instanceof BacklogRefused) seen = e; else throw e; }
     expect(seen).toMatchObject({ name: "BaselineUnreadable", message: expect.stringContaining(`the L3 this backlog counts is ${otherRun}`) });
-    // The block retired (no `ruling70`): the loader loads, with an empty list (the ruling-70 carry then refuses by name, above).
+    // A record with no block (the live file's shape since W3): the loader loads, with an empty list.
     const { ruling70: _gone, ...retired } = base;
-    const loaded = loadBacklogInput({ triage: triageJsonPath(), sha: SHA, catalogue: catalogue("cat-retired", JSON.stringify({ L3: (JSON.parse(readFileSync(resolve(CATALOGUE_DIR, "baseline.json"), "utf8")) as { L3: string }).L3, ...retired })) });
-    expect(loaded.ruling70).toEqual([]);
+    expect(loadBacklogInput({ triage: triageJsonPath(), sha: SHA, catalogue: catalogue("cat-retired", JSON.stringify(retired)) }).ruling70).toEqual([]);
   });
 
   // W2e Task 35 re-baselined the LIVE catalogue/baseline.json to the W2e truth run's CI L3 (the W1d baseline predates the 3x15 badminton
   // default). This backlog is the W1d record, counted from the W1d baseline directory, so the live block no longer qualifies the run it
   // counts. It reads the baseline.json that directory carries (the one W1d was the baseline under), and that file is held to the L3 it
   // counts exactly as the live one was: stale, and the loader refuses it by name.
-  it("W2e T35: the W1d backlog reads the baseline.json its own baseline directory carries, not the live (re-baselined) one — and holds that file to the L3 it counts", () => {
+  it("W2e T35 / W3 T12: the W1d backlog reads the baseline.json its own baseline directory carries, not the live one (re-baselined, block retired) — and holds that file to the L3 it counts", () => {
     const w1dRun = (JSON.parse(readFileSync(join(DEFAULT_BASELINE, "L3", "results.json"), "utf8")) as { runId: string }).runId;
-    const live = JSON.parse(readFileSync(resolve(CATALOGUE_DIR, "baseline.json"), "utf8")) as { L3: string; ruling70: { workflowRun: number; ids: string[] } };
+    const live = JSON.parse(readFileSync(resolve(CATALOGUE_DIR, "baseline.json"), "utf8")) as { L3: string; ruling70?: unknown };
     const archived = JSON.parse(readFileSync(join(DEFAULT_BASELINE, "baseline.json"), "utf8")) as { L3: string; ruling70: { workflowRun: number; ids: string[] } };
-    // The premise: the live block is for another run than the one this backlog counts (else this decoupling would be decoration).
-    expect(new RegExp(`^ci-${live.ruling70.workflowRun}-\\d+-l3$`).test(w1dRun), "the live block does not qualify the W1d run").toBe(false);
+    // The premise: the live file carries no block at all since W3 retired it, so a list this backlog prints can only be the record's.
+    expect(live.ruling70, "the live baseline.json carries no ruling70 (W3 Task 12)").toBeUndefined();
     expect(live.L3, "the live baseline moved off the W1d L3").not.toBe(archived.L3);
     // The record qualifies the W1d run, and it is the run the loader counted.
     expect(new RegExp(`^ci-${archived.ruling70.workflowRun}-\\d+-l3$`).test(w1dRun), "the archived block qualifies the W1d run").toBe(true);
@@ -567,6 +579,31 @@ describe("the ruling-70 held set is baseline.json's list, never the dispatch cut
     // …and the same directory with its record intact loads, with the record's list: the refusal above is the record's staleness alone.
     writeFileSync(join(dir, "baseline.json"), JSON.stringify(archived));
     expect(loadBacklogInput({ triage: triageJsonPath(), sha: SHA, baseline: dir }).ruling70).toEqual(archived.ruling70.ids);
+  });
+});
+
+// W3 Task 12 retired ruling 70 in the LIVE catalogue only. The W1d record is history: its baseline.json keeps the block byte for byte, the
+// backlog still reads it (the intro's held figure is what `judge regression` applied to the W1d L3), and the section it writes is the
+// committed one. The digest is the record's at W1d Task 21, taken before the retirement and unchanged by it.
+const W1D_RECORD_SHA256 = "2af2bd632f2ed6d2a03fa95c9aa9878b82de33e9e947bc7a3e1992f8ecb6ae12";
+
+describe("the W1d record still loads its own block and its backlog section is unchanged (W3 Task 12)", () => {
+  it("the record is byte-identical, its list is the loader's, each id a case of the W1d L3, and the regenerated section equals _INDEX.md's", () => {
+    const bytes = readFileSync(join(BASE, "baseline.json"));
+    expect(createHash("sha256").update(bytes).digest("hex"), "the record is the file W1d committed").toBe(W1D_RECORD_SHA256);
+    const record = JSON.parse(bytes.toString("utf8")) as { L3: string; ruling70: { ids: string[] } };
+    expect(resolve(REPO, record.L3), "the record names the W1d L3").toBe(join(BASE, "L3", "results.json"));
+    expect(real.ruling70, "the loader's list is the record's, in its order").toEqual(record.ruling70.ids);
+    let checked = 0;
+    for (const id of record.ruling70.ids) { expect(stateOf("L3", id), `${id} is a case of the W1d L3`).toBeDefined(); checked++; }
+    expect(checked, "the record lists cells").toBeGreaterThan(0);
+    // The section as `pnpm matrix:backlog` writes it from this input is the committed one, byte for byte (w1d-backlog-index.test.ts runs the
+    // printed command; this is the same check over the loader's own input, so a record drift reds here first, with the record named).
+    const index = readFileSync(resolve(REPO, TRUTH_RUNS, "..", "_INDEX.md"), "utf8");
+    const heading = md.split("\n")[0]!;
+    expect(heading.startsWith("## W1d truth-run backlog"), heading).toBe(true);
+    expect(index.split(heading).length, "the heading is in _INDEX.md once").toBe(2);
+    expect(`${heading}${index.split(heading)[1]!}`).toBe(md);
   });
 });
 
@@ -637,14 +674,11 @@ describe("each wave says how many 🚫 cases route to it by their own reason (T2
 });
 
 describe("the carries: each hangs on its anchor gap, in that gap's wave", () => {
-  it("the seven carries and the five design-row lines sit in the section of the wave their anchor routes to", () => {
-    // Anchor and wave typed from section 8 and the routing the carry cites (SC-P4 and SC-O1 are W2's, SW-H1 W3's, ST-G5 W5's, NEW-W1d-1 W7's).
+  it("the three carries and the five design-row lines sit in the section of the wave their anchor routes to", () => {
+    // Anchor and wave typed from section 8 and the routing the carry cites (SC-P4 is W2's, ST-G5 W5's, NEW-W1d-1 W7's). The four SW-H1
+    // carries went with ruling 70 (W3 Task 12): see "W3 retired ruling 70" below.
     const expected: [string, string][] = [
       ["SC-P4 and the prompt's trap 2 contradict each other", "W2"],
-      ["Owner ruling 70", "W3"],
-      ["Recommendation (the controller's, not an owner ruling)", "W3"],
-      ["The swiss_playoff R4 reason flip", "W3"],
-      ["swiss_playoff R4 cells the committed run keys to this wave", "W2"],
       ["ST-G5 pool of one", "W5"],
       ["Mexicano R4: an intermittent 500", "W7"],
     ];
@@ -655,14 +689,14 @@ describe("the carries: each hangs on its anchor gap, in that gap's wave", () => 
       expect(waveSection(md, wave).includes(`- **${title}`), `${title} is under ${wave}`).toBe(true);
       checked++;
     }
-    expect(checked).toBe(7);
+    expect(checked).toBe(3);
     for (const gap of real.newGaps.gaps) {
       const line = `- **${gap.id} (${gap.wave}): a design row backs the wave.**`;
       expect([...md.matchAll(new RegExp(line.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))], `${gap.id}: once`).toHaveLength(1);
       expect(waveSection(md, gap.wave).includes(line), `${gap.id} is under ${gap.wave}`).toBe(true);
       checked++;
     }
-    expect(checked, "seven carries and five NEW gaps").toBe(12);
+    expect(checked, "three carries and five NEW gaps").toBe(8);
   });
 
   it("the design-row line says named or family, with the design's own word: group_group_ko is the one that is not named", () => {
@@ -677,74 +711,42 @@ describe("the carries: each hangs on its anchor gap, in that gap's wave", () => 
     expect(line("NEW-W1d-2")).toContain("names `americano` for `americano`");
   });
 
-  it("ruling 70's carry names its cells (the writer reads them from baseline.json's own ruling70 block, the list the judge applies) and the retirement rule the W3 prompt states", () => {
+  // W3 Task 12: the SW-H1 fix retired ruling 70, and W3-swiss.md says the ruling-70 carry "goes with the block". The three carries that hung
+  // on the same SW-H1 dead end (the P6 recommendation, the swiss_playoff reason flip and its W2 pointer) went too: the W3 truth run closes them.
+  const RETIRED_CARRIES = ["ruling-70", "p6-recommendation", "swiss-playoff-reason-flip", "swiss-playoff-keyed-here"] as const;
+
+  it("W3 retired ruling 70 and its carry went with the block (W3-swiss.md): no carry of the file, and no line of W3's section, is ruling 70's", () => {
+    const w3 = readFileSync(resolve(REPO, TRUTH_RUNS, "..", "W3-swiss.md"), "utf8").replace(/\s+/g, " ");
+    expect(w3, "the W3 prompt's own rule").toContain("the ruling-70 carry (`catalogue/backlog-carries.json`) goes with the block");
+    const ids = real.carries.carries.map((c) => c.id);
+    expect(ids.length, "the file still holds carries").toBeGreaterThan(0);
+    let checked = 0;
+    for (const gone of RETIRED_CARRIES) { expect(ids, gone).not.toContain(gone); checked++; }
+    expect(checked).toBe(4);
     const sec = waveSection(md, "W3");
-    expect(RULING_70.length, "the ruling lists cells").toBeGreaterThan(0);
-    for (const id of RULING_70) expect(sec, id).toContain(`\`${id}\``);
-    expect(sec).toContain("re-baseline L3 in the same change");
-    expect(sec).toContain("`ruling70`");
-    expect(sec).toContain("RULING_70_IDS");
+    expect(sec.length, "W3's section is there").toBeGreaterThan(0);
+    for (const line of ["- **Owner ruling 70", "- **Recommendation", "- **The swiss_playoff R4 reason flip"]) expect(sec, line).not.toContain(line);
+    expect(waveSection(md, "W2"), "the W2 pointer went with the flip carry").not.toContain("- **swiss_playoff R4 cells the committed run keys to this wave");
+    expect(md).not.toContain("RULING_70_IDS");
   });
 
-  it("ruling 70's carry says which of its cells the committed run does NOT have red, and that only `judge regression` holds them (T22 review m3b)", () => {
-    const line = waveSection(md, "W3").split("\n").find((l) => l.startsWith("- **Owner ruling 70"))!;
-    const held = RULING_70.filter((id) => stateOf("L3", id) !== "red");
-    const keyed = RULING_70.filter((id) => stateOf("L3", id) === "red");
-    expect(held.length, "this baseline has ruling-70 cells that are not red, or the sentence is untested").toBeGreaterThan(0);
-    expect(keyed.length, "and one that is").toBeGreaterThan(0);
-    for (const id of held) expect(line, id).toContain(`\`${id}\``);
-    expect(line).toContain(`The ruling's other ${held.length} cell${held.length === 1 ? "" : "s"}`);
-    expect(line).toContain([...new Set(held.map((id) => `\`${stateOf("L3", id)}\``))].join(" and "));
-    expect(line).toContain("only `judge regression` holds");
-    // The keyed cell is the one the triage counts: it is not among the held.
-    for (const id of keyed) expect(line.split("The ruling's other")[1]!, `${id} is not held`).not.toContain(id);
-  });
-
-  it("the swiss_playoff reason flip: both cells, the per-dispatch reasons from the cut, and where the committed run keys them", () => {
-    const sec = waveSection(md, "W3");
-    const flip = sec.split("\n").find((l) => l.startsWith("- **The swiss_playoff R4 reason flip"))!;
-    for (const id of ["swiss_playoff|boardgame|blitz|R4", "swiss_playoff|generic|score|R4"]) expect(flip, id).toContain(`\`${id}\``);
-    // README: dispatch 1 reads SW-H1, dispatches 2 and 3 the drawn-game stall; the committed run (dispatch 3) keys SC-O1 (boardgame) and SC-O2 (generic).
-    expect(flip).toContain("dispatch 1 SW-H1, dispatch 2 stall, dispatch 3 stall");
-    expect(flip).toContain("SC-O1");
-    expect(flip).toContain("SC-O2");
-  });
-
-  it("the W2 pointer to the swiss_playoff flip (T22 review m8): both cells and their gaps, the owner wave and the carry's title are the data's, never typed", () => {
-    const line = waveSection(md, "W2").split("\n").find((l) => l.startsWith("- **swiss_playoff R4 cells the committed run keys to this wave"))!;
-    expect(line, "the pointer is in W2's section").toBeDefined();
-    const flip = real.carries.carries.find((c) => c.id === "swiss-playoff-reason-flip")!;
-    // The owner wave is the one the triage files the flip carry's anchor gap under (the triage's own data, not the writer's routing).
-    const owner = real.triage.gaps.find((g) => g.gap === flip.anchor)?.wave;
-    expect(owner, "the flip carry's anchor gap is keyed to a wave in the triage").toBeTruthy();
-    expect(owner, "the pointer points ELSEWHERE: a pointer to its own wave would be no pointer").not.toBe("W2");
-    // The cells are the swiss_playoff R4 cells of the dispatch cut (the ones whose reason flips), each keyed to its own gap in the committed run.
-    const cells = real.triage.rows.filter((r) => real.cuts.ids.includes(r.caseId) && /^swiss_playoff\|[^|]+\|[^|]+\|R4$/.test(r.caseId));
-    expect(cells.length, "swiss_playoff R4 cells of the cut are red in the committed run").toBeGreaterThan(0);
-    for (const r of cells) expect(line, r.caseId).toContain(`${r.gap} (\`${r.caseId}\`)`);
-    // The gaps the line tells the reader to watch are the gaps of those cells, each once.
-    const gaps = [...new Set(cells.map((r) => r.gap))];
-    expect(gaps.length, "the cells are keyed to more than one gap, or the list is untested").toBeGreaterThan(1);
-    const watched = /a move in (.+?) as progress/.exec(line);
-    expect(watched, "the line names the gaps to watch").not.toBeNull();
-    expect(watched![1]!.split(/, | and /).sort()).toEqual([...gaps].sort());
-    // A swiss_playoff R4 cell that is red and does NOT flip is not this carry's: the committed run keys one to SW-H1 and the line leaves it out.
-    const steady = real.triage.rows.filter((r) => !real.cuts.ids.includes(r.caseId) && /^swiss_playoff\|[^|]+\|[^|]+\|R4$/.test(r.caseId));
-    expect(steady.length, "the baseline has a swiss_playoff R4 cell that does not flip, or the exclusion is untested").toBeGreaterThan(0);
-    for (const r of steady) expect(line, r.caseId).not.toContain(r.caseId);
-    expect(line).toContain(`the ${owner!} carry "${flip.title}"`);
-    // And that wave's section holds the carry it points at, under that very title.
-    expect(waveSection(md, owner!)).toContain(`- **${flip.title}**`);
-  });
-
-  it("the pointer is refused by name when the carry it points at is gone, and when its anchor is not the wave the cells are keyed in", () => {
-    const gone = copy();
-    gone.carries.carries = gone.carries.carries.filter((c) => c.id !== "swiss-playoff-reason-flip");
-    // The derivation that fills the flip carry has no carry in the file: refused first, by the missing-carry guard.
-    expect(refused(gone)).toMatchObject({ name: "CarryMissing" });
-    const away = copy();
-    away.carries.carries.find((c) => c.id === "swiss-playoff-keyed-here")!.anchor = "SW-H1";
-    expect(refused(away)).toMatchObject({ name: "CarryWaveDisagrees", message: expect.stringMatching(/swiss-playoff-keyed-here/) });
+  it("the carries removed with ruling 70 are CLOSED by the W3 truth run, not dropped: every cell they named works in w3-final's L3, and no case there pairs nobody", () => {
+    const w3 = JSON.parse(readFileSync(resolve(REPO, TRUTH_RUNS, "w3-final", "ci", "L3", "results.json"), "utf8")) as { runId: string; cases: { caseId: string; state: string }[] };
+    expect(w3.runId).toMatch(/^ci-41818942253-\d+-l3$/);
+    const state = new Map(w3.cases.map((c) => [c.caseId, c.state]));
+    // The cells, from the W1d data the carries were derived from: ruling 70's (the record's list), the swiss_playoff R4 cells of the dispatch
+    // cut (the reason flip and its pointer), and every case the W1d triage keyed to SW-H1 (the P6 recommendation's).
+    const playoff = real.cuts.ids.filter((id) => /^swiss_playoff\|[^|]+\|[^|]+\|R4$/.test(id));
+    const sw = real.triage.rows.filter((r) => r.gap === "SW-H1").map((r) => r.caseId);
+    expect(playoff.length, "the cut holds swiss_playoff R4 cells").toBeGreaterThan(0);
+    expect(sw.length, "the W1d triage keys cases to SW-H1").toBeGreaterThan(0);
+    const cells = [...new Set([...RULING_70, ...playoff, ...sw])];
+    let checked = 0;
+    for (const id of cells) { expect(state.get(id), id).toBe("works"); checked++; }
+    expect(checked, "every cell the carries named").toBe(cells.length);
+    expect(checked).toBeGreaterThanOrEqual(RULING_70.length + playoff.length);
+    expect(w3.cases.length).toBeGreaterThan(0);
+    expect(w3.cases.filter((c) => JSON.stringify(c).includes("paired nobody")).map((c) => c.caseId), "no case of the W3 run pairs nobody").toEqual([]);
   });
 
   it("the mexicano carry's counts are the cut's: 9 of the 11 R4 cells flip, and the 500s per dispatch are re-counted from the reasons", () => {
@@ -867,8 +869,8 @@ describe("the writer refuses what would make the section lie (each guard, once, 
     a.carries.carries[0]!.text += " {nonesuch}";
     expect(refusal(a)).toBe("CarryPlaceholder");
     const b = copy();
-    const ruling = b.carries.carries.find((c) => c.text.includes("{cells}"))!;
-    ruling.text = ruling.text.replaceAll("{cells}", "the cells");
+    const mex = b.carries.carries.find((c) => c.text.includes("{flipped}"))!;
+    mex.text = mex.text.replaceAll("{flipped}", "some");
     expect(refusal(b)).toBe("CarryPlaceholder");
   });
   it("a carry no derivation knows, and a derivation with no carry in the file, are each refused (nothing is dropped silently)", () => {
@@ -879,10 +881,7 @@ describe("the writer refuses what would make the section lie (each guard, once, 
     b.carries.carries = b.carries.carries.slice(1);
     expect(refusal(b)).toBe("CarryMissing");
   });
-  it("a carry whose source is gone is refused: no ruling70 list in baseline.json, no ledger entry, no rule note, no mexicano cell", () => {
-    const flips = copy();
-    flips.ruling70 = [];
-    expect(refusal(flips)).toBe("CarryEmpty");
+  it("a carry whose source is gone is refused: no ledger entry, no rule note, no mexicano cell", () => {
     const entry = copy();
     entry.ledger.entries = entry.ledger.entries.filter((e) => e.id !== "SC-P4");
     expect(refusal(entry)).toBe("CarrySourceMissing");
@@ -911,15 +910,6 @@ describe("the writer refuses what would make the section lie (each guard, once, 
   it("the section holds no secret and nothing redact() would change (a fixpoint: the repo is public)", () => {
     expect(findSecrets(md)).toEqual([]);
     expect(md.length).toBeGreaterThan(20_000);
-  });
-  it("a reason class the flip carry does not know is refused, not printed as a guess", () => {
-    const i = copy();
-    for (const d of i.cuts.dispatches) for (const c of d.cases) if (c.caseId.startsWith("swiss_playoff|")) c.reason = "something else entirely";
-    expect(refusal(i)).toBe("CarryEmpty");
-    const j = copy();
-    const d1 = j.cuts.dispatches[0]!.cases.find((c) => c.caseId === "swiss_playoff|boardgame|blitz|R4")!;
-    d1.reason = "I4-nothing-ends-stuck: a reason of a class nobody wrote down, with another shape";
-    expect(refusal(j)).toBe("CarryShapeUnknown");
   });
 });
 
@@ -1031,8 +1021,6 @@ describe("each guard of the writer, by its own message (a guard that shares its 
     const cut = copy();
     cut.cuts.dispatches[1]!.cases = cut.cuts.dispatches[1]!.cases.filter((c) => c.caseId !== cut.cuts.ids[0]);
     expect(refused(cut)).toMatchObject({ name: "CarrySourceMissing", message: expect.stringMatching(/the dispatch cut holds/) });
-    const sw = withoutCases(copy(), gapCases(real, "SW-H1"));
-    expect(refused(sw)).toMatchObject({ name: "CarrySourceMissing", message: expect.stringMatching(/ruling-70.*keys no case to SW-H1/) });
     const st = withoutCases(copy(), gapCases(real, "ST-G5"));
     expect(refused(st)).toMatchObject({ name: "CarrySourceMissing", message: expect.stringMatching(/st-g5-pool-of-one.*keys no case to ST-G5/) });
     const outcome = copy();
@@ -1044,22 +1032,12 @@ describe("each guard of the writer, by its own message (a guard that shares its 
     // A cell the dispatch cut records and the committed L3 does not hold: the writer cannot say what state the run has it in.
     const l3 = copy();
     l3.cases = l3.cases.filter((c) => !(c.layer === "L3" && c.caseId === RULING_70[0]));
-    expect(refused(l3)).toMatchObject({ name: "CarrySourceMissing", message: expect.stringMatching(/ruling-70: the committed L3 holds no case/) });
-    const swissRow = withoutCases(copy(), ["swiss_playoff|boardgame|blitz|R4"]);
-    expect(refused(swissRow)).toMatchObject({ name: "CarrySourceMissing", message: expect.stringMatching(/swiss-playoff-reason-flip.*keys swiss_playoff\|boardgame\|blitz\|R4 to no gap/) });
+    expect(refused(l3)).toMatchObject({ name: "CarrySourceMissing", message: expect.stringMatching(/carry the intro \(ruling 70's cells\): the committed L3 holds no case/) });
     const mexRow = withoutCases(copy(), ["mexicano|football|11-a-side|R4"]);
     expect(refused(mexRow)).toMatchObject({ name: "CarrySourceMissing", message: expect.stringMatching(/mexicano-generate-500.*keys mexicano\|football\|11-a-side\|R4 to no gap/) });
   });
 
-  it("CarryEmpty: no ruling70 list, no steady two-reason cell, no mexicano cell, no flipped one, and no dispatch showing the 500 are each refused, each by what it says", () => {
-    const states = copy();
-    // The cut still flips three cells: only the list decides, so emptying the list is the refusal and the cut's flips are no help.
-    expect(states.cuts.ids.length).toBeGreaterThan(0);
-    states.ruling70 = [];
-    expect(refused(states)).toMatchObject({ name: "CarryEmpty", message: expect.stringMatching(/baseline\.json carries no ruling70 list/) });
-    const reasons = copy();
-    for (const d of reasons.cuts.dispatches) for (const c of d.cases) if (c.caseId.startsWith("swiss_playoff|")) c.reason = "something else entirely";
-    expect(refused(reasons)).toMatchObject({ name: "CarryEmpty", message: expect.stringMatching(/two reasons/) });
+  it("CarryEmpty: no mexicano cell, no flipped one, and no dispatch showing the 500 are each refused, each by what it says", () => {
     const noMex = copy();
     noMex.cases = noMex.cases.filter((c) => !c.caseId.startsWith("mexicano|"));
     expect(refused(noMex)).toMatchObject({ name: "CarryEmpty", message: expect.stringMatching(/holds no mexicano R4 cell/) });
@@ -1091,20 +1069,6 @@ describe("each guard of the writer, by its own message (a guard that shares its 
     const intro = copy();
     intro.carries.intro.push("an unfilled {nonesuch}");
     expect(refused(intro)).toMatchObject({ name: "CarryPlaceholder", message: expect.stringMatching(/the intro names \{nonesuch\}/) });
-  });
-
-  it("a swiss_playoff cell that changes its state or its failing set is no cell of the reason-flip carry: refused, never silently left out", () => {
-    const failing = copy();
-    const d2 = failing.cuts.dispatches[1]!.cases.find((c) => c.caseId === "swiss_playoff|boardgame|blitz|R4")!;
-    d2.checks = d2.checks.map((k) => (k.verdict === "fail" ? { ...k, verdict: "pass" } : k));
-    expect(refused(failing)).toMatchObject({ name: "CarryShapeUnknown", message: expect.stringMatching(/changes its state or its failing-check set/) });
-    const state = copy();
-    state.cuts.dispatches[2]!.cases.find((c) => c.caseId === "swiss_playoff|generic|score|R4")!.state = "works";
-    // A cell the cut newly flips and baseline.json's list does not name is the ruling-70 carry's disagreement first (PR-B re-review I2) ...
-    expect(refused(state)).toMatchObject({ name: "CarrySourcesDisagree", message: expect.stringContaining("the dispatch cut flips `swiss_playoff|generic|score|R4`, which baseline.json's ruling70 does not list") });
-    // ... and with the list naming it too (so the ruling-70 check passes) the reason-flip carry's own guard is the one that speaks.
-    state.ruling70 = [...state.ruling70, "swiss_playoff|generic|score|R4"];
-    expect(refused(state)).toMatchObject({ name: "CarryShapeUnknown", message: expect.stringMatching(/swiss_playoff\|generic\|score\|R4 changes its state/) });
   });
 
   it("a carry's text that carries a secret is redacted in the section (the repo is public)", () => {

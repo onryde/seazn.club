@@ -126,11 +126,15 @@ import {
   loadSettings,
   lockedFixtureIds,
   peopleByEntrant,
+  roundFieldsOf,
   roundRobinStageIds,
+  roundRulesOf,
   siblingAssignments,
   toAssignment,
   toSlotConfig,
   type FixtureLite,
+  type RoundFields,
+  type RoundSequenceStages,
   type ScheduleSettingsOut,
 } from "./schedule";
 import {
@@ -488,6 +492,15 @@ export interface SchedulePack {
    *  this is the gated, verification-only twin `toEngineAssignments` reads
    *  to stamp `Assignment.roundNo`. */
   roundNos: Record<string, number>;
+  /** X-SW-31 (rulings 255-256). Movable fixture id -> the round rules of its stage (`roundBarrier`, `roundGapMinutes`,
+   *  `roundsPerDayCap`; `roundRobinStageIds`' value), ONLY for a fixture of a stage that has any: a Swiss stage today.
+   *  The engine needs these on EVERY row of a sequence and refuses a sequence whose rows disagree (CONFIG_INVALID), so
+   *  `toEngineAssignments` and `toSchedulableFixtures` stamp them from here beside `roundNos`. Absent (not `{}`) on a
+   *  pack with no such fixture, so the pack of a league or a bracket division is byte-identical to before. A pack
+   *  that predates the field simply stamps nothing, which is the start floor it always had.
+   *
+   *  SERVER-SIDE ONLY, like `roundNos`: `toModelPayload` omits it. */
+  roundRules?: Record<string, RoundFields>;
   /** Deterministic preprocessing choices worth telling the organiser about:
    *  stripped bye feeders, same-name person grouping. Rendered at W5 (#400). */
   assumptions: string[];
@@ -561,7 +574,7 @@ export function toModelPayload(
   // this function exists to prevent — and a caller that forgot it compiled
   // clean. Callers that genuinely want no directory pass `{}` on purpose.
   courtDirectory: Record<string, PackCourtInfo>,
-): Omit<SchedulePack, "participants" | "assumptions" | "poolIds" | "stageIds" | "roundNos"> & {
+): Omit<SchedulePack, "participants" | "assumptions" | "poolIds" | "stageIds" | "roundNos" | "roundRules"> & {
   courtDetails: { label: string; venue: string; tags: string[] }[];
 } {
   const label = (id: string): string => courtDirectory[id]?.label ?? id;
@@ -931,7 +944,7 @@ export async function buildSchedulePack(
     // the round-sequence stages (league, group, swiss — W3 T3b). Computed
     // ONCE here, ahead of every mode branch, same reasoning as `lockedIds`
     // just above.
-    const roundRobin = await roundRobinStageIds(tx, divisionId);
+    const roundRobin = await roundRobinStageIds(tx, divisionId, settings);
 
     // People map (entrant → person ids) for the engine draft and the pack's
     // shared-player list.
@@ -1338,7 +1351,7 @@ export async function buildSchedulePack(
       const schedulable: SchedulableFixture[] = movable.map((f) => ({
         // Domain-ranked stand-in for the UUID so the solver's tie-break is stable.
         id: rankById.get(f.id)!,
-        ...(roundRobin.has(f.stage_id) ? { roundNo: f.round_no } : {}),
+        ...roundFieldsOf(roundRobin, f),
         ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
         divisionId: f.division_id,
         // stageId unconditional, same as divisionId — `fixtures.stage_id` is
@@ -1732,6 +1745,7 @@ export async function buildSchedulePack(
           return roundRobin.has(src.stage_id) ? [[f.id, src.round_no] as const] : [];
         }),
       ),
+      ...packRoundRules(packMovable, liteById, roundRobin),
       assumptions,
       fixtures: { movable: packMovable, obstacles: packObstacles },
       draft,
@@ -2037,6 +2051,20 @@ export function structuralCheck(plan: AiSchedulePlan, movableIds: Set<string>, p
   return null;
 }
 
+/** `SchedulePack.roundRules` for a set of movable fixtures: each one's stage rules, only for those that have any
+ *  (so the key is absent, not empty, on a pack with no Swiss stage). */
+function packRoundRules(
+  packMovable: readonly { id: string }[],
+  liteById: ReadonlyMap<string, { stage_id: string }>,
+  roundRobin: RoundSequenceStages,
+): { roundRules?: Record<string, RoundFields> } {
+  const entries = packMovable.flatMap((f) => {
+    const rules = roundRulesOf(roundRobin, liteById.get(f.id)!.stage_id);
+    return Object.keys(rules).length > 0 ? [[f.id, rules] as const] : [];
+  });
+  return entries.length > 0 ? { roundRules: Object.fromEntries(entries) } : {};
+}
+
 /** Map the LLM proposal onto engine assignments (ISO → epoch ms). Entrants and
  *  people come from the pack so the verifier can catch overlaps.
  *
@@ -2091,7 +2119,7 @@ export function toEngineAssignments(plan: AiSchedulePlan, pack: SchedulePack): A
         ? { stageId: pack.stageIds[a.fixture_id]! }
         : {}),
       ...(pack.roundNos[a.fixture_id] !== undefined
-        ? { roundNo: pack.roundNos[a.fixture_id]! }
+        ? { roundNo: pack.roundNos[a.fixture_id]!, ...pack.roundRules?.[a.fixture_id] }
         : {}),
     };
   });
@@ -2136,7 +2164,8 @@ export function toObstacleAssignments(pack: SchedulePack): Assignment[] {
 export function toSchedulableFixtures(pack: SchedulePack): SchedulableFixture[] {
   return pack.fixtures.movable.map((f) => ({
     id: f.id,
-    ...(pack.roundNos[f.id] !== undefined ? { roundNo: pack.roundNos[f.id]! } : {}),
+    // X-SW-31: the round's rules travel with the round (`pack.roundRules`), on every fixture of the sequence.
+    ...(pack.roundNos[f.id] !== undefined ? { roundNo: pack.roundNos[f.id]!, ...pack.roundRules?.[f.id] } : {}),
     ...(f.home !== null ? { home: f.home } : {}),
     ...(f.away !== null ? { away: f.away } : {}),
     people: pack.participants[f.id] ?? [],

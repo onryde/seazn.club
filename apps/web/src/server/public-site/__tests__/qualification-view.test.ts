@@ -59,6 +59,7 @@
 import { describe, expect, it } from "vitest";
 import { foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "@seazn/engine/core";
 import { defaultLineupPair, defaultOrderOf, makeEnvelope } from "@seazn/engine/testkit";
+import type { TiebreakerKey } from "@seazn/engine/sport";
 import {
   PointsRule,
   pointsRuleBounds,
@@ -94,11 +95,13 @@ const moduleOf = (key: string) => {
 };
 const GENERIC = moduleOf("generic");
 const BADMINTON = moduleOf("badminton");
-/** A badminton stage ranked POINTS-first, off the engine: its Swiss order (OC1), which is also the pre-W2d league default
- *  a stage active at the W2d deploy keeps in its pin (spec §5.10: the new defaults reach only stages not yet active, B1).
- *  Since W2d its league default is wins-first (BWF 16.2), where `wins` is the race itself, not a step after points — so
- *  the points-first scenes below hand the stage this order as its own. */
-const BADMINTON_POINTS_FIRST = [...defaultOrderOf(BADMINTON, "swiss")];
+/** A badminton stage ranked POINTS-first: the order a stage active at the W2d deploy keeps in its pin (spec §5.10: the new
+ *  defaults reach only stages not yet active, B1; X-TB-2: a started stage keeps its pinned order). It was badminton's Swiss
+ *  default (OC1) and the pre-W2d league default. Since W2d the league default is wins-first (BWF 16.2), where `wins` is the
+ *  race itself, not a step after points — and since W3 (engine 2.0.0, X-SW-9) the Swiss default is the Buchholz chain
+ *  ending in lots, so NO engine default is points-first-then-wins any more: the scenes below hand the stage this order as
+ *  its own pin. It is an INPUT (a stage's stored order), typed against the engine's key type, not an expected value. */
+const BADMINTON_POINTS_FIRST: readonly TiebreakerKey[] = ["points", "wins", "set_ratio", "point_ratio", "h2h_points"];
 const ICEHOCKEY = moduleOf("icehockey");
 const FOOTBALL = moduleOf("football");
 const CFG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false };
@@ -171,6 +174,10 @@ const walkover = (round: number, winner: string, loser: string) =>
 const withdrew = (round: number, winner: string, loser: string, played: boolean) =>
   fx(round, winner, loser, "forfeited", { kind: "award", winner, loser, reason: "withdrew" }, { played });
 const voided = (f: QualFixture): QualFixture => ({ ...f, status: "cancelled", outcome: null });
+/** A hand-built row declared NOT a Swiss shell (ext_key null, as an ad-hoc row reads). For a scene that leaves a field member
+ *  unseated in a seated round on purpose (four players, one bye): a key-less row there could be a shell, which would make that
+ *  member's count unknown (W3 R17 - its own block below), and that reading is not what such a scene is about. */
+const notShell = (f: QualFixture): QualFixture => ({ ...f, ext_key: null });
 
 interface Scene {
   kind: string;
@@ -858,6 +865,110 @@ describe("statuses equal the engine's on the derived input", () => {
   });
 });
 
+// W3 app-B final review I1 — ruling R17 (progress.md:8; app-A final review m3: a badge may arrive early, never false). A
+// Swiss latecomer's MISSED rounds (round_no < its swiss_first_round) are not rounds it has left. Expected counts come from
+// the rulebook, never the builder: rounds declared − rounds before it joined (FIDE C.07 (2026) art. 16.2.3: each is an
+// unplayed 0-point round on its card) − rounds it has settled; the statuses are the engine's own `qualificationStatus` on
+// those counts. Single sport (generic) on purpose: the count is rounds, not points — the sport only sets the per-match
+// bounds, which the parity suite sweeps.
+describe("a Swiss latecomer's missed rounds are not rounds left (W3 R17)", () => {
+  const ROUNDS = 5;
+  /** A row as `planSwissShells` mints it: `sw-r{n}-b{k}` for a board, `sw-r{n}-bye` for the bye. */
+  const shell = (f: QualFixture, board: number | "bye"): QualFixture => ({
+    ...f,
+    ext_key: board === "bye" ? `sw-r${f.round_no}-bye` : `sw-r${f.round_no}-b${board}`,
+  });
+  const drew = (round: number, home: string, away: string) => fx(round, home, away, "decided", { kind: "draw" });
+  /** Five rounds. A–E from round 1 (a bye each round), L admitted for round 3: rounds 1–2 missed. r1 A–B, C–D drawn, E
+   *  bye; r2 A–C, B–E drawn, D bye; r3 L beats E, A–D and B–C drawn; rounds 4–5 unseated shells. A 3, B 3, C 3, D 5, E 4,
+   *  L 3 (draw 1, bye and win 3: CFG). */
+  function lateScene(): Scene {
+    const r = (id: string, rank: number, played: number, won: number, drawn: number) =>
+      row(id, rank, won, played, [won, 0], { drawn, lost: played - won - drawn, points: won * W + drawn });
+    return {
+      kind: "swiss",
+      meta: { swissRounds: ROUNDS },
+      rows: [r("D", 1, 3, 1, 2), r("E", 2, 3, 1, 1), r("A", 3, 3, 0, 3), r("B", 4, 3, 0, 3), r("C", 5, 3, 0, 3), r("L", 6, 1, 1, 0)],
+      fixtures: [
+        shell(drew(1, "A", "B"), 1), shell(drew(1, "C", "D"), 2), shell(bye(1, "E"), "bye"),
+        shell(drew(2, "A", "C"), 1), shell(drew(2, "B", "E"), 2), shell(bye(2, "D"), "bye"),
+        shell(won(3, "L", "E"), 1), shell(drew(3, "A", "D"), 2), shell(drew(3, "B", "C"), 3),
+        ...[4, 5].flatMap((n) => [1, 2, 3].map((b) => shell(open(n, null, null), b))),
+      ],
+    };
+  }
+  /** The rulebook's count: declared − rounds before joining − rounds settled. Typed per entrant, not read off the builder. */
+  const JOINED: Record<string, number> = { A: 1, B: 1, C: 1, D: 1, E: 1, L: 3 };
+  const SETTLED: Record<string, number> = { A: 3, B: 3, C: 3, D: 3, E: 3, L: 1 };
+  const rulebookLeft = (id: string) => ROUNDS - (JOINED[id]! - 1) - SETTLED[id]!;
+  const engineOn = (s: Scene, left: (id: string) => number) =>
+    qualificationStatus({
+      rows: s.rows.map((r) => ({ entrantId: r.entrantId, points: r.points, active: true })),
+      remaining: new Map(s.rows.map((r) => [r.entrantId, left(r.entrantId)])),
+      perMatch: BOUNDS,
+      cut: 2,
+      anyPlayed: true,
+      complete: false,
+    })!;
+
+  it("the latecomer at round 3 of 5 has 2 rounds left, not 4: the engine's status on the rulebook's counts, every row", () => {
+    const s = lateScene();
+    expect(rulebookLeft("L"), "premise: rounds 1–2 are behind L, rounds 4–5 ahead").toBe(2);
+    const v = must(view(s));
+    const engine = engineOn(s, rulebookLeft);
+    let checked = 0;
+    for (const r of s.rows) {
+      expect(v.rows[r.entrantId]?.status, r.entrantId).toBe(engine.get(r.entrantId)!.status.kind);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every row compared").toBe(6);
+    // The table's own count, the longest anyone has left: 2, never the 4 the missed rounds would add.
+    expect(v.table.label).toBe("Top 2 go through to Finals · 2 rounds left");
+  });
+
+  it("a case whose wrong answer differs: counting the missed rounds says 'Win 3' — three wins with two rounds left", () => {
+    const s = lateScene();
+    // The witness: with L's missed rounds counted as left (4), the engine prints Win 3, an impossible status.
+    expect(engineOn(s, (id) => (id === "L" ? 4 : rulebookLeft(id))).get("L")!.status).toEqual({ kind: "win_k", k: 3 });
+    // The right count (2): L needs help.
+    expect(engineOn(s, rulebookLeft).get("L")!.status).toEqual({ kind: "needs_help" });
+    const l = must(view(s)).rows.L!;
+    expect(l.status).toBe("needs_help");
+    expect(l.label).toBe("Needs help");
+  });
+
+  it("negative pair: an on-time table with real shell keys reads exactly as before — a bye is a round played, not missed", () => {
+    // swiss5's byes (C in r1, D in r2) as real shells: each holder SITS on its bye row, so no round is missed and D keeps
+    // exactly one round left (M7 above). The keyed and the key-less table must agree row for row.
+    const s = swiss5();
+    const boards = new Map<number, number>();
+    const keyed = s.fixtures.map((f) => {
+      if (f.home_entrant_id !== null && f.away_entrant_id === null) return shell(f, "bye");
+      const b = (boards.get(f.round_no) ?? 0) + 1;
+      boards.set(f.round_no, b);
+      return shell(f, b);
+    });
+    expect(keyed.filter((f) => f.ext_key?.endsWith("-bye")).length, "premise: both byes keyed as bye shells").toBe(2);
+    const plain = must(view(s));
+    expect(must(view({ ...s, fixtures: keyed }))).toEqual(plain);
+    expect(plain.rows.D!.ifYouLose).toBe("If you lose your next match, you're out.");
+  });
+
+  it("no status when the rows do not say which are shells (ext_key not loaded) and a row could have missed a round; with keys it shows", () => {
+    const s = lateScene();
+    const unkeyed = s.fixtures.map((f) => {
+      const copy = { ...f };
+      delete copy.ext_key;
+      return copy;
+    });
+    expect(view({ ...s, fixtures: unkeyed })).toBeNull();
+    expect(view(s)).not.toBeNull();
+    // Narrow: a key-less table in which every row sits in every seated round has nothing it could have missed — it shows.
+    expect(swiss5().fixtures.every((f) => f.ext_key === undefined), "premise: swiss5 carries no keys").toBe(true);
+    expect(view(swiss5())).not.toBeNull();
+  });
+});
+
 // Final review I1 (controller ruling): a departed row is NOT frozen. A
 // status-only departure — a `withdrawn` status PATCH (usecases/entrants.ts; a DQ by PATCH cascades since W3 T15),
 // a registrant's self-cancel — leaves its fixtures scheduled, and when the
@@ -1119,7 +1230,7 @@ describe("if you lose", () => {
   it("T2-C1: dropped when the entrant's next seat is a bye (no opponent); kept against a real one", () => {
     const s = swiss4();
     const early = s.fixtures.filter((f) => f.round_no < 3);
-    const half = must(view({ ...s, fixtures: [...early, open(3, "A", "C"), open(3, "D", null)] })).rows.D!;
+    const half = must(view({ ...s, fixtures: [...early, notShell(open(3, "A", "C")), notShell(open(3, "D", null))] })).rows.D!;
     expect(half.status).toBe("needs_help");
     expect(half.ifYouLose).toBeNull();
     const full = must(view({ ...s, fixtures: [...early, open(3, "A", "C"), open(3, "D", "B")] })).rows.D!;
@@ -1129,9 +1240,9 @@ describe("if you lose", () => {
     // Four rounds; D seated in rounds 3 and 4. Two left: a loss still Needs help.
     const s = { ...swiss4(), meta: { swissRounds: 4 } };
     const early = s.fixtures.filter((f) => f.round_no < 3);
-    const byeFirst = must(view({ ...s, fixtures: [...early, open(4, "D", "B"), open(3, "D", null)] })).rows.D!;
+    const byeFirst = must(view({ ...s, fixtures: [...early, notShell(open(4, "D", "B")), notShell(open(3, "D", null))] })).rows.D!;
     expect(byeFirst.ifYouLose).toBeNull();
-    const byeLater = must(view({ ...s, fixtures: [...early, open(4, "D", null), open(3, "D", "B")] })).rows.D!;
+    const byeLater = must(view({ ...s, fixtures: [...early, notShell(open(4, "D", null)), notShell(open(3, "D", "B"))] })).rows.D!;
     expect(byeLater.ifYouLose).toBe("If you lose your next match, you'll need other results to go your way.");
   });
   it("T2-C1: a bye next also hides the what-if's tying result — rule and values only", () => {
@@ -1144,7 +1255,7 @@ describe("if you lose", () => {
     const early = s.fixtures.filter((f) => f.round_no < 3);
     const real = must(view({ ...s, rows, fixtures: [...early, open(3, "A", "B"), open(3, "D", "C")] })).rows.D!;
     expect(real.whatIf).toBe("If you finish level on points with Bo, difference decides: win your next match by 3 or more to finish ahead.");
-    const bye = must(view({ ...s, rows, fixtures: [...early, open(3, "A", "B"), open(3, "D", null)] })).rows.D!;
+    const bye = must(view({ ...s, rows, fixtures: [...early, notShell(open(3, "A", "B")), notShell(open(3, "D", null))] })).rows.D!;
     expect(bye.whatIf).toBe("If you finish level on points with Bo, difference decides. Now: you -2, Bo 0.");
     expect(bye.whatIfAssumption).toBeNull();
   });

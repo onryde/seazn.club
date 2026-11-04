@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { forEachSport } from "@seazn/engine/testkit";
-import { offerableKeys, validateCascade, type CascadeContext, type TableRulesPin } from "@seazn/engine/competition";
+import { DIFF_KEYS, offerableKeys, validateCascade, type CascadeContext, type TableRulesPin } from "@seazn/engine/competition";
 import type { AnySportModule, TableStageKind, TiebreakerKey } from "@seazn/engine/sport";
 import type { StageTableRules } from "@/server/api-v1/schemas";
 import { cfgOf, tableRulesOf } from "./_table-rules-fixture";
@@ -132,6 +132,32 @@ describe("+ Add step (D11, §5.5)", () => {
     expect(positions, "positions swept").toBeGreaterThan(100);
     expect(modifiersOffered, "a modifier was offered somewhere (after an h2h block)").toBeGreaterThan(0);
     expect(modifiersWithheld, "and withheld elsewhere").toBeGreaterThan(0);
+  });
+
+  // W3 app-B T3 (X-SW-31; rulebook-W3 §5 T10). The expected answer is the engine's own declaration, not a list typed here:
+  // `opp_diff` is Swiss-only and reads the sport's goal-difference ledger (`DIFF_KEYS`), so it is offered exactly where
+  // the stage is Swiss AND the sport declares a metric under one of those aliases. The cascade is the sport's own Swiss
+  // order less any `opp_diff` already in it (a step already in the order is never offered twice).
+  it("+ Add step offers opp_diff on a Swiss stage of a sport that records a difference ledger, and nowhere else (forEachSport x kind, counted)", () => {
+    let offeredCount = 0;
+    let withheldCount = 0;
+    const visited = forEachSport(({ module: m }) => {
+      const records = m.metrics.some((metric) => (DIFF_KEYS as readonly string[]).includes(metric.key));
+      for (const kind of [...NON_SWISS, "swiss"] as const) {
+        const keys = m.defaultTiebreakers(kind, cfgOf(m)).filter((k) => k !== "opp_diff");
+        const offered = addableAt(keys, addPosition(keys), ctxOf(m, kind)).includes("opp_diff");
+        expect(offered, `${m.key} ${kind}: opp_diff offered`).toBe(kind === "swiss" && records);
+        if (offered) offeredCount++;
+        else withheldCount++;
+      }
+    });
+    expect(visited, "sports swept").toBeGreaterThan(5);
+    expect(offeredCount, "offered somewhere (a Swiss football-like stage)").toBeGreaterThan(0);
+    expect(withheldCount, "and withheld elsewhere").toBeGreaterThan(0);
+    // The two named ends of the sweep, so a rig that offered it to everything (or nothing) cannot pass by arithmetic.
+    const swissKeys = (m: AnySportModule) => m.defaultTiebreakers("swiss", cfgOf(m)).filter((k) => k !== "opp_diff");
+    expect(addableAt(swissKeys(football), addPosition(swissKeys(football)), ctxOf(football, "swiss"))).toContain("opp_diff");
+    expect(addableAt(swissKeys(badminton), addPosition(swissKeys(badminton)), ctxOf(badminton, "swiss"))).not.toContain("opp_diff");
   });
 
   it("the add point is just before a closing lots (it stays last), at the end of an order without lots", () => {

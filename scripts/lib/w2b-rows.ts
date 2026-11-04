@@ -10,7 +10,7 @@ import { RULE_ID, type RuleRow } from "@seazn/engine/testkit";
 
 const W2B_DATE = "2026-10-08";
 export const signed = (ruling: number, date = W2B_DATE) => `signed ${ruling} ${date}`;
-const deviation = (ruling: number) => `deviation ${ruling} ${W2B_DATE}`;
+const deviation = (ruling: number, date = W2B_DATE) => `deviation ${ruling} ${date}`;
 /** Orchestrator pre-flight rulings are no owner signature (AGENTS.md class 17): their rows stay open until the owner signs. */
 export const OPEN = "⬜ open";
 /** The rows W2b adds, by rules file, each with the status it must carry. Typed from spec
@@ -60,7 +60,7 @@ export const W2B_ROWS: Readonly<Record<string, Readonly<Record<string, string>>>
   "tennis.md": { "TN-WO-1": signed(86), "TN-RT-1": signed(87) },
   "badminton.md": { "BD-WO-1": signed(86), "BD-WO-2": deviation(86), "BD-RT-1": deviation(87) },
   "cricket.md": { "CK-WO-1": signed(86), "CK-AB-1": signed(88), "CK-AB-2": signed(88), "CK-WO-2": signed(125, "2026-10-13") },
-  "boardgame.md": { "BG-WO-1": signed(86), "BG-DW-1": signed(84), "BG-WO-2": signed(90), "BG-WO-3": signed(99, "2026-10-09") },
+  "boardgame.md": { "BG-WO-1": deviation(254, "2026-11-01"), "BG-DW-1": signed(84), "BG-WO-2": signed(90), "BG-WO-3": signed(99, "2026-10-09") },
   "carrom.md": { "CA-WO-1": signed(86), "CA-RT-1": signed(87), "CA-AB-1": signed(88) },
   "generic.md": { "GN-WO-1": signed(86), "GN-RT-1": signed(124, "2026-10-13"), "GN-AB-1": signed(88) },
 };

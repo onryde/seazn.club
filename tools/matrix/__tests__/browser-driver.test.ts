@@ -26,7 +26,7 @@ import type { EntrantIn } from "../lib/browser/pages/entrants.ts";
 import { API_ONLY_UI_WAVE } from "../lib/api-only-ui.ts";
 import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, refusedCell, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
-  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, FORFEIT_DIALOG_ROUTE, NEITHER_WITHHELD_ROUTE, NeitherWithheldButAccepted, NoOrganiserRoute, ORGANISER_TABLE_KINDS, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
+  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, FORFEIT_DIALOG_ROUTE, NEITHER_WITHHELD_ROUTE, NeitherWithheldButAccepted, NoOrganiserRoute, ORGANISER_TABLE_KINDS, FINISH_SWISS_ROUTE, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
 } from "../lib/driver/browser-driver.ts";
 import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type FromTemplateAnswer, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
@@ -48,7 +48,8 @@ import type { CaseSpec } from "../lib/scenarios/types.ts";
 import { PAD_INNINGS_SET, padInningsPlanner } from "../lib/pad-innings-set.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
-import { FakeLeagueDriver, type FakeFixture } from "./fake-driver.ts";
+import { FakeLeagueDriver, FakeSwissDriver, type FakeFixture } from "./fake-driver.ts";
+import { swissRefusedCall } from "./swiss-finish-twin.ts";
 import { modelPage, twoInningsModel } from "./pad-model.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -2918,4 +2919,61 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
     expect(text).toMatch(/import \{[^}]*\bisOrganiserOnlyEvent\b[^}]*\} from "\.\.\/\.\.\/\.\.\/\.\.\/apps\/web\/src\/lib\/organiser-only-events\.ts"/);
     expect(text).not.toMatch(/\bORGANISER_ONLY[A-Z_]*\s*[:=]/);
   });
+});
+
+// W3 app-B Task 6 review m3: "Finish the Swiss now" is an organiser path the browser layer does not drive (L3 is http; the desk's
+// Finish action is the Swiss wave's UI). A Swiss that dead-ends on a browser cell (L2 runs R4 in the browser on three Swiss rows)
+// therefore has no recovery HERE, and says so in the house shape for a path a layer does not drive (M-4 ruling): a NoOrganiserPath
+// naming the wave that owes it, which the runner records as a no-path cell, never an error red. The driver has NO working Finish:
+// `finishSwiss` only refuses, so the recovery is never taken over a path the case did not claim to drive.
+describe("BrowserDriver - the Swiss Finish is a cell with no path in this layer (W3 app-B T6 review m3)", () => {
+  it("finishSwiss is a named NoOrganiserPath: the route's wave and reason, no page touched, nothing sent over http, nothing recorded", async () => {
+    const { driver, pageCalls, http } = league({ spec: spec("swiss") });
+    await built(driver, spec("swiss"));
+    const pagesBefore = [...pageCalls];
+    const httpBefore = [...http.trace];
+    const err = await driver.finishSwiss("s1").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NoOrganiserPath);
+    expect(err, "a layer's missing path is not a misuse of the driver").not.toBeInstanceOf(DriverMisuse);
+    // The route and the NoOrganiserPath literal (the Q-A guard reads a literal only, PF-3) are pinned together.
+    expect(err).toMatchObject({ wave: FINISH_SWISS_ROUTE.wave });
+    expect((err as NoOrganiserPath).reason).toContain(FINISH_SWISS_ROUTE.why);
+    expect(pageCalls).toEqual(pagesBefore);
+    expect(http.trace).toEqual(httpBefore);
+    // Not recorded: only the two creates are on the ledger, and the refused Finish is not a third action.
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass", checked: 2 });
+  });
+
+  // The seam: the loop's own call, on the real driver, reaches that refusal. A fixture on both ends proves the fixture.
+  it("the Swiss loop's dead end on the real BrowserDriver ends the case NoOrganiserPath (after the refusal that offered Finish), not DriverMisuse and not refused_generate", async () => {
+    class SwissProduct extends FakeSwissDriver {
+      override async generate() {
+        if (this.paired === 1) throw swissRefusedCall("POST", "/api/v1/stages/s1/generate", "SWISS_NO_LEGAL_PAIRING", { round: 2, reason: "r", field: "rounds", finishAfter: 1, canFinish: true }, true);
+        return super.generate();
+      }
+    }
+    const s = spec("swiss", "generic", { variant: "score" });
+    const http = new SwissProduct(ORG);
+    const pages: Partial<BrowserPages> = {
+      createDivisionUi: async (_c, _slug, compId, input) => {
+        const ref = await http.createDivision(compId, { name: input.name, slug: PRODUCT_DIV_SLUG, sportKey: input.sportKey, variantKey: input.variantKey, config: {} });
+        await http.postStages(ref.id, stagesForRow(input.row));
+        return { division: { id: ref.id, competition_id: compId, name: input.name, slug: PRODUCT_DIV_SLUG, sport_key: input.sportKey, variant_key: input.variantKey, config: ref.config, status: "draft" }, stages: builtFrom(input.row, ref.id) };
+      },
+      addEntrantsUi: async (_c, w, es) => (await http.addEntrants(w.divisionId, es.map((e, i) => ({ displayName: e.displayName, seed: e.seed ?? i + 1, kind: e.kind })))).map((r, i) => ({ ...r, kind: es[i]!.kind })),
+      startUi: async () => http.start(),
+      generateUi: async () => http.generate(),
+    };
+    const { driver } = make({ http, spec: s, pages });
+    const ctx = { driver, spec: s, orgSlug: ORG_SLUG, cfg: resolveSportCfg(s.sport, s.variant), tag: "m3", denied: [] };
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor(s.row, s.scenario));
+    const err = await playStage(ctx, rec, setup).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(NoOrganiserPath);
+    expect(err).not.toBeInstanceOf(DriverMisuse);
+    expect(err).toMatchObject({ wave: FINISH_SWISS_ROUTE.wave });
+    // The dead end was REACHED (round 2 refused by name, offering Finish), so the refusal above is the recovery's and not an earlier failure's.
+    expect(rec.track(setup.stage.id).pairRounds.at(-1)).toEqual({ roundNo: 2, seated: 0, refused: "SWISS_NO_LEGAL_PAIRING" });
+    expect(http.paired, "anti-vacuity: round 1 was paired before the dead end").toBe(1);
+  }, 60_000);
 });

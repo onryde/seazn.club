@@ -372,7 +372,7 @@ describe.skipIf(!HAS_DB)("ST-G8 stage points (server)", () => {
     expect(skipped, "skipped only where every variant can end tied (cricket)").toEqual(["cricket"]);
   }, 60_000);
 
-  it("the table moves with the save: a Swiss bye already on the table is re-paid under the new points, and again when they are cleared (X-PT-1)", async () => {
+  it("the table moves with the save: a Swiss bye already on the table is re-paid under the new points (its win points, X-SW-5), and again when they are cleared (X-PT-1)", async () => {
     // single-sport: the standings fold is sport-blind under a rule; a Swiss bye is the one result an unstarted stage holds.
     const auth = await seedOrg("pro");
     const { divisionId } = await seedDivision(auth, "badminton", "short", 3);
@@ -392,10 +392,16 @@ describe.skipIf(!HAS_DB)("ST-G8 stage points (server)", () => {
       ((await getStandings(auth, s)).rows as { entrantId: string; points: number }[]).find((r) => r.entrantId === byeWinner)?.points;
     const own = await pointsOf();
     expect(typeof own, "premise: the bye is on the table").toBe("number");
-    const rule = { win: { regulation: 1 }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const, forfeit: { winnerPoints: 5, loserPoints: 0 } };
-    expect(own, "premise: the rule's row differs from the sport's own").not.toBe(rule.forfeit.winnerPoints);
+    // W3 (X-SW-5, ruling 251; engine 2.0.0): a pairing-allocated bye pays the rule's WIN points — never the forfeit row, which
+    // is the pay of a game forfeited, and no bonus. (Engine 1.x paid a bye the rule's forfeit row, which this test pinned as
+    // "a bye pays the rule's forfeit row"; ruling 251 amends the bye half of X-PT-1's payout.) The rule below sets its win and
+    // its forfeit row apart, both different from the sport's own, so the table can only move to the one the engine reads.
+    const rule = { win: { regulation: 4 }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const, forfeit: { winnerPoints: 5, loserPoints: 0 } };
+    expect(own, "premise: the rule's win differs from the sport's own bye credit").not.toBe(rule.win.regulation);
+    expect(own, "premise: the rule's forfeit row differs from the sport's own").not.toBe(rule.forfeit.winnerPoints);
     await putStageRules(auth, s, { points: rule });
-    expect(await pointsOf(), "a bye pays the rule's forfeit row").toBe(rule.forfeit.winnerPoints);
+    expect(await pointsOf(), "a bye pays the rule's win points").toBe(rule.win.regulation);
+    expect(await pointsOf(), "…never its forfeit row (ruling 251)").not.toBe(rule.forfeit.winnerPoints);
     expect(await pinOf(), "the save re-pinned the stage with its own points").toMatchObject({ points: { forfeit: rule.forfeit }, sources: { points: "stage" } });
     await putStageRules(auth, s, { points: null });
     expect(await pointsOf(), "cleared: the sport's own bye credit again").toBe(own);

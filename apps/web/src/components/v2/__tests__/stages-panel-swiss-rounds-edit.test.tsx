@@ -1,13 +1,12 @@
 // W3 Task 12 Phase 2 (X-SW-17, BG-SW-1) — the panel's half of the Swiss stage controls, driven through the real island:
 // the rail gets `swissRounds` (the server's `listSwissRoundControls` row, the stage's rows and two writes) for a Swiss
 // stage only; Save PATCHes `{ rounds }` and says the saved count; "Add a round" POSTs and says the round; a refusal from
-// the More menu is said in the panel's error line, one from the dialog is not (the dialog says it). And the chess colours
-// switch on a boardgame Swiss card: on/off before the first start, fixed after it with its OWN sentence
-// (SWISS_CHESS_LOCKED) — never the rounds one, whose recoveries do nothing for a colour change (controller ruling).
+// the More menu is said in the panel's error line, one from the dialog is not (the dialog says it). And BG-SW-1's desk
+// half (UI5 item 4, owner 2026-11-03: a chess Swiss always balances colours): a chess Swiss card draws no colours switch
+// in any state, and SWISS_CHESS_ALWAYS_ON from another client's PATCH is said in the reader's words.
 //
 // Run in English and in French: a non-English locale is the only way a raw English sentence and the localised one
-// differ. The expected sentences are that dictionary's own copy, never read off the code under test. Another sport:
-// the switch is a chess control, so badminton's Swiss card has none.
+// differ. The expected sentences are that dictionary's own copy, never read off the code under test.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
@@ -241,7 +240,7 @@ describe.each(LOCALES)("StagesPanel — Swiss rounds, and no chess colours switc
     expect(errors(fromDialog.tree())).toEqual([]);
   });
 
-  it("UI5 item 4: no chess colours switch on a chess Swiss card - colours on, a legacy stage stored off, or started", async () => {
+  it("BG-SW-1 UI5 item 4: no chess colours switch on a chess Swiss card - colours on, a legacy stage stored off, or started", async () => {
     // The owner, 2026-11-03: a chess Swiss always balances colours, so the desk offers no switch. Swept over the states
     // the switch used to draw in; the card itself (its rail) is the positive premise, and nothing is PATCHed.
     const chessParts = (t: ReactElement[]) =>

@@ -124,7 +124,7 @@ const OVERLAPPING = [
   { fixtureId: "b", court: "C1", startAtMs: T0 },
 ] as const;
 
-/** The six tier rows of a FULLY PROVED reply, named from the engine's own ladder (`TIER_NAMES`), never typed here. */
+/** One tier row per rung of a FULLY PROVED reply, named from the engine's own ladder (`TIER_NAMES`), never typed here. */
 const provedTiers = () => TIER_NAMES.map((name, value) => ({ name, value }));
 
 // ---- The fake service.

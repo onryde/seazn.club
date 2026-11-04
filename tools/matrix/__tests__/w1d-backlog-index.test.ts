@@ -387,8 +387,15 @@ describe("each quotation a carry makes is in the document it quotes", () => {
   });
 
   it("the section itself never labels a recommendation an owner ruling", () => {
-    const rec = SECTION.split("\n").find((l) => l.startsWith("- **Recommendation"))!;
-    expect(rec).toContain("the controller's, not an owner ruling");
-    expect(rec).not.toMatch(/owner (ruled|approved|said)/i);
+    // A sweep of every line (the P6 recommendation's carry went with ruling 70, W3 Task 12): no line claims the owner ruled, approved or
+    // said anything, and a line that recommends says whose recommendation it is.
+    const lines = SECTION.split("\n").filter((l) => l.trim().length > 0);
+    let checked = 0;
+    for (const l of lines) {
+      expect(l, "no line puts words in the owner's mouth").not.toMatch(/owner (ruled|approved|said)/i);
+      if (/recommendation/i.test(l)) expect(l, "a recommendation says it is not an owner ruling").toContain("not an owner ruling");
+      checked++;
+    }
+    expect(checked, "the section has lines").toBeGreaterThan(0);
   });
 });

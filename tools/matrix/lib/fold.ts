@@ -12,7 +12,7 @@ import {
   type MatchOutcome,
   type StageCtx,
 } from "@seazn/engine/core";
-import { decidedInFor, payout, resolveTableRules, setsToWinOf, type FixtureResult } from "@seazn/engine/competition";
+import { decidedInFor, isUnplayedForfeit, payout, resolveTableRules, setsToWinOf, type FixtureResult } from "@seazn/engine/competition";
 import type { AnySportModule, TableStageKind } from "@seazn/engine/sport";
 import type { StreamEvent, StreamLineups } from "./streams/types.ts";
 
@@ -25,6 +25,18 @@ const voidTarget = (ev: StreamEvent): string | undefined => {
   const id = (ev.payload as { event_id?: unknown } | null)?.event_id;
   return typeof id === "string" ? id : undefined;
 };
+
+/** W3 app-B Task 6 (rulebook P-A2, X-SW-15; app-A T7 review m3): was this two-seated Swiss board NOT PLAYED, so its pair has
+ *  not met and the product may pair it again? A double walkover, or a forfeit the engine's one rule (`isUnplayedForfeit`)
+ *  calls unplayed: a walkover whatever was played, any other forfeit only while nothing was. Exactly the expression the
+ *  product's pairing history reads (usecases/stages.ts buildSwissHistory), so the I6 exemption cannot drift from the rule
+ *  the product pairs by. `played` is the board's own "was anything played" fact (`playRecorded` of its ledger); a null or
+ *  non-object outcome is nothing decided and is no unplayed board. */
+export function unplayedBoard(outcome: unknown, played: boolean): boolean {
+  if (outcome === null || typeof outcome !== "object") return false;
+  const o = outcome as MatchOutcome;
+  return o.kind === "double_walkover" || isUnplayedForfeit(o, played);
+}
 
 /** A harness stream as envelopes, seq and id from 1. A `core.void` (W1d Task 14) is lifted the way the product
  *  lifts one (usecases/scoring.ts: `payload.event_id` → the envelope's `voids`), and carries no payload — the

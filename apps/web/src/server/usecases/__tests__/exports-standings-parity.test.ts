@@ -26,9 +26,11 @@ import {
   completeTableStage,
   foldResults,
   rankStandings,
+  swissDrawFactsOf,
   type FixtureResult,
   type StandingsRow,
   type TableFixture,
+  type TableStage,
 } from "@seazn/engine/competition";
 import { buildStandings } from "@seazn/engine/exports";
 import type { AnySportModule, TableStageKind, TiebreakerKey } from "@seazn/engine/sport";
@@ -97,17 +99,28 @@ function fixtures(m: AnySportModule, draw: boolean): TableFixture[] {
     ...Object.fromEntries(keys.map((k, i) => [k, lostHalvesZero && LOST_HALVES.has(k) ? 0 : 7 + 3 * i])),
     ...Object.fromEntries(DECISION_KEYS.map((k) => [k, 1])),
   });
-  const partial = () => ({ [m.metrics[0]!.key]: 5 });
+  // W3 (engine 2.0.0, X-SW-31): `opp_diff` sums each opponent's recorded difference, and the engine REFUSES a row whose
+  // opponent records none ("whose row records no goal difference (gd or run_diff or diff)"). A partial ledger (Birch's) is the
+  // opponent of Ash, so it carries the sport's difference metric beside its first one — the keys the engine's own message
+  // names — wherever the sport declares one.
+  const diffKey = m.metrics.map((x) => x.key).find((k) => ["gd", "run_diff", "diff"].includes(k));
+  const partial = () => ({ [m.metrics[0]!.key]: 5, ...(diffKey === undefined ? {} : { [diffKey]: 4 }) });
   const win = (id: string, home: string, away: string, loser: Record<string, number>): TableFixture => ({
     id,
     status: "decided",
+    // W3 (engine 2.0.0): a Swiss ledger reads each counted fixture's round (CONFIG_INVALID without one); the league and
+    // group folds ignore it. Each fixture is its own round: every entrant plays at most once a round.
+    roundNo: Number(id.slice(1)),
+    // …and, on a Swiss ledger, whether the result is a game nobody played (`unplayed`, X-SW-7; final review m3 makes it required
+    // on a counted Swiss result): every fixture here is a played game, so `null` - the value `unplayedSidesOf` answers for one.
+    unplayed: null,
     result: [delta(home, "win", full(true)), delta(away, "loss", loser)] as FixtureResult,
   });
   return [
     win("f1", "A", "B", partial()),
     win("f2", "A", "C", Object.fromEntries(keys.map((k, i) => [k, 2 + i]))),
     ...(draw
-      ? [{ id: "f3", status: "decided", result: [delta("B", "draw", partial()), delta("C", "draw", Object.fromEntries(keys.map((k, i) => [k, 3 + i])))] as FixtureResult } satisfies TableFixture]
+      ? [{ id: "f3", status: "decided", roundNo: 3, unplayed: null, result: [delta("B", "draw", partial()), delta("C", "draw", Object.fromEntries(keys.map((k, i) => [k, 3 + i])))] as FixtureResult } satisfies TableFixture]
       : []),
   ];
 }
@@ -115,13 +128,19 @@ function fixtures(m: AnySportModule, draw: boolean): TableFixture[] {
 type RulesDoc = ReturnType<typeof unpinnedRulesDoc>;
 
 /** The ranked stored rows of one state under `doc`'s rules. `level`: nobody has played. */
-function rowsOf(doc: RulesDoc, m: AnySportModule, state: "draw" | "nodraw" | "level" | "empty", kind: TableStageKind): StandingsRow[] {
+function rowsOf(doc: RulesDoc, m: AnySportModule, state: "draw" | "nodraw" | "level" | "empty", kind: TableStageKind, cfg: unknown): StandingsRow[] {
   if (state === "empty") return [];
   const entrants = ["A", "B", "C", "D"];
   const rules = tableRulesOf(doc.tiebreakers, doc.points);
   if (state === "level") return rankStandings(foldResults(entrants, []), { cascade: rules.tiebreakers, results: [], countedFixtures: 0 }).rows;
-  const stage = { id: "s", kind: kind === "americano" ? "league" : kind, entrants, rules, ...(kind === "swiss" ? { swiss: true } : {}) };
-  const done = completeTableStage(stage as Parameters<typeof completeTableStage>[0], fixtures(m, state === "draw"));
+  const base = { id: "s", entrants, rules };
+  // W3 (engine 2.0.0): a Swiss ledger stage names the sport's draw facts under the cfg the order was declared under, and
+  // (final review m3) its unpaired rounds - none here: the four entrants are an abstract ledger, each in the rounds it plays.
+  const stage: TableStage =
+    kind === "swiss"
+      ? { ...base, kind, swiss: true, swissDraw: swissDrawFactsOf(m, cfg), swissAbsentRounds: new Map() }
+      : { ...base, kind: kind === "americano" ? "league" : kind };
+  const done = completeTableStage(stage, fixtures(m, state === "draw"));
   const rows = done.tables.overall;
   if (rows === undefined) throw new Error(`premise: ${m.key} ${kind}: the engine ranked a table`);
   // a stored snapshot's order is the database's, not the table's: hand both documents the rows reversed, so each one's own
@@ -198,17 +217,34 @@ function ordersOf(m: AnySportModule, kind: TableStageKind): { id: string; cfg: u
 
 const STATES = ["draw", "nodraw", "level", "empty"] as const;
 
+/** The sweep's work, counted by a cheap pre-pass over the SAME loops (no table is built): sport × table stage kind × order ×
+ *  state × locale. The sweep's timeout is derived from it (AGENTS.md class 20 — a flat timeout beside a derived cost is a latent
+ *  red), and the sweep asserts it ran exactly this many scenes, so the budget cannot drift from the work it pays for. */
+const SWEEP_SCENES = (() => {
+  let n = 0;
+  forEachSport((c) => {
+    for (const kind of TABLE_KINDS) n += ordersOf(c.module, kind).length * STATES.length * LOCALES.length;
+  });
+  return n;
+})();
+/** Per scene, 3,648 scenes in all: 0.6 ms alone (2.2-2.6 s, 2026-11-03); 19.7 ms in the 117-file scoped run beside the DB suites
+ *  (71.9 s, the worst measured — 27-38 s in lighter loaded runs). 30 ms is 1.5 times the worst: the machine's load, not the
+ *  sweep, is what moves it, and the budget must hold under the load that CI's shards and the scoped runs bring. */
+const SWEEP_MS_PER_SCENE = 30;
+const SWEEP_BUDGET_MS = Math.max(30_000, 5_000 + SWEEP_SCENES * SWEEP_MS_PER_SCENE);
+
 describe("standings export parity — the exported table is the public table (registry sweep, counted)", () => {
   it("every sport × table stage kind × order × state × locale: the export's header list and each row's cell text equal the public table's", () => {
     const seen = { sports: 0, scenes: 0, headers: 0, rows: 0, cells: 0, derivedColumns: 0, derivedCells: 0, dashCells: 0, wholeNumberCells: 0, renderedHeaders: 0, renderedCells: 0, apartTables: 0, halfTables: 0, halfPointCells: 0, halfPointTextCells: 0, d: 0, noD: 0 };
     const derivedKeysSeen = new Set<string>();
+    expect(SWEEP_SCENES, "premise: the pre-pass counted the sweep's scenes (zero would make the budget a floor over nothing)").toBeGreaterThan(2700);
     seen.sports = forEachSport((c) => {
       const m = c.module;
       for (const kind of TABLE_KINDS) {
         for (const order of ordersOf(m, kind)) {
           const doc = unpinnedRulesDoc({ module: m, kind, divisionConfig: order.cfg, divisionTiebreakers: order.divisionTiebreakers });
           for (const state of STATES) {
-            const rows = rowsOf(doc, m, state, kind);
+            const rows = rowsOf(doc, m, state, kind, order.cfg);
             for (const locale of LOCALES) {
               const view = buildTableView(viewInput(doc, m, rows, locale));
               const table = exported(doc, m, rows, locale);
@@ -278,6 +314,7 @@ describe("standings export parity — the exported table is the public table (re
     // scenes, 102144 cells, 4416 derived columns, 14848 dash cells), set a quarter under so a sport's departure is a red,
     // not a silent shrink.
     expect(seen.sports, "every built-in sport was swept").toBe(builtinModules.length);
+    expect(seen.scenes, "the sweep ran exactly the scenes its budget was derived from").toBe(SWEEP_SCENES);
     expect(seen.scenes, "scenes compared").toBeGreaterThan(2700);
     expect(seen.cells, "cells compared").toBeGreaterThan(76000);
     expect(seen.renderedCells, "cells read back off the division page's markup").toBeGreaterThan(19000);
@@ -294,7 +331,7 @@ describe("standings export parity — the exported table is the public table (re
     // Every derived column the engine declares was swept at least once: a key no sport's order earns would be unswept.
     expect([...derivedKeysSeen].sort(), "every derived key").toEqual([...DERIVED_KEYS].sort());
     console.log("exports-standings-parity checked:", JSON.stringify({ ...seen, derivedKeys: derivedKeysSeen.size }));
-  });
+  }, SWEEP_BUDGET_MS);
 });
 
 // Hand-worked cells. The values are the rulebooks' arithmetic, typed here: the ratio is won ÷ lost and ∞ when unbeaten

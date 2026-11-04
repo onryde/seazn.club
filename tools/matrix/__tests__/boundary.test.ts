@@ -58,7 +58,11 @@ const CHESS_INDIVIDUAL_ONLY_RULE = "apps/web/src/lib/chess-individual-only-rule.
 // `rosterLocked` reads it rather than keep a second copy of "a running root Swiss keeps the list open". Import-free (pinned below),
 // so plain node loads it with no alias (the model-fake-driver test double reads it the same way).
 const OPEN_ENTRY_STAGES = "apps/web/src/lib/open-entry-stages.ts";
-const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL, STAGE_DECIDER_OFF, CHESS_INDIVIDUAL_ONLY_RULE, OPEN_ENTRY_STAGES]);
+// W3 app-B T6 (X-SW-26): swiss-refusals.ts is the PRODUCT's Swiss refusal table (codes, statuses, sentences). The harness
+// names its codes (`SwissRefusalCode`, lib/scenarios/common.ts) so a judged refusal is one the product can send, never a typed
+// copy. TYPE-ONLY from shipped modules (pinned below): the table itself imports `@/lib/messages`, which plain node cannot resolve.
+const SWISS_REFUSALS = "apps/web/src/lib/swiss-refusals.ts";
+const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL, STAGE_DECIDER_OFF, CHESS_INDIVIDUAL_ONLY_RULE, OPEN_ENTRY_STAGES, SWISS_REFUSALS]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
 // The bench is also the @seazn/bench workspace (2026-10-04). A bare
@@ -186,6 +190,14 @@ describe("tools/matrix import boundary", () => {
     // A value import (not `import type`): state.ts calls the predicate, so the file really is loaded under plain node.
     const edge = importsOf(join(MATRIX, "lib/model/state.ts")).filter((i) => i.spec.endsWith("/open-entry-stages.ts"));
     expect(edge.map((i) => [i.typeOnly, i.dynamic])).toEqual([[false, false]]);
+  });
+
+  it("the product's Swiss refusal table is named TYPE-ONLY by shipped modules (it imports `@/lib/messages`, which plain node cannot load): lib/scenarios/common.ts is the one, and it loads nothing", () => {
+    expect(existsSync(join(REPO, SWISS_REFUSALS)), SWISS_REFUSALS).toBe(true);
+    const edges = MODULES.flatMap((m) => importsOf(m)
+      .filter((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === SWISS_REFUSALS)
+      .map((i) => [relative(MATRIX, m), i.typeOnly, i.dynamic]));
+    expect(edges).toEqual([["lib/scenarios/common.ts", true, false]]);
   });
 
   it("the product's cascade-only forfeit reasons are a file plain node can load: it exists, imports only the engine's core barrel (a package the matrix depends on), and only the browser driver names it", () => {

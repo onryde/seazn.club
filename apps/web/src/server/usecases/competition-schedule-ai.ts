@@ -52,7 +52,15 @@ import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { resolveVenueTz } from "@/lib/tz";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { assessCapacity, type CapacityReport } from "@seazn/engine/scheduling/capacity";
-import { FIXED_OCCUPYING, MOVABLE_STATUS, OCCUPYING, movableFixtureSql, peopleByEntrant, toSlotConfig } from "./schedule";
+import {
+  FIXED_OCCUPYING,
+  MOVABLE_STATUS,
+  OCCUPYING,
+  movableFixtureSql,
+  peopleByEntrant,
+  toSlotConfig,
+  type RoundFields,
+} from "./schedule";
 import { fixtureHasResultSql } from "./fixture-results-sql";
 import { CAPACITY_IMPOSSIBLE_CODE, capacityInputForFixtures, logCapacityAssessed } from "./capacity-guard";
 import {
@@ -348,6 +356,10 @@ export interface CompetitionPack {
    *  stepladder stage's display round would be forwarded as round order. Keys
    *  inserted in `fixtures.movable` order, like `poolIds`. */
   roundNos: Record<string, number>;
+  /** X-SW-31 (rulings 255-256) - the joint twin of {@link SchedulePack.roundRules}: each source pack's own map (built
+   *  against ITS OWN division's settings, so the divisions of one run never read each other's rest or cap), unioned.
+   *  Absent, not empty, when no source pack has one. SERVER-SIDE ONLY, like `roundNos`. */
+  roundRules?: Record<string, RoundFields>;
   /** Deterministic preprocessing choices worth telling the organiser about:
    *  stripped bye feeders (from each source pack) and the run-wide same-name
    *  person grouping. Rendered at W5 (#400). */
@@ -410,7 +422,7 @@ export function toJointModelPayload(
   // this function exists to prevent — and a caller that forgot it compiled
   // clean. Callers that genuinely want no directory pass `{}` on purpose.
   courtDirectory: Record<string, PackCourtInfo>,
-): Omit<CompetitionPack, "participants" | "assumptions" | "poolIds" | "stageIds" | "roundNos"> & {
+): Omit<CompetitionPack, "participants" | "assumptions" | "poolIds" | "stageIds" | "roundNos" | "roundRules"> & {
   courtDetails: { label: string; venue: string; tags: string[] }[];
 } {
   const label = (id: string): string => courtDirectory[id]?.label ?? id;
@@ -1026,13 +1038,19 @@ export async function buildCompetitionPack(
   const roundNoBySourceFixture = new Map(
     built.flatMap((b) => Object.entries(b.pack.roundNos)),
   );
+  const roundRulesBySourceFixture = new Map(
+    built.flatMap((b) => Object.entries(b.pack.roundRules ?? {})),
+  );
   const stageIds: Record<string, string> = {};
   const roundNos: Record<string, number> = {};
+  const roundRules: Record<string, RoundFields> = {};
   for (const f of movable) {
     const stageId = stageIdBySourceFixture.get(f.id);
     if (stageId !== undefined) stageIds[f.id] = stageId;
     const roundNo = roundNoBySourceFixture.get(f.id);
     if (roundNo !== undefined) roundNos[f.id] = roundNo;
+    const rules = roundRulesBySourceFixture.get(f.id);
+    if (rules !== undefined) roundRules[f.id] = rules;
   }
 
   // Bye-strip assumptions come from the source packs, in the emitted division
@@ -1247,6 +1265,8 @@ export async function buildCompetitionPack(
     poolIds,
     stageIds,
     roundNos,
+    // Absent, not `{}`, when no division has a Swiss stage: a league/bracket run's pack is byte-identical to before.
+    ...(Object.keys(roundRules).length > 0 ? { roundRules } : {}),
     assumptions,
     parsed: { hard: resolved.hard, soft: resolved.soft, unparsed: resolved.unparsed },
     fixtures: { movable, obstacles },
@@ -1424,7 +1444,7 @@ export function toJointEngineAssignments(plan: AiSchedulePlan, pack: Competition
         ? { stageId: pack.stageIds[a.fixture_id]! }
         : {}),
       ...(pack.roundNos[a.fixture_id] !== undefined
-        ? { roundNo: pack.roundNos[a.fixture_id]! }
+        ? { roundNo: pack.roundNos[a.fixture_id]!, ...pack.roundRules?.[a.fixture_id] }
         : {}),
     };
   });
@@ -1486,7 +1506,7 @@ export function toJointObstacleAssignments(pack: CompetitionPack): Assignment[] 
 export function toJointSchedulableFixtures(pack: CompetitionPack): SchedulableFixture[] {
   return pack.fixtures.movable.map((f) => ({
     id: f.id,
-    ...(pack.roundNos[f.id] !== undefined ? { roundNo: pack.roundNos[f.id]! } : {}),
+    ...(pack.roundNos[f.id] !== undefined ? { roundNo: pack.roundNos[f.id]!, ...pack.roundRules?.[f.id] } : {}),
     ...(f.home !== null ? { home: f.home } : {}),
     ...(f.away !== null ? { away: f.away } : {}),
     people: pack.participants[f.id] ?? [],

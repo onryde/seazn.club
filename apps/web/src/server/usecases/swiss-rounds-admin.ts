@@ -299,7 +299,7 @@ export async function swissFinishStateOf(tx: Tx, stageId: string): Promise<Swiss
   return swissFinishState(tx, stage);
 }
 
-/** What a refusal offering Finish carries for the recovery's confirm ("Standings after round {k} become final. Rounds
+/** What a refusal offering Finish carries for the recovery's confirm ("The Swiss ends after round {k}. The table is recalculated as a {k}-round event. Rounds
  *  {k+1}–{N} are removed."): present only when `canFinish`. */
 export function swissFinishDetails(state: SwissFinishState): { canFinish: boolean; finish?: { after: number; rounds: number } } {
   return state.canFinish

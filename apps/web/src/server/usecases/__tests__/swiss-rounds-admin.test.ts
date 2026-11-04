@@ -941,7 +941,14 @@ describe.runIf(HAS_DB)("C11 the offered Add a round never leads to SWISS_ROUNDS_
 
   it("an automatic arrival recorded after the last round is in the added round's field (badminton — arithmetic on the field)", async () => {
     // 4 × 3 at the hard max; a paid registration after round 3 started is recorded "joined after the last round"
-    // (round 4, ruling 250). Round 4's field is then 5 (hard max 5): Add a round fits, and its round seats them.
+    // (round 4, ruling 250). Round 4's field is then 5 (hard max 5): Add a round FITS — it never leads to
+    // SWISS_ROUNDS_ABOVE_MAX — and the round's field counts the latecomer.
+    //
+    // W3 (engine 2.0.0, rulebook §3.1 P-A1/P-A6, X-SW-3): the four veterans have met each other (3 rounds × 2 boards = the 6
+    // pairs of a 4-player round robin), so NO rematch-free pairing of five exists — the newcomer on the bye leaves four who
+    // must rematch, a veteran on the bye leaves two veterans who must meet again. Engine 1.1.0 seated rematches (2 boards and
+    // a bye); 2.0.0 refuses, by name, and seats nobody. Pair on the added round is therefore SWISS_NO_LEGAL_PAIRING (409 —
+    // Finish after round 3 is the way out), its `field` the 5 that includes the latecomer.
     const rig = await swissRig(SPORTS[0], 4, 3);
     await startDivision(rig.auth, rig.divisionId);
     await pair(rig);
@@ -952,10 +959,22 @@ describe.runIf(HAS_DB)("C11 the offered Add a round never leads to SWISS_ROUNDS_
     await startBoard(rig, boardsOf(await rowsOf(rig.stageId), 3)[0]!);
     const late = await registerAndConfirm(rig, "Paid late");
     await playRound(rig, 3);
-    // 5 in round 4's field: 2 boards and a bye.
+    // The premise, read off the ledger rather than assumed: the four veterans have each met the other three.
+    const played = (await rowsOf(rig.stageId)).filter((f) => f.round_no <= 3 && f.home_entrant_id !== null && f.away_entrant_id !== null);
+    const meetings = new Set(played.map((f) => [f.home_entrant_id!, f.away_entrant_id!].sort().join("|")));
+    expect(meetings.size, "premise: the 6 pairs of 4 veterans have all met").toBe(6);
+    expect(played.some((f) => f.home_entrant_id === late || f.away_entrant_id === late), "premise: the latecomer has played nobody").toBe(false);
+
     expect(await addSwissRound(rig.auth, rig.stageId)).toEqual({ rounds: 4, shells_added: 3 });
-    await pair(rig);
-    expect(seatedIn(roundOf(await rowsOf(rig.stageId), 4)), "the paid latecomer plays round 4").toContain(late);
+    const refused = await pair(rig).then(
+      () => null,
+      (e: unknown) => e as { status?: number; code?: string; extra?: unknown },
+    );
+    expect(refused, "Pair on the added round refuses").not.toBeNull();
+    expect(refused!.code).toBe("SWISS_NO_LEGAL_PAIRING");
+    expect(refused!.status, "409, the table's resolvable status: Finish after round 3 is offered").toBe(SWISS_REFUSALS.SWISS_NO_LEGAL_PAIRING.resolvableStatus);
+    expect(refused!.extra, "round 4's field counts the paid latecomer: 4 veterans + 1").toMatchObject({ round: 4, field: 5 });
+    expect(seatedIn(roundOf(await rowsOf(rig.stageId), 4)), "the refusal seats nobody").toEqual([]);
   }, 180_000);
 });
 
@@ -1002,7 +1021,7 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", 
     }
   }
 
-  it("UI5 item 4: switching a chess Swiss's colours off is 422 SWISS_CHESS_ALWAYS_ON before the start, nothing written; Pair draws the colour lot", async () => {
+  it("BG-SW-1 UI5 item 4: switching a chess Swiss's colours off is 422 SWISS_CHESS_ALWAYS_ON before the start, nothing written; Pair draws the colour lot", async () => {
     const rig = await swissRig(BOARDGAME, 4, 3);
     expect((await storedConfig(rig.stageId)).chess, "premise: a new boardgame Swiss is stored with chess on (T8)").toBe(true);
     const config = await storedConfig(rig.stageId);
@@ -1028,7 +1047,7 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", 
 
   // Fix round 1 flipped this test (it pinned "Pair keeps a stored off"): the owner ruled colours always ON for a chess
   // Swiss, so a stage stored off that has not paired round 1 pairs in colour, whatever is stored (controller ruling I1).
-  it("UI5 fix round 1 (I1, Q2): a chess Swiss stored off before the change pairs round 1 in colour — read-side, nothing written; ON goes through; a re-Apply stores it on", async () => {
+  it("BG-SW-1 UI5 fix round 1 (I1, Q2): a chess Swiss stored off before the change pairs round 1 in colour — read-side, nothing written; ON goes through; a re-Apply stores it on", async () => {
     const rig = await swissRig(BOARDGAME, 4, 3);
     await legacyOff(rig.stageId);
     await pair(rig);
@@ -1062,7 +1081,7 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", 
     expect(carried!.config.chess, "badminton: the stored off rides the carry").toBe(false);
   });
 
-  it("UI5 fix round 1 (I1): once round 1 is paired the stage keeps what it paired with — plain stays off, coloured stays on (round 2)", async () => {
+  it("BG-SW-1 UI5 fix round 1 (I1): once round 1 is paired the stage keeps what it paired with — plain stays off, coloured stays on (round 2)", async () => {
     let compared = 0;
     for (const { plain, want } of [
       { plain: true, want: false },
@@ -1083,7 +1102,7 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", 
     expect(compared, "anti-vacuity: both histories paired round 2").toBe(2);
   }, 120_000);
 
-  it("UI5 fix round 1 (I1): another sport is untouched — a badminton Swiss stored off pairs round 1 plain", async () => {
+  it("BG-SW-1 UI5 fix round 1 (I1): another sport is untouched — a badminton Swiss stored off pairs round 1 plain", async () => {
     const rig = await swissRig(BADMINTON, 4, 3);
     await legacyOff(rig.stageId);
     await pair(rig);

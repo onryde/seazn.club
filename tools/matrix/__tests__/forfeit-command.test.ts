@@ -838,6 +838,16 @@ describe("rule 10 — fast-check: any sequence over Walkover, Forfeit, Void, Wit
   const SEED = Number(process.env.MATRIX_FC_SEED ?? 20261009);
   const SPORTS = SPORT_KEYS;
   const RUNS = 200;
+  // The sweep's cost is its item count: one property run per sport per sweep, and the test sweeps twice (the second is the replay).
+  // A flat 5 s default beside that cost is a latent red (AGENTS.md class 20; W3 app-B T5 review m7): the sweep measured 4.5-4.9 s
+  // solo (~1.1 ms a run over 4,400) and 5.4-5.6 s under load, and 24-37 s (5.5-8.5 ms a run) with the machine saturated. So the
+  // budget is derived from the items - a floor, a setup allowance and PER_RUN_MS a run, set above the worst contended cost seen -
+  // and moves with the sport registry instead of waiting for the next sport to push the literal over.
+  const SWEEPS = 2;
+  const FLOOR_MS = 5_000;
+  const SETUP_MS = 2_000;
+  const PER_RUN_MS = 10;
+  const SWEEP_BUDGET_MS = Math.max(FLOOR_MS, SETUP_MS + SPORTS.length * RUNS * SWEEPS * PER_RUN_MS);
   const CODES = ["INVALID_EVENT", "FORFEIT_REASON_WRONG_PHASE", "ABANDONED_SETTLE_OR_VOID", "ALREADY_DECIDED", "DOUBLE_WALKOVER_NO_NEXT_MATCH"] as const;
 
   async function sweep(seed: number) {
@@ -875,7 +885,7 @@ describe("rule 10 — fast-check: any sequence over Walkover, Forfeit, Void, Wit
     return totals;
   }
 
-  // The registry, 200 runs a sport (both sweeps ~2.4s). Since a settle lifts D4 (loop D review M-6) an unsettled
+  // The registry, 200 runs a sport (both sweeps ~4.5 s solo; the budget is derived from the items above). Since a settle lifts D4 (loop D review M-6) an unsettled
   // abandon is only Settle → Void → Forfeit on one fixture, and three sports at 100 runs never drew it.
   it("over one knockout shape and every sport: invariants hold, Forfeit is accepted (a double walkover among them) and refused by each of the table's codes, and the sweep replays from its seed", async () => {
     const totals = await sweep(SEED);
@@ -891,6 +901,8 @@ describe("rule 10 — fast-check: any sequence over Walkover, Forfeit, Void, Wit
     // the unit witnesses above drive both shapes.
     expect(totals.dwTakenBack, "no double walkover was ever taken back").toBeGreaterThan(0);
     for (const c of CODES) expect(totals.codes[c], `no Forfeit was ever refused ${c}`).toBeGreaterThan(0);
-    expect(await sweep(SEED)).toEqual(totals);
-  });
+    // SWEEPS counts the sweeps the budget pays for: the first, and its replays from the same seed.
+    expect(SWEEPS, "the replay is the point of the last assertion").toBeGreaterThan(1);
+    for (let replay = 1; replay < SWEEPS; replay++) expect(await sweep(SEED), `replay ${replay} from the seed`).toEqual(totals);
+  }, SWEEP_BUDGET_MS);
 });

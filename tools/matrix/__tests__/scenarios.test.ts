@@ -9,9 +9,11 @@ import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { RULES, decide } from "../lib/applicability.ts";
-import { BUILDER_DEFAULT_KNOBS, ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
+import { BUILDER_DEFAULT_KNOBS, ROW_KEYS, SPORT_KEYS, stagesForRow, type StagePostBody } from "../lib/catalogue.ts";
 import { NoFieldSize, fieldSizeFor } from "../lib/field-size.ts";
-import { RefusedCall, SetupRefused, type EntrantInput, type EntrantRow, type LineupSlotWire, type StageRef } from "../lib/driver/types.ts";
+import { DriverMisuse, NoOrganiserPath, RefusedCall, SetupRefused, type CompleteOut, type EntrantInput, type EntrantRow, type FinishSwissOut, type LineupSlotWire, type StageRef } from "../lib/driver/types.ts";
+import { judgeSwissRounds } from "../../../apps/web/src/lib/swiss-rounds.ts";
+import { SWISS_REFUSALS } from "../../../apps/web/src/lib/swiss-refusals.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { harnessFaults } from "../lib/judge.ts";
 import { isTerminal, PENDING_STATUSES, winnerOf, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../lib/observed.ts";
@@ -36,6 +38,9 @@ import { START } from "../lib/streams/types.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
 import { runSlice } from "../run.ts";
 import { FakeDeniedDriver, FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver, type FakeFixture, type FakeKnockoutOptions } from "./fake-driver.ts";
+import { FakeMultiStageDriver, type FakeMultiStageOptions } from "./fake-formats-driver.ts";
+import { ModelFakeDriver } from "./model-fake-driver.ts";
+import { finishRefusal, finishRowsOf, judgeFinish, swissRefusedCall, type FinishRow } from "./swiss-finish-twin.ts";
 import { wireCodeFor } from "./product-text.ts";
 import { deps } from "./run-deps.ts";
 import { denied } from "../lib/scenarios/denied.ts";
@@ -1937,6 +1942,50 @@ describe("snapshot — byes are declared, pools stay separate (Task 5 carries)",
     expect(evaluateInvariants(observed).find((c) => c.id === "I3-table-points-equal-declared")).toMatchObject({ verdict: "pass", checked: field });
   });
 
+  // W3 app-B Task 6 (app-A T7 review m3; rulebook P-A2): the seam I6's exemption stands on. A board the engine reads as not
+  // played reaches the invariant only if snapshot carries it - the producer, driven for real, then the real I6.
+  it("snapshot carries the engine's unplayed verdict onto each two-seated board (P-A2), and the real I6 reads it: an unplayed rematch passes, the same rematch of a played board fails", async () => {
+    // single-sport: the seam is snapshot carrying `unplayedBoard`'s verdict onto the board. `unplayedBoard` takes "was anything played"
+    // as a boolean (fold.test.ts runs it over every forfeit reason), so a sport enters only through `playRecorded` of the board's
+    // own stream, which the model twin's m4 test (model-fake-swiss-score.test.ts) drives on a sport that declares play (table tennis).
+    const observe = async (patch: (rows: FakeFixture[], rec: Recorder) => void) => {
+      const driver = new FakeSwissDriver();
+      const ctx = ctxFor(driver, "LIFECYCLE", { row: "swiss" });
+      const rec = new Recorder();
+      const setup = await setUpDivision(ctx, rec, 4);
+      await playStage(ctx, rec, setup);
+      const complete = await finishStage(ctx, rec, setup.stage.id);
+      const rows = driver.fixtures.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null).sort((a, b) => (a.round_no ?? 0) - (b.round_no ?? 0));
+      expect(rows.length, "premise: 4 entrants x 3 rounds seat 6 boards").toBe(6);
+      patch(rows, rec);
+      const observed = await snapshot(ctx, rec, setup, [{ stage: setup.stage, field: setup.entrants.map((e) => e.id), advance: null, complete }], { configEdit: null, withdrawal: null });
+      return { observed, rows };
+    };
+    const forfeit = (f: FakeFixture, outcome: object) => Object.assign(f, { status: "forfeited", outcome });
+    const { observed, rows } = await observe((r, rec) => {
+      forfeit(r[0]!, { kind: "double_walkover" });
+      forfeit(r[1]!, { kind: "award", winner: r[1]!.home_entrant_id, loser: r[1]!.away_entrant_id, reason: "walkover" });
+      forfeit(r[2]!, { kind: "award", winner: r[2]!.home_entrant_id, loser: r[2]!.away_entrant_id, reason: "retired" });
+      rec.streams.delete(r[2]!.id); // a retirement with NOTHING played: the ledger holds no stream
+      forfeit(r[3]!, { kind: "award", winner: r[3]!.home_entrant_id, loser: r[3]!.away_entrant_id, reason: "retired" }); // …and one AFTER play: its stream stays
+    });
+    const flagged = observed.stages[0]!.fixtures.filter((f) => f.unplayed === true).map((f) => f.id).sort();
+    // P-A2: a double walkover, a walkover and a forfeit before play have not met; a retirement after play, and a played win, have.
+    expect(flagged).toEqual([rows[0]!.id, rows[1]!.id, rows[2]!.id].sort());
+    expect(observed.stages[0]!.fixtures.filter((f) => f.id === rows[3]!.id)[0]!.unplayed, "a retirement AFTER play is a meeting").toBeUndefined();
+    expect(observed.stages[0]!.fixtures.filter((f) => f.home === null || f.away === null).every((f) => f.unplayed === undefined), "a bye is no unplayed board").toBe(true);
+
+    // The sequence: round 2's first board repeats round 1's first pair.
+    const rematch = (rows: FakeFixture[]) => { const [a, b] = [rows[0]!, rows.find((f) => f.round_no === 2)!]; Object.assign(b, { home_entrant_id: a.home_entrant_id, away_entrant_id: a.away_entrant_id }); };
+    const i6 = (o: ObservedRun) => evaluateInvariants(o).find((c) => c.id === "I6-swiss-no-rematch")!;
+    const legal = await observe((r) => { forfeit(r[0]!, { kind: "double_walkover" }); rematch(r); });
+    expect(i6(legal.observed), i6(legal.observed).evidence.join("; ")).toMatchObject({ verdict: "pass", checked: 6 });
+    // differential: today (no `unplayed`) the same rows fail
+    const played = await observe((r) => rematch(r));
+    expect(i6(played.observed)).toMatchObject({ verdict: "fail" });
+    expect(i6(played.observed).evidence.join(" ")).toMatch(/rematched in rounds 1 and 2/);
+  });
+
   it("each pool's table is read on its own and keeps its poolId (a merged table would red I1/I3)", async () => {
     const driver = new FakeLeagueDriver();
     const ctx = ctxFor(driver, "LIFECYCLE");
@@ -2032,6 +2081,306 @@ describe("the swiss branch of playStage on the swiss fake", () => {
     expect(inRound(1).filter((f) => f.away === null)).toHaveLength(0);
     expect([inRound(2).filter((f) => f.home !== null && f.away !== null).length, inRound(2).filter((f) => f.away === null).length]).toEqual([3, 1]);
     expect(fx.every((f) => isTerminal(f.status))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W3 app-B Task 6 (premise 5): a Swiss Pair the product REFUSES by name - SWISS_NO_LEGAL_PAIRING, no round left that repeats
+// nobody - is a refusal, not "paired nobody"; and the loop takes the organiser's recovery, "Finish the Swiss now"
+// (POST /swiss/finish), which ends the Swiss after its last complete round AND completes the stage.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** A Swiss-then-knockout product, built from the multi-stage fake (the one multi-stage fake that seeds a later stage): the
+ *  first stage is posted a league and served as a swiss with a round budget, the one thing the loop reads of it. Its
+ *  `deadEnd`th Pair is refused SWISS_NO_LEGAL_PAIRING with the product's body (swiss-finish-twin.ts: the refusal's
+ *  `finishAfter` and `canFinish` are read from the same verdict `finishSwiss` judges by), and Finish does what
+ *  finishSwissNow does: deletes the rows past k, sets `config.rounds := k`, and completes the stage ITSELF (the base fake's
+ *  completeStage, which mints the next stage's draft proposal). */
+class SwissThenKnockout extends FakeMultiStageDriver {
+  readonly #deadEnd: number;
+  readonly #budget: number;
+  readonly #finishRefuses: boolean;
+  #pairs = 0;
+  /** Stage 1's rows past the round that stays, counted when Pair was refused - before Finish deletes anything. */
+  rowsPastK: number | null = null;
+  constructor(o: { deadEnd: number; budget: number; finishRefuses?: boolean }, base: FakeMultiStageOptions = {}) {
+    super(base);
+    this.#deadEnd = o.deadEnd;
+    this.#budget = o.budget;
+    this.#finishRefuses = o.finishRefuses === true;
+  }
+  #rows(): FinishRow[] {
+    return finishRowsOf(this.fixtures.filter((f) => f.stage_id === this.stages[0]!.id), {
+      bye: () => false,
+      seated: (f) => f.home_entrant_id !== null && f.away_entrant_id !== null,
+      result: (f) => f.events.length > 0,
+    });
+  }
+  override async postStages(d: string, bodies: readonly StagePostBody[]): Promise<StageRef[]> {
+    await super.postStages(d, bodies);
+    const first = this.stages[0]!;
+    first.kind = "swiss";
+    first.config = { ...first.config, rounds: this.#budget };
+    const refs = this.stages.map((st) => ({ id: st.id, seq: st.seq, kind: st.kind, config: { ...st.config }, status: st.status }));
+    this.stage = refs[0]!;
+    return refs;
+  }
+  override generate(stageId: string = this.stages[0]?.id ?? ""): ReturnType<FakeMultiStageDriver["generate"]> {
+    if (stageId === this.stages[0]?.id && ++this.#pairs === this.#deadEnd) {
+      this.log("generate", stageId);
+      const verdict = judgeFinish(this.#rows(), this.#budget, false);
+      this.rowsPastK = this.fixtures.filter((f) => f.stage_id === stageId && (f.round_no ?? 0) > verdict.finishedAfter).length;
+      return Promise.reject(swissRefusedCall("POST", `/api/v1/stages/${stageId}/generate`, "SWISS_NO_LEGAL_PAIRING",
+        { round: this.#deadEnd, reason: "every remaining pairing repeats a meeting", field: "rounds", finishAfter: verdict.finishedAfter, canFinish: verdict.canFinish }, verdict.canFinish));
+    }
+    return super.generate(stageId);
+  }
+  async finishSwiss(stageId: string): Promise<FinishSwissOut> {
+    this.log("finishSwiss", stageId);
+    const path = `/api/v1/stages/${stageId}/swiss/finish`;
+    if (this.#finishRefuses) throw swissRefusedCall("POST", path, "SWISS_FINISH_ROUND_UNDECIDED", { canFinish: false, inProgress: false, boards: [] });
+    const verdict = judgeFinish(this.#rows(), this.#budget, this.completedStages.has(stageId));
+    const refused = finishRefusal(path, verdict);
+    if (refused !== null) throw refused;
+    const k = verdict.finishedAfter;
+    const before = this.fixtures.length;
+    this.fixtures = this.fixtures.filter((f) => f.stage_id !== stageId || (f.round_no ?? 0) <= k);
+    const first = this.stages[0]!;
+    first.config = { ...first.config, rounds: k };
+    const complete = await this.completeStage(stageId);
+    return { ...complete, finished_after: k, shells_removed: before - this.fixtures.length, slots_freed: 0 };
+  }
+}
+
+describe("W3 app-B Task 6: the Swiss loop reads SWISS_NO_LEGAL_PAIRING as a refusal and takes the organiser's recovery", () => {
+  // single-sport: the loop reads a refusal's code and `canFinish` and calls Finish; none of it reads a sport's rules, so the whole
+  // block runs on generic (ctxFor's default) - except the real dead end, which is the ENGINE's pairRound over entrants and their
+  // meetings, again sport-independent. The sport-dependent parts of the same task (what a played loser is paid, who played) are swept
+  // or pinned in model-fake-swiss-score.test.ts and fold.test.ts.
+  it("the Swiss loop on SWISS_NO_LEGAL_PAIRING finishes the Swiss and the knockout is reached", async () => {
+    const driver = new SwissThenKnockout({ deadEnd: 2, budget: 3 });
+    const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "league_ko" });
+    const [swiss, ko] = out.observed.stages;
+    const s1 = driver.stageIdAt(1);
+    // The sequence: round 1 paired, round 2 REFUSED by name (recorded as a refusal, seating nobody), and the loop stopped there.
+    expect(swiss!.pairRounds).toEqual([{ roundNo: 1, seated: expect.any(Number) }, { roundNo: 2, seated: 0, refused: "SWISS_NO_LEGAL_PAIRING" }]);
+    expect(swiss!.pairRounds[0]!.seated).toBeGreaterThan(0);
+    expect(swiss!.generates.at(-1)).toMatchObject({ status: 409, code: "SWISS_NO_LEGAL_PAIRING" });
+    // Finish went out ONCE, for this stage, after the refusal; it removed what was past round 1 and the stage is complete.
+    expect(driver.trace.filter((c) => c.startsWith("finishSwiss"))).toEqual([`finishSwiss ${s1}`]);
+    expect(driver.rowsPastK, "premise: the refusal came with rows past round 1 to remove").toBeGreaterThan(0);
+    expect(swiss!.finish).toEqual({ status: 200, code: null, finishedAfter: 1, shellsRemoved: driver.rowsPastK });
+    expect(swiss!.exit).toBe("finished_early");
+    // Finish COMPLETED the stage: /complete is not sent again (the fake refuses a repeat), and the answer is the stage's completion.
+    expect(driver.trace.filter((c) => c === `completeStage ${s1}`)).toHaveLength(1);
+    expect(driver.commits).toEqual([s1, driver.stageIdAt(2)]);
+    expect(swiss!.complete).toMatchObject({ status: 200, code: null, completed: true, seedProposal: { id: driver.proposalIssuedFor(2), status: "draft" } });
+    // ...so the knockout is REACHED: seeded from the Swiss, played to a finish and completed.
+    expect([ko!.fieldSource, ko!.exit, ko!.complete?.completed]).toEqual(["seeded", "drained", true]);
+    expect(ko!.fixtures.length).toBeGreaterThan(0);
+    // The invariants read it as a clean recovery: the refused round is checked and passes, and the loop is bounded.
+    const i4 = checks.find((c) => c.id === "I4-nothing-ends-stuck")!;
+    expect(i4, i4.evidence.join("; ")).toMatchObject({ verdict: "pass" });
+    expect(i4.checked).toBeGreaterThan(0);
+    const bounded = checks.find((c) => c.id === "life-loop-bounded")!;
+    expect(bounded, bounded.evidence.join("; ")).toMatchObject({ verdict: "pass" });
+    expect(out.observed.stages.map((x) => x.exit)).toEqual(["finished_early", "drained"]);
+  });
+
+  // The sequence the other way round: a Swiss that FINISHED early is no excuse for a stage after it that was never reached.
+  it("a Swiss finished early beside a stage that was not reached is still a red run: the run's exit is the stage that failed", async () => {
+    const driver = new SwissThenKnockout({ deadEnd: 2, budget: 3 }, { refuseConfirm: "SEEDING_NOTHING_TO_FILL" });
+    const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "league_ko" });
+    expect(out.observed.stages.map((x) => x.exit)).toEqual(["finished_early", "not_reached"]);
+    const bounded = checks.find((c) => c.id === "life-loop-bounded")!;
+    expect(bounded.verdict).toBe("fail");
+    expect(bounded.evidence).toContain("play loop exited not_reached");
+  });
+
+  it("a Finish the product refuses by name leaves the Swiss unfinished: refused_generate, nothing completed by Finish, and the refusal is recorded", async () => {
+    const driver = new SwissThenKnockout({ deadEnd: 2, budget: 3, finishRefuses: true });
+    const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "league_ko" });
+    const [swiss, ko] = out.observed.stages;
+    expect(swiss!.pairRounds.at(-1)).toEqual({ roundNo: 2, seated: 0, refused: "SWISS_NO_LEGAL_PAIRING" });
+    expect(swiss!.finish).toMatchObject({ status: 409, code: "SWISS_FINISH_ROUND_UNDECIDED", finishedAfter: null, shellsRemoved: null });
+    expect(swiss!.exit).toBe("refused_generate");
+    // Finish committed nothing, so the ordinary /complete is still asked, once - and the stage is not ready.
+    expect(driver.trace.filter((c) => c.startsWith("completeStage"))).toEqual([`completeStage ${driver.stageIdAt(1)}`]);
+    expect(swiss!.complete).toMatchObject({ completed: false });
+    expect(ko!.exit).toBe("not_reached");
+    // Red stays red: the loop did not finish, and the run says so.
+    expect(checks.find((c) => c.id === "life-loop-bounded")).toMatchObject({ verdict: "fail", evidence: expect.arrayContaining(["play loop exited refused_generate"]) });
+  });
+
+  // T6 review m1: a Finish that answers 5xx ended UNKNOWN - it may have committed the completion, so neither Finish nor /complete is
+  // sent again (design section 6.4; the drivers refuse both). That is a result the case is JUDGED on, not an exception out of it.
+  it("m1: a Finish that answers 500 is judged, not thrown: /complete is not sent after it, and I4 names the Finish crash", async () => {
+    class FinishCrashes extends FakeSwissDriver {
+      completes = 0;
+      override async generate() {
+        if (this.paired === 1) throw swissRefusedCall("POST", "/api/v1/stages/s1/generate", "SWISS_NO_LEGAL_PAIRING", { round: 2, reason: "r", field: "rounds", finishAfter: 1, canFinish: true }, true);
+        return super.generate();
+      }
+      async finishSwiss(): Promise<FinishSwissOut> { throw new RefusedCall("POST", "/api/v1/stages/s1/swiss/finish", 500, "INTERNAL", "boom"); }
+      // HttpDriver's promise after a Finish that ended unknown: nothing more is sent for the stage, and asking is a misuse.
+      override completeStage(): Promise<CompleteOut> { this.completes++; throw new DriverMisuse("driver: stage s1: its Finish ended unknown - /complete is never sent after it"); }
+    }
+    const driver = new FinishCrashes();
+    const r = await runOn(driver, "LIFECYCLE", { row: "swiss" }); // resolves: the case is judged
+    const s = r.out.observed.stages[0]!;
+    expect(s.finish).toMatchObject({ status: 500, code: "INTERNAL" });
+    expect(s.exit).toBe("refused_generate");
+    expect(driver.completes, "/complete is not sent for a stage whose Finish ended unknown").toBe(0);
+    expect(s.complete).toMatchObject({ status: 500, code: "INTERNAL", completed: false });
+    const i4 = r.checks.find((c) => c.id === "I4-nothing-ends-stuck")!;
+    expect(i4.verdict).toBe("fail");
+    expect(i4.evidence.join("; ")).toMatch(/finish answered 500 INTERNAL .{1,3} not a named refusal/);
+    expect(r.state.state, "a crashed Finish reds the case").toBe("red");
+  });
+
+  // T6 review m2: SWISS_ROUNDS_ABOVE_MAX is the other Pair refusal that offers Finish (stages.ts judgeSwissPairAt: a running Swiss
+  // whose field a withdrawal shrank under the target round; 409 when Finish is on offer). Its body is
+  // `{ rounds, field, hardMax, ...swissFinishDetails }` - `canFinish` and `finish: { after, rounds }`, NOT the dead end's `finishAfter`.
+  // Today's scenarios cannot reach it (the field is 8, hardMax 7), so this drives the loop with the product's body directly.
+  describe("m2: SWISS_ROUNDS_ABOVE_MAX is treated as the dead end is", () => {
+    const ROUNDS = 3;
+    const FIELD = 2;
+    const aboveMax = (canFinish: boolean) => swissRefusedCall("POST", "/api/v1/stages/s1/generate", "SWISS_ROUNDS_ABOVE_MAX",
+      { rounds: ROUNDS, field: FIELD, hardMax: judgeSwissRounds(ROUNDS, FIELD).hardMax, ...(canFinish ? { canFinish: true, finish: { after: 1, rounds: ROUNDS } } : { canFinish: false }) }, canFinish);
+    class AboveMax extends FakeSwissDriver {
+      finished: string[] = [];
+      constructor(readonly canFinish: boolean) { super(); }
+      override async generate() {
+        if (this.paired === 1) throw aboveMax(this.canFinish);
+        return super.generate();
+      }
+      async finishSwiss(stageId: string): Promise<FinishSwissOut> {
+        this.finished.push(stageId);
+        // Finish keeps round 1 (decided by the loop) and deletes every row past it, as finishSwissNow does.
+        const before = this.fixtures.length;
+        this.fixtures = this.fixtures.filter((f) => (f.round_no ?? 0) <= 1);
+        return { completed: true, events: [{ type: "stage_completed", finalRanks: this.entrants.map((e) => e.id) }], finished_after: 1, shells_removed: before - this.fixtures.length, slots_freed: 0 };
+      }
+    }
+    it("with Finish on offer (409, canFinish): the round is marked refused, Finish is sent once, the Swiss finishes early, and I4 reads a refusal - not \"paired nobody\"", async () => {
+      const row = SWISS_REFUSALS.SWISS_ROUNDS_ABOVE_MAX;
+      expect(row.resolvableStatus, "premise: the table row has a resolvable status of its own").toBeDefined();
+      expect(aboveMax(true).extra, "premise: the real body carries canFinish and no finishAfter").toMatchObject({ canFinish: true });
+      expect(aboveMax(true).extra).not.toHaveProperty("finishAfter");
+      const driver = new AboveMax(true);
+      const r = await runOn(driver, "LIFECYCLE", { row: "swiss" });
+      const s = r.out.observed.stages[0]!;
+      expect(s.generates.at(-1)).toMatchObject({ status: row.resolvableStatus, code: "SWISS_ROUNDS_ABOVE_MAX" });
+      expect(s.pairRounds.at(-1)).toEqual({ roundNo: 2, seated: 0, refused: "SWISS_ROUNDS_ABOVE_MAX" });
+      expect(driver.finished).toHaveLength(1);
+      expect(s.finish).toMatchObject({ status: 200, code: null, finishedAfter: 1 });
+      expect(s.finish!.shellsRemoved, "premise: there were rows past round 1 to remove").toBeGreaterThan(0);
+      expect(s.exit).toBe("finished_early");
+      const i4 = r.checks.find((c) => c.id === "I4-nothing-ends-stuck")!;
+      expect(i4, i4.evidence.join("; ")).toMatchObject({ verdict: "pass" });
+      expect(i4.evidence.join("; ")).not.toMatch(/paired nobody/);
+      expect(r.checks.find((c) => c.id === "life-loop-bounded")).toMatchObject({ verdict: "pass" });
+    });
+    it("without Finish on offer (422, canFinish false): the round is still marked refused, nothing is Finished, and the loop stops refused_generate", async () => {
+      const driver = new AboveMax(false);
+      const r = await runOn(driver, "LIFECYCLE", { row: "swiss" });
+      const s = r.out.observed.stages[0]!;
+      expect(s.generates.at(-1)).toMatchObject({ status: SWISS_REFUSALS.SWISS_ROUNDS_ABOVE_MAX.status, code: "SWISS_ROUNDS_ABOVE_MAX" });
+      expect(s.pairRounds.at(-1)).toEqual({ roundNo: 2, seated: 0, refused: "SWISS_ROUNDS_ABOVE_MAX" });
+      expect(driver.finished).toEqual([]);
+      expect(s.finish).toBeUndefined();
+      expect(s.exit).toBe("refused_generate");
+      expect(r.checks.find((c) => c.id === "I4-nothing-ends-stuck")!.evidence.join("; ")).not.toMatch(/paired nobody/);
+    });
+  });
+
+  // T6 review m3: a driver that has no path to Finish says so as a cell with no path in its layer (NoOrganiserPath, run.ts: 🚫),
+  // and the loop lets that out untouched - it is neither an ordinary refusal (refused_generate) nor a harness defect.
+  it("m3: a Finish a layer does not drive (NoOrganiserPath) leaves the loop unchanged, never read as a refusal", async () => {
+    class NoPathToFinish extends FakeSwissDriver {
+      override async generate() {
+        if (this.paired === 1) throw swissRefusedCall("POST", "/api/v1/stages/s1/generate", "SWISS_NO_LEGAL_PAIRING", { round: 2, reason: "r", field: "rounds", finishAfter: 1, canFinish: true }, true);
+        return super.generate();
+      }
+      async finishSwiss(): Promise<FinishSwissOut> { throw new NoOrganiserPath("W3", "the Swiss Finish is not driven in this layer"); }
+    }
+    const err = await runOn(new NoPathToFinish(), "LIFECYCLE", { row: "swiss" }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(NoOrganiserPath);
+    expect(err).not.toBeInstanceOf(DriverMisuse);
+    expect(err).toMatchObject({ wave: "W3" });
+  });
+
+  it.each([
+    ["a named refusal of another code (STAGE_NOT_READY)", { status: STAGE_NOT_READY_STATUS, code: "STAGE_NOT_READY", extra: null, marked: false }],
+    // The dead end is still a refusal by name, so the round is marked; there is just no Finish to take.
+    ["SWISS_NO_LEGAL_PAIRING where Finish is not on offer (canFinish: false, 422)", { status: 422, code: "SWISS_NO_LEGAL_PAIRING", extra: { round: 2, reason: "r", field: "rounds", finishAfter: 0, canFinish: false }, marked: true }],
+    ["SWISS_NO_LEGAL_PAIRING that crashed (500 is not a refusal)", { status: 500, code: "SWISS_NO_LEGAL_PAIRING", extra: { canFinish: true }, marked: false }],
+    // m2: the other refusal that offers Finish is a refusal by name too, and a 500 is no more a refusal for it.
+    ["SWISS_ROUNDS_ABOVE_MAX where Finish is not on offer (canFinish: false, 422)", { status: SWISS_REFUSALS.SWISS_ROUNDS_ABOVE_MAX.status, code: "SWISS_ROUNDS_ABOVE_MAX", extra: { rounds: 3, field: 2, hardMax: judgeSwissRounds(3, 2).hardMax, canFinish: false }, marked: true }],
+    ["SWISS_ROUNDS_ABOVE_MAX that crashed (500 is not a refusal)", { status: 500, code: "SWISS_ROUNDS_ABOVE_MAX", extra: { canFinish: true }, marked: false }],
+  ] as const)("a refusal with any other code still exits refused_generate: %s", async (_why, refusal) => {
+    class Refuses extends FakeSwissDriver {
+      finished = 0;
+      override async generate() {
+        if (this.paired === 1) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", refusal.status, refusal.code, "refused", null, refusal.extra);
+        return super.generate();
+      }
+      async finishSwiss(): Promise<FinishSwissOut> { this.finished++; throw new Error("fake: Finish must not be taken here"); }
+    }
+    const driver = new Refuses();
+    const r = await runOn(driver, "LIFECYCLE", { row: "swiss" });
+    const s = r.out.observed.stages[0]!;
+    expect(s.exit).toBe("refused_generate");
+    expect(driver.finished, "Finish is the recovery for a named SWISS_NO_LEGAL_PAIRING that offers it, and for nothing else").toBe(0);
+    expect(s.finish).toBeUndefined();
+    expect(r.checks.find((c) => c.id === "life-loop-bounded")).toMatchObject({ verdict: "fail", evidence: expect.arrayContaining(["play loop exited refused_generate"]) });
+    // Only a NAMED refusal that offers Finish marks its round refused; any other refusal (or a crash) is recorded as before: seated 0, no mark.
+    expect(s.pairRounds.at(-1)).toEqual(refusal.marked ? { roundNo: 2, seated: 0, refused: refusal.code } : { roundNo: 2, seated: 0 });
+  });
+
+  it("a driver that cannot Finish is refused by name, never read as an ordinary refusal", async () => {
+    class NoFinish extends FakeSwissDriver {
+      override async generate() {
+        if (this.paired === 1) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, "SWISS_NO_LEGAL_PAIRING", "no pairing", null, { round: 2, reason: "r", field: "rounds", finishAfter: 1, canFinish: true });
+        return super.generate();
+      }
+    }
+    await expect(runOn(new NoFinish(), "LIFECYCLE", { row: "swiss" })).rejects.toThrow(/cannot Finish the Swiss/);
+  });
+
+  // The real dead end: the engine's own pairing runs out of rounds that repeat nobody. Driven end to end through the harness
+  // loop and the model twin (the engine's pairRound), not through a forced refusal.
+  it("a Swiss whose round budget outruns the field dead-ends on the engine's own pairing, and the loop finishes it after the last round that could be paired", async () => {
+    class OverBudget extends ModelFakeDriver {
+      override postStages(d: string, bodies: readonly StagePostBody[]): ReturnType<ModelFakeDriver["postStages"]> {
+        return super.postStages(d, bodies.map((b) => (b.kind === "swiss" ? { ...b, config: { ...b.config, rounds: 12 } } : b)));
+      }
+    }
+    const driver = new OverBudget({});
+    const ctx = ctxFor(driver, "LIFECYCLE", { row: "swiss" });
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, 4);
+    expect(Number(setup.stage.config.rounds), "premise: a budget of 12 rounds over 4 entrants").toBe(12);
+    const shellsBefore = driver.fixtures.length;
+    await playStage(ctx, rec, setup);
+    const complete = await finishStage(ctx, rec, setup.stage.id);
+    const observed = await snapshot(ctx, rec, setup, [{ stage: setup.stage, field: setup.entrants.map((e) => e.id), advance: null, complete }], { configEdit: null, withdrawal: null });
+    const s = observed.stages[0]!;
+    // 4 entrants repeat nobody for 3 rounds; the 4th Pair is the dead end.
+    expect(s.pairRounds.map((p) => p.roundNo)).toEqual([1, 2, 3, 4]);
+    expect(s.pairRounds.at(-1)).toEqual({ roundNo: 4, seated: 0, refused: "SWISS_NO_LEGAL_PAIRING" });
+    expect(s.pairRounds.slice(0, 3).every((p) => p.seated === 2)).toBe(true);
+    expect(s.exit).toBe("finished_early");
+    expect(s.finish).toMatchObject({ status: 200, code: null, finishedAfter: 3 });
+    expect(s.finish!.shellsRemoved, "every shell of rounds 4..12 went").toBe(shellsBefore - driver.fixtures.length);
+    expect(s.finish!.shellsRemoved).toBeGreaterThan(0);
+    expect(driver.stage!.config.rounds, "Finish set the stage's round budget to what was played").toBe(3);
+    expect(complete).toMatchObject({ status: 200, code: null, completed: true });
+    expect(driver.completed).toBe(true);
+    const checks = evaluateInvariants(observed);
+    expect(checks.find((c) => c.id === "I4-nothing-ends-stuck"), checks.find((c) => c.id === "I4-nothing-ends-stuck")!.evidence.join("; ")).toMatchObject({ verdict: "pass" });
+    expect(checks.find((c) => c.id === "I6-swiss-no-rematch")).toMatchObject({ verdict: "pass" });
+    expect(driver.calls.filter((c) => c === "completeStage")).toHaveLength(1);
   });
 });
 

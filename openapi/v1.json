@@ -5314,7 +5314,8 @@
                                     "h2h_reapply",
                                     "h2h_exclusion",
                                     "matches_played",
-                                    "field_goals"
+                                    "field_goals",
+                                    "opp_diff"
                                   ]
                                 }
                               },
@@ -5767,7 +5768,8 @@
                             "h2h_reapply",
                             "h2h_exclusion",
                             "matches_played",
-                            "field_goals"
+                            "field_goals",
+                            "opp_diff"
                           ]
                         }
                       },
@@ -5975,7 +5977,8 @@
                                   "h2h_reapply",
                                   "h2h_exclusion",
                                   "matches_played",
-                                  "field_goals"
+                                  "field_goals",
+                                  "opp_diff"
                                 ]
                               }
                             },
@@ -6580,7 +6583,8 @@
                                   "h2h_reapply",
                                   "h2h_exclusion",
                                   "matches_played",
-                                  "field_goals"
+                                  "field_goals",
+                                  "opp_diff"
                                 ]
                               }
                             },
@@ -7019,7 +7023,8 @@
                             "h2h_reapply",
                             "h2h_exclusion",
                             "matches_played",
-                            "field_goals"
+                            "field_goals",
+                            "opp_diff"
                           ]
                         }
                       },
@@ -7292,7 +7297,8 @@
                                   "h2h_reapply",
                                   "h2h_exclusion",
                                   "matches_played",
-                                  "field_goals"
+                                  "field_goals",
+                                  "opp_diff"
                                 ]
                               }
                             },
@@ -8629,7 +8635,8 @@
                                   "h2h_reapply",
                                   "h2h_exclusion",
                                   "matches_played",
-                                  "field_goals"
+                                  "field_goals",
+                                  "opp_diff"
                                 ]
                               }
                             },
@@ -9144,7 +9151,8 @@
                                   "h2h_reapply",
                                   "h2h_exclusion",
                                   "matches_played",
-                                  "field_goals"
+                                  "field_goals",
+                                  "opp_diff"
                                 ]
                               }
                             },
@@ -15587,6 +15595,10 @@
                                             "order_inside_feeder_rest",
                                             "round_order_day",
                                             "round_order_same_day",
+                                            "round_order_end",
+                                            "no_slot_round_barrier",
+                                            "rounds_per_day",
+                                            "no_slot_rounds_per_day",
                                             "no_slot_lattice",
                                             "no_slot_budget",
                                             "stranded_fixture"
@@ -15689,6 +15701,11 @@
                                       ]
                                     },
                                     "shortfallMinutes": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "measuredCount": {
                                       "type": "integer",
                                       "minimum": -9007199254740991,
                                       "maximum": 9007199254740991
@@ -21917,7 +21934,8 @@
                                             "h2h_reapply",
                                             "h2h_exclusion",
                                             "matches_played",
-                                            "field_goals"
+                                            "field_goals",
+                                            "opp_diff"
                                           ]
                                         }
                                       },
@@ -21973,7 +21991,8 @@
                                             "h2h_reapply",
                                             "h2h_exclusion",
                                             "matches_played",
-                                            "field_goals"
+                                            "field_goals",
+                                            "opp_diff"
                                           ]
                                         }
                                       }
@@ -22022,7 +22041,8 @@
                                             "h2h_reapply",
                                             "h2h_exclusion",
                                             "matches_played",
-                                            "field_goals"
+                                            "field_goals",
+                                            "opp_diff"
                                           ]
                                         }
                                       }
@@ -25287,7 +25307,7 @@
     },
     "/api/v1/stages/{id}/generate": {
       "post": {
-        "summary": "Generate fixtures (idempotent, returns diff). Optional body `{pairing}` — Swiss only, ROUND 1 only (422 SWISS_PAIRING_ROUND_ONE_ONLY / SWISS_PAIRING_NOT_SWISS otherwise); never stored. An americano or mexicano stage mints pair entrants, so in a chess division it is 422 CHESS_INDIVIDUAL_ONLY. A Swiss whose rounds exceed the hard maximum of the field being paired (n − 1 for an even field, n for an odd one) is refused SWISS_ROUNDS_ABOVE_MAX `{rounds, field, hardMax, canFinish}` — 422 as sent (the first Generate, or any before Start); in a running Swiss whose field shrank, only a round beyond the shrunk field's hard maximum is refused, 409 `canFinish: true`, and a round still within it is paired with `swiss_rounds` (verdict shrunk, `{rounds, field, hardMax, canFinish}` — canFinish false for round 1, where nothing is played); above the safe maximum ⌊n/2⌋ it goes through with `swiss_rounds` (verdict warn).",
+        "summary": "Generate fixtures (idempotent, returns diff). Optional body `{pairing}` — Swiss only, ROUND 1 only (422 SWISS_PAIRING_ROUND_ONE_ONLY / SWISS_PAIRING_NOT_SWISS otherwise); never stored. An americano or mexicano stage mints pair entrants, so in a chess division it is 422 CHESS_INDIVIDUAL_ONLY. A Swiss whose rounds exceed the hard maximum of the field being paired (n − 1 for an even field, n for an odd one) is refused SWISS_ROUNDS_ABOVE_MAX `{rounds, field, hardMax, canFinish}` — 422 as sent (the first Generate, or any before Start); in a running Swiss whose field shrank, only a round beyond the shrunk field's hard maximum is refused, 409 `canFinish: true`, and a round still within it is paired with `swiss_rounds` (verdict shrunk, `{rounds, field, hardMax, canFinish}` — canFinish false for round 1, where nothing is played); above the safe maximum ⌊n/2⌋ it goes through with `swiss_rounds` (verdict warn). A Swiss round with no legal pairing is refused by name, never seated empty (W3 app-B, X-SW-3): SWISS_NO_LEGAL_PAIRING `{round, reason, field, finishAfter, canFinish}` — `reason` is rematch, colour, no_bye_candidate or search_limit (a field under two players is refused STAGE_NOT_READY first); `finishAfter` is the round `POST /stages/{id}/swiss/finish` ends the Swiss after, and `canFinish` is true only when that call goes through from here — 409 when `canFinish` (Finish after round `finishAfter` is the way out), else 422. The refusal is raised before any shell is reshaped or seated, so nothing is written.",
         "tags": [
           "stages"
         ],
@@ -25714,6 +25734,18 @@
                             "hardMax"
                           ],
                           "additionalProperties": false
+                        },
+                        "swiss_next_round": {
+                          "type": "string",
+                          "enum": [
+                            "unpairable",
+                            "unknown"
+                          ]
+                        },
+                        "swiss_paired_round": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
@@ -28120,6 +28152,18 @@
                           ],
                           "additionalProperties": false
                         },
+                        "swiss_next_round": {
+                          "type": "string",
+                          "enum": [
+                            "unpairable",
+                            "unknown"
+                          ]
+                        },
+                        "swiss_paired_round": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
                         "removed": {
                           "type": "integer",
                           "minimum": -9007199254740991,
@@ -28904,6 +28948,7 @@
                                       "h2h_exclusion",
                                       "matches_played",
                                       "field_goals",
+                                      "opp_diff",
                                       "fewest_played"
                                     ]
                                   },
@@ -29298,7 +29343,8 @@
                                           "h2h_reapply",
                                           "h2h_exclusion",
                                           "matches_played",
-                                          "field_goals"
+                                          "field_goals",
+                                          "opp_diff"
                                         ]
                                       }
                                     },
@@ -29354,7 +29400,8 @@
                                           "h2h_reapply",
                                           "h2h_exclusion",
                                           "matches_played",
-                                          "field_goals"
+                                          "field_goals",
+                                          "opp_diff"
                                         ]
                                       }
                                     }
@@ -29403,7 +29450,8 @@
                                           "h2h_reapply",
                                           "h2h_exclusion",
                                           "matches_played",
-                                          "field_goals"
+                                          "field_goals",
+                                          "opp_diff"
                                         ]
                                       }
                                     }
@@ -31438,7 +31486,8 @@
                             "h2h_reapply",
                             "h2h_exclusion",
                             "matches_played",
-                            "field_goals"
+                            "field_goals",
+                            "opp_diff"
                           ]
                         },
                         "examples": [
@@ -31491,7 +31540,8 @@
                             "h2h_reapply",
                             "h2h_exclusion",
                             "matches_played",
-                            "field_goals"
+                            "field_goals",
+                            "opp_diff"
                           ]
                         },
                         "examples": [
@@ -31796,7 +31846,8 @@
                                   "h2h_reapply",
                                   "h2h_exclusion",
                                   "matches_played",
-                                  "field_goals"
+                                  "field_goals",
+                                  "opp_diff"
                                 ]
                               }
                             },
@@ -31840,7 +31891,8 @@
                                   "h2h_reapply",
                                   "h2h_exclusion",
                                   "matches_played",
-                                  "field_goals"
+                                  "field_goals",
+                                  "opp_diff"
                                 ]
                               }
                             },
@@ -38046,6 +38098,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -38151,6 +38207,11 @@
                                 ]
                               },
                               "shortfall_minutes": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "measured_count": {
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
@@ -38903,6 +38964,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -39008,6 +39073,11 @@
                                 ]
                               },
                               "shortfall_minutes": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "measured_count": {
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
@@ -39798,6 +39868,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -39903,6 +39977,11 @@
                                 ]
                               },
                               "shortfall_minutes": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "measured_count": {
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
@@ -44688,6 +44767,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -44793,6 +44876,11 @@
                                 ]
                               },
                               "shortfall_minutes": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "measured_count": {
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
@@ -81705,6 +81793,33 @@
                                     },
                                     "champion": {
                                       "type": "boolean"
+                                    },
+                                    "markers": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "bye",
+                                              "late"
+                                            ]
+                                          },
+                                          "text": {
+                                            "type": "string"
+                                          },
+                                          "title": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "text",
+                                          "title"
+                                        ],
+                                        "additionalProperties": false
+                                      }
                                     }
                                   },
                                   "required": [
@@ -83202,6 +83317,7 @@
                                             "h2h_exclusion",
                                             "matches_played",
                                             "field_goals",
+                                            "opp_diff",
                                             "fewest_played"
                                           ]
                                         },
@@ -115211,6 +115327,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -115316,6 +115436,11 @@
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
+                              },
+                              "measuredCount": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
                               }
                             },
                             "required": [
@@ -115370,6 +115495,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -115472,6 +115601,11 @@
                                 ]
                               },
                               "shortfallMinutes": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "measuredCount": {
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
@@ -120099,6 +120233,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -120204,6 +120342,11 @@
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
+                              },
+                              "measuredCount": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
                               }
                             },
                             "required": [
@@ -120258,6 +120401,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -120360,6 +120507,11 @@
                                 ]
                               },
                               "shortfallMinutes": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "measuredCount": {
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
@@ -121806,6 +121958,10 @@
                                       "order_inside_feeder_rest",
                                       "round_order_day",
                                       "round_order_same_day",
+                                      "round_order_end",
+                                      "no_slot_round_barrier",
+                                      "rounds_per_day",
+                                      "no_slot_rounds_per_day",
                                       "no_slot_lattice",
                                       "no_slot_budget",
                                       "stranded_fixture"
@@ -121908,6 +122064,11 @@
                                 ]
                               },
                               "shortfallMinutes": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "measuredCount": {
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
@@ -122452,6 +122613,10 @@
                                                 "order_inside_feeder_rest",
                                                 "round_order_day",
                                                 "round_order_same_day",
+                                                "round_order_end",
+                                                "no_slot_round_barrier",
+                                                "rounds_per_day",
+                                                "no_slot_rounds_per_day",
                                                 "no_slot_lattice",
                                                 "no_slot_budget",
                                                 "stranded_fixture"
@@ -122557,6 +122722,11 @@
                                           ]
                                         },
                                         "shortfall_minutes": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "measured_count": {
                                           "type": "integer",
                                           "minimum": -9007199254740991,
                                           "maximum": 9007199254740991

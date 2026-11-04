@@ -37,7 +37,7 @@ import {
   STRUCTURAL_KEYS,
 } from "@/server/public-site/standings-view";
 import { builtinModules } from "@seazn/engine/sports";
-import { RATIO_LEDGERS, type StandingsRow } from "@seazn/engine/competition";
+import { RATIO_LEDGERS, validateCascade, type StandingsRow } from "@seazn/engine/competition";
 import { StandingsTableView } from "../standings-table-view";
 import { defaultOrderOf } from "@seazn/engine/testkit";
 import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
@@ -62,6 +62,13 @@ const MEASURED: Readonly<Record<string, number>> = {
   "campo": 43.3, "champ": 43, "Veldd.": 41.6, "Saldo": 39.5, "saldo": 39.5, "Game": 34.3, "Diff.": 28.3, "OTW": 26.8,
   "diff": 26.1, "GPr": 24.3, "PPr": 23.4, "pts": 22.3, "OTL": 22.1, "Dif.": 21.3, "WV": 19.7, "VV": 16.6, "GV": 16.5,
   "DP": 16.3, "VP": 15.9, "FG": 15.7, "RJ": 15.5, "G.": 11.6, "B.": 11.2,
+  // W3 T1 (X-SW-31, engine 2.0.0 `opp_diff`): the four new words of table.abbr.oppDiff ("Opp diff", "Dif. rivales",
+  // "Diff. adv.", "Saldo tegenst."), measured the same way on the built app (live prod build of this tree, Geist 11px
+  // uppercase, 0.05em tracking, weight 600, one word at a time, 2026-11-03). The same run re-read "Difference" 72.9,
+  // "Against" 51.2, "Overwinningen" 100, "GD" 16.9, "Pts" 22.3, "diff" 26.1, "Dif." 21.3, "Diff." 28.3, "Saldo" 39.5 and
+  // "Buchholz" 64 - the values above - so the method is the one that produced them. "diff", "Dif.", "Diff." and "Saldo"
+  // were already in the table.
+  "tegenst.": 54.9, "rivales": 48.7, "adv.": 26.5, "Opp": 24.5,
 };
 
 const LOCALES = { en, es, fr, nl } as unknown as Record<string, Dict>;
@@ -419,5 +426,165 @@ describe("hub table: a Swiss table's Round X of N chip (W3 T16, SW-L11)", () => 
     const classes = tag.match(/class="([^"]*)"/)![1]!.split(/\s+/);
     for (const c of ["max-w-full", "w-fit"]) expect(classes, c).toContain(c);
     expect(classes.some((c) => /^w-\d|^min-w-\[/.test(c)), "no fixed width").toBe(false);
+  });
+});
+
+// ── W3 app-B T9 (ST-G21): the public table of a Swiss stage shows the ladders ─────────────────────────────────────────
+//
+// Premise 9 of the plan: the public table already picks its columns through `tableColumns` over the stage's cascade, so the
+// engine's Swiss default chain brings Buchholz Cut-1 / Buchholz / Opp diff into it with no new code. What was owed is the PROOF
+// (here), the `opp_diff` header (Task 3) and the phone fold. Every assertion on the markup anchors on `="` (AGENTS.md: React
+// serialises an omitted prop as `"$undefined"`, so a bare `data-col` probe passes in both states). The expected columns are the
+// engine's: the keys the stage's rules doc holds that the engine refuses outside a Swiss (`validateCascade`, `stage_format`).
+describe("ST-G21 the public table of a Swiss stage shows its tie-break ladders", () => {
+  const cfgOf = (m: (typeof builtinModules)[number]) => (m.configSchema.safeParse({}).success ? {} : Object.values(m.variants)[0]);
+
+  function viewFor(m: (typeof builtinModules)[number], kind: "swiss" | "league", dict: Dict = en as unknown as Dict): TableViewT {
+    const rules = unpinnedRulesDoc({ module: m, kind, divisionConfig: cfgOf(m) });
+    const ledger = new Set<string>([...m.metrics.map((x) => x.key), ...Object.values(RATIO_LEDGERS).flat()]);
+    const row = (id: string, rank: number): StandingsRow => ({
+      entrantId: id,
+      rank,
+      played: 3,
+      won: 2,
+      drawn: 0,
+      lost: 1,
+      points: 6,
+      metrics: { ...Object.fromEntries([...ledger].map((k) => [k, 5])), buchholz: 7.5, buchholz_cut1: 6, opp_diff: -3, sberger: 4.25 },
+    });
+    return buildTableView({
+      id: "t",
+      division: { id: "d1", slug: "div", name: "Div" },
+      caption: kind === "swiss" ? "Swiss" : "League",
+      fullHref: "/x",
+      rows: [row("a", 1), row("b", 2)],
+      metricSpecs: m.metrics,
+      cascade: rules.tiebreakers,
+      entrantNames: { a: "Alpha", b: "Beta" },
+      entrantLogos: {},
+      entrantColours: {},
+      championId: null,
+      updatedAt: "2026-11-03T10:00:00Z",
+      msg: (k, v) => t(dict, k, v),
+      rules,
+      dateOf: () => null,
+      stageKind: kind,
+    });
+  }
+  /** A header cell's visible abbreviation and class list, found by its `data-col="…"`. */
+  function headerOf(markup: string, key: string): { abbr: string; cls: string } | null {
+    const m = markup.match(new RegExp(`<th[^>]*data-col="${key}"[^>]*class="([^"]*)"[^>]*>(?:(?!</th>).)*?<span aria-hidden="true">([^<]*)</span>`));
+    return m === null ? null : { abbr: m[2]!, cls: m[1]! };
+  }
+  const draw = (v: TableViewT) => renderToStaticMarkup(<StandingsTableView view={v} dict={en as unknown as Dict} testid={TESTID} />);
+
+  /** The keys the engine refuses outside a Swiss (its own declaration of "Swiss-only"), asked of the sport's default Swiss chain. */
+  const swissOnlyOf = (m: (typeof builtinModules)[number]): string[] => {
+    const rules = unpinnedRulesDoc({ module: m, kind: "swiss", divisionConfig: cfgOf(m) });
+    return validateCascade(rules.tiebreakers as never, { module: m, cfg: m.configSchema.parse(cfgOf(m)), stageKind: "league", crossGroup: false })
+      .filter((r) => r.reason === "stage_format")
+      .map((r) => String(r.key));
+  };
+  // The English words over the three Swiss-only columns (Task 3's headers; ST-G21): one word per KEY, the same for every sport.
+  const SWISS_ONLY_HEADER_EN: Readonly<Record<string, string>> = { buchholz_cut1: "Buchholz Cut-1", buchholz: "Buchholz", opp_diff: "Opp diff" };
+
+  it("ST-G21 the public table of a Swiss stage under the default chain renders the header of every Swiss-only key the engine puts on it, for every sport (registry sweep, counted)", () => {
+    const seen = new Set<string>();
+    let checked = 0;
+    for (const m of builtinModules) {
+      const markup = draw(viewFor(m, "swiss"));
+      const keys = swissOnlyOf(m);
+      expect(keys.length, `${m.key}: premise - the default Swiss chain holds Swiss-only keys`).toBeGreaterThan(0);
+      for (const key of keys) {
+        expect(headerOf(markup, key)?.abbr, `${m.key} ${key}`).toBe(SWISS_ONLY_HEADER_EN[key]);
+        seen.add(key);
+        checked++;
+      }
+    }
+    expect(checked, "headers checked").toBeGreaterThanOrEqual(22);
+    // anti-vacuity: the badminton/chess pair (Buchholz Cut-1, Buchholz) and the football family's Opp diff were all met
+    expect([...seen].sort()).toEqual(Object.keys(SWISS_ONLY_HEADER_EN).sort());
+  });
+
+  it("ST-G21 a league table renders neither, for every sport (registry sweep, counted)", () => {
+    let checked = 0;
+    for (const m of builtinModules) {
+      const markup = draw(viewFor(m, "league"));
+      expect(markup, `${m.key}: a league table still renders (the pair of the Swiss case above)`).toContain('data-col="points"');
+      for (const col of Object.keys(SWISS_ONLY_HEADER_EN)) {
+        expect(headerOf(markup, col), `${m.key} ${col}`).toBeNull();
+        checked++;
+      }
+    }
+    expect(checked, "(sport, column) pairs checked").toBe(builtinModules.length * Object.keys(SWISS_ONLY_HEADER_EN).length);
+  });
+
+  it("every sport's Swiss table carries the engine's Swiss-only keys of its default chain, and a league table of the same sport none (registry sweep, counted)", () => {
+    let swiss = 0;
+    let columns = 0;
+    for (const m of builtinModules) {
+      const rules = unpinnedRulesDoc({ module: m, kind: "swiss", divisionConfig: cfgOf(m) });
+      const refused = validateCascade(rules.tiebreakers as never, { module: m, cfg: m.configSchema.parse(cfgOf(m)), stageKind: "league", crossGroup: false })
+        .filter((r) => r.reason === "stage_format")
+        .map((r) => String(r.key));
+      const shown = viewFor(m, "swiss").columns.map((c) => c.key);
+      expect(refused.length, `${m.key}: premise - the default Swiss chain holds Swiss-only keys`).toBeGreaterThan(0);
+      for (const key of refused) expect(shown, `${m.key} ${key}`).toContain(key);
+      for (const key of refused) expect(viewFor(m, "league").columns.map((c) => c.key), `${m.key} league ${key}`).not.toContain(key);
+      swiss++;
+      columns += refused.length;
+    }
+    expect(swiss, "sports swept").toBe(builtinModules.length);
+    expect(builtinModules.length).toBe(11);
+    expect(columns, "Swiss-only columns met").toBeGreaterThanOrEqual(22);
+  });
+
+  it("the phone fold: on a phone the ladders sit behind the table's own disclosure (max-md:hidden) while Pts stays; from md up nothing folds - for every sport (registry sweep, counted)", () => {
+    let ladderColumns = 0;
+    for (const m of builtinModules) {
+      const key = m.key;
+      const view = viewFor(m, "swiss");
+      const ladders = view.columns.filter((c) => Object.keys(SWISS_ONLY_HEADER_EN).includes(c.key));
+      expect(ladders.length, `${key}: ladders on the table`).toBeGreaterThan(0);
+      for (const c of ladders) expect(c.compact, `${key} ${c.key} is long tail`).toBe(false);
+      const markup = draw(view);
+      for (const c of ladders) expect(headerOf(markup, c.key)!.cls, `${key} ${c.key}`).toMatch(/(^|\s)max-md:hidden(\s|$)/);
+      expect(headerOf(markup, "points")!.cls, `${key}: Pts is never folded`).not.toMatch(/max-md:hidden/);
+      expect(markup, `${key}: the disclosure exists`).toMatch(/data-testid="[^"]*-more"/);
+      ladderColumns += ladders.length;
+    }
+    expect(ladderColumns, "ladder columns folded").toBeGreaterThanOrEqual(22);
+  });
+
+  // T9 review m4 / fix round 1 (b): with the engine's Swiss chains carrom and tennis hold both ladders, and their Swiss tables'
+  // `md` floor (`--sv-min-md`) is wider than the 734px card the hub gives a 768px page (measured on the built app: the card is
+  // 734 at 768). Their leagues fit. The overflow is REACHABLE, which AGENTS.md #23 makes a feature: the card is the scrolling element
+  // (`overflow-x-auto`) and carries a `tabindex`, a role and an accessible name, unconditionally. The page itself must not scroll
+  // (the browser check is the 768 shot); here the markup is held to the rail contract for EVERY sport's Swiss table, wide or not,
+  // and the sweep reports how many of each it met.
+  const MD_CARD_PX = 734;
+  it("every sport's Swiss table, whether or not its md floor fits the 734px card, scrolls inside ONE reachable rail: overflow-x-auto + role + tabindex 0 + a name (counted)", () => {
+    const wide: string[] = [];
+    const fits: string[] = [];
+    for (const m of builtinModules) {
+      const view = viewFor(m, "swiss");
+      const markup = draw(view);
+      const floor = Number(markup.match(/--sv-min-md:(\d+(?:\.\d+)?)px/)?.[1]);
+      expect(Number.isFinite(floor), `${m.key}: the md floor is declared on the table`).toBe(true);
+      (floor > MD_CARD_PX ? wide : fits).push(`${m.key} ${floor}px`);
+      const region = markup.match(new RegExp(`<div[^>]*data-testid="${TESTID}-scroll"[^>]*>`))?.[0];
+      expect(region, `${m.key}: the scrolling region`).toBeDefined();
+      expect(region!, `${m.key}: the card is the scrolling element`).toMatch(/class="[^"]*(^|\s)overflow-x-auto(\s|")/);
+      expect(region!, `${m.key}: a role`).toMatch(/role="region"/);
+      expect(region!, `${m.key}: tabindex 0, unconditionally`).toMatch(/tabindex="0"/);
+      expect(region!, `${m.key}: an accessible name (the division and the stage)`).toMatch(/aria-label="Div — Swiss"/);
+      // one rail only: a second scroller inside it would be a scroll trap
+      expect((markup.match(/overflow-x-auto/g) ?? []).length, `${m.key}: exactly one horizontal scroller`).toBe(1);
+    }
+    expect(fits.length + wide.length, "sports swept").toBe(builtinModules.length);
+    expect(builtinModules.length).toBe(11);
+    // anti-vacuity: the sweep met BOTH answers, so "the rail is there" was asked of a table that needs it and of one that does not
+    expect(wide.length, `Swiss tables wider than the ${MD_CARD_PX}px card: ${wide.join(", ")}`).toBeGreaterThan(0);
+    expect(fits.length, `Swiss tables that fit: ${fits.join(", ")}`).toBeGreaterThan(0);
   });
 });

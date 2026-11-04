@@ -688,6 +688,84 @@ describe("I4 nothing-ends-stuck", () => {
     const locked = stage({ generates: [{ status: 409, code: "FORMAT_LOCKED", total: 0, created: 0 }], complete: { status: 409, code: "FORMAT_LOCKED", completed: false, finalRanks: null } });
     expect(evaluateInvariant(I4, run([locked])).verdict).toBe("pass");
   });
+  // W3 app-B Task 6 (SW-H1 on the harness; premise 5): a Swiss round the product REFUSED is not a round that "paired
+  // nobody". The loop records the refusal's code on the round (`refused`), and I4 judges it as it judges a refused generate.
+  describe("a refused Swiss pair round (W3 app-B Task 6)", () => {
+    const noPairing = { status: 409, code: "SWISS_NO_LEGAL_PAIRING", total: 0, created: 0 };
+    const ok1 = { status: 200, code: null, total: 4, created: 0 };
+    const finish200 = { status: 200, code: null, finishedAfter: 2, shellsRemoved: 2 };
+    it("I4 a SWISS_NO_LEGAL_PAIRING refusal is a named refusal, not \"paired nobody\"", () => {
+      const s = stage({
+        kind: "swiss", generates: [ok1, ok1, noPairing], pairRounds: [{ roundNo: 1, seated: 2 }, { roundNo: 2, seated: 2 }, { roundNo: 3, seated: 0, refused: "SWISS_NO_LEGAL_PAIRING" }],
+        finish: finish200, complete: done, fixtures: [fx({ home: "a", away: "b", outcome: win("a") })],
+      });
+      const r = evaluateInvariant(I4, run([s]));
+      // 3 generates + 3 pair rounds + 1 finish + 1 complete + 1 terminal two-sided fixture
+      expect(r, r.evidence.join("; ")).toMatchObject({ verdict: "pass", checked: 9 });
+    });
+    it("I4 an empty success still fails \"paired nobody (SW-H1)\": the positive pair of the refusal test, and the property I4 exists for", () => {
+      const empty = stage({ kind: "swiss", generates: [ok1, ok1], pairRounds: [{ roundNo: 1, seated: 2 }, { roundNo: 2, seated: 0 }], complete: done });
+      const r = evaluateInvariant(I4, run([empty]));
+      expect(r.verdict).toBe("fail");
+      expect(r.evidence).toContain("stage 1: round 2 paired nobody (SW-H1)");
+    });
+    it("a round that claims a refusal no recorded generate backs fails: the claim is checked against the generates, never taken", () => {
+      // differential: the refusal's code is on the round, but the only generate recorded for it was an empty 2xx.
+      const claim = stage({ kind: "swiss", generates: [ok1], pairRounds: [{ roundNo: 1, seated: 0, refused: "SWISS_NO_LEGAL_PAIRING" }], complete: done });
+      const r = evaluateInvariant(I4, run([claim]));
+      expect(r.verdict).toBe("fail");
+      expect(r.evidence.join(" ")).toMatch(/round 1 .*SWISS_NO_LEGAL_PAIRING.*no named refusal/);
+      // …and an UNNAMED refusal (a 5xx) does not back it either.
+      const crash = stage({ kind: "swiss", generates: [{ status: 500, code: "SWISS_NO_LEGAL_PAIRING", total: 0, created: 0 }], pairRounds: [{ roundNo: 1, seated: 0, refused: "SWISS_NO_LEGAL_PAIRING" }], complete: done });
+      expect(evaluateInvariant(I4, run([crash])).verdict).toBe("fail");
+    });
+    it("a round cannot be both refused and seated: the two facts disagree, so it fails", () => {
+      const both = stage({ kind: "swiss", generates: [noPairing], pairRounds: [{ roundNo: 1, seated: 2, refused: "SWISS_NO_LEGAL_PAIRING" }], complete: done });
+      const r = evaluateInvariant(I4, run([both]));
+      expect(r.verdict).toBe("fail");
+      expect(r.evidence.join(" ")).toMatch(/round 1 .*refused.*seated 2/);
+    });
+    // T6 review m2: the other Pair refusal that offers Finish (a running Swiss whose field shrank under the target round) is judged
+    // the same way. The exemption is per CODE: a round that claims one refusal is backed only by a recorded refusal of THAT code.
+    describe("SWISS_ROUNDS_ABOVE_MAX (m2)", () => {
+      const aboveMax = { status: 409, code: "SWISS_ROUNDS_ABOVE_MAX", total: 0, created: 0 };
+      it("a named SWISS_ROUNDS_ABOVE_MAX refusal is not \"paired nobody\": the round is checked, and the Finish taken after it counts", () => {
+        const s = stage({
+          kind: "swiss", generates: [ok1, aboveMax], pairRounds: [{ roundNo: 1, seated: 2 }, { roundNo: 2, seated: 0, refused: "SWISS_ROUNDS_ABOVE_MAX" }],
+          finish: finish200, complete: done, fixtures: [fx({ home: "a", away: "b", outcome: win("a") })],
+        });
+        const r = evaluateInvariant(I4, run([s]));
+        // 2 generates + 2 pair rounds + 1 finish + 1 complete + 1 terminal two-sided fixture
+        expect(r, r.evidence.join("; ")).toMatchObject({ verdict: "pass", checked: 7 });
+        expect(r.evidence.join("; ")).not.toMatch(/paired nobody/);
+      });
+      it("the same round without the marker is still \"paired nobody (SW-H1)\": the exemption is the marker's, not the refusal's presence", () => {
+        const s = stage({ kind: "swiss", generates: [ok1, aboveMax], pairRounds: [{ roundNo: 1, seated: 2 }, { roundNo: 2, seated: 0 }], complete: done });
+        const r = evaluateInvariant(I4, run([s]));
+        expect(r.verdict).toBe("fail");
+        expect(r.evidence).toContain("stage 1: round 2 paired nobody (SW-H1)");
+      });
+      it("a round that claims SWISS_ROUNDS_ABOVE_MAX is not backed by a SWISS_NO_LEGAL_PAIRING refusal (the code must match), nor by a 5xx", () => {
+        const other = stage({ kind: "swiss", generates: [noPairing], pairRounds: [{ roundNo: 1, seated: 0, refused: "SWISS_ROUNDS_ABOVE_MAX" }], complete: done });
+        const r = evaluateInvariant(I4, run([other]));
+        expect(r.verdict).toBe("fail");
+        expect(r.evidence.join(" ")).toMatch(/round 1 .*SWISS_ROUNDS_ABOVE_MAX.*no named refusal/);
+        const crash = stage({ kind: "swiss", generates: [{ ...aboveMax, status: 500 }], pairRounds: [{ roundNo: 1, seated: 0, refused: "SWISS_ROUNDS_ABOVE_MAX" }], complete: done });
+        expect(evaluateInvariant(I4, run([crash])).verdict).toBe("fail");
+      });
+    });
+    it("the Finish the loop took is judged like a generate: a 2xx or a NAMED refusal passes, a crash fails, and it counts as checked", () => {
+      const base = { kind: "swiss", generates: [noPairing], pairRounds: [{ roundNo: 1, seated: 0, refused: "SWISS_NO_LEGAL_PAIRING" }], complete: done };
+      const none = evaluateInvariant(I4, run([stage(base)]));
+      const finished = evaluateInvariant(I4, run([stage({ ...base, finish: finish200 })]));
+      expect(finished).toMatchObject({ verdict: "pass", checked: none.checked + 1 });
+      const named = evaluateInvariant(I4, run([stage({ ...base, finish: { status: 409, code: "SWISS_FINISH_ROUND_UNDECIDED", finishedAfter: null, shellsRemoved: null } })]));
+      expect(named.verdict).toBe("pass");
+      const crash = evaluateInvariant(I4, run([stage({ ...base, finish: { status: 500, code: "INTERNAL", finishedAfter: null, shellsRemoved: null } })]));
+      expect(crash.verdict).toBe("fail");
+      expect(crash.evidence.join(" ")).toMatch(/finish answered 500 INTERNAL — not a named refusal/);
+    });
+  });
   // I-1: api-v1 puts a code on EVERY error (http.ts statusCode(), and 500
   // "INTERNAL" for any unhandled throw), so "has a code" is not "named".
   it("a crash is never a named refusal: any 5xx fails whatever its code — the real shapes 500 INTERNAL and 500 MODULE_DUPLICATE", () => {
@@ -813,6 +891,59 @@ describe("I6 swiss-no-rematch", () => {
     const r = evaluateInvariant(I6, run([sw([fx({ home: "a", away: "b" }), fx({ roundNo: 2, home: "c", away: "c" })])]));
     expect(r.verdict).toBe("fail");
     expect(r.evidence.join(" ")).toMatch(/c paired with itself/);
+  });
+  // W3 app-B Task 6 (app-A T7 review m3; P-A2, X-SW-15): a pair whose board was NOT PLAYED has not met, so the product may
+  // pair it again. The ObservedFixture carries the engine's own verdict (`unplayed`, set where the board is observed from
+  // `isUnplayedForfeit` - common.ts and the model); I6 reads that flag, never a list of outcome kinds of its own.
+  describe("an unplayed board is not a meeting (P-A2)", () => {
+    const unplayedDw = (p: Partial<ObservedFixture>) => fx({ status: "forfeited", outcome: { kind: "double_walkover" }, unplayed: true, ...p });
+    it("differential: an unplayed rematch is NOT a violation (today it is), and a played rematch STILL is", () => {
+      // Round 1 plays a-b and c-d; round 2 seats the same two pairs again (the shape app-A's T7 test forces on 4 players).
+      const round2 = [fx({ roundNo: 2, home: "a", away: "b" }), fx({ roundNo: 2, home: "c", away: "d" })];
+      const unplayed = [unplayedDw({ home: "a", away: "b" }), unplayedDw({ home: "c", away: "d" }), ...round2];
+      const r = evaluateInvariant(I6, run([sw(unplayed)]));
+      // differential: today this reads "a~b rematched" and "c~d rematched"
+      expect(r, r.evidence.join("; ")).toMatchObject({ verdict: "pass", checked: 4 });
+      // the played control: the same four boards, round 1 PLAYED, is the double rematch it always was.
+      const played = evaluateInvariant(I6, run([sw([fx({ home: "a", away: "b" }), fx({ home: "c", away: "d" }), ...round2])]));
+      expect(played.verdict).toBe("fail");
+      expect(played.evidence.join(" ")).toMatch(/a~b rematched in rounds 1 and 2/);
+      expect(played.evidence.join(" ")).toMatch(/c~d rematched in rounds 1 and 2/);
+      // exactly the unplayed ones: a~b was a double walkover, c~d was played - only c~d is a rematch.
+      const mixed = evaluateInvariant(I6, run([sw([unplayedDw({ home: "a", away: "b" }), fx({ home: "c", away: "d" }), ...round2])]));
+      expect(mixed.verdict).toBe("fail");
+      expect(mixed.evidence.join(" ")).toMatch(/c~d rematched in rounds 1 and 2/);
+      expect(mixed.evidence.join(" ")).not.toMatch(/a~b rematched/);
+    });
+    it("the exemption is for the EARLIER board: a pair paired again after it really met is a rematch, whatever the later board became", () => {
+      const f = [fx({ home: "a", away: "b" }), unplayedDw({ roundNo: 2, home: "a", away: "b" })];
+      const r = evaluateInvariant(I6, run([sw(f)]));
+      expect(r.verdict).toBe("fail");
+      expect(r.evidence.join(" ")).toMatch(/a~b rematched in rounds 1 and 2/);
+    });
+    it("a chain: two unplayed boards then a played one is clean, and one more board after the played one is a rematch", () => {
+      const chain = [unplayedDw({ home: "a", away: "b" }), unplayedDw({ roundNo: 2, home: "b", away: "a" }), fx({ roundNo: 3, home: "a", away: "b" })];
+      expect(evaluateInvariant(I6, run([sw(chain)]))).toMatchObject({ verdict: "pass", checked: 3 });
+      const after = evaluateInvariant(I6, run([sw([...chain, fx({ roundNo: 4, home: "b", away: "a" })])]));
+      expect(after.verdict).toBe("fail");
+      expect(after.evidence.join(" ")).toMatch(/a~b rematched in rounds 3 and 4/);
+    });
+    it("the order the rows are listed in does not matter: rounds decide which board is earlier", () => {
+      const rows = [fx({ roundNo: 2, home: "a", away: "b" }), unplayedDw({ roundNo: 1, home: "a", away: "b" })];
+      expect(evaluateInvariant(I6, run([sw(rows)])).verdict).toBe("pass");
+      expect(evaluateInvariant(I6, run([sw([...rows].reverse())])).verdict).toBe("pass");
+    });
+    it("it still counts every two-seated board as checked, and says how many it exempted - all boards unplayed is a pass over a non-zero count, never a vacuous one", () => {
+      const all = [unplayedDw({ home: "a", away: "b" }), unplayedDw({ home: "c", away: "d" }), unplayedDw({ roundNo: 2, home: "a", away: "b" })];
+      const r = evaluateInvariant(I6, run([sw(all)]));
+      expect(r).toMatchObject({ verdict: "pass", checked: 3 });
+      expect(r.evidence.join(" ")).toMatch(/3 unplayed board\(s\) do not count as meetings/);
+    });
+    it("a self-pairing is a violation whether or not the board was played", () => {
+      const r = evaluateInvariant(I6, run([sw([unplayedDw({ home: "c", away: "c" })])]));
+      expect(r.verdict).toBe("fail");
+      expect(r.evidence.join(" ")).toMatch(/c paired with itself/);
+    });
   });
   it("abstain: no swiss stage", () => {
     expect(evaluateInvariant(I6, run([stage({})])).verdict).toBe("abstain");

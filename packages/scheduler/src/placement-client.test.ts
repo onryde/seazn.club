@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SolveBuildCall } from "./placement-client.ts";
 import { PlacementError, solveBuild } from "./placement-client.ts";
 import { fixedClock } from "@seazn/engine/core";
-import { SolveBuildRequest, SolveStatus } from "./generated/scheduler.ts";
+import { RoundBarrier, SolveBuildRequest, SolveStatus } from "./generated/scheduler.ts";
 
 /**
  * Recording double for the generated gRPC client, so the channel lifecycle
@@ -77,6 +77,14 @@ const INPUT = {
   dependencies: [],
   constraints: { matchMinutes: 30, gapMinutes: 10 },
   wallSeconds: 8,
+};
+
+/** What a fixture that carries no round rule encodes to (X-SW-31): the proto3 defaults, which the service reads as "no key". */
+const NO_ROUND_RULES = {
+  roundBarrier: RoundBarrier.ROUND_BARRIER_UNSPECIFIED,
+  unpairedRoundSlot: false,
+  roundGapMinutes: 0,
+  roundsPerDayCap: 0,
 };
 
 const EMPTY_RESPONSE = {
@@ -304,7 +312,7 @@ describe("solveBuild", () => {
     // absent-vs-empty slip here is the difference between an ordinary board
     // placing and every fixture becoming unplaceable.
     expect(decoded.fixtures).toEqual([
-      { entrantIndices: [0, 1], divisionIndex: 0, personIndices: [], allowedCourtIndices: [] },
+      { entrantIndices: [0, 1], divisionIndex: 0, personIndices: [], allowedCourtIndices: [], ...NO_ROUND_RULES },
     ]);
     expect(decoded.wallSeconds).toBe(8);
   });
@@ -343,14 +351,120 @@ describe("solveBuild", () => {
     const decoded = SolveBuildRequest.decode(SolveBuildRequest.encode(request).finish());
 
     expect(decoded.fixtures).toEqual([
-      { entrantIndices: [0, 1], divisionIndex: 0, round: 3, personIndices: [], allowedCourtIndices: [] },
-      { entrantIndices: [2, 3], divisionIndex: 0, round: undefined, personIndices: [], allowedCourtIndices: [] },
+      { entrantIndices: [0, 1], divisionIndex: 0, round: 3, personIndices: [], allowedCourtIndices: [], ...NO_ROUND_RULES },
+      { entrantIndices: [2, 3], divisionIndex: 0, round: undefined, personIndices: [], allowedCourtIndices: [], ...NO_ROUND_RULES },
     ]);
     expect(decoded.existing[0]).toMatchObject({ round: 2 });
     expect(decoded.existing[1]?.round).toBeUndefined();
     // The whole point of `optional`: absence must never read back as 0.
     expect(decoded.fixtures[1]?.round).not.toBe(0);
     expect(decoded.existing[1]?.round).not.toBe(0);
+  });
+
+  // X-SW-31 / rulings 255-256 (W3 Swiss). The engine's `build.ts` decides which fixture carries which key; this client
+  // only has to carry every one across, through the REAL binary codec: a field the encoder is never handed is the silent
+  // failure here (the service reads the proto3 default, places a Swiss round with no barrier, and the app's verifier gate
+  // rejects the board). Expected values are the vendored proto's own enum numbers (generated into `RoundBarrier`), never
+  // typed here.
+  describe("round rules on the wire (X-SW-31)", () => {
+    const SLOT = { slots: [{ court: "Court 1", startAtMs: 1_700_000_000_000, dayIndex: 0 }], stepMinutes: 10 };
+
+    it("carries END, the gap, the cap and the unpaired flag on every fixture, and END with the day on every pin", async () => {
+      const mockClient = respondingClient();
+
+      await solveBuild(
+        {
+          ...INPUT,
+          fixtures: [
+            { fixtureId: "paired", entrantIds: ["e1", "e2"], divisionId: "div-a", roundNo: 2, roundBarrier: "end", roundGapMinutes: 30, roundsPerDayCap: 2 },
+            { fixtureId: "slot", entrantIds: [], people: [], divisionId: "div-a", roundNo: 3, roundBarrier: "end", roundGapMinutes: 30, roundsPerDayCap: 2, unpairedRoundSlot: true },
+            { fixtureId: "start", entrantIds: ["e3", "e4"], divisionId: "div-b", roundNo: 1, roundBarrier: "start" },
+            { fixtureId: "plain", entrantIds: ["e5", "e6"], divisionId: "div-c" },
+          ],
+          existing: [
+            { fixtureId: "p1", court: "Court 1", startAtMs: 1_700_000_000_000, roundNo: 1, roundBarrier: "end", dayIndex: 0 },
+            { fixtureId: "p2", court: "Court 1", startAtMs: 1_700_000_100_000, roundNo: 1, roundBarrier: "end", dayIndex: 3 },
+            { fixtureId: "p3", court: "Court 1", startAtMs: 1_700_000_200_000, dayIndex: 2 },
+            { fixtureId: "p4", court: "Court 1", startAtMs: 1_700_000_300_000 },
+          ],
+          grid: SLOT,
+        },
+        { secret: "s3cr3t" },
+        mockClient,
+      );
+
+      const [request] = mockClient.solveBuild.mock.calls[0]!;
+      const decoded = SolveBuildRequest.decode(SolveBuildRequest.encode(request).finish());
+
+      const rules = decoded.fixtures.map(({ roundBarrier, unpairedRoundSlot, roundGapMinutes, roundsPerDayCap }) => ({
+        roundBarrier,
+        unpairedRoundSlot,
+        roundGapMinutes,
+        roundsPerDayCap,
+      }));
+      expect(rules).toEqual([
+        { roundBarrier: RoundBarrier.ROUND_BARRIER_END, unpairedRoundSlot: false, roundGapMinutes: 30, roundsPerDayCap: 2 },
+        { roundBarrier: RoundBarrier.ROUND_BARRIER_END, unpairedRoundSlot: true, roundGapMinutes: 30, roundsPerDayCap: 2 },
+        { roundBarrier: RoundBarrier.ROUND_BARRIER_START, unpairedRoundSlot: false, roundGapMinutes: 0, roundsPerDayCap: 0 },
+        { roundBarrier: RoundBarrier.ROUND_BARRIER_UNSPECIFIED, unpairedRoundSlot: false, roundGapMinutes: 0, roundsPerDayCap: 0 },
+      ]);
+      // The slot has neither seat on the wire (the service refuses that unless the flag is set), and the flag is on it alone.
+      expect(decoded.fixtures[1]).toMatchObject({ entrantIndices: [], personIndices: [] });
+      expect(decoded.fixtures.filter((f) => f.unpairedRoundSlot)).toHaveLength(1);
+
+      expect(decoded.existing.map((p) => p.roundBarrier)).toEqual([
+        RoundBarrier.ROUND_BARRIER_END,
+        RoundBarrier.ROUND_BARRIER_END,
+        RoundBarrier.ROUND_BARRIER_UNSPECIFIED,
+        RoundBarrier.ROUND_BARRIER_UNSPECIFIED,
+      ]);
+      // `day_index` is proto3 `optional`: day 0 is a real day and must survive, an absent day must not become 0.
+      expect(decoded.existing.map((p) => p.dayIndex)).toEqual([0, 3, 2, undefined]);
+      expect(decoded.existing[3]?.dayIndex).not.toBe(0);
+    });
+
+    // Counted, per wire barrier value: every fixture of a table of N inputs comes back with the enum number the proto
+    // declares for it. Zero rows checked is a failure.
+    it.each([
+      ["end", RoundBarrier.ROUND_BARRIER_END],
+      ["start", RoundBarrier.ROUND_BARRIER_START],
+      [undefined, RoundBarrier.ROUND_BARRIER_UNSPECIFIED],
+    ] as const)("maps the engine barrier %s to the wire enum on a fixture and on a pin alike", async (barrier, wire) => {
+      const mockClient = respondingClient();
+      const sizes = [1, 3];
+      let checked = 0;
+      for (const n of sizes) {
+        mockClient.solveBuild.mockClear();
+        await solveBuild(
+          {
+            ...INPUT,
+            fixtures: Array.from({ length: n }, (_, i) => ({
+              fixtureId: `f${i}`,
+              entrantIds: [`a${i}`, `b${i}`],
+              divisionId: "div-a",
+              roundNo: i + 1,
+              ...(barrier !== undefined ? { roundBarrier: barrier } : {}),
+            })),
+            existing: Array.from({ length: n }, (_, i) => ({
+              fixtureId: `p${i}`,
+              court: "Court 1",
+              startAtMs: 1_700_000_000_000 + i,
+              roundNo: i + 1,
+              ...(barrier !== undefined ? { roundBarrier: barrier } : {}),
+            })),
+            grid: SLOT,
+          },
+          { secret: "s3cr3t" },
+          mockClient,
+        );
+        const decoded = SolveBuildRequest.decode(SolveBuildRequest.encode(mockClient.solveBuild.mock.calls[0]![0]).finish());
+        for (const row of [...decoded.fixtures, ...decoded.existing]) {
+          expect(row.roundBarrier).toBe(wire);
+          checked++;
+        }
+      }
+      expect(checked, "anti-vacuity: rows were checked").toBe(sizes.reduce((a, n) => a + 2 * n, 0));
+    });
   });
 
   // proto3 gives every enum a zero value the sender never means to set, and
@@ -494,8 +608,8 @@ describe("solveBuild", () => {
     // own 0/1/2 despite counting from the same origin.
     expect(request.personCount).toBe(2); // priya, quinn
     expect(request.fixtures).toEqual([
-      { entrantIndices: [0, 1], divisionIndex: 0, personIndices: [0], allowedCourtIndices: [] }, // f1: alice=0, bob=1, div-a=0, priya=0
-      { entrantIndices: [1, 2], divisionIndex: 1, personIndices: [0, 1], allowedCourtIndices: [] }, // f2: bob=1, carol=2, div-b=1, priya=0 (reused), quinn=1
+      { entrantIndices: [0, 1], divisionIndex: 0, personIndices: [0], allowedCourtIndices: [], ...NO_ROUND_RULES }, // f1: alice=0, bob=1, div-a=0, priya=0
+      { entrantIndices: [1, 2], divisionIndex: 1, personIndices: [0, 1], allowedCourtIndices: [], ...NO_ROUND_RULES }, // f2: bob=1, carol=2, div-b=1, priya=0 (reused), quinn=1
     ]);
     expect(request.slots).toEqual([
       { courtIndex: 0, startAtMs: 1_700_000_000_000, dayIndex: 0 },
@@ -505,7 +619,7 @@ describe("solveBuild", () => {
     // carries no identity on the wire any more. `ruleGroupIndices`/
     // `entrantIndices` default to `[]` when the input row sets neither (C4/C6).
     expect(request.existing).toEqual([
-      { courtIndex: 1, startAtMs: 1_700_007_200_000, ruleGroupIndices: [], entrantIndices: [] },
+      { courtIndex: 1, startAtMs: 1_700_007_200_000, ruleGroupIndices: [], entrantIndices: [], roundBarrier: RoundBarrier.ROUND_BARRIER_UNSPECIFIED },
     ]);
     expect(request.dependencies).toEqual([{ beforeIndex: 0, afterIndex: 1 }]);
   });
@@ -788,7 +902,7 @@ describe("solveBuild", () => {
     // `ruleGroupIndices` is a straight passthrough; `entrantIndices` resolves
     // ["erin", "alice"] to [4, 0] in the SAME order the caller gave them.
     expect(request.existing).toEqual([
-      { courtIndex: 0, startAtMs: 1_700_000_000_000, ruleGroupIndices: [0], entrantIndices: [4, 0] },
+      { courtIndex: 0, startAtMs: 1_700_000_000_000, ruleGroupIndices: [0], entrantIndices: [4, 0], roundBarrier: RoundBarrier.ROUND_BARRIER_UNSPECIFIED },
     ]);
   });
 
@@ -848,7 +962,7 @@ describe("solveBuild", () => {
       { fixtureIndices: [0], minRestMinutes: 0, maxFixturesPerDay: 2 },
     ]);
     expect(decoded.existing).toEqual([
-      { courtIndex: 0, startAtMs: 1_700_000_000_000, ruleGroupIndices: [0], entrantIndices: [0] },
+      { courtIndex: 0, startAtMs: 1_700_000_000_000, ruleGroupIndices: [0], entrantIndices: [0], roundBarrier: RoundBarrier.ROUND_BARRIER_UNSPECIFIED },
     ]);
   });
 
@@ -868,7 +982,7 @@ describe("solveBuild", () => {
     const [request] = mockClient.solveBuild.mock.calls[0]!;
     expect(request.ruleGroups).toEqual([]);
     expect(request.existing).toEqual([
-      { courtIndex: 0, startAtMs: 1, ruleGroupIndices: [], entrantIndices: [] },
+      { courtIndex: 0, startAtMs: 1, ruleGroupIndices: [], entrantIndices: [], roundBarrier: RoundBarrier.ROUND_BARRIER_UNSPECIFIED },
     ]);
   });
 });

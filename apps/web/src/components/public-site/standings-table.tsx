@@ -17,13 +17,7 @@
 // which is the SAME popover as the tie note, one per rank cell. Every word is
 // the builder's (`buildQualificationView`). Without it the table renders
 // exactly as it did before (pinned by a captured golden).
-import {
-  derivedMetricText,
-  isLevelTable,
-  rankText,
-  type StandingsRow,
-} from "@seazn/engine/competition";
-import type { TiebreakerKey } from "@seazn/engine/sport";
+import { isLevelTable, rankText, type StandingsRow } from "@seazn/engine/competition";
 import type { MetricSpecLike } from "@/lib/public-site";
 import type { Dict } from "@/lib/i18n-constants";
 import { t, type TKey } from "@/lib/i18n-runtime";
@@ -31,16 +25,20 @@ import { formatPublicInstant } from "@/lib/public-date-locale";
 import {
   cellText,
   columnHeader,
+  derivedText,
   ratioNote,
+  rowMarkers,
   tableColumns,
   tableLayoutFor,
   tieNoteText,
   type TableRulesLike,
 } from "@/server/public-site/standings-view";
+import type { SwissRowFacts } from "@/server/public-site/swiss-row-facts";
 import type { QualificationView } from "@/server/public-site/qualification-view";
 import type { QualRowT } from "@/server/public-site/competition-hub-schema";
 import { EntityLogo } from "@/components/ui/entity-logo";
 import { StandingsPopover } from "./standings-popover";
+import { StandingsRowMarkers } from "./standings-row-markers";
 import { QualCutRow, QualLegend, QualMarker, QualPopoverBody, TieNoteText } from "./qualification-bits";
 
 /**
@@ -109,6 +107,12 @@ interface Props {
   /** W2d T17: THIS table's stage rules (`StageTableRulesDoc`): its result columns — IIHF's OTW/OTL — and how its points
    *  print (chess's half-points). Absent or null: W and L as folded, whole points (a stage the loader refused). */
   rules?: TableRulesLike | null;
+  /** W3 app-B T3 (owner Q2): a SWISS stage's per-entrant bye rounds and join round (`swissRowFactsFor`), which become the marks
+   *  beside a name ("Bye R3", "From R3"). Absent: nothing is marked - every table but a Swiss one. */
+  swissFacts?: Readonly<Record<string, SwissRowFacts>>;
+  /** The stage's kind (`stages.kind`): "swiss" spells the Swiss ladders (Buchholz, Cut-1, Sonneborn-Berger, Opp diff) in the
+   *  table's own points format (`tableLayoutFor`); absent or any other kind prints the engine's text (owner Q2 is the Swiss table). */
+  stageKind?: string;
   /** The locale and zone the page prints a date in (the lots note's "Drawn by lots on {date}"): the org's on the
    *  public page and the embed, the viewer's in the console. Absent: en, UTC. */
   locale?: string;
@@ -126,11 +130,13 @@ export function StandingsTable({
   dict,
   qualification: qualificationIn,
   rules,
+  swissFacts,
+  stageKind,
   locale = "en",
   tz = "UTC",
 }: Props) {
   const msg = (key: TKey, vars?: Record<string, string | number>) => t(dict, key, vars);
-  const layout = tableLayoutFor(rules);
+  const layout = tableLayoutFor(rules, stageKind);
   const columns = tableColumns(metricSpecs, cascade, rows, layout);
   const ranked = [...rows].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
   // X-TB-6 (anti-goal 3): a table with no counted fixture is level — every rank the level dash, no leader row, no
@@ -173,7 +179,7 @@ export function StandingsTable({
   // plain cell — never a button that explains nothing. `end`: these columns
   // sit at the table's right, so the panel hangs left, inside the scroll box.
   const derivedCell = (row: StandingsRow, key: string) => {
-    const text = derivedMetricText(row, key as TiebreakerKey, layout.ballsPerOver) ?? "—";
+    const text = derivedText(row, key, layout);
     const note = ratioNote(row, key, msg);
     if (note === null) return text;
     return (
@@ -390,6 +396,12 @@ export function StandingsTable({
                       );
                     })()}
                   </span>
+                  {/* W3 app-B T3: a Swiss bye / late join, on a line of its own under the name. Nothing for an unmarked row. */}
+                  <StandingsRowMarkers
+                    markers={rowMarkers(swissFacts?.[row.entrantId], msg)}
+                    testid={`standings-marker-${row.entrantId}`}
+                    indented={entrantLogos !== undefined}
+                  />
                 </th>
                 {columns.map((col) => (
                   <td

@@ -42,6 +42,22 @@ export function effectiveSwissPairing(i: {
   return i.round === 1 ? "fold" : i.stored;
 }
 
+/** The hint's premise broke: round 1 of a fresh field of two or more has no refusal in it (rulebook-W3 section 3.1: a refusal
+ *  needs a meeting, a bye or a colour already on record), yet the engine refused one. A named error, so a log line and a test
+ *  can say which assumption failed. */
+export class SwissRoundOnePremiseError extends Error {
+  // Declared and assigned, not constructor parameter properties: scripts/smoke imports this file under node's strip-only
+  // TypeScript loader, which cannot erase a parameter property (swiss-pairing.test.ts loads it that way).
+  readonly fieldSize: number;
+  readonly reason: string;
+  constructor(fieldSize: number, reason: string) {
+    super(`premise: round 1 of a fresh field of ${fieldSize} pairs, but the engine refused it (${reason})`);
+    this.name = "SwissRoundOnePremiseError";
+    this.fieldSize = fieldSize;
+    this.reason = reason;
+  }
+}
+
 /** Round-1 pairs by seed position (1-based), lower seed first, sorted —
  *  computed by the engine's own pairRound so the hint cannot drift from it. */
 export function roundOnePairs(fieldSize: number, pairing: SwissPairingMode): Array<[number, number]> {
@@ -52,6 +68,10 @@ export function roundOnePairs(fieldSize: number, pairing: SwissPairingMode): Arr
     rank: i + 1,
   }));
   const round = pairRound(standings, { played: new Set() }, pairing === "rank_adjacent" ? { pairing } : {});
+  // W3 app-B T1 (X-SW-3; engine 2.0.0): a refusal (`ok: false`) carries no pairings. Round one of two or more fresh entrants
+  // always pairs (no meeting, no bye, no colour history to run out), so a refusal here is a broken premise, not an answer:
+  // it is raised by name, never read as "no pairs" (which would print a hint with no boards for a field that has them).
+  if (!round.ok) throw new SwissRoundOnePremiseError(fieldSize, round.reason);
   return round.pairings
     .map((p) => {
       const a = Number(p.home);

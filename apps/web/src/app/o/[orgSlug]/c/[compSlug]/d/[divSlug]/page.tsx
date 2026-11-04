@@ -119,6 +119,7 @@ import type { StandingsRow } from "@seazn/engine/competition";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { localizedTieBreakLabel } from "@/lib/tiebreak-label";
 import { sportLedgerFamily, stageOrderNote } from "@/server/public-site/standings-view";
+import { swissRowFactsFor } from "@/server/public-site/swiss-row-facts";
 import { formatPublicInstant } from "@/lib/public-date-locale";
 
 const TABS = ["entrants", "fixtures", "standings", "stats"] as const;
@@ -1119,6 +1120,8 @@ export default async function DivisionPage({
                         dict={publicDict}
                         qualification={qualification}
                         rules={stageOrder(stage.id)}
+                        swissFacts={swissRowFactsFor(stage, fixtures, snap.rows as StandingsRow[])}
+                        stageKind={stage.kind}
                         locale={locale}
                         tz={scheduleSettings.tz}
                       />

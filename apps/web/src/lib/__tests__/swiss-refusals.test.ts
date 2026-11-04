@@ -36,7 +36,14 @@ const PLAN_CODES = [
   // T18 (RB3-7(c), X-SW-18): requested half/zero byes are deferred. A BODY refusal raised from the zod issue by `http.ts`
   // (the stage-decider precedent), so a 400 like every other body validation, not the 409/422 of a usecase refusal.
   "SWISS_REQUESTED_BYES_DEFERRED",
+  // App-B T1 (X-SW-3, engine 2.0.0 `pairRound`'s refusal): a round with no legal pairing. 422 as sent, 409 when Finish is
+  // the way out (R5 of the app-B pre-flight scan; the `judgeSwissRoundsAt` precedent above).
+  "SWISS_NO_LEGAL_PAIRING",
 ] as const;
+
+/** The codes whose cause is either kind of refusal: a 422 as sent, a 409 when the organiser can resolve it another way
+ *  (`resolvableStatus`). Typed here, not read off the table under test. */
+const RESOLVABLE_CODES = ["SWISS_ROUNDS_ABOVE_MAX", "SWISS_NO_LEGAL_PAIRING"] as const;
 
 /** Codes raised at the body door, from a zod issue (`api-v1/http.ts`), not by a usecase: they answer 400. */
 const BODY_REFUSALS: readonly string[] = ["SWISS_REQUESTED_BYES_DEFERRED"];
@@ -73,7 +80,7 @@ describe("SWISS_REFUSALS (W3 app-A)", () => {
       // One English sentence, not two: the desk's English is the server's English.
       expect(en[row.key as keyof typeof en], `${code}: en/ui.json says what the server says`).toBe(row.message);
     }
-    // Anti-vacuity: 15 codes × 4 locales. Zero checked is a failure, not a pass.
+    // Anti-vacuity: 17 codes × 4 locales. Zero checked is a failure, not a pass.
     expect(checked, "anti-vacuity: (code, locale) pairs checked").toBe(PLAN_CODES.length * 4);
     expect(checked).toBeGreaterThan(0);
   });
@@ -87,7 +94,7 @@ describe("SWISS_REFUSALS (W3 app-A)", () => {
       expect(isSwissRefusalCode(code), code).toBe(true);
       yes++;
     }
-    expect(yes, "anti-vacuity: every plan code judged").toBe(16);
+    expect(yes, "anti-vacuity: every plan code judged").toBe(17);
     const others = ["SEQ_CONFLICT", "SCHEDULE_LOCKED", "FORMAT_LOCKED", "swiss_undo_round_started", "", "toString", "__proto__", "constructor", undefined, null, 409];
     for (const other of others) expect(isSwissRefusalCode(other), String(other)).toBe(false);
     expect(others.length).toBe(11);
@@ -98,6 +105,22 @@ describe("SWISS_REFUSALS (W3 app-A)", () => {
       status: 422,
       message: "Swiss rounds are paired by the system. Add friendlies in another stage.",
     });
+  });
+
+  // App-B T1 (X-SW-3; R5): the row `swissGen` raises when the engine's `pairRound` answers `ok: false`. Its statuses are read
+  // off the table by every caller (the wire, the smoke check), never typed at a call site.
+  it("SWISS_NO_LEGAL_PAIRING has a row with status 422 and a key present in all 4 locales", () => {
+    const row = SWISS_REFUSALS.SWISS_NO_LEGAL_PAIRING;
+    expect(row, "the row exists").toBeDefined();
+    expect(row).toMatchObject({ status: 422, resolvableStatus: 409, key: "swiss.refusal.SWISS_NO_LEGAL_PAIRING" });
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const text = dict[row.key];
+      expect(typeof text === "string" && text.trim() !== "", `${locale}/ui.json has ${row.key}`).toBe(true);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: 4 locales checked").toBe(4);
+    expect(en[row.key as keyof typeof en], "one English sentence, not two").toBe(row.message);
   });
 
   it("SWISS_REQUESTED_BYES_DEFERRED carries the RB3-7(c) guidance (spec §8 Q5, ruling 252): a walkover is the way out", () => {
@@ -134,12 +157,30 @@ describe("swissRefusal (server)", () => {
       extra: { canFinish: true },
     });
     let others = 0;
-    for (const code of PLAN_CODES.filter((c) => c !== "SWISS_ROUNDS_ABOVE_MAX")) {
+    for (const code of PLAN_CODES.filter((c) => !(RESOLVABLE_CODES as readonly string[]).includes(c))) {
       expect(SWISS_REFUSALS[code].resolvableStatus, code).toBeUndefined();
       expect(() => swissRefusal(code, undefined, { resolvable: true }), code).toThrow(/declares no resolvable status/);
       others++;
     }
-    expect(others, "anti-vacuity: every other code judged").toBe(PLAN_CODES.length - 1);
+    expect(others, "anti-vacuity: every other code judged").toBe(PLAN_CODES.length - RESOLVABLE_CODES.length);
+  });
+
+  // App-B T1 (X-SW-3; R5): the second code that declares a resolvable status. 422 as sent (no legal pairing can be found
+  // by re-sending); 409 when Finish is the way out (the organiser resolves it another way). Both read off the table.
+  it("SWISS_NO_LEGAL_PAIRING: 422 as sent, 409 when resolvable, both from the table, with the details as the body's extra", () => {
+    const row = SWISS_REFUSALS.SWISS_NO_LEGAL_PAIRING;
+    const details = { round: 4, reason: "rematch", field: 6 };
+    expect(swissRefusal("SWISS_NO_LEGAL_PAIRING", details)).toMatchObject({
+      status: row.status,
+      code: "SWISS_NO_LEGAL_PAIRING",
+      message: row.message,
+      extra: details,
+    });
+    expect(swissRefusal("SWISS_NO_LEGAL_PAIRING", details, { resolvable: true })).toMatchObject({
+      status: row.resolvableStatus,
+      code: "SWISS_NO_LEGAL_PAIRING",
+    });
+    expect([row.status, row.resolvableStatus], "the two statuses differ, so the choice is witnessed").toEqual([422, 409]);
   });
 
   it("with no details carries no extra (the envelope adds nothing)", () => {

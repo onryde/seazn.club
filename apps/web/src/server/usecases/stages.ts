@@ -22,7 +22,7 @@ import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./forma
 import { validatedStageConfig } from "./stage-defaults";
 import { refuseNewStageTable } from "./table-rule-guards";
 import { swissRefusal } from "./swiss-refusal";
-import { judgeSwissRounds, swissRoundsNoticeOf, type SwissRoundsJudgement, type SwissRoundsNotice, type SwissRoundsShrunk } from "@/lib/swiss-rounds";
+import { judgeSwissRounds, swissRoundsGuidance, swissRoundsNoticeOf, type SwissRoundsJudgement, type SwissRoundsNotice, type SwissRoundsShrunk } from "@/lib/swiss-rounds";
 import { isRootSwissStage } from "@/lib/open-entry-stages";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
@@ -40,6 +40,7 @@ import {
   pairKey,
   type AmericanoRound,
   type SwissStanding,
+  type SwissNextRound,
   type Colour,
 } from "@seazn/engine/scheduling";
 import {
@@ -61,11 +62,13 @@ import {
 import type { TiebreakerKey } from "@seazn/engine/sport";
 import { completeStageIfReady, recomputeStandings, type CompleteResult } from "@/server/engine-db";
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
+import { liveCfg } from "@/server/engine-db/fixture-cfg";
+import { maxRoundPoints } from "@/server/engine-db/swiss-max-round-points";
 // L3/#414 pass 3 — not re-exported through the engine-db barrel (index.ts),
 // but these two ARE exported from the module itself (pass 2); reuse them
 // rather than re-deriving lane/thirdPlace from round/position (never
 // arithmetic — see parseExtKey's own comment).
-import { parseExtKey, bracketWinnerLoser, loadCrossGroupRules, rankedStageStandings } from "@/server/engine-db/competition";
+import { parseExtKey, bracketWinnerLoser, loadCrossGroupRules, rankedStageStandings, stageTablePoints } from "@/server/engine-db/competition";
 import { pinStageTableRules, stageTableRulesDocs, type StageTableRulesDoc } from "@/server/engine-db/table-rules";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { killsLoserEdge, lockDivisionConfigShared, lockStageSeats } from "@/server/engine-db/fed-seats";
@@ -1487,6 +1490,13 @@ export type SwissGenResult = {
    *  the mint, `judgeSwissPairAt` at a Pair) — never a refusal (that throws); null when the pass had nothing to pair. A
    *  warn, or a running Swiss's shrunk-field warning, rides on the Generate's answer. */
   swissRounds: SwissRoundsJudgement | SwissRoundsShrunk | null;
+  /** W3 app-B T7 (X-SW-10): the engine's look-ahead verdict on the round AFTER the one this pass seated - present only when
+   *  the pass asked for it (`lookAhead`, a stage above its safe maximum, never the last round); null when it did not, or
+   *  nothing was seated. `pairable` is a verdict too (the Generate's answer drops it: nothing to tell). */
+  nextRound: SwissNextRound | null;
+  /** W3 app-B T7 (X-SW-11): the `finalRoundMaxScore` this pass sent (table points), else null. Recorded on the round's
+   *  ledger row (`final_round_max_score`) so a later pass can tell the stage's one use of it has been spent. */
+  finalRoundMaxScore: number | null;
 };
 
 /**
@@ -1600,10 +1610,10 @@ export function refuseSwissFieldUnderTwo(stageId: string, fieldSize: number): vo
   }
 }
 
-/** The round history `pairRound` is handed (scheduling `SwissHistory`), in the shape `swissGen` builds it. */
+/** The round history `pairRound` is handed (scheduling `SwissHistory`), in the shape `swissGen` builds it. It holds no SCORE:
+ *  W3 app-B T5 (X-SW-19) moved the pairing score to the stage's own table points (`stageTablePoints`), so the history is
+ *  who has met, in which colours, and who may no longer take the bye - never a second count of the points. */
 export interface SwissHistoryState {
-  /** Each entrant's pairing score: 1 per win or bye, ½ per draw. */
-  score: Map<string, number>;
   /** `pairKey`s of every pair that has met. */
   played: Set<string>;
   /** Each player's colours in round order; a game nobody played holds none. */
@@ -1614,11 +1624,17 @@ export interface SwissHistoryState {
 
 /**
  * The history loop of `swissGen` (its award loop plus its implicit-bye loop), extracted by W3 T6 UNCHANGED except for one
- * rule: the implicit-bye loop credits and bye-marks an entrant for round r only when r is at or after their first Swiss
- * round. For a stage where every first round is null it is the inline loop it replaced, row for row — proven over real
- * seeded rows against a verbatim copy of that loop (swiss-late-field.test.ts). `swissGen` calls it; Task 7 changes its
+ * rule: the implicit-bye loop bye-marks an entrant for round r only when r is at or after their first Swiss round. For a
+ * stage where every first round is null it is the inline loop it replaced, row for row (colours and byes) — proven over
+ * real seeded rows against a verbatim copy of that loop (swiss-late-field.test.ts). `swissGen` calls it; Task 7 changes its
  * `played` rule, keys the P-A4 bye bar on the same "unplayed" reading, and takes every forfeit out of colours as the
  * engine does (a pre-W2b chess win by forfeit included); Task 9 reads it for case (b)'s colours.
+ *
+ * W3 app-B T5 (X-SW-19) took the SCORE out of it: the loop used to add +1 per win, award or bye (and for every implicit
+ * bye) and +½ per draw, a second authority for a number the published table pays by the stage's points rule - an IIHF
+ * overtime win and a regulation win were both +1. The pairing score is the table's points now (`stageTablePoints`), so
+ * the loops keep their other jobs: `played`, `colours`, `byes`, and which entrants sat each round (`inRound`). A legacy
+ * implicit bye (no row, first round null) is therefore worth what the table gives it, 0, and still bars the bye (P-A4).
  *
  * `existing` is the stage's rows in ANY order: the colours are a sequence, so the function sorts its own copy into round
  * order (round_no, seq_in_round) rather than trusting its caller's ORDER BY. That precondition is enforced here, not stated
@@ -1634,7 +1650,6 @@ export function buildSwissHistory(
 ): SwissHistoryState {
   // Round order is this function's own invariant (review m1): a copy, so the caller's array is untouched.
   const rows = [...existing].sort((a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round);
-  const score = new Map<string, number>(entrants.map((e) => [e.id, 0]));
   const played = new Set<string>();
   const colours = new Map<string, Colour[]>();
   const byes = new Set<string>();
@@ -1652,7 +1667,6 @@ export function buildSwissHistory(
       forRound.add(o.winner);
       inRound.set(f.round_no, forRound);
       byes.add(o.winner);
-      score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
       continue;
     }
     if (!f.home_entrant_id || !f.away_entrant_id) continue;
@@ -1678,16 +1692,11 @@ export function buildSwissHistory(
     }
     // FIDE C.04.1(d) (owner-approved 2026-09-24; rulebook P-A4): a player who has scored "a (forfeit) win due to an
     // opponent not appearing" may not later receive the pairing-allocated bye. `byes` feeds ONLY `pairRound`'s bye
-    // pick, so this is eligibility and nothing else — no bye score (the +1 below is the win's). Keyed on the same
+    // pick, so this is eligibility and nothing else — no bye score (the win's points are the table's). Keyed on the same
     // `unplayed` as `played` above: a win WITHOUT play bars the bye (a walkover, a forfeit before play, a pre-W2b chess
     // win by forfeit with nothing played), while a retirement, withdrawal or disqualification won after play is a
     // played game and bars nothing.
     if (unplayed && o?.winner) byes.add(o.winner);
-    if ((o?.kind === "win" || o?.kind === "award") && o.winner) score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
-    else if (o?.kind === "draw" || o?.kind === "tie") {
-      score.set(f.home_entrant_id, (score.get(f.home_entrant_id) ?? 0) + 0.5);
-      score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + 0.5);
-    }
   }
   const latestSeated = latestSeatedSwissRound(rows);
   for (let r = 1; r <= (latestSeated ?? 0); r++) {
@@ -1704,22 +1713,43 @@ export function buildSwissHistory(
       continue;
     }
     // This round already carries an explicit bye row, so the award loop above
-    // has credited whoever sat out; inferring a second one here would
-    // double-count. (C1: this used to fire for a two-sided forfeit as well,
+    // has marked whoever sat out; inferring a second one here would
+    // double-mark. (C1: this used to fire for a two-sided forfeit as well,
     // which silently suppressed the implicit-bye inference for that round.)
     if (inRoundR.some((f) => isOneSidedAwardBye(f))) continue;
     const seen = inRound.get(r) ?? new Set();
     for (const e of entrants) {
       // W3 T6 (ruling 251; rulebook §4 late-entry row, FIDE C.04.2 2.4): a round before the entrant's first Swiss round
       // is a MISSED round — 0 points, and not a bye, so they stay bye-eligible (P-A4) — never an implicit bye. Null is
-      // from round 1, so an entrant enrolled before Start is credited exactly as before.
+      // from round 1, so an entrant enrolled before Start is bye-marked exactly as before. W3 app-B T5 (X-SW-19): the
+      // implicit bye no longer scores - the table gives a round with no row 0, and the pairing score is the table's.
       if (!seen.has(e.id) && (e.swiss_first_round ?? 1) <= r) {
         byes.add(e.id);
-        score.set(e.id, (score.get(e.id) ?? 0) + 1);
       }
     }
   }
-  return { score, played, colours, byes };
+  return { played, colours, byes };
+}
+
+/** W3 app-B T7 (X-SW-11, engine T4c re-review): whether an EARLIER round of this stage was paired with `finalRoundMaxScore`.
+ *  The engine's topscorer exception is the stage's final round only; an "Add a round" after that round was paired would
+ *  make a new last round, and paired under the exception again a non-topscorer can be barred from both colours (the
+ *  engine's M3 guard throws CONFIG_INVALID). So the exception is sent at most once per stage.
+ *
+ *  The source is the ledger: every pass that sent it records `final_round_max_score` on its pairing row (`fixtures_generated`,
+ *  a Redo's step row included, or a late-entry re-pair, `swiss_late_entry`). A round's NEWEST pairing row decides whether
+ *  that round used it - so a final round paired with it, Unpaired, and re-paired once an added round made it a middle one
+ *  has NOT spent it - and only a round before `target` counts: re-pairing the same final round (Unpair then Pair) is the
+ *  same use, not a second one. An undone step is still a row, the direction that errs safe (the exception withheld means a
+ *  refusal by name, never a throw). */
+async function swissFinalMaxSentEarlier(tx: Tx, stageId: string, divisionId: string, target: number): Promise<boolean> {
+  const rows = await tx<{ round: number; sent: boolean }[]>`
+    select distinct on (payload->>'round') (payload->>'round')::int as round, payload ? 'final_round_max_score' as sent
+      from division_events
+     where division_id = ${divisionId} and payload->>'stage_id' = ${stageId} and payload ? 'round'
+       and (type = 'fixtures_generated' or (type = 'swiss_late_entry' and payload->>'case' = 'a'))
+     order by payload->>'round', seq desc`;
+  return rows.some((r) => r.sent && r.round < target);
 }
 
 /** Review m7: round 1's drawn order for a later round. Round 1's field is the entrants round 1 SEATED, not today's active
@@ -1843,6 +1873,8 @@ export async function swissGen(
       drawOrder: null,
       colourLot: null,
       swissRounds,
+      nextRound: null,
+      finalRoundMaxScore: null,
     };
   }
 
@@ -1863,6 +1895,8 @@ export async function swissGen(
       drawOrder: null,
       colourLot: null,
       swissRounds: null,
+      nextRound: null,
+      finalRoundMaxScore: null,
     };
   }
 
@@ -1944,7 +1978,17 @@ export async function swissGen(
     existing.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null),
     sportModule,
   );
-  const { score, played, colours, byes } = buildSwissHistory(existing, field, playedFacts);
+  const { played, colours, byes } = buildSwissHistory(existing, field, playedFacts);
+  // W3 app-B T5 (SW-M11; X-SW-19; RB3-9): the pairing score IS the stage's table points - the same inputs and the same
+  // engine fold the published table is read from (`stageTablePoints`), so the score groups, the table and the tie-breaks read
+  // one number (rulebook §5, last paragraph). Not a count of this loop's own (+1 a win, +½ a draw): that parted from the
+  // table on an IIHF overtime win (3 / 2 / 1 / 0), chess's half-points (2 / 1), a `bySetScore` map and a pinned or custom
+  // rule. An entrant the table does not list yet scores 0. Read-only: the call stores no lots draw (points do not depend on
+  // the order a tie is broken in), and it runs under the division lock this Generate holds.
+  // `rule` is the very points rule that paid those scores (the pin once the stage started): the final-round maximum below
+  // (app-B T7) is measured under it, so the topscorer line and the scores it is compared with are in one unit.
+  const { points, rule } = await stageTablePoints(tx, stageId);
+  const score = new Map(field.map((e) => [e.id, points.get(e.id) ?? 0]));
 
   const cascadeRank = new Map<string, number>();
   if (rankAdjacent && existing.some((f) => isSwissBoardSeated(f) && DECIDED.has(f.status))) {
@@ -1976,11 +2020,65 @@ export async function swissGen(
     rank: cascadeRank.get(e.id) ?? cascadeRank.size + seedRank(e, i),
   }));
   const chess = await swissPairsInColour(tx, divisionId, { id: stageId, config: cfg }, division.sport_key, existing);
+  // W3 app-B T7 (X-SW-10; rulebook-W3-swiss.md §3.3 "Prevention", RB3-4): above the safe maximum ⌊n/2⌋ of THIS round's field a
+  // round can seat boards that leave the next one with no legal pairing. The engine then prefers a seating after which the
+  // next round can still be paired, and reports whether it is (`nextRound`). Never on the last round: no next round to protect,
+  // and set there it would move boards and warn for a round that never comes (engine `SwissConstraints.lookAhead`).
+  const lookAhead = target < rounds && rounds > swissRoundsGuidance(field.length).safeMax;
+  // W3 app-B T7 (X-SW-11; RB3-10; FIDE C.04.3 Art. 1.8): the final round's topscorer line - (rounds − 1) × the most ONE fixture
+  // pays one side under this stage's own points rule, in the table points the score above is measured in. The maximum goes
+  // through the engine's `payout` (`maxRoundPoints`), never a hand formula, so a bonus the table pays is counted. Three
+  // guards, each load-bearing:
+  //  - chess colours on: outside chess there is no colour limit to lift;
+  //  - `rounds > 1`: a one-round Swiss would send (1 − 1) × win = 0, which the engine refuses (CONFIG_INVALID);
+  //  - ONCE per stage: "Add a round" after the final round was paired makes a NEW last round, and an exemption used on two
+  //    rounds can bar a non-topscorer from both colours - the engine's own M3 guard throws CONFIG_INVALID. Read from the
+  //    ledger (`swissFinalMaxSentEarlier`), the way round 1's draw order is.
+  // A maximum of 0 (a pinned rule whose win pays nothing) is never sent either: the engine refuses it, and nobody could be
+  // a topscorer of a table that pays nothing.
+  let finalMax: number | undefined;
+  if (chess && target === rounds && rounds > 1 && !(await swissFinalMaxSentEarlier(tx, stageId, divisionId, target))) {
+    const most = maxRoundPoints(rule, sportModule, liveCfg(division.config, { kind: "swiss", config: cfg }, sportModule));
+    if (most > 0) finalMax = (rounds - 1) * most;
+  }
   const paired = pairRound(
     standings,
     { played, colours, byes },
-    { chess, ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}) },
+    {
+      chess,
+      ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}),
+      ...(lookAhead ? { lookAhead: true } : {}),
+      ...(finalMax !== undefined ? { finalRoundMaxScore: finalMax } : {}),
+    },
   );
+  // W3 app-B T1 (X-SW-3; rulebook-W3 §3.1, P-A1/P-A6; engine 2.0.0): a round with no legal pairing is REFUSED, not seated
+  // empty. Engine 1.x answered with an empty round, so Pair next read "up to date" for a round that could not be played.
+  // This throws BEFORE the reshape and the seats. The one write above it is a rank_adjacent round's lots draw
+  // (`rankedStageStandings` stores any draw its ranking makes, `persistLotsDraws`); the whole Generate is one transaction,
+  // so the throw rolls that draw back with the rest and the press — shells, events, seats, draws — stays as it was (final
+  // review m3). Keep the refusal inside that transaction: caught, or moved outside it, it would leave the draw stored.
+  // `field_too_small` cannot reach here: `refuseSwissFieldUnderTwo` above refuses a round's field under two first
+  // (STAGE_NOT_READY), so the reason is one of the four a field of two or more can have. The status is the table's: 409
+  // when Finish is the way out (`swissFinishDetails` — the same predicate every `canFinish` the server sends reads), else
+  // 422.
+  // W3 app-B T4 (SW-H1 on the desk): the body carries the recovery the desk offers — `canFinish`, THE Finish predicate's
+  // answer (the same one `swissFinishDetails` reads for every other emitter, so an offered Finish always goes through), and
+  // `finishAfter` k, READ FROM THE SAME STATE `finishSwissNow` ends the Swiss at (`state.finishedAfter`: the latest round
+  // whose seated boards are all decided), so "Finish after round k" names the round the Finish route will actually keep.
+  // Not `target - 1`: that is only the same number while the round before this one is the latest decided (the
+  // STAGE_NOT_READY check above guards that round), and a second authority for k is a number that can drift from the route's.
+  // The five fields are copied BY NAME: the engine's `SwissRefusal` object is never spread into the body, so nothing it
+  // carries (entrant ids, history) can reach the wire.
+  if (!paired.ok) {
+    const admin = await import("./swiss-rounds-admin");
+    const finishState = await admin.swissFinishStateOf(tx, stageId);
+    const finishNow = admin.swissFinishDetails(finishState);
+    throw swissRefusal(
+      "SWISS_NO_LEGAL_PAIRING",
+      { round: target, reason: paired.reason, field: paired.field, finishAfter: finishState.finishedAfter, canFinish: finishNow.canFinish },
+      { resolvable: finishNow.canFinish },
+    );
+  }
   // W3 T8 (BG-SW-1; SW-H3, REC RB3-10): with chess colours on, round 1's colours are by lot (FIDE C.04.3 A3 5.1): board
   // 1's upper player takes the lot's colour and the boards alternate. Swapped HERE, before the seats are written, so the
   // stored fixtures carry it (home = White) and round 2's colour history reads it. Whether colours are on is
@@ -2148,6 +2246,8 @@ export async function swissGen(
     drawOrder: target === 1 ? drawOrder : null,
     colourLot,
     swissRounds,
+    nextRound: lookAhead ? (paired.nextRound ?? null) : null,
+    finalRoundMaxScore: finalMax ?? null,
   };
 }
 
@@ -2813,6 +2913,14 @@ export interface GenerateOutcome {
    *  shrank under its count while this round still pairs (`verdict: "shrunk"`, fix round 1). A count above the hard
    *  maximum is otherwise refused (SWISS_ROUNDS_ABOVE_MAX). */
   swiss_rounds?: SwissRoundsNotice;
+  /** W3 app-B T7 (X-SW-10; rulebook-W3-swiss.md §3.3): Swiss only, and ABSENT unless this Pair asked the engine to look one
+   *  round ahead (a stage above its safe maximum, not the last round) and the answer was not "pairable": `unpairable` -
+   *  every legal pairing of the round just seated leaves the next one with none; `unknown` - the search budget ran out
+   *  before the engine could tell. The round is seated either way. Always with `swiss_paired_round`. */
+  swiss_next_round?: "unpairable" | "unknown";
+  /** W3 app-B T7: the round the Pair just seated, sent beside `swiss_next_round` so the desk names the round it follows
+   *  ({round}) and the one it warns about ({round} + 1) from ONE number, the server's - never a second count of its own. */
+  swiss_paired_round?: number;
 }
 
 /**
@@ -3480,6 +3588,8 @@ export async function generateStageFixturesTx(
   let swissSeatedCount = 0;
   let swissReshaped: SwissReshape | undefined;
   let swissRoundsWarn: SwissRoundsNotice | undefined;
+  // W3 app-B T7 (X-SW-10): the look-ahead's verdict when it is not "pairable", and the round it follows.
+  let swissNext: { verdict: "unpairable" | "unknown"; round: number } | undefined;
   // Rides on this pass's `fixtures_generated` row when it seated a round.
   let swissAudit: Record<string, unknown> | undefined;
   let gen: GenFixture[];
@@ -3489,6 +3599,9 @@ export async function generateStageFixturesTx(
     swissSeatedCount = swiss.seatedCount;
     if (!isEmptySwissReshape(swiss.reshaped)) swissReshaped = swiss.reshaped;
     swissRoundsWarn = swissRoundsNoticeOf(swiss.swissRounds);
+    if (swiss.round !== null && swiss.nextRound !== null && swiss.nextRound !== "pairable") {
+      swissNext = { verdict: swiss.nextRound, round: swiss.round };
+    }
     // `override` is true only when the body named a mode OTHER than the one
     // this round would have used anyway — picking the default is no override.
     swissAudit =
@@ -3504,6 +3617,8 @@ export async function generateStageFixturesTx(
             // W3 T9 (T8 review n1): and its drawn order, which later rounds read instead of re-deriving it.
             ...(swiss.drawOrder !== null ? { draw_order: swiss.drawOrder } : {}),
             ...(swiss.colourLot !== null ? { colour_lot: swiss.colourLot } : {}),
+            // W3 app-B T7 (X-SW-11): the final round's topscorer line this pass sent - the stage's one use of it.
+            ...(swiss.finalRoundMaxScore !== null ? { final_round_max_score: swiss.finalRoundMaxScore } : {}),
           }
         : undefined;
   } else if (stage.kind === "americano") {
@@ -3860,6 +3975,7 @@ export async function generateStageFixturesTx(
       fixtures,
       ...(swissReshaped ? { reshaped: swissReshaped } : {}),
       ...(swissRoundsWarn ? { swiss_rounds: swissRoundsWarn } : {}),
+      ...(swissNext ? { swiss_next_round: swissNext.verdict, swiss_paired_round: swissNext.round } : {}),
     },
     divisionId: stage.division_id,
     competitionId: division!.competition_id,

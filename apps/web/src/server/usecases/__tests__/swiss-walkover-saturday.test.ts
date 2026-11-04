@@ -124,6 +124,14 @@ async function fixturesOf(stageId: string): Promise<FixtureRow[]> {
 const inRound = (rows: FixtureRow[], r: number) => rows.filter((f) => f.round_no === r);
 const iso = (v: Date | string | null) => (v === null ? null : v instanceof Date ? v.toISOString() : v);
 
+/** The badminton Swiss tie-break order every division of this probe's production shape was STARTED under (X-TB-2: a started
+ *  stage keeps the order it was pinned to). Engine 2.0.0 (X-SW-9, W3) replaced the sport's Swiss default with
+ *  [points, buchholz_cut1, buchholz, set_ratio, point_ratio, direct, lots], whose last step is a DRAW: two players level on
+ *  everything take a seeded random order, so a table (and a rank_adjacent pairing) that has such a tie is no longer the same
+ *  on every run. The probe mirrors a production division, which was pinned to the pre-W3 order when it started — that order
+ *  (the engine's commit 6c80c1d, "badminton chain reverted to ...") — so it pins it here and stays deterministic. */
+const PRE_W3_BADMINTON_SWISS_ORDER = ["points", "wins", "set_ratio", "point_ratio", "h2h_points"] as const;
+
 interface Rig {
   auth: AuthCtx;
   divisionId: string;
@@ -173,6 +181,7 @@ async function seedRig(): Promise<Rig> {
       progression: null,
     }),
   );
+  await putStageRules(auth, swiss!.id, { tiebreakers: [...PRE_W3_BADMINTON_SWISS_ORDER] });
   const [ko] = await createStages(
     auth,
     division.id,
@@ -419,7 +428,11 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
     // W2b X-WO-1 + BD-WO-1 (loop D): a badminton walkover is credited 2-0 in games, each 21-0, and the same
     // credited score breaks ties — so A (+42) ranks above the played 21-10, 21-10 winners (+22), and H (-42) last.
     // Over [A, S1, S2, S4, S5] (H gone) the fifth takes the bye.
-    expect(roundShape(rig, r2, 2)).toEqual(["sw-r2-b1: A v S1", "sw-r2-b2: S2 v S4", "sw-r2-bye: S5 bye"]);
+    // W3 (X-SW-4, engine 2.0.0; rulebook P-Q6): outside chess a board's home side alternates, from PLAYED games only. Round 1 was
+    // S1 v S4 and S2 v S5 (both played, upper seed home) and A v H (a walkover: no record). So A (no record) v S1 (home once,
+    // wants away) → A home; S2 (home once, wants away) v S4 (away once, wants home) → S4 home — "S4 v S2", where before W3 the
+    // stronger side was always home ("S2 v S4"). The PAIRS are the pre-W3 ones: the order is pinned (above), so no tie is a draw.
+    expect(roundShape(rig, r2, 2)).toEqual(["sw-r2-b1: A v S1", "sw-r2-b2: S4 v S2", "sw-r2-bye: S5 bye"]);
     const seatedR2 = inRound(r2, 2).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]);
     expect(seatedR2, "H is absent from round 2").not.toContain(H);
     const bye = inRound(r2, 2).find((f) => f.ext_key === "sw-r2-bye")!;
@@ -523,7 +536,7 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
     const rows = await fixturesOf(rig.swissId);
     o.after = record(rig, rows);
     // W2b X-WO-1 + BD-WO-1: A's credited 21-0, 21-0 ranks it first of the winners (as in S1).
-    expect(roundShape(rig, rows, 2)).toEqual(["sw-r2-b1: A v S1", "sw-r2-b2: S2 v S4", "sw-r2-bye: S5 bye"]);
+    expect(roundShape(rig, rows, 2)).toEqual(["sw-r2-b1: A v S1", "sw-r2-b2: S4 v S2", "sw-r2-bye: S5 bye"]);
     expect(inRound(rows, 2).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]), "H is absent from round 2").not.toContain(H);
   });
 
@@ -553,7 +566,7 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
     // not `played`, are what keep them apart here.)
     // W2b X-WO-1 + BD-WO-1 (loop D): a badminton walkover is credited 2-0 in games, each 21-0, and the same
     // credited score breaks ties — so A (+42) ranks above the played 21-10, 21-10 winners (+22), and H (-42) last.
-    expect(roundShape(rig, r2, 2)).toEqual(["sw-r2-b1: A v S1", "sw-r2-b2: S2 v S4", "sw-r2-b3: S5 v H"]);
+    expect(roundShape(rig, r2, 2)).toEqual(["sw-r2-b1: A v S1", "sw-r2-b2: S4 v S2", "sw-r2-b3: S5 v H"]);
     const hBoard = inRound(r2, 2).find((f) => f.home_entrant_id === H || f.away_entrant_id === H)!;
     expect([hBoard.home_entrant_id, hBoard.away_entrant_id], "the 0-point H is not paired up with A").not.toContain(A);
     const hOpponent = hBoard.home_entrant_id === H ? hBoard.away_entrant_id : hBoard.home_entrant_id;

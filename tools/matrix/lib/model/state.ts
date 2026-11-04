@@ -17,10 +17,11 @@
 // fix round 1, T14-R3) — and a row the model does not drive is refused by
 // family (ModelUnsupported).
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
-import { EngineError, forbidsLevelResult, isLevelOutcome, type StageKind } from "@seazn/engine/core";
+import { EngineError, forbidsLevelResult, isLevelOutcome, playRecorded, type StageKind } from "@seazn/engine/core";
 import { nextMatchFixtureId, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow, type FixtureStateOut, type OrganiserDriver, type RefusedCall } from "../driver/types.ts";
 import { isRunningRootSwiss } from "../../../../apps/web/src/lib/open-entry-stages.ts";
 import { stagesForRow, type RowKey, type StagePostBody } from "../catalogue.ts";
+import { unplayedBoard } from "../fold.ts";
 import { evaluateStepInvariants } from "../invariants.ts";
 import type { CheckResult } from "../results.ts";
 import { sameOutcome, toObservedOutcome, type GenerateObs, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../observed.ts";
@@ -29,8 +30,8 @@ import { lineupItems, lineupWarningLine, putOwedLineups, type LineupSink } from 
 import { entrantName, rosterMembers, rosterSize } from "../scenarios/rosters.ts";
 import { BRACKET_OF } from "../scenarios/terminal-finals.ts";
 import { hasNoNextMatch, wireGraph } from "../scenarios/w2b-checks.ts";
-import { decidersOffRulesFor, entrantKindFor, resolveSportCfg, stageCfg } from "../sport-cfg.ts";
-import { foldLedger, liveEntries, type LedgerEntry } from "./ledger-fold.ts";
+import { decidersOffRulesFor, entrantKindFor, resolveSportCfg, sportModule, stageCfg } from "../sport-cfg.ts";
+import { foldLedger, ledgerEnvelopes, liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 
 export const COMMAND_KINDS = ["Start", "AddEntrant", "Withdraw", "Score", "Walkover", "Void", "Correct", "Generate", "Rebuild", "Complete"] as const;
 export type CommandKind = (typeof COMMAND_KINDS)[number];
@@ -520,9 +521,21 @@ export function absorbFixtures(m: ModelState, rows: readonly FixtureRow[]): void
   }
 }
 
-const toObserved = (r: FixtureRow): ObservedFixture => ({
+/** W3 app-B Task 6 (rulebook P-A2, X-SW-15): was this two-seated board NOT PLAYED, so I6 may let its pair be paired again? The
+ *  engine's verdict (fold.ts `unplayedBoard`) on the product's stored outcome, with "was anything played" read off the
+ *  model's own ledger for the fixture (`playRecorded`). A ledger the model does not know (null: a cascade or an unseen post
+ *  wrote it) is read as PLAYED - the conservative answer, which exempts only what is unplayed whatever was played (a double
+ *  walkover, a walkover) and never a forfeit whose play it cannot see. */
+function boardUnplayed(m: ModelState, r: FixtureRow): boolean {
+  if (r.home_entrant_id === null || r.away_entrant_id === null) return false;
+  const ledger = m.fixtures.get(r.id)?.ledger ?? null;
+  const played = ledger === null ? true : playRecorded(ledgerEnvelopes(r.id, ledger), sportModule(m.sport));
+  return unplayedBoard(r.outcome, played);
+}
+const toObserved = (m: ModelState) => (r: FixtureRow): ObservedFixture => ({
   id: r.id, stageId: r.stage_id, poolId: r.pool_id, roundNo: r.round_no, home: r.home_entrant_id, away: r.away_entrant_id,
   status: r.status, outcome: toObservedOutcome(r.outcome), declared: null,
+  ...(boardUnplayed(m, r) ? { unplayed: true as const } : {}),
 });
 
 const add = (m: ModelState, id: string, n: number) => m.stepChecks.set(id, (m.stepChecks.get(id) ?? 0) + n);
@@ -682,7 +695,7 @@ export async function checkStep(m: ModelState, d: OrganiserDriver): Promise<void
     facts: [...(m.lateEntry ? (["late_entry"] as const) : []), ...(m.withdrawn.size > 0 ? (["withdrawn"] as const) : [])],
     stages: [{
       id: m.stageId, seq: 1, kind: m.stageKind, config: { ...m.stageConfig }, field: [...m.entrants], fieldSource: "division",
-      fixtures: meetings.map(toObserved), standings: [], generates: [...m.generates], pairRounds: [], complete: null,
+      fixtures: meetings.map(toObserved(m)), standings: [], generates: [...m.generates], pairRounds: [], complete: null,
     }],
     withdrawal: null, configEdit: null,
   };

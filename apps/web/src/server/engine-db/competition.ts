@@ -27,6 +27,8 @@ import {
   isBracketStageComplete,
   isTableStageComplete,
   placementTable,
+  swissDrawFactsOf,
+  unplayedSidesOf,
   type BracketFixture,
   type BracketStage,
   type CompletedTableStage,
@@ -42,9 +44,10 @@ import {
 } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { resolveModule } from "./registry";
-import { resolveFixtureCfg } from "./fixture-cfg";
+import { liveCfg, resolveFixtureCfg } from "./fixture-cfg";
 import { forfeitPlayedFacts, playedFor } from "./forfeit-played";
 import { loadLotsDraws, persistLotsDraws, pinStageTableRules, tableRulesOf, type LoadedTableRules } from "./table-rules";
+import { swissAbsentRounds } from "./swiss-absent-rounds";
 
 type Tx = postgres.TransactionSql;
 
@@ -343,6 +346,9 @@ interface StageInputs {
   /** W2a D-G1: the entrants still in the competing field (`inTheField`) — the bracket guard's exemption is for the
    *  departed alone. */
   field: Set<string>;
+  /** W3 T8 (X-SW-8): a Swiss stage's per-entrant unpaired rounds (`swissAbsentRounds`), for `TableStage.swissAbsentRounds`.
+   *  Empty for every other kind, and for a Swiss nobody has missed a round of. */
+  swissAbsentRounds: ReadonlyMap<string, readonly number[]>;
 }
 
 // Load a stage's fixtures and turn each decided fixture into a StandingsDelta
@@ -483,6 +489,12 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
         setsToWinOf(sportModule, fixtureCfg),
       );
       gamePoints.set(base.result, [pair[0].points, pair[1].points]);
+      // W3 T8 (X-SW-7; FIDE C.07 (2026) 16.2.2 / 16.2.4): the side(s) of this result that lost WITHOUT playing - a forfeit with
+      // nothing played, a double walkover - from the one authority (`unplayedSidesOf`) over the one reader of "was anything
+      // played" (`playedFor`, the same fact `payout` was just handed). `null` is a game played, and the engine REFUSES a
+      // Swiss stage's counted result that leaves it out (final review m3). Asked of a Swiss stage alone: only its ledger reads
+      // the field, and the helper refuses a malformed forfeit (CONFIG_INVALID), which no league table should now start doing.
+      if (kind === "swiss") base.unplayed = unplayedSidesOf(f.outcome as MatchOutcome, playedFor(f, playedFacts), base.result);
     } else if (isOneSidedAwardBye(f)) {
       // Swiss odd-field sit-out (and KO seeded bye): forfeited award with one
       // seat null and no match_state. The two-sided gate above never fires, so
@@ -541,6 +553,9 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
     entrants,
     seeds,
     field,
+    // W3 T8 (X-SW-8): keyed by the table's entrants (`entrants`: every entrant holding a seat), never by the roster - a
+    // case-(c) latecomer with no seat yet is not on the table and the engine refuses a key that is not.
+    swissAbsentRounds: kind === "swiss" ? swissAbsentRounds(fixtures, entrants) : new Map(),
   };
 }
 
@@ -590,7 +605,7 @@ function toTableStage(
   lotsDraws: ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>,
 ): TableStage {
   const gamePoints = inputs.gamePoints;
-  return {
+  const fields = {
     id: inputs.stage.id,
     // americano rides the league fold (Jul3/08 §3)
     kind: (inputs.stage.kind === "americano" ? "league" : inputs.stage.kind) as TableStage["kind"],
@@ -602,7 +617,6 @@ function toTableStage(
     ...(inputs.seeds.size > 0 ? { seeds: inputs.seeds } : {}),
     ...(inputs.stage.config?.rngSeed != null ? { rngSeed: inputs.stage.config.rngSeed } : {}),
     ...(inputs.stage.config?.rounds != null ? { rounds: inputs.stage.config.rounds } : {}),
-    ...(inputs.stage.kind === "swiss" ? { swiss: true } : {}),
     // Jul3/05: carry-over openings, manual rank locks, circular-H2H mode
     ...(Array.isArray(inputs.stage.config?.carry_deltas)
       ? { openingDeltas: inputs.stage.config.carry_deltas as never }
@@ -618,6 +632,26 @@ function toTableStage(
     // W2d T12 (ST-G12, IH-TB-2): the schedule the head-to-head steps need complete, and the sport's order when it is not.
     scheduledPairs: scheduledPairsOf(inputs.fixtures, inputs.tableFixtures),
     ...(inputs.module.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: inputs.module.partialScheduleOrder }),
+  };
+  if (inputs.stage.kind !== "swiss") return fields;
+  // W3 (ruling R4; X-SW-7; engine 2.0.0): a Swiss ledger stage names the sport's draw facts under the stage's merged cfg
+  // (`swissDrawFactsOf`: whether a draw can stand in the stage, and the sets a match is won on). They turn the stage's
+  // points rule into D, the draw points of FIDE C.07 art. 16's dummy cap and of an unplayed round, and the engine
+  // refuses a Swiss stage that names none (CONFIG_INVALID) on its first ranking. The same live cfg the table rules
+  // resolve under (`tableRulesOf`), so the facts and the rule they scale read one cfg. Two returns, not a spread: the
+  // engine's `TableStage` is a union on `swiss`, and a conditional spread widens it to `true | undefined`.
+  //
+  // W3 T8 (X-SW-8; engine final review m3): the stage's declared absences ride the same arm, ALWAYS - an empty map says
+  // "nobody missed a round", and the engine refuses a Swiss stage that says nothing (CONFIG_INVALID), so a producer
+  // that omitted it for the common case would read every absence as "nobody was absent".
+  return {
+    ...fields,
+    swiss: true,
+    swissDraw: swissDrawFactsOf(
+      inputs.module,
+      liveCfg(inputs.division.config, { kind: inputs.stage.kind, config: inputs.stage.config as Record<string, unknown> | null }, inputs.module),
+    ),
+    swissAbsentRounds: inputs.swissAbsentRounds,
   };
 }
 
@@ -763,6 +797,33 @@ export async function rankedStageStandings(
   // The caller holds the division lock (its one caller, `swissGen`, generates under it): a draw made here is stored.
   const { tables } = await rankWithStoredLots(tx, inputs);
   return tables.pools[0]?.rows ?? [];
+}
+
+/**
+ * W3 app-B T5 (SW-M11; X-SW-19; RB3-9): each entrant's points on the stage's own table, and the points rule that paid them.
+ * A Swiss round is paired by SCORE GROUPS, and the score is this number: read from the same inputs (`loadStageInputs`) and
+ * the same engine fold (`completeTableStage`) the published table is, so the groups, the table and the tie-breaks agree
+ * (rulebook §5, last paragraph). A formula over the fixtures (`win.regulation`, `swissDrawPoints`) would be a second
+ * authority; it would part from the table on an IIHF overtime win (3 / 2 / 1 / 0), a `bySetScore` map and a bonus rule.
+ *
+ * `points` holds a row for every entrant the fold lists; an entrant with no row (not seated yet) is simply absent, which
+ * the caller reads as 0. `rule` is the very `rules.points` object `loadStageInputs` paid every result with
+ * (`payout(…, rules.points, …)`): the stage's one rule, its pin once started - returned as handed, never re-read, so a
+ * caller that needs the rule (the final-round maximum) shares it with the scores.
+ *
+ * It NEVER stores a lots draw, unlike `rankedStageStandings`: points do not depend on the order a tie is broken in, so the
+ * draw the fold may make (`newLotsDraws`) is dropped on the floor here - nothing is persisted, and a stage's stored draws are
+ * exactly what they were. Safe to call in the caller's transaction under the division lock, as `swissGen` does.
+ */
+export async function stageTablePoints(
+  tx: Tx,
+  stageId: string,
+): Promise<{ points: ReadonlyMap<string, number>; rule: PointsRule }> {
+  const inputs = await loadStageInputs(tx, stageId);
+  const { tables } = completeTableStage(toTableStage(inputs, await loadLotsDraws(tx, stageId)), inputs.tableFixtures);
+  const points = new Map<string, number>();
+  for (const pool of tables.pools) for (const row of pool.rows) points.set(row.entrantId, row.points);
+  return { points, rule: inputs.rules.points };
 }
 
 /**

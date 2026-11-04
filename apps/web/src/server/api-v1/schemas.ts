@@ -340,6 +340,8 @@ export const TiebreakerKeyS = z.enum([
   // W2d (spec §5.6; Task 4's keys, moved here by PS-2c): the BWF/ITTF/ATP/FIH/IIHF steps and the h2h block modifiers.
   "set_diff", "point_diff", "h2h_two", "h2h_wins", "h2h_set_ratio", "h2h_point_ratio", "h2h_reapply", "h2h_exclusion",
   "matches_played", "field_goals",
+  // W3 app-B T1 (X-SW-9; engine 2.0.0): the Swiss chain's opponents' score difference (the sport's own unit).
+  "opp_diff",
 ]);
 
 /** V364 first-class eligibility: gender category badge/gate (evaluated in
@@ -3041,6 +3043,14 @@ export const GenerateResult = z.object({
   fixtures: z.array(Fixture),
   reshaped: SwissReshapeResult.optional(),
   swiss_rounds: SwissRoundsJudgementResult.optional(),
+  /** W3 app-B T7 (X-SW-10; rulebook-W3-swiss.md §3.3 "Prevention"): the Swiss one-round look-ahead's verdict on the round AFTER
+   *  the one just seated, ABSENT unless it was asked for (a stage above its safe maximum, never the last round) and the answer
+   *  was not "pairable". `unpairable`: every legal pairing of the round just seated leaves the next one with none (the next
+   *  Pair will be refused SWISS_NO_LEGAL_PAIRING). `unknown`: the search ran out of budget before the engine could tell. The
+   *  round is seated either way; `swiss_paired_round` names it. */
+  swiss_next_round: z.enum(["unpairable", "unknown"]).optional(),
+  /** The round this Pair seated, sent with `swiss_next_round` so a client names both rounds from one number. */
+  swiss_paired_round: z.number().int().optional(),
 });
 
 /** POST /stages/{id}/generate body. `pairing` = a ROUND-1-ONLY Swiss override
@@ -3386,7 +3396,7 @@ export type RuleCode = z.infer<typeof RuleCode>;
 // `conflict-detail.ts` uses for its field-order witness: a
 // `Record<ConflictDetailKind, true>` object literal requires every key of
 // the engine's union and rejects any key not in it, so a kind added to (or
-// renamed in) the engine's 25 and forgotten here is a TYPE ERROR at this
+// renamed in) the engine's 32 and forgotten here is a TYPE ERROR at this
 // file, not a wire enum that silently stops matching what the engine emits.
 const CONFLICT_DETAIL_KIND_WITNESS: Record<ConflictDetailKind, true> = {
   person_double_booking: true,
@@ -3414,6 +3424,11 @@ const CONFLICT_DETAIL_KIND_WITNESS: Record<ConflictDetailKind, true> = {
   order_inside_feeder_rest: true,
   round_order_day: true,
   round_order_same_day: true,
+  // W3 app-B T1 (X-SW-31): the engine's 29th-32nd kinds.
+  round_order_end: true,
+  no_slot_round_barrier: true,
+  rounds_per_day: true,
+  no_slot_rounds_per_day: true,
   no_slot_lattice: true,
   no_slot_budget: true,
   stranded_fixture: true,
@@ -3509,6 +3524,11 @@ export const ScheduleConflict = z.object({
    *  conflict's identity and a number in there would move that identity every
    *  time the card moved. */
   shortfall_minutes: z.number().int().optional(),
+  /** How many rounds a calendar day holds, for a `rounds_per_day` breach (X-SW-31, ruling 256). Carried beside the
+   *  conflict for the same reason as `shortfall_minutes`: it is MEASURED, and a number inside `details` would move the
+   *  conflict's identity every time a board moved a round across a day. The cap it exceeds is
+   *  `details.required_count`. */
+  measured_count: z.number().int().optional(),
 });
 export type ScheduleConflict = z.infer<typeof ScheduleConflict>;
 
@@ -3637,14 +3657,14 @@ export const ScheduleSolverInfo = z.object({
    *  NOT redundant with `engine`, which names what actually produced the board:
    *  a REFLOW that timed out and a BUILD that expired before finishing its first
    *  tier both come back `engine: "greedy"`, `budget_expired: true`,
-   *  `tiers_completed: 0`, `tiers_total: 6` — byte for byte the same payload,
-   *  describing two different events.
+   *  `tiers_completed: 0`, `tiers_total` the ladder's size (`TIER_COUNT`) — byte
+   *  for byte the same payload, describing two different events.
    *
    *  It matters because only the BUILD path has a tier ladder. `reflowExisting`
    *  keeps `tiersCompleted` at 0 deliberately (reporting a number from a ladder
    *  it never walked would make an optimality claim nothing proved) while
    *  `tiers_total` stays the build ladder's size, so a reader with only those two
-   *  numbers renders "0 of 6 targets improved" about a run that was never on that
+   *  numbers renders "0 of N targets improved" about a run that was never on that
    *  scale. This is the field that lets it say something true instead.
    *
    *  Optional and additive: absent, a reader keeps the tier sentence, which is
@@ -5560,6 +5580,9 @@ const AiPlanConflict = z.object({
   /** How short a measured breach falls, in minutes — the number a repair round
    *  needs to know how far to move the card (#399). */
   shortfallMinutes: z.number().int().optional(),
+  /** The rounds one day holds, for a `rounds_per_day` breach (X-SW-31, ruling 256) - `ScheduleConflict.measured_count`'s
+   *  twin on the engine-verbatim shape. Declared here or zod strips it. */
+  measuredCount: z.number().int().optional(),
 });
 
 // A durable constraints delta the architect inferred from the instruction —

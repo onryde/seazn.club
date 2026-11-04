@@ -36,6 +36,8 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { SwissHistory } from "@seazn/engine/scheduling";
+import type { TiebreakerKey } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import { applyRoundOneColourLot, swissColourLot, swissDrawSeed } from "@/lib/swiss-draw";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -45,6 +47,7 @@ import { createEntrants } from "../entrants";
 import { getFixtureState } from "../fixtures";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
+import { putStageRules } from "../stage-rules";
 import { createStages, generateStageFixtures, replaceStages } from "../stages";
 import { seedOrg } from "./_seed";
 
@@ -88,6 +91,18 @@ interface Rig {
   lot: "white" | "black" | null;
 }
 
+/** Badminton's declared Swiss order WITHOUT its closing `lots`, read off the module's own declaration. Engine 2.0.0 (X-SW-9)
+ *  closes every sport's Swiss order with `lots`, a SEEDED RANDOM drawing of the level class: here S1 and S2 (and S4 and S5) are
+ *  level after round 1, so a rank-adjacent or fold round 2 would seat whichever order the draw gave and "who meets whom" would be
+ *  luck. A stage's own order (which a started stage pins, X-TB-2) may omit `lots`; residual ties then take seed order — the
+ *  pre-W3 behaviour these cases characterise. */
+function badmintonOrderWithoutLots(): TiebreakerKey[] {
+  const m = builtinModules.find((x) => x.key === "badminton")!;
+  const declared = m.defaultTiebreakers("swiss", m.configSchema.parse({}));
+  expect(declared.at(-1), "premise (X-SW-9): the declared Swiss order closes with lots").toBe("lots");
+  return declared.slice(0, -1);
+}
+
 /** `count` individuals seeded S1..S<count> in a 3-round swiss, started,
  *  round 1 paired. With `lot` (chess only), the stage is re-minted until its own colour lot is that one (review m2:
  *  a random stage id ran ONE lot branch per CI run; each try is a fair coin, so a few tries suffice). */
@@ -124,6 +139,7 @@ async function pairedRoundOne(config: Record<string, unknown>, count = 6, lot?: 
     tries++;
   }
   if (lot !== undefined) expect(swissColourLot(swissDrawSeed(stage!.id)), `rig: a stage drawing ${lot} (${tries} tries)`).toBe(lot);
+  await putStageRules(auth, stage!.id, { tiebreakers: badmintonOrderWithoutLots() }); // the stage's own order, pinned at Start (X-TB-2)
   await startDivision(auth, division.id); // mints the shells
   await generateStageFixtures(auth, stage!.id); // Pair round 1
   const byName = new Map(entrants.map((e) => [e.display_name, e.id]));
@@ -229,7 +245,12 @@ describe.runIf(HAS_DB)("swiss Pair next — a two-sided walkover is a board, not
     // Winners S1, S2, A on 1; S4, S5, H on 0. W2b X-WO-1 + BD-WO-1 (loop D): a badminton walkover is credited 2-0 in games, each 21-0, and the same
     // credited score breaks ties — so A (S3, +42) ranks above the played 21-10, 21-10 winners (+22), and H (-42) last.
     // rank_adjacent pairs 1v2, 3v4, 5v6 over [A, S1, S2, S4, S5, H].
-    expect(shape(rig, r2)).toEqual(["S3 v S1", "S2 v S4", "S5 v S6"]);
+    // W3 (X-SW-4, engine 2.0.0; rulebook P-Q6/RB3-11): outside chess a board's home side alternates — the side that was home
+    // plays away; only PLAYED games hold a home/away record, so the forfeited S3 v S6 gave neither of them one. Round 1 was
+    // S1 v S4, S2 v S5 (both played, upper seed home) and the forfeit S3 v S6. So: A (S3, no record) v S1 (home once, wants
+    // away) → S3 home; S2 (home once, wants away) v S4 (away once, wants home) → both satisfied, S4 home; S5 (away once,
+    // wants home) v H (S6, no record) → S5 home. Before W3 the stronger side was always home ("S2 v S4").
+    expect(shape(rig, r2)).toEqual(["S3 v S1", "S4 v S2", "S5 v S6"]);
     expect(r2.every((f) => f.outcome === null), "an even field: no bye row in round 2").toBe(true);
   });
 
@@ -243,7 +264,12 @@ describe.runIf(HAS_DB)("swiss Pair next — a two-sided walkover is a board, not
     // S4. Had the award scored nothing, A would sit INSIDE the 0 group
     // [A, S4, S5, H] and fold onto S5 (then S4 v H). Had the award been a bye,
     // H's phantom point would put H into the winners' group (S2 v H).
-    expect(shape(rig, r2)).toEqual(["S1 v S2", "S3 v S4", "S5 v S6"]);
+    // W3 (X-SW-4, engine 2.0.0): who is at home follows the played games' home/away record, as above. S1 and S2 were both home
+    // once (both want away): the engine's declared tie — the stronger claim, a larger imbalance and then the UPPER board, gets
+    // its preference — gives S1 away, so S2 is home ("S2 v S1"; before W3 the upper seed was home). A (S3, forfeit: no
+    // record) v S4 (away once, wants home) → S4 home. S5 (away once, wants home) v S6 (no record) → S5 home. WHO meets whom is
+    // unchanged — the +1 the award scored is what keeps A out of the 0 group's fold.
+    expect(shape(rig, r2)).toEqual(["S2 v S1", "S4 v S3", "S5 v S6"]);
   });
 
   it.each(["white", "black"] as const)("fold + chess (lot %s): H is A's first candidate and the walkover is not a meeting (P-A2), so A meets H again; the forfeit gives neither side a colour", async (lot) => {
@@ -307,7 +333,10 @@ describe.runIf(HAS_DB)("swiss Pair next — a walkover winner is not eligible fo
 
     // Round 2: S3 (bottom, never byed) sits out; S5 floats onto S2.
     const r2 = await pairRoundTwo(rig);
-    expect(shape(rig, r2)).toEqual(["S1 v S4", "S5 v S2", "S3 v -"]);
+    // W3 (X-SW-4, engine 2.0.0): S1 played round 1 at home (wants away); S4 won by walkover, which holds no record, so S4 is
+    // home ("S4 v S1"; before W3 the stronger side was home). S5 had the bye and S2 forfeited: neither has a record, so the
+    // upper board (S5, who scored the bye's win) is home.
+    expect(shape(rig, r2)).toEqual(["S4 v S1", "S5 v S2", "S3 v -"]);
     await wins(rig.auth, boardOf(r2, 2, S1), S1);
     await wins(rig.auth, boardOf(r2, 2, S2), S2);
 

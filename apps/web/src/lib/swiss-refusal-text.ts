@@ -4,6 +4,7 @@
 // cannot follow the dictionary types this file needs. Client-safe: stages-panel.tsx and launch-actions.tsx call it.
 import type { MessageKey } from "./messages";
 import { swissRefusalKey, type SwissRefusalCode } from "./swiss-refusals";
+import { noPairingDetailsOf, noPairingNotice, noPairingText } from "./swiss-no-pairing";
 import { swissRoundsGuidanceLine, type SwissRoundsPlural } from "./swiss-rounds";
 
 /** `useMsg()` satisfies it. */
@@ -21,7 +22,10 @@ export type SwissRefusalMsg = (key: MessageKey, vars?: Record<string, string | n
  * Finish now only when it does (W3 T13, THE Finish predicate), else that no more rounds fit (T12 Fix round 1, review I1).
  * `SWISS_FINISH_ROUND_UNDECIDED` (`{ boards, inProgress }`, T13) names the boards still to decide, as the abandoned-board
  * refusal names its boards ("round {round} board {board}"), after the round-in-progress sentence — or, with `inProgress:
- * false`, the reopened-round one (Fix round 1, review m3).
+ * false`, the reopened-round one (Fix round 1, review m3). `SWISS_NO_LEGAL_PAIRING` (`{ round, reason, field, finishAfter,
+ * canFinish }`, W3 app-B T4) is the REASON's sentence — the round, why it cannot be paired, and the Finish recovery when the
+ * server offers it — or the generic one when the details are unreadable. The stages panel's own notice
+ * (`noPairingNotice`) composes the same sentence and adds the Finish button.
  */
 export function swissRefusalText(
   code: SwissRefusalCode,
@@ -30,6 +34,10 @@ export function swissRefusalText(
   plural: SwissRoundsPlural,
 ): string {
   const sentence = msg(swissRefusalKey(code));
+  if (code === "SWISS_NO_LEGAL_PAIRING") {
+    const noPairing = noPairingDetailsOf(details);
+    return noPairing === null ? sentence : noPairingText(noPairingNotice(noPairing), msg);
+  }
   if (code === "SWISS_ROUNDS_LOCKED") {
     const finish = details?.canFinish;
     const add = details?.canAddRound;

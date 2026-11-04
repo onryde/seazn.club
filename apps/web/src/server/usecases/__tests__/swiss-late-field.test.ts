@@ -98,7 +98,7 @@ describe("W3 T6 swissFieldForRound: the field of round r is every entrant whose 
   });
 });
 
-describe("W3 T6 buildSwissHistory: an implicit bye is credited only for a round the entrant was in the field for", () => {
+describe("W3 T6 buildSwissHistory: an implicit bye is marked only for a round the entrant was in the field for", () => {
   // Rounds 1 and 2 fully seated with NO bye row (the legacy shape the implicit-bye inference exists for); L sat out both.
   const rows = [
     row(1, 1, "A", "B", "A"),
@@ -109,24 +109,23 @@ describe("W3 T6 buildSwissHistory: an implicit bye is credited only for a round 
   const others = [ent("A", null, 1), ent("B", null, 2), ent("C", null, 3), ent("D", null, 4)];
   const historyOf = (first: number | null) => buildSwissHistory(rows, [...others, ent("L", first)], new Map());
 
-  it("X-SW-8 boundary: first round 3 — neither round credited (score 0, still bye-eligible)", () => {
+  // W3 app-B T5 (X-SW-19): the history holds no score any more - the pairing score is the stage's table points - so what is
+  // pinned here is the bye eligibility (P-A4); the points of a missed round are the table's (0), pinned on the DB cases below.
+  it("X-SW-8 boundary: first round 3 — neither round marked (still bye-eligible)", () => {
     const h = historyOf(3);
-    expect(h.score.get("L")).toBe(0);
     expect(h.byes.has("L")).toBe(false);
+    expect("score" in h, "the history carries no score of its own (X-SW-19)").toBe(false);
   });
-  it("X-SW-8 boundary: first round 2 — round 1 not credited, round 2 (in the field, unseen, no bye row) credited", () => {
+  it("X-SW-8 boundary: first round 2 — round 1 not marked, round 2 (in the field, unseen, no bye row) marked", () => {
     const h = historyOf(2);
-    expect(h.score.get("L")).toBe(1);
     expect(h.byes.has("L")).toBe(true);
   });
-  it("legacy: null — both rounds credited, exactly as before the field model", () => {
+  it("legacy: null — both rounds marked, exactly as before the field model", () => {
     const h = historyOf(null);
-    expect(h.score.get("L")).toBe(2);
     expect(h.byes.has("L")).toBe(true);
   });
   it("the seated players' history is the same whatever L's first round", () => {
     const strip = (h: ReturnType<typeof historyOf>) => ({
-      score: [...h.score].filter(([id]) => id !== "L").sort(),
       played: [...h.played].sort(),
       colours: [...h.colours].sort(),
       byes: [...h.byes].filter((id) => id !== "L").sort(),
@@ -514,16 +513,18 @@ for (const sport of SPORTS) {
       expect(before.get(opponent!), `the latecomer meets a 0-pointer, inside the lowest score group (met ${r.nameOf(opponent)})`).toBe(0);
     }, 120_000);
 
-    it(`entrants with swiss_first_round null behave exactly as today: the implicit byes are credited (${sport.key})`, async () => {
+    it(`entrants with swiss_first_round null keep the bye bar, but an implicit bye scores what the table scores, 0 (X-SW-19) (${sport.key})`, async () => {
       const r = await twoRoundsPlayed(sport);
       const late = await arrive(r, "Late", null);
       const rows = await allRows(r.stageId);
-      // Today's rule (owner value: live rounds keep their pairings): one implicit bye — a win's point, and the bye spent
-      // — for every fully seated round with no bye row that the entrant sat out.
+      // The legacy rule (owner value: live rounds keep their pairings): an entrant with no first round who sat out a fully
+      // seated round with no bye row is inferred a bye - and so may not take the pairing-allocated one (P-A4). W3 app-B T5
+      // (owner decision 2, 2026-11-02): the inferred bye no longer scores a point in the groups - the table gives a round
+      // with no row 0, and the groups read the table. differential: the pairing score was 2 here, one per implicit bye.
       const implicit = [1, 2].filter((round) => !rows.some((f) => f.round_no === round && isOneSidedAwardBye(f))).length;
       expect(implicit, "rig: rounds 1 and 2 are both such rounds").toBe(2);
       const { standings, history } = await pairSpied(r);
-      expect(standings.find((s) => s.entrantId === late)?.score, "credited one point per implicit bye").toBe(implicit);
+      expect(standings.find((s) => s.entrantId === late)?.score, "no point for an implicit bye: the table's 0").toBe(0);
       expect(history.byes?.has(late), "and marked as having had the bye").toBe(true);
       const bye = (await boardsOf(r.stageId, 3)).find((f) => isOneSidedAwardBye(f));
       expect(bye, "round 3 has a bye").toBeDefined();
@@ -712,8 +713,9 @@ for (const sport of SPORTS) {
         expect(playedForfeits.map((f) => f.id), `${label}: premise — no forfeit decided a board this rig records as played`).toEqual([]);
         const forfeitWins = twoSeated.filter((f) => (f.outcome as { kind?: string } | null)?.kind === "win" && forfeitShaped(f.outcome as MatchOutcome));
         expect(forfeitWins.map((f) => f.id), `${label}: premise — no board is a forfeit-shaped win (legacy forfeit / walkover)`).toEqual([]);
-        expect({ score: g.score, colours: g.colours, byes: g.byes }, `${label}: identical {score, colours, byes}`).toEqual({
-          score: w.score,
+        // W3 app-B T5 (X-SW-19): the extracted history no longer scores (the groups read the table), so the oracle's score is
+        // left out of the comparison - what it still proves is the colours and the byes, row for row.
+        expect({ colours: g.colours, byes: g.byes }, `${label}: identical {colours, byes}`).toEqual({
           colours: w.colours,
           byes: w.byes,
         });
@@ -769,11 +771,10 @@ for (const sport of SPORTS) {
   });
 }
 
-type History = { score: Map<string, number>; played: Set<string>; colours: Map<string, Colour[]>; byes: Set<string> };
+type History = { played: Set<string>; colours: Map<string, Colour[]>; byes: Set<string> };
 
 /** A comparable, order-free view: every map and set as a sorted list. */
 const flat = (h: History) => ({
-  score: [...h.score].sort(([a], [b]) => a.localeCompare(b)),
   played: [...h.played].sort(),
   colours: [...h.colours].sort(([a], [b]) => a.localeCompare(b)),
   byes: [...h.byes].sort(),
@@ -785,9 +786,10 @@ const flat = (h: History) => ({
  * the "unchanged" in "extracted unchanged except for this task's rule": for a stage where every first round is null the
  * extracted function must agree with it on every row the product writes — score, colours and byes exactly, and
  * `played` less the pairs W3 T7's P-A2 rule no longer counts as met (the differential above). Kept verbatim, the old
- * `played` rule included, so that difference stays visible rather than copied into the oracle.
+ * `played` rule included, so that difference stays visible rather than copied into the oracle. Its `score` is kept too, as
+ * the loop wrote it, but is no longer compared: W3 app-B T5 (X-SW-19) moved the pairing score to the table's points.
  */
-function legacySwissHistory(existing: SwissExistingFixture[], entrants: { id: string }[]): History {
+function legacySwissHistory(existing: SwissExistingFixture[], entrants: { id: string }[]): History & { score: Map<string, number> } {
   const score = new Map<string, number>(entrants.map((e) => [e.id, 0]));
   const played = new Set<string>();
   const colours = new Map<string, Colour[]>();

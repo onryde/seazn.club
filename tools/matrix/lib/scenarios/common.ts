@@ -2,19 +2,20 @@
 // the harness did and saw into an ObservedRun. Expected values are derived
 // (R9): points from the sport's table rule paid on the folded stream (fold.ts
 // tableContribution, W2d T9), draw reachability from supportsDraws.
-import { EngineError, SETTLE_METHODS, forbidsLevelResult, type MatchOutcome, type StageCtx, type StageKind } from "@seazn/engine/core";
+import type { SwissRefusalCode } from "../../../../apps/web/src/lib/swiss-refusals.ts";
+import { EngineError, SETTLE_METHODS, forbidsLevelResult, playRecorded, type MatchOutcome, type StageCtx, type StageKind } from "@seazn/engine/core";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { stagesForRow, type StagePostBody } from "../catalogue.ts";
 import { templateBodies, templateField, templateRow } from "../templates.ts";
 import {
-  RefusedCall, SEEDING_FAILED_AFTER_COMMIT, SetupRefused, VOID_EVENT, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type FixtureStateOut, type MemberInput, type PostedEvent, type StageRef,
+  DriverMisuse, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, SetupRefused, VOID_EVENT, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type FixtureStateOut, type MemberInput, type PostedEvent, type StageRef,
 } from "../driver/types.ts";
-import { declaredPoints, foldStream, lineupsFor } from "../fold.ts";
+import { declaredPoints, envelopes, foldStream, lineupsFor, unplayedBoard } from "../fold.ts";
 import { redact } from "../redact.ts";
 import { routeTo } from "../routing.ts";
 import {
-  DEPARTED_STATUSES, isTerminal, snap, toObservedOutcome,
-  type CaseFact, type CompleteObs, type ConfigEditObs, type GenerateObs, type LoopExit, type ObservedDeclared, type ObservedFixture,
+  DEPARTED_STATUSES, isNamedRefusal, isTerminal, snap, toObservedOutcome,
+  type CaseFact, type CompleteObs, type ConfigEditObs, type FinishObs, type GenerateObs, type LoopExit, type ObservedDeclared, type ObservedFixture,
   type ObservedOutcome, type ObservedRun, type ObservedStage, type PairRoundObs, type WithdrawalObs,
 } from "../observed.ts";
 import { decidersOffRulesFor, drawsAllowed, entrantKindFor, sportModule, stageCfg } from "../sport-cfg.ts";
@@ -103,6 +104,11 @@ export class StageTrack {
   exit: LoopExit | null = null;
   readonly generates: GenerateObs[] = [];
   readonly pairRounds: PairRoundObs[] = [];
+  /** W3 app-B Task 6: the Finish the Swiss loop took after a refused Pair - the answer or the refusal. */
+  finish: FinishObs | null = null;
+  /** The stage's completion as Finish answered it (finishSwissNow completes the stage itself). Set only by a Finish the
+   *  product answered 2xx; finishStage hands it back instead of sending /complete a second time. */
+  finishCompleted: CompleteObs | null = null;
 }
 
 /** What decideFixture needs to finish a fixture the scenario already started (Recorder.resumed). */
@@ -490,7 +496,7 @@ function harnessLineupSink(rec: Recorder): LineupSink {
 
 /** Records each generate run-wide AND on the stage's own track (W1-driving
  *  Task 6), so a later stage is judged on its own generates. */
-export async function recordGenerate(ctx: ScenarioContext, rec: Recorder, stageId: string): Promise<FixtureRow[] | null> {
+export async function recordGenerate(ctx: ScenarioContext, rec: Recorder, stageId: string, onRefused?: (e: RefusedCall) => void): Promise<FixtureRow[] | null> {
   const push = (g: GenerateObs) => { rec.generates.push(g); rec.track(stageId).generates.push(g); };
   try {
     const g = await ctx.driver.generate(stageId);
@@ -500,6 +506,8 @@ export async function recordGenerate(ctx: ScenarioContext, rec: Recorder, stageI
     if (!(e instanceof RefusedCall)) throw e;
     // T8-R1: the message is kept — a 5xx's cause is read from it (americano-loop.ts).
     push({ status: e.status, code: e.code, total: 0, created: 0, message: e.message });
+    // W3 app-B Task 6: the Swiss loop reads the refusal's own body (its code and `canFinish`), which the observation drops.
+    onRefused?.(e);
     return null;
   }
 }
@@ -779,6 +787,57 @@ export function drawsDeclaredOnReached(ctx: ScenarioContext, plays: readonly Sta
   return plays.some((p) => p.complete !== null && stageDrawsOk(ctx, p.stage));
 }
 
+/** The Swiss Pair refusals that stop the loop AND offer the organiser's recovery, Finish (typed against the product's own refusal
+ *  table, so a rename there is a compile error here):
+ *   - SWISS_NO_LEGAL_PAIRING: no round is left that repeats nobody (stages.ts swissGen); its body carries `finishAfter`, `canFinish`.
+ *   - SWISS_ROUNDS_ABOVE_MAX: a running Swiss whose field a withdrawal shrank under the target round (judgeSwissPairAt, T6 review
+ *     m2); its body is `{ rounds, field, hardMax, canFinish, finish?: { after, rounds } }` - `canFinish` again, no `finishAfter`.
+ *  Both answer 409 when Finish is on offer and 422 when it is not (the table rows' `resolvableStatus`), and both carry `canFinish`,
+ *  which is the one key the loop reads to take the recovery. */
+const SWISS_FINISHABLE_REFUSALS: readonly SwissRefusalCode[] = ["SWISS_NO_LEGAL_PAIRING", "SWISS_ROUNDS_ABOVE_MAX"];
+
+/** The first NAMED refusal among a Pair's answers that stops the loop and may offer Finish, or null (T6 review m2). A 5xx that
+ *  carries such a code is a crash, not a refusal (`isNamedRefusal`), and is not one. */
+function pairStopped(refusals: readonly RefusedCall[]): { readonly code: SwissRefusalCode; readonly canFinish: boolean } | null {
+  for (const e of refusals) {
+    const code = SWISS_FINISHABLE_REFUSALS.find((c) => c === e.code);
+    if (code !== undefined && isNamedRefusal(e.status, e.code)) return { code, canFinish: e.extra?.canFinish === true };
+  }
+  return null;
+}
+
+/** W3 app-B Task 6 (X-SW-26): the organiser's recovery from a Pair refusal that offers it - "Finish the Swiss now" - taken over the driver and
+ *  recorded on the stage's track. A 2xx is the stage's COMPLETION (finishSwissNow completes the stage itself and mints the next
+ *  stage's draft proposal), so it is kept as the CompleteObs finishStage hands back and /complete is not sent again. A named
+ *  refusal is recorded, committed nothing, and returns false. A 5xx is recorded the same way and ended UNKNOWN (finishStage reads
+ *  it). A driver without the route cannot take the recovery, which is said by name rather than read as an ordinary refusal; a
+ *  driver whose LAYER does not drive it (the browser's) throws NoOrganiserPath from its own finishSwiss, which is not caught
+ *  here. Returns whether the stage was finished. */
+async function finishSwiss(ctx: ScenarioContext, rec: Recorder, stageId: string, offeredBy: SwissRefusalCode): Promise<boolean> {
+  if (ctx.driver.finishSwiss === undefined) throw new DriverMisuse(`scenario: the driver cannot Finish the Swiss (no finishSwiss) - stage ${stageId}'s Pair was refused ${offeredBy} and offered Finish`);
+  const track = rec.track(stageId);
+  try {
+    const f = await ctx.driver.finishSwiss(stageId);
+    track.finish = { status: 200, code: null, finishedAfter: f.finished_after, shellsRemoved: f.shells_removed };
+    // A 2xx that did not complete the stage committed no completion (the driver would let /complete be asked), so it is not kept.
+    if (!f.completed) return false;
+    const done = f.events.find((e) => e.type === "stage_completed");
+    track.finishCompleted = { status: 200, code: null, completed: true, finalRanks: done?.finalRanks ?? null, seedProposal: f.seed_proposal ?? null };
+    return true;
+  } catch (e) {
+    if (!(e instanceof RefusedCall)) throw e;
+    // The same shape finishStage keeps for a /complete that committed and then failed to seed: the completion DID commit.
+    track.finish = { status: e.status, code: e.code, finishedAfter: null, shellsRemoved: null, message: e.message };
+    if (e.code === SEEDING_FAILED_AFTER_COMMIT) {
+      rec.notes.push(`finish committed, but the next stage's seeding failed: ${e.status} ${e.code}`);
+      track.finishCompleted = { status: e.status, code: e.code, completed: true, finalRanks: null, seedProposal: null };
+      return true;
+    }
+    rec.notes.push(`finish refused ${e.status} ${e.code ?? "(no code)"}`);
+    return false;
+  }
+}
+
 /** Plays one stage to its loop exit. `stage` (W1-driving Task 6) defaults to
  *  the root; the exit lands on the stage's own track and on the run alike. */
 export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, hooks: RoundHooks = {}, stage: StageRef = setup.stage): Promise<void> {
@@ -794,12 +853,19 @@ export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: Divi
   if (stage.kind === "swiss") {
     const rounds = Number(stage.config.rounds);
     for (let r = 1; r <= rounds; r++) {
-      const fixtures = await recordGenerate(ctx, rec, stage.id);
+      const refusals: RefusedCall[] = [];
+      const fixtures = await recordGenerate(ctx, rec, stage.id, (e) => refusals.push(e));
       const batch = (fixtures ?? []).filter((f) => f.round_no === r && seatedOpen(f));
-      const pr = { roundNo: r, seated: batch.length };
+      // W3 app-B Task 6 (premise 5; review m2): a Pair the product REFUSED by name with a refusal that offers Finish is a refusal,
+      // not an empty success - marked with its code on the round so I4 does not read it as "paired nobody" (SW-H1).
+      const stopped = pairStopped(refusals);
+      const pr: PairRoundObs = { roundNo: r, seated: batch.length, ...(stopped !== null ? { refused: stopped.code } : {}) };
       rec.pairRounds.push(pr);
       track.pairRounds.push(pr);
       if (batch.length === 0) { // I4 fails on the empty pair round
+        // ...and the organiser's recovery, where the product offers it (`canFinish`): Finish the Swiss after the last round
+        // that could be paired. A Finish the product refuses leaves the organiser stuck: refused_generate, as before.
+        if (stopped !== null && stopped.canFinish && await finishSwiss(ctx, rec, stage.id, stopped.code)) { exit("finished_early"); return; }
         exit(fixtures === null ? "refused_generate" : "empty_pair_round");
         return;
       }
@@ -835,7 +901,13 @@ export interface StagePlay {
 
 /** The run's exit is "drained" only if every stage drained; otherwise the
  *  first stage's that did not. */
-const worstExit = (exits: readonly (LoopExit | null)[]): LoopExit | null => (exits.length === 0 ? null : exits.find((e) => e !== "drained") ?? "drained");
+const worstExit = (exits: readonly (LoopExit | null)[]): LoopExit | null => {
+  if (exits.length === 0) return null;
+  // W3 app-B Task 6: "finished_early" is a loop that ended where the product allows (a Swiss finished after its last complete
+  // round), so it is not the run's failure; it is the run's exit only when no stage failed (and one did finish early).
+  const failed = exits.find((e) => e !== "drained" && e !== "finished_early");
+  return failed ?? (exits.includes("finished_early") ? "finished_early" : "drained");
+};
 
 /** W1-driving Task 6: every stage of the division, in the product's own
  *  sequence. Each later "setup" stage gets its TBD rows right after start,
@@ -962,6 +1034,17 @@ export async function configProbe(ctx: ScenarioContext, rec: Recorder, setup: Di
  *  carries no events, so finalRanks stay null. The driver never repeats it
  *  (FP-3). */
 export async function finishStage(ctx: ScenarioContext, rec: Recorder, stageId: string): Promise<CompleteObs> {
+  // W3 app-B Task 6: a Swiss the loop finished (Finish) is already complete - Finish ran the stage's completion itself, and a
+  // second /complete is never sent (the drivers refuse it). Its answer is the completion.
+  const track = rec.track(stageId);
+  if (track.finishCompleted !== null) return track.finishCompleted;
+  // T6 review m1: a Finish that answered 5xx ended UNKNOWN - it may have committed the completion, so (design section 6.4) the drivers
+  // send neither Finish nor /complete again for the stage. The case is judged on that ending (I4 names a 5xx a crash, not a refusal),
+  // instead of /complete being asked and refused as a misuse of the driver.
+  if (track.finish !== null && track.finish.status >= 500) {
+    rec.notes.push(`finish ended unknown ${track.finish.status} ${track.finish.code ?? "(no code)"}; /complete is not sent after it`);
+    return { status: track.finish.status, code: track.finish.code, completed: false, finalRanks: null, seedProposal: null };
+  }
   try {
     const c = await ctx.driver.completeStage(stageId);
     const done = c.events.find((e) => e.type === "stage_completed");
@@ -1043,6 +1126,18 @@ function terminalFinalsOf(stage: StageRef, play: StagePlay): readonly string[] |
   }
 }
 
+/** W3 app-B Task 6 (rulebook P-A2, X-SW-15): was this two-seated board NOT PLAYED, so its pair has not met? The engine's
+ *  verdict (fold.ts `unplayedBoard`) on the product's stored outcome, with the board's own "was anything played" fact:
+ *  `playRecorded` of the stream the harness holds for it, read as the product reads a stored ledger. A board the harness
+ *  posted nothing to has no stream, and the product reads a fixture with no ledger as nothing played
+ *  (engine-db/forfeit-played.ts), so it reads the same here. One-sided rows (a bye) are no board. */
+function boardUnplayed(ctx: ScenarioContext, rec: Recorder, f: FixtureRow): boolean {
+  if (f.home_entrant_id === null || f.away_entrant_id === null) return false;
+  const stream = rec.streams.get(f.id);
+  const played = stream === undefined ? false : playRecorded(envelopes("matrix", stream), sportModule(ctx.spec.sport));
+  return unplayedBoard(f.outcome, played);
+}
+
 /** One ObservedStage per play (W1-driving Task 6), each on its OWN rows,
  *  tables, generates, pair rounds and exit. The root's field is the
  *  division's entrants ("division"); a later stage's is the entrants the
@@ -1059,7 +1154,11 @@ export async function snapshot(ctx: ScenarioContext, rec: Recorder, setup: Divis
     const rows = all.filter((f) => f.stage_id === stage.id);
     const fixtures: ObservedFixture[] = rows.map((f) => {
       const base = { ...toFixture(f), declared: null };
-      return { ...base, declared: rec.declared.get(f.id) ?? byeDeclared(ctx.spec.sport, ctx.cfg, stage.kind, base) };
+      return {
+        ...base,
+        declared: rec.declared.get(f.id) ?? byeDeclared(ctx.spec.sport, ctx.cfg, stage.kind, base),
+        ...(boardUnplayed(ctx, rec, f) ? { unplayed: true as const } : {}),
+      };
     });
     // One table per pool, each keeping its poolId (a merged table reds I1/I3).
     const poolIds = [...new Set(rows.map((f) => f.pool_id))];
@@ -1076,7 +1175,7 @@ export async function snapshot(ctx: ScenarioContext, rec: Recorder, setup: Divis
     stages.push({
       id: stage.id, seq: stage.seq, kind: stage.kind, config,
       field: [...(play.field ?? [])], fieldSource: i === 0 ? "division" : "seeded", fixtures, standings,
-      generates: track.generates, pairRounds: track.pairRounds, complete: play.complete, exit: track.exit,
+      generates: track.generates, pairRounds: track.pairRounds, ...(track.finish !== null ? { finish: track.finish } : {}), complete: play.complete, exit: track.exit,
       ...(pairs !== undefined ? { persons: { ...Object.fromEntries(setup.persons), ...pairs } } : {}),
       ...(finals !== null ? { terminalFinals: finals } : {}),
     });

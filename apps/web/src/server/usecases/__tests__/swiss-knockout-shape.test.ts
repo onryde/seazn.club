@@ -241,7 +241,9 @@ describe.runIf(HAS_DB)("swiss knockout — the bracket an organiser's Top N actu
     expect(swiss.filter((f) => f.status !== "decided"), "unsettled swiss fixtures").toEqual([]);
     // A 4-entrant swiss over 3 rounds is a full round robin: every pair meets
     // exactly once, so the table is settled by wins alone.
-    expect(swiss.map((f) => pairOf(f, rig.nameOf)).sort()).toEqual([
+    // The PAIRS are the invariant, not which side is home: since engine 2.0.0 (X-SW-4) outside chess the home side alternates
+    // from the games each entrant has played, so "E2 v E1" is the same meeting as "E1 v E2".
+    expect(swiss.map((f) => pairOf(f, rig.nameOf).split(" v ").sort().join(" v ")).sort()).toEqual([
       "E1 v E2",
       "E1 v E3",
       "E1 v E4",
