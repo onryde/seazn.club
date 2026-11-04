@@ -2585,7 +2585,7 @@
   "reg.settings.entrant.pair": "Paire",
   "reg.settings.entrant.chessOnly": "Les échecs n'accueillent que des joueurs individuels. Les paires, les équipes et l'inscription en solo ne sont pas disponibles.",
   "reg.settings.entrant.chessLegacy": "Cette division a été configurée pour des paires ou des équipes avant que les échecs ne deviennent individuels uniquement. L'enregistrement la passe en inscription individuelle.",
-  "reg.settings.entrant.notAllowedOption": "{kind} (non accepté dans cette division)",
+  "reg.settings.entrant.notAllowedOption": "{kind} (non accepté)",
   "reg.settings.entrant.notAllowedHint": "Cette division n'accepte pas le type {kind}, son inscription publique est donc fermée. Choisissez un type de participant dans la liste, ou ajoutez {kind} aux types de participant de la division.",
   "reg.settings.entrant.notAllowedError": "Cette division n'accepte pas ce type de participant. Choisissez-en un dans la liste.",
   "reg.settings.opens": "Ouvre",

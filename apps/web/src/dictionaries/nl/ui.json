@@ -2585,7 +2585,7 @@
   "reg.settings.entrant.pair": "Paar",
   "reg.settings.entrant.chessOnly": "Schaken kent alleen individuele spelers. Duo's, teams en solo-inschrijving zijn niet beschikbaar.",
   "reg.settings.entrant.chessLegacy": "Deze divisie is ingesteld voor duo's of teams voordat schaken alleen individueel werd. Opslaan zet haar om naar individuele inschrijving.",
-  "reg.settings.entrant.notAllowedOption": "{kind} (niet toegestaan in deze divisie)",
+  "reg.settings.entrant.notAllowedOption": "{kind} (niet toegestaan)",
   "reg.settings.entrant.notAllowedHint": "Deze divisie neemt geen {kind} aan, dus de openbare inschrijving is gesloten. Kies een type deelnemer uit de lijst, of voeg {kind} toe aan de soorten deelnemer van de divisie.",
   "reg.settings.entrant.notAllowedError": "Deze divisie neemt dit type deelnemer niet aan. Kies er een uit de lijst.",
   "reg.settings.opens": "Opent",

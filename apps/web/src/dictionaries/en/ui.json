@@ -2585,7 +2585,7 @@
   "reg.settings.entrant.pair": "Pair",
   "reg.settings.entrant.chessOnly": "Chess takes individual players only. Pairs, teams and solo sign-up pools are not available.",
   "reg.settings.entrant.chessLegacy": "This division was set up for pairs or teams before chess became individual-only. Saving moves it to individual entry.",
-  "reg.settings.entrant.notAllowedOption": "{kind} (not allowed in this division)",
+  "reg.settings.entrant.notAllowedOption": "{kind} (not allowed)",
   "reg.settings.entrant.notAllowedHint": "This division doesn't take {kind} entries, so its public sign-up is closed. Pick an entrant type from the list, or add {kind} to the division's entrant kinds.",
   "reg.settings.entrant.notAllowedError": "This division doesn't take that entrant type. Pick one from the list.",
   "reg.settings.opens": "Opens",
