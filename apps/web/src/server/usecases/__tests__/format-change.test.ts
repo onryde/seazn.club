@@ -8,7 +8,7 @@
 //
 // Expected values are read off the rows (what existed before, what is gone after), never typed: a preview count is
 // asserted equal to the number of rows the confirmed change actually deleted. Real Postgres; skipped without one.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -28,6 +28,21 @@ import { rigTarget } from "@/server/relay/__tests__/_session-rig";
 import { makeUser } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// The cleared boards leave the public pages after the commit (`afterScheduleWrite`, deleteStage's publish): a passthrough
+// spy on the division fire, so the change still revalidates for real and the test can see that it did, and when.
+const fired = vi.hoisted(() => [] as string[]);
+vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/public-site/revalidate")>();
+  return {
+    ...real,
+    fireDivisionRevalidate: (...args: Parameters<typeof real.fireDivisionRevalidate>) => {
+      fired.push(args[0]);
+      return real.fireDivisionRevalidate(...args);
+    },
+  };
+});
+const firedFor = (divisionId: string) => fired.filter((d) => d === divisionId).length;
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -167,7 +182,9 @@ describe.skipIf(!HAS_DB)("FMT5 — a generated, unplayed division changes format
     expect(placed, "premise: fixtures are on the schedule").toBeGreaterThan(0);
     expect(await divisionFormatLocked(rig.auth, rig.divisionId), "a bye is not a result").toBe(false);
 
+    const firedBefore = firedFor(rig.divisionId);
     const preview = await previewReplaceStages(rig.auth, rig.divisionId, [league(1)]);
+    expect(firedFor(rig.divisionId), "a dry run publishes nothing").toBe(firedBefore);
     expect(preview.stages).toEqual(before.stages.map((s) => ({ id: s.id, name: s.name })));
     expect(preview.fixtures).toBe(before.fixtures.length);
     expect(preview.slots).toBe(before.fixtures.filter((f) => f.scheduled_at !== null).length);
@@ -181,6 +198,8 @@ describe.skipIf(!HAS_DB)("FMT5 — a generated, unplayed division changes format
 
     const rows = await replaceStages(rig.auth, rig.divisionId, [league(1)], { clear: preview.token! });
     expect(rows.map((r) => r.kind)).toEqual(["league"]);
+    // Fired by the time the change resolves (a voided fire after the request is dropped: stage-revalidate-settles).
+    expect(firedFor(rig.divisionId), "the cleared boards leave the public pages").toBe(firedBefore + 1);
     const after = await board(rig.divisionId);
     expect(after.stages.map((s) => s.id)).toEqual(rows.map((r) => r.id));
     // What the preview said is what went: every one of the fixtures it counted, and its schedule with it.
@@ -205,8 +224,10 @@ describe.skipIf(!HAS_DB)("FMT5 — a generated, unplayed division changes format
     await generateStageFixtures(rig.auth, stage!.id);
     const before = await board(rig.divisionId);
 
+    const firedBefore = firedFor(rig.divisionId);
     const asked = await refusal(replaceStages(rig.auth, rig.divisionId, [knockout(1)]));
     expect(asked).toMatchObject({ status: 409, code: "FORMAT_CHANGE_CONFIRM" });
+    expect(firedFor(rig.divisionId), "a refused change publishes nothing").toBe(firedBefore);
     const offered = asked.extra?.preview as FormatChangePreview;
     expect(offered.fixtures).toBe(before.fixtures.length);
     expect(offered.slots, "nothing is scheduled yet").toBe(0);
