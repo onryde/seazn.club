@@ -331,6 +331,55 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     expect(after.view!.table.label).toBe("Top 2 go through to Finals · 2 rounds left");
   });
 
+  it("W3 R17: a latecomer admitted for round 3 of 5 has rounds 1–2 behind it, not left; on-time rows unchanged (real admission, real reads)", async () => {
+    // W3 app-B final review I1. The latecomer comes through the organiser's real add (`createEntrants` → the late-entry
+    // admission, case (c)), round 3 is paired by the real Pair and played by real scoring writes. The expected counts are
+    // read from the DB's own columns, not the builder: rounds declared − (entrants.swiss_first_round − 1) − rounds with a
+    // settled row seating the entrant.
+    const SIX = [...FOUR, "Eve", "Fay"];
+    const r = await rig("swiss", SIX, 5);
+    await playRound(r, 1, SIX);
+    await generateStageFixtures(r.auth, r.stageId);
+    await playRound(r, 2, SIX);
+    const [late] = await createEntrants(r.auth, r.divisionId, [{ kind: "individual", display_name: "Gus", members: [] }]);
+    expect(late!.late_entry, "premise: round 2 finished and round 3 unpaired, so the organiser's add is case (c) for round 3").toMatchObject({
+      case: "c",
+      round: 3,
+    });
+    r.id.Gus = late!.id;
+    await generateStageFixtures(r.auth, r.stageId); // round 3, the latecomer in its field
+    expect(
+      (await fixturesOf(r)).some((f) => f.round_no === 3 && (f.home_entrant_id === late!.id || f.away_entrant_id === late!.id)),
+      "premise: round 3 seats the latecomer",
+    ).toBe(true);
+    await playRound(r, 3, [...SIX, "Gus"]);
+
+    const first = new Map(
+      (await sql<{ id: string; swiss_first_round: number | null }[]>`
+        select id, swiss_first_round from entrants where division_id = ${r.divisionId}`).map((e) => [e.id, e.swiss_first_round ?? 1]),
+    );
+    expect(first.get(late!.id), "premise: the admission stamped round 3").toBe(3);
+    const settledRounds = (id: string, fx: Row[]) =>
+      new Set(
+        fx.filter((f) => (f.status === "decided" || f.status === "forfeited") && (f.home_entrant_id === id || f.away_entrant_id === id)).map((f) => f.round_no),
+      ).size;
+    const left = (id: string, fx: Row[]) => 5 - (first.get(id)! - 1) - settledRounds(id, fx);
+
+    const { view, rows, statuses } = await load(r);
+    expect(view, "a view exists: the guards read the real shells' keys").not.toBeNull();
+    expect(rows.map((x) => x.entrantId)).toContain(late!.id);
+    const fx = await fixturesOf(r);
+    // The witness: the rounds formula alone (declared − settled) gives the latecomer 4; the rulebook gives 2.
+    expect(5 - settledRounds(late!.id, fx)).toBe(4);
+    expect(left(late!.id, fx)).toBe(2);
+    // Negative pair: every on-time row keeps declared − settled (2).
+    expect(SIX.map((n) => left(r.id[n]!, fx))).toEqual([2, 2, 2, 2, 2, 2]);
+    const engine = await engineStatuses(r, rows, statuses, left);
+    expect(engine.size, "anti-vacuity: all seven rows compared").toBe(7);
+    expectSameStatuses(view!, engine);
+    expect(view!.table.label).toBe("Top 2 go through to Finals · 2 rounds left");
+  });
+
   it("F2 on a real pooled stage: a pool member the snapshot has not folded yet hides that pool's status", async () => {
     const EIGHT = [...FOUR, "Eve", "Fay", "Gus", "Hal"];
     const r = await rig("group", EIGHT);
