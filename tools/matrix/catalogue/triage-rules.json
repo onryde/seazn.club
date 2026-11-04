@@ -403,7 +403,7 @@
       "gap": "SW-H1",
       "wave": "W3",
       "was": "P6",
-      "note": "A swiss round's Generate answers success and pairs nobody (SW-H1: pairRound has no look-ahead and dead-ends, swissGen seats zero boards and raises no error). Intermittent per run: the three cells owner ruling 70 names (swiss_knockout football, carrom, generic R4) flip red/green between dispatches because the product's lots tie-break hashes per-run entrant ids; they are SW-H1 whenever red. Since W2a the run also fails life-bracket-decider-exercised on these cells (the Swiss stage never completes, so the bracket stage after it never posts a decider: 0 settles, 0 tie-breaks): a consequence of this same dead end, so it rides in this rule's closed set (W2e Task 35)."
+      "note": "A swiss round's Generate answers success and pairs nobody (SW-H1: pairRound has no look-ahead and dead-ends, swissGen seats zero boards and raises no error). Intermittent per run: the three cells owner ruling 70 named (swiss_knockout football, carrom, generic R4) flipped red/green between dispatches because the product's lots tie-break hashes per-run entrant ids; they were SW-H1 whenever red. W3 fixed it (engine 2.x pairRound looks ahead; swissGen refuses a round it cannot pair with SWISS_NO_LEGAL_PAIRING) and retired ruling 70 (PR #1121, truth run 41818942253: no case pairs nobody); these rules stay to classify an empty success, should one come back. Since W2a the run also fails life-bracket-decider-exercised on these cells (the Swiss stage never completes, so the bracket stage after it never posts a decider: 0 settles, 0 tie-breaks): a consequence of this same dead end, so it rides in this rule's closed set (W2e Task 35)."
     },
     {
       "id": "swiss-round-paired-nobody-swiss-playoff",
@@ -420,7 +420,7 @@
       "gap": "SW-H1",
       "wave": "W3",
       "was": "P6",
-      "note": "A swiss round's Generate answers success and pairs nobody (SW-H1: pairRound has no look-ahead and dead-ends, swissGen seats zero boards and raises no error). Intermittent per run: the three cells owner ruling 70 names (swiss_knockout football, carrom, generic R4) flip red/green between dispatches because the product's lots tie-break hashes per-run entrant ids; they are SW-H1 whenever red. Since W2a the run also fails life-bracket-decider-exercised on these cells (the Swiss stage never completes, so the bracket stage after it never posts a decider: 0 settles, 0 tie-breaks): a consequence of this same dead end, so it rides in this rule's closed set (W2e Task 35)."
+      "note": "A swiss round's Generate answers success and pairs nobody (SW-H1: pairRound has no look-ahead and dead-ends, swissGen seats zero boards and raises no error). Intermittent per run: the three cells owner ruling 70 named (swiss_knockout football, carrom, generic R4) flipped red/green between dispatches because the product's lots tie-break hashes per-run entrant ids; they were SW-H1 whenever red. W3 fixed it (engine 2.x pairRound looks ahead; swissGen refuses a round it cannot pair with SWISS_NO_LEGAL_PAIRING) and retired ruling 70 (PR #1121, truth run 41818942253: no case pairs nobody); these rules stay to classify an empty success, should one come back. Since W2a the run also fails life-bracket-decider-exercised on these cells (the Swiss stage never completes, so the bracket stage after it never posts a decider: 0 settles, 0 tie-breaks): a consequence of this same dead end, so it rides in this rule's closed set (W2e Task 35)."
     },
     {
       "id": "mexicano-stalled-on-forfeit",

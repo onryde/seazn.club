@@ -12,10 +12,9 @@
 //       fails the run (unexpected_skip, exit 1) unless --expected-skips, a committed JSON list of case ids, names it: a case renamed out
 //       of --expect (3x15 renames badminton's) is judged by no one, and used to be dropped without a word. --sample says --expect is a
 //       DELIBERATE subset of the baseline (the PR sample): its other cases are counted, never refused. It excludes --expected-skips.
-//       The baseline is read as catalogue/baseline.json's ruling70 block says (owner ruling 70): the ids it lists
-//       are red whatever the baseline run recorded, so a later works on them is an improvement and a later red no change.
-//       The block qualifies only the run it was written for (its workflowRun): any other --baseline is judged as it shows,
-//       and the block itself is refused (BaselineUnreadable, exit 2) when it names another id set or another baseline L3.
+//       Owner ruling 70's block (catalogue/baseline.json's `ruling70`: ids held red whatever the baseline run recorded) was retired
+//       by W3's SW-H1 fix: every baseline is judged as it shows, and a baseline.json that carries the block again is refused
+//       (BaselineUnreadable, exit 2) rather than judged with it or without it.
 // --planned-not-run (ruling 65) defaults to allow: a ░ the plan marked planned is not a fault; a ░ on a
 // driven case always is. --json-out writes the verdict as JSON (lib/judge.ts JudgeOut) for `summary --judge`.
 // Exit codes, each with one meaning:
@@ -251,8 +250,8 @@ function regressionMode(cli: Cli, over: JudgeOver): Verdict {
   const expect = readExpect(cli.expect as string);
   const expectedSkips = cli.expectedSkips === undefined ? [] : readExpectedSkips(cli.expectedSkips);
   holdsExactly("--now", now, now.runId, expect, true);
-  // Owner ruling 70: the baseline's override list is applied HERE, in the one reader of a baseline, so matrix:sample and any other
-  // caller judge the same baseline. An unreadable list is a refusal, never a judgement made without it.
+  // Owner ruling 70 (retired by W3): the override list was applied HERE, in the one reader of a baseline, so matrix:sample and any other
+  // caller judged the same baseline. baselineOverrides still reads the file, so a block put back is a refusal, never a judgement.
   let overrides: ReturnType<typeof baselineOverrides>;
   try { overrides = baselineOverrides(over.catalogue === undefined ? {} : { catalogue: over.catalogue }); } catch (e) {
     if (e instanceof BaselineUnreadable) throw new JudgeRefused("BaselineUnreadable", e.message);
