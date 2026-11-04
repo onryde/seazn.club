@@ -67,7 +67,7 @@ The owner moved this defect into W4 (2026-11-04: "there is a W4 going to do Knoc
 **Decision owed (put to the owner as a recommendation), and it must be settled before the plan:**
 - **A.** The plate holds whoever actually loses in round 1 (q = the real loser count). Knockout + Plate is not offered, or is refused with a named reason, when that count is under 2. App-only; quick.
 - **B.** The plate holds everyone's *first* loss: round-1 losers plus bye-holders who lose their first match in round 2. This is the usual intent of a plate (everyone plays at least twice). It needs a new engine feed, which is a cross-repo change to onryde/seazn.club.engine, and a plate that seeds after round 2.
-- **Recommendation: B.** Owner, 2026-11-04: "B as a your rec". Plan W4 around B (the engine feed plus a plate that seeds after round 2). Confirm it with the owner at the W4 rulebook sign-off before building. A is only the fallback if the engine change cannot ship in W4.
+- **Recommendation: B** (controller, 2026-11-04). A was only an interim for a small follow-ups batch; W4 is a whole knockout wave and has room for the engine feed. The owner has not ruled. Put B to the owner at the W4 rulebook sign-off before building; A is the fallback only if the engine change cannot ship in W4.
 
 **Done when:**
 - Every n the builder offers for ko_plate either completes the plate through the real usecases, or is refused up front with copy in 4 locales.
