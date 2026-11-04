@@ -1341,8 +1341,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // counts line above the rows already says "N to schedule" in the card's own words (`stage-progress-counts`).
         // Mirrors the server guard (deleteStage) EXACTLY: only the last stage
         // in the graph, and only when it owns no played fixtures. No "keep one
-        // stage" rule — the server deletes the sole stage of a pure League too,
-        // which is the only escape from the format lock once fixtures exist.
+        // stage" rule — the server deletes the sole stage of a pure League too.
+        // Changing the stages before it is the Format button's (FMT5: the
+        // Division rules card rebuilds the whole graph until the first result).
         const deletable =
           stage.seq === Math.max(...stages.map((s) => s.seq)) &&
           // W2a: a held (`needs_decision`) fixture was PLAYED — same rule as deleteStage's server guard.

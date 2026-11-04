@@ -961,6 +961,12 @@ async function runReplaceStages(
  * non-power-of-two field holds them. Pools, fixtures, snapshots go via
  * ON DELETE CASCADE.
  */
+/** A stage that is not the last in the graph cannot be deleted (the graph would lose its middle). FMT5: the way to change the
+ *  stages before it is the division's Format (the Division rules card), which rebuilds the whole graph until the first result;
+ *  the sentence sends the organiser there, never to delete stage after stage from the end. */
+export const DELETE_STAGE_NOT_LAST_MESSAGE =
+  "only the last stage can be deleted — to change the stages before it, change the division's format on the Fixtures tab";
+
 export async function deleteStage(auth: AuthCtx, stageId: string): Promise<{ deleted: true }> {
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
@@ -998,7 +1004,7 @@ export async function deleteStage(auth: AuthCtx, stageId: string): Promise<{ del
     const [later] = await tx`
       select 1 from stages where division_id = ${stage.division_id} and seq > ${stage.seq} limit 1`;
     if (later) {
-      throw new HttpError(409, "only the last stage can be deleted — remove later stages first");
+      throw new HttpError(409, DELETE_STAGE_NOT_LAST_MESSAGE);
     }
     const [played] = await tx`
       select 1 from fixtures
