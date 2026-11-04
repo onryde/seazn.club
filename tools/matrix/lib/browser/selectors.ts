@@ -79,6 +79,10 @@ const data = <T extends Record<string, DataPin>>(t: T): Readonly<T> => table(t);
 
 export const TESTID = testids({
   templateStartBlank: { id: "template-start-blank", file: `${V2}/template-gallery.tsx`, needle: 'data-testid="template-start-blank"' },
+  // Match Day C8 (133b6f4890): a successful blank-wizard create no longer redirects to the competition; the wizard replaces its
+  // form with this "Add your first division" screen (first-division-prompt.tsx), whose Later link goes to the competition page.
+  firstDivisionPrompt: { id: "first-division-prompt", file: `${V2}/first-division-prompt.tsx`, needle: 'data-testid="first-division-prompt"' },
+  firstDivisionLater: { id: "first-division-later", file: `${V2}/first-division-prompt.tsx`, needle: 'data-testid="first-division-later"' },
   builderName: { id: "division-builder-name", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-name"' },
   builderNext: { id: "division-builder-next", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-next"' },
   builderCreate: { id: "division-builder-create", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-create"' },
