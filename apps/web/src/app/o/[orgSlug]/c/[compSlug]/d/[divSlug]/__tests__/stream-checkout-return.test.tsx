@@ -19,6 +19,7 @@ const stagesSpies = vi.hoisted(() => ({
   listStagesWithTableRules: vi.fn(async () => []),
   getStandings: vi.fn(async () => ({ rows: [] })),
   getSeedProposal: vi.fn(),
+  divisionFormatLocked: vi.fn(async () => false),
   getStageRosterDrift: vi.fn(),
 }));
 
@@ -67,7 +68,7 @@ vi.mock("@/server/usecases/entrants", async (importOriginal) => ({
   listEntrants: vi.fn(async () => scene.entrants),
 }));
 vi.mock("@/server/usecases/schedule", () => ({
-  getScheduleSettings: vi.fn(async () => ({ config: {}, tz: "UTC" })),
+  getScheduleSettings: vi.fn(async () => ({ config: { courts: [] }, tz: "UTC" })),
 }));
 vi.mock("@/lib/entitlements", () => ({
   hasFeature: vi.fn(async () => true),

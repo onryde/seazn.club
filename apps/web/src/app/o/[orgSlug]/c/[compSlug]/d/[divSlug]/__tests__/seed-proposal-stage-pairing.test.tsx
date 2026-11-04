@@ -43,6 +43,7 @@ const stagesSpies = vi.hoisted(() => ({
   // stage" case below sets stageMid's progression to null specifically to
   // prove IT gets no ProgressionPanel — which makes it a root stage too, so
   // this mock has to exist or that render throws instead of asserting.
+  divisionFormatLocked: vi.fn(async () => false),
   getStageRosterDrift: vi.fn(async () => ({ ghosts: [], unplaced: [] })),
 }));
 
@@ -88,7 +89,7 @@ vi.mock("@/server/usecases/fixtures", () => ({
 }));
 vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => []) }));
 vi.mock("@/server/usecases/schedule", () => ({
-  getScheduleSettings: vi.fn(async () => ({ config: {}, tz: "UTC" })),
+  getScheduleSettings: vi.fn(async () => ({ config: { courts: [] }, tz: "UTC" })),
 }));
 vi.mock("@/lib/entitlements", () => ({
   hasFeature: vi.fn(async () => true),

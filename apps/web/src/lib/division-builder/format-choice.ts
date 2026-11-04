@@ -149,7 +149,9 @@ export interface SavedStage {
  *  stage's pool count (config.pools.count on the group stage the progression sources: the nearest earlier one — F3
  *  ultrareview finding 8, every template declares `stage: "previous"`); bestNth -> its count. Summed, because groups_ko
  *  carries BOTH in one take array. Falls back to 4. */
-export function currentQualifiedFromStages(stages: SavedStage[]): number {
+export function currentQualifiedFromStages(
+  stages: readonly { kind?: string; config?: SavedStage["config"]; progression: SavedStage["progression"] }[],
+): number {
   const stageIdx = stages.findIndex((st) => st.progression);
   const stage = stageIdx === -1 ? undefined : stages[stageIdx];
   const sources = (stage?.progression as { sources?: { take?: unknown[] }[] } | undefined)?.sources;

@@ -5,7 +5,6 @@ import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
-import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 // Match Day C4: this file began as the Entrants block's suite. The block moved to the top of the Entrants tab
 // (`entrant-kinds-settings.test.tsx` holds its tests) and the proof that Settings no longer draws it, for every sport, is
@@ -31,10 +30,6 @@ function renderSettings(overrides: { canEdit?: boolean; showSeeds?: boolean } = 
         logo_storage_path: null,
       }}
       orgId="org1"
-      entrantKinds={engineEntrantKinds("football")}
-      structureLocked={false}
-      lockedFields={[]}
-      stages={[]}
       canEdit={overrides.canEdit ?? true}
       divisionPathPrefix="/o/org/c/comp/d/"
       fixturesHref="/o/org/c/comp/d/div/fixtures"

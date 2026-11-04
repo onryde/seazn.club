@@ -39,6 +39,7 @@ vi.mock("@/server/usecases/stages", () => ({
   listStagesWithTableRules: vi.fn(async () => []),
   getStandings: vi.fn(async () => ({ rows: [] })),
   getSeedProposal: vi.fn(),
+  divisionFormatLocked: vi.fn(async () => false),
   getStageRosterDrift: vi.fn(async () => ({ ghosts: [], unplaced: [] })),
 }));
 vi.mock("@/server/usecases/competitions", () => ({
@@ -77,7 +78,7 @@ vi.mock("@/server/usecases/entrants", () => ({
   listLichessLinkGaps: unlinked.read,
 }));
 vi.mock("@/server/usecases/schedule", () => ({
-  getScheduleSettings: vi.fn(async () => ({ config: {}, tz: schedule.tz })),
+  getScheduleSettings: vi.fn(async () => ({ config: { courts: [] }, tz: schedule.tz })),
 }));
 vi.mock("@/lib/entitlements", () => ({
   hasFeature: vi.fn(async () => true),

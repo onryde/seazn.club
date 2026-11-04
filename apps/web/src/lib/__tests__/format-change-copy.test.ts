@@ -8,6 +8,10 @@ import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { FORMAT_CHANGE_REFUSALS, isFormatChangeCode, previewOf, type FormatChangeCode } from "@/lib/format-change";
+import { formatChangeRefusalText } from "@/lib/format-change-copy";
+import { ApiV1Error } from "@/lib/client-v1";
+import { t as tRuntime } from "@/lib/i18n-runtime";
+import type { MessageKey } from "@/lib/messages";
 
 // Typed here, not read from the table under test: a code dropped from the table, or one added without a ruling, fails.
 const CODES = ["FORMAT_LOCKED", "FORMAT_CHANGE_CONFIRM", "FORMAT_CHANGE_STALE", "FORMAT_STREAM_LIVE"] as const;
@@ -52,5 +56,46 @@ describe("FORMAT_CHANGE_REFUSALS (FMT5)", () => {
     expect(previewOf({ preview: { ...preview, dry_run: false } })).toBeNull();
     expect(previewOf(null)).toBeNull();
     expect(previewOf("x")).toBeNull();
+  });
+});
+
+// The Format dialog's three PUTs can be refused by more than the FORMAT_* codes: the board writes' shared refusals (a
+// frozen schedule, an online game already on a board), the stage body's (a Swiss with no rounds, chess individual-only).
+// Each is said in the reader's language off its CODE; the wire's English never reaches the screen. Codes are typed
+// literally (the server's wire values), sentences read from the en dictionary.
+describe("formatChangeRefusalText: every refusal the dialog can meet, in words (FMT5)", () => {
+  const msg = (key: MessageKey, vars?: Record<string, string | number>) => tRuntime(en as never, key, vars);
+  const said = (code: string, extra: Record<string, unknown> = {}) =>
+    formatChangeRefusalText(new ApiV1Error("the wire's English", 409, code, extra), msg, "FALLBACK");
+  const D = en as Record<string, string>;
+
+  it("each code's own sentence, never the wire's English (counted)", () => {
+    const cases: [string, string][] = [
+      ["FORMAT_LOCKED", D["formatChange.err.FORMAT_LOCKED"]!],
+      ["FORMAT_CHANGE_CONFIRM", D["formatChange.err.FORMAT_CHANGE_CONFIRM"]!],
+      ["FORMAT_CHANGE_STALE", D["formatChange.err.FORMAT_CHANGE_STALE"]!],
+      ["SCHEDULE_LOCKED", D["stage.error.scheduleFrozen"]!],
+      ["ONLINE_GAME_EXISTS", D["externalPlay.onlineGameExists"]!],
+      ["STAGE_SWISS_ROUNDS_REQUIRED", D["stage.err.swissRoundsRequired"]!],
+      ["CHESS_INDIVIDUAL_ONLY", D["divset.err.chessIndividualOnly"]!],
+    ];
+    let checked = 0;
+    for (const [code, want] of cases) {
+      expect(want.length, `${code}: premise: the sentence exists`).toBeGreaterThan(0);
+      expect(said(code), code).toBe(want);
+      expect(said(code), code).not.toContain("the wire's English");
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("a live stream names its match, or 'This match' when the refusal carries no number", () => {
+    expect(said("FORMAT_STREAM_LIVE", { fixture_no: 7 })).toBe(D["formatChange.err.FORMAT_STREAM_LIVE"]!.replace("{match}", "Match 7"));
+    expect(said("FORMAT_STREAM_LIVE")).toBe(D["formatChange.err.FORMAT_STREAM_LIVE"]!.replace("{match}", D["rules.err.thisMatch"]!));
+  });
+
+  it("anything else falls to the Settings saves' one reader (settingsSaveErrorText): a non-Error says the fallback", () => {
+    expect(formatChangeRefusalText(undefined, msg, "FALLBACK")).toBe("FALLBACK");
+    expect(formatChangeRefusalText("boom", msg, "FALLBACK")).toBe("FALLBACK");
   });
 });

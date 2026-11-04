@@ -38,7 +38,7 @@ import { patchOf } from "../../lib/zod-patch.ts";
 import { ENTRANT_NAME_MAX } from "../../lib/entrant-roster-name.ts";
 // The player name limit, shared with the directory's rename field (persons-panel.tsx).
 import { PERSON_NAME_MAX } from "../../lib/person-name.ts";
-// Match Day D1: the format fields' bounds, shared with the division builder and the Settings Format group. Import-free,
+// Match Day D1: the format fields' bounds, shared with the division builder and the Format dialog (FMT5). Import-free,
 // so the standalone generator loads it like the files above.
 import { FORMAT_BOUNDS } from "../../lib/format-bounds.ts";
 // Task 9 (spectator surface W1) — the match-centre document schema, reused

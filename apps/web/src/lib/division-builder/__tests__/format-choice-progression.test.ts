@@ -1,24 +1,14 @@
-// F2 (unified progression field): division-settings.tsx reverse-derives the
-// picker's "how many qualify" knob from the division's STORED stages, to
-// pre-fill the Top-N-advance control when editing an existing format. It
-// used to read `.qualification` (`topN` | `take.length`); now it must read
-// `.progression.sources[].take[]`, matching whichever TakeRule kind
-// format-templates.ts's real specs emit (rankRange -> to-from+1, picks ->
-// picks.length, roundLosers -> count).
+// F2 (unified progression field): the format picker reverse-derives its "how many qualify" knob from the division's STORED
+// stages, to open the Format dialog on the format as it stands. It used to read `.qualification` (`topN` | `take.length`);
+// now it must read `.progression.sources[].take[]`, matching whichever TakeRule kind format-templates.ts's real specs emit
+// (rankRange -> to-from+1, picks -> picks.length, roundLosers -> count).
 //
-// currentQualifiedFromStages is a pure extraction (same reasoning as
-// stages-panel.tsx's addStageProgression): the control that shows this
-// value lives inside the "Format" Group, which defaults CLOSED
-// (defaultOpen not passed, Group's own `{open && children}`) — a nested
-// stateful component, opaque to both renderToStaticMarkup (children never
-// render while closed) and the interactive hook-harness's one-level-deep
-// expansion. Pure extraction sidesteps needing to open it at all.
+// Moved from components/v2/__tests__/division-settings-progression.test.tsx with the functions (FMT5: Settings › Format
+// became the Format dialog on the Division rules card, and these readers moved to lib/division-builder/format-choice.ts,
+// the one model the builder and the dialog share). `structureDraftsForApply` was Settings' own copy of the builder's
+// stage drafting; both screens now send `formatStagesFor`, pinned below with the same cases.
 import { describe, expect, it } from "vitest";
-import {
-  currentQualifiedFromStages,
-  currentStandingsCarryFromStages,
-  structureDraftsForApply,
-} from "../division-settings";
+import { currentQualifiedFromStages, currentStandingsCarryFromStages, formatStagesFor } from "../format-choice";
 
 describe("currentQualifiedFromStages — pre-fills Top-N-advance from progression, not qualification", () => {
   it("reads rankRange(1,6) as 6 — the topN replacement", () => {
@@ -116,7 +106,7 @@ describe("currentQualifiedFromStages — pre-fills Top-N-advance from progressio
 // still only recognised rankRange/picks/roundLosers, so it fell through the
 // `for` loop untouched and hit the `return 4` fallback for EVERY groups_ko
 // division. Settings then showed "4" regardless of the real qualifier count,
-// and one unrelated edit + Apply (applyStructure, division-settings.tsx)
+// and one unrelated edit + Apply (applyStructure, division-settings.tsx; now the Format dialog's Save)
 // would silently rewrite the stored progression down to a 4-qualifier
 // knockout — destroying a draw the organiser may have already shared.
 describe("currentQualifiedFromStages — topNPerGroup / bestNth (groups_ko, A3 fix)", () => {
@@ -221,13 +211,13 @@ describe("currentQualifiedFromStages — topNPerGroup / bestNth (groups_ko, A3 f
 describe("F6 — standings carry on settings applyStructure path", () => {
   const knobs = { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 };
 
-  it("structureDraftsForApply with points sets carry on the progression stage", () => {
-    const drafts = structureDraftsForApply("league_ko", knobs, "points");
+  it("formatStagesFor with points sets carry on the progression stage", () => {
+    const drafts = formatStagesFor("league_ko", { ...knobs, standingsCarry: "points" });
     expect(drafts[1]!.progression).toMatchObject({ carry: "points", timing: "setup" });
   });
 
-  it("structureDraftsForApply with none omits carry", () => {
-    const drafts = structureDraftsForApply("league_ko", knobs, "none");
+  it("formatStagesFor with none omits carry", () => {
+    const drafts = formatStagesFor("league_ko", { ...knobs, standingsCarry: "none" });
     expect(drafts[1]!.progression).not.toHaveProperty("carry");
   });
 

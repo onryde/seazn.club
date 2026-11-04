@@ -1,5 +1,5 @@
-// The bounds of a division's format fields — ONE declaration, read by the division builder's Format tab, the Settings
-// Format group and the stage-config validator (Match Day D1, design 2026-10-31 Phase D).
+// The bounds of a division's format fields — ONE declaration, read by the division builder's Format tab, the Format
+// dialog on the Division rules card (FMT5; was the Settings Format group) and the stage-config validator (Match Day D1, design 2026-10-31 Phase D).
 //
 // The two forms used to carry their own literals, and they disagreed: Settings took 1-4 legs where the builder offered
 // two, Settings started rounds at 3 where the builder and the validator start at 1, and the builder offered a fixed list

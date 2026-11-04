@@ -20,7 +20,6 @@ import { StartConfirmDialog } from "@/components/v2/start-confirm-dialog";
 import { startEntrantsLine, type EntryStage } from "@/lib/open-entry-stages";
 import { startPromotesCompetition } from "@/lib/start-promotes-competition";
 import { publishWouldList } from "@/lib/competition-listing";
-import { formatAlreadyLocked } from "@/lib/format-already-locked";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import type { BoardConflict, BoardFixture } from "@/components/v2/board/types";
 
@@ -173,8 +172,8 @@ export function LaunchActions({
         entrantsLine={startEntrantsLine(stages)}
         competitionPromotes={startPromotesCompetition(competitionStatus)}
         // The page already holds this division's fixtures for the gate sheet, so
-        // the predicate costs no extra read — see `fixtures` above.
-        formatLocked={formatAlreadyLocked(fixtures.length)}
+        // this costs no extra read — see `fixtures` above.
+        fixturesExist={fixtures.length > 0}
         unlistedDraft={publishWouldList({ visibility: competitionVisibility, status: competitionStatus })}
         settingsHref={routes.competitionSettings(orgSlug, compSlug)}
         busy={busy}

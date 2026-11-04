@@ -41,7 +41,7 @@ export function sportRefusesStageKind(sportKey: string | null | undefined, kind:
  *  INDIVIDUAL players it rotates (americanoGen plays one person per entrant). ONE rule for every reader (C9 round 3,
  *  controller ruling): the sport offer (templatesForSport with the engine's kinds: football, cricket, hockey and ice
  *  hockey hold teams only and volleyball teams and pairs, so none is offered the format), the division builder
- *  (divisionPlaysTemplate with the division's one kind, review 2 N1), and Settings › Format (templatesForSport with the
+ *  (divisionPlaysTemplate with the division's one kind, review 2 N1), and the Format dialog (FMT5, was Settings › Format: the builder's offer over the
  *  division's effective kinds, which a builder-made division narrows to exactly one, n3). The PAIR entrants it mints
  *  (pairEntrantsFor) are no longer a second need: chess, the one sport holding individuals and no pairs, is refused by
  *  key (sportRefusesStageKind), and format-templates.test.ts asserts over the registry that every other sport holding

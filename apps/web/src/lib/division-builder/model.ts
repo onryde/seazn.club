@@ -134,7 +134,7 @@ export function isPairRotationTemplate(key: string): boolean {
 /** Can a division taking these kinds play this format? (C9 review 2, N1; round 3: the shared rule.) Americano and
  *  Mexicano rotate individual players into new pairs, so a division that takes no individual players - narrowed to Pairs
  *  or Teams on Who plays (Q3, n3) - cannot play them. The kinds needed are `PAIR_MINTING_NEEDS_KINDS`, the one rule the
- *  sport offer and Settings › Format read too, so the builder and Settings cannot drift. What the SPORT is offered is
+ *  sport offer and the Format dialog (FMT5) read too, so the builder and the dialog cannot drift. What the SPORT is offered is
  *  decided upstream (templatesForSport): this narrows that offer to the division's kinds. */
 export function divisionPlaysTemplate(key: string, divisionKinds: readonly string[]): boolean {
   return !isPairRotationTemplate(key) || entrantKindsPlayPairMinting(divisionKinds);

@@ -73,11 +73,8 @@ function settingsProps(sportKey: string, config: Record<string, unknown>, online
       inherited_camera_policy: "off",
     },
     orgId: "org1",
-    entrantKinds: engineEntrantKinds(sportKey),
     variants: [{ key: sportKey === "boardgame" ? "classical" : "standard", name: "Standard" }],
-    structureLocked: false,
     lockedFields: [],
-    stages: [],
     canEdit: true,
     divisionPathPrefix: "/o/org/c/comp/d/",
     fixturesHref: "/o/org/c/comp/d/div/fixtures",
@@ -141,23 +138,36 @@ describe("division Settings: the online-play controls follow the club's flag", (
 // Fix round 1, m6: a save the server refuses 403 ONLINE_CHESS_DISABLED (a save racing a flag change, a kept answer
 // gone stale, PostHog down) reads in the organiser's language — the code is localised, the server's English sentence
 // never shown. The sentence comes from the dictionaries; the code is the server's own constant, re-exported.
-describe("division Settings: the Format summary states that the division plays online (canvas SettingsPhone)", () => {
-  const formatSummary = (tree: ReactElement[]) => {
-    const groups = [...new Set(tree.filter((n) => propsOf(n).title === "Format"))];
-    expect(groups, "the Format group").toHaveLength(1);
-    return String(propsOf(groups[0]!).summary);
+describe("the Division rules card's format chip states that the division plays online (canvas SettingsPhone; FMT5: was Settings › Format's summary)", () => {
+  const chipText = (config: Record<string, unknown>, offered: boolean, locked: boolean, sportKey = "boardgame") => {
+    const base = stripPropsOf(settingsProps(sportKey, config, offered) as unknown as Parameters<typeof stripPropsOf>[0]);
+    const format = {
+      divisionId: "d1",
+      sportKey,
+      stages: [{ name: "Swiss", kind: "swiss", config: { rounds: 5 }, progression: null }],
+      offer: ["swiss", "league"],
+      entrantKinds: engineEntrantKinds(sportKey),
+      templateLocks: {},
+      carryAllowed: true,
+      viewerPlan: "community" as const,
+      entrants: 8,
+      places: 4,
+      matchMinutes: 60,
+      locked,
+      canEdit: true,
+    };
+    const chips = renderIsland(DivisionRulesStrip, { ...base, format }, expandRules).tree().filter((n) => propsOf(n)["data-testid"] === "division-rules-format-chip");
+    expect(chips, "the chip renders once").toHaveLength(1);
+    return textOf(chips[0]!);
   };
-  // W2c: fixtures lock the structure; the variant locks once a stage that plays it has started. "Locked" is both.
-  const lockedProps = (locked: boolean) => ({ structureLocked: locked, lockedFields: locked ? [{ field: "variant_key", code: "DIVISION_FORMAT_LOCKED" as const, stageId: "s1", stageName: "Round 1" }] : [] });
-  it("online ⇒ '· online on Lichess', locked or not and whatever the flag (a fact, not a control); off ⇒ absent", () => {
+  it("online ⇒ '· online on Lichess', locked or not and whatever the flag (a fact, not a control); off ⇒ absent; another sport never", () => {
     const ON = EN_UI["divset.onlinePlay.summaryOn"]!;
     let checked = 0;
     for (const offered of [true, false]) {
       for (const locked of [false, true]) {
-        const on = renderIsland(DivisionSettings, { ...settingsProps("boardgame", { variant: "classical", onlinePlay: "lichess" }, offered), ...lockedProps(locked) }).tree();
-        expect(formatSummary(on), `offered ${offered}, locked ${locked}`).toContain(` · ${ON}`);
-        const off = renderIsland(DivisionSettings, { ...settingsProps("boardgame", { variant: "classical", onlinePlay: "off" }, offered), ...lockedProps(locked) }).tree();
-        expect(formatSummary(off), `off: offered ${offered}, locked ${locked}`).not.toContain(ON);
+        expect(chipText({ variant: "classical", onlinePlay: "lichess" }, offered, locked), `offered ${offered}, locked ${locked}`).toContain(` · ${ON}`);
+        expect(chipText({ variant: "classical", onlinePlay: "off" }, offered, locked), `off: offered ${offered}, locked ${locked}`).not.toContain(ON);
+        expect(chipText({ onlinePlay: "lichess" }, offered, locked, "badminton"), `badminton: offered ${offered}`).not.toContain(ON);
         checked++;
       }
     }

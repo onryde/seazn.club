@@ -1,6 +1,7 @@
 // Match Day D1 — one source for a division's format field bounds (design 2026-10-31 Phase D).
 //
-// The division builder's Format step and the Settings Format group set the same four fields — legs, pools, Swiss rounds
+// The division builder's Format step and the Format dialog on the Division rules card (FMT5; it replaced the Settings Format
+// group) set the same four fields — legs, pools, Swiss rounds
 // and the Top N that qualifies — and each carried its own literals. They disagreed (legs 1-2 vs 1-4, rounds from 1 vs
 // from 3, Top N a fixed list vs any number 2-32), so a division one form built could be one the other could not show.
 //
@@ -10,18 +11,20 @@
 //      a constant the forms export. Each form must reach every field at least once, so a field that loses its marker
 //      cannot leave the sweep passing on fewer fields.
 //   2. The validator accepts both ends of every field, and refuses one below the floor of the two it reads from here.
-//   3. The seams: the legs the organiser picks is the legs the builder posts; Settings shows a stored legs value the
-//      bounds no longer admit as it is, explains it, and keeps it on a format save until the organiser picks another.
+//   3. The seams: the legs the organiser picks is the legs the builder posts; the Format dialog shows a stored legs value
+//      the bounds no longer admit as it is, explains it, and keeps it on a format save until the organiser picks another.
 //
 // Expected values come from FORMAT_BOUNDS and the owner's ruling (legs 1 or 2, "Once" / "Home & away"), never from the
 // forms. One sport (generic) on purpose: the bounds do not vary by sport, and templatesForSport only REMOVES templates
 // for a sport (chess), it never adds a field.
-import { createElement, type ReactElement, type ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expandWithHooks, propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
 import { currentStep, pickTemplate } from "@/components/v2/__tests__/_division-builder-driver";
-import { DivisionSettings } from "@/components/v2/division-settings";
+import { Modal } from "@/components/modal";
+import { DivisionFormatDialog, type DivisionFormatStage } from "@/components/v2/rules/division-format";
+import type { FormatChangePreview } from "@/lib/format-change";
 import { LegsChoice, legsChoices } from "@/components/v2/legs-choice";
 import { AddStageForm } from "@/components/v2/stages-panel";
 import { FORMAT_BOUNDS, type FormatBoundKey, withinFormatBounds } from "@/lib/format-bounds";
@@ -55,13 +58,14 @@ const SPORTS: SportOption[] = [{ key: SPORT, name: "Generic", variants: [{ key: 
 const BOUND_KEYS = Object.keys(FORMAT_BOUNDS).sort() as FormatBoundKey[];
 
 /** The rendered tree, with the shared legs control opened into its radios (it reads copy through `useMsg`, a read-only
- *  hook, so `expandWithHooks` can render it outside the island's own render). */
+ *  hook, so `expandWithHooks` can render it outside the island's own render), and a dialog's footer (a prop of the Modal,
+ *  where its Save button lives). */
 function expand(node: ReactNode): ReactElement[] {
-  return walk(node).flatMap((el) =>
-    el.type === LegsChoice
-      ? [el, ...expand(expandWithHooks(LegsChoice, propsOf(el) as Parameters<typeof LegsChoice>[0]))]
-      : [el],
-  );
+  return walk(node).flatMap((el) => {
+    if (el.type === LegsChoice) return [el, ...expand(expandWithHooks(LegsChoice, propsOf(el) as Parameters<typeof LegsChoice>[0]))];
+    if (el.type === Modal) return [el, ...expand(propsOf(el).footer as ReactNode)];
+    return [el];
+  });
 }
 
 type Island = { tree: () => ReactElement[] };
@@ -82,50 +86,50 @@ function mountBuilder(): Island {
   );
 }
 
-type StageProp = Parameters<typeof DivisionSettings>[0]["stages"][number];
+type StageProp = DivisionFormatStage;
 
-function mountSettings(stages: StageProp[] = []): Island {
+/** The Format dialog on the Division rules card, over a division stored with `stages`. */
+function mountDialog(stages: StageProp[] = []): Island {
   return renderIsland(
-    DivisionSettings,
+    DivisionFormatDialog,
     {
-      division: {
-        id: "d1",
-        name: "Open",
-        sport_key: SPORT,
-        variant_key: "score",
-        config: {},
-        logo_url: null,
-        logo_storage_path: null,
-      },
-      orgId: "org1",
-      entrantKinds: engineEntrantKinds(SPORT),
-      structureLocked: false,
-      lockedFields: [],
+      divisionId: "d1",
+      sportKey: SPORT,
       stages,
-      canEdit: true,
-      divisionPathPrefix: "/o/org/c/comp/d/",
-      fixturesHref: "/o/org/c/comp/d/div/fixtures",
-      embed: createElement("div"),
-      danger: createElement("div"),
-      autoPosts: false,
-      canAutoPost: false,
-      showSeeds: true,
+      offer: templatesForSport(SPORT, engineEntrantKinds(SPORT)).map((t) => t.key),
+      entrantKinds: engineEntrantKinds(SPORT),
+      templateLocks: {},
+      carryAllowed: true,
       viewerPlan: "community",
-      onlineChessOffered: true,
+      entrants: 8,
+      places: 2,
+      matchMinutes: 30,
+      locked: false,
+      canEdit: true,
+      onClose: () => {},
     },
     expand,
   );
 }
 
+/** The dialog's dry run answers "nothing generated" (no token), so a Save is one plain PUT after it. */
+const NOTHING_GENERATED: FormatChangePreview = {
+  dry_run: true,
+  stages: [],
+  fixtures: 0,
+  slots: 0,
+  courts: 0,
+  officials: 0,
+  lineups: 0,
+  device_links: 0,
+  calls: 0,
+  token: null,
+};
+const answerDryRun = () => apiV1Mock.mockImplementation(async (url: string) => (String(url).includes("dry_run=1") ? NOTHING_GENERATED : []));
+
 /** The builder's template cards carry their key (`data-template`); they are ranked for the plan, not in offer order. */
 function pickBuilderTemplate(h: Island, key: string): void {
   pickTemplate(h, key);
-}
-
-function pickSettingsTemplate(h: Island, key: string): void {
-  const select = h.tree().find((e) => propsOf(e)["data-testid"] === "format-template");
-  if (!select) throw new Error("no Settings format select");
-  (propsOf(select).onChange as (e: { target: { value: string } }) => void)({ target: { value: key } });
 }
 
 /** What a rendered bounded control lets the organiser enter: a number input's min/max, or a choice list's values. */
@@ -223,11 +227,11 @@ describe("both forms offer exactly FORMAT_BOUNDS", () => {
     expect(checked).toBeGreaterThan(0);
   });
 
-  it("the Settings Format group: every bounded field of every template", () => {
-    const { checked, seen, mismatches } = sweep(mountSettings(), pickSettingsTemplate);
-    console.info(`[format-bounds] settings: ${checked} bounded fields checked over ${templatesForSport(SPORT, engineEntrantKinds(SPORT)).length} templates`);
+  it("the Format dialog on the Division rules card: every bounded field of every template", () => {
+    const { checked, seen, mismatches } = sweep(mountDialog(), pickBuilderTemplate);
+    console.info(`[format-bounds] format dialog: ${checked} bounded fields checked over ${templatesForSport(SPORT, engineEntrantKinds(SPORT)).length} templates`);
     expect(mismatches).toEqual([]);
-    expect(seen, "Settings reaches every bounded field").toEqual(BOUND_KEYS);
+    expect(seen, "the dialog reaches every bounded field").toEqual(BOUND_KEYS);
     expect(checked).toBeGreaterThan(0);
   });
 });
@@ -564,7 +568,7 @@ describe("the Add-stage form's Top N offers FORMAT_BOUNDS.qualify (fix round 1, 
   });
 });
 
-describe("Settings never clamps a stored legs value silently", () => {
+describe("the Format dialog never clamps a stored legs value silently (FMT5: was Settings › Format)", () => {
   const leagueKo = (legs: number): StageProp[] =>
     buildTemplateStages("league_ko", { qualified: 4, swissRounds: 5, poolCount: 2, legs }).map((d) => ({
       name: d.name,
@@ -577,26 +581,29 @@ describe("Settings never clamps a stored legs value silently", () => {
   const stored = (h: Island) => h.tree().find((e) => propsOf(e)["data-testid"] === "legs-choice-stored");
 
   it("no stages yet (the empty case): Once is picked and nothing is explained", () => {
-    const h = mountSettings([]);
+    const h = mountDialog([]);
+    // The dialog opens a format-less division on the builder's opening format; League is where legs are asked.
+    pickBuilderTemplate(h, "league");
     expect(checkedLegs(h)).toEqual([1]);
     expect(stored(h)).toBeUndefined();
   });
 
   it("a stored Home & away is shown picked, with no note", () => {
-    const h = mountSettings(leagueKo(2));
-    pickSettingsTemplate(h, "league_ko");
+    const h = mountDialog(leagueKo(2));
+    pickBuilderTemplate(h, "league_ko");
     expect(checkedLegs(h)).toEqual([2]);
     expect(stored(h)).toBeUndefined();
   });
 
   it("a stored value past the bounds: neither option picked, the note names it, a format save keeps it, and picking Once then saves 1", async () => {
     expect(withinFormatBounds("legs", STORED), "the case must lie outside the bounds").toBe(false);
-    const h = mountSettings(leagueKo(STORED));
+    answerDryRun();
+    const h = mountDialog(leagueKo(STORED));
     expect(checkedLegs(h)).toEqual([]);
     expect(textOf(stored(h)!)).toBe(note(STORED));
 
     const apply = () => {
-      const button = h.tree().find((e) => propsOf(e)["data-testid"] === "apply-structure");
+      const button = h.tree().find((e) => propsOf(e)["data-testid"] === "division-format-save");
       (propsOf(button!).onClick as () => void)();
     };
     apply();

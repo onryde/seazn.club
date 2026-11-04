@@ -21,7 +21,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { SPORT_RULES } from "@/lib/match-rules";
 import type { RefusedField } from "@/lib/rule-errors";
-import { variantWordKey } from "@/lib/variant-label-keys";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
 
@@ -75,7 +74,6 @@ import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
 import { PointsEditor } from "@/components/v2/rules/points-editor";
 import { LockLine } from "@/components/v2/rules/lock-line";
 import { DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
-import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
 const L = (key: string, vars: Record<string, string | number> = {}, dict: Record<string, string> = enUi as Record<string, string>): string =>
   dict[key]!.replace(/\{(\w+)\}/g, (hole, name: string) => (name in vars ? String(vars[name]) : hole));
@@ -95,11 +93,8 @@ function props(over: Record<string, unknown> = {}, sportKey = "badminton", varia
   return {
     division: { id: "d1", name: "Open", sport_key: sportKey, variant_key: variantKey, config, logo_url: null, logo_storage_path: null },
     orgId: "org1",
-    entrantKinds: engineEntrantKinds(sportKey),
     variants: [{ key: variantKey, name: "Short" }, { key: "other", name: "Other" }],
-    structureLocked: false,
     lockedFields: [] as RefusedField[],
-    stages: [],
     canEdit: true,
     divisionPathPrefix: "/o/org/c/comp/d/",
     fixturesHref: "/o/org/c/comp/d/div/fixtures",
@@ -113,7 +108,7 @@ function props(over: Record<string, unknown> = {}, sportKey = "badminton", varia
   } as unknown as Parameters<typeof DivisionSettings>[0];
 }
 
-/** Settings: the structure lock and the Format group's summary. */
+/** Settings: what is left of the division's set-up there (FMT5: the format went to the Division rules card). */
 const mountSettings = (over: Record<string, unknown> = {}, sportKey = "badminton", variantKey = "short", config: Record<string, unknown> = BADMINTON_CONFIG) =>
   renderIsland(DivisionSettings, props(over, sportKey, variantKey, config));
 /** The same division, as the Division rules strip takes it. */
@@ -249,11 +244,13 @@ describe("the match rule fields: a locked field is read-only before anyone types
 });
 
 describe("the settings island: what is locked, before the organiser types", () => {
-  it("a division with fixtures and NO started stage: the structure is locked (the stage-graph door), the match rules are not", () => {
-    const settings = mountSettings({ structureLocked: true, lockedFields: [] }).tree();
-    expect(byTestId(settings, "format-locked"), "the structure note").toBeDefined();
-    expect(byTestId(settings, "format-template"), "the structure controls are gone").toBeUndefined();
-    const tree = mount({ structureLocked: true, lockedFields: [] }).tree();
+  it("a division with fixtures and NO started stage: the match rules are not locked, and Settings carries no format to lock (FMT5)", () => {
+    const settings = mountSettings({ lockedFields: [] }).tree();
+    for (const id of ["format-locked", "format-template", "apply-structure", "stage-structure"]) {
+      expect(byTestId(settings, id), `Settings › Format is gone: no ${id}`).toBeUndefined();
+    }
+    expect(byTestId(settings, "division-rules-moved"), "the positive pair: Settings points at the card").toBeDefined();
+    const tree = mount({ lockedFields: [] }).tree();
     const rules = propsOf(ruleFieldsEl(tree));
     expect(rules.disabled, "the rule fields are editable").toBe(false);
     expect(rules.lockedFields).toEqual([]);
@@ -261,23 +258,10 @@ describe("the settings island: what is locked, before the organiser types", () =
     expect(testIdsStartingWith(tree, "division-locked-"), "no lock line anywhere").toEqual([]);
   });
 
-  it("nothing locked, structure open: the structure controls are there and no note", () => {
-    const tree = mountSettings().tree();
-    expect(byTestId(tree, "format-template")).toBeDefined();
-    expect(byTestId(tree, "format-locked")).toBeUndefined();
-  });
-
-  it("the variant is read-only when a started stage plays it, the section's one line says why, and the summary says so", () => {
+  it("the variant is read-only when a started stage plays it, and the section's one line says why", () => {
     const tree = mount({ lockedFields: [lock("variant_key")] }).tree();
     expect(propsOf(variantSelect(tree)).disabled).toBe(true);
     expect(formatLockText(tree)).toBe(L("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool A" }));
-    const group = mountSettings({ lockedFields: [lock("variant_key")] }).tree().find((e) => propsOf(e).title === L("divset.format"))!;
-    // The summary names the variant in words (main's #986 summary), so the lock wraps that word, never the stored key.
-    const wordKey = variantWordKey("badminton", "short");
-    expect(wordKey, "premise: the variant has a word in the label table").toBeDefined();
-    const word = L(wordKey!);
-    expect(word, "premise: the word differs from the stored key, so this pins the word").not.toBe("short");
-    expect(String(propsOf(group).summary)).toContain(L("divset.variantLocked", { variant: word }));
     // the rule fields carry the lock list the page handed down
     expect(propsOf(ruleFieldsEl(tree)).lockedFields).toEqual([lock("variant_key")]);
   });
@@ -286,8 +270,6 @@ describe("the settings island: what is locked, before the organiser types", () =
     const tree = mount({ lockedFields: [lock("setTo")] }).tree();
     expect(propsOf(variantSelect(tree)).disabled).toBe(false);
     expect(testIdsStartingWith(tree, "division-locked-"), "one line, the section's").toEqual(["division-locked-format"]);
-    const group = mountSettings({ lockedFields: [lock("setTo")] }).tree().find((e) => propsOf(e).title === L("divset.format"))!;
-    expect(String(propsOf(group).summary)).not.toContain("locked");
   });
 
   it("the standings points are read-only with a line when the table is locked (football) - what it pays, no box, no Save - and open otherwise", () => {
@@ -549,11 +531,6 @@ describe("where a save says what it did: inside the Match format panel, directly
     if (!g) throw new Error("the Match format panel is not in the tree");
     return g;
   };
-  const settingsFormatGroup = (tree: ReactElement[]): ReactElement => {
-    const g = tree.find((e) => propsOf(e).title === L("divset.format"));
-    if (!g) throw new Error("the Format <Group> is not in the tree");
-    return g;
-  };
   const subtreeOf = (group: ReactElement): ReactElement[] => walk(propsOf(group).children as ReactNode);
   const saveIndex = (sub: ReactElement[]): number => sub.findIndex((n) => n.type === "button" && textOf(n).trim() === L("rulesStrip.format.save"));
 
@@ -607,7 +584,7 @@ describe("where a save says what it did: inside the Match format panel, directly
     expect(judged, "every outcome was judged").toBe(scenarios.length);
   });
 
-  it("a save from anywhere else keeps its error at the foot of the page, outside the Format group (the rename)", async () => {
+  it("a save from anywhere else keeps its error at the foot of the page, once (FMT5: Settings has no Format group to hold it)", async () => {
     net.patch.fail = { status: 500, code: "INTERNAL", message: "an unrelated server failure", extra: {} };
     const island = mountSettings();
     clickButton(island.tree(), L("divset.saveName"));
@@ -615,7 +592,6 @@ describe("where a save says what it did: inside the Match format panel, directly
     const tree = island.tree();
     const find = (e: ReactElement) => e.type === "p" && textOf(e).trim() === "an unrelated server failure";
     expect(tree.filter(find), "the error is on the page, once").toHaveLength(1);
-    expect(subtreeOf(settingsFormatGroup(tree)).filter(find), "and not in the Format group").toEqual([]);
   });
 });
 

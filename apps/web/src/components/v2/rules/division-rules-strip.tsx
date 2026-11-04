@@ -4,8 +4,9 @@
 // Fixtures tab. It edits the DIVISION's defaults — the match format, the points and the tie-break order every stage plays
 // unless its card sets its own — with the same three components the builder and the stage cards use (`MatchFormatEditor`,
 // `PointsEditor`, `TiebreaksEditor`, scope "division"). It replaces Settings' Match rules block (variant, online play and its
-// clock, Standings points, the rule grid; the Advanced overrides JSON is gone: owner, "we don't need"). "Format" — the stage
-// structure, League / Swiss / Playoff — stays in Settings with its rebuild.
+// clock, Standings points, the rule grid; the Advanced overrides JSON is gone: owner, "we don't need"). FMT5 (owner-approved
+// mock, 2026-11-03): "Format" — the stage structure, League / Swiss / Playoff — joined them here, as the first button
+// (`DivisionFormatButton`, ./division-format.tsx) with the current format named in a chip; Settings › Format is gone.
 //
 // Three toggle buttons open their panels INLINE under the strip (owner, 2026-10-31, mock option 2: "so that we can reuse the
 // component here and division builder"); several can be open at once. A reader who may not edit gets the same panels
@@ -39,6 +40,7 @@ import { LockLine } from "./lock-line";
 import { MatchFormatEditor, divisionGridFields } from "./match-format-editor";
 import { PointsEditor, divisionPointsDirty, divisionPointsKeys, divisionPointsOf, divisionPointsPatch, hydrateDivisionPoints } from "./points-editor";
 import { TiebreaksEditor } from "./tiebreaks-editor";
+import { DivisionFormatButton, formatChipText, type DivisionFormatProps } from "./division-format";
 
 export type RulesPanel = "format" | "points" | "tiebreaks";
 
@@ -71,6 +73,8 @@ export interface DivisionRulesStripProps {
    *  PATCH, no Save, no locks, and the rules grid inherits the picked variant's preset. `divisionConfig` is the config
    *  the division would be created with, which the points and the summary read. */
   draft?: DivisionRulesDraft;
+  /** FMT5: the division's format, changed from this card (saved divisions only; the builder has its own Format step). */
+  format?: DivisionFormatProps;
 }
 
 /** The builder's draft state, owned by the builder so it survives moving between its steps. */
@@ -120,6 +124,7 @@ export function DivisionRulesStrip({
   lichessGaps,
   initialOpen = [],
   draft,
+  format,
 }: DivisionRulesStripProps) {
   const msg = useMsg();
   const plural = useMsgPlural();
@@ -497,6 +502,16 @@ export function DivisionRulesStrip({
             {msg("rulesStrip.title")}
           </h2>
           <p className="mt-0.5 text-xs text-slate-600">{msg("rulesStrip.lead")}</p>
+          {format !== undefined && draft === undefined && (
+            <p className="mt-1.5">
+              <span className="inline-block max-w-full rounded-full bg-purple-50 px-2.5 py-0.5 text-xs font-medium text-purple-800 [overflow-wrap:anywhere]" data-testid="division-rules-format-chip">
+                {formatChipText(format.stages, msg)}
+                {/* A fact, not a control (canvas SettingsPhone, moved here from Settings › Format's summary with the format):
+                    a chess division that plays online says so whatever the club's flag, so a flag turned off does not hide it. */}
+                {sportKey === "boardgame" && savedFormOnlinePlay === "lichess" && ` · ${msg("divset.onlinePlay.summaryOn")}`}
+              </span>
+            </p>
+          )}
           {summary.length > 0 && (
             <p className="mt-1 min-w-0 break-words text-xs text-slate-800" data-testid="division-rules-summary">
               {summary.join(" · ")}
@@ -504,6 +519,7 @@ export function DivisionRulesStrip({
           )}
         </div>
         <div className="flex min-w-0 flex-wrap gap-2" role="group" aria-label={msg("rulesStrip.title")}>
+          {format !== undefined && draft === undefined && <DivisionFormatButton {...format} />}
           {panels.map((p) => {
             const on = open.has(p.id);
             return (

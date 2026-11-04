@@ -195,8 +195,8 @@ describe("Start tournament confirms first", () => {
         'data-testid="start-confirm-entrants"',
       );
       // The other two consequences still stand — the carve-out is one line.
-      // `baseProps` carries one fixture, so the format line is the LOCKED form.
-      expect(html).toContain(esc(enDict["launch.confirm.format"] as string));
+      // `baseProps` carries one fixture, so the format line is the fixtures-exist form.
+      expect(html).toContain(esc(enDict["launch.confirm.formatOpen"] as string));
       expect(html).toContain(esc(enDict["launch.confirm.rules"] as string));
     }
   });
@@ -256,8 +256,8 @@ describe("Start tournament confirms first", () => {
       expect(html, competitionStatus).not.toContain('data-testid="start-confirm-competition"');
       // The rest of the dialog is untouched by the carve-out — one line.
       expect(html, competitionStatus).toContain(esc(enDict["launch.confirm.entrants"] as string));
-      expect(html, competitionStatus).toContain(esc(enDict["launch.confirm.format"] as string));
-      expect(html, competitionStatus).toContain('data-testid="start-confirm-format-locked"');
+      expect(html, competitionStatus).toContain(esc(enDict["launch.confirm.formatOpen"] as string));
+      expect(html, competitionStatus).toContain('data-testid="start-confirm-format-open"');
       expect(html, competitionStatus).toContain(esc(enDict["launch.confirm.rules"] as string));
     }
   });
@@ -306,41 +306,36 @@ describe("Start tournament confirms first", () => {
     }
   });
 
-  it("does not claim the format is already locked when no fixtures exist", async () => {
+  it("says Start generates the fixtures only where none exist yet", async () => {
     // THE regression, found by driving the product on 2026-09-20: this dialog
-    // said "The format is already locked — fixtures exist" on a division whose
-    // own page, directly behind it, read "No fixtures yet — generate them when
-    // entrants are registered" and offered a Generate fixtures button. On the
-    // quick-start path `/start` is what GENERATES the fixtures, so at the
-    // moment the dialog renders there are none and nothing is locked.
+    // claimed "fixtures exist" on a division whose own page, directly behind
+    // it, read "No fixtures yet — generate them when entrants are registered"
+    // and offered a Generate fixtures button. On the quick-start path `/start`
+    // is what GENERATES the fixtures, so at the moment the dialog renders there
+    // are none.
     //
     // Unlike the entrants and competition lines, this one is REPLACED rather
-    // than omitted: the format does lock, a moment later, and the organiser is
-    // owed that fact in both states.
+    // than omitted: the organiser is owed the format's state in both.
     const empty = renderIsland(LaunchActions, baseProps({ fixtures: [] }));
     await pressStart(empty);
     const emptyProps = confirmProps(empty.tree());
-    expect(emptyProps.formatLocked).toBe(false);
+    expect(emptyProps.fixturesExist).toBe(false);
     const emptyHtml = renderDialog(emptyProps);
-    expect(emptyHtml, "the false claim must be gone").not.toContain(
-      esc(enDict["launch.confirm.format"] as string),
+    expect(emptyHtml, "no fixtures: the fixtures-exist line must be gone").not.toContain('data-testid="start-confirm-format-open"');
+    expect(emptyHtml, "and the generating one must be there — not silence").toContain(
+      esc(enDict["launch.confirm.formatGenerates"] as string),
     );
-    expect(emptyHtml).not.toContain('data-testid="start-confirm-format-locked"');
-    expect(emptyHtml, "and the truthful one must be there — not silence").toContain(
-      esc(enDict["launch.confirm.formatLocksNow"] as string),
-    );
-    expect(emptyHtml).toContain('data-testid="start-confirm-format-locks"');
+    expect(emptyHtml).toContain('data-testid="start-confirm-format-generates"');
 
-    // The positive pair: one fixture is all it takes, because the server's
-    // guard has no status or stage filter.
+    // The positive pair: one fixture is all it takes.
     const one = renderIsland(LaunchActions, baseProps({ fixtures: FIXTURES }));
     await pressStart(one);
     const oneProps = confirmProps(one.tree());
-    expect(oneProps.formatLocked).toBe(true);
+    expect(oneProps.fixturesExist).toBe(true);
     const oneHtml = renderDialog(oneProps);
-    expect(oneHtml).toContain(esc(enDict["launch.confirm.format"] as string));
-    expect(oneHtml).toContain('data-testid="start-confirm-format-locked"');
-    expect(oneHtml).not.toContain(esc(enDict["launch.confirm.formatLocksNow"] as string));
+    expect(oneHtml).toContain(esc(enDict["launch.confirm.formatOpen"] as string));
+    expect(oneHtml).toContain('data-testid="start-confirm-format-open"');
+    expect(oneHtml).not.toContain(esc(enDict["launch.confirm.formatGenerates"] as string));
 
     // Exactly one format line either way — never both, never none.
     for (const html of [emptyHtml, oneHtml]) {
@@ -348,41 +343,52 @@ describe("Start tournament confirms first", () => {
     }
   });
 
-  it("says what fixtures lock - the stage STRUCTURE - and leaves the match rules to the line beside it (W2c T20: rules lock per stage once it starts)", () => {
-    // Since W2c only the stage structure locks with fixtures (`replaceStages`); the match rules lock per stage, once its first
-    // match is scored, and `launch.confirm.rules` already says so. Both lines must name the structure in each locale, and
-    // neither may say "the format" locks (the claim that is false of the rules). The noun is each locale's own word for the
-    // structure, the one the settings tab's structure note uses (`divset.lockedNotePre`).
-    const structure: Record<string, string> = { en: "stage structure", es: "estructura de fases", fr: "structure des phases", nl: "fasestructuur" };
-    const formatWord: Record<string, RegExp> = { en: /\bformat\b/i, es: /\bformato\b/i, fr: /\bformat\b/i, nl: /\bformat\b/i };
+  it("says the format stays open until scoring starts, never that fixtures lock it (FMT5)", () => {
+    // FMT5 (owner-approved 2026-11-03): the format locks at the FIRST RESULT (replaceStages refuses FORMAT_LOCKED on a
+    // result, not a fixture), and a division that has not started has none - so Start never locks it, with fixtures or
+    // without. The generating line is the open line with the generation said first, in every locale, so the two cannot
+    // drift into saying different things about the format; and neither may say anything locks (each locale's own verb for
+    // it, the one FORMAT_LOCKED's sentence uses).
+    const lockVerb: Record<string, RegExp> = { en: /\block/i, es: /bloque/i, fr: /verrouill/i, nl: /\bvast\b/i };
     let judged = 0;
     for (const locale of ["en", "es", "fr", "nl"]) {
-      expect((DICTS[locale]!["divset.lockedNotePre"] as string).toLowerCase(), `${locale}: the structure note uses this noun`).toContain(structure[locale]!);
-      for (const key of ["launch.confirm.format", "launch.confirm.formatLocksNow"]) {
-        const line = DICTS[locale]![key] as string;
-        expect(line.toLowerCase(), `${locale} ${key}`).toContain(structure[locale]!);
-        expect(line, `${locale} ${key} must not say the format locks`).not.toMatch(formatWord[locale]!);
+      const d = DICTS[locale]!;
+      expect(d["formatChange.err.FORMAT_LOCKED"] as string, `${locale}: the lock verb is the house one`).toMatch(lockVerb[locale]!);
+      const open = d["launch.confirm.formatOpen"] as string;
+      const generates = d["launch.confirm.formatGenerates"] as string;
+      expect(generates.endsWith(open), `${locale}: the generating line ends with the open line`).toBe(true);
+      expect(generates.length, `${locale}: and says the generation first`).toBeGreaterThan(open.length);
+      for (const line of [open, generates]) {
+        expect(line, `${locale}: must not say anything locks`).not.toMatch(lockVerb[locale]!);
         judged++;
       }
     }
     expect(judged, "every locale, both lines").toBe(8);
   });
 
-  it("ships the not-yet-locked line in all four locales", async () => {
+  it("ships both format lines in all four locales", async () => {
     // Same bar the other conditional lines are held to: a key present only in
     // English renders English to a Spanish organiser, and no unit test that
     // reads only `en` can see it.
-    const island = renderIsland(LaunchActions, baseProps({ fixtures: [] }));
-    await pressStart(island);
-    const props = confirmProps(island.tree());
-    const english = enDict["launch.confirm.formatLocksNow"] as string;
-    for (const locale of ["en", "es", "fr", "nl"]) {
-      const line = DICTS[locale]!["launch.confirm.formatLocksNow"] as string | undefined;
-      expect(line, `${locale} is missing the key`).toBeTruthy();
-      const html = renderDialog(props, locale);
-      expect(html, locale).toContain(esc(line!));
-      if (locale !== "en") expect(line, locale).not.toBe(english);
+    let judged = 0;
+    for (const [key, fixtures] of [
+      ["launch.confirm.formatGenerates", []],
+      ["launch.confirm.formatOpen", FIXTURES],
+    ] as const) {
+      const island = renderIsland(LaunchActions, baseProps({ fixtures: [...fixtures] }));
+      await pressStart(island);
+      const props = confirmProps(island.tree());
+      const english = enDict[key] as string;
+      for (const locale of ["en", "es", "fr", "nl"]) {
+        const line = DICTS[locale]![key] as string | undefined;
+        expect(line, `${locale} is missing ${key}`).toBeTruthy();
+        const html = renderDialog(props, locale);
+        expect(html, `${locale} ${key}`).toContain(esc(line!));
+        if (locale !== "en") expect(line, `${locale} ${key}`).not.toBe(english);
+        judged++;
+      }
     }
+    expect(judged).toBe(8);
   });
 
   it("states the consequences, and offers a live confirm", async () => {
