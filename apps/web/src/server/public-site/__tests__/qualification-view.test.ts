@@ -956,7 +956,11 @@ describe("a Swiss latecomer's missed rounds are not rounds left (W3 R17)", () =>
 
   it("no status when the rows do not say which are shells (ext_key not loaded) and a row could have missed a round; with keys it shows", () => {
     const s = lateScene();
-    const unkeyed = s.fixtures.map(({ ext_key: _drop, ...f }) => f);
+    const unkeyed = s.fixtures.map((f) => {
+      const copy = { ...f };
+      delete copy.ext_key;
+      return copy;
+    });
     expect(view({ ...s, fixtures: unkeyed })).toBeNull();
     expect(view(s)).not.toBeNull();
     // Narrow: a key-less table in which every row sits in every seated round has nothing it could have missed — it shows.
