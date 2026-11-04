@@ -2,7 +2,8 @@
 // PRODUCT's own source — each gate function's `kind === "…"` terms
 // (usecases/format-gates.ts) keyed by the feature the stage batch requires after
 // it, in the batch's order (usecases/stages.ts `assertStageBatchGates`, which
-// createStages and replaceStages both call: the scan FOLLOWS that call, see
+// createStages, replaceStages and previewReplaceStages all reach, the PUT pair
+// through one delegate: the scan FOLLOWS that call, see
 // product-gates-source.ts) — never from expectedGate, the copy the scenario
 // reads. The 402 envelope the scenario expects is pinned against api-v1/http.ts
 // the same way.
@@ -14,7 +15,17 @@ import { DENIED_CHECKS, DeniedMisuse, PAYMENT_REFUSAL, denied } from "../lib/sce
 import type { CaseSpec, ScenarioContext } from "../lib/scenarios/types.ts";
 import { sportModule } from "../lib/sport-cfg.ts";
 import { FakeDeniedDriver } from "./fake-driver.ts";
-import { BATCH_CALLERS, BATCH_GATES_FN, STAGES_PATH, bodyOf, exportedStageGateFns, productFormatGates, readProduct } from "./product-gates-source.ts";
+import {
+  BATCH_CALLERS,
+  BATCH_GATES_FN,
+  MAX_DELEGATION,
+  STAGES_PATH,
+  exportedStageGateFns,
+  functionBody,
+  gatesChain,
+  productFormatGates,
+  readProduct,
+} from "./product-gates-source.ts";
 
 const read = readProduct;
 
@@ -64,14 +75,19 @@ describe("the product's gate table (the fake's source of truth)", () => {
     // Equal to the exported set: a stage gate added to format-gates.ts but never asked by the batch (or asked twice) reds.
     expect(GATES.map((g) => g.fn).sort()).toEqual(exportedStageGateFns().sort());
     expect(exportedStageGateFns().length).toBeGreaterThan(0);
-    // The follow: createStages AND replaceStages call the one gates function, so the PUT is gated by the table the POST is.
+    // The follow: createStages, replaceStages and its dry run (FMT5) each reach the one gates function - in their own body
+    // or through ONE delegate they call (FMT5: both PUT entries run `runReplaceStages`) - so the PUT is gated by the table
+    // the POST is, and the dry run refuses what the PUT would.
     const src = read(STAGES_PATH);
     let callers = 0;
     for (const c of BATCH_CALLERS) {
-      expect(bodyOf(src, `export async function ${c}(`), `${c} asks ${BATCH_GATES_FN}`).toContain(`${BATCH_GATES_FN}(`);
+      const chain = gatesChain(src, c);
+      expect(chain[0], c).toBe(c);
+      expect(chain.length, `${c}: its own body or one delegate (${chain.join(" -> ")})`).toBeLessThanOrEqual(1 + MAX_DELEGATION);
+      expect(functionBody(src, chain.at(-1)!), `${chain.join(" -> ")} asks ${BATCH_GATES_FN}`).toContain(`${BATCH_GATES_FN}(`);
       callers++;
     }
-    expect(callers).toBe(2);
+    expect(callers, "createStages, replaceStages, previewReplaceStages").toBe(3);
   });
   it("the 402 the scenario expects is api-v1's PaymentRequiredError answer, and it carries feature_key", () => {
     expect(HTTP_402.code, "api-v1/http.ts PaymentRequiredError branch moved").toMatch(/^[A-Z_]+$/);

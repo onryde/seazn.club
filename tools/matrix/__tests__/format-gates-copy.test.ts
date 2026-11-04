@@ -59,8 +59,9 @@ describe("expectedGate — a text-pinned copy of format-gates.ts (server-only, u
   });
 
   it("the stage batch checks the double-elim gate before the advanced gate (so a row hitting both reports double_elim)", () => {
-    // The gates live in `assertStageBatchGates` (W2c T13 fix round 1); `batchGatesBody` follows the call from createStages
-    // and replaceStages (and throws if either stopped calling it), so the order is judged on the function the POST runs.
+    // The gates live in `assertStageBatchGates` (W2c T13 fix round 1); `batchGatesBody` follows the call from createStages,
+    // replaceStages and previewReplaceStages (the PUT pair through their one delegate, FMT5), and throws if any stopped
+    // reaching it, so the order is judged on the function the POST runs.
     const body = batchGatesBody(stages);
     const de = body.indexOf("stageNeedsDoubleElimGate(");
     const adv = body.indexOf("stageNeedsAdvancedFormatsGate(");
