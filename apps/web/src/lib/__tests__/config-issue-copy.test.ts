@@ -13,7 +13,7 @@ import {
 } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { ApiError } from "@/lib/client";
-import { isServerAnswer } from "@/lib/is-server-answer";
+import { isServerAnswer, isUnreachable } from "@/lib/is-server-answer";
 import { ApiV1Error } from "@/lib/client-v1";
 import { msg, type MessageKey } from "@/lib/messages";
 import en from "@/dictionaries/en/ui.json";
@@ -184,8 +184,9 @@ describe("the config refusals this app owns are localized in all four locales (n
 // FU5 (owner-approved, 2026-11-04): a save that never reaches the server used to end `settingsSaveErrorText` with
 // `err.message`, so the BROWSER's English leaked onto a Dutch screen - Chrome "Failed to fetch", Safari "Load failed",
 // Firefox "NetworkError when attempting to fetch resource.". Neither client wrapper catches a fetch rejection (`api()` and
-// `apiV1()` let the TypeError out), so the error that arrives is a bare TypeError. The rule is by CLASS: a server answer is
-// an `ApiError` or an `ApiV1Error`; anything else that is an Error did not come from the server.
+// `apiV1()` let the TypeError out), so the error that arrives is a bare TypeError. The rule is by SHAPE: "unreachable" is a
+// `TypeError` that carries no numeric `status` (`isUnreachable`); every other Error - a server answer, or a bare local one a
+// component threw on purpose, like the logo upload's "bad image" - keeps its own message.
 describe("settingsSaveErrorText: a save that never reached the server", () => {
   const KEY = "save.err.unreachable" as const satisfies MessageKey;
   const LOCALES = [["en", en], ["es", es], ["fr", fr], ["nl", nl]] as const;
@@ -234,11 +235,33 @@ describe("settingsSaveErrorText: a save that never reached the server", () => {
       expect(isServerAnswer(notAnswer), String(notAnswer)).toBe(false);
   });
 
-  it("decided by SHAPE, not by the browser's words: any TypeError or Error that is not a server answer reads the copy, whatever it says", () => {
-    const m = reader(nl);
-    for (const err of [new TypeError("x is not a function"), new Error("anything at all"), new DOMException("signal is aborted", "AbortError")]) {
-      expect(settingsSaveErrorText(err, m, "fallback"), String(err)).toBe(nl[KEY]);
+  it("isUnreachable: the fetch rejection (a TypeError with no numeric status) is unreachable; a server answer, a bare Error, a DOMException and a non-Error are not", () => {
+    let checked = 0;
+    for (const text of BROWSER_TEXTS) {
+      expect(isUnreachable(new TypeError(text)), text).toBe(true);
+      checked++;
     }
+    expect(isUnreachable(new TypeError("x is not a function"))).toBe(true);
+    for (const notUnreachable of [
+      new ApiError("x", 500), new ApiV1Error("x", 422, "CONFIG_INVALID", {}), // a server answer
+      Object.assign(new TypeError("Failed to fetch"), { status: 502 }), // a TypeError that DOES carry a status: it came back from somewhere
+      new Error("bad image"), new Error("Failed to fetch"), new RangeError("x"), new DOMException("aborted", "AbortError"),
+      { message: "Failed to fetch" }, "Failed to fetch", null, undefined,
+    ]) {
+      expect(isUnreachable(notUnreachable), String(notUnreachable)).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(BROWSER_TEXTS.length + 11);
+  });
+
+  it("decided by SHAPE, not by the browser's words: any TypeError without a status reads the copy, whatever it says; any other bare Error keeps its message", () => {
+    const m = reader(nl);
+    expect(settingsSaveErrorText(new TypeError("x is not a function"), m, "fallback")).toBe(nl[KEY]);
+    expect(settingsSaveErrorText(new TypeError("anything at all"), m, "fallback")).toBe(nl[KEY]);
+    // The positive pair: a bare local Error (not a TypeError) is not "the network is down" - it says what it was thrown to say.
+    expect(settingsSaveErrorText(new Error("anything at all"), m, "fallback")).toBe("anything at all");
+    expect(settingsSaveErrorText(new Error("Failed to fetch"), m, "fallback")).toBe("Failed to fetch");
+    expect(settingsSaveErrorText(new DOMException("signal is aborted", "AbortError"), m, "fallback")).toBe("signal is aborted");
   });
 
   it("the positive pair: a server answer keeps its own message even when it says the browser's words (decided by shape, so the words do not matter)", () => {

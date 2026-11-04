@@ -194,9 +194,12 @@ describe("settingsErrorText", () => {
       expect(nl["save.err.unreachable"]).not.toBe(en["save.err.unreachable"]);
     });
 
-    it("decided by shape, not by the browser's words: any Error without a server status reads the copy", () => {
-      expect(settingsErrorText(new Error("network down"), "nl", "generic")).toBe(nl["save.err.unreachable"]);
+    it("decided by shape, not by the browser's words: any TypeError without a server status reads the copy; any other bare Error keeps its message", () => {
+      expect(settingsErrorText(new TypeError("network down"), "nl", "generic")).toBe(nl["save.err.unreachable"]);
       expect(settingsErrorText(new TypeError("x is not a function"), "fr", "generic")).toBe(fr["save.err.unreachable"]);
+      // The positive pair: a bare local Error is not a dead network.
+      expect(settingsErrorText(new Error("network down"), "nl", "generic")).toBe("network down");
+      expect(settingsErrorText(new DOMException("signal is aborted", "AbortError"), "fr", "generic")).toBe("signal is aborted");
     });
 
     it("the positive pair: a server answer keeps its message even when it says the browser's words", () => {

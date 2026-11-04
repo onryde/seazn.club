@@ -43,8 +43,10 @@ describe("rulesWriteErrorText", () => {
     for (const [loc, dict] of LOCALES) {
       const m = reader(dict as Dict);
       expect(rulesWriteErrorText(new ApiV1Error("boom", 500, "UNKNOWN"), m), loc).toBe("boom");
-      // FU5: a bare Error (the fetch TypeError the wrappers let out) is not a server answer - the reader's language, not "boom".
-      expect(rulesWriteErrorText(new Error("boom"), m), `${loc} unreachable`).toBe((dict as Dict)["save.err.unreachable"]);
+      // FU5: the fetch TypeError the wrappers let out is not a server answer - the reader's language, not "boom".
+      expect(rulesWriteErrorText(new TypeError("boom"), m), `${loc} unreachable`).toBe((dict as Dict)["save.err.unreachable"]);
+      // The positive pair: a bare local Error is not a dead network - it keeps its own message.
+      expect(rulesWriteErrorText(new Error("boom"), m), `${loc} bare Error`).toBe("boom");
       expect(rulesWriteErrorText("x", m), `${loc} fallback`).toBe(m("schedule.error.failed"));
       checked++;
     }

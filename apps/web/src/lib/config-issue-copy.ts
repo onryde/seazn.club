@@ -12,7 +12,7 @@ import {
   SHARE_NEEDS_DRAWS,
 } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
-import { isServerAnswer } from "@/lib/is-server-answer";
+import { isUnreachable } from "@/lib/is-server-answer";
 import { ruleRefusalSentence } from "@/lib/rule-errors";
 import { divisionKindRefusalText } from "@/lib/entrant-kind-refusal";
 
@@ -80,9 +80,9 @@ export function configIssueText(issue: ConfigIssue, msg: Msg): string {
 }
 
 /** What a failed settings save says. A rule-lock refusal says itself first (`ruleRefusalSentence`); a CONFIG_INVALID that names its problems says them (all of them, in order); any
- *  other SERVER answer (`isServerAnswer`: an `ApiError` or an `ApiV1Error`) keeps its own message; an error that is not a
- *  server answer - the request never reached it - says so in the reader's language (`save.err.unreachable`); and a
- *  non-Error falls back to `fallback`. `err.extra` is the envelope's detail.
+ *  other Error keeps its own message (a server answer, or a local one a component threw on purpose); a request that never
+ *  left (`isUnreachable`: the fetch rejection, a `TypeError` with no `status`) says so in the reader's language
+ *  (`save.err.unreachable`); and a non-Error falls back to `fallback`. `err.extra` is the envelope's detail.
  *
  *  Neither client wrapper catches a fetch rejection, so offline / DNS / a dropped connection arrives as the browser's bare
  *  TypeError ("Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."). */
@@ -106,7 +106,7 @@ export function settingsSaveErrorText(err: unknown, msg: Msg, fallback: string):
   const issues = configIssuesOf(extra);
   if (issues !== null) return issues.map((i) => configIssueText(i, msg)).join(" ");
   if (!(err instanceof Error)) return fallback;
-  return isServerAnswer(err) ? err.message : msg("save.err.unreachable");
+  return isUnreachable(err) ? msg("save.err.unreachable") : err.message;
 }
 
 /** What a failed RULES write says, wherever the organiser made it: the match block's Save and "Use stage rules", the stage

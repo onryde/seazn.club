@@ -28,7 +28,7 @@ import nl from "@/dictionaries/nl/errors.json";
 import { DEFAULT_LOCALE, type Dict, type Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { ApiV1Error } from "@/lib/client-v1";
-import { isServerAnswer } from "@/lib/is-server-answer";
+import { isUnreachable } from "@/lib/is-server-answer";
 
 const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
 
@@ -166,11 +166,11 @@ export function courtStillInUseErrorMessage(
  * Two codes have authored copy — `SCHEDULE_OUTSIDE_COMPETITION` and
  * `SCHEDULE_COURT_STILL_IN_USE`. Every other SERVER answer still shows the
  * server's own message: a localized guess at copy that does not exist would
- * read worse than an accurate English sentence. An error that is not a server
- * answer - the request never reached it (`isServerAnswer`) - reads
+ * read worse than an accurate English sentence. A request that never left
+ * (`isUnreachable`: the fetch rejection, a `TypeError` with no `status`) reads
  * `save.err.unreachable` in the locale's own dictionary, never the browser's
- * "Failed to fetch". `generic` is reserved for a throw that is not an `Error`
- * at all.
+ * "Failed to fetch"; any other Error keeps its message. `generic` is reserved
+ * for a throw that is not an `Error` at all.
  */
 export function settingsErrorText(err: unknown, locale: Locale, generic: string): string {
   if (err instanceof ApiV1Error) {
@@ -182,5 +182,5 @@ export function settingsErrorText(err: unknown, locale: Locale, generic: string)
   if (!(err instanceof Error)) return generic;
   // A request that never reached the server (offline, DNS, a dropped connection) rejects with the browser's bare TypeError -
   // neither client wrapper catches it - and its English text must not be shown. Told apart by shape, not by those words.
-  return isServerAnswer(err) ? err.message : t(BY_LOCALE[locale] ?? BY_LOCALE[DEFAULT_LOCALE], "save.err.unreachable");
+  return isUnreachable(err) ? t(BY_LOCALE[locale] ?? BY_LOCALE[DEFAULT_LOCALE], "save.err.unreachable") : err.message;
 }
