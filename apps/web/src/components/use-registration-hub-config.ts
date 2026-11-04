@@ -18,6 +18,7 @@ import {
   toDivisionPatchBody,
   toRegistrationSettingsPutBody,
   type DivisionEligibility,
+  type EntrantKindValue,
   type RegistrationConfigState,
   type RegistrationSettingsResponse,
 } from "@/components/registration-hub-config-state";
@@ -29,6 +30,10 @@ export interface RegistrationHubConfigDivisionLike extends DivisionEligibility {
   /** Chess (owner ruling 2026-10-26): the panel offers individual entry only. Optional so a caller that predates
    *  the ruling reads as "not restricted"; the page sets it from the division's sport. */
   individual_only?: boolean;
+  /** FU1: the division's allowed entrant kinds (its effective entrant model, resolved on the server). The entrant-type
+   *  select offers exactly these, and a stored kind outside them is shown as not allowed. Required, so a mount that forgets
+   *  to pass it fails the typecheck rather than silently offering every kind. */
+  allowed_kinds: readonly EntrantKindValue[];
 }
 
 /** Outcome of the two save requests, named by what FAILED. */

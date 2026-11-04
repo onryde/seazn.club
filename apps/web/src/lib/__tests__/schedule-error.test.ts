@@ -8,6 +8,7 @@
 // untouched, and a malformed payload degrading to the server's message rather
 // than to a sentence with a hole in it.
 import { describe, expect, it } from "vitest";
+import { ApiError } from "@/lib/client";
 import { ApiV1Error } from "@/lib/client-v1";
 import {
   SCHEDULE_COURT_STILL_IN_USE,
@@ -20,6 +21,10 @@ import en from "@/dictionaries/en/errors.json";
 import es from "@/dictionaries/es/errors.json";
 import fr from "@/dictionaries/fr/errors.json";
 import nl from "@/dictionaries/nl/errors.json";
+import enUi from "@/dictionaries/en/ui.json";
+import esUi from "@/dictionaries/es/ui.json";
+import frUi from "@/dictionaries/fr/ui.json";
+import nlUi from "@/dictionaries/nl/ui.json";
 
 const SERVER_MESSAGE =
   "this division's schedule starts before the competition opens on 2026-07-01 — widen the competition dates, or bring the division inside them";
@@ -158,10 +163,64 @@ describe("settingsErrorText", () => {
     expect(settingsErrorText(err, "es", "generic")).toBe("Courts in use");
   });
 
-  it("shows a plain Error's message, and the generic string for a non-Error throw", () => {
-    expect(settingsErrorText(new Error("network down"), "en", "generic")).toBe("network down");
+  it("shows the generic string for a non-Error throw", () => {
     expect(settingsErrorText("not an error", "en", "generic")).toBe("generic");
     expect(settingsErrorText(undefined, "en", "generic")).toBe("generic");
+    expect(settingsErrorText({ message: "Failed to fetch" }, "nl", "generic")).toBe("generic");
+  });
+
+  // FU5 fix round 1: this save used to end `err instanceof Error ? err.message : generic`, so an organiser who was offline
+  // read the BROWSER's English ("Failed to fetch" / "Load failed" / "NetworkError when attempting to fetch resource.") on
+  // the board's and the Schedule tab's settings save. A request that never reached the server rejects with a bare
+  // TypeError (neither client wrapper catches it); the copy is the `save.err.unreachable` entry of the locale's dictionary.
+  describe("a save that never reached the server (FU5)", () => {
+    const BROWSER_TEXTS = ["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."];
+    const DICTS = { en, es, fr, nl } as const;
+
+    it("each browser's fetch TypeError reads the locale's own copy, in all four locales (counted), never the browser's English", () => {
+      let checked = 0;
+      for (const [locale, dict] of Object.entries(DICTS) as [keyof typeof DICTS, Record<string, string>][]) {
+        const copy = dict["save.err.unreachable"];
+        expect(copy, locale).toBeTruthy();
+        for (const text of BROWSER_TEXTS) {
+          const got = settingsErrorText(new TypeError(text), locale, "generic");
+          expect(got, `${locale} / ${text}`).toBe(copy);
+          expect(got).not.toContain(text);
+          checked++;
+        }
+      }
+      expect(checked).toBe(4 * BROWSER_TEXTS.length);
+      // A non-English locale differs from English (the word is translated, not copied).
+      expect(nl["save.err.unreachable"]).not.toBe(en["save.err.unreachable"]);
+    });
+
+    it("decided by shape, not by the browser's words: any TypeError without a server status reads the copy; any other bare Error keeps its message", () => {
+      expect(settingsErrorText(new TypeError("network down"), "nl", "generic")).toBe(nl["save.err.unreachable"]);
+      expect(settingsErrorText(new TypeError("x is not a function"), "fr", "generic")).toBe(fr["save.err.unreachable"]);
+      // The positive pair: a bare local Error is not a dead network.
+      expect(settingsErrorText(new Error("network down"), "nl", "generic")).toBe("network down");
+      expect(settingsErrorText(new DOMException("signal is aborted", "AbortError"), "fr", "generic")).toBe("signal is aborted");
+    });
+
+    it("the positive pair: a server answer keeps its message even when it says the browser's words", () => {
+      expect(settingsErrorText(new ApiV1Error("Failed to fetch", 502, "UNKNOWN"), "nl", "generic")).toBe("Failed to fetch");
+      expect(settingsErrorText(new ApiError("Load failed", 500), "nl", "generic")).toBe("Load failed");
+    });
+
+    it("sequence: unreachable, then a server refusal, then unreachable again", () => {
+      expect(settingsErrorText(new TypeError("Load failed"), "es", "generic")).toBe(es["save.err.unreachable"]);
+      expect(settingsErrorText(new ApiV1Error("Courts in use", 409, "SEQ_CONFLICT", {}), "es", "generic")).toBe("Courts in use");
+      expect(settingsErrorText(new TypeError("Load failed"), "es", "generic")).toBe(es["save.err.unreachable"]);
+    });
+
+    it("the errors-namespace copy is the ui-namespace copy (settingsSaveErrorText reads the other): one sentence, four locales", () => {
+      let checked = 0;
+      for (const [locale, errors, ui] of [["en", en, enUi], ["es", es, esUi], ["fr", fr, frUi], ["nl", nl, nlUi]] as const) {
+        expect((errors as Record<string, string>)["save.err.unreachable"], locale).toBe((ui as Record<string, string>)["save.err.unreachable"]);
+        checked++;
+      }
+      expect(checked).toBe(4);
+    });
   });
 });
 

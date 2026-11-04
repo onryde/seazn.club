@@ -12,13 +12,15 @@ import {
   setTargetBelowFloor,
 } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { ApiError } from "@/lib/client";
+import { isServerAnswer, isUnreachable } from "@/lib/is-server-answer";
 import { ApiV1Error } from "@/lib/client-v1";
 import { msg, type MessageKey } from "@/lib/messages";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
-import { LOCALIZED_CONFIG_ISSUES, configIssueText, configIssuesOf, settingsSaveErrorText } from "../config-issue-copy";
+import { LOCALIZED_CONFIG_ISSUES, configIssueText, configIssuesOf, rulesWriteErrorText, settingsSaveErrorText } from "../config-issue-copy";
 
 const invalid = (issues: unknown) => new ApiV1Error("invalid carrom config", 422, "CONFIG_INVALID", { issues });
 
@@ -176,5 +178,132 @@ describe("the config refusals this app owns are localized in all four locales (n
     expect(settingsSaveErrorText(new ApiV1Error("nope", 409, "STAGE_FORMAT_LOCKED", { issues: [{ message: SHARE_NEEDS_DRAWS }] }), msg, "fallback")).toBe("nope");
     expect(settingsSaveErrorText("boom", msg, "fallback")).toBe("fallback");
     expect(settingsSaveErrorText(undefined, msg, "fallback")).toBe("fallback");
+  });
+});
+
+// FU5 (owner-approved, 2026-11-04): a save that never reaches the server used to end `settingsSaveErrorText` with
+// `err.message`, so the BROWSER's English leaked onto a Dutch screen - Chrome "Failed to fetch", Safari "Load failed",
+// Firefox "NetworkError when attempting to fetch resource.". Neither client wrapper catches a fetch rejection (`api()` and
+// `apiV1()` let the TypeError out), so the error that arrives is a bare TypeError. The rule is by SHAPE: "unreachable" is a
+// `TypeError` that carries no numeric `status` (`isUnreachable`); every other Error - a server answer, or a bare local one a
+// component threw on purpose, like the logo upload's "bad image" - keeps its own message.
+describe("settingsSaveErrorText: a save that never reached the server", () => {
+  const KEY = "save.err.unreachable" as const satisfies MessageKey;
+  const LOCALES = [["en", en], ["es", es], ["fr", fr], ["nl", nl]] as const;
+  const reader = (dict: unknown) => (key: MessageKey, vars?: Record<string, string | number>) =>
+    (dict as Record<string, string>)[key]!.replace(/\{(\w+)\}/g, (h, name: string) => (vars !== undefined && name in vars ? String(vars[name]) : h));
+  /** What each browser's fetch throws when the request never leaves (offline, DNS, a dropped connection). */
+  const BROWSER_TEXTS = ["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."];
+
+  it("the new copy exists in all four locales, says something, and the three locales are not the English", () => {
+    let checked = 0;
+    for (const [loc, dict] of LOCALES) {
+      const copy = (dict as Record<string, string>)[KEY];
+      expect(copy, loc).toBeTruthy();
+      expect(copy, `${loc}: no placeholder to leave unfilled`).not.toMatch(/\{\w+\}/);
+      for (const text of BROWSER_TEXTS) expect(copy, `${loc} is not the browser's text`).not.toContain(text);
+      if (loc !== "en") expect(copy, `${loc} is translated`).not.toBe((en as Record<string, string>)[KEY]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("each browser's fetch TypeError reads the new copy, in every locale (counted)", () => {
+    let checked = 0;
+    for (const [loc, dict] of LOCALES) {
+      const m = reader(dict);
+      for (const text of BROWSER_TEXTS) {
+        const got = settingsSaveErrorText(new TypeError(text), m, "fallback");
+        expect(got, `${loc} / ${text}`).toBe((dict as Record<string, string>)[KEY]);
+        expect(got, `${loc}: the browser's English is gone`).not.toContain(text);
+        checked++;
+      }
+    }
+    expect(checked).toBe(LOCALES.length * BROWSER_TEXTS.length);
+  });
+
+  // config-issue-copy.ts is imported by server code and may not import the two "use client" wrappers, so a server answer is
+  // told apart by its SHAPE: the numeric `status` both classes carry. This is the one test that pins the shape to the real
+  // classes - if either stops carrying a numeric `status`, the predicate would call a real refusal "unreachable".
+  it("isServerAnswer: the real ApiError and ApiV1Error are server answers; a fetch TypeError, a plain Error, a DOMException and a non-Error are not", () => {
+    expect(isServerAnswer(new ApiError("x", 500))).toBe(true);
+    expect(isServerAnswer(new ApiError("x", 402, "PAYMENT_REQUIRED"))).toBe(true);
+    expect(isServerAnswer(new ApiV1Error("x", 422, "CONFIG_INVALID", {}))).toBe(true);
+    expect(isServerAnswer(new ApiV1Error("x", 0, "UNKNOWN"))).toBe(true);
+    for (const text of BROWSER_TEXTS) expect(isServerAnswer(new TypeError(text)), text).toBe(false);
+    for (const notAnswer of [new Error("x"), new DOMException("aborted", "AbortError"), Object.assign(new Error("x"), { status: "500" }), { status: 500, message: "x" }, "x", null, undefined])
+      expect(isServerAnswer(notAnswer), String(notAnswer)).toBe(false);
+  });
+
+  it("isUnreachable: the fetch rejection (a TypeError with no numeric status) is unreachable; a server answer, a bare Error, a DOMException and a non-Error are not", () => {
+    let checked = 0;
+    for (const text of BROWSER_TEXTS) {
+      expect(isUnreachable(new TypeError(text)), text).toBe(true);
+      checked++;
+    }
+    expect(isUnreachable(new TypeError("x is not a function"))).toBe(true);
+    for (const notUnreachable of [
+      new ApiError("x", 500), new ApiV1Error("x", 422, "CONFIG_INVALID", {}), // a server answer
+      Object.assign(new TypeError("Failed to fetch"), { status: 502 }), // a TypeError that DOES carry a status: it came back from somewhere
+      new Error("bad image"), new Error("Failed to fetch"), new RangeError("x"), new DOMException("aborted", "AbortError"),
+      { message: "Failed to fetch" }, "Failed to fetch", null, undefined,
+    ]) {
+      expect(isUnreachable(notUnreachable), String(notUnreachable)).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(BROWSER_TEXTS.length + 11);
+  });
+
+  it("decided by SHAPE, not by the browser's words: any TypeError without a status reads the copy, whatever it says; any other bare Error keeps its message", () => {
+    const m = reader(nl);
+    expect(settingsSaveErrorText(new TypeError("x is not a function"), m, "fallback")).toBe(nl[KEY]);
+    expect(settingsSaveErrorText(new TypeError("anything at all"), m, "fallback")).toBe(nl[KEY]);
+    // The positive pair: a bare local Error (not a TypeError) is not "the network is down" - it says what it was thrown to say.
+    expect(settingsSaveErrorText(new Error("anything at all"), m, "fallback")).toBe("anything at all");
+    expect(settingsSaveErrorText(new Error("Failed to fetch"), m, "fallback")).toBe("Failed to fetch");
+    expect(settingsSaveErrorText(new DOMException("signal is aborted", "AbortError"), m, "fallback")).toBe("signal is aborted");
+  });
+
+  it("the positive pair: a server answer keeps its own message even when it says the browser's words (decided by shape, so the words do not matter)", () => {
+    const m = reader(nl);
+    expect(settingsSaveErrorText(new ApiError("Failed to fetch", 502), m, "fallback")).toBe("Failed to fetch");
+    expect(settingsSaveErrorText(new ApiError("Request failed (500)", 500), m, "fallback")).toBe("Request failed (500)");
+    expect(settingsSaveErrorText(new ApiV1Error("Load failed", 502, "UNKNOWN"), m, "fallback")).toBe("Load failed");
+    expect(settingsSaveErrorText(new ApiV1Error("The server said no", 403, "FORBIDDEN"), m, "fallback")).toBe("The server said no");
+  });
+
+  it("a CONFIG_INVALID still lists its issues, and a rule refusal is still said off its code (the new branch never reaches them)", () => {
+    const m = reader(nl);
+    const refused = invalid([
+      { path: ["abandonPolicy"], message: SHARE_NEEDS_DRAWS },
+      { path: ["gameTo"], message: "gameTo must be at least 1" },
+    ]);
+    expect(settingsSaveErrorText(refused, m, "fallback")).toBe(`${nl["rules.err.shareNeedsDraws"]} gameTo must be at least 1`);
+    const locked = new ApiV1Error("Match 3: x", 409, "FORMAT_DOES_NOT_FIT_PLAY", { fixture_id: "f", fixture_no: 3, fit_reason: "score" });
+    expect(settingsSaveErrorText(locked, m, "fallback")).not.toBe(nl[KEY]);
+    expect(settingsSaveErrorText(locked, m, "fallback")).not.toBe("Match 3: x");
+  });
+
+  it("a non-Error still reads the caller's fallback (a string, undefined, null, a plain object)", () => {
+    const m = reader(es);
+    for (const thrown of ["boom", undefined, null, { message: "Failed to fetch" }, 7]) {
+      expect(settingsSaveErrorText(thrown, m, "fallback"), String(thrown)).toBe("fallback");
+    }
+  });
+
+  it("sequence: unreachable, then a server refusal, then unreachable again, then a fallback - no state carried between calls", () => {
+    const m = reader(fr);
+    expect(settingsSaveErrorText(new TypeError("Failed to fetch"), m, "fb")).toBe(fr[KEY]);
+    expect(settingsSaveErrorText(new ApiV1Error("nope", 409, "STAGE_FORMAT_LOCKED"), m, "fb")).toBe("nope");
+    expect(settingsSaveErrorText(new TypeError("Load failed"), m, "fb")).toBe(fr[KEY]);
+    expect(settingsSaveErrorText(undefined, m, "fb")).toBe("fb");
+  });
+
+  it("rulesWriteErrorText (the schedule and rules saves) says it too, and its non-Error fallback is still the generic failure", () => {
+    for (const [loc, dict] of LOCALES) {
+      const m = reader(dict);
+      expect(rulesWriteErrorText(new TypeError("Failed to fetch"), m), loc).toBe((dict as Record<string, string>)[KEY]);
+      expect(rulesWriteErrorText("x", m), `${loc} fallback`).toBe(m("schedule.error.failed"));
+    }
   });
 });

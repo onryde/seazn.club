@@ -105,7 +105,7 @@ describe("AiDiffPanel blocking row localization", () => {
     const html = renderPanel(frDict, "fr");
     // The fr label proves the row no longer prints raw English as primary; a
     // revert to `c.detail || c.reason` would drop this and print the detail.
-    expect(html).toContain(frDict["board.conflict.conflict.court"]); // "conflit de court"
+    expect(html).toContain(frDict["board.conflict.conflict.court"]); // "conflit de terrain"
     expect(frDict["board.conflict.conflict.court"]).not.toBe(
       enDict["board.conflict.conflict.court"],
     );

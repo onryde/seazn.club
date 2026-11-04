@@ -1,0 +1,14 @@
+-- V491 — index divisions.org_id
+--
+-- `divisions` had no access path on org_id (the PK, unique (competition_id, slug) and the partial
+-- divisions_active_idx all lead elsewhere), so every "all divisions of this org" read sequential-scanned it:
+-- the d/new sport history (recentDivisionSports), the online-seat probe (openOrgSeatGate), the /admin slot
+-- list (slotConsumingDivisions) and the per-person player-stats reads. The RLS policy rechecks
+-- `org_id = current_org_id()` on every tenant read of the table too.
+--
+-- Same shape as V254's competitions_org_idx / teams_org_idx: a plain btree on the lone column, idempotent,
+-- NOT partial (slotConsumingDivisions lists archived rows, which divisions_active_idx cannot serve), and
+-- NOT CONCURRENTLY — V413 measured that it hangs inside Flyway (its own schema-history transaction stays open)
+-- and leaves an INVALID index behind. The build holds a write lock on `divisions` for as long as the scan
+-- takes; the table is one row per division, so that is milliseconds, not a maintenance window.
+create index if not exists divisions_org_idx on divisions(org_id);

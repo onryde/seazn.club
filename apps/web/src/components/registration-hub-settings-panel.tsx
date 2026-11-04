@@ -85,6 +85,7 @@ export function RegistrationHubSettingsPanel({
             division_id: openRow.division_id,
             name: openRow.name,
             individual_only: openRow.individual_only === true,
+            allowed_kinds: openRow.allowed_kinds,
             category: openRow.category,
             age_min: openRow.age_min,
             age_max: openRow.age_max,

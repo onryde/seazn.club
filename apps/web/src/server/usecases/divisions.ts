@@ -12,7 +12,10 @@ import {
 } from "@/lib/chess-individual-only";
 import { assertWithinLimit, getLimit, requireFeature, passLockReason } from "@/lib/entitlements";
 import { EngineError, type StageKind } from "@seazn/engine/core";
-import { effectiveEntrantModel, fixtureKeysFor, type EntrantKind, type TiebreakerKey } from "@seazn/engine/sport";
+import { effectiveEntrantModel, fixtureKeysFor, type TiebreakerKey } from "@seazn/engine/sport";
+import { divisionTakesKind } from "@/lib/division-entrant-kinds";
+import { ENTRANT_KIND_IN_USE, REGISTRATION_KIND_IN_USE } from "@/lib/entrant-kind-refusal";
+import { LIVE_UNSEATED_STATUSES } from "@/lib/registration-status";
 import { resolveModule } from "@/server/engine-db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
@@ -1273,12 +1276,40 @@ export async function patchDivision(
           select distinct kind from entrants
           where division_id = ${id} and status not in ('withdrawn', 'disqualified')`;
         for (const { kind } of inUse) {
-          if (!nextModel.kinds.includes(kind as EntrantKind)) {
+          if (!divisionTakesKind(nextModel.kinds, kind)) {
             throw new HttpError(
               422,
               `entrants of kind '${kind}' already exist — withdraw them first`,
-              "ENTRANT_KIND_IN_USE",
+              ENTRANT_KIND_IN_USE,
+              { kind },
             );
+          }
+        }
+        // FU1 fix round 1 (I1, owner 2026-11-04): nor may it strand LIVE registrations of the kind it takes out. Since FU1
+        // the doors that seat an entry (approve, mark paid, promote, the checkout webhook) refuse a kind the division no
+        // longer takes, so a paid entry of a removed kind would sit captured with no seat. Live = pending, paid or
+        // waitlisted, or a confirmed solo sign-up (no entrant yet). Asked only of a kind this save REMOVES (the stored
+        // model takes it, the next does not): a division already holding a mismatched setting - legacy data, m5 - must
+        // not be refused an unrelated save, since every Entrants and format save re-sends the whole config. No settings
+        // row ⇒ no registration was ever submitted (submit needs an enabled row), so there is nothing to strand.
+        const [settings] = await tx<{ entrant_kind: string }[]>`
+          select entrant_kind from registration_settings where division_id = ${id}`;
+        if (settings !== undefined) {
+          const kind = settings.entrant_kind;
+          const currentModel = effectiveEntrantModel(sportModule.entrantModel ?? null, currentConfig);
+          if (divisionTakesKind(currentModel.kinds, kind) && !divisionTakesKind(nextModel.kinds, kind)) {
+            const [{ count }] = await tx<{ count: number }[]>`
+              select count(*)::int as count from registrations
+              where division_id = ${id}
+                and (status in ${tx([...LIVE_UNSEATED_STATUSES])} or (status = 'confirmed' and entrant_id is null))`;
+            if (count > 0) {
+              throw new HttpError(
+                422,
+                `${count} live registration(s) of kind '${kind}' are still waiting — withdraw or reject them first`,
+                REGISTRATION_KIND_IN_USE,
+                { kind, count },
+              );
+            }
           }
         }
         effective.variant_key = variantRefusal ? current.variant_key : (patch.variant_key ?? current.variant_key);

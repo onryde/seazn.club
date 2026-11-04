@@ -12,6 +12,7 @@ import { orgTzDateTimeHalves, orgTzInputValueToInstant } from "@/components/regi
 import { FormBuilder, type FormField } from "@/components/registration-hub-form-builder";
 import type { RegistrationConfigState, RegistrationSettingsResponse } from "@/components/registration-hub-config-state";
 import { ROUTABLE_FIELDS, type ConfigFieldKey } from "@/components/registration-hub-save-error";
+import { effectiveEntrantModel } from "@seazn/engine/sport";
 import {
   RegistrationHubConfigPanel,
   Disclosure,
@@ -112,9 +113,14 @@ const RESPONSE: RegistrationSettingsResponse = {
   updated_at: "2026-01-05T00:00:00Z",
 };
 
+// FU1 — every kind the engine knows (a sport with no entrant model takes them all), so the fixture's stored "team"
+// is offered. Derived from the engine, never typed here.
+const ALL_KINDS = effectiveEntrantModel(null).kinds;
+
 const DIVISION = {
   division_id: "div-1",
   name: "Open Singles",
+  allowed_kinds: ALL_KINDS,
   category: "mixed" as const,
   age_min: 10,
   age_max: 18,
@@ -229,6 +235,17 @@ function expandedText(tree: ReturnType<typeof expandPanel>): string {
 
 function findField(tree: ReturnType<typeof expandPanel>, field: string) {
   return tree.find((e) => propsOf(e)["data-field"] === field);
+}
+
+/** True when an element nested anywhere in `el`'s children matches. */
+function holds(el: ReactElement, match: (x: ReactElement) => boolean): boolean {
+  const walkKids = (kids: unknown): boolean => {
+    if (Array.isArray(kids)) return kids.some(walkKids);
+    if (typeof kids !== "object" || kids === null || !("props" in kids)) return false;
+    const child = kids as ReactElement;
+    return match(child) || walkKids(propsOf(child).children);
+  };
+  return walkKids(propsOf(el).children);
 }
 
 function accordionSection(tree: ReturnType<typeof expandPanel>, id: string) {
@@ -493,7 +510,7 @@ describe("RegistrationHubConfigPanel — every routable field has a render site 
     const dtProps = { dtDrafts: {}, onDateTimeHalfChange: vi.fn() };
     const rendered = [
       ...walk(EligibilitySection({ ...commonProps, orgTz: "UTC", ...dtProps })),
-      ...walk(OpenCloseSection({ ...commonProps, orgTz: "UTC", ...dtProps })),
+      ...walk(OpenCloseSection({ ...commonProps, orgTz: "UTC", allowedKinds: ALL_KINDS, ...dtProps })),
       ...walk(CapacitySection(commonProps)),
       ...walk(
         MoneySection({
@@ -545,6 +562,7 @@ describe("RegistrationHubConfigPanel — the open-for-public toggle's not-live n
         patch: vi.fn(),
         msg: testMsg,
         orgTz: "UTC",
+        allowedKinds: ALL_KINDS,
         dtDrafts: {},
         onDateTimeHalfChange: vi.fn(),
       }),
@@ -1556,5 +1574,136 @@ describe("RegistrationHubConfigPanel — individual-only (chess)", () => {
     const props = { state: FULL_STATE, errors: {}, patch: vi.fn(), msg: testMsg, locale: "en", orgTz: "UTC", dtDrafts: {}, onDateTimeHalfChange: vi.fn() };
     expect(walk(EligibilitySection({ ...props, individualOnly: false })).some((e) => propsOf(e)["data-field"] === "allow_free_agents")).toBe(true);
     expect(walk(EligibilitySection({ ...props, individualOnly: true })).some((e) => propsOf(e)["data-field"] === "allow_free_agents")).toBe(false);
+  });
+});
+
+// FU1 (controller rulings 2-3): the entrant-type select offers ONLY the kinds the division takes, and a stored kind the
+// division no longer takes is shown as not allowed (with the way out), never silently swapped. Driven through the REAL
+// panel - the hook's GET, the select, the client gate and the PUT - so the seam division.allowed_kinds -> select ->
+// save is proven end to end, not by a fixture on both sides. Allowed kinds come from the engine.
+describe("RegistrationHubConfigPanel — only the division's allowed entrant kinds (FU1)", () => {
+  const kindsOf = (kinds: ("team" | "individual" | "pair")[]) => effectiveEntrantModel(null, { entrants: { kinds } }).kinds;
+  const TEAMS_ONLY = kindsOf(["team"]);
+  const PAIRS_OR_INDIVIDUAL = kindsOf(["individual", "pair"]);
+  const optionsOf = (tree: ReturnType<typeof expandPanel>) => {
+    const kids = propsOf(findField(tree, "entrant_kind")!).children;
+    return (Array.isArray(kids) ? kids.flat() : [kids])
+      .filter((k): k is { props: { value: string; disabled?: boolean } } => typeof k === "object" && k !== null && "props" in k)
+      .map((k) => ({ value: k.props.value, disabled: k.props.disabled === true }));
+  };
+  const testId = (tree: ReturnType<typeof expandPanel>, id: string) => tree.find((e) => propsOf(e)["data-testid"] === id);
+  const saveButton = (island: { tree: () => ReactElement[] }) =>
+    island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
+
+  it("offers exactly the division's kinds, in the house order, for every one-kind division and a two-kind one", async () => {
+    // The house order of the select (individual, team, pair - the order this panel has always listed them, and the chess
+    // tests pin). Typed here as the design states it; NOT the engine's order, which leads with team (review m8).
+    const HOUSE_ORDER = ["individual", "team", "pair"] as const;
+    let checked = 0;
+    let reordered = 0;
+    let individualChecked = 0;
+    for (const allowed of [...ALL_KINDS.map((k) => kindsOf([k])), PAIRS_OR_INDIVIDUAL, ALL_KINDS]) {
+      // The stored kind is one the division takes, so nothing is flagged.
+      net.getResponse = { ...RESPONSE, entrant_kind: allowed[0]!, allow_free_agents: false };
+      const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, division: { ...DIVISION, allowed_kinds: allowed } }, expandPanel);
+      await flush();
+      const offered = optionsOf(island.tree());
+      expect(offered.every((o) => !o.disabled), allowed.join(",")).toBe(true);
+      const want = HOUSE_ORDER.filter((k) => allowed.includes(k));
+      expect(want, `premise: ${allowed.join(",")} is all of the division's kinds`).toHaveLength(allowed.length);
+      expect(offered.map((o) => o.value), allowed.join(",")).toEqual(want);
+      if (want.join() !== allowed.join()) reordered++;
+      expect(testId(island.tree(), "entrant-kind-not-allowed")).toBeUndefined();
+      const select = propsOf(findField(island.tree(), "entrant_kind")!);
+      expect(String(select.className), "no amber ring").not.toContain("border-amber");
+      // Fix round 2: the positive pair of the refused case - a valid kind is not invalid and is described by nothing.
+      expect(select["aria-invalid"], allowed.join(",")).toBeUndefined();
+      expect(select["aria-describedby"], allowed.join(",")).toBeUndefined();
+      // The individual option shows the kind's word (it must fit at 320); "creates a player" is its accessible name.
+      const individual = ((select.children as unknown[]).flat() as ReactElement[]).find(
+        (k) => typeof k === "object" && k !== null && propsOf(k).value === "individual",
+      );
+      if (allowed.includes("individual")) {
+        expect(expandedText([individual!])).toBe(t(uiEn, "reg.settings.entrant.individual"));
+        expect(propsOf(individual!)["aria-label"]).toBe(t(uiEn, "reg.settings.entrant.individualAria"));
+        individualChecked++;
+      }
+      checked++;
+    }
+    expect(checked).toBe(ALL_KINDS.length + 2);
+    // The case that tells house order from engine order: without it the array assertion is as order-blind as a Set.
+    expect(reordered).toBeGreaterThan(0);
+    expect(individualChecked).toBeGreaterThan(0);
+  });
+
+  it("a stored kind the division refuses stays selected, marked not allowed, with the fix-it hint - and is never offered as a choice", async () => {
+    net.getResponse = { ...RESPONSE, entrant_kind: "individual", allow_free_agents: false };
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, division: { ...DIVISION, allowed_kinds: TEAMS_ONLY } }, expandPanel);
+    await flush();
+    const tree = island.tree();
+    expect(propsOf(findField(tree, "entrant_kind")!).value).toBe("individual");
+    expect(optionsOf(tree)).toEqual([
+      { value: "individual", disabled: true },
+      { value: "team", disabled: false },
+    ]);
+    const kindName = t(uiEn, "divset.entrants.kind.individual");
+    // Fix round 1 (m6): the option reads the kind's own word (the "(not allowed)" suffix did not fit at 320); the full
+    // sentence is its accessible name, and the hint below carries the reason.
+    const refusedOption = (propsOf(findField(tree, "entrant_kind")!).children as unknown[])
+      .flat()
+      .find((k): k is ReactElement => typeof k === "object" && k !== null && "props" in k && propsOf(k as ReactElement).disabled === true);
+    expect(refusedOption, "premise: the refused option is drawn").toBeDefined();
+    expect(expandedText([refusedOption!])).toBe(kindName);
+    expect(propsOf(refusedOption!)["aria-label"]).toBe(t(uiEn, "reg.settings.entrant.notAllowedOption", { kind: kindName }));
+    expect(String(propsOf(findField(tree, "entrant_kind")!).className)).toContain("border-amber-400");
+    expect(expandedText([testId(tree, "entrant-kind-not-allowed")!])).toBe(
+      t(uiEn, "reg.settings.entrant.notAllowedHint", { kind: kindName }),
+    );
+    // Fix round 2: the hint DESCRIBES the select (aria-describedby) and marks it invalid, rather than sitting inside its
+    // label - so the select's name stays "Entrant type".
+    const select = propsOf(findField(tree, "entrant_kind")!);
+    const hint = propsOf(testId(tree, "entrant-kind-not-allowed")!);
+    expect(typeof hint.id === "string" && hint.id.length > 0, "premise: the hint has an id").toBe(true);
+    expect(select["aria-describedby"]).toBe(hint.id);
+    expect(select["aria-invalid"]).toBe(true);
+    const label = tree.find((e) => e.type === "label" && holds(e, (x) => propsOf(x)["data-field"] === "entrant_kind"));
+    expect(label, "premise: the select sits in its label").toBeDefined();
+    expect(holds(label!, (x) => propsOf(x)["data-testid"] === "entrant-kind-not-allowed"), "the hint is outside the label").toBe(false);
+  });
+
+  it("a save of the refused kind is stopped on the page (no PUT) with the error on the entrant type; picking an offered kind clears it and saves that kind", async () => {
+    net.getResponse = { ...RESPONSE, entrant_kind: "individual", allow_free_agents: false };
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, division: { ...DIVISION, allowed_kinds: TEAMS_ONLY } }, expandPanel);
+    await flush();
+    await (propsOf(saveButton(island)).onClick as () => Promise<void>)();
+    expect(net.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+    const shown = island.tree().find((e) => propsOf(e)["data-field-error"] === "entrant_kind");
+    expect(expandedText([shown!])).toBe(t(uiEn, "reg.settings.entrant.notAllowedError"));
+
+    (propsOf(findField(island.tree(), "entrant_kind")!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "team" } });
+    await flush();
+    expect(testId(island.tree(), "entrant-kind-not-allowed")).toBeUndefined();
+    await (propsOf(saveButton(island)).onClick as () => Promise<void>)();
+    expect(net.calls.find((c) => c.method === "PUT")!.json).toMatchObject({ entrant_kind: "team" });
+  });
+
+  it("positive pair: the same stored kind on a division that takes it saves untouched, with no flag", async () => {
+    net.getResponse = { ...RESPONSE, entrant_kind: "individual", allow_free_agents: false };
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, division: { ...DIVISION, allowed_kinds: PAIRS_OR_INDIVIDUAL } }, expandPanel);
+    await flush();
+    expect(testId(island.tree(), "entrant-kind-not-allowed")).toBeUndefined();
+    await (propsOf(saveButton(island)).onClick as () => Promise<void>)();
+    expect(net.calls.find((c) => c.method === "PUT")!.json).toMatchObject({ entrant_kind: "individual" });
+  });
+
+  it("a refusal from a stale page (the division narrowed since it loaded) lands on the entrant type, in the dictionary's words", async () => {
+    net.getResponse = { ...RESPONSE, entrant_kind: "team", allow_free_agents: false };
+    net.putRejection = new ApiV1Error("this division doesn't take 'team' entrants (server English)", 422, "ENTRANT_KIND_NOT_ALLOWED");
+    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    await (propsOf(saveButton(island)).onClick as () => Promise<void>)();
+    const shown = island.tree().find((e) => propsOf(e)["data-field-error"] === "entrant_kind");
+    expect(shown).toBeTruthy();
+    expect(expandedText([shown!])).toBe(t(uiEn, "reg.settings.entrant.notAllowedError"));
   });
 });

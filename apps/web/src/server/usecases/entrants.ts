@@ -9,12 +9,8 @@ import { HttpError } from "@/lib/errors";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { assertWithinLimit, getLimit } from "@/lib/entitlements";
 import { resolveModule } from "@/server/engine-db/registry";
-import {
-  effectiveEntrantModel,
-  entrantKindCap,
-  type EffectiveEntrantModel,
-  type EntrantKind,
-} from "@seazn/engine/sport";
+import { entrantKindCap, type EffectiveEntrantModel } from "@seazn/engine/sport";
+import { assertDivisionTakesKind, loadEntrantShape } from "./entrant-shape";
 import { loadTeamSquad } from "./teams";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { z } from "zod";
@@ -114,23 +110,8 @@ function filterRosterForSport(
   return { members: cleaned, dropped };
 }
 
-/** Entrant-shape gate (spec 2026-07-18): resolve the division's EFFECTIVE
- *  entrant model — the pinned module's declaration merged with the division's
- *  `config.entrants` override. Sports with no model (generic legacy) fall back
- *  to "all kinds, no cap" so existing divisions accept exactly what they do
- *  today. Load ONCE per write call, not per row. */
-async function loadEntrantShape(tx: Tx, divisionId: string): Promise<EffectiveEntrantModel> {
-  const [d] = await tx<{ sport_key: string; module_version: string; config: unknown }[]>`
-    select sport_key, module_version, config from divisions where id = ${divisionId}`;
-  if (!d) throw new HttpError(404, "division not found");
-  let model = null;
-  try {
-    model = resolveModule(d.sport_key, d.module_version).entrantModel ?? null;
-  } catch {
-    // Retired module build — no declaration to resolve; treat as legacy shape.
-  }
-  return effectiveEntrantModel(model, d.config);
-}
+// Entrant-shape gate (spec 2026-07-18): `loadEntrantShape` (./entrant-shape) resolves the division's EFFECTIVE entrant
+// model; `assertDivisionTakesKind` is the one "may this division hold kind K" refusal (FU1), shared with registration.
 
 /** Roster cap is structural (individual = 1, pair = 2, team = the model's
  *  maxMembers or unbounded). Throws 422 ENTRANT_ROSTER_TOO_BIG when exceeded. */
@@ -467,13 +448,7 @@ export async function createEntrants(
       // model would accept what the ruling refuses. The default is judged too: a widened default must not slip a team
       // in through an omitted kind.
       assertChessKindIndividual(division.sport_key, kind);
-      if (!eff.kinds.includes(kind as EntrantKind)) {
-        throw new HttpError(
-          422,
-          `this division doesn't take '${kind}' entrants`,
-          "ENTRANT_KIND_NOT_ALLOWED",
-        );
-      }
+      assertDivisionTakesKind(eff, kind);
       assertRosterFits(eff, kind, input.members?.length ?? 0);
     }
 

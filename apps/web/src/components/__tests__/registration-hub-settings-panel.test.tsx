@@ -14,6 +14,10 @@ import {
 } from "@/components/registration-hub-division-row";
 import { t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
+import { effectiveEntrantModel } from "@seazn/engine/sport";
+
+// FU1 — every kind the engine knows (a sport with no entrant model takes them all). Derived, never typed here.
+const ALL_KINDS = effectiveEntrantModel(null).kinds;
 
 const nav = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -48,6 +52,7 @@ const ROW: RegistrationHubRowData = {
   eligibility_note: "School-registered students only",
   enabled: true,
   entrant_kind: "individual",
+  allowed_kinds: ALL_KINDS,
   opens_at: null,
   closes_at: null,
   capacity: null,
@@ -163,6 +168,28 @@ describe("RegistrationHubSettingsPanel — opening/closing/saving the config pan
     expect(propsOf(island.tree().find((e) => e.type === RegistrationHubConfigPanel)!).division).toMatchObject({
       division_id: "div-1",
       individual_only: false,
+    });
+  });
+
+  // FU1 — the config panel offers only the division's allowed kinds, and this panel builds its `division` prop
+  // field-by-field: a narrowed row whose kinds this literal dropped would offer every kind again.
+  it("hands the open row's allowed_kinds to the config panel - per row", () => {
+    const teamsOnly = effectiveEntrantModel(null, { entrants: { kinds: ["team"] } }).kinds;
+    expect(teamsOnly).not.toEqual(ALL_KINDS);
+    const island = renderIsland(RegistrationHubSettingsPanel, {
+      ...BASE_PROPS,
+      rows: [ROW, { ...ROW, division_id: "div-2", name: "Club teams", allowed_kinds: teamsOnly }],
+    });
+    const rows = island.tree().filter((e) => e.type === RegistrationHubDivisionRow);
+    (propsOf(rows[1]!).context as RegistrationHubRowContext).onOpen("div-2");
+    expect(propsOf(island.tree().find((e) => e.type === RegistrationHubConfigPanel)!).division).toMatchObject({
+      division_id: "div-2",
+      allowed_kinds: teamsOnly,
+    });
+    (propsOf(rows[0]!).context as RegistrationHubRowContext).onOpen("div-1");
+    expect(propsOf(island.tree().find((e) => e.type === RegistrationHubConfigPanel)!).division).toMatchObject({
+      division_id: "div-1",
+      allowed_kinds: ALL_KINDS,
     });
   });
 

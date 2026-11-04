@@ -100,6 +100,7 @@ export default async function RegistrationHubPage({
       division_id: r.division_id,
       name: r.name,
       individual_only: isChessSport(r.sport_key),
+      allowed_kinds: r.allowed_kinds,
       category: r.category,
       age_min: r.age_min,
       age_max: r.age_max,

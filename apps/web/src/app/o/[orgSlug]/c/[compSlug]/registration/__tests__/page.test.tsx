@@ -215,6 +215,10 @@ import { RegistrationHubRegistrantsPanel } from "@/components/registration-hub-r
 // string, never a hardcoded English literal or a mis-keyed lookup (RS004 W2b
 // review finding 2).
 import { getDictionary, t } from "@/lib/i18n";
+import { builtinModules } from "@seazn/engine/sports";
+import { effectiveEntrantModel } from "@seazn/engine/sport";
+
+const FOOTBALL = builtinModules.find((m) => m.key === "football")!;
 
 const params = Promise.resolve({ orgSlug: "riverside", compSlug: "summer-league" });
 const noTab = Promise.resolve({});
@@ -604,6 +608,9 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
         division_id: "div-1",
         name: "Open Singles",
         sport_key: "football",
+        // FU1 — the loader resolves the division's allowed kinds from these (entrantShapeOf).
+        module_version: FOOTBALL.version,
+        config: {},
         category: null,
         age_min: 10,
         age_max: 18,
@@ -645,6 +652,8 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
         eligibility_note: "School-registered students only",
         enabled: true,
         entrant_kind: "individual",
+        // FU1 — football's own declaration (engine), not every kind: the row is then flagged as refusing "individual".
+        allowed_kinds: effectiveEntrantModel(FOOTBALL.entrantModel ?? null).kinds,
         opens_at: null,
         closes_at: null,
         capacity: 20,
@@ -655,6 +664,7 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
         waitlisted: 5,
       },
     ]);
+    expect((props.rows as { allowed_kinds: string[] }[])[0]!.allowed_kinds).not.toContain("individual");
     expect((props.context as { currency: string }).currency).toBe("gbp");
   });
 

@@ -14,6 +14,7 @@ import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { settingsSaveErrorText } from "@/lib/config-issue-copy";
+import { fileToWebp, putLogo } from "@/lib/division-logo-upload";
 import { divisionAccent, monogram } from "@/lib/division-hue";
 import { ONLINE_CHESS_DISABLED_CODE, onlinePlayShown } from "@/lib/online-chess";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
@@ -115,31 +116,6 @@ export interface DivisionSettingsInfo {
   camera_policy?: CameraPolicy | null;
   /** The competition's policy — what an unset division inherits. */
   inherited_camera_policy?: CameraPolicy;
-}
-
-async function fileToWebp(file: File, max: number): Promise<Blob> {
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const el = new Image();
-    el.onload = () => resolve(el);
-    el.onerror = () => reject(new Error("bad image"));
-    el.src = dataUrl;
-  });
-  const scale = Math.min(1, max / Math.max(img.width, img.height));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(img.width * scale));
-  canvas.height = Math.max(1, Math.round(img.height * scale));
-  canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
-  const blob = await new Promise<Blob | null>((resolve) =>
-    canvas.toBlob(resolve, "image/webp", 0.88),
-  );
-  if (!blob) throw new Error("image conversion failed");
-  return blob;
 }
 
 
@@ -315,17 +291,12 @@ export function DivisionSettings({
   const uploadLogo = (file: File | undefined) => {
     if (!file) return;
     void run(async () => {
-      const webp = await fileToWebp(file, 512);
+      const webp = await fileToWebp(file, 512, msg);
       const { upload_url, storage_path } = await apiV1<{
         upload_url: string;
         storage_path: string;
       }>(`/api/v1/divisions/${division.id}/logo-upload-url`, { method: "POST", json: {} });
-      const put = await fetch(upload_url, {
-        method: "PUT",
-        headers: { "Content-Type": "image/webp" },
-        body: webp,
-      });
-      if (!put.ok) throw new Error(`upload failed (${put.status})`);
+      await putLogo(upload_url, webp, msg);
       await apiV1(`/api/v1/divisions/${division.id}`, {
         method: "PATCH",
         json: { logo_storage_path: storage_path },

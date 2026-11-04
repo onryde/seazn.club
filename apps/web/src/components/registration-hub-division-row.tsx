@@ -25,6 +25,7 @@ import { CopyLink } from "@/components/copy-link";
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import { formatMinor, type Currency } from "@/lib/currency";
+import { divisionTakesKind } from "@/lib/division-entrant-kinds";
 import { deriveRegistrationStatus, type RegistrationHubStatus } from "@/components/registration-hub-status";
 import {
   formatRegistrationWindow,
@@ -55,6 +56,9 @@ export interface RegistrationHubRowData {
    *  (never configured) — rendered as a dash, matching the rest of the
    *  app's "not set" convention rather than inventing a placeholder value. */
   entrant_kind: "team" | "individual" | "pair" | null;
+  /** FU1: the division's allowed entrant kinds (its effective entrant model, resolved on the server - data.ts). A stored
+   *  `entrant_kind` outside them keeps the public sign-up closed, so the row says so; the config panel offers only these. */
+  allowed_kinds: readonly ("team" | "individual" | "pair")[];
   opens_at: string | Date | null;
   closes_at: string | Date | null;
   capacity: number | null;
@@ -132,10 +136,14 @@ export function RegistrationHubDivisionRow({
 }) {
   const { dict } = context;
 
-  const status = deriveRegistrationStatus(
-    { enabled: row.enabled, opens_at: row.opens_at, closes_at: row.closes_at },
-    context.now,
-  );
+  // FU1: a stored kind the division no longer takes - the public panel does not open it (closed_reason
+  // entry_kind_unavailable), so the organiser scanning rows must see it here, not only inside the config panel.
+  const kindRefused = row.entrant_kind !== null && !divisionTakesKind(row.allowed_kinds, row.entrant_kind);
+  // FU1 fix round 1 (m1): and the row says what the public meets - Closed, with no Copy/Open/QR for a link that only ever
+  // refuses (showLinkControls below). The chip on the second line says why.
+  const status: RegistrationHubStatus = kindRefused
+    ? "closed"
+    : deriveRegistrationStatus({ enabled: row.enabled, opens_at: row.opens_at, closes_at: row.closes_at }, context.now);
 
   const windowLabel = formatRegistrationWindow(row.opens_at, row.closes_at, context.orgTz);
   const windowText =
@@ -243,6 +251,14 @@ export function RegistrationHubDivisionRow({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
         <span>{windowText}</span>
         <span>{entrantKindText}</span>
+        {kindRefused && (
+          <span
+            data-testid="row-kind-not-allowed"
+            className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+          >
+            {t(dict, "reg.hub.row.kindNotAllowed")}
+          </span>
+        )}
         <span>{approvalText}</span>
         {categoryLabel && <Chip>{categoryLabel}</Chip>}
         {ageLabel && <Chip>{ageLabel}</Chip>}

@@ -15,6 +15,7 @@
 // the panel's error-rendering never has to know which shape it got.
 import type { ApiV1Error } from "@/lib/client-v1";
 import { CHESS_INDIVIDUAL_ONLY } from "@/lib/chess-individual-only";
+import { ENTRANT_KIND_NOT_ALLOWED } from "@/lib/division-entrant-kinds";
 
 /** Every field this panel writes, across both endpoints. */
 export type ConfigFieldKey =
@@ -127,6 +128,10 @@ export function mapSaveError(err: unknown): SaveErrorInfo {
   // is a stale page or a race - but it is the ENTRY SHAPE that was refused, so it belongs against that field.
   if ((err as Partial<ApiV1Error>)?.code === CHESS_INDIVIDUAL_ONLY) {
     return { field: "entrant_kind", message, code: CHESS_INDIVIDUAL_ONLY };
+  }
+  // FU1: a kind outside the division's Entrant kinds (a stale page, or kinds narrowed while the panel was open).
+  if ((err as Partial<ApiV1Error>)?.code === ENTRANT_KIND_NOT_ALLOWED) {
+    return { field: "entrant_kind", message, code: ENTRANT_KIND_NOT_ALLOWED };
   }
   const extra = (err as Partial<ApiV1Error>)?.extra;
   const issues = extra?.issues;

@@ -174,3 +174,50 @@ describe("DivisionCard — the organiser's eligibility_note (RS007/V380 defect #
     expect(tree.some((el) => el.type === "p" && textOf(el).includes("register.organiserNote"))).toBe(true);
   });
 });
+
+// FU1 (controller ruling 3): a division whose registration kind is one the division itself does not take does not open
+// for sign-up. The server closes it with closed_reason "entry_kind_unavailable"; the card says so in plain words rather
+// than looking like an ordinary window close (or showing nothing at all).
+describe("DivisionCard — entries unavailable for a kind the division does not take (FU1)", () => {
+  const DIVISION: DivisionLike = {
+    division_id: "div-1",
+    name: "Open Teams",
+    entrant_kind: "individual",
+    category: null,
+    age_min: null,
+    age_max: null,
+    requires_dob: false,
+    requires_gender: false,
+    allow_free_agents: false,
+    open: false,
+    closed_reason: "entry_kind_unavailable",
+    capacity: null,
+    remaining: null,
+    taken: 0,
+    opens_at: null,
+    closes_at: "2026-03-05T23:00:00Z",
+    fee_cents: 0,
+    free_agent_fee_cents: null,
+    currency: "USD",
+    payment_method: "offline",
+    form_fields: [],
+    eligibility_note: null,
+  };
+  const badgeTexts = (d: DivisionLike) =>
+    walk(DivisionCard({ division: d, locale: "en", selfEligibility: null, imPlaying: false }))
+      .filter((el) => el.type === "span")
+      .map((el) => textOf(el));
+
+  it("shows the unavailable badge, and neither the window-closed badge nor a closing date", () => {
+    const texts = badgeTexts(DIVISION);
+    expect(texts).toContain("register.entries.badge.kindUnavailable");
+    expect(texts).not.toContain("register.entries.badge.closed");
+    expect(texts.some((s) => s.startsWith("register.entries.window.closes"))).toBe(false);
+  });
+
+  it("positive pair: the same division when open (or closed for its window) carries no unavailable badge", () => {
+    expect(badgeTexts({ ...DIVISION, open: true, closed_reason: null })).not.toContain("register.entries.badge.kindUnavailable");
+    expect(badgeTexts({ ...DIVISION, closed_reason: "window" })).not.toContain("register.entries.badge.kindUnavailable");
+    expect(badgeTexts({ ...DIVISION, closed_reason: "window" })).toContain("register.entries.badge.closed");
+  });
+});

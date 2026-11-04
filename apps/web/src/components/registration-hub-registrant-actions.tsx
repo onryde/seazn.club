@@ -99,6 +99,7 @@ import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { lichessRegistrantRefusalText } from "@/components/v2/entrants-lichess-refusal";
+import { registrantKindRefusalText } from "@/lib/entrant-kind-refusal";
 import { deriveRegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
 import type { MessageKey } from "@/lib/messages";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
@@ -219,10 +220,14 @@ export function RegistrationHubRegistrantActions({
 
   /** What the organiser reads when an action fails. An online-play division refuses to seat a registrant with no Lichess link
    *  that can play (approve, mark paid and promote all seat them): the server's words are English only, so that refusal is
-   *  said here, in the organiser's language. This page is already the registrant's own, so nobody is named. */
+   *  said here, in the organiser's language. This page is already the registrant's own, so nobody is named. The same three
+   *  doors refuse an entry whose kind the division no longer takes (FU1); that too is said off its code (fix round 1 m2). */
   function failureText(err: unknown): string {
-    const lichess = err instanceof ApiV1Error ? lichessRegistrantRefusalText(err, (key) => msg(key as MessageKey)) : null;
-    return lichess ?? errorText(err);
+    if (!(err instanceof ApiV1Error)) return errorText(err);
+    const said =
+      registrantKindRefusalText(err, (key, vars) => msg(key, vars)) ??
+      lichessRegistrantRefusalText(err, (key) => msg(key as MessageKey));
+    return said ?? errorText(err);
   }
 
   async function runStatusAction(

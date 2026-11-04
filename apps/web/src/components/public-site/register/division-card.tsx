@@ -182,6 +182,11 @@ export function DivisionCard({
         {division.closed_reason === "payments_unavailable" && (
           <span className={`${BADGE} bg-red-50 text-red-700`}>{t("register.payments.unavailable.title")}</span>
         )}
+        {/* FU1: the division's settings name an entry type the division itself does not take, so it is not open - the
+            same quiet treatment as Closed: nothing the visitor did, and nothing they can do here. */}
+        {division.closed_reason === "entry_kind_unavailable" && (
+          <span className={`${BADGE} bg-zinc-200 text-ink-muted`}>{t("register.entries.badge.kindUnavailable")}</span>
+        )}
       </div>
 
       {/* RS007/V380 — the retired jsonb "custom rule" note, now rendered

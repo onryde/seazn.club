@@ -83,6 +83,27 @@ describe("the entrant kinds block - what the organiser sees on the Entrants tab"
     expect(html).toContain(EN["divset.entrants.note"]!.replace(/'/g, "&#x27;"));
   });
 
+  it("the note names BOTH blockers in every locale: active entrants and waiting registration entries (FU1 I1)", () => {
+    // The removal refusal has two causes since FU1 (entrants, then live registrations). The note owes both, or an
+    // organiser told "nothing of that kind is active" cannot see why the save is refused. Per-locale words are the
+    // requirement itself, not read back from the component.
+    const blockers: Record<string, { dict: Record<string, string>; entrants: RegExp; registrations: RegExp }> = {
+      en: { dict: enUi as Record<string, string>, entrants: /entrants/i, registrations: /registration/i },
+      es: { dict: esUi as Record<string, string>, entrants: /participantes/i, registrations: /inscripciones/i },
+      fr: { dict: frUi as Record<string, string>, entrants: /participants/i, registrations: /inscriptions/i },
+      nl: { dict: nlUi as Record<string, string>, entrants: /deelnemers/i, registrations: /inschrijvingen/i },
+    };
+    let checked = 0;
+    for (const [loc, { dict, entrants, registrations }] of Object.entries(blockers)) {
+      const note = dict["divset.entrants.note"];
+      expect(note, loc).toBeTypeOf("string");
+      expect(note, `${loc} names active entrants`).toMatch(entrants);
+      expect(note, `${loc} names waiting registrations`).toMatch(registrations);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("closed (the default): one header row that names the ticked kinds in words - not the controls", () => {
     const html = closed({ entrantModel: TEAM_MODEL });
     expect(html).toContain(EN["divset.entrants.kinds"]);
@@ -228,7 +249,7 @@ describe("Save and Reset send what the Settings block sent", () => {
     expect(island.text()).toContain(EN["divset.entrants.sportDefault"]);
   });
 
-  it("the server's lock refusal (a kind with active entrants) is shown to the organiser as the server words it", async () => {
+  it("a refusal under a code this tab does not know is shown to the organiser as the server words it", async () => {
     net.refuse = new ApiV1Error("entrants of kind 'team' already exist — withdraw them first", 409, "CONFLICT");
     const island = renderIsland(EntrantKindsSettings, props({ entrantModel: TEAM_MODEL }));
     click(kindChip(island.tree(), "team"));
@@ -246,6 +267,59 @@ describe("Save and Reset send what the Settings block sent", () => {
     click(saveButton(island.tree()));
     await vi.waitFor(() => expect(island.text()).toContain(EN["divset.err.chessIndividualOnly"]));
     expect(island.text()).not.toContain(SERVER);
+  });
+
+  // FU1 fix round 1 (m2, I1): taking a kind out from under entrants, or live registrations, is said from the CODE and its
+  // facts - the kind as the tab's own word, the count in its plural - never the server's English with its raw slug.
+  it("ENTRANT_KIND_IN_USE and REGISTRATION_KIND_IN_USE read in the organiser's language, naming the kind and the count", async () => {
+    const SERVER = "server English with a raw 'team' slug";
+    const kindWord = (k: string) => EN[`divset.entrants.kind.${k}`]!.toLocaleLowerCase();
+    const fill = (key: string, vars: Record<string, string | number>) =>
+      EN[key]!.replace(/\{(\w+)\}/g, (m, n: string) => (n in vars ? String(vars[n]) : m));
+    const cases = [
+      ...(["team", "pair", "individual"] as const).map((kind) => ({
+        err: new ApiV1Error(SERVER, 422, "ENTRANT_KIND_IN_USE", { kind }),
+        want: fill("divset.err.entrantKindInUse", { kind: kindWord(kind) }),
+      })),
+      {
+        err: new ApiV1Error(SERVER, 422, "REGISTRATION_KIND_IN_USE", { kind: "team", count: 1 }),
+        want: fill("divset.err.registrationKindInUse.one", { count: 1, kind: kindWord("team") }),
+      },
+      {
+        err: new ApiV1Error(SERVER, 422, "REGISTRATION_KIND_IN_USE", { kind: "pair", count: 3 }),
+        want: fill("divset.err.registrationKindInUse.other", { count: 3, kind: kindWord("pair") }),
+      },
+    ];
+    let checked = 0;
+    for (const { err, want } of cases) {
+      net.refuse = err;
+      const island = renderIsland(EntrantKindsSettings, props({ entrantModel: TEAM_MODEL }));
+      click(kindChip(island.tree(), "team"));
+      click(saveButton(island.tree()));
+      await vi.waitFor(() => expect(island.text()).toContain(want));
+      expect(want, "premise: the sentence is filled").not.toMatch(/\{\w+\}/);
+      expect(island.text()).not.toContain(SERVER);
+      expect(island.text(), "a refused save does not claim to have saved").not.toContain(EN["divset.entrants.saved"]);
+      checked++;
+    }
+    expect(checked).toBe(5);
+    expect(refreshMock).not.toHaveBeenCalled();
+  });
+
+  it("the same codes WITHOUT the facts they need (no kind, a count of 0) fall back to the server's words, not a half-filled sentence", async () => {
+    let checked = 0;
+    for (const err of [
+      new ApiV1Error("entrants of kind 'x' already exist", 422, "ENTRANT_KIND_IN_USE", {}),
+      new ApiV1Error("0 live registration(s) of kind 'team'", 422, "REGISTRATION_KIND_IN_USE", { kind: "team", count: 0 }),
+    ]) {
+      net.refuse = err;
+      const island = renderIsland(EntrantKindsSettings, props({ entrantModel: TEAM_MODEL }));
+      click(kindChip(island.tree(), "team"));
+      click(saveButton(island.tree()));
+      await vi.waitFor(() => expect(island.text()).toContain(err.message));
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("a successful Save says so and refreshes the page", async () => {

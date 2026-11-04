@@ -12,7 +12,9 @@ import {
   SHARE_NEEDS_DRAWS,
 } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
+import { isUnreachable } from "@/lib/is-server-answer";
 import { ruleRefusalSentence } from "@/lib/rule-errors";
+import { divisionKindRefusalText } from "@/lib/entrant-kind-refusal";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -78,7 +80,12 @@ export function configIssueText(issue: ConfigIssue, msg: Msg): string {
 }
 
 /** What a failed settings save says. A rule-lock refusal says itself first (`ruleRefusalSentence`); a CONFIG_INVALID that names its problems says them (all of them, in order); any
- *  other error keeps its own message, and a non-Error falls back to `fallback`. `err.extra` is the envelope's detail. */
+ *  other Error keeps its own message (a server answer, or a local one a component threw on purpose); a request that never
+ *  left (`isUnreachable`: the fetch rejection, a `TypeError` with no `status`) says so in the reader's language
+ *  (`save.err.unreachable`); and a non-Error falls back to `fallback`. `err.extra` is the envelope's detail.
+ *
+ *  Neither client wrapper catches a fetch rejection, so offline / DNS / a dropped connection arrives as the browser's bare
+ *  TypeError ("Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."). */
 export function settingsSaveErrorText(err: unknown, msg: Msg, fallback: string): string {
   // W2c Task 19: a rule-lock refusal (a walkover that no longer fits the format, a locked stage or match...) is said in the
   // reader's language off its CODE and facts, never as the server's English message.
@@ -92,10 +99,14 @@ export function settingsSaveErrorText(err: unknown, msg: Msg, fallback: string):
     );
     if (said !== null) return said;
   }
+  // FU1 fix round 1 (m2, I1): taking a kind out while entrants, or live registrations, still hold it.
+  const kindRefusal = divisionKindRefusalText(err, msg);
+  if (kindRefusal !== null) return kindRefusal;
   const extra = (err as { code?: unknown; extra?: unknown } | null)?.code === "CONFIG_INVALID" ? (err as { extra?: unknown }).extra : undefined;
   const issues = configIssuesOf(extra);
   if (issues !== null) return issues.map((i) => configIssueText(i, msg)).join(" ");
-  return err instanceof Error ? err.message : fallback;
+  if (!(err instanceof Error)) return fallback;
+  return isUnreachable(err) ? msg("save.err.unreachable") : err.message;
 }
 
 /** What a failed RULES write says, wherever the organiser made it: the match block's Save and "Use stage rules", the stage

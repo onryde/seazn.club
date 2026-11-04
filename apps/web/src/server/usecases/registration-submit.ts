@@ -56,6 +56,7 @@ import { divisionPlaysOnline } from "@/server/external-play/online-play";
 import { assertUserHasLichessForOnlinePlay } from "./external-accounts";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { openRegistrationSeatGate, type RegistrationSeatGate } from "./online-seat-gate";
+import { assertDivisionTakesKind, entrantShapeOf } from "./entrant-shape";
 
 // ---------------------------------------------------------------------------
 // Input / output shapes
@@ -311,13 +312,15 @@ interface EntryDivisionCtx {
   charges_enabled: boolean;
   sport_key: string;
   config: unknown;
+  /** FU1 - with sport_key and config, resolves the division's allowed entrant kinds (entrant-shape.ts). */
+  module_version: string;
 }
 
 async function loadEntryDivisionCtx(divisionId: string): Promise<EntryDivisionCtx> {
   const [row] = await sql<EntryDivisionCtx[]>`
     select d.id, d.competition_id, d.org_id, d.category, d.age_min, d.age_max,
            d.age_cutoff_month, d.age_cutoff_day, d.eligibility_note,
-           d.sport_key, d.config,
+           d.sport_key, d.config, d.module_version,
            d.name as division_name,
            c.slug as comp_slug, c.name as comp_name, c.visibility as comp_visibility, c.starts_on,
            o.slug as org_slug, o.name as org_name, o.currency as org_currency,
@@ -502,6 +505,9 @@ export async function submitRegistrationGroup(
     if (entry.entrant_kind !== settings.entrant_kind) {
       throw new HttpError(422, `This division only accepts ${settings.entrant_kind} entries`);
     }
+    // FU1 ruling 4: and the division itself must take that kind (its Entrant kinds) - the settings row can hold a kind the
+    // division has since stopped taking. The public panel does not open such a division; this refuses a stale page.
+    assertDivisionTakesKind(entrantShapeOf(divCtx), entry.entrant_kind);
     if (entry.free_agent && (entry.entrant_kind !== "team" || !settings.allow_free_agents)) {
       // "Solo sign-ups" is the organiser-facing name for this since
       // 2026-08-25; `allow_free_agents` stays the column and the API field.

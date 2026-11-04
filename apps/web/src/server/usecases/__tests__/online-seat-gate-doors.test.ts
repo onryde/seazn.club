@@ -163,7 +163,16 @@ async function seedEntry(
   status: "pending" | "waitlisted",
   feeCents: number,
 ): Promise<string> {
-  await sql`update registration_settings set entrant_kind = ${target === null ? "team" : "individual"} where division_id = ${divisionId}`;
+  const kind = target === null ? "team" : "individual";
+  await sql`update registration_settings set entrant_kind = ${kind} where division_id = ${divisionId}`;
+  // FU1: a door seats only a kind the DIVISION takes, and chess declares individual only - an empty TEAM entry exists only on
+  // a chess division whose Entrant kinds override was widened before the individual-only ruling. Written directly, the
+  // same way the settings row is.
+  if (kind === "team") {
+    await sql`
+      update divisions set config = config || ${sql.json({ entrants: { kinds: ["team", "individual"], defaultKind: "individual" } })}
+       where id = ${divisionId}`;
+  }
   const { registration } = await seedRegistration(
     competitionId,
     divisionId,

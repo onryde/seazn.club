@@ -693,6 +693,8 @@ describe.skipIf(!HAS_DB)("entrant-kind guard (spec 2026-07-18)", () => {
     await expect(patchDivision(owner, division.id, { config: narrowed })).rejects.toMatchObject({
       status: 422,
       code: "ENTRANT_KIND_IN_USE",
+      // FU1 fix round 1 (m2): the kind rides along, so the Entrants tab can say the refusal in the reader's language.
+      extra: { kind: "team" },
     });
 
     // Withdraw the team → the same narrowing now lands, and the override sticks.
