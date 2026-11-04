@@ -20,6 +20,7 @@ import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures, replaceStages } from "../stages";
+import { appendEvent } from "@/server/engine-db";
 import { makeUser } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -210,7 +211,10 @@ describe.skipIf(!HAS_DB)("R-T13-3 replaceStages deletes and inserts in ONE trans
 });
 
 describe.skipIf(!HAS_DB)("fix round 2 (c): Apply on a LOCKED division answers FORMAT_LOCKED before any gate", () => {
-  it("fixtures exist + a gated body = 409 FORMAT_LOCKED, never the 402; nothing changes", async () => {
+  // FMT5: the lock is a RESULT, no longer any fixture. A division with fixtures and none played is not locked, so a gated
+  // body there answers its gate's 402 (the gates still ask before the transaction); one result makes it FORMAT_LOCKED,
+  // ahead of the same 402.
+  it("a result + a gated body = 409 FORMAT_LOCKED, never the 402; fixtures alone answer the gate's 402; nothing changes", async () => {
     const auth = await seedOrg("pro");
     await denyFeature(auth.orgId, "formats.double_elim");
     const { divisionId } = await seedDivision(auth);
@@ -221,9 +225,14 @@ describe.skipIf(!HAS_DB)("fix round 2 (c): Apply on a LOCKED division answers FO
     );
     const [stage] = await createStages(auth, divisionId, [league(1)]);
     await generateStageFixtures(auth, stage!.id);
-    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${stage!.id}`;
-    expect(n, "premise: fixtures exist, so the format is locked").toBeGreaterThan(0);
+    const fixtures = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${stage!.id} order by fixture_no`;
+    expect(fixtures.length, "premise: fixtures exist").toBeGreaterThan(0);
     const before = await stageIds(divisionId);
+    // Fixtures, no result: not locked — the gate answers.
+    await expect(replaceStages(auth, divisionId, [DOUBLE_ELIM])).rejects.toMatchObject({ status: 402 });
+    expect(await stageIds(divisionId)).toEqual(before);
+    // One result: locked, ahead of the gate.
+    await appendEvent(auth.orgId, fixtures[0]!.id, 0, { type: "core.start", payload: {} });
     await expect(replaceStages(auth, divisionId, [DOUBLE_ELIM])).rejects.toMatchObject({
       status: 409,
       code: "FORMAT_LOCKED",
@@ -250,8 +259,11 @@ async function until(what: string, done: () => Promise<boolean>): Promise<void> 
   }
 }
 
-describe.skipIf(!HAS_DB)("fix round 3 N1: the FORMAT_LOCKED check UNDER the division lock is the guard, not the pre-read", () => {
-  it("a fixture committed while Apply waits on the division lock is read under it: 409 FORMAT_LOCKED, the stages and the fixture intact", async () => {
+describe.skipIf(!HAS_DB)("fix round 3 N1: the board UNDER the division lock is the one judged, not the pre-read's", () => {
+  // FMT5: what the lock decides moved with the rule. A fixture committed while Apply waits is no longer FORMAT_LOCKED (it
+  // holds no result); it is a board the unconfirmed change would clear, so it is FORMAT_CHANGE_CONFIRM — read under the
+  // lock, since the pre-read saw none. (A RESULT racing the change: format-change.test.ts, on the board's append lock.)
+  it("a fixture committed while Apply waits on the division lock is read under it: 409 FORMAT_CHANGE_CONFIRM, the stages and the fixture intact", async () => {
     const auth = await seedOrg("pro");
     const { divisionId, before } = await seededGraph(auth);
     let apply!: Promise<unknown>;
@@ -275,10 +287,10 @@ describe.skipIf(!HAS_DB)("fix round 3 N1: the FORMAT_LOCKED check UNDER the divi
         values (${before[0]!}, ${divisionId}, ${auth.orgId}, 1, 0, 'race', 'scheduled') returning id`;
       fixtureId = f!.id;
     }); // commits: Apply takes the lock and must read the fixture that exists now
-    await expect(apply).rejects.toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
+    await expect(apply).rejects.toMatchObject({ status: 409, code: "FORMAT_CHANGE_CONFIRM" });
     expect(await stageIds(divisionId), "the stage graph stands").toEqual(before);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where id = ${fixtureId}`;
-    expect(n, "the fixture the delete would have cascaded away is still there").toBe(1);
+    expect(n, "the fixture the delete would have taken is still there").toBe(1);
   });
 });
 

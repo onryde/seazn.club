@@ -1543,6 +1543,22 @@ export type StageTableRules = z.infer<typeof StageTableRules>;
  *  cfg its sport cannot read) — the reader shows no order rather than a guessed one. */
 export const StageWithTableRules = Stage.extend({ tableRules: StageTableRules.nullable() });
 
+/** FMT5 — `PUT /divisions/{id}/stages?dry_run=1`: what the format change would clear (`FormatChangePreview`,
+ *  lib/format-change.ts), every count read from the rows the delete takes. Also the `preview` of a FORMAT_CHANGE_CONFIRM /
+ *  FORMAT_CHANGE_STALE refusal. */
+export const FormatChangePreview = z.object({
+  dry_run: z.literal(true),
+  stages: z.array(z.object({ id: Uuid, name: z.string() })),
+  fixtures: z.number().int(),
+  slots: z.number().int(),
+  courts: z.number().int(),
+  officials: z.number().int(),
+  lineups: z.number().int(),
+  device_links: z.number().int(),
+  calls: z.number().int(),
+  token: z.string().nullable(),
+});
+
 /** A tie-break reason on a standings row: a cascade key, or `fewest_played` (a partial schedule's step, IIHF RBG). */
 export const TieBreakKeyS = z.enum([...TiebreakerKeyS.options, "fewest_played"]);
 /** Why a conditional step left a residual tie unsplit (`TieBreakNote`, W2d §2.3). */

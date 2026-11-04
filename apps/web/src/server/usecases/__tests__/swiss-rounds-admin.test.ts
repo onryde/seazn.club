@@ -222,7 +222,8 @@ async function registerAndConfirm(rig: Rig, name: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// The edit before any start (#838's regression: the Format tab's Apply answers FORMAT_LOCKED once shells exist)
+// The edit before any start (#838's regression: the Format tab's Apply answered FORMAT_LOCKED once shells exist; since FMT5 it
+// asks to clear them instead, FORMAT_CHANGE_CONFIRM)
 // ---------------------------------------------------------------------------------------------------------------------
 
 describe.runIf(HAS_DB)("X-SW-17 the round count is editable until the first fixture starts", () => {
@@ -238,11 +239,14 @@ describe.runIf(HAS_DB)("X-SW-17 the round count is editable until the first fixt
       await pair(rig); // the mint: 5 rounds × 3 boards
       const minted = await rowsOf(rig.stageId);
       expect(roundsIn(minted), `${m.key}: premise, 5 rounds of shells`).toEqual([1, 2, 3, 4, 5]);
-      // #838's premise, on this very stage: the Format tab's Apply is the old way to change the count, and it is locked.
+      // #838's premise, on this very stage: replacing the stage graph is the old way to change the count. Since FMT5 it no
+      // longer refuses outright: it would CLEAR every shell (and asks for that confirm, FORMAT_CHANGE_CONFIRM, writing
+      // nothing). The rounds edit below is the way that keeps rounds 1–3.
       await expect(
         replaceStages(rig.auth, rig.divisionId, [{ seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 3 }, progression: null }]),
-        `${m.key}: premise — Apply answers FORMAT_LOCKED once shells exist`,
-      ).rejects.toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
+        `${m.key}: premise — replacing the stages asks to clear the shells`,
+      ).rejects.toMatchObject({ status: 409, code: "FORMAT_CHANGE_CONFIRM" });
+      expect(await rowsOf(rig.stageId), `${m.key}: the unconfirmed replace moved nothing`).toEqual(minted);
       const ledger0 = await ledgerState(rig.divisionId);
 
       // 5 → 3: rounds 4 and 5 go (3 boards each, a field of 6 has no bye); rounds 1–3 keep every row, id and key.

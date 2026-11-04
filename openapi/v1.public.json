@@ -18069,7 +18069,7 @@
         ]
       },
       "put": {
-        "summary": "Replace the stage graph (v8 Settings format; 409 FORMAT_LOCKED once fixtures exist). Each stage is written as for POST, then the body's `config.rules` over it — except that a slot whose `seq` keeps the same `kind` keeps the rules it already stored IN PLACE OF its preset (a preset key the organiser removed stays removed, and a stage set to the division's rules stays so); a new slot, or one whose kind changed, starts from its own kind's preset. A matched slot also keeps its own `points` (the stage's PointsRule) unless the body sends its own, which replaces it whole, or sends `points: null`, which drops it and stores none; a new slot, or one whose kind changed, has none. Every refusal POST can raise from the body or the carry (400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE, 400 SWISS_REQUESTED_BYES_DEFERRED for a `config.requestedByes` — a requested half-point or zero-point bye is deferred, RB3-7(c) — 402 PAYMENT_REQUIRED for a plan feature or the stage cap, 409 for a `seq` the body names twice, 422 CONFIG_INVALID / TIEBREAK_KEY_INVALID / POINTS_OUTCOME_UNCOVERED / POINTS_SPLIT_FLATTENED / STAGE_SWISS_ROUNDS_REQUIRED — a carried `points` is asked as a sent one — 422 CHESS_INDIVIDUAL_ONLY for an americano or mexicano stage in a chess division, and 422 SWISS_CHESS_ALWAYS_ON for a Swiss stage's `chess: false` in a chess division — a slot's stored off is not carried there: it takes the default, on) refuses the whole save: a refused save leaves the existing stages untouched",
+        "summary": "Replace the stage graph (FMT5: the Division rules card's Format). 409 FORMAT_LOCKED once a result exists anywhere in the division (a status of play, an abandonment with an outcome, or anything recorded; a generation-time bye is none). While the division has fixtures and none holds a result, the change CLEARS them - with their schedule, official appointments, team sheets, device links and Match Day calls - and replaces the stages in one transaction, but only with `clear` set to the `token` of a dry run: without it 409 FORMAT_CHANGE_CONFIRM, with an older board's token 409 FORMAT_CHANGE_STALE, each carrying the fresh dry run as `preview`. Refused outright while a stream session is active on a board (409 FORMAT_STREAM_LIVE, `fixture_id`, `fixture_no`), an online game stands behind one (409 ONLINE_GAME_EXISTS), a match carries its own format (409 FIXTURE_HAS_OWN_FORMAT) or the schedule is frozen (422 SCHEDULE_LOCKED). `dry_run=1` runs the whole change, every refusal included, writes nothing and answers `FormatChangePreview` (the stages it replaces, the fixtures, time slots and courts it clears, the setup that goes with them, and the token; `token` null when there is no fixture to clear). Each stage is written as for POST, then the body's `config.rules` over it — except that a slot whose `seq` keeps the same `kind` keeps the rules it already stored IN PLACE OF its preset (a preset key the organiser removed stays removed, and a stage set to the division's rules stays so); a new slot, or one whose kind changed, starts from its own kind's preset. A matched slot also keeps its own `points` (the stage's PointsRule) unless the body sends its own, which replaces it whole, or sends `points: null`, which drops it and stores none; a new slot, or one whose kind changed, has none. Every refusal POST can raise from the body or the carry (400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE, 400 SWISS_REQUESTED_BYES_DEFERRED for a `config.requestedByes` — a requested half-point or zero-point bye is deferred, RB3-7(c) — 402 PAYMENT_REQUIRED for a plan feature or the stage cap, 409 for a `seq` the body names twice, 422 CONFIG_INVALID / TIEBREAK_KEY_INVALID / POINTS_OUTCOME_UNCOVERED / POINTS_SPLIT_FLATTENED / STAGE_SWISS_ROUNDS_REQUIRED — a carried `points` is asked as a sent one — 422 CHESS_INDIVIDUAL_ONLY for an americano or mexicano stage in a chess division, and 422 SWISS_CHESS_ALWAYS_ON for a Swiss stage's `chess: false` in a chess division — a slot's stored off is not carried there: it takes the default, on) refuses the whole save: a refused save leaves the existing stages untouched",
         "tags": [
           "stages"
         ],
@@ -18083,6 +18083,27 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "dry_run",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "description": "1: answer what the change would clear, write nothing"
+          },
+          {
+            "name": "clear",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The dry run's token, confirming the clear of the fixtures it named"
           }
         ],
         "requestBody": {
@@ -18983,84 +19004,176 @@
                       "const": true
                     },
                     "data": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                          },
-                          "division_id": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                          },
-                          "seq": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "kind": {
-                            "type": "string",
-                            "enum": [
-                              "league",
-                              "group",
-                              "swiss",
-                              "knockout",
-                              "double_elim",
-                              "stepladder",
-                              "page_playoff",
-                              "americano",
-                              "ladder"
-                            ]
-                          },
-                          "name": {
-                            "type": "string"
-                          },
-                          "config": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
                             "type": "object",
-                            "propertyNames": {
-                              "type": "string"
-                            },
-                            "additionalProperties": {}
-                          },
-                          "progression": {
-                            "anyOf": [
-                              {
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "division_id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "seq": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "league",
+                                  "group",
+                                  "swiss",
+                                  "knockout",
+                                  "double_elim",
+                                  "stepladder",
+                                  "page_playoff",
+                                  "americano",
+                                  "ladder"
+                                ]
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "config": {
                                 "type": "object",
                                 "propertyNames": {
                                   "type": "string"
                                 },
                                 "additionalProperties": {}
                               },
-                              {
-                                "type": "null"
+                              "progression": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "additionalProperties": {}
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "pending",
+                                  "active",
+                                  "complete"
+                                ]
                               }
-                            ]
-                          },
-                          "status": {
-                            "type": "string",
-                            "enum": [
-                              "pending",
-                              "active",
-                              "complete"
-                            ]
+                            },
+                            "required": [
+                              "id",
+                              "division_id",
+                              "seq",
+                              "kind",
+                              "name",
+                              "config",
+                              "progression",
+                              "status"
+                            ],
+                            "additionalProperties": false
                           }
                         },
-                        "required": [
-                          "id",
-                          "division_id",
-                          "seq",
-                          "kind",
-                          "name",
-                          "config",
-                          "progression",
-                          "status"
-                        ],
-                        "additionalProperties": false
-                      }
+                        {
+                          "type": "object",
+                          "properties": {
+                            "dry_run": {
+                              "type": "boolean",
+                              "const": true
+                            },
+                            "stages": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "name"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "fixtures": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "slots": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "courts": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "officials": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "lineups": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "device_links": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "calls": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "token": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "dry_run",
+                            "stages",
+                            "fixtures",
+                            "slots",
+                            "courts",
+                            "officials",
+                            "lineups",
+                            "device_links",
+                            "calls",
+                            "token"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "requestId": {
                       "type": "string",
