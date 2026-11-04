@@ -447,7 +447,7 @@ describe("public Bracket", () => {
   });
 
   // Layout defect (this session): at desktop the tree was clipped ~48px on
-  // its right edge while the `/shared/[orgSlug]` shell's `max-w-5xl <main>`
+  // its right edge while the `/live/[orgSlug]` shell's `max-w-5xl <main>`
   // left real page margin unused beside it (measured: a knockout of 8 needs
   // 1040px, main's content box is ~992px). `.bracket-bleed` (globals.css)
   // reclaims that margin without touching the shared shell. Every render

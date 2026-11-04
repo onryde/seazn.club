@@ -29,7 +29,7 @@ export async function jul3Suite(admin: Session, orgId: string, orgSlug: string):
   await v1(admin, `/api/v1/competitions/${comp.id}`, "PATCH", {
     branding: { colors: { primary: "#0f766e" } },
   });
-  const themedHtml = await (await fetch(`${BASE}/shared/${orgSlug}/${comp.slug}`)).text();
+  const themedHtml = await (await fetch(`${BASE}/live/${orgSlug}/${comp.slug}`)).text();
   check("pro public page carries the org accent theme", themedHtml.includes("--ps-accent:#0f766e"));
   const div = await v1(admin, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
     name: "Open",
@@ -53,9 +53,9 @@ export async function jul3Suite(admin: Session, orgId: string, orgSlug: string):
   await call(admin, `/api/orgs/${orgId}`, "PATCH", {
     branding: { colors: { primary: "#1d4ed8" } },
   });
-  const orgLandingHtml = await (await fetch(`${BASE}/shared/${orgSlug}`)).text();
+  const orgLandingHtml = await (await fetch(`${BASE}/live/${orgSlug}`)).text();
   check("pro org landing carries the org color", orgLandingHtml.includes("--ps-accent:#1d4ed8"));
-  const overrideHtml = await (await fetch(`${BASE}/shared/${orgSlug}/${comp.slug}`)).text();
+  const overrideHtml = await (await fetch(`${BASE}/live/${orgSlug}/${comp.slug}`)).text();
   check("competition color overrides the org color", overrideHtml.includes("--ps-accent:#0f766e"));
 
   // -- PROMPT-21: clubs + bulk import ------------------------------------

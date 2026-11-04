@@ -74,7 +74,7 @@ describe("the YouTube player and thumbnail are built in one place, and that plac
     // component, so the made-for-kids rule and the tap-to-play facade come with it; its caller asks the rule first as well
     // (lib/match-day/view.ts `streamPreviewOf`).
     expect(mounts).toEqual([
-      "app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
+      "app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
       "components/v2/match-day/court-stream-preview.tsx",
     ]);
     const preview = all.find((f) => f.rel === "lib/match-day/view.ts");

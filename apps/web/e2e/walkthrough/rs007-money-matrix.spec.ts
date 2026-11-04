@@ -198,7 +198,7 @@ async function enterAndPay(
   const shot = async (name: string) =>
     anon.screenshot({ path: `${s.shots}/${opts.shotPrefix}-${name}.png`, fullPage: true });
 
-  await anon.goto(`/shared/${opts.orgSlug}/${opts.compSlug}/register`, { waitUntil: "load" });
+  await anon.goto(`/live/${opts.orgSlug}/${opts.compSlug}/register`, { waitUntil: "load" });
   await anon.getByRole("button", { name: /^accept$/i }).click({ timeout: 3000 }).catch(() => {});
   await expect(anon.locator("#reg-who-name")).toBeVisible({ timeout: 20_000 });
 

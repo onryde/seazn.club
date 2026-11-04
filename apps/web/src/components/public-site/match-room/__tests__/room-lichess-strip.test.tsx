@@ -28,7 +28,7 @@ import { RoomShell, Screen } from "../room-shell";
 import type { RoomSnapshot } from "../room-snapshot";
 
 const T0 = Date.parse("2026-10-12T10:00:00.000Z");
-const ROOM = "/shared/org/comp/div/fixtures/f1/play";
+const ROOM = "/live/org/comp/div/fixtures/f1/play";
 const TOKEN = "eyJhbGciOiJIUzI1NiJ9.payload-with_chars.sig";
 const SELF = `${ROOM}?t=${encodeURIComponent(TOKEN)}`;
 
@@ -41,7 +41,7 @@ function snap(): RoomSnapshot {
     roundOpenedAt: new Date(T0).toISOString(),
     opensAt: new Date(T0).toISOString(),
     deadline: new Date(T0 + 20 * 60_000).toISOString(),
-    links: { fixture: "/shared/org/comp/div/fixtures/f1", standings: "/shared/org/comp/div" },
+    links: { fixture: "/live/org/comp/div/fixtures/f1", standings: "/live/org/comp/div" },
     meta: { divisionName: "Open Rapid", roundNo: 3, boardNo: 2, limitSeconds: 600, incrementSeconds: 5 },
     orgSlug: "org",
     you: { colour: "white", name: "Ada Okonkwo", checkedIn: false },

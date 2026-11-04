@@ -699,7 +699,7 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
     const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
     const context = propsOf(panel).context as { showRegisterLink: boolean; registerHref: string };
     expect(context.showRegisterLink).toBe(true);
-    expect(context.registerHref).toBe("/shared/riverside/summer-league/register");
+    expect(context.registerHref).toBe("/live/riverside/summer-league/register");
   });
 
   it("hides the register link for a private competition", async () => {

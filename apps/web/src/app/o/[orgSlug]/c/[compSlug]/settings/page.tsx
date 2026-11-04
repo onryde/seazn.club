@@ -162,7 +162,7 @@ export default async function CompetitionSettingsPage({
           themeBranding={themeBranding}
           orgBranding={org.branding}
           suggestedStatus={suggestedStatus}
-          sharePath={routes.shared(orgSlug, competition.slug)}
+          sharePath={routes.publicHub(orgSlug, competition.slug)}
           hasYouthDivisions={youthRow?.youth ?? false}
           archivedCount={archivedDivisions.length}
           archivedPanel={

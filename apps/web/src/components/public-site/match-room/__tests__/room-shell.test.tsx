@@ -42,7 +42,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     roundOpenedAt: new Date(T0).toISOString(),
     opensAt: new Date(T0).toISOString(),
     deadline: new Date(T0 + 20 * 60_000).toISOString(),
-    links: { fixture: "/shared/org/comp/div/fixtures/f1", standings: "/shared/org/comp/div" },
+    links: { fixture: "/live/org/comp/div/fixtures/f1", standings: "/live/org/comp/div" },
     meta: { divisionName: "Open Rapid", roundNo: 3, boardNo: 2, limitSeconds: 600, incrementSeconds: 5 },
     orgSlug: "org",
     you: { colour: "white", name: "Bo Lind", checkedIn: false },
@@ -69,7 +69,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
 function paint(s: RoomSnapshot, locale: keyof typeof LOCALES = "en") {
   return renderToStaticMarkup(
     <DictProvider dict={LOCALES[locale] as unknown as Dict} locale={locale}>
-      <RoomShell initial={s} token="tok" selfPath="/shared/org/comp/div/fixtures/f1/play?t=tok" />
+      <RoomShell initial={s} token="tok" selfPath="/live/org/comp/div/fixtures/f1/play?t=tok" />
     </DictProvider>,
   );
 }
@@ -255,8 +255,8 @@ describe("the room's first paint", () => {
     expect(screenOf(html)).toBe("over");
     expect(html).toContain("You won");
     expect(html).toContain("Checkmate · 1–0");
-    expect(html).toContain('href="/shared/org/comp/div/fixtures/f1"');
-    expect(html).toContain('href="/shared/org/comp/div"');
+    expect(html).toContain('href="/live/org/comp/div/fixtures/f1"');
+    expect(html).toContain('href="/live/org/comp/div"');
     expect(html, "no game actions once it is over").not.toContain('data-testid="room-resign"');
   });
 

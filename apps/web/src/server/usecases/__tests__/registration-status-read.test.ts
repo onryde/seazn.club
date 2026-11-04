@@ -1281,7 +1281,7 @@ describe.skipIf(!HAS_DB)("resendRegistrationConfirmationPublic (RS007)", () => {
     expect(saw).toHaveLength(1);
     // The mail links to the full rid+token page (the English text line reads "View your registration: <url>").
     expect(saw[0]!.text).toContain(
-      `https://test.local/shared/${orgSlug}/${competition.slug}/register/status?rid=${registration.group_id}&token=${access_token}`,
+      `https://test.local/live/${orgSlug}/${competition.slug}/register/status?rid=${registration.group_id}&token=${access_token}`,
     );
   });
 });

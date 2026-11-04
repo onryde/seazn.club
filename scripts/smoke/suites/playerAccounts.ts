@@ -145,7 +145,7 @@ export async function playerAccountsSuite(admin: Session, orgId: string): Promis
   );
 
   // Unclaimed person untouched: no public card without consent.
-  const card = await fetch(`${BASE}/shared/${orgSlug}/${compData.slug}/players/${unclaimedId}`);
+  const card = await fetch(`${BASE}/live/${orgSlug}/${compData.slug}/players/${unclaimedId}`);
   check("pa unclaimed person has no public card", card.status === 404);
 
   // Second invite on a claimed person fails clean.

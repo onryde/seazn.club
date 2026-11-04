@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
 import { Barlow_Condensed } from "next/font/google";
 
-// The widgets are the /shared public tree's own components, and those ask for
+// The widgets are the /live public tree's own components, and those ask for
 // the display face through `font-display` — which globals.css declares
 // `@theme inline` as `var(--ps-font-display, var(--font-geist-sans))`, so the
-// variable is resolved on the element, not at :root. Only the /shared org
+// variable is resolved on the element, not at :root. Only the /live org
 // layout set it, so an embedded widget silently fell back to the body sans:
 // the schedule widget's fixed rail then painted "Finalizado" / "Afgelopen" /
 // "déterminer" over the entrant name (N1f f1, review-n1e I1). Same face and
-// same weights as `(public)/shared/[orgSlug]/layout.tsx` — the two surfaces
+// same weights as `(public)/live/[orgSlug]/layout.tsx` — the two surfaces
 // have to render the rail identically, and 600 is the weight it uses.
 const displayFont = Barlow_Condensed({
   weight: ["500", "600", "700"],

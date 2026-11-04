@@ -15,7 +15,7 @@
 // The predicate under test is the SQL one, `org_has_feature` (V344), because
 // that is what the public tree actually reads: `loadOrg` in
 // server/public-site/data.ts selects `org_has_feature(o.id,
-// 'dashboard.branding') as branded`, and `shared/[orgSlug]/layout.tsx` renders
+// 'dashboard.branding') as branded`, and `live/[orgSlug]/layout.tsx` renders
 // the attribution rail with `{org.branded ? null : …}`. The TS resolver is
 // asserted alongside it so the two cannot answer differently for this key.
 //

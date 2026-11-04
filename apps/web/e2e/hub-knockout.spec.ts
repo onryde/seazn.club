@@ -203,7 +203,7 @@ async function publicCompetition(request: APIRequestContext, label: string) {
   );
   expect(res.status, JSON.stringify(res.error)).toBe(201);
   // A create over the public-dashboard cap degrades to private with a 201
-  // rather than refusing, and a private competition 404s off /shared/*.
+  // rather than refusing, and a private competition 404s off /live/*.
   expect(res.data!.visibility).toBe("public");
   return res.data!;
 }
@@ -320,7 +320,7 @@ async function activeOrgSlug(request: APIRequestContext) {
 // ---------------------------------------------------------------------------
 
 const hubUrl = (orgSlug: string, seeded: Seeded, query: string) =>
-  `/shared/${orgSlug}/${seeded.compSlug}${query}`;
+  `/live/${orgSlug}/${seeded.compSlug}${query}`;
 
 const roundChip = (page: Page, view: HubView, round: HubRound) =>
   page.getByTestId(`mh-knockout-round-${view.id}-${round.key}`);

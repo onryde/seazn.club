@@ -1692,15 +1692,15 @@ jobs:
 
       # The overlay in "Start server" is wiring; this is the behaviour. installPublicErrorNoStore is one of the things
       # register() does, and it shows on the wire: Next sends an ISR page's notFound() with the FOUND page's
-      # `s-maxage=30, stale-while-revalidate=270`, and only the guard turns a /shared 404 into `private, no-cache,
+      # `s-maxage=30, stale-while-revalidate=270`, and only the guard turns a /live 404 into `private, no-cache,
       # no-store, max-age=0, must-revalidate`. The same build without the overlay answers this URL with the s-maxage
       # header (measured), so no-store here means the boot hook ran. A fresh slug per try, so no answer is a cached
       # one; the bound only absorbs a slow first render, a guard that never installs fails it.
-      # The step is only as good as the premise that /shared renders through Next's ISR cache: a forced-dynamic page's
+      # The step is only as good as the premise that /live renders through Next's ISR cache: a forced-dynamic page's
       # notFound() (/r/<ref> is one) sends no-store by itself, whether or not register() ran. So the step also requires
       # `x-nextjs-cache: MISS` on the 404: a header Next sends only on a response that went through its incremental cache
-      # (measured: present on a /shared 404, absent on /r/<ref>'s), and a fresh slug is always a MISS, so a HIT or STALE
-      # would be an answer replayed from a cache rather than the render under test. If /shared ever stops being ISR this
+      # (measured: present on a /live 404, absent on /r/<ref>'s), and a fresh slug is always a MISS, so a HIT or STALE
+      # would be an answer replayed from a cache rather than the render under test. If /live ever stops being ISR this
       # step reds loudly rather than passing for the wrong reason. (e2e/public-cache-headers.spec.ts is NOT a tripwire for
       # that: it skips when s-maxage is missing, probes another route, and e2e does not run on pull requests.)
       - name: Prove the server ran register() (a public 404 goes out no-store)
@@ -1709,7 +1709,7 @@ jobs:
           hdrs="$RUNNER_TEMP/register-proof-headers.txt"
           ok=""
           for i in $(seq 1 15); do
-            code=$(curl -s -o /dev/null -D "$hdrs" -w '%{http_code}' --max-time 10 "http://localhost:3000/shared/register-proof-${GITHUB_RUN_ID:-0}-${i}" || true)
+            code=$(curl -s -o /dev/null -D "$hdrs" -w '%{http_code}' --max-time 10 "http://localhost:3000/live/register-proof-${GITHUB_RUN_ID:-0}-${i}" || true)
             cc=$(tr -d '\r' < "$hdrs" | grep -i '^cache-control:' || true)
             isr=$(tr -d '\r' < "$hdrs" | grep -i '^x-nextjs-cache:[[:space:]]*MISS' || true)
             if [ "$code" = "404" ] && grep -qi 'no-store' <<< "$cc" && [ -n "$isr" ]; then
@@ -1718,7 +1718,7 @@ jobs:
             sleep 1
           done
           if [ -z "$ok" ]; then
-            echo "a public /shared 404 did not go out no-store from an ISR render (last: HTTP ${code}, ${cc:-no Cache-Control header}, ${isr:-no x-nextjs-cache: MISS header}) - instrumentation.ts register() did not run on this server, or /shared stopped rendering through Next's ISR cache and no-store alone proves nothing"
+            echo "a public /live 404 did not go out no-store from an ISR render (last: HTTP ${code}, ${cc:-no Cache-Control header}, ${isr:-no x-nextjs-cache: MISS header}) - instrumentation.ts register() did not run on this server, or /live stopped rendering through Next's ISR cache and no-store alone proves nothing"
             cat dev-server.log; exit 1
           fi
 

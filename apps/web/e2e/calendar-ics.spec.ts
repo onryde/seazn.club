@@ -78,7 +78,7 @@ test("the public .ics carries an unscheduled final as a tentative all-day event"
   const final = fixtures.find((f) => !f.home_entrant_id && !f.away_entrant_id);
   expect(final, "the final's slots are unresolved before either semi is played").toBeTruthy();
 
-  // /shared/... needs the org/competition/division SLUGS, not ids — resolved
+  // /live/... needs the org/competition/division SLUGS, not ids — resolved
   // via the API rather than hardcoded, since this is a freshly-seeded org and
   // no demo slug is guaranteed to exist.
   const compData = await apiJson<{ org_id: string; slug: string }>(
@@ -90,7 +90,7 @@ test("the public .ics carries an unscheduled final as a tentative all-day event"
   const orgSlug = orgs.data!.find((o) => o.id === compData.data!.org_id)?.slug;
   expect(orgSlug, "the current session must be a member of the org that owns this competition").toBeTruthy();
 
-  const url = `/shared/${orgSlug}/${compData.data!.slug}/${divData.data!.slug}/calendar.ics`;
+  const url = `/live/${orgSlug}/${compData.data!.slug}/${divData.data!.slug}/calendar.ics`;
   const res = await request.get(url);
   expect(res.status()).toBe(200);
   expect(res.headers()["content-type"]).toContain("text/calendar");
@@ -172,7 +172,7 @@ test("the ?entrant= feed still carries an unresolved final that names neither si
   const orgSlug = orgs.data!.find((o) => o.id === compData.data!.org_id)?.slug;
 
   const res = await request.get(
-    `/shared/${orgSlug}/${compData.data!.slug}/${divData.data!.slug}/calendar.ics?entrant=${subscriberEntrantId}`,
+    `/live/${orgSlug}/${compData.data!.slug}/${divData.data!.slug}/calendar.ics?entrant=${subscriberEntrantId}`,
   );
   expect(res.status()).toBe(200);
   const body = await res.text();
@@ -258,7 +258,7 @@ test("the public .ics carries the venue and court a fixture was scheduled onto",
   const orgSlug = orgs.data!.find((o) => o.id === compData.data!.org_id)?.slug;
 
   const res = await request.get(
-    `/shared/${orgSlug}/${compData.data!.slug}/${divData.data!.slug}/calendar.ics`,
+    `/live/${orgSlug}/${compData.data!.slug}/${divData.data!.slug}/calendar.ics`,
   );
   expect(res.status()).toBe(200);
   const body = await res.text();

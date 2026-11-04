@@ -151,9 +151,9 @@ test.beforeAll(async ({ browser }) => {
     .toBe(24);
 
   seed = {
-    divisionPath: `/shared/${org.slug}/${competition.slug}/${div.slug}?tab=standings`,
+    divisionPath: `/live/${org.slug}/${competition.slug}/${div.slug}?tab=standings`,
     embedPath: `/embed/divisions/${div.id}/standings`,
-    hubPath: `/shared/${org.slug}/${competition.slug}`,
+    hubPath: `/live/${org.slug}/${competition.slug}`,
   };
 });
 
@@ -218,7 +218,7 @@ function expectLongNameClamped(m: Awaited<ReturnType<typeof longName>>, width: n
 }
 
 /** `hyphens: auto` breaks words by the rules of the element's LANGUAGE, and
- *  with no `lang` in scope the browser does not hyphenate at all. The /shared
+ *  with no `lang` in scope the browser does not hyphenate at all. The /live
  *  org layout sets `<html lang>` to the ORG's locale (`HtmlLang`), and the
  *  legend check beside each call reads this org's copy from the English
  *  dictionary — so the page must say "en". */

@@ -1,6 +1,6 @@
 // T2 (owner approved 2026-09-17): the division page's "View Public Page"
 // button goes to the HUB scoped to this division, not to the old standalone
-// division page. `/shared/<org>/<comp>?tab=matches&division=<divSlug>` — both
+// division page. `/live/<org>/<comp>?tab=matches&division=<divSlug>` — both
 // spellings read from the hub itself: "matches" is one of `deriveHubTabs`'
 // ids (`lib/matches-hub.ts:212,243`) and `?division=` is what
 // `readDivisionParam`/`useDivisionParam` (`use-tab-param.ts:172,192`) read and
@@ -156,7 +156,7 @@ const hrefOf = (id: DeskOpenItem["id"], items: DeskOpenItem[]): string | undefin
 const topLevelPublicLinks = (tree: ReactNode): string[] =>
   findAll(tree, "a")
     .map((el) => (el.props as { href?: string }).href ?? "")
-    .filter((href) => href.startsWith("/shared/"));
+    .filter((href) => href.startsWith("/live/"));
 
 const publicCompetition = { id: "comp-1", frozen: false, visibility: "public", slug: "comp-one" };
 const privateCompetition = { ...publicCompetition, visibility: "private" };
@@ -170,14 +170,14 @@ describe("division page — View Public Page opens the hub, this division select
     competitionsSpy.getCompetition.mockReset().mockResolvedValue(publicCompetition);
   });
 
-  it("points at the hub's Matches tab with ?division=, not at the old /shared/<org>/<comp>/<div> page", async () => {
+  it("points at the hub's Matches tab with ?division=, not at the old /live/<org>/<comp>/<div> page", async () => {
     const menus = openMenus(await renderPage());
     expect(menus.length, "one Open menu").toBe(1);
     const items = itemsOf(menus[0]!);
-    expect(hrefOf("public", items)).toBe("/shared/org/comp-one?tab=matches&division=div");
+    expect(hrefOf("public", items)).toBe("/live/org/comp-one?tab=matches&division=div");
     // The OLD target, named so this test fails if the href goes back to it:
     // the standalone division page is slated for a 308 into the hub.
-    expect(items.map((i) => i.href)).not.toContain("/shared/org/comp-one/div");
+    expect(items.map((i) => i.href)).not.toContain("/live/org/comp-one/div");
   });
 
   it("is absent on a private competition, like the other public links beside it", async () => {
@@ -219,7 +219,7 @@ describe("division page — Slideshow, View Public Page and QR fold into one Ope
         id: "public",
         label: "action.viewPublic",
         ariaLabel: "aria.viewPublic",
-        href: "/shared/org/comp-one?tab=matches&division=div",
+        href: "/live/org/comp-one?tab=matches&division=div",
         newTab: true,
         arrow: true,
         plainAnchor: true,
@@ -228,7 +228,7 @@ describe("division page — Slideshow, View Public Page and QR fold into one Ope
         id: "qr",
         label: "action.qr",
         ariaLabel: "aria.qrPoster",
-        href: "/shared/org/comp-one/poster.pdf?division=div",
+        href: "/live/org/comp-one/poster.pdf?division=div",
         newTab: true,
         arrow: true,
         plainAnchor: true,

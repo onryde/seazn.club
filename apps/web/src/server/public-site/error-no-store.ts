@@ -9,12 +9,12 @@
 // runs before the render; a `headers()` Cache-Control would apply to found
 // pages too, and Next would keep it). A `revalidate = 0` not-found boundary is
 // not an option either: in an ISR route it throws "Page changed from static to
-// dynamic at runtime" and serves a 500 (see (public)/shared/[orgSlug]/not-found.tsx).
+// dynamic at runtime" and serves a 500 (see (public)/live/[orgSlug]/not-found.tsx).
 //
 // So the header is fixed on the wire: `installPublicErrorNoStore` wraps
 // `ServerResponse.prototype.writeHead` — the call every node response makes,
 // explicitly or through `end()` — and, for a status of 400 or more on a
-// cacheable public path (the proxy's own `isCacheablePublicPath`: /shared,
+// cacheable public path (the proxy's own `isCacheablePublicPath`: /live,
 // /embed), replaces any Cache-Control with the value Next itself sends for an
 // uncacheable response. Every other response is untouched: found pages, a
 // redirect, and every /api path keep exactly what they had.

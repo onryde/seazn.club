@@ -20,7 +20,7 @@ export type ExternalPlayLobby =
   | { state: "online_chess_off"; roomPath: null }
   | {
       state: Exclude<LobbyState, "online_chess_off">;
-      /** The player's own room (`routes.sharedFixturePlay`, no token — the session is the identity there too). */
+      /** The player's own room (`routes.publicFixturePlay`, no token — the session is the identity there too). */
       roomPath: string;
       /** The round's window (D12), or nulls while it is unopened. */
       opensAt: string | null;

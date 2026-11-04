@@ -1,9 +1,13 @@
 // The pure half of the kiosk's phone card (OWNER RULING C1, 2026-09-15; the
 // gate is `kiosk-phone-card.tsx`). It replaces the "made for a TV" banner's
 // logic (N1d d6): the hub link is unchanged, and the remembered ✕ became the
-// remembered "Show the board anyway". NO IMPORTS, on purpose: the e2e spec
+// remembered "Show the board anyway". ONE import, on purpose: the e2e spec
 // reads the storage key from here, and a spec that loads a module whose chain
-// reaches a JSON import fails to collect.
+// reaches a JSON import fails to collect. The URL builder (lib/routes.ts) is
+// that import: its chain is lib/public-hub-root.mjs and nothing else, and the
+// e2e helpers already load it. Relative, not `@/`, so the spec needs no alias.
+
+import { routes } from "../../lib/routes";
 
 /** Where "Show the board anyway" is remembered, per browser. */
 export const KIOSK_BOARD_CHOSEN_STORAGE_KEY = "seazn:kiosk-board-chosen";
@@ -14,7 +18,7 @@ export const KIOSK_BOARD_CHOSEN_STORAGE_KEY = "seazn:kiosk-board-chosen";
  * `use-tab-param.ts`) when the kiosk shows one division.
  */
 export function kioskHubHref(orgSlug: string, competitionSlug: string, divisionSlug?: string | null): string {
-  const hub = `/shared/${encodeURIComponent(orgSlug)}/${encodeURIComponent(competitionSlug)}`;
+  const hub = routes.publicHub(encodeURIComponent(orgSlug), encodeURIComponent(competitionSlug));
   return divisionSlug ? `${hub}?division=${encodeURIComponent(divisionSlug)}` : hub;
 }
 

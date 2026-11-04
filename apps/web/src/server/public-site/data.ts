@@ -40,6 +40,7 @@ import type { PlayerMatchLine, PlayerUpcomingRow } from "./public-player-matches
 import { loadPublicExternalPlay, loadPublicPairedWhiteSide, loadPublicRoundOpenedAt } from "@/server/usecases/external-play-read";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import type { PublicExternalPlay } from "@/server/external-play/public-view";
+import { routes } from "@/lib/routes";
 
 /**
  * `{count}`-pluralized org-default-locale copy — the `public-site/data.ts`
@@ -1294,7 +1295,7 @@ export async function getPublicFixture(
         replayParts(fixtureId),
       ]);
       const locale = toLocale(shell.org.default_locale);
-      const basePath = `/shared/${shell.org.slug}/${shell.competition.slug}/${division.slug}`;
+      const basePath = routes.publicHub(shell.org.slug, shell.competition.slug, division.slug);
       const matchCentre = await loadMatchCentre(sql, fixture, {
         orgTz: tzRow?.org_tz ?? null,
         division: {
@@ -1312,7 +1313,7 @@ export async function getPublicFixture(
           playerNameDisplay: division.player_name_display ?? null,
         },
         locale,
-        hrefs: { division: basePath, competition: `/shared/${shell.org.slug}/${shell.competition.slug}`, calendar: `${basePath}/calendar.ics` },
+        hrefs: { division: basePath, competition: routes.publicHub(shell.org.slug, shell.competition.slug), calendar: routes.publicCalendar(shell.org.slug, shell.competition.slug, division.slug) },
         stage: stageRow ? { name: stageRow.name, roundLabel: null } : null,
         slotLabelLookup: (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars),
       });

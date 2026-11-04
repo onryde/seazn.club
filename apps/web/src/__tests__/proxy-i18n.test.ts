@@ -44,6 +44,19 @@ describe("marketing [lang] rewrite honors the resolved locale", () => {
     expect(rewriteTarget(proxy(req("/")))).toBe("/en");
   });
 
+  it("LIVE1 option A: a bare /live is the marketing wall (rewritten to the locale); /live/<org>/… is the spectator hub (never rewritten)", () => {
+    // The wall: exactly the unprefixed path, rewritten like /start and /pricing.
+    expect(rewriteTarget(proxy(req("/live")))).toBe("/en/live");
+    expect(rewriteTarget(proxy(req("/live", { cookie: "seazn_locale=fr" })))).toBe("/fr/live");
+    // The hub: a `/live/` prefix is NOT marketing. A rewrite here would swallow every spectator page into [lang].
+    const hub = ["/live/riverside", "/live/riverside/summer-cup", "/live/riverside/summer-cup/open?tab=standings"];
+    for (const path of hub) {
+      const res = proxy(req(path, { cookie: "seazn_locale=fr" }));
+      expect(res.headers.get("x-middleware-rewrite"), `${path}: not rewritten`).toBeNull();
+    }
+    expect(hub.length, "anti-vacuity: hub paths").toBe(3);
+  });
+
   it("ignores an unsupported cookie locale and negotiates instead", () => {
     // de isn't a built locale — cookie is skipped, Accept-Language wins.
     expect(

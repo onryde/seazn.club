@@ -85,7 +85,7 @@ async function posterUrl(
   const orgs = await apiJson<OrgInfo[]>(request, "/api/orgs");
   const orgSlug = orgs.data!.find((o) => o.id === compData.data!.org_id)?.slug;
   expect(orgSlug, "the current session must be a member of the org that owns this competition").toBeTruthy();
-  return `/shared/${orgSlug}/${compData.data!.slug}/poster.pdf`;
+  return `/live/${orgSlug}/${compData.data!.slug}/poster.pdf`;
 }
 
 test.describe("public poster.pdf — the draw", () => {
@@ -202,7 +202,7 @@ test.describe("public poster.pdf — locale", () => {
 
     const orgs = await apiJson<OrgInfo[]>(page.request, "/api/orgs");
     const orgSlug = orgs.data!.find((o) => o.id === orgId)?.slug;
-    const res = await page.request.get(`/shared/${orgSlug}/${comp.data!.slug}/poster.pdf`);
+    const res = await page.request.get(`/live/${orgSlug}/${comp.data!.slug}/poster.pdf`);
     expect(res.status()).toBe(200);
     const buf = Buffer.from(await res.body());
     const text = decodePdfText(buf);

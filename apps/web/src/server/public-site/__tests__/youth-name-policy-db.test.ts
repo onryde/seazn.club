@@ -304,6 +304,6 @@ describe.skipIf(!HAS_DB)("competition hub leader boards — a masked row carries
     const row = rows.find((r) => r.person.name === OPEN_FULL);
     expect(row, `rows: ${JSON.stringify(rows)}`).toBeDefined();
     expect(row!.person).toEqual({ personId: s.open.personId, name: OPEN_FULL, masked: false });
-    expect(row!.personHref).toBe(`/shared/${s.orgSlug}/${s.compSlug}/players/${s.open.personId}`);
+    expect(row!.personHref).toBe(`/live/${s.orgSlug}/${s.compSlug}/players/${s.open.personId}`);
   });
 });

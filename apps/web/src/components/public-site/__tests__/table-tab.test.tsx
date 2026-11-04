@@ -509,7 +509,7 @@ describe("TableTab — the division filter", () => {
   });
 
   it("a chip tap narrows the tab and writes `division=` back to the URL; All takes it out again", () => {
-    const loc = { href: "https://seazn.club/shared/riverside/autumn-cup?tab=table", search: "?tab=table" };
+    const loc = { href: "https://seazn.club/live/riverside/autumn-cup?tab=table", search: "?tab=table" };
     const replaced: string[] = [];
     vi.stubGlobal("window", {
       location: loc,
@@ -533,10 +533,10 @@ describe("TableTab — the division filter", () => {
 
     expect(views()).toEqual(["mh-table-sunday-super", "mh-table-sunday-group", "mh-table-premier-league"]);
     tap("mh-table-division-premier");
-    expect(replaced).toEqual(["https://seazn.club/shared/riverside/autumn-cup?tab=table&division=premier"]);
+    expect(replaced).toEqual(["https://seazn.club/live/riverside/autumn-cup?tab=table&division=premier"]);
     expect(views()).toEqual(["mh-table-premier-league"]);
     tap("mh-table-division-all");
-    expect(replaced.at(-1)).toBe("https://seazn.club/shared/riverside/autumn-cup?tab=table");
+    expect(replaced.at(-1)).toBe("https://seazn.club/live/riverside/autumn-cup?tab=table");
     expect(views()).toEqual(["mh-table-sunday-super", "mh-table-sunday-group", "mh-table-premier-league"]);
   });
 });

@@ -39,7 +39,7 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
 // match page) throws `DYNAMIC_SERVER_USAGE` at request time — confirmed
 // against a live server: HTTP 500, "An error occurred in the Server
 // Components render", `digest: 'DYNAMIC_SERVER_USAGE'`. The sibling page
-// (`(public)/shared/.../fixtures/[fixtureId]/page.tsx`) hit the exact same
+// (`(public)/live/.../fixtures/[fixtureId]/page.tsx`) hit the exact same
 // throw and documents it (its own Task 14d comment): in this Next version
 // (`node_modules/next/dist/docs/01-app/02-guides/caching-without-cache-
 // components.md`), reading `searchParams` inside a page that stays

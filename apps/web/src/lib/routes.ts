@@ -5,7 +5,17 @@
 // The URL — not the seazn_org cookie — is the source of truth for which org
 // a page shows; multi-org tabs stay independent.
 
+import { PUBLIC_HUB_ROOT } from "./public-hub-root.mjs";
+
+export { PUBLIC_HUB_ROOT };
+
 type Slug = string;
+
+/** Whether `pathname` is inside the public spectator tree: `/live/<anything>`. A bare `/live` is the marketing wall
+ *  (option A), and `/livex…` is neither. */
+export function isPublicHubPath(pathname: string): boolean {
+  return pathname.startsWith(`${PUBLIC_HUB_ROOT}/`) && pathname.length > PUBLIC_HUB_ROOT.length + 1;
+}
 
 export const routes = {
   orgHome: (org: Slug) => `/o/${org}`,
@@ -76,22 +86,50 @@ export const routes = {
   /** Token/chromeless surfaces stay id-based — no slug chain in kiosk URLs. */
   slideshowCompetition: (competitionId: string) => `/slideshow/competitions/${competitionId}`,
   slideshowDivision: (divisionId: string) => `/slideshow/divisions/${divisionId}`,
-  /** Public dashboard — slug-based already, marker-less scheme, unchanged. */
-  shared: (orgSlug: Slug, compSlug?: Slug, divSlug?: Slug) =>
-    ["/shared", orgSlug, compSlug, divSlug].filter(Boolean).join("/"),
+  // ── The public spectator tree (LIVE1, 2026-11-03: `/shared/…` → `/live/…`). Every spectator URL in the app is
+  // built HERE, over PUBLIC_HUB_ROOT — never by hand (lib/__tests__/public-hub-links.test.ts reds on one). The old
+  // root answers a permanent 308 to the new one (next.config.js), so a printed QR code still lands; a link we
+  // produce never goes through it. A bare `/live` is the marketing wall, not this tree (option A).
+  /** The public hub: the org home, a competition, or a division. Slug-based, marker-less scheme. */
+  publicHub: (orgSlug: Slug, compSlug?: Slug, divSlug?: Slug) => {
+    // An empty org slug would build a bare `/live`: the MARKETING wall (option A), a working-looking 200 where the old
+    // root answered a 404. Slugs are non-null in the database, so this "cannot happen", and is refused if it does.
+    if (!orgSlug) throw new Error("routes.publicHub: an empty org slug builds the marketing /live, not a hub page");
+    return [PUBLIC_HUB_ROOT, orgSlug, compSlug, divSlug].filter(Boolean).join("/");
+  },
+  /** The org's news feed (`?page=N` is appended by the pager), and one post. */
+  publicNews: (orgSlug: Slug) => `${PUBLIC_HUB_ROOT}/${orgSlug}/news`,
+  publicNewsPost: (orgSlug: Slug, postSlug: Slug) => `${PUBLIC_HUB_ROOT}/${orgSlug}/news/${postSlug}`,
+  /** A post's 9:16 story card (the PNG route beside the post). */
+  publicNewsStory: (orgSlug: Slug, postSlug: Slug) => `${PUBLIC_HUB_ROOT}/${orgSlug}/news/${postSlug}/story.png`,
   /** Public register page (design §5) — competition-scoped (one cart can
    *  span divisions), so the SAME url is shown on every Registration hub
    *  row rather than a per-division link. */
-  publicRegister: (orgSlug: Slug, compSlug: Slug) => `/shared/${orgSlug}/${compSlug}/register`,
+  publicRegister: (orgSlug: Slug, compSlug: Slug) => `${PUBLIC_HUB_ROOT}/${orgSlug}/${compSlug}/register`,
+  /** The entrant's registration status page; its `?rid=&token=` capability is appended by the caller. */
+  publicRegisterStatus: (orgSlug: Slug, compSlug: Slug) => `${PUBLIC_HUB_ROOT}/${orgSlug}/${compSlug}/register/status`,
+  /** The join-a-team page; its `?join_code=` (and `&player_id=`) is appended by the caller. */
+  publicRegisterJoin: (orgSlug: Slug, compSlug: Slug) => `${PUBLIC_HUB_ROOT}/${orgSlug}/${compSlug}/register/join`,
+  /** A player's public card within a competition (robots.ts keeps these out of the index). */
+  publicPlayer: (orgSlug: Slug, compSlug: Slug, personId: string) =>
+    `${PUBLIC_HUB_ROOT}/${orgSlug}/${compSlug}/players/${personId}`,
+  /** The venue-TV board, competition-wide or for one division. */
+  publicPresent: (orgSlug: Slug, compSlug: Slug, divSlug?: Slug) =>
+    `${[PUBLIC_HUB_ROOT, orgSlug, compSlug, divSlug].filter(Boolean).join("/")}/present`,
+  /** The competition's printable poster (`?division=` narrows it to one division). */
+  publicPosterPdf: (orgSlug: Slug, compSlug: Slug) => `${PUBLIC_HUB_ROOT}/${orgSlug}/${compSlug}/poster.pdf`,
+  /** A division's fixture calendar feed. */
+  publicCalendar: (orgSlug: Slug, compSlug: Slug, divSlug: Slug) =>
+    `${PUBLIC_HUB_ROOT}/${orgSlug}/${compSlug}/${divSlug}/calendar.ics`,
   /** Public fixture page (spectator view — the link /me hands a player). */
-  sharedFixture: (orgSlug: Slug, compSlug: Slug, divSlug: Slug, fixtureId: string) =>
-    `/shared/${orgSlug}/${compSlug}/${divSlug}/fixtures/${fixtureId}`,
+  publicFixture: (orgSlug: Slug, compSlug: Slug, divSlug: Slug, fixtureId: string) =>
+    `${PUBLIC_HUB_ROOT}/${orgSlug}/${compSlug}/${divSlug}/fixtures/${fixtureId}`,
   /** The player's match room for an online fixture (chess design §6). Same
-   *  slug chain as `sharedFixture` above, so a /me link and an emailed
+   *  slug chain as `publicFixture` above, so a /me link and an emailed
    *  personal link address the same page; `?t=` carries the match-room token
    *  (`usecases/match-room-token.ts`) for a player with no session. */
-  sharedFixturePlay: (orgSlug: Slug, compSlug: Slug, divSlug: Slug, fixtureId: string, token?: string) =>
-    `/shared/${orgSlug}/${compSlug}/${divSlug}/fixtures/${fixtureId}/play` +
+  publicFixturePlay: (orgSlug: Slug, compSlug: Slug, divSlug: Slug, fixtureId: string, token?: string) =>
+    `${PUBLIC_HUB_ROOT}/${orgSlug}/${compSlug}/${divSlug}/fixtures/${fixtureId}/play` +
     (token ? `?t=${encodeURIComponent(token)}` : ""),
   /** Player home (PROMPT-53) — cross-org, deliberately NOT under /o. */
   me: () => "/me",

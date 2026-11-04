@@ -61,14 +61,14 @@ afterEach(() => {
 
 describe("kioskHubHref: where Open the live page goes on a public kiosk", () => {
   it("a competition kiosk links the competition's hub, with no filter", () => {
-    expect(kioskHubHref("club", "spring-cup")).toBe("/shared/club/spring-cup");
-    expect(kioskHubHref("club", "spring-cup", null)).toBe("/shared/club/spring-cup");
-    expect(kioskHubHref("club", "spring-cup", "")).toBe("/shared/club/spring-cup");
+    expect(kioskHubHref("club", "spring-cup")).toBe("/live/club/spring-cup");
+    expect(kioskHubHref("club", "spring-cup", null)).toBe("/live/club/spring-cup");
+    expect(kioskHubHref("club", "spring-cup", "")).toBe("/live/club/spring-cup");
   });
 
   it("a division kiosk links the same hub filtered to its division, and the hub's own reader reads that division back", () => {
     const href = kioskHubHref("club", "spring-cup", "under-12s");
-    expect(href).toBe("/shared/club/spring-cup?division=under-12s");
+    expect(href).toBe("/live/club/spring-cup?division=under-12s");
 
     vi.stubGlobal("window", { location: { search: new URL(href, "https://seazn.test").search } });
     expect(readDivisionParam()).toBe("under-12s");
@@ -133,7 +133,7 @@ describe("the remembered choice: localStorage, and a browser whose storage throw
 
 // --- the gate -----------------------------------------------------------------
 
-const HREF = "/shared/club/spring-cup?division=under-12s";
+const HREF = "/live/club/spring-cup?division=under-12s";
 const LABELS = {
   title: "(made for a tv)",
   openLive: "(open the live page)",

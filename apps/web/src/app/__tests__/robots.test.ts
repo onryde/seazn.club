@@ -35,7 +35,7 @@ function robotsMatches(pattern: string, path: string): boolean {
   return new RegExp(`^${body}${anchored ? "$" : ""}`).test(path);
 }
 
-const PLAYERS = "/shared/*/*/players/";
+const PLAYERS = "/live/*/*/players/";
 
 describe("robots.txt: the `*` rule", () => {
   it("tells every crawler to skip the PostHog proxy and public player profiles", () => {
@@ -46,11 +46,11 @@ describe("robots.txt: the `*` rule", () => {
 
   it("the player pattern matches a real profile URL and nothing above it: the competition page stays crawlable", () => {
     // Premise: the pattern's depth is the route tree's depth.
-    const profile = join(process.cwd(), "src/app/(public)/shared/[orgSlug]/[competitionSlug]/players/[personId]/page.tsx");
+    const profile = join(process.cwd(), "src/app/(public)/live/[orgSlug]/[competitionSlug]/players/[personId]/page.tsx");
     expect(existsSync(profile), profile).toBe(true);
 
-    expect(robotsMatches(PLAYERS, "/shared/acme-club/summer-cup/players/0b5f2c1e-7d1a-4c55-9a51-2f8f1e3c9d10")).toBe(true);
-    for (const open of ["/shared/acme-club/summer-cup", "/shared/acme-club/summer-cup/", "/shared/acme-club", "/shared/acme-club/summer-cup/register"]) {
+    expect(robotsMatches(PLAYERS, "/live/acme-club/summer-cup/players/0b5f2c1e-7d1a-4c55-9a51-2f8f1e3c9d10")).toBe(true);
+    for (const open of ["/live/acme-club/summer-cup", "/live/acme-club/summer-cup/", "/live/acme-club", "/live/acme-club/summer-cup/register"]) {
       expect(robotsMatches(PLAYERS, open), open).toBe(false);
     }
     expect(robotsMatches("/ingest/", "/ingest/e/?ip=1")).toBe(true);

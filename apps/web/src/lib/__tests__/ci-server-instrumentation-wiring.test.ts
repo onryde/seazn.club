@@ -359,8 +359,8 @@ function proofProblems(text: string): string[] {
   const stepText = steps.map((s) => s.join("\n"));
   const startAt = stepText.findIndex((s) => s.split("\n").some((l) => START.test(l)));
   const smokeAt = stepText.findIndex((s) => /\bnpm run test:smoke\s*$/m.test(s));
-  const proofAt = stepText.findIndex((s) => /\/shared\//.test(s) && /no-store/i.test(s));
-  if (proofAt < 0) return ["no step requests a /shared URL and requires no-store"];
+  const proofAt = stepText.findIndex((s) => /\/live\//.test(s) && /no-store/i.test(s));
+  if (proofAt < 0) return ["no step requests a /live URL and requires no-store"];
   const problems: string[] = [];
   if (proofAt <= startAt) problems.push("the proof does not come after the step that starts the server");
   if (smokeAt < 0) problems.push("the first smoke run was not found, so the proof cannot be ordered before it");
@@ -500,12 +500,12 @@ describe("the behavioural proof that register() ran", () => {
     expect(judgeRow(row, ran)).toBeNull();
   });
 
-  it("the extracted step asks fresh public /shared URLs on the job's server port, each bounded to 10 s", () => {
+  it("the extracted step asks fresh public /live URLs on the job's server port, each bounded to 10 s", () => {
     expect(body, "the proof step's run: body was not found").not.toBeNull();
     // A failing answer makes the step ask all 15 times, so every request is visible.
     const ran = runStep(body!, TABLE[0]!.answer);
     expect(ran.urls.length).toBe(15);
-    for (const u of ran.urls) expect(u, "the proof asks a public /shared URL").toMatch(/^http:\/\/localhost:3000\/shared\/[\w-]+$/);
+    for (const u of ran.urls) expect(u, "the proof asks a public /live URL").toMatch(/^http:\/\/localhost:3000\/live\/[\w-]+$/);
     expect(new Set(ran.urls).size, "a fresh slug per request").toBe(15);
     expect(ran.maxTimes, "a hung server must not cost 30 s a try").toEqual(Array(15).fill("10"));
   });
@@ -519,7 +519,7 @@ describe("the behavioural proof that register() ran", () => {
   it("the ordering and silencing checks catch a misplaced or muted step", () => {
     const head = "jobs:\n  smoke:\n    steps:\n";
     const start = ["      - name: Start", "        run: |", "          node apps/web/.next/standalone/apps/web/server.js &"];
-    const proof = ["      - name: Prove", "        run: |", "          curl http://localhost:3000/shared/x | grep -qi 'no-store'"];
+    const proof = ["      - name: Prove", "        run: |", "          curl http://localhost:3000/live/x | grep -qi 'no-store'"];
     const smoke = ["      - name: Smoke", "        run: npm run test:smoke"];
     const job = (...steps: string[][]): string => `${head}${steps.flat().join("\n")}\n`;
     const muted = (key: string): string[] => ["      - name: Prove", `        ${key}`, ...proof.slice(1)];

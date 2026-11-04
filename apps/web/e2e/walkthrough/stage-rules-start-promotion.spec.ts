@@ -601,7 +601,7 @@ test("a spectator reads the league stage's own format: on its match page, on the
 
   const [, orgSlug, compSlug] = (await competitionPath(request, compId)).match(/^\/o\/([^/]+)\/c\/([^/]+)$/)!;
   const divSlug = (await divisionPath(request, divId)).split("/d/")[1]!;
-  const shared = `/shared/${orgSlug}/${compSlug}`;
+  const shared = `/live/${orgSlug}/${compSlug}`;
 
   // 1. The public match page of a league fixture — the one scored above, so
   // it is labelled from its frozen snapshot, which carries the stage's rules.

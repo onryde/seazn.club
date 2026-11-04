@@ -7,7 +7,7 @@
       "rows": [
         {
           "id": "fixture-320",
-          "route": "/shared/{orgSlug}/{compSlug}/{divSlug}/fixtures/{fixtureId}",
+          "route": "/live/{orgSlug}/{compSlug}/{divSlug}/fixtures/{fixtureId}",
           "viewport": {
             "width": 320,
             "height": 568
@@ -34,7 +34,7 @@
         },
         {
           "id": "fixture-320-zoom125",
-          "route": "/shared/{orgSlug}/{compSlug}/{divSlug}/fixtures/{fixtureId}",
+          "route": "/live/{orgSlug}/{compSlug}/{divSlug}/fixtures/{fixtureId}",
           "viewport": {
             "width": 320,
             "height": 568
@@ -59,7 +59,7 @@
         },
         {
           "id": "fixture-768",
-          "route": "/shared/{orgSlug}/{compSlug}/{divSlug}/fixtures/{fixtureId}",
+          "route": "/live/{orgSlug}/{compSlug}/{divSlug}/fixtures/{fixtureId}",
           "viewport": {
             "width": 768,
             "height": 1024
@@ -82,7 +82,7 @@
         },
         {
           "id": "fixture-1280",
-          "route": "/shared/{orgSlug}/{compSlug}/{divSlug}/fixtures/{fixtureId}",
+          "route": "/live/{orgSlug}/{compSlug}/{divSlug}/fixtures/{fixtureId}",
           "viewport": {
             "width": 1280,
             "height": 800

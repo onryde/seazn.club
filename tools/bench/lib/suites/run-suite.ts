@@ -5520,7 +5520,7 @@ export async function runPackSuite(
         // declares; the backend auto-provisions the org and names it itself, so
         // the two differ on every real run (`bench-tiny-club` vs
         // `my-organization-2`). Every public surface the browser driver touches
-        // is addressed by this slug — `/shared/{orgSlug}/...` and `/o/{orgSlug}/...`
+        // is addressed by this slug — `/live/{orgSlug}/...` and `/o/{orgSlug}/...`
         // — and the pack's value resolves to a 404 whose HTTP 200 chrome renders
         // without the wizard, so the failure surfaced as a Playwright timeout on
         // a correct selector rather than as a bad URL. See `PlanSql.getOrgSlug`.
@@ -5530,7 +5530,7 @@ export async function runPackSuite(
             if (input.sql === undefined) {
               throw new Error(
                 `${suiteKey}: registration division "${division.ref}" needs either the PlanSql seam or an explicit resolveOrgSlug ` +
-                  `to read the server-assigned org slug — every /shared/ and /o/ URL is addressed by it, and the pack's ` +
+                  `to read the server-assigned org slug — every /live/ and /o/ URL is addressed by it, and the pack's ` +
                   `declared slug is not what the backend minted`,
               );
             }

@@ -272,8 +272,8 @@ test("show seeds OFF: no seed chip on the public Teams and Entrants tabs, and th
   const byName = [...bySeed].sort();
   expect(byName, "premise: the two orders disagree").not.toEqual(bySeed);
 
-  const hubUrl = `/shared/${org.slug}/${rig.compSlug}?tab=teams`;
-  const entrantsUrl = `/shared/${org.slug}/${rig.compSlug}/${rig.divSlug}?tab=entrants`;
+  const hubUrl = `/live/${org.slug}/${rig.compSlug}?tab=teams`;
+  const entrantsUrl = `/live/${org.slug}/${rig.compSlug}/${rig.divSlug}?tab=entrants`;
   const apiPath = `/api/v1/public/orgs/${org.slug}/competitions/${rig.compSlug}/divisions/${rig.divSlug}/entrants`;
   /** A spectator's view of both pages: which of OUR names appear, in DOM
    *  order, and every seed chip the org's own dictionary would print. */

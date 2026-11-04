@@ -1515,31 +1515,31 @@ describe("KnockoutTab — taps and polls", () => {
   });
 
   it("the Draw switch writes `view=draw` into the URL and shows the tree; Rounds takes the parameter out", () => {
-    const replaced = stubLocation("https://seazn.club/shared/riverside/autumn-cup?tab=knockout");
+    const replaced = stubLocation("https://seazn.club/live/riverside/autumn-cup?tab=knockout");
     const island = mount(MID);
     const hasDraw = () => island.tree().some((x) => propsOf(x)["data-testid"] === `mh-knockout-draw-${VIEW}`);
     expect(hasDraw()).toBe(false);
 
     tap(island.tree(), "mh-knockout-view-draw");
-    expect(replaced).toEqual(["https://seazn.club/shared/riverside/autumn-cup?tab=knockout&view=draw"]);
+    expect(replaced).toEqual(["https://seazn.club/live/riverside/autumn-cup?tab=knockout&view=draw"]);
     expect(hasDraw()).toBe(true);
     expect(propsOf(find(island.tree(), "mh-knockout-view-draw"))["aria-pressed"]).toBe(true);
 
     tap(island.tree(), "mh-knockout-view-rounds");
-    expect(replaced.at(-1)).toBe("https://seazn.club/shared/riverside/autumn-cup?tab=knockout");
+    expect(replaced.at(-1)).toBe("https://seazn.club/live/riverside/autumn-cup?tab=knockout");
     expect(hasDraw()).toBe(false);
   });
 
   it("a division chip narrows the tab and writes `division=` back; All takes it out", () => {
-    const replaced = stubLocation("https://seazn.club/shared/riverside/autumn-cup?tab=knockout");
+    const replaced = stubLocation("https://seazn.club/live/riverside/autumn-cup?tab=knockout");
     const island = mount(MULTI);
     tap(island.tree(), "mh-knockout-division-sunday-league");
     expect(replaced).toEqual([
-      "https://seazn.club/shared/riverside/autumn-cup?tab=knockout&division=sunday-league",
+      "https://seazn.club/live/riverside/autumn-cup?tab=knockout&division=sunday-league",
     ]);
     expect(cards(island.tree())).toEqual(["p3"]);
     tap(island.tree(), "mh-knockout-division-all");
-    expect(replaced.at(-1)).toBe("https://seazn.club/shared/riverside/autumn-cup?tab=knockout");
+    expect(replaced.at(-1)).toBe("https://seazn.club/live/riverside/autumn-cup?tab=knockout");
     expect(cards(island.tree())).toEqual(["q1", "q2", "q3", "q4", "p3"]);
   });
 

@@ -371,7 +371,7 @@ async function getPublicFixtureBodyBefore(shell: PublicCompetitionShell, divisio
     order by org_id nulls last
     limit 1`;
   const locale = toLocale(shell.org.default_locale);
-  const basePath = `/shared/${shell.org.slug}/${shell.competition.slug}/${division.slug}`;
+  const basePath = `/live/${shell.org.slug}/${shell.competition.slug}/${division.slug}`;
   const matchCentre = await loadMatchCentreBefore(sql, fixture, {
     orgTz: tzRow?.org_tz ?? null,
     division: {
@@ -386,7 +386,7 @@ async function getPublicFixtureBodyBefore(shell: PublicCompetitionShell, divisio
       playerNameDisplay: division.player_name_display ?? null,
     },
     locale,
-    hrefs: { division: basePath, competition: `/shared/${shell.org.slug}/${shell.competition.slug}`, calendar: `${basePath}/calendar.ics` },
+    hrefs: { division: basePath, competition: `/live/${shell.org.slug}/${shell.competition.slug}`, calendar: `${basePath}/calendar.ics` },
     stage: stageRow ? { name: stageRow.name, roundLabel: null } : null,
     slotLabelLookup: (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars),
   });
@@ -435,7 +435,7 @@ async function loadFixtureMatchCentreCtxBefore(divisionId: string, stageId: stri
   if (!row) throw new HttpError(404, "fixture not found");
   const [stageRow] = await sql<{ name: string }[]>`select name from stages where id = ${stageId}`;
   const locale = toLocale(row.org_default_locale);
-  const basePath = `/shared/${row.org_slug}/${row.competition_slug}/${row.division_slug}`;
+  const basePath = `/live/${row.org_slug}/${row.competition_slug}/${row.division_slug}`;
   return {
     orgTz: row.org_tz,
     division: {
@@ -450,7 +450,7 @@ async function loadFixtureMatchCentreCtxBefore(divisionId: string, stageId: stri
       playerNameDisplay: row.player_name_display,
     },
     locale,
-    hrefs: { division: basePath, competition: `/shared/${row.org_slug}/${row.competition_slug}`, calendar: `${basePath}/calendar.ics` },
+    hrefs: { division: basePath, competition: `/live/${row.org_slug}/${row.competition_slug}`, calendar: `${basePath}/calendar.ics` },
     stage: stageRow ? { name: stageRow.name, roundLabel: null } : null,
     slotLabelLookup: (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars),
   };

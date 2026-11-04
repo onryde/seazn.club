@@ -153,7 +153,7 @@ export async function v13Suite(admin: Session, proOrgId: string, proOrgSlug: str
   check("v13 audit verify keys are public", keys.status === 200);
 
   // --- PROMPT-64: no-login presentation mode renders for the public comp.
-  const present = await html(newSession(), `/shared/${proOrgSlug}/${comp.slug}/present`);
+  const present = await html(newSession(), `/live/${proOrgSlug}/${comp.slug}/present`);
   check(
     "v13 presentation mode renders without login",
     present.status === 200 && present.body.includes(`V13 Cup ${tag}`),

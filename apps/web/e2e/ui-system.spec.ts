@@ -136,13 +136,13 @@ test("visibility picker: Link only surfaces a copyable URL; public page stays no
   await expect(page.getByText(uiEn["visibility.private.consequence"]!, { exact: true })).toBeVisible();
   await page.getByRole("radio", { name: /link only/i }).check();
   // The consequence is immediate: share URL + copy affordance appear.
-  await expect(page.getByText(`/shared/${orgSlug}/${comp.data!.slug}`).first()).toBeVisible();
+  await expect(page.getByText(`/live/${orgSlug}/${comp.data!.slug}`).first()).toBeVisible();
   await expect(page.getByRole("button", { name: /copy link/i })).toBeVisible();
   await page.getByRole("button", { name: /save settings/i }).click();
   await expect(page.getByText("Saved.").first()).toBeVisible();
 
   // Keys/noindex behaviour unchanged: unlisted pages serve a robots noindex.
-  const res = await page.request.get(`/shared/${orgSlug}/${comp.data!.slug}`);
+  const res = await page.request.get(`/live/${orgSlug}/${comp.data!.slug}`);
   expect(res.status()).toBe(200);
   const html = await res.text();
   expect(html).toMatch(/noindex/);

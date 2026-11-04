@@ -26,7 +26,7 @@ const esc = (s: string) =>
 
 const row = (id: string, over: Partial<PlayerUpcomingRow> = {}): PlayerUpcomingRow => ({
   fixtureId: id,
-  href: `/shared/riverside/autumn-cup/premier/fixtures/${id}`,
+  href: `/live/riverside/autumn-cup/premier/fixtures/${id}`,
   scheduledAt: "2030-07-01T10:00:00.000Z",
   tz: "Asia/Kolkata",
   venue: null,
@@ -178,7 +178,7 @@ describe("PlayerUpcoming", () => {
 
   it("every row links to its fixture, names competition and division as SEPARATE elements, and the opponent with the Matches grammar", () => {
     const html = render([row("x", { courtLabel: "Court 3", venue: "Riverside Hall" })]);
-    expect(html).toContain('href="/shared/riverside/autumn-cup/premier/fixtures/x"');
+    expect(html).toContain('href="/live/riverside/autumn-cup/premier/fixtures/x"');
     expect(html).toContain(">Autumn Cup<");
     expect(html).toContain(">Premier<");
     expect(html).toContain(`>${esc(interpolate(en["player.opponent"], { opponent: "Opponent x" }))}<`);

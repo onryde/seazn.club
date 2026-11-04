@@ -710,7 +710,7 @@ export default async function DivisionPage({
             id: "public" as const,
             label: t(dict, "action.viewPublic"),
             ariaLabel: t(dict, "aria.viewPublic"),
-            href: `/shared/${orgSlug}/${competition.slug}?tab=matches&division=${divSlug}`,
+            href: `${routes.publicHub(orgSlug, competition.slug)}?tab=matches&division=${divSlug}`,
             newTab: true,
             arrow: true,
             plainAnchor: true,
@@ -719,7 +719,7 @@ export default async function DivisionPage({
             id: "qr" as const,
             label: t(dict, "action.qr"),
             ariaLabel: t(dict, "aria.qrPoster"),
-            href: `/shared/${orgSlug}/${competition.slug}/poster.pdf?division=${divSlug}`,
+            href: `${routes.publicPosterPdf(orgSlug, competition.slug)}?division=${divSlug}`,
             newTab: true,
             arrow: true,
             plainAnchor: true,
@@ -1189,7 +1189,7 @@ export default async function DivisionPage({
             divisionId={id}
             publicBase={
               competition.visibility !== "private"
-                ? `/shared/${orgSlug}/${compSlug}`
+                ? routes.publicHub(orgSlug, compSlug)
                 : null
             }
             viewerPlan={viewerPlan}

@@ -350,14 +350,14 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
     expect(model.description).toMatch(/fixtures/i);
   });
 
-  it("live-page QR (Task 16): public competition's timetable carries meta.liveUrl to /shared/...; private carries none", async () => {
+  it("live-page QR (Task 16): public competition's timetable carries meta.liveUrl to /live/...; private carries none", async () => {
     const { auth } = await seedOrg("pro");
     const { division, comp } = await seedDivision(auth);
     const [{ slug: orgSlug }] = await sql<{ slug: string }[]>`
       select slug from organizations where id = ${auth.orgId}`;
 
     // seedDivision creates the competition as visibility: "private" — its
-    // /shared/... page 404s, so no QR belongs on it.
+    // /live/... page 404s, so no QR belongs on it.
     const privateModel = await buildDivisionDocModel(auth, division.id, "timetable", {
       printedAt: PRINTED,
     });
@@ -371,7 +371,7 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
       printedAt: PRINTED,
     });
     expect(model.meta.liveUrl).toBe(
-      `https://seazn.club/shared/${orgSlug}/${comp.slug}/${division.slug}`,
+      `https://seazn.club/live/${orgSlug}/${comp.slug}/${division.slug}`,
     );
   });
 

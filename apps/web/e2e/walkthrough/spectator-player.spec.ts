@@ -375,7 +375,7 @@ test.afterAll(async ({ request }) => {
 });
 
 const cardPath = (orgSlug: string, compSlug: string, personId: string) =>
-  `/shared/${orgSlug}/${compSlug}/players/${personId}`;
+  `/live/${orgSlug}/${compSlug}/players/${personId}`;
 const matchesApi = (orgSlug: string, compSlug: string, personId: string) =>
   `/api/v1/public/orgs/${orgSlug}/competitions/${compSlug}/players/${personId}/matches`;
 
@@ -580,7 +580,7 @@ test("PP4: an organiser's consent revoke clears Quinn's card, endpoint, name on 
   expect(masked, "the mask must differ from the full name").not.toBe(quinn.name);
   const full = dictString("en", "player.opponent", { opponent: quinn.name });
   const hidden = dictString("en", "player.opponent", { opponent: masked });
-  const hubTeams = `/shared/${pro.slug}/${comp.slug}?tab=teams&division=${tennisA.divSlug}`;
+  const hubTeams = `/live/${pro.slug}/${comp.slug}?tab=teams&division=${tennisA.divSlug}`;
   const quinnLink = `a[href="${cardPath(pro.slug, comp.slug, quinn.id)}"]`;
   // Quinn is an `individual` entrant, and a singles entrant's hub card no
   // longer opens onto a squad (2026-09-17): one person is not a team of zero,
@@ -801,7 +801,7 @@ test("refused card: never-consented, not in the plan and unknown each get the or
       const cta = box.getByRole("link");
       await expect(cta).toHaveText(dictString(locale, "player.notFound.cta"));
       const orgSlug = path.split("/")[2]!;
-      await expect(cta).toHaveAttribute("href", `/shared/${orgSlug}`);
+      await expect(cta).toHaveAttribute("href", `/live/${orgSlug}`);
       await expect
         .poll(() => page.evaluate(() => document.documentElement.lang), { message: `${locale} ${cause}: <html lang>` })
         .toBe(locale);
@@ -875,7 +875,7 @@ test("free plan: hub Stats leaders, hub Teams and division Entrants show plain n
     const names = people.map((p) => p.name);
     const ids = people.map((p) => p.id);
 
-    await page.goto(`/shared/${org}/${compSlug}?tab=stats`);
+    await page.goto(`/live/${org}/${compSlug}?tab=stats`);
     const board = page.getByTestId(`mh-leaders-${div}-points`);
     await expect(board, `${label}: the Stats tab's points board`).toBeVisible();
     const scorer = people[0]!;
@@ -893,11 +893,11 @@ test("free plan: hub Stats leaders, hub Teams and division Entrants show plain n
       expect(await page.content(), `${label}: the Stats tab carries a withheld person id`).not.toContain(scorer.id);
     }
 
-    await page.goto(`/shared/${org}/${compSlug}?tab=teams&division=${div}`);
+    await page.goto(`/live/${org}/${compSlug}?tab=teams&division=${div}`);
     for (const teamId of teamIds) await expect(page.getByTestId(`mh-team-${teamId}`)).toBeAttached();
     await expectCardLinks(page.getByTestId("mh-teams"), names, `${label} hub Teams`, links, org, compSlug, ids);
 
-    await page.goto(`/shared/${org}/${compSlug}/${div}?tab=entrants`);
+    await page.goto(`/live/${org}/${compSlug}/${div}?tab=entrants`);
     const panel = page.locator("#panel-entrants");
     await expect(panel).toBeVisible();
     await expectCardLinks(panel, names, `${label} division Entrants`, links, org, compSlug, ids);

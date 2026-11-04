@@ -92,7 +92,7 @@ describe.skipIf(!HAS_DB)("readExternalPlayLobby — who gets a door", () => {
   it("each of the two players gets THEIR room's path (the play page, no token — the session is the identity)", async () => {
     const s = await seed();
     const g = await slugsOf(s);
-    const expected = routes.sharedFixturePlay(g.org, g.comp, g.div, s.fixtureId);
+    const expected = routes.publicFixturePlay(g.org, g.comp, g.div, s.fixtureId);
     let checked = 0;
     for (const p of [s.home, s.away]) {
       const lobby = await readExternalPlayLobby(p.userId, s.fixtureId, deps());

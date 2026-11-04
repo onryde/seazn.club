@@ -10,7 +10,7 @@
 //
 // Assertions are deliberately narrow per file (matched on the specific `src`
 // identifier actually used at each converted site), not a file-wide `<img`
-// ban — apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/page.tsx
+// ban — apps/web/src/app/(public)/live/[orgSlug]/[competitionSlug]/page.tsx
 // still has two *deliberate* `<img>` (competition branding.banner/logo,
 // skipped as ambiguous-source per the report §4) that must keep working.
 import { describe, expect, it } from "vitest";
@@ -58,7 +58,7 @@ const CASES: Case[] = [
   },
   {
     name: "[orgSlug]/layout.tsx org logo",
-    file: join(SRC_ROOT, "app/(public)/shared/[orgSlug]/layout.tsx"),
+    file: join(SRC_ROOT, "app/(public)/live/[orgSlug]/layout.tsx"),
     srcExpr: "org.logo",
     width: 32,
     height: 32,

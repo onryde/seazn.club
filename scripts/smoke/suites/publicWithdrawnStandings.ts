@@ -110,7 +110,7 @@ export async function publicWithdrawnStandingsSuite(): Promise<void> {
     dq.status === 200 && v1data<{ status: string }>(dq).status === "disqualified",
   );
 
-  const page = await html(newSession(), `/shared/${org.slug}/${comp.slug}/${div.slug}`);
+  const page = await html(newSession(), `/live/${org.slug}/${comp.slug}/${div.slug}`);
   // The standings table's NAME CELLS, not the body. A whole-body grep cannot
   // make this assertion in either direction: the page carries entrant ids
   // legitimately (fixture hrefs, the embed snippet), so "no UUID in the body"

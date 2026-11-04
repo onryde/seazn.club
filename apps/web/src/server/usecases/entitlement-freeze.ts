@@ -75,7 +75,7 @@ export const PUBLIC_DASHBOARD_STATUSES = ["published", "live"] as const;
  * so this comment has a witness and not just an author.
  *
  * `private` is genuinely outside the set: the view does not admit it, and the
- * `/shared/...` page 404s for it (V230, see usecases/exports.ts).
+ * `/live/...` page 404s for it (V230, see usecases/exports.ts).
  */
 // The tuple itself lives in `lib/competition-listing.ts` (dependency-free, so the
 // New competition form's client island can read it too); this file re-exports it

@@ -30,7 +30,7 @@ export type EyebrowTone = "lime" | "white" | "red" | "muted";
  *
  * Two maps, named for the ground, so a caller has to say which it is painting
  * on. The light values are not invented here: they are the ones
- * `(public)/shared/[orgSlug]/page.tsx` already worked out for its latest-news
+ * `(public)/live/[orgSlug]/page.tsx` already worked out for its latest-news
  * strip, which is the one surface of the three that was correct.
  */
 export const TONE_ON_DARK: Record<EyebrowTone, string> = {

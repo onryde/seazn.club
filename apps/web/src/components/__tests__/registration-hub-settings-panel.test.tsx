@@ -28,7 +28,7 @@ const CONTEXT: Omit<RegistrationHubRowContext, "onOpen"> = {
   now: new Date("2026-06-15T12:00:00Z"),
   orgTz: "UTC",
   currency: "usd",
-  registerHref: "/shared/riverside/summer-league/register",
+  registerHref: "/live/riverside/summer-league/register",
   registerQrFileName: "register-summer-league.png",
   showRegisterLink: true,
   canEdit: true,

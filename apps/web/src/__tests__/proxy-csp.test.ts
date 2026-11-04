@@ -8,8 +8,12 @@ const page = (path: string) => new NextRequest(`http://localhost:3000${path}`);
 
 describe("CSP vs cacheable public routes", () => {
   it("classifies the cacheable public tree", () => {
-    expect(isCacheablePublicPath("/shared/riverside/summer-league")).toBe(true);
-    expect(isCacheablePublicPath("/shared")).toBe(true);
+    expect(isCacheablePublicPath("/live/riverside/summer-league")).toBe(true);
+    expect(isCacheablePublicPath("/live/riverside")).toBe(true);
+    // LIVE1 option A: a bare /live is the marketing wall and keeps the app's nonce CSP; /livex is neither.
+    expect(isCacheablePublicPath("/live")).toBe(false);
+    expect(isCacheablePublicPath("/live/")).toBe(false);
+    expect(isCacheablePublicPath("/livex/riverside")).toBe(false);
     expect(isCacheablePublicPath("/embed/divisions/x/standings")).toBe(true);
     expect(isCacheablePublicPath("/dashboard")).toBe(false);
     expect(isCacheablePublicPath("/r/AB12CD")).toBe(false); // force-dynamic registration-ref tree excluded
@@ -19,7 +23,7 @@ describe("CSP vs cacheable public routes", () => {
 
   it("keeps report-only CSP on cacheable public pages even in enforce mode", () => {
     vi.stubEnv("CSP_MODE", "enforce");
-    const res = proxy(page("/shared/riverside/summer-league"));
+    const res = proxy(page("/live/riverside/summer-league"));
     expect(res.headers.get("Content-Security-Policy")).toBeNull();
     expect(res.headers.get("Content-Security-Policy-Report-Only")).toContain("default-src 'self'");
   });
@@ -32,7 +36,7 @@ describe("CSP vs cacheable public routes", () => {
 
   it("skips nonce request headers on cacheable public paths to preserve ISR", () => {
     vi.stubEnv("CSP_MODE", "enforce");
-    const res = proxy(page("/shared/riverside/summer-league"));
+    const res = proxy(page("/live/riverside/summer-league"));
     // x-middleware-override-headers should be null or not contain x-nonce
     const overrideHeaders = res.headers.get("x-middleware-override-headers");
     if (overrideHeaders) {
@@ -77,7 +81,7 @@ describe("A5 — connect-src carries the loopback phase endpoint on /overlay onl
     return d.split(" ").slice(1);
   };
   const OVERLAY = [`/overlay/fixtures/${UUID}`, `/overlay/fixtures/${UUID}?host=compositor`];
-  const OTHERS = ["/", "/dashboard", "/shared/riverside", "/embed/divisions/x/standings", "/score/tok123", `/overlayx/fixtures/${UUID}`];
+  const OTHERS = ["/", "/dashboard", "/live/riverside", "/embed/divisions/x/standings", "/score/tok123", `/overlayx/fixtures/${UUID}`];
 
   for (const mode of ["report-only", "enforce"] as const) {
     it(`${mode}: every /overlay route carries it; no other route class does; every other directive is byte-identical`, () => {
@@ -105,7 +109,7 @@ describe("A5 — connect-src carries the loopback phase endpoint on /overlay onl
       }
       console.log(`[${mode}] routes checked: ${checked}`);
       expect(checked).toBe(OVERLAY.length + OTHERS.length);
-      expect([...classes].sort()).toEqual(["dashboard", "embed", "overlay", "overlayx", "root", "score", "shared"]);
+      expect([...classes].sort()).toEqual(["dashboard", "embed", "live", "overlay", "overlayx", "root", "score"]);
     });
   }
 });

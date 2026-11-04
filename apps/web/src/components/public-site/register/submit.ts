@@ -8,6 +8,7 @@
 import { toGroupEntry } from "./cart";
 import { toGroupPlayers } from "./roster";
 import type { CartState, ConsentState, ContactState } from "./types";
+import { routes } from "@/lib/routes";
 
 /** Mirrors `PublicRegisterGroupRequest`'s wire shape (schemas.ts:2430)
  *  field-for-field. `locale` is deliberately absent: the route resolves it
@@ -98,7 +99,7 @@ export function resolvePostSubmitNavigation(
   if (result.checkout_url) return { kind: "checkout", url: result.checkout_url };
   return {
     kind: "status",
-    url: `/shared/${orgSlug}/${competitionSlug}/register/status?rid=${result.group_id}&token=${encodeURIComponent(result.access_token)}`,
+    url: `${routes.publicRegisterStatus(orgSlug, competitionSlug)}?rid=${result.group_id}&token=${encodeURIComponent(result.access_token)}`,
   };
 }
 

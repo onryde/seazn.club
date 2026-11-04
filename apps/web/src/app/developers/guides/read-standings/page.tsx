@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { CodeBlock, ScopeChip } from "@/components/dev-code-block";
+import { routes } from "@/lib/routes";
 
 export const metadata: Metadata = { title: "Read standings into a sheet or site" };
 
@@ -19,7 +20,7 @@ export default function ReadStandingsGuide() {
       </h2>
       <p className="mt-2 text-slate-600">
         Everything a public dashboard shows is also JSON — slugs are in the
-        dashboard URL (<code className="font-mono text-sm">/shared/&lt;org&gt;/&lt;competition&gt;/&lt;division&gt;</code>):
+        dashboard URL (<code className="font-mono text-sm">{routes.publicHub("<org>", "<competition>", "<division>")}</code>):
       </p>
       <CodeBlock title="public standings">{`
 curl https://seazn.club/api/v1/public/orgs/riverside/competitions/summer-league/divisions/mens-a/standings

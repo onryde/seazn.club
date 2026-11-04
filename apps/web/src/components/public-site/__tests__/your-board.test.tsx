@@ -42,7 +42,7 @@ import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { YourBoard, YourBoardCard, loadYourBoard } from "../your-board";
 import { SESSION_HINT_COOKIE } from "@/lib/session-hint";
 
-const ROOM = "/shared/club/cup/open/fixtures/f1/play";
+const ROOM = "/live/club/cup/open/fixtures/f1/play";
 const answer = (state: ExternalPlayLobby["state"]): ExternalPlayLobby =>
   state === "online_chess_off" ? { state, roomPath: null } : { state, roomPath: ROOM, opensAt: null, deadline: null };
 const s = (loc: Loc, key: string) => String(DICTS[loc][key]);
@@ -52,7 +52,7 @@ describe("Your board — first paint", () => {
   it("the empty case first: the server-rendered island is EMPTY — no room path in the shared (ISR) HTML", () => {
     const h = renderToStaticMarkup(<YourBoard fixtureId="f1" />);
     expect(h).toBe("");
-    expect(h).not.toContain('="/shared/');
+    expect(h).not.toContain('="/live/');
   });
 });
 
@@ -110,7 +110,7 @@ describe("YourBoardCard — every lobby state", () => {
       if (state === "online_chess_off") {
         // No door into a room (D14 adds the player-home link to every state, so "no <a> at all" no longer holds).
         expect(h, `${state}: a plain state, no door`).not.toContain('data-testid="your-board-link"');
-        expect(h, `${state}: no room path`).not.toContain('="/shared/');
+        expect(h, `${state}: no room path`).not.toContain('="/live/');
       } else {
         expect(h, state).toMatch(new RegExp(`<a[^>]*data-testid="your-board-link"[^>]*href="${ROOM}"|<a[^>]*href="${ROOM}"[^>]*data-testid="your-board-link"`));
         expect(h, state).toContain(esc(s("en", "externalPlay.yourBoard.cta")));
@@ -181,7 +181,7 @@ describe("YourBoard — after hydration, and across a navigation", () => {
       (url: string) => new Promise((resolve) => pending.set(/fixtures\/([^/]+)\//.exec(url)![1]!, resolve)),
     );
     return async (fixtureId: string, state: ExternalPlayLobby["state"]) => {
-      const room = `/shared/club/cup/open/fixtures/${fixtureId}/play`;
+      const room = `/live/club/cup/open/fixtures/${fixtureId}/play`;
       pending.get(fixtureId)!(state === "online_chess_off" ? { state, roomPath: null } : { state, roomPath: room, opensAt: null, deadline: null });
       await flush();
     };
@@ -210,7 +210,7 @@ describe("YourBoard — after hydration, and across a navigation", () => {
     await flush();
     expect(cards(island), "before the answer").toEqual([]);
     await answer("f1", "check_in");
-    expect(cards(island).map((v) => [v.state, v.roomPath])).toEqual([["check_in", "/shared/club/cup/open/fixtures/f1/play"]]);
+    expect(cards(island).map((v) => [v.state, v.roomPath])).toEqual([["check_in", "/live/club/cup/open/fixtures/f1/play"]]);
   });
 
   it("a navigation to another fixture never shows the previous fixture's door while its own is on the way", async () => {
@@ -223,7 +223,7 @@ describe("YourBoard — after hydration, and across a navigation", () => {
     await flush();
     expect(cards(island), "f2's page, f2's answer not in yet").toEqual([]);
     await answer("f2", "playing");
-    expect(cards(island).map((v) => v.roomPath)).toEqual(["/shared/club/cup/open/fixtures/f2/play"]);
+    expect(cards(island).map((v) => v.roomPath)).toEqual(["/live/club/cup/open/fixtures/f2/play"]);
   });
 
   it("a late answer for the fixture left behind does not overwrite the current one", async () => {
@@ -234,6 +234,6 @@ describe("YourBoard — after hydration, and across a navigation", () => {
     await flush();
     await answer("f2", "playing");
     await answer("f1", "check_in"); // lands last
-    expect(cards(island).map((v) => [v.state, v.roomPath])).toEqual([["playing", "/shared/club/cup/open/fixtures/f2/play"]]);
+    expect(cards(island).map((v) => [v.state, v.roomPath])).toEqual([["playing", "/live/club/cup/open/fixtures/f2/play"]]);
   });
 });

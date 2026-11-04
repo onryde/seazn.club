@@ -20,7 +20,7 @@ describe("LiveTicker", () => {
   });
   it("links each fixture to its live page (same target as LiveNowStrip)", () => {
     const html = renderToStaticMarkup(<LiveTicker fixtures={[fx(1), fx(2)]} />);
-    expect(html).toContain("/shared/riverside/summer-1/a/fixtures/f1");
+    expect(html).toContain("/live/riverside/summer-1/a/fixtures/f1");
     expect(html).toContain("Falcons 21 — Comets 11");
     expect(html).toContain("Summer Open 2");
   });

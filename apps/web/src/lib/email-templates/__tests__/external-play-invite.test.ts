@@ -19,7 +19,7 @@ const ARGS = {
   opponentName: "Alice <b>Bold</b>",
   roundNo: 3,
   deadlineLabel: "Wed 1 Oct, 12:30 UTC",
-  fixtureUrl: "https://example.test/shared/org/comp/div/fixtures/abc",
+  fixtureUrl: "https://example.test/live/org/comp/div/fixtures/abc",
 };
 
 const KEYS = ["subject", "preheader", "title", "body", "deadline", "button", "footer", "text"] as const;

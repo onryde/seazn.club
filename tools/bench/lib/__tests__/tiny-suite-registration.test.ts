@@ -334,7 +334,7 @@ describe("runTinySuite — d-registration driven via a fake registrationDrivers"
 
   // The regression for the first live run's failure. `tiny.ts` addressed every
   // public URL with `plan.org.slug` — the PACK's declared slug — while the org
-  // is auto-provisioned and named by the backend. `/shared/bench-tiny-club/...`
+  // is auto-provisioned and named by the backend. `/live/bench-tiny-club/...`
   // 404s, and a 404 here still serves HTTP 200 chrome with no wizard on it, so
   // the run died 30s later inside Playwright as
   //   locator.fill: Timeout 30000ms exceeded — waiting for '#reg-who-name'

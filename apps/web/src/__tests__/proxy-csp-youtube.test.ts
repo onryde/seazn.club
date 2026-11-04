@@ -63,7 +63,7 @@ describe("CSP for the replay player", () => {
   });
 
   it("the public match page's real response carries it (through proxy(), the real call site), report-only and enforced", () => {
-    const route = "/shared/riverside/summer-league/open/fixtures/8c4f7a52-1f3e-4b9a-9d2c-3e5f6a7b8c9d";
+    const route = "/live/riverside/summer-league/open/fixtures/8c4f7a52-1f3e-4b9a-9d2c-3e5f6a7b8c9d";
     const headerOf = (res: Response) =>
       res.headers.get("Content-Security-Policy") ?? res.headers.get("Content-Security-Policy-Report-Only") ?? "";
     const frame = (csp: string) => directives(csp).get("frame-src") ?? [];

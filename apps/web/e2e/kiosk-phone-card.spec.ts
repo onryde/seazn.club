@@ -30,7 +30,7 @@ import { KIOSK_BOARD_CHOSEN_STORAGE_KEY } from "../src/components/public-site/ki
 //   - the card at 320 with nothing cut off and no horizontal page scroll;
 //   - K-1: the board spanning a TV-size viewport, now that /present lives in
 //     the `(kiosk)` route group, outside the org chrome layout;
-//   - K-1: a bad /present link still reaching the branded /shared 404, which
+//   - K-1: a bad /present link still reaching the branded /live 404, which
 //     inside `(kiosk)` only `(kiosk)/[orgSlug]/not-found.tsx` provides.
 //
 // Each "shown" assertion has its opposite in this file:
@@ -93,7 +93,7 @@ async function seedKiosk(request: APIRequestContext) {
   );
   expect(comp.status, JSON.stringify(comp.error)).toBe(201);
   // A create over the public-dashboard cap degrades to private with a 201,
-  // and a private competition 404s off /shared/*.
+  // and a private competition 404s off /live/*.
   expect(comp.data!.visibility).toBe("public");
 
   // Two divisions with fixtures: the hub's Matches tab shows its division
@@ -196,9 +196,9 @@ async function cardReadability(page: Page): Promise<{ checked: string[]; problem
 
 test.describe("the kiosk on a phone: the 'made for a TV' card (OWNER RULING C1)", () => {
   let seeded: Awaited<ReturnType<typeof seedKiosk>>;
-  const divisionKiosk = () => `/shared/${seeded.orgSlug}/${seeded.compSlug}/${seeded.divisionSlug}/present`;
-  const competitionKiosk = () => `/shared/${seeded.orgSlug}/${seeded.compSlug}/present`;
-  const divisionHub = () => `/shared/${seeded.orgSlug}/${seeded.compSlug}?division=${seeded.divisionSlug}`;
+  const divisionKiosk = () => `/live/${seeded.orgSlug}/${seeded.compSlug}/${seeded.divisionSlug}/present`;
+  const competitionKiosk = () => `/live/${seeded.orgSlug}/${seeded.compSlug}/present`;
+  const divisionHub = () => `/live/${seeded.orgSlug}/${seeded.compSlug}?division=${seeded.divisionSlug}`;
 
   test.beforeAll(async ({ playwright }, testInfo) => {
     // A hook has its own clock; the test's `setTimeout` does not reach it.
@@ -241,7 +241,7 @@ test.describe("the kiosk on a phone: the 'made for a TV' card (OWNER RULING C1)"
     await openLive(page).click();
     await expect(page).toHaveURL(
       new RegExp(
-        `/shared/${escapeRegExp(seeded.orgSlug)}/${escapeRegExp(seeded.compSlug)}\\?division=${escapeRegExp(seeded.divisionSlug)}$`,
+        `/live/${escapeRegExp(seeded.orgSlug)}/${escapeRegExp(seeded.compSlug)}\\?division=${escapeRegExp(seeded.divisionSlug)}$`,
       ),
     );
     await expect(page.getByTestId("mh-root")).toBeVisible();
@@ -266,7 +266,7 @@ test.describe("the kiosk on a phone: the 'made for a TV' card (OWNER RULING C1)"
     await openMounted(page, competitionKiosk());
 
     await expect(card(page)).toBeVisible();
-    await expect(openLive(page)).toHaveAttribute("href", `/shared/${seeded.orgSlug}/${seeded.compSlug}`);
+    await expect(openLive(page)).toHaveAttribute("href", `/live/${seeded.orgSlug}/${seeded.compSlug}`);
   });
 
   test("Show the board anyway shows the board with no banner, a reload keeps the board, and clearing the stored key brings the card back", async ({ page }) => {
@@ -363,14 +363,14 @@ test.describe("the kiosk on a phone: the 'made for a TV' card (OWNER RULING C1)"
     await expect(banner, "the hub the card links to").toBeVisible();
   });
 
-  test("K-1: a /present link to a competition that does not exist gets the branded /shared 404, not Next's bare page", async ({ page }) => {
+  test("K-1: a /present link to a competition that does not exist gets the branded /live 404, not Next's bare page", async ({ page }) => {
     // The page's own notFound() is caught by the nearest not-found.tsx above
     // it. In the `(kiosk)` group that is `(kiosk)/[orgSlug]/not-found.tsx`;
     // without it the miss falls through to Next's built-in page. Since the org
     // door split (K fix round, F2) an ORG-level miss on /present is thrown by
     // the page too, so it reaches the same branded page — the test below.
     await page.setViewportSize(DESKTOP);
-    const response = await page.goto(`/shared/${seeded.orgSlug}/no-such-competition-${TAG.toLowerCase()}/present`);
+    const response = await page.goto(`/live/${seeded.orgSlug}/no-such-competition-${TAG.toLowerCase()}/present`);
     expect(response?.status(), "a 404 status").toBe(404);
     await expect(page.getByTestId("shared-not-found")).toBeVisible();
     await expect(page.getByTestId("kiosk-board")).toHaveCount(0);
@@ -387,7 +387,7 @@ test.describe("the kiosk on a phone: the 'made for a TV' card (OWNER RULING C1)"
     // The competition slug is a real, live one, so the ORG is the only missing
     // half — otherwise this passes on the test above's case.
     await page.setViewportSize(DESKTOP);
-    const response = await page.goto(`/shared/no-such-org-${TAG.toLowerCase()}/${seeded.compSlug}/present`);
+    const response = await page.goto(`/live/no-such-org-${TAG.toLowerCase()}/${seeded.compSlug}/present`);
     expect(response?.status(), "a 404 status").toBe(404);
     await expect(page.getByTestId("shared-not-found")).toBeVisible();
     await expect(page.getByTestId("kiosk-board")).toHaveCount(0);
@@ -490,7 +490,7 @@ test.describe("a renamed slug still reaches the board (K fix round, F2 + F3)", (
     );
     expect(comp.status, JSON.stringify(comp.error)).toBe(201);
     // Over the public-dashboard cap a create degrades to private with a 201,
-    // and a private competition 404s off /shared/* — every redirect below would
+    // and a private competition 404s off /live/* — every redirect below would
     // then be asserted against a board that was never served.
     expect(comp.data!.visibility).toBe("public");
     const division = await seedLeagueDivision(request, comp.data!.id, "Open");
@@ -513,16 +513,16 @@ test.describe("a renamed slug still reaches the board (K fix round, F2 + F3)", (
 
     // The hop itself, unfollowed. F3 was a 404 here, and a followed navigation
     // cannot tell a redirect from a page that simply rendered.
-    const oldBoard = `/shared/${orgSlug}/${board.slug}/present`;
-    const newBoard = `/shared/${orgSlug}/${renamed.data!.slug}/present`;
+    const oldBoard = `/live/${orgSlug}/${board.slug}/present`;
+    const newBoard = `/live/${orgSlug}/${renamed.data!.slug}/present`;
     const hop = await page.request.get(oldBoard, { maxRedirects: 0 });
     expect(hop.status(), "the competition board redirects rather than 404ing").toBe(308);
     expect(locationPath(hop)).toBe(newBoard);
 
     // One level deeper — the other board file — where the /{div} tail is what
     // a tail-less redirect would lose.
-    const oldDiv = `/shared/${orgSlug}/${board.slug}/${board.divisionSlug}/present`;
-    const newDiv = `/shared/${orgSlug}/${renamed.data!.slug}/${board.divisionSlug}/present`;
+    const oldDiv = `/live/${orgSlug}/${board.slug}/${board.divisionSlug}/present`;
+    const newDiv = `/live/${orgSlug}/${renamed.data!.slug}/${board.divisionSlug}/present`;
     const divHop = await page.request.get(oldDiv, { maxRedirects: 0 });
     expect(divHop.status(), "the division board redirects too").toBe(308);
     expect(locationPath(divHop), "the /{div} tail survives").toBe(newDiv);
@@ -557,19 +557,19 @@ test.describe("a renamed slug still reaches the board (K fix round, F2 + F3)", (
     expect(renamed.data!.slug, "the rename regenerated the slug").not.toBe(oldOrgSlug);
     const newOrgSlug = renamed.data!.slug;
 
-    // F2: this landed on /shared/<new> — the org hub, not the board — because
+    // F2: this landed on /live/<new> — the org hub, not the board — because
     // the kiosk LAYOUT answered with the only param a layout has.
-    const oldBoard = `/shared/${oldOrgSlug}/${board.slug}/present`;
-    const newBoard = `/shared/${newOrgSlug}/${board.slug}/present`;
+    const oldBoard = `/live/${oldOrgSlug}/${board.slug}/present`;
+    const newBoard = `/live/${newOrgSlug}/${board.slug}/present`;
     const hop = await page.request.get(oldBoard, { maxRedirects: 0 });
     expect(hop.status(), "the board redirects").toBe(308);
     expect(locationPath(hop), "the /{comp} tail survives an ORG rename").toBe(newBoard);
 
-    const oldDiv = `/shared/${oldOrgSlug}/${board.slug}/${board.divisionSlug}/present`;
+    const oldDiv = `/live/${oldOrgSlug}/${board.slug}/${board.divisionSlug}/present`;
     const divHop = await page.request.get(oldDiv, { maxRedirects: 0 });
     expect(divHop.status(), "the division board redirects").toBe(308);
     expect(locationPath(divHop), "…and so does /{comp}/{div}").toBe(
-      `/shared/${newOrgSlug}/${board.slug}/${board.divisionSlug}/present`,
+      `/live/${newOrgSlug}/${board.slug}/${board.divisionSlug}/present`,
     );
 
     await page.setViewportSize(DESKTOP);
@@ -578,16 +578,16 @@ test.describe("a renamed slug still reaches the board (K fix round, F2 + F3)", (
     await expect(page.getByTestId("kiosk-board")).toBeVisible();
 
     // TODAY'S behaviour, not the desired one — and the evidence behind the
-    // comment in `(public)/shared/[orgSlug]/[competitionSlug]/page.tsx`: the
+    // comment in `(public)/live/[orgSlug]/[competitionSlug]/page.tsx`: the
     // chrome tree still drops the tail, because its layout redirects before the
     // page-level lookup can run. When that is fixed this expectation becomes
-    // `/shared/<new>/<comp>`; it is asserted so the fix cannot be silent.
-    const chromeHop = await page.request.get(`/shared/${oldOrgSlug}/${board.slug}`, {
+    // `/live/<new>/<comp>`; it is asserted so the fix cannot be silent.
+    const chromeHop = await page.request.get(`/live/${oldOrgSlug}/${board.slug}`, {
       maxRedirects: 0,
     });
     expect(chromeHop.status(), "the chrome hub redirects").toBe(308);
     expect(locationPath(chromeHop), "chrome hub drops the tail (unfixed)").toBe(
-      `/shared/${newOrgSlug}`,
+      `/live/${newOrgSlug}`,
     );
   });
 });

@@ -503,7 +503,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     // and offers no check-in.
     const ctx = await playerContext(browser);
     const p = await ctx.newPage();
-    const roomPath = routes.sharedFixturePlay(r.slugs.org, r.slugs.comp, r.slugs.div, board.fixtureId);
+    const roomPath = routes.publicFixturePlay(r.slugs.org, r.slugs.comp, r.slugs.div, board.fixtureId);
     await loginUi(p, board.home.email, roomPath);
     await p.goto(roomPath);
     await expect(screen(p)).toHaveAttribute("data-screen", "notOpened", { timeout: 20_000 });
@@ -1126,7 +1126,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const card = p.getByTestId("your-board");
     await expect(card, "the lobby offers the check-in").toHaveAttribute("data-state", "check_in", { timeout: 30_000 });
     await card.getByTestId("your-board-link").click();
-    await p.waitForURL((u) => u.pathname === routes.sharedFixturePlay(r.slugs.org, r.slugs.comp, r.slugs.div, board1.fixtureId));
+    await p.waitForURL((u) => u.pathname === routes.publicFixturePlay(r.slugs.org, r.slugs.comp, r.slugs.div, board1.fixtureId));
     await expect(screen(p)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
     await passCameraTest(p);
     const [claim] = await Promise.all([
@@ -1255,7 +1255,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const card = np.getByTestId("your-board");
     await expect(card, "the lobby offers the check-in").toHaveAttribute("data-state", "check_in", { timeout: 30_000 });
     await card.getByTestId("your-board-link").click();
-    await np.waitForURL((u) => u.pathname === routes.sharedFixturePlay(r.slugs.org, r.slugs.comp, r.slugs.div, board1.fixtureId));
+    await np.waitForURL((u) => u.pathname === routes.publicFixturePlay(r.slugs.org, r.slugs.comp, r.slugs.div, board1.fixtureId));
     await expect(screen(np)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
     // The stayer's own re-claim, if it comes, comes by itself: watched from before the retire.
     const reclaim = sp.waitForResponse((res) => res.request().method() === "POST" && isRoom(res.url()), { timeout: IDLE_POLL_MS + 20_000 });
@@ -1406,7 +1406,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const card = np.getByTestId("your-board");
     await expect(card).toHaveAttribute("data-state", "check_in", { timeout: 30_000 });
     await card.getByTestId("your-board-link").click();
-    await np.waitForURL((u) => u.pathname === routes.sharedFixturePlay(r.slugs.org, r.slugs.comp, r.slugs.div, board1.fixtureId));
+    await np.waitForURL((u) => u.pathname === routes.publicFixturePlay(r.slugs.org, r.slugs.comp, r.slugs.div, board1.fixtureId));
     await expect(screen(np)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
     await passCameraTest(np);
     await np.getByTestId("room-checkin-cta").click();

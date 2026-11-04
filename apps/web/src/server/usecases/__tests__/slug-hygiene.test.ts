@@ -142,7 +142,7 @@ describe.skipIf(!HAS_DB)("slug hygiene (PROMPT-30)", () => {
     expect(a.slug).toBe(`riverside-${suffix}`);
     const b = await mk(`Riverside ${suffix}`);
     expect(b.slug).toBe(`riverside-${suffix}-2`);
-    // App routes stay reserved for org slugs (/shared/[orgSlug] guard).
+    // App routes stay reserved for org slugs (/live/[orgSlug] guard).
     const c = await mk("Settings");
     expect(c.slug).toMatch(/^settings-\d+$/);
   });

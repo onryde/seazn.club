@@ -111,7 +111,7 @@ export async function stageRulesFormatSmoke(): Promise<void> {
       lines[0].line[0].params?.cap === rules.cap,
   );
 
-  const page = await html(anon, `/shared/${orgSlug}/${comp.slug}/${divRow.slug}`);
+  const page = await html(anon, `/live/${orgSlug}/${comp.slug}/${divRow.slug}`);
   check(
     "stage rules smoke: the division page's Swiss chip carries the line, read ANONYMOUSLY",
     page.status === 200 &&

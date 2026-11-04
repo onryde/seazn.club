@@ -33,8 +33,8 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
   getPublicCompetition,
 }));
 
-import PresentDivisionPage from "@/app/(public)/shared/(kiosk)/[orgSlug]/[competitionSlug]/[divisionSlug]/present/page";
-import PresentCompetitionPage from "@/app/(public)/shared/(kiosk)/[orgSlug]/[competitionSlug]/present/page";
+import PresentDivisionPage from "@/app/(public)/live/(kiosk)/[orgSlug]/[competitionSlug]/[divisionSlug]/present/page";
+import PresentCompetitionPage from "@/app/(public)/live/(kiosk)/[orgSlug]/[competitionSlug]/present/page";
 import { Slideshow } from "@/components/v2/slideshow";
 import type { BracketSlideFixture, FixtureSlideItem, Slide } from "@/server/slideshow-data";
 import { slideshowLabels, type SlideshowLabels } from "@/server/slideshow-labels";
@@ -432,8 +432,8 @@ describe("<Slideshow> renders every string from its labels (R10e u1)", () => {
     const board = createElement(Slideshow, {
       title: "Copa",
       slides: EVERY_BRANCH,
-      backHref: "/shared/o/c",
-      liveHref: "/shared/o/c",
+      backHref: "/live/o/c",
+      liveHref: "/live/o/c",
       sponsors: [{ name: "Acme" }],
       labels: slideshowLabels("es"),
     }) as ReactElement<{ slides: Slide[] }>;
@@ -460,7 +460,7 @@ describe("<Slideshow> renders every string from its labels (R10e u1)", () => {
           title: "Copa",
           slides: [{ kind: "fixtures", division: "Open", title: "Board", items: [item(status, 1)] }],
           backHref: "/",
-          liveHref: "/shared/o/c",
+          liveHref: "/live/o/c",
           labels: slideshowLabels("es"),
         }),
       );
@@ -505,8 +505,8 @@ describe("<Slideshow> renders every string from its labels (R10e u1)", () => {
       const board = createElement(Slideshow, {
         title: "Copa",
         slides: EVERY_BRANCH,
-        backHref: "/shared/o/c",
-        liveHref: "/shared/o/c",
+        backHref: "/live/o/c",
+        liveHref: "/live/o/c",
         labels: slideshowLabels(locale!),
       }) as ReactElement<{ slides: Slide[] }>;
       const all = renderEachSlide(board);
@@ -593,7 +593,7 @@ describe("public /present kiosk: fixtures rows name the round, not the organiser
         title: "Copa",
         slides: [{ kind: "fixtures", division: "Open", title: "Board", items: [item("scheduled", 3)] }],
         backHref: "/",
-        liveHref: "/shared/o/c",
+        liveHref: "/live/o/c",
         labels: slideshowLabels("en"),
       }),
     );
@@ -672,11 +672,11 @@ describe("public /present kiosk: the phone card (C1)", () => {
       params({ orgSlug: "o", competitionSlug: "c", divisionSlug: "d" }),
     )) as Board;
 
-    expect(board.props.liveHref).toBe("/shared/o/c?division=d");
+    expect(board.props.liveHref).toBe("/live/o/c?division=d");
     expect(board.props.labels.phoneCard).toEqual(es);
     expect(board.props, "the retired banner is not handed over").not.toHaveProperty("notice");
     const html = renderToStaticMarkup(board);
-    expect(openLiveTag(html)).toContain('href="/shared/o/c?division=d"');
+    expect(openLiveTag(html)).toContain('href="/live/o/c?division=d"');
     expect(html).not.toContain("kiosk-tv-hint");
   });
 
@@ -690,10 +690,10 @@ describe("public /present kiosk: the phone card (C1)", () => {
     getPublicDivision.mockResolvedValue(orgData("es"));
     const board = (await PresentCompetitionPage(params({ orgSlug: "o", competitionSlug: "c" }))) as Board;
 
-    expect(board.props.liveHref).toBe("/shared/o/c");
+    expect(board.props.liveHref).toBe("/live/o/c");
     expect(board.props.labels.phoneCard).toEqual(es);
     expect(board.props).not.toHaveProperty("notice");
-    expect(openLiveTag(renderToStaticMarkup(board))).toContain('href="/shared/o/c"');
+    expect(openLiveTag(renderToStaticMarkup(board))).toContain('href="/live/o/c"');
   });
 
   it("the board's card links the liveHref it is handed, not its back link", () => {
@@ -731,7 +731,7 @@ describe("<Slideshow> draws a double walkover's tag where the score would be (re
   const TAG = "2× w/o";
   const muted = new RegExp(`<span class="[^"]*text-court-muted[^"]*">${TAG}</span>`);
   const render = (slide: Slide) =>
-    renderToStaticMarkup(createElement(Slideshow, { title: "Copa", slides: [slide], backHref: "/", liveHref: "/shared/o/c", labels: slideshowLabels("en") }));
+    renderToStaticMarkup(createElement(Slideshow, { title: "Copa", slides: [slide], backHref: "/", liveHref: "/live/o/c", labels: slideshowLabels("en") }));
 
   it("the fixtures slide and every bracket kind: the tag, muted, once; the credited pair keeps its accent score", () => {
     const sites: string[] = [];
@@ -768,7 +768,7 @@ describe("<Slideshow> names a credited result's reason in the status cell (Loop 
         title: "Copa",
         slides: [{ kind: "fixtures", division: "Open", title: "Latest results", items }],
         backHref: "/",
-        liveHref: "/shared/o/c",
+        liveHref: "/live/o/c",
         labels: slideshowLabels(locale),
       }),
     );

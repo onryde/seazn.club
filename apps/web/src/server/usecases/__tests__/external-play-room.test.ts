@@ -190,9 +190,9 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — identity (every failu
     expect([home.you.colour, away.you.colour]).toEqual(["white", "black"]);
     // FIXED links (never history.back()): the fixture page, and the division
     // page above it that carries the standings.
-    expect(home.links.fixture).toMatch(new RegExp(`^/shared/${home.orgSlug}/[^/]+/[^/]+/fixtures/${s.fixtureId}$`));
+    expect(home.links.fixture).toMatch(new RegExp(`^/live/${home.orgSlug}/[^/]+/[^/]+/fixtures/${s.fixtureId}$`));
     expect(home.links.fixture).toBe(`${home.links.standings}/fixtures/${s.fixtureId}`);
-    expect(routes.sharedFixturePlay("o", "c", "d", s.fixtureId, "tok")).toBe(`/shared/o/c/d/fixtures/${s.fixtureId}/play?t=tok`);
+    expect(routes.publicFixturePlay("o", "c", "d", s.fixtureId, "tok")).toBe(`/live/o/c/d/fixtures/${s.fixtureId}/play?t=tok`);
   });
 
   it("a non-player session ⇒ 404 NOT_FOUND", async () => {

@@ -30,7 +30,7 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   });
   check("sp pro creates a competition-scoped title sponsor", scoped.status === 201);
 
-  const shared = await html(newSession(), `/shared/${proOrgSlug}/${comp.slug}`);
+  const shared = await html(newSession(), `/live/${proOrgSlug}/${comp.slug}`);
   check(
     "sp public page renders the perimeter board (title leads)",
     shared.status === 200 &&
@@ -139,7 +139,7 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
     tier: "gold",
   });
   check("sp free tiering gated (402)", freeGold.status === 402);
-  const freeShared = await html(newSession(), `/shared/${freeOrg.slug}/${freeComp.slug}`);
+  const freeShared = await html(newSession(), `/live/${freeOrg.slug}/${freeComp.slug}`);
   check(
     "sp free strip renders publicly, un-tiered",
     freeShared.status === 200 &&

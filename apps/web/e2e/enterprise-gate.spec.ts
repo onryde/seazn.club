@@ -50,7 +50,7 @@ import type { PassKey } from "../src/lib/currency";
 // both omit the enterprise card entirely (grepped; zero hits for "Contact
 // us"). So the real, and previously undriven, surface of this key is the
 // PUBLIC "Powered by Seazn Club" attribution footer
-// (`(public)/shared/[orgSlug]/layout.tsx:110`, `{org.branded ? null : (...)}`)
+// (`(public)/live/[orgSlug]/layout.tsx:110`, `{org.branded ? null : (...)}`)
 // — unauthenticated, and exactly the mechanism V396 made enterprise-only.
 //
 // ── Why C5 reads entitlement-admin.ts as TEXT, not as a module ──────────────
@@ -297,14 +297,14 @@ test.describe("dashboard.branding gates the public attribution footer", () => {
     const pro = await seedOrgOnPlan("pro");
     const enterprise = await seedOrgOnPlan("enterprise");
 
-    // No auth anywhere under (public)/shared — a bare page.goto is enough.
-    await page.goto(`/shared/${pro.orgSlug}`);
+    // No auth anywhere under (public)/live — a bare page.goto is enough.
+    await page.goto(`/live/${pro.orgSlug}`);
     await expect(
       page.getByText("Powered by", { exact: false }),
       "pro has not paid for badge removal (enterprise-only since V396)",
     ).toBeVisible();
 
-    await page.goto(`/shared/${enterprise.orgSlug}`);
+    await page.goto(`/live/${enterprise.orgSlug}`);
     await expect(
       page.getByText("Powered by", { exact: false }),
       "enterprise is the one plan that may remove it",

@@ -3,7 +3,7 @@
 // AnalyticsBootstrap was a server component that called getCurrentUser() (->
 // cookies()) from the ROOT layout, forcing every route rendered through it
 // (/, /clubs, /people, /players, /_not-found, and — once R1's
-// generateStaticParams fix lands — /shared too) to render dynamically
+// generateStaticParams fix lands — /live too) to render dynamically
 // whenever NEXT_PUBLIC_POSTHOG_KEY was set (task-7-report.md's audited
 // finding). The replacement resolves the same identity client-side via
 // lib/analytics-identity (which owns the GET /api/users/me fetch),

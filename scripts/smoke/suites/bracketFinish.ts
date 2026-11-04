@@ -161,7 +161,7 @@ export async function bracketFinishSuite(): Promise<void> {
   // search stayed green while the court card read "<winner> won" (Task 17's prod-build mutant on resultMsg).
   const lotLine = (pub["matchCentre.result.settled_lot"] ?? "").replaceAll("{winner}", foot.nameOf.get(footAway) ?? "");
   const statusLine = (body: string): string | null => /data-testid="mc-status-line"[^>]*>([^<]*)</.exec(body)?.[1] ?? null;
-  const matchPath = `/shared/${orgSlug}/${compRow.slug}/${foot.divSlug}/fixtures/${footSf?.id ?? ""}`;
+  const matchPath = `/live/${orgSlug}/${compRow.slug}/${foot.divSlug}/fixtures/${footSf?.id ?? ""}`;
   let matchPage = await html(newSession(), matchPath);
   let pageReads = 1;
   for (let tries = 0; tries < 20 && !(matchPage.status === 200 && statusLine(matchPage.body) === lotLine); tries++) {

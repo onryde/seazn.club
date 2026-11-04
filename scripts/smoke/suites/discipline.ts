@@ -136,7 +136,7 @@ export async function disciplineSuite(
   );
   check("disc: ban listed active after confirm", active.length >= 1);
 
-  const pub = await html(newSession(), `/shared/${proOrgSlug}/${comp.slug}/${div.slug}`);
+  const pub = await html(newSession(), `/live/${proOrgSlug}/${comp.slug}/${div.slug}`);
   check(
     "disc: public suspensions strip shows the ban",
     pub.status === 200 && pub.body.includes("Suspensions") && pub.body.includes("to serve"),

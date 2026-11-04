@@ -45,7 +45,7 @@ describe("AnalyticsBootstrap on the overlay segment", () => {
   it("still resolves identity on the public match page — the positive pair", () => {
     // Without this case the assertion above passes on a component that never
     // resolves identity anywhere, which is a different (and much worse) bug.
-    pathname.current = "/shared/acme/summer-cup/div-a/fixtures/1";
+    pathname.current = "/live/acme/summer-cup/div-a/fixtures/1";
     renderIsland(AnalyticsBootstrap, {});
     expect(resolveIdentity).toHaveBeenCalledTimes(1);
   });

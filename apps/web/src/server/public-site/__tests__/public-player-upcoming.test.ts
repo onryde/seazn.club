@@ -494,13 +494,13 @@ describe.skipIf(!HAS_DB)("readPlayerUpcoming against real Postgres", () => {
     const rows = await read(scene.cur.id);
     expect(rows.filter((r) => r.isOtherCompetition).map((r) => r.fixtureId)).toEqual([scene.f.ned]);
     expect(byId(rows, scene.f.ned)).toMatchObject({
-      href: `/shared/${scene.orgSlug}/${scene.sib.slug}/${scene.slugs.sib}/fixtures/${scene.f.ned}`,
+      href: `/live/${scene.orgSlug}/${scene.sib.slug}/${scene.slugs.sib}/fixtures/${scene.f.ned}`,
       competitionSlug: scene.sib.slug,
       competitionName: scene.sib.name,
       divisionSlug: scene.slugs.sib,
     });
     expect(byId(rows, scene.f.bo)).toMatchObject({
-      href: `/shared/${scene.orgSlug}/${scene.cur.slug}/${scene.slugs.singles}/fixtures/${scene.f.bo}`,
+      href: `/live/${scene.orgSlug}/${scene.cur.slug}/${scene.slugs.singles}/fixtures/${scene.f.bo}`,
       isOtherCompetition: false,
       courtLabel: "Court 3",
       venue: "Riverside Hall",

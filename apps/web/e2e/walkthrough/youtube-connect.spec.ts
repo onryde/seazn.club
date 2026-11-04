@@ -721,7 +721,7 @@ spec("replay links: two parts (a Stop past the grace, then a second video) are P
   // Nothing is fetched from Google's hosts: the facade's picture is stubbed, and the player is never mounted (no tap).
   await page.route("https://i.ytimg.com/vi/**", (route) =>
     route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 360"><rect width="480" height="360" fill="#16342a"/></svg>' }));
-  await page.goto(`/shared/${rig.orgSlug}/${rig.compSlug}/${rig.divSlug}/fixtures/${f.id}`, { waitUntil: "load" });
+  await page.goto(`/live/${rig.orgSlug}/${rig.compSlug}/${rig.divSlug}/fixtures/${f.id}`, { waitUntil: "load" });
   const player = page.getByTestId("replay-embed");
   await expect(player, "the public match page carries the replay player").toBeVisible({ timeout: NAV_MS });
   const tabs = player.getByRole("tab");
@@ -842,7 +842,7 @@ spec("made-for-kids replay: a part made while the channel was declared made-for-
   for (const width of [1280, 320] as const) {
     await page.setViewportSize({ width, height: width < 768 ? 700 : 900 });
     googleFetches.length = 0;
-    await page.goto(`/shared/${rig.orgSlug}/${rig.compSlug}/${rig.divSlug}/fixtures/${f.id}`, { waitUntil: "load" });
+    await page.goto(`/live/${rig.orgSlug}/${rig.compSlug}/${rig.divSlug}/fixtures/${f.id}`, { waitUntil: "load" });
     const player = page.getByTestId("replay-embed");
     await expect(player, `@${width}: the public match page carries the replay section`).toBeVisible({ timeout: NAV_MS });
     const tabs = player.getByRole("tab");

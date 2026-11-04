@@ -61,6 +61,7 @@ import { msgFor } from "@/lib/messages-i18n";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import { creditsNobody, unseatedForfeitLoser, unseatedForfeitLoserName } from "@/lib/forfeit-tag";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
+import { routes } from "@/lib/routes";
 
 type Tx = postgres.TransactionSql;
 
@@ -158,11 +159,11 @@ export function groupByCourt<T extends { court_id: string | null; court_name: st
 }
 
 // v12/Task 16: the live-page QR only points somewhere reachable — a
-// `private` competition's `/shared/...` page 404s (V230 public_competitions_v
+// `private` competition's `/live/...` page 404s (V230 public_competitions_v
 // gate), so no QR when private. `public`/`unlisted` both resolve.
 export function liveUrlFor(meta: Pick<DivisionMeta, "visibility" | "org_slug" | "comp_slug" | "div_slug">): string | undefined {
   if (meta.visibility === "private") return undefined;
-  return `${siteOrigin()}/shared/${meta.org_slug}/${meta.comp_slug}/${meta.div_slug}`;
+  return `${siteOrigin()}${routes.publicHub(meta.org_slug, meta.comp_slug, meta.div_slug)}`;
 }
 
 // Jul3/06 §6 / v12: branding (club colours, sponsor logos, tournament

@@ -35,7 +35,7 @@ function table<T extends Record<string, object>>(t: T): Readonly<T> {
 const V2 = "apps/web/src/components/v2";
 const STANDINGS_TABLE = "apps/web/src/components/public-site/standings-table.tsx";
 const ORG_DIVISION_PAGE = "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx";
-const PUBLIC_DIVISION_PAGE = "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx";
+const PUBLIC_DIVISION_PAGE = "apps/web/src/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx";
 /** confirm-dialog.tsx derives both buttons from its `testId` prop. */
 const CONFIRM_DIALOG: Pin = Object.freeze({ file: `${V2}/confirm-dialog.tsx`, needle: "`${testId}-confirm`" });
 

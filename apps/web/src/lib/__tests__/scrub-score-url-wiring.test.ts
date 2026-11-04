@@ -339,7 +339,7 @@ describe("the match-room token (review I1): every config's real hooks scrub it",
       roundOpenId: randomUUID(),
       roundOpenedAt: new Date().toISOString(),
     });
-    const selfPath = routes.sharedFixturePlay("chess-club", "autumn-open", "open", randomUUID(), token);
+    const selfPath = routes.publicFixturePlay("chess-club", "autumn-open", "open", randomUUID(), token);
     const startHref = lichessLinkStartHref("chess-club", selfPath);
     const urls = {
       room: `https://seazn.club${selfPath}`,
@@ -711,7 +711,7 @@ describe("a one-time token in a span's bare query, and a join code: every Sentry
     const server = transaction({ name: "GET /magic-link", traceData: serverSpanDetails(url, "/magic-link").data });
     const joinTx = transaction({ name: "GET /api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/join", traceData: otelTraceData(joinUrl) });
     const error = { event_id: "s1", transaction: "GET /magic-link", breadcrumbs: [outgoingBreadcrumb(url)], request: { url: "https://seazn.club/magic-link" } };
-    const joinError = { event_id: "s2", request: { method: "GET", url: "https://seazn.club/shared/city-club/spring-open/register/join", query_string: { join_code: code, player_id: "p1" } } };
+    const joinError = { event_id: "s2", request: { method: "GET", url: "https://seazn.club/live/city-club/spring-open/register/join", query_string: { join_code: code, player_id: "p1" } } };
     return { login, code, tx, child, server, joinTx, error, joinError };
   }
   const data = (e: unknown) => (e as { contexts: { trace: { data: Record<string, unknown> } } }).contexts.trace.data;

@@ -508,7 +508,7 @@ export async function youtubeConnectSuite(): Promise<void> {
       }
     });
     const divSlug = v1data<{ slug: string }>(await v1(a.s, `/api/v1/divisions/${fx.divisionId}`)).slug;
-    const path = `/shared/${a.orgSlug}/${comp.slug}/${divSlug}/fixtures/${fx.fixtureId}`;
+    const path = `/live/${a.orgSlug}/${comp.slug}/${divSlug}/fixtures/${fx.fixtureId}`;
     const page = await html(newSession(), path);   // anonymous: a spectator's view
     const replay = sectionFrom(page.body, 'data-testid="replay-embed"');
     step(`the public page renders the replay region (got ${page.status})`, page.status === 200 && replay !== "");
@@ -582,7 +582,7 @@ export async function youtubeConnectSuite(): Promise<void> {
     });
     const replayOf = async (fx: { fixtureId: string; divisionId: string }) => {
       const divSlug = v1data<{ slug: string }>(await v1(a.s, `/api/v1/divisions/${fx.divisionId}`)).slug;
-      const page = await html(newSession(), `/shared/${a.orgSlug}/${comp.slug}/${divSlug}/fixtures/${fx.fixtureId}`);   // anonymous
+      const page = await html(newSession(), `/live/${a.orgSlug}/${comp.slug}/${divSlug}/fixtures/${fx.fixtureId}`);   // anonymous
       return { status: page.status, replay: sectionFrom(page.body, 'data-testid="replay-embed"') };
     };
     const kids = await replayOf(kidsFx);

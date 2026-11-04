@@ -179,8 +179,8 @@ async function inRequestWithAfter<T>(
     onTaskError: undefined,
   });
   const workStore = {
-    route: shape === "isr-regeneration" ? "/shared/[orgSlug]/[competitionSlug]" : "/api/v1/fixtures/[id]/events",
-    page: shape === "isr-regeneration" ? "/shared/[orgSlug]/[competitionSlug]/page" : "/api/v1/fixtures/[id]/events/route",
+    route: shape === "isr-regeneration" ? "/live/[orgSlug]/[competitionSlug]" : "/api/v1/fixtures/[id]/events",
+    page: shape === "isr-regeneration" ? "/live/[orgSlug]/[competitionSlug]/page" : "/api/v1/fixtures/[id]/events/route",
     isStaticGeneration: shape === "isr-regeneration",
     incrementalCache: {
       revalidateTag: (tags: string | string[], durations?: { expire?: number }) => {

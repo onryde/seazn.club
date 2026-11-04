@@ -197,7 +197,7 @@ async function w2cPublicStageFormatChecks(owner: Session, orgId: string): Promis
   const started = await v1(owner, `/api/v1/divisions/${div.id}/start`, "POST");
 
   const anon = newSession();
-  const page = await html(anon, `/shared/${orgSlug}/${comp.slug}/${div.slug}`);
+  const page = await html(anon, `/live/${orgSlug}/${comp.slug}/${div.slug}`);
   const chips = page.body.split(`data-testid="division-stage-format"`).length - 1;
   const hub = v1data<{ divisions?: { slug: string; stageFormatLines?: { stageName: string; line: { key: string }[] }[] }[] } | undefined>(
     await v1(anon, `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/hub`),

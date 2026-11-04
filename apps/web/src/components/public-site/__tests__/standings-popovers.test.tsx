@@ -182,7 +182,7 @@ describe("the hub's Table tab (StandingsTableView)", () => {
     // W2d T17: no stage rules (a plain whole-point layout) and no date — these suites pin the rest of the view
     rules: null,
     dateOf: () => null,
-    fullHref: "/shared/o/c/div?tab=standings",
+    fullHref: "/live/o/c/div?tab=standings",
     rows: ROWS,
     metricSpecs: SPECS,
     cascade: CASCADE,

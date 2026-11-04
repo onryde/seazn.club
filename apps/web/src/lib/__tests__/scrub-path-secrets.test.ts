@@ -289,7 +289,7 @@ describe("what must not be mangled", () => {
   it("routes that merely look like a credential prefix are left alone, in every encoding", () => {
     const uuid = "00000000-0000-4000-8000-000000000001";
     const notSecrets = [
-      "/shared/chess-club/autumn-open/register/join",
+      "/live/chess-club/autumn-open/register/join",
       "/api/v1/public/orgs/chess-club/competitions/autumn-open/register/join",
       "/join",
       "/joined/abc",

@@ -164,7 +164,7 @@ interface SubmitResult {
 }
 
 function statusUrl(orgSlug: string, compSlug: string, res: SubmitResult): string {
-  return `/shared/${orgSlug}/${compSlug}/register/status?rid=${res.group_id}&token=${res.access_token}`;
+  return `/live/${orgSlug}/${compSlug}/register/status?rid=${res.group_id}&token=${res.access_token}`;
 }
 
 test("a pooled solo sign-up is placed through the real Registrants-tab banner and assign sheet, and reads their own status page as assigned, never waiting", async ({
@@ -333,7 +333,7 @@ test("an unplaced solo sign-up sees its own deadline, is auto-withdrawn once it 
     placeByAt: PAST_DEADLINE,
   });
 
-  const registerUrl = `/shared/${org.slug}/${compSlug}/register`;
+  const registerUrl = `/live/${org.slug}/${compSlug}/register`;
 
   // Solo sign-up #1 — fills the pool bound to exactly 1/1.
   const solo1Name = `RS012 Solo B1 ${suffix}`;

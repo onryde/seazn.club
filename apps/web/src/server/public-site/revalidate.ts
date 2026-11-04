@@ -15,6 +15,7 @@ import { deferred } from "@/lib/deferred";
 import { publicFixtureCacheKey } from "./fixture-doc-cache-key";
 import { publicDivisionCacheKeys } from "./division-doc-cache-keys";
 import { publicHubCacheKey, publicHubStaleCacheKey } from "./hub-doc-cache-keys";
+import { routes } from "@/lib/routes";
 
 export { DISCOVERY_TAG };
 
@@ -351,8 +352,8 @@ export function fireDiscoveryRevalidate(): void {
  *  only) — cross-instance staleness stays bounded by the 30s ISR window. */
 export function firePostRevalidate(orgSlug: string, postSlug: string): void {
   try {
-    revalidatePath(`/shared/${orgSlug}/news/${postSlug}`);
-    revalidatePath(`/shared/${orgSlug}/news`);
+    revalidatePath(routes.publicNewsPost(orgSlug, postSlug));
+    revalidatePath(routes.publicNews(orgSlug));
   } catch {
     // outside a Next request scope (tests, scripts) — nothing to invalidate
   }

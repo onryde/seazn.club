@@ -381,7 +381,7 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
     },
   );
   expect(settings.status).toBeLessThan(300);
-  // Published so `/shared/${orgSlug}` below has this card to hold at every
+  // Published so `/live/${orgSlug}` below has this card to hold at every
   // width: a draft is listed nowhere (owner decision 2026-09-27), and an org
   // home with nothing on it is the vacuous empty state #349 warns about.
   const published = await apiJson<{ status: string }>(request, `/api/v1/competitions/${compId}`, "PATCH", {
@@ -461,9 +461,9 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
   const joinCode = submitted.data!.entries[0]!.join_code;
   expect(joinCode, "a team entry must mint a join_code or the join page has nothing to show").toBeTruthy();
   statusPath =
-    `/shared/${orgSlug}/${compSlug}/register/status` +
+    `/live/${orgSlug}/${compSlug}/register/status` +
     `?rid=${submitted.data!.group_id}&token=${submitted.data!.access_token}`;
-  joinPath = `/shared/${orgSlug}/${compSlug}/register/join?join_code=${joinCode}`;
+  joinPath = `/live/${orgSlug}/${compSlug}/register/join?join_code=${joinCode}`;
 
   // RS009 — one person entering the team division ALONE, so the Registrants
   // tab has a row whose "Assign to a team" control exists. A hub with no
@@ -497,7 +497,7 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
   // "waiting for a team"). Each entry submitted through a SEPARATE cart gets
   // its own group_id/access_token, so this is a genuinely different page.
   soloStatusPath =
-    `/shared/${orgSlug}/${compSlug}/register/status` +
+    `/live/${orgSlug}/${compSlug}/register/status` +
     `?rid=${solo.data!.group_id}&token=${solo.data!.access_token}`;
   // P11 (D6): import.events has no plan_entitlements row on any plan during
   // rollout (design doc §2.4/R6) — without this override the import route
@@ -553,7 +553,7 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
   expect(mcBall.status, `cricket.ball -> ${mcBall.status} ${JSON.stringify(mcBall.error)}`).toBeLessThan(300);
   const mcCompSlug = await apiJson<{ slug: string }>(request, `/api/v1/competitions/${mcFx.competitionId}`);
   const mcDivSlug = await apiJson<{ slug: string }>(request, `/api/v1/divisions/${mcFx.divisionId}`);
-  publicCricketFixturePath = `/shared/${orgSlug}/${mcCompSlug.data!.slug}/${mcDivSlug.data!.slug}/fixtures/${mcFx.fixtureId}`;
+  publicCricketFixturePath = `/live/${orgSlug}/${mcCompSlug.data!.slug}/${mcDivSlug.data!.slug}/fixtures/${mcFx.fixtureId}`;
   publicCricketCompSlug = mcCompSlug.data!.slug;
   publicCricketPlayerId = mcFx.personIds[`MC Home 1 ${TAG}`]!;
 });
@@ -1371,8 +1371,8 @@ test("division header: Slideshow, View Public Page and QR are one Open menu at e
 
   // Each destination is in the DOM exactly ONCE at this width (a hidden copy beside a visible one is still a copy).
   const slideshowHref = `/slideshow/divisions/${div.data!.id}`;
-  const publicHref = `/shared/${orgSlug}/${comp.data!.slug}?tab=matches&division=${divSlug}`;
-  const qrHref = `/shared/${orgSlug}/${comp.data!.slug}/poster.pdf?division=${divSlug}`;
+  const publicHref = `/live/${orgSlug}/${comp.data!.slug}?tab=matches&division=${divSlug}`;
+  const qrHref = `/live/${orgSlug}/${comp.data!.slug}/poster.pdf?division=${divSlug}`;
   for (const href of [slideshowHref, publicHref, qrHref]) {
     await expect(page.locator(`a[href="${href}"]`), `${href} appears once`).toHaveCount(1);
   }
@@ -1666,9 +1666,9 @@ test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser })
     const routes = [
       "/",
       "/pricing",
-      `/shared/${orgSlug}`,
-      `/shared/${orgSlug}/${compSlug}`,
-      `/shared/${orgSlug}/${compSlug}/register`,
+      `/live/${orgSlug}`,
+      `/live/${orgSlug}/${compSlug}`,
+      `/live/${orgSlug}/${compSlug}/register`,
       // Seazn Games (design doc 2026-08-26, W3) — public, no login, no org.
       // Added here rather than the "console routes" test above because
       // these are genuinely anonymous marketing/play surfaces, same as "/"
@@ -1763,13 +1763,13 @@ test("spectator hub tabs and a player card: no horizontal scroll, each tab opens
     test.setTimeout(Math.max(FLOOR_MS, routes * ROUTE_CHECK_MS));
     for (const { comp, tabs } of hubs) {
       for (const id of tabs) {
-        await anon.goto(`/shared/${orgSlug}/${comp}?tab=${id}`, { waitUntil: "load" });
+        await anon.goto(`/live/${orgSlug}/${comp}?tab=${id}`, { waitUntil: "load" });
         await expect(anon.getByTestId(`mh-tab-panel-${id}`), `${comp} ?tab=${id} opened a different tab`).toBeVisible();
         await expectNoHorizontalScroll(anon);
       }
     }
     expect(publicCricketPlayerId, "setup did not fill the player id").toBeTruthy();
-    await anon.goto(`/shared/${orgSlug}/${publicCricketCompSlug}/players/${publicCricketPlayerId}`, { waitUntil: "load" });
+    await anon.goto(`/live/${orgSlug}/${publicCricketCompSlug}/players/${publicCricketPlayerId}`, { waitUntil: "load" });
     await expect(anon.getByTestId("mh-player-matches").locator('[data-slab="true"]')).toBeVisible();
     await expectNoHorizontalScroll(anon);
   } finally {
@@ -1857,13 +1857,13 @@ test("news (SPEC-2): feed + post page hold at mobile width", async ({ page, brow
   const anonCtx = await browser.newContext({ viewport: projectViewport() ?? undefined });
   try {
     const anon = await anonCtx.newPage();
-    await anon.goto(`/shared/${orgSlug}/news`, { waitUntil: "load" });
+    await anon.goto(`/live/${orgSlug}/news`, { waitUntil: "load" });
     await anon.waitForTimeout(300);
     await expectNoHorizontalScroll(anon);
     // Assert the card while still ON the feed — the post page has no cards.
     await expect(anon.getByTestId("news-card").first()).toBeVisible();
 
-    await anon.goto(`/shared/${orgSlug}/news/${postSlug}`, { waitUntil: "load" });
+    await anon.goto(`/live/${orgSlug}/news/${postSlug}`, { waitUntil: "load" });
     await anon.waitForTimeout(300);
     await expectNoHorizontalScroll(anon);
   } finally {
@@ -1883,7 +1883,7 @@ test("axe: no serious/critical violations on key surfaces (v3/11 gap 11)", async
     "/settings?tab=organization",
     "/settings/billing",
     `/o/${orgSlug}/c/${compSlug}/upgrade`,
-    `/shared/${orgSlug}/${compSlug}`,
+    `/live/${orgSlug}/${compSlug}`,
     // RS010 close-out (v3/11 gap 11 was never re-swept for the Registration
     // redesign) — the public register stepper (divisionId above has
     // registration enabled, open, individual entrant), the Registration hub
@@ -1891,7 +1891,7 @@ test("axe: no serious/critical violations on key surfaces (v3/11 gap 11)", async
     // audits above, reused here for axe), and the register status page
     // (statusPath, seeded by the setup test with a real registration so this
     // renders populated, not its empty state) had zero axe coverage.
-    `/shared/${orgSlug}/${compSlug}/register`,
+    `/live/${orgSlug}/${compSlug}/register`,
     `/o/${orgSlug}/c/${compSlug}/registration?tab=settings`,
     `/o/${orgSlug}/c/${compSlug}/registration?tab=registrants`,
     statusPath,
@@ -1990,7 +1990,7 @@ test("LCP < 2.5s on Fast-3G: public dashboard + registration (v3/11 gap 15)", as
   const anonCtx = await browser.newContext({ viewport: projectViewport() ?? undefined });
   try {
     const anon = await anonCtx.newPage();
-    for (const path of [`/shared/${orgSlug}/${compSlug}`, `/shared/${orgSlug}/${compSlug}/register`]) {
+    for (const path of [`/live/${orgSlug}/${compSlug}`, `/live/${orgSlug}/${compSlug}/register`]) {
       const lcp = await measureLcp(anon, path);
       expect(lcp, `LCP on ${path}`).toBeLessThan(2500);
     }
@@ -3442,7 +3442,7 @@ test("P6 setup: a fresh org with an up-front TBD knockout fixture (seeded, group
   const comp = await apiJson<{ id: string; slug: string }>(page.request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `P6 Fix1 ${TAG}`,
-    visibility: "unlisted", // reachable on /shared/... — default is private
+    visibility: "unlisted", // reachable on /live/... — default is private
   });
   expect(comp.status).toBeLessThan(300);
   p6CompSlug = comp.data!.slug;
@@ -3536,7 +3536,7 @@ test("P6 public surface: a visitor sees the resolved slot label in the ORG's own
   // fixture detail page, same pattern) previously ignored it completely.
   await setOrgLocaleSql(org.id, "es");
 
-  await page.goto(`/shared/${p6OrgSlug}/${p6CompSlug}/${p6DivSlug}`, { waitUntil: "load" });
+  await page.goto(`/live/${p6OrgSlug}/${p6CompSlug}/${p6DivSlug}`, { waitUntil: "load" });
   // Default tab is Schedule (Tabs labels=["Schedule","Standings","Entrants"]).
   await expect(page.getByText("Ganador del Grupo A", { exact: false }).first()).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("Ganador del Grupo B", { exact: false }).first()).toBeVisible();
@@ -4576,7 +4576,7 @@ test("register stepper: ENTRIES/DETAILS/CONSENT/REVIEW hold at this width, no ho
     const anonCtx = await browser.newContext({ viewport: projectViewport() ?? undefined });
     try {
       const anon = await anonCtx.newPage();
-      await anon.goto(`/shared/${org.slug}/${comp.data!.slug}/register`, { waitUntil: "load" });
+      await anon.goto(`/live/${org.slug}/${comp.data!.slug}/register`, { waitUntil: "load" });
       await anon.waitForTimeout(300);
 
       // Step 1 — WHO. Two open divisions, one `requires_dob`, means
@@ -7743,7 +7743,7 @@ test("W2d T17 public standings: IIHF OTW/OTL columns on both public tables, no h
   const otl = kit.dictString("en", "table.abbr.otl");
 
   // ── the division page ──
-  await page.goto(`/shared/${org.slug}/${competition.slug}/${div.slug}?tab=standings`, { waitUntil: "load" });
+  await page.goto(`/live/${org.slug}/${competition.slug}/${div.slug}?tab=standings`, { waitUntil: "load" });
   const panel = page.locator("#panel-standings");
   await expect(panel).toBeVisible();
   const headers = await panel.locator('thead th span[aria-hidden="true"]').allInnerTexts();
@@ -7768,7 +7768,7 @@ test("W2d T17 public standings: IIHF OTW/OTL columns on both public tables, no h
   if (width <= 320) expect(scrollable.length, "anti-vacuity: the 320 division table scrolls in a rail the loop checked").toBeGreaterThanOrEqual(1);
 
   // ── the hub's Table tab ──
-  await page.goto(`/shared/${org.slug}/${competition.slug}?tab=table`, { waitUntil: "load" });
+  await page.goto(`/live/${org.slug}/${competition.slug}?tab=table`, { waitUntil: "load" });
   const hub = page.getByTestId("mh-tab-panel-table");
   await expect(hub).toBeVisible();
   // T17 fix 1 (m2): on a phone the split table shows GP and Pts and folds W · OTW · OTL · L behind "Show all columns";

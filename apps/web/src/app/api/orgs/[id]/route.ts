@@ -96,7 +96,7 @@ export async function PATCH(
     if ("name" in body) {
       updates.name = body.name;
       // Rename regenerates the slug (v3/01 §2, PROMPT-30); the old slug keeps
-      // redirecting via slug_history so shared /o and /shared links survive.
+      // redirecting via slug_history so shared /o and /live links survive.
       const [current] = await sql<{ name: string; slug: string }[]>`
         select name, slug from organizations where id = ${id}`;
       if (!current) throw new HttpError(404, "Organization not found");

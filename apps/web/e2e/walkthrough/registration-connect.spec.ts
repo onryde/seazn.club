@@ -184,7 +184,7 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
     // OTHER walkthrough in the same job — which is precisely how it broke
     // rs010-registration-cross-flow, whose captain then rendered under this
     // spec's name instead of its own. Everything below drives only public
-    // `/shared/...` pages, so there is nothing here that wanted auth.
+    // `/live/...` pages, so there is nothing here that wanted auth.
     const ctx = await browser.newContext({
       storageState: { cookies: [], origins: [] },
       viewport: { width: 1280, height: 900 },
@@ -192,7 +192,7 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
     });
     const anon = await ctx.newPage();
 
-    await anon.goto(`/shared/${org.slug}/${comp.data!.slug}/register`, { waitUntil: "load" });
+    await anon.goto(`/live/${org.slug}/${comp.data!.slug}/register`, { waitUntil: "load" });
     await expect(anon.locator("#reg-who-name")).toBeVisible({ timeout: 20_000 });
 
     // ---- BEAT 2 — WHO ----------------------------------------------------

@@ -349,8 +349,8 @@ function expectDrawnIsEngine(d: Awaited<ReturnType<typeof drawn>>, e: Expected, 
 }
 
 const paths = {
-  division: (slug: string) => `/shared/${scene.orgSlug}/${scene.compSlug}/${slug}?tab=standings`,
-  hub: () => `/shared/${scene.orgSlug}/${scene.compSlug}?tab=table`,
+  division: (slug: string) => `/live/${scene.orgSlug}/${scene.compSlug}/${slug}?tab=standings`,
+  hub: () => `/live/${scene.orgSlug}/${scene.compSlug}?tab=table`,
   console: (slug: string) => `/o/${scene.orgSlug}/c/${scene.compSlug}/d/${slug}?tab=standings`,
 };
 
@@ -621,8 +621,8 @@ test("pools: a Spanish org's division page and hub name each pool from its key i
   const want = ["A", "B"].slice(0, POOLS).map((key) => `Groups — ${dictString("es", "table.poolLabel", { key })}`);
   expect(want[0], "premise: Spanish is not the stored English name").not.toContain("Pool");
 
-  const divisionPath = `/shared/${org.slug}/${comp.slug}/${div.slug}?tab=standings`;
-  const hubPath = `/shared/${org.slug}/${comp.slug}?tab=table`;
+  const divisionPath = `/live/${org.slug}/${comp.slug}/${div.slug}?tab=standings`;
+  const hubPath = `/live/${org.slug}/${comp.slug}?tab=table`;
   const captions = (p: Page) => p.locator("#panel-standings table > caption");
   const hubPools = (p: Page) => p.locator(`section[data-testid^="mh-table-${div.slug}-"]`);
   let checked = 0;

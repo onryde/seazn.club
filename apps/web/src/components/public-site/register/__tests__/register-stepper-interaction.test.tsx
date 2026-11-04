@@ -1902,7 +1902,7 @@ describe("step 4 — the Lichess link on CONSENT (I5)", () => {
     expect(await reachConsent({ ...DIV_OPEN, online_play: true }, UNLINKED)).toEqual({
       divisions: ["Open Singles"],
       orgSlug: ORG_SLUG,
-      next: `/shared/${ORG_SLUG}/${COMPETITION_SLUG}/register`,
+      next: `/live/${ORG_SLUG}/${COMPETITION_SLUG}/register`,
       state: UNLINKED,
     });
   });
@@ -1950,7 +1950,7 @@ describe("step 5 — submit", () => {
     expect((options as { json: { contact: { name: string } } }).json.contact.name).toBe("Alex Test");
 
     expect(assignMock).toHaveBeenCalledWith(
-      `/shared/${ORG_SLUG}/${COMPETITION_SLUG}/register/status?rid=g1&token=tok123`,
+      `/live/${ORG_SLUG}/${COMPETITION_SLUG}/register/status?rid=g1&token=tok123`,
     );
   });
 
@@ -2042,7 +2042,7 @@ describe("step 5 — submit", () => {
     // I5 (T16 fix round 1): and it comes BACK to this registration (a same-origin path the route re-validates) — it
     // used to land the player on /me, out of the form.
     expect(propsOf(links[0]!).href).toBe(
-      `/api/auth/lichess?org=${ORG_SLUG}&next=${encodeURIComponent(`/shared/${ORG_SLUG}/${COMPETITION_SLUG}/register`)}`,
+      `/api/auth/lichess?org=${ORG_SLUG}&next=${encodeURIComponent(`/live/${ORG_SLUG}/${COMPETITION_SLUG}/register`)}`,
     );
   });
 
@@ -2079,7 +2079,7 @@ describe("step 5 — submit", () => {
     const links = island.tree().filter((e) => propsOf(e)["data-testid"] === "register-lichess-reconnect-link");
     expect(links, "exactly one reconnect link").toHaveLength(1);
     expect(propsOf(links[0]!).href).toBe(
-      `/api/auth/lichess?org=${ORG_SLUG}&next=${encodeURIComponent(`/shared/${ORG_SLUG}/${COMPETITION_SLUG}/register`)}`,
+      `/api/auth/lichess?org=${ORG_SLUG}&next=${encodeURIComponent(`/live/${ORG_SLUG}/${COMPETITION_SLUG}/register`)}`,
     );
     expect(textOf(links[0]!)).toBe(String(EN_UI["register.lichess.reconnect.cta"]));
     // The pair: the "link" affordance is not offered for this reason.
@@ -2177,7 +2177,7 @@ describe("step 5 — submit", () => {
     const secondJson = (apiV1Mock.impl.mock.calls[1]![1] as { json: unknown }).json;
     expect(secondJson, "identical resubmission — the failed attempt cleared nothing").toEqual(firstJson);
     expect(assignMock).toHaveBeenCalledWith(
-      `/shared/${ORG_SLUG}/${COMPETITION_SLUG}/register/status?rid=g2&token=tok789`,
+      `/live/${ORG_SLUG}/${COMPETITION_SLUG}/register/status?rid=g2&token=tok789`,
     );
   });
 

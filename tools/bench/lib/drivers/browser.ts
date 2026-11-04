@@ -421,7 +421,7 @@ async function enterViaStepper(
   onPaidDuringEnter: () => void,
 ): Promise<EntryOutcome> {
   const { page } = session;
-  await page.goto(`${base}/shared/${division.orgSlug}/${division.competitionSlug}/register`);
+  await page.goto(`${base}/live/${division.orgSlug}/${division.competitionSlug}/register`);
 
   // Step "who".
   await page.locator("#reg-who-name").fill(entry.contact.name);
@@ -705,7 +705,7 @@ async function joinViaForm(
   consent: ConsentInput,
 ): Promise<void> {
   const { page } = session;
-  await page.goto(`${base}/shared/${entry.orgSlug}/${entry.competitionSlug}/register/join?join_code=${encodeURIComponent(joinCode)}`);
+  await page.goto(`${base}/live/${entry.orgSlug}/${entry.competitionSlug}/register/join?join_code=${encodeURIComponent(joinCode)}`);
 
   const player: RegistrationPlayer = entry.player;
   await page.locator("#reg-who-name").fill(player.fullName);

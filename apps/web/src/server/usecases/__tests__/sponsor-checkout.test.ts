@@ -358,9 +358,9 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
     expect(mailed).toHaveLength(1);
     expect(mailed[0]!.to).toBe("b@bolt.test");
     // The "See it live" link must be absolute — mail clients have no origin
-    // to resolve "/shared/…" against (stg regression: NEXT_PUBLIC_APP_URL was
+    // to resolve "/live/…" against (stg regression: NEXT_PUBLIC_APP_URL was
     // never set anywhere, so every receipt shipped a relative link).
-    expect(mailed[0]!.text).toMatch(/^https?:\/\/.+\/shared\//m);
+    expect(mailed[0]!.text).toMatch(/^https?:\/\/.+\/live\//m);
 
     // A late failure event never clobbers the paid order.
     await handleSponsorPaymentFailed(intent);

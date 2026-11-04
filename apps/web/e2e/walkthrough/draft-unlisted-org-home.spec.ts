@@ -72,7 +72,7 @@ test.afterAll(async ({ browser }) => {
 });
 
 const chip = (page: Page, comp: SeededCompetition) => page.getByTestId(`mh-org-chip-${comp.id}`);
-const card = (page: Page, comp: SeededCompetition) => page.locator(`a[href="/shared/${org.slug}/${comp.slug}"]`);
+const card = (page: Page, comp: SeededCompetition) => page.locator(`a[href="/live/${org.slug}/${comp.slug}"]`);
 
 test("a new public draft is off the org home but open by link; publishing it from settings lists it", async ({
   browser,
@@ -96,7 +96,7 @@ test("a new public draft is off the org home but open by link; publishing it fro
   // 1. The org home — the spectator's first load, which also primes the page's
   //    cache with the draft left out.
   const anon = await spectator(browser, { width: 1280 });
-  const home = await anon.goto(`/shared/${org.slug}`);
+  const home = await anon.goto(`/live/${org.slug}`);
   expect(home?.status()).toBe(200);
   await expect(chip(anon, listed), "the published neighbour is listed").toBeVisible({ timeout: NAV_MS });
   await expect(chip(anon, draft), "the draft has no card").toHaveCount(0);
@@ -104,12 +104,12 @@ test("a new public draft is off the org home but open by link; publishing it fro
 
   // 2. The direct link still works — a draft is unlisted, not hidden — and
   //    keeps crawlers out. The published neighbour's hub is the positive pair.
-  const hub = await anon.goto(`/shared/${org.slug}/${draft.slug}`);
+  const hub = await anon.goto(`/live/${org.slug}/${draft.slug}`);
   expect(hub?.status(), "the draft's hub serves by link").toBe(200);
   await expect(anon.getByRole("heading", { name: draft.name }).first()).toBeVisible({ timeout: NAV_MS });
-  const draftHtml = await (await anon.request.get(`/shared/${org.slug}/${draft.slug}`)).text();
+  const draftHtml = await (await anon.request.get(`/live/${org.slug}/${draft.slug}`)).text();
   expect(draftHtml, "the draft's hub is noindexed").toMatch(NOINDEX);
-  const listedHtml = await (await anon.request.get(`/shared/${org.slug}/${listed.slug}`)).text();
+  const listedHtml = await (await anon.request.get(`/live/${org.slug}/${listed.slug}`)).text();
   expect(listedHtml, "a published hub is not").not.toMatch(NOINDEX);
 
   // 3. The organiser sees why, and publishes from the Status select.
@@ -136,7 +136,7 @@ test("a new public draft is off the org home but open by link; publishing it fro
 
   // 4. The same spectator's org home now lists it, within the page's window.
   await expect(async () => {
-    await anon.goto(`/shared/${org.slug}`);
+    await anon.goto(`/live/${org.slug}`);
     await expect(chip(anon, draft)).toBeVisible({ timeout: 2_000 });
   }, "the published competition reaches the org home").toPass({ timeout: LISTING_BOUND_MS });
   await expect(card(anon, draft)).toHaveCount(1);
@@ -144,7 +144,7 @@ test("a new public draft is off the org home but open by link; publishing it fro
 
   // …and its hub is indexable again.
   await expect
-    .poll(async () => NOINDEX.test(await (await anon.request.get(`/shared/${org.slug}/${draft.slug}`)).text()), {
+    .poll(async () => NOINDEX.test(await (await anon.request.get(`/live/${org.slug}/${draft.slug}`)).text()), {
       message: "the published hub drops its noindex",
       timeout: LISTING_BOUND_MS,
     })
@@ -152,7 +152,7 @@ test("a new public draft is off the org home but open by link; publishing it fro
 
   // The page with two cards holds at the narrowest width.
   const phone = await spectator(browser, { width: 320 });
-  await phone.goto(`/shared/${org.slug}`);
+  await phone.goto(`/live/${org.slug}`);
   await expect(chip(phone, draft)).toBeVisible({ timeout: NAV_MS });
   await expectNoHorizontalScroll(phone);
 });

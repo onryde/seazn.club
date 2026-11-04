@@ -14,7 +14,7 @@ export interface ExternalPlayInviteArgs {
   /** Batch 1 onwards (spec §3.2.1): when THIS board's check-in opens. Absent for batch 0, whose check-in opens at the Open
    *  press, so the mail says "ready to play now" as it always did; present, it says WHEN (`bodyLater`, `textLater`). */
   opensLabel?: string;
-  /** The player's own match room (`routes.sharedFixturePlay`), carrying their
+  /** The player's own match room (`routes.publicFixturePlay`), carrying their
    *  personal link token when they have one. */
   fixtureUrl: string;
 }

@@ -33,6 +33,7 @@ import { plural, t } from "@/lib/i18n-runtime";
 import { chipLabelKey, chipShowsCount, competitionChip, sortOrgHomeCompetitions } from "@/lib/public-site";
 import { fetchOrgLive } from "./org-live-data";
 import { HUB_IDLE_POLL_MS, HUB_POLL_MS } from "./use-live-competition";
+import { routes } from "@/lib/routes";
 
 export interface OrgLiveCompetition {
   id: string;
@@ -195,7 +196,7 @@ export function OrgLiveChips({ orgSlug, competitions, dict, locale }: OrgLiveChi
       {current.map((c) => (
         <li key={c.id}>
           <Link
-            href={`/shared/${orgSlug}/${c.slug}`}
+            href={routes.publicHub(orgSlug, c.slug)}
             className="group flex h-full flex-col justify-between rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-accent-line hover:shadow-md"
           >
             <div className="flex items-start justify-between gap-3">

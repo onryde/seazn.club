@@ -458,7 +458,7 @@ body {
 
   /* The public bracket tree is intrinsically wide (engine geometry, shared
      with the console panel and the PDF poster — see bracket.tsx) and every
-     public page routes through the `/shared/[orgSlug]` shell's
+     public page routes through the `/live/[orgSlug]` shell's
      `max-w-5xl` reading column. Past that column's ~1024px breakpoint the
      tree was capped to ~992px of usable width while real page margin sat
      idle beside it — a knockout of 8 needs 1040px and lost its rightmost

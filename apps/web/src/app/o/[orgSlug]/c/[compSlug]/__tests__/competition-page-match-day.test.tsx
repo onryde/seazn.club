@@ -346,7 +346,7 @@ const panelOf = (menu: string): string => menu.slice(menu.search(/<div[^>]*role=
 
 describe("the competition page's Open menu (C5)", () => {
   const SLIDESHOW = routes.slideshowCompetition("comp-1");
-  const PUBLIC = routes.shared("riverside", "summer-league");
+  const PUBLIC = routes.publicHub("riverside", "summer-league");
   const QR = `${PUBLIC}/poster.pdf`;
   const SETTINGS = routes.competitionSettings("riverside", "summer-league");
   const REGISTRATION = routes.competitionRegistration("riverside", "summer-league");
@@ -562,8 +562,8 @@ describe("the Match Day door, off the day and on it (C5 addition)", () => {
     expect(links.length, "Match Day + the three tools").toBe(4);
     expect(links.slice(1).map((a) => a.match(/\shref="([^"]*)"/)?.[1])).toEqual([
       routes.slideshowCompetition("comp-1"),
-      routes.shared("riverside", "summer-league"),
-      `${routes.shared("riverside", "summer-league")}/poster.pdf`,
+      routes.publicHub("riverside", "summer-league"),
+      `${routes.publicHub("riverside", "summer-league")}/poster.pdf`,
     ]);
   });
 

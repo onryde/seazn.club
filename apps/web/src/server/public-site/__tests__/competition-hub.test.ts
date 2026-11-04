@@ -984,7 +984,7 @@ describe("loadCompetitionHub — the document", () => {
       bucket: "completed",
       winnerIndex: 0,
       divisionSlug: "open",
-      href: "/shared/riverside/autumn-cup/open/fixtures/fx-decided",
+      href: "/live/riverside/autumn-cup/open/fixtures/fx-decided",
       venueName: "Riverside Park",
       courtName: "Pitch 2",
       header: { status: "decided", live: false, scoreLines: ["2", "1"] },
@@ -1192,7 +1192,7 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
       tz: "Europe/London",
       entrantCount: 3,
       variantKey: "11-a-side",
-      href: "/shared/riverside/autumn-cup/open",
+      href: "/live/riverside/autumn-cup/open",
     });
     expect(doc.divisions[0]!.formatLine).toEqual(
       describeFormat("football", resolveLatestModule("football"), DIV.config),
@@ -1304,7 +1304,7 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
       divisionId: "div-1",
       divisionSlug: "open",
       caption: "League",
-      fullHref: "/shared/riverside/autumn-cup/open?tab=standings",
+      fullHref: "/live/riverside/autumn-cup/open?tab=standings",
       updatedAt: "2026-09-04T16:00:00.000Z",
     });
     expect(doc.tables[0]!.rows.map((r) => r.name)).toEqual(["Blue Blazers", "Red Rockets"]);
@@ -1449,7 +1449,7 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
       divisionSlug: "open",
       colour: "#0044cc",
       seed: 1,
-      href: "/shared/riverside/autumn-cup/open?tab=entrants",
+      href: "/live/riverside/autumn-cup/open?tab=entrants",
     });
     expect(doc.teams[1]!.colour).toBeNull();
   });
@@ -1498,11 +1498,11 @@ describe("loadCompetitionHub — info", () => {
       endsOn: "2026-09-30",
       venues: ["Aylesbury Rec", "Riverside Park"],
       registrationOpen: false,
-      registerHref: "/shared/riverside/autumn-cup/register",
+      registerHref: "/live/riverside/autumn-cup/register",
       calendars: [
-        { divisionName: "Open", href: "/shared/riverside/autumn-cup/open/calendar.ics" },
+        { divisionName: "Open", href: "/live/riverside/autumn-cup/open/calendar.ics" },
       ],
-      presentHref: "/shared/riverside/autumn-cup/present",
+      presentHref: "/live/riverside/autumn-cup/present",
     });
   });
 
@@ -1585,7 +1585,7 @@ describe("loadCompetitionHub — squads, suspensions, division prose, team calen
         name: "Zed Adams",
         squadNumber: 9,
         position: "FW",
-        playerHref: "/shared/riverside/autumn-cup/players/pz",
+        playerHref: "/live/riverside/autumn-cup/players/pz",
         suspendedRemaining: null,
       },
       // No public id (no consent, or no player-profile entitlement): no link,
@@ -1596,7 +1596,7 @@ describe("loadCompetitionHub — squads, suspensions, division prose, team calen
         name: "Arun Kumar",
         squadNumber: null,
         position: null,
-        playerHref: "/shared/riverside/autumn-cup/players/pa",
+        playerHref: "/live/riverside/autumn-cup/players/pa",
         suspendedRemaining: null,
       },
     ]);
@@ -1625,7 +1625,7 @@ describe("loadCompetitionHub — squads, suspensions, division prose, team calen
       expect({ youth, display, playerHref: m!.playerHref, personId: m!.personId }).toEqual({
         youth,
         display,
-        playerHref: links ? "/shared/riverside/autumn-cup/players/ps" : null,
+        playerHref: links ? "/live/riverside/autumn-cup/players/ps" : null,
         personId: links ? "ps" : null,
       });
     }
@@ -1931,12 +1931,12 @@ describe("loadCompetitionHub — squads, suspensions, division prose, team calen
   it("each team's calendar is its division's .ics route with that entrant's filter", async () => {
     const doc = await load();
     expect(doc.teams.map((t) => t.calendarHref)).toEqual([
-      "/shared/riverside/autumn-cup/open/calendar.ics?entrant=e1",
-      "/shared/riverside/autumn-cup/open/calendar.ics?entrant=e2",
-      "/shared/riverside/autumn-cup/open/calendar.ics?entrant=e3",
+      "/live/riverside/autumn-cup/open/calendar.ics?entrant=e1",
+      "/live/riverside/autumn-cup/open/calendar.ics?entrant=e2",
+      "/live/riverside/autumn-cup/open/calendar.ics?entrant=e3",
     ]);
     // The card's own link is untouched (the redirect decision owns it).
-    expect(doc.teams[0]!.href).toBe("/shared/riverside/autumn-cup/open?tab=entrants");
+    expect(doc.teams[0]!.href).toBe("/live/riverside/autumn-cup/open?tab=entrants");
   });
 });
 
@@ -1955,7 +1955,7 @@ describe("loadCompetitionHub — the stats.player gate", () => {
     expect(doc.leaders[0]).toMatchObject({ divisionId: "div-1", sportKey: "football", key: "goals" });
     expect(doc.leaders[0]!.rows[0]).toMatchObject({
       value: "3",
-      personHref: "/shared/riverside/autumn-cup/players/p1",
+      personHref: "/live/riverside/autumn-cup/players/p1",
     });
     // The board's heading is the shared player-stat vocabulary's own word,
     // never a key and never the engine's raw token where copy exists.
