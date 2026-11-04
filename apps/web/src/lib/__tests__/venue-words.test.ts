@@ -203,4 +203,37 @@ describe("the seven keys that took {venue} carry the localised noun and no Engli
     const en = venueWords(msgIn("en"), "pitch");
     expect(msgIn("en")("wizard.venuesProHint", { venue: en.singular, venues: en.plural })).toContain("parallel pitches");
   });
+
+  // French says "terrain" for the court (ruling 2026-11-04), as `venue.noun.court` and `matchDay.noun.court` do. In French
+  // "court" is ALSO the adjective "short" (un nom court, des sets courts), and those must stay - so the keys that mean "short"
+  // are listed, and every other fr/ui.json and fr/errors.json value (placeholders removed: `{court}` is a name, not the noun)
+  // is checked to have no "court(s)" left.
+  it("fr: no value says the noun \"court\" any more - only the keys where it means 'short' keep the word", async () => {
+    const SHORT_NOT_COURT = [
+      "clubs.form.short", "clubs.team.short", "format.swiss_playoff.tagline", "format.swiss_knockout.tagline",
+      "rules.field.setType.option.short4", "import.field.clubShort", "import.field.teamShort", "variant.badminton.short",
+      "variant.tennis.fast4", "variant.tennis.shortSets", "schedule.health.explain.restSpread",
+    ];
+    const frErrors = (await import("@/dictionaries/fr/errors.json")).default as Dict;
+    const noun = /\bcourts?\b/i;
+    let checked = 0;
+    const leaked: string[] = [];
+    for (const [file, dict] of [["ui", DICT.fr], ["errors", frErrors]] as const) {
+      for (const [key, value] of Object.entries(dict)) {
+        if (typeof value !== "string") continue;
+        checked++;
+        const words = value.replace(/\{\w+\}/g, "");
+        if (noun.test(words) && !SHORT_NOT_COURT.includes(key)) leaked.push(`${file}:${key}`);
+      }
+    }
+    expect(checked, "anti-vacuity: the sweep read the French dictionaries").toBeGreaterThan(1000);
+    expect(leaked).toEqual([]);
+    // The allow-list is not stale: every listed key still carries the adjective in French, and its English is not about the
+    // venue at all (no "court" there) - so none of them is a place that should have been renamed.
+    for (const key of SHORT_NOT_COURT) {
+      expect(DICT.fr[key]!.replace(/\{\w+\}/g, ""), key).toMatch(noun);
+      expect((DICT.en as Dict)[key], `${key}: English does not say court`).not.toMatch(noun);
+    }
+    expect(SHORT_NOT_COURT.length).toBe(11);
+  });
 });
