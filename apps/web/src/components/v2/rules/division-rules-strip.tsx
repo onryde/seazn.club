@@ -402,7 +402,15 @@ export function DivisionRulesStrip({
     );
   };
 
-  const summary = ruleDict === undefined ? [] : divisionSummaryClauses(sportKey, sportModule, divisionConfig).map((c) => rulesChipText(ruleDict, c));
+  // The card's summary line leaves out "an abandoned match is replayed": hidden until a one-step replay exists (owner
+  // 2026-11-04) - an abandoned match keeps its partial score and `core.start` is refused after it. Only this line drops it
+  // (award, share and the 4th-quarter rule stay); `describeAbandon` and every other surface still say it.
+  const summary =
+    ruleDict === undefined
+      ? []
+      : divisionSummaryClauses(sportKey, sportModule, divisionConfig)
+          .filter((c) => c.key !== "format.rules.abandon.replay")
+          .map((c) => rulesChipText(ruleDict, c));
   const panels: { id: RulesPanel; label: string }[] = [
     { id: "format", label: msg("rulesStrip.format") },
     ...(offersTable
