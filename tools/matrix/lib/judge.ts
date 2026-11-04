@@ -15,6 +15,7 @@
 //   scopeOfPlan    "<layer> (<scope>)" derived from a plan string (ruling T6-SCOPE);
 //   JudgeOut       the verdict as JSON, which `summary --judge` (Task 8) reads.
 import { z } from "zod";
+import { generatePathTotals } from "./generate-path.ts";
 import { livePlan, noVariant, noWidth, type ExpectedPlan } from "./expected-plan.ts";
 import { CASE_STATES, LAYERS, VACUOUS_REASONS, isPlannedShape, type CaseResultV2, type CaseState, type RunResults } from "./results.ts";
 
@@ -68,6 +69,12 @@ export function harnessFaults(run: JudgedRun, opts: { plannedNotRun: "allow" | "
     else if (c.state === "not_run" && c.planned !== true) kind = "unplanned-not-run";
     else if (c.state === "not_run" && opts.plannedNotRun === "refuse") kind = "planned-not-run";
     if (kind !== null) out.push({ caseId: c.caseId, kind, reason });
+  }
+  // Anti-vacuity for the generate steps: a run whose every generate was drawn by Start never drove the Generate
+  // control, so its live-click path is unproven (a run that filed no tally is not asked).
+  const g = generatePathTotals(run.cases);
+  if (g.start > 0 && g.live === 0) {
+    out.push({ caseId: "(run)", kind: "vacuous", reason: `checked zero live Generate clicks (vacuous): ${g.start} generate step(s) were drawn by Start, none clicked Generate` });
   }
   return out;
 }

@@ -10,6 +10,7 @@
 // Pure: no browser, no HTTP. BrowserDriver asks `wantsBrowser` before each
 // organiser action, `record`s the path it took, and returns `coverage()` among
 // its checks.
+import { GENERATE_PATHS, generatePathNote, type GeneratePath } from "../generate-path.ts";
 import { FILLER, type FillerName } from "../fillers.ts";
 import type { CheckResult } from "../results.ts";
 import { WAVE_ID, type Route } from "../routing.ts";
@@ -45,6 +46,7 @@ export const CREATE_PATHS: Readonly<Partial<Record<ActionType, string>>> = Objec
  *  created at least one item (both only for a CREATE_PATHS type). */
 interface Tally { browser: number; http: number; exempt: string | null; answered: number; created: number }
 
+
 export class MixedLedger {
   readonly #tally = new Map<ActionType, Tally>();
   readonly #filler = new Map<FillerName, number>();
@@ -61,6 +63,15 @@ export class MixedLedger {
   /** The filler calls counted so far, by name ({} before any). */
   fillers(): Readonly<Partial<Record<FillerName, number>>> {
     return Object.freeze(Object.fromEntries(this.#filler));
+  }
+
+  #generatePaths = { live: 0, start: 0 };
+
+  /** One generate step's path (generate-path.ts): a live click on Generate, or a stage Start already generated. */
+  generatePath(p: GeneratePath): void {
+    if (p === "live-click") this.#generatePaths.live++;
+    else if (p === "generated-by-start") this.#generatePaths.start++;
+    else throw new Error(`mixed: '${String(p)}' is not a generate path (declared: ${GENERATE_PATHS.join(", ")})`);
   }
 
   #of(a: ActionType): Tally {
@@ -154,6 +165,7 @@ export class MixedLedger {
       if (t.exempt !== null) exempted.push(`${a}: exempt — ${t.exempt}`);
       else reds.push(`${a}: invoked ${t.http}×, never in the browser`);
     }
+    if (this.#generatePaths.live + this.#generatePaths.start > 0) notes.push(generatePathNote(this.#generatePaths.live, this.#generatePaths.start));
     if (checked === 0) return { id, kind: "assertion", verdict: "fail", checked: 0, reason: "vacuous: the case invoked no organiser action (checked 0 is a failure)", evidence: [] };
     if (reds.length > 0) {
       return { id, kind: "assertion", verdict: "fail", checked, reason: `${reds.length} of ${checked} invoked action type(s) never ran in the browser`, evidence: [...reds, ...exempted, ...notes] };
