@@ -231,7 +231,7 @@ describe("the seven keys that took {venue} carry the localised noun and no Engli
     // The allow-list is not stale: every listed key still carries the adjective in French, and its English is not about the
     // venue at all (no "court" there) - so none of them is a place that should have been renamed.
     for (const key of SHORT_NOT_COURT) {
-      expect(DICT.fr[key]!.replace(/\{\w+\}/g, ""), key).toMatch(noun);
+      expect((DICT.fr as unknown as Record<string, string>)[key]!.replace(/\{\w+\}/g, ""), key).toMatch(noun);
       expect((DICT.en as Dict)[key], `${key}: English does not say court`).not.toMatch(noun);
     }
     expect(SHORT_NOT_COURT.length).toBe(11);

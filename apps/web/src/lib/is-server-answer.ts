@@ -17,6 +17,9 @@ export function isServerAnswer(err: unknown): err is Error & { status: number } 
 // is a lie. What `fetch` rejects with when the request never goes out is a `TypeError` - Chrome "Failed to fetch", Safari
 // "Load failed", Firefox "NetworkError when attempting to fetch resource." - and, like all three, it carries no `status`. A
 // `TypeError` that does carry one came back from somewhere, so it is not this. Never decided by the browser's words.
-export function isUnreachable(err: unknown): err is TypeError {
+//
+// A plain boolean, not a type predicate: `TypeError` is structurally identical to `Error`, so a predicate would narrow the
+// other branch of `isUnreachable(err) ? ... : err.message` to `never`.
+export function isUnreachable(err: unknown): boolean {
   return err instanceof TypeError && !isServerAnswer(err);
 }

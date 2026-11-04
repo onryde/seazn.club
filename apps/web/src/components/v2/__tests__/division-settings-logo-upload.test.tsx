@@ -134,12 +134,12 @@ function banner(tree: ReactElement[]): string | undefined {
   return p === undefined ? undefined : (propsOf(p).children as string);
 }
 
-async function upload(dict: Dict): Promise<{ shown: string | undefined; island: ReturnType<typeof renderIsland> }> {
+async function upload(dict: Dict): Promise<{ shown: string | undefined }> {
   state.dict = dict;
   const island = renderIsland(DivisionSettings, baseProps);
   pickLogo(island.tree());
   await flush();
-  return { shown: banner(island.tree()), island };
+  return { shown: banner(island.tree()) };
 }
 
 describe("DivisionSettings logo upload: its own failures read in the reader's locale", () => {
