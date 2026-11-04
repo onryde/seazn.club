@@ -1,7 +1,8 @@
-// The z3 objective minimizes makespan and has nothing that spreads a board
-// across a multi-day window (T1 in build.ts pulls every fixture toward the
-// earliest reachable day) — so a 7-day window with no explicit day cap piled
-// every fixture onto day one exactly like a 1-day window did. This is the
+// The solver's objective has nothing that spreads a board across a multi-day
+// window (build.ts T1 packs days: it minimises the count of calendar days used,
+// and every rung is shift-invariant) — so a 7-day window with no explicit day
+// cap piled every fixture onto ONE day, not necessarily the first (W3 T11; see
+// `withDefaultDaySpread`'s doc), exactly like a 1-day window did. This is the
 // default `max_fixtures_per_day` the auto pass now injects to close that gap,
 // tested as the pure function it is rather than through a full autoSchedule
 // DB round trip.
