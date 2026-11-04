@@ -1021,7 +1021,7 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", 
     }
   }
 
-  it("UI5 item 4: switching a chess Swiss's colours off is 422 SWISS_CHESS_ALWAYS_ON before the start, nothing written; Pair draws the colour lot", async () => {
+  it("BG-SW-1 UI5 item 4: switching a chess Swiss's colours off is 422 SWISS_CHESS_ALWAYS_ON before the start, nothing written; Pair draws the colour lot", async () => {
     const rig = await swissRig(BOARDGAME, 4, 3);
     expect((await storedConfig(rig.stageId)).chess, "premise: a new boardgame Swiss is stored with chess on (T8)").toBe(true);
     const config = await storedConfig(rig.stageId);
@@ -1047,7 +1047,7 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", 
 
   // Fix round 1 flipped this test (it pinned "Pair keeps a stored off"): the owner ruled colours always ON for a chess
   // Swiss, so a stage stored off that has not paired round 1 pairs in colour, whatever is stored (controller ruling I1).
-  it("UI5 fix round 1 (I1, Q2): a chess Swiss stored off before the change pairs round 1 in colour — read-side, nothing written; ON goes through; a re-Apply stores it on", async () => {
+  it("BG-SW-1 UI5 fix round 1 (I1, Q2): a chess Swiss stored off before the change pairs round 1 in colour — read-side, nothing written; ON goes through; a re-Apply stores it on", async () => {
     const rig = await swissRig(BOARDGAME, 4, 3);
     await legacyOff(rig.stageId);
     await pair(rig);
@@ -1081,7 +1081,7 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", 
     expect(carried!.config.chess, "badminton: the stored off rides the carry").toBe(false);
   });
 
-  it("UI5 fix round 1 (I1): once round 1 is paired the stage keeps what it paired with — plain stays off, coloured stays on (round 2)", async () => {
+  it("BG-SW-1 UI5 fix round 1 (I1): once round 1 is paired the stage keeps what it paired with — plain stays off, coloured stays on (round 2)", async () => {
     let compared = 0;
     for (const { plain, want } of [
       { plain: true, want: false },
@@ -1102,7 +1102,7 @@ describe.runIf(HAS_DB)("BG-SW-1 chess colours are always on for a chess Swiss", 
     expect(compared, "anti-vacuity: both histories paired round 2").toBe(2);
   }, 120_000);
 
-  it("UI5 fix round 1 (I1): another sport is untouched — a badminton Swiss stored off pairs round 1 plain", async () => {
+  it("BG-SW-1 UI5 fix round 1 (I1): another sport is untouched — a badminton Swiss stored off pairs round 1 plain", async () => {
     const rig = await swissRig(BADMINTON, 4, 3);
     await legacyOff(rig.stageId);
     await pair(rig);
