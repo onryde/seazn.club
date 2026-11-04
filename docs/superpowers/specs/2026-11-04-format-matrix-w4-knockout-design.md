@@ -9,7 +9,10 @@
   `grid.md`), read-only against app `origin/main` 97d22c8acd and engine `origin/main` 972a7c7 (= 3.0.2, the app's
   pin); the owner's prod census and anomaly drill-down (2026-11-04). The recon is machine-local; copy it to
   `.superpowers/handoff/2026-11-04-w4/` when the plan starts, as W3 did.
-- **Status:** DRAFT for owner approval. Decisions marked **OWNER** were made by the owner in the W4 brainstorm on
+- **Status:** **APPROVED by the owner 2026-11-04 (ruling 274: "approve and record all rules")** — every designer's and
+  controller's call below, and every REC rulebook row, is signed by 274; rule rows recorded in the engine's rules files
+  on approval (owner instruction "record all rules in engine"), each marked not-yet-implemented until its PR lands.
+  Original drafting note: Decisions marked **OWNER** were made by the owner in the W4 brainstorm on
   2026-11-04 (Q1–Q8, rulings 263–270). Q1 the owner agreed as framed. **Q2–Q8 were the owner accepting the designer's
   recommendation** (Q2: "apply your rec"; Q3–Q8 recorded in the register as "AGREED rec", Q3 being option B, the
   recommendation). Where an owner ruling itself carries a designer's call (Q2's tiebreak, Q3's exclusions and n≥4 gate,
