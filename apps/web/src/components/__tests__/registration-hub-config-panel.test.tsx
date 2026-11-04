@@ -237,6 +237,17 @@ function findField(tree: ReturnType<typeof expandPanel>, field: string) {
   return tree.find((e) => propsOf(e)["data-field"] === field);
 }
 
+/** True when an element nested anywhere in `el`'s children matches. */
+function holds(el: ReactElement, match: (x: ReactElement) => boolean): boolean {
+  const walkKids = (kids: unknown): boolean => {
+    if (Array.isArray(kids)) return kids.some(walkKids);
+    if (typeof kids !== "object" || kids === null || !("props" in kids)) return false;
+    const child = kids as ReactElement;
+    return match(child) || walkKids(propsOf(child).children);
+  };
+  return walkKids(propsOf(el).children);
+}
+
 function accordionSection(tree: ReturnType<typeof expandPanel>, id: string) {
   return tree.find((e) => propsOf(e)["data-accordion-section"] === id);
 }
@@ -1602,7 +1613,11 @@ describe("RegistrationHubConfigPanel — only the division's allowed entrant kin
       expect(offered.map((o) => o.value), allowed.join(",")).toEqual(want);
       if (want.join() !== allowed.join()) reordered++;
       expect(testId(island.tree(), "entrant-kind-not-allowed")).toBeUndefined();
-      expect(String(propsOf(findField(island.tree(), "entrant_kind")!).className), "no amber ring").not.toContain("border-amber");
+      const select = propsOf(findField(island.tree(), "entrant_kind")!);
+      expect(String(select.className), "no amber ring").not.toContain("border-amber");
+      // Fix round 2: the positive pair of the refused case - a valid kind is not invalid and is described by nothing.
+      expect(select["aria-invalid"], allowed.join(",")).toBeUndefined();
+      expect(select["aria-describedby"], allowed.join(",")).toBeUndefined();
       checked++;
     }
     expect(checked).toBe(ALL_KINDS.length + 2);
@@ -1633,6 +1648,16 @@ describe("RegistrationHubConfigPanel — only the division's allowed entrant kin
     expect(expandedText([testId(tree, "entrant-kind-not-allowed")!])).toBe(
       t(uiEn, "reg.settings.entrant.notAllowedHint", { kind: kindName }),
     );
+    // Fix round 2: the hint DESCRIBES the select (aria-describedby) and marks it invalid, rather than sitting inside its
+    // label - so the select's name stays "Entrant type".
+    const select = propsOf(findField(tree, "entrant_kind")!);
+    const hint = propsOf(testId(tree, "entrant-kind-not-allowed")!);
+    expect(typeof hint.id === "string" && hint.id.length > 0, "premise: the hint has an id").toBe(true);
+    expect(select["aria-describedby"]).toBe(hint.id);
+    expect(select["aria-invalid"]).toBe(true);
+    const label = tree.find((e) => e.type === "label" && holds(e, (x) => propsOf(x)["data-field"] === "entrant_kind"));
+    expect(label, "premise: the select sits in its label").toBeDefined();
+    expect(holds(label!, (x) => propsOf(x)["data-testid"] === "entrant-kind-not-allowed"), "the hint is outside the label").toBe(false);
   });
 
   it("a save of the refused kind is stopped on the page (no PUT) with the error on the entrant type; picking an offered kind clears it and saves that kind", async () => {

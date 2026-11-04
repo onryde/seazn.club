@@ -80,6 +80,9 @@ type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
 /** The entrant-type select's order, unchanged from before FU1; filtered to the division's allowed kinds. */
 const KIND_OPTION_ORDER: readonly EntrantKindValue[] = ["individual", "team", "pair"];
+/** The refused-kind hint's id, for the select's aria-describedby. Static: one config panel is open at a time (a Modal), and
+ *  OpenCloseSection must stay hookless (its tests call it directly), so useId is not available. */
+const ENTRANT_KIND_HINT_ID = "reg-config-entrant-kind-hint";
 
 /** The four fields this panel edits as a date+time PAIR rather than a
  *  single value — see registration-hub-tz-input.ts's header for why (the
@@ -875,65 +878,72 @@ export function OpenCloseSection({
         {msg("reg.settings.openForPublic")}
       </label>
       {errors.enabled && (<p data-field-error="enabled" role="alert" className="mt-1 text-xs text-red-600">{errors.enabled}</p>)}
-      <label className="label">
-        {msg("reg.settings.entrantType")}
-        <select
-          data-field="entrant_kind"
-          className={`input min-h-11 mt-1${storedKindRefused ? " border-amber-400" : ""}`}
-          value={state.entrant_kind}
-          disabled={individualOnly}
-          onChange={(e) => {
-            const v = e.target.value as RegistrationConfigState["entrant_kind"];
-            // Team-only setting (server 422s otherwise) — clear it locally
-            // the moment the division stops being a team division, so the
-            // organiser never hits a preventable error.
-            patch({ entrant_kind: v, allow_free_agents: v === "team" ? state.allow_free_agents : false });
-          }}
-        >
-          {/* FU1 fix round 1 (m6): the option shows the kind's own word only. "(not allowed)" beside it was measured not
-              to fit this select at 320 in ANY locale (en needs 219px of a 202px control; nl far more), and a select cannot
-              wrap. The reason is the amber hint directly beneath (inside this label, so it is part of the select's name);
-              the full sentence stays the option's accessible name for the open picker. */}
-          {storedKindRefused && (
-            <option
-              value={state.entrant_kind}
-              disabled
-              aria-label={msg("reg.settings.entrant.notAllowedOption", { kind: storedKindName })}
-            >
-              {storedKindName}
-            </option>
+      <div>
+        <label className="label">
+          {msg("reg.settings.entrantType")}
+          <select
+            data-field="entrant_kind"
+            className={`input min-h-11 mt-1${storedKindRefused ? " border-amber-400" : ""}`}
+            value={state.entrant_kind}
+            disabled={individualOnly}
+            // FU1 fix round 2: a refused kind is an invalid value the save will not take; the hint below says why. Wired by
+            // describedby (not nested in the label) so the select's NAME stays "Entrant type".
+            aria-invalid={storedKindRefused || undefined}
+            aria-describedby={storedKindRefused ? ENTRANT_KIND_HINT_ID : undefined}
+            onChange={(e) => {
+              const v = e.target.value as RegistrationConfigState["entrant_kind"];
+              // Team-only setting (server 422s otherwise) — clear it locally
+              // the moment the division stops being a team division, so the
+              // organiser never hits a preventable error.
+              patch({ entrant_kind: v, allow_free_agents: v === "team" ? state.allow_free_agents : false });
+            }}
+          >
+            {/* FU1 fix round 1 (m6): the option shows the kind's own word only. "(not allowed)" beside it was measured not
+                to fit this select at 320 in ANY locale (en needs 219px of a 202px control; nl far more), and a select cannot
+                wrap. The reason is the amber hint directly beneath (the select's description); the full sentence stays the
+                option's accessible name for the open picker. */}
+            {storedKindRefused && (
+              <option
+                value={state.entrant_kind}
+                disabled
+                aria-label={msg("reg.settings.entrant.notAllowedOption", { kind: storedKindName })}
+              >
+                {storedKindName}
+              </option>
+            )}
+            {offeredKinds.map((k) => (
+              <option key={k} value={k}>
+                {msg(`reg.settings.entrant.${k}`)}
+              </option>
+            ))}
+          </select>
+          {individualOnly && (
+            <span data-testid="entrant-kind-individual-only" className="mt-1 block text-xs font-normal text-slate-500">
+              {msg("reg.settings.entrant.chessOnly")}
+            </span>
           )}
-          {offeredKinds.map((k) => (
-            <option key={k} value={k}>
-              {msg(`reg.settings.entrant.${k}`)}
-            </option>
-          ))}
-        </select>
+          {individualOnly && entryShapeLegacy && (
+            <span
+              data-testid="entrant-kind-legacy"
+              role="status"
+              className="mt-1 block rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-normal text-amber-800"
+            >
+              {msg("reg.settings.entrant.chessLegacy")}
+            </span>
+          )}
+        </label>
         {storedKindRefused && (
-          <span
+          <p
+            id={ENTRANT_KIND_HINT_ID}
             data-testid="entrant-kind-not-allowed"
             role="status"
-            className="mt-1 block rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-normal text-amber-800"
+            className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
           >
             {msg("reg.settings.entrant.notAllowedHint", { kind: storedKindName })}
-          </span>
-        )}
-        {individualOnly && (
-          <span data-testid="entrant-kind-individual-only" className="mt-1 block text-xs font-normal text-slate-500">
-            {msg("reg.settings.entrant.chessOnly")}
-          </span>
-        )}
-        {individualOnly && entryShapeLegacy && (
-          <span
-            data-testid="entrant-kind-legacy"
-            role="status"
-            className="mt-1 block rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-normal text-amber-800"
-          >
-            {msg("reg.settings.entrant.chessLegacy")}
-          </span>
+          </p>
         )}
         {errors.entrant_kind && (<p data-field-error="entrant_kind" role="alert" className="mt-1 text-xs text-red-600">{errors.entrant_kind}</p>)}
-      </label>
+      </div>
       <div className="grid grid-cols-1 gap-3">
         {/* OrgTzDateTimePair, not DateTimeField's own `kind="datetime-local"`
             — see that component's header comment for why: this panel needs
