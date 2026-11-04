@@ -18,6 +18,7 @@ import { HttpError } from "@/lib/errors";
 import { registrantsExportHref } from "@/components/registration-hub-registrant-derive";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { RegistrationHubRowData } from "@/components/registration-hub-division-row";
+import { entrantShapeOf } from "@/server/usecases/entrant-shape";
 import {
   listRegistrations,
   rosterCapExpr,
@@ -42,6 +43,9 @@ export interface RawDivisionRow {
   /** The division's sport module key - read ONLY to derive `individual_only` (chess takes individual entrants only,
    *  owner ruling 2026-10-26); the page maps it, the row card does not show it. */
   sport_key: string;
+  /** FU1: the division's allowed entrant kinds - its effective entrant model (sport module + `config.entrants`), resolved
+   *  by the same function every registration door asks (server/usecases/entrant-shape.ts). */
+  allowed_kinds: RegistrationHubRowData["allowed_kinds"];
   category: RegistrationHubRowData["category"];
   age_min: number | null;
   age_max: number | null;
@@ -91,12 +95,14 @@ export async function fetchDivisionRows(
   auth: Pick<AuthCtx, "orgId">,
   competitionId: string,
 ): Promise<RawDivisionRow[]> {
-  return withTenant(auth.orgId, (tx) =>
-    tx<RawDivisionRow[]>`
+  const rows = await withTenant(auth.orgId, (tx) =>
+    tx<(Omit<RawDivisionRow, "allowed_kinds"> & { module_version: string; config: unknown })[]>`
       select
         d.id as division_id,
         d.name,
         d.sport_key,
+        d.module_version,
+        d.config,
         d.category,
         d.age_min,
         d.age_max,
@@ -128,6 +134,11 @@ export async function fetchDivisionRows(
       where d.competition_id = ${competitionId} and d.archived_at is null
       order by d.name, d.id`,
   );
+  // The model's inputs stay here; the row carries only the kinds they resolve to.
+  return rows.map(({ module_version, config, ...row }) => ({
+    ...row,
+    allowed_kinds: entrantShapeOf({ sport_key: row.sport_key, module_version, config }).kinds,
+  }));
 }
 
 /** Finding 6 fallback: `fetchDivisionRows`'s `org_currency` column rides on

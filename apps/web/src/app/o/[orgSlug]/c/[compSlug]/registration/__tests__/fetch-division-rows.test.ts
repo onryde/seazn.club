@@ -16,6 +16,9 @@ import {
 import { createDivision } from "@/server/usecases/divisions";
 import { putRegistrationSettings } from "@/server/usecases/registrations";
 import { sql } from "@/lib/db";
+import { randomUUID } from "node:crypto";
+import { builtinModules } from "@seazn/engine/sports";
+import { effectiveEntrantModel } from "@seazn/engine/sport";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -165,6 +168,52 @@ describe.skipIf(!HAS_DB)("fetchDivisionRows — real Postgres", () => {
     const rows = await fetchDivisionRows(owner, competition.id);
     const dupeRowOrder = rows.filter((r) => dupeIds.includes(r.division_id)).map((r) => r.division_id);
     expect(dupeRowOrder).toEqual([...dupeIds].sort());
+  });
+
+  // FU1 — the Settings tab offers the entrant kinds the DIVISION allows (its sport module's declaration narrowed by
+  // `config.entrants`), resolved here on the server. Expected kinds come from the engine's own declarations, swept over
+  // every builtin module, plus a generic division narrowed to teams.
+  it("carries each division's allowed kinds - swept over the sport registry, and narrowed by config.entrants", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: open } = await rig(owner);
+    const narrowed = await createDivision(owner, competition.id, {
+      name: "Club teams",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false, entrants: { kinds: ["team"] } },
+    } as never);
+    const expected = new Map<string, readonly string[]>([
+      [open.id, effectiveEntrantModel(null).kinds],
+      [narrowed.id, effectiveEntrantModel(null, { entrants: { kinds: ["team"] } }).kinds],
+    ]);
+    for (const mod of builtinModules) {
+      // The sports catalog row the division points at: present after sync:sports, inserted here when a DB lacks it.
+      await sql`
+        insert into sports (key, name, module_version, position_catalog)
+        values (${mod.key}, ${mod.key}, ${mod.version}, ${sql.json((mod.positions ?? { groups: [] }) as never)})
+        on conflict (key) do nothing`;
+      const [division] = await sql<{ id: string }[]>`
+        insert into divisions (competition_id, org_id, name, slug, sport_key, variant_key, config, module_version)
+        values (${competition.id}, ${orgId}, ${mod.key}, ${"d-" + mod.key + "-" + randomUUID().slice(0, 6)},
+                ${mod.key}, ${Object.keys(mod.variants)[0] ?? "default"}, '{}'::jsonb, ${mod.version})
+        returning id`;
+      expected.set(division!.id, effectiveEntrantModel(mod.entrantModel ?? null).kinds);
+    }
+
+    const rows = await fetchDivisionRows(owner, competition.id);
+    let checked = 0;
+    let narrowerThanAll = 0;
+    for (const [id, kinds] of expected) {
+      const row = rows.find((r) => r.division_id === id);
+      expect(row, id).toBeTruthy();
+      expect(row!.allowed_kinds, row!.name).toEqual(kinds);
+      checked++;
+      if (kinds.length < effectiveEntrantModel(null).kinds.length) narrowerThanAll++;
+    }
+    expect(checked).toBe(builtinModules.length + 2);
+    // Without a division narrower than "every kind" this test cannot see a loader that ignores the division.
+    expect(narrowerThanAll).toBeGreaterThan(1);
   });
 
   // RS004 W3b review finding 4 — fetchDivisionRows had no cross-org test.

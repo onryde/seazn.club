@@ -9,6 +9,7 @@
 import type { FormField } from "@/components/registration-hub-form-builder";
 import type { DivisionCategoryValue } from "@/components/registration-hub-row-derive";
 import type { ConfigFieldKey } from "@/components/registration-hub-save-error";
+import { divisionTakesKind } from "@/lib/division-entrant-kinds";
 
 export type EntrantKindValue = "individual" | "team" | "pair";
 export type ApprovalValue = "auto" | "manual";
@@ -210,6 +211,7 @@ export function toRegistrationSettingsPutBody(
 // already prevented some other way (a `maxLength` attribute, a hidden "add"
 // control once the cap is hit) and don't need a second, redundant gate here.
 export type ConfigValidationIssue =
+  | "entrantKindNotAllowed"
   | "capacityRange"
   | "feeCentsRange"
   | "cardFeeMinimum"
@@ -229,8 +231,16 @@ const CARD_FEE_CENTS_MIN = 100;
 
 export function validateConfigState(
   state: RegistrationConfigState,
+  /** The division's allowed entrant kinds, resolved on the server (FU1) - the same predicate the save is judged by. */
+  allowedKinds: readonly EntrantKindValue[],
 ): Partial<Record<ConfigFieldKey, ConfigValidationIssue>> {
   const issues: Partial<Record<ConfigFieldKey, ConfigValidationIssue>> = {};
+
+  // FU1 - mirrors putRegistrationSettings' ENTRANT_KIND_NOT_ALLOWED: a stored kind the division no longer takes is shown
+  // (and named) rather than silently swapped, so the organiser must pick an allowed one before the save goes out.
+  if (!divisionTakesKind(allowedKinds, state.entrant_kind)) {
+    issues.entrant_kind = "entrantKindNotAllowed";
+  }
 
   // null capacity is a deliberate, valid "uncapped" — never a violation.
   if (

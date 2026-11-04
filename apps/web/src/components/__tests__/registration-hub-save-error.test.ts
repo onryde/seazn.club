@@ -12,6 +12,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiV1Error } from "@/lib/client-v1";
 import { mapSaveError } from "@/components/registration-hub-save-error";
+import { ENTRANT_KIND_NOT_ALLOWED } from "@/lib/division-entrant-kinds";
 // RS004 review finding 2: schemas.ts is explicitly NOT server-only (pure
 // Zod, shared with the OpenAPI generator — see its own file header), and
 // AGE_MAX_BEFORE_MIN is exported specifically so callers can raise/assert
@@ -159,5 +160,18 @@ describe("mapSaveError - CHESS_INDIVIDUAL_ONLY", () => {
     const info = mapSaveError(err);
     expect(info.field).toBe("closes_at");
     expect(info.code).toBeUndefined();
+  });
+});
+
+// FU1: a kind the division does not take is a 422 with a stable code (ENTRANT_KIND_NOT_ALLOWED); like the chess refusal
+// it is routed to the entrant type and carries its code so the panel localises it rather than showing server English.
+describe("mapSaveError - ENTRANT_KIND_NOT_ALLOWED", () => {
+  it("routes the code to entrant_kind and carries it", () => {
+    const err = new ApiV1Error("this division doesn't take 'team' entrants", 422, ENTRANT_KIND_NOT_ALLOWED);
+    expect(mapSaveError(err)).toEqual({
+      field: "entrant_kind",
+      message: "this division doesn't take 'team' entrants",
+      code: ENTRANT_KIND_NOT_ALLOWED,
+    });
   });
 });

@@ -14,6 +14,10 @@ import {
   type RegistrationSettingsResponse,
 } from "@/components/registration-hub-config-state";
 import type { FormField } from "@/components/registration-hub-form-builder";
+import { effectiveEntrantModel } from "@seazn/engine/sport";
+
+// FU1 — every kind the engine knows (a sport with no entrant model takes them all). Derived, never typed here.
+const ALL_KINDS = effectiveEntrantModel(null).kinds;
 
 const FORM_FIELDS: FormField[] = [
   { key: "shirt_size", label: "Shirt size", kind: "text", required: true },
@@ -277,51 +281,80 @@ describe("validateConfigState", () => {
   };
 
   it("a well-formed state has no issues at all", () => {
-    expect(validateConfigState(VALID_STATE)).toEqual({});
+    expect(validateConfigState(VALID_STATE, ALL_KINDS)).toEqual({});
+  });
+
+  // FU1 — mirrors putRegistrationSettings' ENTRANT_KIND_NOT_ALLOWED. Swept over every engine kind against every
+  // one-kind division the engine can express, plus the all-kinds division: each pair is judged by membership.
+  describe("entrant_kind (server: 422 ENTRANT_KIND_NOT_ALLOWED)", () => {
+    it("names a kind the division does not take, and passes one it does", () => {
+      let refused = 0;
+      let accepted = 0;
+      const divisions = [...ALL_KINDS.map((k) => effectiveEntrantModel(null, { entrants: { kinds: [k] } }).kinds), ALL_KINDS];
+      for (const allowed of divisions) {
+        for (const kind of ALL_KINDS) {
+          const issue = validateConfigState({ ...VALID_STATE, entrant_kind: kind }, allowed).entrant_kind;
+          if (allowed.includes(kind)) {
+            expect(issue, `${kind} in [${allowed.join(",")}]`).toBeUndefined();
+            accepted++;
+          } else {
+            expect(issue, `${kind} in [${allowed.join(",")}]`).toBe("entrantKindNotAllowed");
+            refused++;
+          }
+        }
+      }
+      // 3 one-kind divisions x 3 kinds = 3 accepted + 6 refused; the all-kinds division accepts all 3.
+      expect({ accepted, refused }).toEqual({ accepted: ALL_KINDS.length * 2, refused: ALL_KINDS.length * (ALL_KINDS.length - 1) });
+    });
+
+    it("is the only issue a forbidden kind raises - no other field is blamed", () => {
+      const teamsOnly = effectiveEntrantModel(null, { entrants: { kinds: ["team"] } }).kinds;
+      expect(validateConfigState({ ...VALID_STATE, entrant_kind: "pair" }, teamsOnly)).toEqual({ entrant_kind: "entrantKindNotAllowed" });
+    });
   });
 
   describe("capacity (server bound: 1..10000)", () => {
     it("accepts null — a deliberate 'uncapped' division, not a violation", () => {
-      expect(validateConfigState({ ...VALID_STATE, capacity: null })).toEqual({});
+      expect(validateConfigState({ ...VALID_STATE, capacity: null }, ALL_KINDS)).toEqual({});
     });
     it("accepts the boundary values 1 and 10000", () => {
-      expect(validateConfigState({ ...VALID_STATE, capacity: 1 })).toEqual({});
-      expect(validateConfigState({ ...VALID_STATE, capacity: 10_000 })).toEqual({});
+      expect(validateConfigState({ ...VALID_STATE, capacity: 1 }, ALL_KINDS)).toEqual({});
+      expect(validateConfigState({ ...VALID_STATE, capacity: 10_000 }, ALL_KINDS)).toEqual({});
     });
     it("rejects 0 and 10001", () => {
-      expect(validateConfigState({ ...VALID_STATE, capacity: 0 }).capacity).toBe("capacityRange");
-      expect(validateConfigState({ ...VALID_STATE, capacity: 10_001 }).capacity).toBe("capacityRange");
+      expect(validateConfigState({ ...VALID_STATE, capacity: 0 }, ALL_KINDS).capacity).toBe("capacityRange");
+      expect(validateConfigState({ ...VALID_STATE, capacity: 10_001 }, ALL_KINDS).capacity).toBe("capacityRange");
     });
     it("rejects a non-integer", () => {
-      expect(validateConfigState({ ...VALID_STATE, capacity: 32.5 }).capacity).toBe("capacityRange");
+      expect(validateConfigState({ ...VALID_STATE, capacity: 32.5 }, ALL_KINDS).capacity).toBe("capacityRange");
     });
   });
 
   describe("fee_cents (server bound: 0..10000000)", () => {
     it("accepts the boundary values 0 and 10000000", () => {
-      expect(validateConfigState({ ...VALID_STATE, fee_cents: 0 })).toEqual({});
-      expect(validateConfigState({ ...VALID_STATE, fee_cents: 10_000_000 })).toEqual({});
+      expect(validateConfigState({ ...VALID_STATE, fee_cents: 0 }, ALL_KINDS)).toEqual({});
+      expect(validateConfigState({ ...VALID_STATE, fee_cents: 10_000_000 }, ALL_KINDS)).toEqual({});
     });
     it("rejects a negative fee and one over the cap", () => {
-      expect(validateConfigState({ ...VALID_STATE, fee_cents: -1 }).fee_cents).toBe("feeCentsRange");
-      expect(validateConfigState({ ...VALID_STATE, fee_cents: 10_000_001 }).fee_cents).toBe("feeCentsRange");
+      expect(validateConfigState({ ...VALID_STATE, fee_cents: -1 }, ALL_KINDS).fee_cents).toBe("feeCentsRange");
+      expect(validateConfigState({ ...VALID_STATE, fee_cents: 10_000_001 }, ALL_KINDS).fee_cents).toBe("feeCentsRange");
     });
   });
 
   describe("card fee minimum (server: 'Card entry fees must be at least 1.00 (or 0 for free)')", () => {
     it("free (0) is fine on a card division", () => {
-      expect(validateConfigState({ ...VALID_STATE, payment_method: "stripe", fee_cents: 0 })).toEqual({});
+      expect(validateConfigState({ ...VALID_STATE, payment_method: "stripe", fee_cents: 0 }, ALL_KINDS)).toEqual({});
     });
     it("the minimum charge (100 = 1.00) is fine on a card division", () => {
-      expect(validateConfigState({ ...VALID_STATE, payment_method: "stripe", fee_cents: 100 })).toEqual({});
+      expect(validateConfigState({ ...VALID_STATE, payment_method: "stripe", fee_cents: 100 }, ALL_KINDS)).toEqual({});
     });
     it("1-99 cents on a card division is rejected", () => {
       expect(
-        validateConfigState({ ...VALID_STATE, payment_method: "stripe", fee_cents: 50 }).fee_cents,
+        validateConfigState({ ...VALID_STATE, payment_method: "stripe", fee_cents: 50 }, ALL_KINDS).fee_cents,
       ).toBe("cardFeeMinimum");
     });
     it("the SAME 50 cents is fine when paying the organiser offline — the rule is card-only", () => {
-      expect(validateConfigState({ ...VALID_STATE, payment_method: "offline", fee_cents: 50 })).toEqual({});
+      expect(validateConfigState({ ...VALID_STATE, payment_method: "offline", fee_cents: 50 }, ALL_KINDS)).toEqual({});
     });
   });
 
@@ -331,48 +364,48 @@ describe("validateConfigState", () => {
   describe("solo card fee minimum (server: 'Card entry fees for a solo sign-up must be at least 1.00 (or 0 for free)')", () => {
     it("null (no separate price) is fine on a card division", () => {
       expect(
-        validateConfigState({ ...VALID_STATE, payment_method: "stripe", free_agent_fee_cents: null }),
+        validateConfigState({ ...VALID_STATE, payment_method: "stripe", free_agent_fee_cents: null }, ALL_KINDS),
       ).toEqual({});
     });
     it("free (0) is fine on a card division", () => {
       expect(
-        validateConfigState({ ...VALID_STATE, payment_method: "stripe", free_agent_fee_cents: 0 }),
+        validateConfigState({ ...VALID_STATE, payment_method: "stripe", free_agent_fee_cents: 0 }, ALL_KINDS),
       ).toEqual({});
     });
     it("the minimum charge (100 = 1.00) is fine on a card division", () => {
       expect(
-        validateConfigState({ ...VALID_STATE, payment_method: "stripe", free_agent_fee_cents: 100 }),
+        validateConfigState({ ...VALID_STATE, payment_method: "stripe", free_agent_fee_cents: 100 }, ALL_KINDS),
       ).toEqual({});
     });
     it("1-99 cents on a card division is rejected", () => {
       expect(
-        validateConfigState({ ...VALID_STATE, payment_method: "stripe", free_agent_fee_cents: 50 })
+        validateConfigState({ ...VALID_STATE, payment_method: "stripe", free_agent_fee_cents: 50 }, ALL_KINDS)
           .free_agent_fee_cents,
       ).toBe("soloCardFeeMinimum");
     });
     it("the SAME 50 cents is fine when paying the organiser offline — the rule is card-only", () => {
       expect(
-        validateConfigState({ ...VALID_STATE, payment_method: "offline", free_agent_fee_cents: 50 }),
+        validateConfigState({ ...VALID_STATE, payment_method: "offline", free_agent_fee_cents: 50 }, ALL_KINDS),
       ).toEqual({});
     });
   });
 
   describe("dates order (server: 'closes_at must be after opens_at')", () => {
     it("closes strictly after opens is fine", () => {
-      expect(validateConfigState(VALID_STATE)).toEqual({});
+      expect(validateConfigState(VALID_STATE, ALL_KINDS)).toEqual({});
     });
     it("neither side set yet is fine — not every division has a window configured", () => {
-      expect(validateConfigState({ ...VALID_STATE, opens_at: null, closes_at: null })).toEqual({});
+      expect(validateConfigState({ ...VALID_STATE, opens_at: null, closes_at: null }, ALL_KINDS)).toEqual({});
     });
     it("closes BEFORE opens is rejected", () => {
       expect(
-        validateConfigState({ ...VALID_STATE, opens_at: "2026-02-01T00:00:00.000Z", closes_at: "2026-01-01T00:00:00.000Z" })
+        validateConfigState({ ...VALID_STATE, opens_at: "2026-02-01T00:00:00.000Z", closes_at: "2026-01-01T00:00:00.000Z" }, ALL_KINDS)
           .closes_at,
       ).toBe("datesOrder");
     });
     it("closes at the SAME instant as opens is rejected too — 'after' is strict", () => {
       const same = "2026-01-01T00:00:00.000Z";
-      expect(validateConfigState({ ...VALID_STATE, opens_at: same, closes_at: same }).closes_at).toBe(
+      expect(validateConfigState({ ...VALID_STATE, opens_at: same, closes_at: same }, ALL_KINDS).closes_at).toBe(
         "datesOrder",
       );
     });
@@ -387,7 +420,7 @@ describe("validateConfigState", () => {
             { key: "a", label: "A", kind: "text", required: false },
             { key: "b", label: "B", kind: "text", required: false },
           ],
-        }),
+        }, ALL_KINDS),
       ).toEqual({});
     });
     it("two fields sharing a key is rejected on form_fields", () => {
@@ -398,7 +431,7 @@ describe("validateConfigState", () => {
             { key: "shirt_size", label: "Shirt size", kind: "text", required: false },
             { key: "shirt_size", label: "T-shirt size", kind: "text", required: false },
           ],
-        }).form_fields,
+        }, ALL_KINDS).form_fields,
       ).toBe("duplicateFormFieldKeys");
     });
   });
@@ -409,7 +442,7 @@ describe("validateConfigState", () => {
         validateConfigState({
           ...VALID_STATE,
           form_fields: [{ key: "size", label: "Size", kind: "select", options: ["S", "M"], required: false }],
-        }),
+        }, ALL_KINDS),
       ).toEqual({});
     });
     it("a select field with NO options at all is rejected", () => {
@@ -417,7 +450,7 @@ describe("validateConfigState", () => {
         validateConfigState({
           ...VALID_STATE,
           form_fields: [{ key: "size", label: "Size", kind: "select", options: [], required: false }],
-        }).form_fields,
+        }, ALL_KINDS).form_fields,
       ).toBe("selectNeedsOptions");
     });
     it("a select field with only a blank/whitespace option is ALSO rejected — the FormBuilder kind-switch seed", () => {
@@ -427,7 +460,7 @@ describe("validateConfigState", () => {
         validateConfigState({
           ...VALID_STATE,
           form_fields: [{ key: "size", label: "Size", kind: "select", options: ["   "], required: false }],
-        }).form_fields,
+        }, ALL_KINDS).form_fields,
       ).toBe("selectNeedsOptions");
     });
     it("a text field with no options is fine — the rule is select-only", () => {
@@ -435,7 +468,7 @@ describe("validateConfigState", () => {
         validateConfigState({
           ...VALID_STATE,
           form_fields: [{ key: "notes", label: "Notes", kind: "text", required: false }],
-        }),
+        }, ALL_KINDS),
       ).toEqual({});
     });
   });

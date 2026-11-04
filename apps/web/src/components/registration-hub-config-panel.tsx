@@ -45,11 +45,13 @@ import { FormBuilder } from "@/components/registration-hub-form-builder";
 import type { DivisionCategoryValue } from "@/components/registration-hub-row-derive";
 import {
   validateConfigState,
+  type EntrantKindValue,
   type RegistrationConfigState,
   type ConfigValidationIssue,
 } from "@/components/registration-hub-config-state";
 import type { ConfigFieldKey } from "@/components/registration-hub-save-error";
 import { CHESS_INDIVIDUAL_ONLY } from "@/lib/chess-individual-only";
+import { ENTRANT_KIND_NOT_ALLOWED, divisionTakesKind } from "@/lib/division-entrant-kinds";
 import {
   useRegistrationConfigPanelState,
   type RegistrationHubConfigDivisionLike,
@@ -76,6 +78,9 @@ const CUTOFF_TIME_OPTIONS = ["23:59"];
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
+/** The entrant-type select's order, unchanged from before FU1; filtered to the division's allowed kinds. */
+const KIND_OPTION_ORDER: readonly EntrantKindValue[] = ["individual", "team", "pair"];
+
 /** The four fields this panel edits as a date+time PAIR rather than a
  *  single value — see registration-hub-tz-input.ts's header for why (the
  *  half-filled-value bug, RS005 R4 task 2). */
@@ -88,6 +93,8 @@ type DateTimeFieldKey = (typeof DATETIME_FIELDS)[number];
  *  lives in the four dictionaries, never hardcoded here. */
 function validationMessage(issue: ConfigValidationIssue, msg: Msg): string {
   switch (issue) {
+    case "entrantKindNotAllowed":
+      return msg("reg.settings.entrant.notAllowedError");
     case "capacityRange":
       return msg("reg.hub.config.capacityRangeError");
     case "feeCentsRange":
@@ -331,7 +338,11 @@ export function RegistrationHubConfigPanel({
   const locale = useLocaleOrDefault();
   const { state, readOnly, loadError, busy, errors, formError, saveOutcome, patch, save } =
     useRegistrationConfigPanelState(division, onSaved, (code) =>
-      code === CHESS_INDIVIDUAL_ONLY ? msg("divset.err.chessIndividualOnly") : null,
+      code === CHESS_INDIVIDUAL_ONLY
+        ? msg("divset.err.chessIndividualOnly")
+        : code === ENTRANT_KIND_NOT_ALLOWED
+          ? msg("reg.settings.entrant.notAllowedError")
+          : null,
     );
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>(DEFAULT_OPEN);
   // Finding 3: the fee input's draft text, independent of fee_cents. Owned
@@ -409,7 +420,7 @@ export function RegistrationHubConfigPanel({
         nextClientErrors[field] = msg("reg.hub.config.incompleteDateTime");
       }
     }
-    const issues = validateConfigState(state);
+    const issues = validateConfigState(state, division.allowed_kinds);
     for (const key of Object.keys(issues) as ConfigFieldKey[]) {
       if (nextClientErrors[key]) continue;
       nextClientErrors[key] = validationMessage(issues[key]!, msg);
@@ -516,6 +527,7 @@ export function RegistrationHubConfigPanel({
                     onDateTimeHalfChange={onDateTimeHalfChange}
                     individualOnly={division.individual_only === true}
                     entryShapeLegacy={readOnly!.storedEntryShapeLegacy}
+                    allowedKinds={division.allowed_kinds}
                   />
                 ) : id === "capacity" ? (
                   <CapacitySection state={state} errors={fieldErrors} patch={patch} msg={msg} />
@@ -819,6 +831,7 @@ export function OpenCloseSection({
   onDateTimeHalfChange,
   individualOnly = false,
   entryShapeLegacy = false,
+  allowedKinds,
 }: {
   state: RegistrationConfigState;
   errors: Partial<Record<ConfigFieldKey, string>>;
@@ -833,12 +846,23 @@ export function OpenCloseSection({
   individualOnly?: boolean;
   /** The stored settings still hold a pair/team/solo-pool shape from before the ruling (seeded as Individual here). */
   entryShapeLegacy?: boolean;
+  /** FU1: the division's allowed entrant kinds - the only ones the select offers. */
+  allowedKinds: readonly EntrantKindValue[];
 }) {
   // A short, DST-correct abbreviation ("BST", "IST") rather than the raw
   // IANA string — matches the zone labelling the row already shows
   // (registration-hub-row-derive.ts's formatRegistrationWindow).
   const zone = fmtZoneAbbrev(orgTz, new Date());
   const timeLabel = msg("datetime.timeLabel");
+  // FU1: offer exactly the kinds the division takes (chess keeps its own locked Individual). A stored kind outside them -
+  // a row saved before this check, or the division's Entrant kinds narrowed since - is NOT swapped for a valid one behind
+  // the organiser's back: it stays selected, marked as not allowed, with the way out beside it, and a save is refused
+  // until they pick an offered kind.
+  const offeredKinds: readonly EntrantKindValue[] = individualOnly
+    ? ["individual"]
+    : KIND_OPTION_ORDER.filter((k) => divisionTakesKind(allowedKinds, k));
+  const storedKindRefused = !individualOnly && !divisionTakesKind(allowedKinds, state.entrant_kind);
+  const storedKindName = msg(`divset.entrants.kind.${state.entrant_kind}`);
   return (
     <section className="card space-y-3 p-4">
       <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -866,10 +890,26 @@ export function OpenCloseSection({
             patch({ entrant_kind: v, allow_free_agents: v === "team" ? state.allow_free_agents : false });
           }}
         >
-          <option value="individual">{msg("reg.settings.entrant.individual")}</option>
-          {!individualOnly && <option value="team">{msg("reg.settings.entrant.team")}</option>}
-          {!individualOnly && <option value="pair">{msg("reg.settings.entrant.pair")}</option>}
+          {storedKindRefused && (
+            <option value={state.entrant_kind} disabled>
+              {msg("reg.settings.entrant.notAllowedOption", { kind: storedKindName })}
+            </option>
+          )}
+          {offeredKinds.map((k) => (
+            <option key={k} value={k}>
+              {msg(`reg.settings.entrant.${k}`)}
+            </option>
+          ))}
         </select>
+        {storedKindRefused && (
+          <span
+            data-testid="entrant-kind-not-allowed"
+            role="status"
+            className="mt-1 block rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-normal text-amber-800"
+          >
+            {msg("reg.settings.entrant.notAllowedHint", { kind: storedKindName })}
+          </span>
+        )}
         {individualOnly && (
           <span data-testid="entrant-kind-individual-only" className="mt-1 block text-xs font-normal text-slate-500">
             {msg("reg.settings.entrant.chessOnly")}

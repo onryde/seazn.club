@@ -18,6 +18,10 @@ import { CopyLink } from "@/components/copy-link";
 import { t } from "@/lib/i18n-runtime";
 import { formatMinor } from "@/lib/currency";
 import uiEn from "@/dictionaries/en/ui.json";
+import { effectiveEntrantModel } from "@seazn/engine/sport";
+
+// FU1 — every kind the engine knows (a sport with no entrant model takes them all). Derived, never typed here.
+const ALL_KINDS = effectiveEntrantModel(null).kinds;
 
 const NOW = new Date("2026-06-15T12:00:00Z");
 
@@ -32,6 +36,7 @@ const BASE_ROW: RegistrationHubRowData = {
   eligibility_note: null,
   enabled: true,
   entrant_kind: "individual",
+  allowed_kinds: ALL_KINDS,
   opens_at: null,
   closes_at: null,
   capacity: null,
@@ -425,6 +430,32 @@ describe("RegistrationHubDivisionRow — badges and dash fallbacks", () => {
     expect(text).toContain(t(uiEn, "divset.entrants.kind.team"));
   });
 
+  // FU1: a stored entrant kind the division no longer takes (its kinds narrowed since, or a row saved before the check)
+  // closes the public sign-up; the row says so, so the organiser is not left guessing why the link refuses everyone.
+  it("flags a stored entrant kind the division does not take - swept over every engine kind against a one-kind division", () => {
+    const flag = (row: RegistrationHubRowData) =>
+      walk(RegistrationHubDivisionRow({ row, context: BASE_CONTEXT })).filter((e) => propsOf(e)["data-testid"] === "row-kind-not-allowed");
+    let flagged = 0;
+    let clean = 0;
+    for (const only of ALL_KINDS) {
+      const allowed = effectiveEntrantModel(null, { entrants: { kinds: [only] } }).kinds;
+      for (const kind of ALL_KINDS) {
+        const chips = flag({ ...BASE_ROW, entrant_kind: kind, allowed_kinds: allowed });
+        if (kind === only) {
+          expect(chips, `${kind} on ${only}-only`).toHaveLength(0);
+          clean++;
+        } else {
+          expect(chips, `${kind} on ${only}-only`).toHaveLength(1);
+          expect(textOf(chips[0]!)).toBe(t(uiEn, "reg.hub.row.kindNotAllowed"));
+          flagged++;
+        }
+      }
+    }
+    expect({ flagged, clean }).toEqual({ flagged: ALL_KINDS.length * (ALL_KINDS.length - 1), clean: ALL_KINDS.length });
+    // An unconfigured row (no stored kind) is never flagged: registration falls back to the division's own default.
+    expect(flag({ ...BASE_ROW, entrant_kind: null, allowed_kinds: effectiveEntrantModel(null, { entrants: { kinds: ["team"] } }).kinds })).toHaveLength(0);
+  });
+
   it("renders the approval mode label when set", () => {
     const text = textOf(RegistrationHubDivisionRow({ row: { ...BASE_ROW, approval: "manual" }, context: BASE_CONTEXT }));
     expect(text).toContain(t(uiEn, "reg.hub.row.approval.manual"));
@@ -447,6 +478,7 @@ describe("RegistrationHubDivisionRow — full text against a fixture, not spot-c
       eligibility_note: null,
       enabled: true,
       entrant_kind: "team",
+      allowed_kinds: ALL_KINDS,
       opens_at: null,
       closes_at: null,
       capacity: 20,
