@@ -737,6 +737,39 @@ describe("X-SW-3 the desk shows the refusal sentence and the Finish action, neve
     expect(byTestId(island.tree(), "schedule-pairing-refusal"), "a stale refusal does not outlive the next press").toHaveLength(0);
   });
 
+  it("final review m1: a Rebuild clears the notice and its live Finish (the sequence: refused, then rebuilt)", async () => {
+    // The notice describes the stage the Rebuild just replaced; left up, its Finish would act on a stage nobody re-read.
+    apiV1Mock.mockReset();
+    confirmMock.mockReset();
+    confirmMock.mockResolvedValue(true);
+    apiV1Mock.mockImplementation((path: string) => {
+      if (path.endsWith("/generate")) return Promise.reject(refusal());
+      if (path.endsWith("/rebuild")) return Promise.resolve({ created: 0, existing: 0, removed: 0, slots: { kept: 0, freed: 0, unscheduled: 0 } });
+      return Promise.resolve({});
+    });
+    const island = renderIsland(StagesPanel, {
+      ...props,
+      stages: [swissStage({ rounds: 5 })],
+      fixtures: history(),
+      divisionStatus: "active",
+      swissRoundControls: { s1: control() },
+      rosterDrift: { s1: { ghosts: [{ id: "e1", display_name: "Withdrawn Wendy" }], unplaced: [] } },
+    } as never);
+    await flush();
+    const onAct = propsOf(island.tree().find((el) => el.type === StageRail)!).onAct as (id: string, action: "generate") => Promise<boolean>;
+    expect(await onAct("s1", "generate"), "rig: the press is refused").toBe(false);
+    await flush();
+    expect(byTestId(island.tree(), "schedule-pairing-refusal"), "rig: the notice is up").toHaveLength(1);
+    expect(byTestId(island.tree(), "schedule-pairing-finish"), "rig: with its Finish").toHaveLength(1);
+    const rebuild = byTestId(island.tree(), "roster-drift-rebuild");
+    expect(rebuild, "rig: the Rebuild button is on the desk").toHaveLength(1);
+    (propsOf(rebuild[0]!).onClick as () => void)();
+    await flush();
+    expect(apiV1Mock.mock.calls.some(([path]) => String(path).endsWith("/rebuild")), "rig: the rebuild posted").toBe(true);
+    expect(byTestId(island.tree(), "schedule-pairing-refusal"), "the Rebuild clears the notice").toHaveLength(0);
+    expect(byTestId(island.tree(), "schedule-pairing-finish"), "and the Finish inside it").toHaveLength(0);
+  });
+
   it("X-SW-3 a refusal Finish cannot answer (round 1, or the Swiss is over) offers no action, only the reason; unreadable details fall back to the red line", async () => {
     const roundOne = { round: 1, reason: "search_limit", field: 8, finishAfter: 0, canFinish: false };
     const a = await mount(control({ started: false }), async () => {

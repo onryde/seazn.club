@@ -987,6 +987,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     setNotice(null);
     setWarning(null);
     setNextRound(null);
+    // Final review m1: a refusal notice (and its live Finish) describes the stage this Rebuild replaces — cleared, as act and
+    // swissStageWrite clear it.
+    setPairingRefusal(null);
     setGameExists(false);
     setBusy(stageId);
     try {
