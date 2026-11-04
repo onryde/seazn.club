@@ -19,7 +19,7 @@ import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
-import { LOCALIZED_CONFIG_ISSUES, configIssueText, configIssuesOf, rulesWriteErrorText, settingsSaveErrorText } from "../config-issue-copy";
+import { LOCALIZED_CONFIG_ISSUES, configIssueText, configIssuesOf, isServerAnswer, rulesWriteErrorText, settingsSaveErrorText } from "../config-issue-copy";
 
 const invalid = (issues: unknown) => new ApiV1Error("invalid carrom config", 422, "CONFIG_INVALID", { issues });
 
@@ -220,14 +220,27 @@ describe("settingsSaveErrorText: a save that never reached the server", () => {
     expect(checked).toBe(LOCALES.length * BROWSER_TEXTS.length);
   });
 
-  it("decided by CLASS, not by the browser's words: any TypeError or Error that is not a server answer reads the copy, whatever it says", () => {
+  // config-issue-copy.ts is imported by server code and may not import the two "use client" wrappers, so a server answer is
+  // told apart by its SHAPE: the numeric `status` both classes carry. This is the one test that pins the shape to the real
+  // classes - if either stops carrying a numeric `status`, the predicate would call a real refusal "unreachable".
+  it("isServerAnswer: the real ApiError and ApiV1Error are server answers; a fetch TypeError, a plain Error, a DOMException and a non-Error are not", () => {
+    expect(isServerAnswer(new ApiError("x", 500))).toBe(true);
+    expect(isServerAnswer(new ApiError("x", 402, "PAYMENT_REQUIRED"))).toBe(true);
+    expect(isServerAnswer(new ApiV1Error("x", 422, "CONFIG_INVALID", {}))).toBe(true);
+    expect(isServerAnswer(new ApiV1Error("x", 0, "UNKNOWN"))).toBe(true);
+    for (const text of BROWSER_TEXTS) expect(isServerAnswer(new TypeError(text)), text).toBe(false);
+    for (const notAnswer of [new Error("x"), new DOMException("aborted", "AbortError"), Object.assign(new Error("x"), { status: "500" }), { status: 500, message: "x" }, "x", null, undefined])
+      expect(isServerAnswer(notAnswer), String(notAnswer)).toBe(false);
+  });
+
+  it("decided by SHAPE, not by the browser's words: any TypeError or Error that is not a server answer reads the copy, whatever it says", () => {
     const m = reader(nl);
     for (const err of [new TypeError("x is not a function"), new Error("anything at all"), new DOMException("signal is aborted", "AbortError")]) {
       expect(settingsSaveErrorText(err, m, "fallback"), String(err)).toBe(nl[KEY]);
     }
   });
 
-  it("the positive pair: a server answer keeps its own message even when it says the browser's words (decided by class, so the words do not matter)", () => {
+  it("the positive pair: a server answer keeps its own message even when it says the browser's words (decided by shape, so the words do not matter)", () => {
     const m = reader(nl);
     expect(settingsSaveErrorText(new ApiError("Failed to fetch", 502), m, "fallback")).toBe("Failed to fetch");
     expect(settingsSaveErrorText(new ApiError("Request failed (500)", 500), m, "fallback")).toBe("Request failed (500)");

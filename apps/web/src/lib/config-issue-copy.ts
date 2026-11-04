@@ -11,8 +11,6 @@ import {
   SHARE_NEEDS_DRAWN_GAME,
   SHARE_NEEDS_DRAWS,
 } from "@seazn/engine/sport";
-import { ApiError } from "@/lib/client";
-import { ApiV1Error } from "@/lib/client-v1";
 import type { MessageKey } from "@/lib/messages";
 import { ruleRefusalSentence } from "@/lib/rule-errors";
 import { divisionKindRefusalText } from "@/lib/entrant-kind-refusal";
@@ -80,14 +78,24 @@ export function configIssueText(issue: ConfigIssue, msg: Msg): string {
   return issue.message;
 }
 
+/** Did this error come back from the server? Both client wrappers' errors (`ApiError`, lib/client.ts, and `ApiV1Error`,
+ *  lib/client-v1.ts) carry the HTTP `status` they were thrown for, as a number; the TypeError `fetch` rejects with when
+ *  the request never leaves (offline, DNS, a dropped connection) has none. It is told apart by that SHAPE, never by the
+ *  browser's words, which differ per browser and per language.
+ *
+ *  Structural on purpose: this module is also imported by server code (`configIssuesOf`), and both wrappers are
+ *  `"use client"` - importing them here would turn them into client references in the server graph. */
+export function isServerAnswer(err: unknown): err is Error & { status: number } {
+  return err instanceof Error && typeof (err as { status?: unknown }).status === "number";
+}
+
 /** What a failed settings save says. A rule-lock refusal says itself first (`ruleRefusalSentence`); a CONFIG_INVALID that names its problems says them (all of them, in order); any
- *  other SERVER answer (an `ApiError` or an `ApiV1Error`) keeps its own message; an error that is not a server answer - the
- *  request never reached it - says so in the reader's language (`save.err.unreachable`); and a non-Error falls back to
- *  `fallback`. `err.extra` is the envelope's detail.
+ *  other SERVER answer (`isServerAnswer`: an `ApiError` or an `ApiV1Error`) keeps its own message; an error that is not a
+ *  server answer - the request never reached it - says so in the reader's language (`save.err.unreachable`); and a
+ *  non-Error falls back to `fallback`. `err.extra` is the envelope's detail.
  *
  *  Neither client wrapper catches a fetch rejection, so offline / DNS / a dropped connection arrives as the browser's bare
- *  TypeError ("Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."). It is told apart by
- *  CLASS - never by those words, which differ per browser and per language. */
+ *  TypeError ("Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."). */
 export function settingsSaveErrorText(err: unknown, msg: Msg, fallback: string): string {
   // W2c Task 19: a rule-lock refusal (a walkover that no longer fits the format, a locked stage or match...) is said in the
   // reader's language off its CODE and facts, never as the server's English message.
@@ -108,7 +116,7 @@ export function settingsSaveErrorText(err: unknown, msg: Msg, fallback: string):
   const issues = configIssuesOf(extra);
   if (issues !== null) return issues.map((i) => configIssueText(i, msg)).join(" ");
   if (!(err instanceof Error)) return fallback;
-  return err instanceof ApiError || err instanceof ApiV1Error ? err.message : msg("save.err.unreachable");
+  return isServerAnswer(err) ? err.message : msg("save.err.unreachable");
 }
 
 /** What a failed RULES write says, wherever the organiser made it: the match block's Save and "Use stage rules", the stage
