@@ -2876,7 +2876,7 @@
   "divset.entrants.warning.missingDob": "Geboortedatum ontbreekt",
   "divset.entrants.warning.missingGender": "Geslacht ontbreekt",
   "divset.entrants.resetDone": "Teruggezet naar de sportstandaard.",
-  "divset.entrants.note": "Een soort kan niet worden verwijderd zolang er nog actieve deelnemers van dat soort zijn — trek ze eerst terug.",
+  "divset.entrants.note": "Een soort kan niet worden verwijderd zolang er nog actieve deelnemers van dat soort zijn of inschrijvingen van dat soort wachten — trek ze eerst terug of wijs ze af.",
   "stagetags.title": "Vereiste veldlabels",
   "stagetags.any": "Elk veld",
   "stagetags.desc": "Velden moeten alle hier genoemde labels dragen om de wedstrijden van deze fase te spelen. Dit beperkt de eis van de divisie; een ronde kan die nog verder beperken.",

@@ -2929,7 +2929,7 @@
   "divset.entrants.warning.missingDob": "Date de naissance manquante",
   "divset.entrants.warning.missingGender": "Genre manquant",
   "divset.entrants.resetDone": "Rétabli à la valeur par défaut du sport.",
-  "divset.entrants.note": "Un type ne peut pas être supprimé tant que des participants de ce type sont actifs — retirez-les d'abord.",
+  "divset.entrants.note": "Un type ne peut pas être supprimé tant que des participants de ce type sont actifs ou que des inscriptions de ce type sont en attente — retirez-les ou refusez-les d'abord.",
   "stagetags.title": "Étiquettes de terrain requises",
   "stagetags.any": "N'importe quel terrain",
   "stagetags.desc": "Les terrains doivent porter toutes les étiquettes listées ici pour accueillir les matchs de cette phase. Cela restreint l'exigence de la division ; un tour peut la restreindre davantage.",

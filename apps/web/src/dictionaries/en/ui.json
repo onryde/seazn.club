@@ -2929,7 +2929,7 @@
   "divset.entrants.warning.missingDob": "Missing date of birth",
   "divset.entrants.warning.missingGender": "Missing gender",
   "divset.entrants.resetDone": "Reset to the sport default.",
-  "divset.entrants.note": "A kind can't be removed while entrants of that kind are still active — withdraw them first.",
+  "divset.entrants.note": "A kind can't be removed while entrants of that kind are still active, or while registration entries of that kind are still waiting — withdraw or reject them first.",
   "stagetags.title": "Required court tags",
   "stagetags.any": "Any court",
   "stagetags.desc": "Courts must carry every tag listed here to host this stage's matches. This narrows the division requirement; a round can narrow it further still.",

@@ -83,6 +83,27 @@ describe("the entrant kinds block - what the organiser sees on the Entrants tab"
     expect(html).toContain(EN["divset.entrants.note"]!.replace(/'/g, "&#x27;"));
   });
 
+  it("the note names BOTH blockers in every locale: active entrants and waiting registration entries (FU1 I1)", () => {
+    // The removal refusal has two causes since FU1 (entrants, then live registrations). The note owes both, or an
+    // organiser told "nothing of that kind is active" cannot see why the save is refused. Per-locale words are the
+    // requirement itself, not read back from the component.
+    const blockers: Record<string, { dict: Record<string, string>; entrants: RegExp; registrations: RegExp }> = {
+      en: { dict: enUi as Record<string, string>, entrants: /entrants/i, registrations: /registration/i },
+      es: { dict: esUi as Record<string, string>, entrants: /participantes/i, registrations: /inscripciones/i },
+      fr: { dict: frUi as Record<string, string>, entrants: /participants/i, registrations: /inscriptions/i },
+      nl: { dict: nlUi as Record<string, string>, entrants: /deelnemers/i, registrations: /inschrijvingen/i },
+    };
+    let checked = 0;
+    for (const [loc, { dict, entrants, registrations }] of Object.entries(blockers)) {
+      const note = dict["divset.entrants.note"];
+      expect(note, loc).toBeTypeOf("string");
+      expect(note, `${loc} names active entrants`).toMatch(entrants);
+      expect(note, `${loc} names waiting registrations`).toMatch(registrations);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("closed (the default): one header row that names the ticked kinds in words - not the controls", () => {
     const html = closed({ entrantModel: TEAM_MODEL });
     expect(html).toContain(EN["divset.entrants.kinds"]);

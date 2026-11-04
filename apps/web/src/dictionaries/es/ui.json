@@ -2876,7 +2876,7 @@
   "divset.entrants.warning.missingDob": "Falta la fecha de nacimiento",
   "divset.entrants.warning.missingGender": "Falta el género",
   "divset.entrants.resetDone": "Restablecido al valor predeterminado del deporte.",
-  "divset.entrants.note": "Un tipo no se puede quitar mientras haya participantes de ese tipo activos: retíralos primero.",
+  "divset.entrants.note": "Un tipo no se puede quitar mientras haya participantes de ese tipo activos o inscripciones de ese tipo pendientes: retíralos o recházalos primero.",
   "stagetags.title": "Etiquetas de pista requeridas",
   "stagetags.any": "Cualquier pista",
   "stagetags.desc": "Las pistas deben tener todas las etiquetas indicadas aquí para acoger los partidos de esta fase. Esto restringe el requisito de la división; una ronda puede restringirlo aún más.",
