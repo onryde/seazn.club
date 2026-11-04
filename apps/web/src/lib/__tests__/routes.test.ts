@@ -94,6 +94,14 @@ describe("routes", () => {
     expect(cases.length).toBe(9);
   });
 
+  it("publicHub refuses an empty org slug — it would build the marketing /live (a 200), not a hub page — and builds a real one", () => {
+    expect(() => routes.publicHub("")).toThrow(/empty org slug/);
+    expect(() => routes.publicHub("", "summer-smash", "u16-boys")).toThrow(/empty org slug/);
+    // The positive pair: a real org slug still builds the hub, with or without the rest.
+    expect(routes.publicHub("acme")).toBe("/live/acme");
+    expect(routes.publicHub("acme", "summer-smash", "u16-boys")).toBe("/live/acme/summer-smash/u16-boys");
+  });
+
   it("builds the public register page — the registration hub's per-row copy link target", () => {
     expect(routes.publicRegister("acme", "summer-smash")).toBe(
       "/live/acme/summer-smash/register",

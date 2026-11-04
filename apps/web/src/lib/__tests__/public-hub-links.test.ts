@@ -15,7 +15,12 @@
 //
 // What counts as a spectator path:
 //   - `/shared` as a path segment, anywhere in a string (`"/shared/x"`, `${origin}/shared/`, `"/shared"`);
-//   - `/live/` — the root followed by more path. A bare `"/live"` is the MARKETING page (option A) and is allowed.
+//   - `/live/` — the root followed by more path;
+//   - a plain string literal that is exactly `"/live"`. That is the MARKETING page (option A), but it is also the first
+//     element of the old builder's own shape (`["/live", org].join("/")`, `"/live" + "/" + org`), which no per-literal
+//     read can tell apart. So it is flagged everywhere except at its pinned marketing sites (MARKETING_WALL). A
+//     template part ending in `/live` (`${BASE}/live`, `/${lang}/live`) is the wall's localised or absolute URL and is
+//     not flagged: a hand-built hub URL through a template spells `/live/` and is.
 // A regex literal is flagged when it spells `\/` and either root's word (proxy.ts's cacheable-tree regex was one).
 import { describe, expect, it } from "vitest";
 import { createRequire } from "node:module";
@@ -39,11 +44,20 @@ const NOT_THE_HUB: { file: string; text: string }[] = [
   { file: "src/server/relay/fakes.ts", text: "rtmps://fake.ingest.invalid:443/live/" },
 ];
 
+/** The bare `"/live"` literal's legitimate sites: links to the marketing wall, and the proxy's set of unprefixed
+ *  marketing paths. Each pinned to its file AND how many times it appears there, so a second `"/live"` in the same file
+ *  (a hand-built hub join beside the wall link) still reds; an entry no longer found is stale and reds too. */
+const MARKETING_WALL: { file: string; count: number }[] = [
+  { file: "src/components/marketing/live-ticker.tsx", count: 1 },
+  { file: "src/proxy.ts", count: 1 },
+];
+
 const SHARED_SEGMENT = /\/shared(?![\w-])/;
 const LIVE_DEEP = /\/live\//;
 const REGEX_ROOT = /\\\/.*\b(shared|live)\b/;
+const BARE_LIVE = "/live";
 
-type Offence = { file: string; line: number; text: string };
+type Offence = { file: string; line: number; text: string; bare?: true };
 
 function isModuleSpecifier(node: TS.Node): boolean {
   const p = node.parent;
@@ -67,9 +81,15 @@ export function scanSource(file: string, text: string): { offences: Offence[]; s
   const visit = (node: TS.Node) => {
     let value: string | null = null;
     let isRegex = false;
+    let isPlain = false;
     switch (node.kind) {
       case ts.SyntaxKind.StringLiteral:
       case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+        if (!isModuleSpecifier(node)) {
+          value = (node as TS.LiteralLikeNode).text;
+          isPlain = true;
+        }
+        break;
       case ts.SyntaxKind.TemplateHead:
       case ts.SyntaxKind.TemplateMiddle:
       case ts.SyntaxKind.TemplateTail:
@@ -85,10 +105,11 @@ export function scanSource(file: string, text: string): { offences: Offence[]; s
     }
     if (value !== null) {
       strings += 1;
-      const hit = isRegex ? REGEX_ROOT.test(value) : SHARED_SEGMENT.test(value) || LIVE_DEEP.test(value);
+      const bare = isPlain && value === BARE_LIVE;
+      const hit = bare || (isRegex ? REGEX_ROOT.test(value) : SHARED_SEGMENT.test(value) || LIVE_DEEP.test(value));
       if (hit) {
         const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
-        offences.push({ file, line, text: value.trim().slice(0, 120) });
+        offences.push({ file, line, text: value.trim().slice(0, 120), ...(bare ? { bare: true as const } : {}) });
       }
     }
     ts.forEachChild(node, visit);
@@ -120,10 +141,16 @@ describe("LIVE1: one builder for spectator URLs (routes.* over lib/public-hub-ro
       `const i = <code>/shared/&lt;org&gt;</code>;`,
       "const j = /^\\/(shared|embed)(\\/|$)/;",
       "const k = `x ${a} /live/${b}`;",
+      // The old builder's shape over the new root (review m1): the bare root literal, joined or concatenated.
+      `const l = ["/live", org, comp].join("/");`,
+      `const m = "/live" + "/" + org;`,
+      // A bare "/live" is flagged wherever it is not a pinned marketing site (MARKETING_WALL).
+      `const n = "/live";`,
+      `const o = <a href="/live">wall</a>;`,
     ];
     const clean = [
-      `const a = "/live";`,
-      `const b = <a href="/live">wall</a>;`,
+      "const a = `${BASE}/live`;",
+      `const b = "/lives";`,
       "const c = `/${lang}/live`;",
       `import { x } from "@/app/(public)/live/[orgSlug]/page";`,
       `import { y } from "@/components/v2/shared/datetime-field";`,
@@ -139,7 +166,7 @@ describe("LIVE1: one builder for spectator URLs (routes.* over lib/public-hub-ro
     ];
     let checked = 0;
     for (const snippet of flagged) {
-      const file = snippet.includes("<") ? "probe.tsx" : "probe.ts";
+      const file = snippet.includes("<a") || snippet.includes("<code") ? "probe.tsx" : "probe.ts";
       expect(scanSource(file, snippet).offences.length, `should flag: ${snippet}`).toBe(1);
       checked += 1;
     }
@@ -162,12 +189,17 @@ describe("LIVE1: one builder for spectator URLs (routes.* over lib/public-hub-ro
     let strings = 0;
     const reached = new Set<string>();
     const usedExemptions = new Set<(typeof NOT_THE_HUB)[number]>();
+    const bareByFile = new Map<string, number>();
     for (const file of files) {
       const r = scanSource(file, readFileSync(`${APP}${file}`, "utf8"));
       strings += r.strings;
       if (r.strings > 0) reached.add(file);
       if (file === ROOT_MODULE) continue;
       for (const o of r.offences) {
+        if (o.bare && MARKETING_WALL.some((x) => x.file === o.file)) {
+          bareByFile.set(o.file, (bareByFile.get(o.file) ?? 0) + 1);
+          continue;
+        }
         const exempt = NOT_THE_HUB.find((x) => x.file === o.file && x.text === o.text);
         if (exempt) usedExemptions.add(exempt);
         else offences.push(o);
@@ -183,7 +215,13 @@ describe("LIVE1: one builder for spectator URLs (routes.* over lib/public-hub-ro
     // The root module itself must still spell both roots — otherwise the allowlist exempts nothing and a moved root
     // would go unnoticed here.
     const root = scanSource(ROOT_MODULE, readFileSync(`${APP}${ROOT_MODULE}`, "utf8"));
-    expect(root.offences.length, "the root module spells /shared (the redirect's source)").toBe(1);
+    expect(root.offences.map((o) => o.text).sort(), "the root module spells both roots: /live and /shared").toEqual(["/live", "/shared"]);
+    // Each marketing site spells the bare "/live" exactly as often as it is pinned: fewer is a stale pin, more is a
+    // hand-built hub link hiding beside the wall link.
+    expect(
+      MARKETING_WALL.map((x) => `${x.file} x${bareByFile.get(x.file) ?? 0}`),
+      "bare \"/live\" at the marketing sites: pinned counts",
+    ).toEqual(MARKETING_WALL.map((x) => `${x.file} x${x.count}`));
     expect(
       NOT_THE_HUB.filter((x) => !usedExemptions.has(x)).map((x) => `${x.file}  ${x.text}`),
       "stale exemptions: each must still be found, or delete it",

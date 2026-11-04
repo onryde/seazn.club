@@ -91,8 +91,12 @@ export const routes = {
   // root answers a permanent 308 to the new one (next.config.js), so a printed QR code still lands; a link we
   // produce never goes through it. A bare `/live` is the marketing wall, not this tree (option A).
   /** The public hub: the org home, a competition, or a division. Slug-based, marker-less scheme. */
-  publicHub: (orgSlug: Slug, compSlug?: Slug, divSlug?: Slug) =>
-    [PUBLIC_HUB_ROOT, orgSlug, compSlug, divSlug].filter(Boolean).join("/"),
+  publicHub: (orgSlug: Slug, compSlug?: Slug, divSlug?: Slug) => {
+    // An empty org slug would build a bare `/live`: the MARKETING wall (option A), a working-looking 200 where the old
+    // root answered a 404. Slugs are non-null in the database, so this "cannot happen", and is refused if it does.
+    if (!orgSlug) throw new Error("routes.publicHub: an empty org slug builds the marketing /live, not a hub page");
+    return [PUBLIC_HUB_ROOT, orgSlug, compSlug, divSlug].filter(Boolean).join("/");
+  },
   /** The org's news feed (`?page=N` is appended by the pager), and one post. */
   publicNews: (orgSlug: Slug) => `${PUBLIC_HUB_ROOT}/${orgSlug}/news`,
   publicNewsPost: (orgSlug: Slug, postSlug: Slug) => `${PUBLIC_HUB_ROOT}/${orgSlug}/news/${postSlug}`,

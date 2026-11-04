@@ -7,7 +7,7 @@
 // every page / route handler / share image to the URL pattern Next serves it
 // at. What this cannot see (a build and e2e do): Next's precedence of the
 // static `present` segment over the chrome tree's `[divisionSlug]`.
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -107,5 +107,16 @@ describe("/live route inventory across the K-1 kiosk move", () => {
   it("each /present page keeps a share image at its own segment (it inherited its parent's before the move)", () => {
     const og = new Set(entries().filter((e) => e.kind === "og").map((e) => e.url));
     for (const url of PRESENT) expect(og.has(url), `${url} has an opengraph-image`).toBe(true);
+  });
+});
+
+// LIVE1 (2026-11-03): the tree moved from app/(public)/shared to app/(public)/live, and `/shared/:path*` 308s to
+// `/live/:path*` in next.config.js. Redirects run BEFORE the filesystem, so a page left (or re-added by a branch cut
+// before the move, e.g. a merge that brings the old directory back) under the old root is dead code nobody can reach,
+// and its tests prove a route no visitor is served. Whichever branch merges second moves its files under (public)/live.
+describe("LIVE1: the old spectator root is gone", () => {
+  it("app/(public)/shared does not exist, and app/(public)/live does (the premise)", () => {
+    expect(existsSync(HUB_TREE), "premise: the hub tree is at (public)/live").toBe(true);
+    expect(existsSync(join(APP, "(public)", "shared")), "move anything under (public)/shared to (public)/live").toBe(false);
   });
 });
