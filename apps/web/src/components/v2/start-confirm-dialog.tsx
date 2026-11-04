@@ -43,8 +43,11 @@ export function StartConfirmDialog({
    *  Omitted, never softened, for the same reason as the entrants line: for a
    *  draft or an already-live competition it is simply untrue. */
   competitionPromotes,
-  /** Do fixtures exist yet? The format no longer locks with them (FMT5: it locks at the first result, which a division
-   *  that has not started cannot have, so it is always still open here). On the quick-start path `/start` is what
+  /** Do fixtures exist yet? The format no longer locks with them (FMT5: it locks at the first result that stands). Before
+   *  Start no result can be recorded, so the format is still open whenever this dialog shows - held by two named
+   *  refusals, not by this comment: live scoring's phase gate (scoring.ts, `divisionScoringClosed` → WRONG_PHASE
+   *  "division has not started — scoring is closed") and the import's (event-import.ts, `import.division_not_started`).
+   *  The Division rules card reads the lock itself (`divisionFormatLocked`); this dialog does not. On the quick-start path `/start` is what
    *  generates the fixtures, so the line says that too; it is REPLACED, never omitted, because the organiser is owed the
    *  format's state either way. Saying "fixtures exist" over a page reading "No fixtures yet" was a live defect found by
    *  driving the product on 2026-09-20. */

@@ -181,7 +181,10 @@ describe("the Format button (FMT5)", () => {
     expect(h.tree().some((e) => e.type === DivisionFormatDialog)).toBe(false);
   });
 
-  it("the sequence: opened locked from the old address, then a void unlocks it on refresh - the dialog does not pop open by itself", () => {
+  // Fix round 1 (review I2): this was titled "a void unlocks it on refresh", which only the server can prove - it is now
+  // proved there (format-change.test.ts, "score, void, score again"). What THIS test drives is the button's half: handed
+  // `locked` false on a later render (the page's re-read of the predicate), it is live, and it does not pop open.
+  it("the prop flips from locked to open on a later render: the button is live to press, and the dialog does not pop open by itself", () => {
     const h = renderIsland(DivisionFormatButton, props({ locked: true, initialOpen: true }));
     expect(h.tree().some((e) => e.type === DivisionFormatDialog)).toBe(false);
     h.rerender(props({ locked: false, initialOpen: true }));
@@ -324,16 +327,37 @@ describe("Save: the dry run, then the write (FMT5)", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("the setup it clears is listed only where there is some, and device links warn that printed sheets stop", async () => {
+  it("the setup it clears is listed only where there is some, and live remote-scoring links are named with the sheets that stop", async () => {
     apiV1Mock.mockResolvedValueOnce({ ...PREVIEW, slots: 3, courts: 0, officials: 2, lineups: 1, device_links: 4, calls: 1 });
     const { h } = mountDialog({ stages: stagesOf("league") });
     click(h, "division-format-save");
     await flush();
     const items = walk(byId(h, "division-format-clears")!).filter((e) => e.type === "li");
-    expect(items.map((e) => propsOf(e)["data-clear"])).toEqual(["stages", "fixtures", "slots", "officials", "lineups", "devices", "calls"]);
+    expect(items.map((e) => propsOf(e)["data-clear"])).toEqual(["stages", "fixtures", "slots", "officials", "lineups", "remoteLinks", "calls"]);
     expect(textOf(items[2]!)).toBe(sayN("formatChange.confirm.slotsNoCourt", 3));
+    expect(textOf(items[5]!)).toBe(sayN("formatChange.confirm.remoteLinks", 4));
     expect(textOf(items[6]!)).toBe(sayN("formatChange.confirm.calls", 1));
     expect(h.text()).toContain(say("formatChange.confirm.sheetsStop"));
+  });
+
+  // Controller ruling I1 (fix round 1): a live remote-scoring link is not refused; the confirm says how many stop working,
+  // and only when there is one. The server counts live links only (format-change.test.ts), so one, then none.
+  it("one live remote-scoring link: its own line, in the singular; none: no line and no sheets warning", async () => {
+    apiV1Mock.mockResolvedValueOnce({ ...PREVIEW, device_links: 1 });
+    const { h } = mountDialog({ stages: stagesOf("league") });
+    click(h, "division-format-save");
+    await flush();
+    const line = walk(byId(h, "division-format-clears")!).find((e) => propsOf(e)["data-clear"] === "remoteLinks");
+    expect(textOf(line!)).toBe(say("formatChange.confirm.remoteLinks.one", { count: 1 }));
+
+    apiV1Mock.mockResolvedValueOnce({ ...PREVIEW, device_links: 0 });
+    const { h: none } = mountDialog({ stages: stagesOf("league") });
+    click(none, "division-format-save");
+    await flush();
+    const kinds = walk(byId(none, "division-format-clears")!).filter((e) => e.type === "li").map((e) => propsOf(e)["data-clear"]);
+    expect(kinds, "anti-vacuity: the list itself is drawn").toContain("fixtures");
+    expect(kinds).not.toContain("remoteLinks");
+    expect(none.text()).not.toContain(say("formatChange.confirm.sheetsStop"));
   });
 
   it("Clear sends the previewed body with its token, ONE write, then closes and refreshes", async () => {
@@ -394,11 +418,65 @@ describe("Save: the dry run, then the write (FMT5)", () => {
     expect(byId(h, "division-format-confirm")).toBeUndefined();
     expect(calls()).toHaveLength(1);
     expect(onClose).not.toHaveBeenCalled();
+    // Review m6b: a first result landed while the dialog was open - the page re-reads the lock, so the button behind greys.
+    expect(refresh, "FORMAT_LOCKED refreshes the page").toHaveBeenCalledTimes(1);
 
     apiV1Mock.mockRejectedValueOnce(refusal("FORMAT_STREAM_LIVE", { fixture_no: 7 }));
     click(h, "division-format-save");
     await flush();
     expect(textOf(byId(h, "division-format-error")!)).toBe(say("formatChange.err.FORMAT_STREAM_LIVE", { match: say("rules.err.match", { n: 7 }) }));
+    expect(refresh, "any other refusal leaves the page as it is").toHaveBeenCalledTimes(1);
+  });
+
+  // Review m6a (fix round 1): the dry run found nothing to clear, but fixtures were generated before the plain PUT landed. That
+  // PUT is refused FORMAT_CHANGE_CONFIRM with the board as it is now; the dialog opens the confirm on it, flagged as changed,
+  // instead of an error asking for a confirm step it never showed. The confirm's Clear then sends that preview's token.
+  it("fixtures appear between the dry run and the plain save: the CONFIRM refusal opens the confirm on its own counts; Clear sends its token", async () => {
+    const appeared: FormatChangePreview = { ...PREVIEW, stages: [{ id: "s1", name: "League" }], fixtures: 6, slots: 0, courts: 0, token: "l4te" };
+    apiV1Mock
+      .mockResolvedValueOnce(NOTHING)
+      .mockRejectedValueOnce(refusal("FORMAT_CHANGE_CONFIRM", { preview: appeared }))
+      .mockResolvedValueOnce([]);
+    const { h, onClose } = mountDialog({ stages: stagesOf("league") });
+    pickTemplate(h as never, "league_ko");
+    click(h, "division-format-save");
+    await flush();
+    expect(byId(h, "division-format-error"), "no error sentence").toBeUndefined();
+    expect(byId(h, "division-format-confirm")).toBeDefined();
+    expect(textOf(byId(h, "division-format-stale")!)).toBe(say("formatChange.err.FORMAT_CHANGE_STALE"));
+    const items = walk(byId(h, "division-format-clears")!).filter((e) => e.type === "li");
+    expect(items.map((e) => [propsOf(e)["data-clear"], textOf(e)])).toEqual([
+      ["stages", sayN("formatChange.confirm.stages", 1, { names: "League" })],
+      ["fixtures", sayN("formatChange.confirm.fixtures", 6)],
+    ]);
+    expect(onClose).not.toHaveBeenCalled();
+    click(h, "division-format-clear");
+    await flush();
+    const sent = calls();
+    expect(sent.map((c) => c.url)).toEqual([`${URL_BASE}?dry_run=1`, URL_BASE, `${URL_BASE}?clear=l4te`]);
+    expect(sent[2]!.json, "the body the organiser saved").toEqual(sent[0]!.json);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // Review m2's client half: someone else's change emptied the board under the open confirm, so the STALE refusal's preview
+  // has no fixture and no token. The list names the stages alone (no "0 unplayed fixtures"), and Clear sends no token.
+  it("the board was emptied under the open confirm: the fresh list has no fixture line, and Clear sends no token", async () => {
+    const emptied: FormatChangePreview = { ...NOTHING, stages: [{ id: "s9", name: "Knockout" }] };
+    apiV1Mock
+      .mockResolvedValueOnce(PREVIEW)
+      .mockRejectedValueOnce(refusal("FORMAT_CHANGE_STALE", { preview: emptied }))
+      .mockResolvedValueOnce([]);
+    const { h, onClose } = mountDialog({ stages: stagesOf("league") });
+    click(h, "division-format-save");
+    await flush();
+    click(h, "division-format-clear");
+    await flush();
+    const items = walk(byId(h, "division-format-clears")!).filter((e) => e.type === "li");
+    expect(items.map((e) => [propsOf(e)["data-clear"], textOf(e)])).toEqual([["stages", sayN("formatChange.confirm.stages", 1, { names: "Knockout" })]]);
+    click(h, "division-format-clear");
+    await flush();
+    expect(calls().map((c) => c.url)).toEqual([`${URL_BASE}?dry_run=1`, `${URL_BASE}?clear=t0k`, URL_BASE]);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("a plan gate answers with the upgrade card, not a sentence", async () => {

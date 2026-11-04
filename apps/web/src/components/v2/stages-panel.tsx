@@ -982,7 +982,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     return (
       <div className="space-y-6">
         {rulesStrip !== undefined && <DivisionRulesStrip {...rulesStrip} />}
-        <p className="text-sm text-slate-500">{msg("schedule.noStages")}</p>
+        {/* Fix round 1 (review m9): the pointer at the Format button is an editor's - a reader has no such button. */}
+        <p className="text-sm text-slate-500" data-testid="stages-empty">{msg(canEdit ? "schedule.noStages" : "schedule.noStagesReader")}</p>
       </div>
     );
   }

@@ -186,6 +186,14 @@ export function DivisionFormatDialog({
   function refused(err: unknown) {
     if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(String(err.extra.feature_key ?? ""));
     else setError(formatChangeRefusalText(err, msg, msg("divset.failed")));
+    // Fix round 1 (review m6b): a first result landed while the dialog was open. The page re-reads the lock, so the
+    // Format button behind the dialog greys with its reason instead of staying live until a reload.
+    if (err instanceof ApiV1Error && err.code === "FORMAT_LOCKED") router.refresh();
+  }
+
+  /** A CONFIRM or STALE refusal's own preview, if it carries one: the board the change would clear now. */
+  function freshPreview(err: unknown): FormatChangePreview | null {
+    return err instanceof ApiV1Error && (err.code === "FORMAT_CHANGE_STALE" || err.code === "FORMAT_CHANGE_CONFIRM") ? previewOf(err.extra) : null;
   }
 
   function finish() {
@@ -203,8 +211,9 @@ export function DivisionFormatDialog({
     }
     const body = drafts.map((d, i) => ({ ...d, seq: i + 1 }));
     setBusy(true);
+    let asked: FormatChangePreview | null = null;
     try {
-      const asked = await apiV1<FormatChangePreview>(`/api/v1/divisions/${divisionId}/stages?dry_run=1`, { method: "PUT", json: body });
+      asked = await apiV1<FormatChangePreview>(`/api/v1/divisions/${divisionId}/stages?dry_run=1`, { method: "PUT", json: body });
       if (asked.token === null) {
         // Nothing generated: nothing to clear, so nothing to confirm.
         await apiV1(`/api/v1/divisions/${divisionId}/stages`, { method: "PUT", json: body });
@@ -216,7 +225,18 @@ export function DivisionFormatDialog({
       setStale(false);
       setStep("confirm");
     } catch (err) {
-      refused(err);
+      // Fix round 1 (review m6a): fixtures appeared between the dry run (nothing to clear) and the direct save. The
+      // refusal carries the board as it is now, so the confirm opens on it - flagged as changed - rather than an error
+      // that asks for a confirm step the dialog never showed.
+      const fresh = asked !== null ? freshPreview(err) : null;
+      if (fresh !== null) {
+        setPreview(fresh);
+        setSent({ body, template });
+        setStale(true);
+        setStep("confirm");
+      } else {
+        refused(err);
+      }
     } finally {
       setBusy(false);
     }
@@ -233,7 +253,7 @@ export function DivisionFormatDialog({
       finish();
     } catch (err) {
       // The board moved under the open confirm: the refusal carries the fresh counts, shown here for a second look.
-      const fresh = err instanceof ApiV1Error && (err.code === "FORMAT_CHANGE_STALE" || err.code === "FORMAT_CHANGE_CONFIRM") ? previewOf(err.extra) : null;
+      const fresh = freshPreview(err);
       if (fresh !== null) {
         setPreview(fresh);
         setStale(true);
@@ -265,8 +285,12 @@ export function DivisionFormatDialog({
           names: preview.stages.map((s) => s.name).join(", "),
         }),
       },
-      { key: "fixtures", text: msgPlural("formatChange.confirm.fixtures", preview.fixtures, { count: preview.fixtures }) },
     ];
+    // A board emptied under the open confirm (someone else's change, review m2) has no fixture line: "0 unplayed fixtures"
+    // would name nothing.
+    if (preview.fixtures > 0) {
+      cleared.push({ key: "fixtures", text: msgPlural("formatChange.confirm.fixtures", preview.fixtures, { count: preview.fixtures }) });
+    }
     if (preview.slots > 0) {
       cleared.push({
         key: "slots",
@@ -278,7 +302,11 @@ export function DivisionFormatDialog({
     }
     if (preview.officials > 0) cleared.push({ key: "officials", text: msg("progression.rosterDrift.alsoOfficials", { count: preview.officials }) });
     if (preview.lineups > 0) cleared.push({ key: "lineups", text: msg("progression.rosterDrift.alsoLineups", { count: preview.lineups }) });
-    if (preview.device_links > 0) cleared.push({ key: "devices", text: msg("progression.rosterDrift.alsoDevices", { count: preview.device_links }) });
+    // Controller ruling I1: a live remote-scoring link is not refused; the confirm names how many stop working (the
+    // server counts the live ones only, so a revoked or expired link never shows a line).
+    if (preview.device_links > 0) {
+      cleared.push({ key: "remoteLinks", text: msgPlural("formatChange.confirm.remoteLinks", preview.device_links, { count: preview.device_links }) });
+    }
     if (preview.calls > 0) cleared.push({ key: "calls", text: msgPlural("formatChange.confirm.calls", preview.calls, { count: preview.calls }) });
     return (
       <Modal
