@@ -591,19 +591,43 @@ export const KEY_ROUTE_RULES: readonly RouteRule[] = RULES;
 //    every dedicated door that writes one is `manage` (POST /entrants/:id/withdraw, PATCH /entrants/:id) or never-key
 //    (POST /fixtures/:id/external-play/resolve).
 //  - any sport event the organiser-only predicate flags by its payload (`ORGANISER_ONLY_SPORT_EVENTS`, empty since W2b).
-// Everything else is `score`: every other core type and every sport event — what a scorer records. One exception lives at
-// the live door only, because it needs the ledger: the forfeit that ENDS the side's own match-ending sanction (D13, X-SE-3),
-// which a scorer may record, so the scorer-level key may too. The per-type decisions are pinned against the engine's
-// CORE_EVENT_SCHEMAS in api-v1/__tests__/key-event-scope.test.ts, so a new core type reds until it is decided.
+// Everything else is `score`: the core types `SCORE_KEY_CORE_EVENT_TYPES` names and every sport event — what a scorer
+// records. A core type in NEITHER set (one a newer engine declares) is `manage` until someone decides it: the default
+// fails closed in the code, not only in the coverage test (SEC1 fix round 1, m2). Two refinements live at the live door
+// only, because they need the ledger (usecases/scoring.ts `assertEntitledToScore`): the forfeit that ENDS the side's own
+// match-ending sanction (D13, X-SE-3), which a scorer may record, so the scorer-level key may too; and a `core.void`,
+// which needs the scope of the event it undoes. The per-type decisions are pinned against the engine's
+// CORE_EVENT_SCHEMAS in api-v1/__tests__/key-event-scope.test.ts.
 export const MANAGE_KEY_EVENT_TYPES: ReadonlySet<string> = new Set(["core.finalize", ...ORGANISER_ONLY_EVENT_TYPES]);
+/** The core types a scorer records, so the scorer-level key may send them. Restated per type on purpose: an undecided
+ *  core type must land in neither set, so it fails closed. */
+export const SCORE_KEY_CORE_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "core.start",
+  "core.void",
+  "core.note",
+  "core.award",
+  "core.suspend",
+  "core.resume",
+  "core.lineup.substitution",
+  "core.lineup.replacement",
+  "core.lineup.position",
+  "core.lineup.retirement",
+  "core.lineup.entry",
+]);
+/** The engine's core namespace: every type in CORE_EVENT_SCHEMAS, and no sport event (pinned in key-event-scope.test.ts). */
+const CORE_NAMESPACE = "core.";
 
 /** The scope a key needs to send `(type, payload)` through a ledger door — `score` (the doors' own) or `manage`. */
 export function keyScopeForEvent(type: string, payload: unknown): KeyScope {
-  return MANAGE_KEY_EVENT_TYPES.has(type) || isOrganiserOnlyEvent(type, payload) ? "manage" : "score";
+  if (MANAGE_KEY_EVENT_TYPES.has(type) || isOrganiserOnlyEvent(type, payload)) return "manage";
+  if (type.startsWith(CORE_NAMESPACE) && !SCORE_KEY_CORE_EVENT_TYPES.has(type)) return "manage";
+  return "score";
 }
 
-/** The 403's message: the route refusal's shape (api-v1/auth.ts `apiKeyAuth`), naming the event instead of the endpoint. */
-export function keyEventScopeRefusal(scopes: readonly string[], required: KeyScope, type: string): string {
+/** The 403's message: the route refusal's shape (api-v1/auth.ts `apiKeyAuth`), naming the event instead of the endpoint —
+ *  or, for a `core.void` refused on what it undoes, the event it would void. */
+export function keyEventScopeRefusal(scopes: readonly string[], required: KeyScope, type: string, voidTarget?: string): string {
   const held = scopes.length > 0 ? `is limited to '${scopes.join("', '")}'` : "has no scope";
-  return `This key ${held} — sending ${type} needs the '${required}' scope. Create a key with the right scope in org settings.`;
+  const act = voidTarget === undefined ? `sending ${type}` : `voiding a ${voidTarget}`;
+  return `This key ${held} — ${act} needs the '${required}' scope. Create a key with the right scope in org settings.`;
 }

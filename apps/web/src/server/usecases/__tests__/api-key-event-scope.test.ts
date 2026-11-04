@@ -9,13 +9,15 @@
 // w2e-ending-sanction.test.ts sweeps for every declaring sport.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
+import { CORE_EVENT_SCHEMAS } from "@seazn/engine/core";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { POST as eventsRoute } from "@/app/api/v1/fixtures/[id]/events/route";
 import { POST as finalizeRoute } from "@/app/api/v1/fixtures/[id]/finalize/route";
 import { POST as importRoute } from "@/app/api/v1/divisions/[id]/events/import/route";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { MANAGE_KEY_EVENT_TYPES } from "@/server/api-v1/key-scopes";
+import { keyScopeForEvent } from "@/server/api-v1/key-scopes";
+import { RESULT_CARRIED_FORWARD, RESULT_CARRIED_FORWARD_MESSAGE } from "@/server/usecases/carried-forward";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { importEvents } from "@/server/usecases/event-import";
 import { scoreEvent } from "@/server/usecases/scoring";
@@ -51,12 +53,15 @@ const tip = async (id: string) =>
 const statusOf = async (id: string) => (await sql<{ status: string }[]>`select status from fixtures where id = ${id}`)[0]!.status;
 const lastType = async (id: string) =>
   (await sql<{ type: string }[]>`select type from score_events where fixture_id = ${id} order by seq desc limit 1`)[0]?.type ?? null;
+/** The id of the latest `type` row on the fixture's ledger — what a `core.void` names. */
+const eventIdOf = async (id: string, type: string) =>
+  (await sql<{ id: string }[]>`select id from score_events where fixture_id = ${id} and type = ${type} order by seq desc limit 1`)[0]!.id;
 
 /** A started generic knockout of `entrants` (entrants / 2 seated first-round fixtures), and a `score` and a `manage` key
  *  minted for its org the way a club mints them (createApiKey). api.write is Pro Plus (V290): granted by override here —
  *  this suite is about the event gate, not the entitlement one (api-key-scopes.test.ts's reasoning). */
-async function rig(entrants = 2, sport = "generic", variant = "score") {
-  const s = await seedBracket({ sport, variant, stageKind: "knockout", entrants });
+async function rig(entrants = 2, sport = "generic", variant = "score", stageKind: "knockout" | "league" = "knockout") {
+  const s = await seedBracket({ sport, variant, stageKind, entrants });
   for (const feature of ["api.access", "api.write"]) {
     await sql`
       insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
@@ -116,6 +121,20 @@ async function prepare(s: SeededBracket, id: string, events: { type: string; pay
   for (const e of events) await scoreEvent(s.auth, id, { expected_seq: await tip(id), type: e.type, payload: e.payload });
 }
 
+/** m3 — the sweeps iterate the ENGINE's declared core types, never the set under test: the types swept are the engine's
+ *  that have a SWEEP row (the spec, typed above), and the code's manage set is asserted EQUAL to them. So a type dropped
+ *  from the table is still swept (and its score key's 201 reds), a type added without a row reds the equality, and a row
+ *  whose type the engine lost reds as stale. Zero swept is a failure. */
+function manageTypesSwept(): string[] {
+  const core = Object.keys(CORE_EVENT_SCHEMAS);
+  expect(core.length, "the engine declares core types").toBeGreaterThan(0);
+  expect(Object.keys(SWEEP).filter((t) => !core.includes(t)), "a SWEEP row the engine does not declare").toEqual([]);
+  const swept = core.filter((t) => Object.hasOwn(SWEEP, t));
+  expect(swept.length, `manage-level core types swept: ${swept.length} of ${core.length}`).toBeGreaterThan(0);
+  expect(core.filter((t) => keyScopeForEvent(t, {}) === "manage").sort(), "the code's manage set is the SWEEP's").toEqual([...swept].sort());
+  return swept;
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 describe.skipIf(!HAS_DB)("SEC1: a key's scope gates the event at POST /fixtures/:id/events", () => {
   it("a score key scores and decides a match, is refused core.finalize (nothing written), and the manage key then finalizes it", async () => {
@@ -152,8 +171,7 @@ describe.skipIf(!HAS_DB)("SEC1: a key's scope gates the event at POST /fixtures/
   });
 
   it("every manage-level event in the table is refused to a score key and nothing is written; the manage key records it on the same ledger", async () => {
-    const types = [...MANAGE_KEY_EVENT_TYPES];
-    expect(types.length, "the table has manage rows (zero = nothing swept)").toBeGreaterThan(0);
+    const types = manageTypesSwept();
     const { s, score, manage } = await rig(types.length * 2);
     expect(s.fixtureIds.length, "one seated fixture per manage type").toBeGreaterThanOrEqual(types.length);
     let refused = 0;
@@ -193,13 +211,22 @@ describe.skipIf(!HAS_DB)("SEC1: a key's scope gates the event at POST /fixtures/
     // Before any sanction, a score key's forfeit is the organiser's act: refused.
     const early = await send(score, id, "core.forfeit", { by: away, reason: "disqualified" });
     expect([early.status, early.code], "a forfeit with no sanction before it").toEqual([403, "FORBIDDEN"]);
+    // m4 — WHICH gate: the key-scope gate, not any other 403 (FORBIDDEN is every bare HttpError's code).
+    expect(early.message, "refused by the key-scope gate").toContain("sending core.forfeit needs the 'manage' scope");
     expect((await send(score, id, "badminton.sanction", { by: away, level: "disqualification" })).status, "the black card").toBe(201);
     const before = await tip(id);
     const other = await send(score, id, "core.forfeit", { by: home, reason: "disqualified" });
     expect([other.status, other.code], "against the OTHER side").toEqual([403, "FORBIDDEN"]);
+    expect(other.message, "refused by the key-scope gate").toContain("sending core.forfeit needs the 'manage' scope");
     expect(await tip(id)).toBe(before);
     const ending = await send(score, id, "core.forfeit", { by: away, reason: "disqualified" });
     expect([ending.status, ending.data?.status, ending.data?.seq], "the ending").toEqual([201, "forfeited", before + 1]);
+    // The sequence after it: the ending is a forfeit, so taking it back is a void OF a forfeit — the organiser's (fix
+    // round 1, ruling 1), even for the key that recorded it.
+    const undo = await send(score, id, "core.void", { event_id: await eventIdOf(id, "core.forfeit") });
+    expect([undo.status, undo.code], "the score key's void of its own ending").toEqual([403, "FORBIDDEN"]);
+    expect(undo.message).toContain("voiding a core.forfeit needs the 'manage' scope");
+    expect(await tip(id), "nothing written").toBe(before + 1);
   });
 
   it("an api_key AuthCtx that carries no scopes is refused every event, not trusted (no producer builds one for scoring)", async () => {
@@ -215,6 +242,105 @@ describe.skipIf(!HAS_DB)("SEC1: a key's scope gates the event at POST /fixtures/
       });
     }
     expect(await tip(id), "nothing written").toBe(0);
+  });
+
+  it("m1: a scope-less api_key ctx is refused even the forfeit that ends a black card — D13 is the scorer-level key's, and it holds no scope", async () => {
+    // single-sport: badminton — the D13 rulebook row the live door reaches (see the D13 case above).
+    const { s, score } = await rig(2, "badminton", "bwf");
+    const id = s.fixtureIds[0]!;
+    const { home, away } = await seats(id);
+    await prepare(s, id, [
+      { type: "core.start", payload: {} },
+      { type: "badminton.rally", payload: { wonBy: home } },
+      { type: "badminton.sanction", payload: { by: away, level: "disqualification" } },
+    ]);
+    const before = await tip(id);
+    const bare: AuthCtx = { orgId: s.auth.orgId, via: "api_key", userId: null, role: null, keyId: randomUUID() };
+    await expect(scoreEvent(bare, id, { expected_seq: before, type: "core.forfeit", payload: { by: away, reason: "disqualified" } })).rejects.toMatchObject({
+      status: 403,
+      message: expect.stringContaining("This key has no scope — sending core.forfeit needs the 'manage' scope"),
+    });
+    expect(await tip(id), "nothing written").toBe(before);
+    // The positive pair, on the same ledger: the score key records exactly that ending.
+    const ending = await send(score, id, "core.forfeit", { by: away, reason: "disqualified" });
+    expect([ending.status, ending.data?.status], "the score key's ending").toEqual([201, "forfeited"]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("SEC1 fix round 1: a key's core.void is judged by what it undoes", () => {
+  it("ruling 1: a score key may not void an organiser's settle, forfeit or abandon; the manage key may; a score-level target stays the score key's", async () => {
+    // core.finalize is not swept here: nothing appends to a finalized fixture (the next case).
+    const targets = manageTypesSwept().filter((t) => t !== "core.finalize");
+    expect(targets.length, `void targets swept: ${targets.length}`).toBeGreaterThan(0);
+    // A league: no feed and an open stage, so a decided fixture is never carried forward and only the target is asked.
+    const { s, score, manage } = await rig(4, "generic", "score", "league");
+    expect(s.fixtureIds.length, "one fixture per target, and one for the positive pair").toBeGreaterThan(targets.length);
+    let refused = 0;
+    for (const [i, type] of targets.entries()) {
+      const id = s.fixtureIds[i]!;
+      const f = await seats(id);
+      await prepare(s, id, [...SWEEP[type]!.prep(f), { type, payload: SWEEP[type]!.payload(f) }]);
+      const target = await eventIdOf(id, type);
+      const before = await tip(id);
+      const statusBefore = await statusOf(id);
+      const out = await send(score, id, "core.void", { event_id: target });
+      expect([out.status, out.code], `${type}: the score key's void`).toEqual([403, "FORBIDDEN"]);
+      expect(out.message, type).toBe(
+        `This key is limited to 'score' — voiding a ${type} needs the 'manage' scope. Create a key with the right scope in org settings.`,
+      );
+      expect(await tip(id), `${type}: nothing written`).toBe(before);
+      expect(await statusOf(id), `${type}: status unchanged`).toBe(statusBefore);
+      refused++;
+      const ok = await send(manage, id, "core.void", { event_id: target });
+      expect([ok.status, ok.data?.seq], `${type}: the manage key's void`).toEqual([201, before + 1]);
+    }
+    expect(refused).toBe(targets.length);
+
+    // The positive pair: the score key voids its own deciding result (a score-level target) on a fixture not carried.
+    const id = s.fixtureIds[targets.length]!;
+    expect((await send(score, id, "core.start", {})).status).toBe(201);
+    expect((await send(score, id, "generic.result", { p1Score: 3, p2Score: 1 })).data?.status).toBe("decided");
+    const undo = await send(score, id, "core.void", { event_id: await eventIdOf(id, "generic.result") });
+    expect(undo.status, "score key: void of a score-level target").toBe(201);
+  });
+
+  it("void after finalize: the score key's void of the finalized result is still refused, and nothing is written", async () => {
+    const { s, score, manage } = await rig();
+    const id = s.fixtureIds[0]!;
+    expect((await send(score, id, "core.start", {})).status).toBe(201);
+    expect((await send(score, id, "generic.result", { p1Score: 3, p2Score: 1 })).status).toBe(201);
+    expect((await send(manage, id, "core.finalize", {})).data?.status).toBe("finalized");
+    const before = await tip(id);
+    const out = await send(score, id, "core.void", { event_id: await eventIdOf(id, "generic.result") });
+    expect([out.status, out.code], "a void on a finalized ledger").toEqual([422, "ALREADY_DECIDED"]);
+    expect(await tip(id), "nothing written").toBe(before);
+    expect(await statusOf(id)).toBe("finalized");
+  });
+
+  it("m7: once the result is carried forward, the score key gets the device link's refusal for any void; the manage key does not", async () => {
+    // A knockout SF is carried the instant it is decided: the winner's seat in the final fills (carried-forward-scoring.test.ts P5).
+    const { s, score, manage } = await rig(4);
+    const id = s.fixtureIds[0]!;
+    expect((await send(score, id, "core.start", {})).status).toBe(201);
+    expect((await send(score, id, "generic.result", { p1Score: 3, p2Score: 1 })).data?.status).toBe("decided");
+    const [feed] = await sql<{ filled: boolean }[]>`
+      select case f.winner_to_slot when 1 then w.home_entrant_id is not null else w.away_entrant_id is not null end as filled
+      from fixtures f join fixtures w on w.id = f.winner_to_fixture where f.id = ${id}`;
+    expect(feed?.filled, "the final's seat is filled: the result is carried").toBe(true);
+    const before = await tip(id);
+    let refused = 0;
+    // The deciding event, and an earlier one: voiding either re-folds the carried result.
+    for (const type of ["generic.result", "core.start"]) {
+      const out = await send(score, id, "core.void", { event_id: await eventIdOf(id, type) });
+      expect([out.status, out.code, out.message], `void of ${type}`).toEqual([403, RESULT_CARRIED_FORWARD, RESULT_CARRIED_FORWARD_MESSAGE]);
+      refused++;
+    }
+    expect(refused).toBe(2);
+    expect(await tip(id), "nothing written").toBe(before);
+    expect(await statusOf(id)).toBe("decided");
+    // The organiser-level key corrects it, as the organiser's session does.
+    const ok = await send(manage, id, "core.void", { event_id: await eventIdOf(id, "generic.result") });
+    expect([ok.status, ok.data?.seq], "the manage key's void").toEqual([201, before + 1]);
   });
 });
 
@@ -253,8 +379,7 @@ describe.skipIf(!HAS_DB)("SEC1: a key's scope gates the events at POST /division
   });
 
   it("every manage-level event in the table, in a stream, refuses a score key's import and writes nothing; a stream with none imports", async () => {
-    const types = [...MANAGE_KEY_EVENT_TYPES];
-    expect(types.length).toBeGreaterThan(0);
+    const types = manageTypesSwept();
     const { s, score } = await rig(4);
     const [id, clean] = s.fixtureIds as [string, string];
     const f = await seats(id);

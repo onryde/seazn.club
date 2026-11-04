@@ -7,8 +7,9 @@
 // payload clause while `ORGANISER_ONLY_SPORT_EVENTS` is empty (pinned in authority-only-tiles.test.ts). No
 // `server-only`: the pad imports it, and a client component importing server code breaks the build.
 //
-// ONE exception, which is NOT this predicate's (D13, spec 2026-10-28 §5.2, rule X-SE-3): a scorer — a device link or
-// an official scorer — may append the `core.forfeit` that ENDS the side's own match-ending sanction, right after it
+// ONE exception, which is NOT this predicate's (D13, spec 2026-10-28 §5.2, rule X-SE-3): a scorer — a device link, an
+// official scorer, or a `score`-scoped org API key (SEC1; not a key with no scope) — may append the `core.forfeit` that
+// ENDS the side's own match-ending sanction, right after it
 // (`forfeit{disqualified}` after a badminton black card or a tennis default, `forfeit{retired}` after a volleyball
 // expulsion or disqualification). The predicate still answers "organiser-only" for that forfeit: the exception needs the
 // ledger's last live event, which only the server reads (scoring.ts `isOwnSanctionEnding`, the engine's

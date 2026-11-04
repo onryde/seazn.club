@@ -8,6 +8,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { ORGANISER_ONLY_EVENT_TYPES, ORGANISER_ONLY_SPORT_EVENTS } from "@/lib/organiser-only-events";
 import {
   MANAGE_KEY_EVENT_TYPES,
+  SCORE_KEY_CORE_EVENT_TYPES,
   keyEventScopeRefusal,
   keyScopeForEvent,
   matchKeyRoute,
@@ -43,6 +44,11 @@ describe("SEC1: the scope a key needs to SEND an event", () => {
     expect(keyScopeForEvent("", undefined)).toBe("score");
     expect(keyScopeForEvent("no.such.event", {})).toBe("score");
     expect(keyScopeForEvent("constructor", {})).toBe("score"); // no prototype key is a table row
+    // m2 — fail closed in the CODE, not only in the coverage test below: a core type no row decides (one a newer engine
+    // declares, or a typo in the core namespace) is the organiser's until someone decides it.
+    for (const undecided of ["core.someday", "core.lineup.someday", "core."]) {
+      expect(keyScopeForEvent(undecided, {}), undecided).toBe("manage");
+    }
     // Fail closed: a key ctx that carries no scopes is below every event.
     expect(scopeSatisfies([], "score")).toBe(false);
     expect(scopeSatisfies([], "manage")).toBe(false);
@@ -52,6 +58,19 @@ describe("SEC1: the scope a key needs to SEND an event", () => {
     expect(CORE_TYPES.length, "the engine declares core types (zero = nothing checked)").toBeGreaterThan(0);
     expect(CORE_TYPES.filter((t) => !Object.hasOwn(DECISIONS, t)), "an undecided core type").toEqual([]);
     expect(Object.keys(DECISIONS).filter((t) => !CORE_TYPES.includes(t)), "a stale decision").toEqual([]);
+  });
+
+  it("the two code sets split the engine's core types between them: every one decided once, none left to the default", () => {
+    // The premise the fail-closed default (m2) stands on: every core type the engine declares, and no sport event, is in
+    // the `core.` namespace.
+    expect(CORE_TYPES.filter((t) => !t.startsWith("core.")), "a core type outside the core namespace").toEqual([]);
+    const sportInCore = builtinModules.flatMap((m) => Object.keys((m as { eventSchemas?: Record<string, unknown> }).eventSchemas ?? {})).filter((t) => t.startsWith("core."));
+    expect(sportInCore, "a sport event in the core namespace").toEqual([]);
+    const scoreRows = Object.entries(DECISIONS).filter(([, d]) => d.scope === "score").map(([t]) => t);
+    expect(scoreRows.length, "score rows (zero = nothing decided score)").toBeGreaterThan(0);
+    expect([...SCORE_KEY_CORE_EVENT_TYPES].sort(), "the score set is exactly the score rows").toEqual(scoreRows.sort());
+    expect([...SCORE_KEY_CORE_EVENT_TYPES].filter((t) => MANAGE_KEY_EVENT_TYPES.has(t)), "a type in both sets").toEqual([]);
+    expect(SCORE_KEY_CORE_EVENT_TYPES.size + MANAGE_KEY_EVENT_TYPES.size, `core types split: ${CORE_TYPES.length}`).toBe(CORE_TYPES.length);
   });
 
   it("keyScopeForEvent answers every decision, whatever the payload", () => {
@@ -109,6 +128,10 @@ describe("SEC1: the scope a key needs to SEND an event", () => {
       "This key is limited to 'score' — sending core.finalize needs the 'manage' scope. Create a key with the right scope in org settings.",
     );
     expect(keyEventScopeRefusal(["read", "score"], "manage", "core.settle")).toContain("limited to 'read', 'score'");
+    // A void names what it undoes: the scope is the target's (controller ruling, fix round 1).
+    expect(keyEventScopeRefusal(["score"], "manage", "core.void", "core.forfeit")).toBe(
+      "This key is limited to 'score' — voiding a core.forfeit needs the 'manage' scope. Create a key with the right scope in org settings.",
+    );
     // The empty case: a ctx with no scopes says so rather than printing an empty quote pair.
     expect(keyEventScopeRefusal([], "score", "core.start")).toBe(
       "This key has no scope — sending core.start needs the 'score' scope. Create a key with the right scope in org settings.",
