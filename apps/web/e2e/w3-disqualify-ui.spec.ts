@@ -2,6 +2,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from "@
 import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, divisionPath, expectNoHorizontalScroll, fixturePath, scoreFixture, stageCardOf } from "./helpers";
 import { fill, uiEn } from "./match-room-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { openMatchActions } from "./helpers/match-actions";
 
 // W3 ruling 258 (owner "yes add both", 2026-11-02; ruling 259: no reason or notes field). T15 shipped the disqualification
 // cascade server-side only (`PATCH /entrants/{id}` {status:"disqualified"} -> `withdrawEntrantCascade`), and nothing in the
@@ -321,6 +322,7 @@ test.describe("W3 ruling 258 - Disqualify from the Entrants tab", () => {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(await fixturePath(request, board.id));
       await dismissCookieBanner(page);
+      await openMatchActions(page);
       await page.getByTestId("score-forfeit").click({ timeout: STEP_MS });
       const d = page.getByTestId("forfeit-dialog");
       await expect(d).toBeVisible({ timeout: 10_000 });
