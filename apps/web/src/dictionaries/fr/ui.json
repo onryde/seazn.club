@@ -3160,6 +3160,7 @@
   "score.needsDecision.waiting.table": "Ce match a été arrêté sans résultat. Il reste hors du classement jusqu'à ce que l'organisateur décide du vainqueur.",
   "score.needsDecision.waiting.tiebreak": "La partie est nulle et son départage n'est pas encore saisi. Saisissez le départage sur le pupitre une fois joué.",
   "score.needsDecision.settle": "Trancher le match",
+  "score.needsDecision.recordTiebreak": "Enregistrer le départage",
   "score.needsDecision.dialogTitle": "Trancher le match",
   "score.needsDecision.whoAdvances": "Qui se qualifie ?",
   "score.needsDecision.whoWins": "Qui a gagné ?",

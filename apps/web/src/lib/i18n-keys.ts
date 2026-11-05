@@ -7047,6 +7047,7 @@ export type DictionaryKey =
   | "score.needsDecision.noChoice"
   | "score.needsDecision.noChoice.place"
   | "score.needsDecision.note"
+  | "score.needsDecision.recordTiebreak"
   | "score.needsDecision.settle"
   | "score.needsDecision.title"
   | "score.needsDecision.waiting"

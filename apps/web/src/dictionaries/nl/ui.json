@@ -3107,6 +3107,7 @@
   "score.needsDecision.waiting.table": "Deze wedstrijd is gestaakt zonder uitslag. Hij blijft buiten de ranglijst tot de organisator de winnaar bepaalt.",
   "score.needsDecision.waiting.tiebreak": "De partij eindigde in remise en de tiebreak is nog niet vastgelegd. Leg de tiebreak vast op het scorepad zodra die gespeeld is.",
   "score.needsDecision.settle": "Wedstrijd beslissen",
+  "score.needsDecision.recordTiebreak": "Tiebreak vastleggen",
   "score.needsDecision.dialogTitle": "Wedstrijd beslissen",
   "score.needsDecision.whoAdvances": "Wie gaat door?",
   "score.needsDecision.whoWins": "Wie won?",

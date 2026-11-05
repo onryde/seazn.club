@@ -596,6 +596,9 @@ export function FixtureConsole({
   // PhoneDisclosures stay independent. `?stream=open` (streamReturn) opens Stream on the first render only.
   const [openPanel, setOpenPanel] = useState<OpenPanel>(() => (stream && streamReturn ? "stream" : null));
   const handoverOpen = openPanel === "handover";
+  // Owner 2026-11-05: Forfeit and Abandon open from a button beside Remote scoring (desktop); on a phone the card stays
+  // in the one DOM, always open (ScoringPad v3 phone composition: no second phone tree).
+  const [matchActionsOpen, setMatchActionsOpen] = useState(false);
   const streamOpen = openPanel === "stream";
   const [detailsOpen, setDetailsOpen] = useState(false);
 
@@ -1331,6 +1334,52 @@ export function FixtureConsole({
         </div>
       )}
 
+      {/* W2a Task 11 (UI-1 option A): a HELD bracket fixture's decision, at the TOP of the console, above the Scoring card (owner, 2026-11-05: a decision is what the organiser must see first) — organisers only
+          (the settle is organiser-only on the server; a scorer would only earn a 403). */}
+      {scoring && home && away && canOrganise && held && (
+        <NeedsDecisionBlock
+          msg={msg}
+          cause={heldCause({ outcome: live.outcome, events })}
+          table={inTableStage(stageKind)}
+          home={{ id: home.id, name: homeName!, withdrawn: home.withdrawn === true }}
+          away={{ id: away.id, name: awayName!, withdrawn: away.withdrawn === true }}
+          feedsNextMatch={fixture.feeds_next_match}
+          busy={busy || padSyncing}
+          settle={settle}
+        />
+      )}
+
+      {/* Owner 2026-11-05: Finalize (and Share) is a banner at the top, in the same place as the Needs-a-decision block,
+          not a button in the Match actions card. Same gating as before: `offerFinalize` is `finalizeVisible`. */}
+      {scoring && home && away && offerFinalize && (
+        <section
+          data-role="finalize-banner"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-purple-100 bg-purple-50/40 p-4"
+        >
+          <p className="text-sm font-semibold text-slate-800">{summary?.headline ?? msg("score.resultIn")}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              data-testid="score-finalize"
+              disabled={busy || padSyncing}
+              onClick={() => send("core.finalize", {})}
+              className="btn btn-ghost min-h-11"
+            >
+              {msg("score.finalize")}
+            </button>
+            {publicPath && (
+              // v3/10 #2: result decided → one tap to the club group chat.
+              <ShareButton
+                title={`${homeName} ${msg("schedule.vs")} ${awayName}`}
+                text={msg("score.shareText", { home: homeName!, away: awayName!, headline: summary?.headline ?? msg("score.resultIn") })}
+                url={publicPath}
+                className="btn btn-ghost min-h-11"
+              />
+            )}
+          </div>
+        </section>
+      )}
+
       {/* SCORING (R7/C2 + C3). The pad, and beside its heading the two
           controls that belong to scoring rather than to authority: `Start
           match`, the one thing to press before kick-off and the only filled
@@ -1360,6 +1409,18 @@ export function FixtureConsole({
                   className="btn btn-ghost min-h-11 max-md:hidden"
                 >
                   {msg("score.handOverDevice")}
+                </button>
+              )}
+              {offerOrganiserActions && (
+                <button
+                  type="button"
+                  data-testid="match-actions-toggle"
+                  aria-expanded={matchActionsOpen}
+                  aria-controls="match-actions-panel"
+                  onClick={() => setMatchActionsOpen((o) => !o)}
+                  className="btn btn-ghost min-h-11 max-md:hidden"
+                >
+                  {msg("score.matchActions")}
                 </button>
               )}
               {!started && (
@@ -1648,55 +1709,19 @@ export function FixtureConsole({
           below the ledger, and OUTLINED throughout — a filled button here
           would compete with a scoring tile for the eye, which is exactly the
           hierarchy failure D-12 is. */}
-      {/* W2a Task 11 (UI-1 option A): a HELD bracket fixture's decision, above the match actions — organisers only
-          (the settle is organiser-only on the server; a scorer would only earn a 403). */}
-      {scoring && home && away && canOrganise && held && (
-        <NeedsDecisionBlock
-          msg={msg}
-          cause={heldCause({ outcome: live.outcome, events })}
-          table={inTableStage(stageKind)}
-          home={{ id: home.id, name: homeName!, withdrawn: home.withdrawn === true }}
-          away={{ id: away.id, name: awayName!, withdrawn: away.withdrawn === true }}
-          feedsNextMatch={fixture.feeds_next_match}
-          busy={busy || padSyncing}
-          settle={settle}
-        />
-      )}
-
       {/* W2a: rendered only when it holds a control — a scorer on an in-play match, or anyone on a held one, would
           otherwise get a named, explained container with nothing in it. */}
-      {scoring && home && away && (offerFinalize || offerOrganiserActions) && (
+      {scoring && home && away && offerOrganiserActions && (
         <section
           data-role="match-actions"
-          className="rounded-2xl border border-purple-100 bg-purple-50/40 p-4"
+          id="match-actions-panel"
+          className={`rounded-2xl border border-purple-100 bg-purple-50/40 p-4${matchActionsOpen ? "" : " hidden max-md:block"}`}
         >
           <h2 className="text-[11px] font-semibold uppercase tracking-[0.09em] text-purple-800">
             {msg("score.matchActions")}
           </h2>
           <p className="mt-0.5 text-xs text-slate-600">{msg("score.matchActionsNote")}</p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            {offerFinalize && (
-              <>
-                <button
-                  type="button"
-                  data-testid="score-finalize"
-                  disabled={busy || padSyncing}
-                  onClick={() => send("core.finalize", {})}
-                  className="btn btn-ghost min-h-11"
-                >
-                  {msg("score.finalize")}
-                </button>
-                {publicPath && (
-                  // v3/10 #2: result decided → one tap to the club group chat.
-                  <ShareButton
-                    title={`${homeName} ${msg("schedule.vs")} ${awayName}`}
-                    text={msg("score.shareText", { home: homeName!, away: awayName!, headline: summary?.headline ?? msg("score.resultIn") })}
-                    url={publicPath}
-                    className="btn btn-ghost min-h-11"
-                  />
-                )}
-              </>
-            )}
             {offerForfeit && (
               <button
                 type="button"
