@@ -1,5 +1,6 @@
-// Cloudflare Turnstile, the CLIENT side of four of the six guarded surfaces, driven the way a browser would (join and register have
-// their own interaction suites): login (auth-form), start (start-wizard), resend (resend-confirmation), withdraw (withdraw-by-ref).
+// Cloudflare Turnstile, the CLIENT side of six of the seven guarded routes, driven the way a browser would (join and register have
+// their own interaction suites): login (auth-form), start (start-wizard), resend (resend-confirmation), and the three withdraw
+// buttons (withdraw-by-ref, cancel-entry, registration-actions: by-ref and by-id are two routes under one action).
 //
 // A pure-builder suite is blind to wiring (apps/web vitest has no DOM): a form can build the right header in a unit test and still
 // never send it, never reset the widget, or mount the widget for the wrong action. So each real island is mounted through
@@ -80,6 +81,8 @@ import { AuthForm } from "../auth-form";
 import { StartWizard } from "../start-wizard";
 import { WithdrawByRef } from "../public-site/withdraw-by-ref";
 import { ResendConfirmation } from "../../app/(public)/live/[orgSlug]/[competitionSlug]/register/status/resend-confirmation";
+import { CancelEntry } from "../../app/(public)/live/[orgSlug]/[competitionSlug]/register/status/cancel-entry";
+import { RegistrationActions } from "../public-site/registration-actions";
 
 beforeEach(() => {
   net.calls = [];
@@ -168,6 +171,27 @@ async function runWithdraw() {
   return island;
 }
 
+function mountCancel(): Island {
+  return renderIsland(CancelEntry, { entryId: "e1", token: "tok", divisionName: "Doubles", refundable: true, refundAmountFormatted: "$10.00" });
+}
+async function runCancel() {
+  const island = mountCancel();
+  (propsOf(byType(island, "button")[0]!).onClick as () => void)(); // `onClick={cancel}` returns the promise, but settle the same way
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  return island;
+}
+
+// paymentDue=false: the pay button is not rendered, so the one button is withdraw (pay is deliberately not bot-checked).
+function mountActions(): Island {
+  return renderIsland(RegistrationActions, { registrationId: "reg-1", token: "tok", status: "confirmed", paymentDue: false });
+}
+async function runActions() {
+  const island = mountActions();
+  (propsOf(byType(island, "button")[0]!).onClick as () => void)();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  return island;
+}
+
 const SURFACES: Surface[] = [
   {
     name: "login (auth-form)", action: "login", fn: "api", url: "/api/auth/magic-link", Err: ApiError,
@@ -185,12 +209,21 @@ const SURFACES: Surface[] = [
     name: "withdraw (withdraw-by-ref)", action: "withdraw", fn: "apiV1", url: "/api/v1/public/registrations/by-ref/SZ-REF-1/withdraw", Err: ApiV1Error,
     run: runWithdraw, mount: mountWithdraw, widgetOnMount: false, text: (i) => textOf(i.tree()),
   },
+  {
+    name: "withdraw (cancel-entry, status page)", action: "withdraw", fn: "apiV1", url: "/api/v1/public/registrations/e1/withdraw", Err: ApiV1Error,
+    run: runCancel, mount: mountCancel, widgetOnMount: false, text: (i) => textOf(i.tree()),
+  },
+  {
+    name: "withdraw (registration-actions, by id)", action: "withdraw", fn: "apiV1", url: "/api/v1/public/registrations/reg-1/withdraw", Err: ApiV1Error,
+    run: runActions, mount: mountActions, widgetOnMount: false, text: (i) => textOf(i.tree()),
+  },
 ];
 
-describe("the four surfaces send the widget's token, reset it, and say the bot check's own sentence when it refuses", () => {
-  it("anti-vacuity: the sweep covers four surfaces, the actions are distinct and none of them is empty", () => {
-    expect(SURFACES).toHaveLength(4);
-    expect(new Set(SURFACES.map((s) => s.action)).size).toBe(4);
+describe("the six surfaces send the widget's token, reset it, and say the bot check's own sentence when it refuses", () => {
+  it("anti-vacuity: the sweep covers six surfaces on four actions, three of them withdraw", () => {
+    expect(SURFACES).toHaveLength(6);
+    expect(SURFACES.map((s) => s.action).sort()).toEqual(["login", "resend", "start", "withdraw", "withdraw", "withdraw"]);
+    expect(new Set(SURFACES.map((s) => s.url)).size, "six distinct request URLs").toBe(6);
   });
 
   for (const s of SURFACES) {
@@ -255,17 +288,25 @@ describe("the four surfaces send the widget's token, reset it, and say the bot c
     });
   }
 
-  it("withdraw: the widget is armed by the press, BEFORE the confirm dialog resolves, and a declined confirm sends nothing", async () => {
-    net.confirm = false;
-    const island = await runWithdraw();
-    expect(net.calls, "declined: no request").toHaveLength(0);
-    expect(widgets(island), "armed even though the person declined: the check had started while they read the dialog").toHaveLength(1);
-    expect(turnstileFake.resets, "nothing was sent, so there is nothing to reset").toBe(0);
-  });
+  for (const w of [
+    { name: "withdraw-by-ref", run: runWithdraw },
+    { name: "cancel-entry", run: runCancel },
+    { name: "registration-actions", run: runActions },
+  ]) {
+    it(`${w.name}: the widget is armed by the press, BEFORE the confirm dialog resolves, and a declined confirm sends nothing`, async () => {
+      net.confirm = false;
+      const island = await w.run();
+      expect(net.calls, "declined: no request").toHaveLength(0);
+      expect(widgets(island), "armed even though the person declined: the check had started while they read the dialog").toHaveLength(1);
+      expect(turnstileFake.resets, "nothing was sent, so there is nothing to reset").toBe(0);
+    });
+  }
 
-  it("resend and withdraw do NOT mount a widget until pressed (a status page with ten withdraw buttons runs one check, not ten)", () => {
+  it("resend and the three withdraws do NOT mount a widget until pressed (a status page with ten withdraw buttons runs one check, not ten)", () => {
     expect(widgets(mountResend())).toHaveLength(0);
     expect(widgets(mountWithdraw())).toHaveLength(0);
+    expect(widgets(mountCancel())).toHaveLength(0);
+    expect(widgets(mountActions())).toHaveLength(0);
   });
 
   it("login and start mount theirs on the form itself (start: on the step that submits, not before)", () => {

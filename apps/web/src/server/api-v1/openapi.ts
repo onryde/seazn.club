@@ -30,6 +30,8 @@ import {
 // The stream-link validator's own host list (zod only, client-safe, already reached through api-v1/schemas/): a published example
 // link is built from it, so it is a link `isStreamUrl` accepts by construction.
 import { STREAM_HOSTS } from "../../lib/stream-url.ts";
+// The bot-check header and refusal code (Cloudflare Turnstile) on the public writes. Zero imports in that file, so the generator stays clean.
+import { TURNSTILE_ERROR_CODE, TURNSTILE_HEADER } from "../../lib/turnstile.ts";
 
 // ---------------------------------------------------------------------------
 // Route registry — one row per (path, method). The coverage test asserts this
@@ -49,6 +51,8 @@ interface RouteSpec {
   response?: ZodType; // the `data` member of the envelope
   status?: number; // success status (default 200)
   query?: Record<string, { schema: object; description?: string }>;
+  /** Request headers the route reads beyond the auth headers (documented as `in: "header"` parameters). */
+  headers?: Record<string, { schema: object; description?: string; required?: boolean }>;
   public?: boolean; // no auth, cacheable
   errors?: number[]; // extra documented error statuses
   /** Capture QR v2 §6.3 (the phone's routes): the 2xx is the BARE `response` shape and every refusal the bare
@@ -81,6 +85,20 @@ const REGISTRATION_LIST_QUERY = {
   consent_pending: { schema: { type: "string", enum: ["1", "0"] } },
   q: { schema: { type: "string" } },
   sort: { schema: { type: "string", enum: S.RegistrationSort.options } },
+};
+
+/** The bot check on a public write (Cloudflare Turnstile). The token rides in a HEADER, not the body, because several of these bodies
+ *  are strict schemas and the check runs before any body is read. Not `required` in the OpenAPI sense: it is enforced on a
+ *  deployment that has the check on and skipped on a developer's machine or a CI harness, so a client written against a local
+ *  server works without one. */
+const TURNSTILE_HEADERS: NonNullable<RouteSpec["headers"]> = {
+  [TURNSTILE_HEADER]: {
+    schema: { type: "string", maxLength: 2048 },
+    description:
+      "Cloudflare Turnstile token from the page's invisible widget (action = the route's own: register, join, resend or withdraw), single use. " +
+      `Enforced where the bot check is on (staging and production): a missing, spent, expired, wrong-action or wrong-host token is 403 ${TURNSTILE_ERROR_CODE} ` +
+      "before the body is read. Checked after the first rate limit, so a refusal costs one request of the public read budget.",
+  },
 };
 
 const pageOf = (item: ZodType) =>
@@ -375,15 +393,15 @@ export const ROUTES: RouteSpec[] = [
   // returns 201 regardless, so a committed cart is never reported as a failed
   // registration — see the route's own doc comment).
   // 400 is the honeypot's generic rejection; there is no 402 on this path.
-  { path: "/public/orgs/{orgSlug}/competitions/{slug}/register", method: "post", summary: "Public group registration submit: a club rep's whole cart (one or more entries) in one transaction — capacity, eligibility, waitlist and payment-method coherence enforced; an entry of a kind its division's entrant kinds do not include is 422 ENTRANT_KIND_NOT_ALLOWED; checkout_url is a Stripe URL when the cart has a payable subtotal, otherwise null", tag: "public", public: true, request: S.PublicRegisterGroupRequest, response: S.PublicRegisterGroupResponse, status: 201, errors: [400, 404, 422, 429, 503] },
+  { path: "/public/orgs/{orgSlug}/competitions/{slug}/register", method: "post", summary: "Public group registration submit: a club rep's whole cart (one or more entries) in one transaction — capacity, eligibility, waitlist and payment-method coherence enforced; an entry of a kind its division's entrant kinds do not include is 422 ENTRANT_KIND_NOT_ALLOWED; checkout_url is a Stripe URL when the cart has a payable subtotal, otherwise null", tag: "public", public: true, request: S.PublicRegisterGroupRequest, response: S.PublicRegisterGroupResponse, status: 201, headers: TURNSTILE_HEADERS, errors: [400, 403, 404, 422, 429, 503] },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}/register/join", method: "get", summary: "Preview a join link before claiming — entry/division/competition/org context, unclaimed slots, whether a new person may be added", tag: "public", public: true, query: { join_code: { schema: { type: "string" } } }, response: S.PublicJoinPreviewResponse, errors: [404, 429] },
-  { path: "/public/orgs/{orgSlug}/competitions/{slug}/register/join", method: "post", summary: "Join an existing team or pair entry via its join_code link — claims an existing captain-entered slot (player_id given) or inserts a genuinely new player (refused for a pair); squad-cap and eligibility enforced", tag: "public", public: true, request: S.PublicJoinRequest, response: S.PublicJoinResponse, status: 201, errors: [404, 409, 422, 429] },
+  { path: "/public/orgs/{orgSlug}/competitions/{slug}/register/join", method: "post", summary: "Join an existing team or pair entry via its join_code link — claims an existing captain-entered slot (player_id given) or inserts a genuinely new player (refused for a pair); squad-cap and eligibility enforced", tag: "public", public: true, request: S.PublicJoinRequest, response: S.PublicJoinResponse, status: 201, headers: TURNSTILE_HEADERS, errors: [403, 404, 409, 422, 429] },
   { path: "/public/registrations/{id}", method: "get", summary: "Registrant status view (?token=; ?reconcile=1 after checkout)", tag: "public", public: true, response: S.PublicRegistrationStatus, errors: [401] },
-  { path: "/public/registrations/{id}/withdraw", method: "post", summary: "Registrant self-withdraw (token)", tag: "public", public: true, request: S.PublicRegistrationToken, response: S.PublicRegistrationStatus },
+  { path: "/public/registrations/{id}/withdraw", method: "post", summary: "Registrant self-withdraw (token)", tag: "public", public: true, request: S.PublicRegistrationToken, response: S.PublicRegistrationStatus, headers: TURNSTILE_HEADERS, errors: [403] },
   { path: "/public/registrations/{id}/checkout", method: "post", summary: "(Re)open Stripe Checkout for a pending paid registration", tag: "public", public: true, request: S.PublicRegistrationToken, errors: [422, 503] },
   { path: "/public/registrations/{id}/ics", method: "get", summary: "Confirmation .ics for the competition dates (?token=)", tag: "public", public: true, errors: [401] },
-  { path: "/public/registrations/by-ref/{ref}/withdraw", method: "post", summary: "Self-withdraw via reference number — the ref locates, the email token authorises (v3/05 §3)", tag: "public", public: true, request: S.PublicRegistrationToken, errors: [404] },
-  { path: "/public/registrations/groups/{id}/resend", method: "post", summary: "Registrant self-service resend of the cart-shaped confirmation email (token) — refused only once every entry in the cart is terminal", tag: "public", public: true, request: S.PublicRegistrationToken, response: z.object({ sent: z.boolean() }), errors: [404, 422] },
+  { path: "/public/registrations/by-ref/{ref}/withdraw", method: "post", summary: "Self-withdraw via reference number — the ref locates, the email token authorises (v3/05 §3)", tag: "public", public: true, request: S.PublicRegistrationToken, headers: TURNSTILE_HEADERS, errors: [403, 404] },
+  { path: "/public/registrations/groups/{id}/resend", method: "post", summary: "Registrant self-service resend of the cart-shaped confirmation email (token) — refused only once every entry in the cart is terminal", tag: "public", public: true, request: S.PublicRegistrationToken, response: z.object({ sent: z.boolean() }), headers: TURNSTILE_HEADERS, errors: [403, 404, 422] },
   // Clubs & bulk import (Jul3/01, PROMPT-21)
   { path: "/clubs", method: "get", summary: "List clubs", tag: "clubs", response: z.array(S.Club) },
   { path: "/clubs", method: "post", summary: "Create a club (all plans; capped by `clubs.max`)", tag: "clubs", request: S.CreateClub, response: S.Club, status: 201, errors: [402, 409] },
@@ -1009,7 +1027,7 @@ function operation(route: RouteSpec): Record<string, unknown> {
   const overrides = ERROR_SCHEMA_OVERRIDES[`${route.method.toUpperCase()} ${route.path}`];
   for (const status of route.errors ?? []) {
     responses[String(status)] = {
-      description: { 400: "Validation error", 402: "Plan upgrade required", 409: "Conflict", 410: "Gone", 422: "Rejected by the engine", 426: "Client engine out of date", 429: "Rate limited" }[status] ?? "Error",
+      description: { 400: "Validation error", 402: "Plan upgrade required", 403: "Forbidden", 409: "Conflict", 410: "Gone", 422: "Rejected by the engine", 426: "Client engine out of date", 429: "Rate limited" }[status] ?? "Error",
       content: { "application/json": { schema: overrides?.[status] ?? errorBody } },
     };
   }
@@ -1037,6 +1055,13 @@ function operation(route: RouteSpec): Record<string, unknown> {
         required: false,
         schema: q.schema,
         ...(q.description ? { description: q.description } : {}),
+      })),
+      ...Object.entries(route.headers ?? {}).map(([name, h]) => ({
+        name,
+        in: "header",
+        required: h.required ?? false,
+        schema: h.schema,
+        ...(h.description ? { description: h.description } : {}),
       })),
     ],
     ...(route.request

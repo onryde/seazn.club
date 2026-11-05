@@ -37,7 +37,7 @@ const RECIPE = [
   "  npm run build --workspace apps/web",
   "  rm -rf apps/web/.next/standalone/apps/web/.next/static",
   "  cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static",
-  "  AUTH_SECRET=… DATABASE_URL=… E2E_PROD_TARGET=1 \\",
+  "  AUTH_SECRET=… DATABASE_URL=… E2E_PROD_TARGET=1 ENV_NAME=local \\",
   "    node apps/web/.next/standalone/apps/web/server.js",
   "",
   "Full recipe (env vars, ports, cleanup): docs/runbooks/e2e-local.md",

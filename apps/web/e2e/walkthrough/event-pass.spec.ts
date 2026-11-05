@@ -60,7 +60,7 @@ import { STRIPE_REQUEST_TIMEOUT_MS } from "../../src/lib/stripe";
 // REAL Stripe test keys in the spec's own environment (Playwright does not read
 // .env.local — the server does):
 //
-//   cd apps/web && npm run build && npx next start -p 3021
+//   cd apps/web && npm run build && ENV_NAME=local npx next start -p 3021
 //   set -a; . ./.env.local; set +a
 //   E2E_PROD_TARGET=1 PLAYWRIGHT_BASE=http://localhost:3021 \
 //     npx playwright test e2e/walkthrough/event-pass.spec.ts --project=walkthrough

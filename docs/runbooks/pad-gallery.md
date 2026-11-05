@@ -55,6 +55,7 @@ nohup env PORT=<port> HOSTNAME=127.0.0.1 \
   DATABASE_URL="postgresql://postgres@127.0.0.1:<port>/<dbname>" \
   DATABASE_SSL=disable \
   E2E_PROD_TARGET=1 \
+  ENV_NAME=local \
   node --env-file=<worktree>/apps/web/.env.local server.js \
   > server.log 2>&1 < /dev/null &
 disown

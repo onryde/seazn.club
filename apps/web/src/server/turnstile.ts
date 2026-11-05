@@ -3,7 +3,7 @@ import "server-only";
 // register, resend, join, withdraw); nothing else in the app knows what a siteverify response looks like.
 //
 // Two questions, kept apart so each can be tested alone:
-//   * `turnstileMode`  — must THIS process check at all? (one small predicate, below)
+//   * `turnstileMode`  — must THIS process check at all? (one small predicate, below; it also honours the `TURNSTILE=off` break-glass)
 //   * `verifyTurnstile` — is THIS token good for THIS action on THIS host? (strict; it never skips)
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
@@ -24,9 +24,28 @@ type Env = Record<string, string | undefined>;
 export type TurnstileMode = "skip" | "enforce";
 
 /**
+ * The break-glass: `TURNSTILE=off` turns the bot check off on a RUNNING deployment, for the day Cloudflare or the widget is down
+ * or a mis-set site key locks every club out of sign-in and registration. Modelled on `REALTIME_PUBLISH=off` (lib/realtime.ts):
+ * a server-side variable read at CALL time, so a Fly secret set on a live machine takes effect with no rebuild.
+ *
+ * Exactly "off", compared case-insensitively after trimming. Every other value, the empty string and an unset variable leave the
+ * check ON, so a typo ("false", "0", "no") can never open the door by accident. It lives in the environment and nowhere in the
+ * repo: turnstile-ci-wiring.test.ts fails a fly*.toml, Dockerfile or workflow that sets it.
+ */
+export function turnstileSwitchedOff(env: Env = process.env): boolean {
+  return env.TURNSTILE?.trim().toLowerCase() === "off";
+}
+
+/** A developer's machine, vitest or a harness server (`ENV_NAME` local or ci): the processes that never check. */
+function isHarness(env: Env): boolean {
+  const envName = env.ENV_NAME?.trim();
+  return env.NODE_ENV !== "production" || (!!envName && FAKE_DRIVER_ENV_NAMES.includes(envName));
+}
+
+/**
  * Must this process check the token?
  *
- *   * `skip`    — dev, vitest, and a harness server (`ENV_NAME` local or ci, the SAME list that licenses the relay's fake
+ *   * `skip`    — the `TURNSTILE=off` break-glass (above), then dev, vitest, and a harness server (`ENV_NAME` local or ci, the SAME list that licenses the relay's fake
  *                 drivers: `FAKE_DRIVER_ENV_NAMES`). Skipped even when a secret is set, on purpose: a developer's
  *                 `.env.local` carries the live secret, and every local server started from it (seazn-env, the e2e target)
  *                 would otherwise demand a token from a widget that is not allowed on `localhost`.
@@ -38,9 +57,18 @@ export type TurnstileMode = "skip" | "enforce";
  * harness: only an explicit `local` / `ci` is.
  */
 export function turnstileMode(env: Env = process.env): TurnstileMode {
-  const envName = env.ENV_NAME?.trim();
-  const harness = env.NODE_ENV !== "production" || (!!envName && FAKE_DRIVER_ENV_NAMES.includes(envName));
-  return harness ? "skip" : "enforce";
+  return turnstileSwitchedOff(env) || isHarness(env) ? "skip" : "enforce";
+}
+
+/** One loud line per process (module state: a new process is a new module) while the break-glass is what lets requests through. */
+let switchWarned = false;
+function warnSwitchedOff(env: Env): void {
+  if (switchWarned) return;
+  switchWarned = true;
+  log.warn(
+    { env_name: env.ENV_NAME?.trim() || null },
+    "turnstile: TURNSTILE=off — the bot check is DISABLED on this process: every guarded POST is accepted without a token. Unset the TURNSTILE secret to turn it back on.",
+  );
 }
 
 export type TurnstileRefusalReason =
@@ -136,7 +164,11 @@ const REFUSAL_MESSAGE = "Verification failed. Reload the page and try again.";
  * "verification failed"; the reason (and, for a misconfiguration, which variable) goes to the log.
  */
 export async function requireTurnstile(req: Request, action: TurnstileAction): Promise<void> {
-  if (turnstileMode() === "skip") return;
+  if (turnstileMode() === "skip") {
+    // Only the break-glass earns a warning: a harness or a dev process skips by design and would drown the line in noise.
+    if (turnstileSwitchedOff(process.env) && !isHarness(process.env)) warnSwitchedOff(process.env);
+    return;
+  }
   const verdict = await verifyTurnstile({ token: req.headers.get(TURNSTILE_HEADER), action, ip: clientIp(req) });
   if (verdict.ok) return;
   const misconfigured = verdict.reason === "secret_unset" || verdict.reason === "hostnames_unset";

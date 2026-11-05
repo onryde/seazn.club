@@ -22,6 +22,9 @@ import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
+import { isTurnstileRefusal } from "@/lib/turnstile";
+import { withTurnstile } from "@/lib/turnstile-client";
 import type { MessageKey } from "@/lib/messages";
 import { classifyStatusActionFailure, publicWithdrawPath, type StatusActionFailureKind } from "./view-model";
 
@@ -57,8 +60,13 @@ export function CancelEntry({
   const confirmDialog = useConfirm();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ kind: StatusActionFailureKind; detail: string } | null>(null);
+  // Mounted by the click, BEFORE the confirm dialog (an entry card is one of many on a cart, and only the one pressed needs a bot
+  // check): the invisible check runs while the person reads the dialog, so its token is ready when they confirm.
+  const turnstile = useTurnstile("withdraw");
+  const [armed, setArmed] = useState(false);
 
   async function cancel() {
+    setArmed(true);
     const ok = await confirmDialog({
       title: msg("confirm.cancelEntry.title", { division: divisionName }),
       body: refundable
@@ -71,13 +79,13 @@ export function CancelEntry({
     setBusy(true);
     setError(null);
     try {
-      await apiV1(publicWithdrawPath(entryId), { method: "POST", json: { token } });
+      await withTurnstile(turnstile, (headers) => apiV1(publicWithdrawPath(entryId), { method: "POST", json: { token }, headers }));
       router.refresh();
     } catch (err) {
       const status = err instanceof ApiV1Error ? err.status : undefined;
       setError({
         kind: classifyStatusActionFailure(status),
-        detail: err instanceof Error ? err.message : String(err),
+        detail: isTurnstileRefusal(err) ? msg("turnstile.error") : err instanceof Error ? err.message : String(err),
       });
     } finally {
       setBusy(false);
@@ -94,6 +102,7 @@ export function CancelEntry({
       >
         {busy ? msg("register.status.cancel.busy") : msg("register.status.cancel.cta")}
       </button>
+      {armed && <TurnstileWidget controller={turnstile} />}
       {error && (
         <div className="mt-1.5 space-y-0.5">
           <p className="text-xs text-red-600">{msg(FAILURE_KEY[error.kind])}</p>

@@ -4,7 +4,7 @@
 //
 // A CAPTURE HARNESS, not a spec: `.capture.ts` is matched only by the `gallery` project, and the PHONE_PANEL_PR2_SHOTS_DIR
 // guard makes it a no-op without one. It goes live through the fake relay drivers, so it never runs in CI's parallel leg.
-// Run it deliberately, against a production server started with CAPTURE_QR_V2_ALWAYS=1 and RELAY_DRIVERS=fake:
+// Run it deliberately, against a production server started with CAPTURE_QR_V2_ALWAYS=1, RELAY_DRIVERS=fake and ENV_NAME=local:
 //
 //   PHONE_PANEL_PR2_SHOTS_DIR=/tmp/pr2 PLAYWRIGHT_BASE=http://localhost:PORT E2E_PROD_TARGET=1 DATABASE_URL=… \
 //     pnpm exec playwright test --project=gallery e2e/stream-phone-panel-pr2.capture.ts

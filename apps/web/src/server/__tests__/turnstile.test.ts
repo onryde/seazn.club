@@ -115,6 +115,58 @@ describe("turnstileMode: must this process check at all", () => {
   });
 });
 
+// The break-glass: `TURNSTILE=off` on a RUNNING deployment (a Fly secret) turns the check off without a rebuild, for the day
+// Cloudflare or the widget is down or a mis-set site key locks every club out. The rule is typed from the brief: the switch is
+// "off" and nothing else, compared case-insensitively after trimming. Every other value, the empty string and an unset variable
+// enforce, so a typo ("false", "0", "no") never opens the door by accident.
+describe("TURNSTILE=off: the break-glass is exactly 'off', and nothing else opens the door", () => {
+  const DEPLOYED = { NODE_ENV: "production", ENV_NAME: "prod", TURNSTILE_SECRET: SECRET_PASS };
+  const OFF = ["off", "OFF", "Off", "oFf", " off ", "\toff\n", "  OFF"];
+  // Empty and unset first (the empty set answers "no" to everything and must land on enforce); then the near misses.
+  const NOT_OFF: (string | undefined)[] = [undefined, "", " ", "false", "0", "no", "on", "ON", "1", "true", "of", "offf", "off off", "of f", "disabled", "off;", "o ff"];
+
+  it.each(OFF)("TURNSTILE=%j skips, in production, on a named deployment, with its secret set", (value) => {
+    expect(turnstileMode({ ...DEPLOYED, TURNSTILE: value })).toBe("skip");
+  });
+
+  it("it also skips a deployment that lost its secret or its ENV_NAME: the break-glass works exactly when the rest is broken", () => {
+    expect(turnstileMode({ NODE_ENV: "production", ENV_NAME: "stg", TURNSTILE: "off" })).toBe("skip");
+    expect(turnstileMode({ NODE_ENV: "production", TURNSTILE: "off" })).toBe("skip");
+    expect(turnstileMode({ NODE_ENV: "production", ENV_NAME: "prod", TURNSTILE_SECRET: "", TURNSTILE: "off" })).toBe("skip");
+  });
+
+  it.each(NOT_OFF)("TURNSTILE=%j still enforces (production, prod, secret set)", (value) => {
+    expect(turnstileMode({ ...DEPLOYED, TURNSTILE: value })).toBe("enforce");
+  });
+
+  it("anti-vacuity: both lists are real, and no value is on both", () => {
+    expect(OFF.length).toBeGreaterThanOrEqual(6);
+    expect(NOT_OFF.length).toBeGreaterThanOrEqual(15);
+    expect(NOT_OFF).toContain(undefined);
+    expect(NOT_OFF).toContain("");
+    for (const v of OFF) expect(NOT_OFF.map((n) => n?.trim().toLowerCase()), JSON.stringify(v)).not.toContain(v.trim().toLowerCase());
+  });
+
+  it("only the variable TURNSTILE is the switch: 'off' in a neighbouring Turnstile variable does not turn the check off", () => {
+    for (const key of ["TURNSTILE_SECRET", "TURNSTILE_HOSTNAMES", "NEXT_PUBLIC_TURNSTILE_SITE_KEY", "TURNSTILE_OFF", "turnstile", "ENV_NAME"]) {
+      expect(turnstileMode({ NODE_ENV: "production", ENV_NAME: "prod", [key]: "off" }), key).toBe("enforce");
+    }
+  });
+
+  it("is read from process.env at call time, not captured at import (a Fly secret set on a running machine takes effect)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("ENV_NAME", "prod");
+    vi.stubEnv("TURNSTILE_SECRET", SECRET_PASS);
+    vi.stubEnv("TURNSTILE_HOSTNAMES", HOST);
+    const gate = (await import("../turnstile")).turnstileMode; // imported ONCE, before the switch exists
+    expect(gate()).toBe("enforce");
+    vi.stubEnv("TURNSTILE", "off");
+    expect(gate()).toBe("skip");
+    vi.stubEnv("TURNSTILE", "on");
+    expect(gate(), "switching it back on enforces again").toBe("enforce");
+  });
+});
+
 describe("verifyTurnstile: one token, one action, one host", () => {
   it("accepts a fresh token minted for this action on an allowed host, and sends Cloudflare the documented request", async () => {
     const token = cf.mint("login");
@@ -127,6 +179,22 @@ describe("verifyTurnstile: one token, one action, one host", () => {
     expect(call!.init.body).toBeInstanceOf(URLSearchParams); // urlencoded, one of the two bodies Cloudflare accepts
     expect(Object.fromEntries(call!.form)).toEqual({ secret: SECRET_PASS, response: token, remoteip: "203.0.113.9" });
     expect(call!.init.signal, "a hung Cloudflare must not hang the request").toBeInstanceOf(AbortSignal);
+  });
+
+  // The signal is what keeps a hung Cloudflare from hanging a login. Its VALUE is a decision: 10 s is long enough for a slow
+  // siteverify and short enough that a request still answers inside a gateway's own timeout. 0 aborts every check (the whole site
+  // locked out); minutes lets one dead upstream pin every in-flight request. Typed here, not read from SITEVERIFY_TIMEOUT_MS.
+  it("the siteverify call is bounded by AbortSignal.timeout(10_000), and that very signal is the one fetch gets", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    try {
+      await verifyTurnstile({ token: cf.mint("login"), action: "login", env: ENV });
+      expect(timeout).toHaveBeenCalledTimes(1);
+      expect(timeout).toHaveBeenCalledWith(10_000);
+      expect(cf.calls).toHaveLength(1);
+      expect(cf.calls[0]!.init.signal, "the signal handed to fetch is the one the timeout made").toBe(timeout.mock.results[0]!.value);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   it("omits remoteip when the address is unknown, empty or absent", async () => {
@@ -315,6 +383,75 @@ describe("requireTurnstile: the gate a route calls", () => {
     vi.stubEnv("ENV_NAME", "ci");
     await expect(requireTurnstile(req(), "login")).resolves.toBeUndefined();
     expect(cf.impl).not.toHaveBeenCalled();
+  });
+
+  describe("TURNSTILE=off", () => {
+    it("a deployed server resolves with NO token and never calls Cloudflare, for every action", async () => {
+      prod({ TURNSTILE: "off" });
+      let checked = 0;
+      for (const action of TURNSTILE_ACTIONS) {
+        await expect(requireTurnstile(req(), action), action).resolves.toBeUndefined();
+        checked++;
+      }
+      expect(checked).toBe(TURNSTILE_ACTIONS.length);
+      expect(cf.impl).not.toHaveBeenCalled();
+    });
+
+    it("' off ' and 'OFF' skip; 'false', '0', 'no', the empty string and unset still refuse a request with no token (403 TURNSTILE_FAILED)", async () => {
+      let checked = 0;
+      for (const [value, skips] of [[" off ", true], ["OFF", true], ["false", false], ["0", false], ["no", false], ["", false], [undefined, false]] as const) {
+        vi.unstubAllEnvs();
+        prod();
+        if (value !== undefined) vi.stubEnv("TURNSTILE", value);
+        const verdict = requireTurnstile(req(), "register");
+        if (skips) await expect(verdict, JSON.stringify(value)).resolves.toBeUndefined();
+        else expect((await refusal(verdict)).code, JSON.stringify(value)).toBe(TURNSTILE_ERROR_CODE);
+        checked++;
+      }
+      expect(checked).toBe(7);
+    });
+
+    it("warns loudly ONCE per process, however many requests it lets through, and the warning names the switch", async () => {
+      vi.resetModules(); // a fresh module is a fresh process: the once-flag is module state
+      const fresh = await import("../turnstile");
+      prod({ TURNSTILE: "off" });
+      for (let i = 0; i < 5; i++) await fresh.requireTurnstile(req(), "login");
+      expect(logMock.warn, "one warning for five requests").toHaveBeenCalledTimes(1);
+      const [fields, message] = logMock.warn.mock.calls[0]!;
+      expect(message).toContain("TURNSTILE=off");
+      expect(String(message).toLowerCase()).toContain("disabled");
+      expect(fields).toMatchObject({ env_name: "stg" });
+      expect(logMock.error).not.toHaveBeenCalled();
+      expect(cf.impl).not.toHaveBeenCalled();
+    });
+
+    it("says nothing when it is not what skipped the check (a harness or a dev process skips anyway)", async () => {
+      vi.resetModules();
+      const fresh = await import("../turnstile");
+      await fresh.requireTurnstile(req(), "login"); // vitest: NODE_ENV test
+      vi.stubEnv("TURNSTILE", "off");
+      await fresh.requireTurnstile(req(), "login"); // still NODE_ENV test
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("ENV_NAME", "ci");
+      await fresh.requireTurnstile(req(), "login"); // a harness server
+      expect(logMock.warn).not.toHaveBeenCalled();
+    });
+
+    it("takes effect on a running process and is reversible: refuses, then lets through once switched off, then refuses again", async () => {
+      prod();
+      expect((await refusal(requireTurnstile(req(), "join"))).status).toBe(403);
+      vi.stubEnv("TURNSTILE", "off");
+      await expect(requireTurnstile(req(), "join")).resolves.toBeUndefined();
+      vi.stubEnv("TURNSTILE", "");
+      expect((await refusal(requireTurnstile(req(), "join"))).status).toBe(403);
+    });
+
+    it("a token sent anyway is not even looked at while it is off (the widget still runs, the server just does not enforce)", async () => {
+      prod({ TURNSTILE: "off" });
+      await requireTurnstile(req({ [TURNSTILE_HEADER]: "garbage" }), "withdraw");
+      await requireTurnstile(req({ [TURNSTILE_HEADER]: cf.mint("withdraw") }), "withdraw");
+      expect(cf.impl).not.toHaveBeenCalled();
+    });
   });
 
   it("a deployment with NO secret: 403 TURNSTILE_FAILED even for a plausible token, no call to Cloudflare, logged as an error", async () => {
