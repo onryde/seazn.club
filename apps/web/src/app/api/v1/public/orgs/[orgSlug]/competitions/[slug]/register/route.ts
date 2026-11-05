@@ -1,6 +1,7 @@
 import { v1, parseBody, reply } from "@/server/api-v1/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
+import { requireTurnstile } from "@/server/turnstile";
 import { HttpError } from "@/lib/errors";
 import { PublicRegisterGroupRequest } from "@/server/api-v1/schemas";
 import { submitRegistrationGroup } from "@/server/usecases/registration-submit";
@@ -32,6 +33,9 @@ export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const ip = clientIp(req.headers);
     await rateLimit(`regsubmit:${ip}`, { max: 10, windowSeconds: 60 });
+    // Bot check (Cloudflare Turnstile): after the general per-IP bucket, before the body, the honeypot and the narrower bucket,
+    // so a request that fails it spends one hit and not the competition's whole 5-per-5-minutes. 403 TURNSTILE_FAILED.
+    await requireTurnstile(req, "register");
     const { orgSlug, slug } = await params;
     const input = await parseBody(req, PublicRegisterGroupRequest);
     // Honeypot (v3/05 §4): hidden on the real form; a filled value is a bot.

@@ -2235,6 +2235,7 @@
   "registration.withdrawEntryFor": "Inschrijving voor {division} intrekken",
   "auth.emailRequired": "Voer je e-mailadres in om een inloglink te ontvangen.",
   "auth.error": "Er is iets misgegaan",
+  "turnstile.error": "We konden niet bevestigen dat je een persoon bent. Laad de pagina opnieuw en probeer het nog eens. Blijft het mislukken, schakel dan je contentblocker voor deze site uit.",
   "auth.check.title": "Controleer je e-mail",
   "auth.check.bodyPre": "We hebben een inloglink gestuurd naar",
   "auth.check.bodyPost": ". Open deze om in te loggen — hij verloopt over 15 minuten.",

@@ -4,6 +4,7 @@ import { baseUrl } from "@/lib/oauth";
 import { publicRateLimit } from "@/server/usecases/public";
 import { rateLimit, EMAIL_LIMIT } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
+import { requireTurnstile } from "@/server/turnstile";
 import { PublicRegistrationToken } from "@/server/api-v1/schemas";
 import { resendRegistrationConfirmationPublic } from "@/server/usecases/registrations";
 
@@ -20,6 +21,8 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     await publicRateLimit(req);
+    // Bot check (Cloudflare Turnstile): after the public read budget, before the email bucket and the send. 403 TURNSTILE_FAILED.
+    await requireTurnstile(req, "resend");
     const ip = clientIp(req.headers);
     await rateLimit(`regresend:${ip}`, EMAIL_LIMIT);
     const { id } = await params;

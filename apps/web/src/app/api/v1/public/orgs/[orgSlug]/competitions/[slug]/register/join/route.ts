@@ -1,6 +1,7 @@
 import { v1, parseBody, reply } from "@/server/api-v1/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
+import { requireTurnstile } from "@/server/turnstile";
 import { PublicJoinRequest } from "@/server/api-v1/schemas";
 import { joinTeamEntry, previewJoinEntry } from "@/server/usecases/registration-submit";
 import { getCurrentUser } from "@/lib/auth";
@@ -40,6 +41,8 @@ export async function GET(req: Request, { params }: Ctx) {
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     await rateLimit(`regjoin:${clientIp(req.headers)}`, { max: 5, windowSeconds: 300 });
+    // Bot check (Cloudflare Turnstile), POST only: the preview GET above stays open. 403 TURNSTILE_FAILED.
+    await requireTurnstile(req, "join");
     // orgSlug/slug are unused: joinTeamEntry needs no org/competition scoping
     // (see above). Still awaited so this route honours the same dynamic-
     // segment contract as its sibling /register.

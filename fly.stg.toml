@@ -15,6 +15,8 @@ primary_region = "lhr"
     NEXT_PUBLIC_POSTHOG_HOST           = "https://eu.posthog.com"
     NEXT_PUBLIC_POSTHOG_API_HOST       = "https://n.seazn.club"
     NEXT_PUBLIC_SENTRY_DSN             = "https://77cd7f66bdb8a600423328d6e561b6e9@o4512107033198592.ingest.de.sentry.io/4512119703208016"
+    # Cloudflare Turnstile site key (public by design); TURNSTILE_SECRET / TURNSTILE_HOSTNAMES are runtime `fly secrets`.
+    NEXT_PUBLIC_TURNSTILE_SITE_KEY     = "0x4AAAAAAF0vaX-2fN3egqBE"
 
 [http_service]
   internal_port        = 3000

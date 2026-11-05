@@ -70,8 +70,10 @@ export function cspHeader(
   const enforce = process.env.CSP_MODE === "enforce" && !opts.forceReportOnly;
   const value = [
     `default-src 'self'`,
-    // Stripe.js is loaded from js.stripe.com for Embedded Checkout.
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' https://js.stripe.com${isDev ? " 'unsafe-eval'" : ""}`,
+    // Stripe.js is loaded from js.stripe.com for Embedded Checkout. Turnstile's api.js is loaded from challenges.cloudflare.com by
+    // lib/turnstile-client.ts (a script this page's own nonced code appends, so 'strict-dynamic' already trusts it; the origin is the
+    // declaration for a browser that ignores 'strict-dynamic').
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' https://js.stripe.com https://challenges.cloudflare.com${isDev ? " 'unsafe-eval'" : ""}`,
     // Tailwind ships an external stylesheet; 'unsafe-inline' covers the small
     // inline styles Next injects. Styles are low-risk vs script injection.
     `style-src 'self' 'unsafe-inline'`,
@@ -85,9 +87,10 @@ export function cspHeader(
     // (Cloudflare's RealtimeKit network allowlist; proxy-csp-realtimekit.test.ts).
     // R2005: the compositor's loopback phase channel, on `/overlay` only (overlayLoopbackOrigin).
     `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.realtime.cloudflare.com wss://*.realtime.cloudflare.com https://*.ingest.sentry.io https://*.sentry.io${posthogApiOrigin()}${overlayLoopbackOrigin(opts.pathname ?? "")}`,
-    // Embedded Checkout renders inside a Stripe-hosted iframe. The public match page's replay player (YouTube Connect T16) is YouTube's
+    // Embedded Checkout renders inside a Stripe-hosted iframe; the Turnstile widget (components/turnstile-widget.tsx) is a challenges.cloudflare.com
+    // iframe. The public match page's replay player (YouTube Connect T16) is YouTube's
     // privacy-enhanced embed, loaded only after a tap: `youtube-nocookie.com` and its www host, and no `youtube.com` origin.
-    `frame-src 'self' https://js.stripe.com https://*.stripe.com https://hooks.stripe.com https://www.youtube-nocookie.com https://youtube-nocookie.com`,
+    `frame-src 'self' https://js.stripe.com https://*.stripe.com https://hooks.stripe.com https://www.youtube-nocookie.com https://youtube-nocookie.com https://challenges.cloudflare.com`,
     `object-src 'none'`,
     `base-uri 'self'`,
     `form-action 'self'`,

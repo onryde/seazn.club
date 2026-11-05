@@ -4,6 +4,9 @@ import { useState } from "react";
 import { api } from "@/lib/client";
 import { LegalNotice } from "@/components/legal-notice";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
+import { isTurnstileRefusal } from "@/lib/turnstile";
+import { withTurnstile } from "@/lib/turnstile-client";
 
 /**
  * Passwordless sign-in: Google, or a one-time link emailed to the address.
@@ -18,6 +21,7 @@ export function AuthForm({ next }: { next?: string }) {
   const [busy, setBusy] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [devLink, setDevLink] = useState<string | null>(null);
+  const turnstile = useTurnstile("login");
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -28,14 +32,17 @@ export function AuthForm({ next }: { next?: string }) {
     }
     setBusy(true);
     try {
-      const res = await api<{ login_url?: string }>("/api/auth/magic-link", {
-        method: "POST",
-        json: { email, ...(next ? { next } : {}) },
-      });
+      const res = await withTurnstile(turnstile, (headers) =>
+        api<{ login_url?: string }>("/api/auth/magic-link", {
+          method: "POST",
+          json: { email, ...(next ? { next } : {}) },
+          headers,
+        }),
+      );
       setDevLink(res.login_url ?? null);
       setSentTo(email);
     } catch (err) {
-      setError(err instanceof Error ? err.message : msg("auth.error"));
+      setError(isTurnstileRefusal(err) ? msg("turnstile.error") : err instanceof Error ? err.message : msg("auth.error"));
     } finally {
       setBusy(false);
     }
@@ -111,6 +118,8 @@ export function AuthForm({ next }: { next?: string }) {
             {error}
           </p>
         )}
+
+        <TurnstileWidget controller={turnstile} />
 
         <button disabled={busy} className="btn btn-primary w-full py-2.5">
           {busy ? msg("auth.wait") : msg("auth.submit")}

@@ -8,6 +8,7 @@
 import { lichessRefusalReason } from "@/components/public-site/register/submit";
 import type { CartState, ConsentState, ContactState } from "@/components/public-site/register/types";
 import type { WhoFieldRequirements } from "@/components/public-site/register/validation";
+import { TURNSTILE_ERROR_CODE } from "@/lib/turnstile";
 
 /** Sentinel for "add me as a new player" — never a real player_id (those
  *  are uuids). PublicJoinRequest's own contract is "player_id omitted ->
@@ -176,10 +177,12 @@ export function buildJoinBody(
  *    DETAILS were refused rather than that they'd tried too many times.
  *    Distinct, honest copy: wait, then the exact same click works (unlike
  *    "rejected", where resubmitting unchanged never will).
+ *  - verification (403 + code TURNSTILE_FAILED): the bot check refused the request before the join was read, so nothing
+ *    about the joiner's details is wrong — reload and try again (its copy says so, and names content blockers).
  *  - rejected (everything else — 400/422/…): the server refused what was
  *    submitted (roster cap, pair-can't-add, guardian missing, eligibility).
  */
-export type JoinFailureKind = "notFound" | "conflict" | "retry" | "rateLimited" | "rejected" | "lichessLink" | "lichessReconnect";
+export type JoinFailureKind = "notFound" | "conflict" | "retry" | "rateLimited" | "rejected" | "lichessLink" | "lichessReconnect" | "verification";
 
 /** Two refusals are told apart by their CODE as well as their status, because the right next step differs and the
  *  generic `rejected` copy ("check your details") would send a joiner with correct details hunting for a mistake:
@@ -194,6 +197,8 @@ export function classifyJoinFailure(status: number | undefined, code?: string): 
   if (status === 409) return "conflict";
   if (status === 429) return "rateLimited";
   if (status >= 500) return "retry";
+  // The bot check refused (403 TURNSTILE_FAILED): its own sentence, never "check your details" (the details are fine).
+  if (status === 403 && code === TURNSTILE_ERROR_CODE) return "verification";
   const lichess = lichessRefusalReason(status, code);
   if (lichess === "link") return "lichessLink";
   if (lichess === "reconnect") return "lichessReconnect";

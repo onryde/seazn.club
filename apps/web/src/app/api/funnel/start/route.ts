@@ -4,6 +4,7 @@ import { clientIp } from "@/lib/client-ip";
 import { sql } from "@/lib/db";
 import { handler } from "@/lib/http";
 import { rateLimit, EMAIL_LIMIT } from "@/lib/rate-limit";
+import { requireTurnstile } from "@/server/turnstile";
 import { baseUrl } from "@/lib/oauth";
 import { createFunnelDraft, funnelPayloadSchema } from "@/lib/funnel";
 import { funnelClaimEmail } from "@/lib/email";
@@ -32,6 +33,8 @@ export async function POST(req: Request) {
   return handler(async () => {
     const ip = clientIp(await headers());
     await rateLimit(`funnel-start:${ip}`, EMAIL_LIMIT);
+    // Bot check (Cloudflare Turnstile): before the body is read or a draft is written. 403 TURNSTILE_FAILED.
+    await requireTurnstile(req, "start");
 
     // `locale` is kept out of the payload: the claim re-reads the draft's payload strictly. It rides its own column instead.
     const { email, locale, ...payload } = schema.parse(await req.json());

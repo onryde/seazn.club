@@ -185,6 +185,25 @@ describe("classifySubmitFailure", () => {
   it("422 is rejected", () => {
     expect(classifySubmitFailure(422)).toBe("rejected");
   });
+
+  // Turnstile: a refused bot check is about the visit, not the content, so "check your details" would be the wrong sentence for
+  // it. The wire code is typed here, not read from lib/turnstile.ts, so a rename that this did not follow is a red test.
+  it("403 TURNSTILE_FAILED is retryable (a fresh check is all that is missing), never 'rejected'", () => {
+    expect(classifySubmitFailure(403, "TURNSTILE_FAILED")).toBe("retry");
+  });
+
+  it("the pair is the status AND the code: a bare 403, another 403 code and that code elsewhere keep their own buckets (counted)", () => {
+    let checked = 0;
+    for (const [status, code, kind] of [
+      [403, undefined, "rejected"], [403, "FORBIDDEN", "rejected"], [403, "turnstile_failed", "rejected"],
+      [400, "TURNSTILE_FAILED", "rejected"], [422, "TURNSTILE_FAILED", "rejected"], [404, "TURNSTILE_FAILED", "rejected"], [429, "TURNSTILE_FAILED", "rejected"],
+      [409, "TURNSTILE_FAILED", "retry"], [500, "TURNSTILE_FAILED", "retry"], [undefined, "TURNSTILE_FAILED", "retry"],
+    ] as const) {
+      expect(classifySubmitFailure(status, code), `${status} ${code}`).toBe(kind);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every pair was asked").toBe(10);
+  });
 });
 
 // Owner 2026-10-25: a registration into an online-play division is refused with one of TWO Lichess reasons. The reason is the

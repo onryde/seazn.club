@@ -37,6 +37,26 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
   return { ...actual, apiV1: (...args: unknown[]) => apiV1Mock.impl(...args) };
 });
 
+// Turnstile's widget needs a browser; its controller is stood in for by a fake with the controller's own surface (token/reset), so
+// the stepper's side of the seam is driven for real: the REAL `withTurnstile` hands the (mocked-network) `apiV1` call the header,
+// and resets the widget after. `turnstileFake.token` is what the "widget" holds; null = no widget / no token (no site key, dev, e2e).
+const turnstileFake = vi.hoisted(() => ({
+  token: null as string | null,
+  resets: 0,
+  controller: null as unknown as { token(): Promise<string | null>; reset(): void },
+  actions: [] as string[],
+}));
+vi.mock("@/components/turnstile-widget", () => {
+  turnstileFake.controller = {
+    token: () => Promise.resolve(turnstileFake.token),
+    reset: () => { turnstileFake.resets++; },
+  };
+  return {
+    useTurnstile: (action: string) => { turnstileFake.actions.push(action); return turnstileFake.controller; },
+    TurnstileWidget: function TurnstileWidgetStub() { return null; },
+  };
+});
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -1969,6 +1989,75 @@ describe("step 5 — submit", () => {
     await (propsOf(btn!).onClick as () => Promise<void>)();
     expect(assignMock).toHaveBeenCalledWith("https://checkout.stripe.com/pay/xyz");
     expect(assignMock).not.toHaveBeenCalledWith(expect.stringContaining("/register/status"));
+  });
+
+  // Turnstile (bot check). The register POST carries the widget's token in the `cf-turnstile-response` header (typed from the wire
+  // contract, not read from lib/turnstile.ts), the widget sits on the review step that submits, and it is reset after the request
+  // whatever came back: a token is single-use.
+  describe("Turnstile bot check", () => {
+    beforeEach(() => {
+      turnstileFake.token = null;
+      turnstileFake.resets = 0;
+      turnstileFake.actions = [];
+    });
+    const FREE_RESULT = { group_id: "g1", ref_code: "SZ-TEST-01", access_token: "tok123", currency: "gbp", amount_cents: 0, checkout_url: null, entries: [] };
+    const submitBtn = (island: ReturnType<typeof mount>["island"]) =>
+      island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition")!;
+
+    it("the review step mounts exactly one widget, for the `register` action, wired to the controller that sends the request", async () => {
+      const { island } = await reachReview();
+      expect(turnstileFake.actions.length, "anti-vacuity: the hook ran").toBeGreaterThan(0);
+      expect(turnstileFake.actions.every((a) => a === "register")).toBe(true);
+      const widgets = island.tree().filter((e) => typeof e.type === "function" && e.type.name === "TurnstileWidgetStub");
+      expect(widgets, "one widget on the review step").toHaveLength(1);
+      expect(propsOf(widgets[0]!).controller).toBe(turnstileFake.controller);
+    });
+
+    it("a held token travels in the header on the register POST (never in the body), and the widget is reset afterwards", async () => {
+      turnstileFake.token = "tok-from-widget";
+      apiV1Mock.impl.mockResolvedValueOnce(FREE_RESULT);
+      const { island } = await reachReview();
+      await (propsOf(submitBtn(island)).onClick as () => Promise<void>)();
+      expect(apiV1Mock.impl).toHaveBeenCalledTimes(1);
+      const options = apiV1Mock.impl.mock.calls[0]![1] as { headers?: Record<string, string>; json: unknown };
+      expect(options.headers).toEqual({ "cf-turnstile-response": "tok-from-widget" });
+      expect(JSON.stringify(options.json)).not.toContain("tok-from-widget");
+      expect(turnstileFake.resets).toBe(1);
+    });
+
+    it("no token (no site key, dev, e2e): the POST goes with NO header at all, and the widget is still reset", async () => {
+      apiV1Mock.impl.mockResolvedValueOnce(FREE_RESULT);
+      const { island } = await reachReview();
+      await (propsOf(submitBtn(island)).onClick as () => Promise<void>)();
+      const options = apiV1Mock.impl.mock.calls[0]![1] as { headers?: Record<string, string> };
+      expect(options.headers).toEqual({});
+      expect(turnstileFake.resets).toBe(1);
+    });
+
+    it("403 TURNSTILE_FAILED says 'please try again' with the bot-check sentence beneath: never 'check your details', never the server's English", async () => {
+      turnstileFake.token = "tok-refused";
+      apiV1Mock.impl.mockRejectedValueOnce(new ApiV1Error("Verification failed. Reload the page and try again.", 403, "TURNSTILE_FAILED"));
+      const { island } = await reachReview();
+      await (propsOf(submitBtn(island)).onClick as () => Promise<void>)();
+      const alert = island.tree().find((e) => propsOf(e).role === "alert");
+      expect(alert, "an alert block").toBeTruthy();
+      const children = propsOf(alert!).children as ReactElement[];
+      expect(textOf(children[0]!), "primary: the retry bucket's words").toBe("Something went wrong — please try again.");
+      expect(textOf(children[1]!), "secondary: the dictionary's bot-check sentence").toBe(String(EN_UI["turnstile.error"]));
+      expect(textOf(island.tree())).not.toContain("check your details");
+      expect(textOf(island.tree())).not.toContain("Verification failed. Reload the page");
+      expect(turnstileFake.resets, "a refused token is spent too").toBe(1);
+    });
+
+    it("a 403 with another code keeps the 'rejected' bucket and its own detail (the pair)", async () => {
+      apiV1Mock.impl.mockRejectedValueOnce(new ApiV1Error("Forbidden", 403, "FORBIDDEN"));
+      const { island } = await reachReview();
+      await (propsOf(submitBtn(island)).onClick as () => Promise<void>)();
+      const alert = island.tree().find((e) => propsOf(e).role === "alert");
+      const children = propsOf(alert!).children as ReactElement[];
+      expect(textOf(children[0]!)).toContain("check your details");
+      expect(textOf(children[1]!)).toBe("Forbidden");
+    });
   });
 
   // FIX 3 (RS006 fix wave) — a failed submit used to render `err.message`

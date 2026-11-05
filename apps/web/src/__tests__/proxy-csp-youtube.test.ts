@@ -20,10 +20,10 @@ const directives = (csp: string): Map<string, string[]> =>
 const policy = () => directives(cspHeader("n").value);
 
 describe("CSP for the replay player", () => {
-  it("frame-src is exactly the existing origins plus the two privacy-enhanced embed hosts", () => {
+  it("frame-src is exactly the existing origins plus the two privacy-enhanced embed hosts (and Turnstile's, proxy-csp-turnstile.test.ts)", () => {
     expect(policy().get("frame-src")).toEqual([
       "'self'", "https://js.stripe.com", "https://*.stripe.com", "https://hooks.stripe.com",
-      "https://www.youtube-nocookie.com", "https://youtube-nocookie.com",
+      "https://www.youtube-nocookie.com", "https://youtube-nocookie.com", "https://challenges.cloudflare.com",
     ]);
   });
 

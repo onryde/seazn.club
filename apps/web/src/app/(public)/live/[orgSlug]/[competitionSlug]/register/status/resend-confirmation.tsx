@@ -15,6 +15,9 @@
 // so it is safe, useful extra color, never the primary thing read.
 import { useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
+import { isTurnstileRefusal } from "@/lib/turnstile";
+import { withTurnstile } from "@/lib/turnstile-client";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { classifyStatusActionFailure, publicResendPath, type StatusActionFailureKind } from "./view-model";
@@ -36,12 +39,19 @@ export function ResendConfirmation({ groupId, token }: { groupId: string; token:
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<{ kind: StatusActionFailureKind; detail: string } | null>(null);
+  // The widget is mounted by the first click, not on page load: most visitors to a status page never resend, and the
+  // invisible check has a second or two to finish while the request waits for its token.
+  const turnstile = useTurnstile("resend");
+  const [armed, setArmed] = useState(false);
 
   async function resend() {
+    setArmed(true);
     setBusy(true);
     setError(null);
     try {
-      const result = await apiV1<{ sent: boolean }>(publicResendPath(groupId), { method: "POST", json: { token } });
+      const result = await withTurnstile(turnstile, (headers) =>
+        apiV1<{ sent: boolean }>(publicResendPath(groupId), { method: "POST", json: { token }, headers }),
+      );
       // `sent: false` is a 200: the first attempt was not accepted and the mail waits on the outbox for its retries (or there is no
       // mail provider here at all). Say so with the existing could-not-resend copy rather than claim it went out.
       if (result.sent) setSent(true);
@@ -50,7 +60,7 @@ export function ResendConfirmation({ groupId, token }: { groupId: string; token:
       const status = err instanceof ApiV1Error ? err.status : undefined;
       setError({
         kind: classifyStatusActionFailure(status),
-        detail: err instanceof Error ? err.message : String(err),
+        detail: isTurnstileRefusal(err) ? msg("turnstile.error") : err instanceof Error ? err.message : String(err),
       });
     } finally {
       setBusy(false);
@@ -67,6 +77,7 @@ export function ResendConfirmation({ groupId, token }: { groupId: string; token:
       >
         {busy ? msg("register.status.resend.busy") : msg("register.status.resend.cta")}
       </button>
+      {armed && <TurnstileWidget controller={turnstile} />}
       {sent && <p className="mt-1 text-xs text-emerald-700">{msg("register.status.resend.sent")}</p>}
       {error && (
         <div className="mt-1 space-y-0.5">

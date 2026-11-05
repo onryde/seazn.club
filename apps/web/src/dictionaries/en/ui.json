@@ -2235,6 +2235,7 @@
   "registration.withdrawEntryFor": "Withdraw {division} entry",
   "auth.emailRequired": "Enter your email to get a sign-in link.",
   "auth.error": "Something went wrong",
+  "turnstile.error": "We couldn't confirm you're a person. Reload the page and try again. If it keeps failing, turn off any content blocker for this site.",
   "auth.check.title": "Check your email",
   "auth.check.bodyPre": "We sent a sign-in link to",
   "auth.check.bodyPost": ". Open it to sign in — it expires in 15 minutes.",

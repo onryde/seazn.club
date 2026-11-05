@@ -185,6 +185,11 @@ jobs:
           # load-bearing: a NEXT_PUBLIC_ value is inlined into the server chunks at build, so blanking it here is inert.
           SENTRY_DSN: ""
           NEXT_PUBLIC_SENTRY_DSN: ""
+          # A harness, and it says so: under NODE_ENV=production the bot check (Cloudflare Turnstile) is enforced unless ENV_NAME
+          # names CI or a developer's machine (`turnstileMode`, apps/web/src/server/turnstile.ts), and the bench's ONLY auth path
+          # is the magic-link POST, a guarded route. Without it every sign-in below answers 403 TURNSTILE_FAILED. The other CI
+          # servers carry the same line (e2e.yml, ci.yml, matrix-truth.yml); turnstile-ci-wiring.test.ts sweeps them all.
+          ENV_NAME: ci
           # 3200, NOT 3000. `env.ts`'s FORBIDDEN_BASE_PORTS refuses 3000 and
           # 3100 outright (the owner's dev server and the e2e target); the
           # bench always owns its own server. The standalone entrypoint reads

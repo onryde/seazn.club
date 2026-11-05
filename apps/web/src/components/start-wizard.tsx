@@ -8,6 +8,9 @@ import { recommendFormats, type Recommendation } from "@/lib/format-recommend";
 import { FUNNEL_SPORTS } from "@/components/start-funnel-form";
 import { LegalNotice } from "@/components/legal-notice";
 import { useLocale, useT } from "@/components/i18n/dict-provider";
+import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
+import { isTurnstileRefusal } from "@/lib/turnstile";
+import { withTurnstile } from "@/lib/turnstile-client";
 
 interface Initial {
   sport?: string;
@@ -29,6 +32,7 @@ export function StartWizard({ initial }: { initial: Initial }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ message: string; claim_url?: string } | null>(null);
+  const turnstile = useTurnstile("start");
 
   const recs: Recommendation[] = useMemo(
     () => recommendFormats({ entrants, courts, hours }),
@@ -42,22 +46,25 @@ export function StartWizard({ initial }: { initial: Initial }) {
     setBusy(true);
     setError(null);
     try {
-      const res = await api<{ message: string; claim_url?: string }>("/api/funnel/start", {
-        method: "POST",
-        json: {
-          email,
-          // The claim email is written in the language this page was shown in.
-          locale,
-          name: compName,
-          sport,
-          entrants,
-          ...(initial.date ? { start_date: initial.date } : {}),
-          ...(format ? { format } : {}),
-        },
-      });
+      const res = await withTurnstile(turnstile, (headers) =>
+        api<{ message: string; claim_url?: string }>("/api/funnel/start", {
+          method: "POST",
+          json: {
+            email,
+            // The claim email is written in the language this page was shown in.
+            locale,
+            name: compName,
+            sport,
+            entrants,
+            ...(initial.date ? { start_date: initial.date } : {}),
+            ...(format ? { format } : {}),
+          },
+          headers,
+        }),
+      );
       setDone(res);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("start.wizard.genericError"));
+      setError(isTurnstileRefusal(err) ? t("turnstile.error") : err instanceof Error ? err.message : t("start.wizard.genericError"));
     } finally {
       setBusy(false);
     }
@@ -238,6 +245,7 @@ export function StartWizard({ initial }: { initial: Initial }) {
           <p className="text-xs text-slate-400">{t("start.wizard.emailNote")}</p>
           <LegalNotice className="text-left" />
           {error && <p className="text-sm text-red-600">{error}</p>}
+          <TurnstileWidget controller={turnstile} />
           <div className="flex gap-2">
             <button type="button" onClick={() => setStep(1)} className="btn btn-ghost flex-none">
               ← {t("start.wizard.back")}

@@ -208,6 +208,24 @@ describe("classifyJoinFailure — 409 here means a real conflict, unlike submit.
     expect(classifyJoinFailure(503)).toBe("retry");
     expect(classifyJoinFailure(undefined)).toBe("retry");
   });
+  // Turnstile: the bot check refuses with 403 + TURNSTILE_FAILED. The wire code is typed here, not read from lib/turnstile.ts, so
+  // a rename on the server that the classifier did not follow is a red test and not a joiner told "check your details".
+  it("403 TURNSTILE_FAILED -> verification (its own sentence: the details were never read, so none of them is wrong)", () => {
+    expect(classifyJoinFailure(403, "TURNSTILE_FAILED")).toBe("verification");
+  });
+  it("a 403 WITHOUT that code, or that code on another status, is not 'verification'", () => {
+    let checked = 0;
+    for (const [status, code, kind] of [
+      [403, undefined, "rejected"], [403, "FORBIDDEN", "rejected"], [403, "turnstile_failed", "rejected"],
+      [422, "TURNSTILE_FAILED", "rejected"], [400, "TURNSTILE_FAILED", "rejected"],
+      [404, "TURNSTILE_FAILED", "notFound"], [409, "TURNSTILE_FAILED", "conflict"], [429, "TURNSTILE_FAILED", "rateLimited"],
+      [500, "TURNSTILE_FAILED", "retry"], [undefined, "TURNSTILE_FAILED", "retry"],
+    ] as const) {
+      expect(classifyJoinFailure(status, code), `${status} ${code}`).toBe(kind);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every near miss was asked").toBe(10);
+  });
 });
 
 describe("selectionAfterRefresh — a post-conflict refresh must not silently drop a valid selection (FIX 4)", () => {

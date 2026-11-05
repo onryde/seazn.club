@@ -12,6 +12,9 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1 } from "@/lib/client-v1";
+import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
+import { isTurnstileRefusal } from "@/lib/turnstile";
+import { withTurnstile } from "@/lib/turnstile-client";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
 
@@ -35,8 +38,13 @@ export function WithdrawByRef({
   const confirmDialog = useConfirm();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Mounted by the click, BEFORE the confirm dialog: a cart can hold ten entries and so ten of these buttons, and only the one
+  // pressed needs a check. The invisible check runs while the person reads the dialog, so its token is ready when they confirm.
+  const turnstile = useTurnstile("withdraw");
+  const [armed, setArmed] = useState(false);
 
   async function withdraw() {
+    setArmed(true);
     const ok = await confirmDialog({
       title: msg("confirm.withdrawCartEntry.title", { division: divisionName }),
       body: msg("confirm.withdrawCartEntry.body", { division: divisionName }),
@@ -47,20 +55,23 @@ export function WithdrawByRef({
     setBusy(true);
     setError(null);
     try {
-      await apiV1(`/api/v1/public/registrations/by-ref/${encodeURIComponent(refCode)}/withdraw`, {
-        method: "POST",
-        json: { token, registration_id: entryId },
-      });
+      await withTurnstile(turnstile, (headers) =>
+        apiV1(`/api/v1/public/registrations/by-ref/${encodeURIComponent(refCode)}/withdraw`, {
+          method: "POST",
+          json: { token, registration_id: entryId },
+          headers,
+        }),
+      );
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Withdraw failed");
+      setError(isTurnstileRefusal(err) ? msg("turnstile.error") : err instanceof Error ? err.message : "Withdraw failed");
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <span className="inline-flex items-center gap-2">
+    <span className="inline-flex flex-wrap items-center gap-2">
       <button
         type="button"
         disabled={busy}
@@ -70,6 +81,7 @@ export function WithdrawByRef({
         {busy ? msg("registration.withdrawing") : msg("registration.withdrawEntryFor", { division: divisionName })}
       </button>
       {error && <span className="text-xs text-red-600">{error}</span>}
+      {armed && <TurnstileWidget controller={turnstile} className="basis-full" />}
     </span>
   );
 }

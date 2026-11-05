@@ -2235,6 +2235,7 @@
   "registration.withdrawEntryFor": "Retirer l'inscription en {division}",
   "auth.emailRequired": "Saisissez votre e-mail pour recevoir un lien de connexion.",
   "auth.error": "Une erreur s'est produite",
+  "turnstile.error": "Nous n'avons pas pu confirmer que vous êtes une personne. Rechargez la page et réessayez. Si cela échoue encore, désactivez votre bloqueur de contenu pour ce site.",
   "auth.check.title": "Vérifiez votre e-mail",
   "auth.check.bodyPre": "Nous avons envoyé un lien de connexion à",
   "auth.check.bodyPost": ". Ouvrez-le pour vous connecter — il expire dans 15 minutes.",
