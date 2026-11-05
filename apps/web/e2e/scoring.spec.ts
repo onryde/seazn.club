@@ -12,6 +12,7 @@ import {
   divisionPath,
   fixturePath,
 } from "./helpers";
+import { openMatchActions } from "./helpers/match-actions";
 
 // Scoring discoverability + sport-shaped pads (organiser feedback: the score
 // pad was hard to reach, and cricket should be over-by-over, not ball-by-ball).
@@ -163,6 +164,33 @@ test("Start match takes the fixture live and records core.start", async ({ page,
   await expect(page.getByRole("button", { name: "Start match", exact: true })).toHaveCount(0);
 });
 
+test("match actions: closed behind its toggle on a wide screen, open on a phone, beside Remote scoring", async ({
+  page,
+  request,
+}) => {
+  // The console's layout (feat/fixture-console-layout): Forfeit and Abandon live in a Match actions panel. From 768 px
+  // it starts closed and a button beside Remote scoring opens it; a phone has no toggle and shows the panel open.
+  const { fixtureId } = await seedLiveFixture(request, "Layout");
+  await postEvent(request, fixtureId, "core.start");
+  const forfeit = page.getByTestId("score-forfeit");
+  const toggle = page.getByTestId("match-actions-toggle");
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(await fixturePath(page.request, fixtureId));
+  await expect(toggle).toBeVisible({ timeout: 20_000 });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(forfeit).toBeHidden();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(forfeit).toBeVisible();
+  await toggle.click();
+  await expect(forfeit).toBeHidden();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(toggle).toBeHidden();
+  await expect(forfeit).toBeVisible();
+});
+
 test("forfeit records core.forfeit with the side and the reason, and ends the fixture", async ({
   page,
   request,
@@ -176,6 +204,7 @@ test("forfeit records core.forfeit with the side and the reason, and ends the fi
   await postEvent(request, fixtureId, "badminton.rally", { wonBy: homeId });
   await page.goto(await fixturePath(page.request, fixtureId));
 
+  await openMatchActions(page);
   await page.getByTestId("score-forfeit").click({ timeout: 20_000 });
   // Not a native prompt — the in-app `ForfeitDialog` (forfeit-dialog.tsx).
   const dialog = page.getByTestId("forfeit-dialog");
@@ -217,6 +246,7 @@ test("abandon records core.abandon with its reason and ends the fixture", async 
   const { fixtureId } = await seedLiveFixture(request, "Abandon");
   await page.goto(await fixturePath(page.request, fixtureId));
 
+  await openMatchActions(page);
   await page.getByRole("button", { name: "Abandon…", exact: true }).click({ timeout: 20_000 });
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible({ timeout: 10_000 });
@@ -263,6 +293,7 @@ test("abandon with an empty reason writes nothing — the fixture stays live", a
   const { fixtureId } = await seedLiveFixture(request, "AbandonEmpty");
   await page.goto(await fixturePath(page.request, fixtureId));
 
+  await openMatchActions(page);
   await page.getByRole("button", { name: "Abandon…", exact: true }).click({ timeout: 20_000 });
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible({ timeout: 10_000 });
@@ -270,6 +301,7 @@ test("abandon with an empty reason writes nothing — the fixture stays live", a
 
   await expect(dialog).toHaveCount(0, { timeout: 10_000 });
   // Still offered, because nothing was decided.
+  await openMatchActions(page);
   await expect(page.getByRole("button", { name: "Abandon…", exact: true })).toBeVisible();
   expect(
     (await ledger(request, fixtureId)).map((e) => e.type),
@@ -284,6 +316,7 @@ test("the forfeit dialog closes on Cancel, Escape and a tap outside, writing not
   await page.goto(await fixturePath(page.request, fixtureId));
   const dialog = page.getByTestId("forfeit-dialog");
   const open = async () => {
+    await openMatchActions(page);
     await page.getByTestId("score-forfeit").click({ timeout: 20_000 });
     await expect(dialog).toBeVisible({ timeout: 10_000 });
     await dialog.getByTestId("forfeit-who-away").click();

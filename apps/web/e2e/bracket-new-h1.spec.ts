@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, fixturePath } from "./helpers";
+import { openMatchActions } from "./helpers/match-actions";
 
 // NEW-H1 (rulebook-W2-sets-cricket.md:57; W2a spec §5.4.7, §8.2). A set-sport
 // knockout semi-final abandoned by its scorer folds to `outcome: null`, the
@@ -51,6 +52,7 @@ test("NEW-H1: an abandoned badminton semi-final leaves the final's seat empty an
   const tip = async (id: string) => (await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${id}/state`)).data!.last_seq;
   expect((await apiJson(request, `/api/v1/fixtures/${sf1!.id}/events`, "POST", { expected_seq: await tip(sf1!.id), type: "core.start", payload: {} })).status).toBeLessThan(300);
   await page.goto(await fixturePath(request, sf1!.id));
+  await openMatchActions(page);
   await page.getByRole("button", { name: "Abandon…", exact: true }).click({ timeout: 20_000 });
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible({ timeout: 10_000 });

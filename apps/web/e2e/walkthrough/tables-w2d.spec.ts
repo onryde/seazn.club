@@ -34,6 +34,7 @@ import { dismissCookieBanner } from "../scorepad-a11y-kit";
 import { openPanels } from "../helpers/rules-strip";
 import { closeOpenContexts } from "../spectator-public-helpers";
 import { API_CALL_MS, activeOrgSlug, dictString, division, entrants, eventStream, person, publicCompetition, spectator } from "../spectator-w2-kit";
+import { openMatchActions } from "../helpers/match-actions";
 
 // Each test seeds its own competition: nothing is shared, so nothing serialises.
 test.describe.configure({ mode: "parallel" });
@@ -959,6 +960,7 @@ test.describe("sets: volleyball, badminton, table tennis", () => {
     const ac = between(fixtures, A, C);
     await page.goto(await fixturePath(request, ac.id), { waitUntil: "load" });
     await dismissCookieBanner(page);
+    await openMatchActions(page);
     await page.getByTestId("score-forfeit").click({ timeout: STEP_MS });
     const dialog = page.getByTestId("forfeit-dialog");
     await expect(dialog).toBeVisible({ timeout: STEP_MS });
@@ -1076,6 +1078,7 @@ test.describe("cricket", () => {
     await play(request, bc, [["core.start"]]);
     await page.goto(await fixturePath(request, bc.id), { waitUntil: "load" });
     await dismissCookieBanner(page);
+    await openMatchActions(page);
     await page.getByRole("button", { name: say("score.abandon"), exact: true }).click({ timeout: STEP_MS });
     await page.getByTestId("score-prompt-reason").fill("Rain");
     await page.getByTestId("score-prompt-submit").click();
