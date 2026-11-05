@@ -3107,6 +3107,7 @@
   "score.needsDecision.waiting.table": "Este partido se suspendió sin resultado. Queda fuera de la clasificación hasta que el organizador decida el ganador.",
   "score.needsDecision.waiting.tiebreak": "La partida terminó en tablas y su desempate aún no está registrado. Registra el desempate en el marcador cuando se juegue.",
   "score.needsDecision.settle": "Resolver el partido",
+  "score.needsDecision.recordTiebreak": "Registrar el desempate",
   "score.needsDecision.dialogTitle": "Resolver el partido",
   "score.needsDecision.whoAdvances": "¿Quién avanza?",
   "score.needsDecision.whoWins": "¿Quién ganó?",

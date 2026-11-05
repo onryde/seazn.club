@@ -149,6 +149,15 @@ interface BlockProps {
   settle: (payload: { winner: string; method: SettleMethod; note?: string }) => Promise<SettleResult>;
 }
 
+/** The pad's Tie-break tile (`TIEBREAK_TILE_ID` in scorepad/v3/skins/boardgame.tsx), opened from the console banner.
+ *  Falls back to bringing the pad into view when the tile is not on screen (a phone's pad may be collapsed). */
+function openPadTiebreak(): void {
+  const pad = document.querySelector<HTMLElement>('[data-testid="score-pad"]');
+  const tile = pad?.querySelector<HTMLElement>('[data-tile-id="tiebreak"]') ?? null;
+  (tile ?? pad)?.scrollIntoView({ block: "center" });
+  tile?.click();
+}
+
 export function NeedsDecisionBlock(props: BlockProps) {
   const { msg } = props;
   const [open, setOpen] = useState(false);
@@ -174,18 +183,33 @@ export function NeedsDecisionBlock(props: BlockProps) {
           </p>
         )}
       </div>
-      <button
-        type="button"
-        data-testid="settle-open"
-        disabled={props.busy}
-        onClick={() => {
-          setRefusal(null);
-          setOpen(true);
-        }}
-        className="btn btn-primary mt-3 min-h-11 w-full shrink-0 md:mt-0 md:w-auto"
-      >
-        {msg("score.needsDecision.settle")}
-      </button>
+      <div className="mt-3 flex shrink-0 flex-col gap-2 md:mt-0 md:flex-row">
+        {props.cause === "tiebreak" && (
+          // Owner 2026-11-05: a drawn knockout game is offered its tie-break from here, not only Settle. The tie-break is
+          // the pad's own Tile (the scorer's to record, BG-KO-1): this opens that tile rather than a second path.
+          <button
+            type="button"
+            data-testid="tiebreak-open"
+            disabled={props.busy}
+            onClick={openPadTiebreak}
+            className="btn btn-ghost min-h-11 w-full shrink-0 md:w-auto"
+          >
+            {msg("score.needsDecision.recordTiebreak")}
+          </button>
+        )}
+        <button
+          type="button"
+          data-testid="settle-open"
+          disabled={props.busy}
+          onClick={() => {
+            setRefusal(null);
+            setOpen(true);
+          }}
+          className="btn btn-primary min-h-11 w-full shrink-0 md:w-auto"
+        >
+          {msg("score.needsDecision.settle")}
+        </button>
+      </div>
       {open && (
         <SettleDialog
           {...props}

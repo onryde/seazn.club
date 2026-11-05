@@ -221,6 +221,15 @@ function bandHtml(html: string): string {
   return html.slice(start, end);
 }
 
+/** Owner 2026-11-05: Finalize (and Share) is a banner at the top, beside the Needs-a-decision block, not in the band. */
+function finalizeBannerHtml(html: string): string {
+  const start = html.indexOf('data-role="finalize-banner"');
+  expect(start, "no finalize banner rendered").toBeGreaterThan(-1);
+  const end = html.indexOf("</section>", start);
+  expect(end).toBeGreaterThan(start);
+  return html.slice(start, end);
+}
+
 describe("the authority band (D-12)", () => {
   it("gathers the match-ending controls into one named, explained container", () => {
     const band = bandHtml(consoleHtml());
@@ -230,9 +239,13 @@ describe("the authority band (D-12)", () => {
     expect(band).toContain("Abandon");
   });
 
-  it("holds Finalize too — the most-used authority action, not buried (R7-3a)", () => {
-    const band = bandHtml(consoleHtml({ outcome: { kind: "win", winner: "e-home" } }));
-    expect(band).toContain("Finalize");
+  it("Finalize is a banner at the TOP, above the Scoring card, not in the band (owner, 2026-11-05)", () => {
+    const html = consoleHtml({ outcome: { kind: "win", winner: "e-home" } });
+    expect(finalizeBannerHtml(html)).toContain("Finalize");
+    expect(html.indexOf('data-role="finalize-banner"'), "above the Scoring card").toBeLessThan(
+      html.indexOf('data-role="console-scoring"'),
+    );
+    expect(html, "a decided match has nothing left to forfeit or abandon").not.toContain('data-role="match-actions"');
   });
 
   // R7/C review — the design of record's own wording, which C shipped without
@@ -243,7 +256,7 @@ describe("the authority band (D-12)", () => {
   it("reads Finalize result and Abandon…, the approved wording", () => {
     expect(bandHtml(consoleHtml())).toContain(">Abandon…<");
     expect(
-      bandHtml(consoleHtml({ outcome: { kind: "win", winner: "e-home" } })),
+      finalizeBannerHtml(consoleHtml({ outcome: { kind: "win", winner: "e-home" } })),
       "the button no longer explains its own mechanism in its label",
     ).toContain(">Finalize result<");
   });
@@ -253,8 +266,23 @@ describe("the authority band (D-12)", () => {
       bandHtml(consoleHtml()),
       "a filled button in this band reads as the thing to press",
     ).not.toContain("btn-primary");
-    expect(bandHtml(consoleHtml({ outcome: { kind: "win", winner: "e-home" } }))).not.toContain(
+    expect(finalizeBannerHtml(consoleHtml({ outcome: { kind: "win", winner: "e-home" } }))).not.toContain(
       "btn-primary",
+    );
+  });
+
+  it("Forfeit and Abandon open from a Match actions button beside Remote scoring; a phone keeps the card open (owner, 2026-11-05)", () => {
+    const html = consoleHtml();
+    const toggle = html.indexOf('data-testid="match-actions-toggle"');
+    expect(toggle, "the button that opens the panel").toBeGreaterThan(-1);
+    const row = html.slice(html.lastIndexOf("<div", html.indexOf('data-role="device-handover"')), toggle + 400);
+    expect(row, "in the same button row as Remote scoring").toContain("Remote scoring");
+    expect(html.slice(toggle, toggle + 300), "desktop-only: the phone has no second tree").toMatch(/\smax-md:hidden"/);
+    const band = html.slice(html.indexOf('data-role="match-actions"') - 80, html.indexOf('data-role="match-actions"') + 200);
+    expect(band, "closed on desktop, always shown on a phone").toContain("hidden max-md:block");
+    expect(band).toContain('id="match-actions-panel"');
+    expect(consoleHtml({ canOrganise: false }), "no organiser actions, no button").not.toContain(
+      'data-testid="match-actions-toggle"',
     );
   });
 
@@ -311,7 +339,7 @@ describe("W2a: held bracket fixtures and organiser-only actions (finding 11, fin
   });
 
   it("a scorer still finalizes a decided match: Finalize is not organiser-only", () => {
-    expect(bandHtml(consoleHtml({ canOrganise: false, outcome: { kind: "win", winner: "e-home" } }))).toContain(FINALIZE);
+    expect(finalizeBannerHtml(consoleHtml({ canOrganise: false, outcome: { kind: "win", winner: "e-home" } }))).toContain(FINALIZE);
   });
 
   it("finding 27 + C12: a held knockout fixture shows the block and hides Finalize, for the organiser", () => {

@@ -229,6 +229,18 @@ describe("heldCause and the block's sentence (ruling D-H3)", () => {
       />,
     );
 
+  it("a drawn knockout game is offered its tie-break from the banner; the other causes are not (owner, 2026-11-05)", () => {
+    expect(body("tiebreak"), "the button that opens the pad's Tie-break tile").toContain('data-testid="tiebreak-open"');
+    expect(body("tiebreak")).toContain(en["score.needsDecision.recordTiebreak"]);
+    expect(body("tiebreak"), "Settle stays beside it").toContain('data-testid="settle-open"');
+    for (const cause of ["level", "abandoned"] as const) {
+      expect(body(cause), `${cause} has no tie-break to record`).not.toContain('data-testid="tiebreak-open"');
+    }
+    for (const dict of [en, es, fr, nl]) {
+      expect(dict["score.needsDecision.recordTiebreak"], "every locale carries the label").toBeTruthy();
+    }
+  });
+
   it("each held shape names its own cause; an abandon wins over the outcome it left behind", () => {
     const { outcome: pending } = chessKnockout();
     expect(pending, "a drawn chess knockout game owes its tie-break: no outcome yet").toBeNull();
