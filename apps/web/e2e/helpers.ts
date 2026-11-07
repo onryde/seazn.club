@@ -469,6 +469,25 @@ export async function mintEmailClaimPathBySql(personId: string): Promise<string>
   return `/claim/${secret}`;
 }
 
+/**
+ * Stand-in for an org EMAIL invite's join link: the token its email carries.
+ * An email-bound invite's token signs a new or unverified account in with one
+ * click, so no API returns it to anyone (the org's invite list and create
+ * answer carry `token: null` for it — fix/invite-token-exposure, 2026-11-07).
+ * The mail itself is not capturable here (Resend, no sink), so this reads the
+ * stored row, the way {@link mintEmailClaimPathBySql} stands in for a claim
+ * email. It stands in for the MAIL only: the invite is whatever the real route
+ * made. Throws when the invite is not an email invite.
+ */
+export async function emailInviteTokenBySql(inviteId: string): Promise<string> {
+  return withDb(async (sql) => {
+    const rows = await sql<{ token: string }[]>`
+      select token from org_invites where id = ${inviteId} and email is not null`;
+    if (rows.length !== 1) throw new Error(`emailInviteTokenBySql: no email invite ${inviteId}`);
+    return rows[0]!.token;
+  });
+}
+
 const DEFAULT_SHOT_WIDTHS = [1280, 768, 320];
 
 /**

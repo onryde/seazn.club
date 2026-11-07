@@ -5,7 +5,7 @@ import {
   settingsUrl,
   type SeededOrg,
 } from "../settings-support";
-import { apiJson, TAG } from "../helpers";
+import { apiJson, emailInviteTokenBySql, TAG } from "../helpers";
 import { ownTest, signInOwnAccount } from "../own-account";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -303,7 +303,8 @@ test("an unknown ?tab= lands on the organisation panel, not an empty page", asyn
 
 interface InviteRow {
   id: string;
-  token: string;
+  /** A shareable link's token; null for an email invite (its token goes into the email only). */
+  token: string | null;
   email: string | null;
   role: string;
   revoked: boolean;
@@ -315,10 +316,10 @@ test("team tab: an email invite is really accepted, the new member's role change
   page,
   browser,
 }) => {
-  // Budget: 1 goto + 2 reloads + an anonymous claim + ~8 API reads. Expressed
+  // Budget: 1 goto + 2 reloads + an anonymous claim + ~11 API reads. Expressed
   // as a sum rather than a flat constant so adding a step moves the budget.
   const NAVIGATIONS = 6;
-  const API_READS = 10;
+  const API_READS = 13;
   test.setTimeout(Math.max(60_000, 15_000 + NAVIGATIONS * 6_000 + API_READS * 1_500));
 
   const memberEmail = `delivered+e2e-w2-member-${TAG}-${Math.random().toString(36).slice(2, 6)}@resend.dev`;
@@ -339,7 +340,7 @@ test("team tab: an email invite is really accepted, the new member's role change
     page.getByRole("button", { name: "Send invite" }).click(),
   ]);
   // This server has no Resend key, so the invite email's first attempt cannot go out: the notice says it may
-  // arrive late and points at the personal link, while the outbox keeps the email.
+  // arrive late and points at revoking it for an invite link, while the outbox keeps the email.
   const notSent = UI_EN["settings.team.inviteEmail.notSent"];
   expect(notSent, "settings.team.inviteEmail.notSent missing from en/ui.json").toBeTruthy();
   await expect(page.getByText(notSent!, { exact: true })).toBeVisible({ timeout: 20_000 });
@@ -347,6 +348,8 @@ test("team tab: an email invite is really accepted, the new member's role change
   const emailInvite = (await readInvites()).find((i) => i.email === memberEmail);
   expect(emailInvite, `no invite row was stored for ${memberEmail}`).toBeTruthy();
   expect(emailInvite!.role).toBe("viewer");
+  // The list never hands the editor an email invite's token: it signs a new or unverified account in.
+  expect(emailInvite!.token, "the invite list carries the email-bound token").toBeNull();
 
   // The invite's email is ONE `org_invite` row, ref the stored invite, written with it. Its first attempt was made
   // in the request, so it is no longer waiting and holds no body.
@@ -365,14 +368,47 @@ test("team tab: an email invite is really accepted, the new member's role change
     "one invite email for the invite, its first attempt made, no body kept",
   ).toEqual({ count: 1, waiting: 0, withBody: 0 });
 
+  // ── a second email invite revokes from its row, by id ────────────────────
+  // Its token never reaches this page, so the row's only control is Revoke (no copy-link), and the revoke names the
+  // invite's id.
+  const doomedEmail = `delivered+e2e-w2-doomed-${TAG}-${Math.random().toString(36).slice(2, 6)}@resend.dev`;
+  await page.getByPlaceholder("name@club.org").fill(doomedEmail);
+  await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes("/invites") && r.request().method() === "POST" && r.ok(),
+    ),
+    page.getByRole("button", { name: "Send invite" }).click(),
+  ]);
+  const doomedInvite = (await readInvites()).find((i) => i.email === doomedEmail);
+  expect(doomedInvite, `no invite row was stored for ${doomedEmail}`).toBeTruthy();
+  const doomedEmailRow = page.locator("li").filter({ hasText: doomedEmail });
+  await expect(doomedEmailRow).toBeVisible({ timeout: 20_000 });
+  await expect(doomedEmailRow.getByRole("button"), "an email invite row offers Revoke and nothing else").toHaveCount(1);
+  await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.url().endsWith(`/invites/${doomedInvite!.id}/revoke`) && r.request().method() === "POST" && r.ok(),
+    ),
+    doomedEmailRow.getByRole("button", { name: "Revoke" }).click(),
+  ]);
+  const afterEmailRevoke = await readInvites();
+  expect(afterEmailRevoke.find((i) => i.id === doomedInvite!.id)?.revoked, "the email invite is still live").toBe(true);
+  // ...and its positive pair: the first email invite survives (it is claimed next).
+  expect(
+    afterEmailRevoke.find((i) => i.id === emailInvite!.id)?.revoked,
+    "revoking one email invite took the other with it",
+  ).toBe(false);
+
   // ── a real person accepts it ─────────────────────────────────────────────
   // An invite nobody can accept is a row, not a feature. `browser.newContext()`
   // on its own INHERITS the project storageState (the authed owner's session),
   // so a "fresh" visitor would silently be the owner again and the claim would
   // prove nothing. Spell out empty storage.
+  // The token is the one the invite EMAIL carries (no sink here: read from the stored row, the mailbox stand-in).
+  const mailedToken = await emailInviteTokenBySql(emailInvite!.id);
   const anon = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   try {
-    const claimed = await anon.request.post(`/api/invites/${emailInvite!.token}/claim`, {
+    const claimed = await anon.request.post(`/api/invites/${mailedToken}/claim`, {
       data: {},
     });
     expect(claimed.ok(), `claiming the invite failed: ${claimed.status()}`).toBe(true);
@@ -432,6 +468,7 @@ test("team tab: an email invite is really accepted, the new member's role change
   ).toBe(beforeLinks + 1);
   const doomed = afterDouble.find((i) => !beforeTokens.has(i.token));
   expect(doomed, "the link invite the double tap created could not be identified").toBeTruthy();
+  expect(doomed!.token, "a link invite keeps its token in the list").toBeTruthy();
   // The role the picker was on, not merely the default — a create that ignored
   // the select would still have produced exactly one row.
   expect(doomed!.role).toBe("viewer");
@@ -451,7 +488,7 @@ test("team tab: an email invite is really accepted, the new member's role change
   await page.reload();
   // Link rows render the token masked as `/join/xxxx…yyyy`; the leading four
   // characters make the row deterministic without depending on wording.
-  const doomedRow = page.locator("li").filter({ hasText: doomed!.token.slice(0, 4) });
+  const doomedRow = page.locator("li").filter({ hasText: doomed!.token!.slice(0, 4) });
   await expect(doomedRow).toBeVisible({ timeout: 20_000 });
   await Promise.all([
     page.waitForResponse(
