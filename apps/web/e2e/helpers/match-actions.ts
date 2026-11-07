@@ -1,8 +1,12 @@
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 /**
- * The fixture console keeps Forfeit, Abandon and Finalize in a Match actions panel that starts closed at 768 px and
- * wider (a phone shows it open, with no toggle). Open it before reaching for one of those controls.
+ * The fixture console keeps Forfeit, Abandon and Finalize in a Match actions panel. From 768 px up it is absent until
+ * its toggle opens it, right under the Scoring header; a phone shows it open with no toggle. Open it before reaching
+ * for one of those controls.
+ *
+ * A click that lands before the page hydrates does nothing, so the click is retried until the toggle itself reports
+ * `aria-expanded="true"` — a single click would race hydration and the panel would never appear.
  */
 export async function openMatchActions(page: Page): Promise<void> {
   // The console hydrates after navigation; wait for the toggle or the panel itself before deciding there is none.
@@ -13,6 +17,8 @@ export async function openMatchActions(page: Page): Promise<void> {
     .catch(() => undefined);
   const toggle = page.getByTestId("match-actions-toggle");
   if ((await toggle.count()) === 0 || !(await toggle.isVisible())) return;
-  if ((await toggle.getAttribute("aria-expanded")) === "true") return;
-  await toggle.click();
+  await expect(async () => {
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true", { timeout: 1_000 });
+  }).toPass({ timeout: 20_000 });
 }
