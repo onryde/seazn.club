@@ -466,6 +466,23 @@ export async function schedulingConstraintsSuite(): Promise<void> {
       `conflicts=${JSON.stringify((poolAuto as { conflicts?: unknown[] } | undefined)?.conflicts ?? []).slice(0, 400)} ` +
       `times=${(poolAuto?.assignments ?? []).map((a) => `${a.fixture_id.slice(0, 4)}@${a.scheduled_at.slice(5, 16)}/${a.court_id.slice(0, 4)}`).join(",")}`,
   );
+  // TEMPORARY DIAGNOSTIC (flake sampling): the auto pass writes nothing, so repeated calls are independent solver samples.
+  for (let n = 1; n <= 10; n++) {
+    const sample = v1data<AutoOut>(await v1(s, `/api/v1/stages/${poolStage.id}/schedule/auto`, "POST", {}));
+    const gap = (ids: readonly string[]): number => {
+      const t = (sample?.assignments ?? []).filter((a) => ids.includes(a.fixture_id)).map((a) => Date.parse(a.scheduled_at)).sort((a, b) => a - b);
+      let m = Infinity;
+      for (let i = 1; i < t.length; i++) m = Math.min(m, (t[i] - (t[i - 1] + MATCH_MS)) / 60000);
+      return m;
+    };
+    const label = (id: string) => (sf.some((f) => f.id === id) ? "S" : lf.some((f) => f.id === id) ? "L" : "?");
+    console.log(
+      `#452 sample ${n}: n=${(sample?.assignments ?? []).length} strict=${gap(sf.map((f) => f.id))} lax=${gap(lf.map((f) => f.id))} ` +
+        `solver=${(sample as { solver?: { status?: string } } | undefined)?.solver?.status ?? "none"} ` +
+        `board=${(sample?.assignments ?? []).map((a) => `${label(a.fixture_id)}@${a.scheduled_at.slice(11, 16)}/${a.court_id.slice(0, 3)}`).sort().join(",")} ` +
+        `solverInfo=${JSON.stringify((sample as { solver?: unknown } | undefined)?.solver ?? null).slice(0, 300)}`,
+    );
+  }
   check(
     "#452 pools/auto: the placer honours the POOL rest (≥90) and not division-wide (lax pool <90)",
     (poolAuto?.assignments ?? []).length === 6 &&
