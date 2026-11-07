@@ -454,8 +454,8 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
 
     // The read side was already correct and stayed untouched by this wave —
     // what changed is that there is now something for it to read.
-    expect(readClock(before, "H1")).toBeUndefined();
-    expect(readClock(after, "H1")).toBe("12:41");
+    expect(readClock(before, "H1", cfg)).toBeUndefined();
+    expect(readClock(after, "H1", cfg)).toBe("12:41");
 
     expect(stripOf(before).map((item) => item.id)).not.toContain("clock");
     const item = stripOf(after).find((s) => s.id === "clock");
@@ -587,7 +587,7 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
 
     const folded = foldFootball(cfg, [["core.start"], [tap.type, tap.payload]]);
     expect((folded as { asOf?: unknown }).asOf).toBeUndefined();
-    expect(readClock(folded, "H1")).toBeUndefined();
+    expect(readClock(folded, "H1", cfg)).toBeUndefined();
     expect(stripOf(folded).map((item) => item.id)).not.toContain("clock");
   });
 });
@@ -632,6 +632,25 @@ describe("PadClockBar renders the time that would be stamped, plus its controls"
 
   it("keeps the control at the 44px tap floor", () => {
     expect(html(0, false)).toContain("min-height:44px");
+  });
+
+  it("shows a skin's display in the readout in place of M:SS, and M:SS without one (S2-5 ruling 108)", () => {
+    const readout = (out: string) => /data-role="v3-clock-value"[^>]*>([^<]*)</.exec(out)?.[1];
+    const withDisplay = renderToStaticMarkup(
+      PadClockBar({
+        elapsed: 0,
+        display: "45:00",
+        running: false,
+        adjusting: false,
+        onToggle: () => {},
+        onToggleAdjust: () => {},
+        onAdjust: () => {},
+        fixtureId: "fx-1",
+        t,
+      }) as never,
+    );
+    expect(readout(withDisplay)).toBe("45:00");
+    expect(readout(html(0, false))).toBe("0:00");
   });
 
   it("every key it renders exists in ALL FOUR dictionaries — nothing here has a gate but this", () => {

@@ -1229,9 +1229,14 @@ function schemaFor(module: AnySportModule, type: string): PayloadSchemaProbe | u
  * the WRONG one to assistive tech. `useId()` is unavailable in this repo's
  * node-only hook harness (`_hook-harness`), so the suffix comes from the one
  * value already guaranteed unique per pad: the fixture it is scoring.
+ *
+ * `display` — S2-5 ruling 108. The skin's own reading of `elapsed`
+ * (`PadClockSpec.display`, football's match time), shown in the readout in
+ * place of `formatClock(elapsed)` when given. Every other sport passes none.
  */
 export function PadClockBar(props: {
   elapsed: number;
+  display?: string;
   running: boolean;
   adjusting: boolean;
   onToggle: () => void;
@@ -1267,7 +1272,7 @@ export function PadClockBar(props: {
           style={{ minHeight: 44 }}
           className="shrink-0 rounded-lg bg-slate-50 px-2 text-right font-mono text-lg font-semibold tabular-nums text-slate-900 transition-colors hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
         >
-          {formatClock(props.elapsed)}
+          {props.display ?? formatClock(props.elapsed)}
         </button>
         <button
           type="button"
@@ -3003,6 +3008,7 @@ export function PadHostV3(props: PadHostV3Props) {
       {clock && (
         <PadClockBar
           elapsed={elapsedOf(clock, nowMs)}
+          display={clockSpec?.display?.(elapsedOf(clock, nowMs))}
           running={clock.runningSince !== null}
           adjusting={adjusting}
           onToggle={toggleClockNow}

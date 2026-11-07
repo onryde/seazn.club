@@ -68,6 +68,7 @@ import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import type { SportTone } from "../sport-theme";
 import type { PadClockSpec } from "../clock";
+import { matchClock, matchTimeCfgOf } from "./football-match-time";
 import { retirementSlotsOf, retirementTilesOf } from "../retirement-slot";
 import {
   MORE_SHEET_KEY,
@@ -240,8 +241,8 @@ const SIDE_LABEL: Record<Side, MessageKey> = {
 const SIDES: readonly Side[] = ["home", "away"];
 
 /**
- * MM:SS, only when the fold's own `asOf` names the CURRENT phase — and
- * `undefined` when it does not.
+ * The fold's `asOf` in MATCH time (S2-5 ruling 108, `matchClock`), only when
+ * it names the CURRENT phase — and `undefined` when it does not.
  *
  * The guard mirrors football's own (unexported) `footballPosition`: a stamp
  * left over from a phase the match has since left must never read as "now".
@@ -250,18 +251,22 @@ const SIDES: readonly Side[] = ["home", "away"];
  * With `clock()` on the skin, Pause/Start/Correct publish `football.clock`
  * and seed `asOf`; the strip still prefers the fold's reading when present.
  */
-export function readClock(state: unknown, phase: string): string | undefined {
+export function readClock(state: unknown, phase: string, cfg: unknown): string | undefined {
   const asOf = asState(state).asOf;
   const elapsed = asOf?.elapsed;
   if (asOf?.period !== phase || typeof elapsed !== "number" || !Number.isFinite(elapsed) || elapsed < 0) {
     return undefined;
   }
-  return `${Math.floor(elapsed / 60)}:${String(Math.floor(elapsed % 60)).padStart(2, "0")}`;
+  return matchClock({ period: phase, elapsed }, matchTimeCfgOf(cfg));
 }
 
 /**
  * Declares `PadClockBar` for regulation / ET play phases — same contract as
  * period-shared `buildClock`. Absent in pre / post / SHOOTOUT.
+ *
+ * `display` shows the bar's reading in match time (S2-5 ruling 108): the bar
+ * holds seconds within the period, as the engine stamps them, and only the
+ * readout adds the periods before.
  */
 export function buildFootballClock(view: PadHostView): PadClockSpec | null {
   const state = asState(view.state);
@@ -274,7 +279,9 @@ export function buildFootballClock(view: PadHostView): PadClockSpec | null {
     typeof asOf.elapsed === "number" &&
     Number.isFinite(asOf.elapsed) &&
     asOf.elapsed >= 0;
-  return fresh ? { period: phase, seed: asOf.elapsed } : { period: phase };
+  const timeCfg = matchTimeCfgOf(view.cfg);
+  const display = (elapsed: number) => matchClock({ period: phase, elapsed }, timeCfg);
+  return fresh ? { period: phase, seed: asOf.elapsed, display } : { period: phase, display };
 }
 
 /**
@@ -490,7 +497,7 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
       tone: "led",
     },
   ];
-  const clock = readClock(state, phase);
+  const clock = readClock(state, phase, view.cfg);
   if (clock !== undefined) {
     strip.push({ id: "clock", label: t("scorepad.skin.football.header.clock"), value: clock, tone: "led" });
   }

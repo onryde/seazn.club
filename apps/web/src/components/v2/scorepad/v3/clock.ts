@@ -571,11 +571,12 @@ export function stampOf(clock: PadClock | null, nowMs: number, floor?: GameTimeS
   return { period: clock.period, elapsed: Math.max(elapsed, least) };
 }
 
-/** M:SS. The same rendering `skins/football.tsx`'s `readClock` produces from
- *  the fold, so the ticking display and the fold's own strip item cannot
- *  disagree about format. Minutes are NOT capped at 60 and not zero-padded:
- *  football's `90+3` is minute 48 of H2, and every one of these sports counts
- *  minutes within a period rather than clock time of day. */
+/** M:SS within the period. Minutes are NOT capped at 60 and not zero-padded:
+ *  every sport but football counts minutes within a period rather than clock
+ *  time of day. Football reads MATCH time instead (S2-5 ruling 108): its
+ *  `readClock` and its `PadClockSpec.display` both go through
+ *  `skins/football-match-time.ts`'s `matchClock`, which builds on this, so the
+ *  ticking bar and the fold's own strip item still cannot disagree. */
 export function formatClock(seconds: number): string {
   const whole = sanitiseSeconds(seconds);
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;

@@ -1674,11 +1674,11 @@ describe("footballDetail", () => {
 
 describe("readClock", () => {
   it("formats MM:SS only for a stamp naming the current phase", () => {
-    expect(readClock({ asOf: { period: "H1", elapsed: 0 } }, "H1")).toBe("0:00");
-    expect(readClock({ asOf: { period: "H1", elapsed: 65 } }, "H1")).toBe("1:05");
-    expect(readClock({ asOf: { period: "H1", elapsed: 65 } }, "H2")).toBeUndefined();
-    expect(readClock({}, "H1")).toBeUndefined();
-    expect(readClock({ asOf: { period: "H1", elapsed: -1 } }, "H1")).toBeUndefined();
+    expect(readClock({ asOf: { period: "H1", elapsed: 0 } }, "H1", {})).toBe("0:00");
+    expect(readClock({ asOf: { period: "H1", elapsed: 65 } }, "H1", {})).toBe("1:05");
+    expect(readClock({ asOf: { period: "H1", elapsed: 65 } }, "H2", {})).toBeUndefined();
+    expect(readClock({}, "H1", {})).toBeUndefined();
+    expect(readClock({ asOf: { period: "H1", elapsed: -1 } }, "H1", {})).toBeUndefined();
   });
 });
 
@@ -1708,11 +1708,17 @@ describe("footballSkinV3", () => {
   it("declares clock() so PadClockBar mounts in play — Pause/Start/Correct publish football.clock", () => {
     const skin = footballSkinV3(t);
     expect(typeof skin.clock).toBe("function");
-    expect(skin.clock!(view({ state: state({ phase: "H1" }) }))).toEqual({ period: "H1" });
-    expect(skin.clock!(view({ state: state({ phase: "H1", asOf: { period: "H1", elapsed: 761 } }) }))).toEqual({
-      period: "H1",
-      seed: 761,
-    });
+    // `display` (S2-5 ruling 108) is a function, so it is split off before
+    // the exact match and read on its own; football-match-time.test.ts holds
+    // what it reads.
+    const { display: fresh, ...unseeded } = skin.clock!(view({ state: state({ phase: "H1" }) }))!;
+    expect(unseeded).toEqual({ period: "H1" });
+    expect(fresh!(761)).toBe("12:41");
+    const { display: seededDisplay, ...seeded } = skin.clock!(
+      view({ state: state({ phase: "H1", asOf: { period: "H1", elapsed: 761 } }) }),
+    )!;
+    expect(seeded).toEqual({ period: "H1", seed: 761 });
+    expect(seededDisplay!(761)).toBe("12:41");
     expect(skin.clock!(view({ state: state({ phase: "pre" }) }))).toBeNull();
     expect(skin.clock!(view({ state: state({ phase: "SHOOTOUT" }) }))).toBeNull();
     expect(skin.clock!(view({ state: state({ phase: "final" }) }))).toBeNull();

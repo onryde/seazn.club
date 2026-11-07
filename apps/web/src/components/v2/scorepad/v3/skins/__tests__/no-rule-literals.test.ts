@@ -150,8 +150,9 @@ const NAMES_CHECKED_AT_CLOSE = 49;
 /** Distinct banned names, across the whole list. A name banned in one skin is banned in every skin. */
 const DISTINCT_BANNED_NAMES = 31;
 
-/** Skin source files (`*.ts`/`*.tsx`, `__tests__` excluded) at 17948f93a8. Re-pin when a skin file is added. */
-const PINNED_SKIN_FILES = 13;
+/** Skin source files (`*.ts`/`*.tsx`, `__tests__` excluded) at 17948f93a8, plus `football-match-time.ts` (S2-5
+ *  ruling 108). Re-pin when a skin file is added. */
+const PINNED_SKIN_FILES = 14;
 
 const PLAIN_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
