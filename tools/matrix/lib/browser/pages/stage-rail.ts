@@ -17,6 +17,7 @@ import { actAndAwait } from "../respond.ts";
 import { DATA, TESTID } from "../selectors.ts";
 import { classifyGenerateRail, type GeneratePath } from "../../generate-path.ts";
 import type { CompleteOut, FixtureRow, GenerateOut } from "../../driver/types.ts";
+import { isUnseatedSwissByeShell } from "../../../../../apps/web/src/lib/swiss-shell.ts";
 import { actBudget, awaitScreen, exactPath, navBudget, selectorValue, shoot, visit, type DivisionWhere, type PageCtx } from "./ctx.ts";
 import { paths } from "./paths.ts";
 import { RUN_SHEET_FILTER_OPTIONS, fixtureRowSelector, readThenShowAll, type DefaultFilterSeen } from "./run-sheet.ts";
@@ -115,18 +116,22 @@ async function railFor(c: PageCtx, where: DivisionWhere, stageId: string, hooks:
 export class GeneratedWithoutFixtureNumbers extends Error {
   readonly created: number;
   constructor(created: number) {
-    super(`browser: generate answered ${created} fixtures created but no fixture number among them — fixture_no is NOT NULL (V263), so the run sheet has no row to prove the screen by`);
+    super(`browser: generate answered ${created} fixtures created but no fixture number among the rows the run sheet draws (fixture_no is NOT NULL, V263; an unseated Swiss bye shell is drawn as no row) — so the run sheet has no row to prove the screen by`);
     this.name = "GeneratedWithoutFixtureNumbers";
     this.created = created;
   }
 }
 
 /** The run-sheet row that proves a generate drew: the highest fixture number
- *  in the answer (numbers only grow), or null when nothing was created and
- *  nothing new is drawn. */
-export function newestCreatedFixtureNo(out: { readonly created: GenerateOut["created"]; readonly fixtures: readonly Pick<FixtureRow, "fixture_no">[] }): number | null {
+ *  in the answer (numbers only grow) among the rows the sheet DRAWS, or null
+ *  when nothing was created and nothing new is drawn. A Swiss Pair answers every
+ *  row of its stage, and the sheet draws none for a bye shell nobody is seated
+ *  in yet (run-sheet-groups.ts buildRunSheet, W3 T3 X-SW-29) — on an odd field
+ *  the last round's bye shell carries the highest number (CI run 42418390209,
+ *  swiss F1). The predicate is the product's own (swiss-shell.ts). */
+export function newestCreatedFixtureNo(out: { readonly created: GenerateOut["created"]; readonly fixtures: readonly Pick<FixtureRow, "fixture_no" | "ext_key" | "home_entrant_id" | "away_entrant_id">[] }): number | null {
   if (out.created === 0) return null;
-  const newest = Math.max(0, ...out.fixtures.map((f) => f.fixture_no ?? 0));
+  const newest = Math.max(0, ...out.fixtures.filter((f) => !isUnseatedSwissByeShell(f)).map((f) => f.fixture_no ?? 0));
   if (newest < 1) throw new GeneratedWithoutFixtureNumbers(out.created);
   return newest;
 }

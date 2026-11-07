@@ -23,6 +23,7 @@ import {
   FORFEIT_TESTID,
   ORGANISER_VIEWPORT,
   START_MATCH_TESTID,
+  openMatchActions,
   playMatchByTaps,
   selectorForTapStep,
   type PadLocator,
@@ -452,9 +453,16 @@ export function gateScoringOnStartRow(page: PadPage, waitForStartRow: () => Prom
  *  toggle IS on screen from the first load; but every console send carries
  *  `expected_seq` from the page's last load (`fixture-console.tsx:456`), and a
  *  console loaded before the scorer's `core.start` is answered SEQ_CONFLICT and
- *  writes nothing. So the FIRST control of each organiser action reloads too. */
+ *  writes nothing. So the FIRST control of each organiser action reloads too.
+ *
+ *  PR #1133 — at the organiser's width (≥768) the Forfeit sits in the Match
+ *  actions panel, CLOSED behind its toggle, and the reload closes it again. So
+ *  after the reload the Forfeit's wait opens the panel first (`openMatchActions`,
+ *  a no-op where there is no closed toggle on screen). Finalize is the banner at
+ *  the top, outside the panel: it opens nothing. */
 export function reloadConsoleBeforeAction(page: TapPage): PadPage {
-  const reloadFirst = new Set([FINALIZE_TESTID, FORFEIT_TESTID].map((testid) => selectorForTapStep({ kind: "testid", testid })));
+  const forfeit = selectorForTapStep({ kind: "testid", testid: FORFEIT_TESTID });
+  const reloadFirst = new Set([selectorForTapStep({ kind: "testid", testid: FINALIZE_TESTID }), forfeit]);
   return {
     goto: (url) => page.goto(url),
     setViewportSize: (size) => page.setViewportSize(size),
@@ -465,6 +473,7 @@ export function reloadConsoleBeforeAction(page: TapPage): PadPage {
         ...inner,
         waitFor: async (options) => {
           await page.reload();
+          if (selector === forfeit) await openMatchActions(page, options?.timeout);
           await inner.waitFor(options);
         },
       };

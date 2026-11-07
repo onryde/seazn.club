@@ -33,6 +33,10 @@ import {
   FORFEIT_TESTID,
   FORFEIT_WHO_TESTID_PREFIX,
   FORFEIT_WHY_TESTID_PREFIX,
+  MATCH_ACTIONS_CLOSED_SELECTOR,
+  MATCH_ACTIONS_OPEN_SELECTOR,
+  MATCH_ACTIONS_TOGGLE_TESTID,
+  openMatchActions,
   organiserStepsFor,
   playMatchByTaps,
   selectorForTapStep,
@@ -1262,6 +1266,114 @@ describe("organiserStepsFor — what the scorer pad cannot author, on the fixtur
     expect(dockSrc).toMatch(new RegExp('"data-testid":\\s*`' + DOCK_CHIP_TESTID_PREFIX + "\\$\\{chip\\.id\\}`"));
     const spreads = dockSrc.match(/\{\.\.\.dockChipAttrs\(chip,/g) ?? [];
     expect(spreads.length, `dockChipAttrs spreads: ${spreads.length}`).toBeGreaterThan(0);
+  });
+
+  // PR #1133: Forfeit and Abandon moved into a "Match actions" panel that starts CLOSED at ≥768 behind a toggle; a phone
+  // shows it open and hides the toggle. Finalize moved OUT, to a banner at the top. Read from the product's own markup.
+  // PR #1134 keeps the toggle and its aria-expanded and renders the closed panel not at all (it was `hidden`).
+  it("PR #1133: the console's Match actions panel holds Forfeit and Abandon, closed at md and up behind a toggle hidden on phones; Finalize is a banner outside it", () => {
+    const web = (path: string) => readFileSync(new URL(`../../../../apps/web/src/components/v2/${path}`, import.meta.url), "utf8");
+    const consoleSrc = web("fixture-console.tsx");
+    const section = (role: string): string => {
+      const at = consoleSrc.indexOf(`data-role="${role}"`);
+      expect(at, `fixture-console.tsx has no data-role="${role}"`).toBeGreaterThan(0);
+      const end = consoleSrc.indexOf("</section>", at);
+      expect(end, `${role} never closes`).toBeGreaterThan(at);
+      return consoleSrc.slice(at, end);
+    };
+    // The toggle: its testid, the open state as aria-expanded, and hidden below md (so `:visible` counts it 0 on a phone).
+    const toggle = /<button[^>]*?data-testid="match-actions-toggle"[\s\S]*?<\/button>/.exec(consoleSrc)?.[0] ?? "";
+    expect(toggle, "the toggle's button").not.toBe("");
+    expect(`data-testid="${MATCH_ACTIONS_TOGGLE_TESTID}"`).toBe('data-testid="match-actions-toggle"');
+    expect(toggle).toContain("aria-expanded={matchActionsOpen}");
+    expect(toggle).toMatch(/className="[^"]*\bmax-md:hidden\b[^"]*"/);
+    // The panel (as re-laid out by PR #1134): absent while closed at md and up, rendered under the Scoring header once
+    // open there, and always rendered below md; Forfeit and Abandon live in it. md is 768 (Tailwind), the same edge
+    // as the toggle's max-md:hidden — so wherever the toggle is hidden the panel is open.
+    expect(consoleSrc).toContain('const wideLayout = useMediaQuery("(min-width: 768px)");');
+    expect(consoleSrc).toContain("const wideOpen = wideLayout && matchActionsOpen;");
+    expect(consoleSrc).toContain("{wideOpen && matchActionsPanel}");
+    expect(consoleSrc).toContain("{!wideLayout && matchActionsPanel}");
+    expect(consoleSrc.match(/\{[^{}]*&& matchActionsPanel\}/g), "the panel's placements").toHaveLength(2);
+    const panel = section("match-actions");
+    expect(panel).toContain(`data-testid="${FORFEIT_TESTID}"`);
+    expect(panel).toContain('{msg("score.abandon")}');
+    expect(panel).not.toContain(FINALIZE_TESTID);
+    // Finalize: the banner at the top, never inside the panel.
+    expect(section("finalize-banner")).toContain(`data-testid="${FINALIZE_TESTID}"`);
+    // The open state is the only thing the closed/open selectors key on, both through the toggle's own testid.
+    expect(MATCH_ACTIONS_CLOSED_SELECTOR).toBe('[data-testid="match-actions-toggle"]:not([aria-expanded="true"]):visible');
+    expect(MATCH_ACTIONS_OPEN_SELECTOR).toBe('[data-testid="match-actions-toggle"][aria-expanded="true"]');
+  });
+
+  describe("openMatchActions — opens the closed panel, and only that", () => {
+    /** A console whose toggle is `toggle`: on screen and closed, on screen and open, or not on screen (a phone, or no
+     *  match action offered). A tap that lands opens it, unless `dropTap` (the page was not hydrated). */
+    function consolePage(toggle: "closed" | "open" | "absent", dropTap = false) {
+      let state = toggle;
+      const log: string[] = [];
+      const page: Pick<PadPage, "locator"> = {
+        locator: (selector: string): PadLocator => ({
+          count: async () => {
+            log.push(`count ${selector}`);
+            if (selector === MATCH_ACTIONS_CLOSED_SELECTOR) return state === "closed" ? 1 : 0;
+            if (selector === MATCH_ACTIONS_OPEN_SELECTOR) return state === "open" ? 1 : 0;
+            throw new Error(`unexpected selector ${selector}`);
+          },
+          click: async () => {
+            log.push(`click ${selector}`);
+            if (selector !== MATCH_ACTIONS_CLOSED_SELECTOR || state !== "closed") throw new Error(`no closed toggle to click (${selector})`);
+            if (!dropTap) state = "open";
+          },
+          waitFor: async (o) => {
+            log.push(`wait ${o?.state} ${o?.timeout} ${selector}`);
+            if (selector === MATCH_ACTIONS_OPEN_SELECTOR && state !== "open") {
+              const e = new Error(`Timeout ${o?.timeout}ms waiting for ${selector}`);
+              e.name = "TimeoutError";
+              throw e;
+            }
+          },
+          fill: async () => { throw new Error("fill is not the toggle's"); },
+        }),
+      };
+      return { page, log, state: () => state };
+    }
+
+    it("closed behind a visible toggle: taps it once, then waits for it to read open", async () => {
+      const g = consolePage("closed");
+      expect(await openMatchActions(g.page, 1234)).toBe(true);
+      expect(g.state()).toBe("open");
+      expect(g.log).toEqual([
+        `count ${MATCH_ACTIONS_CLOSED_SELECTOR}`,
+        `click ${MATCH_ACTIONS_CLOSED_SELECTOR}`,
+        `wait attached 1234 ${MATCH_ACTIONS_OPEN_SELECTOR}`,
+      ]);
+    });
+
+    it("already open, or no toggle on screen (a phone, or nothing to offer): taps nothing — a second tap would CLOSE it", async () => {
+      let checked = 0;
+      for (const toggle of ["open", "absent"] as const) {
+        const g = consolePage(toggle);
+        expect(await openMatchActions(g.page), toggle).toBe(false);
+        expect(g.log.filter((l) => l.startsWith("click")), toggle).toEqual([]);
+        expect(g.state(), toggle).toBe(toggle);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+
+    it("a second call after opening taps nothing (the sequence: open, then open again)", async () => {
+      const g = consolePage("closed");
+      expect(await openMatchActions(g.page)).toBe(true);
+      expect(await openMatchActions(g.page)).toBe(false);
+      expect(g.log.filter((l) => l.startsWith("click"))).toHaveLength(1);
+    });
+
+    it("a tap that never lands (an unhydrated toggle) is a named timeout on the OPEN toggle, not a pass", async () => {
+      const g = consolePage("closed", true);
+      await expect(openMatchActions(g.page, 50)).rejects.toThrow(/aria-expanded="true"/);
+      expect(g.state()).toBe("closed");
+    });
   });
 
   it("selectorForTapStep: dock chips (tapped or offered) and releaseHold resolve to Task 8-style testids; text to its own", () => {
