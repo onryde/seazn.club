@@ -23,6 +23,7 @@ import { getRouteRegex } from "next/dist/shared/lib/router/utils/route-regex";
 import { getCacheControlHeader } from "next/dist/server/lib/cache-control";
 import { mintReportToken } from "@/server/sponsors/report-token";
 import { isCacheablePublicPath } from "@/proxy";
+import { routes } from "@/lib/routes";
 
 vi.mock("next/headers", () => ({ headers: async () => new Headers(), cookies: async () => ({ get: () => undefined }) }));
 
@@ -88,8 +89,9 @@ describe("served per request, never cached", () => {
     const url = `/r/sponsor/${mintReportToken()}`;
     expect(unstable_doesMiddlewareMatch({ config, nextConfig: {}, url })).toBe(true);
     expect(isCacheablePublicPath(url)).toBe(false);
-    // The positive pair: the public site IS cacheable, so the predicate is live.
-    expect(isCacheablePublicPath("/shared/riverside")).toBe(true);
+    // The positive pair: the public site IS cacheable, so the predicate is live. Built by the hub's own builder, never a
+    // literal, so the next move of the spectator root (LIVE1 moved /shared to /live) moves this with it.
+    expect(isCacheablePublicPath(routes.publicHub("riverside"))).toBe(true);
   });
 
   it("the page is force-dynamic with no revalidate of its own, which Next serves as private, no-store", () => {

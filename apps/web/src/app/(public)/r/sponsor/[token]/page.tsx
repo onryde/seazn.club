@@ -3,7 +3,7 @@
 //   - it is looked up by its hash and never logged, decoded or shape-checked (`sponsorReport`): an unknown, a revoked and a
 //     malformed token are the same opaque 404 (./not-found.tsx), at the cost of the same one lookup;
 //   - the page is per request and never cached (`force-dynamic`: Next sends `private, no-cache, no-store`), so a revoke closes
-//     the link on the next load, and proxy.ts's CDN-cacheable set (`/shared`, `/embed`) does not include it;
+//     the link on the next load, and proxy.ts's CDN-cacheable set (`/live/…`, `/embed`) does not include it;
 //   - noindex, nofollow, and no referrer: the URL never leaves in a Referer, to the logo's host or the frame store;
 //   - the scrubbers drop the token from analytics, Sentry and replay (`/r/sponsor/` in lib/scrub-score-url.ts).
 // Rate-limited per client IP by `publicRateLimit` (the public API's own 60 a minute), BEFORE the lookup: a throttled visit
