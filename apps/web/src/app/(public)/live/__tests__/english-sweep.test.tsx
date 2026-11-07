@@ -211,6 +211,7 @@ import * as PresentDivision from "../(kiosk)/[orgSlug]/[competitionSlug]/[divisi
 import * as MatchRoom from "../(kiosk)/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/play/page";
 import * as SponsorReportPage from "../../r/sponsor/[token]/page";
 import SponsorReportNotFound from "../../r/sponsor/[token]/not-found";
+import * as SponsorReportNotFoundModule from "../../r/sponsor/[token]/not-found";
 import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { fmtOnScreen, type SponsorReport, type SponsorReportShowing } from "@/lib/sponsor-report";
 import type { RoomSnapshot } from "@/components/public-site/match-room/room-snapshot";
@@ -1422,13 +1423,15 @@ const SCENES: Scene[] = [
   },
   {
     // The ONE answer for a token that opens nothing (unknown, revoked, malformed): it takes no props and reads no token.
-    name: "sponsor report not-found",
+    // Its head too: on notFound() Next skips the PAGE's generateMetadata and reads the not-found module's (next 16.3.6
+    // resolve-metadata.js, the error convention), so without its own the 404 serves the root layout's English head.
+    name: "sponsor report not-found (body and head)",
     files: ["../r/sponsor/[token]/not-found.tsx"],
-    minDictValues: 2,
+    minDictValues: 4,
     render: async () => {
       const markup = renderToStaticMarkup(await SponsorReportNotFound());
       expect(markup, "the 404 drew").toContain('data-testid="sponsor-report-not-found"');
-      return extractSegments(markup);
+      return [...extractSegments(markup), ...(await served(SponsorReportNotFoundModule, undefined))];
     },
   },
 ];

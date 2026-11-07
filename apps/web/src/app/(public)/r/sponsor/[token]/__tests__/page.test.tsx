@@ -67,7 +67,7 @@ import { airingFramePath } from "@/server/sponsors/airings";
 import { createReportLink, revokeReportLink } from "@/server/sponsors/report";
 import SponsorReportPage, { generateMetadata } from "../page";
 import { matchLines } from "@/components/sponsors/report-view";
-import SponsorReportNotFound from "../not-found";
+import SponsorReportNotFound, { generateMetadata as notFoundMetadata } from "../not-found";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const LONG = "Harbourside Building Supplies and Timber Co"; // 43 characters (Review Focus 5)
@@ -115,6 +115,16 @@ describe("metadata", () => {
     expect(meta.title).toBe(t(fr, "sponsorReport.meta.title"));
     // Its own: left out, the page inherits the ROOT layout's English site description (the /live english sweep found it).
     expect(meta.description).toBe(t(fr, "sponsorReport.meta.description"));
+  });
+
+  it("the 404's head is its own: on notFound() Next skips the page's generateMetadata, so the not-found declares the same noindex, nofollow and no-referrer, with a localised title and description", async () => {
+    const before = statementCount();
+    const meta = await notFoundMetadata();
+    expect(statementCount() - before, "it reads no token and no row").toBe(0);
+    expect(meta.robots).toEqual({ index: false, follow: false });
+    expect(meta.referrer).toBe("no-referrer");
+    expect(meta.title).toBe(t(fr, "sponsorReport.notFound.title"));
+    expect(meta.description).toBe(t(fr, "sponsorReport.notFound.body"));
   });
 });
 
