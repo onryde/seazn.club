@@ -21,7 +21,7 @@ Captured scenario this fulfils: `2026-09-05-stream-overlay-prompts/_SCENARIO-202
 | D10 | OBS streams in the report | **Not counted in the MVP** (an OBS page is public, its beacon forgeable); the report says "composed streams". Confirmed. |
 | D11 | Viewer wording | **"Viewer impressions"** (live viewers at each showing, added up) with **peak live viewers** beside it. Confirmed. *2026-11-01 (owner): the labels stay; the values show "Coming soon" until viewer counts ship (§5.2 note).* |
 | D12 | Default dial | **Normal** for a newly ticked sponsor. Confirmed. |
-| D13 | Ship before YouTube Connect? | **No: build in parallel, release together** with YouTube Connect, so viewers and "watch this moment" are live on day one. |
+| D13 | Ship before YouTube Connect? | **No: build in parallel, release together** with YouTube Connect, so viewers and "watch this moment" are live on day one. *2026-11-01 (owner): PR B (viewer counts) is deferred, so viewers are not live on day one; they show "Coming soon" (§5.2 note).* |
 | D14 | Rotation continuity | **One rotation per org across all its matches** (a per-org cursor), so on Light a T20's single innings break does not always go to the first title sponsor. |
 | D15 | Match-page sponsor links | **"a": the sponsor board also shows on the public match page**, links tagged with that fixture (`src=match`), so clicks count per match. |
 
@@ -59,7 +59,7 @@ declarations, mutate each guard once), frontend-design skill in every UI dispatc
    tabletennis, tennis, icehockey, hockey), **0** declare a break today; `sport/module.ts` has no break vocabulary.
    §3.1 adds it.
 2. *"Viewer counts fall back to match-page views"* (mock caption) — no page-view counter exists. Without YouTube
-   Connect the viewers column shows a dash; the MVP builds no counter.
+   Connect the viewers column shows "Coming soon" (*2026-11-01, §5.2 note*: PR B deferred), never a dash; the MVP builds no counter.
 3. *A 4th top-bar link fits* — `components/nav.tsx` (#516) measured 4 icons overflowing below ~340 px. §6.1.
 
 ## 2. Extensibility requirements → where each lands

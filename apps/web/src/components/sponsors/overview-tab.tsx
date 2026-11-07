@@ -96,7 +96,7 @@ export function OverviewTab(props: OverviewTabProps) {
         {label}
       </dt>
       <dd
-        className={`min-w-0 shrink-0 font-semibold tabular-nums ${accent ? "text-purple-700" : "text-slate-800"}`}
+        className={`shrink-0 font-semibold tabular-nums ${accent ? "text-purple-700" : "text-slate-800"}`}
         data-testid={`sponsor-overview-${field}`}
         data-row={key}
       >

@@ -493,7 +493,7 @@ describe.skipIf(!HAS_DB)("S14: a deleted sponsor", () => {
 });
 
 describe.skipIf(!HAS_DB)("S14: empty", () => {
-  it("a link over a period with nothing in it: zeros, an empty list, viewers a dash (null) - a second call the same", async () => {
+  it("a link over a period with nothing in it: zeros, an empty list, viewers null (the page shows Coming soon) - a second call the same", async () => {
     const r = await rig();
     const l = await link(r, { from: "2026-06-01", to: "2026-06-30" });
     const got = must(await sponsorReport(l.token, NOW));

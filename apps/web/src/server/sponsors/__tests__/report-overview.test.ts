@@ -249,7 +249,7 @@ describe.skipIf(!HAS_DB)("S13: the Overview's numbers", () => {
     expect(row.onScreenMs, "8 s, not 8 s − 30 s").toBe(8_000);
   });
 
-  it("viewer impressions and peak viewers are null in PR A for every row, aired or not - the card shows a dash, never 0", async () => {
+  it("viewer impressions and peak viewers are null in PR A for every row, aired or not - null, never 0 (the pages show Coming soon)", async () => {
     const auth = await org();
     const aired = await sponsorRow(auth.orgId, "Aired Ltd");
     await sponsorRow(auth.orgId, "Quiet Ltd");

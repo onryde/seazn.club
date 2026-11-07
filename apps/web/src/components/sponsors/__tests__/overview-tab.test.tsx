@@ -190,6 +190,17 @@ describe("the rows", () => {
     expect(m.text("sponsor-overview-notes")).toContain(msg("sponsors.overview.viewersFootnote"));
   });
 
+  // Only NULL is "not measured": a measured 0 (viewer counts shipped, nobody watching) is a number, so a null check
+  // loosened to a falsy one (`!r.viewerImpressions`) would print the legend over a real 0 (coming-soon review M3).
+  it("a row with 0 viewers reads 0 with its peak, never the Coming soon legend", () => {
+    const zero = row({ sponsorId: "s0", name: "Zero Viewers Ltd", timesShown: 4, onScreenMs: 32_000, viewerImpressions: 0, peakViewers: 0 });
+    const m = mount({ rows: [zero] });
+    const cell = m.byTestId("sponsor-overview-viewers").find((e) => (propsOf(e)["data-row"] as string) === rowKey(zero));
+    expect(cell, "the viewers cell is drawn").toBeDefined();
+    expect(flat(textOf(cell!))).toBe(flat(`${(0).toLocaleString("en")} ${msg("sponsors.overview.peak", { count: (0).toLocaleString("en") })}`));
+    expect(m.byTestId("viewers-coming-soon"), "no legend over a measured 0").toHaveLength(0);
+  });
+
   it("every stat carries its label in the row (the phone card's line, the desktop's screen-reader name), in order", () => {
     const m = mount();
     const items = m.byTestId(`sponsor-overview-row-s1`);
