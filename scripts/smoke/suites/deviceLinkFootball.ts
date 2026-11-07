@@ -73,7 +73,7 @@ export async function deviceLinkFootballSuite(): Promise<void> {
   );
   const gen = v1data<{ fixtures: { id: string }[] } | undefined>(await v1(owner, `/api/v1/stages/${stage?.id ?? ""}/generate`, "POST"));
   await v1(owner, `/api/v1/divisions/${div?.id ?? ""}/start`, "POST");
-  const fixtureId = gen?.fixtures[0]?.id ?? "";
+  const fixtureId = gen?.fixtures?.[0]?.id ?? "";
   const fixture = v1data<{ home_entrant_id: string; away_entrant_id: string } | undefined>(await v1(owner, `/api/v1/fixtures/${fixtureId}`));
   // The draw decides the seats: the sheet goes on whichever seat the home team (the one with the sheet's people) holds.
   const sheetEntrant = ents[0]?.id ?? "";
