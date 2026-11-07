@@ -1,6 +1,8 @@
 import "server-only";
 import crypto from "node:crypto";
 import { sql, type Tx } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
+import { QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
 
 // Short TTL: a login link is a live credential, so it should not linger.
 const TTL_MINUTES = 15;
@@ -14,6 +16,10 @@ export const LOGIN_LINK_TTL_MS = TTL_MINUTES * 60_000;
  * (the outbox row for the email expires at exactly that instant).
  */
 export async function issueLoginLink(userId: string, db: Tx | typeof sql): Promise<{ token: string; expiresAt: Date }> {
+  // The quick-match system user (V492) is the actor for guest-created rows and can never sign in (quick-match spec §7.1).
+  // Refused here, before anything is written, because both callers come through here: `createLoginLink` and the sign-in
+  // route (which answers its address as no account before it gets this far, so this is the backstop, not the answer).
+  if (userId === QUICK_MATCH_SYSTEM_USER_ID) throw new HttpError(403, "system user");
   const token = crypto.randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + LOGIN_LINK_TTL_MS);
   // Only one live link per user — invalidate any earlier unused ones.
