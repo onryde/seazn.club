@@ -55,6 +55,8 @@
 //    screen masks the token on purpose;
 //  - the fixture check-in code `/checkin/<token>` and `/api/checkin/<token>` (an HS256 JWT valid until the fixture's local
 //    midnight; checkin-token.ts): it is the proof of presence at the venue, so it is a credential, not a public address;
+//  - the Match Day code `/day/<token>` (`md_` + 43 base64url, one day; match-day-codes.ts): it lists a competition's matches
+//    and opens their scoring links in the Seazn Club app, and a phone's camera lands on the page with it;
 //  - the sponsor report link `/r/sponsor/<token>` (32 random bytes, base64url; until the club revokes it; R4 S14): whoever
 //    holds it reads that sponsor's figures and frames, with no login - a bearer credential, though it sits under `/r/`;
 //  - a quick match's home `/q/<home token>` (`qm_` + 43 base64url; quick-match-tokens.ts): whoever holds it can score
@@ -185,6 +187,7 @@ const SECRET_PATH_ROUTES = [
   // Quick match (plan 1 Task 9): the home token. A one-letter root, which is why every root here is matched at the root
   // only: a competition slug `q` (`/o/x/c/q/…`) is an address, not this route.
   "/q/",
+  "/day/",
 ] as const;
 /** The marketing locale prefix (`/fr/pricing`): a route root may follow it. */
 const LOCALE_PREFIX = LOCALES.join("|");

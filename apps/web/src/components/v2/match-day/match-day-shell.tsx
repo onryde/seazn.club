@@ -66,6 +66,7 @@ import { CourtFocus, NoCourtFocus, fixtureHref, type MatchDayCtx } from "./court
 import { CourtList, NoCourtList } from "./court-list";
 import { levelWords } from "@/lib/score/levels";
 import { VenueFilter } from "./venue-filter";
+import { MatchDayCodeSheet } from "./match-day-code-sheet";
 
 /** How often the page re-reads the closures against its clock: a break is minutes, so a minute is exact enough (m1). */
 const CLOCK_TICK_MS = 60_000;
@@ -142,6 +143,8 @@ export function MatchDayShell({
   /** The Needs-you list, open under the header. */
   const [needsOpen, setNeedsOpen] = useState(false);
   const needsId = useId();
+  /** The Match Day code sheet (MD-1 Task 2), open over the page. Editors only: a viewer never sees its button. */
+  const [codeOpen, setCodeOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -302,6 +305,17 @@ export function MatchDayShell({
               </div>
             )}
           </div>
+          {!readOnly && (
+            <button
+              type="button"
+              data-testid="md-code-open"
+              aria-haspopup="dialog"
+              onClick={() => setCodeOpen(true)}
+              className="btn btn-ghost inline-flex min-h-11 shrink-0 items-center max-md:w-full md:order-last"
+            >
+              {t(dict, "matchDay.code.title")}
+            </button>
+          )}
           {needsTone !== null && (
             <button
               type="button"
@@ -368,6 +382,17 @@ export function MatchDayShell({
           </div>
         )}
       </header>
+      {codeOpen && !readOnly && (
+        <MatchDayCodeSheet
+          competitionId={competitionId}
+          dict={dict}
+          locale={locale}
+          today={view.date}
+          courts={view.courts}
+          venuesToday={view.venues_today}
+          onClose={() => setCodeOpen(false)}
+        />
+      )}
 
       {courts.length === 0 && noCourt.length === 0 ? (
         <div data-testid="md-empty" className="card p-6">

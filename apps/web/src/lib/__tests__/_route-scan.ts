@@ -73,6 +73,7 @@ export const VERDICTS: Record<string, true | string> = {
   "checkin/[token]": true,
   "claim/[token]": true,
   "score/[token]": true,
+  "day/[token]": true,
   "api/invites/[token]": true,
   "api/checkin/[token]": true,
   "api/claims/[token]": true,

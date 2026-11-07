@@ -374,6 +374,12 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "GET /fixtures/:id/device-links",
   "DELETE /fixtures/:id/device-links/:linkId",
   "POST /fixtures/:id/device-links/reissue",
+  // Match Day codes (capture S4 design §3; MD-1): minting one hands out a credential that lists a day's matches and opens
+  // their scoring links — the device-links reasoning. The desk's doors are editor-session only (requireResourceAuth
+  // competition `write`, and the use-case refuses any non-session actor); never key-reachable.
+  "POST /competitions/:id/match-day-codes",
+  "GET /competitions/:id/match-day-codes",
+  "POST /match-day-codes/:id/revoke",
   // Streaming R1: a session consumes money and a target carries a stream key —
   // both structural bans, the device-links reasoning.
   "POST /fixtures/:id/stream-sessions",

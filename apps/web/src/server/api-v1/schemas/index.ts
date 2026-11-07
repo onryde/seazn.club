@@ -114,7 +114,7 @@ export {
   SlotLabelRef, Fixture, DeskInPlayFixture, DeskNextFixture, CompetitionDesk, LineupSlotInput, PutLineup,
   AppendEventRequest, EventImportRequest, EventImportReport, ScoreEvent, AppendEventResponse, FixtureState,
   StandingsRowOut, CreateApiKey, ApiKey, CreatedApiKey, CreateDeviceLink, DeviceLink, CreatedDeviceLink,
-  ScorerSheetsRequest,
+  ScorerSheetsRequest, MatchDayCodeScope, CreateMatchDayCode, MatchDayCode,
 } from "./scoring.ts";
 export {
   SwissReshapeResult, SwissRoundsJudgementResult, GenerateResult, GenerateStageInput, RebuildResult, UnpairResult,
