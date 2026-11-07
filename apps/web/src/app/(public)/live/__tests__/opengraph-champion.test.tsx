@@ -1,5 +1,6 @@
-// ST-G26 (W4 app A Task 23) — the division share card reads the first TABLE snapshot, and a division that is only a
-// bracket names its champion (owner pick, R24 item 6, option A: "Champion name large, with a trophy").
+// ST-G26 (W4 app A Task 23) — the division share card reads the first TABLE snapshot, and a division whose FINAL stage
+// is a bracket names its champion once that bracket is complete (owner pick, R24 item 6, option A: "Champion name large,
+// with a trophy"; extended past bracket-only divisions by the owner's B6b fix-round-1 ruling).
 //
 // The card drew `standings[0]` — whatever the unordered query returned first. A knockout writes a placement snapshot
 // when it completes (rank only, every count zero), so a knockout-only division's preview was an all-zero table, and a
@@ -182,18 +183,76 @@ describe("ST-G26 the champion model's guard", () => {
   });
 });
 
-describe("ST-G26 the share card reads the first TABLE snapshot", () => {
-  it("a group then a finished knockout: the group's Pool A table, even when the knockout's placement snapshot comes first", async () => {
+// Owner ruling (B6b fix round 1, OG pick A): a division whose FINAL stage is a bracket gets the champion card once that
+// bracket is complete — a group or a league that feeds a knockout included, not only a bracket-only division. While
+// the final bracket is still being played, the card stays the table it was.
+describe("ST-G26 a division whose final stage is a bracket names its champion once that bracket is complete", () => {
+  it("every table kind, then every bracket kind, the final decided: the champion, the trophy and the Champion label — no table", async () => {
+    const tableKinds = StageKind.options.filter((k) => !BRACKET_STAGE_KINDS.has(k));
+    const bracketKinds = StageKind.options.filter((k) => BRACKET_STAGE_KINDS.has(k));
+    let checked = 0;
+    for (const first of tableKinds) {
+      for (const final of bracketKinds) {
+        Object.assign(state, {
+          stages: [stage("s1", 1, first), stage("ko", 2, final)],
+          fixtures: bracket("ko"),
+          // Stage then pool order, as the read hands it over: the first stage's tables, then the bracket's placement.
+          standings: [table("s1", "pA", ["e3", "e1"]), table("s1", "pB", ["e2", "e4"]), placement("ko")],
+        });
+        const html = await draw();
+        const at = `${first} -> ${final}`;
+        expect(html, at).toContain(`>${esc("Maya Kapoor")}<`);
+        expect(html, at).toContain(TROPHY);
+        expect(html, at).toContain(`>${esc(line("en", "table.champion"))}<`);
+        // The first stage's table is not drawn under the crown.
+        expect(html, at).not.toContain(">Pts 9<");
+        expect(html, at).not.toContain(`>${esc("Clara Dunn")}<`);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: the engine's table kinds x bracket kinds").toBe(tableKinds.length * bracketKinds.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("a group then a knockout still being played: the group's Pool A table, no trophy", async () => {
     Object.assign(state, {
+      stages: [stage("sg", 1, "group"), stage("ko", 2, "knockout", "active")],
+      fixtures: bracket("ko", "scheduled"),
+      standings: [table("sg", "pA", ["e3", "e1"]), table("sg", "pB", ["e2", "e4"])],
+    });
+    const html = await draw();
+    expect(html).toContain(`>${esc("Clara Dunn")}<`);
+    expect(html).toContain(">Pts 9<");
+    expect(html).not.toContain(TROPHY);
+    expect(html).not.toContain(`>${esc(line("en", "table.champion"))}<`);
+  });
+
+  it("a youth division of individuals whose final stage is a finished knockout: the youth line, never the name", async () => {
+    Object.assign(state, {
+      youth: true,
       stages: [stage("sg", 1, "group"), stage("ko", 2, "knockout")],
       fixtures: bracket("ko"),
-      standings: [placement("ko"), table("sg", "pA", ["e3", "e1"]), table("sg", "pB", ["e2", "e4"])],
+      standings: [table("sg", "pA", ["e3", "e1"]), placement("ko")],
+    });
+    const html = await draw();
+    expect(html).not.toContain("Maya Kapoor");
+    expect(html).not.toContain(TROPHY);
+    expect(html).toContain(`>${esc(line("en", "og.standings.youth"))}<`);
+  });
+});
+
+describe("ST-G26 the share card reads the first TABLE snapshot", () => {
+  it("a finished knockout then a league (the league is the final stage): the league's table, though the knockout's placement snapshot reads first", async () => {
+    Object.assign(state, {
+      stages: [stage("ko", 1, "knockout"), stage("lg", 2, "league")],
+      fixtures: bracket("ko"),
+      standings: [placement("ko"), table("lg", null, ["e3", "e1"])],
     });
     const html = await draw();
     expect(html).toContain(`>${esc("Clara Dunn")}<`);
     expect(html).toContain(">Pts 9<");
     expect(html).not.toContain(">P 0<");
-    // Not a bracket-only division: no champion card.
+    // The final stage is a table, so the card is that table — the knockout's winner is not crowned here.
     expect(html).not.toContain(TROPHY);
   });
 

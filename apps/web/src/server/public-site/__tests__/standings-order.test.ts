@@ -10,12 +10,22 @@
 // pools in display order (`lib/pool-order.ts` — key, natural; the stage-wide table first). Written here in the WORST
 // order (the knockout first, then Pool B, then Pool A) and asserted across the pools AND the knockout, never one sample.
 //
+// The public JSON API (`publicStandings`, `/api/v1/public/.../standings`) read the same view the same unordered way, so
+// an API consumer got the snapshots in write order too (B6b review finding 6); it is held to the same order below.
+//
 // Real Postgres required; skipped without DATABASE_URL.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/cache", () => ({
   unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
   revalidateTag: vi.fn(),
+}));
+
+// The API's cache-aside: no Redis here, and a hit would hand back an earlier call's order instead of reading it.
+vi.mock("@/lib/cache", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/cache")>()),
+  cacheGet: async () => null,
+  cacheSet: async () => undefined,
 }));
 
 // The plan is the trap: on a small table Postgres walks `stages (division_id, seq)` and the snapshot key
@@ -51,6 +61,7 @@ import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { getPublicDivision } from "../data";
+import { publicStandings } from "@/server/usecases/public";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -171,5 +182,30 @@ describe.skipIf(!HAS_DB)("ST-G26 standings are read in stage then pool order", (
     const data = await getPublicDivision(scene.orgSlug, scene.compSlug, "empty");
     expect(data, "the public division").not.toBeNull();
     expect(data!.standings).toEqual([]);
+  });
+
+  for (const heap of [true, false]) {
+    it(`the public API (publicStandings): Pool A, then Pool B, then the knockout — ${heap ? "heap-order plan" : "the planner's own plan"}`, async () => {
+      plan.heap = heap;
+      try {
+        const before = plan.forced;
+        const doc = (await publicStandings(scene.orgSlug, scene.compSlug, "open")) as {
+          standings: { stage_id: string; pool_id: string | null; rows: unknown[] }[];
+        };
+        expect(plan.forced - before, "the standings read went through the plan under test").toBe(heap ? 1 : 0);
+        const read = doc.standings.map(keyOf);
+        expect(read.length, "anti-vacuity: three snapshots read").toBe(3);
+        expect(read).toEqual(["group/A", "group/B", "KO"]);
+        // The document's own shape is untouched: every snapshot still carries its rows.
+        expect(doc.standings.every((s) => Array.isArray(s.rows) && s.rows.length > 0)).toBe(true);
+      } finally {
+        plan.heap = false;
+      }
+    });
+  }
+
+  it("the public API's empty case: a division with no snapshots reads none", async () => {
+    const doc = (await publicStandings(scene.orgSlug, scene.compSlug, "empty")) as { standings: unknown[] };
+    expect(doc.standings).toEqual([]);
   });
 });

@@ -52,3 +52,25 @@ export function byPoolOrder(
     return ida < idb ? -1 : 1;
   };
 }
+
+/**
+ * ST-G26 (W4 app A Task 23): a division's standings in the product's order — its stages by seq (the order the organiser
+ * built them), and inside a stage its pools in display order (`byPoolOrder`: the stage-wide table, then key, natural).
+ * `public_standings_v` has no order of its own, and an unordered read hands its rows on in whatever order the plan
+ * produced — heap order is WRITE order, and a knockout writes its placement snapshot last of all. Every reader that
+ * takes the list's order as the division's goes through here: the public division read (the share card's first table,
+ * /present's one slide per snapshot) and the public JSON API (`publicStandings`, B6b review finding 6).
+ *
+ * Sorted in code, not SQL, so the pool order keeps one authority (this file's natural collation). A snapshot whose
+ * stage the caller did not list reads after every stage it did. Returns a sorted COPY.
+ */
+export function inStageThenPoolOrder<T extends { stage_id: string; pool_id: string | null }>(
+  standings: readonly T[],
+  stages: readonly { id: string; seq: number }[],
+  pools: readonly PoolOrderRef[],
+): T[] {
+  const seq = new Map(stages.map((st) => [st.id, st.seq]));
+  const stageSeq = (s: T) => seq.get(s.stage_id) ?? Number.MAX_SAFE_INTEGER;
+  const poolOrder = byPoolOrder(pools);
+  return [...standings].sort((a, b) => stageSeq(a) - stageSeq(b) || poolOrder(a, b));
+}

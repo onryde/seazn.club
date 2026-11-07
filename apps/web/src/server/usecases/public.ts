@@ -24,6 +24,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { cacheGet, cacheSet } from "@/lib/cache";
 import { cachedSingleFlight } from "@/lib/single-flight-cache";
+import { inStageThenPoolOrder } from "@/lib/pool-order";
 import { publicHubCacheKey, publicHubStaleCacheKey } from "@/server/public-site/hub-doc-cache-keys";
 import {
   PUBLIC_REF_TTL_SECONDS,
@@ -568,10 +569,21 @@ export async function publicStandings(
 ): Promise<unknown> {
   const division = await findDivision(orgSlug, compSlug, divSlug);
   return cached(publicDivisionStandingsCacheKey(division.id), async () => {
-    const standings = await sql`
-      select stage_id, pool_id, rows, updated_at
-      from public_standings_v where division_id = ${division.id}`;
-    return { division_id: division.id, standings };
+    // ST-G26 (B6b review finding 6): the view has no order, so the snapshots are put in the division's — stages by
+    // seq, then pools in display order — by the one helper the public division page uses.
+    const [standings, stages, pools] = await Promise.all([
+      sql<{ stage_id: string; pool_id: string | null; rows: unknown; updated_at: Date }[]>`
+        select stage_id, pool_id, rows, updated_at
+        from public_standings_v where division_id = ${division.id}`,
+      sql<{ id: string; seq: number }[]>`
+        select id, seq from public_stages_v where division_id = ${division.id}`,
+      sql<{ id: string; key: string; name: string }[]>`
+        select p.id, p.key, p.name
+        from public_pools_v p
+        join public_stages_v s on s.id = p.stage_id
+        where s.division_id = ${division.id}`,
+    ]);
+    return { division_id: division.id, standings: inStageThenPoolOrder(standings, stages, pools) };
   });
 }
 

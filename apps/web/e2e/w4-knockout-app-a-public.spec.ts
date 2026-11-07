@@ -47,6 +47,28 @@ async function crop(target: Locator | Page, name: string) {
   if (dir) await target.screenshot({ path: `${dir}/${name}.png`, ...("goto" in target ? { fullPage: true } : {}) });
 }
 
+/**
+ * /present: bring the board to the bracket slide (titled with the stage's name), let its fade-in FINISH, and crop it.
+ * The board turns its own page every 9s (`SLIDE_MS`), so a shot is kept only if the bracket slide is still the one up
+ * after it was taken; otherwise it tries again.
+ */
+async function presentBracketSlide(page: Page, title: string, shot: string) {
+  const heading = page.locator(".animate-slide-in h2");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    for (let i = 0; i < 4 && (await heading.textContent())?.trim() !== title; i++) await page.keyboard.press("ArrowRight");
+    await expect(heading, "the bracket slide is up").toHaveText(title);
+    await page.waitForFunction(() => {
+      const slide = document.querySelector(".animate-slide-in");
+      return !!slide && slide.getAnimations().every((a) => a.playState === "finished");
+    });
+    const png = await page.screenshot({ fullPage: true });
+    if ((await heading.textContent())?.trim() !== title) continue;
+    if (process.env.B6B_SHOTS) writeFileSync(`${process.env.B6B_SHOTS}/${shot}.png`, png);
+    return;
+  }
+  throw new Error(`the bracket slide never held still for ${shot}`);
+}
+
 /** A public, started knockout; returns its stage, fixtures and slugs. */
 async function publicKnockout(
   r: APIRequestContext,
@@ -75,15 +97,18 @@ async function publicKnockout(
 }
 
 test.describe("N-1 a bracket tile keeps its result off the names, and a finished bye reads no TBD (Task 22)", () => {
-  test("console tile at 320: a tap on the 43-character name lands on the name, never on the score line", async ({ page, request }) => {
+  test("console tile at 320: a tap on either name lands on that name, never on the score line", async ({ page, request }) => {
     test.setTimeout(4 * 60_000);
     expect(LONG).toHaveLength(43);
-    // Three entrants: seed 1 takes the bye; seed 2 (the long name) plays seed 3. Badminton on purpose: its racquet
-    // scoreline ("2 — 1 · 21–15, 18–21, 21–19") is the longest headline a tile carries — the one N-1 reported.
-    const ko = await publicKnockout(request, { key: "badminton", variant: "bwf" }, ["Riverside Smashers", LONG, "Catford Feathers"], "N-1", "individual");
+    // Three entrants: seed 1 takes the bye; seed 2 plays seed 3, and seed 3 is seated at HOME — so the 43-character
+    // name is the TOP name, the one the old result line was painted over (`absolute right-2 top-1.5`). Badminton on
+    // purpose: its racquet scoreline ("2 — 1 · 21–15, 18–21, 21–19") is the longest headline a tile carries — the one
+    // N-1 reported.
+    const ko = await publicKnockout(request, { key: "badminton", variant: "bwf" }, ["Riverside Smashers", "Catford Feathers", LONG], "N-1", "individual");
     const all = await Promise.all(ko.fixtureIds.map((id) => read(request, id)));
     const played = all.find((f) => f.home_entrant_id && f.away_entrant_id && [f.home_entrant_id, f.away_entrant_id].some((e) => ko.nameOf.get(e) === LONG));
     expect(played, "the long name's first-round match is seated").toBeTruthy();
+    expect(ko.nameOf.get(played!.home_entrant_id!), "premise: the long name sits on top, where the old line was painted").toBe(LONG);
     await post(request, played!.id, "core.start");
     for (const [home, away] of [[21, 15], [18, 21], [21, 19]] as const) await post(request, played!.id, "badminton.game.summary", { home, away });
     expect((await read(request, played!.id)).status, "the match is decided").toMatch(/decided|finalized/);
@@ -96,26 +121,36 @@ test.describe("N-1 a bracket tile keeps its result off the names, and a finished
     await expect(tile).toBeVisible({ timeout: STEP_MS });
     const headline = tile.getByTestId("bracket-tile-headline");
     await expect(headline, "the decided tile carries its result line").toBeVisible();
-    const name = tile.getByText(LONG, { exact: true });
-    await name.scrollIntoViewIfNeeded();
-    const [n, h] = [await name.boundingBox(), await headline.boundingBox()];
-    expect(n && h, "both the name and the result line are laid out").toBeTruthy();
-    // The result line is its own row, below both names — never painted over the top name.
-    expect(h!.y, `the result line starts below the name (${JSON.stringify({ n, h })})`).toBeGreaterThanOrEqual(n!.y + n!.height - 0.5);
-    // What a finger reaches: the topmost element at the centre of the name's VISIBLE part (it truncates inside the
-    // tile) is the name, or inside it.
+    await tile.scrollIntoViewIfNeeded();
     const t = (await tile.boundingBox())!;
-    const cx = (Math.max(n!.x, t.x) + Math.min(n!.x + n!.width, t.x + t.width)) / 2;
-    const cy = n!.y + n!.height / 2;
-    const hit = await name.evaluate(
-      (nameEl, [x, y]) => {
-        const el = document.elementFromPoint(x, y);
-        // The name node itself or a node inside it — never the tile around it, nor the result line.
-        return { inName: !!el && nameEl.contains(el), inHeadline: !!el?.closest('[data-testid="bracket-tile-headline"]') };
-      },
-      [cx, cy] as const,
-    );
-    expect(hit, "the tap lands on the name, not the score").toEqual({ inName: true, inHeadline: false });
+    // What a finger reaches, for BOTH names: the topmost element at the centre of each name's VISIBLE part (a name
+    // truncates inside the tile) is that name, or inside it — never the tile around it, nor the result line.
+    const seats = [LONG, ko.nameOf.get(played!.away_entrant_id!)!];
+    let tapped = 0;
+    for (const who of seats) {
+      const name = tile.getByText(who, { exact: true });
+      const n = (await name.boundingBox())!;
+      expect(n, `${who}: laid out`).toBeTruthy();
+      const cx = (Math.max(n.x, t.x) + Math.min(n.x + n.width, t.x + t.width)) / 2;
+      const cy = n.y + n.height / 2;
+      const hit = await name.evaluate(
+        (nameEl, [x, y]) => {
+          const el = document.elementFromPoint(x, y);
+          return { inName: !!el && nameEl.contains(el), inHeadline: !!el?.closest('[data-testid="bracket-tile-headline"]') };
+        },
+        [cx, cy] as const,
+      );
+      expect(hit, `a tap on ${who === LONG ? "the top (43-character) name" : "the bottom name"} lands on it, not on the score`).toEqual({ inName: true, inHeadline: false });
+      tapped++;
+    }
+    expect(tapped, "anti-vacuity: both seats tapped").toBe(2);
+    // The result line is its own row, below BOTH names.
+    const lowest = Math.max(...(await Promise.all(seats.map(async (who) => {
+      const b = (await tile.getByText(who, { exact: true }).boundingBox())!;
+      return b.y + b.height;
+    }))));
+    const h = (await headline.boundingBox())!;
+    expect(h.y, "the result line starts below both names").toBeGreaterThanOrEqual(lowest - 0.5);
     await crop(tile, "n1-console-tile-320");
 
     // The bye: its empty seat reads the bye's word on the public bracket, never "TBD".
@@ -193,7 +228,7 @@ test.describe("ST-G7 the embed shows a finished bracket as a bracket", () => {
       if (await showBoard.isVisible()) await showBoard.click();
       await expect(page.locator("h2:visible").first(), `${w}: the board shows a slide`).toBeVisible({ timeout: STEP_MS });
       await expectNoHorizontalScroll(page);
-      await crop(page, `stg7-present-${w}`);
+      await presentBracketSlide(page, "Cup", `stg7-present-${w}`);
     }
 
     // /present rotates its slides in the browser, so the slide LIST is read where the board receives it: its payload.
@@ -202,5 +237,65 @@ test.describe("ST-G7 the embed shows a finished bracket as a bracket", () => {
     const slidesOf = (kind: string) => board.split(`\\"kind\\":\\"${kind}\\"`).length - 1 + (board.split(`"kind":"${kind}"`).length - 1);
     expect(slidesOf("bracket"), "the knockout's bracket slide is on the board").toBeGreaterThan(0);
     expect(slidesOf("standings"), "and no standings slide").toBe(0);
+  });
+});
+
+test.describe("ST-G26 a division whose final stage is a finished knockout crowns its champion on its share card", () => {
+  test("group -> knockout, the final decided and the stage completed: the division's own og:image renders", async ({ page, request }) => {
+    test.setTimeout(4 * 60_000);
+    const org = await activeOrg(page);
+    const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `W4 Group KO ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+      visibility: "public",
+    });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string; slug: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Open", sport_key: "generic", variant_key: "score",
+    });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const added = await addEntrantsViaApi(request, div.data!.id, [LONG, "Riverside Athletic FC", "Harbour United Reserves", "Bears of Brockley"], "team");
+    expect(added.ids, `entrants: HTTP ${added.status}`).toHaveLength(4);
+    // Two pools of two feed a knockout with each pool's winner (stage-progression.spec.ts's recipe, one qualifier each).
+    const stages = await apiJson<{ id: string; kind: string }[]>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", [
+      { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
+      {
+        seq: 2, kind: "knockout", name: "Final", config: {},
+        progression: { sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] }], placement: "rank_order", timing: "setup" },
+      },
+    ]);
+    expect(stages.status, JSON.stringify(stages.error)).toBe(201);
+    const groupId = stages.data!.find((s) => s.kind === "group")!.id;
+    const koId = stages.data!.find((s) => s.kind === "knockout")!.id;
+    expect((await apiJson(request, `/api/v1/stages/${koId}/generate`, "POST")).status).toBe(200);
+    const groupGen = await apiJson<{ fixtures: { id: string }[] }>(request, `/api/v1/stages/${groupId}/generate`, "POST");
+    expect(groupGen.status, JSON.stringify(groupGen.error)).toBe(200);
+    expect(groupGen.data!.fixtures, "premise: one match per pool").toHaveLength(2);
+    expect((await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status).toBeLessThan(300);
+    for (const f of groupGen.data!.fixtures) await post(request, f.id, "generic.result", { p1Score: 2, p2Score: 0 });
+    expect((await apiJson(request, `/api/v1/stages/${groupId}/complete`, "POST")).status).toBe(200);
+    const proposal = await apiJson<{ id: string }>(request, `/api/v1/stages/${koId}/seed-proposal`, "POST");
+    expect(proposal.status, JSON.stringify(proposal.error)).toBe(201);
+    const confirmed = await apiJson<{ fixtures: { id: string; home_entrant_id: string | null; away_entrant_id: string | null }[] }>(
+      request, `/api/v1/stages/${koId}/seed-proposal/confirm`, "POST", { proposalId: proposal.data!.id },
+    );
+    expect(confirmed.status, JSON.stringify(confirmed.error)).toBe(200);
+    const final = confirmed.data!.fixtures.find((f) => f.home_entrant_id && f.away_entrant_id);
+    expect(final, "premise: the two pool winners meet in the final").toBeTruthy();
+    await post(request, final!.id, "generic.result", { p1Score: 2, p2Score: 1 });
+    expect((await apiJson(request, `/api/v1/stages/${koId}/complete`, "POST")).status).toBeLessThan(300);
+    const champion = added.ids.indexOf(final!.home_entrant_id!);
+    expect(champion, "premise: the final's home side won it").toBeGreaterThanOrEqual(0);
+
+    // The share image the division page itself names (the logic is unit-proven in opengraph-champion.test.tsx; this is
+    // the real render, saved for review).
+    await page.goto(`/live/${org.slug}/${comp.data!.slug}/${div.data!.slug}`);
+    const ogUrl = await page.locator('meta[property="og:image"]').first().getAttribute("content");
+    expect(ogUrl, "the division page names its share image").toBeTruthy();
+    const ogPath = new URL(ogUrl!, page.url());
+    const og = await page.request.get(`${ogPath.pathname}${ogPath.search}`);
+    expect(og.status(), "the share card renders").toBe(200);
+    expect(og.headers()["content-type"]).toContain("image/png");
+    if (process.env.B6B_SHOTS) writeFileSync(`${process.env.B6B_SHOTS}/stg26-og-group-ko-champion.png`, await og.body());
   });
 });

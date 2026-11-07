@@ -33,13 +33,16 @@ export default async function Image({ params }: Props) {
     : [];
 
   // ST-G26 (W4 app A Task 23): the first TABLE snapshot, in the read's stage-then-pool order. A bracket's snapshot is
-  // the placement table it writes on completion (rank only, every count zero) — never a table to show. A division that
-  // is ONLY a bracket names its champion instead, once crowned (owner pick, R24 item 6, option A).
+  // the placement table it writes on completion (rank only, every count zero) — never a table to show.
+  // Owner ruling (OG pick A, R24 item 6; B6b fix round 1): a division whose FINAL stage is a bracket — bracket-only, or
+  // a group/league feeding it — names its champion instead, once that bracket is complete: its final decided
+  // (`divisionChampion`, the moment the division page's banner crowns). Until then a division with a table keeps its
+  // table, and a bracket-only one its empty line. A final stage that is a table never crowns here.
   const stages = data?.stages ?? [];
   const isBracket = (stageId: string) => BRACKET_KINDS.has(stages.find((s) => s.id === stageId)?.kind ?? "");
   const table = data?.standings.find((s) => !isBracket(s.stage_id));
-  const bracketOnly = stages.length > 0 && stages.every((s) => BRACKET_KINDS.has(s.kind));
-  const championId = data && bracketOnly ? divisionChampion(data.stages, data.fixtures, data.standings) : null;
+  const finalStage = stages.reduce<(typeof stages)[number] | undefined>((last, s) => (!last || s.seq > last.seq ? s : last), undefined);
+  const championId = data && finalStage && BRACKET_KINDS.has(finalStage.kind) ? divisionChampion(data.stages, data.fixtures, data.standings) : null;
   const rows = (table?.rows ?? []) as StandingsSnapshotRow[];
   // W2d T17: the table's own stage's rules — how its points print (RB2B-17).
   const rules = data?.stages.find((s) => s.id === table?.stage_id)?.table_rules ?? null;

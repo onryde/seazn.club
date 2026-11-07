@@ -530,12 +530,13 @@ export async function buildDivisionSlides(
           id: f.id,
           round_no: f.round_no,
           seq_in_round: f.seq_in_round,
+          // N-1 (rulings 116/117): a settled bye's unlabelled empty seat reads the bye's word, never "to be decided".
           home: f.home_entrant_id
             ? (names[f.home_entrant_id] ?? null)
-            : (unseatedName(f, "home") ?? resolveSlotLabel(f.home_slot_label ?? null, lookup, "bracket.tbd")),
+            : (unseatedName(f, "home") ?? resolveSlotLabel(f.home_slot_label ?? null, lookup, bracketSeatFallbackKey(f, "home"))),
           away: f.away_entrant_id
             ? (names[f.away_entrant_id] ?? null)
-            : (unseatedName(f, "away") ?? resolveSlotLabel(f.away_slot_label ?? null, lookup, "bracket.tbd")),
+            : (unseatedName(f, "away") ?? resolveSlotLabel(f.away_slot_label ?? null, lookup, bracketSeatFallbackKey(f, "away"))),
           home_slot_label: f.home_slot_label,
           away_slot_label: f.away_slot_label,
           ...scoreOf(f),
