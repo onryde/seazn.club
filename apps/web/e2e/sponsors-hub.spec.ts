@@ -8,7 +8,7 @@
 //      on the hub's Sponsors tab, with a second query param carried through, and Settings itself no longer lists Sponsors.
 //   3. A viewer (a non-editor) gets the same read-only view Settings gave: the Sponsors tab renders, with no add form; the editor-only
 //      tabs are not offered, and `?tab=packages` falls back to Overview instead of refusing.
-//   4. The Dashboard's Sponsors entry - the way in at EVERY width, the top-bar Sponsors link being hidden under 350px - works from 320;
+//   4. The Competitions home's Sponsors entry - the way in at EVERY width, the top-bar Sponsors link being hidden under 350px - works from 320;
 //      from 350 the top-bar link is there too, and on a desktop it is a LABELLED link while Settings is its gear alone (owner 2026-11-01).
 //   5. On stream (S12): the tab, driven as an editor drives it - the first tick turns the rotation on at Normal (R12) and the page shows
 //      it; the dial and a competition's own scope persist across a reload; the preview names a sport's breaks when it has no finished
@@ -18,7 +18,7 @@
 //      checked against the url's token; a viewer reads the same numbers with no Share report, and both link routes refuse it (R19).
 //      Default viewport only (R17): no width claims here.
 // Width checks for the hub live in mobile.spec.ts (ruling R17: only that file runs in the seven width projects); this file holds its own
-// default viewport, plus the 320 pass the Dashboard entry exists for.
+// default viewport, plus the 320 pass the Competitions home entry exists for.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -150,13 +150,13 @@ test("a viewer gets the read-only view Settings gave: Sponsors without the add f
   }
 });
 
-test("the Dashboard's Sponsors entry opens the hub at 320, where the top-bar Sponsors link is hidden", async ({ page }) => {
+test("the Competitions home's Sponsors entry opens the hub at 320, where the top-bar Sponsors link is hidden", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto(`/o/${org.slug}`);
-  // Under 350px the top-bar Sponsors link is `display: none`; the Dashboard's own entry is the way in.
+  // Under 350px the top-bar Sponsors link is `display: none`; the Competitions home's own entry is the way in.
   await expect(page.getByTestId("nav-sponsors"), "the top-bar link is hidden at 320").toBeHidden();
   const entry = page.getByTestId("org-home-sponsors");
-  await expect(entry, "the Dashboard entry is visible at 320").toBeVisible();
+  await expect(entry, "the Competitions home entry is visible at 320").toBeVisible();
   await expectNoHorizontalScroll(page);
   await entry.click();
   await expect(page).toHaveURL(new RegExp(`/o/${org.slug}/sponsors$`));

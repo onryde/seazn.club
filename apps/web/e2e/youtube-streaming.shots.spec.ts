@@ -201,7 +201,7 @@ async function expectGantryFits(page: Page, where: string, opts: { playerHome?: 
   ).toEqual(labelled.map(() => seen.vw >= opts.labelsFrom));
   expect(seen.n, `${where}: the gantry has links to measure`).toBeGreaterThanOrEqual(3);
   expect(seen.testids, `${where}: the Streaming item is among them`).toContain("nav-streaming");
-  // The Sponsors link (R4 S11): `hidden min-[350px]:flex` - there from 350, gone below it (the Dashboard's own entry covers 320).
+  // The Sponsors link (R4 S11): `hidden min-[350px]:flex` - there from 350, gone below it (the Competitions home's own entry covers 320).
   expect(seen.testids.includes("nav-sponsors"), `${where}: Sponsors is ${seen.vw >= SPONSORS_FROM_PX ? "shown" : "hidden"} at ${seen.vw}px`).toBe(
     seen.vw >= SPONSORS_FROM_PX,
   );

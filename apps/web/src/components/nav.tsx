@@ -134,8 +134,8 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
   // where main had 114). Nothing else moves: labels, type and the display name are as they were.
   //
   // Phones are icon-only either way: Sign out's right edge is at 28N + 204 for N icon links (the 4-link nav's 4px at 320 and the
-  // 5-link nav's 6px at 350, as measured above). Sponsors is `hidden min-[350px]:flex` (the Player-home precedent; the org
-  // Dashboard carries a Sponsors entry at every width), and the worst case - Streaming + a claimed player - needs 372px for six
+  // 5-link nav's 6px at 350, as measured above). Sponsors is `hidden min-[350px]:flex` (the Player-home precedent; the org's
+  // Competitions home carries a Sponsors entry at every width), and the worst case - Streaming + a claimed player - needs 372px for six
   // links, so Player home folds first: for a streaming org it is `hidden min-[390px]:flex` (five of six links shown 350-389, all
   // six from 390), and it keeps the 350 precedent for an org without Streaming, whose five links already fit. 320 shows four
   // whatever the org. An org LOGO puts 38px more in the row (the 28px logo and its 10px gap; measured, five links then fit from
@@ -304,7 +304,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 </Link>
               )}
               {/* Sponsors (R4, owner ruling 2026-11-01): the top-level hub, a labelled link like its siblings, hidden entirely under
-                  350 (390 for an org with a logo) - the org Dashboard carries a Sponsors entry at every width. See the budget note above `navLabelClass`. Shown
+                  350 (390 for an org with a logo) - the org's Competitions home carries a Sponsors entry at every width. See the budget note above `navLabelClass`. Shown
                   to every role: the hub itself decides what a non-editor sees (read-only Overview and Sponsors, as Settings gave). */}
               {activeOrg && (
                 <Link

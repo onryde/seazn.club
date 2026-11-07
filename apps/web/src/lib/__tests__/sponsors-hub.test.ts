@@ -1,6 +1,6 @@
 // R4 sponsors-on-stream S11 - the Sponsors hub's pure tab rules (spec 2026-10-27 §5.1, R19).
 //
-// Pure and dependency-free so the page, the nav's dashboard entry and the tests share ONE declaration of the tabs.
+// Pure and dependency-free so the page, the nav and Competitions home entries and the tests share ONE declaration of the tabs.
 // Every expectation below is read from `SPONSORS_TABS` / `SPONSORS_EDITOR_ONLY_TABS` themselves (the declarations),
 // never from a second typed list - except the ONE literal pin of the declared order, which is the contract with
 // S12 (On stream) and S13 (Overview) and with the e2e specs.

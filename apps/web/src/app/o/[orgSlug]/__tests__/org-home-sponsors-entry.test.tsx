@@ -1,10 +1,11 @@
-// R4 sponsors-on-stream S11 - the org Dashboard's Sponsors entry (OWNER RULING §6.1 "a", 2026-10-31).
+// R4 sponsors-on-stream S11 - the org Competitions home's Sponsors entry (OWNER RULING §6.1 "a", 2026-10-31). The ruling
+// called the page "the Dashboard"; main's Match Day C7 titled it Competitions (the top bar's link to it still reads Dashboard).
 //
 // The top-bar Sponsors link is `hidden min-[350px]:flex` (`min-[390px]` for an org with a logo): it is gone below 350px. The ruling's other half is that the
-// Dashboard carries a Sponsors entry AT EVERY WIDTH, so a phone user at 320 always has a way in. "At every width" is a
+// Competitions home carries a Sponsors entry AT EVERY WIDTH, so a phone user at 320 always has a way in. "At every width" is a
 // claim about CLASSES, so it is asserted on the link's class tokens: nothing that hides it at any breakpoint
 // (`hidden`, `max-*:hidden`, `sm:hidden`, `md:hidden` ...) - and the link is there for a viewer too (the hub gives a
-// non-editor its read-only Overview and Sponsors) and on an EMPTY dashboard, where the page renders a different body.
+// non-editor its read-only Overview and Sponsors) and on an EMPTY Competitions home, where the page renders a different body.
 //
 // Rendered through react-dom/server - vitest runs `environment: "node"` and this workspace has no jsdom.
 import { describe, expect, it, vi, beforeEach } from "vitest";
@@ -76,7 +77,7 @@ beforeEach(() => {
   h.competitions = [];
 });
 
-describe("the org Dashboard's Sponsors entry", () => {
+describe("the org Competitions home's Sponsors entry", () => {
   it("is a link to the Sponsors hub, labelled Sponsors, and nothing hides it at ANY width", async () => {
     h.competitions = [{ id: "c1", name: "Summer League", slug: "summer-league", status: "live", ends_on: null }];
     const e = entry(await render());
@@ -88,7 +89,18 @@ describe("the org Dashboard's Sponsors entry", () => {
     expect(e!.cls).toContain("btn");
   });
 
-  it("is there on an EMPTY dashboard too (the page renders a different body when there are no competitions)", async () => {
+  it("has the same tap-height floor as its header neighbour, New competition (main's Match Day C7 row)", async () => {
+    h.competitions = [{ id: "c1", name: "Summer League", slug: "summer-league", status: "live", ends_on: null }];
+    const html = await render();
+    // The floor is read off the neighbour main renders (`data-tour="new-competition"`), never typed here.
+    const neighbour = html.match(/<a\b([^>]*data-tour="new-competition"[^>]*)>/);
+    expect(neighbour, "premise: the New competition button renders for an editor").not.toBeNull();
+    const floor = (neighbour![1]!.match(/\bclass="([^"]*)"/)?.[1] ?? "").split(/\s+/).filter((t) => t.startsWith("min-h-"));
+    expect(floor.length, "premise: the neighbour carries a min-h floor (tokens checked)").toBeGreaterThan(0);
+    expect(entry(html)!.cls).toEqual(expect.arrayContaining(floor));
+  });
+
+  it("is there on an EMPTY Competitions home too (the page renders a different body when there are no competitions)", async () => {
     h.competitions = [];
     const e = entry(await render());
     expect(e).not.toBeNull();

@@ -1,8 +1,8 @@
 // The Sponsors hub's tab rules (R4 sponsors-on-stream S11; spec 2026-10-27 §5.1).
 //
 // `/o/[orgSlug]/sponsors?tab=...` is a top-level console page (it left Settings), so its tab list, who may see which
-// tab, and the redirect from the old Settings URL live here, pure and dependency-free: the page, the dashboard entry
-// and the tests all read ONE declaration. Mirrors `registration-hub-tab.ts` (the hub's `?tab=` is read server-side;
+// tab, and the redirect from the old Settings URL live here, pure and dependency-free: the page, the Competitions home
+// entry and the tests all read ONE declaration. Mirrors `registration-hub-tab.ts` (the hub's `?tab=` is read server-side;
 // there is no client tabs component in this repo).
 //
 // Who sees what (R19, from the existing Settings -> Sponsors guard, reused):
