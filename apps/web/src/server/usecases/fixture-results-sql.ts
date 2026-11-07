@@ -48,12 +48,13 @@
 //     reader): the snapshot exemption inside `fixtureEvidenceSql` and `playedSql`
 //     (engine-db/format-standing.ts)
 //   `swissByeShellSql` (W3 T3, X-SW-29; defined in engine-db/system-bye-sql.ts
-//     since W4 T3): the sheet day list (scorer-sheets.ts), the board read's
-//     `bye_shell` flag (fixtures.ts), fixture-started-sql.ts, and `byeLineSql`
+//     since W4 T3): the sheet day list (scorer-sheets.ts),
+//     fixture-started-sql.ts, and `byeLineSql`
 //   `byeLineSql` (W4 T3, K2, X-SD-5; engine-db/system-bye-sql.ts — the Swiss
 //     shell, the system bye and the pre-award bye line): `movableFixtureSql` and
 //     the quick Start's rolling times (schedule.ts), history.ts's placement
-//     replays (`slotTaker`), and V492's shape
+//     replays (`slotTaker`), the board read's `bye_line` flag (fixtures.ts,
+//     B1a review #1), and V492's shape
 //   NEITHER, a status list only
 //     - stages.ts: `deleteStage` refuses `in_play`/`decided`/`finalized` and
 //       deletes every other row with its evidence, an abandoned match or a

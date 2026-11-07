@@ -1259,7 +1259,8 @@ export async function main() {
   await suite("w3SwissB", () => w3SwissBSuite());
 
   // Format matrix W4 knockout app-A: counted checks for the tasks that owe one (T2: a called final survives a void of its
-  // feeder, X-LE-9); the suite's own header lists each. After w3SwissB, as the plan places every new suite after the last.
+  // feeder, X-LE-9; T3: an awarded bye holds no court, X-SD-5; T4: Rebuild keeps the final's slot by bracket role,
+  // X-RB-1); the suite's own header lists each. After w3SwissB, as the plan places every new suite after the last.
   // Own fresh owner; keyless; every read and write a v1 route.
   await suite("w4KnockoutA", () => w4KnockoutASuite());
 }

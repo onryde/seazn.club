@@ -8,7 +8,8 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { PatchFixture, PutLineup, ScheduleConflict } from "@/server/api-v1/schemas";
 import { type BoardFixtureRow, type FixtureRow } from "./stages";
-import { fixtureHasResultSql, swissByeShellSql } from "./fixture-results-sql";
+import { fixtureHasResultSql } from "./fixture-results-sql";
+import { byeLineSql } from "@/server/engine-db/system-bye-sql";
 import { activeAbandonReasonSql, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { streamUrlSchema } from "@/lib/stream-url";
 import { feedsNextMatch, type FeedEdges } from "@/lib/bracket-next-match";
@@ -448,7 +449,7 @@ export async function listDivisionFixturesForBoard(
         third_place: boolean;
         conditional: boolean;
         held: boolean;
-        bye_shell: boolean;
+        bye_line: boolean;
       })[]
     >`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
@@ -460,18 +461,19 @@ export async function listDivisionFixturesForBoard(
              -- refuses to move. The status test comes first, so the evidence
              -- lookups run for scheduled rows only.
              (f.status = 'scheduled' and ${fixtureHasResultSql(tx)}) as held,
-             -- W3 T3 (X-SW-29): a Swiss bye row, which no board write places.
-             ${swissByeShellSql(tx, "f")} as bye_shell
+             -- W3 T3 (X-SW-29), W4 T3 (X-SD-5): a bye line, which no board write places (B1a review #1:
+             -- the server's own predicate, so a knockout bye line is no drag target either).
+             ${byeLineSql(tx, "f")} as bye_line
       from fixtures f
       where f.division_id = ${divisionId}
       order by f.stage_id, f.round_no, f.seq_in_round`;
     // Omitted, not nulled: the RSC flight serialises an undefined value as
     // "$undefined" and a null/false as the key plus its value — only a key
     // that is not there costs nothing.
-    return rows.map(({ ext_key, lane, is_final, third_place, conditional, held, bye_shell, ...row }) => ({
+    return rows.map(({ ext_key, lane, is_final, third_place, conditional, held, bye_line, ...row }) => ({
       ...row,
       ...(held ? { held: true as const } : {}),
-      ...(bye_shell ? { bye_shell: true as const } : {}),
+      ...(bye_line ? { bye_line: true as const } : {}),
       ...(ext_key !== null && ext_key.startsWith("pp-") ? { ext_key } : {}),
       ...(lane !== null ? { lane } : {}),
       ...(is_final ? { is_final } : {}),

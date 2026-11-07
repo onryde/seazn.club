@@ -204,10 +204,10 @@ describe.runIf(HAS_DB)("W3 T3 X-SW-29 a Swiss bye shell never takes a court", ()
     const { byes, boards } = await split(rig.stageId);
     const rows = await listDivisionFixturesForBoard(rig.auth, rig.divisionId);
     expect(rows.length, "anti-vacuity: the board read every row").toBe(6);
-    const marked = rows.filter((r) => r.bye_shell === true).map((r) => r.id).sort();
+    const marked = rows.filter((r) => r.bye_line === true).map((r) => r.id).sort();
     expect(marked, "both bye rows are marked, seated or not").toEqual(byes.map((b) => b.id).sort());
-    for (const r of rows.filter((x) => x.bye_shell !== true)) {
-      expect(Object.prototype.hasOwnProperty.call(r, "bye_shell"), `${r.id}: sent only when true`).toBe(false);
+    for (const r of rows.filter((x) => x.bye_line !== true)) {
+      expect(Object.prototype.hasOwnProperty.call(r, "bye_line"), `${r.id}: sent only when true`).toBe(false);
     }
     const unseated = rows.find((r) => r.id === byes.find((b) => b.status === "scheduled")!.id)!;
     expect([boardMovable(unseated), inBoardTray(unseated)], "the unseated shell: no drag, no tray").toEqual([false, false]);

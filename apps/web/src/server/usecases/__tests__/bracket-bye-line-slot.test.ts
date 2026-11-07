@@ -31,6 +31,10 @@ import { playedFixtureIds } from "../fixture-results-sql";
 import { redoDivision, undoDivision } from "../history";
 import { applySchedule, autoSchedule, isMovable, movableFixtureSql, moveFixture, putScheduleSettings, startDivision } from "../schedule";
 import { completeStage, confirmSeedProposal, createStages, generateStageFixtures } from "../stages";
+import { getCompetitionDesk } from "../competition-desk";
+import { listDivisionFixturesForBoard } from "../fixtures";
+import { boardMovable, inBoardTray } from "@/components/v2/board/types";
+import { computeDisruptions } from "@/components/v2/board/use-disruption-signals";
 import { createCourt, createVenue } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
@@ -115,6 +119,7 @@ async function orgDivision(label: string) {
 
 interface LeagueKo {
   auth: AuthCtx;
+  competitionId: string;
   divisionId: string;
   venueId: string;
   courts: string[];
@@ -220,6 +225,38 @@ describe.runIf(HAS_DB)("W4 T3 K2 a bracket bye line never takes or keeps a court
     expect(slot(after.find((r) => r.id === rig.byeLineId)!), "the awarded bye holds no slot").toEqual(NONE);
     for (const r of after.filter((x) => x.id !== rig.byeLineId)) {
       expect(slot(r), "positive pair: a real line keeps its slot across the confirm").toEqual(realBefore.get(r.id));
+    }
+  }, 180_000);
+
+  it("X-SD-5 the board and the desk read a pre-award bye line as the server does: not movable, not in the tray, owed nothing (B1a review #1)", async () => {
+    // The server refuses to place a bye line (BYE_LINE_NOT_PLACEABLE), so every screen must agree: the board offers no
+    // drag and no tray card, and the desk counts no unscheduled match that no action could ever clear. Read through the
+    // REAL producers (`listDivisionFixturesForBoard`, `getCompetitionDesk`) into the board's own predicates.
+    const rig = await leagueKo();
+    const at = new Date("2030-07-01T10:00:00Z");
+    const owed = async () => {
+      const d = (await getCompetitionDesk(rig.auth, rig.competitionId, at)).divisions.get(rig.divisionId)!;
+      return { field: d.unscheduled, attention: d.attention.find((a) => a.kind === "unscheduled") ?? null };
+    };
+    await autoPlace(rig.auth, rig.leagueStageId);
+    // Positive pair: the bracket's two real lines are owed a slot; the bye line is not.
+    expect(await owed(), "before the bracket is placed: its two real lines are owed, the bye line is not").toEqual({
+      field: 2,
+      attention: { kind: "unscheduled", count: 2 },
+    });
+    await autoPlace(rig.auth, rig.koStageId);
+    expect(slot(await rowOf(rig.koStageId, rig.byeLineId)), "premise: the bye line is still untimed").toEqual(NONE);
+    expect(await owed(), "every real line placed: nothing is owed").toEqual({ field: 0, attention: null });
+
+    const board = (await listDivisionFixturesForBoard(rig.auth, rig.divisionId)).filter((f) => f.stage_id === rig.koStageId);
+    const bye = board.find((f) => f.id === rig.byeLineId)!;
+    expect(bye.bye_line, "the board read marks the bye line").toBe(true);
+    expect([boardMovable(bye), inBoardTray(bye)], "the board neither moves it nor trays it").toEqual([false, false]);
+    const real = board.filter((f) => f.id !== rig.byeLineId);
+    expect(real.length, "anti-vacuity: the real first-round line and the final").toBe(2);
+    for (const f of real) {
+      expect(Object.prototype.hasOwnProperty.call(f, "bye_line"), `${f.id}: the flag is sent only when true`).toBe(false);
+      expect(boardMovable(f), "positive pair: a real line stays movable").toBe(true);
     }
   }, 180_000);
 
@@ -447,6 +484,14 @@ describe.runIf(HAS_DB)("W4 T3 K2 a bracket bye line never takes or keeps a court
       status: 422,
       code: "BYE_LINE_NOT_PLACEABLE",
     });
+    // B1a review #1: the board agrees. The dead-seat tie keeps its slot (D6) but no board write can move it, so it is no
+    // drag target and no disruption either — a repair could never move it off a court that has gone.
+    await moveFixture(s.auth, b.id, { scheduled_at: "2030-08-01T10:00:00.000Z", court_id: court.id });
+    const board = await listDivisionFixturesForBoard(s.auth, s.divisionId);
+    const deadTie = board.find((f) => f.id === tieId)!;
+    expect([deadTie.bye_line, boardMovable(deadTie)], "the board marks the dead-seat tie and offers no move").toEqual([true, false]);
+    const gone = computeDisruptions(board, { courts: [], blackouts: [], sessionWindows: [], matchMinutes: 30 });
+    expect(gone.fixtureIds, "its court gone: the real line is flagged, the dead-seat tie is not").toEqual([b.id]);
 
     const arriving = await play(b.id);
     const tie = await rowOf(s.stageId, tieId);

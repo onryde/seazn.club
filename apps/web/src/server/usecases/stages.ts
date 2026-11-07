@@ -249,8 +249,9 @@ export type BoardFixtureRow = Omit<
    *  a start taken back, a walkover recorded in play), which every board
    *  write refuses to move (review 4 of #857). Sent only when true. */
   held?: true;
-  /** W3 T3 (X-SW-29): a Swiss bye row (`swissByeShellSql`), which no board write places. Sent only when true. */
-  bye_shell?: true;
+  /** W3 T3 (X-SW-29), W4 T3 (X-SD-5): a bye line (`byeLineSql` — a Swiss bye shell, a bracket's system bye, or a
+   *  pre-award bye line), which no board write places. Sent only when true. */
+  bye_line?: true;
 };
 
 export const BOARD_FIXTURE_COLS = [
@@ -4313,9 +4314,15 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     // ever deletes a score event — so it adds no refusal here, only
     // monotonicity where status is unreliable.)
     //
-    // This guard's whole set — status clause and evidence — is
-    // `fixtureHasResultSql`, which history reads as its played set (review 2
-    // of #857, I3), so what rebuild refuses history never deletes. A walkover
+    // This guard's status clause and evidence are `fixtureHasResultSql`,
+    // which history reads as its played set (review 2 of #857, I3), so what
+    // rebuild refuses for a RESULT history never deletes. Since W4 T2 the
+    // guard's whole set is wider — results ∪ a live Match Day call (below) —
+    // while history's `unplayed` is still results only. That gap is
+    // unreachable today, not closed: a call appends a `schedule_edited` ledger
+    // row (match-day-call.ts), so Undo inverts the call (moving the match off
+    // the called slot) before it can reach a Generate's `fixtures_cleared`
+    // (B1a review #3). A call that wrote no ledger row would open it. A walkover
     // blocks only through its evidence (review 3 of #857, N2): the one a
     // scorer records posts `core.forfeit`; the generator's F14 walkover has
     // nothing played behind it, so a stage holding one rebuilds.

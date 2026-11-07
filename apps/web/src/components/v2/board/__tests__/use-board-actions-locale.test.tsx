@@ -140,3 +140,22 @@ describe("useBoardActions — fail()'s played refusal", () => {
     expect(actions().error).not.toBe(english);
   });
 });
+
+// W4 B1a review #1: a drag onto a knockout bye line is refused by the server (BYE_LINE_NOT_PLACEABLE, schedule.ts
+// `moveFixture`) in an English sentence. The board says it in the reader's language, off the code, from the knockout
+// refusal table's own key — never the server's English.
+describe("useBoardActions — fail()'s knockout refusal", () => {
+  it("a refused drag of a bye line reads the knockout copy in this org's locale, never the server's English", async () => {
+    const { KNOCKOUT_REFUSALS } = await import("@/lib/knockout-refusals");
+    const row = KNOCKOUT_REFUSALS.BYE_LINE_NOT_PLACEABLE;
+    net.reject = () => Promise.reject(new ApiV1Error(row.en, row.status, "BYE_LINE_NOT_PLACEABLE"));
+
+    const actions = driveHook();
+    await actions().moveCard(TBD_ID, "2026-09-01T10:00:00.000Z", "Court 1");
+
+    const { msgFor } = await import("@/lib/messages-i18n");
+    const spanish = msgFor("es", row.key);
+    expect(spanish, "premise: the Spanish copy differs from the English").not.toBe(row.en);
+    expect(actions().error).toBe(spanish);
+  });
+});

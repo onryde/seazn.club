@@ -26,7 +26,7 @@ import {
   type PhaseStage,
 } from "@/lib/division-phase";
 import { seedingSourceReady } from "@/lib/seeding-source-ready";
-import { isUnseatedSwissByeShell } from "@/lib/swiss-shell";
+import { isWaitingByeLine } from "@/lib/bye-line";
 import { rowAwaitsSettle, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { kickoffsOf } from "@/server/engine-db/kickoff";
 import type { ProgressionSpec } from "@seazn/engine/competition";
@@ -203,7 +203,7 @@ type FixtureRaw = {
   division_id: string;
   status: string;
   scheduled_at: string | null;
-  /** Read only to tell an unseated Swiss bye shell (`isUnseatedSwissByeShell`), which is no scheduling work. */
+  /** Read only to tell a waiting bye line (`isWaitingByeLine` — the Swiss bye shell's key), which is no scheduling work. */
   ext_key: string | null;
   fixture_no: number;
   stage_id: string;
@@ -564,10 +564,12 @@ export async function getCompetitionDesk(
         proposal: (x.proposal_status ?? "none") as SeedProposalState,
       }));
     const rows = fixtures.filter((x) => x.division_id === d.id);
-    // W3 T3 (X-SW-29): an unseated Swiss bye shell is `scheduled` with no time, but no one can ever give it one
-    // (SWISS_BYE_NOT_PLACEABLE), so it is no fixture to the phase or the attentions — counting it would leave a red
-    // "unscheduled" on the division that no action clears. Once Pair seats it, it is a settled bye like any other.
-    const work = rows.filter((x) => !isUnseatedSwissByeShell(x));
+    // W3 T3 (X-SW-29), W4 B1a review #1 (X-SD-5): a bye line nobody has settled yet — an unseated Swiss bye shell, a
+    // bracket's pre-award bye line, a dead seat's tie — is `scheduled` with no time, but no one can ever give it one
+    // (SWISS_BYE_NOT_PLACEABLE, BYE_LINE_NOT_PLACEABLE), so it is no fixture to the phase or the attentions — counting
+    // it would leave an "unscheduled" on the division that no action clears. Once settled (Pair seats the shell, the
+    // seed confirm awards the bye, the walkover lands) it is a decided line like any other (`isWaitingByeLine`).
+    const work = rows.filter((x) => !isWaitingByeLine(x));
     const stageKindById = new Map(divisionStages.map((x) => [x.id, x.kind]));
     const phaseFixtures: PhaseFixture[] = work.map((x) => ({
       id: x.id,

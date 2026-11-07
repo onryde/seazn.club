@@ -541,6 +541,9 @@ describe.skipIf(!HAS_DB)("X-RB-1 knockout Rebuild carries by bracket role (W4 T4
   it("X-RB-1 a double-elimination Rebuild still carries by position (only a knockout reads roles)", async () => {
     // 4 → 5 changes the lanes' depth, so position and role disagree here: a role carry would move every lower-bracket
     // and grand-final slot. Expected = the rule as it stood (position), with a bye line holding nothing (X-SD-5).
+    // KNOWN DEFECT PINNED (B1a review #6, parked): this freezes today's position carry for double elimination, which is
+    // K3's own defect — the new grand final does NOT inherit the old grand final's slot. It flips when double
+    // elimination gets role keys; until then a red here means the carry changed, not that it was fixed or broke.
     const rig = await laidOutKnockout(4, "double_elim");
     await createEntrants(rig.auth, rig.divisionId, [{ kind: "individual", display_name: "E5", seed: 5, members: [] }]);
 

@@ -29,6 +29,9 @@ export interface DisruptionFixtureInput {
   /** The board read's flag for a `scheduled` match that holds a result (a start
    *  taken back) — see `BoardFixture.held`. */
   held?: boolean;
+  /** The board read's flag for a bye line (`BoardFixture.bye_line`): a dead seat's tie may keep its slot (W4 D6), but
+   *  no board write moves it, so it is never flagged. */
+  bye_line?: boolean;
 }
 
 /** The config fields the signal reads — a structural subset of ScheduleConfig /
@@ -63,7 +66,9 @@ export interface DisruptionResult {
  * cancelled) and is NEVER flagged — you don't reschedule a match that's already
  * been played or is underway. Nor a `held` one: a start taken back reads
  * `scheduled`, but every builder keeps it in place (`isMovable`), so flagging it
- * would pre-arm a repair that nothing can perform.
+ * would pre-arm a repair that nothing can perform. Nor a bye line (`bye_line`):
+ * a dead seat's tie keeps its slot (W4 D6), and no builder or board write may
+ * move it (BYE_LINE_NOT_PLACEABLE).
  */
 function flaggable(f: DisruptionFixtureInput): boolean {
   return f.status === "postponed" || boardMovable(f);

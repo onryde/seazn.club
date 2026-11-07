@@ -56,3 +56,14 @@ function isPreAwardByeLine(f: ByeLineRow): boolean {
 export function isByeLine(f: ByeLineRow): boolean {
   return isSwissByeShellExtKey(f.ext_key) || isSystemBye(f) || isPreAwardByeLine(f);
 }
+
+/**
+ * A bye line nobody has settled yet (`scheduled`): it waits, and no one can ever give it a court or a time
+ * (BYE_LINE_NOT_PLACEABLE), so it is no scheduling work owed — the desk counts no "unscheduled" for it (B1a review #1;
+ * W3 T3 did the same for the unseated Swiss shell). Once settled (its award written, `forfeited`) it is an ordinary
+ * decided line, as every other settled match is. The board reads the same answer through its `bye_line` flag
+ * (`byeLineSql`) beside its own `status === "scheduled"` gate (components/v2/board/types.ts).
+ */
+export function isWaitingByeLine(f: ByeLineRow): boolean {
+  return f.status === "scheduled" && isByeLine(f);
+}
