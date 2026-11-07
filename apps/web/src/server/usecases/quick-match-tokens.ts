@@ -8,7 +8,7 @@
 // Import-light on purpose: no database, no session — every helper is pure or reads its KEK from process.env per call.
 import { createHash, randomBytes } from "node:crypto";
 import { HttpError } from "@/lib/errors";
-import { hasValidKek, openWith, sealWith } from "@/server/relay/crypto";
+import { hasValidKek, openWith, sealWith, type KekName } from "@/server/relay/crypto";
 
 export const QUICK_MATCH_TOKEN_PREFIX = "qm_";
 export const QUICK_MATCH_VISITOR_COOKIE = "seazn_qm_visitor";
@@ -25,8 +25,11 @@ const VISITOR_KEY_SHAPE = new RegExp(`^${VISITOR_KEY_PREFIX}${BODY}$`);
  *  is a configuration gap the guest can report, never a bare 500 and never an unsealed token. */
 const KEK_MISSING = "Quick matches are not configured on this server (DEVICE_LINK_KEK missing or malformed)";
 
+/** The home token rides on the device-link key (C19): the one name every seal, open and refusal below reads. */
+const HOME_TOKEN_KEK: KekName = "DEVICE_LINK_KEK";
+
 function assertKekConfigured(): void {
-  if (!hasValidKek("DEVICE_LINK_KEK")) {
+  if (!hasValidKek(HOME_TOKEN_KEK)) {
     throw new HttpError(503, KEK_MISSING, "DEVICE_LINK_KEK_MISSING");
   }
 }
@@ -46,14 +49,14 @@ export function hashHomeToken(secret: string): string {
 
 export function sealHomeToken(secret: string): Buffer {
   assertKekConfigured();
-  return sealWith("DEVICE_LINK_KEK", secret);
+  return sealWith(HOME_TOKEN_KEK, secret);
 }
 
 /** Checked BEFORE openWith (pre-flight A6): without it crypto's kek() throws a plain Error, a 500 on every page that
  *  rebuilds the link. A tampered or wrong-key envelope stays a 500 — that is not a configuration gap. */
 export function openHomeToken(enc: Uint8Array): string {
   assertKekConfigured();
-  return openWith("DEVICE_LINK_KEK", enc);
+  return openWith(HOME_TOKEN_KEK, enc);
 }
 
 export function mintVisitorKey(): string {
