@@ -66,7 +66,12 @@ export const QUICK_MATCH_ERRORS = {
   FORMAT_NOT_OFFERED: "QUICK_MATCH_FORMAT_NOT_OFFERED",
   SPORT_NOT_OFFERED: "QUICK_MATCH_SPORT_NOT_OFFERED",
   KIND_NOT_OFFERED: "QUICK_MATCH_KIND_NOT_OFFERED",
+  VISITOR_INVALID: "QUICK_MATCH_VISITOR_INVALID",
 } as const;
+
+/** What `hashVisitorKey` returns (quick-match-tokens.ts): sha256 hex, 64 lowercase characters. The cap counts rows by
+ *  this value, so anything else (an empty string, a raw cookie, a typo'd caller) would count against a visitor nobody is. */
+const VISITOR_HASH_SHAPE = /^[0-9a-f]{64}$/;
 
 const DAY_MS = 24 * 3600 * 1000;
 
@@ -157,6 +162,9 @@ export async function createQuickMatchTree(
       await tx`select pg_advisory_xact_lock(hashtext(${"qm-visitor:" + ctx.visitorHash}))`;
       if ((await alive(tx, ctx.visitorHash, now)) >= QUICK_MATCH_MAX_ALIVE_PER_VISITOR) throw tooManyAlive();
       const write = await generateStageFixturesTx(tx, auth, stage.id, {}, "record");
+      // No frozen-competition check before the start, though it is the caller's job (`startDivision` asks
+      // `frozenCompetitionIds` first): a competition is frozen only when its org is over `competitions.max_active`, and
+      // the system org's `max_active` is null, unlimited (Task 1's override, ruling D6), so nothing in it can be frozen.
       const started = await startDivisionInTx(tx, auth, division.id, stage.id, {});
       // `startDivisionInTx` promotes only `published` → `live`, and a guest competition is never published.
       await tx`update competitions set status = 'live' where id = ${competition.id}`;
@@ -198,7 +206,8 @@ export async function createQuickMatchTree(
 }
 
 /**
- * Create a guest's quick match: what plan 2's route calls. In this order, each step answering before the next runs:
+ * Create a guest's quick match: what plan 2's route calls. In this order, each step answering before the next runs
+ * (a `visitorHash` that is not a visitor key's sha256 hex is refused 400 QUICK_MATCH_VISITOR_INVALID before any of them):
  *   0. the home token is minted, hashed and sealed BEFORE any read or write: a server without DEVICE_LINK_KEK refuses
  *      503 DEVICE_LINK_KEK_MISSING having touched nothing, as device links seal before any write (E2, A4);
  *   1. the early per-visitor count: QUICK_MATCH_MAX_ALIVE_PER_VISITOR alive already → 429 QUICK_MATCH_TOO_MANY_ALIVE,
@@ -213,6 +222,9 @@ export async function createQuickMatch(
   input: CreateQuickMatch,
   ctx: { visitorHash: string; now?: Date; _failBeforeGenerateForTests?: () => void },
 ): Promise<CreatedQuickMatch> {
+  if (!VISITOR_HASH_SHAPE.test(ctx.visitorHash)) {
+    throw new HttpError(400, "visitorHash must be a visitor key's sha256 hex", QUICK_MATCH_ERRORS.VISITOR_INVALID);
+  }
   const home = sealNewHomeToken();
   const now = ctx.now ?? new Date();
 

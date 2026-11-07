@@ -8,6 +8,9 @@
 // the Start button shows), the rulebook (round robin n·(n-1)/2; byes to the top seeds) or the plan's own catalog row,
 // never from the create itself.
 //
+// The wrapper is driven on badminton only: the sweep across every sport and variant is Task 6's probe
+// (`_quick-match-probe.ts`, through quick-match-offer.test.ts), which creates through the same tree.
+//
 // Real Postgres required (RLS, triggers, the generator); skipped without DATABASE_URL.
 import { randomBytes as kekBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -19,12 +22,15 @@ import { isBye } from "@/lib/run-sheet-groups";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import type { EntrantKind } from "@seazn/engine/sport";
 import { CreateQuickMatch } from "@/server/api-v1/schemas";
+import { createCompetition } from "../competitions";
 import { listDivisionFixtures } from "../fixtures";
 import { createQuickMatch, createQuickMatchTree, sealNewHomeToken, systemAuth } from "../quick-match-create";
 import { quickMatchPreview } from "../quick-match-preview";
 import { offerFor } from "../quick-match-sports";
-import { hashHomeToken } from "../quick-match-tokens";
-import type { FixtureRow } from "../stages";
+import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
+import { hashHomeToken, hashVisitorKey, mintVisitorKey, openHomeToken } from "../quick-match-tokens";
+import { afterScheduleWrite } from "../schedule";
+import { afterGenerateCommit, type FixtureRow } from "../stages";
 import { seedOrg } from "./_seed";
 
 const KEK = kekBytes(32).toString("hex");
@@ -35,6 +41,15 @@ vi.mock("@/lib/posthog-server", async (orig) => ({
   captureServer: vi.fn(),
 }));
 // The real offer, through a spy: Part B's Review Focus 5 case answers one call with an offer that refuses knockout.
+// The two post-commit steps, real but spied: a case asserts the create calls them, and the atomicity case fails one.
+vi.mock("../stages", async (orig) => {
+  const real = await orig<typeof import("../stages")>();
+  return { ...real, afterGenerateCommit: vi.fn(real.afterGenerateCommit) };
+});
+vi.mock("../schedule", async (orig) => {
+  const real = await orig<typeof import("../schedule")>();
+  return { ...real, afterScheduleWrite: vi.fn(real.afterScheduleWrite) };
+});
 vi.mock("../quick-match-sports", async (orig) => {
   const real = await orig<typeof import("../quick-match-sports")>();
   return { ...real, offerFor: vi.fn(real.offerFor) };
@@ -44,7 +59,8 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const SYSTEM_ORG = QUICK_MATCH_SYSTEM_ORG_ID;
 
 const uniq = () => `QM ${randomUUID().slice(0, 8)}`;
-const v = () => `test-visitor-${randomUUID()}`;
+/** A visitor as the route will name one: a fresh visitor key's sha256 hex (the wrapper refuses any other shape). */
+const v = () => hashVisitorKey(mintVisitorKey());
 const sides = ["Ravi & Sam", "Priya & Tom", "Lee & Ana", "Jo & Max"];
 /** Read from the catalog in beforeAll, never typed (B5c). */
 let BADMINTON_V: string;
@@ -97,6 +113,21 @@ describe.skipIf(!HAS_DB)("createQuickMatchTree (Part A: the unguarded tree)", ()
     // §7.2: alive for QUICK_MATCH_EXPIRY_DAYS (7) days of inactivity from the create.
     expect((q!.expires_at as Date).getTime() - (q!.last_activity_at as Date).getTime()).toBe(7 * 24 * 3600 * 1000);
     expect(out.expiresAt.getTime()).toBe((q!.expires_at as Date).getTime());
+    // C19: the sealed envelope opens to the token the creator was handed (the page link can be shown again).
+    const [enc] = await sql<{ token_enc: Uint8Array }[]>`select token_enc from quick_matches where id = ${out.id}`;
+    expect(openHomeToken(enc!.token_enc)).toBe(out.token);
+  });
+
+  it("runs both post-commit steps: the generate's (SCHEDULE_GENERATED) and the start's (afterScheduleWrite)", async () => {
+    const out = await tree();
+    const generated = vi.mocked(captureServer).mock.calls.map(([a]) => a)
+      .filter((a) => a.event === EVENTS.SCHEDULE_GENERATED && a.properties?.stage_id === out.stageId);
+    expect(generated).toHaveLength(1);
+    expect(generated[0]!.properties).toMatchObject({ fixtures_created: 6 });   // 4·3/2, the round robin's own count
+    const starts = vi.mocked(afterScheduleWrite).mock.calls.filter(([divisionId]) => divisionId === out.divisionId);
+    expect(starts).toHaveLength(1);
+    expect(starts[0]!.slice(0, 3)).toEqual([out.divisionId, out.competitionId, "start"]);
+    expect(new Set(starts[0]![3])).toEqual(new Set(nonBye(await listDivisionFixtures(systemAuth(), out.divisionId)).map((f) => f.id)));
   });
 
   it("creates a knockout of 4 with two semi-finals and a final wired", async () => {
@@ -133,7 +164,35 @@ describe.skipIf(!HAS_DB)("createQuickMatchTree (Part A: the unguarded tree)", ()
     const name = uniq();   // B5b: this case's own name, never the org's count (A16)
     await expect(tree({ name }, "pair", () => { throw new Error("boom"); })).rejects.toThrow("boom");
     expect(await sql`select 1 from competitions where org_id = ${SYSTEM_ORG} and name = ${name}`).toHaveLength(0);
+  });
+
+  it("leaves nothing behind when a step AFTER the commit fails: the committed quick_matches row goes too", async () => {
+    // Here the last transaction has committed, so the row exists until the compensation deletes it: this check can fail.
+    const name = uniq();
+    vi.mocked(afterGenerateCommit).mockRejectedValueOnce(new Error("after-commit boom"));
+    await expect(tree({ name })).rejects.toThrow("after-commit boom");
     expect(await sql`select 1 from quick_matches where name = ${name}`).toHaveLength(0);
+    expect(await sql`select 1 from competitions where org_id = ${SYSTEM_ORG} and name = ${name}`).toHaveLength(0);
+  });
+
+  it("the locked recount refuses the 6th alive match with 429, and the refused create leaves no competition (B5f)", async () => {
+    // The tree has no early count, so this 429 comes from the recount INSIDE the last transaction, after the competition,
+    // division, stage and entrants were committed by their own use cases.
+    const visitorHash = v();
+    const make = (name: string) => createQuickMatchTree(input({ name }), "pair", { visitorHash, home: sealNewHomeToken() });
+    for (let i = 0; i < 5; i++) await make(uniq());
+    const name = uniq();
+    await expect(make(name)).rejects.toMatchObject({ status: 429, code: "QUICK_MATCH_TOO_MANY_ALIVE" });
+    expect(await sql`select 1 from competitions where org_id = ${SYSTEM_ORG} and name = ${name}`).toHaveLength(0);
+  });
+
+  it("the hard delete touches only the system org: another org's competition id deletes nothing (§7.8)", async () => {
+    const { auth } = await seedOrg("community");
+    const theirs = await createCompetition(auth, {
+      name: uniq(), visibility: "private", branding: {}, starts_on: "2026-11-07", ends_on: "2026-11-08",
+    });
+    await hardDeleteQuickMatchCompetition(theirs.id);
+    expect(await sql`select 1 from competitions where id = ${theirs.id}`).toHaveLength(1);
   });
 
   it("is never in a public view (§9 visibility, D7)", async () => {
@@ -233,12 +292,43 @@ describe.skipIf(!HAS_DB)("createQuickMatch (Part B: the guarded wrapper)", () =>
       .rejects.toMatchObject({ status: 429, code: "QUICK_MATCH_TOO_MANY_ALIVE" });
   });
 
+  it("a visitor's SAVED matches do not count: five saved, the next create succeeds (§7.2 alive = unsaved)", async () => {
+    const visitorHash = v();
+    for (let i = 0; i < 5; i++) await createQuickMatch(base(), { visitorHash });
+    const { auth } = await seedOrg("community");   // a real user to have saved them
+    await sql`update quick_matches set saved_by_user_id = ${auth.userId} where visitor_hash = ${visitorHash}`;
+    const out = await createQuickMatch(base(), { visitorHash });
+    expect(await sql`select 1 from quick_matches where id = ${out.id}`).toHaveLength(1);
+  });
+
+  it("a visitor's EXPIRED matches do not count: five made, the next create 8 days later succeeds (§7.2 alive = unexpired)", async () => {
+    const visitorHash = v();
+    for (let i = 0; i < 5; i++) await createQuickMatch(base(), { visitorHash });
+    const later = new Date(Date.now() + 8 * 24 * 3600 * 1000);   // past QUICK_MATCH_EXPIRY_DAYS (7) of the five
+    const out = await createQuickMatch(base(), { visitorHash, now: later });
+    expect(await sql`select 1 from quick_matches where id = ${out.id}`).toHaveLength(1);
+  });
+
+  it.each([[""], ["test-visitor-1"], ["A".repeat(64)], ["a".repeat(63)], ["g".repeat(64)]])(
+    "refuses a visitorHash that is not sha256 hex (%j) with 400 QUICK_MATCH_VISITOR_INVALID, before anything",
+    async (visitorHash) => {
+      await expect(createQuickMatch(base(), { visitorHash, _failBeforeGenerateForTests: reachedTree }))
+        .rejects.toMatchObject({ status: 400, code: "QUICK_MATCH_VISITOR_INVALID" });
+    },
+  );
+
   it("two concurrent creates at 4 alive: exactly one succeeds (the locked recount, B5f)", async () => {
     const visitorHash = v();
     for (let i = 0; i < 4; i++) await createQuickMatch(base(), { visitorHash });
-    const both = await Promise.allSettled([createQuickMatch(base(), { visitorHash }), createQuickMatch(base(), { visitorHash })]);
+    const pair = [base(), base()];
+    const both = await Promise.allSettled(pair.map((b) => createQuickMatch(b, { visitorHash })));
     expect(both.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect(both.find((r) => r.status === "rejected")).toMatchObject({ reason: { status: 429, code: "QUICK_MATCH_TOO_MANY_ALIVE" } });
+    // The loser leaves no competition, found by its own name; the winner's stands.
+    const loser = pair[both.findIndex((r) => r.status === "rejected")]!.name;
+    const winner = pair[both.findIndex((r) => r.status === "fulfilled")]!.name;
+    expect(await sql`select 1 from competitions where org_id = ${SYSTEM_ORG} and name = ${loser}`).toHaveLength(0);
+    expect(await sql`select 1 from competitions where org_id = ${SYSTEM_ORG} and name = ${winner}`).toHaveLength(1);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from quick_matches where visitor_hash = ${visitorHash}`;
     expect(n).toBe(5);
   });
