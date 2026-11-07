@@ -156,6 +156,11 @@ for (const width of WIDTHS) {
       const overview = page.getByTestId("sponsors-tab-overview");
       await expect(page.getByTestId(`sponsor-overview-row-${titleId}`).getByTestId("sponsor-overview-name"), "witness: the long name's row").toHaveText(LONG_SPONSOR);
       await expect(page.getByTestId(`sponsor-overview-row-gone-${GONE_SPONSOR}`).getByText(ui("sponsors.overview.deleted"), { exact: true }), "witness: the deleted sponsor's row").toBeVisible();
+      // Owner ruling 2026-11-01 (PR B deferred): no row has a viewer number, so every row's viewers read "Coming soon" - five
+      // rows, the five sponsors seeded above (the deleted one keeps its row by name).
+      await expect(overview.getByTestId("sponsor-overview-viewers"), "witness: five rows").toHaveCount(5);
+      await expect(overview.getByTestId("viewers-coming-soon"), "witness: the viewers legend in every row").toHaveCount(5);
+      await expect(overview.getByTestId("viewers-coming-soon").first()).toHaveText(ui("sponsors.viewers.comingSoon"));
       await capture(page, "hub-overview", width, overview);
 
       await page.goto(sponsorsUrl(org.slug, "sponsors"));
@@ -207,6 +212,7 @@ for (const width of WIDTHS) {
         const report = page.getByTestId("sponsor-report");
         await expect(page.getByRole("heading", { level: 1 }), "witness: the long name heads it").toContainText(LONG_SPONSOR);
         await expect(page.getByTestId("report-showing"), "witness: the two showings").toHaveCount(2);
+        await expect(report.getByTestId("viewers-coming-soon"), "witness: the viewers legend (owner ruling 2026-11-01)").toHaveText(ui("sponsors.viewers.comingSoon"));
         // Final review S14: the stranger's empty jar shows the cookie banner, which would sit over the report in the shot.
         await dismissCookieBanner(page);
         await capture(page, "report", width, report);
