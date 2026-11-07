@@ -76,9 +76,13 @@ export function quickMatchPreview(input: { format: QuickMatchFormat; sides: numb
   let byeCount = 0;
   for (const f of [...draw].sort((a, b) => a.roundNo - b.roundNo || a.seqInRound - b.seqInRound)) {
     const where = `R${f.roundNo}·${f.seqInRound}`;
+    // The engine always lands a bye's award on home (stages.ts bracketToGen), so its away seat is empty. A bye with
+    // someone in that seat would be a match shown as a walk-through: refuse it rather than blank the side.
+    if (f.bye && (f.awaySeed !== null || f.awayFrom !== null)) {
+      throw new Error(`quickMatchPreview cannot name ${where}: a bye with its away seat filled`);
+    }
     const line: QuickMatchPreviewLine = {
       home: seatOf(f.homeSeed, f.homeFrom, where),
-      // The engine always lands a bye's award on home (stages.ts bracketToGen), so away is the empty seat.
       away: f.bye ? EMPTY_SEAT : seatOf(f.awaySeed, f.awayFrom, where),
       bye: f.bye,
     };

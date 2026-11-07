@@ -12,6 +12,7 @@
 // "With 3 sides seed 1 sits out; with 5, seeds 1 to 3; with 6, seeds 1 and 2."
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { msg } from "@/lib/messages";
+import { roundRoleLabel } from "@/lib/round-role-label";
 import { previewDivisionFixtures, previewStageDraw } from "../stages";
 import { quickMatchPreview, quickMatchStageInput, type QuickMatchPreviewRound } from "../quick-match-preview";
 
@@ -48,9 +49,16 @@ describe("quickMatchPreview — counts", () => {
 });
 
 describe("quickMatchPreview — the draw (C22)", () => {
-  it("knockout of 4 pairs seed 1 v 4 and 2 v 3 in round one (C22)", () => {
+  // Hand-derived from seed i v S+1−i of the padded size S, dropping the pairs whose S+1−i is past the field (byes):
+  // 3 → S 4: 1v4 bye, 2v3 · 4 → 1v4, 2v3 · 5 → S 8: 1v8, 2v7, 3v6 byes, 4v5 · 6 → S 8: 1v8, 2v7 byes, 3v6, 4v5.
+  it.each([
+    [3, ["2v3"]],
+    [4, ["1v4", "2v3"]],
+    [5, ["4v5"]],
+    [6, ["3v6", "4v5"]],
+  ])("knockout of %i pairs %j in round one (C22)", (sides, expected) => {
     // the PAIRING is the assertion, not the line order
-    expect(pairs(quickMatchPreview({ format: "knockout", sides: 4, plays: 1 }).rounds[0]!)).toEqual(new Set(["1v4", "2v3"]));
+    expect(pairs(quickMatchPreview({ format: "knockout", sides, plays: 1 }).rounds[0]!)).toEqual(new Set(expected));
   });
 
   it.each([
@@ -60,7 +68,26 @@ describe("quickMatchPreview — the draw (C22)", () => {
   ])("knockout of %i: the byes go to seeds %j (spec §7.3 step 3)", (sides, holders) => {
     const r1 = quickMatchPreview({ format: "knockout", sides, plays: 1 }).rounds[0]!;
     expect(r1.lines.filter((l) => l.bye).map((l) => l.home.seed).sort()).toEqual(holders);
-    expect(r1.lines.filter((l) => l.bye).every((l) => l.away.seed === null && l.away.feeder === null)).toBe(true);
+    // The generator's own bye fixtures, read raw (the fold blanks a bye's away seat, so its output cannot witness
+    // this): nobody sits opposite a bye holder and nothing feeds that seat.
+    const rawByes = previewStageDraw(quickMatchStageInput({ format: "knockout", plays: 1, name: "x" }), sides).filter((f) => f.bye);
+    expect(rawByes).toHaveLength(holders.length);
+    expect(rawByes.map((f) => [f.awaySeed, f.awayFrom])).toEqual(holders.map(() => [null, null]));
+  });
+
+  // The rulebook names a knockout round by its distance from the final: final, semi-final, quarter-final. The padded
+  // size S has log2(S) rounds: 2 sides → S 2 (1 round), 3–4 → S 4 (2), 5–6 → S 8 (3).
+  it.each([
+    [2, ["final"]],
+    [3, ["semi_final", "final"]],
+    [4, ["semi_final", "final"]],
+    [5, ["quarter_final", "semi_final", "final"]],
+    [6, ["quarter_final", "semi_final", "final"]],
+  ])("knockout of %i: the rounds are %j", (sides, roles) => {
+    const p = quickMatchPreview({ format: "knockout", sides, plays: 1 });
+    expect(p.rounds.map((r) => r.role?.kind)).toEqual(roles);
+    // every line of a round sits in it (the fold takes the round's role from its first line)
+    expect(p.rounds.map((r) => r.roundNo)).toEqual(roles.map((_, i) => i + 1));
   });
 
   it("a later knockout round names its sides by feeder, never by seed or by text, and every knockout round carries the engine's role", () => {
@@ -75,18 +102,25 @@ describe("quickMatchPreview — the draw (C22)", () => {
     expect(quickMatchPreview({ format: "league", sides: 4, plays: 1 }).rounds.every((r) => r.role === null)).toBe(true);
   });
 
-  it("matchCount equals previewDivisionFixtures' non-bye lines for every format, side count and plays (C17 differential)", () => {
+  it("matchCount, byeCount and the round names equal previewDivisionFixtures' for every format, side count and plays (C17 differential)", () => {
     const bye = msg("bracket.slot.bye"); // a test file: the bye-render-sites scan reads non-test files only
     let checked = 0;
     for (const format of ["league", "knockout"] as const)
       for (let sides = 2; sides <= 6; sides++)
         for (const plays of format === "league" ? [1, 2, 3, 4] : [1]) {
-          const lines = previewDivisionFixtures([quickMatchStageInput({ format, plays, name: "x" })], sides)[0]!.sections.flatMap(
-            (s) => s.matches,
-          );
-          expect(quickMatchPreview({ format, sides, plays }).matchCount, `${format} ${sides}×${plays}`).toBe(
-            lines.filter((m) => m.away !== bye).length,
-          );
+          const label = `${format} ${sides}×${plays}`;
+          const sections = previewDivisionFixtures([quickMatchStageInput({ format, plays, name: "x" })], sides)[0]!.sections;
+          const lines = sections.flatMap((s) => s.matches);
+          const p = quickMatchPreview({ format, sides, plays });
+          expect(p.matchCount, label).toBe(lines.filter((m) => m.away !== bye).length);
+          expect(p.byeCount, label).toBe(lines.filter((m) => m.away === bye).length);
+          // A round robin's odd field sits one side out per round, but that is no fixture: never a bye line.
+          if (format === "league") expect(p.byeCount, label).toBe(0);
+          // Each round's typed role, named the way the text preview names it, is that preview's section title.
+          expect(
+            p.rounds.map((r) => (r.role ? roundRoleLabel(msg, r.role) : msg("bracket.round.plain", { n: r.roundNo }))),
+            label,
+          ).toEqual(sections.map((s) => s.title));
           checked++;
         }
     expect(checked).toBe(25); // 5 side counts × (4 plays + 1): anti-vacuity
@@ -179,6 +213,7 @@ describe("quickMatchPreview — a seat it cannot name is refused, never shown bl
     ["a loser feed", [{ ...fixture, homeFrom: { round: 1, seq: 1, side: "loser" }, awayFrom: { round: 1, seq: 2, side: "winner" } }]],
     ["a match seat with neither seed nor feeder", [{ ...fixture, homeFrom: null, awayFrom: { round: 1, seq: 2, side: "winner" } }]],
     ["a draw of no fixtures", []],
+    ["a bye with its away seat filled", [{ ...fixture, roundNo: 1, homeSeed: 1, awaySeed: 4, homeFrom: null, awayFrom: null, bye: true }]],
   ])("refuses %s", async (_label, drawn) => {
     // The real generator never produces any of these for a quick match stage (the sweeps above); a stub draw reaches
     // the guard. The next test is its positive pair: the same stub with well-formed seats is accepted.
