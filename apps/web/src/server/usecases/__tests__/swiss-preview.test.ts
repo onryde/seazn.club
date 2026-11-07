@@ -3,11 +3,13 @@
 // `previewSwissNextRound` runs the very Generate the desk's Pair next runs (`generateStageFixturesTx`), reads the round it
 // seated and rolls the whole transaction back, answering the pairings and `inputHash`, a hash of the round's INPUTS (the
 // stage's fixtures by id, status and result version, and the division's active entrants). `pairSwissNextRound` takes that
-// hash back, recomputes it under the division lock and refuses MD_STALE (409) when it moved, MD_ALREADY (409) when the round
-// is already seated, and otherwise runs the Generate for real.
+// hash and the previewed round back, recomputes the hash under the division lock and refuses MD_ALREADY (409) when that
+// round is already seated, MD_STALE (409) when the inputs moved (results, field, stage config, lots draws), and otherwise
+// runs the Generate for real.
 //
-// The case Review Focus 4 names: a preview whose draw uses lots. The draw is rolled back with the preview and made again
-// at the pair, so a hash over the drawn PAIRINGS would refuse every approve. The hash is over the inputs, so it does not.
+// The case Review Focus 4 names: a preview whose draw uses lots. The preview commits that draw before its rolled-back
+// Pair (fix round 1, I1), so the pair reads the very draw the preview did and seats exactly the previewed pairings; the
+// hash is over the inputs, never the drawn pairings, so the approve is not refused as stale.
 //
 // Every expected value is read from the rows the rig wrote or from the preview's own answer; none is computed by the code
 // under test.
@@ -63,7 +65,7 @@ async function chessSwiss(opts: { players: number; seeded: boolean; config?: Rec
   const division = await createDivision(auth, comp.id, {
     name: "Open",
     slug: "open-" + randomUUID().slice(0, 6),
-    sport_key: "boardgame",
+    sport_key: "boardgame", // single-sport: preview and pair are sport-blind wrappers over the one Generate; chess is the sport whose Swiss ties fall to lots (draws, no seeds) and whose colours add the most pairing inputs, so it carries every case here
     variant_key: "classical",
     config: {},
   });
@@ -167,7 +169,7 @@ describe.skipIf(!HAS_DB)("MD-1 Task 5: Swiss next-round preview and stale-checke
     const preview = await previewSwissNextRound(r.auth, r.stageId);
     expect(preview.pairings.length, "anti-vacuity: three boards proposed").toBe(3);
 
-    const paired = await pairSwissNextRound(r.auth, r.stageId, preview.inputHash);
+    const paired = await pairSwissNextRound(r.auth, r.stageId, preview.inputHash, preview.round);
 
     expect(paired).toEqual({ round: 2 });
     expect(await seatedPairings(r.stageId, 2), "the very pairings the preview proposed (no lots drawn)").toEqual(preview.pairings);
@@ -188,12 +190,12 @@ describe.skipIf(!HAS_DB)("MD-1 Task 5: Swiss next-round preview and stale-checke
     const [after] = await boardsOf(r.stageId, 1);
     expect(after!.status, "premise: the board is decided again, so its status did not move").toBe(board!.status);
 
-    expect(await refusalOf(pairSwissNextRound(r.auth, r.stageId, preview.inputHash))).toEqual({ status: 409, code: "MD_STALE" });
+    expect(await refusalOf(pairSwissNextRound(r.auth, r.stageId, preview.inputHash, preview.round))).toEqual({ status: 409, code: "MD_STALE" });
     expect(await seatedIn(r.stageId, 2), "nothing was seated").toBe(0);
     // And a fresh preview's hash pairs.
     const again = await previewSwissNextRound(r.auth, r.stageId);
     expect(again.inputHash, "the fresh preview hashes the new result").not.toBe(preview.inputHash);
-    expect(await pairSwissNextRound(r.auth, r.stageId, again.inputHash)).toEqual({ round: 2 });
+    expect(await pairSwissNextRound(r.auth, r.stageId, again.inputHash, again.round)).toEqual({ round: 2 });
   }, 180_000);
 
   it("pair after the field changed is MD_STALE", async () => {
@@ -208,7 +210,7 @@ describe.skipIf(!HAS_DB)("MD-1 Task 5: Swiss next-round preview and stale-checke
       fixturesBefore,
     );
 
-    expect(await refusalOf(pairSwissNextRound(r.auth, r.stageId, preview.inputHash))).toEqual({ status: 409, code: "MD_STALE" });
+    expect(await refusalOf(pairSwissNextRound(r.auth, r.stageId, preview.inputHash, preview.round))).toEqual({ status: 409, code: "MD_STALE" });
     expect(await seatedIn(r.stageId, 2), "nothing was seated").toBe(0);
   }, 180_000);
 
@@ -216,18 +218,18 @@ describe.skipIf(!HAS_DB)("MD-1 Task 5: Swiss next-round preview and stale-checke
     const r = await chessSwiss({ players: 4, seeded: true });
     expect(await decideRoundOne(r, (b) => chessWin(r.auth, b, b.home_entrant_id!)), "rig: round 1 decided").toBe(2);
     const preview = await previewSwissNextRound(r.auth, r.stageId);
-    expect(await pairSwissNextRound(r.auth, r.stageId, preview.inputHash)).toEqual({ round: 2 });
+    expect(await pairSwissNextRound(r.auth, r.stageId, preview.inputHash, preview.round)).toEqual({ round: 2 });
     const seated = await seatedPairings(r.stageId, 2);
     const fixtures = await fixtureCount(r.stageId);
 
     // The second phone, holding the same proposal.
-    expect(await refusalOf(pairSwissNextRound(r.auth, r.stageId, preview.inputHash))).toEqual({ status: 409, code: "MD_ALREADY" });
+    expect(await refusalOf(pairSwissNextRound(r.auth, r.stageId, preview.inputHash, preview.round))).toEqual({ status: 409, code: "MD_ALREADY" });
     expect(await seatedPairings(r.stageId, 2), "round 2 is as the first approve seated it").toEqual(seated);
     expect(await fixtureCount(r.stageId)).toBe(fixtures);
     expect(await seatedIn(r.stageId, 3), "and round 3 was not touched").toBe(0);
   }, 180_000);
 
-  it("a preview that draws lots still pairs with its own hash", async () => {
+  it("a preview that draws lots still pairs with its own hash, and seats exactly the previewed pairings", async () => {
     // Unseeded and drawn level: rank-adjacent pairing ranks the level table, which takes a drawing of lots.
     const r = await chessSwiss({ players: 4, seeded: false, config: { pairing: "rank_adjacent" } });
     expect(await decideRoundOne(r, (b) => chessDraw(r.auth, b)), "rig: both round-1 boards drawn, so the table is level").toBe(2);
@@ -237,17 +239,78 @@ describe.skipIf(!HAS_DB)("MD-1 Task 5: Swiss next-round preview and stale-checke
 
     const preview = await previewSwissNextRound(r.auth, r.stageId);
     expect(preview.round).toBe(2);
-    expect(await lotsCount(r.stageId), "the preview's draw was rolled back with it").toBe(0);
+    expect(await lotsCount(r.stageId), "the preview drew lots and KEPT the draw (committed before its rolled-back Pair)").toBeGreaterThan(0);
+    expect(await seatedIn(r.stageId, 2), "while round 2 itself was rolled back").toBe(0);
     const second = await previewSwissNextRound(r.auth, r.stageId);
-    expect(second.inputHash, "a second preview, drawing its own lots, hashes the same inputs").toBe(preview.inputHash);
+    expect(second.pairings, "a second preview reads the same stored draw, so it proposes the same pairings").toEqual(preview.pairings);
 
-    expect(await pairSwissNextRound(r.auth, r.stageId, preview.inputHash), "the approve is not stale").toEqual({ round: 2 });
-    expect(await seatedIn(r.stageId, 2), "round 2 is seated").toBe(2);
+    expect(await pairSwissNextRound(r.auth, r.stageId, preview.inputHash, preview.round), "the approve is not stale").toEqual({ round: 2 });
+    expect(await seatedPairings(r.stageId, 2), "the round seated is the previewed round, board by board").toEqual(preview.pairings);
+  }, 180_000);
+
+  it("a lots draw replaced after the preview is MD_STALE", async () => {
+    const r = await chessSwiss({ players: 4, seeded: false, config: { pairing: "rank_adjacent" } });
+    expect(await decideRoundOne(r, (b) => chessDraw(r.auth, b))).toBe(2);
+    const preview = await previewSwissNextRound(r.auth, r.stageId);
+    expect(await lotsCount(r.stageId), "premise: the pairing reads a stored draw").toBeGreaterThan(0);
+    // The draw the preview paired over goes; the pair would have to draw again, perhaps differently.
+    await sql`delete from stage_lots_draws where stage_id = ${r.stageId}`;
+
+    expect(await refusalOf(pairSwissNextRound(r.auth, r.stageId, preview.inputHash, preview.round))).toEqual({ status: 409, code: "MD_STALE" });
+    expect(await seatedIn(r.stageId, 2), "nothing was seated").toBe(0);
+  }, 180_000);
+
+  it("a pairing mode changed after the preview is MD_STALE", async () => {
+    const r = await chessSwiss({ players: 6, seeded: true });
+    expect(await decideRoundOne(r, (b) => chessWin(r.auth, b, b.home_entrant_id!)), "rig: round 1 decided").toBe(3);
+    const preview = await previewSwissNextRound(r.auth, r.stageId);
+    const [cfg] = await sql<{ pairing: string | null }[]>`select config->>'pairing' as pairing from stages where id = ${r.stageId}`;
+    expect(cfg!.pairing, "premise: the stage pairs by its default mode").not.toBe("rank_adjacent");
+    // The desk's pairing menu: the stage's stored mode changes between the review and the approve.
+    await sql`update stages set config = config || '{"pairing":"rank_adjacent"}'::jsonb where id = ${r.stageId}`;
+
+    expect(await refusalOf(pairSwissNextRound(r.auth, r.stageId, preview.inputHash, preview.round))).toEqual({ status: 409, code: "MD_STALE" });
+    expect(await seatedIn(r.stageId, 2), "nothing was seated").toBe(0);
+  }, 180_000);
+
+  it("an approve for a round other than the next one: a seated round is MD_ALREADY even after a result, a later one MD_STALE", async () => {
+    const r = await chessSwiss({ players: 4, seeded: true });
+    expect(await decideRoundOne(r, (b) => chessWin(r.auth, b, b.home_entrant_id!))).toBe(2);
+    const preview = await previewSwissNextRound(r.auth, r.stageId);
+    // A round ahead of the next one to pair is not the proposal the server holds.
+    expect(await refusalOf(pairSwissNextRound(r.auth, r.stageId, preview.inputHash, preview.round + 1))).toEqual({ status: 409, code: "MD_STALE" });
+    expect(await seatedIn(r.stageId, 3), "nothing was seated").toBe(0);
+    // A round that is not a whole number is refused before anything is read.
+    expect(await refusalOf(pairSwissNextRound(r.auth, r.stageId, preview.inputHash, Number.NaN))).toEqual({ status: 422, code: undefined });
+
+    expect(await pairSwissNextRound(r.auth, r.stageId, preview.inputHash, preview.round)).toEqual({ round: 2 });
+    // A scorer finishes a board of the new round before the second phone approves: still the round it held, already seated.
+    const [b] = (await boardsOf(r.stageId, 2)).filter(playable);
+    await chessWin(r.auth, b!, b!.home_entrant_id!);
+    expect(await refusalOf(pairSwissNextRound(r.auth, r.stageId, preview.inputHash, preview.round))).toEqual({ status: 409, code: "MD_ALREADY" });
+    expect(await seatedIn(r.stageId, 3), "round 3 was not touched").toBe(0);
+  }, 180_000);
+
+  it("a preview of a round still in play gives one refusal, with or without a result", async () => {
+    const r = await chessSwiss({ players: 4, seeded: true });
+    // Round 1 is paired and nothing is played yet.
+    const fresh = await refusalOf(previewSwissNextRound(r.auth, r.stageId));
+    const [b] = (await boardsOf(r.stageId, 1)).filter(playable);
+    await chessWin(r.auth, b!, b!.home_entrant_id!);
+    const oneResult = await refusalOf(previewSwissNextRound(r.auth, r.stageId));
+    expect(fresh?.code, "the round still in play: not ready").toBe("STAGE_NOT_READY");
+    expect(oneResult, "the same refusal after its first result").toEqual(fresh);
+  }, 180_000);
+
+  it("a preview with every round seated is MD_ALREADY", async () => {
+    const r = await chessSwiss({ players: 4, seeded: true, config: { rounds: 1 } });
+    expect(await seatedIn(r.stageId, 1), "premise: the one round is seated").toBe(2);
+    expect(await refusalOf(previewSwissNextRound(r.auth, r.stageId))).toEqual({ status: 409, code: "MD_ALREADY" });
   }, 180_000);
 
   it("anti-vacuity for the lots case: that level table takes a drawing of lots, inside a transaction", async () => {
-    // The ranking the rank-adjacent pair reads (`rankedStageStandings`) stores the draw it makes, so a count inside its
-    // transaction shows the preview above, from the same state, drew lots and had them rolled back.
+    // The ranking the rank-adjacent pair reads (`rankedStageStandings`) stores the draw it makes: from this state a draw is
+    // needed, so the lots tests above exercise a real drawing of lots.
     const r = await chessSwiss({ players: 4, seeded: false, config: { pairing: "rank_adjacent" } });
     expect(await decideRoundOne(r, (b) => chessDraw(r.auth, b))).toBe(2);
     await sql`delete from stage_lots_draws where stage_id = ${r.stageId}`;
