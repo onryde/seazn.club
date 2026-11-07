@@ -294,7 +294,8 @@ export async function withTenant<T>(
     privilegedPrelude?: (tx: Tx) => Promise<void>;
     /** Runs LAST, on this transaction's own connection, after `fn` returns and with the role set BACK to the pool's
      *  (`reset role`): for a row in a SEALED table that must commit or roll back with `fn`'s writes — a log the spec
-     *  says every write carries (the Match Day code's use log, MD-1). It gets `fn`'s result; keep it to that write. */
+     *  says every write carries (the Match Day code's use log, MD-1). It gets `fn`'s result; keep it to that write.
+     *  Allow-listed: lib/__tests__/privileged-epilogue-boundary.test.ts names the one caller. */
     privilegedEpilogue?: (tx: Tx, result: T) => Promise<void>;
   } = {},
 ): Promise<T> {

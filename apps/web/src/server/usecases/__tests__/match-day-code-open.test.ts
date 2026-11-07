@@ -14,7 +14,7 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers(),
 }));
 
-import { sql } from "@/lib/db";
+import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CaptureMatchdayOpen, CaptureMatchdayRefusal } from "@/server/api-v1/capture-schemas";
@@ -226,6 +226,42 @@ describe.skipIf(!HAS_DB)("open a match through a Match Day code", () => {
       { kind: "open", fixture_id: f[0] },
       { kind: "open", fixture_id: f[5] },
     ]);
+  });
+
+  // THE SECURITY PIN for `withTenant`'s privilegedEpilogue (fix round 2, I2; modelled on privilegedPrelude's,
+  // external-accounts.test.ts): the epilogue may write what the tenant role cannot, but the callback before it must still
+  // run as the tenant role with RLS on. Moving `reset role` above `fn` would turn every RLS policy off for the whole
+  // callback the moment an epilogue is given; this test is what makes that move red.
+  it("withTenant's privilegedEpilogue: fn runs as app_user under RLS; only the epilogue runs as the pool's role", async () => {
+    const other = await seedDay();
+    const foreign = other.comp.fixtures[0]!.id;
+    const { code } = await codeFor(day, { kind: "competition" });
+    type Seen = { pid: number; role: string; own: number; foreign: number };
+    const look = async (tx: Tx): Promise<Seen> => {
+      const [r] = await tx<Seen[]>`
+        select pg_backend_pid() as pid, current_user as role,
+               (select count(*)::int from fixtures where id = ${f[0]!}) as own,
+               (select count(*)::int from fixtures where id = ${foreign}) as foreign`;
+      return r!;
+    };
+    let after: (Seen & { sealed: number; got: Seen }) | null = null;
+    const inFn = await withTenant(day.orgId, look, {
+      privilegedEpilogue: async (tx, got) => {
+        const [{ sealed }] = await tx<{ sealed: number }[]>`select count(*)::int as sealed from match_day_codes where id = ${code.id}`;
+        after = { ...(await look(tx)), sealed, got };
+      },
+    });
+    expect(inFn.role, "the callback runs as the tenant role whenever an epilogue is given").toBe("app_user");
+    expect(inFn.own, "premise: the tenant's own fixture is visible").toBe(1);
+    expect(inFn.foreign, "RLS is on inside the callback: another org's fixture is invisible").toBe(0);
+    expect(after, "premise: the epilogue ran").not.toBeNull();
+    const epilogue = after!;
+    expect(epilogue.got, "the epilogue gets fn's result").toEqual(inFn);
+    expect(epilogue.pid, "ONE connection: the epilogue is the same transaction, not a second checkout").toBe(inFn.pid);
+    expect(epilogue.role, "the epilogue is privileged: it is not the tenant role").not.toBe("app_user");
+    expect(epilogue.sealed, "and so it reaches a sealed table (match_day_codes: no app_user grant)").toBe(1);
+    // Without an epilogue nothing changes: the callback is the tenant role, as ever.
+    expect((await withTenant(day.orgId, look)).role).toBe("app_user");
   });
 
   describe("POST /api/v1/match-day-code/fixtures/{id}/scoring-link", () => {

@@ -273,7 +273,7 @@ export function matchDayActor(code: MatchDayCodeRow): AuthCtx {
 }
 
 /** Log a match opened or an approval made against the code that did it (§3). On the pooled client, or on `db`: a
- *  transaction holding the pool's own role (the table is sealed: `withTenant`'s `privilegedEpilogue`), so the row commits
+ *  transaction holding the pool's own role (the table is sealed: `withTenant`'s epilogue, used by the open alone), so the row commits
  *  or rolls back with the write it logs (MD-1 fix M4). */
 export async function logMatchDayUse(codeId: string, use: MatchDayUse, db?: Tx): Promise<void> {
   const q = db ?? sql;
