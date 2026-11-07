@@ -275,6 +275,9 @@ describe("privacy — what the YouTube section says about the other halves of th
     expect(env.length, "anti-vacuity: the Machine env literal was found").toBeGreaterThan(40);
     expect([...env.matchAll(/(\w+):/g)].map((m) => m[1])).toEqual(["SESSION_ID", "JOB_TOKEN", "APP_URL", "RELAY_DEADLINE_AT", "RELAY_AIRINGS"]);
     expect(env, "RELAY_AIRINGS carries a constant, never a value read from anywhere else").toContain('...(process.env.RELAY_AIRINGS === "1" ? { RELAY_AIRINGS: "1" } : {}),');
+    // A spread names no key, so the name list above cannot see one: `...process.env` would put every secret on the Machine
+    // and still read five names. Exactly one spread, the switch pinned above (ci-fix review m4).
+    expect((env.match(/\.\.\./g) ?? []).length, "one spread in the Machine env, the RELAY_AIRINGS switch").toBe(1);
   });
 
   it("R9 (B7 re-review m3): the sub-processors list says what Fly.io runs for us - the hosting AND the machine that adds the score overlay - in the privacy page's own words", () => {
