@@ -27,7 +27,6 @@ import { log } from "@/server/logger";
 import { EngineError } from "@seazn/engine/core";
 import {
   boardMetrics,
-  buildSchedule,
   calendarDaysCovering,
   dayKeyInTz,
   deltaConflicts,
@@ -90,6 +89,7 @@ import {
   unionRequiredCourtTags,
 } from "./court-candidates";
 import { buildEngineConstraints } from "./engine-constraints";
+import { autoBuildSchedule } from "./schedule-solver-rest";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { generateStageFixturesUnpublished, refuseSwissRoundsAboveMaxAtStart } from "./stages";
 import { schedulingAiModel, toRuleFixture } from "./schedule-ai";
@@ -2100,6 +2100,14 @@ export async function autoSchedule(
    * which stages the contention by holding the placement client open (it used
    * to hold the z3 lock; C8 deleted that and the test with it, and this
    * restores the fact at the seam that replaced it).
+   *
+   * `autoBuildSchedule` (#452) is `buildSchedule` plus two things that keep
+   * that promise: it adds each pool's rest to the request on the way IN (a
+   * synchronous rewrite of the input, nothing awaited ahead of the call), and
+   * refuses a solver board that breaks a declared rest on the way OUT — a
+   * second, solver-free greedy rebuild that runs only when the first call has
+   * already returned a solver board. A `solver_busy` answer is greedy, so it
+   * comes straight back. See `schedule-solver-rest.ts`.
    */
   const out: BuildResult | ReflowResult = await (body.mode === "reflow"
     ? // Pinned cards are handed separately from the rest: the solver may not
@@ -2112,7 +2120,7 @@ export async function autoSchedule(
         placed: plan.placedNow,
         pinned: plan.pinnedNow,
       })
-    : buildSchedule({
+    : autoBuildSchedule({
         fixtures: schedulable,
         config,
         existing: board,
@@ -2680,7 +2688,10 @@ async function reflowExisting(args: {
     };
   }
 
-  const out = await buildSchedule({
+  // `autoBuildSchedule`, not bare `buildSchedule`: this is the auto pass too, so
+  // the pool rest goes out on the request and a solver board that breaks a
+  // declared rest is refused (#452, `schedule-solver-rest.ts`).
+  const out = await autoBuildSchedule({
     fixtures: args.schedulable,
     config: args.config,
     existing: args.board,
