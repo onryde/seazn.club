@@ -22210,7 +22210,7 @@
     },
     "/api/v1/stages/{id}/complete": {
       "post": {
-        "summary": "Guarded stage completion / progression",
+        "summary": "Guarded stage completion / progression. A bracket stage whose final is settled but which still owes another line — a third-place match, or a bracket reset the losers' champion earned — that is scheduled, in play, or abandoned and held for its settle is refused 409 STAGE_HAS_UNDECIDED_FIXTURES with `fixture_ids` (W4 T6, AN-2) and nothing is written; a bye line, a cancelled line and a reset nobody owes are never owed. A bracket whose final is not yet settled answers `{completed: false}` as before",
         "tags": [
           "stages"
         ],
@@ -22403,6 +22403,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -26370,7 +26414,7 @@
     },
     "/api/v1/stages/{id}/seed-proposal/confirm": {
       "post": {
-        "summary": "Confirm a draft proposal: fills the stage's TBD fixtures via the same slot-fill pathway as intra-bracket advancement, never regenerates. 409 SEEDING_PROPOSAL_STALE/SEEDING_ALREADY_CONFIRMED/SEEDING_FIXTURES_ALREADY_FILLED, 422 SEEDING_EDIT_UNKNOWN_SLOT/SEEDING_SLOT_DOUBLE_ASSIGNED/SEEDING_SLOT_FOREIGN_FIXTURE/SEEDING_ENTRANT_FOREIGN/SEEDING_ENTRANT_WITHDRAWN (an entrant about to be filled has withdrawn or been disqualified — recompute the proposal; her seat is left empty, nobody is promoted into it)/SEEDING_TIE_UNRESOLVED",
+        "summary": "Confirm a draft proposal: fills the stage's TBD fixtures via the same slot-fill pathway as intra-bracket advancement, never regenerates. 409 SEEDING_PROPOSAL_STALE/SEEDING_ALREADY_CONFIRMED/SEEDING_FIXTURES_ALREADY_FILLED, 422 SEEDING_EDIT_UNKNOWN_SLOT/SEEDING_SLOT_DOUBLE_ASSIGNED/SEEDING_SLOT_FOREIGN_FIXTURE/SEEDING_ENTRANT_FOREIGN/SEEDING_ENTRANT_WITHDRAWN (an entrant about to be filled has withdrawn or been disqualified — recompute the proposal; her seat is left empty, nobody is promoted into it)/SEEDING_TIE_UNRESOLVED. A confirm appends a `seed_confirmed` ledger row (W4 T5, K1): an undo barrier — Undo, Redo and Restore across it are 409 SEED_CONFIRM_NOT_UNDOABLE, and Recompute is 409 SEEDING_ALREADY_CONFIRMED from then on, so a confirmed draw is final",
         "tags": [
           "stages"
         ],
@@ -75471,7 +75515,7 @@
     },
     "/api/v1/divisions/{id}/undo": {
       "post": {
-        "summary": "Undo the last structural edit: appends the inverse event, moves the watermark (results-guarded)",
+        "summary": "Undo the last structural edit: appends the inverse event, moves the watermark (results-guarded). Refused by name at an undo barrier, writing nothing: 409 SEED_CONFIRM_NOT_UNDOABLE (a confirmed seed proposal, `seed_confirmed`); 422 SWISS_LATE_ENTRY_NOT_UNDOABLE, SWISS_ROUNDS_CHANGE_NOT_UNDOABLE",
         "tags": [
           "history"
         ],
@@ -75772,7 +75816,7 @@
     },
     "/api/v1/divisions/{id}/redo": {
       "post": {
-        "summary": "Redo the next edit (Word-like linear history)",
+        "summary": "Redo the next edit (Word-like linear history). Refused by name across an undo barrier, as Undo is (409 SEED_CONFIRM_NOT_UNDOABLE for a confirmed seed proposal)",
         "tags": [
           "history"
         ],
@@ -76924,7 +76968,7 @@
     },
     "/api/v1/divisions/{id}/restore": {
       "post": {
-        "summary": "Undo back to a checkpoint (confirm: true; results-guarded)",
+        "summary": "Undo back to a checkpoint (confirm: true; results-guarded). A loop of Undos, so it stops at an undo barrier and is refused by name (409 SEED_CONFIRM_NOT_UNDOABLE at a confirmed seed proposal); the steps taken before it stay",
         "tags": [
           "history"
         ],
@@ -77091,6 +77135,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {

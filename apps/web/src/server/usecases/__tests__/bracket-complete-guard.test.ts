@@ -217,6 +217,10 @@ describe.runIf(HAS_DB)("W4 T6 undecidedBracketFixtures — the lines of a bracke
   it("double elimination: the bracket reset is owed only when the losers' champion won the grand final", async () => {
     // single-sport: badminton — the reset rule is the engine's harness rule (champion.ts): owed iff the grand final's
     // winner is not its home entrant (the winners' champion sits at home).
+    // B1b review M5: that last clause is the code's own assumption, so the expected value is NOT read from it. It is the
+    // rulebook's: the winners' champion is the grand finalist who has lost no match, and the reset is owed iff the other
+    // one won. A premise then pins that the generator seats that unbeaten finalist at home — the seat `resetOwed` reads —
+    // so a generator that seated the losers' champion at home reds the premise instead of inverting code and oracle together.
     let judged = 0;
     for (const gfHomeWins of [true, false]) {
       const s = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "double_elim", entrants: 4, stageConfig: { bracketReset: true } });
@@ -234,8 +238,19 @@ describe.runIf(HAS_DB)("W4 T6 undecidedBracketFixtures — the lines of a bracke
       expect(gf.outcome?.winner === gf.home_entrant_id, "premise: the side the case asks for won it").toBe(gfHomeWins);
       const others = (await linesOf(s.stageId)).filter((l) => !l.conditional && l.status !== "decided" && l.status !== "forfeited");
       expect(others, "premise: every other line is settled").toEqual([]);
-      expect(await undecided(s.stageId), gfHomeWins ? "not owed: the winners' champion won" : "owed: the losers' champion won").toEqual(
-        gfHomeWins ? [] : [reset!.id],
+      // Who lost a match before the grand final, off the stored outcomes (a line's loser is the seat its winner is not).
+      const before = (await linesOf(s.stageId)).filter((l) => !l.conditional && l.id !== gf.id && l.outcome?.winner);
+      expect(before.length, "anti-vacuity: the lines before the grand final were read").toBeGreaterThan(0);
+      const beaten = new Set(before.map((l) => (l.outcome!.winner === l.home_entrant_id ? l.away_entrant_id : l.home_entrant_id)));
+      const unbeaten = [gf.home_entrant_id, gf.away_entrant_id].filter((e) => !beaten.has(e));
+      expect(unbeaten.length, "premise (rulebook): exactly one grand finalist is unbeaten — the winners' champion").toBe(1);
+      expect(unbeaten[0], "premise: the winners' champion sits at the grand final's home (the seat the reset rule reads)").toBe(
+        gf.home_entrant_id,
+      );
+      const resetOwed = gf.outcome!.winner !== unbeaten[0];
+      expect(resetOwed, "premise: the case drove the side it asks for").toBe(!gfHomeWins);
+      expect(await undecided(s.stageId), resetOwed ? "owed: the losers' champion won" : "not owed: the winners' champion won").toEqual(
+        resetOwed ? [reset!.id] : [],
       );
       judged++;
     }
@@ -356,6 +371,9 @@ describe.runIf(HAS_DB)("W4 T6 X-CH-5 an unplayed final is never decided automati
     expect(await completeStageIfReady(r.auth.orgId, r.stageId), "engine-db completion: not yet").toEqual({ completed: false, events: [] });
     expect(await completeStage(r.auth, r.stageId), "the organiser's Complete: not yet, no refusal").toMatchObject({ completed: false });
     expect(await stageStatus(r.stageId)).toBe("active");
+    // B1b review M6: D5 asks that no outcome is written, so the final is read again AFTER both completion calls.
+    const after = await fixtureRow(r.final.id);
+    expect([after.status, after.outcome], "neither completion call wrote the final").toEqual(["scheduled", null]);
 
     // D5's positive pair: the final decided by play, auto-advance completes the stage.
     await playBadminton(r.auth, r.final.id, true);
