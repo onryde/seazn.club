@@ -68,10 +68,11 @@ const YOUTUBE_COLUMNS = ["refresh_token_enc"];
 const YOUTUBE_OWNER = "server/youtube/token-store.ts";
 
 /** Quick match (V492, spec 2026-11-03 §7.1, C19): the home-page token's sealed envelope on `quick_matches`, under
- *  DEVICE_LINK_KEK. SQL over it lives in exactly one file, the create that writes it. A later reader (the link rebuilt
- *  from the envelope) joins this owner or moves the column's SQL into one file both use. */
+ *  DEVICE_LINK_KEK. SQL over it lives in exactly two files: the create that writes it, and the home read that returns it
+ *  on `QuickMatchRow.tokenEnc` (plan 1 Task 7) — the one row every later reader rebuilds the link from (the pad's back
+ *  link, the saved list), so none of them names the column. A third reader joins these owners or reads the row. */
 const QUICK_MATCH_COLUMNS = ["token_enc"];
-const QUICK_MATCH_OWNER = "server/usecases/quick-match-create.ts";
+const QUICK_MATCH_OWNERS = ["server/usecases/quick-match-create.ts", "server/usecases/quick-match-home.ts"];
 
 describe("*_enc columns never leave their owners", () => {
   it("every declared *_enc column is owned — a new one cannot walk past this test", () => {
@@ -128,13 +129,13 @@ describe("*_enc columns never leave their owners", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("outside __tests__, only quick-match-create.ts names token_enc — and it does", () => {
+  it("outside __tests__, only quick-match-create.ts and quick-match-home.ts name token_enc — and both do", () => {
     const pattern = new RegExp(`\\b(${QUICK_MATCH_COLUMNS.join("|")})\\b`);
     const naming = walk(SRC)
       .map((f) => relative(SRC, f))
       .filter((f) => !f.split("/").includes("__tests__"))
       .filter((f) => pattern.test(readFileSync(join(SRC, f), "utf8")));
-    expect(naming).toEqual([QUICK_MATCH_OWNER]);
+    expect([...naming].sort()).toEqual([...QUICK_MATCH_OWNERS].sort());
   });
 });
 
