@@ -840,6 +840,32 @@ describe("roundDone - the 'N of M done' on a round bar (the stage card's own cou
     expect(roundDone(rows, new Set()), "settled: nothing is owed").toEqual({ done: 2, total: 2 });
   });
 
+  // Owner-approved quirk (W4 B1a shots): a knockout line waiting on its award - the day-one bye, or a dead seat waiting on the
+  // side that walks over it - is still owed, so its round never reads "0 of 0". Which of the two it will become is not on
+  // the row, so it counts in the total and never as done; once settled it is what it became (a walkover done, a bye award
+  // no match). The Swiss bye shell is no such line: Pair makes it a bye, never a match, and it has no phantom side.
+  it("a knockout line waiting on its award counts in the total, never as done; a settled bye and a Swiss bye shell do not", () => {
+    const BYE_LABEL = { key: "bracket.slot.bye", params: {} };
+    const SEED = { key: "slot.rank", params: { rank: 1 } };
+    const rows: { what: string; row: ReturnType<typeof fx>; want: { done: number; total: number } }[] = [
+      { what: "the empty case", row: fx({ id: "e", home_entrant_id: null, away_entrant_id: null }), want: { done: 0, total: 1 } },
+      { what: "day one: the seed unfilled, the away side the bye", row: fx({ id: "d1", home_entrant_id: null, away_entrant_id: null, home_slot_label: SEED, away_slot_label: BYE_LABEL }), want: { done: 0, total: 1 } },
+      { what: "a dead seat waiting on the side that walks over it", row: fx({ id: "dead", home_entrant_id: null, away_entrant_id: null, home_slot_label: BYE_LABEL, away_slot_label: SEED }), want: { done: 0, total: 1 } },
+      { what: "the bye awarded: no match", row: fx({ id: "aw", away_entrant_id: null, away_slot_label: BYE_LABEL, status: "forfeited", outcome: { kind: "award", winner: "h1", loser: null, reason: "bye" } }), want: { done: 0, total: 0 } },
+      { what: "the walkover landed: a done match", row: fx({ id: "wo", away_entrant_id: null, away_slot_label: BYE_LABEL, status: "forfeited", outcome: { kind: "award", winner: "h1", loser: "x9", reason: "withdrew" } }), want: { done: 1, total: 1 } },
+      { what: "a Swiss bye shell before Pair", row: fx({ id: "sw", ext_key: "sw-r2-bye", home_entrant_id: null, away_entrant_id: null }), want: { done: 0, total: 0 } },
+    ];
+    let checked = 0;
+    for (const r of rows) {
+      expect(roundDone([r.row], new Set()), r.what).toEqual(r.want);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every row was asked").toBe(rows.length);
+    const waiting = rows.filter((r) => r.what.startsWith("day one") || r.what.startsWith("a dead seat")).map((r) => r.row);
+    expect(waiting.every((f) => isBye(f)), "premise: both waiting lines are byes to the rest of the sheet (no Set time)").toBe(true);
+    expect(roundDone([...waiting, rows[0]!.row], new Set()), "beside an open match: 0 of 3").toEqual({ done: 0, total: 3 });
+  });
+
   it("parity with the stage card: the round counts add up to stageCounts over the stage's real matches, and open = total - done", () => {
     const held = new Set(["ab"]);
     const rows = [

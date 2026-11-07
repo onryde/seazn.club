@@ -39,7 +39,7 @@ import { applySchedule, autoSchedule, isMovable, movableFixtureSql, moveFixture,
 import { completeStage, confirmSeedProposal, createStages, generateStageFixtures } from "../stages";
 import { getCompetitionDesk } from "../competition-desk";
 import { listDivisionFixtures, listDivisionFixturesForBoard } from "../fixtures";
-import { buildRunSheet, isBye, type RunSheetBlock, type RunSheetFixture } from "@/lib/run-sheet-groups";
+import { buildRunSheet, isBye, roundDone, type RunSheetBlock, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import { isUnscheduledFixture } from "@/lib/division-phase";
 import { runSheetCounts, runSheetKeeps } from "@/components/v2/desk/run-sheet";
 import { RunSheetRow } from "@/components/v2/desk/run-sheet-row";
@@ -304,6 +304,14 @@ describe.runIf(HAS_DB)("W4 T3 K2 a bracket bye line never takes or keeps a court
     await autoPlace(rig.auth, rig.koStageId);
     expect(slot(await rowOf(rig.koStageId, rig.byeLineId)), "premise: the bye line is still untimed").toEqual(NONE);
     expect(await owed(), "every real line placed: nothing is owed").toEqual({ field: 0, attention: null });
+    // Owner-approved quirk (B1a shots): the desk's "N of M played" total counts what its unscheduled count counts — the
+    // waiting bye line is no fixture to either. Expected = every non-cancelled line of the division but the rig's bye.
+    const division = await listDivisionFixtures(rig.auth, rig.divisionId);
+    expect(division.some((f) => f.id === rig.byeLineId), "premise: the division read holds the bye line").toBe(true);
+    const desk = (await getCompetitionDesk(rig.auth, rig.competitionId, at)).divisions.get(rig.divisionId)!;
+    const lines = division.filter((f) => f.status !== "cancelled" && f.id !== rig.byeLineId).length;
+    expect(lines, "anti-vacuity: the league's six and the bracket's two real lines").toBe(8);
+    expect([desk.played, desk.total], "the desk's played total leaves the waiting bye line out, as its unscheduled count does").toEqual([0, lines]);
 
     const board = (await listDivisionFixturesForBoard(rig.auth, rig.divisionId)).filter((f) => f.stage_id === rig.koStageId);
     const bye = board.find((f) => f.id === rig.byeLineId)!;
@@ -351,6 +359,13 @@ describe.runIf(HAS_DB)("W4 T3 K2 a bracket bye line never takes or keeps a court
       nowMs,
     });
     expect(sheetRowsOf(blocks).some((f) => f.id === rig.byeLineId), "the bye stays on the sheet, a ghost row in its round (R7b)").toBe(true);
+    // Owner-approved quirk (B1a shots): the round bar counts the line waiting on its award in the total, never as done.
+    // Expected = the stored lines of the bye's round (the bye and the real line beside it).
+    const koBlock = blocks.find((x) => x.kind === "bracket" && x.stageId === rig.koStageId);
+    const byeRound = koBlock && koBlock.kind === "bracket" ? koBlock.rounds.find((r) => r.fixtures.some((f) => f.id === rig.byeLineId)) : undefined;
+    const byeRoundNo = bye.round_no;
+    expect(ko.filter((f) => f.round_no === byeRoundNo).length, "anti-vacuity: the bye shares its round with a real line").toBe(2);
+    expect(roundDone(byeRound?.fixtures ?? [], new Set()), "day one: 0 of 2, the waiting bye owed, not done").toEqual({ done: 0, total: 2 });
     const ctx = { stageId: rig.koStageId, nowMs, matchMinutes: 30 };
     expect(runSheetCounts(blocks, ctx).unscheduled, "the Unscheduled chip counts the two real lines only").toBe(2);
     const keep = { ...ctx, tz: "UTC", today: dayKeyInTz(nowMs, "UTC") };
@@ -627,12 +642,34 @@ describe.runIf(HAS_DB)("W4 T3 K2 a bracket bye line never takes or keeps a court
     expect(WRONG_BYE_SENTENCES, "anti-vacuity: the right name differs from a side swap and from a missing feed").not.toContain(want);
     expect(tieRow.html, "names the feeder whose winner walks over her dead seat").toContain(want);
 
+    // Owner-approved quirk (B1a shots): the round bar. The dead-seat tie is owed its walkover, so it counts in its round's
+    // total and never as done — a round whose only line it is reads "0 of 1", never "0 of 0" — and once the walkover
+    // lands it is done, the total unchanged. Expected totals = the round's lines in the stored bracket.
+    const tieRound = rows.find((r) => r.id === tieId)!.round_no;
+    const linesInRound = rows.filter((r) => r.round_no === tieRound).length;
+    expect(linesInRound, "anti-vacuity: the tie's round holds the tie and its sibling").toBe(2);
+    const roundOf = async () => {
+      const blocks = buildRunSheet({
+        fixtures: (await listDivisionFixtures(s.auth, s.divisionId)).map(toSheetRow),
+        stages: [{ id: s.stageId, seq: 1, kind: "knockout" }],
+        tz: "UTC",
+        nowMs: Date.parse("2030-07-01T10:00:00Z"),
+      });
+      const bracket = blocks.find((x) => x.kind === "bracket");
+      return bracket && bracket.kind === "bracket" ? bracket.rounds.find((r) => r.round === tieRound)!.fixtures : [];
+    };
+    const waitingRound = await roundOf();
+    expect(roundDone(waitingRound, new Set()), "waiting: the tie counts in its round, not as done").toEqual({ done: 0, total: linesInRound });
+    const tieAlone = waitingRound.filter((f) => f.id === tieId);
+    expect(roundDone(tieAlone, new Set()), "a round whose only line is the waiting tie: 0 of 1, never 0 of 0").toEqual({ done: 0, total: 1 });
+
     const arriving = await play(b.id);
     const tie = await rowOf(s.stageId, tieId);
     expect([tie.status, tie.outcome], "the arrival walks over her dead seat").toEqual([
       "forfeited",
       { kind: "award", winner: arriving, loser: w1, reason: "withdrew" },
     ]);
+    expect(roundDone(await roundOf(), new Set()), "the walkover landed: done, the total unchanged").toEqual({ done: 1, total: linesInRound });
     expect(slot(tie), "the withdrew walkover keeps the slot it held").toEqual(placed);
   }, 180_000);
 });

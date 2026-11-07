@@ -636,7 +636,10 @@ export async function getCompetitionDesk(
       phase: resolvePhase(input),
       attention,
       played: s?.played ?? 0,
-      total: s?.total ?? rows.length,
+      // Owner-approved quirk (W4 B1a shots): the "of M" counts what `unscheduled` beside it counts. A waiting bye line is
+      // no fixture yet (`work`, above), so it is out of the total too - "0 of 12 played · 12 unscheduled", never "of 13".
+      // Its award, once written, is played and counted like any other settled bye (card-stats.ts's PLAYED clause).
+      total: (s?.total ?? rows.length) - (rows.length - work.length),
       unscheduled: work.filter((x) => x.status === "scheduled" && x.scheduled_at === null).length,
       in_play: inPlay,
       entrants: s?.entrants ?? 0,

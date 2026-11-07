@@ -27,7 +27,7 @@ import { zonedTimeInput } from "@/lib/zoned-datetime";
 import type { FixtureRow } from "@/server/usecases/stages";
 import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import { isUnseatedSwissByeShell } from "@/lib/swiss-shell";
-import { isWaitingByeLine } from "@/lib/bye-line";
+import { byePhantomSide, isWaitingByeLine } from "@/lib/bye-line";
 import type { CameraPolicy } from "@/lib/camera-policy";
 import type { NeedsReason } from "@/server/external-play/types";
 import { stageCounts } from "@/lib/stage-card/summaries";
@@ -459,15 +459,26 @@ function inReadingOrder(poolOrder: ReadonlyMap<string, number>): (a: RunSheetFix
 }
 
 /**
- * "N of M done" for one round: M is every real match in it (byes are no match), N what the stage card itself counts as finished -
- * `stageCounts`' `played` bucket, the number the Complete button waits on. A walkover, an abandonment and a cancellation are
- * done (nothing is left to play); a match held for its settle is not (`held` is the ids the page lists as awaiting it). The
- * bars of a stage's rounds therefore add up to the stage's own counts line: a bar can never read "1 of 2" on a stage Complete
- * is already enabled for.
+ * A knockout line still waiting on its award: a phantom side (`byePhantomSide`) and nothing settled (`isWaitingByeLine`) - the
+ * day-one bye, or a dead seat waiting on the side that walks over it (owner-approved quirk, W4 B1a shots). Which of the two it
+ * will become is not on the row, so `roundDone` counts it in the total and never as done. The Swiss bye shell is no such line:
+ * it has no phantom side until Pair seats it as a bye, never a match.
+ */
+function awaitsItsAward(f: RunSheetFixture): boolean {
+  return byePhantomSide(f) !== null && isWaitingByeLine({ ...f, ext_key: f.ext_key ?? null });
+}
+
+/**
+ * "N of M done" for one round: M is every real match in it (byes are no match) plus every knockout line still waiting on its
+ * award (`awaitsItsAward`: owed, so a final waiting on a dead seat reads "0 of 1", never "0 of 0"), N what the stage card itself
+ * counts as finished - `stageCounts`' `played` bucket, the number the Complete button waits on. A walkover, an abandonment and a
+ * cancellation are done (nothing is left to play); a match held for its settle is not (`held` is the ids the page lists as
+ * awaiting it). Once its award lands a waiting line is what it became: a walkover is done, a bye leaves the count. Over real
+ * matches only, the bars of a stage's rounds add up to the stage's own counts line.
  */
 export function roundDone(fixtures: readonly RunSheetFixture[], held: ReadonlySet<string>): { done: number; total: number } {
   const real = fixtures.filter((f) => !isBye(f));
-  return { done: stageCounts(real, held).played, total: real.length };
+  return { done: stageCounts(real, held).played, total: real.length + fixtures.filter(awaitsItsAward).length };
 }
 
 /**
