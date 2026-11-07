@@ -148,6 +148,13 @@ export async function humanizeEngineMessage(orgId: string, message: string): Pro
   }
 }
 
+/** A device link, or a Match Day code's actor (capture S4 design §3; MD-1 batch 1 review m6): neither is a human with a
+ *  name, so neither records an organiser-only event or finalizes, and a code's actor is refused every gate a link is,
+ *  with the same status and words. Keyed on the actor's KIND, never its role. */
+function isLinkActor(auth: AuthCtx): boolean {
+  return auth.via === "device_link" || auth.via === "match_day_code";
+}
+
 /**
  * Append one score event. 201-shape on success; EngineError SEQ_CONFLICT →
  * 409 (v1 kernel maps it); module rejection → 422, nothing persisted.
@@ -614,7 +621,7 @@ async function assertEntitledToScore(
   // below). Every other scorer forfeit stays organiser-only.
   if (
     isOrganiserOnlyEvent(input.type, input.payload) &&
-    (auth.via === "device_link" || subjectToScorerCapabilityGates(auth)) &&
+    (isLinkActor(auth) || subjectToScorerCapabilityGates(auth)) &&
     !(await isOwnSanctionEnding(auth.orgId, fixtureId, sport, input))
   ) {
     const verb =
@@ -660,8 +667,9 @@ async function assertEntitledToScore(
   }
 
   // Device-link capabilities (doc 13 §7): strictly ⊂ scorer. Append + void
-  // OWN-LINK events pre-finalize; finalizing needs a human with a name.
-  if (auth.via === "device_link") {
+  // OWN-LINK events pre-finalize; finalizing needs a human with a name. A Match Day code's actor is held to exactly
+  // these (`isLinkActor`): a code never finalizes (capture S4 design §3; MD-1 batch 1 review m6).
+  if (isLinkActor(auth)) {
     if (input.type === "core.finalize") {
       throw new HttpError(403, "Finalizing needs an organiser or scorer account");
     }

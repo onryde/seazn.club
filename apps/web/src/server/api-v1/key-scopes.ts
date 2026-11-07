@@ -405,6 +405,7 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   // MD-1 (capture S4 Match Day design §9): the Match Day code's own routes. Their Bearer is an md_ code the route resolves
   // itself — a credential that lists a day and opens scoring links; never a key.
   "GET /match-day-code",
+  "POST /match-day-code/fixtures/:id/scoring-link",
   // Chess in-page board (2026-10-09 design §6): the room read names a player's
   // seat, the POSTs seat them, submit moves with that player's own stored
   // Lichess OAuth token, report their clock at zero, and stamp a camera gap

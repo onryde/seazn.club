@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
   CaptureBeat, CaptureBeatAnswer, CaptureDescriptor, CaptureRefusal, CaptureScoringLinkOk, CaptureStartBody, CaptureStartOk,
-  CaptureMatchdayDay, CaptureMatchdayRefusal,
+  CaptureMatchdayDay, CaptureMatchdayRefusal, CaptureMatchdayOpen,
 } from "../apps/web/src/server/api-v1/capture-schemas.ts";
 import { CaptureQrV2 } from "../apps/web/src/lib/capture-qr.ts";
 
@@ -275,6 +275,30 @@ const contracts: Contract[] = [
       refusal: {
         twin: CaptureMatchdayRefusal,
         description: "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at), 429 RATE_LIMITED (with Retry-After). The open and the approvals answer MD_OUT_OF_SCOPE, MD_NO_APPROVE, MD_STALE, MD_ALREADY and MD_TIES too.",
+        props: {
+          code: "The machine word the phone keys its copy on: an MD_ word, or one of the v1 envelope's own (RATE_LIMITED, NOT_FOUND, INTERNAL, …).",
+          message: "A plain English developer string; the phone never shows it.",
+          opens_at: "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
+        },
+      },
+    },
+  },
+  {
+    file: "capture-matchday-open.v1.json",
+    title: "Seazn Match Day code open, v1: POST /api/v1/match-day-code/fixtures/{id}/scoring-link",
+    root: {
+      twin: CaptureMatchdayOpen,
+      description: `What a phone holding a Match Day code gets when it opens a match (${MD_SPEC} §6, §9.4; MD-1 Task 4), authenticated by Authorization: Bearer md_… only, with no body. The answer is \`data\` in the v1 envelope {ok: true, data, requestId}; $defs.refusal is \`error\` in {ok: false, error, requestId}. ${PINNED_BY}`,
+      props: {
+        kind: "link (the match's scoring link) or finished (the match is finalized or cancelled: there is nothing to score, and nothing was written).",
+        url: "link only: the match's own Remote scoring link, https://{host}/score/dl_{43 base64url}, the printed QR's when the match has one. Re-shown on every open, never a second link beside a live one, and nothing is revoked. A credential: the phone hands it to its scoring pad and stores it as a scan of that QR would be.",
+        sport_key: "link only: the match's sport: it decides which pad the phone opens.",
+      },
+    },
+    defs: {
+      refusal: {
+        twin: CaptureMatchdayRefusal,
+        description: "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at), 403 MD_OUT_OF_SCOPE (the match is not in the code's competition, venue or courts, or not on its day, at the moment of asking), 404 NOT_FOUND (no such match), 429 RATE_LIMITED (with Retry-After).",
         props: {
           code: "The machine word the phone keys its copy on: an MD_ word, or one of the v1 envelope's own (RATE_LIMITED, NOT_FOUND, INTERNAL, …).",
           message: "A plain English developer string; the phone never shows it.",

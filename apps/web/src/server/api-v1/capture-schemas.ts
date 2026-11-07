@@ -370,3 +370,16 @@ export const CaptureMatchdayRefusal = z.strictObject({
   opens_at: MdInstant.optional(),
 });
 export type CaptureMatchdayRefusal = z.infer<typeof CaptureMatchdayRefusal>;
+
+// ---------------------------------------------------------------------------------------------------------------
+// capture-matchday-open.v1 (capture S4 Match Day design §6, §9.4; MD-1 Task 4): POST /match-day-code/fixtures/{id}/scoring-link
+// ---------------------------------------------------------------------------------------------------------------
+
+/** The open's 200: the match's own scoring link (the capture phone's pattern, `CAPTURE_SCORING_LINK_URL_RE`) and the
+ *  sport whose pad it opens, or "the match is over" (finalized or cancelled), with nothing else. A match outside the
+ *  code's scope is the refusal 403 MD_OUT_OF_SCOPE, never a 200. */
+export const CaptureMatchdayOpen = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("link"), url: z.string().regex(CAPTURE_SCORING_LINK_URL_RE), sport_key: z.string().min(1) }),
+  z.strictObject({ kind: z.literal("finished") }),
+]);
+export type CaptureMatchdayOpen = z.infer<typeof CaptureMatchdayOpen>;

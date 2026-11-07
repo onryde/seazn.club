@@ -39,7 +39,8 @@ import { formatLineOf } from "@/server/engine-db/rules-version";
  *  rules its pad reloads after a correction (`GET /fixtures/{id}/rules`, `getFixtureRules`) — every other fixture
  *  surface (detail, lineups, schedule) is 403 for dl_ tokens. */
 function rejectDeviceLink(auth: AuthCtx): void {
-  if (auth.via === "device_link") {
+  // A Match Day code's actor is refused exactly as a device link is (MD-1 batch 1 review m6).
+  if (auth.via === "device_link" || auth.via === "match_day_code") {
     throw new HttpError(403, "Device links can only access their fixture's scoring surface");
   }
 }
