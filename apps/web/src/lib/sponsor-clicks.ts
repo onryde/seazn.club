@@ -10,7 +10,7 @@
 //   • a short code (R7) — what the stream prints, `seazn.club/s/<code>`; the code IS the tag (that sponsor, that
 //     fixture, `stream`), so its query string is ignored. A viewer may type it in lowercase (a phone keyboard does):
 //     ASCII letters fold to uppercase, which is injective because the alphabet has no 0/O, 1/I/L pairs.
-// The four sources are the V483 CHECK on `sponsor_clicks.source` (`lib/__tests__/sponsor-clicks.test.ts` reads it back).
+// The four sources are the V492 CHECK on `sponsor_clicks.source` (`lib/__tests__/sponsor-clicks.test.ts` reads it back).
 // Relative, with its extension: api-v1/schemas.ts imports this file under bare `node --experimental-strip-types`
 // (openapi-gen), which resolves no `@/` alias.
 import {

@@ -6,7 +6,7 @@
 //   - every window is HALF-OPEN in UTC, [from, to): a row exactly at `from` counts, one exactly at `to` does not;
 //   - "This year" is 1 Jan 00:00 UTC of `now`'s UTC year to 1 Jan of the next;
 //   - "Last 30 days" is LAST_DAYS whole UTC days ending with `now`'s own day (from 00:00 UTC LAST_DAYS-1 days before today, to
-//     00:00 UTC tomorrow) - whole days, so a report link, whose bounds are DATES (V483 from_date / to_date), can carry exactly
+//     00:00 UTC tomorrow) - whole days, so a report link, whose bounds are DATES (V492 from_date / to_date), can carry exactly
 //     the period the organiser was looking at;
 //   - "One competition" has NO time window: it is every airing and click whose fixture is in that competition.
 // `now` is always an argument. Nothing here reads the clock.
@@ -94,7 +94,7 @@ export function isIsoDay(s: string): boolean {
   return !Number.isNaN(d.getTime()) && isoDay(d) === s;
 }
 
-/** S14: a report link's INCLUSIVE dates (V483 from_date / to_date) as the half-open UTC window its report counts:
+/** S14: a report link's INCLUSIVE dates (V492 from_date / to_date) as the half-open UTC window its report counts:
  *  `[from 00:00 UTC, to + 1 day 00:00 UTC)` - S13's rule (controller addendum 2026-11-01), the inverse of `windowDates`.
  *  Anything but two real dates in order is refused by name (the table checks the order too; a NaN window would compare
  *  false with every row and report zeros). */

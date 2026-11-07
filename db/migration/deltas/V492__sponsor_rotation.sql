@@ -1,4 +1,4 @@
--- V483 — Sponsors on stream (R4, spec docs/superpowers/specs/2026-10-27-sponsors-on-stream-design.md §4): the
+-- V492 — Sponsors on stream (R4, spec docs/superpowers/specs/2026-10-27-sponsors-on-stream-design.md §4): the
 -- rotation's settings and assignments, the proof-of-display log and its frames, the tombstones of frame objects whose
 -- rows went (S9), tracked clicks, the sponsor report's links, and the on-screen short codes (owner ruling R7).
 -- Greenfield: no backfill. Every existing sponsor starts OFF the stream (on_stream = false); the first tick (S12) turns

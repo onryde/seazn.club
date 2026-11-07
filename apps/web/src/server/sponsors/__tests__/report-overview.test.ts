@@ -12,7 +12,7 @@
 //     in lib/__tests__/sponsor-report.test.ts). "One competition" has no time bound: the airings and clicks whose FIXTURE is in
 //     it, so a click with no fixture is excluded.
 //   - A deleted sponsor's airings survive on `sponsor_name` (R16, Review Focus 4): its row has no sponsor id (no live link);
-//     its clicks went with it (V483 cascade), so its link clicks are UNKNOWN (null, shown as a dash), not zero.
+//     its clicks went with it (V492 cascade), so its link clicks are UNKNOWN (null, shown as a dash), not zero.
 //
 // The transitions (TEST-STRATEGY rule 1) and where each is pinned:
 //   seeded period sums ................................ "sums"

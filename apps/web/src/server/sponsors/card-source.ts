@@ -8,7 +8,7 @@ import "server-only";
 //
 // ORDER AND DEDUPE are `resolveSponsors`' (usecases/sponsors.ts) — called, never restated (preflight (e)5): competition
 // rows first, then tier rank, display order, created_at, id, deduped by name, active only. Asked `onStream`, it keeps
-// only the rows ticked onto the stream (`on_stream`, V483) BEFORE it dedupes (fix round 1, I2: a ticked renewal must not
+// only the rows ticked onto the stream (`on_stream`, V492) BEFORE it dedupes (fix round 1, I2: a ticked renewal must not
 // hide behind the unticked row it renews), and never answers from the branding blob.
 //
 // TIERS (ruling R13, D8): an org without `sponsors.tiers` gets every card as `partner`, exactly as its public board

@@ -29,7 +29,7 @@ import { rigUser, streamRig } from "@/server/relay/__tests__/_session-rig";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 // ---- spec / brief literals ----------------------------------------------------------------------------------------
-/** The seven TENANT tables V483 creates (brief S3 + the coordinator's R7 addition). */
+/** The seven TENANT tables V492 creates (brief S3 + the coordinator's R7 addition). */
 const NEW_TABLES = [
   "sponsor_stream_settings", "sponsor_assignments", "sponsor_airings", "sponsor_airing_frames",
   "sponsor_clicks", "sponsor_report_links", "sponsor_short_codes",
@@ -39,8 +39,8 @@ const SEALED_TABLES = ["sponsor_frame_tombstones"] as const;
 /** The R4 delta, found by SUFFIX, never by number (final review m1): a renumber before merge is then a pure `git mv`. */
 const DELTAS_DIR = resolve(__dirname, "../../../../../../db/migration/deltas");
 const SPONSOR_ROTATION_DELTA = /^V\d+__sponsor_rotation\.sql$/;
-const V483_MATCHES = readdirSync(DELTAS_DIR).filter((f) => SPONSOR_ROTATION_DELTA.test(f));
-const V483_FILE = resolve(DELTAS_DIR, V483_MATCHES[0] ?? "the-sponsor-rotation-delta-is-missing.sql");
+const V492_MATCHES = readdirSync(DELTAS_DIR).filter((f) => SPONSOR_ROTATION_DELTA.test(f));
+const V492_FILE = resolve(DELTAS_DIR, V492_MATCHES[0] ?? "the-sponsor-rotation-delta-is-missing.sql");
 /** Tables the console writes under withTenant (S12 settings PUT, S13 create/revoke a link). */
 const TENANT_WRITTEN = new Set<string>(["sponsor_stream_settings", "sponsor_report_links"]);
 const FREQUENCIES = ["light", "normal", "busy"];
@@ -49,7 +49,7 @@ const AIRING_SOURCES = ["rotation", "scene", "operator"];
 const STYLES = ["lower_third", "banner"];
 const CLICK_SOURCES = ["match", "stream", "site", "unknown"];
 /** Every FK whose parent the app deletes (a sponsor, a fixture, a session, a competition). Each delete walks it, so each
- *  has an index led by that column (V483 header). */
+ *  has an index led by that column (V492 header). */
 const WALKED_FKS = [
   "sponsor_stream_settings.competition_id",
   "sponsor_assignments.fixture_id", "sponsor_assignments.sponsor_id",
@@ -202,7 +202,7 @@ describe("the tier list has one authority (F10)", () => {
   });
 });
 
-describe.skipIf(!HAS_DB)("V483 sponsors on stream — the constraints are real", () => {
+describe.skipIf(!HAS_DB)("V492 sponsors on stream — the constraints are real", () => {
   it("SPONSOR_TIERS equals every tier CHECK's set, read from information_schema (one authority; count reported)", async () => {
     const checks = await sql<{ table_name: string; check_clause: string }[]>`
       select ccu.table_name, cc.check_clause
@@ -589,12 +589,12 @@ describe.skipIf(!HAS_DB)("V483 sponsors on stream — the constraints are real",
 
   // ---- tenancy ----------------------------------------------------------------------------------------------------
   it("the R4 delta is found by its suffix: exactly one file matches, whatever its number", () => {
-    expect(V483_MATCHES, "exactly one sponsor_rotation delta").toHaveLength(1);
-    expect(V483_FILE.endsWith("__sponsor_rotation.sql")).toBe(true);
+    expect(V492_MATCHES, "exactly one sponsor_rotation delta").toHaveLength(1);
+    expect(V492_FILE.endsWith("__sponsor_rotation.sql")).toBe(true);
   });
 
-  it("V483 creates exactly the tenant tables and the sealed one this file classifies — a table added later is classified or this reds (count reported)", () => {
-    const created = [...readFileSync(V483_FILE, "utf8").matchAll(/^create table (\w+)/gm)].map((m) => m[1]!);
+  it("V492 creates exactly the tenant tables and the sealed one this file classifies — a table added later is classified or this reds (count reported)", () => {
+    const created = [...readFileSync(V492_FILE, "utf8").matchAll(/^create table (\w+)/gm)].map((m) => m[1]!);
     expect(created.length, "tables read from the file").toBeGreaterThan(0);
     expect([...created].sort()).toEqual([...NEW_TABLES, ...SEALED_TABLES].sort());
   });

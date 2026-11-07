@@ -16,7 +16,7 @@ import "server-only";
 //   - The PERIOD (lib/sponsor-report.ts): half-open UTC windows from `now` for "This year" / "Last 30 days"; "One competition"
 //     is every airing and click whose FIXTURE is in it, with no time bound, so a click with no fixture is not counted there.
 //   - A DELETED sponsor (R16, Review Focus 4): its airings survive with sponsor_id null and their `sponsor_name` snapshot, so it
-//     keeps a row under that name with no sponsor id (no link can be made for it). Its clicks went with it (V483: sponsor_clicks
+//     keeps a row under that name with no sponsor id (no link can be made for it). Its clicks went with it (V492: sponsor_clicks
 //     cascade), so its link clicks are UNKNOWN — null, shown as a dash — never a false zero.
 //
 // THE LINK (spec §4, §5.2): 32 random bytes, base64url, shown ONCE as `/r/sponsor/<token>`; only sha256(token) is stored. The raw
@@ -25,7 +25,7 @@ import "server-only";
 //
 // TENANCY: every call checks the caller's org is the path's (the routes' door checks membership of the PATH org, so this is the
 // line that stops one org's credential naming another), then reads under `withTenant` (RLS) and filters org_id as well. The
-// database checks no cross-org reference (V483 has no composite foreign keys), so the sponsor and competition a link names are
+// database checks no cross-org reference (V492 has no composite foreign keys), so the sponsor and competition a link names are
 // checked to be this org's here.
 import type postgres from "postgres";
 import { sql, withTenant, type Tx } from "@/lib/db";
@@ -272,7 +272,7 @@ interface ShowingRow {
  * log line and no row.
  *
  * The lookup also refuses a link whose sponsor or competition is not its own org's (the database checks no cross-org reference,
- * V483). A deleted sponsor or competition takes its links with it (V483 cascades), so it is unknown here.
+ * V492). A deleted sponsor or competition takes its links with it (V492 cascades), so it is unknown here.
  *
  * The figures are S13's rules (see the top of this file) over the link's own scope: its inclusive dates as the half-open UTC
  * window `[from_date, to_date + 1 day)` (`linkWindow`), AND, when the link names a competition, S13's competition filter (the

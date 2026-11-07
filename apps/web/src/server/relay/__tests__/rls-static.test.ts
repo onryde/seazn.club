@@ -52,7 +52,7 @@ describe("the stream deltas — RLS is static text, not a runtime hope", () => {
   // directory itself — not the fold's list — and checks every delta from V410 on by what its SQL touches.
   //
   // A foreign key that merely POINTS AT a stream table (`references fixture_stream_sessions(id)`) does not touch it: it
-  // creates no stream table, alters none, and grants nothing on one. R4's V483 (tenant sponsor tables with an airing →
+  // creates no stream table, alters none, and grants nothing on one. R4's V492 (tenant sponsor tables with an airing →
   // session key) is such a delta, and it must stay OUT of the fold, whose no-policy/no-grant claim would refuse its
   // org-scoped policies. So FK targets are stripped before the content test — and only they: any other mention in the
   // same file still counts (the synthetic pair below pins both directions).

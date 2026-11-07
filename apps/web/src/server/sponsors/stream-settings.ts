@@ -1,7 +1,7 @@
 import "server-only";
 // server/sponsors/stream-settings.ts — R4 sponsors on stream, S5: the rotation's dial (spec 2026-10-27 §3.2, §4), read
 // on every overlay poll and written by the On stream tab (S12's PUT route). One row per scope in
-// sponsor_stream_settings (V483): the org row (competition_id null) and any competition rows. A competition's own row
+// sponsor_stream_settings (V492): the org row (competition_id null) and any competition rows. A competition's own row
 // OVERRIDES the org row — whole, `enabled` included, so a competition can be switched off under an org that is on.
 import type postgres from "postgres";
 import type { Tx } from "@/lib/db";
@@ -10,7 +10,7 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { SPONSOR_FREQUENCIES, type SponsorFrequency } from "@/lib/sponsor-frequencies";
 
-/** V483's `sponsor_stream_settings_frequency_check`, in the planner's vocabulary: declared once in the dependency-free
+/** V492's `sponsor_stream_settings_frequency_check`, in the planner's vocabulary: declared once in the dependency-free
  *  `lib/sponsor-frequencies.ts` (R4 S12 moved it there so the tab's dial and the PUT's zod enum can read it), re-exported
  *  for its importers. */
 export { SPONSOR_FREQUENCIES };
@@ -59,7 +59,7 @@ export async function resolveStreamSettings(
  * Writes one scope's settings (S12's PUT). Upserts on the scope key (`unique nulls not distinct`), so a second save of
  * the same scope updates its row and never adds one. The route owns the role check (editor only, ruling R19); this owns
  * the org: the caller's org must be the path's, and a competition must be that org's. The database checks neither
- * (V483 has no composite foreign keys).
+ * (V492 has no composite foreign keys).
  */
 export async function putStreamSettings(
   auth: AuthCtx,

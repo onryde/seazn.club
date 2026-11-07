@@ -7,7 +7,7 @@
 //     line (controller addendum 2026-11-01: spy on the logger);
 //   - create and revoke are EDITOR-ONLY (R19: owner / admin; a viewer is 403 - there is no "scorer" role);
 //   - revoke sets `revoked_at`; a second revoke is a 404 that changes nothing; another org's link is 404;
-//   - the link carries inclusive DATES (V483 from_date <= to_date).
+//   - the link carries inclusive DATES (V492 from_date <= to_date).
 // Expected hashes come from node:crypto directly, never from `hashReportToken`.
 //
 // The transitions (TEST-STRATEGY rule 1) and where each is pinned:
@@ -233,7 +233,7 @@ describe.skipIf(!HAS_DB)("S13: report links", () => {
       from: "2026-06-01", to: "2026-06-01", createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) });
   });
 
-  it("deleted sponsor: its links go with it (V483 cascade) - the list drops them and revoke is 404", async () => {
+  it("deleted sponsor: its links go with it (V492 cascade) - the list drops them and revoke is 404", async () => {
     const o = await organiser();
     const link = await createReportLink(o.auth, o.orgId, { sponsorId: o.sponsorId, ...PERIOD });
     await deleteSponsor(o.auth, o.sponsorId);

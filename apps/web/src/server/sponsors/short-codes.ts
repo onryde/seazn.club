@@ -1,6 +1,6 @@
 import "server-only";
 // server/sponsors/short-codes.ts — R4 sponsors on stream, S5 (owner ruling R7): the code a sponsor card prints as
-// `seazn.club/s/<code>`, minted server-side once per (sponsor, fixture) into sponsor_short_codes (V483) and resolved by
+// `seazn.club/s/<code>`, minted server-side once per (sponsor, fixture) into sponsor_short_codes (V492) and resolved by
 // S10's /s/ route to that sponsor, that fixture and `src=stream`.
 //
 // Only a sponsor with a URL gets one: the code is a link, and a sponsor with nowhere to send a viewer prints nothing

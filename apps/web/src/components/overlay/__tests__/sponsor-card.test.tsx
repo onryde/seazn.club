@@ -3,7 +3,7 @@
 // public base url - and nothing link-like without one).
 //
 // Where the expected values come from: the short-code alphabet and pattern (`lib/sponsor-short-code.ts`, the one
-// authority the V483 CHECK mirrors), the showing length `SCENE_CAROUSEL_MS` (spec §3.4), the line forms (spec §3.6),
+// authority the V492 CHECK mirrors), the showing length `SCENE_CAROUSEL_MS` (spec §3.4), the line forms (spec §3.6),
 // and Review Focus 5 for the truncation chain (`min-width: 0` on every flex ancestor of the name).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";

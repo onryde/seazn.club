@@ -273,7 +273,7 @@ const reportJoin = (sessionId: string) => sql<{ moment_id: string; frame_path: s
    where a.session_id = ${sessionId}
    order by a.started_at, a.moment_id`;
 const storedAt = (path: string) => store.objects.get(`${SPONSOR_FRAMES_BUCKET}\n${path}`);
-/** The tombstones (V483) among `paths`. */
+/** The tombstones (V492) among `paths`. */
 const tombstonesOf = async (paths: string[]) =>
   (await sql<{ path: string }[]>`select path from sponsor_frame_tombstones where path in ${sql(paths)} order by path`).map((r) => r.path);
 
@@ -448,7 +448,7 @@ describe.skipIf(!HAS_DB)("S9: POST …/airings/[momentId]/frame", () => {
     expect((await framesOf(c.S)).map((f) => f.moment_id).sort(), "the rows stand").toEqual([start.momentId, other].sort());
   });
 
-  it("replace overwrites the row's PATH: a row left under an older key moves to this frame's key, with this frame's bytes there — and the key it left is tombstoned (V483, review m8), so the next pass removes that object and never this one", async () => {
+  it("replace overwrites the row's PATH: a row left under an older key moves to this frame's key, with this frame's bytes there — and the key it left is tombstoned (V492, review m8), so the next pass removes that object and never this one", async () => {
     const p = await plainSession();
     const id = sponsorMomentId(3, OVER_END.kind);
     const legacy = `${p.orgId}/legacy-older-key.jpg`;
@@ -907,7 +907,7 @@ describe.skipIf(!HAS_DB)("S9: orphan frames (no airing row) are purged past sess
 });
 
 // ---------------------------------------------------------------------------------------------------------------
-// DB: tombstones (V483, review m8) — the object outlives its row in no way at all.
+// DB: tombstones (V492, review m8) — the object outlives its row in no way at all.
 // ---------------------------------------------------------------------------------------------------------------
 describe.skipIf(!HAS_DB)("S9: every object whose row goes is tombstoned and removed on the next pass", () => {
   it("a session deleted (its frames cascade): each path is tombstoned in the same statement, live session or not, and the next pass removes the objects and the tombstones", async () => {

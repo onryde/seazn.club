@@ -5,7 +5,7 @@
 //     controller's default rule stands (addendum 2026-11-01);
 //   - "This year" is 1 January 00:00 UTC of `now`'s UTC year up to (not including) 1 January of the next;
 //   - "Last 30 days" is 30 whole UTC days ending with `now`'s own day: from 00:00 UTC 29 days before today, to 00:00 UTC
-//     tomorrow. Whole days, so a report link (whose bounds are DATES, V483 from_date/to_date) can carry exactly this period;
+//     tomorrow. Whole days, so a report link (whose bounds are DATES, V492 from_date/to_date) can carry exactly this period;
 //   - "One competition" has no time bound at all (null window): it is every airing and click whose fixture is in it.
 // Literal dates below are typed from that rule by hand.
 import { describe, expect, it } from "vitest";
@@ -66,7 +66,7 @@ describe("periodWindow - half-open UTC windows from `now`, never the wall clock"
   });
 });
 
-describe("windowDates - the INCLUSIVE dates a report link carries for a window (V483 date columns)", () => {
+describe("windowDates - the INCLUSIVE dates a report link carries for a window (V492 date columns)", () => {
   it("this year => 1 Jan .. 31 Dec; last 30 days => 29 days ago .. today", () => {
     expect(windowDates(periodWindow(THIS_YEAR, at("2026-11-01T10:00:00.000Z"))!)).toEqual({ from: "2026-01-01", to: "2026-12-31" });
     expect(windowDates(periodWindow(LAST_30, at("2026-11-01T10:00:00.000Z"))!)).toEqual({ from: "2026-10-03", to: "2026-11-01" });

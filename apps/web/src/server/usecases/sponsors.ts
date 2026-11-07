@@ -57,7 +57,7 @@ export interface SponsorRow {
   status: "active" | "pending" | "inactive";
   click_count: number;
   created_at: string;
-  /** Ticked onto the stream's rotation (V483; R4 S12). Written only by PATCH; a created sponsor starts false. */
+  /** Ticked onto the stream's rotation (V492; R4 S12). Written only by PATCH; a created sponsor starts false. */
   on_stream: boolean;
   /** The paid order that activated this placement, when it was bought
    *  through a package (list reads only — write paths return it unset). */
@@ -101,7 +101,7 @@ export const CreateSponsorInput = SponsorWriteFields.extend({
 export type CreateSponsorInput = z.infer<typeof CreateSponsorInput>;
 
 /** `on_stream` (R4 S12, controller row 30) is PATCH-ONLY and snake_case: `patchSponsor` writes the body's keys as columns.
- *  A created sponsor starts off the stream (V483's default), so `CreateSponsorInput` does not carry it. */
+ *  A created sponsor starts off the stream (V492's default), so `CreateSponsorInput` does not carry it. */
 export const PatchSponsorInput = SponsorWriteFields.partial().extend({ on_stream: z.boolean().optional() });
 export type PatchSponsorInput = z.infer<typeof PatchSponsorInput>;
 

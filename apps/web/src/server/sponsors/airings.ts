@@ -4,8 +4,8 @@ import "server-only";
 // `heartbeat` (usecases/stream-sessions.ts) hands them here inside the beat's own transaction, under the session row's
 // lock, and the session's end closes whatever is still open (`closeOpenAirings`, from the one transition writer).
 //
-// PRIVILEGED path: app_user cannot write sponsor_airings (V483 grants it SELECT only); this runs on the relay's `sql`
-// client like the rest of heartbeat handling. The database checks no cross-org reference (V483 has no composite FKs),
+// PRIVILEGED path: app_user cannot write sponsor_airings (V492 grants it SELECT only); this runs on the relay's `sql`
+// client like the rest of heartbeat handling. The database checks no cross-org reference (V492 has no composite FKs),
 // so every read below is scoped to the session's org, and the session's fixture is checked to be that org's.
 //
 // Rules, per item, in order:
@@ -36,7 +36,7 @@ import "server-only";
 // like the airing in sponsor_airing_frames (session_id, moment_id) with no foreign key to it, because the frame usually
 // arrives before the beat that carries its start. `storeAiringFrame` below; the report (S14) left-joins it, driven from
 // the airings, and `purgeOrphanFrames` (the daily relay sweep) removes the frames no airing ever claimed, then every
-// object whose row has gone (sponsor_frame_tombstones, V483: an orphan purged, a session or org deleted, a key moved).
+// object whose row has gone (sponsor_frame_tombstones, V492: an orphan purged, a session or org deleted, a key moved).
 import { builtinModules } from "@seazn/engine/sports";
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -167,7 +167,7 @@ async function recordEnd(tx: Tx, s: AiringSession, item: Extract<RelayAiring, { 
 export async function recordAirings(tx: Tx, s: AiringSession, items: readonly RelayAiring[], now: Date): Promise<AiringsRecorded> {
   const out: AiringsRecorded = { written: 0, refused: 0, why: [] };
   if (items.length === 0) return out;
-  // "Cannot happen" as a guard: the session's fixture is the session's org's (the DB does not check it, V483 note).
+  // "Cannot happen" as a guard: the session's fixture is the session's org's (the DB does not check it, V492 note).
   if (s.fixtureId !== null) {
     const [f] = await tx<{ org_id: string }[]>`select org_id from fixtures where id = ${s.fixtureId}`;
     if (f !== undefined && f.org_id !== s.orgId) {
@@ -340,7 +340,7 @@ const isJpeg = (bytes: Uint8Array): boolean => JPEG_SOI.every((b, i) => bytes[i]
  * once); it is reported ONCE, HERE, tagged with the session's org and FRAME_STORAGE_ROUTE and carrying the session id
  * (S9 carry: the route's `handler` captures a bare 5xx with none of them), with the provider's error as its `cause` — and
  * the route answers that one 502 itself, so its handler does not report it a second time. A row write
- * that fails after the object was stored tombstones the path (V483), so the sweep removes the object no row names. The
+ * that fails after the object was stored tombstones the path (V492), so the sweep removes the object no row names. The
  * token and the bytes are never logged. No lock: a frame racing the session's end is still a real frame of a real showing.
  */
 export async function storeAiringFrame(sessionId: string, token: string, momentId: string, bytes: Uint8Array | null): Promise<void> {
@@ -396,7 +396,7 @@ export interface FramePurge { orphans: number; purged: number; failed: number }
  * Plan ruling (S9, orphans): a frame posted for an airing web never records — the compositor's 64-item buffer overflowed,
  * a beat was refused, the final beat was lost — is claimed by no sponsor_airings row, and S14's report (driven from the
  * airings) never shows it. Once its session has been over for longer than ORPHAN_FRAME_GRACE_MS no airing can still land
- * (the heartbeat answers 410), so its row goes; V483's trigger tombstones its path in the same statement. Then the
+ * (the heartbeat answers 410), so its row goes; V492's trigger tombstones its path in the same statement. Then the
  * tombstones are drained — every object whose row went, by this purge or by a cascade (a session or org deleted) or a
  * moved key — storage first: the objects in one call per batch, then the tombstones it READ, matched on (path,
  * deleted_at): a path that departs again while the batch is in storage keeps its re-stamped tombstone for the next pass. A

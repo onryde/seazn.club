@@ -52,7 +52,7 @@ export interface SponsorCard {
   name: string;
   logoUrl: string | null;
   tier: SponsorTier;
-  /** The sponsor's `on_stream` tick (V483), read off the row by the card source (S5) for BOTH lists. R4 S7: the scene
+  /** The sponsor's `on_stream` tick (V492), read off the row by the card source (S5) for BOTH lists. R4 S7: the scene
    *  carousel shows ticked cards only (spec §3.4), and `plan.cards` also carries unticked cards an airing still names,
    *  so the page cannot tell the two apart without it. Every card in `PlanInput.cards` must carry `true`
    *  (`SponsorPlanInputError` otherwise); an `assignedCards` entry carries whichever the row says. */
@@ -78,7 +78,7 @@ export interface BreakOpened extends BreakDecl {
   at: string;
 }
 
-/** One `sponsor_assignments` row (V483). `sponsorId` is null once the sponsor is deleted; `sponsorName` is the
+/** One `sponsor_assignments` row (V492). `sponsorId` is null once the sponsor is deleted; `sponsorName` is the
  *  snapshot taken at assign time, so the report and the airing keep the name. Rotation ⇔ a position (DB check). */
 export interface SponsorAssignment {
   momentId: string;

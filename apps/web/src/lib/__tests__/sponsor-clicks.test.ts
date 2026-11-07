@@ -1,7 +1,7 @@
 // R4 sponsors on stream, S7 (ruling R6) and S10: the client-safe click helpers. The server's `recordClick` lives in
 // `server/sponsors/clicks.ts`; the overlay card (client code), the boards and the redirect route share these.
 //
-// Where the expected values come from: the click sources from the V483 CHECK on `sponsor_clicks.source` (the
+// Where the expected values come from: the click sources from the V492 CHECK on `sponsor_clicks.source` (the
 // database's own declaration, read back from the migration), the tag shape from spec 2026-10-27 §3.7
 // (`/s/<sponsorId>?f=<fixtureId>&src=match|site`, anything else `unknown`; a `stream` claim on a link is `unknown` too —
 // owner ruling R7 "a", 2026-10-31: stream clicks come only through `/s/<code>`), and the short-code pattern from
@@ -32,7 +32,7 @@ const SPONSOR = "6f1c2b9e-1d2a-4c3b-9e8f-7a6b5c4d3e2f";
 const FIXTURE = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 
 describe("CLICK_SOURCES", () => {
-  it("is exactly the V483 CHECK's set on sponsor_clicks.source", () => {
+  it("is exactly the V492 CHECK's set on sponsor_clicks.source", () => {
     // Found by suffix, never by number (final review m1): a renumber before merge is then a pure `git mv`.
     const deltas = fileURLToPath(new URL("../../../../../db/migration/deltas/", import.meta.url));
     const named = readdirSync(deltas).filter((f) => SPONSOR_ROTATION_DELTA.test(f));

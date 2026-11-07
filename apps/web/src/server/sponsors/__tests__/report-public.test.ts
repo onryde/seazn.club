@@ -13,7 +13,7 @@
 //   - "visits from the stream" = the sponsor's `sponsor_clicks` with `source = 'stream'` only - never the all-sources number;
 //   - each showing's frame is `sponsor_airings LEFT JOIN sponsor_airing_frames on (session_id, moment_id)`, read through
 //     `signedReadUrls(orgId, paths, ttl <= 3600)` - ONE provider call per report; the storage path itself is never in the answer;
-//   - a deleted sponsor's links cascade with it (V483), so its report is gone (null);
+//   - a deleted sponsor's links cascade with it (V492), so its report is gone (null);
 //   - entrant names are the PUBLIC names (`maskPublicEntrantNames`, the house authority the stream itself airs).
 // Storage is stubbed at the `signedReadUrls` boundary only (no Supabase locally); the database is real.
 //
@@ -485,7 +485,7 @@ describe.skipIf(!HAS_DB)("S14: a deleted sponsor", () => {
 
     await deleteSponsor(r.auth, r.sponsorId);
     const [left] = await sql<{ n: number }[]>`select count(*)::int as n from sponsor_report_links where id = ${l.id}`;
-    expect(left!.n, "premise: V483's cascade took the link").toBe(0);
+    expect(left!.n, "premise: V492's cascade took the link").toBe(0);
     const [kept] = await sql<{ n: number }[]>`select count(*)::int as n from sponsor_airings where org_id = ${r.auth.orgId} and sponsor_id is null`;
     expect(kept!.n, "the airing kept its row, sponsor set null (R16)").toBe(1);
     expect(await sponsorReport(l.token, NOW)).toBeNull();

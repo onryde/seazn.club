@@ -9,7 +9,7 @@ import "server-only";
 // "Proven gone" (`undone`) needs a complete replay (R3) that reached the assignment's seq: the public door folds at a
 // cached `last_seq` up to 30 s behind the relay door's, and its absence says nothing about a break the fresher door saw
 // (fix round 1, I1 — `foldedThrough`). The transaction:
-//   1. check the fixture is the org's (the database does not: V483 has no composite foreign keys);
+//   1. check the fixture is the org's (the database does not: V492 has no composite foreign keys);
 //   2. take the org's rotation lock (`lockSponsorRotation`) — one rotation per org across all its matches (D14), so two
 //      fixtures streaming at once never hand out one position, and two polls of one fixture never assign one break twice;
 //   3. re-read the fixture's assignments and the org's max(position), and re-plan on them (another poll may have just

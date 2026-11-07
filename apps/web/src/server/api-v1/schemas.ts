@@ -5148,7 +5148,7 @@ export const Sponsor = z.object({
   status: SponsorStatus,
   click_count: z.number().int(),
   created_at: z.string(),
-  /** R4 sponsors on stream (V483): ticked onto the stream's rotation. Written only through PATCH; a new sponsor starts false. */
+  /** R4 sponsors on stream (V492): ticked onto the stream's rotation. Written only through PATCH; a new sponsor starts false. */
   on_stream: z.boolean(),
   /** Set on list reads when a paid package order activated this placement. */
   paid_order_id: z.string().nullable().optional(),
@@ -5192,7 +5192,7 @@ export const PutSponsorStreamSettings = z.object({
 });
 export const SponsorStreamSettings = PutSponsorStreamSettings;
 
-/** R4 sponsors on stream, S13 (spec §4, §5.2): a shareable report link for one sponsor over inclusive DATES (V483 from_date /
+/** R4 sponsors on stream, S13 (spec §4, §5.2): a shareable report link for one sponsor over inclusive DATES (V492 from_date /
  *  to_date), optionally one competition. The usecase re-checks the dates (server/sponsors/report.ts), so a caller that skips
  *  this schema is refused the same way. */
 export const CreateSponsorReportLink = z
