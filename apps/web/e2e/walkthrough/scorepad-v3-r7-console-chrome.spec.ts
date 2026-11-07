@@ -110,8 +110,8 @@ test("R7 console: one ledger with provenance, a labelled band, handover beside t
 
   // The authority band exists, is labelled, and says what it costs.
   const band = page.locator('[data-role="match-actions"]');
+  await openMatchActions(page); // absent until its toggle opens it, from 768 px up
   await expect(band).toHaveCount(1);
-  await openMatchActions(page); // closed behind its toggle from 768 px up
   await expect(band).toContainText(/cannot be undone/i);
 
   // Handover moved up beside the pad header — it used to be the last card on

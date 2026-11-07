@@ -279,7 +279,9 @@ describe("the authority band (D-12)", () => {
     expect(row, "in the same button row as Remote scoring").toContain("Remote scoring");
     expect(html.slice(toggle, toggle + 300), "desktop-only: the phone has no second tree").toMatch(/\smax-md:hidden"/);
     const band = html.slice(html.indexOf('data-role="match-actions"') - 80, html.indexOf('data-role="match-actions"') + 200);
-    expect(band, "closed on desktop, always shown on a phone").toContain("hidden max-md:block");
+    expect(band, "the server render is the phone's: the panel is there, open, with no desktop-hiding class").not.toContain(
+      "hidden",
+    );
     expect(band).toContain('id="match-actions-panel"');
     expect(consoleHtml({ canOrganise: false }), "no organiser actions, no button").not.toContain(
       'data-testid="match-actions-toggle"',

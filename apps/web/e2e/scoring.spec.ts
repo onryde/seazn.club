@@ -183,6 +183,12 @@ test("match actions: closed behind its toggle on a wide screen, open on a phone,
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(forfeit).toBeVisible();
+  // Owner report 2026-11-05: it opens directly under the Scoring header, not at the end of the page.
+  const panelBox = await page.locator('[data-role="match-actions"]').boundingBox();
+  const toggleBox = await toggle.boundingBox();
+  const padBox = await page.getByTestId("score-pad").boundingBox();
+  expect(panelBox!.y, "below the button that opened it").toBeGreaterThan(toggleBox!.y);
+  expect(panelBox!.y, "above the pad, not at the end of the page").toBeLessThan(padBox!.y);
   await toggle.click();
   await expect(forfeit).toBeHidden();
 
