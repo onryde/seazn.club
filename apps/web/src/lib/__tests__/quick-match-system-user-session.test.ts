@@ -9,16 +9,22 @@
 //    GET /api/orgs/[id]/invites, POST the claim signed out. The system user is unverified (V492), which is exactly the
 //    case that claim auto-signs-in. `claimEmailInvite` therefore treats it as it treats a verified account (`needs_signin`,
 //    nothing written), so the system user is not joined to the editor's org or marked verified on the way to the refusal.
-//  - magic-link consume is driven with a link planted by hand (the minter refuses to make one), to show the refusal
-//    reaches through a real door as a 403 and no cookie.
+//  - staff impersonation is refused where it starts (`createImpersonationToken`), so no token for the system user exists
+//    to open; `createSession` would refuse the page that opens one too, but only after the token was spent.
 // The Google callback cannot reach it (it signs in only an address Google verified; `.invalid` never verifies, and the
 // system user has no google_sub), and the other doors need a secret that is only ever mailed to the `.invalid` address.
 //
-// Each refusal has its positive pair: an ordinary account still gets its session through the same door.
+// READ-ONLY on the system user's row. Vitest runs files in parallel, and this file runs beside two that assert the row's
+// seed values (system-user-refused.test.ts, quick-match-migration.test.ts). So nothing here may write it, not even a
+// "restore": a door is only driven where its guard refuses before any write, and a polluted row is a FAILED premise here,
+// never healed. (A door that writes before it reaches `createSession`, such as consume, is therefore not driven with the
+// system user; the createSession unit case below is what witnesses that guard.)
+//
+// Each refusal has its positive pair: an ordinary account still gets through the same door.
 //
 // Sport: not applicable. Sign-in is sport-agnostic.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/rate-limit")>()),
@@ -41,10 +47,10 @@ vi.mock("@sentry/nextjs", async (importOriginal) => ({
 
 import { sql } from "@/lib/db";
 import { createSession } from "@/lib/auth";
+import { createImpersonationToken } from "@/lib/admin";
 import { HttpError } from "@/lib/errors";
 import { QUICK_MATCH_SYSTEM_USER_EMAIL, QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
 import { createInvite } from "@/server/usecases/invites";
-import { POST as CONSUME } from "@/app/api/auth/magic-link/consume/route";
 import { POST as INVITE_CLAIM } from "@/app/api/invites/[token]/claim/route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -79,21 +85,16 @@ describe.skipIf(!HAS_DB)("the doors that mint a session refuse the system user (
 
   const systemRow = async (): Promise<SystemRow> =>
     (await sql<SystemRow[]>`select email_verified, terms_accepted_at from users where id = ${QUICK_MATCH_SYSTEM_USER_ID}`)[0]!;
-  /** Back to V492's seed (unverified, no terms, no link, no membership), only these columns, never the row. A refused door
-   *  can still flip `email_verified` on its way to the refusal (consume does, by design, before the session), and a
-   *  mutated run of this file can do more; the shared local database would otherwise carry it into the next premise. */
-  const restoreSystemUser = async () => {
-    await sql`delete from login_links where user_id = ${QUICK_MATCH_SYSTEM_USER_ID}`;
-    if (orgs.length > 0) await sql`delete from org_members where user_id = ${QUICK_MATCH_SYSTEM_USER_ID} and org_id = any(${orgs})`;
-    await sql`
-      update users set email_verified = false, terms_accepted_at = null, terms_version = null
-      where id = ${QUICK_MATCH_SYSTEM_USER_ID}`;
+  const seedUser = async (tag: string, verified = false): Promise<{ id: string; email: string }> => {
+    const email = `${RUN}-${tag}-${randomUUID().slice(0, 8)}@test.local`;
+    const [{ id }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified) values (${email}, ${tag}, ${verified}) returning id`;
+    users.push(id);
+    return { id, email };
   };
   const seedOrg = async (): Promise<{ orgId: string; ownerId: string }> => {
     const suffix = randomUUID().slice(0, 8);
-    const [{ id: ownerId }] = await sql<{ id: string }[]>`
-      insert into users (email, display_name) values (${`${RUN}-owner-${suffix}@test.local`}, 'Owner') returning id`;
-    users.push(ownerId);
+    const { id: ownerId } = await seedUser("owner");
     const [{ id: orgId }] = await sql<{ id: string }[]>`
       insert into organizations (name, slug, created_by) values (${`Org ${suffix}`}, ${`${RUN}-${suffix}`}, ${ownerId}) returning id`;
     orgs.push(orgId);
@@ -106,36 +107,29 @@ describe.skipIf(!HAS_DB)("the doors that mint a session refuse the system user (
     });
     return { status: res.status, body: (await res.json()) as { ok: boolean; error?: string; data?: { needs_signin?: boolean } } };
   };
-  const consume = async (token: string) => {
-    const res = await CONSUME(
-      new Request("https://signin.test/api/auth/magic-link/consume", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        // A `next` lands on it rather than provisioning a default org for the positive pair's new account.
-        body: JSON.stringify({ token, next: "/me" }),
-      }),
-    );
-    return { status: res.status, body: (await res.json()) as { ok: boolean; error?: string } };
-  };
-  const plantLink = async (userId: string): Promise<string> => {
-    const token = randomBytes(32).toString("base64url");
-    await sql`insert into login_links (user_id, token, expires_at) values (${userId}, ${token}, now() + interval '10 minutes')`;
-    return token;
-  };
   const membership = async (orgId: string, userId: string): Promise<number> =>
     (await sql<{ n: number }[]>`select count(*)::int as n from org_members where org_id = ${orgId} and user_id = ${userId}`)[0]!.n;
+  const impersonations = async (actorId: string, targetId: string): Promise<number> =>
+    (await sql<{ n: number }[]>`
+      select count(*)::int as n from impersonation_sessions where actor_id = ${actorId} and target_id = ${targetId}`)[0]!.n;
+  const audits = async (actorId: string, targetId: string): Promise<number> =>
+    (await sql<{ n: number }[]>`
+      select count(*)::int as n from staff_audit_log
+      where actor_id = ${actorId} and action = 'impersonate_start' and target_id = ${targetId}`)[0]!.n;
 
   beforeAll(async () => {
-    // Premise, not a comment: the system user exists under its address and is UNVERIFIED, which is the case the invite
-    // claim auto-signs-in. Were it verified, the invite case below would pass for the wrong reason.
+    // Premise, not a comment: the system user exists under its address. Without the row, the invite claim would create an
+    // ordinary account for the address and the refusal below would pass for the wrong reason.
     const rows = await sql<{ id: string }[]>`select id from users where email = ${QUICK_MATCH_SYSTEM_USER_EMAIL} and deleted_at is null`;
     expect(rows.map((r) => r.id), "premise: V492 seeded the system user under its address").toEqual([QUICK_MATCH_SYSTEM_USER_ID]);
-    await restoreSystemUser();
   });
   afterAll(async () => {
-    await restoreSystemUser();
+    if (users.length > 0) {
+      await sql`delete from impersonation_sessions where actor_id = any(${users}) or target_id = any(${users})`;
+      await sql`delete from staff_audit_log where actor_id = any(${users})`;
+    }
     if (orgs.length > 0) await sql`delete from organizations where id = any(${orgs})`; // members, invites cascade
-    if (users.length > 0) await sql`delete from users where id = any(${users})`; // login_links cascade
+    if (users.length > 0) await sql`delete from users where id = any(${users})`;
     await sql.end({ timeout: 2 }).catch(() => undefined);
   });
 
@@ -143,7 +137,9 @@ describe.skipIf(!HAS_DB)("the doors that mint a session refuse the system user (
 
   it("an email invite to the system address: needs_signin, no cookie, not joined, not verified, invite unspent", async () => {
     const { orgId, ownerId } = await seedOrg();
-    expect((await systemRow()).email_verified, "premise: the system user is unverified").toBe(false);
+    // Premise: the seed state, the case the claim would auto-sign-in. Were it verified, the refusal would be the old
+    // verified-account branch and prove nothing about the guard.
+    expect(await systemRow(), "premise: the system user is at its V492 seed").toEqual({ email_verified: false, terms_accepted_at: null });
     const invite = await createInvite(orgId, ownerId, { role: "admin", max_uses: 1, email: QUICK_MATCH_SYSTEM_USER_EMAIL });
 
     const res = await claimInvite(invite.token);
@@ -152,51 +148,45 @@ describe.skipIf(!HAS_DB)("the doors that mint a session refuse the system user (
     expect(res.body).toEqual({ ok: true, data: { needs_signin: true } });
     expect(h.jar.has(SESSION_COOKIE), "no session").toBe(false);
     expect(await membership(orgId, QUICK_MATCH_SYSTEM_USER_ID), "not joined to the editor's org").toBe(0);
-    const row = await systemRow();
-    expect([row.email_verified, row.terms_accepted_at]).toEqual([false, null]);
+    expect(await systemRow(), "not verified, no terms stamp").toEqual({ email_verified: false, terms_accepted_at: null });
     const [{ used_count }] = await sql<{ used_count: number }[]>`select used_count from org_invites where id = ${invite.id}`;
     expect(used_count).toBe(0);
   });
 
   it("positive pair: an email invite to an ordinary unverified address still signs in and joins through the same door", async () => {
     const { orgId, ownerId } = await seedOrg();
-    const email = `${RUN}-invitee-${randomUUID().slice(0, 8)}@club.test`;
-    const [{ id: inviteeId }] = await sql<{ id: string }[]>`
-      insert into users (email, display_name, email_verified) values (${email}, 'Invitee', false) returning id`;
-    users.push(inviteeId);
-    const invite = await createInvite(orgId, ownerId, { role: "admin", max_uses: 1, email });
+    const invitee = await seedUser("invitee");
+    const invite = await createInvite(orgId, ownerId, { role: "admin", max_uses: 1, email: invitee.email });
 
     const res = await claimInvite(invite.token);
 
     expect(res.status).toBe(200);
     expect(res.body.data?.needs_signin).toBe(false);
     expect(h.jar.has(SESSION_COOKIE), "a session").toBe(true);
-    expect(await membership(orgId, inviteeId)).toBe(1);
+    expect(await membership(orgId, invitee.id)).toBe(1);
   });
 
-  // ---- magic-link consume: the createSession refusal through a real door -------------------------------------------
+  // ---- staff impersonation: refused where it starts -----------------------------------------------------------------
 
-  it("a planted sign-in link for the system user is refused at the session: 403, no cookie", async () => {
-    const token = await plantLink(QUICK_MATCH_SYSTEM_USER_ID);
-    try {
-      const res = await consume(token);
-      expect(res.status).toBe(403);
-      expect(res.body).toEqual({ ok: false, error: "system user" });
-      expect(h.jar.has(SESSION_COOKIE), "no session").toBe(false);
-    } finally {
-      await restoreSystemUser(); // consume verifies the address before the session is asked for
-    }
+  it("staff cannot start impersonating the system user: 403, no impersonation token, no audit entry", async () => {
+    const staff = await seedUser("staff");
+
+    const err = await createImpersonationToken(staff.id, QUICK_MATCH_SYSTEM_USER_ID).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).status).toBe(403);
+    expect(await impersonations(staff.id, QUICK_MATCH_SYSTEM_USER_ID), "no token row").toBe(0);
+    expect(await audits(staff.id, QUICK_MATCH_SYSTEM_USER_ID), "no impersonate_start entry").toBe(0);
   });
 
-  it("positive pair: a link for an ordinary account still signs it in through the same door", async () => {
-    const [{ id }] = await sql<{ id: string }[]>`
-      insert into users (email, display_name, email_verified) values (${`${RUN}-consume@test.local`}, 'Consumer', false) returning id`;
-    users.push(id);
-    const token = await plantLink(id);
+  it("positive pair: staff still get a token for an ordinary user, with its row and audit entry", async () => {
+    const staff = await seedUser("staff");
+    const target = await seedUser("target");
 
-    const res = await consume(token);
+    const token = await createImpersonationToken(staff.id, target.id);
 
-    expect(res.status).toBe(200);
-    expect(h.jar.has(SESSION_COOKIE), "a session").toBe(true);
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(await impersonations(staff.id, target.id)).toBe(1);
+    expect(await audits(staff.id, target.id)).toBe(1);
   });
 });

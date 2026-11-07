@@ -2,7 +2,8 @@ import "server-only";
 import crypto from "node:crypto";
 import { sql } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
-import { AuthError } from "@/lib/errors";
+import { AuthError, HttpError } from "@/lib/errors";
+import { QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
 import type { User } from "@/lib/types";
 
 export type StaffRole = "support" | "superadmin";
@@ -111,6 +112,10 @@ export async function createImpersonationToken(
   actorId: string,
   targetId: string,
 ): Promise<string> {
+  // The quick-match system user (V492) can never sign in (quick-match spec §7.1), and an impersonation IS a sign-in.
+  // Refused here, before the token row and the audit entry, rather than when the page opens it (createSession refuses
+  // there too, but only after the token is spent).
+  if (targetId === QUICK_MATCH_SYSTEM_USER_ID) throw new HttpError(403, "Cannot impersonate the system user");
   const token = crypto.randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
   await sql`

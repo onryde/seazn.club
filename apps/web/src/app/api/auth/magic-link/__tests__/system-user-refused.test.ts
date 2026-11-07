@@ -11,6 +11,11 @@
 // Driven through the REAL route, the REAL minter and the REAL outbox on real Postgres; the stand-ins are the rate limiter,
 // `next/headers` and the logger. Resend is off (no API key), so the positive pair's row ends dead without a network call.
 //
+// READ-ONLY on the system user's row and its links. Vitest runs files in parallel, and this file runs beside others that
+// read the same seeded row (quick-match-system-user-session.test.ts, quick-match-migration.test.ts). So nothing here
+// writes it, not even a "restore": every case is one whose guard refuses before any write, and a polluted row is a FAILED
+// premise here, never healed.
+//
 // Sport: not applicable. Sign-in is sport-agnostic.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -73,24 +78,13 @@ describe.skipIf(!HAS_DB)("the quick-match system user never gets a sign-in link 
       insert into users (email, display_name, email_verified) values (${email}, 'Ordinary', false) returning id`;
     return { id, email };
   };
-  /** Back to V492's seed: unverified, no terms, no link. A mutated run of this file can stamp or verify it, and the shared
-   *  local database would otherwise carry that into the next run's premise. Only these columns, never the row. */
-  const restoreSystemUser = async () => {
-    await sql`delete from login_links where user_id = ${QUICK_MATCH_SYSTEM_USER_ID}`;
-    await sql`
-      update users set email_verified = false, terms_accepted_at = null, terms_version = null
-      where id = ${QUICK_MATCH_SYSTEM_USER_ID}`;
-  };
-
   beforeAll(async () => {
     // Premise, not a comment: the system user exists, under its address, so the route's lookup really resolves to it.
     // Without the row the address is an unknown one and the route would create an ordinary account for it.
     const rows = await sql<{ id: string }[]>`select id from users where email = ${QUICK_MATCH_SYSTEM_USER_EMAIL} and deleted_at is null`;
     expect(rows.map((r) => r.id), "premise: V492 seeded the system user under its address").toEqual([QUICK_MATCH_SYSTEM_USER_ID]);
-    await restoreSystemUser();
   });
   afterAll(async () => {
-    await restoreSystemUser();
     if (emails.length > 0) {
       await sql`delete from email_outbox where lower(recipient) = any(${emails.map((e) => e.toLowerCase())})`;
       await sql`delete from users where email = any(${emails})`; // login_links cascade
@@ -111,7 +105,9 @@ describe.skipIf(!HAS_DB)("the quick-match system user never gets a sign-in link 
 
   it("the system address gets the ordinary 200 and nothing else: no token, no email row, no terms stamp", async () => {
     const before = { outbox: await outboxCount(QUICK_MATCH_SYSTEM_USER_EMAIL), row: await systemRow() };
-    expect(before.row.terms_accepted_at, "premise: the system user has not accepted the terms").toBeNull();
+    // Premise: the V492 seed. A stamp already there would hide B10; a link already there would hide the minter's refusal.
+    expect(before.row, "premise: the system user is at its V492 seed").toEqual({ email_verified: false, terms_accepted_at: null, terms_version: null });
+    expect(await linkCount(QUICK_MATCH_SYSTEM_USER_ID), "premise: the system user holds no sign-in link").toBe(0);
 
     const res = await post(QUICK_MATCH_SYSTEM_USER_EMAIL);
 
