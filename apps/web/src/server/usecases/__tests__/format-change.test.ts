@@ -780,6 +780,8 @@ describe.skipIf(!HAS_DB)("FMT5 — every table that points at a fixture, a stage
     "fixtures(stage_id)->stages": { action: "c", handling: "deleted first, counted (preview.fixtures, slots, courts)" },
     "fixtures(winner_to_fixture)->fixtures": { action: "n", handling: "set null (every fixture goes)" },
     "lineups(fixture_id)->fixtures": { action: "c", handling: "cascade, counted (preview.lineups)" },
+    "match_day_code_uses(fixture_id)->fixtures": { action: "c", handling: "cascade: the Match Day code's log of a match it opened goes with the match (V492)" },
+    "match_day_code_uses(stage_id)->stages": { action: "c", handling: "cascade: the Match Day code's log of an approval goes with its stage (V492)" },
     "match_reports(fixture_id)->fixtures": { action: "c", handling: "evidence: FORMAT_LOCKED" },
     "match_states(fixture_id)->fixtures": { action: "c", handling: "an event-less award (seq 0, but the generator's own) is a result: FORMAT_LOCKED; a row folding events cascades - the ledger speaks for it" },
     "official_marks(fixture_id)->fixtures": { action: "c", handling: "evidence: FORMAT_LOCKED" },
