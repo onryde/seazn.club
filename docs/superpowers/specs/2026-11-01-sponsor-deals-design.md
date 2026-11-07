@@ -159,6 +159,8 @@ Tiers on community stay governed by `sponsors.tiers` as today. Whether a communi
 - Emails: invoice sent, payment received (to the club), deal live (to the sponsor, optional). Reuse the email outbox.
 - How "Live · awaiting payment" reminders work, if any. Keep them minimal.
 
-## 10. Open: the owner's to decide
+## 10. Owner answers (2026-11-07, "Ok" to the controller's recommendations)
 
-1. On the community plan, can a package carry a tier (Title, Gold and so on), or does every community deal stay Partner until the club upgrades?
+1. **Community tier:** no. On the community plan every deal is Partner, until the club upgrades. Tiers stay gated by `sponsors.tiers` as today. (The plan isolates this in one task, so a later change is cheap.)
+2. **Bank details for offline invoices:** a separate setting from the registrant payment instructions.
+3. **After all of a sponsor's deals have ended:** the club may switch the sponsor back on by hand, as for a sponsor with no deal.
