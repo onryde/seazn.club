@@ -18,9 +18,11 @@ export type Scope = "read" | "write";
 
 export interface AuthCtx {
   orgId: string;
-  via: "session" | "api_key" | "device_link";
+  /** `match_day_code`: a Match Day code's actor (`matchDayActor`, match-day-codes.ts), built by the md_ routes, which
+   *  resolve the code themselves — no door in this file ever returns it. */
+  via: "session" | "api_key" | "device_link" | "match_day_code";
   /** Session actor; null for API keys (recorded_by stays null on their
-   *  events). For device links: the ISSUING organiser (doc 13 §7 attribution
+   *  events). For device links and Match Day codes: the ISSUING organiser (doc 13 §7 attribution
    *  — recorded_by = issued_by, the issuer vouches for the device). */
   userId: string | null;
   role: OrgRole | null;
@@ -46,6 +48,8 @@ const KEY_PREFIX = "sc_";
 // prefix-agnostic), just no longer minted.
 const LEGACY_KEY_PREFIX = "sk_live_";
 const DEVICE_LINK_PREFIX = "dl_";
+/** A Match Day code (capture S4 §3; match-day-codes.ts MATCH_DAY_CODE_PREFIX): opens only the md_ routes. */
+const MATCH_DAY_CODE_PREFIX = "md_";
 
 export function hashApiKey(secret: string): string {
   return createHash("sha256").update(secret, "utf8").digest("hex");
@@ -195,12 +199,25 @@ function deviceLinkToken(req: Request): string | null {
   return token.startsWith(DEVICE_LINK_PREFIX) ? token : null;
 }
 
+function matchDayCodeToken(req: Request): string | null {
+  const header = req.headers.get("authorization");
+  if (!header?.startsWith("Bearer ")) return null;
+  const token = header.slice("Bearer ".length).trim();
+  return token.startsWith(MATCH_DAY_CODE_PREFIX) ? token : null;
+}
+
 /** dl_ tokens open exactly ONE door — the fixture-scoped scoring surface via
  *  requireFixtureActor. Every other auth path rejects them outright with 403
- *  (doc 13 §7: "everything else — finalize, lineups, any other resource"). */
+ *  (doc 13 §7: "everything else — finalize, lineups, any other resource").
+ *  md_ tokens (Match Day codes) open NO door here: the md_ routes resolve them
+ *  themselves, and every door in this file refuses one with 403 before it
+ *  looks at the session — never a 401 fall-through (MD-1 Review Focus 5). */
 function rejectDeviceLink(req: Request): void {
   if (deviceLinkToken(req)) {
     throw new HttpError(403, "Device links can only access their fixture's scoring surface");
+  }
+  if (matchDayCodeToken(req)) {
+    throw new HttpError(403, "A Match Day code opens only the Match Day app's routes");
   }
 }
 
@@ -281,6 +298,8 @@ export async function requireFixtureActor(
       deviceLinkId: link.id,
     });
   }
+  // A dl_ token was handled above; this refuses an md_ one before any lookup or session read.
+  rejectDeviceLink(req);
   const orgId = await resourceOrg("fixture", fixtureId);
   const token = bearerToken(req);
   if (token) return apiKeyAuth(req, token, orgId);
