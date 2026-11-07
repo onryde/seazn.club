@@ -250,8 +250,11 @@ export function nextMatchStartedText(): NextMatchText {
   const lib = read(`apps/web/src/${from[1]}.ts`);
   const code = new RegExp(`\\bexport const ${thrown[2]} = "([A-Z_]+)";`).exec(lib)?.[1];
   if (code === undefined) throw new Error(`product-text: ${thrown[2]} is not a string constant in ${from[1]}.ts`);
-  const started = /\nfunction hasStarted\(t: Node\): boolean \{\s*return t\.status !== "([a-z_]+)" \|\| t\.outcome !== null \|\| t\.live_events > 0;\s*\}/.exec(fed);
-  if (started === null) throw new Error("product-text: fed-seats.ts hasStarted is not the three-term rule the model mirrors — re-read it");
+  // The ruling's three terms, then W4 T2's fourth (X-LE-9): a live Match Day call. No driver here ever calls a fixture to a
+  // court (the matrix plays results through the pad's routes), so the fourth term never holds on a matrix board and the
+  // model mirrors the three; the shape is still pinned whole, so a fifth term reds here and is read.
+  const started = /\nfunction hasStarted\(t: Node\): boolean \{\s*return t\.status !== "([a-z_]+)" \|\| t\.outcome !== null \|\| t\.live_events > 0 \|\| t\.called;\s*\}/.exec(fed);
+  if (started === null) throw new Error("product-text: fed-seats.ts hasStarted is not the three-term rule (plus W4 T2's live call) the model mirrors — re-read it");
   const cascade = /\nfunction isCascadeWalkover\(t: Node\): boolean \{\s*return t\.status === "([a-z_]+)" && \(t\.outcome as \{ kind\?: string \} \| null\)\?\.kind === "([a-z_]+)" && t\.live_events === 0;\s*\}/.exec(fed);
   if (cascade === null) throw new Error("product-text: fed-seats.ts isCascadeWalkover is not the three-term exemption the model mirrors — re-read it");
   const resetExempt = /\n\s*const reset = isCascadeWalkover\(t\);\s*if \(!reset && hasStarted\(t\)\) \{/.test(fed);
