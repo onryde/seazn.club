@@ -56,6 +56,7 @@
 // therefore self-guarding rather than assumed.
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { apiJson, fixturePath, seedRosteredFixture, TAG } from "../helpers";
+import { openMatchActions } from "../helpers/match-actions";
 import { padPollMs } from "../realtime-propagation-kit";
 
 /** The pad's stream tick, read from `use-fixture-stream.ts`'s own declaration.
@@ -336,6 +337,8 @@ test("a console whose pad stream is dead still refreshes when the operator retur
   // build that disabled Forfeit permanently would satisfy the disabled-check
   // below while proving nothing (AGENTS.md: a negative assertion needs its
   // positive).
+  // Forfeit lives in the Match actions panel, closed from 768 px up (#1133).
+  await openMatchActions(page);
   await expect(forfeit(page), "Forfeit should be live before the operator returns").toBeEnabled();
 
   phase = "visible";
