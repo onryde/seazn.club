@@ -82,21 +82,24 @@ export function OverviewTab(props: OverviewTabProps) {
   /** A count, or - for a deleted sponsor's clicks, which went with it - a dash read as "not available". */
   const count = (n: number | null) => (n === null ? dash(msg("sponsors.overview.notAvailable")) : fmtNumber(locale, n));
   /** Viewer numbers are not measured yet: real text, read as shown. A CAPTION in the table's secondary style (the "peak"
-   *  line's), not a pill: the `md` number columns are 6rem, and no padded pill holds "Próximamente" (81 px at text-xs). */
+   *  line's), not a pill: the `md` number columns are ≈87 px (5.4rem), and no padded pill holds "Próximamente" (81 px at
+   *  text-xs). */
   const comingSoon = (
     <span data-testid="viewers-coming-soon" className="inline-block max-w-full text-xs font-medium text-slate-500">
       {msg("sponsors.viewers.comingSoon")}
     </span>
   );
   /** One number with its label: a labelled line on a phone card, a right-aligned cell under the header from `md`. On the
-   *  phone line the label wraps and the value never shrinks (`shrink-0`), so a long label cannot squeeze a value out. */
-  const stat = (key: string, field: string, label: string, value: React.ReactNode, accent = false) => (
+   *  phone line the label wraps and a value never shrinks (`shrink-0`), so a long label cannot squeeze a value out. The
+   *  Coming soon legend (`caption`) is the one exception: a caption, not a value, so it may wrap, right-aligned under
+   *  itself - nl's "Binnenkort beschikbaar" does not fit beside its label on one line at 320 (fix round 1, I-new). */
+  const stat = (key: string, field: string, label: string, value: React.ReactNode, accent = false, caption = false) => (
     <div className="flex min-w-0 items-baseline justify-between gap-3 md:block md:text-right">
       <dt className="text-slate-500 md:sr-only" data-row={key}>
         {label}
       </dt>
       <dd
-        className={`shrink-0 font-semibold tabular-nums ${accent ? "text-purple-700" : "text-slate-800"}`}
+        className={`${caption ? "min-w-0 text-right" : "shrink-0"} font-semibold tabular-nums ${accent ? "text-purple-700" : "text-slate-800"}`}
         data-testid={`sponsor-overview-${field}`}
         data-row={key}
       >
@@ -197,6 +200,8 @@ export function OverviewTab(props: OverviewTabProps) {
                             )}
                           </>
                         ),
+                        false,
+                        r.viewerImpressions === null,
                       )}
                       {stat(key, "clicks", msg("sponsors.overview.col.linkClicks"), count(r.linkClicks))}
                     </dl>

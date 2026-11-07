@@ -14,14 +14,14 @@ Captured scenario this fulfils: `2026-09-05-stream-overlay-prompts/_SCENARIO-202
 | D3 | How does a club choose what plays? | **C: rotation by default, a per-sponsor deal where one was sold.** The MVP cut ships the **rotation and the dial only**; deals are **Later** (§10), and §2 keeps them additive. |
 | D4 | How does the sponsor get the numbers? | A **shareable link (no login)** in the MVP. PDF and the monthly email are **Later**. |
 | D5 | Report contents | The mock (`overview-report.html`): times shown, time on screen, live viewers when shown, link clicks, a frame from the broadcast per showing with "watch this moment". *2026-11-01 (owner): PR B deferred; live viewers show as "Coming soon" (§5.2 note).* |
-| D6 | Sponsor playback | "Watch this moment" opens the YouTube VOD at the showing. |
+| D6 | Sponsor playback | "Watch this moment" opens the YouTube VOD at the showing. *2026-11-01 (owner): deferred with PR B (Y2); PR A's report has no "watch this moment" link.* |
 | D7 | Scope | "I need a working MVP" → this cut ("yes"). Mocks are **layout only**; the build uses the house theme. |
 | D8 | Gate? | **No new gate** — rotation and the report wherever streaming is (stream credits are the meter). Confirmed. |
 | D9 | Tier weights | **title 3 · gold 2 · silver 1 · partner 1.** Confirmed. |
 | D10 | OBS streams in the report | **Not counted in the MVP** (an OBS page is public, its beacon forgeable); the report says "composed streams". Confirmed. |
 | D11 | Viewer wording | **"Viewer impressions"** (live viewers at each showing, added up) with **peak live viewers** beside it. Confirmed. *2026-11-01 (owner): the labels stay; the values show "Coming soon" until viewer counts ship (§5.2 note).* |
 | D12 | Default dial | **Normal** for a newly ticked sponsor. Confirmed. |
-| D13 | Ship before YouTube Connect? | **No: build in parallel, release together** with YouTube Connect, so viewers and "watch this moment" are live on day one. *2026-11-01 (owner): PR B (viewer counts) is deferred, so viewers are not live on day one; they show "Coming soon" (§5.2 note).* |
+| D13 | Ship before YouTube Connect? | **No: build in parallel, release together** with YouTube Connect, so viewers and "watch this moment" are live on day one. *2026-11-01 (owner): PR B (Y1–Y3: viewer counts, "watch this moment", paid placement) is deferred, so neither viewers nor "watch this moment" are live on day one; viewers show "Coming soon" (§5.2 note).* |
 | D14 | Rotation continuity | **One rotation per org across all its matches** (a per-org cursor), so on Light a T20's single innings break does not always go to the first title sponsor. |
 | D15 | Match-page sponsor links | **"a": the sponsor board also shows on the public match page**, links tagged with that fixture (`src=match`), so clicks count per match. |
 
@@ -58,8 +58,8 @@ declarations, mutate each guard once), frontend-design skill in every UI dispatc
    modules (`packages/engine/src/sports/index.ts`: football, cricket, boardgame, carrom, generic, volleyball, badminton,
    tabletennis, tennis, icehockey, hockey), **0** declare a break today; `sport/module.ts` has no break vocabulary.
    §3.1 adds it.
-2. *"Viewer counts fall back to match-page views"* (mock caption) — no page-view counter exists. Without YouTube
-   Connect the viewers column shows "Coming soon" (*2026-11-01, §5.2 note*: PR B deferred), never a dash; the MVP builds no counter.
+2. *"Viewer counts fall back to match-page views"* (mock caption) — no page-view counter exists. In PR A, with or
+   without YouTube Connect, the viewers column shows "Coming soon" (*2026-11-01, §5.2 note*: PR B deferred), never a dash; the MVP builds no counter.
 3. *A 4th top-bar link fits* — `components/nav.tsx` (#516) measured 4 icons overflowing below ~340 px. §6.1.
 
 ## 2. Extensibility requirements → where each lands

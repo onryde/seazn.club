@@ -22,8 +22,11 @@
 //   U4  picker value     `onChange` pushes overviewHref(orgSlug, THIS_YEAR)   -> "the picker"
 //   U5  competition note  drop `period.kind === "competition" &&`              -> "the competition-click footnote..." (fix round 1, m4)
 //   U6  legend dropped    null viewers draw nothing instead of the legend      -> "viewers with no number", "a row reads its own numbers"
+//   U7  legend unwrapped  the Coming soon dd keeps `shrink-0`                  -> "the phone line" (nl, fix round 1 I-new)
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const nav = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => nav }));
@@ -34,9 +37,13 @@ import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hoo
 import { fmtIsoDay, fmtOnScreen, overviewHref, type SponsorOverviewRow, type SponsorPeriod } from "@/lib/sponsor-report";
 import { sponsorsHref } from "@/lib/sponsors-hub";
 import { t } from "@/lib/i18n-runtime";
-import type { Dict } from "@/lib/i18n-constants";
+import { LOCALES, type Dict, type Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
+import { minContentWidth, openFace, textWidth } from "@/components/public-site/__tests__/font-advance";
 import uiEn from "@/dictionaries/en/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 
 const en = uiEn as unknown as Dict;
 const msg = (key: MessageKey, vars?: Record<string, string | number>) => t(en, key, vars);
@@ -339,5 +346,51 @@ describe("Share report", () => {
     m.island.rerender(base({ period, shareDefaults: defaults, links: [{ id: "l9", sponsorId: "s1", competitionId: defaults.competitionId, competitionName: "Autumn Cup", from: defaults.from, to: defaults.to, createdAt: NOW }] }));
     expect(m.shares()).toHaveLength(1);
     expect((propsOf(m.shares()[0]!).links as { id: string }[]).map((l) => l.id)).toEqual(["l9"]);
+  });
+});
+
+// Fix round 1, I-new: on a phone each stat is one flex line, label (`dt`) and value (`dd`). A value never shrinks (`shrink-0`),
+// but the Coming soon legend is a caption, so it may wrap - nl's "Binnenkort beschikbaar" did not fit beside its label at 320
+// and crossed the row card's border. vitest has no layout, so the line is priced with the shipped faces (font-advance.ts, an
+// over-estimate: no kerning) against the width a 320 px screen leaves the line, from the classes the island renders.
+describe("the phone line - the viewers label and its Coming soon legend fit a 320 px card in every locale", () => {
+  const FONTS = join(dirname(fileURLToPath(import.meta.url)), "../../../../assets/fonts");
+  const regular = openFace(join(FONTS, "Geist-Regular.ttf"), "Geist Regular");
+  // The legend is `font-medium` (500). No 500 instance is committed, and 700 is wider: an upper bound, the safe direction.
+  const bold = openFace(join(FONTS, "Geist-Bold.ttf"), "Geist Bold");
+  const DICTS: Record<Locale, Dict> = { en, fr: uiFr as unknown as Dict, es: uiEs as unknown as Dict, nl: uiNl as unknown as Dict };
+  // 320 - main `px-4` (16 x 2), the hub card's `p-4` and border (17 x 2), this row's `p-3` and border (13 x 2) = 228.
+  const LINE_PX = 320 - 2 * 16 - 2 * (16 + 1) - 2 * (12 + 1);
+  const GAP_PX = 12; // `gap-3`
+  const LABEL_PX = 14; // the `dl`'s `text-sm`
+  const LEGEND_PX = 12; // `text-xs`
+
+  it("prices the line from what renders: the row's padding, a number's dd that never shrinks, and a legend's dd that may wrap", () => {
+    const m = mount();
+    const cls = (e: ReactElement) => String(propsOf(e).className ?? "").split(/\s+/);
+    const li = m.find("sponsor-overview-row-s1");
+    expect(cls(li), "the row card's padding and border the 228 px budget assumes").toEqual(expect.arrayContaining(["p-3", "border"]));
+    const dd = (row: string) => {
+      const [el] = m.byTestId("sponsor-overview-viewers").filter((e) => propsOf(e)["data-row"] === row);
+      if (!el) throw new Error(`no viewers cell on row ${row}`);
+      return cls(el);
+    };
+    expect(dd("s2"), "a number never shrinks off its line").toContain("shrink-0");
+    // s1's viewers are null: the legend. With `shrink-0` it is one unbreakable line; without it, only its longest word is.
+    const legendWraps = !dd("s1").includes("shrink-0");
+    let checked = 0;
+    const over: string[] = [];
+    for (const locale of LOCALES) {
+      const label = t(DICTS[locale], "sponsors.overview.col.viewerImpressions");
+      const legend = t(DICTS[locale], "sponsors.viewers.comingSoon");
+      // The dt has no `min-w-0`, so it cannot shrink below its longest word.
+      const need =
+        minContentWidth(regular, label, LABEL_PX) + GAP_PX + (legendWraps ? minContentWidth(bold, legend, LEGEND_PX) : textWidth(bold, legend, LEGEND_PX));
+      if (need > LINE_PX) over.push(`${locale}: "${label}" + "${legend}" needs ${need.toFixed(1)} px of ${LINE_PX}`);
+      checked++;
+    }
+    expect(over.join("; "), "a locale whose label and legend overrun the line").toBe("");
+    expect(checked, "every locale priced").toBe(LOCALES.length);
+    expect(checked).toBeGreaterThan(0);
   });
 });
