@@ -13,6 +13,7 @@ import { BRACKET_SLIDE_KINDS, bracketSlideLaysOut } from "@/components/v2/slides
 import { resolveLogoUrl } from "@/server/public-site/data";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import { bracketSeatFallbackKey } from "@/lib/bracket-bye-seat";
 import { creditsNobody, forfeitLedgerOfReason, unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import { outcomeTagWords } from "@/lib/outcome-text";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
@@ -755,7 +756,10 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
     if (named !== null) return named;
     const stored = (which === "home" ? f.home_slot_label : f.away_slot_label) ?? null;
     const label = namer.seatLabelOf(f.id, which, stored);
-    return label === null ? resolveSlotLabel(null, lookup, "bracket.tbd") : namer.seat(f.id, which, label);
+    // N-1 (rulings 116/117): a settled bye's empty seat with no label reads the bye's word, never "to be decided".
+    return label === null
+      ? resolveSlotLabel(null, lookup, bracketSeatFallbackKey({ ...f, outcome: f.outcome ?? null }, which))
+      : namer.seat(f.id, which, label);
   };
 
   // Design review I-1 (audit 3.1): a double walkover credits nobody — no 0 / 0 on the TV; its tag in the score's place.
