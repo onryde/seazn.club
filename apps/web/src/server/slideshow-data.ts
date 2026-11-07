@@ -722,6 +722,10 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
   for (const snap of data.standings) {
     const stage = stageById.get(snap.stage_id);
     if (!stage || snap.rows.length === 0) continue;
+    // ST-G7 (W4 app A Task 23): a bracket stage is drawn as its bracket slide below, never as a table. Its standings
+    // snapshot is the placement table it writes when it completes (rank only, every count zero), which read here as an
+    // all-zero "table" beside the bracket. The organiser board has always walked table stages only.
+    if (BRACKET_SLIDE_KINDS.has(stage.kind)) continue;
     const pool = snap.pool_id !== null ? poolById.get(snap.pool_id) : undefined;
     const { columns, rows, level, tiebreakColumns } = standingsSlideRows(snap.rows, stageShape(sportModule, stage.table_rules, stage.kind), names, (key) => t(publicDict, key));
     slides.push({

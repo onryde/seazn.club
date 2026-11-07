@@ -5,7 +5,8 @@
 // the key had never carried. So the PLAN denies it again on Community, and the
 // pass lifts it for the one competition it paid for. Real Postgres.
 import type { AnyPlanKey } from "@/lib/currency";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { isValidElement, type ReactElement } from "react";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { embedDivisionData, type EmbedPayload } from "@/server/embed-data";
@@ -16,6 +17,15 @@ import { createDivision } from "@/server/usecases/divisions";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { startDivision } from "@/server/usecases/schedule";
+import { scoreEvent } from "@/server/usecases/scoring";
+import { completeStage } from "@/server/usecases/stages";
+import EmbedWidgetPage from "@/app/embed/divisions/[id]/[widget]/page";
+import { StandingsTable } from "@/components/public-site/standings-table";
+import { Bracket } from "@/components/public-site/bracket";
+
+// ST-G7: the widget page fires its render event; no PostHog here.
+vi.mock("@/lib/posthog-server", () => ({ captureServer: vi.fn(async () => undefined) }));
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -227,5 +237,93 @@ describe.skipIf(!HAS_DB)("embedDivisionData — a page playoff's fixtures carry 
     expect(Object.fromEntries(fixtures.map((f) => [f.id, f.ext_key]))).toEqual(
       Object.fromEntries(stored.map((r) => [r.id, r.ext_key])),
     );
+  });
+});
+
+// ST-G7 (W4 app A Task 23) — the embed's standings widget drew one table per standings snapshot of every stage, so a
+// FINISHED knockout — which writes a placement snapshot when it completes (rank only, every count zero) — reached a
+// club's website as an all-zero table. The division page has always drawn a bracket stage as its bracket; the widget
+// now does the same. Driven through the real producer: a knockout generated, every match scored through `scoreEvent`,
+// the stage completed through `completeStage`, and the snapshot read back before the page is asked for anything.
+describe.skipIf(!HAS_DB)("ST-G7 a finished knockout is not a standings table in the embed", () => {
+  type Found = { tables: ReactElement<{ caption?: string }>[]; brackets: ReactElement<{ kind: string; fixtures: { stage_id: string }[] }>[] };
+  /** Every standings table and bracket the widget draws, in tree order. */
+  function drawn(node: unknown, out: Found = { tables: [], brackets: [] }): Found {
+    if (Array.isArray(node)) for (const child of node) drawn(child, out);
+    else if (isValidElement(node)) {
+      if (node.type === StandingsTable) out.tables.push(node as Found["tables"][number]);
+      else if (node.type === Bracket) out.brackets.push(node as Found["brackets"][number]);
+      else for (const value of Object.values((node.props ?? {}) as Record<string, unknown>)) drawn(value, out);
+    }
+    return out;
+  }
+  const widget = async (id: string) => drawn(await EmbedWidgetPage({ params: Promise.resolve({ id, widget: "standings" }) }));
+
+  async function decideEveryMatch(auth: AuthCtx, stageId: string) {
+    // Round by round: a later round is seated only once its feeders are decided.
+    for (let guard = 0; guard < 8; guard++) {
+      const open = await sql<{ id: string }[]>`
+        select id from fixtures where stage_id = ${stageId} and status = 'scheduled'
+          and home_entrant_id is not null and away_entrant_id is not null
+        order by round_no, seq_in_round`;
+      if (open.length === 0) return;
+      for (const f of open) {
+        await scoreEvent(auth, f.id, { expected_seq: 0, type: "core.start", payload: {} });
+        await scoreEvent(auth, f.id, { expected_seq: 1, type: "generic.result", payload: { p1Score: 2, p2Score: 1 } });
+      }
+    }
+    throw new Error("the knockout never ran out of matches to play");
+  }
+
+  it("the knockout's placement snapshot draws no table; the widget draws the knockout as its bracket", async () => {
+    const { auth } = await seedOrg("pro");
+    const competition = await createCompetition(auth, { ends_on: "2030-12-31", name: "ST-G7 Embed Cup", visibility: "public", branding: {} });
+    const division = await createDivision(auth, competition.id, { name: "Cup", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+    await createEntrants(
+      auth,
+      division.id,
+      ["Ash", "Birch", "Cedar", "Damson"].map((name, i) => ({ kind: "individual" as const, display_name: name, seed: i + 1, members: [] })),
+    );
+    const [ko] = await createStages(auth, division.id, { seq: 1, kind: "knockout", name: "Finals", config: {} });
+    await generateStageFixtures(auth, ko!.id);
+    await startDivision(auth, division.id);
+    await decideEveryMatch(auth, ko!.id);
+    await completeStage(auth, ko!.id);
+
+    // The premise, from the stored rows: the stage completed and wrote its placement snapshot.
+    const [stored] = await sql<{ status: string; snaps: number }[]>`
+      select s.status, (select count(*)::int from standings_snapshots x where x.stage_id = s.id) as snaps
+      from stages s where s.id = ${ko!.id}`;
+    expect(stored, "the knockout completed with its placement snapshot").toEqual({ status: "complete", snaps: 1 });
+
+    const { tables, brackets } = await widget(division.id);
+    expect(tables.map((t) => t.props.caption), "no standings table for the knockout").toEqual([]);
+    expect(brackets.map((b) => b.props.kind), "the knockout, drawn as a bracket").toEqual(["knockout"]);
+    const fixtures = brackets[0]!.props.fixtures;
+    expect(fixtures.length, "anti-vacuity: the bracket carries the stage's matches").toBe(3);
+    expect(fixtures.every((f) => f.stage_id === ko!.id)).toBe(true);
+  });
+
+  it("a table stage's snapshot is still drawn as its table (the positive pair); a knockout not yet drawn adds nothing", async () => {
+    const { auth } = await seedOrg("pro");
+    const competition = await createCompetition(auth, { ends_on: "2030-12-31", name: "ST-G7 Embed League", visibility: "public", branding: {} });
+    const division = await createDivision(auth, competition.id, { name: "League", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+    await createEntrants(
+      auth,
+      division.id,
+      ["Ash", "Birch", "Cedar"].map((name, i) => ({ kind: "individual" as const, display_name: name, seed: i + 1, members: [] })),
+    );
+    const [league] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "League", config: {} });
+    await generateStageFixtures(auth, league!.id);
+    // The premise: the generator wrote the league's opening table.
+    const [{ snaps }] = await sql<{ snaps: number }[]>`
+      select count(*)::int as snaps from standings_snapshots where stage_id = ${league!.id}`;
+    expect(snaps, "the league's snapshot").toBe(1);
+    // The knockout that follows it, created but not drawn yet: no matches, so no bracket (and no empty heading).
+    await createStages(auth, division.id, { seq: 2, kind: "knockout", name: "Finals", config: {} });
+
+    const { tables, brackets } = await widget(division.id);
+    expect(tables.map((t) => t.props.caption)).toEqual(["League"]);
+    expect(brackets).toEqual([]);
   });
 });

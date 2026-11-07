@@ -41,6 +41,7 @@ import { loadPublicExternalPlay, loadPublicPairedWhiteSide, loadPublicRoundOpene
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import type { PublicExternalPlay } from "@/server/external-play/public-view";
 import { routes } from "@/lib/routes";
+import { byPoolOrder, type PoolOrderRef } from "@/lib/pool-order";
 
 /**
  * `{count}`-pluralized org-default-locale copy — the `public-site/data.ts`
@@ -1091,7 +1092,28 @@ export async function readPublicDivisionDetail(
   const [{ stages, pools }, fixtures, { standings, tz }, entrants] = sequential
     ? ([await readStagesAndPools(), await readFixtures(), await readStandingsAndTz(), await readEntrants()] as const)
     : await Promise.all([readStagesAndPools(), readFixtures(), readStandingsAndTz(), readEntrants()]);
-  return { stages, pools, fixtures, standings, entrants, tz };
+  return { stages, pools, fixtures, standings: inStageThenPoolOrder(standings, stages, pools), entrants, tz };
+}
+
+/**
+ * ST-G26 (W4 app A Task 23): a division's standings in the product's order — its stages by seq (the order the organiser
+ * built them), and inside a stage its pools in display order (`byPoolOrder`: the stage-wide table, then key, natural).
+ * The view has no order of its own, and the read used to hand its rows on in whatever order the plan produced — heap
+ * order is WRITE order, and a knockout writes its placement snapshot last of all. Two readers take this list's order as
+ * the division's: the share card (the first table) and /present (one slide per snapshot, in list order).
+ *
+ * Sorted here, not in SQL, so the pool order has one authority (`lib/pool-order.ts`'s natural collation). A snapshot
+ * whose stage the stages lane did not return reads after every stage it did.
+ */
+function inStageThenPoolOrder<T extends { stage_id: string; pool_id: string | null }>(
+  standings: T[],
+  stages: readonly { id: string; seq: number }[],
+  pools: readonly PoolOrderRef[],
+): T[] {
+  const seq = new Map(stages.map((st) => [st.id, st.seq]));
+  const stageSeq = (s: T) => seq.get(s.stage_id) ?? Number.MAX_SAFE_INTEGER;
+  const poolOrder = byPoolOrder(pools);
+  return [...standings].sort((a, b) => stageSeq(a) - stageSeq(b) || poolOrder(a, b));
 }
 
 /** Division home: schedule + standings + entrants + stage skeleton. */
