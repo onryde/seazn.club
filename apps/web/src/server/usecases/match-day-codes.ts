@@ -18,6 +18,7 @@ import { resolveVenueTz } from "@/lib/tz";
 import { isEditorRole } from "@/lib/types";
 import { assertUuid, type AuthCtx } from "@/server/api-v1/auth";
 import { hasValidKek, openWith, sealWith } from "@/server/relay/crypto";
+import { log } from "@/server/logger";
 
 export const MATCH_DAY_CODE_PREFIX = "md_";
 
@@ -65,7 +66,7 @@ function sealToken(token: string): Buffer {
 
 function openToken(enc: Uint8Array): string {
   if (!hasValidKek("DEVICE_LINK_KEK")) throw new HttpError(503, KEK_MISSING, "DEVICE_LINK_KEK_MISSING");
-  return openWith("DEVICE_LINK_KEK", enc); // a tamper/wrong-key failure stays a 500 — it is not a config gap
+  return openWith("DEVICE_LINK_KEK", enc); // a tamper/wrong-key failure is a plain Error, never this 503
 }
 
 /** Editors only, session only: an API key, a device link and a Match Day code never manage Match Day codes. */
@@ -192,12 +193,38 @@ export async function mintMatchDayCode(
 export async function listMatchDayCodes(auth: AuthCtx, competitionId: string): Promise<Array<MatchDayCodeRow & { url: string }>> {
   requireSessionEditor(auth);
   await competitionZone(auth, competitionId);
-  const rows = await sql<(DbRow & { token_enc: Uint8Array })[]>`
-    select ${cols()}, token_enc from match_day_codes
+  const rows = await sql<(DbRow & { token_enc: Uint8Array; tok_hash: string })[]>`
+    select ${cols()}, token_enc, tok_hash from match_day_codes
      where competition_id = ${competitionId} and org_id = ${auth.orgId}
        and revoked_at is null and expires_at > ${new Date()}
      order by opens_at, created_at, id`;
-  return rows.map(({ token_enc, ...r }) => ({ ...toRow(r), url: urlOf(openToken(token_enc)) }));
+  const listed: Array<MatchDayCodeRow & { url: string }> = [];
+  for (const { token_enc, tok_hash, ...r } of rows) {
+    const token = verifiedToken(token_enc, tok_hash, { codeId: r.id, competitionId });
+    if (token !== null) listed.push({ ...toRow(r), url: urlOf(token) });
+  }
+  return listed;
+}
+
+/**
+ * The token a row's envelope opens to, only when it hashes to the row's own `tok_hash` (MD-1 review I2; the
+ * device-links.ts re-show precedent). The envelope has no AAD, so a swapped or restored `token_enc` would otherwise
+ * show the desk another code's working QR under this row's scope and day. A row that will not open, or opens to
+ * another token, is passed over and logged without the token, so one bad row never fails the whole list. A missing
+ * KEK is not a bad row: it stays the 503 `openToken` throws.
+ */
+function verifiedToken(enc: Uint8Array, tokHash: string, ids: { codeId: string; competitionId: string }): string | null {
+  let token: string;
+  try {
+    token = openToken(enc);
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    log.warn(ids, "match day code: sealed token will not open; left out of the list");
+    return null;
+  }
+  if (hashToken(token) === tokHash) return token;
+  log.warn(ids, "match day code: sealed token does not match the row's token hash; left out of the list");
+  return null;
 }
 
 /** The org a code belongs to, for the withdraw route's door (404 when there is no such code). */
