@@ -118,5 +118,28 @@ export async function deviceLinkFootballSuite(): Promise<void> {
   // 5. A side with no sheet is an empty lineup.
   step(`the other side, with no sheet, reads lineup [] (got ${JSON.stringify(sides?.[otherSeat]?.lineup)})`, Array.isArray(sides?.[otherSeat]?.lineup) && sides[otherSeat].lineup.length === 0);
 
+  // 6. Task 2 (ruling 107): the pad samples the server's time from the `Date` header of its /events calls. The phone
+  //    starts the match and starts the clock through the link; the clock write is 201 and its answer's Date header
+  //    names a time within 60 s of this runner's clock (the same host's, so a header that is missing, unparseable or
+  //    from somewhere else entirely reds).
+  const viaLink = (expected_seq: number, type: string, payload: unknown) =>
+    v1(newSession(), `/api/v1/fixtures/${fixtureId}/events`, "POST", { expected_seq, type, payload }, asPhone);
+  const started = await viaLink(0, "core.start", {});
+  const clock = await viaLink(1, "football.clock", { running: true, at: { period: "H1", elapsed: 0 } });
+  const dateHeader = clock.headers.get("date");
+  const serverMs = dateHeader === null ? NaN : Date.parse(dateHeader);
+  step(
+    `core.start then football.clock through the link → 201, 201, with a Date header within 60 s of the runner (got ${started.status} ${clock.status} ${clock.json.error?.code ?? ""}, Date ${JSON.stringify(dateHeader)})`,
+    started.status === 201 && clock.status === 201 && Number.isFinite(serverMs) && Math.abs(serverMs - Date.now()) <= 60_000,
+  );
+  // 7. The ledger, read back through the link: the clock row is there with a parseable recorded_at.
+  const events = await v1(newSession(), `/api/v1/fixtures/${fixtureId}/events?since_seq=0`, "GET", undefined, asPhone);
+  const rows = v1data<{ seq: number; type: string; recorded_at: string }[] | undefined>(events) ?? [];
+  const clockRow = rows.find((r) => r.type === "football.clock");
+  step(
+    `GET /events through the link returns the clock row (seq 2) with a parseable recorded_at (got ${events.status}, ${JSON.stringify(clockRow)})`,
+    events.status === 200 && clockRow?.seq === 2 && Number.isFinite(Date.parse(clockRow.recorded_at)),
+  );
+
   done();
 }

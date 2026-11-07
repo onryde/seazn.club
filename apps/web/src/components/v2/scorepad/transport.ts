@@ -23,6 +23,7 @@
 import { z } from "zod";
 import type { AppendCallResult, AppendEventBody, ScoringTransport } from "./pipeline";
 import type { AppendSuccess, LedgerSlotEvent } from "./types";
+import { createServerOffset, offsetSampleOf } from "./server-offset";
 import { NEXT_MATCH_STARTED_CODE, nextMatchRefOf } from "../../../lib/next-match-started";
 import { isLevelResultReason } from "../../../lib/level-result-reason";
 import { isSettleRefusalReason } from "../../../lib/settle-refusal-reason";
@@ -122,6 +123,8 @@ export interface TransportInit {
   /** Injectable fetch — defaults to the global. Every transport.test.ts case
    *  injects a double; no server is ever contacted from this suite. */
   fetchFn?: typeof fetch;
+  /** Injectable clock for the server-time offset (S2-5 ruling 107) — defaults to `Date.now`. */
+  now?: () => number;
 }
 
 /** `GET /api/v1/fixtures/{id}/state`, narrowed to what use-pad-pipeline.ts's
@@ -154,6 +157,10 @@ export interface PadTransport extends ScoringTransport {
    *  version). Optional so a hand-rolled test transport need not grow one; both real transports have it, and a pad
    *  whose transport lacks it keeps its rules (its taps are still refused, never applied under the new ones). */
   getRules?(fixtureId: string): Promise<FixtureRulesResult>;
+  /** S2-5 ruling 107 — how far the server's clock is ahead of this device's, in ms: the median of the last few samples
+   *  of the `Date` header on the `/events` calls (`server-offset.ts`), null until one is taken. The server's now is
+   *  `Date.now() + (offset ?? 0)`. Optional so a hand-rolled test transport need not grow one. */
+  serverOffsetMs?(): number | null;
 }
 
 interface V1Envelope<T> {
@@ -386,15 +393,38 @@ export function isPermanentRefusal(status: number): boolean {
   return status >= 400 && status < 500;
 }
 
+/** The answer's `Date` header, or null when it cannot be read. The offset is a measurement riding the call, never part of
+ *  its outcome: a response whose headers cannot be read (a body-only stand-in for one) must still be classified by its
+ *  status and envelope, not turned into a network error by the sampling (transport.test.ts's no-parseable-body case). */
+function dateHeaderOf(res: Response): string | null {
+  try {
+    return res.headers.get("date");
+  } catch {
+    return null;
+  }
+}
+
 function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTransport {
   const doFetch = init.fetchFn ?? fetch;
+  const now = init.now ?? Date.now;
   const headers = { "Content-Type": "application/json", ...authHeadersFor(auth) };
+  // S2-5 ruling 107: one window per transport, fed by the /events calls only — `/state` revalidates by ETag, and a
+  // revalidated fetch can hand back a stored response's headers. Any status samples: the header is the server's.
+  const offset = createServerOffset();
+  /** `doFetch`, timing the round trip and sampling the answer's `Date` header. A thrown fetch records nothing. */
+  async function sampledFetch(url: string, reqInit: RequestInit): Promise<Response> {
+    const sentAtMs = now();
+    const res = await doFetch(url, reqInit);
+    const sample = offsetSampleOf(dateHeaderOf(res), sentAtMs, now());
+    if (sample !== undefined) offset.add(sample);
+    return res;
+  }
 
   return {
     async appendEvent(fixtureId: string, body: AppendEventBody): Promise<AppendCallResult> {
       let res: Response;
       try {
-        res = await doFetch(`/api/v1/fixtures/${fixtureId}/events`, {
+        res = await sampledFetch(`/api/v1/fixtures/${fixtureId}/events`, {
           method: "POST",
           headers,
           body: JSON.stringify(body),
@@ -473,7 +503,7 @@ function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTranspor
     },
 
     async listEventsSince(fixtureId: string, sinceSeq: number): Promise<LedgerSlotEvent[]> {
-      const res = await doFetch(`/api/v1/fixtures/${fixtureId}/events?since_seq=${sinceSeq}`, { headers });
+      const res = await sampledFetch(`/api/v1/fixtures/${fixtureId}/events?since_seq=${sinceSeq}`, { headers });
       const data = await readV1Envelope<unknown>(res);
       return ledgerSlotEventsSchema.parse(data);
     },
@@ -493,6 +523,8 @@ function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTranspor
       const res = await doFetch(`/api/v1/fixtures/${fixtureId}/rules`, { headers });
       return readV1Envelope<FixtureRulesResult>(res);
     },
+
+    serverOffsetMs: () => offset.offsetMs(),
   };
 }
 

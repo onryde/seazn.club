@@ -809,3 +809,74 @@ describe("CHROME_TERMINAL_CODES (scorer sheets §4.5)", () => {
     expect(terminalRefusalOf(outcome.kind === "rejected" ? outcome : null)).not.toBeNull();
   });
 });
+
+// S2-5 ruling 107: the transport keeps a server-time offset from the `Date` header of its /events calls only. The clock
+// steps S − 300 100 (sent) then S − 299 900 (received), so each sample is 300 500 (S + 500 − the midpoint S − 300 000).
+describe("serverOffsetMs — the Date header of /events", () => {
+  const S = Date.UTC(2026, 10, 7, 12, 0, 0);
+  const DATE = "Sat, 07 Nov 2026 12:00:00 GMT";
+  /** A clock that answers sent, then received, for each request — the order makeTransport reads it in. */
+  function steppingNow() {
+    let i = 0;
+    return () => (i++ % 2 === 0 ? S - 300_100 : S - 299_900);
+  }
+  const appendOk = { ok: true, data: { seq: 1, state_summary: null, outcome: null, status: "in_play" } };
+
+  it("serverOffsetMs is null until an /events response with a Date header", async () => {
+    const { fn } = fakeFetch((url) =>
+      url.endsWith("/state")
+        ? fakeResponse(200, { ok: true, data: { status: "in_play", last_seq: 0, state: {}, summary: null, outcome: null } }, { date: DATE })
+        : fakeResponse(201, appendOk, { date: DATE }),
+    );
+    const t = sessionTransport({ fetchFn: fn, now: steppingNow() });
+    expect(t.serverOffsetMs?.()).toBeNull();
+    await t.fetchState("fx-1");
+    expect(t.serverOffsetMs?.(), "/state is never sampled: an ETag revalidation can replay a stored Date").toBeNull();
+    await t.appendEvent("fx-1", BODY);
+    expect(t.serverOffsetMs?.()).toBe(300_500);
+  });
+
+  it("a response with no Date header records nothing", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(201, appendOk));
+    const t = deviceLinkTransport("dl_x", { fetchFn: fn, now: steppingNow() });
+    await t.appendEvent("fx-1", BODY);
+    expect(t.serverOffsetMs?.()).toBeNull();
+  });
+
+  it("a refused append still samples: the header is the server's, whatever the status", async () => {
+    const { fn } = fakeFetch(() =>
+      fakeResponse(409, { ok: false, error: { code: "SEQ_CONFLICT", message: "stale", current_seq: 7 } }, { date: DATE }),
+    );
+    const t = sessionTransport({ fetchFn: fn, now: steppingNow() });
+    expect((await t.appendEvent("fx-1", BODY)).kind).toBe("conflict");
+    expect(t.serverOffsetMs?.()).toBe(300_500);
+  });
+
+  it("a network error records nothing", async () => {
+    const fn = (async () => {
+      throw new TypeError("Failed to fetch");
+    }) as typeof fetch;
+    const t = sessionTransport({ fetchFn: fn, now: steppingNow() });
+    expect((await t.appendEvent("fx-1", BODY)).kind).toBe("network-error");
+    expect(t.serverOffsetMs?.()).toBeNull();
+  });
+
+  it("listEventsSince samples too", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: [] }, { date: DATE }));
+    const t = deviceLinkTransport("dl_x", { fetchFn: fn, now: steppingNow() });
+    expect(await t.listEventsSince("fx-1", 0)).toEqual([]);
+    expect(t.serverOffsetMs?.()).toBe(300_500);
+  });
+
+  it("without an injected clock the transport reads Date.now, and its offset is the header's against it", async () => {
+    // The real clock: the sample is the header's second + 500 − now, so a header naming the current second lands within
+    // a second of zero (no fake clock to make it exact).
+    const now = new Date(Date.now()).toUTCString();
+    const { fn } = fakeFetch(() => fakeResponse(201, appendOk, { date: now }));
+    const t = sessionTransport({ fetchFn: fn });
+    await t.appendEvent("fx-1", BODY);
+    const off = t.serverOffsetMs?.();
+    expect(off).not.toBeNull();
+    expect(Math.abs(off!)).toBeLessThanOrEqual(1_000);
+  });
+});
