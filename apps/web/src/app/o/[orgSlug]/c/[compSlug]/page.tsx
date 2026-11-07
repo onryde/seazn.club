@@ -80,9 +80,15 @@ export default async function CompetitionPage({
   const trialAvailable = checkoutTrialDays(subRow) > 0;
   // W4 T21 review I1 (ruling 273): the wrap-up prompt's "Mark completed" is a second door to `completed`, for the
   // organisers who never open settings — so it lists the open stages exactly as the settings select does. Read only
-  // when the prompt shows (it is rare, and the read is not free).
+  // when the prompt shows (it is rare, and the read is not free). Like the desk summary above, a failed read never
+  // blanks the page: the prompt shows without its warning.
   const wrapUp = canEdit && needsWrapUp(competition.status, competition.ends_on);
-  const wrapUpOpenStages = wrapUp ? await openStagesOf(auth, id) : [];
+  const wrapUpOpenStages = wrapUp
+    ? await openStagesOf(auth, id).catch((err: unknown) => {
+        log.error({ event: "wrapup_open_stages_failed", competitionId: id, err }, "wrapup_open_stages_failed");
+        return [];
+      })
+    : [];
   const compPhase = desk ? competitionPhase(desk) : null;
   // F5 fix: DivisionLedger's own "is this kick-off past?" check (its
   // nextLine) needs a fixed instant, never `Date.now()` read inside its own

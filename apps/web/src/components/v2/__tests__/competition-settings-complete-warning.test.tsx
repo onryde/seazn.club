@@ -15,6 +15,9 @@ import { OpenStagesWarning } from "../open-stages-warning";
 import { apiV1 } from "@/lib/client-v1";
 import { plural, t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { OPEN_STAGE_STATES, type OpenStageRow } from "@/lib/open-stages";
 
@@ -177,6 +180,26 @@ describe("OpenStagesWarning — the list itself", () => {
     expect(new Set(STAGES.map((s) => s.state))).toEqual(new Set(OPEN_STAGE_STATES));
     // One stage reads singular.
     expect(warn([STAGES[0]!]).text()).toContain(sayN("compset.openStages.heading", 1));
+  });
+
+  it("its body sentence follows the door it sits in: settings says Save, the wrap-up prompt (no Save button) says mark completed", () => {
+    // B-desk re-review N3: the wrap-up prompt has no Save button, so "save the competition" there names a control that is
+    // not on screen. Default (the settings select) keeps its sentence.
+    const settings = warn().text();
+    expect(settings).toContain(say("compset.openStages.body"));
+    expect(settings).not.toContain(say("comp.wrapUp.openStagesBody"));
+    const wrapUp = renderIsland(OpenStagesWarning, { id: "w", stages: STAGES, canComplete: true, door: "wrapUp" }).text();
+    expect(wrapUp).toContain(say("comp.wrapUp.openStagesBody"));
+    expect(wrapUp).not.toContain(say("compset.openStages.body"));
+    // Every locale words it, and words it differently from its settings sentence.
+    let checked = 0;
+    for (const [loc, d] of [["en", uiEn], ["es", uiEs], ["fr", uiFr], ["nl", uiNl]] as const) {
+      const body = (d as Record<string, string>)["comp.wrapUp.openStagesBody"];
+      expect(body, loc).toBeTruthy();
+      expect(body, loc).not.toBe((d as Record<string, string>)["compset.openStages.body"]);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("offers Complete stage only where nothing but the completion is left — and never when it may not act", () => {

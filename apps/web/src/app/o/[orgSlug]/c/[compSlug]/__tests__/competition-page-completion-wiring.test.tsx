@@ -17,6 +17,9 @@ const h = vi.hoisted(() => ({
   frozen: false,
   openStages: [] as { stageId: string }[],
   askedFor: [] as string[],
+  canEdit: true,
+  openStagesFails: false,
+  logError: vi.fn(),
   // M2: one division whose desk row carries this attention, finished, 3 of 3 played.
   divisions: [] as { id: string; name: string; slug: string; sport_key: string; logo_storage_path: null; logo_url: null }[],
   attention: [] as Attention[],
@@ -27,8 +30,11 @@ vi.mock("@/server/page-auth", () => ({
     auth: { orgId: "org-1" },
     org: { id: "org-1", name: "Riverside CC", slug: "riverside" },
     competition: { id: "comp-1", name: "Summer League", slug: "summer-league" },
-    canEdit: true,
+    canEdit: h.canEdit,
   }),
+}));
+vi.mock("@/server/logger", () => ({
+  log: { error: h.logError, warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
 }));
 vi.mock("@/server/usecases/competitions", () => ({
   getCompetition: async () => ({
@@ -38,6 +44,7 @@ vi.mock("@/server/usecases/competitions", () => ({
   }),
   openStagesOf: async (_auth: unknown, competitionId: string) => {
     h.askedFor.push(competitionId);
+    if (h.openStagesFails) throw new Error("connection terminated");
     return h.openStages;
   },
 }));
@@ -87,6 +94,9 @@ beforeEach(() => {
   h.frozen = false;
   h.openStages = [];
   h.askedFor = [];
+  h.canEdit = true;
+  h.openStagesFails = false;
+  h.logError.mockReset();
   h.divisions = [];
   h.attention = [];
 });
@@ -109,6 +119,27 @@ describe("the wrap-up prompt's open stages are wired from the server (W4 T21 I1)
     expect(h.askedFor).toEqual(["comp-1"]);
     expect(propsOf(p!).openStages).toBe(rows);
     expect(propsOf(p!).canCompleteStages).toBe(true);
+  });
+
+  it("a viewer who cannot edit gets no prompt past the end date — and the page never reads open stages for them", async () => {
+    // B-desk re-review N4: the gate's `canEdit` half, on its own. The end date HAS passed, so only canEdit says no.
+    h.canEdit = false;
+    h.openStages = [{ stageId: "s-1" }];
+    expect(await prompt()).toBeUndefined();
+    expect(h.askedFor).toEqual([]);
+    h.canEdit = true;
+    expect(await prompt(), "premise: the same competition prompts its editor").toBeDefined();
+  });
+
+  it("a failed open-stage read never blanks the page: the prompt still shows, with no warning, and the failure is logged", async () => {
+    // B-desk re-review N2: the same contract as the page's desk summary read (spec §Error handling).
+    h.openStagesFails = true;
+    const p = await prompt();
+    expect(p, "the page still renders its wrap-up prompt").toBeDefined();
+    expect(propsOf(p!).openStages).toEqual([]);
+    expect(h.askedFor).toEqual(["comp-1"]);
+    expect(h.logError).toHaveBeenCalledTimes(1);
+    expect(h.logError.mock.calls[0]![0]).toMatchObject({ event: "wrapup_open_stages_failed", competitionId: "comp-1" });
   });
 
   it("a frozen competition still lists them, but offers no Complete stage", async () => {

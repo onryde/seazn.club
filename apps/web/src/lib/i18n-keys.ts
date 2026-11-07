@@ -1534,6 +1534,7 @@ export type DictionaryKey =
   | "comp.wrapUp.complete"
   | "comp.wrapUp.completing"
   | "comp.wrapUp.failed"
+  | "comp.wrapUp.openStagesBody"
   | "comp.wrapUp.title"
   | "compset.brandColor"
   | "compset.brandColorDesc"

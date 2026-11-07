@@ -60,6 +60,8 @@ describe("CompetitionWrapUpPrompt — the second completion door warns too (W4 T
     expect(w, "the warning mounts").toBeDefined();
     expect(propsOf(w!).stages).toBe(ROWS);
     expect(propsOf(w!).canComplete).toBe(true);
+    // N3: the prompt has no Save button, so its warning speaks of marking the competition completed.
+    expect(propsOf(w!).door).toBe("wrapUp");
     expect(propsOf(markCompleted(tree))["aria-describedby"], "Mark completed is described by the warning").toBe(propsOf(w!).id);
     // A frozen competition still says what is open, but offers no write.
     expect(propsOf(warningOf(mount({ canCompleteStages: false }).tree())!).canComplete).toBe(false);

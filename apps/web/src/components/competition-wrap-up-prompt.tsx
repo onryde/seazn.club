@@ -94,7 +94,7 @@ export function CompetitionWrapUpPrompt({
             {msg("comp.wrapUp.body", { date: endedOnLabel })}
           </p>
           {openStages.length > 0 && (
-            <OpenStagesWarning id={OPEN_STAGES_ID} stages={openStages} canComplete={canCompleteStages} />
+            <OpenStagesWarning id={OPEN_STAGES_ID} stages={openStages} canComplete={canCompleteStages} door="wrapUp" />
           )}
           {error && (
             <p role="alert" className="mt-2 text-sm font-medium text-red-700">

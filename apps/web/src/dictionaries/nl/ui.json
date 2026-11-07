@@ -4316,6 +4316,7 @@
   "comp.wrapUp.title": "De einddatum van deze competitie is verstreken",
   "comp.wrapUp.body": "Ze zou eindigen op {date}. Markeer ze als voltooid, of stel een nieuwe einddatum in als ze nog loopt.",
   "comp.wrapUp.complete": "Als voltooid markeren",
+  "comp.wrapUp.openStagesBody": "Je kunt de competitie toch als voltooid markeren. Open fases blijven zonder rangschikking tot je ze afrondt.",
   "comp.wrapUp.completing": "Bezig met markeren…",
   "comp.wrapUp.changeDate": "Einddatum wijzigen",
   "comp.wrapUp.failed": "Kon de status niet bijwerken. Probeer opnieuw.",

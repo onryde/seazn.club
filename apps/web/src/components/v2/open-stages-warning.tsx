@@ -23,16 +23,25 @@ const STATE_KEY: Record<Exclude<OpenStageState, "matches_left">, MessageKey> = {
   no_matches: "compset.openStages.state.no_matches",
 };
 
+/** The sentence under the heading, by the door the warning sits in: settings completes on Save; the competition
+ *  page's wrap-up prompt has no Save button, so it speaks of marking the competition completed (B-desk re-review N3). */
+const BODY_KEY: Record<"settings" | "wrapUp", MessageKey> = {
+  settings: "compset.openStages.body",
+  wrapUp: "comp.wrapUp.openStagesBody",
+};
+
 export function OpenStagesWarning({
   id,
   stages,
   canComplete,
+  door = "settings",
 }: {
-  /** The Status select points at this with aria-describedby. */
+  /** The completing control (the Status select, or Mark completed) points at this with aria-describedby. */
   id: string;
   stages: OpenStageRow[];
   /** False for a frozen competition: the warning still says what is open, but offers no write. */
   canComplete: boolean;
+  door?: keyof typeof BODY_KEY;
 }) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -62,7 +71,7 @@ export function OpenStagesWarning({
       className="col-span-2 mt-2 rounded-lg bg-amber-50 p-3 ring-1 ring-inset ring-amber-200"
     >
       <p className="text-sm font-semibold text-amber-900">{msgPlural("compset.openStages.heading", stages.length)}</p>
-      <p className="mt-1 text-xs leading-relaxed text-amber-900/80">{msg("compset.openStages.body")}</p>
+      <p className="mt-1 text-xs leading-relaxed text-amber-900/80">{msg(BODY_KEY[door])}</p>
       <ul className="mt-2 divide-y divide-amber-200/80">
         {stages.map((s) => {
           const offer = canComplete && onlyCompletionLeft(s.state);

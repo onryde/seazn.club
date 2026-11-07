@@ -50,6 +50,21 @@ async function startedKnockout(request: APIRequestContext, label: string, visibi
   return { compId: comp.data!.id, compSlug: comp.data!.slug, divisionId: div.data!.id, stageId: stage.data!.id, ids: added.ids, names, semis };
 }
 
+/** Play a `startedKnockout` out through the scoring API — both semis, then the final they seat — leaving its stage open
+ *  (auto-advance off). Returns the final. */
+async function playOut(request: APIRequestContext, k: Awaited<ReturnType<typeof startedKnockout>>): Promise<Fx> {
+  for (const sf of k.semis) await scoreFixture(request, sf.id, 3, 1);
+  let final: Fx | undefined;
+  await expect
+    .poll(async () => {
+      final = (await divisionFixtures(request, k.divisionId)).find((f) => !k.semis.some((s) => s.id === f.id));
+      return Boolean(final?.home_entrant_id && final?.away_entrant_id);
+    }, { timeout: 30_000 })
+    .toBe(true);
+  await scoreFixture(request, final!.id, 3, 1);
+  return final!;
+}
+
 
 test.describe("K12 a disqualification walkover is worded as one", () => {
   // W4 T18 (K12), driven first on the base build: the organiser console's Activity row read "Withdrawal recorded" for a
@@ -107,20 +122,11 @@ test.describe("X-CH-8 the desk asks to complete a finished bracket", () => {
   test("X-CH-8 a decided final raises its desk row; completing the competition warns, lists the stage, and still completes", async ({ page, request }) => {
     test.setTimeout(240_000);
     const k = await startedKnockout(request, "XCH8", "public");
-    // Play the bracket out through the scoring API: both semis, then the final they seat.
-    for (const sf of k.semis) await scoreFixture(request, sf.id, 3, 1);
-    let final: Fx | undefined;
-    await expect
-      .poll(async () => {
-        final = (await divisionFixtures(request, k.divisionId)).find((f) => !k.semis.some((s) => s.id === f.id));
-        return Boolean(final?.home_entrant_id && final?.away_entrant_id);
-      }, { timeout: 30_000 })
-      .toBe(true);
-    await scoreFixture(request, final!.id, 3, 1);
+    const final = await playOut(request, k);
     const all = await divisionFixtures(request, k.divisionId);
     expect(all.map((f) => f.status).sort(), "premise: all three decided").toEqual(["decided", "decided", "decided"]);
     expect(await stageStatus(request, k.stageId), "premise: auto-advance off leaves the stage open").toBe("active");
-    const champion = k.names[k.ids.indexOf(final!.home_entrant_id!)]!;
+    const champion = k.names[k.ids.indexOf(final.home_entrant_id!)]!;
 
     // The desk: ONE red row naming the stage, whose action is the fixtures tab's Complete stage.
     const compPath = await competitionPath(request, k.compId);
@@ -176,5 +182,34 @@ test.describe("X-CH-8 the desk asks to complete a finished bracket", () => {
     await expect(page.locator('[data-attention="final_decided"]')).toHaveCount(0);
     await page.goto(hub);
     await expect(page.locator('[data-testid^="mh-knockout-champion-"]').first()).toContainText(champion);
+  });
+
+  test("X-CH-8 the wrap-up door: past its end date, Mark it completed lists the open stage too, and still completes", async ({ page, request }) => {
+    // B-desk review I1: the competition page's wrap-up prompt is a second, one-tap door to `completed`.
+    test.setTimeout(240_000);
+    const k = await startedKnockout(request, "XCH8W", "public");
+    await playOut(request, k);
+    // The prompt shows once the end date is past its grace; set after play, so no score meets a past end date.
+    const endsOn = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+    const ended = await apiJson(request, `/api/v1/competitions/${k.compId}`, "PATCH", { ends_on: endsOn });
+    expect(ended.status, JSON.stringify(ended.error)).toBe(200);
+    await page.goto(await competitionPath(request, k.compId));
+    await dismissCookieBanner(page);
+    const prompt = page.locator('section[aria-labelledby="wrapup-title"]');
+    const warning = prompt.getByTestId("compset-open-stages");
+    await expect(warning).toContainText(uiEn["comp.wrapUp.openStagesBody"]!);
+    await expect(warning.locator(`[data-open-stage="${k.stageId}"]`)).toContainText(uiEn["compset.openStages.state.final_decided"]!);
+    const mark = prompt.getByRole("button", { name: uiEn["comp.wrapUp.complete"]! });
+    await expect(mark, "Mark it completed is described by the warning").toHaveAttribute("aria-describedby", "wrapup-open-stages");
+    for (const w of [320, 768, 1280]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expectNoHorizontalScroll(page);
+    }
+    await mark.click();
+    await expect
+      .poll(async () => (await apiJson<{ status: string }>(request, `/api/v1/competitions/${k.compId}`)).data?.status, { timeout: 30_000 })
+      .toBe("completed");
+    expect(await stageStatus(request, k.stageId), "it completed the competition, not the stage").toBe("active");
+    await expect(prompt, "answered: the prompt is gone").toHaveCount(0);
   });
 });

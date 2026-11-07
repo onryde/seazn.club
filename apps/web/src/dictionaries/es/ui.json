@@ -4316,6 +4316,7 @@
   "comp.wrapUp.title": "La fecha de finalización de esta competición ya pasó",
   "comp.wrapUp.body": "Debía terminar el {date}. Márcala como completada o establece una nueva fecha de finalización si sigue en curso.",
   "comp.wrapUp.complete": "Marcar como completada",
+  "comp.wrapUp.openStagesBody": "Aun así puedes marcar la competición como completada. Las fases abiertas quedan sin clasificación hasta que las completes.",
   "comp.wrapUp.completing": "Marcando como completada…",
   "comp.wrapUp.changeDate": "Cambiar la fecha de finalización",
   "comp.wrapUp.failed": "No se pudo actualizar el estado. Inténtalo de nuevo.",
