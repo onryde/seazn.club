@@ -316,11 +316,18 @@ test("team tab: an email invite is really accepted, the new member's role change
   page,
   browser,
 }) => {
-  // Budget: 1 goto + 2 reloads + an anonymous claim + ~11 API reads. Expressed
-  // as a sum rather than a flat constant so adding a step moves the budget.
+  // Budget, expressed as a sum rather than a flat constant so adding a step
+  // moves it. NAVIGATIONS: 1 goto + 2 reloads; the constant keeps the 3 spare
+  // it already had. ROUND_TRIPS, every awaited server round trip below, counted:
+  //   8 invite-list reads (readInvites; the poll's counts as one),
+  //   8 actions awaited on the server (2 email sends, the email revoke, the
+  //     anonymous claim, the role change, the double-tap create, the sibling
+  //     create, the link revoke),
+  //   2 direct DB reads (the outbox row, the mailed token),
+  //   1 members read.
   const NAVIGATIONS = 6;
-  const API_READS = 13;
-  test.setTimeout(Math.max(60_000, 15_000 + NAVIGATIONS * 6_000 + API_READS * 1_500));
+  const ROUND_TRIPS = 8 + 8 + 2 + 1;
+  test.setTimeout(Math.max(60_000, 15_000 + NAVIGATIONS * 6_000 + ROUND_TRIPS * 1_500));
 
   const memberEmail = `delivered+e2e-w2-member-${TAG}-${Math.random().toString(36).slice(2, 6)}@resend.dev`;
   const invitesUrl = `/api/orgs/${org.orgId}/invites`;

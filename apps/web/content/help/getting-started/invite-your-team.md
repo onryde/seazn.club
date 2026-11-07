@@ -26,7 +26,7 @@ Invites never change an existing member's role — accepting a second invite add
 
 ## Common questions
 
-**Someone's invite email didn't arrive?** Seazn Club keeps retrying an invite email that didn't go out straight away, so give it a little while and ask them to check spam. If it still hasn't come, revoke the pending invite and either send a new one or create an invite link and share that with them directly.
+**Someone's invite email didn't arrive?** An invite email that didn't go out straight away may arrive late, or not at all. Ask them to check spam; if it still hasn't come, revoke the pending invite and either send a new one or create an invite link and share that with them directly.
 
 **Can I cut off a link I shared too widely?** Yes — press **Revoke** next to it. Everyone who already joined stays; nobody new can use it.
 
