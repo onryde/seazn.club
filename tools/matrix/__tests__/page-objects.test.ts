@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { NoProductResponse } from "../lib/browser/respond.ts";
 import { COMPETITION_ENDS_ON, createCompetitionUi, createFromTemplateUi } from "../lib/browser/pages/competition.ts";
-import { FINALIZE_TESTID, FORFEIT_CONFIRM_TESTID, FORFEIT_TESTID, FORFEIT_WHO_TESTID_PREFIX, FORFEIT_WHY_TESTID_PREFIX, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, START_MATCH_TESTID, TAP_WAIT_TIMEOUT_MS } from "../../bench/lib/drivers/scorer.ts";
+import { FINALIZE_TESTID, FORFEIT_CONFIRM_TESTID, FORFEIT_TESTID, FORFEIT_WHO_TESTID_PREFIX, FORFEIT_WHY_TESTID_PREFIX, MATCH_ACTIONS_CLOSED_SELECTOR, MATCH_ACTIONS_OPEN_SELECTOR, MATCH_ACTIONS_TOGGLE_TESTID, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, START_MATCH_TESTID, TAP_WAIT_TIMEOUT_MS } from "../../bench/lib/drivers/scorer.ts";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
 import {
   LandedElsewhere, READS_ONLY, REACT_PROPS_KEY, REPLACEMENTS_MAX, ScreenNeverShowed, UnsafeSelectorValue, actBudget, attrEquals, awaitHydrated, awaitScreen, boundActions,
@@ -1357,28 +1357,48 @@ describe("abandonUi: the console's Abandon (W2a Task 14 Step 8)", () => {
   const BASE = "http://localhost:3999";
   interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }
   type W = { pred: (r: Resp) => boolean; resolve: (r: Resp) => void; timer: ReturnType<typeof setTimeout> };
+  const btn = `role:button:${NAME.abandon.text}`;
+  const toggleId = `testid:${MATCH_ACTIONS_TOGGLE_TESTID}`;
 
-  function consolePage(o: { offered?: boolean; stuck?: boolean; answer?: { status: number; body: unknown }; eventsOf?: string } = {}) {
+  /** PR #1133: the Abandon sits in the Match actions panel. `toggle` is the console's width and state: "closed" (md and
+   *  up, as loaded — L1's 1280), "open" (md and up, already opened) or "absent" (a phone: the panel open, its toggle
+   *  hidden). getByRole skips a hidden button, so while the panel is closed the Abandon is not found at all. A console
+   *  that offers no match action at all (`offered: false` with `toggle: "absent"`) renders neither. */
+  function consolePage(o: { offered?: boolean; stuck?: boolean; answer?: { status: number; body: unknown }; eventsOf?: string; toggle?: "closed" | "open" | "absent" } = {}) {
     const log: string[] = [];
     const roles: { role: string; name: string; exact: boolean | undefined }[] = [];
     let screen = 0;
+    const toggle = o.toggle ?? "closed";
+    let panelOpen = toggle !== "closed";
     const waiters: W[] = [];
     const emit = (r: Resp) => { for (const w of [...waiters]) if (w.pred(r)) { clearTimeout(w.timer); waiters.splice(waiters.indexOf(w), 1); w.resolve(r); } };
     const answer = o.answer ?? { status: 200, body: { ok: true, data: { seq: 4, status: "abandoned", outcome: null, event_id: "ev-4" } } };
-    const loc = (d: string) => ({
+    /** What a locator `d` finds on screen. */
+    const shown = (d: string): boolean => {
+      if (d.includes("|")) return d.split("|").some(shown);
+      if (d === MATCH_ACTIONS_CLOSED_SELECTOR) return toggle === "closed" && !panelOpen;
+      if (d === MATCH_ACTIONS_OPEN_SELECTOR) return toggle !== "absent" && panelOpen;
+      if (d === toggleId) return toggle !== "absent";
+      if (d === btn) return o.offered !== false && panelOpen;
+      return true;
+    };
+    const loc = (d: string): { d: string; [k: string]: unknown } => ({
       d,
       first: () => loc(d),
+      or: (other: { d: string }) => loc(`${d}|${other.d}`),
+      count: async () => (shown(d) ? 1 : 0),
       waitFor: async (w?: { state?: string }) => {
         log.push(`wait ${w?.state} ${d}`);
-        const absentButton = o.offered === false && d.startsWith("role:button") && w?.state !== "detached";
-        const stillThere = o.stuck === true && d.startsWith("role:button") && w?.state === "detached";
-        if (absentButton || stillThere) { const e = new Error("locator.waitFor: Timeout exceeded"); e.name = "TimeoutError"; throw e; }
+        const missing = w?.state !== "detached" && !shown(d);
+        const stillThere = o.stuck === true && d === btn && w?.state === "detached";
+        if (missing || stillThere) { const e = new Error("locator.waitFor: Timeout exceeded"); e.name = "TimeoutError"; throw e; }
       },
       elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
       fill: async (v: string) => { log.push(`fill ${d} = ${v}`); screen++; },
       click: async () => {
         log.push(`click ${d}`);
         screen++;
+        if (d === MATCH_ACTIONS_CLOSED_SELECTOR) panelOpen = true;
         if (d === `testid:${PROMPT_SUBMIT_TESTID}`) {
           emit({ request: () => ({ method: () => "POST" }), url: () => `${BASE}/api/v1/fixtures/${o.eventsOf ?? "fx-1"}/events`, status: () => answer.status, json: () => Promise.resolve(answer.body) });
         }
@@ -1388,6 +1408,7 @@ describe("abandonUi: the console's Abandon (W2a Task 14 Step 8)", () => {
       reload: async () => { log.push("reload"); },
       getByRole: (role: string, f: { name: string; exact?: boolean }) => { roles.push({ role, name: f.name, exact: f.exact }); return loc(`role:${role}:${f.name}`); },
       getByTestId: (id: string) => loc(`testid:${id}`),
+      locator: (sel: string) => loc(sel),
       waitForResponse: (pred: (r: Resp) => boolean, t: { timeout: number }): Promise<Resp> => new Promise((resolveW, reject) => {
         const w: W = { pred, resolve: resolveW, timer: setTimeout(() => { waiters.splice(waiters.indexOf(w), 1); const e = new Error("Timeout"); e.name = "TimeoutError"; reject(e); }, t.timeout) };
         waiters.push(w);
@@ -1417,14 +1438,16 @@ describe("abandonUi: the console's Abandon (W2a Task 14 Step 8)", () => {
     expect(fc).toContain('void send("core.abandon", { reason });');
   });
 
-  it("reloads, waits for the offer, pictures before, opens the prompt, types the reason, submits, takes the product's own answer, waits for the offer to go, pictures after", async () => {
+  it("reloads, opens the closed Match actions panel, waits for the offer, pictures before, opens the prompt, types the reason, submits, takes the product's own answer, waits for the offer to go, pictures after", async () => {
     const g = consolePage();
     const posted = await abandonUi(g.ctx, "fx-1", "matrix: abandoned");
     expect(posted).toMatchObject({ seq: 4, event_id: "ev-4", status: "abandoned" });
-    const btn = `role:button:${NAME.abandon.text}`;
     expect(g.log).toEqual([
       "reload",
-      `wait attached ${btn}`,
+      // PR #1133: the first act after the load is the toggle (md and up) or the Abandon (a phone), so the load waits for either.
+      `wait attached ${toggleId}|${btn}`,
+      `click ${MATCH_ACTIONS_CLOSED_SELECTOR}`,
+      `wait attached ${MATCH_ACTIONS_OPEN_SELECTOR}`,
       `wait visible ${btn}`,
       "shot 12-abandon-before",
       `click ${btn}`,
@@ -1434,6 +1457,19 @@ describe("abandonUi: the console's Abandon (W2a Task 14 Step 8)", () => {
       "shot 12-abandon",
     ]);
     expect(g.evidence.checks().find((c) => c.id === "visual-evidence")).toMatchObject({ verdict: "pass", checked: 2 });
+  });
+
+  it("PR #1133: a panel already open (md and up) or a phone (open, toggle hidden) is never toggled — a tap there would CLOSE it — and the Abandon is still driven", async () => {
+    let checked = 0;
+    for (const toggle of ["open", "absent"] as const) {
+      const g = consolePage({ toggle });
+      const posted = await abandonUi(g.ctx, "fx-1", "matrix: abandoned");
+      expect(posted, toggle).toMatchObject({ seq: 4, status: "abandoned" });
+      expect(g.log.filter((l) => l.includes(MATCH_ACTIONS_TOGGLE_TESTID) && l.startsWith("click")), toggle).toEqual([]);
+      expect(g.log, toggle).toContain(`click ${btn}`);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("the Abandon button is looked up by its WHOLE accessible name (exact), so a longer button that merely contains the word is never the one clicked (M-3)", async () => {
@@ -1465,9 +1501,14 @@ describe("abandonUi: the console's Abandon (W2a Task 14 Step 8)", () => {
   });
 
   it("a console that offers no Abandon (decided, held, or not the organiser's) is ScreenNeverShowed, never a click on nothing", async () => {
-    const g = consolePage({ offered: false });
+    // No match action at all: neither the toggle nor the Abandon renders.
+    const g = consolePage({ offered: false, toggle: "absent" });
     await expect(abandonUi(g.ctx, "fx-1", "r")).rejects.toBeInstanceOf(ScreenNeverShowed);
     expect(g.log.some((l) => l.startsWith("click"))).toBe(false);
+    // A panel with a Forfeit but no Abandon (a held chess tie-break): opened, and still ScreenNeverShowed for the Abandon.
+    const held = consolePage({ offered: false });
+    await expect(abandonUi(held.ctx, "fx-1", "r")).rejects.toThrow(/the console's Abandon, for a match in play/);
+    expect(held.log.filter((l) => l.startsWith("click"))).toEqual([`click ${MATCH_ACTIONS_CLOSED_SELECTOR}`]);
   });
 
   it("an Abandon still offered after the send is ScreenNeverShowed (the screen did not change), not a pass", async () => {
@@ -1495,10 +1536,20 @@ describe("forfeitUi: the dialog's four taps on a console scheduled or under way 
   const fx = { id: "fx-1", home_entrant_id: "e-home", away_entrant_id: "e-away" };
   interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }
 
-  /** `absent`: testids the page does not render — counted 0, and a wait on one times out as Playwright's would. */
-  function forfeitPage(started: boolean, absent: readonly string[] = []) {
+  /** `absent`: testids the page does not render — counted 0, and a wait on one times out as Playwright's would.
+   *  `toggle` (PR #1133): the Match actions panel the Forfeit sits in — "closed" behind its toggle (md and up, as loaded:
+   *  L1's 1280), "open" (md and up, already opened) or "absent" (a phone: open, its toggle hidden). While it is closed the
+   *  Forfeit is attached but HIDDEN, so the opener's wait for it to be visible times out, as Playwright's did on CI. */
+  function forfeitPage(started: boolean, absent: readonly string[] = [], toggle: "closed" | "open" | "absent" = "closed") {
     const log: string[] = [];
-    const missing = (d: string) => absent.some((t) => d === `testid:${t}` || d === `[data-testid="${t}"]`);
+    let panelOpen = toggle !== "closed";
+    const opener = `[data-testid="${FORFEIT_TESTID}"]`;
+    const missing = (d: string) =>
+      absent.some((t) => d === `testid:${t}` || d === `[data-testid="${t}"]`)
+      || (d === MATCH_ACTIONS_CLOSED_SELECTOR && !(toggle === "closed" && !panelOpen))
+      || (d === MATCH_ACTIONS_OPEN_SELECTOR && !(toggle !== "absent" && panelOpen))
+      || (d === `testid:${MATCH_ACTIONS_TOGGLE_TESTID}` && toggle === "absent");
+    const hidden = (d: string) => d === opener && !panelOpen;
     let screen = 0;
     let deliver: (() => void) | null = null;
     const answer = { seq: 4, status: "forfeited", outcome: null, event_id: "ev-4" };
@@ -1513,10 +1564,18 @@ describe("forfeitUi: the dialog's four taps on a console scheduled or under way 
       count: async () => (d === `testid:${START_MATCH_TESTID}` ? (started ? 0 : 1) : missing(d) ? 0 : 1),
       waitFor: async (w) => {
         log.push(`wait ${w?.state} ${d}`);
+        const wantsVisible = w?.state === undefined || w.state === "visible";
         if (missing(d)) { const e = new Error(`Timeout waiting for ${d}`); e.name = "TimeoutError"; throw e; }
+        if (wantsVisible && hidden(d)) { const e = new Error(`Timeout waiting for ${d} to be visible — resolved to hidden`); e.name = "TimeoutError"; throw e; }
       },
       elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
-      click: async () => { log.push(`click ${d}`); screen++; if (d === submit) deliver?.(); },
+      click: async () => {
+        if (hidden(d)) throw new Error(`click on hidden ${d}`);
+        log.push(`click ${d}`);
+        screen++;
+        if (d === MATCH_ACTIONS_CLOSED_SELECTOR) panelOpen = true;
+        if (d === submit) deliver?.();
+      },
       fill: async (v) => { log.push(`fill ${d} ${v}`); screen++; },
     });
     const page = {
@@ -1549,7 +1608,9 @@ describe("forfeitUi: the dialog's four taps on a console scheduled or under way 
       const posted = await forfeitUi(g.ctx, fx, by, "walkover");
       expect(posted, by).toEqual([{ seq: 4, status: "forfeited", outcome: null, event_id: "ev-4" }]);
       expect(g.log[0], by).toBe("reload");
-      const acts = g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"));
+      // PR #1133: at md and up the first act is the closed Match actions toggle, then the dialog's own steps.
+      const [toggleTap, ...acts] = g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"));
+      expect(toggleTap, by).toBe(`click ${MATCH_ACTIONS_CLOSED_SELECTOR}`);
       const steps = forfeitSteps(fx, by, "walkover");
       expect(acts.length, by).toBe(steps.length);
       expect(acts.some((l) => l.includes(START_MATCH_TESTID)), `${by}: Start is never tapped`).toBe(false);
@@ -1567,7 +1628,7 @@ describe("forfeitUi: the dialog's four taps on a console scheduled or under way 
     expect(e).toBeInstanceOf(ConsoleChoiceNotOffered);
     expect({ testid: (e as ConsoleChoiceNotOffered).testid, guidance: (e as ConsoleChoiceNotOffered).guidance, fixtureId: (e as ConsoleChoiceNotOffered).fixtureId }).toEqual({ testid: FORFEIT_NEITHER_TESTID, guidance: true, fixtureId: "fx-1" });
     expect(g.log.filter((l) => l.startsWith("wait") && l.includes(FORFEIT_NEITHER_TESTID)), "never waited on").toEqual([]);
-    expect(g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"))).toEqual([`click [data-testid="${FORFEIT_TESTID}"]`]);
+    expect(g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"))).toEqual([`click ${MATCH_ACTIONS_CLOSED_SELECTOR}`, `click [data-testid="${FORFEIT_TESTID}"]`]);
     expect(g.log, "the dialog's panel was up before the count").toContain(`wait undefined testid:${FORFEIT_DIALOG_TESTID}`);
     expect(g.log).not.toContain("await the events POST");
   });
@@ -1578,7 +1639,7 @@ describe("forfeitUi: the dialog's four taps on a console scheduled or under way 
     expect(e).toBeInstanceOf(ConsoleChoiceNotOffered);
     expect([(e as ConsoleChoiceNotOffered).testid, (e as ConsoleChoiceNotOffered).guidance]).toEqual([`${FORFEIT_WHY_TESTID_PREFIX}walkover`, false]);
     const steps = forfeitSteps(fx, "e-away", "walkover");
-    expect(g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"))).toEqual(steps.slice(0, 2).map((st) => `click [data-testid="${(st as { testid: string }).testid}"]`));
+    expect(g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"))).toEqual([`click ${MATCH_ACTIONS_CLOSED_SELECTOR}`, ...steps.slice(0, 2).map((st) => `click [data-testid="${(st as { testid: string }).testid}"]`)]);
     expect(g.log).not.toContain("await the events POST");
   });
 
@@ -1586,10 +1647,43 @@ describe("forfeitUi: the dialog's four taps on a console scheduled or under way 
     const g = forfeitPage(true);
     const posted = await forfeitUi(g.ctx, fx, "e-away", "walkover");
     expect(posted).toEqual([{ seq: 4, status: "forfeited", outcome: null, event_id: "ev-4" }]);
-    const acts = g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"));
+    // The dialog's own acts (the Match actions toggle before them is the PR #1133 tests' below).
+    const acts = g.log.filter((l) => (l.startsWith("click") || l.startsWith("fill")) && !l.includes(MATCH_ACTIONS_TOGGLE_TESTID));
     expect(acts.length).toBe(forfeitSteps(fx, "e-away", "walkover").length);
     expect(acts.some((l) => l.includes(START_MATCH_TESTID))).toBe(false);
     expect(acts.at(-1)).toBe(`click [data-testid="${FORFEIT_CONFIRM_TESTID}"]`);
+  });
+
+  // PR #1133: the Forfeit moved into the Match actions panel, CLOSED at md and up behind its toggle (CI's 53 faults:
+  // "score-forfeit … resolved to hidden"). The load waits for the toggle or the Forfeit to hydrate, then the toggle is
+  // tapped once — and only where it is on screen and closed: a second tap, or one on a phone, would close the panel.
+  it("PR #1133: md and up, as loaded — the closed toggle is tapped once, after the load and before the opener; the load's hydration target is the toggle or the Forfeit", async () => {
+    const g = forfeitPage(true);
+    await forfeitUi(g.ctx, fx, "e-away", "retired");
+    const reloadAt = g.log.indexOf("reload");
+    const toggleAt = g.log.indexOf(`click ${MATCH_ACTIONS_CLOSED_SELECTOR}`);
+    const openerAt = g.log.indexOf(`click [data-testid="${FORFEIT_TESTID}"]`);
+    expect(reloadAt).toBe(0);
+    expect(g.log[1]).toBe(`wait attached testid:${MATCH_ACTIONS_TOGGLE_TESTID}|testid:${FORFEIT_TESTID}`);
+    expect(toggleAt).toBeGreaterThan(reloadAt);
+    expect(openerAt).toBeGreaterThan(toggleAt);
+    // The tap landed (the toggle reads open) before the opener was waited on.
+    expect(g.log.slice(toggleAt, openerAt)).toContain(`wait attached ${MATCH_ACTIONS_OPEN_SELECTOR}`);
+    expect(g.log.filter((l) => l === `click ${MATCH_ACTIONS_CLOSED_SELECTOR}`)).toHaveLength(1);
+  });
+
+  it("PR #1133: a panel already open, or a phone (open, toggle hidden), is never toggled — and the four Forfeit steps still land", async () => {
+    let checked = 0;
+    for (const toggle of ["open", "absent"] as const) {
+      const g = forfeitPage(true, [], toggle);
+      const posted = await forfeitUi(g.ctx, fx, "e-away", "walkover");
+      expect(posted, toggle).toEqual([{ seq: 4, status: "forfeited", outcome: null, event_id: "ev-4" }]);
+      const acts = g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"));
+      expect(acts.filter((l) => l.includes(MATCH_ACTIONS_TOGGLE_TESTID)), toggle).toEqual([]);
+      expect(acts.length, toggle).toBe(forfeitSteps(fx, "e-away", "walkover").length);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 

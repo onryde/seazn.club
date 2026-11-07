@@ -8,8 +8,17 @@
 //  - Finalize is `score-finalize` → send("core.finalize", {}) (:1272-1276):
 //    the FIXTURE'S EVENTS ROUTE, not a /finalize endpoint (the brief's Step 0
 //    question). It renders only once the page knows the match is decided
-//    (`decided`, :714) and sits in the match-actions band, which needs
-//    `scoring` (:685 — status not finalized) — so a finalized console drops it.
+//    (`decided`, :714) and needs `scoring` (:685 — status not finalized) — so a
+//    finalized console drops it. Since 2026-11-05 (PR #1133) it is the
+//    `finalize-banner` at the TOP of the console, on screen as loaded.
+//  - PR #1133: Forfeit and Abandon sit in the "Match actions" panel
+//    (`data-role="match-actions"`), which starts CLOSED at md and up behind
+//    `match-actions-toggle` (its `aria-expanded` says which); on a phone it is
+//    open and the toggle hidden. So forfeitUi and abandonUi load the console
+//    waiting for the toggle OR their control to hydrate (whichever is the first
+//    act at that width), then open the panel with the bench's own
+//    openMatchActions (scorer.ts, ruling 38), which taps only a toggle that is
+//    on screen and closed — a second tap would close the panel again.
 //  - Start is `score-start-match` → send("core.start", {}) (:1026-1031), shown
 //    while the status is scheduled (`started`, :725). The console never
 //    starts a match by itself. Since W2b Task 11 its Forfeit is offered BEFORE
@@ -44,8 +53,8 @@
 //    and a console loaded before the fixture's last event is answered
 //    SEQ_CONFLICT — so both acts reload first, as the bench's
 //    reloadConsoleBeforeAction does (tap-play.ts:456).
-import type { Page } from "playwright";
-import { FINALIZE_TESTID, FORFEIT_TESTID, FORFEIT_WHO_TESTID_PREFIX, FORFEIT_WHY_TESTID_PREFIX, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, organiserStepsFor, selectorForTapStep, type PadPage, type TapStep } from "../../../../bench/lib/drivers/scorer.ts";
+import type { Locator, Page } from "playwright";
+import { FINALIZE_TESTID, FORFEIT_TESTID, FORFEIT_WHO_TESTID_PREFIX, FORFEIT_WHY_TESTID_PREFIX, MATCH_ACTIONS_TOGGLE_TESTID, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, openMatchActions, organiserStepsFor, selectorForTapStep, type PadPage, type TapStep } from "../../../../bench/lib/drivers/scorer.ts";
 import { executeStep, executeSteps } from "../../pads/execute.ts";
 import { BadBudget, budgetMs } from "../budget.ts";
 import { actAndAwait } from "../respond.ts";
@@ -56,6 +65,12 @@ import { actBudget, awaitScreen, exactPath, navBudget, reload, shoot, stepBudget
 /** The route every console send answers on — finalize's included. */
 export function eventsPath(fixtureId: string): RegExp {
   return exactPath(`/api/v1/fixtures/${fixtureId}/events`);
+}
+
+/** What a load waits to hydrate before a Match actions control (PR #1133): the panel's toggle, the first act at md and
+ *  up where the panel starts closed, or the control itself, the first act on a phone (ctx.ts HydrationTarget's union). */
+function matchActionsOr(page: Pick<Page, "getByTestId">, control: Locator): Locator {
+  return page.getByTestId(MATCH_ACTIONS_TOGGLE_TESTID).or(control);
 }
 
 export class ForfeitNeedsBothSides extends Error {
@@ -151,8 +166,10 @@ export async function forfeitUi(c: PageCtx, fixture: ForfeitFixture, by: string,
   if (opener === undefined || who === undefined || why === undefined) throw new Error(`browser: the forfeit's steps are opener, side, reason, Confirm — got ${steps.length}`);
   const nav = navBudget(c);
   const { stepMs } = forfeitBudgets(c, steps.length);
-  // The Forfeit opener is the first act, scheduled or under way.
-  await reload(c, { control: page.getByTestId(FORFEIT_TESTID), what: "the console's Forfeit" });
+  // The Forfeit opener is the first act, scheduled or under way — after opening the Match actions panel it sits in
+  // (PR #1133: closed at md and up behind its toggle, open on a phone).
+  await reload(c, { control: matchActionsOr(page, page.getByTestId(FORFEIT_TESTID)), what: "the console's Forfeit" });
+  await openMatchActions(page, stepMs);
   const posted: PostedEvent[] = [];
   const before = await shoot(c, "07-forfeit-before");
   // Open the dialog and wait for its PANEL (always rendered), then count the side; pick it, wait for the reason group
@@ -219,7 +236,10 @@ export async function abandonUi(c: PageCtx, fixtureId: string, reason: string): 
   const t = actBudget(c, 1);
   const nav = navBudget(c);
   const abandon = page.getByRole("button", { name: NAME.abandon.text, exact: true });
-  await reload(c, { control: abandon, what: "the console's Abandon" });
+  // PR #1133: the Abandon sits in the Match actions panel, closed at md and up behind its toggle (getByRole does not
+  // find a hidden button, so a closed panel shows no Abandon at all); a phone shows it open.
+  await reload(c, { control: matchActionsOr(page, abandon), what: "the console's Abandon" });
+  await openMatchActions(page, t);
   await awaitScreen(() => abandon.waitFor({ state: "visible", timeout: nav }), "the console's Abandon, for a match in play", nav);
   const before = await shoot(c, "12-abandon-before");
   await abandon.click({ timeout: t });
