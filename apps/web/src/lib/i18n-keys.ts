@@ -7487,7 +7487,6 @@ export type DictionaryKey =
   | "settings.team.actionFailed"
   | "settings.team.copyLink.copied"
   | "settings.team.copyLink.cta"
-  | "settings.team.copyLink.label"
   | "settings.team.copyLink.title"
   | "settings.team.inviteEmail.expires"
   | "settings.team.inviteEmail.label"

@@ -162,9 +162,12 @@ export function OrgTeam({
       }),
     );
 
-  const revokeInvite = (token: string) =>
+  /** By the invite's id: an email-bound invite reaches this panel without its
+   *  token (that goes only into the invitee's email), and a link is revoked the
+   *  same way so there is one path. */
+  const revokeInvite = (inviteId: string) =>
     run(() =>
-      api(`/api/orgs/${orgId}/invites/${token}/revoke`, { method: "POST" }),
+      api(`/api/orgs/${orgId}/invites/${inviteId}/revoke`, { method: "POST" }),
     );
 
   const changeRole = (userId: string, newRole: OrgRole) =>
@@ -328,16 +331,19 @@ export function OrgTeam({
                     {i.email}
                   </span>
                   {/* Meta wraps to its own full-width line on phones — the
-                      address keeps the room (v3/02 §3.1, same as members). */}
+                      address keeps the room (v3/02 §3.1, same as members).
+                      No copy-link here: the personal link signs a new or
+                      unverified account in, so it reaches the invitee's
+                      mailbox only and never this panel (the list carries no
+                      token for an email invite). */}
                   <span className="flex w-full items-center justify-end gap-3 sm:w-auto sm:shrink-0">
                     {i.expires_at && (
                       <span className="shrink-0 text-xs text-slate-500">
                         {msg("settings.team.inviteEmail.expires")} <ClientTime value={i.expires_at} mode="date" />
                       </span>
                     )}
-                    <CopyLinkButton token={i.token} />
                     <button
-                      onClick={() => revokeInvite(i.token)}
+                      onClick={() => revokeInvite(i.id)}
                       disabled={busy}
                       className="shrink-0 text-xs text-red-500 hover:text-red-700"
                     >
@@ -387,7 +393,7 @@ export function OrgTeam({
                   <span className={`badge shrink-0 ${ROLE_BADGE[i.role]}`}>
                     {roleLabel(msg, i.role)}
                   </span>
-                  <InviteLink token={i.token} />
+                  {i.token && <InviteLink token={i.token} />}
                   <span className="flex w-full items-center justify-end gap-3 sm:w-auto sm:shrink-0">
                     <span className="shrink-0 text-xs text-slate-500">
                       {i.max_uses === 0 && i.used_count > 0 && (
@@ -400,7 +406,7 @@ export function OrgTeam({
                       )}
                     </span>
                     <button
-                      onClick={() => revokeInvite(i.token)}
+                      onClick={() => revokeInvite(i.id)}
                       disabled={busy}
                       className="shrink-0 text-xs text-red-500 hover:text-red-700"
                     >
@@ -447,33 +453,6 @@ function InviteLink({ token }: { token: string }) {
       title={msg("settings.team.copyLink.title")}
     >
       {copied ? msg("settings.team.copyLink.copied") : msg("settings.team.copyLink.cta", { masked })}
-    </button>
-  );
-}
-
-/** Compact copy affordance for email-invite rows (the address is the
- *  identity there; the URL itself would just be noise). */
-function CopyLinkButton({ token }: { token: string }) {
-  const msg = useMsg();
-  const [copied, setCopied] = useState(false);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(joinUrl(token));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  }
-
-  return (
-    <button
-      onClick={copy}
-      className="shrink-0 text-xs text-purple-700 hover:underline"
-      title={msg("settings.team.copyLink.title")}
-    >
-      {copied ? msg("settings.team.copyLink.copied") : msg("settings.team.copyLink.label")}
     </button>
   );
 }

@@ -3,15 +3,12 @@ import { requireOrgRole } from "@/lib/auth";
 import { handler } from "@/lib/http";
 import { baseUrl } from "@/lib/oauth";
 import { orgInviteEmail } from "@/lib/email";
-import { createInvite } from "@/server/usecases/invites";
+import { createInvite, inviteForEditor, type StoredInvite } from "@/server/usecases/invites";
 import { dispatchNow, enqueueEmail, expiryWithin, recipientLocale } from "@/server/email-outbox";
-import {
-  EDITOR_ROLES,
-  createInviteSchema,
-  type OrgInvite,
-} from "@/lib/types";
+import { EDITOR_ROLES, createInviteSchema } from "@/lib/types";
 
-/** List invite links for an org (editors only). */
+/** List invite links for an org (editors only). An email-bound invite is listed WITHOUT its token: the token is the
+ *  invitee's one-click sign-in and goes into their email only (`inviteForEditor`). */
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -19,12 +16,13 @@ export async function GET(
   return handler(async () => {
     const { id } = await params;
     await requireOrgRole(id, EDITOR_ROLES);
-    return sql<OrgInvite[]>`
+    const rows = await sql<StoredInvite[]>`
       select id, org_id, role, email, token, expires_at, max_uses,
              used_count, revoked, created_at
       from org_invites
       where org_id = ${id}
       order by created_at desc`;
+    return rows.map(inviteForEditor);
   });
 }
 
@@ -38,7 +36,8 @@ export async function GET(
  *  link, so a second invite to the same address is a second email, not a
  *  replacement). The language is the org's default: the invitee may have no
  *  account, and none is looked up by address. The first attempt is made here,
- *  after commit, and `email_sent` is its outcome. */
+ *  after commit, and `email_sent` is its outcome. The answer is `inviteForEditor` of the invite: an email invite's
+ *  token is in the email and NOT in this answer. */
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -65,11 +64,13 @@ export async function POST(
       });
       return { invite, outboxId };
     });
-    if (outboxId === null) return invite;
+    if (outboxId === null) return inviteForEditor(invite);
 
     // email_sent=false is not an error: the outbox keeps trying (or has given
-    // up), and the UI offers the personal link for manual sharing meanwhile.
+    // up). The personal link is NOT offered for manual sharing meanwhile: it
+    // would sign a stranger in as the invitee. The UI says the mail may be late
+    // and points at revoking it and sharing an invite link instead.
     const email_sent = (await dispatchNow([outboxId])).get(outboxId) === "sent";
-    return { ...invite, email_sent };
+    return { ...inviteForEditor(invite), email_sent };
   });
 }
