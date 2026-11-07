@@ -37,6 +37,9 @@ import {
   frozenCompetitionIds,
   PUBLIC_DASHBOARD_STATUSES,
 } from "./entitlement-freeze";
+import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { openStageState, type OpenStageFixtureRow } from "@/server/engine-db/stage-finals";
+import type { OpenStageRow } from "@/lib/open-stages";
 
 export interface CompetitionRow {
   id: string;
@@ -469,6 +472,41 @@ export async function getCompetition(auth: AuthCtx, id: string): Promise<Competi
   if (!row) throw new HttpError(404, "competition not found");
   const frozen = await frozenCompetitionIds(auth.orgId);
   return { ...row, frozen: frozen.has(row.id) };
+}
+
+/**
+ * W4 T21 (AN-1, X-CH-8; owner pick R24 4A, ruling 273): every stage of the competition still open — what the
+ * Complete-competition warning lists. Completing a competition WARNS and never refuses (`patchCompetition` is
+ * unchanged): prod held a completed competition whose knockout final was decided while its stage was never completed,
+ * so the bracket never ranked. A read only. Archived divisions are left out (they are off the competition's pages);
+ * divisions in the order the competition lists them (`listDivisions`: created_at, id), stages by their seq.
+ *
+ * Each stage's state is `openStageState` (engine-db/stage-finals.ts), over the ONE rule the desk's red
+ * `final_decided` row reads: a bracket with every match settled waits only for Complete stage.
+ */
+export async function openStagesOf(auth: AuthCtx, competitionId: string): Promise<OpenStageRow[]> {
+  return withTenant(auth.orgId, async (tx) => {
+    const stages = await tx<{ id: string; kind: string; name: string; seq: number; division_name: string }[]>`
+      select s.id, s.kind, s.name, s.seq, d.name as division_name
+        from stages s
+        join divisions d on d.id = s.division_id
+       where d.competition_id = ${competitionId}
+         and d.archived_at is null
+         and s.status <> 'complete'
+       order by d.created_at, d.id, s.seq`;
+    if (stages.length === 0) return [];
+    const rows = await tx<(OpenStageFixtureRow & { stage_id: string })[]>`
+      select f.stage_id, f.status, f.outcome, f.ext_key, f.home_entrant_id, f.away_entrant_id,
+             ${hasActiveAbandonSql(tx)} as has_active_abandon,
+             ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
+             ${hasActiveAbandonSql(tx, "f", { noResult: true })} as no_result
+        from fixtures f
+       where f.stage_id in ${tx(stages.map((s) => s.id))}`;
+    return stages.map((s) => {
+      const { state, matchesLeft } = openStageState(s.kind, rows.filter((r) => r.stage_id === s.id));
+      return { stageId: s.id, divisionName: s.division_name, seq: s.seq, stageName: s.name, state, matchesLeft };
+    });
+  });
 }
 
 // Activation funnel (feature 1): `competition_made_public` fires exactly once

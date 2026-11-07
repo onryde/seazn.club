@@ -123,6 +123,7 @@ describe("PhasePill", () => {
     ["needs_fixtures", "Needs fixtures", { kind: "needs_fixtures", stageName: "Finals" }],
     ["no_scorer", "No scorer", { kind: "no_scorer", count: 1, fixtureIds: ["f"], minutesSinceKickoff: 4 }],
     ["needs_decision", "Needs a decision", { kind: "needs_decision", count: 1, fixtureIds: ["f"] }],
+    ["final_decided", "Final decided", { kind: "final_decided", stageName: "Knockout" }],
   ] as const)("RED_PILL_KEY, alone: %s prints its own word", (kind, word, attention) => {
     const html = renderToStaticMarkup(<PhasePill dict={en} phase="scheduled" attention={[attention as Attention]} />);
     expect(html).toContain(`data-pill="${kind}"`);
@@ -399,6 +400,26 @@ describe("desk.* copy (review round 3 — pluralization and subject-verb agreeme
     expect(html).toContain('data-pill="needs_decision"');
     expect(html).not.toContain("Finished");
   });
+  // W4 T21 (AN-1, X-CH-8). Empty case first: no attention, no row.
+  it("W4 final_decided: no decided final builds no row", () => {
+    expect(needsYouItems(en, desk(div({ attention: [] })), names, "org", "comp", "en").filter((i) => i.kind === "final_decided")).toEqual([]);
+  });
+  it("W4 final_decided: ONE red row naming the stage, whose action is the fixtures tab's own Complete stage", () => {
+    const d = div({ attention: [{ kind: "final_decided", stageName: "Knockout" }] });
+    const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "final_decided", severity: "red" });
+    expect(items[0].title).toBe(t(en, "desk.needsYou.final_decided", { division: "Premier Division", stage: "Knockout" }));
+    expect(items[0].title).toContain("Knockout");
+    expect(items[0].sub).toBe(en["desk.needsYou.final_decided.sub"]);
+    // The landing button's OWN key (the action-label sweep in competition-desk-actions.spec.ts finds it there).
+    expect(items[0].action).toEqual({ label: en["schedule.complete"], href: "/o/org/c/comp/d/premier-division?tab=fixtures" });
+  });
+  it("W4 final_decided: the decided bracket reads its red pill, never Finished (red attention outranks the phase)", () => {
+    const html = renderToStaticMarkup(<PhasePill dict={en} phase="finished" attention={[{ kind: "final_decided", stageName: "Knockout" }]} />);
+    expect(html).toContain('data-pill="final_decided"');
+    expect(html).not.toContain("Finished");
+  });
   it("K1: needs_fixtures builds a row naming the stage, with the fixtures-tab action", () => {
     const d = div({ attention: [{ kind: "needs_fixtures", stageName: "Finals" }] });
     const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
@@ -485,7 +506,7 @@ describe("DivisionLedger", () => {
   it("F1: a started division with generated-but-unscheduled fixtures renders setting_up with its played/unscheduled counts", () => {
     const phaseInput: PhaseInput = {
       divisionStatus: "active",
-      stages: [{ id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true, timing: null, sourceReady: false, proposal: "none" as const }],
+      stages: [{ id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true, timing: null, sourceReady: false, proposal: "none" as const, finalDecided: false }],
       fixtures: Array.from({ length: 6 }, (_, i) => ({
         id: `f${i}`, status: "scheduled", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 90, hasScorer: false,
         stageId: "s1", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false,
@@ -580,6 +601,17 @@ describe("DivisionLedger", () => {
     expect(html).toContain("Open fixtures");
     expect(html).toContain('href="/o/org/c/comp/d/u16-cup?tab=fixtures"');
     expect(html).toContain('data-pill="needs_fixtures"');
+  });
+  it("W4 final_decided: the mobile card carries Complete stage to the fixtures tab, on a FINISHED-phase row", () => {
+    const d = div({ phase: "finished", played: 7, total: 7, attention: [{ kind: "final_decided", stageName: "Knockout" }] });
+    const html = renderToStaticMarkup(
+      <DivisionLedger page={1} showFinished={false} canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+        rows={[{ id: "d1", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: d, statusLine: "7 of 7 played" }]} />,
+    );
+    // A finished division that still owes its completion is never hidden by the default view.
+    expect(html).toContain('data-pill="final_decided"');
+    expect(html).toContain(en["schedule.complete"]);
+    expect(html).toContain('href="/o/org/c/comp/d/u16-cup?tab=fixtures"');
   });
   // F3 fix (final review, Important): the mobile card's own red action
   // button reads `no_scorer.fixtureIds` now, not a single `fixtureId` —

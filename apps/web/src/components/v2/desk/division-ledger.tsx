@@ -88,10 +88,14 @@ function nextLine(dict: Dict, d: DeskDivision, locale: string, nowMs: number): s
  *  on the stage before it and "Generate fixtures". */
 function redAction(dict: Dict, d: DeskDivision, org: string, comp: string, slug: string): { label: string; href: string } | null {
   const a = d.attention.find(
-    (x): x is Extract<Attention, { kind: "needs_draw" | "needs_fixtures" | "no_scorer" }> =>
-      x.kind === "needs_draw" || x.kind === "needs_fixtures" || x.kind === "no_scorer",
+    (x): x is Extract<Attention, { kind: "needs_draw" | "needs_fixtures" | "final_decided" | "no_scorer" }> =>
+      x.kind === "needs_draw" || x.kind === "needs_fixtures" || x.kind === "final_decided" || x.kind === "no_scorer",
   );
   if (!a) return null;
+  // W4 T21 (AN-1, X-CH-8): the fixtures tab's own Complete stage, as the Needs-you row says it.
+  if (a.kind === "final_decided") {
+    return { label: t(dict, "schedule.complete"), href: routes.division(org, comp, slug, "fixtures") };
+  }
   if (a.kind === "needs_draw") {
     // M1 (fix round I): the panel's OWN key for whichever door it is showing
     // — see needs-you.tsx's `DRAW_DOOR_KEY`. This row and the Needs-you row

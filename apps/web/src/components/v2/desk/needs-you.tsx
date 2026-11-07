@@ -203,6 +203,16 @@ export function needsYouItems(
           });
           break;
         }
+        // W4 T21 (AN-1, X-CH-8): a bracket played out and never completed. The action is the fixtures tab's own
+        // Complete stage — its label is that button's key, so the row and the button it points at cannot drift.
+        case "final_decided":
+          items.push({
+            key: needsYouKey(d.id, "final_decided"), severity: sev, kind: a.kind,
+            title: t(dict, "desk.needsYou.final_decided", { division: d.name, stage: a.stageName }),
+            sub: t(dict, "desk.needsYou.final_decided.sub"),
+            action: { label: t(dict, "schedule.complete"), href: routes.division(org, comp, d.slug, "fixtures") },
+          });
+          break;
         case "registrations_waiting":
           waiting += a.count; // one competition-level row, not one per division
           break;

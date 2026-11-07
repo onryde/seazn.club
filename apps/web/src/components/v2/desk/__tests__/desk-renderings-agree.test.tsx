@@ -87,6 +87,10 @@ const UNREACHABLE: Record<string, string> = {
   // W2a (addendum 9): a HELD fixture — `needs_decision`, or a recorded abandon awaiting its settle — is live
   // (`isLiveFixture`), so rule 2 refuses `finished` while one exists. That is the whole point of the row.
   "finished/needs_decision": "a held fixture is live, which blocks rule 2",
+  // W4 T21: a decided final is a PLAYED match. Rule 1's `setup` division has none; rule 4 needs the lowest open stage to
+  // owe work, and the stage whose final is decided owes none (it has fixtures and no draw); rule 6 falls back to
+  // `setting_up` only when nothing has been played.
+  "setting_up/final_decided": "a decided final is played, and the stage holding it owes no work",
 };
 
 type Shape = {
@@ -109,7 +113,7 @@ const FUTURE = "2026-09-19T09:00:00Z";
 
 const st = (o: Partial<PhaseStage> = {}): PhaseStage => ({
   id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true,
-  timing: null, sourceReady: false, proposal: "none", ...o,
+  timing: null, sourceReady: false, proposal: "none", finalDecided: false, ...o,
 });
 /** A stage whose TBD bracket is generated and whose sources are complete —
  *  the ONLY state in which the panel's draw door both renders and works. */
@@ -265,6 +269,23 @@ const SHAPES: Shape[] = [
     stages: [st({ id: "ko", name: "Knockout" })],
     fixtures: [fxt({ id: "a", stageId: "ko", status: "needs_decision", scheduledAt: null }),
                fxt({ id: "b", stageId: "ko", status: "in_play", hasScorer: true })],
+  },
+  // W4 T21 (AN-1, X-CH-8): the main draw's final decided, its stage never completed (auto-advance off). Alone it reads
+  // Finished — the AN-1 desk; beside a Plate still being played or dated it reads match day or scheduled.
+  {
+    why: "finished/final_decided — AN-1: every match of the knockout decided, the stage never completed",
+    stages: [st({ id: "ko", name: "Knockout", finalDecided: true })],
+    fixtures: [fxt({ id: "a", stageId: "ko" }), fxt({ id: "b", stageId: "ko" }), fxt({ id: "c", stageId: "ko" })],
+  },
+  {
+    why: "match_day/final_decided — the main draw decided and never completed, its Plate being played",
+    stages: [st({ id: "ko", name: "Knockout", finalDecided: true }), st({ id: "pl", name: "Plate", seq: 2 })],
+    fixtures: [fxt({ id: "a", stageId: "ko" }), fxt({ id: "b", stageId: "pl", status: "in_play", hasScorer: true })],
+  },
+  {
+    why: "scheduled/final_decided — the main draw decided and never completed, its Plate final dated",
+    stages: [st({ id: "ko", name: "Knockout", finalDecided: true }), st({ id: "pl", name: "Plate", seq: 2 })],
+    fixtures: [fxt({ id: "a", stageId: "ko" }), fxt({ id: "b", stageId: "pl", status: "scheduled", scheduledAt: FUTURE })],
   },
   {
     why: "finished/registrations_waiting — the season is over and an entry was never dealt with",

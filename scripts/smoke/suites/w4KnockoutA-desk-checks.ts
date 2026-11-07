@@ -141,3 +141,83 @@ export async function w4aDeskK12Check(): Promise<void> {
     );
   }
 }
+
+/** Record a generic result on one fixture through the scoring API (optimistic concurrency on `last_seq`). */
+async function scoreGeneric(owner: Session, fixtureId: string, p1Score: number, p2Score: number): Promise<number> {
+  const state = v1data<{ last_seq: number } | undefined>(await v1(owner, `/api/v1/fixtures/${fixtureId}/state`));
+  const res = await v1(owner, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+    expected_seq: state?.last_seq ?? 0,
+    type: "generic.result",
+    payload: { p1Score, p2Score },
+  });
+  return res.status;
+}
+
+/** How many times `attr="value"` appears in the markup — anchored on `="`, never a bare word the dictionary also holds. */
+const countAttr = (body: string, attr: string, value: string) => body.split(`${attr}="${value}"`).length - 1;
+
+/**
+ * W4 T21 (AN-1, X-CH-8; owner pick R24 4A): a knockout played out with auto-advance off leaves its stage open. The
+ * desk raises ONE red "Final decided" row for it; completing the competition is never refused, and the settings page
+ * of a competition saved as completed lists the open stage with its Complete stage; completing the stage takes both
+ * away. Every read is anchored on markup (`data-*="…"`), never on a word the serialised dictionary also carries.
+ */
+export async function w4aDeskXch8Check(): Promise<void> {
+  const { owner, orgSlug } = await organiser("w4adeskxch8");
+  const k = await startedKnockout(owner, "W4A XCH8", 4);
+  const semis = k.drawn.filter((f) => f.home_entrant_id && f.away_entrant_id);
+  check(
+    `w4a desk X-CH-8: a started knockout of four — ${k.drawn.length} fixture(s) read, ${semis.length} seated semi-final(s)`,
+    k.ok && orgSlug !== "" && semis.length === 2,
+  );
+  if (semis.length !== 2) return;
+  const semiScores = [];
+  for (const sf of semis) semiScores.push(await scoreGeneric(owner, sf.id, 3, 1));
+  const final = (await k.fixtures()).find((f) => !semis.some((s) => s.id === f.id));
+  const finalScore = final?.home_entrant_id && final.away_entrant_id ? await scoreGeneric(owner, final.id, 3, 1) : 0;
+  const played = await k.fixtures();
+  const stageStatus = async () => v1data<{ status: string } | undefined>(await v1(owner, `/api/v1/stages/${k.stageId}`))?.status;
+  const before = await stageStatus();
+  check(
+    `w4a desk X-CH-8: the bracket is played out (results ${[...semiScores, finalScore].join(", ")}; ${played.length} fixture(s), ` +
+      `${played.filter((f) => f.status === "decided").length} decided) and its stage stays ${before}`,
+    played.length === 3 && played.every((f) => f.status === "decided") && before === "active",
+  );
+
+  const deskPath = `/o/${orgSlug}/c/${k.compSlug}`;
+  const desk = await html(owner, deskPath);
+  const rows = countAttr(desk.body, "data-attention", "final_decided");
+  check(`w4a desk X-CH-8: the desk (${desk.status}) raises ONE "Final decided" row — ${rows} read`, desk.status === 200 && rows === 1);
+
+  const patched = await v1(owner, `/api/v1/competitions/${k.compId}`, "PATCH", { status: "completed" });
+  check(`w4a desk X-CH-8: completing the competition is never refused (${patched.status})`, patched.status === 200);
+
+  const settingsPath = `${deskPath}/settings`;
+  const settings = await html(owner, settingsPath);
+  const listed = [...settings.body.matchAll(/data-open-stage="([^"]+)"/g)].map((m) => m[1]);
+  check(
+    `w4a desk X-CH-8: settings (${settings.status}) of the completed competition warns — ${listed.length} open stage(s) listed, ` +
+      `the stage's state ${countAttr(settings.body, "data-state", "final_decided") === 1 ? "final_decided" : "missing"}, Complete stage offered ` +
+      `${countAttr(settings.body, "data-complete-stage", k.stageId)}x`,
+    settings.status === 200 &&
+      countAttr(settings.body, "data-testid", "compset-open-stages") === 1 &&
+      listed.length === 1 &&
+      listed[0] === k.stageId &&
+      countAttr(settings.body, "data-state", "final_decided") === 1 &&
+      countAttr(settings.body, "data-complete-stage", k.stageId) === 1,
+  );
+
+  const completed = await v1(owner, `/api/v1/stages/${k.stageId}/complete`, "POST", {});
+  const after = await stageStatus();
+  const settingsAfter = await html(owner, settingsPath);
+  const deskAfter = await html(owner, deskPath);
+  check(
+    `w4a desk X-CH-8: Complete stage (${completed.status}) completes it (${after}); the warning and the desk row are gone`,
+    completed.status < 300 &&
+      after === "complete" &&
+      settingsAfter.status === 200 &&
+      countAttr(settingsAfter.body, "data-testid", "compset-open-stages") === 0 &&
+      deskAfter.status === 200 &&
+      countAttr(deskAfter.body, "data-attention", "final_decided") === 0,
+  );
+}
