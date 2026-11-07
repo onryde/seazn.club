@@ -81,38 +81,79 @@ describe("unsettledCount (W4 T21)", () => {
 
 describe("openStageState (W4 T21) — what the Complete-competition warning says of an open stage", () => {
   const fx = (o: Partial<OpenStageFixtureRow> = {}): OpenStageFixtureRow => ({
-    ...row(), ext_key: null, home_entrant_id: "h", away_entrant_id: "a", ...o,
+    ...row(), ext_key: null, winner_to_fixture: null, home_entrant_id: "h", away_entrant_id: "a", ...o,
   });
   const wonFx = (o: Partial<OpenStageFixtureRow> = {}) => fx({ status: "decided", outcome: { kind: "win", winner: "h", loser: "a" }, ...o });
+  /** A knockout of four as the generator writes it: two semis feeding the final (`winner_to_fixture`), and — with a
+   *  third-place playoff — the bronze (`ko-3p`), which feeds nothing and is no final (`parseExtKey`). */
+  const semis = () => [wonFx({ winner_to_fixture: "fin" }), wonFx({ winner_to_fixture: "fin" })];
+  const bronze = (o: Partial<OpenStageFixtureRow> = {}) => fx({ ext_key: "ko-3p", ...o });
 
   it("empty case first: a stage with no fixtures has no matches, whatever its kind", () => {
     expect(openStageState("knockout", [])).toEqual({ state: "no_matches", matchesLeft: 0 });
     expect(openStageState("league", [])).toEqual({ state: "no_matches", matchesLeft: 0 });
   });
 
-  it("a bracket is worded by its final; any other stage by its matches left", () => {
-    expect(openStageState("knockout", [wonFx(), wonFx(), wonFx()])).toEqual({ state: "final_decided", matchesLeft: 0 });
-    expect(openStageState("knockout", [wonFx(), wonFx(), fx()])).toEqual({ state: "final_pending", matchesLeft: 1 });
+  it("a bracket is worded by its final: decided with nothing left, still to play, or held for a decision", () => {
+    expect(openStageState("knockout", [...semis(), wonFx()])).toEqual({ state: "final_decided", matchesLeft: 0 });
+    expect(openStageState("knockout", [...semis(), fx()])).toEqual({ state: "final_pending", matchesLeft: 1 });
+    expect(openStageState("knockout", [wonFx({ winner_to_fixture: "fin" }), fx({ winner_to_fixture: "fin" }), fx()]))
+      .toEqual({ state: "final_pending", matchesLeft: 2 });
+    // Held: played and level, or a recorded abandon owed its settle — never "not played yet".
+    expect(openStageState("knockout", [...semis(), fx({ status: "needs_decision", outcome: { kind: "draw" } })]))
+      .toEqual({ state: "final_held", matchesLeft: 1 });
+    expect(openStageState("knockout", [...semis(), fx({ status: "abandoned", has_active_abandon: true })]))
+      .toEqual({ state: "final_held", matchesLeft: 1 });
+  });
+
+  it("AN-2: the final decided with the bronze still to play reads its matches left, never 'final not played'", () => {
+    expect(openStageState("knockout", [...semis(), wonFx(), bronze()])).toEqual({ state: "matches_left", matchesLeft: 1 });
+    // The positive pair: the bronze played too, the bracket waits only for Complete stage.
+    expect(openStageState("knockout", [...semis(), wonFx(), bronze({ status: "decided", outcome: { kind: "win", winner: "h", loser: "a" } })]))
+      .toEqual({ state: "final_decided", matchesLeft: 0 });
+    // And the bronze decided while the final is not: the final is what is pending.
+    expect(openStageState("knockout", [...semis(), fx(), bronze({ status: "decided", outcome: { kind: "win", winner: "h", loser: "a" } })]))
+      .toEqual({ state: "final_pending", matchesLeft: 1 });
+  });
+
+  it("guard: rows that name no final (every one feeding onward — a read missing the final's columns) never claim it settled", () => {
+    // Cannot happen with the generator's rows (a bracket always has a deciding game); if a read ever drops
+    // `winner_to_fixture`/`ext_key`, the warning must fall back to "final not played", never print "matches left" as if
+    // the final were decided.
+    expect(openStageState("knockout", [...semis(), wonFx({ winner_to_fixture: "elsewhere" }), fx({ winner_to_fixture: "elsewhere" })]))
+      .toEqual({ state: "final_pending", matchesLeft: 1 });
+  });
+
+  it("a table stage is worded by its matches left", () => {
     expect(openStageState("league", [wonFx(), fx(), fx({ status: "in_play" })])).toEqual({ state: "matches_left", matchesLeft: 2 });
     expect(openStageState("league", [wonFx(), wonFx()])).toEqual({ state: "all_played", matchesLeft: 0 });
   });
 
-  it("an unseated Swiss bye shell is never a match: not left to play, and alone it is no matches; seated, it is an ordinary row", () => {
-    const byeShell = fx({ ext_key: "sw-r2-bye", home_entrant_id: null, away_entrant_id: null });
-    const board = (o: Partial<OpenStageFixtureRow> = {}) => fx({ ext_key: "sw-r2-b1", ...o });
-    // Round 1 played; round 2's board still to play, its bye shell not yet seated.
-    expect(openStageState("swiss", [wonFx({ ext_key: "sw-r1-b1" }), board(), byeShell])).toEqual({ state: "matches_left", matchesLeft: 1 });
-    expect(openStageState("swiss", [wonFx({ ext_key: "sw-r1-b1" }), byeShell])).toEqual({ state: "all_played", matchesLeft: 0 });
-    expect(openStageState("swiss", [byeShell])).toEqual({ state: "no_matches", matchesLeft: 0 });
-    // The positive pair: a seated bye (Pair filled a side) is a row like any other — here still scheduled, so owed.
-    expect(openStageState("swiss", [fx({ ext_key: "sw-r2-bye", away_entrant_id: null })])).toEqual({ state: "matches_left", matchesLeft: 1 });
+  it("Swiss: a later round's unseated bye shell is never a match left; once seated and awarded it is an ordinary settled row", () => {
+    // The generator mints every declared round's boards and its bye shell up front (stages.ts swissGen). After round 1
+    // of a five-entrant, two-round Swiss: round 1 played (its bye seated and awarded), round 2's two TBD boards still to
+    // play, and its bye shell not yet seated by Pair.
+    const award = { status: "decided", outcome: { kind: "award", winner: "h", reason: "bye" }, away_entrant_id: null } as const;
+    const r1 = [wonFx({ ext_key: "sw-r1-b1" }), wonFx({ ext_key: "sw-r1-b2" }), fx({ ext_key: "sw-r1-bye", ...award })];
+    const r2Shells = [
+      fx({ ext_key: "sw-r2-b1", home_entrant_id: null, away_entrant_id: null }),
+      fx({ ext_key: "sw-r2-b2", home_entrant_id: null, away_entrant_id: null }),
+      fx({ ext_key: "sw-r2-bye", home_entrant_id: null, away_entrant_id: null }),
+    ];
+    expect(openStageState("swiss", [...r1, ...r2Shells])).toEqual({ state: "matches_left", matchesLeft: 2 });
+    // Round 2 paired and played, its bye seated and awarded: every match settled.
+    const r2 = [wonFx({ ext_key: "sw-r2-b1" }), wonFx({ ext_key: "sw-r2-b2" }), fx({ ext_key: "sw-r2-bye", ...award })];
+    expect(openStageState("swiss", [...r1, ...r2])).toEqual({ state: "all_played", matchesLeft: 0 });
+    // The positive pair: a seated bye not yet awarded is a row like any other — still owed.
+    expect(openStageState("swiss", [...r1, fx({ ext_key: "sw-r2-bye", away_entrant_id: null })])).toEqual({ state: "matches_left", matchesLeft: 1 });
   });
 
   it("SWEEP: the cases above reach every state the warning declares (count reported; zero fails)", () => {
     const reached = new Set([
       openStageState("knockout", []).state,
-      openStageState("knockout", [wonFx()]).state,
-      openStageState("knockout", [fx()]).state,
+      openStageState("knockout", [...semis(), wonFx()]).state,
+      openStageState("knockout", [...semis(), fx()]).state,
+      openStageState("knockout", [...semis(), fx({ status: "needs_decision", outcome: { kind: "draw" } })]).state,
       openStageState("league", [fx()]).state,
       openStageState("league", [wonFx()]).state,
     ]);

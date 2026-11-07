@@ -36,6 +36,7 @@ const sayN = (key: string, n: number, vars?: Record<string, string | number>) =>
 const STAGES: OpenStageRow[] = [
   { stageId: "s-ko", divisionName: "Men's Singles A", seq: 1, stageName: "Knockout", state: "final_decided", matchesLeft: 0 },
   { stageId: "s-wd", divisionName: "Women's Doubles", seq: 2, stageName: "Knockout", state: "final_pending", matchesLeft: 3 },
+  { stageId: "s-bd", divisionName: "Boys' Doubles", seq: 1, stageName: "Knockout", state: "final_held", matchesLeft: 1 },
   { stageId: "s-mx", divisionName: "Mixed Doubles", seq: 1, stageName: "League", state: "matches_left", matchesLeft: 3 },
   { stageId: "s-vt", divisionName: "Veterans", seq: 1, stageName: "League", state: "all_played", matchesLeft: 0 },
   { stageId: "s-jr", divisionName: "Juniors", seq: 1, stageName: "League", state: "no_matches", matchesLeft: 0 },
@@ -182,6 +183,12 @@ describe("OpenStagesWarning — the list itself", () => {
     const buttons = completeButtons(warn().tree());
     expect(buttons.map((b) => propsOf(b)["data-complete-stage"])).toEqual(["s-ko", "s-vt"]);
     expect(completeButtons(warn(STAGES, false).tree())).toEqual([]);
+  });
+
+  it("the Complete stage button is a full phone tap target, like the fixtures tab's own (min-h-11)", () => {
+    const buttons = completeButtons(warn().tree());
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const b of buttons) expect(String(propsOf(b).className).split(/\s+/)).toContain("min-h-11");
   });
 
   it("Complete stage POSTs the existing complete route for THAT stage, then refreshes the page", async () => {

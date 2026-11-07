@@ -520,7 +520,7 @@ describe("DivisionLedger", () => {
     const attention = resolveAttention(phaseInput);
     const line = statusLine(en, {
       phase, played: 0, total: 6, unscheduled: 6, inPlay: 0, entrants: 4,
-      next: null, needsDrawStageName: null, locale: "en", displayTz: "Europe/London", now: "2026-09-05T09:00:00Z",
+      next: null, needsDrawStageName: null, finalDecidedStageName: null, locale: "en", displayTz: "Europe/London", now: "2026-09-05T09:00:00Z",
     });
     const d = div({ phase, played: 0, total: 6, unscheduled: 6, next: null, attention });
     const html = renderToStaticMarkup(

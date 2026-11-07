@@ -496,7 +496,7 @@ export async function openStagesOf(auth: AuthCtx, competitionId: string): Promis
        order by d.created_at, d.id, s.seq`;
     if (stages.length === 0) return [];
     const rows = await tx<(OpenStageFixtureRow & { stage_id: string })[]>`
-      select f.stage_id, f.status, f.outcome, f.ext_key, f.home_entrant_id, f.away_entrant_id,
+      select f.stage_id, f.status, f.outcome, f.ext_key, f.winner_to_fixture, f.home_entrant_id, f.away_entrant_id,
              ${hasActiveAbandonSql(tx)} as has_active_abandon,
              ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
              ${hasActiveAbandonSql(tx, "f", { noResult: true })} as no_result

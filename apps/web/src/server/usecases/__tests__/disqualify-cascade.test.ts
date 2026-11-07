@@ -693,11 +693,18 @@ describe.runIf(HAS_DB)("K12 a disqualification walkover is worded as one and cre
       const wdBracket = await bracketBySeed(wdRig.stageId, wdRig.entrants);
       expect(dqBracket.length, "rows compared").toBeGreaterThan(0);
       expect(JSON.stringify(dqBracket)).toBe(JSON.stringify(wdBracket));
+      // The walked semi, expected from the board as it was drawn BEFORE the cascade (never from the row under test):
+      // its seated home seed is awarded the match over the disqualified away seed.
+      const seedOf = (id: string) => `seed${dqRig.entrants.indexOf(id) + 1}`;
+      const homeSeed = seedOf(dqBoard.home_entrant_id!);
+      const awaySeed = seedOf(dqLoser);
+      expect([homeSeed, awaySeed], "premise: both seats are seeded entrants of this rig").not.toContain("seed0");
+      expect(homeSeed).not.toBe(awaySeed);
       const walked = dqBracket.find((r) => r.at === `${dqBoard.round_no}.${dqBoard.seq_in_round}`);
       expect(walked, "the DQ's semi is the cascade's award").toEqual({
         at: `${dqBoard.round_no}.${dqBoard.seq_in_round}`, status: "forfeited",
-        home: walked!.home, away: walked!.away,
-        outcome: { kind: "award", winner: walked!.home, loser: walked!.away, reason: WITHDREW },
+        home: homeSeed, away: awaySeed,
+        outcome: { kind: "award", winner: homeSeed, loser: awaySeed, reason: WITHDREW },
       });
     }, 120_000);
   }

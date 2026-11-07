@@ -13,7 +13,9 @@
 //                       through the same /api/v1 route the settings nudge uses
 //                       (v17 SPEC-4 §7 — there is no other status writer, and a
 //                       second one would be a second place to get authorisation
-//                       and lifecycle events wrong).
+//                       and lifecycle events wrong). Like the settings select, it
+//                       lists the stages still open first (W4 T21 I1,
+//                       `OpenStagesWarning`) — a warning, never a refusal.
 //   "the date moved"  → a link to settings, where `ends_on` is edited. It is a
 //                       date field with a picker, not a one-click answer, so it
 //                       stays where it already works.
@@ -30,16 +32,28 @@ import Link from "@/components/ui/console-link";
 import { CalendarX2 } from "lucide-react";
 import { apiV1 } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { OpenStagesWarning } from "@/components/v2/open-stages-warning";
+import type { OpenStageRow } from "@/lib/open-stages";
+
+const OPEN_STAGES_ID = "wrapup-open-stages";
 
 export function CompetitionWrapUpPrompt({
   competitionId,
   endedOnLabel,
   settingsHref,
+  openStages = [],
+  canCompleteStages = true,
 }: {
   competitionId: string;
   /** `ends_on`, already formatted by the server — see the page for the tz. */
   endedOnLabel: string;
   settingsHref: string;
+  /** W4 T21 review I1 (ruling 273): the competition's open stages (`openStagesOf`). "Mark completed" is a second door
+   *  to `completed`, so it warns exactly as the settings select does — the same list, the same Complete stage — and,
+   *  like it, never refuses. */
+  openStages?: OpenStageRow[];
+  /** False for a frozen competition: the list still shows, with no Complete stage. */
+  canCompleteStages?: boolean;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -79,6 +93,9 @@ export function CompetitionWrapUpPrompt({
           <p className="mt-0.5 text-sm text-amber-800">
             {msg("comp.wrapUp.body", { date: endedOnLabel })}
           </p>
+          {openStages.length > 0 && (
+            <OpenStagesWarning id={OPEN_STAGES_ID} stages={openStages} canComplete={canCompleteStages} />
+          )}
           {error && (
             <p role="alert" className="mt-2 text-sm font-medium text-red-700">
               {error}
@@ -90,6 +107,7 @@ export function CompetitionWrapUpPrompt({
               type="button"
               onClick={() => void markCompleted()}
               disabled={busy}
+              aria-describedby={openStages.length > 0 ? OPEN_STAGES_ID : undefined}
               className="btn btn-primary disabled:opacity-50"
             >
               {busy ? msg("comp.wrapUp.completing") : msg("comp.wrapUp.complete")}

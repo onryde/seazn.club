@@ -4,7 +4,7 @@ import en from "@/dictionaries/en/ui.json";
 import { PhasePill, AttentionChip } from "@/components/v2/desk/phase-pill";
 import { needsYouItems } from "@/components/v2/desk/needs-you";
 import { ProgressionPanel, type SeedProposal } from "@/components/v2/progression-panel";
-import { statusLine } from "@/lib/division-status-line";
+import { statusLine, finalDecidedStageName } from "@/lib/division-status-line";
 import { leadingAttention,
   ATTENTION_SEVERITY, DIVISION_PHASES, DRAW_DOORS, resolveAttention, resolvePhase,
   type Attention, type DivisionPhase, type DrawDoor, type PhaseFixture, type PhaseInput, type PhaseStage,
@@ -437,6 +437,7 @@ const inPlayFixtures = (n: number, divisionId = "d1"): DeskInPlayFixture[] =>
         phase: r.phase, played: r.played, total: r.desk.total, unscheduled: r.desk.unscheduled,
         inPlay: r.desk.in_play, entrants: r.desk.entrants, next: null,
         needsDrawStageName: r.desk.needs_draw_stage?.name ?? null,
+        finalDecidedStageName: finalDecidedStageName(r.desk.attention),
         locale: "en", displayTz: TZ, now: NOW,
       });
       if (r.played > 0 || r.desk.total > 0) expect(line).not.toContain("entrants");
@@ -445,6 +446,12 @@ const inPlayFixtures = (n: number, divisionId = "d1"): DeskInPlayFixture[] =>
       // `setting_up` word.
       if (r.desk.needs_draw_stage && r.desk.in_play === 0) {
         expect(line).toContain(`${r.desk.needs_draw_stage.name} not drawn`);
+      }
+      // W4 T21 M2: a decided final whose stage is still open never reads "complete" beside its red pill.
+      const decided = finalDecidedStageName(r.desk.attention);
+      if (decided !== null && !r.desk.needs_draw_stage && r.desk.in_play === 0) {
+        expect(line).toContain(`${decided} not completed`);
+        expect(line).not.toContain("· complete");
       }
     });
 

@@ -18,6 +18,7 @@ import { onlyCompletionLeft, type OpenStageRow, type OpenStageState } from "@/li
 const STATE_KEY: Record<Exclude<OpenStageState, "matches_left">, MessageKey> = {
   final_decided: "compset.openStages.state.final_decided",
   final_pending: "compset.openStages.state.final_pending",
+  final_held: "compset.openStages.state.final_held",
   all_played: "compset.openStages.state.all_played",
   no_matches: "compset.openStages.state.no_matches",
 };
@@ -93,7 +94,7 @@ export function OpenStagesWarning({
                   data-complete-stage={s.stageId}
                   disabled={busy !== null}
                   onClick={() => void complete(s.stageId)}
-                  className="btn btn-ghost shrink-0 px-2.5 py-1 text-xs"
+                  className="btn btn-ghost min-h-11 shrink-0 px-3 py-1.5 text-xs"
                 >
                   {msg("schedule.complete")}
                 </button>

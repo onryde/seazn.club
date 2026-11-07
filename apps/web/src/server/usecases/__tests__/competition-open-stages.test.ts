@@ -50,13 +50,15 @@ async function org() {
 }
 
 /** One division of four in `competitionId`, its one stage of `kind`; `generate` false leaves the stage empty and unstarted. */
-async function division(auth: AuthCtx, competitionId: string, name: string, kind: "knockout" | "league", generate = true) {
+async function division(
+  auth: AuthCtx, competitionId: string, name: string, kind: "knockout" | "league", generate = true, config: Record<string, unknown> = {},
+) {
   const d = await createDivision(auth, competitionId, {
     name, slug: `${name.toLowerCase().replace(/[^a-z]+/g, "-")}-${randomUUID().slice(0, 6)}`,
     sport_key: "generic", variant_key: "score", config: CONFIG,
   });
   await createEntrants(auth, d.id, ["A", "B", "C", "D"].map((n, i) => ({ kind: "individual", display_name: `${name} ${n}`, seed: i + 1, members: [] })));
-  const [stage] = await createStages(auth, d.id, { seq: 1, kind, name: kind === "knockout" ? "Knockout" : "League", config: {}, progression: null });
+  const [stage] = await createStages(auth, d.id, { seq: 1, kind, name: kind === "knockout" ? "Knockout" : "League", config, progression: null });
   if (generate) {
     await generateStageFixtures(auth, stage!.id);
     await startDivision(auth, d.id);
@@ -123,6 +125,23 @@ describe.skipIf(!HAS_DB)("openStagesOf — what the Complete-competition warning
     expect((await completeStage(auth, decided.stageId, { publish: false })).completed).toBe(true);
     await archiveDivision(auth, empty.divisionId);
     expect((await openStagesOf(auth, comp.id)).map((r) => r.stageId)).toEqual([pending.stageId, left.stageId, allPlayed.stageId]);
+  });
+
+  it("AN-2: a knockout whose final is decided while its bronze is still to play reads '1 match left', never 'final not played'", async () => {
+    const { auth, suffix } = await org();
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "OS AN-2 " + suffix, visibility: "private", branding: {} });
+    const ko = await division(auth, comp.id, "Cup", "knockout", true, { thirdPlace: true });
+    await play(auth, ko.stageId, 2); // the semis seat the final and the bronze
+    const round2 = await sql<{ id: string; ext_key: string | null }[]>`
+      select id, ext_key from fixtures where stage_id = ${ko.stageId} and winner_to_fixture is null order by fixture_no`;
+    const final = round2.find((f) => !(f.ext_key ?? "").endsWith("-3p"));
+    expect(round2.length, "premise: the final and the bronze feed nothing").toBe(2);
+    expect(final, "premise: one of them is the final").toBeDefined();
+    expect((await openStagesOf(auth, comp.id)).map((r) => [r.state, r.matchesLeft]), "both still to play").toEqual([["final_pending", 2]]);
+    await decide(auth, final!.id);
+    expect((await openStagesOf(auth, comp.id)).map((r) => [r.state, r.matchesLeft])).toEqual([["matches_left", 1]]);
+    await play(auth, ko.stageId, 1); // the bronze
+    expect((await openStagesOf(auth, comp.id)).map((r) => [r.state, r.matchesLeft])).toEqual([["final_decided", 0]]);
   });
 
   it("tenancy: another organisation reads nothing of this competition", async () => {

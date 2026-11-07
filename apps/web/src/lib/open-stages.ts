@@ -4,11 +4,14 @@
 
 /** What an open stage is waiting for. Exhaustive: the warning has one line per state.
  *  - `final_decided`: a bracket whose deciding game is settled and nothing else is owed — only Complete stage is left;
- *  - `final_pending`: a bracket whose final is still to be played (or held);
- *  - `matches_left`: any other stage with matches still to play or owed a settle;
+ *  - `final_pending`: a bracket whose final is still to be played;
+ *  - `final_held`: a bracket whose final was played but is held for a decision (level, or a recorded abandon owed its
+ *    settle) — never "not played yet" (W4 T21 review M3);
+ *  - `matches_left`: a table stage with matches still to play or owed a settle — and a bracket whose final IS decided
+ *    while other matches (a bronze) are still owed (AN-2);
  *  - `all_played`: any other stage with every match settled — only Complete stage is left;
  *  - `no_matches`: a stage with no fixtures at all. */
-export const OPEN_STAGE_STATES = ["final_decided", "final_pending", "matches_left", "all_played", "no_matches"] as const;
+export const OPEN_STAGE_STATES = ["final_decided", "final_pending", "final_held", "matches_left", "all_played", "no_matches"] as const;
 export type OpenStageState = (typeof OPEN_STAGE_STATES)[number];
 
 export interface OpenStageRow {
