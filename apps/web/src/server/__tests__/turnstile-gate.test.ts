@@ -3,20 +3,19 @@
 // server/__tests__/turnstile.test.ts proves the judgement; THIS file proves each route actually asks, asks for ITS
 // action, asks before it reads a body, and asks after its first rate limit and not before it.
 //
-// What "the handler body did not run" means here: every one of the six reads its body with `req.json()` (directly, or through
+// What "the handler body did not run" means here: every one of the seven reads its body with `req.json()` (directly, or through
 // `parseBody`), so a request spied on `json` that is refused with that spy untouched never got past the gate. That is a
 // stronger claim than "returned 403" (a gate placed after the read would also return 403) and needs no usecase mocked.
 //
 // The surfaces are typed from the brief; two sweeps cross-check them. One against the actions lib/turnstile.ts DECLARES (a
-// declared action with no surface fails). One against the route TREE (every non-GET handler under app/api/v1/public, auth,
-// funnel and consent is either a surface here or on a reviewed exempt list with a reason; a new public POST that is neither
-// fails, so it cannot ship ungated by omission).
+// declared action with no surface fails). One against the route TREE (every write handler under app/api is a surface here, sits
+// behind a door the reader can detect in the source, or is on a reviewed exempt list with a reason; a new anonymous write that
+// is none of those fails, so it cannot ship ungated by omission).
 //
 // Cloudflare is a stateful fake (global `fetch`): a token is good once, exactly as siteverify says.
 //
 // Sport: not applicable. A bot check is sport-agnostic.
-import { readFileSync, readdirSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const limiter = vi.hoisted(() => ({ calls: 0, refuse: false }));
@@ -59,6 +58,7 @@ vi.mock("@/server/usecases/registration-submit", async (importOriginal) => ({
 
 import { TURNSTILE_ACTIONS, TURNSTILE_ERROR_CODE, TURNSTILE_HEADER, type TurnstileAction } from "@/lib/turnstile";
 import { SITEVERIFY_URL } from "../turnstile";
+import { classifyHandler, classifyTree, gatedActions, writeHandlers, type Handler, type RouteClass } from "./_route-classify";
 import { POST as login } from "@/app/api/auth/magic-link/route";
 import { POST as start } from "@/app/api/funnel/start/route";
 import { POST as register } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
@@ -243,103 +243,151 @@ describe("TURNSTILE=off opens EVERY gated route, and only that value does", () =
   });
 
   it("the surfaces swept ARE the gated routes found in the tree, so a gated route with no surface cannot dodge the switch test", () => {
-    const gatedFiles = sweptWriteRoutes.filter((r) => r.actions.length > 0).map((r) => r.file).sort();
+    const gatedFiles = tree.filter((t) => t.cls === "gated").map((t) => t.handler.file).sort();
     expect(gatedFiles.length).toBeGreaterThan(0);
     expect(gatedFiles).toEqual(SURFACES.map((s) => s.file).sort());
   });
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------
-// The route-tree sweep. The surfaces above prove each GATED route; nothing there can see a public POST that was never gated.
-// This reads the source of every route file under the public/auth/funnel/consent trees, finds each exported non-GET handler, and
-// requires it to be either a surface above or on EXEMPT with a reason. Reading source is the point: a route nobody remembered to
-// add to SURFACES is exactly the one that needs to fail.
+// The route-tree sweep. The surfaces above prove each GATED route; nothing there can see a public write that was never gated.
+// This reads the source of EVERY route file under app/api (_route-classify.ts), finds each exported write handler (POST, PUT,
+// PATCH, DELETE) and says what stands in front of it. A handler that sits behind something the reader can DETECT (a session or
+// API-key door, a staff door, a cron secret, a verified webhook signature, a fake-driver switch, a minted bearer) needs nothing
+// typed here. A handler with nothing detectable in front of it is anonymous, and an anonymous write must be a surface above or on
+// EXEMPT with a reason. Reading source is the point: a route nobody remembered to add anywhere is exactly the one that must fail.
 // ---------------------------------------------------------------------------------------------------------------------------
-const API_DIR = resolve(import.meta.dirname, "../../app/api");
-const SWEPT_ROOTS = ["v1/public", "auth", "funnel", "consent"];
-const WRITE_VERBS = ["POST", "PUT", "PATCH", "DELETE"] as const;
+const SRC_DIR = resolve(import.meta.dirname, "../..");
+const API_DIR = resolve(SRC_DIR, "app/api");
 
-/** The non-GET verbs a route module EXPORTS as handlers: `export function POST`, `export const POST =`, `export { x as POST }`.
- *  An outbound `fetch(url, { method: "POST" })` is not an export and must not count (auth/google/callback has one). */
-function exportedWriteVerbs(src: string): string[] {
-  const verbs = new Set<string>();
-  const verb = WRITE_VERBS.join("|");
-  for (const m of src.matchAll(new RegExp(`export\\s+(?:async\\s+)?function\\s+(${verb})\\b`, "g"))) verbs.add(m[1]!);
-  for (const m of src.matchAll(new RegExp(`export\\s+(?:const|let|var)\\s+(${verb})\\b`, "g"))) verbs.add(m[1]!);
-  for (const m of src.matchAll(/export\s*\{([^}]*)\}/g)) {
-    for (const spec of m[1]!.split(",")) {
-      const exported = spec.trim().split(/\s+as\s+/).pop()?.trim() ?? "";
-      if ((WRITE_VERBS as readonly string[]).includes(exported)) verbs.add(exported);
-    }
-  }
-  return [...verbs].sort();
-}
-
-/** The actions a route file asks Cloudflare for: every `requireTurnstile(req, "<action>")` in it. */
-function gatedActions(src: string): string[] {
-  return [...src.matchAll(/\brequireTurnstile\(\s*req\s*,\s*"([a-z]+)"\s*\)/g)].map((m) => m[1]!);
-}
-
-function routeFiles(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-    const p = resolve(dir, e.name);
-    return e.isDirectory() ? routeFiles(p) : e.name === "route.ts" ? [p] : [];
-  });
-}
-
-/** Non-GET handlers that are deliberately NOT bot-checked. Reviewed 2026-11-05; each needs a reason a future reader can disagree with. */
+/** Anonymous write handlers that are deliberately NOT bot-checked, keyed `<file> <VERB>`. Reviewed 2026-11-07; each reason is
+ *  what the handler does today, so a future reader can disagree with it. A handler a detectable door holds back is NOT listed:
+ *  the sweep fails an entry that a rule now explains. */
 const EXEMPT: Record<string, string> = {
-  "auth/change-email/route.ts": "needs a signed-in session (requireUser); not an anonymous surface",
-  "auth/logout/route.ts": "ends the caller's own session; sends no mail and writes nothing a bot can use",
-  "auth/magic-link/consume/route.ts": "redeems an emailed one-time token: the token is the credential, spent on use, per-IP AUTH_LIMIT",
-  "auth/verify-email/route.ts": "redeems an emailed one-time token: the token is the credential, per-IP AUTH_LIMIT",
-  "funnel/claim/route.ts": "redeems an emailed one-time funnel token: the token is the credential, per-IP AUTH_LIMIT",
-  "funnel/remind/route.ts": "cron endpoint behind the x-cron-secret header; never reached from a browser",
-  "consent/route.ts": "cookie-consent receipt: writes one row, sends no mail, per-IP CONSENT_LIMIT; a challenge would block the banner itself",
-  "v1/public/registrations/[id]/checkout/route.ts": "pay: needs the registrant's own token for an existing registration, per-IP CHECKOUT_LIMIT; revisit if Checkout Session spend becomes a target",
+  "auth/logout/route.ts POST": "ends the caller's own session; takes no input, writes nothing and sends nothing a bot could use",
+  "auth/magic-link/consume/route.ts POST": "redeems an emailed one-time token: the token is the credential and is spent on use; per-IP AUTH_LIMIT",
+  "auth/verify-email/route.ts POST": "redeems an emailed one-time token: the token is the credential and is spent on use; per-IP AUTH_LIMIT",
+  "funnel/claim/route.ts POST": "redeems an emailed one-time funnel token (mailed only after the bot-checked start); per-IP AUTH_LIMIT",
+  "invites/[token]/claim/route.ts POST":
+    "redeems an emailed invite token: the token proves the inbox and is the credential, it mints a session only for a new or unverified invitee; POST-only, per-IP AUTH_LIMIT",
+  "claims/[token]/accept/route.ts POST":
+    "redeems an emailed person-claim token: signed in it links the caller's own account, signed out it needs the emailed secret plus a same-origin request; per-IP AUTH_LIMIT",
+  "public/format-preview/route.ts POST":
+    "pure computation over placeholder entrants for the home configurator: no database, no session, no mail; the answer is cached per (format, entrants); per-IP limit of 30 a minute",
+  "consent/route.ts POST": "cookie-consent receipt: writes one row, sends no mail; per-IP CONSENT_LIMIT; a challenge would block the consent banner itself",
+  "v1/public/registrations/[id]/checkout/route.ts POST":
+    "pay: needs the registrant's own token for an existing registration, per-IP CHECKOUT_LIMIT; revisit if Checkout Session spend becomes a target",
 };
 
-const sweptWriteRoutes = SWEPT_ROOTS.flatMap((root) => routeFiles(resolve(API_DIR, root)))
-  .map((abs) => ({ file: relative(API_DIR, abs), src: readFileSync(abs, "utf8") }))
-  .map((r) => ({ ...r, verbs: exportedWriteVerbs(r.src), actions: gatedActions(r.src) }))
-  .filter((r) => r.verbs.length > 0);
+const tree = classifyTree(API_DIR, SRC_DIR);
+const key = (h: Handler) => `${h.file} ${h.verb}`;
+const byClass = (cls: RouteClass) => tree.filter((t) => t.cls === cls);
 
-describe("route-tree sweep: every public non-GET handler is gated or reviewed-exempt", () => {
-  it("the detectors see each export form and ignore an outbound fetch method (a detector that finds nothing proves nothing)", () => {
-    expect(exportedWriteVerbs("export async function POST(req: Request) {}")).toEqual(["POST"]);
-    expect(exportedWriteVerbs("export function DELETE() {}\nexport const PATCH = handler(x);")).toEqual(["DELETE", "PATCH"]);
-    expect(exportedWriteVerbs("const h = x;\nexport { h as PUT, other, GET, POST };")).toEqual(["POST", "PUT"]);
-    expect(exportedWriteVerbs('export async function GET() {}\nawait fetch(u, { method: "POST" });')).toEqual([]);
+describe("route-tree sweep: every write handler under app/api is gated, behind a detectable door, or reviewed-exempt", () => {
+  const door = (src: string, over: { readModule?: (s: string) => string | undefined } = {}): RouteClass =>
+    classifyHandler(writeHandlers("x/route.ts", src)[0]!, { readModule: over.readModule ?? (() => undefined) });
+
+  it("the detectors see each export form, and a guard NAMED in a comment, or on a GET, or on another verb, is not a guard on this handler", () => {
+    const verbs = (src: string) => writeHandlers("x/route.ts", src).map((h) => h.verb).sort();
+    expect(verbs("export async function POST(req: Request) {}")).toEqual(["POST"]);
+    expect(verbs("export function DELETE() {}\nexport const PATCH = handler(x);")).toEqual(["DELETE", "PATCH"]);
+    expect(verbs("const h = x;\nexport { h as PUT, other, GET, POST };")).toEqual(["POST", "PUT"]);
+    expect(verbs('export async function GET() {}\nawait fetch(u, { method: "POST" });')).toEqual([]);
     expect(gatedActions('await requireTurnstile(req, "login");\nawait requireTurnstile( req ,"join" )')).toEqual(["login", "join"]);
     expect(gatedActions("// requireTurnstile is mentioned here\nawait other(req, 'login')")).toEqual([]);
+    // A door in a comment is not a door.
+    expect(door("export async function POST() {\n  // requireUser() would go here\n  /* requireStaff() */\n  return 1;\n}")).toBe("anonymous");
+    // A door on the GET does not hold the POST back (handlers are read one by one, up to the next export).
+    expect(door("export async function GET() { await requireUser(); }\nexport async function POST() { return 1; }")).toBe("anonymous");
+    expect(writeHandlers("x/route.ts", "export async function GET() { await requireUser(); }\nexport async function POST() { return 1; }")).toHaveLength(1);
+    // A bare re-export names no body, so it cannot be explained and has to be argued for.
+    expect(door("export { POST } from '../other/route';")).toBe("anonymous");
   });
 
-  it("anti-vacuity: the sweep found the route tree (every surface file, every exempt file) and checked a real number of routes", () => {
-    const found = new Set(sweptWriteRoutes.map((r) => r.file));
-    // 7 gated + 8 exempt. Typed here, not derived from the lists under test: a lost directory or a broken walker shrinks this.
-    expect(sweptWriteRoutes.length, "non-GET route files found").toBe(15);
-    for (const s of SURFACES) expect(found.has(s.file), `${s.file} is a swept write route`).toBe(true);
-    for (const f of Object.keys(EXEMPT)) expect(found.has(f), `${f} is a swept write route`).toBe(true);
+  it("each class is recognised from the source it names (a rule that matches nothing proves nothing), and not from a lookalike", () => {
+    const cases: [RouteClass, string][] = [
+      ["gated", 'export async function POST(req: Request) { await requireTurnstile(req, "login"); }'],
+      ["identity", "export async function POST(req: Request) { const ctx = await requireResourceAuth(req, 'fixture', id, 'write'); }"],
+      ["identity", "export async function POST(req: Request) { await matchRoomIdentity(req); }"],
+      ["staff", "export async function POST() { await requireSuperadmin(); }"],
+      ["billing", "export async function POST() { await requireBillingOwner(); }"],
+      ["cron", "const s = process.env.CRON_SECRET;\nexport async function POST(req: Request) { req.headers.get('x-cron-secret'); }"],
+      ["webhook", "export async function POST(req: Request) { stripe.webhooks.constructEvent(raw, sig, secret); }"],
+      ["harness", "export async function POST() { if (!fakeControlEnabled(process.env)) throw new Error(); }"],
+      ["bearer", "export async function POST(req: Request) { const t = bearerOf(req); }"],
+      ["session401", "export async function POST() { const u = await getCurrentUser(); if (!u) return json({}, { status: 401 }); }"],
+    ];
+    for (const [want, src] of cases) expect([want, door(src)]).toEqual([want, want]);
+    // Lookalikes: the secret header with no CRON_SECRET in the file, getCurrentUser without a 401 (consent reads it optionally).
+    expect(door("export async function POST(req: Request) { req.headers.get('x-cron-secret'); }")).toBe("anonymous");
+    expect(door("export async function POST() { const u = await getCurrentUser(); return u?.id; }")).toBe("anonymous");
+    expect(door("export async function POST() { await requireUserAgent(); }")).toBe("anonymous");
   });
 
-  it("every swept non-GET route is a surface (gated for its declared action) or exempt, never both, never neither", () => {
+  it("one hop: a door inside the usecase the handler calls counts; a usecase with no door, or an uncalled import, does not", () => {
+    const route = "import { setThing, other } from '@/server/usecases/thing';\nexport async function POST() { return setThing(1); }";
+    const guarded = () => "export async function setThing(n: number) {\n  await requireBillingOwner();\n}\nexport async function other() {}";
+    const unguarded = () => "export async function setThing(n: number) { return n; }\nexport async function other() { await requireUser(); }";
+    expect(door(route, { readModule: guarded })).toBe("via-usecase");
+    expect(door(route, { readModule: unguarded }), "the door is in `other`, which this handler does not call").toBe("anonymous");
+    expect(door(route, { readModule: () => undefined })).toBe("anonymous");
+    const commented = () => "export async function setThing() {\n  // await requireUser();\n}";
+    expect(door(route, { readModule: commented })).toBe("anonymous");
+  });
+
+  it("anti-vacuity: the walker found the tree, every surface file is a swept gated handler, and every class the rules exist for occurs", () => {
+    const files = new Set(tree.map((t) => t.handler.file));
+    expect(tree.length, "write handlers found under app/api").toBeGreaterThan(250);
+    expect(files.size, "route files with a write handler").toBeGreaterThan(250);
+    // Counts are floors for the big classes (the tree grows) and exact for the small ones the rules were written around.
+    const floors: Partial<Record<RouteClass, number>> = { identity: 150, staff: 15, cron: 10, billing: 5, bearer: 4, session401: 3, webhook: 2, harness: 2, "via-usecase": 3 };
+    for (const [cls, floor] of Object.entries(floors) as [RouteClass, number][]) {
+      expect(byClass(cls).length, `handlers classified ${cls}`).toBeGreaterThanOrEqual(floor);
+    }
+    expect(byClass("gated").map((t) => t.handler.file).sort()).toEqual(SURFACES.map((s) => s.file).sort());
+    expect(byClass("anonymous").length, "anonymous write handlers").toBe(Object.keys(EXEMPT).length);
+  });
+
+  it("every gated handler is a surface for exactly its declared action, and every surface is a gated handler", () => {
     const surfaceByFile = new Map(SURFACES.map((s) => [s.file, s.action]));
     let checked = 0;
-    for (const r of sweptWriteRoutes) {
-      const exempt = r.file in EXEMPT;
-      const surface = surfaceByFile.get(r.file);
-      expect([r.file, "gated or exempt, not both", exempt !== (surface !== undefined)]).toEqual([r.file, "gated or exempt, not both", true]);
-      if (surface) expect([r.file, r.actions]).toEqual([r.file, [surface]]);
-      else expect([r.file, "exempt route must not call the gate", r.actions]).toEqual([r.file, "exempt route must not call the gate", []]);
+    for (const { handler, cls } of tree) {
+      const surface = surfaceByFile.get(handler.file);
+      if (cls === "gated") {
+        expect([key(handler), "is a surface", surface !== undefined]).toEqual([key(handler), "is a surface", true]);
+        expect([key(handler), gatedActions(handler.body)]).toEqual([key(handler), [surface]]);
+      } else {
+        expect([key(handler), "is not a surface", surface === undefined]).toEqual([key(handler), "is not a surface", true]);
+        expect([key(handler), "calls the gate", gatedActions(handler.body).length]).toEqual([key(handler), "calls the gate", 0]);
+      }
       checked++;
     }
-    expect(checked, "routes checked").toBe(sweptWriteRoutes.length);
+    expect(checked, "handlers checked").toBe(tree.length);
     expect(checked).toBeGreaterThan(0);
   });
 
-  it("every exempt entry carries a reason", () => {
+  it("every anonymous write handler is on EXEMPT, every EXEMPT entry is an anonymous handler (no stale or shadowed entry), none is both", () => {
+    const anonymous = new Set(byClass("anonymous").map((t) => key(t.handler)));
+    expect([...anonymous].filter((k) => !(k in EXEMPT)), "anonymous and not argued for: gate it, or review it onto EXEMPT with a reason").toEqual([]);
+    const present = new Map(tree.map((t) => [key(t.handler), t.cls]));
+    let checked = 0;
+    for (const k of Object.keys(EXEMPT)) {
+      expect([k, present.get(k)], "an EXEMPT entry must be a real handler that nothing detectable explains").toEqual([k, "anonymous"]);
+      checked++;
+    }
+    expect(checked, "exempt entries checked").toBe(Object.keys(EXEMPT).length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("every exempt entry carries a real reason", () => {
     expect(Object.keys(EXEMPT).length).toBeGreaterThan(0);
-    for (const [file, why] of Object.entries(EXEMPT)) expect([file, why.length > 20]).toEqual([file, true]);
+    for (const [k, why] of Object.entries(EXEMPT)) expect([k, why.length > 30]).toEqual([k, true]);
+  });
+
+  it("the three anonymous token and compute routes the review named are exempt, not hidden behind a rule", () => {
+    for (const k of ["invites/[token]/claim/route.ts POST", "claims/[token]/accept/route.ts POST", "public/format-preview/route.ts POST"]) {
+      expect([k, tree.find((t) => key(t.handler) === k)?.cls, k in EXEMPT]).toEqual([k, "anonymous", true]);
+    }
   });
 });
 

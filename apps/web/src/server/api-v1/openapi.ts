@@ -97,7 +97,7 @@ const TURNSTILE_HEADERS: NonNullable<RouteSpec["headers"]> = {
     description:
       "Cloudflare Turnstile token from the page's invisible widget (action = the route's own: register, join, resend or withdraw), single use. " +
       `Enforced where the bot check is on (staging and production): a missing, spent, expired, wrong-action or wrong-host token is 403 ${TURNSTILE_ERROR_CODE} ` +
-      "before the body is read. Checked after the first rate limit, so a refusal costs one request of the public read budget.",
+      "before the body is read. Checked straight after the route's first per-IP rate limit, so a refused request still counts against that limit and is answered 429 first once it is spent.",
   },
 };
 

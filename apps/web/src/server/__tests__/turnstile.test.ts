@@ -547,7 +547,7 @@ describe("the wire contract between the browser and the server", () => {
     expect(TURNSTILE_TOKEN_MAX_LENGTH, "Cloudflare: 'Maximum length: 2048 characters'").toBe(2048);
   });
 
-  it("the six guarded actions are the six surfaces, and every one is a legal Cloudflare action (A-Za-z0-9_-, 32 chars at most)", () => {
+  it("the six declared actions are exactly these (seven routes: withdraw is shared), and every one is a legal Cloudflare action (A-Za-z0-9_-, 32 chars at most)", () => {
     expect([...TURNSTILE_ACTIONS].sort()).toEqual(["join", "login", "register", "resend", "start", "withdraw"]);
     let checked = 0;
     for (const a of TURNSTILE_ACTIONS) {

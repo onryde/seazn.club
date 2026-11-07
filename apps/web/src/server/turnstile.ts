@@ -1,6 +1,6 @@
 import "server-only";
-// Cloudflare Turnstile, server half: the ONE place a token is judged. Six public POSTs call `requireTurnstile` (login, start,
-// register, resend, join, withdraw); nothing else in the app knows what a siteverify response looks like.
+// Cloudflare Turnstile, server half: the ONE place a token is judged. Seven public POSTs call `requireTurnstile` (login, start,
+// register, resend, join, and withdraw, which two routes share); nothing else in the app knows what a siteverify response looks like.
 //
 // Two questions, kept apart so each can be tested alone:
 //   * `turnstileMode`  — must THIS process check at all? (one small predicate, below; it also honours the `TURNSTILE=off` break-glass)

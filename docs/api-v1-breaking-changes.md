@@ -27,7 +27,7 @@ Five public writes are now checked by Cloudflare Turnstile on the hosted service
 | `GET` on any public route, the join preview included | handled | unchanged: reads are not checked |
 | A server that does not run the check (local development, a test harness) | handled | unchanged: no header needed |
 
-The token travels in the `cf-turnstile-response` request header, never in the body, because several of these bodies are strict schemas. The check runs after the route's first rate limit, so a refused request costs one request of the public read budget. A token is single use and is minted for one action: `register`, `join`, `resend` or `withdraw` (both withdraw routes share `withdraw`).
+The token travels in the `cf-turnstile-response` request header, never in the body, because several of these bodies are strict schemas. The check runs straight after the route's first per-IP rate limit, so a refused request still counts against that limit, and once the limit is spent the answer is 429 first. A token is single use and is minted for one action: `register`, `join`, `resend` or `withdraw` (both withdraw routes share `withdraw`).
 
 ## 2026-11-11 — a sponsor deal's send and create answer `invoice_url`, not `checkout_url`; a daily invoice-email cap
 

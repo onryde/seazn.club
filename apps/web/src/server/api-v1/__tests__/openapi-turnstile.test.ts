@@ -58,6 +58,10 @@ describe("OpenAPI documents the bot check on exactly the routes that enforce it"
         expect(header, `${path} documents the header`).toBeDefined();
         expect(header!.required, `${path}: optional, a developer's server and CI harnesses skip the check`).toBe(false);
         expect(header!.description, `${path}: the header says what refuses and with which code`).toContain("403 TURNSTILE_FAILED");
+        // Not every route spends the shared public read budget first (register, join and by-ref have buckets of their own), so the
+        // text names "the route's first per-IP rate limit" and never the read budget.
+        expect(header!.description, `${path}: says which limit the refusal counts against, truthfully`).toContain("first per-IP rate limit");
+        expect(header!.description).not.toContain("public read budget");
         expect(op.responses["403"], `${path} documents the 403`).toBeDefined();
         expect(op.responses["403"]!.description).toBe("Forbidden");
         checked++;

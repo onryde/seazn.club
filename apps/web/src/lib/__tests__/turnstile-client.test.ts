@@ -364,6 +364,42 @@ describe("mount and unmount", () => {
     expect(widget.api.render).toHaveBeenCalledTimes(1);
   });
 
+  // `failed` is sticky until something clears it, and unmount does not: a first mount whose script was blocked leaves it true. A
+  // person who then leaves the step and comes back (or React strict mode's second mount) gets a NEW load, and a click during it
+  // must WAIT for that widget's token, not be told "failed" by the previous mount's leftover.
+  it("a mount whose script failed, an unmount, then a remount: token() waits for the new widget instead of answering null", async () => {
+    vi.useFakeTimers();
+    try {
+      const widget = fakeWidget();
+      let release!: (api: TurnstileApi) => void;
+      const load = vi
+        .fn<() => Promise<TurnstileApi>>()
+        .mockRejectedValueOnce(new Error("blocked"))
+        .mockImplementationOnce(() => new Promise<TurnstileApi>((r) => (release = r)));
+      const { c } = controller({ load }, widget);
+
+      c.mount(CONTAINER, VIEW);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await c.token(), "premise: the first mount failed, so the controller is in the failed state").toBeNull();
+      expect(vi.getTimerCount(), "premise: that answer did not wait").toBe(0);
+
+      c.unmount();
+      c.mount(CONTAINER, VIEW); // the second load is still in flight
+      let got: string | null | undefined;
+      void c.token().then((t) => (got = t));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(got, "must be waiting, not already answered null from the first mount's failure").toBeUndefined();
+      expect(vi.getTimerCount(), "a wait timer is running").toBe(1);
+
+      release(widget.api);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(got, "the remounted widget's token").toBe("tok-1");
+      expect(load).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("unmount releases a request that was waiting, with null, at once (not when the 20 s wait runs out)", async () => {
     vi.useFakeTimers();
     try {

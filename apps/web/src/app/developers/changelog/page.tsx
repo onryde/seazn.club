@@ -10,7 +10,7 @@ const ENTRIES: { date: string; title: string; lines: string[] }[] = [
     title: "Breaking: the public registration writes take a bot-check token in the cf-turnstile-response header",
     lines: [
       "POST /public/orgs/{orgSlug}/competitions/{slug}/register, POST .../register/join, POST /public/registrations/{id}/withdraw, POST /public/registrations/by-ref/{ref}/withdraw and POST /public/registrations/groups/{id}/resend are now checked by Cloudflare Turnstile on the hosted service. Send the page widget's token in the cf-turnstile-response request header (a header, not a body field: the bodies are strict). A token is single use and is minted for one action (register, join, resend or withdraw; both withdraw routes share withdraw).",
-      "A missing, spent, expired, wrong-action or wrong-host token is refused 403 TURNSTILE_FAILED before the body is read. The check runs after the route's first rate limit, so a refusal costs one request of the public read budget. The 403 is new on these five routes and is documented on them in the OpenAPI spec.",
+      "A missing, spent, expired, wrong-action or wrong-host token is refused 403 TURNSTILE_FAILED before the body is read. The check runs straight after the route's first per-IP rate limit, so a refused request still counts against that limit, and once the limit is spent the answer is 429 first. The 403 is new on these five routes and is documented on them in the OpenAPI spec.",
       "Reads (GET) are not checked, including the join preview. A server that does not run the check (local development, a test harness) accepts requests without the header.",
       "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
     ],
