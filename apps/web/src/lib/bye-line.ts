@@ -36,15 +36,23 @@ function isSystemBye(f: ByeLineRow): boolean {
   return seat === null || o.winner === seat;
 }
 
-/** A bye line before its award: `scheduled`, no outcome, and an EMPTY side carrying the bye slot label. Covers the
+/** A bye line's PHANTOM side: the EMPTY side carrying the bye slot label (home first), or null when neither is. A seated
+ *  side is no phantom, whatever its label. The other side is the one that sits out — the run sheet's bye row names it
+ *  (B1a review N1). */
+export function byePhantomSide(
+  f: Pick<ByeLineRow, "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label">,
+): "home" | "away" | null {
+  if (f.home_entrant_id === null && labelKey(f.home_slot_label) === BYE_SLOT_LABEL.key) return "home";
+  if (f.away_entrant_id === null && labelKey(f.away_slot_label) === BYE_SLOT_LABEL.key) return "away";
+  return null;
+}
+
+/** A bye line before its award: `scheduled`, no outcome, and a phantom side (`byePhantomSide`). Covers the
  *  `timing: "setup"` bracket's day-one line (no seat yet), the moment its seed is filled but not yet awarded, and a
- *  withdrawal's dead seat waiting on the side that walks over it. A seated side is no phantom, whatever its label. */
+ *  withdrawal's dead seat waiting on the side that walks over it. */
 function isPreAwardByeLine(f: ByeLineRow): boolean {
   if (f.status !== "scheduled" || f.outcome != null) return false;
-  return (
-    (f.home_entrant_id === null && labelKey(f.home_slot_label) === BYE_SLOT_LABEL.key) ||
-    (f.away_entrant_id === null && labelKey(f.away_slot_label) === BYE_SLOT_LABEL.key)
-  );
+  return byePhantomSide(f) !== null;
 }
 
 /**
@@ -62,7 +70,8 @@ export function isByeLine(f: ByeLineRow): boolean {
  * (BYE_LINE_NOT_PLACEABLE), so it is no scheduling work owed — the desk counts no "unscheduled" for it (B1a review #1;
  * W3 T3 did the same for the unseated Swiss shell). Once settled (its award written, `forfeited`) it is an ordinary
  * decided line, as every other settled match is. The board reads the same answer through its `bye_line` flag
- * (`byeLineSql`) beside its own `status === "scheduled"` gate (components/v2/board/types.ts).
+ * (`byeLineSql`) beside its own `status === "scheduled"` gate (components/v2/board/types.ts); the division Fixtures
+ * tab's `isBye` (lib/run-sheet-groups.ts) reads this predicate itself (B1a review N1).
  */
 export function isWaitingByeLine(f: ByeLineRow): boolean {
   return f.status === "scheduled" && isByeLine(f);

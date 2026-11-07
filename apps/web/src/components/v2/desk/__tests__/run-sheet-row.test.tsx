@@ -8,6 +8,7 @@ import { ApiV1Error } from "@/lib/client-v1";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import type { RunSheetFixture } from "@/lib/run-sheet-groups";
 import { messages } from "@/lib/messages";
+import { resolveSlotLabel } from "@/lib/slot-label";
 
 // `RunSheetRow`'s inline Set-time editor refreshes on save. Nothing here clicks
 // it, but the hook throws outside a router context.
@@ -450,6 +451,65 @@ describe("R116-3: ruling 116's walkover reads as a walkover naming her, never a 
     expect(html).toContain(msg("schedule.bye", { name: "Alpha" }));
     expect(html).not.toContain("Charlie");
     expect(html, "no Withdrawn chip on a bye (audit 4.1)").not.toContain('data-testid="run-sheet-withdrawn"');
+  });
+});
+
+// W4 B1a review N1: a bye line before its award (`isWaitingByeLine`, lib/bye-line.ts) — a bracket's day-one bye, a seed
+// filled but not yet awarded, a withdrawal's dead seat waiting on the side that walks over it — is a line the server will
+// never place (BYE_LINE_NOT_PLACEABLE). It is the bye row (R7a: never actionable, so no Set time that could only refuse),
+// and it names the side that sits out: the seated entrant, else that side's own label (stored, then feed edge, as every
+// undrawn seat reads) — never "?" and never the phantom side's "Bye".
+describe("W4 B1a N1: a pre-award bye line is the bye row, naming the side that sits out", () => {
+  const BYE_LABEL = { key: "bracket.slot.bye", params: {} };
+  const QUALIFIER = { key: "slot.nth_group", params: { n: 1, g: "A" } };
+  const FEED = { key: "slot.winner_match", params: { round: 1, seq: 2 } };
+  const render = (f: RunSheetFixture, feed?: { home?: typeof FEED; away?: typeof FEED }) =>
+    renderToStaticMarkup(
+      <RunSheetRow
+        fixture={f}
+        href="/f/1"
+        tz={TZ}
+        orgTz={TZ}
+        nowMs={NOW_MS}
+        canEdit
+        entrantNames={ENTRANTS}
+        feedLabels={feed ? { [f.id]: feed } : undefined}
+      />,
+    );
+  const preAward = { status: "scheduled", outcome: null, scheduled_at: null, home_entrant_id: null, away_entrant_id: null } as const;
+  const byeOf = (name: string) => msg("schedule.bye", { name });
+
+  it("either phantom side: a day-one line names the other side's stored label, offers nothing, and is never \"? / Bye has a bye\"", () => {
+    let checked = 0;
+    for (const phantom of ["home", "away"] as const) {
+      const labels =
+        phantom === "home" ? { home_slot_label: BYE_LABEL, away_slot_label: QUALIFIER } : { home_slot_label: QUALIFIER, away_slot_label: BYE_LABEL };
+      const html = render(fx({ ...preAward, ...labels }));
+      expect(html, `${phantom}: the bye row`).toContain('data-testid="run-sheet-bye"');
+      expect(rowAction(html), `${phantom}: no action — no Set time`).toBeNull();
+      expect(html, `${phantom}: names the real side's label`).toContain(byeOf(resolveSlotLabel(QUALIFIER, msg, "schedule.tbd")));
+      expect(html, `${phantom}: never the phantom's label`).not.toContain(byeOf(msg("bracket.slot.bye")));
+      expect(html, `${phantom}: never an unknown sitter`).not.toContain(byeOf("?"));
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a filled seed not yet awarded names its entrant; a dead seat names the feed edge that walks over it", () => {
+    const seeded = render(fx({ ...preAward, home_entrant_id: "e1", away_slot_label: BYE_LABEL }));
+    expect([seeded.includes('data-testid="run-sheet-bye"'), rowAction(seeded)], "seeded: the bye row, no action").toEqual([true, null]);
+    expect(seeded).toContain(byeOf("Alpha"));
+    // The dead seat (her seat, the bye label stamped) with the arriving side still waiting on its feeder: no stored label
+    // on that side, so the feed edge names it — as the row's own undrawn seats read (`seatLabel`).
+    const dead = render(fx({ ...preAward, scheduled_at: TODAY_1400, home_slot_label: BYE_LABEL, away_slot_label: null }), { away: FEED });
+    expect([dead.includes('data-testid="run-sheet-bye"'), rowAction(dead)], "dead seat, timed (D6): the bye row, no action").toEqual([true, null]);
+    expect(dead).toContain(byeOf(resolveSlotLabel(FEED, msg, "schedule.tbd")));
+  });
+
+  it("positive pair: the same untimed line with no bye label is a match owed a time", () => {
+    const html = render(fx({ ...preAward, home_slot_label: QUALIFIER, away_slot_label: FEED }));
+    expect(html).not.toContain('data-testid="run-sheet-bye"');
+    expect(rowAction(html)).toBe("set_time");
   });
 });
 

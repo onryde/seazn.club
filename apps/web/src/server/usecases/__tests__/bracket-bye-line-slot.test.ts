@@ -11,8 +11,11 @@
 //
 // single-sport: badminton — every predicate under test reads seats, status, outcome, slot labels, ext_key and the slot
 // columns; no sport field.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { sql } from "@/lib/db";
 import { buildTemplateStages } from "@/lib/format-templates";
 import { holdsSlot } from "@/lib/rebuild-slots";
@@ -32,7 +35,12 @@ import { redoDivision, undoDivision } from "../history";
 import { applySchedule, autoSchedule, isMovable, movableFixtureSql, moveFixture, putScheduleSettings, startDivision } from "../schedule";
 import { completeStage, confirmSeedProposal, createStages, generateStageFixtures } from "../stages";
 import { getCompetitionDesk } from "../competition-desk";
-import { listDivisionFixturesForBoard } from "../fixtures";
+import { listDivisionFixtures, listDivisionFixturesForBoard } from "../fixtures";
+import { buildRunSheet, isBye, type RunSheetBlock, type RunSheetFixture } from "@/lib/run-sheet-groups";
+import { isUnscheduledFixture } from "@/lib/division-phase";
+import { runSheetCounts, runSheetKeeps } from "@/components/v2/desk/run-sheet";
+import { RunSheetRow } from "@/components/v2/desk/run-sheet-row";
+import type { FixtureRow } from "../stages";
 import { boardMovable, inBoardTray } from "@/components/v2/board/types";
 import { computeDisruptions } from "@/components/v2/board/use-disruption-signals";
 import { createCourt, createVenue } from "../venues";
@@ -40,6 +48,31 @@ import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// `RunSheetRow` (rendered below from the division page's own rows) reaches for `useRouter`; nothing here clicks it.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => new URLSearchParams(""),
+}));
+
+/** The division page's read adapted for the run sheet exactly as stages-panel.tsx's `toRunSheetFixture` does. */
+const toSheetRow = (f: FixtureRow): RunSheetFixture => ({
+  ...f,
+  home_slot_label: f.home_slot_label ?? null,
+  away_slot_label: f.away_slot_label ?? null,
+  venue_name: f.venue_name ?? null,
+  officials: f.officials ?? [],
+});
+const sheetRowsOf = (blocks: readonly RunSheetBlock[]): RunSheetFixture[] =>
+  blocks.flatMap((b) => (b.kind === "bracket" ? b.rounds.flatMap((r) => r.fixtures) : b.fixtures));
+/** The run sheet's row, as the Fixtures tab renders it: the one action it offers, and whether it is the bye row. */
+function sheetRow(f: RunSheetFixture, names: Record<string, string>, nowMs: number) {
+  const html = renderToStaticMarkup(
+    createElement(RunSheetRow, { fixture: f, href: "/f/1", tz: "UTC", orgTz: "UTC", nowMs, canEdit: true, entrantNames: names }),
+  );
+  return { html, bye: html.includes('data-testid="run-sheet-bye"'), action: /data-row-action="([a-z_]+)"/.exec(html)?.[1] ?? null };
+}
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -257,6 +290,55 @@ describe.runIf(HAS_DB)("W4 T3 K2 a bracket bye line never takes or keeps a court
     for (const f of real) {
       expect(Object.prototype.hasOwnProperty.call(f, "bye_line"), `${f.id}: the flag is sent only when true`).toBe(false);
       expect(boardMovable(f), "positive pair: a real line stays movable").toBe(true);
+    }
+  }, 180_000);
+
+  it("X-SD-5 the division Fixtures tab reads a pre-award bye line as the server does: nothing to schedule, no Unscheduled count, no Set time (B1a review N1)", async () => {
+    // The run sheet's "is this a bye" (`isBye`, lib/run-sheet-groups.ts) feeds the stage rail's "N to schedule"
+    // badge, the Unscheduled chip and the row's action. A bye line the server will never place must reach none of them:
+    // a count no action clears, and a Set time that can only answer BYE_LINE_NOT_PLACEABLE. Fed the division page's own
+    // rows (`listDivisionFixtures`, adapted as `toRunSheetFixture` does) into the real builder, counts and row.
+    const rig = await leagueKo();
+    await autoPlace(rig.auth, rig.leagueStageId);
+    const nowMs = Date.parse("2030-07-01T10:00:00Z");
+    const rows = (await listDivisionFixtures(rig.auth, rig.divisionId)).map(toSheetRow);
+    const ko = rows.filter((f) => f.stage_id === rig.koStageId);
+    const bye = ko.find((f) => f.id === rig.byeLineId)!;
+    const real = ko.filter((f) => f.id !== rig.byeLineId);
+    expect(real.length, "anti-vacuity: the real first-round line and the final").toBe(2);
+    expect([bye.status, bye.scheduled_at, bye.outcome], "premise: the bye line is pre-award and untimed").toEqual(["scheduled", null, null]);
+    expect(real.every((f) => f.status === "scheduled" && f.scheduled_at === null), "premise: the real lines are untimed too").toBe(true);
+
+    expect(isBye(bye), "the run sheet reads the bye line as a bye").toBe(true);
+    expect(real.map(isBye), "positive pair: a real untimed line is no bye").toEqual([false, false]);
+
+    // The stage rail's "N to schedule" badge: stages-panel.tsx's own expression over the stage's rows.
+    const toSchedule = ko.filter((f) => isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at }) && !isBye(f));
+    expect(toSchedule.map((f) => f.id).sort(), "the knockout's badge counts the two real lines, not the bye").toEqual(real.map((f) => f.id).sort());
+
+    const blocks = buildRunSheet({
+      fixtures: rows,
+      stages: [
+        { id: rig.leagueStageId, seq: 1, kind: "league" },
+        { id: rig.koStageId, seq: 2, kind: "knockout" },
+      ],
+      tz: "UTC",
+      nowMs,
+    });
+    expect(sheetRowsOf(blocks).some((f) => f.id === rig.byeLineId), "the bye stays on the sheet, a ghost row in its round (R7b)").toBe(true);
+    const ctx = { stageId: rig.koStageId, nowMs, matchMinutes: 30 };
+    expect(runSheetCounts(blocks, ctx).unscheduled, "the Unscheduled chip counts the two real lines only").toBe(2);
+    const keep = { ...ctx, tz: "UTC", today: dayKeyInTz(nowMs, "UTC") };
+    expect(runSheetKeeps(bye, "unscheduled", keep), "the Unscheduled filter does not list the bye").toBe(false);
+    expect(real.every((f) => runSheetKeeps(f, "unscheduled", keep)), "positive pair: it lists every real line").toBe(true);
+
+    const names = Object.fromEntries(rig.nameOf);
+    const byeRow = sheetRow(bye, names, nowMs);
+    expect([byeRow.bye, byeRow.action], "the bye's row is the bye row, offering nothing — no Set time").toEqual([true, null]);
+    expect(byeRow.html, "and names no unknown sitter").not.toContain("? has a bye");
+    for (const f of real) {
+      const r = sheetRow(f, names, nowMs);
+      expect([r.bye, r.action], `positive pair: ${f.id} is offered a time`).toEqual([false, "set_time"]);
     }
   }, 180_000);
 
@@ -492,6 +574,13 @@ describe.runIf(HAS_DB)("W4 T3 K2 a bracket bye line never takes or keeps a court
     expect([deadTie.bye_line, boardMovable(deadTie)], "the board marks the dead-seat tie and offers no move").toEqual([true, false]);
     const gone = computeDisruptions(board, { courts: [], blackouts: [], sessionWindows: [], matchMinutes: 30 });
     expect(gone.fixtureIds, "its court gone: the real line is flagged, the dead-seat tie is not").toEqual([b.id]);
+    // B1a review N1: and the division Fixtures tab agrees, from the division page's own row: a bye, so its row offers no
+    // time edit that could only refuse, and names the side that walks over it, never an unknown sitter.
+    const sheetTie = toSheetRow((await listDivisionFixtures(s.auth, s.divisionId)).find((f) => f.id === tieId)!);
+    expect(isBye(sheetTie), "the run sheet reads the dead-seat tie as a bye").toBe(true);
+    const tieRow = sheetRow(sheetTie, {}, Date.parse("2030-07-01T10:00:00Z"));
+    expect([tieRow.bye, tieRow.action], "its row is the bye row, offering nothing").toEqual([true, null]);
+    expect(tieRow.html, "and names no unknown sitter").not.toContain("? has a bye");
 
     const arriving = await play(b.id);
     const tie = await rowOf(s.stageId, tieId);

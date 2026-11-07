@@ -203,7 +203,8 @@ type FixtureRaw = {
   division_id: string;
   status: string;
   scheduled_at: string | null;
-  /** Read only to tell a waiting bye line (`isWaitingByeLine` — the Swiss bye shell's key), which is no scheduling work. */
+  /** The Swiss bye shell's key — one input of `isWaitingByeLine` (lib/bye-line.ts), which tells a bye line nobody has
+   *  settled: no scheduling work. */
   ext_key: string | null;
   fixture_no: number;
   stage_id: string;
@@ -215,12 +216,17 @@ type FixtureRaw = {
   away_entrant_id: string | null;
   /** `{key, params, seed}` while the matching entrant id is null and the
    *  slot is one THIS stage's draw fills; cleared by `fillSlot`. A slot fed
-   *  by an earlier fixture of the same bracket never carries one. */
+   *  by an earlier fixture of the same bracket never carries one. Also read
+   *  by `isWaitingByeLine`: an empty side stamped with the bye label
+   *  (`BYE_SLOT_LABEL`) is a bye line's phantom side. */
   home_slot_label: unknown;
   away_slot_label: unknown;
   /** `{kind: "award", winner}` for a bye baked by `awardSeededByes`, and the
-   *  decided outcome of any played fixture. Read only as "is this row
-   *  already resolved?". */
+   *  decided outcome of any played fixture. Read as "is this row already
+   *  resolved?" AND by `isWaitingByeLine` (a system bye's award, a pre-award
+   *  line's absent outcome) — with the status, ext_key, both entrant ids and
+   *  both slot labels, every column it reads; trim none of them, or a
+   *  waiting bye line counts as unscheduled again (B1a review #1). */
   outcome: unknown;
   home: string | null;
   away: string | null;

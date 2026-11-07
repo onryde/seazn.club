@@ -27,6 +27,7 @@ import { zonedTimeInput } from "@/lib/zoned-datetime";
 import type { FixtureRow } from "@/server/usecases/stages";
 import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import { isUnseatedSwissByeShell } from "@/lib/swiss-shell";
+import { isWaitingByeLine } from "@/lib/bye-line";
 import type { CameraPolicy } from "@/lib/camera-policy";
 import type { NeedsReason } from "@/server/external-play/types";
 import { stageCounts } from "@/lib/stage-card/summaries";
@@ -175,9 +176,16 @@ export const ROUND_SEQUENCE_STAGE_KINDS: ReadonlySet<string> = new Set(["league"
  *
  *  W3 T3 (X-SW-29, RB3-23): a Swiss stage's bye row is a bye before Pair seats it, too — an unseated `sw-r{N}-bye`
  *  shell has no seat and no award yet, but it is never a match, takes no court or time (the server refuses one,
- *  SWISS_BYE_NOT_PLACEABLE) and is never actionable. `isUnseatedSwissByeShell` (lib/swiss-shell.ts) is the shell alone. */
+ *  SWISS_BYE_NOT_PLACEABLE) and is never actionable. `isUnseatedSwissByeShell` (lib/swiss-shell.ts) is the shell alone.
+ *
+ *  W4 B1a review N1 (X-SD-5): so is every bye line nobody has settled yet (`isWaitingByeLine`, lib/bye-line.ts, the
+ *  predicate the desk and the board read too) — a bracket's pre-award bye line, a seed filled but not awarded, a
+ *  withdrawal's dead seat waiting on the side that walks over it. The server never places one (BYE_LINE_NOT_PLACEABLE),
+ *  so the stage rail's "to schedule" badge, the Unscheduled chip and the row's Set time must never see it either. */
 export function isBye(f: RunSheetFixture): boolean {
   if (isUnseatedSwissByeShell(f)) return true;
+  // The wire row's `ext_key` is optional (`FixtureRow`); absent is no key.
+  if (isWaitingByeLine({ ...f, ext_key: f.ext_key ?? null })) return true;
   const o = f.outcome as { kind?: string } | null;
   if (o?.kind !== "award") return false;
   const empty = f.home_entrant_id === null ? "home" : f.away_entrant_id === null ? "away" : null;

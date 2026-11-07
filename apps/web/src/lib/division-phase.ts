@@ -500,9 +500,14 @@ export function hasPlayedFixture(fixtures: readonly { status: string; awaitsSett
  * about the fixture, never about the reader's write rights.
  *
  * Deliberately says nothing about byes: a bye has no time and never will,
- * and every caller already applies its own `isBye` rule (the run sheet keeps
- * byes visible under every filter; the panel's section excludes them). One
- * fact per predicate.
+ * so every caller drops byes BEFORE asking — the run sheet's chip, filter and
+ * the stage rail's badge through `isBye` (lib/run-sheet-groups.ts), the desk
+ * through its `work` filter (`isWaitingByeLine`, lib/bye-line.ts, which
+ * `isBye` reads too). Both count a bye line nobody has settled — a bracket's
+ * pre-award bye, a dead seat's tie — as a bye, because the server never
+ * places one (BYE_LINE_NOT_PLACEABLE; W4 B1a review N1). The run sheet
+ * keeps byes visible under "All"; every work filter drops them. One fact per
+ * predicate.
  */
 export function isUnscheduledFixture(f: { status: string; scheduledAt: string | null }): boolean {
   return f.status === "scheduled" && f.scheduledAt === null;
