@@ -1,0 +1,142 @@
+{
+  "engine": "3.0.2",
+  "generatedAt": "2026-11-07T22:21:03.392Z",
+  "offered": [
+    {
+      "sport_key": "football",
+      "variant_key": "11-a-side"
+    },
+    {
+      "sport_key": "football",
+      "variant_key": "mini-soccer"
+    },
+    {
+      "sport_key": "football",
+      "variant_key": "small-sided"
+    },
+    {
+      "sport_key": "football",
+      "variant_key": "youth"
+    },
+    {
+      "sport_key": "cricket",
+      "variant_key": "hundred"
+    },
+    {
+      "sport_key": "cricket",
+      "variant_key": "odi"
+    },
+    {
+      "sport_key": "cricket",
+      "variant_key": "t20"
+    },
+    {
+      "sport_key": "cricket",
+      "variant_key": "test"
+    },
+    {
+      "sport_key": "boardgame",
+      "variant_key": "blitz"
+    },
+    {
+      "sport_key": "boardgame",
+      "variant_key": "classical"
+    },
+    {
+      "sport_key": "boardgame",
+      "variant_key": "rapid"
+    },
+    {
+      "sport_key": "carrom",
+      "variant_key": "club-29"
+    },
+    {
+      "sport_key": "carrom",
+      "variant_key": "icf"
+    },
+    {
+      "sport_key": "volleyball",
+      "variant_key": "beach"
+    },
+    {
+      "sport_key": "volleyball",
+      "variant_key": "indoor"
+    },
+    {
+      "sport_key": "badminton",
+      "variant_key": "bwf"
+    },
+    {
+      "sport_key": "badminton",
+      "variant_key": "bwf-3x15"
+    },
+    {
+      "sport_key": "badminton",
+      "variant_key": "short"
+    },
+    {
+      "sport_key": "tabletennis",
+      "variant_key": "bo5"
+    },
+    {
+      "sport_key": "tabletennis",
+      "variant_key": "bo7"
+    },
+    {
+      "sport_key": "tabletennis",
+      "variant_key": "hardbat-21"
+    },
+    {
+      "sport_key": "tennis",
+      "variant_key": "doubles-noad-mtb10"
+    },
+    {
+      "sport_key": "tennis",
+      "variant_key": "fast4"
+    },
+    {
+      "sport_key": "tennis",
+      "variant_key": "grand-slam"
+    },
+    {
+      "sport_key": "tennis",
+      "variant_key": "short-sets"
+    },
+    {
+      "sport_key": "tennis",
+      "variant_key": "tour"
+    },
+    {
+      "sport_key": "icehockey",
+      "variant_key": "iihf"
+    },
+    {
+      "sport_key": "icehockey",
+      "variant_key": "recreational"
+    },
+    {
+      "sport_key": "hockey",
+      "variant_key": "fih-outdoor"
+    },
+    {
+      "sport_key": "hockey",
+      "variant_key": "fih-shootout"
+    },
+    {
+      "sport_key": "hockey",
+      "variant_key": "youth"
+    }
+  ],
+  "excluded": [
+    {
+      "sport_key": "generic",
+      "variant_key": "score",
+      "code": "QUICK_MATCH_GENERIC"
+    },
+    {
+      "sport_key": "generic",
+      "variant_key": "win_loss",
+      "code": "QUICK_MATCH_GENERIC"
+    }
+  ]
+}
