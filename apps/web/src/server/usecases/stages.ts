@@ -22,6 +22,7 @@ import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./forma
 import { validatedStageConfig } from "./stage-defaults";
 import { refuseNewStageTable } from "./table-rule-guards";
 import { swissRefusal } from "./swiss-refusal";
+import { knockoutRefusal } from "./knockout-refusal";
 import { judgeSwissRounds, swissRoundsGuidance, swissRoundsNoticeOf, type SwissRoundsJudgement, type SwissRoundsNotice, type SwissRoundsShrunk } from "@/lib/swiss-rounds";
 import { isRootSwissStage } from "@/lib/open-entry-stages";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
@@ -72,7 +73,7 @@ import { parseExtKey, bracketWinnerLoser, loadCrossGroupRules, rankedStageStandi
 import { pinStageTableRules, stageTableRulesDocs, type StageTableRulesDoc } from "@/server/engine-db/table-rules";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { killsLoserEdge, lockDivisionConfigShared, lockStageSeats } from "@/server/engine-db/fed-seats";
-import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { completionEngineStatus, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { forfeitPlayedFacts, playedFor } from "@/server/engine-db/forfeit-played";
 import { FIXTURE_DELETED_REASON, ROUND_VOIDED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
@@ -5526,6 +5527,65 @@ export async function refoldStageTable(
 // rule — see loadBracketFixtures' own export note below.
 export const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
 
+/**
+ * W4 T6 (AN-2; the app half of engine row X-CH-7): the lines of a BRACKET stage still owed a result, in bracket order
+ * (round, then position) — `[]` for any other kind, an unknown stage, or a bracket with nothing owed.
+ *
+ * Owed means pending as stage completion reads it (`completionEngineStatus`: scheduled or in play, a recorded abandon
+ * held for the organiser's settle included; a cancelled line, a cascade void and a settled abandon are not). Two pending
+ * shapes are NOT owed, because nobody can ever play them:
+ *  - a bye line (`isByeLine`) — a seat padded out or left dead by a departure, e.g. a third-place line whose BOTH semi
+ *    losers have left (withdrawal-w2b's R-1 consequence: the stage completes on its final);
+ *  - a double-elimination reset (`conditional`) that the grand final did not trigger: owed only when the grand final's
+ *    winner is not its home entrant, the winners' champion (champion.ts `bracketChampion`, the engine harness's rule).
+ *    Until that grand final has a winner it is not owed either; the grand final itself is.
+ * App PR B aliases the engine's same-named export against this one (controller ruling R15).
+ */
+export async function undecidedBracketFixtures(tx: Tx, stageId: string): Promise<string[]> {
+  const [stage] = await tx<{ kind: string }[]>`select kind from stages where id = ${stageId}`;
+  if (stage === undefined || !BRACKET_KINDS.has(stage.kind)) return [];
+  const rows = await tx<
+    (ByeLineRow & {
+      id: string;
+      round_no: number;
+      is_final: boolean;
+      third_place: boolean;
+      conditional: boolean;
+      has_active_abandon: boolean;
+      expunged: boolean;
+      no_result: boolean;
+    })[]
+  >`
+    select f.id, f.round_no, f.ext_key, f.status, f.outcome, f.home_entrant_id, f.away_entrant_id,
+           f.home_slot_label, f.away_slot_label, f.is_final, f.third_place, f.conditional,
+           ${hasActiveAbandonSql(tx)} as has_active_abandon,
+           ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
+           ${hasActiveAbandonSql(tx, "f", { noResult: true })} as no_result
+      from fixtures f
+     where f.stage_id = ${stageId}
+     order by f.round_no, f.seq_in_round, f.id`;
+  const status = (r: (typeof rows)[number]) => completionEngineStatus(stage.kind, r);
+  const winnerOf = (r: (typeof rows)[number]): string | null =>
+    status(r) === "decided" || status(r) === "walkover" ? ((r.outcome as { winner?: string } | null)?.winner ?? null) : null;
+  // The grand final a reset follows: the latest earlier final, not itself conditional, not a bronze match.
+  const resetOwed = (reset: (typeof rows)[number]): boolean => {
+    const gf = rows
+      .filter((r) => r.is_final && !r.conditional && !r.third_place && r.round_no < reset.round_no)
+      .sort((a, b) => b.round_no - a.round_no)[0];
+    const winner = gf === undefined ? null : winnerOf(gf);
+    return gf !== undefined && winner !== null && winner !== gf.home_entrant_id;
+  };
+  return rows
+    .filter((r) => {
+      const s = status(r);
+      if (s !== "scheduled" && s !== "in_play") return false;
+      if (isByeLine(r)) return false;
+      if (r.conditional && !resetOwed(r)) return false;
+      return true;
+    })
+    .map((r) => r.id);
+}
+
 // F6 (#625) — carry-over has TWO application paths now: seedNextStage (below,
 // `timing:"on_complete"`) and the propose/confirm pair (computeSeedProposal /
 // confirmSeedProposal, `timing:"setup"`). The three helpers here are what both
@@ -5734,7 +5794,16 @@ export async function completeStage(
     if (!stage) throw new HttpError(404, "stage not found");
     return stage;
   });
-  const result = await completeStageIfReady(auth.orgId, stageId);
+  // W4 T6 (AN-2): asked under the division lock, in the completion's own transaction, at exactly the point the engine
+  // says a bracket is complete (every final settled) — so a final not yet settled keeps the soft `{completed: false}`
+  // (controller ruling C4), and a bracket with a third-place line, or any other line, still owed a result is refused by
+  // name instead of completing around it.
+  const result = await completeStageIfReady(auth.orgId, stageId, {
+    beforeBracketComplete: async (tx) => {
+      const owed = await undecidedBracketFixtures(tx, stageId);
+      if (owed.length > 0) throw knockoutRefusal("STAGE_HAS_UNDECIDED_FIXTURES", { fixture_ids: owed });
+    },
+  });
   if (!result.completed) return result;
 
   // R10g (review-r10f m2): from here the stage is complete (its completion

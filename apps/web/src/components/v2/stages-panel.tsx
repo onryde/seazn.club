@@ -27,6 +27,7 @@ import { rulesWriteErrorText } from "@/lib/config-issue-copy";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import { isUndoRefusalCode, undoRefusalKey } from "@/lib/undo-refusals";
+import { isKnockoutRefusalCode, knockoutRefusalKey } from "@/lib/knockout-refusals";
 import { swissRoundsWarnNotice, type SwissRoundsNotice } from "@/lib/swiss-rounds";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
 import { nextRoundNoticeOf, nextRoundText, type NextRoundNotice } from "@/lib/swiss-next-round";
@@ -2496,6 +2497,12 @@ export function classifyActError(
   // server's English sentence with its ids.
   if (err instanceof ApiV1Error && err.code === "STAGE_SEAT_DEPARTED") {
     return { tone: "warning", text: scoringErrorText(err.code, err.message, msg, "schedule.error.failed", err.extra), refresh: false };
+  }
+  // W4 T6 (AN-2): Complete refused because a line of the bracket is still owed a result (STAGE_HAS_UNDECIDED_FIXTURES:
+  // a third-place match unplayed beside a decided final). Amber — matches to finish — in the reader's language, never
+  // the server's English sentence.
+  if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) {
+    return { tone: "warning", text: msg(knockoutRefusalKey(err.code)), refresh: false };
   }
   const precondition = generatePreconditionMessage(err, msg, stageName, matchName);
   if (precondition) return { tone: "warning", text: precondition, refresh: false };

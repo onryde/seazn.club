@@ -19,6 +19,8 @@ const PLAN_CODES = [
   "BYE_LINE_NOT_PLACEABLE",
   // T5 (K1): Undo, Redo and Restore never step across a seed confirm.
   "SEED_CONFIRM_NOT_UNDOABLE",
+  // T6 (AN-2): a bracket completes only with every match decided.
+  "STAGE_HAS_UNDECIDED_FIXTURES",
 ] as const;
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
@@ -75,6 +77,14 @@ describe("KNOCKOUT_REFUSALS (W4 app-A)", () => {
       status: 409,
       en: "A confirmed draw can't be undone. Recompute the proposal instead.",
       key: "knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE",
+    });
+  });
+
+  it("STAGE_HAS_UNDECIDED_FIXTURES: 409, with the plan's sentence", () => {
+    expect(KNOCKOUT_REFUSALS.STAGE_HAS_UNDECIDED_FIXTURES).toEqual({
+      status: 409,
+      en: "This bracket still has matches without a result. Finish or settle them first.",
+      key: "knockout.refusal.STAGE_HAS_UNDECIDED_FIXTURES",
     });
   });
 

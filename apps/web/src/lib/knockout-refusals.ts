@@ -16,7 +16,9 @@ export type KnockoutRefusalCode =
   // T3 (K2; X-SD-5): a bye line is not played, so it takes no court, no time and no pin.
   | "BYE_LINE_NOT_PLACEABLE"
   // T5 (K1): an Undo, Redo or Restore that would step across a seed confirm (history.ts `UNDO_BARRIER_TYPES`).
-  | "SEED_CONFIRM_NOT_UNDOABLE";
+  | "SEED_CONFIRM_NOT_UNDOABLE"
+  // T6 (AN-2): Complete on a bracket the engine would complete while a line is still owed a result (`fixture_ids`).
+  | "STAGE_HAS_UNDECIDED_FIXTURES";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -35,6 +37,11 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 409,
     en: "A confirmed draw can't be undone. Recompute the proposal instead.",
     key: "knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE",
+  },
+  STAGE_HAS_UNDECIDED_FIXTURES: {
+    status: 409,
+    en: "This bracket still has matches without a result. Finish or settle them first.",
+    key: "knockout.refusal.STAGE_HAS_UNDECIDED_FIXTURES",
   },
 };
 

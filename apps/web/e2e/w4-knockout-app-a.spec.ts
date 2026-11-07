@@ -1,6 +1,7 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { TAG, activeOrgIdFromRequest, apiJson, divisionPath, seedVenueWithCourts } from "./helpers";
 import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-kit";
+import { dismissCookieBanner } from "./scorepad-a11y-kit";
 
 // W4 knockout app-A (spec 2026-11-04-format-matrix-w4-knockout-design.md). One describe per rule, each driven through the
 // real product: the v1 routes the desk and the pad call, and read back on the division's run sheet.
@@ -354,5 +355,100 @@ test.describe("K1 Undo refuses across a confirmed draw", () => {
     for (const id of [seated[0]!.home_entrant_id!, seated[0]!.away_entrant_id!]) {
       await expect(line, `the run sheet seats ${nameOf.get(id)}`).toContainText(nameOf.get(id)!, { timeout: 20_000 });
     }
+  });
+});
+
+// X-CH-7 (W4 T6, AN-2 app half): a bracket completes only with every match decided. The engine completes once every
+// FINAL is settled, and a third-place line is never one — so Complete went through with it unplayed and the division read
+// Finished beside a missing result. Match Day C3 disables Complete while any match is open, so the refusal is what a
+// STALE tab still reaches: the page renders with every match settled, the third-place result is taken back behind it,
+// and Complete is refused by name in the reader's language — the stage stays active until that line has its result.
+test.describe("X-CH-7 Complete refuses an unfinished bracket", () => {
+  test("a knockout of four with a third-place line: the third-place result taken back behind a stale page, Complete is refused by name, then completes once it is decided", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(150_000);
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Bronze cup ${TAG}`, visibility: "private" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "badminton",
+      variant_key: "bwf",
+      config: {},
+    });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const added = await apiJson(
+      request,
+      `/api/v1/divisions/${divisionId}/entrants`,
+      "POST",
+      Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `Bronze P${i + 1} ${TAG}`, seed: i + 1 })),
+    );
+    expect(added.status, JSON.stringify(added.error)).toBe(201);
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq: 1,
+      kind: "knockout",
+      name: "Cup",
+      config: { thirdPlace: true },
+    });
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    const stageId = stage.data!.id;
+    expect((await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST")).status).toBe(200);
+    expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
+    const rows = async () => (await stageFixtures(request, divisionId, stageId)) as Seated[];
+    const semis = (await rows()).filter((f) => f.round_no === 1);
+    expect(semis.length, "premise: two semi-finals").toBe(2);
+    for (const f of semis) await homeWins(request, f.id);
+    const lastRound = (await rows()).filter((f) => f.round_no === 2);
+    const bronze = lastRound.find((f) => f.ext_key?.endsWith("3p"));
+    const final = lastRound.find((f) => f !== bronze);
+    expect(bronze && final, "premise: the final and the third-place line, both seated").toBeTruthy();
+    await homeWins(request, final!.id);
+    const bronzeDecider = await homeWins(request, bronze!.id);
+    const stageStatus = async () =>
+      (await apiJson<{ id: string; status: string }[]>(request, `/api/v1/divisions/${divisionId}/stages`)).data!.find((s) => s.id === stageId)!.status;
+
+    // Every match settled: the page renders with Complete enabled.
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+    const complete = page.getByTestId("stage-complete");
+    await expect(complete).toBeEnabled({ timeout: 20_000 });
+    // Behind it, the third-place result is taken back: that line is in play again.
+    const tip = (await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${bronze!.id}/state`)).data!.last_seq;
+    const voided = await apiJson(request, `/api/v1/fixtures/${bronze!.id}/events`, "POST", {
+      expected_seq: tip,
+      type: "core.void",
+      payload: { event_id: bronzeDecider },
+    });
+    expect(voided.status, JSON.stringify(voided.error)).toBeLessThan(300);
+    expect((await rows()).find((f) => f.id === bronze!.id)!.status, "premise: the third-place line is open again").not.toBe("decided");
+
+    const answered = page.waitForResponse((r) => r.url().endsWith(`/api/v1/stages/${stageId}/complete`) && r.request().method() === "POST");
+    await complete.click();
+    const res = await answered;
+    expect(res.status(), "Complete is refused").toBe(409);
+    expect(((await res.json()) as { error?: { code?: string; fixture_ids?: string[] } }).error).toMatchObject({
+      code: "STAGE_HAS_UNDECIDED_FIXTURES",
+      fixture_ids: [bronze!.id],
+    });
+    await expect(page.getByTestId("schedule-warning"), "said in the organiser's words").toHaveText(
+      "This bracket still has matches without a result. Finish or settle them first.",
+    );
+    expect(await stageStatus(), "the stage stays active").toBe("active");
+
+    // The positive pair: the third-place line decided again, the same Complete goes through.
+    const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${bronze!.id}/state`);
+    const decided = await apiJson(request, `/api/v1/fixtures/${bronze!.id}/events`, "POST", {
+      expected_seq: state.data!.last_seq,
+      type: "badminton.game.summary",
+      payload: { home: 21, away: 12 },
+    });
+    expect(decided.status, JSON.stringify(decided.error)).toBeLessThan(300);
+    await page.reload();
+    await expect(complete).toBeEnabled({ timeout: 20_000 });
+    await complete.click();
+    await expect.poll(stageStatus, { timeout: 20_000 }).toBe("complete");
+    await expect(page.getByTestId("schedule-warning")).toHaveCount(0);
   });
 });

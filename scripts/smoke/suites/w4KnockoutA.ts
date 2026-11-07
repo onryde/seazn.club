@@ -18,13 +18,18 @@ import { type Session, appendScoreEvent, check, newSession, signIn, tag, v1, v1d
  * (the four first-round losers seated): the division's Undo is refused 409 SEED_CONFIRM_NOT_UNDOABLE and the Plate keeps
  * every seat (before T5 it inverted the Plate's day-one generation and deleted the seeded draw).
  *
+ * T6 (AN-2, X-CH-7): a bracket completes only with every match decided. A knockout of four with a third-place line, the
+ * semis and the final decided, the third-place match unplayed: Complete is refused 409 STAGE_HAS_UNDECIDED_FIXTURES naming
+ * that line, the stage stays active; with the third-place match decided the same Complete goes through.
+ *
  * Own fresh owner; keyless; every read and write is a v1 route. Every check is counted, and a run that checked nothing fails.
  * SMOKE_ONLY=w4KnockoutA runs it alone (SELECTABLE_SUITES).
  */
 export async function w4KnockoutASuite(): Promise<void> {
   // T2: 1 (a called final survives a void of its feeder). T3: 1 (an awarded bye holds no court). T4: 1 (the final keeps
-  // its slot across an 8 → 9 Rebuild). T5: 1 (Undo refuses across a confirmed draw).
-  const EXPECTED_CHECKS = 4;
+  // its slot across an 8 → 9 Rebuild). T5: 1 (Undo refuses across a confirmed draw). T6: 1 (Complete refuses a bracket
+  // with its third-place match unplayed).
+  const EXPECTED_CHECKS = 5;
   let checked = 0;
   const w4Check = (label: string, cond: boolean) => {
     checked++;
@@ -271,6 +276,57 @@ export async function w4KnockoutASuite(): Promise<void> {
     w4Check(
       "w4a K1: Undo after a Plate's draft is confirmed is refused 409 SEED_CONFIRM_NOT_UNDOABLE, and the Plate keeps every seat" +
         (ok ? "" : ` — plate gen ${plateDayOne.status}, main gen ${mainGen.status}, start ${started.status}, played ${played}, complete ${done.status} ${JSON.stringify(done.json).slice(0, 120)}, confirm ${confirmed?.status ?? "-"} ${JSON.stringify(confirmed?.json).slice(0, 160)}, seated ${seated}, undo ${undo.status} ${JSON.stringify(undo.json).slice(0, 160)}, rows ${plateBefore.length}→${plateAfter.length}, seats kept ${seats(plateAfter) === seats(plateBefore)}`),
+      ok,
+    );
+  }
+
+  // Check 5 (T6, AN-2 / X-CH-7): a knockout of four with a third-place line; both semis and the final decided (home
+  // wins), the third-place match unplayed. The engine completes once every FINAL is settled, and a third-place line is
+  // none, so Complete used to go through and the division read Finished beside a missing result. Now it is refused by
+  // name, the line named, the stage active; the positive pair decides that line and the same Complete goes through.
+  {
+    const divId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Bronze", sport_key: "badminton", variant_key: "bwf", config: {} }),
+    )?.id;
+    await v1(
+      owner,
+      `/api/v1/divisions/${divId}/entrants`,
+      "POST",
+      Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `Bronze P${i + 1} ${tag}`, seed: i + 1 })),
+    );
+    const stageId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "knockout", name: "Bronze", config: { thirdPlace: true } }),
+    )?.id;
+    const generated = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    const rows = async () =>
+      (v1data<(Fx & { ext_key?: string | null })[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter(
+        (f) => f.stage_id === stageId,
+      );
+    const semis = (await rows()).filter((f) => f.round_no === 1);
+    for (const f of semis) await homeWins(owner, f.id);
+    const last = (await rows()).filter((f) => f.round_no === 2);
+    const bronze = last.find((f) => f.ext_key?.endsWith("3p") === true);
+    const final = last.find((f) => f !== bronze);
+    const finalWon = final ? await homeWins(owner, final.id) : undefined;
+    const refused = await v1(owner, `/api/v1/stages/${stageId}/complete`, "POST", {});
+    const ids = (refused.json.error as { fixture_ids?: unknown } | undefined)?.fixture_ids;
+    const stageAfter = (v1data<{ id: string; status: string }[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/stages`)) ?? []).find(
+      (st) => st.id === stageId,
+    )?.status;
+    const bronzeWon = bronze ? await homeWins(owner, bronze.id) : undefined;
+    const done = await v1(owner, `/api/v1/stages/${stageId}/complete`, "POST", {});
+    const ok =
+      generated.status === 200 && started.status === 200 && semis.length === 2 &&
+      // the premise: the final decided, the third-place line seated and unplayed
+      bronze !== undefined && final !== undefined && finalWon !== undefined &&
+      refused.status === 409 && refused.json.error?.code === "STAGE_HAS_UNDECIDED_FIXTURES" &&
+      Array.isArray(ids) && ids.length === 1 && ids[0] === bronze.id &&
+      stageAfter === "active" &&
+      bronzeWon !== undefined && done.status === 200 && v1data<{ completed?: boolean } | undefined>(done)?.completed === true;
+    w4Check(
+      "w4a X-CH-7: Complete on a knockout whose third-place match is unplayed is refused 409 STAGE_HAS_UNDECIDED_FIXTURES naming it; decided, it completes" +
+        (ok ? "" : ` — generate ${generated.status}, start ${started.status}, semis ${semis.length}, final ${final?.id ?? "none"} ${finalWon ?? "-"}, bronze ${bronze?.id ?? "none"}, complete ${refused.status} ${JSON.stringify(refused.json).slice(0, 200)}, stage ${stageAfter ?? "-"}, then ${done.status} ${JSON.stringify(done.json).slice(0, 160)}`),
       ok,
     );
   }

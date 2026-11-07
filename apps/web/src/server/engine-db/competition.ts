@@ -907,6 +907,12 @@ export interface CompleteResult {
 export async function completeStageIfReady(
   orgId: string,
   stageId: string,
+  opts: {
+    /** W4 T6 (AN-2): a caller's last word on a BRACKET stage the engine would complete, asked under the division lock in
+     *  this transaction before anything is written; a throw refuses the completion and rolls it back. The organiser's
+     *  Complete (usecases/stages.ts `completeStage`) refuses a bracket with a line still owed a result here. */
+    beforeBracketComplete?: (tx: Tx) => Promise<void>;
+  } = {},
 ): Promise<CompleteResult> {
   return withTenant(orgId, async (tx) => {
     const inputs = await loadStageInputs(tx, stageId);
@@ -1005,6 +1011,7 @@ export async function completeStageIfReady(
       if (!isBracketStageComplete(bracketStage, bracketFixtures)) {
         return { completed: false, events: [] };
       }
+      await opts.beforeBracketComplete?.(tx);
       // D-G1 guard. bracketRanks orders an entrant who never lost a settled fixture by elimination round −1: LAST.
       // Right for a departed entrant whose line the generator voided (F14, walkoverDepartedQualifiers); wrong for
       // anyone still in the field — an unbeaten field entrant who won no final means the deciding game decided

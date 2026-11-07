@@ -3650,6 +3650,7 @@ export type DictionaryKey =
   | "knockout.pendingPair"
   | "knockout.refusal.BYE_LINE_NOT_PLACEABLE"
   | "knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE"
+  | "knockout.refusal.STAGE_HAS_UNDECIDED_FIXTURES"
   | "knockout.roundsLabel"
   | "knockout.view.draw"
   | "knockout.view.label"

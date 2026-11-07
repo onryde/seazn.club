@@ -2396,6 +2396,7 @@
   "bracket.appearsOnceGenerated": "Het schema verschijnt zodra de wedstrijden zijn gegenereerd",
   "knockout.refusal.BYE_LINE_NOT_PLACEABLE": "Een bye wordt niet gespeeld, dus neemt nooit een veld of een tijd in.",
   "knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE": "Een bevestigde loting kan niet ongedaan worden gemaakt. Bereken in plaats daarvan het voorstel opnieuw.",
+  "knockout.refusal.STAGE_HAS_UNDECIDED_FIXTURES": "Dit schema heeft nog wedstrijden zonder uitslag. Speel ze eerst uit of beslis ze.",
   "stage.err.swissRoundsRequired": "Een Zwitserse fase heeft een aantal rondes nodig voordat die kan worden opgeslagen. Zet Rondes op 1 of meer en pas het opnieuw toe.",
   "swiss.refusal.SWISS_ADHOC_REFUSED": "Zwitserse rondes worden door het systeem gekoppeld. Voeg vriendschappelijke wedstrijden toe in een andere fase.",
   "swiss.refusal.SWISS_BYE_NOT_PLACEABLE": "Een bye wordt niet gespeeld, dus neemt geen veld of tijd in.",
