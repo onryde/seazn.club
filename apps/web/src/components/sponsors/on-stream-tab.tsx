@@ -91,11 +91,6 @@ export function previewCards(sponsors: readonly OnStreamSponsor[], hasTiers: boo
     .map(({ s }) => ({ id: s.id, sponsorId: s.id, name: s.name, logoUrl: null, tier: hasTiers ? s.tier : "partner", onStream: true }));
 }
 
-/** One write through the v1 envelope: a refusal throws `ApiV1Error` with the envelope's code (shown via save-error.ts). */
-async function send(url: string, method: "PATCH" | "PUT", body: unknown): Promise<void> {
-  await apiV1(url, { method, json: body });
-}
-
 export function OnStreamTab(props: OnStreamTabProps) {
   const { orgId, orgSlug, sponsors, competitions, scope, hasTiers, settings, ownRow, sports } = props;
   const msg = useMsg();
@@ -123,6 +118,8 @@ export function OnStreamTab(props: OnStreamTabProps) {
   const cards = useMemo(() => previewCards(inScope, hasTiers), [inScope, hasTiers]);
   const msgPlural = useMsgPlural();
 
+  /** One write through the v1 envelope: a refusal throws `ApiV1Error` with the envelope's code (shown via save-error.ts).
+   *  Each caller passes its `apiV1` path as a LITERAL, so the call-path scan (api-v1-call-paths.test.ts) reads the prefix. */
   async function write(fn: () => Promise<void>, undo: () => void) {
     setBusy(true);
     setError(null);
@@ -140,7 +137,9 @@ export function OnStreamTab(props: OnStreamTabProps) {
   function tick(sponsor: OnStreamSponsor, next: boolean) {
     setTicks((t) => ({ ...t, [sponsor.id]: next }));
     void write(
-      () => send(`/api/v1/orgs/${orgId}/sponsors/${sponsor.id}`, "PATCH", { on_stream: next }),
+      async () => {
+        await apiV1(`/api/v1/orgs/${orgId}/sponsors/${sponsor.id}`, { method: "PATCH", json: { on_stream: next } });
+      },
       () => setTicks((t) => ({ ...t, [sponsor.id]: !next })),
     );
   }
@@ -150,7 +149,9 @@ export function OnStreamTab(props: OnStreamTabProps) {
     setEnabled(next.enabled);
     setDial(next.frequency);
     void write(
-      () => send(`/api/v1/orgs/${orgId}/sponsor-stream-settings`, "PUT", { competitionId: scope, ...next }),
+      async () => {
+        await apiV1(`/api/v1/orgs/${orgId}/sponsor-stream-settings`, { method: "PUT", json: { competitionId: scope, ...next } });
+      },
       () => {
         setEnabled(before.enabled);
         setDial(before.dial);
