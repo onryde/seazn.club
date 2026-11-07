@@ -1270,6 +1270,7 @@ describe("organiserStepsFor — what the scorer pad cannot author, on the fixtur
 
   // PR #1133: Forfeit and Abandon moved into a "Match actions" panel that starts CLOSED at ≥768 behind a toggle; a phone
   // shows it open and hides the toggle. Finalize moved OUT, to a banner at the top. Read from the product's own markup.
+  // PR #1134 keeps the toggle and its aria-expanded and renders the closed panel not at all (it was `hidden`).
   it("PR #1133: the console's Match actions panel holds Forfeit and Abandon, closed at md and up behind a toggle hidden on phones; Finalize is a banner outside it", () => {
     const web = (path: string) => readFileSync(new URL(`../../../../apps/web/src/components/v2/${path}`, import.meta.url), "utf8");
     const consoleSrc = web("fixture-console.tsx");
@@ -1286,9 +1287,15 @@ describe("organiserStepsFor — what the scorer pad cannot author, on the fixtur
     expect(`data-testid="${MATCH_ACTIONS_TOGGLE_TESTID}"`).toBe('data-testid="match-actions-toggle"');
     expect(toggle).toContain("aria-expanded={matchActionsOpen}");
     expect(toggle).toMatch(/className="[^"]*\bmax-md:hidden\b[^"]*"/);
-    // The panel: hidden while closed at md and up, shown below md; Forfeit and Abandon live in it.
+    // The panel (as re-laid out by PR #1134): absent while closed at md and up, rendered under the Scoring header once
+    // open there, and always rendered below md; Forfeit and Abandon live in it. md is 768 (Tailwind), the same edge
+    // as the toggle's max-md:hidden — so wherever the toggle is hidden the panel is open.
+    expect(consoleSrc).toContain('const wideLayout = useMediaQuery("(min-width: 768px)");');
+    expect(consoleSrc).toContain("const wideOpen = wideLayout && matchActionsOpen;");
+    expect(consoleSrc).toContain("{wideOpen && matchActionsPanel}");
+    expect(consoleSrc).toContain("{!wideLayout && matchActionsPanel}");
+    expect(consoleSrc.match(/\{[^{}]*&& matchActionsPanel\}/g), "the panel's placements").toHaveLength(2);
     const panel = section("match-actions");
-    expect(panel).toContain('${matchActionsOpen ? "" : " hidden max-md:block"}');
     expect(panel).toContain(`data-testid="${FORFEIT_TESTID}"`);
     expect(panel).toContain('{msg("score.abandon")}');
     expect(panel).not.toContain(FINALIZE_TESTID);
