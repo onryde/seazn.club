@@ -606,6 +606,7 @@
   "sponsors.share.revokeConfirm": "¿Revocar este enlace? Dejará de abrirse al instante.",
   "sponsors.share.revokeYes": "Revocar enlace",
   "sponsorReport.meta.title": "Informe del patrocinador",
+  "sponsorReport.meta.description": "Cuántas veces apareció tu tarjeta en las retransmisiones del club, durante cuánto tiempo y las visitas que trajo.",
   "sponsorReport.heading": "{sponsor} en las retransmisiones de {org}",
   "sponsorReport.scope.all": "Todos los partidos retransmitidos",
   "sponsorReport.period": "{from} – {to}",

@@ -606,6 +606,7 @@
   "sponsors.share.revokeConfirm": "Deze link intrekken? Hij werkt meteen niet meer.",
   "sponsors.share.revokeYes": "Link intrekken",
   "sponsorReport.meta.title": "Sponsorrapport",
+  "sponsorReport.meta.description": "Hoe vaak je kaart in de streams van de club in beeld kwam, hoe lang, en de bezoeken die hij opleverde.",
   "sponsorReport.heading": "{sponsor} in de streams van {org}",
   "sponsorReport.scope.all": "Alle gestreamde wedstrijden",
   "sponsorReport.period": "{from} – {to}",

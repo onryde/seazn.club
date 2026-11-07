@@ -106,13 +106,15 @@ const notFoundOf = async (token: string) => {
 };
 
 describe("metadata", () => {
-  it("is noindex, nofollow and no-referrer, with a localised title - read from the locale alone, no database", async () => {
+  it("is noindex, nofollow and no-referrer, with a localised title and description - read from the locale alone, no database", async () => {
     const before = statementCount();
     const meta = await generateMetadata();
     expect(statementCount() - before, "the title needs no lookup").toBe(0);
     expect(meta.robots).toEqual({ index: false, follow: false });
     expect(meta.referrer).toBe("no-referrer");
     expect(meta.title).toBe(t(fr, "sponsorReport.meta.title"));
+    // Its own: left out, the page inherits the ROOT layout's English site description (the /live english sweep found it).
+    expect(meta.description).toBe(t(fr, "sponsorReport.meta.description"));
   });
 });
 

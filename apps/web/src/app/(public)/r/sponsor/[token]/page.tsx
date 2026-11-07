@@ -25,7 +25,13 @@ import { publicRateLimit } from "@/server/usecases/public";
 
 export async function generateMetadata(): Promise<Metadata> {
   const ui = await getDictionary(await resolveLocale(), "ui");
-  return { title: t(ui, "sponsorReport.meta.title"), robots: { index: false, follow: false }, referrer: "no-referrer" };
+  // Its own description: left out, the page would serve the root layout's English site description in every locale.
+  return {
+    title: t(ui, "sponsorReport.meta.title"),
+    description: t(ui, "sponsorReport.meta.description"),
+    robots: { index: false, follow: false },
+    referrer: "no-referrer",
+  };
 }
 
 /** True when this client is over the public read budget. Any other limiter failure is a real error. */

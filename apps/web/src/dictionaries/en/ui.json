@@ -606,6 +606,7 @@
   "sponsors.share.revokeConfirm": "Revoke this link? It stops opening at once.",
   "sponsors.share.revokeYes": "Revoke link",
   "sponsorReport.meta.title": "Sponsor report",
+  "sponsorReport.meta.description": "How often your card appeared on the club's streams, for how long, and the visits it brought.",
   "sponsorReport.heading": "{sponsor} on {org} streams",
   "sponsorReport.scope.all": "Every streamed match",
   "sponsorReport.period": "{from} – {to}",

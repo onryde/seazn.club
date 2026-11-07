@@ -606,6 +606,7 @@
   "sponsors.share.revokeConfirm": "Révoquer ce lien ? Il cessera de s'ouvrir immédiatement.",
   "sponsors.share.revokeYes": "Révoquer le lien",
   "sponsorReport.meta.title": "Rapport du sponsor",
+  "sponsorReport.meta.description": "Combien de fois votre carte est apparue sur les diffusions du club, combien de temps, et les visites qu’elle a apportées.",
   "sponsorReport.heading": "{sponsor} sur les diffusions de {org}",
   "sponsorReport.scope.all": "Tous les matchs diffusés",
   "sponsorReport.period": "{from} – {to}",

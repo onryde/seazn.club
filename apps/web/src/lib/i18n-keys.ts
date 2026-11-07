@@ -7551,6 +7551,7 @@ export type DictionaryKey =
   | "sponsorReport.match.gone"
   | "sponsorReport.match.sides"
   | "sponsorReport.match.tbd"
+  | "sponsorReport.meta.description"
   | "sponsorReport.meta.title"
   | "sponsorReport.notFound.body"
   | "sponsorReport.notFound.title"
