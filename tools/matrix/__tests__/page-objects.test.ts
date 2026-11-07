@@ -31,6 +31,7 @@ import { ALL_FILTER, CONSOLE_MOUNTED_TESTIDS, RUN_SHEET_FILTER_OPTIONS, type Def
 import { StageNotGeneratable } from "../lib/generate-path.ts";
 import { GeneratedWithoutFixtureNumbers, MD_BREAKPOINT_PX, completeStageUi, completionShots, expectedFoldBranch, generateUi, judgeFoldBranch, newestCreatedFixtureNo, openFold, openFoldIfFolded, railSheetSelector, railTriggerSelector } from "../lib/browser/pages/stage-rail.ts";
 import { NEEDS_DECISION } from "../lib/browser/pages/needs-decision.ts";
+import { planSwissShells } from "../../../apps/web/src/lib/swiss-shell.ts";
 import { UnreadableStandingsRow, standingsCellsOf, tablesFromCells } from "../lib/browser/pages/standings.ts";
 import { LEVEL_RANK } from "@seazn/engine/competition";
 import { DATA, NAME, TESTID, templateCardTestid, templateLabel } from "../lib/browser/selectors.ts";
@@ -237,7 +238,47 @@ describe("the stage rail's fold", () => {
 // fixture row carries a number: fixtures.fixture_no is NOT NULL, numbered by a
 // BEFORE INSERT trigger (db/migration/deltas/V263__routing_slugs.sql:37-53).
 describe("generate: the run-sheet row that proves the screen", () => {
-  const fx = (fixture_no: number | null) => ({ fixture_no });
+  const fx = (fixture_no: number | null) => ({ fixture_no, ext_key: null, home_entrant_id: "e-h", away_entrant_id: "e-a" });
+
+  // CI run 42418390209, swiss|badminton|bwf-3x15|F1@360: an odd field's Swiss Pair answers EVERY row of the stage
+  // (stages.ts readStageFixtureRows), the later rounds' unseated bye shells included, and the run sheet draws no row for
+  // one (run-sheet-groups.ts, W3 T3 X-SW-29: "no one to name"). The highest number was round 4's bye shell, so the wait
+  // for its row could never end. The rows here are the product's own plan (swiss-shell.ts planSwissShells), numbered in
+  // mint order, round 1 seated as Pair seats it (its bye an award to one side).
+  const swissPairAnswer = (rounds: number, field: number, seatedRounds: number) =>
+    planSwissShells(rounds, field).map((s, i) => {
+      const seated = s.roundNo <= seatedRounds;
+      return { fixture_no: i + 1, ext_key: s.extKey, home_entrant_id: seated ? `e-${i}h` : null, away_entrant_id: seated && !s.bye ? `e-${i}a` : null };
+    });
+  const numberOf = (rows: readonly { fixture_no: number; ext_key: string }[], key: string): number => rows.find((r) => r.ext_key === key)!.fixture_no;
+
+  it("Swiss, odd field (F1's 7 over 4 rounds), round 1 paired: the newest DRAWN row is round 4's last board, never its unseated bye shell", () => {
+    const rows = swissPairAnswer(4, 7, 1);
+    expect(rows).toHaveLength(16);
+    const bye4 = numberOf(rows, "sw-r4-bye");
+    expect(bye4, "round 4's bye shell is the highest number the answer carries").toBe(Math.max(...rows.map((r) => r.fixture_no)));
+    expect(newestCreatedFixtureNo({ created: 4, fixtures: rows })).toBe(numberOf(rows, "sw-r4-b3"));
+  });
+
+  it("Swiss: a bye shell once seated (its round paired) is drawn, so it can be the newest; an even field has no bye at all", () => {
+    let checked = 0;
+    // Every round paired: round 4's bye is an award row now, and the sheet draws it.
+    const all = swissPairAnswer(4, 7, 4);
+    expect(newestCreatedFixtureNo({ created: 4, fixtures: all })).toBe(numberOf(all, "sw-r4-bye"));
+    checked++;
+    // R4a / M1's even field of 8: no bye shell, so round 4's last board is the highest number and is drawn (as TBD).
+    const even = swissPairAnswer(4, 8, 1);
+    expect(even.some((r) => r.ext_key.endsWith("-bye"))).toBe(false);
+    expect(newestCreatedFixtureNo({ created: 4, fixtures: even })).toBe(numberOf(even, "sw-r4-b4"));
+    checked++;
+    expect(checked).toBe(2);
+  });
+
+  it("rows created that are ALL undrawn (unseated bye shells alone) is refused by name, never a wait on a row that cannot come", () => {
+    const byesOnly = swissPairAnswer(2, 3, 0).filter((r) => r.ext_key.endsWith("-bye"));
+    expect(byesOnly).toHaveLength(2);
+    expect(() => newestCreatedFixtureNo({ created: 2, fixtures: byesOnly })).toThrow(GeneratedWithoutFixtureNumbers);
+  });
 
   it("empty case first: nothing created is nothing new to draw, whatever already exists", () => {
     expect(newestCreatedFixtureNo({ created: 0, fixtures: [] })).toBeNull();
