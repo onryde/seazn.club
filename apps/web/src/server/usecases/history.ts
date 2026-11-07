@@ -25,7 +25,8 @@ import { sql, withTenant } from "@/lib/db";
 // below 1, where there is no window to roll (see `createCheckpoint`).
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
-import type { SwissRefusalCode } from "@/lib/swiss-refusals";
+import { isKnockoutRefusalCode } from "@/lib/knockout-refusals";
+import type { UndoRefusalCode } from "@/lib/undo-refusals";
 import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
 import { UUID_RE, liveCourt, venueBack, venueOf, venueWith } from "./court-restore-sql";
 import { fixtureHasResultSql, playedFixtureIds } from "./fixture-results-sql";
@@ -48,6 +49,7 @@ import {
   type GenerateWrite,
 } from "./stages";
 import { swissRefusal } from "./swiss-refusal";
+import { knockoutRefusal } from "./knockout-refusal";
 import { DEPARTED_STATUSES } from "./entrants";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
@@ -101,13 +103,24 @@ const slotTaker = (tx: Tx) => tx`not ${byeLineSql(tx, "fixtures")}`;
  * The engine skips them — they are not REVERSIBLE (`isReversible`) — so this app-side check is the only barrier.
  * A late entry is one only when an ORGANISER added the player (ruling 252 items 8 and 11: an automatic arrival — a paid
  * registration, a waitlist promotion, an import — does not change Undo); a change to the round count always is.
+ * W4 T5 (K1): so is a seed confirm (`seed_confirmed`, stages.ts `confirmSeedProposal`). It fills a setup-timing bracket's
+ * seats through `fillSlot`, a write no ledger step records, so an Undo after it inverted the step BEFORE it — the
+ * bracket's own day-one generation — and deleted the seeded draw. Each row is written by `appendUndoBarrierRow`
+ * (swiss-late-entry.ts), which moves the division's token and never the watermark.
  */
 export const UNDO_BARRIER_TYPES = {
   swiss_late_entry: "SWISS_LATE_ENTRY_NOT_UNDOABLE",
   swiss_rounds_changed: "SWISS_ROUNDS_CHANGE_NOT_UNDOABLE",
-} as const satisfies Record<string, SwissRefusalCode>;
+  seed_confirmed: "SEED_CONFIRM_NOT_UNDOABLE",
+} as const satisfies Record<string, UndoRefusalCode>;
 
-type UndoBarrierType = keyof typeof UNDO_BARRIER_TYPES;
+export type UndoBarrierType = keyof typeof UNDO_BARRIER_TYPES;
+
+/** A barrier's refusal, thrown through its own family's table so the status, the code and the English come from one row:
+ *  a knockout code through `knockoutRefusal`, a Swiss one through `swissRefusal`. */
+function undoRefusal(code: UndoRefusalCode): HttpError {
+  return isKnockoutRefusalCode(code) ? knockoutRefusal(code) : swissRefusal(code);
+}
 
 function isUndoBarrier(e: LedgerEvent): e is LedgerEvent & { type: UndoBarrierType } {
   if (!Object.hasOwn(UNDO_BARRIER_TYPES, e.type)) return false;
@@ -116,7 +129,7 @@ function isUndoBarrier(e: LedgerEvent): e is LedgerEvent & { type: UndoBarrierTy
 
 /** The refusal code of the NEWEST barrier past `targetSeq` — the ledger row an Undo inverts or a Redo copies — or null
  *  when the step crosses none. Order-free: the newest is the highest seq, however the ledger arrives. */
-export function undoBarrierRefusal(ledger: readonly LedgerEvent[], targetSeq: number): SwissRefusalCode | null {
+export function undoBarrierRefusal(ledger: readonly LedgerEvent[], targetSeq: number): UndoRefusalCode | null {
   let newest: (LedgerEvent & { type: UndoBarrierType }) | undefined;
   for (const e of ledger) {
     if (e.seq <= targetSeq || !isUndoBarrier(e)) continue;
@@ -750,11 +763,12 @@ async function stepWrite(
     } catch (err) {
       toEngineError(err);
     }
-    // W3 T5 (design §10.8, X-SW-28). The undo barriers first, before any read or write: an organiser's late entry or a
-    // round-count change newer than the row this step inverts (Undo) or copies (Redo) refuses the step by name.
+    // W3 T5 (design §10.8, X-SW-28). The undo barriers first, before any read or write: an organiser's late entry, a
+    // round-count change or (W4 T5, K1) a seed confirm newer than the row this step inverts (Undo) or copies (Redo)
+    // refuses the step by name.
     const targetSeq = invertedStepSeq(direction, result.event.payload);
     const barrier = undoBarrierRefusal(ledger, targetSeq);
-    if (barrier !== null) throw swissRefusal(barrier);
+    if (barrier !== null) throw undoRefusal(barrier);
     // Undo of Pair next (SW-M2 / #835, RB3-22). A Pair seats a Swiss round by UPDATING shells that already exist, so
     // its `fixtures_generated` names no `fixture_ids` and the engine's inverse deletes nothing: the seats are this
     // step's to clear, read from the Pair row the step takes away (`seated_fixture_ids`; `pairRowClearedBy`: the row an
@@ -792,9 +806,10 @@ async function stepWrite(
     // rows) and a redo of a clear both hand back the payload of the event
     // they invert or copy, whose snapshot is from BEFORE the restore. It used
     // to be kept whenever present, so a change made outside the ledger since
-    // the restore — a seed fill (`confirmSeedProposal`), any writer that
-    // appends no division event — was deleted here and quietly reverted by
-    // the next restore.
+    // the restore — any writer that appends no division event (a seed fill
+    // was the real one until W4 T5 made `confirmSeedProposal` append its
+    // `seed_confirmed` barrier, which no step now crosses) — was deleted here
+    // and quietly reverted by the next restore.
     if (result.event.type === "fixtures_cleared") {
       const ids = (result.event.payload.fixture_ids as string[]) ?? [];
       if (ids.length > 0) result.event.payload.fixtures = await snapshotFixtures(tx, { ids });

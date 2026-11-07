@@ -33,6 +33,7 @@ import { resolveModule } from "@/server/engine-db";
 import { forfeitPlayedFacts } from "@/server/engine-db/forfeit-played";
 import { withTenant } from "@/lib/db";
 import { swissRefusal } from "./swiss-refusal";
+import type { UndoBarrierType } from "./history";
 import { swissAddRoundState, swissBoardStartedSql, swissFinishDetails, swissFinishState } from "./swiss-rounds-admin";
 import { OCCUPYING, afterScheduleWrite, courtVenueIds, divisionLockState } from "./schedule";
 import {
@@ -196,9 +197,15 @@ export async function nextFreeRoundSlot(
   return null;
 }
 
-async function appendLateEntryRow(
+/**
+ * Append one undo-barrier ledger row (history.ts `UNDO_BARRIER_TYPES`) — the ONE writer of such a row (W4 pre-flight
+ * drift R4: exported once rather than copied): an organiser's late entry here, and since W4 T5 (K1) a seed confirm
+ * (`seed_confirmed`, stages.ts `confirmSeedProposal`).
+ */
+export async function appendUndoBarrierRow(
   tx: Tx,
   divisionId: string,
+  type: UndoBarrierType,
   payload: Record<string, unknown>,
   actorId: string | null,
 ): Promise<void> {
@@ -209,9 +216,12 @@ async function appendLateEntryRow(
     select coalesce(max(seq), 0)::int as seq from division_events where division_id = ${divisionId}`;
   await tx`
     insert into division_events (division_id, seq, type, payload, actor_id)
-    values (${divisionId}, ${last + 1}, 'swiss_late_entry', ${tx.json(payload as never)}, ${actorId})`;
+    values (${divisionId}, ${last + 1}, ${type}, ${tx.json(payload as never)}, ${actorId})`;
   await tx`update divisions set seq = ${last + 1} where id = ${divisionId}`;
 }
+
+const appendLateEntryRow = (tx: Tx, divisionId: string, payload: Record<string, unknown>, actorId: string | null) =>
+  appendUndoBarrierRow(tx, divisionId, "swiss_late_entry", payload, actorId);
 
 async function stampFirstRound(tx: Tx, entrantId: string, stageId: string, round: number): Promise<void> {
   await tx`

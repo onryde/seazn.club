@@ -17,6 +17,8 @@ import { knockoutRefusal } from "@/server/usecases/knockout-refusal";
 const PLAN_CODES = [
   // T3 (K2, X-SD-5): a bye line is not played, so it never takes a court or a time.
   "BYE_LINE_NOT_PLACEABLE",
+  // T5 (K1): Undo, Redo and Restore never step across a seed confirm.
+  "SEED_CONFIRM_NOT_UNDOABLE",
 ] as const;
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
@@ -65,6 +67,14 @@ describe("KNOCKOUT_REFUSALS (W4 app-A)", () => {
       status: 422,
       en: "A bye is not played, so it never takes a court or a time.",
       key: "knockout.refusal.BYE_LINE_NOT_PLACEABLE",
+    });
+  });
+
+  it("SEED_CONFIRM_NOT_UNDOABLE: 409 (a state of the division, resolved another way), with the plan's sentence", () => {
+    expect(KNOCKOUT_REFUSALS.SEED_CONFIRM_NOT_UNDOABLE).toEqual({
+      status: 409,
+      en: "A confirmed draw can't be undone. Recompute the proposal instead.",
+      key: "knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE",
     });
   });
 

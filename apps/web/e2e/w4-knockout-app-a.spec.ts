@@ -5,7 +5,7 @@ import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-k
 // W4 knockout app-A (spec 2026-11-04-format-matrix-w4-knockout-design.md). One describe per rule, each driven through the
 // real product: the v1 routes the desk and the pad call, and read back on the division's run sheet.
 
-type Seated = Fx & { home_entrant_id: string | null; away_entrant_id: string | null };
+type Seated = Fx & { home_entrant_id: string | null; away_entrant_id: string | null; status: string };
 
 /** A badminton knockout of `names`, seeded in order, generated and Started. */
 async function startedKnockout(request: APIRequestContext, label: string, names: string[]) {
@@ -260,5 +260,99 @@ test.describe("X-RB-1 the final keeps its court across 8→9", () => {
       courts[1]!.name,
       { timeout: 20_000 },
     );
+  });
+});
+
+// K1 (W4 T5): Undo cannot cross a seed confirm. A Plate is drawn on day one with every seat TBD (`timing: "setup"`); the
+// confirm seats it through `fillSlot`, which no ledger step records, so the next Undo inverted the Plate's own generation
+// and deleted the seeded draw. The confirm now appends a `seed_confirmed` undo barrier: History lists it as "Draw
+// confirmed", and its Undo is refused by name in the reader's language while the Plate keeps every seat.
+test.describe("K1 Undo refuses across a confirmed draw", () => {
+  test("play out a Main draw of eight, confirm its Plate, press Undo on the History panel — refused by name, and the Plate keeps every seat", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(180_000);
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Plate cup ${TAG}`, visibility: "private" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "badminton",
+      variant_key: "bwf",
+      config: {},
+    });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const added = await apiJson<{ id: string; display_name: string }[]>(
+      request,
+      `/api/v1/divisions/${divisionId}/entrants`,
+      "POST",
+      Array.from({ length: 8 }, (_, i) => ({ kind: "individual", display_name: `Plate P${i + 1} ${TAG}`, seed: i + 1 })),
+    );
+    expect(added.status, JSON.stringify(added.error)).toBe(201);
+    const nameOf = new Map(added.data!.map((e) => [e.id, e.display_name]));
+    const main = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "knockout", name: "Main draw", config: {} });
+    expect(main.status, JSON.stringify(main.error)).toBe(201);
+    const plate = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq: 2,
+      kind: "knockout",
+      name: "Plate",
+      config: {},
+      progression: { sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 4 }] }], placement: "rank_order", timing: "setup" },
+    });
+    expect(plate.status, JSON.stringify(plate.error)).toBe(201);
+    expect((await apiJson(request, `/api/v1/stages/${plate.data!.id}/generate`, "POST")).status, "the Plate's day-one draw").toBe(200);
+    expect((await apiJson(request, `/api/v1/stages/${main.data!.id}/generate`, "POST")).status).toBe(200);
+    expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
+
+    const mainRows = async () => (await stageFixtures(request, divisionId, main.data!.id)) as Seated[];
+    for (let guard = 0; guard < 6; guard++) {
+      const open = (await mainRows()).filter(
+        (f) => f.home_entrant_id !== null && f.away_entrant_id !== null && !["decided", "finalized", "forfeited", "void"].includes(f.status),
+      );
+      if (open.length === 0) break;
+      for (const f of open) await homeWins(request, f.id);
+    }
+    const done = await apiJson<{ completed: boolean }>(request, `/api/v1/stages/${main.data!.id}/complete`, "POST");
+    expect([done.status, done.data?.completed], JSON.stringify(done.error)).toEqual([200, true]);
+    const proposal = await apiJson<{ id: string; computed: { ties: { slots: string[]; entrantIds: string[] }[] } }>(
+      request,
+      `/api/v1/stages/${plate.data!.id}/seed-proposal`,
+      "POST",
+    );
+    expect(proposal.status, JSON.stringify(proposal.error)).toBe(200);
+    const ties = proposal.data!.computed.ties;
+    const confirmed = await apiJson(request, `/api/v1/stages/${plate.data!.id}/seed-proposal/confirm`, "POST", {
+      proposalId: proposal.data!.id,
+      ...(ties.length > 0 ? { tiePicks: ties.map((t) => ({ slots: t.slots, order: t.entrantIds })) } : {}),
+    });
+    expect(confirmed.status, JSON.stringify(confirmed.error)).toBe(200);
+    const plateRows = async () => (await stageFixtures(request, divisionId, plate.data!.id)) as Seated[];
+    const seated = (await plateRows()).filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null);
+    expect(seated.length, "premise: the confirm seated the Plate's two first-round lines").toBe(2);
+    const seatsBefore = (await plateRows()).map((f) => [f.id, f.home_entrant_id, f.away_entrant_id]);
+
+    // The History panel: the confirm is listed by name, and Undo answers the barrier's refusal in the reader's language.
+    await page.goto(await divisionPath(request, divisionId, "/schedule?tab=history"));
+    await expect(page.getByText("Draw confirmed").first(), "History names the confirm").toBeVisible({ timeout: 20_000 });
+    const undo = page.getByTestId("history-undo");
+    await expect(undo).toBeEnabled({ timeout: 20_000 });
+    const answered = page.waitForResponse(
+      (r) => r.url().endsWith(`/api/v1/divisions/${divisionId}/undo`) && r.request().method() === "POST",
+    );
+    await undo.click();
+    expect((await answered).status(), "the Undo is refused").toBe(409);
+    await expect(page.getByTestId("history-error")).toHaveText("A confirmed draw can't be undone. Recompute the proposal instead.", {
+      timeout: 20_000,
+    });
+    expect((await plateRows()).map((f) => [f.id, f.home_entrant_id, f.away_entrant_id]), "the Plate keeps every seat").toEqual(seatsBefore);
+
+    // And the run sheet still names the Plate's seeded players.
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await showAllFixtures(page);
+    const line = page.locator(`li[data-fixture-no="${seated[0]!.fixture_no}"]`);
+    for (const id of [seated[0]!.home_entrant_id!, seated[0]!.away_entrant_id!]) {
+      await expect(line, `the run sheet seats ${nameOf.get(id)}`).toContainText(nameOf.get(id)!, { timeout: 20_000 });
+    }
   });
 });

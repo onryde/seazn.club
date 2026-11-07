@@ -311,6 +311,11 @@ describe("aiUndoErrorKey (a refused one-tap AI Undo → localized copy key)", ()
     expect(checked, "anti-vacuity: every code checked").toBe(codes.length);
     expect(checked).toBeGreaterThan(0);
   });
+  it("says the confirmed-draw barrier (W4 T5, K1: a KNOCKOUT code, 409) in its own sentence", () => {
+    // The plan's code and key, typed here. A restore loop that stops on a seed confirm answers this; through
+    // `aiErrorKey` a 409 reads as a generic conflict.
+    expect(aiUndoErrorKey(409, "SEED_CONFIRM_NOT_UNDOABLE")).toBe("knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE");
+  });
   it("leaves every other refusal to aiErrorKey (positive pair)", () => {
     for (const [status, code] of [
       [422, "SCHEDULE_LOCKED"],

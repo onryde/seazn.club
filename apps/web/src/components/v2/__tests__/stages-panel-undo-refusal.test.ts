@@ -43,6 +43,15 @@ describe("undoRefusalMessage — StagesPanel's Undo-last refusal", () => {
     expect(checked).toBe(3);
   });
 
+  it("says the confirmed-draw barrier (a KNOCKOUT code) with the dictionary's sentence (W4 T5, K1)", () => {
+    // Undo-last after a seed confirm: the server refuses with SEED_CONFIRM_NOT_UNDOABLE (409, the plan's) — a knockout
+    // refusal, not a Swiss one, so a Swiss-only branch let its English through.
+    const local = EN["knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE"];
+    expect(typeof local, "en/ui.json has its sentence").toBe("string");
+    const text = undoRefusalMessage(new ApiV1Error("server: SEED_CONFIRM_NOT_UNDOABLE", 409, "SEED_CONFIRM_NOT_UNDOABLE"), msg);
+    expect(text).toBe(local);
+  });
+
   it("keeps an unrecognised refusal's own message", () => {
     expect(undoRefusalMessage(new ApiV1Error("division is mid-solve", 409, "BUSY"), msg)).toBe(
       "division is mid-solve",

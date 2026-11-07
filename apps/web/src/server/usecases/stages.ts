@@ -6916,6 +6916,20 @@ export async function confirmSeedProposal(
       await tx`update divisions set seq = ${nextSeq} where id = ${stage.division_id}`;
     }
 
+    // W4 T5 (K1): the confirm is an undo barrier. Its fills went through `fillSlot`, which no ledger step records, so an
+    // Undo after it inverted the step BEFORE it — this bracket's own day-one generation — and deleted the seeded draw.
+    // One `seed_confirmed` row, LAST (after any carry event) and under the `division:` lock taken above: Undo, Redo and
+    // Restore refuse to step across it by name (history.ts `UNDO_BARRIER_TYPES`). Its writer moves the division's token
+    // and never the watermark.
+    const { appendUndoBarrierRow } = await import("./swiss-late-entry");
+    await appendUndoBarrierRow(
+      tx,
+      stage.division_id,
+      "seed_confirmed",
+      { stage_id: stageId, proposal_id: proposal.id, source: "organiser" },
+      auth.userId,
+    );
+
     const fixturesRaw = await tx<Omit<FixtureRow, "court_name">[]>`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
              f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,

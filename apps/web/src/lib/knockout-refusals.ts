@@ -14,7 +14,9 @@ import type { MessageKey } from "@/lib/messages";
 
 export type KnockoutRefusalCode =
   // T3 (K2; X-SD-5): a bye line is not played, so it takes no court, no time and no pin.
-  "BYE_LINE_NOT_PLACEABLE";
+  | "BYE_LINE_NOT_PLACEABLE"
+  // T5 (K1): an Undo, Redo or Restore that would step across a seed confirm (history.ts `UNDO_BARRIER_TYPES`).
+  | "SEED_CONFIRM_NOT_UNDOABLE";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -28,6 +30,11 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 422,
     en: "A bye is not played, so it never takes a court or a time.",
     key: "knockout.refusal.BYE_LINE_NOT_PLACEABLE",
+  },
+  SEED_CONFIRM_NOT_UNDOABLE: {
+    status: 409,
+    en: "A confirmed draw can't be undone. Recompute the proposal instead.",
+    key: "knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE",
   },
 };
 

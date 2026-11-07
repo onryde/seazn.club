@@ -14,13 +14,17 @@ import { type Session, appendScoreEvent, check, newSession, signIn, tag, v1, v1d
  * T4 (X-RB-1, K3): Rebuild carries a knockout's slots by bracket role. A knockout of eight laid out line by line, then a
  * ninth entrant and a Rebuild: the final still holds the final's court and time (by position it went to a semi-final).
  *
+ * T5 (K1): Undo cannot cross a seed confirm. A Main draw of eight played out and completed, its Plate's draft confirmed
+ * (the four first-round losers seated): the division's Undo is refused 409 SEED_CONFIRM_NOT_UNDOABLE and the Plate keeps
+ * every seat (before T5 it inverted the Plate's day-one generation and deleted the seeded draw).
+ *
  * Own fresh owner; keyless; every read and write is a v1 route. Every check is counted, and a run that checked nothing fails.
  * SMOKE_ONLY=w4KnockoutA runs it alone (SELECTABLE_SUITES).
  */
 export async function w4KnockoutASuite(): Promise<void> {
   // T2: 1 (a called final survives a void of its feeder). T3: 1 (an awarded bye holds no court). T4: 1 (the final keeps
-  // its slot across an 8 → 9 Rebuild).
-  const EXPECTED_CHECKS = 3;
+  // its slot across an 8 → 9 Rebuild). T5: 1 (Undo refuses across a confirmed draw).
+  const EXPECTED_CHECKS = 4;
   let checked = 0;
   const w4Check = (label: string, cond: boolean) => {
     checked++;
@@ -53,6 +57,7 @@ export async function w4KnockoutASuite(): Promise<void> {
     away_entrant_id: string | null;
     scheduled_at: string | null;
     court_id: string | null;
+    status?: string;
   };
 
   /** A badminton knockout of `n` seeded entrants on its own division, generated and Started — with `settings` (the
@@ -198,6 +203,74 @@ export async function w4KnockoutASuite(): Promise<void> {
     w4Check(
       "w4a X-RB-1: an 8 → 9 knockout Rebuild keeps the final's court and time on the final — 7 kept, 0 freed, 1 unscheduled" +
         (ok ? "" : ` — generate ${ko.generated}, lines ${before.length}, placed ${placedOk}, rebuild ${rebuilt.status} ${JSON.stringify(rebuilt.json).slice(0, 160)}, final round ${finalRound}→${newFinalRound} (${finals.length}), final ${oldFinal}→${newFinal}, slots ${JSON.stringify(slots)}`),
+      ok,
+    );
+  }
+
+  // Check 4 (T5, K1): Undo cannot cross a seed confirm. A Main draw of eight (home always wins) played out and completed;
+  // its Plate — drawn on day one, every seat TBD, `timing: "setup"` — seeded by confirming the draft. The confirm's fills
+  // are no ledger step, so before T5 the next Undo inverted the Plate's own generation and deleted the seeded draw. Now
+  // it is refused by name and the Plate keeps every seat. The expected seats are the ones read after the confirm.
+  {
+    const divId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Seed confirm", sport_key: "badminton", variant_key: "bwf", config: {} }),
+    )?.id;
+    await v1(
+      owner,
+      `/api/v1/divisions/${divId}/entrants`,
+      "POST",
+      Array.from({ length: 8 }, (_, i) => ({ kind: "individual", display_name: `Seed confirm P${i + 1} ${tag}`, seed: i + 1 })),
+    );
+    const mainId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "knockout", name: "Main draw", config: {} }),
+    )?.id;
+    const plateId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", {
+        seq: 2,
+        kind: "knockout",
+        name: "Plate",
+        config: {},
+        progression: { sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 4 }] }], placement: "rank_order", timing: "setup" },
+      }),
+    )?.id;
+    const plateDayOne = await v1(owner, `/api/v1/stages/${plateId}/generate`, "POST");
+    const mainGen = await v1(owner, `/api/v1/stages/${mainId}/generate`, "POST");
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    const stageRows = async (stageId: string | undefined) =>
+      (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    let played = 0;
+    for (let guard = 0; guard < 6; guard++) {
+      const open = (await stageRows(mainId)).filter(
+        (f) => f.home_entrant_id !== null && f.away_entrant_id !== null && !["decided", "finalized", "forfeited", "void"].includes(f.status ?? ""),
+      );
+      if (open.length === 0) break;
+      for (const f of open) if (await homeWins(owner, f.id)) played++;
+    }
+    const done = await v1(owner, `/api/v1/stages/${mainId}/complete`, "POST");
+    const proposal = v1data<{ id: string; computed: { ties: { slots: string[]; entrantIds: string[] }[] } } | undefined>(
+      await v1(owner, `/api/v1/stages/${plateId}/seed-proposal`, "POST"),
+    );
+    const confirmed = proposal
+      ? await v1(owner, `/api/v1/stages/${plateId}/seed-proposal/confirm`, "POST", {
+          proposalId: proposal.id,
+          ...(proposal.computed.ties.length > 0 ? { tiePicks: proposal.computed.ties.map((t) => ({ slots: t.slots, order: t.entrantIds })) } : {}),
+        })
+      : undefined;
+    const seats = (rows: Fx[]) => rows.map((f) => `${f.id}:${f.home_entrant_id ?? "-"}|${f.away_entrant_id ?? "-"}`).sort().join(",");
+    const plateBefore = await stageRows(plateId);
+    const seated = plateBefore.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null).length;
+    const undo = await v1(owner, `/api/v1/divisions/${divId}/undo`, "POST", {});
+    const plateAfter = await stageRows(plateId);
+    const ok =
+      plateDayOne.status === 200 && mainGen.status === 200 && started.status === 200 && played === 7 && done.status === 200 &&
+      confirmed?.status === 200 &&
+      // the premise: the Plate's two first-round lines are seated by the confirm
+      seated === 2 &&
+      undo.status === 409 && undo.json.error?.code === "SEED_CONFIRM_NOT_UNDOABLE" &&
+      plateAfter.length === plateBefore.length && seats(plateAfter) === seats(plateBefore);
+    w4Check(
+      "w4a K1: Undo after a Plate's draft is confirmed is refused 409 SEED_CONFIRM_NOT_UNDOABLE, and the Plate keeps every seat" +
+        (ok ? "" : ` — plate gen ${plateDayOne.status}, main gen ${mainGen.status}, start ${started.status}, played ${played}, complete ${done.status} ${JSON.stringify(done.json).slice(0, 120)}, confirm ${confirmed?.status ?? "-"} ${JSON.stringify(confirmed?.json).slice(0, 160)}, seated ${seated}, undo ${undo.status} ${JSON.stringify(undo.json).slice(0, 160)}, rows ${plateBefore.length}→${plateAfter.length}, seats kept ${seats(plateAfter) === seats(plateBefore)}`),
       ok,
     );
   }
