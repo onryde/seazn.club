@@ -273,9 +273,11 @@ const reportJoin = (sessionId: string) => sql<{ moment_id: string; frame_path: s
    where a.session_id = ${sessionId}
    order by a.started_at, a.moment_id`;
 const storedAt = (path: string) => store.objects.get(`${SPONSOR_FRAMES_BUCKET}\n${path}`);
-/** The tombstones (V492) among `paths`. */
+/** The tombstones (V492) among `paths`, in JS's own code-unit order - the order every expectation here builds with `.sort()`.
+ *  Never the database's `order by path`: under CI's en_US collation that compares case-insensitively first, so the
+ *  base64url ids `MTp…` and `Mjp…` came back the other way round from a JS sort of the same two paths. */
 const tombstonesOf = async (paths: string[]) =>
-  (await sql<{ path: string }[]>`select path from sponsor_frame_tombstones where path in ${sql(paths)} order by path`).map((r) => r.path);
+  (await sql<{ path: string }[]>`select path from sponsor_frame_tombstones where path in ${sql(paths)}`).map((r) => r.path).sort();
 
 // ---------------------------------------------------------------------------------------------------------------
 // Pure: the grammar and the storage key.
