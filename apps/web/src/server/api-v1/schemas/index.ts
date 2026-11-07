@@ -47,6 +47,9 @@ export {
   CAPTURE_RECORD_MAX_LINES, CAPTURE_RECORD_MAX_BYTES, CAPTURE_RECORD_REF_RE, CaptureRecordLine, CaptureRecordOk,
   CaptureRecordRefusalCode, CaptureRecordRefusal, CaptureRecordSecretS2, CaptureRecordSecretS3, CaptureRecordSecretS4,
   CaptureRecordSecretS5,
+  // capture-matchday-day.v1 (capture S4 Match Day design §5, §9; MD-1 Task 3).
+  CaptureMatchdayRefusalCode, CaptureMatchdayRow, CaptureMatchdayApproval, CaptureMatchdayCourt, CaptureMatchdayDay,
+  CaptureMatchdayRefusal,
 } from "../capture-schemas.ts";
 export {
   Uuid, CourtId, RequiredCourtTags, VenueId, Slug, Visibility, CompetitionStatus, DivisionStatus, StageKind,

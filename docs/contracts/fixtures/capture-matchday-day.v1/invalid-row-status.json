@@ -1,0 +1,96 @@
+{
+  "competition": {
+    "id": "2f0c8a51-6b8e-4d37-9a51-0c1e2d3f4a5b",
+    "name": "SAFE Open 2026"
+  },
+  "day": "2026-11-07",
+  "tz": "Europe/Amsterdam",
+  "opens_at": "2026-11-06T23:00:00.000Z",
+  "expires_at": "2026-11-07T23:00:00.000Z",
+  "scope": {
+    "kind": "competition",
+    "label": "SAFE Open 2026"
+  },
+  "can_approve": false,
+  "courts": [
+    {
+      "court_id": "6a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "court_name": "Court 1",
+      "venue_name": "Hall A",
+      "state": "playing",
+      "now": {
+        "fixture_id": "7b2c3d4e-5f6a-4b7c-9d8e-0f1a2b3c4d5e",
+        "sport_key": "badminton",
+        "division_name": "Men's doubles",
+        "round_label": "R1",
+        "home": "Ann & Bob",
+        "away": "Cat & Dan",
+        "status": "decided",
+        "scheduled_at": "2026-11-07T10:00:00.000Z",
+        "summary": "14-9"
+      },
+      "next": [
+        {
+          "fixture_id": "8c3d4e5f-6a7b-4c8d-ae9f-1a2b3c4d5e6f",
+          "sport_key": "badminton",
+          "division_name": "Men's singles",
+          "round_label": "R2",
+          "home": "Patel",
+          "away": "Okafor",
+          "status": "upcoming",
+          "scheduled_at": "2026-11-07T09:40:00.000Z",
+          "summary": null
+        }
+      ],
+      "finished": [
+        {
+          "fixture_id": "9d4e5f6a-7b8c-4d9e-bf0a-2b3c4d5e6f7a",
+          "sport_key": "badminton",
+          "division_name": "Men's doubles",
+          "round_label": "R1",
+          "home": "Ann & Bob",
+          "away": "Cat & Dan",
+          "status": "finished",
+          "scheduled_at": "2026-11-07T08:00:00.000Z",
+          "summary": "21-15 21-18"
+        }
+      ]
+    },
+    {
+      "court_id": "0e5f6a7b-8c9d-4e0f-8a1b-3c4d5e6f7a8b",
+      "court_name": "Court 2",
+      "venue_name": "Hall A",
+      "state": "free",
+      "now": null,
+      "next": [
+        {
+          "fixture_id": "1f6a7b8c-9d0e-4f1a-9b2c-4d5e6f7a8b9c",
+          "sport_key": "badminton",
+          "division_name": "Men's doubles",
+          "round_label": "QF",
+          "home": null,
+          "away": null,
+          "status": "upcoming",
+          "scheduled_at": "2026-11-07T09:20:00.000Z",
+          "summary": null
+        }
+      ],
+      "finished": []
+    }
+  ],
+  "no_court": [
+    {
+      "fixture_id": "2a7b8c9d-0e1f-4a2b-ac3d-5e6f7a8b9c0d",
+      "sport_key": "badminton",
+      "division_name": "Women's singles",
+      "round_label": "R2",
+      "home": "Singh",
+      "away": "Murphy",
+      "status": "upcoming",
+      "scheduled_at": null,
+      "summary": null
+    }
+  ],
+  "online": [],
+  "approvals": []
+}

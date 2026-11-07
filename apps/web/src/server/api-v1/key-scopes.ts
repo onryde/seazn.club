@@ -402,6 +402,9 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   // S2-1 (capture design §7.1): the phone's Remote Scoring bootstrap. Its Bearer is a device link `dl_…` that the route resolves itself —
   // never a key, and a key is refused by it (LINK_INVALID); the one v1 route a `dl_` token opens beyond the fixture surface.
   "GET /device-link",
+  // MD-1 (capture S4 Match Day design §9): the Match Day code's own routes. Their Bearer is an md_ code the route resolves
+  // itself — a credential that lists a day and opens scoring links; never a key.
+  "GET /match-day-code",
   // Chess in-page board (2026-10-09 design §6): the room read names a player's
   // seat, the POSTs seat them, submit moves with that player's own stored
   // Lichess OAuth token, report their clock at zero, and stamp a camera gap

@@ -1,0 +1,41 @@
+{
+  "competition": {
+    "id": "2f0c8a51-6b8e-4d37-9a51-0c1e2d3f4a5b",
+    "name": "SAFE Open 2026"
+  },
+  "day": "2026-11-07",
+  "tz": "Europe/Amsterdam",
+  "opens_at": "2026-11-06T23:00:00.000Z",
+  "expires_at": "2026-11-07T23:00:00.000Z",
+  "scope": {
+    "kind": "courts",
+    "label": "Court 2"
+  },
+  "can_approve": false,
+  "courts": [
+    {
+      "court_id": "0e5f6a7b-8c9d-4e0f-8a1b-3c4d5e6f7a8b",
+      "court_name": "Court 2",
+      "venue_name": "Hall A",
+      "state": "free",
+      "now": null,
+      "next": [
+        {
+          "fixture_id": "1f6a7b8c-9d0e-4f1a-9b2c-4d5e6f7a8b9c",
+          "sport_key": "badminton",
+          "division_name": "Men's doubles",
+          "round_label": "QF",
+          "home": null,
+          "away": null,
+          "status": "upcoming",
+          "scheduled_at": "2026-11-07T09:20:00.000Z",
+          "summary": null
+        }
+      ],
+      "finished": []
+    }
+  ],
+  "no_court": [],
+  "online": [],
+  "approvals": []
+}

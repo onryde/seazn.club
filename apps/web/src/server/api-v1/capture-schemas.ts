@@ -306,3 +306,67 @@ export const CaptureRefusal = z.union([
   z.strictObject({ code: CaptureRefusalCode.exclude(["already_live"]), message: z.string() }),
 ]);
 export type CaptureRefusal = z.infer<typeof CaptureRefusal>;
+
+// ---------------------------------------------------------------------------------------------------------------
+// capture-matchday-day.v1 (capture S4 Match Day design 2026-11-07 §5, §9; MD-1 Task 3): a Match Day code's day read,
+// `GET /match-day-code`. The md_ routes ride the v1 envelope: an answer is `data` in `{ok: true, data, requestId}`, a refusal is `error`
+// in `{ok: false, error, requestId}`.
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Every refusal word the md_ routes answer (the plan's Global Constraints), with its status. */
+export const CaptureMatchdayRefusalCode = z.enum([
+  "MD_UNKNOWN", "MD_WITHDRAWN", "MD_ENDED", "MD_NOT_OPEN", "MD_OUT_OF_SCOPE", "MD_NO_APPROVE", "MD_STALE", "MD_ALREADY",
+  "MD_TIES",
+]);
+export type CaptureMatchdayRefusalCode = z.infer<typeof CaptureMatchdayRefusalCode>;
+/** An instant the server writes with `toISOString()`: UTC, milliseconds, `Z`. */
+const MdInstant = z.iso.datetime();
+/** One match as the list shows it. */
+export const CaptureMatchdayRow = z.strictObject({
+  fixture_id: z.uuid(),
+  sport_key: z.string().min(1),
+  division_name: z.string(),
+  round_label: z.string().min(1).nullable(),
+  home: z.string().nullable(),
+  away: z.string().nullable(),
+  status: z.enum(["upcoming", "in_play", "finished"]),
+  scheduled_at: MdInstant.nullable(),
+  summary: z.string().nullable(),
+});
+export const CaptureMatchdayApproval = z.strictObject({
+  kind: z.enum(["swiss", "draw"]),
+  stage_id: z.uuid(),
+  division_name: z.string(),
+  label: z.string(),
+});
+export const CaptureMatchdayCourt = z.strictObject({
+  court_id: z.uuid(),
+  court_name: z.string(),
+  venue_name: z.string(),
+  state: z.enum(["playing", "called", "free", "in_use_elsewhere"]),
+  now: CaptureMatchdayRow.nullable(),
+  next: z.array(CaptureMatchdayRow),
+  finished: z.array(CaptureMatchdayRow),
+});
+export const CaptureMatchdayDay = z.strictObject({
+  competition: z.strictObject({ id: z.uuid(), name: z.string() }),
+  scope: z.strictObject({ kind: z.enum(["competition", "venue", "courts"]), label: z.string() }),
+  day: z.iso.date(),
+  tz: z.string().min(1),
+  opens_at: MdInstant,
+  expires_at: MdInstant,
+  can_approve: z.boolean(),
+  courts: z.array(CaptureMatchdayCourt),
+  no_court: z.array(CaptureMatchdayRow),
+  online: z.array(CaptureMatchdayRow),
+  approvals: z.array(CaptureMatchdayApproval),
+});
+export type CaptureMatchdayDay = z.infer<typeof CaptureMatchdayDay>;
+/** Every refusal, the envelope's `error`: an MD_ word, or one of the v1 envelope's own (`RATE_LIMITED` 429 with
+ *  Retry-After, `NOT_FOUND` 404, `INTERNAL`, …). `opens_at` rides MD_NOT_OPEN only. */
+export const CaptureMatchdayRefusal = z.strictObject({
+  code: z.string().min(1),
+  message: z.string(),
+  opens_at: MdInstant.optional(),
+});
+export type CaptureMatchdayRefusal = z.infer<typeof CaptureMatchdayRefusal>;
