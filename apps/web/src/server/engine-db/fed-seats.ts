@@ -80,6 +80,9 @@ interface Node {
   status: string;
   outcome: unknown;
   live_events: number;
+  /** W4 T2 (K4, X-LE-9; owner ruling 257): a Match Day call still holds on it (`fixtureCalledSql`). A call writes a court
+   *  and a time and no status, outcome or event, so none of the three terms below sees it. */
+  called: boolean;
   /** The seats' slot-label keys — a dead seat carries the cascade's bye key (Review Focus 1's revive reads it). */
   home_key: string | null;
   away_key: string | null;
@@ -160,12 +163,12 @@ export function advancingSides(outcome: unknown): { winner: string | undefined; 
   }
 }
 
-/** Has the next match started, in the ruling's own three terms. Each is
- *  checked on its own because each can hold alone: a `core.note` leaves a
- *  fixture `scheduled` with a live event; a recorded walkover carries an
- *  outcome with a single `core.forfeit` behind it. */
+/** Has the next match started, in the ruling's own three terms — and, since W4 T2 (X-LE-9), a live Match Day call: a
+ *  final called to a court has its players standing at it, so taking a name off it is refused like any started match.
+ *  Each is checked on its own because each can hold alone: a `core.note` leaves a fixture `scheduled` with a live
+ *  event; a recorded walkover carries an outcome with a single `core.forfeit` behind it; a call writes none of them. */
 function hasStarted(t: Node): boolean {
-  return t.status !== "scheduled" || t.outcome !== null || t.live_events > 0;
+  return t.status !== "scheduled" || t.outcome !== null || t.live_events > 0 || t.called;
 }
 
 /** A walkover the SYSTEM awarded, which nobody played: `awardSeededByes`
@@ -229,6 +232,9 @@ function drawnLabel(src: Node, side: Side): Step["label"] {
 }
 
 async function readNode(tx: Tx, id: string): Promise<Node | undefined> {
+  // Imported lazily, as `departedOf` imports entrants: the predicate sits in usecases, ABOVE this file
+  // (match-day-call → engine-db → append-event → here), and a static edge back up reorders the cycle's evaluation.
+  const { fixtureCalledSql } = await import("@/server/usecases/fixture-started-sql");
   const [n] = await tx<Node[]>`
     select f.id, f.stage_id, f.round_no, f.seq_in_round, f.home_entrant_id, f.away_entrant_id,
            f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
@@ -237,7 +243,8 @@ async function readNode(tx: Tx, id: string): Promise<Node | undefined> {
            (select count(*)::int from score_events e
             where e.fixture_id = f.id and e.type <> 'core.void'
               and not exists (select 1 from score_events v
-                              where v.fixture_id = e.fixture_id and v.voids_event_id = e.id)) as live_events
+                              where v.fixture_id = e.fixture_id and v.voids_event_id = e.id)) as live_events,
+           ${fixtureCalledSql(tx, "f")} as called
     from fixtures f join stages s on s.id = f.stage_id
     where f.id = ${id}`;
   return n;

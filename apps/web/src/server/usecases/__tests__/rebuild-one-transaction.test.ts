@@ -26,6 +26,7 @@ import { createEntrants, patchEntrant } from "../entrants";
 import { setDivisionLocks } from "../history";
 import { startDivision } from "../schedule";
 import { createStages, generateStageFixtures, rebuildStageFixtures } from "../stages";
+import { callFixtureToCourt, undoCall } from "../match-day-call";
 import { createCourt, createVenue } from "../venues";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
@@ -377,5 +378,41 @@ describe.skipIf(!HAS_DB)("X-RB-1 Rebuild is one transaction", () => {
     }
     expect(checked).toBe(before.length);
     expect(out.slots).toEqual({ kept: before.length, freed: 0, unscheduled: 0 });
+  });
+});
+
+// W4 Task 2 (K4, X-LE-9; owner ruling 257). A Match Day call writes a court and a time and nothing Rebuild's result guard
+// read, so a stage whose only start was a called match rebuilt — the delete cascades into `fixture_calls`
+// (V484__match_day_fixture_calls.sql), so the players standing at the court lost their match and its call. Badminton, one
+// sport: neither the guard nor the call reads a sport column.
+describe.skipIf(!HAS_DB)("X-LE-9 a called match is started", () => {
+  it("X-LE-9 Rebuild refuses a stage whose only start is a live call", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedDivision(auth, BADMINTON, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "knockout", name: "Cup", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const before = await rowsOf(stage!.id);
+    const r1 = before.filter((r) => r.round_no === 1);
+    expect(r1.length, "premise: two seated round-one lines").toBe(2);
+    expect(r1.every((r) => r.home_entrant_id !== null && r.away_entrant_id !== null)).toBe(true);
+    const { courts } = await twoCourts(auth);
+    const called = r1[0]!;
+    await callFixtureToCourt(auth, called.id, courts[0]);
+    const [{ n: events }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from score_events e join fixtures f on f.id = e.fixture_id where f.stage_id = ${stage!.id}`;
+    const [{ status }] = await sql<{ status: string }[]>`select status from fixtures where id = ${called.id}`;
+    expect([events, status], "premise: nothing recorded, the call wrote no status").toEqual([0, "scheduled"]);
+
+    await expect(rebuildStageFixtures(auth, stage!.id)).rejects.toMatchObject({ status: 409, code: "STAGE_HAS_RESULTS" });
+    expect((await rowsOf(stage!.id)).map((r) => r.id), "nothing deleted").toEqual(before.map((r) => r.id));
+    const calls = await sql<{ court_id: string }[]>`select court_id from fixture_calls where fixture_id = ${called.id}`;
+    expect(calls, "the call row survives").toEqual([{ court_id: courts[0] }]);
+
+    // The positive pair: Undo call, and the stage nobody has started rebuilds.
+    await undoCall(auth, called.id);
+    const out = await rebuildStageFixtures(auth, stage!.id);
+    expect(out.removed, "an uncalled stage rebuilds").toBe(before.length);
   });
 });

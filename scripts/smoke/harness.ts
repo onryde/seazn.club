@@ -1599,6 +1599,8 @@ export async function cleanup(tag: string): Promise<void> {
     `delivered+w3a_${tag}@resend.dev`,
     // w3SwissBSuite's own org (W3 Swiss app-B) — its competition, division, entrants and stage cascade with it.
     `delivered+w3b_${tag}@resend.dev`,
+    // w4KnockoutASuite's own org (W4 knockout app-A) — its competition, divisions, venue, courts and calls cascade with it.
+    `delivered+w4a_${tag}@resend.dev`,
     // youtubeConnectSuite's two orgs (YouTube Connect T21) - the connections, destinations, broadcasts, fixtures and pending grants
     // all cascade with the org (V479: on delete cascade on org_id).
     `delivered+ytconnect_${tag}@resend.dev`,

@@ -28,6 +28,7 @@ const KNOWN = [
   "w2eRefusals",
   "w3SwissA",
   "w3SwissB",
+  "w4KnockoutA",
   "youtubeConnect",
 ] as const;
 
@@ -91,7 +92,8 @@ describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
     // w2dTables (own org) after that (format matrix W2d A14); funnelReminder (email outbox phase 3 wave 5 T8: no
     // session at all, nothing from SubsetCtx); w2eRefusals after that (format matrix W2e T33: its own Pro org and sign-in, nothing
     // from SubsetCtx); w3SwissA after that (format matrix W3 Swiss app-A: its own org and sign-in, nothing from SubsetCtx); w3SwissB after it (format
-    // matrix W3 Swiss app-B: its own org and sign-in, nothing from SubsetCtx);
+    // matrix W3 Swiss app-B: its own org and sign-in, nothing from SubsetCtx); w4KnockoutA after it (format matrix W4
+    // knockout app-A: its own org and sign-in, nothing from SubsetCtx);
     // youtubeConnect last (YouTube Connect T21: its own two orgs and sign-ins, nothing from SubsetCtx).
     const block = /const SELECTABLE_SUITES\b[\s\S]*?=\s*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
     const names = [...block.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);

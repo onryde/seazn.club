@@ -154,6 +154,7 @@ import {
   type SlotLabel,
 } from "./stage-seeding";
 import { fixtureEvidenceSql, fixtureHasResultSql, fixtureHoldsStandingResultSql } from "./fixture-results-sql";
+import { fixtureCalledSql } from "./fixture-started-sql";
 import { carriedSlotCounts, carrySlots, chooseDoomedBoards } from "@/lib/rebuild-slots";
 import { firstOwnFormat, matchName, ownFormatLoss, refuseOwnFormatLoss } from "./fixture-override-guards";
 import { FORMAT_CHANGE_REFUSALS, type FormatChangePreview } from "@/lib/format-change";
@@ -4314,9 +4315,15 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     // blocks only through its evidence (review 3 of #857, N2): the one a
     // scorer records posts `core.forfeit`; the generator's F14 walkover has
     // nothing played behind it, so a stage holding one rebuilds.
+    //
+    // W4 T2 (K4, X-LE-9; owner ruling 257): a live Match Day call refuses too. A call writes a court and a time and no
+    // status or event, so nothing above sees it, and the delete cascades into `fixture_calls` (V484) — the players
+    // standing at the court would lose their match and its call. Only the call arm of the one "started" predicate
+    // (`fixtureCalledSql`, fixture-started-sql.ts): its online-game arm is refused below by name (ONLINE_GAME_EXISTS, and
+    // a bridge row with no game rebuilds, M-10), and its decided arm would refuse the F14 walkover N2 keeps rebuildable.
     const [blocked] = await tx<{ id: string }[]>`
       select f.id from fixtures f
-      where f.stage_id = ${stageId} and ${fixtureHasResultSql(tx)}
+      where f.stage_id = ${stageId} and (${fixtureHasResultSql(tx)} or ${fixtureCalledSql(tx)})
       limit 1`;
     if (blocked) {
       throw new HttpError(
