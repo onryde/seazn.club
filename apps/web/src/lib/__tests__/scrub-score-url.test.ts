@@ -296,6 +296,62 @@ describe("scrubSentryEvent", () => {
   });
 });
 
+// MD-1 review I3: a Match Day code (`md_` + 32 random bytes as base64url, match-day-codes.ts) is a bearer credential
+// like a device link's `dl_`: the Match Day app sends it as `Authorization: Bearer md_…` on every call. Telemetry loses
+// it the same way, plain, glued, encoded at any depth, and in a Sentry event's headers.
+describe("scrubScoreUrl — a bare Match Day code (md_, MD-1 I3)", () => {
+  const MD = "md_TWF0Y2ggRGF5IGNvZGUgZm9yIGEgd2hvbGUgZGF5IGF0IGNv_Zx-3";
+  const MD_OTHER = "md_U2Vjb25kIE1hdGNoIERheSBjb2RlIGZvciB0aGUgdmVudWUx-_q";
+  function expectNoMd(value: unknown): void {
+    const text = JSON.stringify(value);
+    expect(text).not.toContain(MD);
+    expect(text).not.toContain(MD_OTHER);
+  }
+
+  it.each([
+    ["a Bearer header value", `Bearer ${MD}`, "Bearer md_[token]"],
+    ["a %2F-encoded path segment", `?next=%2Fapi%2Fv1%2Fmatch-day%2F${MD}%2Fboard&x=1`, "?next=%2Fapi%2Fv1%2Fmatch-day%2Fmd_[token]%2Fboard&x=1"],
+    [
+      "a triple-encoded URL",
+      `?r=https%25253A%25252F%25252Fseazn.club%25252Fapi%25252Fv1%25252Fmatch-day%25252F${MD}`,
+      "?r=https%25253A%25252F%25252Fseazn.club%25252Fapi%25252Fv1%25252Fmatch-day%25252Fmd_[token]",
+    ],
+    ["a secret glued to a word character", `session_${MD}`, "session_md_[token]"],
+    ["both kinds in one string", `Bearer ${MD} then Bearer ${TOKEN}`, "Bearer md_[token] then Bearer dl_[token]"],
+    ["two codes", `${MD} ${MD_OTHER}`, "md_[token] md_[token]"],
+  ])("%s", (_, input, expected) => {
+    expect(scrubScoreUrl(input)).toBe(expected);
+    expectNoMd(scrubScoreUrl(input));
+  });
+
+  it.each([
+    ["a short md_ word", "md_x"],
+    ["a snake_case name holding md_", "cmd_md_config"],
+    ["31 token characters: one short of a secret", `md_${"A".repeat(31)}`],
+  ])("leaves %s untouched", (_, input) => {
+    expect(scrubScoreUrl(input)).toBe(input);
+  });
+
+  it("scrubs 32 token characters (the guard's exact floor)", () => {
+    expect(scrubScoreUrl(`md_${"A".repeat(32)}`)).toBe("md_[token]");
+  });
+
+  it("a Sentry event on an organiser route: the Authorization header, the URL and a breadcrumb lose the code", () => {
+    const event: Event = {
+      event_id: "e-md",
+      request: {
+        url: `https://seazn.club/api/v1/competitions/c1/schedule?ref=%2Fday%2F${MD}`,
+        headers: { authorization: `Bearer ${MD}` },
+      },
+      breadcrumbs: [{ category: "fetch", message: `GET /api/v1/match-day/board Bearer ${MD_OTHER}` }],
+    };
+    const out = scrubSentryEvent(event);
+    expect(out).not.toBeNull();
+    expectNoMd(out);
+    expect(out!.request?.headers?.authorization).toBe("Bearer md_[token]");
+  });
+});
+
 // Capture QR v2 §10.2 (A18, FP18): a phone route's code is half its credential and its Bearer the other half; the beat
 // body names the code again. A capture route's event loses all three. Every other event keeps its URL and body.
 describe("scrubSentryEvent — the capture phone routes (A18)", () => {

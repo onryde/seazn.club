@@ -110,12 +110,14 @@ const SCORE_PATH = /\/score\/[^/?#\s"'<>]+/g;
 const ENCODED_SCORE_PATH = /(%(?:25)*2[Ff]score%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
 /**
  * A bare secret, e.g. in an `Authorization` header. `mintDeviceLinkSecret`
- * makes `dl_` + 43 base64url chars. No `\b` in front: a secret glued to a word
- * character (`x_dl_…`, `%2Fdl_…`) has no word boundary before its `d`. The
- * 32-character floor is what keeps ordinary words (`model_dl_config`,
- * `handl_…`) from being eaten.
+ * makes `dl_` + 43 base64url chars, and a Match Day code (MD-1 review I3,
+ * `match-day-codes.ts`) is `md_` + 43 more, sent as `Bearer md_…` the same way.
+ * The prefix is kept (`dl_[token]`, `md_[token]`). No `\b` in front: a secret
+ * glued to a word character (`x_dl_…`, `%2Fmd_…`) has no word boundary before
+ * its prefix. The 32-character floor is what keeps ordinary words
+ * (`model_dl_config`, `handl_…`, `cmd_md_config`) from being eaten.
  */
-const BARE_TOKEN = /dl_[A-Za-z0-9_-]{32,}/g;
+const BARE_TOKEN = /(dl|md)_[A-Za-z0-9_-]{32,}/g;
 /**
  * The overlay key as a query parameter: `key=` at the start of a query string (Sentry's `request.query_string` carries
  * no `?`) or after `?` / `&`, never inside another name (`monkey=`, `apikey=`). The value ends at the next `&`, `#`,
@@ -255,6 +257,7 @@ const MAYBE_TOKEN = new RegExp(
     "\\/score\\/",
     "%(?:25)*2[Ff]score%",
     "dl_",
+    "md_",
     `${OVERLAY_KEY_PARAM}=`,
     `${OVERLAY_KEY_PARAM}%`,
     `${RELAY_PAGE_TOKEN_PARAM}=`,
@@ -277,7 +280,7 @@ export function scrubTokenQuery(query: string): string {
   return query.replace(TOKEN_PARAM, "$1$2[token]");
 }
 
-/** One string: `/score/<token>` (plain or encoded) becomes `/score/[token]`, a bare `dl_…` secret becomes `dl_[token]`,
+/** One string: `/score/<token>` (plain or encoded) becomes `/score/[token]`, a bare `dl_…` / `md_…` secret becomes `dl_[token]` / `md_[token]`,
  *  an overlay `key=` query value (plain or encoded) becomes `[key]`, a relay page token's `st=` value (plain or
  *  encoded) becomes `[st]`, a capture code in `/capture/codes/<code>` (plain or encoded) becomes `[code]`, a
  *  match-room token in a `t=` query value (plain or encoded) becomes `[token]`, a team's join code in a
@@ -292,7 +295,7 @@ export function scrubScoreUrl(value: string): string {
     .replace(ENCODED_ROOM_TOKEN, "$1[token]")
     .replace(SCORE_PATH, "/score/[token]")
     .replace(ENCODED_SCORE_PATH, "$1[token]")
-    .replace(BARE_TOKEN, "dl_[token]")
+    .replace(BARE_TOKEN, "$1_[token]")
     .replace(OVERLAY_KEY_QUERY, "$1[key]")
     .replace(ENCODED_OVERLAY_KEY, "$1[key]")
     .replace(RELAY_PAGE_TOKEN_QUERY, "$1[st]")
