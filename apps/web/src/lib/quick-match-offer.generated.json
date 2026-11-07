@@ -1,114 +1,141 @@
 {
   "engine": "3.0.2",
-  "generatedAt": "2026-11-07T22:33:13.336Z",
+  "generatedAt": "2026-11-07T22:51:37.969Z",
   "offered": [
     {
       "sport_key": "football",
-      "variant_key": "11-a-side"
+      "variant_key": "11-a-side",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "football",
-      "variant_key": "mini-soccer"
+      "variant_key": "mini-soccer",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "football",
-      "variant_key": "small-sided"
+      "variant_key": "small-sided",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "football",
-      "variant_key": "youth"
+      "variant_key": "youth",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "boardgame",
-      "variant_key": "blitz"
+      "variant_key": "blitz",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "boardgame",
-      "variant_key": "classical"
+      "variant_key": "classical",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "boardgame",
-      "variant_key": "rapid"
+      "variant_key": "rapid",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "carrom",
-      "variant_key": "club-29"
+      "variant_key": "club-29",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "carrom",
-      "variant_key": "icf"
+      "variant_key": "icf",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "volleyball",
-      "variant_key": "beach"
+      "variant_key": "beach",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "volleyball",
-      "variant_key": "indoor"
+      "variant_key": "indoor",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "badminton",
-      "variant_key": "bwf"
+      "variant_key": "bwf",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "badminton",
-      "variant_key": "bwf-3x15"
+      "variant_key": "bwf-3x15",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "badminton",
-      "variant_key": "short"
+      "variant_key": "short",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "tabletennis",
-      "variant_key": "bo5"
+      "variant_key": "bo5",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "tabletennis",
-      "variant_key": "bo7"
+      "variant_key": "bo7",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "tabletennis",
-      "variant_key": "hardbat-21"
+      "variant_key": "hardbat-21",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "tennis",
-      "variant_key": "doubles-noad-mtb10"
+      "variant_key": "doubles-noad-mtb10",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "tennis",
-      "variant_key": "fast4"
+      "variant_key": "fast4",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "tennis",
-      "variant_key": "grand-slam"
+      "variant_key": "grand-slam",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "tennis",
-      "variant_key": "short-sets"
+      "variant_key": "short-sets",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "tennis",
-      "variant_key": "tour"
+      "variant_key": "tour",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "icehockey",
-      "variant_key": "iihf"
+      "variant_key": "iihf",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "icehockey",
-      "variant_key": "recreational"
+      "variant_key": "recreational",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "hockey",
-      "variant_key": "fih-outdoor"
+      "variant_key": "fih-outdoor",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "hockey",
-      "variant_key": "fih-shootout"
+      "variant_key": "fih-shootout",
+      "knockoutAllowed": true
     },
     {
       "sport_key": "hockey",
-      "variant_key": "youth"
+      "variant_key": "youth",
+      "knockoutAllowed": true
     }
   ],
   "excluded": [

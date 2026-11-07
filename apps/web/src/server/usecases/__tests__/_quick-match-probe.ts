@@ -24,7 +24,7 @@ import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { EngineError, isCoreEventType, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
-import { bracketMayEndLevel, type AnySportModule } from "@seazn/engine/sport";
+import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { buildWalk, forEachSportAsync, makeEnvelope, onePlayEvent } from "@seazn/engine/testkit";
 import { sql, withTenant } from "@/lib/db";
@@ -39,7 +39,7 @@ import { listDivisionFixtures } from "../fixtures";
 import { createQuickMatchTree, sealNewHomeToken, systemAuth, type CreatedQuickMatch } from "../quick-match-create";
 import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
 import { quickMatchPreview, type QuickMatchFormat } from "../quick-match-preview";
-import { offerFor, type QuickMatchOfferJson } from "../quick-match-sports";
+import { knockoutMayEndLevel, offerFor, type QuickMatchOfferJson } from "../quick-match-sports";
 import { scoreEvent } from "../scoring";
 
 /** The probe's budgets: generator seeds tried per sport × variant, and events per walk. An unproven case names both. */
@@ -66,14 +66,21 @@ const ENGINE_PACKAGE_JSON = resolve(import.meta.dirname, "../../../../../../node
  * MODULE-OWNED events only, up to and including the deciding event. A walk that draws `core.forfeit`, `core.abandon` or
  * any other `core.*` event before it decides is skipped (the generator draws them; a forfeit is not play), and so is a
  * walk the generator cannot draw at all (it throws: cricket's "ran out of eligible players" with no lineup). null = no
- * seed decides (unproven).
+ * seed decides (unproven). Each throw is kept, `seed N: message`, in `walkErrors` when the caller passes one, so an
+ * unproven case says why the generator gave up rather than only that it did.
  */
-export function decidingPrefix(module: AnySportModule, cfg: unknown, lineups: LineupPair): EventEnvelope[] | null {
+export function decidingPrefix(
+  module: AnySportModule,
+  cfg: unknown,
+  lineups: LineupPair,
+  walkErrors: string[] = [],
+): EventEnvelope[] | null {
   for (let seed = 1; seed <= PROBE_SEEDS; seed++) {
     let walk: { events: EventEnvelope[]; states: unknown[] };
     try {
       walk = buildWalk(module as never, cfg as never, lineups, seed, PROBE_MAX_EVENTS) as typeof walk;
-    } catch {
+    } catch (err) {
+      walkErrors.push(`seed ${seed}: ${err instanceof Error ? err.message : String(err)}`);
       continue;
     }
     for (const [i, event] of walk.events.entries()) {
@@ -151,7 +158,8 @@ async function fixtureFold(auth: AuthCtx, fixtureId: string): Promise<FixtureFol
  */
 export async function playToDecided(auth: AuthCtx, fixtureId: string): Promise<PlayResult> {
   const { module, cfg, lineups } = await fixtureFold(auth, fixtureId);
-  const prefix = decidingPrefix(module, cfg, lineups) ?? [];
+  const walkErrors: string[] = [];
+  const prefix = decidingPrefix(module, cfg, lineups, walkErrors) ?? [];
   const events = prefix.length > 0 ? prefix : [makeEnvelope(0, { type: "core.start", payload: {} })];
   let last: Awaited<ReturnType<typeof scoreEvent>> | null = null;
   for (const e of events) {
@@ -164,7 +172,8 @@ export async function playToDecided(auth: AuthCtx, fixtureId: string): Promise<P
     }
   }
   if (prefix.length === 0) {
-    return { kind: "unproven", why: `no seed in 1..${PROBE_SEEDS} decided within ${PROBE_MAX_EVENTS} events, and the write path took core.start` };
+    const thrown = walkErrors.length > 0 ? `; the walk threw on ${walkErrors.length} seed(s), last ${walkErrors.at(-1)}` : "";
+    return { kind: "unproven", why: `no seed in 1..${PROBE_SEEDS} decided within ${PROBE_MAX_EVENTS} events, and the write path took core.start${thrown}` };
   }
   if (last?.status !== "decided") {
     return { kind: "unproven", why: `the walk decided after ${prefix.length} events but the write path answered status '${last?.status}'` };
@@ -218,9 +227,12 @@ function probeCreate(
 /**
  * Run the whole probe (module header). Throws when any case is unproven (naming it and both budgets), when a count
  * case disagrees (naming it), when `offered` is empty, or when it lacks badminton. `checked` counts sport × variant
- * cases, `countCases` the D3 creates; both are printed unless `quiet`.
+ * cases, `countCases` the D3 creates, `knockoutCases` the knockouts among them (each one also asked C23's bracket
+ * question); all three are printed unless `quiet`.
  */
-export async function runQuickMatchProbe(opts: { quiet?: boolean }): Promise<{ offer: OfferJson; checked: number; countCases: number }> {
+export async function runQuickMatchProbe(
+  opts: { quiet?: boolean },
+): Promise<{ offer: OfferJson; checked: number; countCases: number; knockoutCases: number }> {
   const say = (line: string) => { if (!opts.quiet) console.info(line); };
   const auth = systemAuth();
   const offered: OfferJson["offered"] = [];
@@ -229,6 +241,7 @@ export async function runQuickMatchProbe(opts: { quiet?: boolean }): Promise<{ o
   const countFailures: string[] = [];
   let checked = 0;
   let countCases = 0;
+  let knockoutCases = 0;
 
   const visited = await forEachSportAsync(async ({ key: sport_key }) => {
     const [sport] = await sql<{ module_version: string }[]>`select module_version from sports where key = ${sport_key}`;
@@ -271,7 +284,8 @@ export async function runQuickMatchProbe(opts: { quiet?: boolean }): Promise<{ o
         if (created) await hardDeleteQuickMatchCompetition(created.competitionId);
       }
       if (result.kind === "decided") {
-        offered.push({ sport_key, variant_key });
+        // knockoutAllowed rides in the JSON so the drift pin sees the engine's declaration move (review M2).
+        offered.push({ sport_key, variant_key, knockoutAllowed: (await offerFor(sport_key, variant_key)).knockoutAllowed });
         say(`probe ${name}: offered (decided after ${result.events} events)`);
       } else if (result.kind === "refused") {
         excluded.push({ sport_key, variant_key, code: result.code });
@@ -292,6 +306,7 @@ export async function runQuickMatchProbe(opts: { quiet?: boolean }): Promise<{ o
         ];
         for (const [format, n] of cases) {
           countCases++;
+          if (format === "knockout") knockoutCases++;
           const out = await probeCreate(sport_key, variant_key, k, format, n);
           try {
             const matches = (await listDivisionFixtures(auth, out.divisionId)).filter((f) => !isBye(f));
@@ -302,12 +317,12 @@ export async function runQuickMatchProbe(opts: { quiet?: boolean }): Promise<{ o
             }
             // C23's premise, as a guard: a knockout is offered only where no bracket match can end level, because a
             // level result waits for an organiser's settle and a guest has none. Asked of a seated first-round match's
-            // own fold cfg (the stage's preset deciders included), through the engine's one answer (`canEndLevel`).
+            // own fold cfg (the stage's preset deciders included), through the one helper `offerFor` decides with.
             if (format === "knockout") {
               const seated = matches.find((f) => f.home_entrant_id !== null && f.away_entrant_id !== null);
               if (!seated) throw new Error(`probe ${name} knockout of ${n}: no seated first-round match`);
               const fold = await fixtureFold(auth, seated.id);
-              if (bracketMayEndLevel(fold.module, "knockout", fold.cfg)) {
+              if (knockoutMayEndLevel(fold.module, fold.cfg)) {
                 countFailures.push(`${name} ${k} knockout of ${n}: offered, but a bracket match can end level (C23)`);
               }
             }
@@ -319,7 +334,7 @@ export async function runQuickMatchProbe(opts: { quiet?: boolean }): Promise<{ o
     }
   }, builtinModules);
 
-  say(`quick match probe: ${visited} sports, ${checked} sport×variant cases, ${countCases} count cases; offered ${offered.length}, excluded ${excluded.length}`);
+  say(`quick match probe: ${visited} sports, ${checked} sport×variant cases, ${countCases} count cases (${knockoutCases} knockouts); offered ${offered.length}, excluded ${excluded.length}`);
   if (visited === 0 || checked === 0) throw new Error("quick match probe checked nothing");
   if (unproven.length > 0) {
     throw new Error(`quick match probe: ${unproven.length} case(s) unproven at PROBE_SEEDS=${PROBE_SEEDS}, PROBE_MAX_EVENTS=${PROBE_MAX_EVENTS}:\n  ${unproven.join("\n  ")}`);
@@ -329,5 +344,5 @@ export async function runQuickMatchProbe(opts: { quiet?: boolean }): Promise<{ o
   if (!offered.some((o) => o.sport_key === "badminton")) throw new Error("quick match probe does not offer badminton (spec §9)");
 
   const engine = (JSON.parse(readFileSync(ENGINE_PACKAGE_JSON, "utf8")) as { version: string }).version;
-  return { offer: { engine, generatedAt: new Date().toISOString(), offered, excluded }, checked, countCases };
+  return { offer: { engine, generatedAt: new Date().toISOString(), offered, excluded }, checked, countCases, knockoutCases };
 }

@@ -8,29 +8,34 @@ import "server-only";
 //     (`__tests__/_quick-match-probe.ts`, which writes `lib/quick-match-offer.generated.json`). Never typed here.
 //   - kinds: the sport's own entrant model (pre-flight D2: Singles/Doubles is the entrant kind, a per-sport axis, not a
 //     variant), read from the catalog rows before any division exists; chess is individual only (owner, 2026-10-26).
-//   - knockoutAllowed: the engine's own declaration (C23 with D10): a knockout is offered only when the variant cannot
-//     end level in a bracket (`supportsDraws(cfg, "knockout")` false) AND its table can pay neither a tie nor a no
-//     result, because a level knockout result waits for an organiser's settle and a guest has no organiser. On engine
-//     3.0.2 the `supportsDraws` clause is false for every variant, so the tie / no-result clauses are what refuse; the
-//     stage's own preset deciders (extra time and penalties, a shoot-out, overtime) are what keep a football, hockey or
-//     ice-hockey knockout from ending level, and the probe asserts that of every knockout it creates
-//     (`bracketMayEndLevel` over the seated match's own fold cfg).
+//   - knockoutAllowed: C23's own premise, decided by the engine (owner ruling 2026-11-07): a knockout is offered only
+//     when no match of it can end level, because a level knockout result waits for an organiser's settle and a guest
+//     has no organiser. Asked of the cfg a quick match knockout actually plays (`quickMatchKnockoutCfg`: the variant
+//     under the knockout stage's preset deciders, as `createStages` stores them) through `bracketMayEndLevel`
+//     (`knockoutMayEndLevel`). The probe's C23 check asks the same `knockoutMayEndLevel` of every real knockout fixture
+//     it creates, so the offer's composed answer is proven against the fold the match plays. The presets are why
+//     football, hockey and ice hockey are offered a knockout (extra time and penalties, a shoot-out, overtime decide a
+//     level match). The earlier rule's `supportsDraws(cfg, "knockout")` was false for every variant, and its
+//     tie / no-result clause (D10) refused only cricket, which the probe excludes by name.
 import offerJson from "@/lib/quick-match-offer.generated.json";
 import { isChessSport } from "@/lib/chess-individual-only";
 import { sql } from "@/lib/db";
 import { messages, type MessageKey } from "@/lib/messages";
 import { variantWordKey } from "@/lib/variant-label-keys";
 import { resolveModule } from "@/server/engine-db/registry";
-import { withSchemaDefaults } from "@/server/engine-db/fixture-cfg";
-import type { EntrantKind } from "@seazn/engine/sport";
+import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
+import { bracketMayEndLevel, type AnySportModule, type EntrantKind } from "@seazn/engine/sport";
 import { entrantShapeOf } from "./entrant-shape";
+import { quickMatchStageInput } from "./quick-match-preview";
+import { withStageDefaults } from "./stage-defaults";
 
 /** The probe's output, as committed: the refusal's CODE only, never the engine's message (B6f), and no kind per entry
- *  (the kind is a per-sport axis `offerFor` computes, D2). */
+ *  (the kind is a per-sport axis `offerFor` computes, D2). An offered entry records the `knockoutAllowed` the probe saw,
+ *  so the drift pin reds when the engine's declaration moves (review M2); `offerFor` still computes it, never reads it. */
 export interface QuickMatchOfferJson {
   engine: string;
   generatedAt: string;
-  offered: { sport_key: string; variant_key: string }[];
+  offered: { sport_key: string; variant_key: string; knockoutAllowed: boolean }[];
   excluded: { sport_key: string; variant_key: string; code: string }[];
 }
 
@@ -45,26 +50,52 @@ export interface QuickMatchOffer {
 /** A fresh object per answer: a caller may mutate what it is given. */
 const nothing = (): QuickMatchOffer => ({ offered: false, kinds: [], knockoutAllowed: false });
 
+/**
+ * The fold cfg of a quick match knockout's match, before any exists: the variant's config (what the division holds)
+ * under the knockout stage's config as `createStages` stores it (`withStageDefaults`: the sport's preset deciders for a
+ * knockout of this variant), resolved the way a fixture's fold is (`resolveFixtureCfg`: division ⊕ stage rules ⊕ the
+ * bracket deciders, schema defaults filled). The probe checks this against every real knockout fixture it creates.
+ */
+export function quickMatchKnockoutCfg(mod: AnySportModule, variant_key: string, variantConfig: unknown): unknown {
+  const stage = withStageDefaults(mod, "knockout", variant_key, quickMatchStageInput({ format: "knockout", plays: 1, name: "" }).config);
+  return resolveFixtureCfg({ config_snapshot: null, rules_override: null }, variantConfig, { kind: "knockout", config: stage }, mod);
+}
+
+/** C23 (owner ruling 2026-11-07): can a knockout match under `cfg` end level, so that it would wait for an organiser's
+ *  settle? The engine's one answer (`bracketMayEndLevel`), shared by `offerFor` and the probe. */
+export function knockoutMayEndLevel(mod: AnySportModule, cfg: unknown): boolean {
+  return bracketMayEndLevel(mod, "knockout", cfg);
+}
+
+/** One system variant's catalog facts: its row joined to its sport's pinned module version. */
+interface SystemVariantRow {
+  sport_key: string;
+  variant_key: string;
+  module_version: string;
+  config: unknown;
+}
+
+/** The offer for one catalog row, in memory: the one place the three facts are computed, for `offerFor` (one row) and
+ *  `listQuickMatchSports` (every row from one query). */
+function offerOf({ sport_key, variant_key, module_version, config }: SystemVariantRow): QuickMatchOffer {
+  const mod = resolveModule(sport_key, module_version);
+  const kinds: EntrantKind[] = isChessSport(sport_key)
+    ? ["individual"]
+    : [...entrantShapeOf({ sport_key, module_version, config }).kinds];
+  const knockoutAllowed = !knockoutMayEndLevel(mod, quickMatchKnockoutCfg(mod, variant_key, config));
+  const offered = OFFER.offered.some((o) => o.sport_key === sport_key && o.variant_key === variant_key);
+  return { offered, kinds, knockoutAllowed };
+}
+
 /** One sport × SYSTEM variant (an org's own preset is never offered to a guest). An unknown sport or variant offers
  *  nothing. `kinds` and `knockoutAllowed` are computed for every known variant, offered or not: the probe reads them
  *  while it is still producing `offered`. */
 export async function offerFor(sport_key: string, variant_key: string): Promise<QuickMatchOffer> {
-  const [sport] = await sql<{ module_version: string }[]>`select module_version from sports where key = ${sport_key}`;
-  if (!sport) return nothing();
-  const [variant] = await sql<{ config: unknown }[]>`
-    select config from sport_variants
-    where sport_key = ${sport_key} and key = ${variant_key} and is_system and org_id is null`;
-  if (!variant) return nothing();
-
-  const mod = resolveModule(sport_key, sport.module_version);
-  const kinds: EntrantKind[] = isChessSport(sport_key)
-    ? ["individual"]
-    : [...entrantShapeOf({ sport_key, module_version: sport.module_version, config: variant.config }).kinds];
-  const cfg = withSchemaDefaults(mod, variant.config) as never;
-  const level = mod.reachableResultKinds(cfg, "league");
-  const knockoutAllowed = !mod.supportsDraws(cfg, "knockout") && !level.has("tie") && !level.has("noResult");
-  const offered = OFFER.offered.some((o) => o.sport_key === sport_key && o.variant_key === variant_key);
-  return { offered, kinds, knockoutAllowed };
+  const [row] = await sql<SystemVariantRow[]>`
+    select v.sport_key, v.key as variant_key, s.module_version, v.config
+    from sport_variants v join sports s on s.key = v.sport_key
+    where v.sport_key = ${sport_key} and v.key = ${variant_key} and v.is_system and v.org_id is null`;
+  return row ? offerOf(row) : nothing();
 }
 
 export interface QuickMatchVariant {
@@ -85,14 +116,16 @@ const isMessageKey = (k: string): k is MessageKey => Object.hasOwn(messages, k);
  *  dictionary keys, never the catalog's English `name` columns, so the screen renders them in all four locales (C1);
  *  a sport or variant the dictionary cannot name is not listed. `kinds` is the sport's own, one list per sport (D2). */
 export async function listQuickMatchSports(): Promise<QuickMatchSport[]> {
-  const rows = await sql<{ sport_key: string; variant_key: string }[]>`
-    select v.sport_key, v.key as variant_key
+  // One query; the rest is in memory (review M8: it was two more per variant, through `offerFor`).
+  const rows = await sql<SystemVariantRow[]>`
+    select v.sport_key, v.key as variant_key, s.module_version, v.config
     from sport_variants v join sports s on s.key = v.sport_key
     where v.is_system and v.org_id is null
     order by v.sport_key, v.key`;
   const bySport = new Map<string, QuickMatchSport>();
-  for (const { sport_key, variant_key } of rows) {
-    const offer = await offerFor(sport_key, variant_key);
+  for (const row of rows) {
+    const { sport_key, variant_key } = row;
+    const offer = offerOf(row);
     if (!offer.offered) continue;
     const sportLabel = `sport.${sport_key}`;
     const variantLabel = variantWordKey(sport_key, variant_key);

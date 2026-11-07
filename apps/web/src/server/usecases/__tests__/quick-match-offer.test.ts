@@ -18,7 +18,9 @@ import { sql } from "@/lib/db";
 import { withSchemaDefaults } from "@/server/engine-db/fixture-cfg";
 import { resolveModule } from "@/server/engine-db/registry";
 import { listQuickMatchSports, offerFor, type QuickMatchOfferJson } from "../quick-match-sports";
-import { runQuickMatchProbe } from "./_quick-match-probe";
+import { bracketMayEndLevel, stageDefaultsFor } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
+import { decidingPrefix, runQuickMatchProbe } from "./_quick-match-probe";
 
 const KEK = kekBytes(32).toString("hex");
 vi.stubEnv("DEVICE_LINK_KEK", KEK);   // A15: the probe seals a home token per create
@@ -42,8 +44,10 @@ afterAll(async () => {
   await client?.end();
 });
 
-describe.skipIf(!HAS_DB || !WRITING)("write the quick match offer (QUICK_MATCH_PROBE_WRITE=1 only)", () => {
+describe.skipIf(!WRITING)("write the quick match offer (QUICK_MATCH_PROBE_WRITE=1 only)", () => {
   it("writes the probe's offer", async () => {
+    // A write asked for with no database must fail, never skip green: the JSON would silently stay as it was (review M3).
+    if (!HAS_DB) throw new Error("QUICK_MATCH_PROBE_WRITE=1 needs DATABASE_URL: the probe creates and scores real quick matches");
     const run = await runQuickMatchProbe({ quiet: false });
     writeFileSync(OFFER_JSON_PATH, JSON.stringify(run.offer, null, 2) + "\n");
   }, 30 * 60_000);
@@ -54,10 +58,12 @@ describe.skipIf(!HAS_DB || WRITING)("quick match offer", () => {
     // Its expected value is this probe's own earlier output, so it proves only that nothing moved. The spec's oracle is
     // the next test and the knockout one (B6g).
     const run = await runQuickMatchProbe({ quiet: true });
-    console.info(`quick match probe checked ${run.checked} sport×variant cases and ${run.countCases} count cases`);
+    console.info(`quick match probe checked ${run.checked} sport×variant cases, ${run.countCases} count cases, ${run.knockoutCases} knockouts`);
     expect(run.checked).toBeGreaterThan(0);   // zero checked is a failure
     expect(run.countCases).toBeGreaterThan(0);
-    expect(run.offer.offered).toEqual(committed.offered);
+    expect(run.knockoutCases).toBeGreaterThan(0);   // C23's bracket question was asked of at least one real knockout (M1)
+    expect(run.offer.engine).toBe(committed.engine);   // M2: the engine the offer was proven on
+    expect(run.offer.offered).toEqual(committed.offered);   // every offered variant's key AND its knockoutAllowed (M2)
     expect(run.offer.excluded).toEqual(committed.excluded);
   }, 30 * 60_000);   // hundreds of creates (D3: "cost: slower DB suite"); AGENTS.md class 20
 
@@ -68,12 +74,11 @@ describe.skipIf(!HAS_DB || WRITING)("quick match offer", () => {
     for (const k of ["badminton", "tabletennis", "tennis"]) expect(committed.offered.some((o) => o.sport_key === k), k).toBe(true);
   });
 
-  it("knockoutAllowed is the engine's own declaration for every variant, with both values present (C23, D8, D10)", async () => {
-    // Every SYSTEM variant, offered or not: `offerFor` answers knockoutAllowed for each, and the list carries that answer.
-    // D8's "both values" is witnessed across the catalog because on engine 3.0.2 no OFFERED variant can stall a bracket:
-    // `supportsDraws(cfg, "knockout")` is false in every sport, and the knockout stage plays its sport's preset deciders
-    // to a winner (the probe asserts that on every knockout it creates). The `false` side is cricket's (D10: a tie and a
-    // no result), which the probe excludes.
+  it("knockoutAllowed is the engine's answer to 'can a knockout match end level?' for every variant, and the list agrees (C23, owner ruling 2026-11-07)", async () => {
+    // Every SYSTEM variant, offered or not. The expected value is composed here from the ENGINE's own pieces — the
+    // variant's config under `stageDefaultsFor(module, "knockout", variant)`, the documented `{...division, ...rules}`
+    // overlay — and asked of `bracketMayEndLevel`; `offerFor` composes through the app's create path
+    // (`withStageDefaults`, `resolveFixtureCfg`), so a drift between the two reds here.
     let checked = 0;
     const seen = new Set<boolean>();
     const rows = await sql<{ sport_key: string; key: string; config: unknown; module_version: string }[]>`
@@ -83,9 +88,8 @@ describe.skipIf(!HAS_DB || WRITING)("quick match offer", () => {
     const declared = new Map<string, boolean>();
     for (const r of rows) {
       const mod = resolveModule(r.sport_key, r.module_version);
-      const cfg = withSchemaDefaults(mod, r.config) as never;
-      const level = mod.reachableResultKinds(cfg, "league");
-      const expected = !mod.supportsDraws(cfg, "knockout") && !level.has("tie") && !level.has("noResult");
+      const knockoutCfg = { ...(withSchemaDefaults(mod, r.config) as object), ...stageDefaultsFor(mod, "knockout", r.key) };
+      const expected = !bracketMayEndLevel(mod, "knockout", knockoutCfg);
       expect((await offerFor(r.sport_key, r.key)).knockoutAllowed, `${r.sport_key}/${r.key}`).toBe(expected);
       declared.set(`${r.sport_key}/${r.key}`, expected);
       seen.add(expected);
@@ -101,9 +105,34 @@ describe.skipIf(!HAS_DB || WRITING)("quick match offer", () => {
     }
     console.info(`knockout offer checked ${checked} variants, ${listed} of them listed`);
     expect(checked).toBeGreaterThan(0);
-    expect(listed).toBeGreaterThan(0);
-    expect(seen).toEqual(new Set([true, false]));   // D8: both directions witnessed
-    expect(sports.find((s) => s.sport_key === "badminton")!.variants.some((x) => x.knockoutAllowed)).toBe(true);   // §9
+    expect(listed).toBe(committed.offered.length);   // every offered variant is listed, none dropped for want of a label (M4)
+    // Both directions across the catalog (D8). On engine 3.0.2 the only `false` is cricket/test (pinned below), which
+    // C11 excludes; among the OFFERED variants the count of refusals is the committed JSON's own (0 on 3.0.2).
+    expect(seen).toEqual(new Set([true, false]));
+    const offeredRefusals = committed.offered.filter((o) => !declared.get(`${o.sport_key}/${o.variant_key}`)).length;
+    expect(offeredRefusals).toBe(committed.offered.filter((o) => !o.knockoutAllowed).length);
+  });
+
+  it("football/11-a-side is offered a knockout: its knockout preset (extra time, then penalties) decides a level match", async () => {
+    // Owner ruling 2026-11-07. The variant alone CAN end level in a bracket; the stage's preset deciders are the reason.
+    const [row] = await sql<{ config: unknown; module_version: string }[]>`
+      select v.config, s.module_version from sport_variants v join sports s on s.key = v.sport_key
+      where v.sport_key = 'football' and v.key = '11-a-side' and v.is_system and v.org_id is null`;
+    const mod = resolveModule("football", row!.module_version);
+    expect(bracketMayEndLevel(mod, "knockout", withSchemaDefaults(mod, row!.config))).toBe(true);   // without the preset
+    expect((await offerFor("football", "11-a-side")).knockoutAllowed).toBe(true);
+    expect(committed.offered).toContainEqual({ sport_key: "football", variant_key: "11-a-side", knockoutAllowed: true });
+  });
+
+  it("badminton is offered a knockout: every rally game ends with a winner (§9)", async () => {
+    const sports = await listQuickMatchSports();
+    const badminton = sports.find((s) => s.sport_key === "badminton")!;
+    expect(badminton.variants.length).toBeGreaterThan(0);
+    for (const x of badminton.variants) expect(x.knockoutAllowed, x.variant_key).toBe(true);
+  });
+
+  it("cricket/test is refused a knockout: a Test can end drawn even under its knockout preset (C23; excluded anyway by C11)", async () => {
+    expect((await offerFor("cricket", "test")).knockoutAllowed).toBe(false);
   });
 
   it("generic is excluded by the probe and never listed (B6e)", async () => {
@@ -132,5 +161,20 @@ describe.skipIf(!HAS_DB || WRITING)("quick match offer", () => {
   it("offerFor of an unknown sport or variant offers nothing (the empty case)", async () => {
     expect(await offerFor("badminton", "no-such-variant")).toEqual({ offered: false, kinds: [], knockoutAllowed: false });
     expect(await offerFor("no-such-sport", "x")).toEqual({ offered: false, kinds: [], knockoutAllowed: false });
+  });
+});
+
+describe("decidingPrefix keeps why the walk gave up (review M5)", () => {
+  it("a walk that throws on every seed answers null and keeps each seed's message", () => {
+    // Pure: no database. A module whose init throws stands in for cricket's "ran out of eligible players".
+    const badminton = builtinModules.find((m) => m.key === "badminton")!;
+    const broken = { ...badminton, init: () => { throw new Error("no eligible players for this walk"); } };
+    const cfg = badminton.configSchema.parse({});
+    const errors: string[] = [];
+    const lineups = { home: { entrantId: "H", slots: [] }, away: { entrantId: "A", slots: [] } };
+    expect(decidingPrefix(broken as never, cfg, lineups, errors)).toBeNull();
+    expect(errors.length).toBeGreaterThan(0);   // zero kept is the bare catch this replaces
+    expect(errors.every((e) => e.includes("no eligible players for this walk"))).toBe(true);
+    expect(errors[0]).toMatch(/^seed 1: /);
   });
 });
