@@ -55,6 +55,7 @@ import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import { FLOOR_MS, ROUTE_CHECK_MS } from "./spectator-w2-kit";
 import { withDb } from "./rs007-money-kit";
 import { STORAGE_KEY as GAME_2048_STORAGE_KEY, type GameState as Game2048State } from "../src/games/2048/state";
+import { openMatchActions } from "./helpers/match-actions";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
 // (375×667, 390×844). Every audited route must render with zero page-level
@@ -6014,6 +6015,7 @@ test("forfeit dialog (W2b T11): every choice reachable, 44px floor, no horizonta
       .locator('[data-testid^="forfeit-who-"], [data-testid^="forfeit-why-"], [data-testid="forfeit-confirm"]')
       .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
   const open = async () => {
+    await openMatchActions(page);
     await page.getByTestId("score-forfeit").click({ timeout: 20_000 });
     await expect(dialog).toBeVisible({ timeout: 10_000 });
     await dialog.getByTestId("forfeit-who-away").click();

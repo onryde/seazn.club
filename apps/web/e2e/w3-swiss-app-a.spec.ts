@@ -32,6 +32,7 @@ import {
   type Seated,
 } from "./support/swiss-app-a-kit";
 import { builtinModules } from "@seazn/engine/sports";
+import { openMatchActions } from "./helpers/match-actions";
 
 // W3 Swiss app-A (spec 2026-10-31-format-matrix-w3-swiss-design.md). One
 // describe per rule, each driven through the real desk.
@@ -1087,6 +1088,7 @@ for (const sport of LATE_SPORTS) {
 
       for (const f of await r.boards(2)) {
         await page.goto(await fixturePath(request, f.id));
+        await openMatchActions(page);
         await page.getByTestId("score-forfeit").click({ timeout: 20_000 });
         const d = page.getByTestId("forfeit-dialog");
         await expect(d).toBeVisible({ timeout: 10_000 });

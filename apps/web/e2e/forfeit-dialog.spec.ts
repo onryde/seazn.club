@@ -5,6 +5,7 @@ import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { builtinModules } from "@seazn/engine/sports";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { openMatchActions } from "./helpers/match-actions";
 
 // W2b Task 11 (UI-1 option A; spec §5.5, §7): the organiser console's forfeit dialog — who → why (by phase) → the
 // engine's credit preview → one specific Confirm. Every test asserts through the DOM AND through the API (the ledger,
@@ -211,6 +212,7 @@ async function drawnChessKnockout(r: APIRequestContext) {
 
 const dialogOf = (page: Page) => page.getByTestId("forfeit-dialog");
 async function openDialog(page: Page): Promise<Locator> {
+  await openMatchActions(page);
   await page.getByTestId("score-forfeit").click({ timeout: 20_000 });
   const d = dialogOf(page);
   await expect(d).toBeVisible({ timeout: 10_000 });
@@ -614,6 +616,7 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
     // The positive pair: the organiser is offered the Forfeit on both.
     for (const id of [pre.fx.id, tb.fx.id]) {
       await page.goto(await fixturePath(request, id));
+      await openMatchActions(page);
       await expect(page.getByTestId("score-forfeit")).toBeVisible({ timeout: 20_000 });
     }
     for (const id of [pre.fx.id, tb.fx.id]) {

@@ -32,6 +32,7 @@ import { StreamSessionProvider, useSharedPhoneSession } from "@/components/v2/st
 import { nextOpenPanel, streamButtonState, type OpenPanel } from "@/lib/fixture-stream-mount";
 import { officialLabelKey } from "@/lib/official-label";
 import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
+import { useMediaQuery } from "@/lib/use-client-snapshot";
 import type { MatchRulesBlockProps } from "@/components/v2/match-rules-block";
 import { MatchFormatEditor } from "@/components/v2/rules/match-format-editor";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
@@ -957,6 +958,62 @@ export function FixtureConsole({
   const offerForfeit = !decided && (!held || tiebreakPending) && canOrganise && (forfeitModel?.who.length ?? 0) > 0;
   const offerAbandon = !decided && !held && canOrganise;
   const offerOrganiserActions = offerForfeit || offerAbandon;
+  const wideLayout = useMediaQuery("(min-width: 768px)");
+  const wideOpen = wideLayout && matchActionsOpen;
+  // The Match actions panel (R7/C2, D-12). From 768 px it opens directly under the Scoring header, beside the toggle
+  // that opened it, and is absent while closed; a phone shows it open, below the pad and ledger. Rendered in one place
+  // at a time, so its test ids stay unique.
+  const matchActionsPanel =
+    scoring && home && away && offerOrganiserActions ? (
+        <section
+          data-role="match-actions"
+          id="match-actions-panel"
+          className={`rounded-2xl border border-purple-100 bg-purple-50/40 p-4${wideOpen ? " mb-4" : ""}`}
+        >
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.09em] text-purple-800">
+            {msg("score.matchActions")}
+          </h2>
+          <p className="mt-0.5 text-xs text-slate-600">{msg("score.matchActionsNote")}</p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {offerForfeit && (
+              <button
+                type="button"
+                data-testid="score-forfeit"
+                disabled={busy || padSyncing}
+                onClick={() => {
+                  setForfeitRefusal(null);
+                  setForfeitOpen(forfeitModel);
+                }}
+                className="btn btn-danger min-h-11"
+              >
+                {msg("score.forfeit")}
+              </button>
+            )}
+            {offerAbandon && (
+              <button
+                type="button"
+                disabled={busy || padSyncing}
+                onClick={() => setAbandonPrompt(true)}
+                className="btn btn-danger min-h-11"
+              >
+                {msg("score.abandon")}
+              </button>
+            )}
+          </div>
+          {abandonPrompt && (
+            <TextPromptDialog
+              title={msg("score.abandonPrompt")}
+              initialValue=""
+              msg={msg}
+              onClose={() => setAbandonPrompt(false)}
+              onSubmit={(reason) => {
+                setAbandonPrompt(false);
+                void send("core.abandon", { reason });
+              }}
+            />
+          )}
+        </section>
+    ) : null;
   // Owner ruling 17 — the padSpec resolved purely to decide whether a
   // DECIDED fixture still keeps the pad mounted (`shouldMountPad` above).
   // `scorePadV2?.resolvedConfig ?? sport.config` is the SAME cfg fallback
@@ -1437,6 +1494,8 @@ export function FixtureConsole({
             </div>
           </div>
 
+          {wideOpen && matchActionsPanel}
+
           {canHandOver && handoverOpen && (
             <div className="mb-4">
               <DeviceLinkPanel
@@ -1711,56 +1770,7 @@ export function FixtureConsole({
           hierarchy failure D-12 is. */}
       {/* W2a: rendered only when it holds a control — a scorer on an in-play match, or anyone on a held one, would
           otherwise get a named, explained container with nothing in it. */}
-      {scoring && home && away && offerOrganiserActions && (
-        <section
-          data-role="match-actions"
-          id="match-actions-panel"
-          className={`rounded-2xl border border-purple-100 bg-purple-50/40 p-4${matchActionsOpen ? "" : " hidden max-md:block"}`}
-        >
-          <h2 className="text-[11px] font-semibold uppercase tracking-[0.09em] text-purple-800">
-            {msg("score.matchActions")}
-          </h2>
-          <p className="mt-0.5 text-xs text-slate-600">{msg("score.matchActionsNote")}</p>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            {offerForfeit && (
-              <button
-                type="button"
-                data-testid="score-forfeit"
-                disabled={busy || padSyncing}
-                onClick={() => {
-                  setForfeitRefusal(null);
-                  setForfeitOpen(forfeitModel);
-                }}
-                className="btn btn-danger min-h-11"
-              >
-                {msg("score.forfeit")}
-              </button>
-            )}
-            {offerAbandon && (
-              <button
-                type="button"
-                disabled={busy || padSyncing}
-                onClick={() => setAbandonPrompt(true)}
-                className="btn btn-danger min-h-11"
-              >
-                {msg("score.abandon")}
-              </button>
-            )}
-          </div>
-          {abandonPrompt && (
-            <TextPromptDialog
-              title={msg("score.abandonPrompt")}
-              initialValue=""
-              msg={msg}
-              onClose={() => setAbandonPrompt(false)}
-              onSubmit={(reason) => {
-                setAbandonPrompt(false);
-                void send("core.abandon", { reason });
-              }}
-            />
-          )}
-        </section>
-      )}
+      {!wideLayout && matchActionsPanel}
       {/* W2b Task 11 (spec §7): a refused forfeit closed its dialog; the reason stays here, outside the band, so a
           refusal that resynced the match into its decided state is still read. Design audit 1.4: in the console's own
           error-banner treatment (the `error` line under the header, the app's house alert) — one red banner style. */}

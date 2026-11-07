@@ -9,6 +9,7 @@ import { CASCADE_ONLY_FORFEIT_REASONS } from "../src/lib/forfeit-phase-refusal";
 import { ARMAGEDDON_RESULTS, TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { openMatchActions } from "./helpers/match-actions";
 
 // W2a spec §9 (format-matrix W2a, loop H): a bracket always finishes.
 //  - the console: a HELD fixture (a level result in a knockout, or an abandon that decided nobody) shows "Needs a
@@ -582,6 +583,7 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     expect((await read(request, sf.id)).status).toBe("in_play");
     const path = await fixturePath(request, sf.id);
     await page.goto(path);
+    await openMatchActions(page);
     await expect(page.getByTestId("score-forfeit")).toBeVisible();
     await expect(page.getByRole("button", { name: ABANDON(), exact: true })).toBeVisible();
     await expect(page.getByTestId("needs-decision"), "in play: nothing is held").toHaveCount(0);
@@ -743,6 +745,7 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
     // engine would take an abandon here — tiebreak.test.ts — but a held fixture is the organiser's to settle).
     await expect(page.getByTestId("needs-decision").locator("[data-cause]")).toHaveAttribute("data-cause", "tiebreak");
     await expect(page.getByTestId("needs-decision").locator("[data-cause]")).toHaveText(ui("score.needsDecision.body.tiebreak"));
+    await openMatchActions(page);
     await expect(page.getByTestId("score-forfeit")).toBeVisible();
     await expect(page.getByRole("button", { name: ABANDON(), exact: true })).toHaveCount(0);
     await expect(tile(page, "draw"), "the game is already drawn: no second Draw").toHaveCount(0);
@@ -1166,6 +1169,7 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
     let widths = 0;
     for (const w of [1280, 768, 320]) {
       await page.setViewportSize({ width: w, height: 900 });
+      await openMatchActions(page);
       await page.getByTestId("score-forfeit").click({ timeout: 20_000 });
       const d = page.getByTestId("forfeit-dialog");
       await expect(d).toBeVisible();
