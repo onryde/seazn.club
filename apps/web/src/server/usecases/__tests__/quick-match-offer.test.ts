@@ -62,7 +62,9 @@ describe.skipIf(!HAS_DB || WRITING)("quick match offer", () => {
   }, 30 * 60_000);   // hundreds of creates (D3: "cost: slower DB suite"); AGENTS.md class 20
 
   it("cricket is excluded and badminton, table tennis and tennis are offered (spec §9)", () => {
-    expect(committed.excluded.some((e) => e.sport_key === "cricket")).toBe(true);
+    // C11 with the controller's ruling (2026-11-07): cricket is a lineup sport, excluded by name with its reason code.
+    expect(committed.excluded.some((e) => e.sport_key === "cricket" && e.code === "QUICK_MATCH_LINEUP_SPORT")).toBe(true);
+    expect(committed.offered.filter((o) => o.sport_key === "cricket")).toEqual([]);
     for (const k of ["badminton", "tabletennis", "tennis"]) expect(committed.offered.some((o) => o.sport_key === k), k).toBe(true);
   });
 

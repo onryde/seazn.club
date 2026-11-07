@@ -5,7 +5,10 @@
 // For every sport module (swept with the engine's own `forEachSportAsync`, which reports how many it visited) × each of
 // its system variants:
 //   1. generic is excluded with QUICK_MATCH_GENERIC and nothing is created: the probe is the one source that keeps it off
-//      the setup screen and out of the API (B6e);
+//      the setup screen and out of the API (B6e). A LINEUP sport (cricket) is excluded the same way, by name, with
+//      QUICK_MATCH_LINEUP_SPORT (spec C11, controller ruling 2026-11-07): the engine's walk CAN score cricket with no
+//      lineup, through innings summaries, but a guest on the cricket pad meets mostly named-person actions it cannot use,
+//      and a summary-only match is not the product C11 deferred to v2;
 //   2. THE OFFER: a league of 2 sides and 1 play through the real create (`createQuickMatchTree`, never the guarded
 //      wrapper: the probe must not go through the offer it is producing, A9), with the variant's registration default
 //      kind, then ONE COMPLETE MATCH scored on its only fixture through the real write path (`scoreEvent`, what
@@ -47,6 +50,13 @@ export type OfferJson = QuickMatchOfferJson;
 
 /** The code generic is excluded with (B6e): not a refusal of the write path, a product decision the probe owns. */
 export const QUICK_MATCH_GENERIC = "QUICK_MATCH_GENERIC";
+/** The code a lineup sport is excluded with (spec C11: lineup sports are optional and wait for v2; controller ruling
+ *  2026-11-07). A product decision the probe owns, like generic's — not a refusal of the write path, which accepts a
+ *  cricket match scored by innings summaries with no lineup (engine 3.0.2). */
+export const QUICK_MATCH_LINEUP_SPORT = "QUICK_MATCH_LINEUP_SPORT";
+/** The lineup sports C11 names. Typed, because no engine declaration says "this pad needs a named person to score"
+ *  (`LineupPolicy` covers substitutions only). */
+export const QUICK_MATCH_LINEUP_SPORTS: ReadonlySet<string> = new Set(["cricket"]);
 
 /** The repo root's engine package.json, as toolchain.test.ts reads it: the version the offer was proven on. */
 const ENGINE_PACKAGE_JSON = resolve(import.meta.dirname, "../../../../../../node_modules/@seazn/engine/package.json");
@@ -235,6 +245,11 @@ export async function runQuickMatchProbe(opts: { quiet?: boolean }): Promise<{ o
       if (sport_key === "generic") {
         excluded.push({ sport_key, variant_key, code: QUICK_MATCH_GENERIC });
         say(`probe ${name}: excluded ${QUICK_MATCH_GENERIC}`);
+        continue;
+      }
+      if (QUICK_MATCH_LINEUP_SPORTS.has(sport_key)) {
+        excluded.push({ sport_key, variant_key, code: QUICK_MATCH_LINEUP_SPORT });
+        say(`probe ${name}: excluded ${QUICK_MATCH_LINEUP_SPORT}`);
         continue;
       }
 
