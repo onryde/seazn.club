@@ -11,12 +11,16 @@ import { type Session, appendScoreEvent, check, newSession, signIn, tag, v1, v1d
  * T3 (X-SD-5, K2): a bye is not played, so it never takes a court or a time. A knockout of three Started with rolling times
  * leaves its awarded bye with no time and no court, and the board's move onto it is refused 422 BYE_LINE_NOT_PLACEABLE.
  *
+ * T4 (X-RB-1, K3): Rebuild carries a knockout's slots by bracket role. A knockout of eight laid out line by line, then a
+ * ninth entrant and a Rebuild: the final still holds the final's court and time (by position it went to a semi-final).
+ *
  * Own fresh owner; keyless; every read and write is a v1 route. Every check is counted, and a run that checked nothing fails.
  * SMOKE_ONLY=w4KnockoutA runs it alone (SELECTABLE_SUITES).
  */
 export async function w4KnockoutASuite(): Promise<void> {
-  // T2: 1 (a called final survives a void of its feeder). T3: 1 (an awarded bye holds no court).
-  const EXPECTED_CHECKS = 2;
+  // T2: 1 (a called final survives a void of its feeder). T3: 1 (an awarded bye holds no court). T4: 1 (the final keeps
+  // its slot across an 8 → 9 Rebuild).
+  const EXPECTED_CHECKS = 3;
   let checked = 0;
   const w4Check = (label: string, cond: boolean) => {
     checked++;
@@ -52,8 +56,9 @@ export async function w4KnockoutASuite(): Promise<void> {
   };
 
   /** A badminton knockout of `n` seeded entrants on its own division, generated and Started — with `settings` (the
-   *  division's schedule settings) saved first when given, so Start writes its rolling times. */
-  async function startedKnockout(s: Session, label: string, n: number, settings?: Record<string, unknown>) {
+   *  division's schedule settings) saved first when given, so Start writes its rolling times. `start: false` stops after
+   *  Generate (a pre-Start board). */
+  async function startedKnockout(s: Session, label: string, n: number, settings?: Record<string, unknown>, start = true) {
     const divId = v1data<{ id: string } | undefined>(
       await v1(s, `/api/v1/competitions/${comp?.id}/divisions`, "POST", {
         name: label,
@@ -73,10 +78,10 @@ export async function w4KnockoutASuite(): Promise<void> {
     )?.id;
     if (settings) await v1(s, `/api/v1/divisions/${divId}/schedule-settings`, "PUT", { tz: "UTC", config: settings });
     const generated = await v1(s, `/api/v1/stages/${stageId}/generate`, "POST");
-    const started = await v1(s, `/api/v1/divisions/${divId}/start`, "POST");
+    const started = start ? (await v1(s, `/api/v1/divisions/${divId}/start`, "POST")).status : null;
     const fixtures = async () =>
       (v1data<Fx[] | undefined>(await v1(s, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
-    return { divId, stageId, generated: generated.status, started: started.status, fixtures };
+    return { divId, stageId, generated: generated.status, started, fixtures };
   }
 
   /** The scorer wins `fixtureId` for the home side, two games to love; returns the deciding event's id. */
@@ -154,6 +159,45 @@ export async function w4KnockoutASuite(): Promise<void> {
     w4Check(
       "w4a X-SD-5: an awarded knockout bye takes no rolling time and no court — the board's move is refused 422 BYE_LINE_NOT_PLACEABLE" +
         (ok ? "" : ` — generate ${ko.generated}, start ${ko.started}, r1 ${r1.length}, bye ${bye?.id ?? "none"} ${bye?.scheduled_at ?? "-"}/${bye?.court_id ?? "-"}, real ${real?.scheduled_at ?? "none"}, move ${moved?.status ?? "-"} ${JSON.stringify(moved?.json).slice(0, 160)}, after ${byeAfter?.scheduled_at ?? "-"}/${byeAfter?.court_id ?? "-"}`),
+      ok,
+    );
+  }
+
+  // Check 3 (T4, X-RB-1; K3): a knockout of eight, generated and laid out (each line its own hour; the final alone on
+  // Court 2), then a ninth entrant and a Rebuild. The bracket doubles to 16 and its final moves a round later; by role it
+  // still holds the final's court and time, and the answer reports seven kept, none freed, and one unscheduled (the one
+  // real new first-round line; its neighbours are byes). Expected slots are the ones this check writes.
+  {
+    const ko = await startedKnockout(owner, "Role carry", 8, undefined, false);
+    const before = await ko.fixtures();
+    const finalRound = Math.max(...before.map((f) => f.round_no));
+    let placedOk = 0;
+    let oldFinal = "";
+    for (const [i, f] of before.entries()) {
+      const at = `2030-06-15T${String(8 + i).padStart(2, "0")}:00:00.000Z`;
+      const court = f.round_no === finalRound ? courts[1] : courts[0];
+      const placed = await v1(owner, `/api/v1/fixtures/${f.id}`, "PATCH", { scheduled_at: at, venue_id: venueId, court_id: court });
+      if (placed.status === 200) placedOk++;
+      if (f.round_no === finalRound) oldFinal = `${at}|${court}`;
+    }
+    await v1(owner, `/api/v1/divisions/${ko.divId}/entrants`, "POST", [
+      { kind: "individual", display_name: `Role carry P9 ${tag}`, seed: 9 },
+    ]);
+    const rebuilt = await v1(owner, `/api/v1/stages/${ko.stageId}/rebuild`, "POST");
+    const slots = v1data<{ slots?: { kept: number; freed: number; unscheduled: number } } | undefined>(rebuilt)?.slots;
+    const after = await ko.fixtures();
+    const newFinalRound = after.length > 0 ? Math.max(...after.map((f) => f.round_no)) : -1;
+    const finals = after.filter((f) => f.round_no === newFinalRound);
+    const newFinal = finals[0] ? `${finals[0].scheduled_at === null ? "-" : new Date(finals[0].scheduled_at).toISOString()}|${finals[0].court_id ?? "-"}` : "";
+    const ok =
+      ko.generated === 200 && before.length === 7 && placedOk === 7 && rebuilt.status === 200 &&
+      // the premise: the bracket doubled, so the final moved a round later
+      newFinalRound === finalRound + 1 && finals.length === 1 &&
+      newFinal === oldFinal &&
+      slots?.kept === 7 && slots.freed === 0 && slots.unscheduled === 1;
+    w4Check(
+      "w4a X-RB-1: an 8 → 9 knockout Rebuild keeps the final's court and time on the final — 7 kept, 0 freed, 1 unscheduled" +
+        (ok ? "" : ` — generate ${ko.generated}, lines ${before.length}, placed ${placedOk}, rebuild ${rebuilt.status} ${JSON.stringify(rebuilt.json).slice(0, 160)}, final round ${finalRound}→${newFinalRound} (${finals.length}), final ${oldFinal}→${newFinal}, slots ${JSON.stringify(slots)}`),
       ok,
     );
   }

@@ -102,7 +102,8 @@ import {
 } from "@/lib/swiss-pairing";
 import { ONLINE_GAME_EXISTS_CODE } from "@/lib/open-round";
 import { byeAward, isOneSidedAwardBye } from "@/lib/fixture-bye";
-import { BYE_SLOT_LABEL } from "@/lib/bye-line";
+import { BYE_SLOT_LABEL, isByeLine, type ByeLineRow } from "@/lib/bye-line";
+import { bracketRoleKey, finalRoundOf, type BracketRoleRow } from "@/lib/bracket-role";
 import { engineFixtureStatus as toBracketFixtureStatus } from "@/lib/fixture-engine-status";
 import { personalPointsLeaderboard } from "./americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -4151,6 +4152,14 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
   });
 }
 
+/** W4 T4 (K3, X-RB-1): a knockout line's role key (`bracketRoleKey`), counted back from ITS bracket's final. The final
+ *  is read on first use, so a side with no rows (nothing generated) never asks; a side with rows and no final refuses by
+ *  name (`BracketHasNoFinalError`), which rolls the Rebuild back. */
+function roleKeyOf(rows: readonly BracketRoleRow[]): (row: BracketRoleRow) => string {
+  let finalRound: number | undefined;
+  return (row) => bracketRoleKey(row, (finalRound ??= finalRoundOf(rows)));
+}
+
 export interface RebuildOutcome extends GenerateOutcome {
   /** Fixtures deleted before regenerating (0 only when the stage had none). */
   removed: number;
@@ -4341,20 +4350,20 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     // Phase 3 wave 1 (G-1): the boards go, and their queued invites with them - after every refusal above, before the delete. The
     // rebuilt boards are new fixtures with new ids, so an invite left queued would mail a board that no longer exists.
     await cancelBoardInvites(tx, stageFixtureIds, FIXTURE_DELETED_REASON);
-    // X-RB-1: the slots the delete is about to take, read before it.
+    // X-RB-1: the slots the delete is about to take, read before it — with what `isByeLine` reads (W4 T4).
     const before = await tx<
-      {
+      ({
         pool_id: string | null;
         round_no: number;
         seq_in_round: number;
-        ext_key: string | null;
         scheduled_at: Date | null;
         court_id: string | null;
         venue_id: string | null;
         schedule_locked: boolean;
-      }[]
+      } & ByeLineRow)[]
     >`
-      select pool_id, round_no, seq_in_round, ext_key, scheduled_at, court_id, venue_id, schedule_locked
+      select pool_id, round_no, seq_in_round, ext_key, scheduled_at, court_id, venue_id, schedule_locked,
+             status, outcome, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label
       from fixtures where stage_id = ${stageId}
       order by pool_id nulls first, round_no, seq_in_round, created_at, id`;
     const deleted = await tx<{ id: string }[]>`
@@ -4362,15 +4371,32 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
 
     const generated = await generateStageFixturesTx(tx, auth, stageId, {});
 
+    // W4 T4 (K3, X-RB-1): a bye line neither gives nor takes a slot (`isByeLine`, every kind), and a knockout carries by
+    // bracket ROLE — its `round_no` counts from the first round, so by position an 8 → 9 Rebuild handed the final's
+    // slot to a semi-final. Each side is keyed against its own final. Every other kind keeps the position.
+    const oldRows = before.map((r) => ({
+      pool_id: r.pool_id,
+      round_no: r.round_no,
+      seq_in_round: r.seq_in_round,
+      ext_key: r.ext_key,
+      scheduled_at: r.scheduled_at === null ? null : r.scheduled_at.toISOString(),
+      court_id: r.court_id,
+      venue_id: r.venue_id,
+      schedule_locked: r.schedule_locked,
+      bye: isByeLine(r),
+    }));
+    const newRows = generated.outcome.fixtures.map((f) => ({
+      id: f.id,
+      pool_id: f.pool_id,
+      round_no: f.round_no,
+      seq_in_round: f.seq_in_round,
+      ext_key: f.ext_key ?? null,
+      bye: isByeLine({ ...f, ext_key: f.ext_key ?? null }),
+    }));
     const carry = carrySlots(
-      before.map((r) => ({ ...r, scheduled_at: r.scheduled_at === null ? null : r.scheduled_at.toISOString() })),
-      generated.outcome.fixtures.map((f) => ({
-        id: f.id,
-        pool_id: f.pool_id,
-        round_no: f.round_no,
-        seq_in_round: f.seq_in_round,
-        ext_key: f.ext_key ?? null,
-      })),
+      oldRows,
+      newRows,
+      stage.kind === "knockout" ? { before: roleKeyOf(oldRows), after: roleKeyOf(newRows) } : undefined,
     );
     const carried = [...carry.assign];
     if (carried.length > 0) {

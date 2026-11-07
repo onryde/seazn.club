@@ -177,3 +177,88 @@ test.describe("X-SD-5 a bye holds no court on the run sheet", () => {
     await expect(realRow, "positive pair: the real line's row names its court").toContainText(courts[1]!.name, { timeout: 20_000 });
   });
 });
+
+// X-RB-1 (W4 T4, K3): a knockout's round numbers count from its FIRST round, so a Rebuild that carried slots by
+// (pool, round, seq) handed the old final's court and time to a semi-final when a ninth entrant doubled the bracket, and
+// left the new final unscheduled. Rebuild now carries a knockout by bracket role: the final keeps the final's slot, the
+// semi-finals keep the semi-finals'. Driven through the roster-drift banner's Rebuild button and read back on the run sheet.
+test.describe("X-RB-1 the final keeps its court across 8→9", () => {
+  test("lay out a knockout of eight, enrol a ninth, Rebuild — the final still holds the final's court and time", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(150_000);
+    const orgId = await activeOrgIdFromRequest(request);
+    const { venueId, courts } = await seedVenueWithCourts(request, [`Role Court ${TAG}`, `Final Court ${TAG}`], { orgId });
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Role cup ${TAG}`, visibility: "private" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "badminton",
+      variant_key: "bwf",
+      config: {},
+    });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const added = await apiJson(
+      request,
+      `/api/v1/divisions/${divisionId}/entrants`,
+      "POST",
+      Array.from({ length: 8 }, (_, i) => ({ kind: "individual", display_name: `Role P${i + 1} ${TAG}`, seed: i + 1 })),
+    );
+    expect(added.status, JSON.stringify(added.error)).toBe(201);
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "knockout", name: "Cup", config: {} });
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    const stageId = stage.data!.id;
+    const gen = await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST");
+    expect(gen.status, JSON.stringify(gen.error)).toBe(200);
+
+    // Lay out every line: its own hour; the final alone on the final's court. Expected slots are what THIS test writes.
+    const before = await stageFixtures(request, divisionId, stageId);
+    const finalRound = Math.max(...before.map((f) => f.round_no));
+    expect([before.length, before.filter((f) => f.round_no === finalRound).length], "premise: seven lines, one final").toEqual([7, 1]);
+    const laid = new Map<string, { scheduled_at: string; court_id: string }>();
+    for (const [i, f] of before.entries()) {
+      const at = `2030-06-15T${String(8 + i).padStart(2, "0")}:00:00.000Z`;
+      const court = f.round_no === finalRound ? courts[1]! : courts[0]!;
+      const placed = await apiJson(request, `/api/v1/fixtures/${f.id}`, "PATCH", { scheduled_at: at, venue_id: venueId, court_id: court.id });
+      expect(placed.status, JSON.stringify(placed.error)).toBe(200);
+      laid.set(f.id, { scheduled_at: at, court_id: court.id });
+    }
+    const oldFinal = laid.get(before.find((f) => f.round_no === finalRound)!.id)!;
+    const oldSemis = before.filter((f) => f.round_no === finalRound - 1).map((f) => laid.get(f.id)!.scheduled_at).sort();
+
+    const late = await apiJson(request, `/api/v1/divisions/${divisionId}/entrants`, "POST", [
+      { kind: "individual", display_name: `Role P9 ${TAG}`, seed: 9 },
+    ]);
+    expect(late.status, JSON.stringify(late.error)).toBe(201);
+
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    const banner = page.getByTestId("roster-drift-banner");
+    await expect(banner).toBeVisible({ timeout: 20_000 });
+    await banner.getByTestId("roster-drift-rebuild").click();
+    const dialog = page.getByRole("alertdialog", { name: "Rebuild this stage's fixtures?" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Rebuild" }).click();
+    // Every old role survives in a bracket of 16; the one real new first-round line has nothing to inherit (its seven
+    // neighbours are byes, which need no slot).
+    await expect(
+      page.getByText("Rebuilt — 7 fixture(s) replaced. 7 slot(s) kept, 0 freed, 1 unscheduled.", { exact: true }),
+    ).toBeVisible({ timeout: 20_000 });
+
+    const after = await stageFixtures(request, divisionId, stageId);
+    const newFinalRound = Math.max(...after.map((f) => f.round_no));
+    expect(newFinalRound, "premise: the final moved a round later").toBe(finalRound + 1);
+    const finals = after.filter((f) => f.round_no === newFinalRound);
+    expect(finals.length).toBe(1);
+    expect({ scheduled_at: finals[0]!.scheduled_at, court_id: finals[0]!.court_id }, "the final keeps the final's slot").toEqual(oldFinal);
+    expect(
+      after.filter((f) => f.round_no === newFinalRound - 1).map((f) => f.scheduled_at).sort(),
+      "the semi-finals keep the semi-finals' times",
+    ).toEqual(oldSemis);
+    await expect(page.locator(`[data-fixture-no="${finals[0]!.fixture_no}"]`), "the run sheet's final names the final's court").toContainText(
+      courts[1]!.name,
+      { timeout: 20_000 },
+    );
+  });
+});
