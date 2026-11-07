@@ -162,6 +162,10 @@ const EXEMPT: readonly Exemption[] = [
   { file: "src/server/usecases/stages.ts", fn: "writeDepartedSeat", sites: 1, reason: "writes the bye label onto a dead seat" },
   { file: "src/server/usecases/stages.ts", fn: "resolveBracketSeats", sites: 6, reason: "reads and writes seat labels to resolve the bracket's seats; writes, never renders" },
   { file: "src/server/usecases/stages.ts", fn: "confirmSeedProposal", sites: 2, reason: "writes the bye label on a confirmed seeding's bye seats" },
+  // W4 T3 (K2, X-SD-5): the ONE bye-line predicate and its SQL twin decide whether a line may take a court — placement,
+  // never a render. A dead seat's tie IS a bye line until the walkover over it lands (ruling D6), which is the point.
+  { file: "src/lib/bye-line.ts", fn: "isPreAwardByeLine", sites: 2, reason: "the bye-line predicate (may this line take a court?); gates placement writes, renders nothing" },
+  { file: "src/server/engine-db/system-bye-sql.ts", fn: "byeLineSql", sites: 2, reason: "isByeLine's SQL twin; gates placement writes, renders nothing" },
   { file: "src/server/engine-db/fed-seats.ts", fn: "seatIsStamped", sites: 1, reason: "the cascade's predicate: is this dead seat bye-stamped — gates a write" },
   { file: "src/server/engine-db/fed-seats.ts", fn: "planRevive", sites: 1, reason: "plans the cascade's seat revive (a write)" },
   { file: "src/server/engine-db/fed-seats.ts", fn: "writePlan", sites: 1, reason: "the cascade's dead-seat write" },

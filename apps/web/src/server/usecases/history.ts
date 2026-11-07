@@ -28,7 +28,8 @@ import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lo
 import type { SwissRefusalCode } from "@/lib/swiss-refusals";
 import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
 import { UUID_RE, liveCourt, venueBack, venueOf, venueWith } from "./court-restore-sql";
-import { fixtureHasResultSql, playedFixtureIds, swissByeShellSql } from "./fixture-results-sql";
+import { fixtureHasResultSql, playedFixtureIds } from "./fixture-results-sql";
+import { byeLineSql } from "@/server/engine-db/system-bye-sql";
 import { refuseOwnFormatLoss } from "./fixture-override-guards";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { log } from "@/server/logger";
@@ -87,12 +88,13 @@ async function loadLedger(tx: Tx, divisionId: string): Promise<LedgerEvent[]> {
  *  write parked on the row's lock re-checks the row it finally gets. */
 const unplayed = (tx: Tx) => tx`not ${fixtureHasResultSql(tx, "fixtures")}`;
 
-/** W3 T5 (X-SW-29; T3 review m3): a replayed PLACEMENT never lands on a Swiss bye shell. A bye is not played, so it
- *  holds no court and no time (`swissByeShellSql`, the SQL twin of the one bye-shell predicate), and no writer since
- *  W3 T3 records one — but a ledger row written before T3 can name a bye shell among its moves, and V485 cleared the
- *  slot without touching the ledger. An Undo walking back past a Pair next reaches those rows, and a Redo replays them.
- *  On the target row itself, like `unplayed`, on every statement below that writes a slot. */
-const slotTaker = (tx: Tx) => tx`not ${swissByeShellSql(tx, "fixtures")}`;
+/** W3 T5 (X-SW-29; T3 review m3): a replayed PLACEMENT never lands on a bye line. A bye is not played, so it holds no
+ *  court and no time (`byeLineSql`, the SQL twin of the one bye-line predicate: a Swiss bye shell, and since W4 T3 (K2,
+ *  X-SD-5) a bracket's bye line, pre-award or awarded), and no writer since records one — but a ledger row written
+ *  before can name one among its moves, and V485/V492 cleared the slot without touching the ledger. An Undo walking
+ *  back reaches those rows, and a Redo replays them. On the target row itself, like `unplayed`, on every statement
+ *  below that writes a slot. */
+const slotTaker = (tx: Tx) => tx`not ${byeLineSql(tx, "fixtures")}`;
 
 /**
  * W3 T5 (design §10.8, X-SW-28; spec §7 "Add late player has no Undo"): the ledger events no Undo or Redo steps across.

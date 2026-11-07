@@ -3647,6 +3647,7 @@ export type DictionaryKey =
   | "knockout.next.through"
   | "knockout.pendingLoser"
   | "knockout.pendingPair"
+  | "knockout.refusal.BYE_LINE_NOT_PLACEABLE"
   | "knockout.roundsLabel"
   | "knockout.view.draw"
   | "knockout.view.label"

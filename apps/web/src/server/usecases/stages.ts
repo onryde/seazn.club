@@ -102,6 +102,7 @@ import {
 } from "@/lib/swiss-pairing";
 import { ONLINE_GAME_EXISTS_CODE } from "@/lib/open-round";
 import { byeAward, isOneSidedAwardBye } from "@/lib/fixture-bye";
+import { BYE_SLOT_LABEL } from "@/lib/bye-line";
 import { engineFixtureStatus as toBracketFixtureStatus } from "@/lib/fixture-engine-status";
 import { personalPointsLeaderboard } from "./americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -1429,14 +1430,8 @@ function walkoverDepartedQualifiers(
 /** A board whose result is in (W3 T9 reads it too: a late player's "current round" is the one with a board not in it). */
 export const DECIDED: ReadonlySet<string> = new Set(["decided", "finalized", "forfeited"]);
 
-/** The slot label stamped on a bye's PHANTOM side — the seat the bracket pads
- *  out and nobody ever occupies. One authority, shared by the two generation
- *  paths (`generateStageFixtures`' own insert and the `timing: "setup"`
- *  progression path's label pass) and by `awardSeededByes` below, which reads
- *  it back as the marker that says "this line is a walkover, not a match still
- *  waiting on an opponent". The public hub already keys its own bye detection
- *  on the same string (public-site/competition-hub.ts's BYE_SLOT_KEY). */
-const BYE_SLOT_LABEL = { key: "bracket.slot.bye", params: {} } as const;
+// `BYE_SLOT_LABEL` — the slot label stamped on a bye's PHANTOM side — lives in lib/bye-line.ts since W4 T3 (ruling D7:
+// one authority a client-safe reader can import), beside `isByeLine`, which reads it.
 
 /** The generator's baked award (`g.award`): a structural bye (one seat) is a bye; F14's departed-qualifier pairing
  *  (both seats filled) is the walkover a withdrawal records — `reason: "withdrew"`, the departed side the loser —
@@ -4967,7 +4962,13 @@ async function awardSeededByes(tx: Tx, stageId: string): Promise<string[]> {
       status = 'forfeited',
       outcome = jsonb_build_object(
         'kind', 'award', 'winner', lines.winner, 'loser', lines.withdrawn,
-        'reason', case when lines.withdrawn is null then 'bye' else 'withdrew' end)
+        'reason', case when lines.withdrawn is null then 'bye' else 'withdrew' end),
+      -- W4 T3 (K2, X-SD-5): a bye is not played, so the award leaves it no court, no time and no pin (a line placed
+      -- before the fix, or pinned on the board). A withdrew walkover keeps its slot: it is no bye line (isByeLine, lib/bye-line.ts).
+      scheduled_at = case when lines.withdrawn is null then null else fixtures.scheduled_at end,
+      court_id = case when lines.withdrawn is null then null else fixtures.court_id end,
+      venue_id = case when lines.withdrawn is null then null else fixtures.venue_id end,
+      schedule_locked = case when lines.withdrawn is null then false else fixtures.schedule_locked end
     from lines
     where fixtures.id = lines.id
     returning fixtures.id, lines.withdrawn is not null as withdrew`;

@@ -2394,6 +2394,7 @@
   "bracket.generateFirst": "Generate fixtures to see the bracket",
   "bracket.unavailable": "These fixtures can't be drawn as a bracket",
   "bracket.appearsOnceGenerated": "The bracket appears once fixtures are generated",
+  "knockout.refusal.BYE_LINE_NOT_PLACEABLE": "A bye is not played, so it never takes a court or a time.",
   "stage.err.swissRoundsRequired": "A Swiss stage needs a number of rounds before it can be saved. Set Rounds to 1 or more and apply again.",
   "swiss.refusal.SWISS_ADHOC_REFUSED": "Swiss rounds are paired by the system. Add friendlies in another stage.",
   "swiss.refusal.SWISS_BYE_NOT_PLACEABLE": "A bye is not played, so it takes no court or time.",

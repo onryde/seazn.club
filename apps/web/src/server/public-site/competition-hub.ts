@@ -86,6 +86,7 @@ import { statusOf } from "./match-centre";
 import { byPoolOrder } from "@/lib/pool-order";
 import { poolLabel } from "@/lib/pool-label";
 import { isSwissByeShellExtKey } from "@/lib/swiss-shell";
+import { BYE_SLOT_LABEL } from "@/lib/bye-line";
 import { swissRoundState, type SwissRoundState } from "@/lib/swiss-round-state";
 import { readEveryPublicDivision } from "./read-every-division";
 import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
@@ -334,11 +335,6 @@ export function hubSides(
   return [side(home, homeShort), side(away, awayShort)];
 }
 
-/** The slot-label key `stages.ts` (`byeSlotLabel`) stores on a bye's phantom
- *  side. It is the ONLY record of a bye: `hubSides` resolves the label to a
- *  sentence and drops the key, so this must read the fixture, not the side. */
-const BYE_SLOT_KEY = "bracket.slot.bye";
-
 /**
  * `HubMatch.byeSides` — `[home, away]`, true where that side is a bye: no
  * entrant AND the stored bye slot label (Knockout fix round 2b). Never decided
@@ -354,8 +350,11 @@ export function hubByeSides(
 ): [boolean, boolean] {
   // R116-1: a seat a walkover was won over (ruling 116's withdrawn winner) keeps the bye label it was stamped with when
   // it died, but it is no bye — the tie reads as a walkover naming her (`hubSides`).
+  // The stored bye slot label (`BYE_SLOT_LABEL`, lib/bye-line.ts — W4 ruling D7, one authority) is the ONLY record of a
+  // bye: `hubSides` resolves the label to a sentence and drops the key, so this reads the fixture, not the side. Read
+  // in place, never through a local alias, so the bye-render-sites scan still sees this site (R116-4).
   const bye = (entrantId: string | null, label: SlotLabel | null, seat: "home" | "away") =>
-    entrantId === null && label?.key === BYE_SLOT_KEY && unseatedForfeitLoser(fixture, seat) === null;
+    entrantId === null && label?.key === BYE_SLOT_LABEL.key && unseatedForfeitLoser(fixture, seat) === null;
   return [
     bye(fixture.home_entrant_id, fixture.home_slot_label, "home"),
     bye(fixture.away_entrant_id, fixture.away_slot_label, "away"),

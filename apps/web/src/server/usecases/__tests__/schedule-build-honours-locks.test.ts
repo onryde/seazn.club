@@ -495,6 +495,9 @@ describe("lockedFixtureIds (the unified lock predicate)", () => {
     ext_key: null,
     home_entrant_id: null,
     away_entrant_id: null,
+    outcome: null,
+    home_slot_label: null,
+    away_slot_label: null,
     scheduled_at: "2026-08-01T09:00:00.000Z",
     // P9 pass-3a-FIX: court_id/venue_id are what scopeLocked reads now.
     // court_label/venue are LEGACY and null here on purpose — the dedicated
