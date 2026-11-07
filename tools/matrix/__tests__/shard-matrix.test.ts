@@ -682,13 +682,18 @@ describe("shard-matrix.ts the CLI: matrix=<json> for $GITHUB_OUTPUT (exit 0), or
   });
 
   it("a plan that would time out past the cap is a refusal at plan time, named (ShardTimeoutTooLong), never at minute 360", () => {
-    const c = JSON.parse(shardsText) as { layers: Record<string, { full: { shards: number } }> };
-    c.layers.L1.full.shards = 2; // 155 driven over two stripes of one browser worker at 210 s
+    const c = JSON.parse(shardsText) as { maxTimeoutMinutes: number; layers: Record<string, { full: { shards: number } }> };
+    // Two stripes of one browser worker for L1's 155 driven cases (78 in stripe 1). Against the real 300-minute cap that
+    // now FITS - the retired Triple round robin's 🚫 took stripe 1 from 83 to 78 - so the cap is lowered to 200 minutes,
+    // which 78 cases at L1's committed ceiling (setup and slack aside) outrun whatever that ceiling rounds to above 150 s.
+    c.layers.L1.full.shards = 2;
+    c.maxTimeoutMinutes = 200;
     const f = join(dir, "two.json");
     writeFileSync(f, JSON.stringify(c));
     expect(main(["--scope", "full", "--shards-file", f])).toBe(2);
     expect(io.err).toMatch(/ShardTimeoutTooLong/);
     expect(io.err).toMatch(/L1 shard 1\/2/);
+    expect(io.err).toMatch(/exceeds maxTimeoutMinutes 200/);
     expect(io.out).toBe("");
   });
 
