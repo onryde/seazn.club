@@ -5,7 +5,8 @@
 //   1. The page OPENS WITHOUT A LOGIN, in a real browser with an empty cookie jar: a 200, served `no-store`, noindex, the
 //      figures under their labels - and at 320, 768 and 1280 with no horizontal scroll, a 43-character match name truncating
 //      inside its card rather than pushing the page wide (R17: the widths are looped here with `test.use({ viewport })`).
-//   2. Print: the chrome (the print button, the cookie banner) is gone under `print` media and the showings are still there.
+//   2. Print: the chrome (the print button, the cookie banner) is gone under `print` media and the showings and the viewers
+//      "Coming soon" legend are still there.
 //   3. The real Next 404: an unknown, a malformed, a revoked and a deleted sponsor's token each answer HTTP 404 with the
 //      SAME body (byte-equal `main`), noindex - and a link answers 200 right up to its revoke (no cache in between).
 // The figures are typed from the rows this file seeds (two closed showings of 8 s and 15 s, one still open; two stream visits and
@@ -112,13 +113,18 @@ for (const width of [320, 768, 1280]) {
       await expect(page.getByTestId("sponsor-report")).toBeVisible();
       await expect(page.getByRole("heading", { level: 1 })).toHaveText(ui("sponsorReport.heading", { sponsor: SPONSOR, org: org.name }));
 
-      // The figures, typed from the seeded rows: 23 s over the two closed showings, three showings, two stream visits, viewers a dash.
+      // The figures, typed from the seeded rows: 23 s over the two closed showings, three showings, two stream visits - and
+      // viewers, not measured yet (owner ruling 2026-11-01: PR B deferred), the "Coming soon" legend.
       await expect(page.getByTestId("report-on-screen")).toHaveText(fmtOnScreen("en", SHOWN_MS[0]! + SHOWN_MS[1]!));
       await expect(page.getByText(ui("sponsorReport.stat.onScreen.other", { count: 3 }), { exact: true })).toBeVisible();
       await expect(page.getByTestId("report-stream-visits")).toHaveText("2");
       await expect(page.getByText(ui("sponsorReport.stat.visits.other"), { exact: true })).toBeVisible();
-      await expect(page.getByTestId("report-viewers").locator('[aria-hidden="true"]')).toHaveText("—");
-      await expect(page.getByTestId("report-viewers").locator(".sr-only")).toHaveText(ui("sponsorReport.notAvailable"));
+      // The legend is real text a screen reader reads as shown: the whole cell is its words, and nothing in it is aria-hidden.
+      const viewers = page.getByTestId("report-viewers");
+      await expect(viewers).toHaveText(ui("sponsors.viewers.comingSoon"));
+      await expect(viewers.getByTestId("viewers-coming-soon")).toBeVisible();
+      await expect(viewers.locator('[aria-hidden="true"]')).toHaveCount(0);
+      await expect(page.getByText(ui("sponsorReport.viewersNote"), { exact: true })).toBeVisible();
 
       // Each showing: three cards, each the placeholder (no frame store in CI), the open one still being counted.
       const cards = page.getByTestId("report-showing");
@@ -164,6 +170,9 @@ test("print: the chrome goes (the print button, the cookie banner), the report s
   await expect(banner).toBeHidden();
   await expect(page.getByTestId("report-showing")).toHaveCount(3);
   await expect(page.getByTestId("report-showing").first()).toBeVisible();
+  // The viewers legend is content, not chrome: it prints, in its own words.
+  await expect(page.getByTestId("viewers-coming-soon")).toBeVisible();
+  await expect(page.getByTestId("viewers-coming-soon")).toHaveText(ui("sponsors.viewers.comingSoon"));
   await page.context().close();
 });
 

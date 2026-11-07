@@ -6,7 +6,8 @@
 //     fallback, "a break in play" (`BREAK_FALLBACK_MSG`), a scene showing is the break screen - never a raw kind;
 //   - the match line: both sides, an empty seat ("to be decided"), a deleted fixture;
 //   - an OPEN showing says it is still being counted, never "0 s";
-//   - viewers is a dash with words for a screen reader, never 0;
+//   - viewers with no number is the "Coming soon" legend (owner ruling 2026-11-01, PR B deferred): real text, never
+//     aria-hidden, never a dash or 0, and it prints; a number replaces it (0 too); the footnote promises no YouTube;
 //   - the list says it is the latest N of M when the report holds more showings than it lists, and only then;
 //   - the empty report: the empty sentence, no card.
 // Sports: every shipped sport's declared kinds (the registry sweep).
@@ -119,9 +120,50 @@ describe("the figures and the list", () => {
     expect(html).not.toContain(esc(t(en, "sponsorReport.showing.onScreen", { duration: fmtOnScreen("en", 0) })));
   });
 
-  it("viewers is a dash with words, never a 0; a number when there is one", () => {
-    expect(draw(report())).toMatch(/data-testid="report-viewers"[^>]*><span aria-hidden="true">—<\/span><span class="sr-only">Not available yet<\/span>/);
-    expect(draw(report({ viewerImpressions: 2140 }))).toMatch(/data-testid="report-viewers"[^>]*>2,140</);
+  // Owner ruling 2026-11-01: PR B (viewer counts) is deferred, so a report with no viewer number says "Coming soon" - a
+  // legend a screen reader reads as it is shown (never aria-hidden, never a dash), and one a printer keeps.
+  it("viewers with no number is the Coming soon legend - real text, never aria-hidden, no dash, no 0 - the empty report too (counted)", () => {
+    const legend = esc(t(en, "sponsors.viewers.comingSoon"));
+    expect(t(en, "sponsors.viewers.comingSoon"), "premise: the dictionary has the legend").not.toBe("sponsors.viewers.comingSoon");
+    let checked = 0;
+    // The empty case first: nothing aired, so there is no viewer number either.
+    for (const r of [report({ timesShown: 0, onScreenMs: 0, showings: [] }), report()]) {
+      const cell = draw(r).match(/<dd data-testid="report-viewers"[^>]*>(.*?)<\/dd>/)?.[1];
+      expect(cell, "the viewers figure is drawn").toBeDefined();
+      expect(cell).toMatch(new RegExp(`^<span data-testid="viewers-coming-soon" class="([^"]*)">${legend}</span>$`));
+      expect(cell).not.toContain("aria-hidden");
+      expect(cell).not.toContain("—");
+      const cls = cell!.match(/class="([^"]*)"/)![1]!.split(/\s+/);
+      // Print: browsers drop fills by default, so the legend carries an outline that prints, and print never hides it.
+      expect(cls, "an outline a printer keeps").toEqual(expect.arrayContaining(["border", "print:border-current"]));
+      expect(cls.filter((c) => /(^|:)hidden$/.test(c)), "print never hides it").toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a viewer number replaces the legend - 0 included, a null check and not a falsy one (counted)", () => {
+    let checked = 0;
+    for (const n of [2140, 0]) {
+      const html = draw(report({ viewerImpressions: n }));
+      expect(html, String(n)).toMatch(new RegExp(`data-testid="report-viewers"[^>]*>${n.toLocaleString("en")}</dd>`));
+      expect(html, String(n)).not.toContain('data-testid="viewers-coming-soon"');
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the footnote says viewer numbers are coming soon in every locale, and the report promises YouTube nowhere (counted)", async () => {
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const ui = await getDictionary(locale, "ui");
+      const html = renderToStaticMarkup(<SponsorReportView report={report()} ui={ui} locale={locale} />);
+      expect(html, locale).toContain(`<p>${esc(t(ui, "sponsorReport.viewersNote"))}</p>`);
+      expect(html, `${locale}: the legend in the locale's own words`).toContain(`>${esc(t(ui, "sponsors.viewers.comingSoon"))}</span>`);
+      expect(html, `${locale}: no YouTube promise`).not.toMatch(/youtube/i);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("says it lists the latest N of M only when it lists fewer than were shown", () => {

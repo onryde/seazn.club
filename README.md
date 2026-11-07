@@ -190,6 +190,11 @@ exists; and the compositor carrying R4 PR C is deployed and named by `RELAY_IMAG
 that, leave it unset — a Machine without it sends no airings and grabs no frames, so the
 report's "Times shown" stays 0. Streams already running keep the env they booted with.
 
+**Rollback step.** Before rolling web back past R4 PR A, unset `RELAY_AIRINGS` on web and let the composed streams
+running with it end. An older web refuses a beat that carries airings. The compositor turns airings off after one refused
+count-only beat, but when airing lines arrive first it takes the second refused beat: about 10 s at the 5 s cadence,
+close to web's 15 s composed stale window.
+
 Two facts worth knowing before reading the design:
 
 - `stream.liveInputs.create()` returns `{ uid, rtmps, srt, webRTC }` from a single call,

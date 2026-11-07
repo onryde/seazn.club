@@ -23,7 +23,7 @@ Overview shows each sponsor's numbers for a period: **This year**, **Last 30 day
 
 - **Times shown** and **On screen** count the sponsor's cards on streams Seazn composes. A card still on screen counts as shown, and adds its time once it ends.
 - **Link clicks** count visits through the sponsor's tracked links: the logos on your public pages and the short link printed on a stream card. Automated previews and repeat taps within 30 seconds are not counted.
-- **Viewer impressions** are not measured yet, so the column shows a dash.
+- **Viewer impressions** are not measured yet, so the column shows **Coming soon**. The sponsor's report shows the same.
 - A deleted sponsor keeps its airings, but its link clicks are removed with it.
 
 ## Share report

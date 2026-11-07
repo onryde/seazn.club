@@ -4,8 +4,8 @@
 // a Share report link per sponsor.
 //
 // The numbers are the server's (`sponsorOverview`, server/sponsors/report.ts, where every rule is stated); this file only lays
-// them out. A value the server does not have is a DASH, never 0: viewer numbers until Y1 fills them, and a deleted sponsor's
-// clicks (they were deleted with it).
+// them out. A value the server does not have is never 0: a deleted sponsor's clicks (they were deleted with it) are a DASH,
+// and viewer numbers - not measured yet (owner ruling 2026-11-01: PR B deferred) - are a "Coming soon" legend.
 //
 // ONE DOM for every width (house rule): a list of sponsors, each a definition list of its four numbers. On a phone each sponsor
 // is a card whose lines carry their labels; from `md` the same list lines up under a column header row (aria-hidden - the
@@ -81,14 +81,22 @@ export function OverviewTab(props: OverviewTabProps) {
   );
   /** A count, or - for a deleted sponsor's clicks, which went with it - a dash read as "not available". */
   const count = (n: number | null) => (n === null ? dash(msg("sponsors.overview.notAvailable")) : fmtNumber(locale, n));
-  /** One number with its label: a labelled line on a phone card, a right-aligned cell under the header from `md`. */
+  /** Viewer numbers are not measured yet: real text, read as shown. A CAPTION in the table's secondary style (the "peak"
+   *  line's), not a pill: the `md` number columns are 6rem, and no padded pill holds "Próximamente" (81 px at text-xs). */
+  const comingSoon = (
+    <span data-testid="viewers-coming-soon" className="inline-block max-w-full text-xs font-medium text-slate-500">
+      {msg("sponsors.viewers.comingSoon")}
+    </span>
+  );
+  /** One number with its label: a labelled line on a phone card, a right-aligned cell under the header from `md`. On the
+   *  phone line the label wraps and the value never shrinks (`shrink-0`), so a long label cannot squeeze a value out. */
   const stat = (key: string, field: string, label: string, value: React.ReactNode, accent = false) => (
     <div className="flex min-w-0 items-baseline justify-between gap-3 md:block md:text-right">
       <dt className="text-slate-500 md:sr-only" data-row={key}>
         {label}
       </dt>
       <dd
-        className={`min-w-0 font-semibold tabular-nums ${accent ? "text-purple-700" : "text-slate-800"}`}
+        className={`min-w-0 shrink-0 font-semibold tabular-nums ${accent ? "text-purple-700" : "text-slate-800"}`}
         data-testid={`sponsor-overview-${field}`}
         data-row={key}
       >
@@ -178,7 +186,7 @@ export function OverviewTab(props: OverviewTabProps) {
                         "viewers",
                         msg("sponsors.overview.col.viewerImpressions"),
                         r.viewerImpressions === null ? (
-                          dash(msg("sponsors.overview.notMeasured"))
+                          comingSoon
                         ) : (
                           <>
                             {count(r.viewerImpressions)}

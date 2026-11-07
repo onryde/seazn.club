@@ -268,17 +268,18 @@ test("overview: a stream click - the code a viewer types, through the real /s/ r
     expect(made.status, JSON.stringify(made.error)).toBe(201);
     const sponsorId = made.data!.id;
 
-    // Before any click: the row reads zeros (a real zero, not a dash) and viewers a dash.
+    // Before any click: the row reads zeros (a real zero, not a dash) and viewers - not measured yet (owner ruling 2026-11-01:
+    // PR B deferred) - the "Coming soon" legend.
     await page.goto(sponsorsUrl(seeded.slug, "overview"));
     const row = page.getByTestId(`sponsor-overview-row-${sponsorId}`);
     await expect(row).toBeVisible();
     await expect(row.getByTestId("sponsor-overview-clicks")).toHaveText("0");
-    // The dash is two parts: the mark on screen (hidden from screen readers) and the words a screen reader says instead.
-    // `toHaveText` on the cell would read both, so each is asserted on its own.
+    // The legend is real text a screen reader reads as shown: the whole cell is its words, and nothing in it is aria-hidden.
+    expect(UI["sponsors.viewers.comingSoon"], "the dictionary has the legend").toBeTruthy();
     const viewers = row.getByTestId("sponsor-overview-viewers");
-    await expect(viewers.locator('[aria-hidden="true"]')).toHaveText("—");
-    await expect(viewers.locator(".sr-only")).toHaveText(UI["sponsors.overview.notMeasured"] ?? "");
-    expect(UI["sponsors.overview.notMeasured"], "the dictionary has the spoken words").toBeTruthy();
+    await expect(viewers).toHaveText(UI["sponsors.viewers.comingSoon"] ?? "");
+    await expect(viewers.getByTestId("viewers-coming-soon")).toBeVisible();
+    await expect(viewers.locator('[aria-hidden="true"]')).toHaveCount(0);
 
     // The stream's short code (S5 mints it from a live overlay poll; written straight to its table here, as public-fixture.spec.ts
     // does). Drawn from the declared alphabet at the longest length so no other run collides.

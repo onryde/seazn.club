@@ -20,13 +20,17 @@ import { breakMsgKey } from "@/components/sponsors/break-labels";
 /** The root layout mounts Barlow Condensed as `--font-barlow`; the public theme's `font-display` reads `--ps-font-display`. */
 const DISPLAY_FACE = { "--ps-font-display": "var(--font-barlow)" } as CSSProperties;
 
-/** A figure that is not measured yet: a dash to the eye, words to a screen reader (the Overview's own rule). */
-function Dash({ words }: { words: string }) {
+/** Viewer numbers are not measured yet (owner ruling 2026-11-01: PR B deferred), so their figure's slot holds a legend: real
+ *  text, read as shown (never aria-hidden), set in the figures' own display face. Print drops fills by default, so on paper
+ *  its outline takes the text colour and the fill goes - the same legend on every printer. */
+function ComingSoon({ label }: { label: string }) {
   return (
-    <>
-      <span aria-hidden="true">—</span>
-      <span className="sr-only">{words}</span>
-    </>
+    <span
+      data-testid="viewers-coming-soon"
+      className="inline-flex max-w-full items-center rounded-full border border-accent-line bg-accent-soft px-3 py-1 font-display text-base leading-tight font-semibold text-accent-strong print:border-current print:bg-transparent"
+    >
+      {label}
+    </span>
   );
 }
 
@@ -157,8 +161,16 @@ export function SponsorReportView({ report, ui, locale }: { report: SponsorRepor
             </div>
             <div className="flex min-w-0 flex-col-reverse gap-1 px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
               <dt className="text-sm text-ink-muted">{t(ui, "sponsorReport.stat.viewers")}</dt>
-              <dd data-testid="report-viewers" className="font-display text-4xl leading-none font-bold tabular-nums text-balance text-ink-muted lg:text-5xl">
-                {report.viewerImpressions === null ? <Dash words={t(ui, "sponsorReport.notAvailable")} /> : fmtNumber(locale, report.viewerImpressions)}
+              {/* With no number, the slot keeps a figure's line height (text-4xl / 5xl at leading-none) so the row stays level. */}
+              <dd
+                data-testid="report-viewers"
+                className={
+                  report.viewerImpressions === null
+                    ? "flex min-h-9 items-center lg:min-h-12"
+                    : "font-display text-4xl leading-none font-bold tabular-nums text-balance text-ink lg:text-5xl"
+                }
+              >
+                {report.viewerImpressions === null ? <ComingSoon label={t(ui, "sponsors.viewers.comingSoon")} /> : fmtNumber(locale, report.viewerImpressions)}
               </dd>
             </div>
             <div className="flex min-w-0 flex-col-reverse gap-1 px-4 py-4 sm:px-6 sm:py-6 lg:px-8">

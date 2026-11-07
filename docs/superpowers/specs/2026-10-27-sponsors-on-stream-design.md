@@ -13,13 +13,13 @@ Captured scenario this fulfils: `2026-09-05-stream-overlay-prompts/_SCENARIO-202
 | D2 | Where does Sponsors live? | "Better to move out the Sponsor tab from the setting and redesign along with that" → **A: top-level Sponsors with tabs** (Overview · Sponsors · On stream · Packages and orders), opens on Overview. |
 | D3 | How does a club choose what plays? | **C: rotation by default, a per-sponsor deal where one was sold.** The MVP cut ships the **rotation and the dial only**; deals are **Later** (§10), and §2 keeps them additive. |
 | D4 | How does the sponsor get the numbers? | A **shareable link (no login)** in the MVP. PDF and the monthly email are **Later**. |
-| D5 | Report contents | The mock (`overview-report.html`): times shown, time on screen, live viewers when shown, link clicks, a frame from the broadcast per showing with "watch this moment". |
+| D5 | Report contents | The mock (`overview-report.html`): times shown, time on screen, live viewers when shown, link clicks, a frame from the broadcast per showing with "watch this moment". *2026-11-01 (owner): PR B deferred; live viewers show as "Coming soon" (§5.2 note).* |
 | D6 | Sponsor playback | "Watch this moment" opens the YouTube VOD at the showing. |
 | D7 | Scope | "I need a working MVP" → this cut ("yes"). Mocks are **layout only**; the build uses the house theme. |
 | D8 | Gate? | **No new gate** — rotation and the report wherever streaming is (stream credits are the meter). Confirmed. |
 | D9 | Tier weights | **title 3 · gold 2 · silver 1 · partner 1.** Confirmed. |
 | D10 | OBS streams in the report | **Not counted in the MVP** (an OBS page is public, its beacon forgeable); the report says "composed streams". Confirmed. |
-| D11 | Viewer wording | **"Viewer impressions"** (live viewers at each showing, added up) with **peak live viewers** beside it. Confirmed. |
+| D11 | Viewer wording | **"Viewer impressions"** (live viewers at each showing, added up) with **peak live viewers** beside it. Confirmed. *2026-11-01 (owner): the labels stay; the values show "Coming soon" until viewer counts ship (§5.2 note).* |
 | D12 | Default dial | **Normal** for a newly ticked sponsor. Confirmed. |
 | D13 | Ship before YouTube Connect? | **No: build in parallel, release together** with YouTube Connect, so viewers and "watch this moment" are live on day one. |
 | D14 | Rotation continuity | **One rotation per org across all its matches** (a per-org cursor), so on Light a T20's single innings break does not always go to the first title sponsor. |
@@ -252,7 +252,7 @@ the match page only.
 ### 5.1 Sponsors hub (`/o/[orgSlug]/sponsors?tab=…`)
 
 - **Overview** (default): period picker (this year / last 30 days / one competition); per sponsor: times shown, on
-  screen (Σ `ended_at − started_at`), viewer impressions (Σ `viewers`, dash when none), link clicks (`sponsor_clicks`
+  screen (Σ `ended_at − started_at`), viewer impressions (Σ `viewers`; "Coming soon" when none, 2026-11-01 — §5.2 note), link clicks (`sponsor_clicks`
   in period), "Share report". Phone: one card per sponsor (mock).
 - **Sponsors:** today's `OrgSponsors` list and form, moved, behaviour unchanged.
 - **On stream:** the rotation checklist (tier shown), the Light / Normal / Busy dial, "Where" as text (short breaks →
@@ -273,6 +273,15 @@ After a YouTube purge (§6.3) the showing keeps its frame, match, break and time
 and no "watch this moment".
 Footnote: "composed streams", "viewer numbers from YouTube". `noindex`, rate-limited like other public reads, opaque
 404 on a revoked or unknown token. Mobile bar applies. The browser's print works; a built PDF is Later.
+
+**Note, 2026-11-01 (owner ruling: "Skip for now PR B and show, coming soon as a legend").** PR B (YouTube viewer
+counts, Y1–Y3) is deferred. In PR A every viewer figure shows a **"Coming soon"** legend instead of a dash: the
+report's viewers tile and the Overview's Viewer impressions column (key `sponsors.viewers.comingSoon`, real text, not
+`aria-hidden`, printed). The footnote above no longer promises YouTube; it reads "Viewer numbers are coming soon."
+Presentation only: `viewerImpressions`, `peakViewers` and a showing's `viewers` stay `null` in the API and the OpenAPI
+is unchanged. When viewer counts return, the brainstormed shape (owner 2026-11-01, not yet designed) is: **extendable
+viewer sources** (YouTube, Cloudflare, …; the report counts from whichever source produced the number), **one
+destination per stream**, and the **peak while the card is on screen**. That needs a spec amendment before any build.
 
 ## 6. Constraints the builder must meet
 

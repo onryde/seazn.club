@@ -8,7 +8,7 @@
 //
 // The transitions and where each is pinned:
 //   a period is picked ............................... "the picker"
-//   numbers, dash for null viewers .................... "a row reads its own numbers"
+//   numbers; Coming soon for null viewers ............. "a row reads its own numbers", "viewers with no number"
 //   a deleted sponsor .................................. "a deleted sponsor"
 //   empty org (editor / viewer) ........................ "empty"
 //   viewer (R19 read-only) ............................. "R19"
@@ -21,6 +21,7 @@
 //   U3  deleted no link  drop `row.sponsorId !== null &&` on the button       -> "a deleted sponsor"
 //   U4  picker value     `onChange` pushes overviewHref(orgSlug, THIS_YEAR)   -> "the picker"
 //   U5  competition note  drop `period.kind === "competition" &&`              -> "the competition-click footnote..." (fix round 1, m4)
+//   U6  legend dropped    null viewers draw nothing instead of the legend      -> "viewers with no number", "a row reads its own numbers"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 
@@ -29,7 +30,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => nav }));
 
 import { OverviewTab, type OverviewTabProps } from "../overview-tab";
 import { ShareReport } from "../share-report";
-import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { fmtIsoDay, fmtOnScreen, overviewHref, type SponsorOverviewRow, type SponsorPeriod } from "@/lib/sponsor-report";
 import { sponsorsHref } from "@/lib/sponsors-hub";
 import { t } from "@/lib/i18n-runtime";
@@ -135,7 +136,7 @@ describe("the picker - the period on screen, and a pick navigates to it", () => 
 });
 
 describe("the rows", () => {
-  it("a row reads its own numbers: times shown, on screen to the second, link clicks, and a DASH for viewers it does not have (never 0)", () => {
+  it("a row reads its own numbers: times shown, on screen to the second, link clicks, and Coming soon for viewers it does not have (never 0, never a dash)", () => {
     const m = mount();
     let checked = 0;
     for (const r of ROWS) {
@@ -143,10 +144,10 @@ describe("the rows", () => {
       const cell = (field: string) => flat(textOf(m.byTestId(`sponsor-overview-${field}`).find((e) => (propsOf(e)["data-row"] as string) === k)!));
       expect(cell("times"), r.name).toBe(String(r.timesShown));
       expect(cell("onscreen"), r.name).toBe(fmtOnScreen("en", r.onScreenMs));
-      // A missing value is the dash on screen plus words for a screen reader (fix round 1, m7): "not measured" for viewers,
-      // "not available" for a deleted sponsor's clicks (they went with it).
+      // A deleted sponsor's clicks (they went with it) are the dash on screen plus words for a screen reader (fix round 1, m7);
+      // viewers with no number are the "Coming soon" legend (owner ruling 2026-11-01, PR B deferred).
       expect(cell("clicks"), r.name).toBe(r.linkClicks === null ? `${DASH} ${msg("sponsors.overview.notAvailable")}` : String(r.linkClicks));
-      if (r.viewerImpressions === null) expect(cell("viewers"), r.name).toBe(`${DASH} ${msg("sponsors.overview.notMeasured")}`);
+      if (r.viewerImpressions === null) expect(cell("viewers"), r.name).toBe(msg("sponsors.viewers.comingSoon"));
       else expect(cell("viewers"), r.name).toBe(flat(`${r.viewerImpressions.toLocaleString("en")} ${msg("sponsors.overview.peak", { count: r.peakViewers!.toLocaleString("en") })}`));
       checked++;
     }
@@ -155,13 +156,38 @@ describe("the rows", () => {
     expect(m.island.text()).toContain(fmtOnScreen("en", 252_000));
   });
 
-  it("every dash is hidden from screen readers and spoken as words instead (counted)", () => {
+  it("every dash is hidden from screen readers and spoken as words instead (counted) - viewers are never a dash", () => {
     const m = mount();
     const dashes = m.island.tree().filter((e) => e.type === "span" && textOf(e) === DASH);
-    expect(dashes.length, "Gone's clicks + Harbour's and Gone's viewers").toBe(3);
+    expect(dashes.length, "Gone's clicks only").toBe(1);
     for (const d of dashes) expect(propsOf(d)["aria-hidden"]).toBe("true");
     const spoken = m.island.tree().filter((e) => e.type === "span" && String(propsOf(e).className) === "sr-only").map((e) => textOf(e)).sort();
-    expect(spoken).toEqual([msg("sponsors.overview.notAvailable"), msg("sponsors.overview.notMeasured"), msg("sponsors.overview.notMeasured")].sort());
+    expect(spoken).toEqual([msg("sponsors.overview.notAvailable")]);
+  });
+
+  // Owner ruling 2026-11-01: PR B (viewer counts) is deferred, so a row with no viewer number says "Coming soon".
+  it("viewers with no number is the Coming soon legend: one per such row, real text, never aria-hidden; a row with a number has none (counted)", () => {
+    expect(msg("sponsors.viewers.comingSoon"), "premise: the dictionary has the legend").not.toBe("sponsors.viewers.comingSoon");
+    const m = mount();
+    const legends = m.byTestId("viewers-coming-soon");
+    const without = ROWS.filter((r) => r.viewerImpressions === null);
+    expect(without.length, "anti-vacuity: rows with no viewer number").toBe(2);
+    expect(legends).toHaveLength(without.length);
+    let checked = 0;
+    for (const r of ROWS) {
+      const k = rowKey(r);
+      const cell = m.byTestId("sponsor-overview-viewers").find((e) => (propsOf(e)["data-row"] as string) === k);
+      expect(cell, `${r.name}: the viewers cell is drawn`).toBeDefined();
+      const inCell = walk(cell);
+      const legend = inCell.filter((e) => propsOf(e)["data-testid"] === "viewers-coming-soon");
+      expect(legend, r.name).toHaveLength(r.viewerImpressions === null ? 1 : 0);
+      for (const e of inCell) expect(propsOf(e)["aria-hidden"], `${r.name}: nothing in the viewers cell is hidden from a screen reader`).toBeUndefined();
+      if (legend[0]) expect(flat(textOf(legend[0])), r.name).toBe(msg("sponsors.viewers.comingSoon"));
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
+    // The notes explain the legend instead of a dash.
+    expect(m.text("sponsor-overview-notes")).toContain(msg("sponsors.overview.viewersFootnote"));
   });
 
   it("every stat carries its label in the row (the phone card's line, the desktop's screen-reader name), in order", () => {
@@ -240,10 +266,11 @@ describe("empty", () => {
     expect(viewer.has("sponsor-overview-empty-link")).toBe(false);
   });
 
-  it("sponsors with nothing aired read zeros and dashes, not the empty state", () => {
+  it("sponsors with nothing aired read zeros and Coming soon for viewers, not the empty state", () => {
     const m = mount({ rows: [row({ sponsorId: "s9", name: "Quiet Ltd" })] });
     expect(m.has("sponsor-overview-empty")).toBe(false);
     expect(m.text("sponsor-overview-row-s9")).toContain(fmtOnScreen("en", 0));
+    expect(m.byTestId("viewers-coming-soon"), "the one row's viewers").toHaveLength(1);
   });
 });
 

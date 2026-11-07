@@ -11,7 +11,8 @@
 //   - rate-limited by `publicRateLimit` (the client's own IP bucket), checked BEFORE the lookup: a throttled visit gets the
 //     throttled screen and never the report, and spends no database statement (no oracle). A page cannot answer 429 (Next's
 //     HTTP fallbacks are 401/403/404 only), so the throttled screen is the page's form of it - see task-S14-report.md D1;
-//   - every figure under its spec §5.2 label; viewers a dash (PR A); each showing's frame a SIGNED url, never the path, or a
+//   - every figure under its spec §5.2 label; viewers the "Coming soon" legend (owner ruling 2026-11-01: PR B deferred);
+//     each showing's frame a SIGNED url, never the path, or a
 //     neutral placeholder;
 //   - every string from the dictionary (here: the fr dictionary, so a hard-coded English string cannot pass);
 //   - long names truncate: `min-w-0` on every box from the showing card down to the name.
@@ -191,8 +192,10 @@ describe.skipIf(!HAS_DB)("the seam: S13's real link, the real page, the real rev
     expect(html).toContain(esc(plural(fr, "sponsorReport.stat.onScreen", 2, "fr", { count: fmtNumber("fr", 2) })));
     expect(html).toMatch(new RegExp(`data-testid="report-stream-visits"[^>]*>${fmtNumber("fr", 2)}<`));
     expect(html).toContain(esc(plural(fr, "sponsorReport.stat.visits", 2, "fr")));
-    expect(html, "viewers: a dash with its words for a screen reader").toMatch(/data-testid="report-viewers"[^>]*><span aria-hidden="true">—<\/span>/);
-    expect(html).toContain(esc(t(fr, "sponsorReport.notAvailable")));
+    expect(html, "viewers: the Coming soon legend, real text a screen reader reads").toMatch(
+      new RegExp(`data-testid="report-viewers"[^>]*><span data-testid="viewers-coming-soon"[^>]*>${esc(t(fr, "sponsors.viewers.comingSoon"))}</span></dd>`),
+    );
+    expect(html).toContain(esc(t(fr, "sponsorReport.viewersNote")));
     expect(html).toContain(fmtIsoDay("fr", "2026-06-01"));
     expect(html).toContain(fmtIsoDay("fr", "2026-06-30"));
     expect(html).toContain('src="https://cdn.example/logo.png"');
@@ -266,13 +269,20 @@ describe.skipIf(!HAS_DB)("the seam: S13's real link, the real page, the real rev
       ctx.locale = locale;
       const dict = await getDictionary(locale, "ui");
       const html = await render(link.url.split("/").at(-1)!);
-      for (const key of ["sponsorReport.showings.title", "sponsorReport.footnote", "sponsorReport.print", "sponsorReport.stat.viewers"] as const) {
+      for (const key of [
+        "sponsorReport.showings.title",
+        "sponsorReport.footnote",
+        "sponsorReport.print",
+        "sponsorReport.stat.viewers",
+        "sponsors.viewers.comingSoon",
+        "sponsorReport.viewersNote",
+      ] as const) {
         expect(html, `${locale} ${key}`).toContain(esc(t(dict, key)));
         if (locale !== "en") expect(t(dict, key), `${locale} ${key} is translated`).not.toBe(t(en, key));
         checked++;
       }
     }
-    expect(checked).toBe(16);
+    expect(checked).toBe(24);
   });
 });
 
