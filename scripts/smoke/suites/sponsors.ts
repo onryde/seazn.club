@@ -288,7 +288,18 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   );
   if (report) await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-report-links/${report.id}`, "DELETE");
   const closed = report ? await html(newSession(), report.url) : null;
-  check("sponsors: a revoked report link is the 404", closed !== null && closed.status === 404 && closed.body.includes('data-testid="sponsor-report-not-found"'));
+  // A notFound() thrown by the page fails Next's server render, so the 404 is Next's error shell (an empty
+  // <html id="__next_error__"> body) carrying the main render's Flight data, and the browser draws the route's not-found
+  // client-side (next 16.3.6 app-render.js, the errorRecovery path). The notice is therefore in the HTML only as escaped
+  // Flight JSON, never as a `data-testid="..."` attribute - that is what e2e/sponsor-report.spec.ts reads after it draws.
+  // So: the status, THIS route's notice in any form, and nothing of the report, its sponsor's name included.
+  const notice = closed?.body.includes("sponsor-report-not-found") ?? false;
+  const leaked = (closed?.body.includes('data-testid="sponsor-report"') ?? false) || (closed?.body.includes(`Goldco ${tag}`) ?? false);
+  const revokedIs404 = closed !== null && closed.status === 404 && notice && !leaked;
+  if (!revokedIs404) {
+    console.log(`      revoked report link: status ${closed?.status ?? "no link"}, notice ${notice}, report or name leaked ${leaked}, ${closed?.body.length ?? 0} bytes`);
+  }
+  check("sponsors: a revoked report link is the 404", revokedIs404);
 
   // --- R4 S15: the rows S5, S8, S9 and S10 owed, chained off ONE live volleyball match in `comp` — whose own settings row
   // is Normal and on (the S12 rows above), and where the gold sponsor is the only ticked one. AFTER the Overview and report
