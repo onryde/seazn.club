@@ -73,6 +73,31 @@
 //     — the reload and second-device path), and it goes false again at a
 //     period change, because a new period genuinely has no observation yet.
 //
+// AND A SEVENTH, RULED RATHER THAN FORCED (S2-5 ruling 107, design §7.2):
+//
+//  7. A SHARED CLOCK FOLLOWS THE LEDGER'S CLOCK EVENTS. A skin that declares
+//     `PadClockSpec.shared` (football alone) gets one clock across every
+//     screen scoring the match — the console, a second console, the device
+//     pad, the phone. The anchor is the newest standing `*.clock` event in the
+//     ledger (Start, Pause or Correct, from ANY screen), read through its `at`
+//     and its row's `recordedAt`: running, `at.elapsed + (serverNow −
+//     recordedAt)`; paused, `at.elapsed`. The held clock re-seats whenever that
+//     anchor changes, in the current period only (`followAnchor`), and on
+//     nothing else. An anchor this pad wrote itself carries this pad's OWN
+//     `createdAt`, so it is read in local time (offset 0); every other one is
+//     the server's time, read through the transport's measured offset.
+//
+//     This does not reopen property 3's "a clock that only ever shows the
+//     past". That failure was re-seating from `spec.seed` — the fold's last
+//     STAMPED event — on every tap, which drags a running clock back to when
+//     the last goal happened. A clock event is different in kind: its reading
+//     is PROJECTED FORWARD to now from the moment it was recorded, so
+//     following it never moves a running clock backwards in time, and goals,
+//     cards and subs never move it at all. Properties 1 and 2 bend only as far
+//     as the ruling asks: the clock is still started and paused by a scorer's
+//     tap, just not necessarily THIS scorer's. An unshared skin (hockey and the
+//     rest) is untouched — `reconcileClock` follows nothing for it.
+//
 // TWO OBLIGATIONS THIS FILE CANNOT DISCHARGE, recorded because nothing else
 // records them (R6 review, gaps 9 and 10):
 //
@@ -131,6 +156,18 @@ export interface PadClockSpec {
    * `skins/football.tsx` are that guard, already written.
    */
   readonly seed?: number;
+  /**
+   * PROPERTY 7 — this clock is the match's, not this pad's: it follows the
+   * ledger's newest `*.clock` event (`reconcileClock`). Absent for every skin
+   * whose clock is pad-local, which is every skin but football.
+   */
+  readonly shared?: true;
+  /**
+   * How the bar shows `elapsed` (seconds within `period`), when not as
+   * `formatClock` would. Football's match time (ruling 108) lives here, behind
+   * the skin, so the shared formatter every other sport reads is unchanged.
+   */
+  readonly display?: (elapsed: number) => string;
 }
 
 /**
@@ -157,6 +194,13 @@ export interface PadClock {
    * into an observation. See property 6's own note in this file's header.
    */
   readonly known: boolean;
+  /**
+   * PROPERTY 7 — the `ClockAnchor.key` this clock was last seated from, so the
+   * same anchor seen again on the next render is not re-applied over a local
+   * tap made since. Absent on a clock no anchor has seated. `startClock`,
+   * `pauseClock` and `adjustClock` spread, so it survives them.
+   */
+  readonly anchorKey?: string;
 }
 
 /** A paused clock at `seed` seconds into `period`. Non-integer, negative and
@@ -383,12 +427,148 @@ export function reseatClock(prev: PadClock | null, spec: PadClockSpec | null): P
   return prev;
 }
 
+/**
+ * One ledger event, as much of it as property 7 reads. `EventEnvelope` (the
+ * engine's) satisfies it structurally; restated so this file stays a leaf.
+ */
+export interface LedgerClockEvent {
+  readonly id: string;
+  readonly seq: number;
+  readonly type: string;
+  readonly payload: unknown;
+  readonly recordedAt: string;
+  readonly voids?: string;
+}
+
+/**
+ * The newest standing clock event, read (property 7). `elapsed` is whole
+ * seconds into `period` at `recordedAtMs`; `own` says `recordedAtMs` is this
+ * pad's own clock rather than the server's.
+ */
+export interface ClockAnchor {
+  readonly key: string;
+  readonly period: string;
+  readonly elapsed: number;
+  readonly running: boolean;
+  readonly recordedAtMs: number;
+  readonly own: boolean;
+}
+
+/**
+ * PROPERTY 7's anchor: the newest standing `clockType` event in `events`, or
+ * `null` when there is none.
+ *
+ * Walks the clock events that no `voids` names, in seq order; the last one
+ * that reads is the anchor. At an EQUAL seq the ledger's row is walked after
+ * this pad's own (`ownIds`) pending guess, so it wins: a pending event's seq
+ * is `expected_seq + 1`, a guess the server may have given to someone else.
+ *
+ * A clock event reads when its payload has a boolean `running` and its row a
+ * parseable `recordedAt`. With a valid `at` it is an anchor as it stands.
+ * Without one (controller ruling X-8; the phone does the same) it is still
+ * the newest clock event, so it PROJECTS the anchor before it to its own
+ * moment — the same period, that anchor's reading carried to this event's
+ * `recordedAt` if it was running — and takes its own `running`. An unstamped
+ * event with nothing before it reads as nothing.
+ */
+export function latestClockAnchor(
+  events: readonly LedgerClockEvent[],
+  clockType: string,
+  ownIds: ReadonlySet<string>,
+): ClockAnchor | null {
+  const voided = new Set<string>();
+  for (const event of events) if (typeof event.voids === "string") voided.add(event.voids);
+  const standing = events
+    .filter((event) => event.type === clockType && !voided.has(event.id))
+    .map((event) => ({ event, own: ownIds.has(event.id) }))
+    .sort((a, b) => a.event.seq - b.event.seq || Number(b.own) - Number(a.own));
+  let anchor: ClockAnchor | null = null;
+  for (const { event, own } of standing) anchor = anchorOf(event, own, anchor) ?? anchor;
+  return anchor;
+}
+
+/** One clock event as an anchor, given the anchor before it, or `null` when it
+ *  does not read. See `latestClockAnchor`. */
+function anchorOf(event: LedgerClockEvent, own: boolean, before: ClockAnchor | null): ClockAnchor | null {
+  const recordedAtMs = Date.parse(event.recordedAt);
+  if (!Number.isFinite(recordedAtMs)) return null;
+  const { running, at } = (typeof event.payload === "object" && event.payload !== null ? event.payload : {}) as {
+    running?: unknown;
+    at?: unknown;
+  };
+  if (typeof running !== "boolean") return null;
+  const stamp = gameTimeOf(at);
+  if (stamp !== null) return { key: event.id, ...stamp, running, recordedAtMs, own };
+  if (before === null) return null;
+  const ran = before.running ? Math.max(0, (recordedAtMs - before.recordedAtMs) / 1000) : 0;
+  return { key: event.id, period: before.period, elapsed: Math.floor(before.elapsed + ran), running, recordedAtMs, own };
+}
+
+/** A payload's `at`, when it is one the engine would have accepted. */
+function gameTimeOf(at: unknown): GameTimeStamp | null {
+  if (typeof at !== "object" || at === null) return null;
+  const { period, elapsed } = at as { period?: unknown; elapsed?: unknown };
+  if (typeof period !== "string" || period.trim() === "") return null;
+  if (typeof elapsed !== "number" || !Number.isFinite(elapsed) || elapsed < 0) return null;
+  return { period, elapsed: sanitiseSeconds(elapsed) };
+}
+
+/**
+ * PROPERTY 7. The held clock, re-seated from `anchor` when the anchor is NEW
+ * and names the held clock's period; otherwise `prev`, BY REFERENCE.
+ *
+ * By reference when the anchor is the one already followed (`anchorKey`), so
+ * a local Start or Pause made since — before its own clock event is in the
+ * ledger — is not undone on the next render. A void that moves the anchor
+ * BACK to an older event is a new key, and re-seats to it.
+ *
+ * `offsetMs` is serverNow − localNow (the transport's `serverOffsetMs`). A
+ * foreign anchor's `recordedAtMs` is the server's time, so the run began at
+ * `recordedAtMs − offsetMs` on this pad's clock; this pad's own anchor is
+ * already in local time and is read with no offset.
+ */
+export function followAnchor(prev: PadClock | null, anchor: ClockAnchor | null, offsetMs: number): PadClock | null {
+  if (prev === null || anchor === null) return prev;
+  if (anchor.period !== prev.period || anchor.key === prev.anchorKey) return prev;
+  return {
+    period: prev.period,
+    base: sanitiseSeconds(anchor.elapsed),
+    runningSince: anchor.running ? anchor.recordedAtMs - (anchor.own ? 0 : offsetMs) : null,
+    known: true,
+    anchorKey: anchor.key,
+  };
+}
+
+/**
+ * The host's one call: `reseatClock`, then — for a SHARED spec only —
+ * `followAnchor`. An unshared spec is exactly `reseatClock`, so property 3
+ * holds for every sport but football.
+ */
+export function reconcileClock(
+  prev: PadClock | null,
+  spec: PadClockSpec | null,
+  anchor: ClockAnchor | null,
+  offsetMs: number,
+): PadClock | null {
+  const seated = reseatClock(prev, spec);
+  return spec?.shared ? followAnchor(seated, anchor, offsetMs) : seated;
+}
+
 /** The `at` for an event dispatched at `nowMs`, or `undefined` when this pad
  *  has no clock, or has one that has never been told the time (property 6).
- *  Stamps while PAUSED too — property 5. */
-export function stampOf(clock: PadClock | null, nowMs: number): GameTimeStamp | undefined {
+ *  Stamps while PAUSED too — property 5.
+ *
+ *  `floor`, when it names the clock's own period, is the lowest `elapsed` this
+ *  may stamp: the ledger's newest `at` (the fold's `asOf`), which the server
+ *  refuses to see an event go below (`NON_MONOTONIC_TIME`). A followed clock
+ *  (property 7) is read through a measured offset, so it can sit a second or
+ *  two under a stamp another screen has already recorded. Another period's
+ *  floor is incomparable and ignored, as in `adjustClock`. */
+export function stampOf(clock: PadClock | null, nowMs: number, floor?: GameTimeStamp): GameTimeStamp | undefined {
   if (clock === null || !clock.known) return undefined;
-  return { period: clock.period, elapsed: elapsedOf(clock, nowMs) };
+  const elapsed = elapsedOf(clock, nowMs);
+  const least = floor !== undefined && floor.period === clock.period ? sanitiseSeconds(floor.elapsed) : 0;
+  return { period: clock.period, elapsed: Math.max(elapsed, least) };
 }
 
 /** M:SS. The same rendering `skins/football.tsx`'s `readClock` produces from

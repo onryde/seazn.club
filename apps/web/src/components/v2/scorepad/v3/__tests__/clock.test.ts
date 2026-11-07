@@ -27,14 +27,18 @@ import {
   CLOCK_NUDGE_FINE_SECONDS,
   adjustClock,
   elapsedOf,
+  followAnchor,
   formatClock,
   initClock,
+  latestClockAnchor,
   pauseClock,
+  reconcileClock,
   reseatClock,
   stampOf,
   stampPayload,
   startClock,
   toggleClock,
+  type ClockAnchor,
   type PadClock,
 } from "../clock";
 import { buildScorebug, footballSkinV3, readClock } from "../skins/football";
@@ -1172,5 +1176,318 @@ describe("the two properties that let the host seed its tick at 0 instead of Dat
     // which the caller had already given a real `nowMs`.
     const running = startClock(initClock("P1", 0), T0);
     expect(reseatClock(running, { period: "P1", seed: 5 })).toBe(running);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. The SHARED clock (S2-5 ruling 107; design §7.2) — property 7
+// ---------------------------------------------------------------------------
+//
+// Server time is S0. Pad A's own clock reads the server's; pad B's runs five
+// minutes FAST, so B's offset (serverNow − local) is −300 000. Every event is
+// built literally, and every expected reading is worked by hand from the
+// rule `at.elapsed + (serverNow − recordedAt)`, never asked of the code.
+
+const S0 = 1_700_000_000_000;
+const iso = (ms: number) => new Date(ms).toISOString();
+const ev = (id: string, seq: number, payload: unknown, recordedAt: string, type = "football.clock") => ({
+  id,
+  seq,
+  type,
+  payload,
+  recordedAt,
+});
+
+describe("latestClockAnchor — the ledger's newest clock event, from any screen", () => {
+  const start = ev("e2", 2, { running: true, at: { period: "H1", elapsed: 0 } }, iso(S0));
+  const goal = ev("g3", 3, { by: "home" }, iso(S0 + 5_000), "football.goal");
+  const pause = ev("e4", 4, { running: false, at: { period: "H1", elapsed: 610 } }, iso(S0 + 610_000));
+
+  it("takes the highest-seq clock event, and never a goal", () => {
+    const a = latestClockAnchor([start, goal, pause], "football.clock", new Set());
+    expect(a).toEqual({
+      key: "e4",
+      period: "H1",
+      elapsed: 610,
+      running: false,
+      recordedAtMs: S0 + 610_000,
+      own: false,
+    });
+    // A goal after the newest clock event does not become the anchor either.
+    const lateGoal = ev("g5", 5, { by: "away", at: { period: "H1", elapsed: 700 } }, iso(S0 + 700_000), "football.goal");
+    expect(latestClockAnchor([start, goal, pause, lateGoal], "football.clock", new Set())?.key).toBe("e4");
+  });
+
+  it("skips a voided clock event and falls back to the one before", () => {
+    const voidE4 = { ...ev("v5", 5, { event_id: "e4" }, iso(S0 + 620_000), "core.void"), voids: "e4" };
+    expect(latestClockAnchor([start, goal, pause, voidE4], "football.clock", new Set())).toEqual({
+      key: "e2",
+      period: "H1",
+      elapsed: 0,
+      running: true,
+      recordedAtMs: S0,
+      own: false,
+    });
+  });
+
+  it("skips a payload with no boolean running, or an unreadable recordedAt", () => {
+    const noRunning = ev("x5", 5, { at: { period: "H1", elapsed: 700 } }, iso(S0 + 700_000));
+    const stringRunning = ev("x6", 6, { running: "yes", at: { period: "H1", elapsed: 700 } }, iso(S0 + 700_000));
+    const nullPayload = ev("x7", 7, null, iso(S0 + 700_000));
+    const badTime = ev("x8", 8, { running: true, at: { period: "H1", elapsed: 700 } }, "not a time");
+    for (const bad of [noRunning, stringRunning, nullPayload, badTime]) {
+      expect(latestClockAnchor([start, pause, bad], "football.clock", new Set())?.key, bad.id).toBe("e4");
+    }
+  });
+
+  it("marks this pad's own event own", () => {
+    expect(latestClockAnchor([start, goal, pause], "football.clock", new Set(["e4"]))?.own).toBe(true);
+    expect(latestClockAnchor([start, goal, pause], "football.clock", new Set(["e2"]))?.own).toBe(false);
+  });
+
+  it("at an equal seq the ledger's row beats this pad's pending guess", () => {
+    const pending = ev("k6", 6, { running: true, at: { period: "H1", elapsed: 610 } }, iso(S0 + 615_000));
+    const foreign = ev("e6", 6, { running: false, at: { period: "H1", elapsed: 612 } }, iso(S0 + 612_000));
+    // In either order of arrival.
+    for (const events of [
+      [start, pause, pending, foreign],
+      [start, pause, foreign, pending],
+    ]) {
+      const a = latestClockAnchor(events, "football.clock", new Set(["k6"]));
+      expect(a).toEqual({ key: "e6", period: "H1", elapsed: 612, running: false, recordedAtMs: S0 + 612_000, own: false });
+    }
+  });
+
+  it("answers null for no events and for another sport's clock type", () => {
+    expect(latestClockAnchor([], "football.clock", new Set())).toBeNull();
+    const hockey = [
+      ev("h2", 2, { running: true, at: { period: "P1", elapsed: 0 } }, iso(S0), "hockey.clock"),
+      ev("h3", 3, { running: false, at: { period: "P1", elapsed: 90 } }, iso(S0 + 90_000), "hockey.clock"),
+    ];
+    expect(latestClockAnchor(hockey, "football.clock", new Set())).toBeNull();
+  });
+
+  it("an at with a non-numeric elapsed, a negative one or a blank period is UNSTAMPED, so it projects (X-8)", () => {
+    // Controller ruling 1 (X-8): a clock event with a boolean `running` and no
+    // valid `at` is still the newest clock event — it projects the anchor
+    // before it rather than being skipped. Start at 0 at S0 (running); each of
+    // these Pauses arrives at S0 + 90 s, so the projected reading is 90.
+    for (const at of [{ period: "H1", elapsed: "90" }, { period: "H1", elapsed: -1 }, { period: " ", elapsed: 90 }]) {
+      const bad = ev("u3", 3, { running: false, at }, iso(S0 + 90_000));
+      expect(latestClockAnchor([start, bad], "football.clock", new Set())).toEqual({
+        key: "u3",
+        period: "H1",
+        elapsed: 90,
+        running: false,
+        recordedAtMs: S0 + 90_000,
+        own: false,
+      });
+    }
+  });
+
+  it("an unstamped Pause freezes the projected reading (X-8)", () => {
+    // Start at 600 at S0, running; a Pause with no `at` lands 30.9 s later →
+    // 600 + floor(30.9) = 630, paused. It is its own key, own flag and time.
+    const running = ev("e2", 2, { running: true, at: { period: "H1", elapsed: 600 } }, iso(S0));
+    const unstamped = ev("e3", 3, { running: false }, iso(S0 + 30_900));
+    expect(latestClockAnchor([running, unstamped], "football.clock", new Set(["e3"]))).toEqual({
+      key: "e3",
+      period: "H1",
+      elapsed: 630,
+      running: false,
+      recordedAtMs: S0 + 30_900,
+      own: true,
+    });
+    // An unstamped Start after a PAUSED anchor keeps that anchor's reading:
+    // nothing ran in between.
+    const paused = ev("e4", 4, { running: false, at: { period: "H1", elapsed: 610 } }, iso(S0 + 610_000));
+    const restart = ev("e5", 5, { running: true }, iso(S0 + 700_000));
+    expect(latestClockAnchor([running, paused, restart], "football.clock", new Set())).toEqual({
+      key: "e5",
+      period: "H1",
+      elapsed: 610,
+      running: true,
+      recordedAtMs: S0 + 700_000,
+      own: false,
+    });
+  });
+
+  it("an unstamped event with nothing before it is no anchor (X-8)", () => {
+    const lone = ev("e2", 2, { running: true }, iso(S0));
+    expect(latestClockAnchor([lone], "football.clock", new Set())).toBeNull();
+    // ...and a stamped event after it anchors as usual.
+    const later = ev("e3", 3, { running: false, at: { period: "H1", elapsed: 45 } }, iso(S0 + 45_000));
+    expect(latestClockAnchor([lone, later], "football.clock", new Set())?.key).toBe("e3");
+  });
+});
+
+describe("followAnchor — a shared clock follows the newest clock event (S2-5 rulings 107)", () => {
+  const anchorOf = (over: Partial<ClockAnchor>): ClockAnchor => ({
+    key: "e4",
+    period: "H1",
+    elapsed: 600,
+    running: true,
+    recordedAtMs: S0,
+    own: false,
+    ...over,
+  });
+
+  it("re-seats from a foreign RUNNING anchor in server time", () => {
+    // This pad's local clock is five minutes SLOW (offset +300 000): server
+    // S0 is local S0 − 300 000. Thirty local seconds later the reading is
+    // 600 + 30.
+    const held = startClock(initClock("H1", 0), S0 - 300_000);
+    const c = followAnchor(held, anchorOf({}), 300_000)!;
+    expect(elapsedOf(c, S0 - 300_000 + 30_000)).toBe(630);
+    expect([c.known, c.anchorKey]).toEqual([true, "e4"]);
+    expect(c.runningSince).toBe(S0 - 300_000);
+  });
+
+  it("a paused anchor freezes at its at.elapsed", () => {
+    const held = startClock(initClock("H1", 0), S0);
+    const c = followAnchor(held, anchorOf({ running: false, elapsed: 610 }), 300_000)!;
+    expect(c.runningSince).toBeNull();
+    expect(elapsedOf(c, 0)).toBe(610);
+    expect(elapsedOf(c, S0 + 3_600_000)).toBe(610);
+    expect(c.known).toBe(true);
+    // An anchor's elapsed is held to the `DurationSeconds` contract on the way in.
+    expect(followAnchor(held, anchorOf({ key: "e5", running: false, elapsed: -5 }), 0)!.base).toBe(0);
+  });
+
+  it("reads this pad's own anchor in LOCAL time, whatever the offset", () => {
+    const L1 = S0 + 42_000;
+    const c = followAnchor(initClock("H1"), anchorOf({ own: true, recordedAtMs: L1 }), 300_000)!;
+    expect(c.runningSince).toBe(L1);
+  });
+
+  it("the same anchor again is the held clock BY REFERENCE, so a local Pause in between survives", () => {
+    const anchor = anchorOf({});
+    const followed = followAnchor(initClock("H1"), anchor, 0)!;
+    const paused = pauseClock(followed, S0 + 20_000);
+    // `pauseClock` spreads, so the anchor key rides along with the Pause.
+    expect(paused.anchorKey).toBe("e4");
+    expect(elapsedOf(paused, S0 + 99_000)).toBe(620);
+    expect(followAnchor(paused, anchor, 0)).toBe(paused);
+    // `startClock` and `adjustClock` spread too.
+    expect(startClock(paused, S0 + 30_000).anchorKey).toBe("e4");
+    expect(adjustClock(paused, 60, S0 + 30_000).anchorKey).toBe("e4");
+  });
+
+  it("ignores an anchor from another period, and a null clock or anchor", () => {
+    const prev = startClock(initClock("H2", 0), S0);
+    expect(followAnchor(prev, anchorOf({ period: "H1" }), 0)).toBe(prev);
+    expect(followAnchor(prev, null, 0)).toBe(prev);
+    expect(followAnchor(null, anchorOf({ period: "H2" }), 0)).toBeNull();
+  });
+
+  it("a void that moves the anchor BACK re-seats to the older event", () => {
+    const onE4 = followAnchor(initClock("H1"), anchorOf({ key: "e4", running: false, elapsed: 610 }), 0)!;
+    expect(onE4.anchorKey).toBe("e4");
+    // e4 is voided: the newest standing clock event is the older e2, Start at 0.
+    const back = followAnchor(onE4, anchorOf({ key: "e2", running: true, elapsed: 0, recordedAtMs: S0 }), 0)!;
+    expect(back).not.toBe(onE4);
+    expect(back.anchorKey).toBe("e2");
+    expect(back.runningSince).toBe(S0);
+    expect(elapsedOf(back, S0 + 15_000)).toBe(15);
+  });
+
+  it("two pads following one anchor read within a second of each other (design §10)", () => {
+    // A tapped Start at 600: A holds its own copy (recordedAt = A's createdAt,
+    // S0 on A's clock, which is the server's). B reads the server's row,
+    // recorded 120 ms later, with its own clock five minutes fast.
+    const startOnA = { key: "k6", period: "H1", elapsed: 600, running: true, recordedAtMs: S0, own: true };
+    const startOnB = { key: "e6", period: "H1", elapsed: 600, running: true, recordedAtMs: S0 + 120, own: false };
+    const a = followAnchor(initClock("H1", 580), startOnA, 0)!;
+    const b = followAnchor(initClock("H1", 580), startOnB, -300_000)!;
+    // The true instant S0 + 30 000 is local S0 + 30 000 on A and S0 + 330 000 on B.
+    const readA = elapsedOf(a, S0 + 30_000);
+    const readB = elapsedOf(b, S0 + 330_000);
+    expect(readA).toBe(630);
+    expect(readB).toBe(629);
+    expect(Math.abs(readA - readB)).toBeLessThanOrEqual(1);
+    expect(Math.min(readA, readB)).toBeGreaterThanOrEqual(629);
+  });
+
+  it("two pads converge on the later of two near-simultaneous taps", () => {
+    // A taps Start (seq 6) as B taps Pause (seq 7). Each pad holds its own
+    // copy of its own tap and the server's copy of the other's.
+    const aStart = { running: true, at: { period: "H1", elapsed: 600 } };
+    const bPause = { running: false, at: { period: "H1", elapsed: 605 } };
+    const onA = [ev("k6", 6, aStart, iso(S0)), ev("e7", 7, bPause, iso(S0 + 5_000))];
+    // B's own copy carries B's createdAt, on B's clock: five minutes fast.
+    const onB = [ev("e6", 6, aStart, iso(S0 + 100)), ev("k7", 7, bPause, iso(S0 + 305_000))];
+    const a = followAnchor(
+      startClock(initClock("H1", 600), S0),
+      latestClockAnchor(onA, "football.clock", new Set(["k6"])),
+      0,
+    )!;
+    const b = followAnchor(
+      initClock("H1", 600),
+      latestClockAnchor(onB, "football.clock", new Set(["k7"])),
+      -300_000,
+    )!;
+    expect([a.runningSince, b.runningSince]).toEqual([null, null]);
+    expect([elapsedOf(a, S0 + 60_000), elapsedOf(b, S0 + 360_000)]).toEqual([605, 605]);
+    expect([a.anchorKey, b.anchorKey]).toEqual(["e7", "k7"]);
+  });
+});
+
+describe("reconcileClock — reseat, then follow only when the spec is shared", () => {
+  const anchor: ClockAnchor = { key: "e9", period: "P1", elapsed: 300, running: false, recordedAtMs: S0, own: false };
+
+  it("an UNSHARED spec (hockey) ignores every anchor: property 3 holds", () => {
+    const prev = startClock(initClock("P1", 120), S0);
+    expect(reconcileClock(prev, { period: "P1", seed: 200 }, anchor, 0)).toBe(prev);
+    // ...and seats exactly as reseatClock does where there is no clock yet.
+    const fresh = reconcileClock(null, { period: "P1", seed: 200 }, anchor, 0)!;
+    expect([fresh.base, fresh.runningSince, fresh.known, fresh.anchorKey]).toEqual([200, null, true, undefined]);
+  });
+
+  it("a SHARED spec re-seats a known clock that an unshared one would keep", () => {
+    const prev = startClock(initClock("P1", 120), S0);
+    const c = reconcileClock(prev, { period: "P1", seed: 200, shared: true }, anchor, 0)!;
+    expect(c).not.toBe(prev);
+    expect(c.anchorKey).toBe("e9");
+    expect([c.base, c.runningSince]).toEqual([300, null]);
+    // A null spec still drops the clock, shared or not.
+    expect(reconcileClock(prev, null, anchor, 0)).toBeNull();
+  });
+
+  it("a period change seats fresh, then follows an anchor of the NEW period only", () => {
+    const prev = startClock(initClock("H1", 2700), S0);
+    const h1Anchor: ClockAnchor = { key: "e4", period: "H1", elapsed: 2760, running: false, recordedAtMs: S0, own: false };
+    const c = reconcileClock(prev, { period: "H2", shared: true }, h1Anchor, 0)!;
+    expect(c).toEqual({ period: "H2", base: 0, runningSince: null, known: false });
+    // Once the second half's own Start is in the ledger, it follows that.
+    const h2Start: ClockAnchor = { key: "e8", period: "H2", elapsed: 0, running: true, recordedAtMs: S0 + 900_000, own: false };
+    const d = reconcileClock(c, { period: "H2", shared: true }, h2Start, 0)!;
+    expect([d.known, d.anchorKey, d.runningSince]).toEqual([true, "e8", S0 + 900_000]);
+  });
+
+  it("a fresh mount mid-match follows the latest anchor at once (a reload)", () => {
+    const running: ClockAnchor = { key: "e4", period: "H1", elapsed: 600, running: true, recordedAtMs: S0, own: false };
+    const c = reconcileClock(null, { period: "H1", seed: 590, shared: true }, running, 0)!;
+    expect(c.runningSince).toBe(S0);
+    expect(elapsedOf(c, S0 + 60_000)).toBe(660);
+  });
+});
+
+describe("stampOf with a floor", () => {
+  const at590 = initClock("H1", 590);
+
+  it("with a same-period floor never stamps below it", () => {
+    expect(stampOf(at590, S0, { period: "H1", elapsed: 610 })).toEqual({ period: "H1", elapsed: 610 });
+    // A floor below the reading leaves the reading alone.
+    expect(stampOf(at590, S0, { period: "H1", elapsed: 500 })).toEqual({ period: "H1", elapsed: 590 });
+  });
+
+  it("ignores another period's floor, and without one is unchanged", () => {
+    expect(stampOf(at590, S0, { period: "H2", elapsed: 9 })).toEqual({ period: "H1", elapsed: 590 });
+    // ...even one ABOVE the reading: a second-half stamp is no bound on the first half.
+    expect(stampOf(at590, S0, { period: "H2", elapsed: 2_000 })).toEqual({ period: "H1", elapsed: 590 });
+    expect(stampOf(at590, S0)).toEqual({ period: "H1", elapsed: 590 });
+    // A floor never turns a clock that has not been told the time into one that stamps.
+    expect(stampOf(initClock("H1"), S0, { period: "H1", elapsed: 610 })).toBeUndefined();
+    expect(stampOf(null, S0, { period: "H1", elapsed: 610 })).toBeUndefined();
   });
 });
