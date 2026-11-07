@@ -41,10 +41,12 @@ import {
   type ClockAnchor,
   type PadClock,
 } from "../clock";
-import { buildScorebug, footballSkinV3, readClock } from "../skins/football";
-import { PadClockBar, stampFor } from "../pad-host";
+import { buildFootballClock, buildScorebug, footballSkinV3, readClock } from "../skins/football";
+import { buildClock } from "../skins/period-shared";
+import { PadClockBar, correctionSurvives, stampFor } from "../pad-host";
 import type { PadHostView } from "../types";
 import { foldFootball, footballCfg } from "./_football-fold";
+import { appendVerdict, foldPeriod, hockey, periodCfg } from "./_period-fold";
 
 const T0 = 1_700_000_000_000; // a fixed wall-clock origin; nothing reads Date.now()
 
@@ -1070,16 +1072,45 @@ describe("the host's own wiring, audited at the source (a mirror — see the not
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
 
-  it("routes THE send through stampFor, so there is exactly one place `at` enters an event", () => {
-    expect(src).toContain("const stamped = stampFor(props.module, type, payload, clock, Date.now());");
+  it("routes THE send through stampFor with the shared floor, so there is exactly one place `at` enters an event", () => {
+    expect(src).toContain("const stamped = stampFor(props.module, type, payload, clock, Date.now(), floor);");
     expect(src).toContain("void dispatch(type, stamped)");
     // The old, unstamped call must be gone — not merely joined by a new one.
     expect(src).not.toContain("void dispatch(type, payload)");
   });
 
-  it("consults the SKIN for the clock spec and reconciles it through reseatClock", () => {
+  it("consults the SKIN for the clock spec and reconciles it through reconcileClock", () => {
     expect(src).toContain("props.skin.clock?.(view)");
-    expect(src).toContain("reseatClock(clock, clockSpec)");
+    expect(src).toContain("reconcileClock(clock, clockSpec, anchor,");
+    expect(src).toContain("latestClockAnchor(pipeline.events,");
+    expect(src).toContain("`${props.module.key}.clock`, pipeline.ownEventIds)");
+    // The bare reseat is gone from the host — not merely joined by a second call.
+    expect(src).not.toContain("reseatClock(clock, clockSpec)");
+  });
+
+  it("reads the server offset from the REAL transport, not a constant (S2-5 ruling 107, inert-seam check)", () => {
+    // `registry.tsx` builds `props.transport` with `sessionTransport()` or
+    // `deviceLinkTransport()`, both `makeTransport`, which carries
+    // `serverOffsetMs` (transport.test.ts). The skew walkthrough
+    // (`walkthrough/scorepad-v3-football-shared-clock.spec.ts`, its last test)
+    // is the behavioural proof; this pins that the host asks for it at all.
+    expect(src).toContain("reconcileClock(clock, clockSpec, anchor, props.transport.serverOffsetMs?.() ?? 0)");
+  });
+
+  it("publishClock floors its at like a tap does", () => {
+    expect(src).toContain("at: stampOf(next, now, floor) ?? { period: next.period, elapsed: elapsedOf(next, now) },");
+    expect(src).toContain("[pipeline, props.module, msg, floor]");
+    // The floor is the one adjustClockNow uses, and only for a SHARED clock.
+    expect(src).toContain("clockSpec?.shared === true && clockSpec.seed !== undefined ? clockSpec.seed : undefined");
+  });
+
+  it("a running clock gets an immediate tick, so a followed anchor paints at once", () => {
+    expect(src).toContain("const tick = setTimeout(() => setNowMs(Date.now()), 0);");
+    expect(src).toContain("clearTimeout(tick);");
+  });
+
+  it("closes the correction row only when the period changes or the clock goes, so it stays open across a followed anchor", () => {
+    expect(src).toContain("if (adjusting && !correctionSurvives(clock, nextClock)) setAdjusting(false);");
   });
 
   it("mounts the bar only when a clock exists, so every pre-R6 skin's DOM is unchanged", () => {
@@ -1195,6 +1226,92 @@ describe("the two properties that let the host seed its tick at 0 instead of Dat
     // which the caller had already given a real `nowMs`.
     const running = startClock(initClock("P1", 0), T0);
     expect(reseatClock(running, { period: "P1", seed: 5 })).toBe(running);
+  });
+
+  it("followAnchor is the only other way in, and the host ticks at once for it", () => {
+    // S2-5 ruling 107. A SHARED clock can come back RUNNING from a ledger
+    // anchor with no tap on this pad, so `nowMs` (still 0, or half a second
+    // stale) would paint the anchor's base until the next interval. The host
+    // schedules an immediate `setNowMs(Date.now())` whenever the held clock is
+    // running, which covers this transition as well as `toggleClockNow`.
+    const runningAnchor: ClockAnchor = { key: "e7", period: "P1", elapsed: 300, running: true, recordedAtMs: T0, own: false };
+    for (const spec of [{ period: "P1" }, { period: "P1", seed: 0 }, { period: "P2", seed: 900 }]) {
+      // Unshared: the anchor is never followed, so reconcileClock is reseatClock.
+      expect(reconcileClock(null, spec, runningAnchor, 0)!.runningSince).toBeNull();
+    }
+    const followed = reconcileClock(null, { period: "P1", shared: true }, runningAnchor, 0)!;
+    expect(followed.runningSince).toBe(T0);
+    expect(elapsedOf(followed, 0)).toBe(300);
+    expect(elapsedOf(followed, T0 + 10_000)).toBe(310);
+    const src = readFileSync(join(process.cwd(), "src/components/v2/scorepad/v3/pad-host.tsx"), "utf8");
+    expect(src).toContain("const tick = setTimeout(() => setNowMs(Date.now()), 0);");
+  });
+});
+
+describe("the shared clock reaches football and nothing else (S2-5 rulings 107, 108)", () => {
+  const viewOf = (cfg: unknown, state: unknown): PadHostView => ({
+    cfg,
+    state,
+    summary: {},
+    phase: "live",
+    band: 3,
+    entitlements: {},
+    personNames: {},
+    squads: { home: { entrantId: "H", members: [], subsUsed: 0, exemptUsed: {} }, away: { entrantId: "A", members: [], subsUsed: 0, exemptUsed: {} } },
+    events: [],
+    contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
+    entrantNames: {},
+  });
+
+  it("football's spec is shared and hockey's is not, from real folds", () => {
+    const cfg = footballCfg();
+    const football = buildFootballClock(viewOf(cfg, foldFootball(cfg, [["core.start"]])))!;
+    expect(football.shared).toBe(true);
+    const seeded = buildFootballClock(
+      viewOf(cfg, foldFootball(cfg, [["core.start"], ["football.goal", { by: "H", at: { period: "H1", elapsed: 610 } }]])),
+    )!;
+    expect([seeded.shared, seeded.seed]).toEqual([true, 610]);
+    const hcfg = periodCfg(hockey);
+    const hockeySpec = buildClock(viewOf(hcfg, foldPeriod(hockey, hcfg, [["core.start"]])))!;
+    expect(hockeySpec).not.toBeNull();
+    expect(hockeySpec.shared).toBeUndefined();
+  });
+
+  it("stampFor with a floor stamps a football.goal at asOf when the followed reading is below it", () => {
+    // Another screen recorded a goal at 610; this pad follows a Pause anchor
+    // read at 590. Unfloored, the next goal would be stamped 590 and the
+    // server's strict append would refuse it (NON_MONOTONIC_TIME).
+    const cfg = footballCfg();
+    const prior: [type: string, payload?: unknown][] = [["core.start"], ["football.goal", { by: "H", at: { period: "H1", elapsed: 610 } }]];
+    const followed = followAnchor(
+      initClock("H1", 610),
+      { key: "e4", period: "H1", elapsed: 590, running: false, recordedAtMs: T0, own: false },
+      0,
+    )!;
+    const floor = { period: "H1", elapsed: 610 };
+    const floored = stampFor(footballModule!, "football.goal", { by: "A" }, followed, T0 + 1_000, floor);
+    expect(floored).toEqual({ by: "A", at: { period: "H1", elapsed: 610 } });
+    expect(appendVerdict(footballModule!, cfg, prior, ["football.goal", floored])).toBe("accepted");
+    // The control: without the floor the same tap is the refused stamp.
+    const bare = stampFor(footballModule!, "football.goal", { by: "A" }, followed, T0 + 1_000);
+    expect(bare).toEqual({ by: "A", at: { period: "H1", elapsed: 590 } });
+    expect(appendVerdict(footballModule!, cfg, prior, ["football.goal", bare])).toBe("non-monotonic");
+  });
+
+  it("the correction row survives a followed anchor, and closes on a period change or a clock that goes", () => {
+    const held = startClock(initClock("H1", 100), T0);
+    const followed = followAnchor(
+      held,
+      { key: "e9", period: "H1", elapsed: 400, running: false, recordedAtMs: T0, own: false },
+      0,
+    )!;
+    expect(correctionSurvives(held, followed)).toBe(true);
+    expect(correctionSurvives(held, held)).toBe(true);
+    expect(correctionSurvives(held, initClock("H2"))).toBe(false);
+    expect(correctionSurvives(held, null)).toBe(false);
+    expect(correctionSurvives(null, initClock("H1"))).toBe(false);
   });
 });
 

@@ -1712,12 +1712,13 @@ describe("footballSkinV3", () => {
     // the exact match and read on its own; football-match-time.test.ts holds
     // what it reads.
     const { display: fresh, ...unseeded } = skin.clock!(view({ state: state({ phase: "H1" }) }))!;
-    expect(unseeded).toEqual({ period: "H1" });
+    // `shared` (S2-5 ruling 107): football's clock follows the ledger's clock events.
+    expect(unseeded).toEqual({ period: "H1", shared: true });
     expect(fresh!(761)).toBe("12:41");
     const { display: seededDisplay, ...seeded } = skin.clock!(
       view({ state: state({ phase: "H1", asOf: { period: "H1", elapsed: 761 } }) }),
     )!;
-    expect(seeded).toEqual({ period: "H1", seed: 761 });
+    expect(seeded).toEqual({ period: "H1", seed: 761, shared: true });
     expect(seededDisplay!(761)).toBe("12:41");
     expect(skin.clock!(view({ state: state({ phase: "pre" }) }))).toBeNull();
     expect(skin.clock!(view({ state: state({ phase: "SHOOTOUT" }) }))).toBeNull();

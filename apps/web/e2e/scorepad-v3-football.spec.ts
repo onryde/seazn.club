@@ -10,6 +10,7 @@ import {
   TAG,
   type RosteredFixture,
 } from "./helpers";
+import { ledger, openLiveConsole, pad, postEvent } from "./scorepad-v3-football-kit";
 
 // ScoringPad v3, wave R3/task D — the coverage football's conversion OWES
 // beyond re-pointing the four pre-existing skin tests and the three
@@ -46,10 +47,6 @@ import {
 // shared state to serialise for.
 test.describe.configure({ mode: "parallel" });
 
-function pad(page: Page) {
-  return page.locator('[data-testid="score-pad"]');
-}
-
 /** A tile by `TileSpec.id` (`data-tile-id`, tile-grid.tsx) — never by
  *  accessible name, which is the concatenation of two LOCALISED strings
  *  ("Goal" + "Home"). Football's board is
@@ -67,44 +64,8 @@ function v3Dock(page: Page) {
   return pad(page).locator('[data-role="v3-dock"]');
 }
 
-async function ledger(
-  request: APIRequestContext,
-  fixtureId: string,
-): Promise<{ id: string; seq: number; type: string; payload: Record<string, unknown> }[]> {
-  const res = await apiJson<{ id: string; seq: number; type: string; payload: Record<string, unknown> }[]>(
-    request,
-    `/api/v1/fixtures/${fixtureId}/events?since_seq=0`,
-  );
-  expect(res.status, `ledger read failed: ${JSON.stringify(res.error)}`).toBe(200);
-  return res.data ?? [];
-}
-
 async function countOf(request: APIRequestContext, fixtureId: string, type: string): Promise<number> {
   return (await ledger(request, fixtureId)).filter((e) => e.type === type).length;
-}
-
-/** Dispatch a real ledger event directly, reading `last_seq` fresh each call.
- *  Used for SETUP only — the one action a test is actually about always goes
- *  through the real pad. Same helper, same posture as
- *  scorepad-v3-cricket.spec.ts's own. */
-async function postEvent(
-  request: APIRequestContext,
-  fixtureId: string,
-  type: string,
-  payload: Record<string, unknown>,
-): Promise<void> {
-  const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
-  if (state.status !== 200 || !state.data) {
-    throw new Error(`postEvent(${type}): GET state -> ${state.status} ${JSON.stringify(state.error)}`);
-  }
-  const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
-    expected_seq: state.data.last_seq,
-    type,
-    payload,
-  });
-  if (res.status >= 300) {
-    throw new Error(`postEvent(${type}) -> ${res.status} ${JSON.stringify(res.error)}`);
-  }
 }
 
 /** MERGE a few cfg keys into the division's existing config — never replace
@@ -123,17 +84,6 @@ async function mergeDivisionConfig(
     throw new Error(`mergeDivisionConfig: GET division -> ${div.status} ${JSON.stringify(div.error)}`);
   }
   await setDivisionConfigSql(divisionId, { ...div.data.config, ...patch });
-}
-
-/** Open the console and take the fixture live through the console's own
- *  "Start match" control — the real organiser flow. */
-async function openLiveConsole(page: Page, fx: RosteredFixture): Promise<void> {
-  await page.goto(await fixturePath(page.request, fx.fixtureId));
-  await expect(pad(page)).toBeVisible({ timeout: 20_000 });
-  await page.getByRole("button", { name: "Start match", exact: true }).click();
-  await expect
-    .poll(async () => (await ledger(page.request, fx.fixtureId)).map((e) => e.type), { timeout: 20_000 })
-    .toContain("core.start");
 }
 
 /** `openLiveConsole` minus the tap, for a fixture whose `core.start` (and

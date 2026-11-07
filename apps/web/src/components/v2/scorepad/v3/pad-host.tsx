@@ -86,10 +86,12 @@ import {
   adjustClock,
   elapsedOf,
   formatClock,
-  reseatClock,
+  latestClockAnchor,
+  reconcileClock,
   stampOf,
   stampPayload,
   toggleClock,
+  type GameTimeStamp,
   type PadClock,
   type PayloadSchemaProbe,
 } from "./clock";
@@ -1141,6 +1143,13 @@ export function adaptSwapSlot(
  * `eventSchemas` is OPTIONAL on `AnySportModule`, and a module without one
  * stamps nothing but its kernel events — the same fail-safe direction every
  * branch in this path takes: a pad that would have dispatched still dispatches.
+ *
+ * `floor` (S2-5 ruling 107) is the lowest `at` the stamp may carry in its own
+ * period — the fold's `asOf`, for a SHARED clock only. A clock that follows
+ * the ledger's clock events is read through a measured server offset, so it
+ * can sit a second or two under a stamp another screen already recorded, and
+ * the server refuses an event stamped below that (`NON_MONOTONIC_TIME`). See
+ * `stampOf`. An unshared clock passes none, as before.
  */
 export function stampFor(
   module: AnySportModule,
@@ -1148,8 +1157,21 @@ export function stampFor(
   payload: unknown,
   clock: PadClock | null,
   nowMs: number,
+  floor?: GameTimeStamp,
 ): unknown {
-  return stampPayload(payload, stampOf(clock, nowMs), schemaFor(module, type));
+  return stampPayload(payload, stampOf(clock, nowMs, floor), schemaFor(module, type));
+}
+
+/**
+ * S2-5 ruling 107 — whether the clock's correction row stays open across a
+ * change of the held clock. It closes when the PERIOD changes (it would be
+ * offering to nudge a period the scorer has left) or the clock goes; it stays
+ * open when a SHARED clock follows a new anchor in the same period, since a
+ * Correct from this pad is itself such an anchor, and a row that shut on every
+ * one would shut under the scorer's finger.
+ */
+export function correctionSurvives(prev: PadClock | null, next: PadClock | null): boolean {
+  return prev !== null && next !== null && prev.period === next.period;
 }
 
 /**
@@ -2067,10 +2089,13 @@ export function PadHostV3(props: PadHostV3Props) {
   // declare no `clock()` at all, and a lazy initialiser still runs on every one
   // of their mounts to produce a value nothing will ever read. Zero is not a
   // placeholder here, it is unreachable: `elapsedOf` ignores `nowMs` entirely
-  // while a clock is PAUSED, `reseatClock` only ever returns a paused clock or
-  // the one already held, and the sole transition into running is
-  // `toggleClockNow` below — which sets a real `Date.now()` in the same update
-  // that starts it. Both facts are pinned in `__tests__/clock.test.ts`.
+  // while a clock is PAUSED, and `reseatClock` only ever returns a paused clock
+  // or the one already held. There are two transitions into running:
+  // `toggleClockNow` below, which sets a real `Date.now()` in the same update
+  // that starts it, and — for a SHARED clock (S2-5 ruling 107) — `followAnchor`
+  // seating from a running clock event in the ledger, for which the tick effect
+  // further down schedules an immediate `setNowMs(Date.now())`. All three facts
+  // are pinned in `__tests__/clock.test.ts`.
   const [clock, setClock] = useState<PadClock | null>(null);
   // Updated only in mutators + reseat — never mirrored from render `clock`, so a
   // Correct tap that races a parent re-render cannot lose a nudge already
@@ -2189,20 +2214,42 @@ export function PadHostV3(props: PadHostV3Props) {
   // `contextOverrides` reset above uses and for the same reason (this repo's
   // react-hooks/refs rule forbids touching a ref during render).
   //
-  // `reseatClock` is where the load-bearing guard lives: it re-seeds ONLY when
-  // the declared period changes, and otherwise returns the held clock by
-  // reference. Following the spec's `seed` instead would drag a running clock
-  // back to the last stamped event's time on every tap, since `seed` is
-  // rebuilt from a fold that advances on every tap. See ../clock.ts.
+  // `reconcileClock` is `reseatClock` — where the load-bearing guard lives: it
+  // re-seeds ONLY when the declared period changes, and otherwise returns the
+  // held clock by reference. Following the spec's `seed` instead would drag a
+  // running clock back to the last stamped event's time on every tap, since
+  // `seed` is rebuilt from a fold that advances on every tap. See ../clock.ts.
+  //
+  // S2-5 ruling 107 — then, for a SHARED spec only (football), it follows the
+  // ledger's newest standing clock event from any screen (`followAnchor`,
+  // property 7), read in server time through the transport's measured offset.
+  // `pipeline.events` is the durable ledger plus this pad's still-queued taps,
+  // and `pipeline.ownEventIds` says which of them carry this pad's own clock.
   const clockSpec = props.skin.clock?.(view) ?? null;
-  const nextClock = reseatClock(clock, clockSpec);
+  const sharedClock = clockSpec?.shared === true;
+  const anchor = useMemo(
+    () => (sharedClock ? latestClockAnchor(pipeline.events, `${props.module.key}.clock`, pipeline.ownEventIds) : null),
+    [sharedClock, pipeline.events, pipeline.ownEventIds, props.module.key],
+  );
+  const nextClock = reconcileClock(clock, clockSpec, anchor, props.transport.serverOffsetMs?.() ?? 0);
   if (nextClock !== clock) {
     setClock(nextClock);
     // A whistle re-seats the clock, and a correction row left open across it
     // would be offering to nudge a period the scorer has already left. Closing
     // here rather than in an effect keeps it in the same render as the re-seat.
-    if (adjusting) setAdjusting(false);
+    // A followed anchor in the SAME period leaves it open (`correctionSurvives`).
+    if (adjusting && !correctionSurvives(clock, nextClock)) setAdjusting(false);
   }
+  // S2-5 ruling 107 — the lowest `at` a SHARED clock may stamp or publish in
+  // its own period: the fold's `asOf`, which is `clockSpec.seed` (the same
+  // source `adjustClockNow` uses for its floor). Split into primitives so the
+  // floor's identity moves only when its value does, not on every render.
+  const floorPeriod = clockSpec?.period;
+  const floorElapsed = clockSpec?.shared === true && clockSpec.seed !== undefined ? clockSpec.seed : undefined;
+  const floor = useMemo<GameTimeStamp | undefined>(
+    () => (floorPeriod === undefined || floorElapsed === undefined ? undefined : { period: floorPeriod, elapsed: floorElapsed }),
+    [floorPeriod, floorElapsed],
+  );
   // Sync the ref AFTER render — react-hooks/refs forbids writing `.current`
   // during render (CI lint gate). Mutators still write the ref synchronously
   // so Correct/toggle see the latest seat before the next paint.
@@ -2422,8 +2469,9 @@ export function PadHostV3(props: PadHostV3Props) {
       // the caller's own payload back by reference, unchanged.
       //
       // `Date.now()` here rather than the render-throttled `nowMs`: the stamp
-      // must be the time of the TAP, not of the last tick.
-      const stamped = stampFor(props.module, type, payload, clock, Date.now());
+      // must be the time of the TAP, not of the last tick. `floor` is set for a
+      // shared clock only (S2-5 ruling 107, `stampFor`).
+      const stamped = stampFor(props.module, type, payload, clock, Date.now(), floor);
       // W2e T30 (D3): a sheet that was confirmed ("This ends the match: <side> loses") on an end-level sanction sends the
       // sanction AND its ending, as one bound pair (`runEnding`). W2e T31 (D12): so does volleyball's "No" to "Can <team> still
       // field six players?" on an expulsion or a disqualification (`sideRetires`), with the retired ending. Only a SHEET completion may become an ending: the
@@ -2441,7 +2489,7 @@ export function PadHostV3(props: PadHostV3Props) {
         setDispatchRefusal(msg("scorepad.rejection.fallback"));
       });
     },
-    [dispatch, msg, clock, props.module, choosing, endingPrompt, sendEnding],
+    [dispatch, msg, clock, floor, props.module, choosing, endingPrompt, sendEnding],
   );
 
   // W2d T18 fix round 1 (m2) — the question's own Cancel and the ribbon's Take back are one action: drop the open
@@ -2473,10 +2521,14 @@ export function PadHostV3(props: PadHostV3Props) {
   // second is never a full second behind the second that would be STAMPED —
   // the two must not visibly disagree at the moment a scorer taps.
   //
-  // No synchronous `setNowMs` in the effect body: the only transition into a
-  // running clock is `toggleClockNow` below, which sets it at the tap, and
-  // `reseatClock` never returns a running clock. Setting it here as well would
-  // trip react-hooks/set-state-in-effect for a value that is already current.
+  // No synchronous `setNowMs` in the effect body (react-hooks/set-state-in-
+  // effect). `toggleClockNow` below sets it at the tap, and `reseatClock` never
+  // returns a running clock. But a SHARED clock (S2-5 ruling 107) has a second
+  // transition into running: `followAnchor` seating from another screen's
+  // Start, with `nowMs` still 0 or up to half a second stale, so the bar would
+  // paint the anchor's base until the first interval. The immediate
+  // `setTimeout(…, 0)` paints it at once; for a toggle it repeats a value that
+  // is already current, which costs one render.
   //
   // WHAT IS STILL UNPROVEN HERE, stated once for both this effect and
   // `toggleClockNow`. Neither is inert any more — R6/task C landed
@@ -2489,8 +2541,12 @@ export function PadHostV3(props: PadHostV3Props) {
   // is the only thing that will ever see this effect run.
   useEffect(() => {
     if (!clock || clock.runningSince === null) return;
+    const tick = setTimeout(() => setNowMs(Date.now()), 0);
     const id = setInterval(() => setNowMs(Date.now()), 500);
-    return () => clearInterval(id);
+    return () => {
+      clearTimeout(tick);
+      clearInterval(id);
+    };
   }, [clock]);
 
   const publishClock = useCallback(
@@ -2499,7 +2555,11 @@ export function PadHostV3(props: PadHostV3Props) {
       if (props.module.eventSchemas?.[type] === undefined) return;
       try {
         await pipeline.submit(type, {
-          at: { period: next.period, elapsed: elapsedOf(next, now) },
+          // Floored like a tap (S2-5 ruling 107, `stampFor`): a shared clock's
+          // Start, Pause or Correct never records an `at` under the fold's
+          // `asOf`. A clock that has never been told the time (an unmoved
+          // Correct) has no stamp, and still publishes its reading as before.
+          at: stampOf(next, now, floor) ?? { period: next.period, elapsed: elapsedOf(next, now) },
           running: next.runningSince !== null,
         });
       } catch (err: unknown) {
@@ -2507,7 +2567,7 @@ export function PadHostV3(props: PadHostV3Props) {
         setDispatchRefusal(msg("scorepad.rejection.fallback"));
       }
     },
-    [pipeline, props.module, msg],
+    [pipeline, props.module, msg, floor],
   );
 
   const toggleClockNow = useCallback(() => {

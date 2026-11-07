@@ -264,6 +264,8 @@ export function readClock(state: unknown, phase: string, cfg: unknown): string |
  * Declares `PadClockBar` for regulation / ET play phases — same contract as
  * period-shared `buildClock`. Absent in pre / post / SHOOTOUT.
  *
+ * `shared` makes it the match's clock rather than this pad's (S2-5 ruling
+ * 107): it follows the newest `football.clock` event from any screen.
  * `display` shows the bar's reading in match time (S2-5 ruling 108): the bar
  * holds seconds within the period, as the engine stamps them, and only the
  * readout adds the periods before.
@@ -281,7 +283,9 @@ export function buildFootballClock(view: PadHostView): PadClockSpec | null {
     asOf.elapsed >= 0;
   const timeCfg = matchTimeCfgOf(view.cfg);
   const display = (elapsed: number) => matchClock({ period: phase, elapsed }, timeCfg);
-  return fresh ? { period: phase, seed: asOf.elapsed, display } : { period: phase, display };
+  // `shared` (S2-5 ruling 107): every screen scoring this match follows the
+  // ledger's newest `football.clock` event (clock.ts property 7).
+  return fresh ? { period: phase, seed: asOf.elapsed, shared: true, display } : { period: phase, shared: true, display };
 }
 
 /**
