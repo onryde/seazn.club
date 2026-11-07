@@ -9,11 +9,16 @@
 // subrequest, and the value is an address; otherwise Fly's peer is the client. With no Fly header at all (local dev, CI) the
 // first X-Forwarded-For hop, then X-Real-IP, else "unknown". A CF header with no Fly peer to vouch for it is ignored.
 //
-// This is a PARTIAL guard. A Cloudflare Worker's fetch() to the fly.dev origin leaves from Cloudflare's own ranges and may set
-// `CF-Connecting-IP` to anything (developers.cloudflare.com/fundamentals/reference/http-headers); Cloudflare marks every
-// Worker subrequest with `cf-worker`, which is what is detected here. The full close is a zone Transform Rule that stamps a
-// secret header the origin checks - an owner ops step this code does not take. Until then a forged value can move requests
-// into ANOTHER client's bucket, so a per-IP limit is a brake, never an authorisation.
+// The range check alone is a PARTIAL guard. A Cloudflare Worker's fetch() to the fly.dev origin leaves from Cloudflare's own
+// ranges and may set `CF-Connecting-IP` to anything (developers.cloudflare.com/fundamentals/reference/http-headers);
+// Cloudflare marks every Worker subrequest with `cf-worker`, which is detected here. And anyone with a Cloudflare zone of
+// their own can proxy to the fly.dev origin through Cloudflare's network, so the peer is a genuine edge with no `cf-worker`.
+// The close is the ORIGIN STAMP (owner OK 2026-11-07): OUR zone's Transform Rule sets `x-seazn-origin` to a secret that web
+// holds as `CF_ORIGIN_SECRET`; with the secret set, `CF-Connecting-IP` is believed only on a request carrying that exact
+// stamp, and a missing or wrong one falls back to Fly's peer (never a refusal). Unset, nothing changes - the ops order (rule
+// first, then the secret) is in the README's "Deploy step - client IP behind Cloudflare". Even so, a per-IP limit is a brake,
+// never an authorisation.
+import { timingSafeEqual } from "node:crypto";
 import { BlockList, isIP } from "node:net";
 
 /** Cloudflare's published edge ranges: https://www.cloudflare.com/ips-v4 and https://www.cloudflare.com/ips-v6, fetched
@@ -44,12 +49,30 @@ export function isCloudflarePeer(ip: string): boolean {
 
 const first = (v: string | null | undefined): string | undefined => v?.trim() || undefined;
 
+/** The header OUR Cloudflare zone's Transform Rule stamps on every request it forwards. Its value is a secret: never logged,
+ *  echoed, or put into an error (Sentry events carry request headers, so `lib/scrub-score-url.ts` redacts it there). */
+export const ORIGIN_STAMP_HEADER = "x-seazn-origin";
+
+/** Whether the request came through OUR zone. With `CF_ORIGIN_SECRET` set (read per request), its stamp must equal the secret,
+ *  compared in constant time; a stamp of another length is a mismatch, never a throw. Unset or empty: not required. */
+function throughOurZone(headers: Headers): boolean {
+  const secret = process.env.CF_ORIGIN_SECRET;
+  if (!secret) return true;
+  const stamp = headers.get(ORIGIN_STAMP_HEADER);
+  if (stamp === null) return false;
+  const sent = Buffer.from(stamp, "utf8");
+  const want = Buffer.from(secret, "utf8");
+  // timingSafeEqual throws on unequal lengths; the length of a 32+ byte random secret is not worth hiding.
+  return sent.length === want.length && timingSafeEqual(sent, want);
+}
+
 /** The client IP a per-IP limiter keys on (see the header for the order and why). */
 export function clientIp(headers: Headers): string {
   const fly = first(headers.get("fly-client-ip"));
   if (fly !== undefined) {
     const cf = first(headers.get("cf-connecting-ip"));
-    const believed = cf !== undefined && isIP(cf) !== 0 && !headers.has("cf-worker") && isCloudflarePeer(fly);
+    const believed =
+      cf !== undefined && isIP(cf) !== 0 && !headers.has("cf-worker") && isCloudflarePeer(fly) && throughOurZone(headers);
     return believed ? cf : fly;
   }
   return first(headers.get("x-forwarded-for")?.split(",")[0]) ?? first(headers.get("x-real-ip")) ?? "unknown";

@@ -531,6 +531,26 @@ function scrubJoinCodeKeys<E extends Event>(event: E): E {
   return hit.n ? { ...event, request: { ...event.request, query_string: scrubbed } } : event;
 }
 
+/** OUR Cloudflare zone's origin stamp: `ORIGIN_STAMP_HEADER` in lib/client-ip.ts, spelled here because this module is
+ *  bundled for the browser and that one imports `node:net`/`node:crypto` (scrub-score-url.test.ts pins the two together).
+ *  Its value is the CF_ORIGIN_SECRET, and every server event carries its request's headers. */
+const ORIGIN_STAMP_HEADER = "x-seazn-origin";
+
+/** Any event's request loses the origin stamp's VALUE; the header stays as "[redacted]". A copy: the input is never mutated. */
+function dropOriginStamp<E extends Event>(event: E): E {
+  const headers = event.request?.headers;
+  if (!headers || !Object.keys(headers).some((k) => k.toLowerCase() === ORIGIN_STAMP_HEADER)) return event;
+  return {
+    ...event,
+    request: {
+      ...event.request,
+      headers: Object.fromEntries(
+        Object.entries(headers).map(([k, v]) => [k, k.toLowerCase() === ORIGIN_STAMP_HEADER ? "[redacted]" : v]),
+      ),
+    },
+  };
+}
+
 /**
  * Sentry `beforeSend` / `beforeSendTransaction`: scrubs the request URL and
  * headers (the Bearer secret), the transaction name, breadcrumbs, tags, stack
@@ -538,7 +558,7 @@ function scrubJoinCodeKeys<E extends Event>(event: E): E {
  * request body (A18); a one-time-token route's event also loses the token in
  * its bare `request.query_string`; the event of a route that takes a credential
  * in its body (`BODY_CREDENTIAL_ROUTES`: a token or a join code) or in its path
- * loses `request.data`.
+ * loses `request.data`. Every event loses the origin stamp's value.
  */
 export function scrubSentryEvent<E extends Event>(event: E): E {
   const oneTime = isOneTimeTokenEvent(event);
@@ -547,7 +567,7 @@ export function scrubSentryEvent<E extends Event>(event: E): E {
   const safe = isCaptureEvent(event) ? dropCaptureSecrets(scrubbed) : scrubbed;
   const queryScrubbed = oneTime ? dropOneTimeToken(safe) : safe;
   const withSpans = scrubSpans(scrubJoinCodeKeys(queryScrubbed), oneTime, body);
-  return body ? dropRequestBody(withSpans) : withSpans;
+  return dropOriginStamp(body ? dropRequestBody(withSpans) : withSpans);
 }
 
 /**

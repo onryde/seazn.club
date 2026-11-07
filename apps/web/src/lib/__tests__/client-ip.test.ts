@@ -13,7 +13,7 @@
 // limits-route.test.ts), the public read limiters (`publicClientIp`), and the /s/ redirect's miss budget and click dedupe.
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The limiters' own call, recorded: the wiring `describe` reads which bucket each limiter keyed on.
 vi.mock("@/lib/rate-limit", async (importOriginal) => {
@@ -39,6 +39,11 @@ const DIRECT = "198.51.100.60";
 const XFF_FIRST = "192.0.2.7";
 const REAL = "192.0.2.99";
 const h = (o: Record<string, string>) => new Headers(o);
+
+// Every test outside the origin-stamp describe runs with the secret UNSET - today's deployment - whatever a developer's
+// .env.local (vitest.config.ts loads it) holds; that describe sets it per test. Unstubbed after each.
+beforeEach(() => vi.stubEnv("CF_ORIGIN_SECRET", undefined));
+afterEach(() => vi.unstubAllEnvs());
 
 describe("Cloudflare's published ranges (fetched 2026-11-01)", () => {
   it("are the published lists: 15 IPv4 and 7 IPv6 CIDRs, each a valid network of its family (count reported)", () => {
@@ -163,6 +168,115 @@ describe("clientIp", () => {
       checked++;
     }
     expect(checked).toBe(cases.length);
+  });
+});
+
+// The origin stamp (owner OK 2026-11-07). Anyone with a Cloudflare zone of their own can send requests to the fly.dev origin
+// THROUGH Cloudflare's network: the peer is a genuine Cloudflare edge, there is no `cf-worker`, and `CF-Connecting-IP` says
+// whatever they chose. Only OUR zone's Transform Rule stamps `x-seazn-origin` with the value held in the `CF_ORIGIN_SECRET` Fly
+// secret, so with the secret set, Cloudflare's header is believed only on a request that carries that exact stamp. A missing or
+// wrong stamp falls back to Fly's peer - never a refusal. Unset, nothing changes. The header name and the fallback are the
+// brief's (README "Deploy step - client IP behind Cloudflare"), typed here, not read from the module.
+describe("the origin stamp: CF_ORIGIN_SECRET and x-seazn-origin", () => {
+  /** A 64-character hex value, the shape `openssl rand -hex 32` gives the runbook. */
+  const SECRET = "0123456789abcdef".repeat(4);
+  /** A visitor named by ANOTHER Cloudflare zone's request to our origin - any value its owner picked. */
+  const FORGED = "192.0.2.200";
+  const stamped = (o: Record<string, string>, stamp = SECRET) => h({ ...o, "x-seazn-origin": stamp });
+  const run = (cases: Array<[Headers, string, string]>): number => {
+    let checked = 0;
+    for (const [headers, want, label] of cases) {
+      expect(clientIp(headers), label).toBe(want);
+      checked++;
+    }
+    return checked;
+  };
+
+  it("set, and the stamp matches: Cloudflare's visitor, IPv4 and IPv6, a forged X-Forwarded-For hop beside it (count reported)", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    const cases: Array<[Headers, string, string]> = [
+      [stamped({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR }), VISITOR, "v4 peer, v4 visitor"],
+      [stamped({ "fly-client-ip": CF_EDGE6, "cf-connecting-ip": VISITOR6 }), VISITOR6, "v6 peer, v6 visitor"],
+      [stamped({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR, "x-forwarded-for": `${XFF_FIRST}, ${CF_EDGE}` }), VISITOR, "XFF beside it"],
+    ];
+    expect(run(cases)).toBe(3);
+  });
+
+  it("set, and the stamp is missing, wrong at the same length, or another length: Fly's peer, and none of them throws (count reported)", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    const base = { "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR };
+    const cases: Array<[Headers, string, string]> = [
+      [h(base), CF_EDGE, "missing"],
+      [stamped(base, `${SECRET.slice(0, -1)}0`), CF_EDGE, "same length, last character wrong"],
+      [stamped(base, `f${SECRET.slice(1)}`), CF_EDGE, "same length, first character wrong"],
+      [stamped(base, SECRET.toUpperCase()), CF_EDGE, "same length, another case"],
+      [stamped(base, SECRET.slice(0, -1)), CF_EDGE, "one character short"],
+      [stamped(base, `${SECRET}0`), CF_EDGE, "one character long"],
+      [stamped(base, SECRET.slice(0, 32)), CF_EDGE, "a prefix"],
+      [stamped(base, SECRET + SECRET), CF_EDGE, "the secret twice"],
+      [stamped(base, ""), CF_EDGE, "empty"],
+    ];
+    expect(SECRET.toUpperCase(), "premise: the case-flipped stamp differs").not.toBe(SECRET);
+    expect(run(cases)).toBe(9);
+  });
+
+  it("a CF-Connecting-IP forged through ANOTHER zone (a Cloudflare-range peer, no cf-worker, no stamp): Fly's peer once the secret is set - and the forged value while it is not, the gap this closes", () => {
+    const fromAnotherZone = [
+      h({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": FORGED }),
+      h({ "fly-client-ip": CF_EDGE6, "cf-connecting-ip": FORGED }),
+    ];
+    expect(fromAnotherZone.map(clientIp), "unset: today's behaviour believes it").toEqual([FORGED, FORGED]);
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    expect(fromAnotherZone.map(clientIp), "set: Fly's peer").toEqual([CF_EDGE, CF_EDGE6]);
+  });
+
+  it("is in ADDITION to the existing checks: a matching stamp never rescues a non-Cloudflare peer, a Worker subrequest or a non-address (count reported)", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    const cases: Array<[Headers, string, string]> = [
+      [stamped({ "fly-client-ip": DIRECT, "cf-connecting-ip": VISITOR }), DIRECT, "peer outside Cloudflare"],
+      [stamped({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR, "cf-worker": "attacker.example" }), CF_EDGE, "a Worker subrequest"],
+      [stamped({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": "evil" }), CF_EDGE, "not an address"],
+      [stamped({ "fly-client-ip": CF_EDGE }), CF_EDGE, "no CF header at all"],
+    ];
+    expect(run(cases)).toBe(4);
+  });
+
+  it("with no Fly header (local, CI) the secret changes nothing: X-Forwarded-For, then X-Real-IP, then \"unknown\"; a stamped CF header with no Fly peer is still ignored (count reported)", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    const cases: Array<[Headers, string, string]> = [
+      [h({ "x-forwarded-for": `${XFF_FIRST}, 10.0.0.1` }), XFF_FIRST, "XFF"],
+      [h({ "x-real-ip": REAL }), REAL, "X-Real-IP"],
+      [stamped({ "cf-connecting-ip": VISITOR, "x-forwarded-for": XFF_FIRST }), XFF_FIRST, "stamped CF, no Fly peer"],
+      [stamped({ "cf-connecting-ip": VISITOR }), "unknown", "stamped CF alone"],
+    ];
+    expect(run(cases)).toBe(4);
+  });
+
+  it("unset or empty, the stamp is not required and a stamp of any value changes nothing - today's behaviour (count reported)", () => {
+    const base = { "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR };
+    let checked = 0;
+    for (const secret of [undefined, ""]) {
+      vi.stubEnv("CF_ORIGIN_SECRET", secret);
+      checked += run([
+        [h(base), VISITOR, `${JSON.stringify(secret)}: no stamp`],
+        [stamped(base, "anything"), VISITOR, `${JSON.stringify(secret)}: a stamp`],
+        [stamped(base, ""), VISITOR, `${JSON.stringify(secret)}: an empty stamp`],
+      ]);
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("is read per request, not at module load: the same request moves as the secret is set, unset and set to another value", () => {
+    const req = stamped({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR });
+    const seen: string[] = [];
+    seen.push(clientIp(req));
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    seen.push(clientIp(req));
+    vi.stubEnv("CF_ORIGIN_SECRET", "another-secret-of-another-environment");
+    seen.push(clientIp(req));
+    vi.stubEnv("CF_ORIGIN_SECRET", undefined);
+    seen.push(clientIp(req));
+    expect(seen).toEqual([VISITOR, VISITOR, CF_EDGE, VISITOR]);
   });
 });
 

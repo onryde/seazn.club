@@ -195,6 +195,31 @@ running with it end. An older web refuses a beat that carries airings. The compo
 count-only beat, but when airing lines arrive first it takes the second refused beat: about 10 s at the 5 s cadence,
 close to web's 15 s composed stale window.
 
+**Deploy step — client IP behind Cloudflare (`CF_ORIGIN_SECRET`).** Every per-IP rate limit keys on
+[`apps/web/src/lib/client-ip.ts`](apps/web/src/lib/client-ip.ts), which believes Cloudflare's `CF-Connecting-IP` only
+when Fly's peer is a Cloudflare edge. Anyone with a Cloudflare zone of their own can still reach the `*.fly.dev` origin
+through Cloudflare's network and set that header to anything. The close is an origin stamp: our zone writes a secret
+header, and web believes `CF-Connecting-IP` only on a request that carries it. **The order matters:**
+
+1. In Cloudflare, add a **Rules → Transform Rules → Modify Request Header** rule: *Set static*, header
+   `x-seazn-origin`, value a fresh random secret of 32+ bytes (`openssl rand -hex 32`), with a **different value per
+   environment**. `stg.seazn.club` sits under the `seazn.club` zone unless stg has a zone of its own, so this is one
+   rule per Fly app, each filtered on the hostnames that app serves (`fly certs list -a seazn-club-prod` and
+   `-a seazn-club-stg` list them, `games.` hosts included). Before going on, confirm with Cloudflare Trace that the rule
+   matches each of those hosts.
+2. Only **then** set the matching value on that web app: `fly secrets set CF_ORIGIN_SECRET=<value> -a seazn-club-stg`
+   (stg first), then `-a seazn-club-prod`. If the secret is set before the rule exists, or a host is missing from the
+   rule's filter, those requests carry no stamp and fall back to `Fly-Client-IP`, which is a Cloudflare edge. Every
+   visitor behind that edge then shares one rate-limit bucket. Nothing is refused for a missing stamp; requests only
+   lose their per-visitor bucket.
+3. **Rollback:** unset the Fly secret first (`fly secrets unset CF_ORIGIN_SECRET -a <app>`), then remove the rule.
+
+Unset, web behaves exactly as before the stamp existed. The value is never logged or echoed, and Sentry events show the
+header only as `[redacted]` (`lib/scrub-score-url.ts`). An alternative is Cloudflare's **Authenticated Origin Pulls**
+(mTLS from Cloudflare to the origin). The zone-level variant presents Cloudflare's shared certificate, which proves
+"Cloudflare" rather than "our zone", so only a certificate of our own would do. Fly's proxy terminates TLS before web
+sees the request, so that option was not evaluated here.
+
 Two facts worth knowing before reading the design:
 
 - `stream.liveInputs.create()` returns `{ uid, rtmps, srt, webRTC }` from a single call,

@@ -14,6 +14,7 @@ import {
   scrubScoreUrl,
   scrubSentryEvent,
 } from "../scrub-score-url";
+import { ORIGIN_STAMP_HEADER } from "../client-ip";
 
 /** The real shape: `dl_` + 32 random bytes as base64url (device-links.ts). */
 const TOKEN = "dl_Q2hvb3NlIGEgcmVhbGx5IGxvbmcgcmFuZG9tIHRva2Vu_Ab-9";
@@ -360,6 +361,50 @@ describe("scrubSentryEvent — the capture phone routes (A18)", () => {
       },
     };
     expect(scrubSentryEvent(other)).toEqual(other);
+  });
+});
+
+// Client-IP hardening (owner OK 2026-11-07): OUR Cloudflare zone stamps `x-seazn-origin` with the secret web holds as
+// CF_ORIGIN_SECRET (lib/client-ip.ts). A server event keeps its request headers, so without this every error and transaction
+// sent after the zone rule goes live would carry that secret to Sentry. Every event's request loses the stamp's VALUE.
+describe("scrubSentryEvent — the origin stamp (x-seazn-origin)", () => {
+  /** The shape `openssl rand -hex 32` gives the runbook. */
+  const STAMP = "0123456789abcdef".repeat(4);
+  const stampedEvent = (url: string, headerName: string, type?: "transaction"): Event => ({
+    event_id: "s1",
+    ...(type ? { type } : {}),
+    transaction: `GET ${new URL(url).pathname}`,
+    request: { method: "GET", url, headers: { [headerName]: STAMP, "user-agent": "ua/1", "cf-connecting-ip": "203.0.113.50" } },
+  });
+
+  it("the name redacted below is lib/client-ip.ts's ORIGIN_STAMP_HEADER (this module is bundled for the browser, so it spells the name itself instead of importing that node-only one)", () => {
+    expect(ORIGIN_STAMP_HEADER).toBe("x-seazn-origin");
+  });
+
+  it("an error or a transaction, on any route (a page, an API route, a capture route), either header case: the value is gone, every other header is kept (count reported)", () => {
+    let checked = 0;
+    for (const url of ["https://seazn.club/live/club", "https://seazn.club/api/v1/public/fixtures/f1", "https://seazn.club/api/v1/capture/codes/k3m9p2q7r4t8"]) {
+      for (const headerName of ["x-seazn-origin", "X-Seazn-Origin"]) {
+        for (const type of [undefined, "transaction"] as const) {
+          const out = scrubSentryEvent(stampedEvent(url, headerName, type));
+          expect(JSON.stringify(out), `${url} ${headerName} ${type}`).not.toContain(STAMP);
+          expect(out.request?.headers?.[headerName], "the header stays, so an event still shows the rule is live").toBe("[redacted]");
+          expect(out.request?.headers?.["user-agent"]).toBe("ua/1");
+          expect(out.request?.headers?.["cf-connecting-ip"]).toBe("203.0.113.50");
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(12);
+  });
+
+  it("the input event is never mutated, and an event without the stamp is returned exactly as it came", () => {
+    const event = stampedEvent("https://seazn.club/live/club", "x-seazn-origin");
+    const before = JSON.stringify(event);
+    scrubSentryEvent(event);
+    expect(JSON.stringify(event)).toBe(before);
+    const unstamped: Event = { event_id: "u1", request: { url: "https://seazn.club/live/club", headers: { "user-agent": "ua/1" } } };
+    expect(scrubSentryEvent(unstamped)).toEqual(unstamped);
   });
 });
 
