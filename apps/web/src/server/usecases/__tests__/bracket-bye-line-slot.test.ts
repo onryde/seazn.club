@@ -19,7 +19,10 @@ import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { sql } from "@/lib/db";
 import { buildTemplateStages } from "@/lib/format-templates";
 import { holdsSlot } from "@/lib/rebuild-slots";
-import { isByeLine } from "@/lib/bye-line";
+import { BYE_SLOT_LABEL, isByeLine } from "@/lib/bye-line";
+import { feedLabels, type FeedLabelPair } from "@/lib/schedule-board";
+import { resolveSlotLabel, type SlotLabel } from "@/lib/slot-label";
+import { messages } from "@/lib/messages";
 import { BYE_LINE_SHAPES, rowOf as shapeRow } from "@/lib/__tests__/bye-line-shapes";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CreateStage } from "@/server/api-v1/schemas";
@@ -66,10 +69,31 @@ const toSheetRow = (f: FixtureRow): RunSheetFixture => ({
 });
 const sheetRowsOf = (blocks: readonly RunSheetBlock[]): RunSheetFixture[] =>
   blocks.flatMap((b) => (b.kind === "bracket" ? b.rounds.flatMap((r) => r.fixtures) : b.fixtures));
+/** The feed edges the Fixtures tab passes every row (`feedLabels(fixtures.map(toFeedRow))`, stages-panel.tsx), from the
+ *  same division rows — the adapter copied as that module-private `toFeedRow` writes it. */
+const feedOf = (rows: readonly FixtureRow[]): Record<string, FeedLabelPair> =>
+  feedLabels(
+    rows.map((f) => ({
+      id: f.id,
+      round_no: f.round_no,
+      seq_in_round: f.seq_in_round,
+      winner_to_fixture: f.winner_to_fixture ?? null,
+      winner_to_slot: f.winner_to_slot ?? null,
+      loser_to_fixture: f.loser_to_fixture ?? null,
+      loser_to_slot: f.loser_to_slot ?? null,
+    })),
+  );
+/** The English catalogue, as the row reads it outside a DictProvider. */
+const en = (key: string, vars?: Record<string, string | number>): string =>
+  ((messages as Record<string, string>)[key] ?? key).replace(/\{(\w+)\}/g, (_m, k: string) => String(vars?.[k] ?? `{${k}}`));
+/** "{name} has a bye", the sitter named by a slot label (the shared label renderer, never the row's own side choice). */
+const byeSentenceFor = (label: SlotLabel) => en("schedule.bye", { name: resolveSlotLabel(label, en as never, "schedule.tbd") });
+/** The two answers a wrong side choice or a missing feed would print — the expected sentence must differ from both. */
+const WRONG_BYE_SENTENCES = [en("schedule.bye", { name: en("bracket.slot.bye") }), en("schedule.bye", { name: en("schedule.tbd") })];
 /** The run sheet's row, as the Fixtures tab renders it: the one action it offers, and whether it is the bye row. */
-function sheetRow(f: RunSheetFixture, names: Record<string, string>, nowMs: number) {
+function sheetRow(f: RunSheetFixture, names: Record<string, string>, nowMs: number, feed?: Record<string, FeedLabelPair>) {
   const html = renderToStaticMarkup(
-    createElement(RunSheetRow, { fixture: f, href: "/f/1", tz: "UTC", orgTz: "UTC", nowMs, canEdit: true, entrantNames: names }),
+    createElement(RunSheetRow, { fixture: f, href: "/f/1", tz: "UTC", orgTz: "UTC", nowMs, canEdit: true, entrantNames: names, feedLabels: feed }),
   );
   return { html, bye: html.includes('data-testid="run-sheet-bye"'), action: /data-row-action="([a-z_]+)"/.exec(html)?.[1] ?? null };
 }
@@ -301,7 +325,8 @@ describe.runIf(HAS_DB)("W4 T3 K2 a bracket bye line never takes or keeps a court
     const rig = await leagueKo();
     await autoPlace(rig.auth, rig.leagueStageId);
     const nowMs = Date.parse("2030-07-01T10:00:00Z");
-    const rows = (await listDivisionFixtures(rig.auth, rig.divisionId)).map(toSheetRow);
+    const wire = await listDivisionFixtures(rig.auth, rig.divisionId);
+    const rows = wire.map(toSheetRow);
     const ko = rows.filter((f) => f.stage_id === rig.koStageId);
     const bye = ko.find((f) => f.id === rig.byeLineId)!;
     const real = ko.filter((f) => f.id !== rig.byeLineId);
@@ -333,9 +358,17 @@ describe.runIf(HAS_DB)("W4 T3 K2 a bracket bye line never takes or keeps a court
     expect(real.every((f) => runSheetKeeps(f, "unscheduled", keep)), "positive pair: it lists every real line").toBe(true);
 
     const names = Object.fromEntries(rig.nameOf);
-    const byeRow = sheetRow(bye, names, nowMs);
+    const byeRow = sheetRow(bye, names, nowMs, feedOf(wire));
     expect([byeRow.bye, byeRow.action], "the bye's row is the bye row, offering nothing — no Set time").toEqual([true, null]);
-    expect(byeRow.html, "and names no unknown sitter").not.toContain("? has a bye");
+    // The sitter by name: the day-one draw stamps the bye label on one side and the qualifier it seats on the other, so
+    // the row names that qualifier — read off the stored row, not off the row's own side choice.
+    const labels = [bye.home_slot_label, bye.away_slot_label] as (SlotLabel | null)[];
+    expect(labels.filter((l) => l?.key === BYE_SLOT_LABEL.key).length, "premise: exactly one side is the phantom").toBe(1);
+    const qualifier = labels.find((l) => l !== null && l.key !== BYE_SLOT_LABEL.key);
+    expect(qualifier, "premise: the other side carries the qualifier it seats").toBeTruthy();
+    const want = byeSentenceFor(qualifier!);
+    expect(WRONG_BYE_SENTENCES, "anti-vacuity: the right name differs from a side swap and from a missing label").not.toContain(want);
+    expect(byeRow.html, "names the qualifier that sits out").toContain(want);
     for (const f of real) {
       const r = sheetRow(f, names, nowMs);
       expect([r.bye, r.action], `positive pair: ${f.id} is offered a time`).toEqual([false, "set_time"]);
@@ -576,11 +609,23 @@ describe.runIf(HAS_DB)("W4 T3 K2 a bracket bye line never takes or keeps a court
     expect(gone.fixtureIds, "its court gone: the real line is flagged, the dead-seat tie is not").toEqual([b.id]);
     // B1a review N1: and the division Fixtures tab agrees, from the division page's own row: a bye, so its row offers no
     // time edit that could only refuse, and names the side that walks over it, never an unknown sitter.
-    const sheetTie = toSheetRow((await listDivisionFixtures(s.auth, s.divisionId)).find((f) => f.id === tieId)!);
+    const divRows = await listDivisionFixtures(s.auth, s.divisionId);
+    const sheetTie = toSheetRow(divRows.find((f) => f.id === tieId)!);
     expect(isBye(sheetTie), "the run sheet reads the dead-seat tie as a bye").toBe(true);
-    const tieRow = sheetRow(sheetTie, {}, Date.parse("2030-07-01T10:00:00Z"));
+    const tieRow = sheetRow(sheetTie, {}, Date.parse("2030-07-01T10:00:00Z"), feedOf(divRows));
     expect([tieRow.bye, tieRow.action], "its row is the bye row, offering nothing").toEqual([true, null]);
-    expect(tieRow.html, "and names no unknown sitter").not.toContain("? has a bye");
+    // The sitter by name: the side `b`'s winner arrives in — the side that walks over her dead seat. That side stores
+    // its own "Winner of" label pointing at b (stored wins over the feed edge, `seatLabel`), so the row names b's
+    // round and place. Derived from the seeded feeder, not from the row's own side choice.
+    expect([b.winner_to_fixture, a.winner_to_slot !== b.winner_to_slot], "premise: b feeds the tie's other side").toEqual([tieId, true]);
+    const arrivingSide = (b.winner_to_slot === 1 ? sheetTie.home_slot_label : sheetTie.away_slot_label) as SlotLabel | null;
+    expect(arrivingSide, "premise: the arriving side's label points at b").toMatchObject({
+      key: "slot.winner_match",
+      params: { round: b.round_no, seq: b.seq_in_round },
+    });
+    const want = byeSentenceFor(arrivingSide!);
+    expect(WRONG_BYE_SENTENCES, "anti-vacuity: the right name differs from a side swap and from a missing feed").not.toContain(want);
+    expect(tieRow.html, "names the feeder whose winner walks over her dead seat").toContain(want);
 
     const arriving = await play(b.id);
     const tie = await rowOf(s.stageId, tieId);
