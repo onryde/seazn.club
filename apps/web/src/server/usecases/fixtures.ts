@@ -642,7 +642,7 @@ export type PutLineupOut = LineupOut & LineupCheck;
  *  it (finding 3). `slot` is `text` in the DDL but carries
  *  `check (slot in ('starting','bench'))` (V215), so the narrowing where it is
  *  read is the database's guarantee, not an assumption. */
-interface StoredLineupSlot {
+export interface StoredLineupSlot {
   person_id: string;
   full_name: string;
   squad_number: number | null;

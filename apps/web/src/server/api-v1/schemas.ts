@@ -1496,7 +1496,19 @@ const DeviceLinkSide = z.object({
   name: z.string(),
   kind: z.string(),
   members: z.array(z.object({ person_id: z.string(), full_name: z.string() })),
-  lineup: z.array(z.object({ person_id: z.string(), pair_order: z.number().int().nullable() })),
+  /** S2-5 design §10: each row carries the team sheet (slot, position, order, role(s), shirt number) beside `pair_order`. */
+  lineup: z.array(
+    z.object({
+      person_id: z.string(),
+      pair_order: z.number().int().nullable(),
+      slot: z.enum(["starting", "bench"]),
+      position_key: z.string().nullable(),
+      order_no: z.number().int().nullable(),
+      role: z.string().nullable(),
+      roles: z.array(z.string()),
+      squad_number: z.number().int().nullable(),
+    }),
+  ),
 });
 export const DeviceLinkBootstrap = z.object({
   fixture_id: z.string(),

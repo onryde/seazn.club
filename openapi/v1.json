@@ -48292,7 +48292,7 @@
     },
     "/api/v1/device-link": {
       "get": {
-        "summary": "The phone's Remote Scoring bootstrap: what the /score/{token} page resolves for a scan, as JSON — the fixture, sport, cfg, `rules_version`, `engine_epoch_required` (the epoch a write must carry, the effective floor a 426 reports), the `screen` the scan opens on, the match's names, both sides (null while a seat has no entrant) and the ledger's `last_seq`. Authenticated by `Authorization: Bearer dl_…` ONLY (the one v1 route that resolves a device link itself; every other v1 route refuses it 403). 401 LINK_INVALID / LINK_REVOKED / LINK_EXPIRED",
+        "summary": "The phone's Remote Scoring bootstrap: what the /score/{token} page resolves for a scan, as JSON — the fixture, sport, cfg, `rules_version`, `engine_epoch_required` (the epoch a write must carry, the effective floor a 426 reports), the `screen` the scan opens on, the match's names, both sides, each lineup row with its slot, position, order, role(s) and shirt number (null while a seat has no entrant) and the ledger's `last_seq`. Authenticated by `Authorization: Bearer dl_…` ONLY (the one v1 route that resolves a device link itself; every other v1 route refuses it 403). 401 LINK_INVALID / LINK_REVOKED / LINK_EXPIRED",
         "tags": [
           "scoring"
         ],
@@ -48460,11 +48460,74 @@
                                                 "type": "null"
                                               }
                                             ]
+                                          },
+                                          "slot": {
+                                            "type": "string",
+                                            "enum": [
+                                              "starting",
+                                              "bench"
+                                            ]
+                                          },
+                                          "position_key": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "order_no": {
+                                            "anyOf": [
+                                              {
+                                                "type": "integer",
+                                                "minimum": -9007199254740991,
+                                                "maximum": 9007199254740991
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "role": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "roles": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "squad_number": {
+                                            "anyOf": [
+                                              {
+                                                "type": "integer",
+                                                "minimum": -9007199254740991,
+                                                "maximum": 9007199254740991
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
                                           }
                                         },
                                         "required": [
                                           "person_id",
-                                          "pair_order"
+                                          "pair_order",
+                                          "slot",
+                                          "position_key",
+                                          "order_no",
+                                          "role",
+                                          "roles",
+                                          "squad_number"
                                         ],
                                         "additionalProperties": false
                                       }
@@ -48536,11 +48599,74 @@
                                                 "type": "null"
                                               }
                                             ]
+                                          },
+                                          "slot": {
+                                            "type": "string",
+                                            "enum": [
+                                              "starting",
+                                              "bench"
+                                            ]
+                                          },
+                                          "position_key": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "order_no": {
+                                            "anyOf": [
+                                              {
+                                                "type": "integer",
+                                                "minimum": -9007199254740991,
+                                                "maximum": 9007199254740991
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "role": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "roles": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "squad_number": {
+                                            "anyOf": [
+                                              {
+                                                "type": "integer",
+                                                "minimum": -9007199254740991,
+                                                "maximum": 9007199254740991
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
                                           }
                                         },
                                         "required": [
                                           "person_id",
-                                          "pair_order"
+                                          "pair_order",
+                                          "slot",
+                                          "position_key",
+                                          "order_no",
+                                          "role",
+                                          "roles",
+                                          "squad_number"
                                         ],
                                         "additionalProperties": false
                                       }
@@ -48640,7 +48766,15 @@
                         "lineup": [
                           {
                             "person_id": "example",
-                            "pair_order": null
+                            "pair_order": null,
+                            "slot": "starting",
+                            "position_key": null,
+                            "order_no": null,
+                            "role": null,
+                            "roles": [
+                              null
+                            ],
+                            "squad_number": null
                           }
                         ]
                       },
@@ -48657,7 +48791,15 @@
                         "lineup": [
                           {
                             "person_id": "example",
-                            "pair_order": null
+                            "pair_order": null,
+                            "slot": "starting",
+                            "position_key": null,
+                            "order_no": null,
+                            "role": null,
+                            "roles": [
+                              null
+                            ],
+                            "squad_number": null
                           }
                         ]
                       }

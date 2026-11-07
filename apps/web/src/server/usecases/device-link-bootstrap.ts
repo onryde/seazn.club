@@ -8,19 +8,35 @@ import { HttpError } from "@/lib/errors";
 import { scanScreen } from "@/lib/scan-screen";
 import type { SlotLabelLookup } from "@/lib/slot-label";
 import { getEntrant } from "./entrants";
-import { getFixtureState, getLineup, loadFixturePadCfg } from "./fixtures";
+import { getFixtureState, getLineup, loadFixturePadCfg, type StoredLineupSlot } from "./fixtures";
 import { resultCarriedForward } from "./carried-forward";
 import { scanMatchNames } from "./scan-match-names";
 import { readScanFixture } from "./scan-fixture";
 import { requiredEngineEpoch } from "./scoring";
 import type { ResolvedDeviceLink } from "./device-links";
 
+/** One row of a side's team sheet, as `readLineup` stores it (S2-5 design §10): the phone's football and cricket pads read
+ *  the slot, position, order, role(s) and shirt number; table tennis reads `pair_order`. Every field is the stored one,
+ *  verbatim; `squad_number` is the roster's (`entrant_members`), null when unset. */
+export type DeviceLinkBootstrapLineupRow = {
+  person_id: string;
+  pair_order: number | null;
+  slot: "starting" | "bench";
+  position_key: string | null;
+  order_no: number | null;
+  /** The DB's `not null default 'player'`, passed through as stored. */
+  role: string | null;
+  roles: string[];
+  squad_number: number | null;
+};
+
 export type DeviceLinkBootstrapSide = {
   entrant_id: string;
   name: string;
   kind: string;
   members: { person_id: string; full_name: string }[];
-  lineup: { person_id: string; pair_order: number | null }[];
+  /** In `readLineup`'s order: `order_no`, then name. */
+  lineup: DeviceLinkBootstrapLineupRow[];
 };
 
 export type DeviceLinkBootstrap = {
@@ -49,13 +65,27 @@ async function sideOf(read: AuthCtx, fixtureId: string, entrantId: string | null
   if (!entrantId) return null;
   const [entrant, lineup] = await Promise.all([getEntrant(read, entrantId), getLineup(read, fixtureId, entrantId)]);
   const members = entrant.members as { person_id: string; full_name: string }[];
-  const slots = lineup.slots as { person_id: string; pair_order: number | null }[];
+  const slots = lineup.slots as StoredLineupSlot[];
   return {
     entrant_id: entrant.id,
     name: entrant.display_name,
     kind: entrant.kind,
     members: members.map((m) => ({ person_id: m.person_id, full_name: m.full_name })),
-    lineup: slots.map((l) => ({ person_id: l.person_id, pair_order: l.pair_order ?? null })),
+    lineup: slots.map(lineupRowOf),
+  };
+}
+
+/** `slot` is `text` with `check (slot in ('starting','bench'))` (V215), so the narrowing is the database's guarantee. */
+function lineupRowOf(l: StoredLineupSlot): DeviceLinkBootstrapLineupRow {
+  return {
+    person_id: l.person_id,
+    pair_order: l.pair_order ?? null,
+    slot: l.slot as DeviceLinkBootstrapLineupRow["slot"],
+    position_key: l.position_key,
+    order_no: l.order_no,
+    role: l.role,
+    roles: l.roles,
+    squad_number: l.squad_number,
   };
 }
 
