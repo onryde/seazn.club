@@ -368,6 +368,35 @@ describe("S9: the frame's moment id and storage key (pure)", () => {
   });
 });
 
+// Next hands the route its body as a stream it has already begun to read, so Node never discards what the route leaves
+// unread, and on a kept-alive connection the client's NEXT request waits behind bytes nobody reads (CI smoke: the fetch
+// after the 413 frame failed 6 s later). An answer given with the body unread closes the connection; never by reading the
+// rest - a declared overrun is never read.
+describe("S9: the connection after an answer (pure: every case is refused before any database read)", () => {
+  it("Connection: close when the body was left unread - no bearer, a declared overrun, a chunked overrun - and not once it was read to its end, or there was none", async () => {
+    const url = sc2FrameUrl(randomUUID(), sponsorMomentId(1, OVER_END.kind));
+    const BAD = "not-a-relay-token";
+    const CHUNK = 64 * 1024;
+    const declared = () => ({ body: countingStream(5).stream, contentLength: AIRING_FRAME_MAX_BYTES + 1 });
+    const cases: [label: string, opts: PostOpts, connection: string | null][] = [
+      ["no bearer, a small JPEG (the bearer is checked first)", { body: jpegOf(2_000) }, "close"],
+      ["no bearer, declared past the bound", declared(), "close"],
+      ["a refused token, declared past the bound", { token: BAD, ...declared() }, "close"],
+      ["a refused token, a chunked body past the bound", { token: BAD, body: countingStream(64, CHUNK).stream }, "close"],
+      ["a refused token, a JPEG read to its end", { token: BAD, body: jpegOf(2_000) }, null],
+      ["a refused token, no body", { token: BAD, body: null }, null],
+    ];
+    let checked = 0;
+    for (const [label, opts, connection] of cases) {
+      const res = await postFrame(url, opts);
+      expect(res.status, `${label}: the credential's refusal`).toBe(401);
+      expect(res.headers.get("connection"), label).toBe(connection);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every case").toBe(cases.length);
+  });
+});
+
 // ---------------------------------------------------------------------------------------------------------------
 // DB: the endpoint.
 // ---------------------------------------------------------------------------------------------------------------
@@ -518,16 +547,19 @@ describe.skipIf(!HAS_DB)("S9: POST …/airings/[momentId]/frame", () => {
     const p = await plainSession();
     const id = (seq: number) => sponsorMomentId(seq, OVER_END.kind);
     const exact = jpegOf(AIRING_FRAME_MAX_BYTES);
-    expect((await postFrame(sc2FrameUrl(p.sessionId, id(1)), { token: p.token, body: exact })).status).toBe(204);
+    const stored = await postFrame(sc2FrameUrl(p.sessionId, id(1)), { token: p.token, body: exact });
+    expect(stored.status).toBe(204);
+    expect(stored.headers.get("connection"), "read to its end: the connection stays open").toBeNull();
     const [row] = await framesOf(p.sessionId);
     expect(storedAt(row!.path)?.byteLength, "the whole frame, at the bound").toBe(AIRING_FRAME_MAX_BYTES);
     const calls = store.calls.length;
-    // Declared one past the bound: refused from the header, the body untouched.
+    // Declared one past the bound: refused from the header, the body untouched - so the connection closes behind it.
     const declared = countingStream(5);
     const a = await postFrame(sc2FrameUrl(p.sessionId, id(2)), { token: p.token, body: declared.stream, contentLength: AIRING_FRAME_MAX_BYTES + 1 });
     expect(a.status).toBe(413);
     expect(await json(a)).toMatchObject({ ok: false, code: "FRAME_TOO_LARGE" });
     expect(declared.seen.pulled, "a declared overrun is never read").toBe(0);
+    expect(a.headers.get("connection"), "left unread: the connection closes").toBe("close");
     // One byte past, with no length: a chunked body exactly one byte over.
     const CHUNK = 64 * 1024;
     const over = new ReadableStream<Uint8Array>({

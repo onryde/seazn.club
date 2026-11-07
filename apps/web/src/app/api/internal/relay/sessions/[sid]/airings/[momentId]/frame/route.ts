@@ -11,11 +11,13 @@ type Ctx = { params: Promise<{ sid: string; momentId: string }> };
  *  before a byte is read; a body with no length is read no further than one chunk past the bound (`readCapped`). A body
  *  that cannot be read to its end — the client aborted mid-upload — is the CLIENT's failure: 400, never a 500 (this path
  *  runs no proxy, so the route reads the stream itself: S9 review m10). */
-async function frameBody(req: Request): Promise<Uint8Array | null> {
+async function frameBody(req: Request, body: { readToEnd: boolean }): Promise<Uint8Array | null> {
   const declared = Number(req.headers.get("content-length") ?? "");
   if (Number.isFinite(declared) && declared > AIRING_FRAME_MAX_BYTES) return null;
   try {
-    return await readCapped(req.body, AIRING_FRAME_MAX_BYTES);
+    const bytes = await readCapped(req.body, AIRING_FRAME_MAX_BYTES);
+    body.readToEnd = bytes !== null;
+    return bytes;
   } catch {
     throw new HttpError(400, "the frame body could not be read to its end", "FRAME_BODY_UNREADABLE");
   }
@@ -35,11 +37,12 @@ async function frameBody(req: Request): Promise<Uint8Array | null> {
  *  A storage failure (`FrameStorageFailed`) is answered HERE, in the handler's own envelope: the usecase has already
  *  reported it with its org and session (S9 carry), and the handler would capture it a second time with neither. */
 export async function POST(req: Request, { params }: Ctx) {
-  return handler(async () => {
+  const body = { readToEnd: req.body === null };
+  const res = await handler(async () => {
     const { sid, momentId } = await params;
     const token = bearerOf(req);
     try {
-      await storeAiringFrame(sid, token, momentId, await frameBody(req));
+      await storeAiringFrame(sid, token, momentId, await frameBody(req, body));
     } catch (err) {
       if (err instanceof FrameStorageFailed) {
         return NextResponse.json({ ok: false, error: err.message, code: err.code }, { status: err.status });
@@ -48,4 +51,11 @@ export async function POST(req: Request, { params }: Ctx) {
     }
     return new Response(null, { status: 204 });
   });
+  // An answer given with the body left unread (no bearer, a declared overrun, a chunked one cut at the bound, a failed read)
+  // closes the connection. Next hands this handler a body stream it has already begun to read, so Node never discards the
+  // rest, and the client's next request on a kept-alive connection would wait behind bytes nobody reads (CI smoke: the
+  // fetch after the 413 failed 6 s later). HTTP lets a server close rather than read on (RFC 9110 §15.5.14), and a declared
+  // overrun is never read, so the rest is not drained either.
+  if (!body.readToEnd) res.headers.set("connection", "close");
+  return res;
 }
