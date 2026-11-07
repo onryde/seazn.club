@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quick match setup mockup</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600&display=swap');
+body { margin: 0; padding: 24px 16px; background: #f5f5f7; color: #1d1d1f; font-family: Inter, system-ui, sans-serif; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.intro { color: #6e6e73; font-size: 14px; max-width: 760px; margin: 0 0 8px; }
+.row { display: flex; flex-wrap: wrap; gap: 24px; justify-content: center; }
+.col { width: 320px; }
+.cap { font-size: 13px; color: #6e6e73; margin: 10px 4px 0; }
+.cap b { color: #1d1d1f; }
+
+.qm-phone { width: 300px; margin: 1.25rem auto 0; border-radius: 30px; border: 6px solid #1f1f22; background: linear-gradient(180deg, #1d1145, #150b36); overflow: hidden; box-shadow: 0 12px 32px rgba(0,0,0,.18); color: #f5f0e8; font-size: 13px; line-height: 1.35; }
+.qm-screen { min-height: 700px; display: flex; flex-direction: column; }
+.qm-display { font-family: 'Barlow Condensed', Inter, sans-serif; text-transform: uppercase; letter-spacing: .03em; }
+.qm-gantry { padding: 10px 14px; display: flex; justify-content: space-between; align-items: baseline; }
+.qm-wordmark { font-weight: 700; font-size: 17px; letter-spacing: .06em; }
+.qm-gantry-sub { font-size: 12px; opacity: .85; }
+.qm-body { padding: 6px 14px 10px; flex: 1; }
+.qm-eyebrow { color: #a3e635; font-size: 11px; font-weight: 600; letter-spacing: .22em; margin: 0; }
+.qm-namefield { display: flex; align-items: baseline; gap: 8px; border-bottom: 1px dashed #3b2a6e; padding-bottom: 4px; margin-top: 2px; }
+.qm-name { font-size: 26px; font-weight: 700; line-height: 1; }
+.qm-pencil { color: #a3e635; font-size: 14px; }
+.qm-hint { font-size: 11px; color: #8d7fc0; margin: 3px 0 0; }
+.qm-lbl { font-size: 11px; font-weight: 600; color: #b7aede; margin: 12px 0 5px; display: flex; justify-content: space-between; }
+.qm-lbl .qm-count { font-weight: 400; color: #8d7fc0; }
+.qm-help { font-size: 11px; color: #8d7fc0; margin: 5px 0 0; }
+.qm-chips { display: flex; gap: 6px; overflow: hidden; white-space: nowrap; }
+.qm-chip { border-radius: 999px; padding: 4px 10px; font-size: 12px; background: #241650; border: 1px solid #3b2a6e; flex: none; }
+.qm-chip.on { background: #a3e635; color: #150b36; border-color: #a3e635; font-weight: 600; }
+.qm-seg { display: flex; margin-top: 6px; border: 1px solid #3b2a6e; border-radius: 8px; overflow: hidden; background: #241650; }
+.qm-seg span { flex: 1; text-align: center; padding: 6px 0; font-size: 12px; color: #b7aede; }
+.qm-seg span.on { background: rgba(163,230,53,.14); color: #f5f0e8; font-weight: 600; box-shadow: inset 0 -2px 0 #a3e635; }
+.qm-seg-format span { padding: 8px 0; font-size: 13px; }
+.qm-card { background: rgba(36,22,80,.75); border: 1px solid #3b2a6e; border-radius: 14px; overflow: hidden; }
+.qm-side { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-bottom: 1px solid #3b2a6e; }
+.qm-num { width: 24px; height: 24px; border-radius: 6px; background: #a3e635; color: #150b36; font-weight: 700; font-size: 14px; display: flex; align-items: center; justify-content: center; flex: none; }
+.qm-input { flex: 1; border: 1px solid #3b2a6e; border-radius: 8px; padding: 6px 9px; background: #150b36; font-size: 14px; }
+.qm-add { padding: 8px 10px; font-size: 12px; color: #a3e635; font-weight: 600; }
+.qm-select { border: 1px solid #3b2a6e; border-radius: 8px; background: #241650; padding: 8px 10px; font-size: 13px; display: flex; justify-content: space-between; }
+.qm-select span { color: #a3e635; }
+.qm-link { font-size: 12px; color: #b7aede; text-decoration: underline; margin: 12px 0 0; }
+.qm-sub { margin: 8px 0 0; padding-left: 10px; border-left: 2px solid #3b2a6e; }
+.qm-sub .qm-lbl { margin-top: 0; }
+.qm-bottombar { border-top: 1px solid #3b2a6e; background: rgba(21,11,54,.9); padding: 10px 14px 16px; }
+.qm-btn { display: block; text-align: center; border-radius: 10px; padding: 11px 0; font-weight: 600; font-size: 14px; background: #a3e635; color: #150b36; }
+.qm-btn small { font-weight: 500; opacity: .75; }
+.qm-bracket { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; font-size: 11px; }
+.qm-brk { background: #150b36; border: 1px solid #3b2a6e; border-radius: 8px; padding: 6px 8px; color: #b7aede; }
+.qm-brk b { display: block; color: #f5f0e8; font-weight: 500; }
+.qm-brk-final { grid-column: 1 / 3; text-align: center; }
+</style>
+</head>
+<body>
+<h1>Quick match · setup screen</h1>
+<p class="intro">Design of record, chosen by the owner on 2026-11-05: the stadium-night stage with every control open. Same screen drawn with League chosen and with Knockout chosen. With two sides the Format row hides and "Each pair plays" stands alone.</p>
+
+<div class="row">
+  <div class="col">
+    <div class="qm-phone"><div class="qm-screen">
+      <div class="qm-gantry"><span class="qm-display qm-wordmark">Seazn</span><span class="qm-display qm-gantry-sub">Quick match</span></div>
+      <div class="qm-body">
+        <p class="qm-display qm-eyebrow">Quick match</p>
+        <div class="qm-namefield"><span class="qm-display qm-name">Badminton · Tue 3 Nov</span><span class="qm-pencil">✎</span></div>
+        <p class="qm-hint">The name you'll look for later</p>
+        <p class="qm-lbl">Sport</p>
+        <div class="qm-chips"><span class="qm-chip on">Badminton</span><span class="qm-chip">Table tennis</span><span class="qm-chip">Tennis</span><span class="qm-chip">Carrom</span><span class="qm-chip">Chess</span></div>
+        <div class="qm-seg"><span>Singles</span><span class="on">Doubles</span><span>Team</span></div>
+        <p class="qm-lbl">Sides <span class="qm-count">4 of 6</span></p>
+        <div class="qm-card">
+          <div class="qm-side"><span class="qm-num qm-display">1</span><span class="qm-input">Ravi &amp; Sam</span></div>
+          <div class="qm-side"><span class="qm-num qm-display">2</span><span class="qm-input">Priya &amp; Tom</span></div>
+          <div class="qm-side"><span class="qm-num qm-display">3</span><span class="qm-input">Lee &amp; Ana</span></div>
+          <div class="qm-side"><span class="qm-num qm-display">4</span><span class="qm-input">Jo &amp; Max</span></div>
+          <div class="qm-add">+ Add a side</div>
+        </div>
+        <p class="qm-lbl">Format</p>
+        <div class="qm-seg qm-seg-format"><span class="on">League</span><span>Knockout</span></div>
+        <p class="qm-help">Everyone plays everyone. Most wins tops the table.</p>
+        <div class="qm-sub">
+          <p class="qm-lbl">Each pair plays</p>
+          <div class="qm-seg"><span class="on">Once</span><span>Twice</span><span>3 times</span><span>4 times</span></div>
+        </div>
+        <p class="qm-lbl">Match rules</p>
+        <div class="qm-select">Best of 3 games to 21 <span>⌄</span></div>
+        <p class="qm-link">Email me the link (optional)</p>
+      </div>
+      <div class="qm-bottombar"><span class="qm-btn">Start playing <small>· 6 matches</small></span></div>
+    </div></div>
+    <p class="cap"><b>League chosen.</b> "Each pair plays" is a sub-row of the format. The Start button counts the matches.</p>
+  </div>
+
+  <div class="col">
+    <div class="qm-phone"><div class="qm-screen">
+      <div class="qm-gantry"><span class="qm-display qm-wordmark">Seazn</span><span class="qm-display qm-gantry-sub">Quick match</span></div>
+      <div class="qm-body">
+        <p class="qm-display qm-eyebrow">Quick match</p>
+        <div class="qm-namefield"><span class="qm-display qm-name">Badminton · Tue 3 Nov</span><span class="qm-pencil">✎</span></div>
+        <p class="qm-hint">The name you'll look for later</p>
+        <p class="qm-lbl">Sport</p>
+        <div class="qm-chips"><span class="qm-chip on">Badminton</span><span class="qm-chip">Table tennis</span><span class="qm-chip">Tennis</span><span class="qm-chip">Carrom</span><span class="qm-chip">Chess</span></div>
+        <div class="qm-seg"><span>Singles</span><span class="on">Doubles</span><span>Team</span></div>
+        <p class="qm-lbl">Sides <span class="qm-count">4 of 6</span></p>
+        <div class="qm-card">
+          <div class="qm-side"><span class="qm-num qm-display">1</span><span class="qm-input">Ravi &amp; Sam</span></div>
+          <div class="qm-side"><span class="qm-num qm-display">2</span><span class="qm-input">Priya &amp; Tom</span></div>
+          <div class="qm-side"><span class="qm-num qm-display">3</span><span class="qm-input">Lee &amp; Ana</span></div>
+          <div class="qm-side"><span class="qm-num qm-display">4</span><span class="qm-input">Jo &amp; Max</span></div>
+          <div class="qm-add">+ Add a side</div>
+        </div>
+        <p class="qm-lbl">Format</p>
+        <div class="qm-seg qm-seg-format"><span>League</span><span class="on">Knockout</span></div>
+        <p class="qm-help">Lose and you're out. Two semi-finals, then a final.</p>
+        <div class="qm-bracket">
+          <div class="qm-brk">Semi-final<b>Ravi &amp; Sam v Jo &amp; Max</b></div>
+          <div class="qm-brk">Semi-final<b>Priya &amp; Tom v Lee &amp; Ana</b></div>
+          <div class="qm-brk qm-brk-final">Final<b>Winners meet</b></div>
+        </div>
+        <p class="qm-lbl">Match rules</p>
+        <div class="qm-select">Best of 3 games to 21 <span>⌄</span></div>
+        <p class="qm-link">Email me the link (optional)</p>
+      </div>
+      <div class="qm-bottombar"><span class="qm-btn">Start playing <small>· 3 matches</small></span></div>
+    </div></div>
+    <p class="cap"><b>Knockout chosen.</b> The sub-row becomes a glance at the draw. With 3, 5 or 6 sides it also shows who sits out the first round.</p>
+  </div>
+</div>
+</body>
+</html>
