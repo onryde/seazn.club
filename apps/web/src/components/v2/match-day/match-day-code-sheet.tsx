@@ -67,26 +67,25 @@ export function MatchDayCodeSheet({ competitionId, dict, locale, today, courts, 
   const [shown, setShown] = useState<{ id: string; qr: SeaznQr } | null>(null);
   const [busy, setBusy] = useState<Busy>(null);
   const [failed, setFailed] = useState(false);
-  const base = `/api/v1/competitions/${competitionId}/match-day-codes`;
 
   const reload = useCallback(async () => {
     try {
-      const list = await apiV1<MatchDayCode[] | undefined>(base);
+      const list = await apiV1<MatchDayCode[] | undefined>(`/api/v1/competitions/${competitionId}/match-day-codes`);
       setCodes(Array.isArray(list) ? list : []);
     } catch {
       setFailed(true);
     }
-  }, [base]);
+  }, [competitionId]);
   // The first read, on open. A cut-off 200 (undefined) reads as an empty list, never a crash.
   useEffect(() => {
     const ctl = new AbortController();
-    apiV1<MatchDayCode[] | undefined>(base, { signal: ctl.signal })
+    apiV1<MatchDayCode[] | undefined>(`/api/v1/competitions/${competitionId}/match-day-codes`, { signal: ctl.signal })
       .then((list) => setCodes(Array.isArray(list) ? list : []))
       .catch(() => {
         if (!ctl.signal.aborted) setFailed(true);
       });
     return () => ctl.abort();
-  }, [base]);
+  }, [competitionId]);
 
   const show = async (code: MatchDayCode) => setShown({ id: code.id, qr: await renderSeaznQr(code.url) });
   const body = scopeBody(kind, venueId, courtIds);
@@ -96,7 +95,7 @@ export function MatchDayCodeSheet({ competitionId, dict, locale, today, courts, 
     setBusy({ kind: "minting" });
     setFailed(false);
     try {
-      const code = await apiV1<MatchDayCode>(base, { method: "POST", json: { scope: body, day, can_approve: canApprove } });
+      const code = await apiV1<MatchDayCode>(`/api/v1/competitions/${competitionId}/match-day-codes`, { method: "POST", json: { scope: body, day, can_approve: canApprove } });
       await show(code);
       await reload();
     } catch {
