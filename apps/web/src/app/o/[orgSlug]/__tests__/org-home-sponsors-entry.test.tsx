@@ -31,6 +31,10 @@ vi.mock("@/server/usecases/card-stats", () => ({
   listCompetitionCardStats: async () => new Map(),
   nextLine: () => null,
 }));
+// Match Day C7 (main): the page reads today's counts for its deck. None today, as main's org-home-pass-menu.test.tsx stubs it.
+vi.mock("@/server/usecases/match-day", () => ({
+  competitionsFixturesToday: async () => ({ day: "2026-11-08", tz: "UTC", counts: new Map(), next: new Map() }),
+}));
 vi.mock("@/lib/db", () => ({
   sql: (strings: TemplateStringsArray | unknown[]) =>
     !Array.isArray(strings) || !("raw" in strings) ? { __fragment: strings } : Promise.resolve([]),
@@ -42,16 +46,12 @@ vi.mock("@/lib/entitlements", async (orig) => ({
 vi.mock("@/lib/currency-server", () => ({ preferredCurrency: async () => "usd" }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 vi.mock("@/components/billing-banner", () => ({ BillingBanner: () => null }));
-vi.mock("@/components/ui/entity-card", () => ({ EntityCard: (p: { name: string }) => <div data-card={p.name} /> }));
 vi.mock("@/components/ui/card-menu", () => ({ CardMenu: () => null }));
-vi.mock("@/components/ui/view-toggle", () => ({
-  ViewToggleContainer: (p: { children?: React.ReactNode }) => <div>{p.children}</div>,
-}));
 
 import Page from "../page";
 
 const render = async (): Promise<string> =>
-  renderToStaticMarkup(await Page({ params: Promise.resolve({ orgSlug: "riverside" }) }));
+  renderToStaticMarkup(await Page({ params: Promise.resolve({ orgSlug: "riverside" }), searchParams: Promise.resolve({}) }));
 
 /** The Sponsors entry's anchor attributes, or null. Anchored on `data-testid="org-home-sponsors"` and its `="`. */
 function entry(html: string): { href: string; cls: string[]; text: string } | null {
