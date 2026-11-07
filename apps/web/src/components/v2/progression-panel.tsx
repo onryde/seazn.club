@@ -480,6 +480,11 @@ export function ProgressionPanel({
         )}
         {notice && <p className="text-sm text-emerald-700">{notice}</p>}
         <div className="flex-1" />
+        {/* W4 B1b M11: a confirmed draw is an undo barrier (Undo, Redo and Restore stop at it; Recompute is refused for good), so
+            the organiser is told before pressing Confirm - the Swiss rounds dialog says its own barrier before Save the same way. */}
+        <p data-testid="progression-confirm-final" className="min-w-0 text-xs text-slate-600">
+          {msg("progression.confirmFinal")}
+        </p>
         <button
           type="button"
           disabled={busy !== null || !ready}

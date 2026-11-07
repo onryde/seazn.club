@@ -205,3 +205,71 @@ describe("ProgressionPanel — draft table structure", () => {
     expect(btnMatch![0]).not.toMatch(/disabled=""/);
   });
 });
+
+// W4 B1b review M11 (controller ruling, fix round 1): since W4 T5 a confirmed draw is an undo barrier — Undo, Redo and
+// Restore refuse to cross it (SEED_CONFIRM_NOT_UNDOABLE) and Recompute is refused for good. The organiser is told so
+// BEFORE pressing Confirm, as the Swiss rounds dialog says its own barrier before Save (swiss-rounds-dialog.tsx), so the
+// lock is never a surprise. The sentence is typed here (the ruling's), never read back from the panel.
+describe("ProgressionPanel — Confirm warns that a confirmed draw can't be undone (M11)", () => {
+  const KEY = "progression.confirmFinal";
+  const SENTENCE = "Once confirmed, this draw can't be undone.";
+  const noTies: SeedProposal = { ...DRAFT, computed: { ...DRAFT.computed, ties: [] } };
+
+  it("the empty cases first: no proposal, a draft with nobody in it, a stale one and a confirmed one carry no warning (none has Confirm)", () => {
+    const states: [string, SeedProposal | null][] = [
+      ["no proposal", null],
+      ["draft-empty", { ...DRAFT, computed: { ...DRAFT.computed, qualifiers: [], ties: [] } }],
+      ["stale", { ...DRAFT, status: "stale" }],
+      ["confirmed", { ...DRAFT, status: "confirmed" }],
+    ];
+    let checked = 0;
+    for (const [what, proposal] of states) {
+      const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ proposal })} />);
+      expect(html, `${what}: premise, the card rendered`).not.toBe("");
+      expect(html, `${what}: no Confirm`).not.toContain("Confirm proposal");
+      expect(html, `${what}: no warning`).not.toContain('data-testid="progression-confirm-final"');
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every Confirm-less state").toBe(4);
+  });
+
+  it("a draft says it beside Confirm, before the button, whether Confirm is live or waiting on a tie", () => {
+    let checked = 0;
+    for (const proposal of [noTies, DRAFT]) {
+      const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ proposal })} />);
+      const warn = html.match(/<p[^>]*data-testid="progression-confirm-final"[^>]*>([^<]*)<\/p>/);
+      expect(warn?.[1], "the warning is the ruling's sentence").toBe(SENTENCE.replace("'", "&#x27;"));
+      expect(html.indexOf('data-testid="progression-confirm-final"'), "said before the Confirm button").toBeLessThan(
+        html.search(/<button[^>]*>\s*Confirm proposal\s*<\/button>/),
+      );
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("is said in the reader's language: all four dictionaries carry it, translated, and the panel renders each", async () => {
+    const { DictProvider } = await import("@/components/i18n/dict-provider");
+    const dicts = {
+      en: (await import("@/dictionaries/en/ui.json")).default,
+      es: (await import("@/dictionaries/es/ui.json")).default,
+      fr: (await import("@/dictionaries/fr/ui.json")).default,
+      nl: (await import("@/dictionaries/nl/ui.json")).default,
+    } as unknown as Record<"en" | "es" | "fr" | "nl", Record<string, string>>;
+    expect(dicts.en[KEY], "en is the ruling's sentence").toBe(SENTENCE);
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(dicts) as ["en" | "es" | "fr" | "nl", Record<string, string>][]) {
+      const value = dict[KEY];
+      expect(typeof value === "string" && value.trim() !== "", `${locale}/${KEY} is missing`).toBe(true);
+      if (locale !== "en") expect(value, `${locale}/${KEY} copies the English`).not.toBe(SENTENCE);
+      const html = renderToStaticMarkup(
+        <DictProvider dict={dict as never} locale={locale}>
+          <ProgressionPanel {...baseProps({ proposal: noTies, locale })} />
+        </DictProvider>,
+      );
+      const warn = html.match(/<p[^>]*data-testid="progression-confirm-final"[^>]*>([^<]*)<\/p>/);
+      expect(warn?.[1]?.replaceAll("&#x27;", "'"), `${locale}: the panel renders its own dictionary's sentence`).toBe(value);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: four locales").toBe(4);
+  });
+});

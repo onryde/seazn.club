@@ -5720,6 +5720,7 @@ export type DictionaryKey =
   | "progression.choosePlaceholder"
   | "progression.computeCta"
   | "progression.confirmCta"
+  | "progression.confirmFinal"
   | "progression.confirmedNotice.one"
   | "progression.confirmedNotice.other"
   | "progression.confirming"

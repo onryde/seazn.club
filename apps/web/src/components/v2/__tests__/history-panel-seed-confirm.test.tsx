@@ -21,8 +21,13 @@ import nl from "@/dictionaries/nl/ui.json";
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
 }));
+// The confirm dialog answers yes, and keeps what it was asked to say (M11: Restore's body).
+const { confirmAsked } = vi.hoisted(() => ({ confirmAsked: [] as { title?: string; body?: string }[] }));
 vi.mock("@/components/ui/confirm-provider", () => ({
-  useConfirm: () => vi.fn(async () => true),
+  useConfirm: () => async (o: { title?: string; body?: string }) => {
+    confirmAsked.push(o);
+    return true;
+  },
 }));
 const apiV1 = vi.fn();
 vi.mock("@/lib/client-v1", async (importOriginal) => {
@@ -143,5 +148,48 @@ describe("HistoryPanel — SEED_CONFIRM_NOT_UNDOABLE on Undo, Redo or Restore is
   it("a code that only LOOKS like a knockout refusal still surfaces the server's own message (the negative pair)", async () => {
     const { shown, SERVER } = await refuse("history-undo", "SEED_CONFIRM_SOMETHING_NEW", 409);
     expect(shown).toBe(SERVER);
+  });
+});
+
+// W4 B1b review M11 (controller ruling, fix round 1): Restore is a loop of Undos, so since T5 it stops at a confirmed draw
+// (an undo barrier). Its confirm used to promise "Schedule edits made after {name} are undone" — every one, which is now
+// false. The body says where it stops. The English sentence is typed here (the ruling's), never read from the panel.
+describe("HistoryPanel — Restore's confirm says it stops at a change that can't be undone (M11)", () => {
+  const KEY = "confirm.restoreCheckpoint.body";
+  const SENTENCE =
+    "Schedule edits made after {name} are undone. A change that can't be undone, such as a confirmed draw, stops the restore there. Results are never touched.";
+  /** The pre-T5 sentences, which promised every edit back: typed so a locale left on them is caught. */
+  const BEFORE: Record<string, string> = {
+    en: "Schedule edits made after {name} are undone. Results are never touched.",
+    es: "Se deshacen las ediciones del calendario realizadas después de {name}. Los resultados nunca se tocan.",
+    fr: "Les modifications du calendrier effectuées après {name} sont annulées. Les résultats ne sont jamais touchés.",
+    nl: "Planningswijzigingen na {name} worden ongedaan gemaakt. Resultaten worden nooit gewijzigd.",
+  };
+
+  it("the Restore button asks with the ruling's sentence, the save point named", async () => {
+    const ctx = await mount([]);
+    apiV1.mockImplementation(async (path: string) =>
+      path.endsWith("/restore") ? { steps: 0 } : path.endsWith("/history") ? { watermark: null, seq: 1, events: [] } : CHECKPOINTS,
+    );
+    confirmAsked.length = 0;
+    const button = ctx.byTestid("checkpoint-restore")[0];
+    expect(button, "checkpoint-restore is on the panel").toBeDefined();
+    await (propsOf(button!).onClick as () => unknown)();
+    await ctx.settle();
+    expect(confirmAsked.length, "anti-vacuity: the confirm was asked once").toBe(1);
+    expect(confirmAsked[0]!.body).toBe(SENTENCE.replace("{name}", CHECKPOINTS[0]!.label));
+  });
+
+  it("every locale says where it stops: translated, the save point kept, none left on the old promise", () => {
+    expect(EN[KEY], "en is the ruling's sentence").toBe(SENTENCE);
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(DICTS)) {
+      const value = dict[KEY]!;
+      expect(value, `${locale}: names the save point`).toContain("{name}");
+      expect(value, `${locale}: still promises every edit back`).not.toBe(BEFORE[locale]);
+      if (locale !== "en") expect(value, `${locale} copies the English`).not.toBe(SENTENCE);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: four locales").toBe(4);
   });
 });
