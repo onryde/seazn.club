@@ -459,6 +459,13 @@ export async function schedulingConstraintsSuite(): Promise<void> {
   };
   const strictAutoGap = minPoolGapMinutes(sf.map((f) => f.id));
   const laxAutoGap = minPoolGapMinutes(lf.map((f) => f.id));
+  // Report what was measured, pass or fail: four conditions share one check, and a bare FAIL cannot say which broke.
+  console.log(
+    `#452 pools/auto measured: assignments=${(poolAuto?.assignments ?? []).length} strictGap=${strictAutoGap} ` +
+      `laxGap=${laxAutoGap} solver=${(poolAuto as { solver?: { status?: string } } | undefined)?.solver?.status ?? "none"} ` +
+      `conflicts=${JSON.stringify((poolAuto as { conflicts?: unknown[] } | undefined)?.conflicts ?? []).slice(0, 400)} ` +
+      `times=${(poolAuto?.assignments ?? []).map((a) => `${a.fixture_id.slice(0, 4)}@${a.scheduled_at.slice(5, 16)}/${a.court_id.slice(0, 4)}`).join(",")}`,
+  );
   check(
     "#452 pools/auto: the placer honours the POOL rest (≥90) and not division-wide (lax pool <90)",
     (poolAuto?.assignments ?? []).length === 6 &&
