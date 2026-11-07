@@ -386,3 +386,37 @@ export const CaptureMatchdayOpen = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("finished") }),
 ]);
 export type CaptureMatchdayOpen = z.infer<typeof CaptureMatchdayOpen>;
+
+// ---------------------------------------------------------------------------------------------------------------
+// capture-matchday-approval.v1 (capture S4 Match Day design §7, §9.5; MD-1 Task 6):
+// GET|POST /match-day-code/approvals/{kind}/{stageId}
+// ---------------------------------------------------------------------------------------------------------------
+
+/** One pairing or drawn match as the review shows it: its place, and its sides' names (`away` null on a bye, or a
+ *  knockout match whose other seat is fed from elsewhere). */
+const CaptureMatchdayApprovalRow = z.strictObject({
+  label: z.string().min(1),
+  home: z.string(),
+  away: z.string().nullable(),
+});
+/** The review (GET): what the server computed, read-only, and the `hash` (and, for a Swiss round, the `round`) the approve
+ *  hands back. `ties`: a draw with a tie only the web desk can resolve, which the phone cannot approve. */
+export const CaptureMatchdayApprovalReview = z.strictObject({
+  kind: z.enum(["swiss", "draw"]),
+  stage_id: z.uuid(),
+  division_name: z.string(),
+  round: z.number().int().min(1).nullable(),
+  rows: z.array(CaptureMatchdayApprovalRow),
+  hash: z.string().min(1).max(128),
+  ties: z.boolean(),
+});
+export type CaptureMatchdayApprovalReview = z.infer<typeof CaptureMatchdayApprovalReview>;
+/** The approve's body (POST): the review's `hash`, and for a Swiss round its `round` (a draw sends none, or null). */
+export const CaptureMatchdayApprovalRequest = z.strictObject({
+  hash: z.string().min(1).max(128),
+  round: z.number().int().min(1).nullable().optional(),
+});
+export type CaptureMatchdayApprovalRequest = z.infer<typeof CaptureMatchdayApprovalRequest>;
+/** The approve's 200: approved, by this request. A second phone's approve is the refusal MD_ALREADY, never this. */
+export const CaptureMatchdayApprovalOk = z.strictObject({ ok: z.literal(true) });
+export type CaptureMatchdayApprovalOk = z.infer<typeof CaptureMatchdayApprovalOk>;

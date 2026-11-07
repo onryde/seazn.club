@@ -52,6 +52,8 @@ export {
   CaptureMatchdayRefusal,
   // capture-matchday-open.v1 (MD-1 Task 4).
   CaptureMatchdayOpen,
+  // capture-matchday-approval.v1 (MD-1 Task 6).
+  CaptureMatchdayApprovalReview, CaptureMatchdayApprovalRequest, CaptureMatchdayApprovalOk,
 } from "../capture-schemas.ts";
 export {
   Uuid, CourtId, RequiredCourtTags, VenueId, Slug, Visibility, CompetitionStatus, DivisionStatus, StageKind,

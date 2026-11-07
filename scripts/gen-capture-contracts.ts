@@ -16,6 +16,7 @@ import { z } from "zod";
 import {
   CaptureBeat, CaptureBeatAnswer, CaptureDescriptor, CaptureRefusal, CaptureScoringLinkOk, CaptureStartBody, CaptureStartOk,
   CaptureMatchdayDay, CaptureMatchdayRefusal, CaptureMatchdayOpen,
+  CaptureMatchdayApprovalReview, CaptureMatchdayApprovalRequest, CaptureMatchdayApprovalOk,
 } from "../apps/web/src/server/api-v1/capture-schemas.ts";
 import { CaptureQrV2 } from "../apps/web/src/lib/capture-qr.ts";
 
@@ -302,6 +303,52 @@ const contracts: Contract[] = [
         description: "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at), 403 MD_OUT_OF_SCOPE (the match is not in the code's competition, venue or courts, or not on its day, at the moment of asking). A 404 NOT_FOUND (no such match) and a 429 RATE_LIMITED (with Retry-After) are the v1 envelope's own answers, outside this shape.",
         props: {
           code: "The machine word the phone keys its copy on: one of the plan's MD_ words, a closed list. The v1 envelope's own answers (429 RATE_LIMITED, 404 NOT_FOUND, 500 INTERNAL) are not md_ refusals and are outside this shape; the phone reads them by status.",
+          message: "A plain English developer string; the phone never shows it.",
+          opens_at: "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
+        },
+      },
+    },
+  },
+  {
+    file: "capture-matchday-approval.v1.json",
+    title: "Seazn Match Day code approval, v1: GET|POST /api/v1/match-day-code/approvals/{kind}/{stageId}",
+    root: {
+      twin: CaptureMatchdayApprovalReview,
+      description: `An approval as a phone holding a Match Day code reviews it (${MD_SPEC} §7, §9.5; MD-1 Task 6): GET /api/v1/match-day-code/approvals/{kind}/{stageId}, kind swiss or draw, authenticated by Authorization: Bearer md_… only, and only for a code minted with "can approve draws". The root is the review, \`data\` in the v1 envelope {ok: true, data, requestId}. POST to the same path with $defs.request approves it and answers $defs.ok; $defs.refusal is \`error\` in {ok: false, error, requestId}. Nothing in it is a credential. ${PINNED_BY}`,
+      props: {
+        kind: "swiss (the next round of a Swiss stage) or draw (the seed proposal from groups into a knockout).",
+        stage_id: "The stage the approval acts on: the day read's approvals.stage_id.",
+        division_name: "The stage's division.",
+        round: "swiss: the round awaiting pairing, the day read's approvals.round; the approve hands it back. draw: null.",
+        rows: "What the server computed, read-only, in order: swiss, one row per board of the round, the bye last with away null; draw, one row per knockout match a qualifier is drawn into, in round then match order. To change a slot, the organiser uses the web desk.",
+        "rows.label": "The row's place: the round as the web's board codes it (R4, QF, SF, F, …), then its number in the round when the round holds more than one (R4 1, QF 2).",
+        "rows.home": "The first side's name.",
+        "rows.away": "The second side's name; null on a bye, or in a knockout match whose other seat is fed from elsewhere.",
+        hash: "What the approve hands back, unchanged: swiss, a hash of the round's inputs (results, field, stage settings and lots); draw, the proposal's id. An approve whose hash is no longer the server's is refused MD_STALE.",
+        ties: "draw only (swiss: false): the draw has a tie only the web desk can resolve. The phone shows it and does not approve it; an approve is refused MD_TIES.",
+      },
+    },
+    defs: {
+      request: {
+        twin: CaptureMatchdayApprovalRequest,
+        description: "The approve's body, POST /api/v1/match-day-code/approvals/{kind}/{stageId}: the review's hash, and for swiss its round.",
+        props: {
+          hash: "The review's hash, unchanged.",
+          round: "swiss: the review's round (required: an approve without it is a 422). draw: omitted, or null.",
+        },
+      },
+      ok: {
+        twin: CaptureMatchdayApprovalOk,
+        description: "The approve's 200: this request approved it. The new matches are on the server at once; the phone refreshes its day read. A second phone's approve is the refusal MD_ALREADY, never this.",
+        props: {
+          ok: "Always true.",
+        },
+      },
+      refusal: {
+        twin: CaptureMatchdayRefusal,
+        description: "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at), 403 MD_NO_APPROVE (the code was minted without \"can approve draws\": the review AND the approve), 403 MD_OUT_OF_SCOPE (the stage is not in the code's competition, or for a venue or courts code none of its matches is on those courts on the code's day), 409 MD_STALE (the hash is no longer the server's — a result, the field or the proposal changed — or the approval is not ready: the round before is still in play, or the groups are not complete; review again), 409 MD_ALREADY (approved already: another phone or the desk was first), 409 MD_TIES (draw: a tie the web desk must resolve). A 404 NOT_FOUND (no such stage, kind or proposal), a 422 (a swiss approve without a round, or a stage of another kind) and a 429 RATE_LIMITED (with Retry-After) are the v1 envelope's own answers, outside this shape.",
+        props: {
+          code: "The machine word the phone keys its copy on: one of the plan's MD_ words, a closed list. The v1 envelope's own answers (429 RATE_LIMITED, 404 NOT_FOUND, 422, 500 INTERNAL) are not md_ refusals and are outside this shape; the phone reads them by status.",
           message: "A plain English developer string; the phone never shows it.",
           opens_at: "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
         },

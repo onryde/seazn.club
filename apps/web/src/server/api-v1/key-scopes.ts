@@ -406,6 +406,8 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   // itself — a credential that lists a day and opens scoring links; never a key.
   "GET /match-day-code",
   "POST /match-day-code/fixtures/:id/scoring-link",
+  "GET /match-day-code/approvals/:kind/:stageId",
+  "POST /match-day-code/approvals/:kind/:stageId",
   // Chess in-page board (2026-10-09 design §6): the room read names a player's
   // seat, the POSTs seat them, submit moves with that player's own stored
   // Lichess OAuth token, report their clock at zero, and stamp a camera gap
