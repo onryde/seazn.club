@@ -48,6 +48,7 @@ import { createStages, generateStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { WithdrawCascadeReport } from "@/server/api-v1/schemas";
 import { seedOrg } from "./_seed";
+import { buildRibbon, disqualifiedForfeiters, FORFEIT_RIBBON_KEY } from "@/components/v2/scorepad/v3/ribbon";
 
 // The public reads (T15 review I4) go through `unstable_cache`, which has no incrementalCache outside a real request: a
 // passthrough, never a memoising double (competition-hub-db.test.ts's own reason).
@@ -596,6 +597,108 @@ describe.runIf(HAS_DB)("W3 T15 ruling 2: /me reads the loser's status beside a f
       }
       expect(checked).toBe(BOARDS.length);
       expect(msgFor("en", BOARDS[0].fullKey), "premise: the plain walkover says no withdrawal").not.toMatch(/withdr/i);
+    }, 120_000);
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W4 T18 (K12; ruling 259 — none of the 39 rule ids): a disqualification walkover is WORDED as a disqualification, and
+// CREDITED exactly as a withdrawal (controller ruling C12: never the stored reason `disqualified` — the engine's
+// `FORFEIT_REASONS` comment, core/types.ts: "retired / disqualified = after [play]", and PF-2 refuses an unplayed one; ruling
+// 115 credits the cascade's `withdrew`). So the representation stays: the stored payload is the cascade's own, and the
+// organiser's console words it by the loser's entrant STATUS (`disqualifiedForfeiters` over the seated sides, read by
+// `buildRibbon`). Everything below is driven through the real doors on a knockout (the W4 shape): the roster editor's
+// PATCH to `disqualified`, the Withdraw route's cascade. The words come from the en catalog through the declared key map
+// (`FORFEIT_RIBBON_KEY`), never from the branch under test. Both sports of this file's sweep: the forfeit's words are
+// sport-blind, the cascade's seating is the sport's.
+// ---------------------------------------------------------------------------------------------------------------------
+describe.runIf(HAS_DB)("K12 a disqualification walkover is worded as one and credited as a withdrawal (W4 T18)", () => {
+  /** A started knockout of four, two seated semis, nothing played. Seeds 1..4 by creation order. */
+  async function knockout(sport: Sport) {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "K12 " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open", slug: "open-" + randomUUID().slice(0, 6), sport_key: sport.sport, variant_key: sport.variant, config: {},
+    });
+    const sportModule = builtinModules.find((m) => m.key === sport.sport)!;
+    const kind = (sportModule.entrantModel?.defaultKind ?? "individual") as Kind;
+    const made = await createEntrants(auth, division.id, [1, 2, 3, 4].map((i) => entrantInput(kind, `K${i}`, i)));
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "knockout", name: "Cup", config: {}, progression: null });
+    await generateStageFixtures(auth, stage!.id);
+    await startDivision(auth, division.id);
+    const semis = (await rowsOf(stage!.id)).filter(seated);
+    expect(semis, "premise: two seated semis").toHaveLength(2);
+    expect(semis.map((f) => f.status), "premise: nothing played").toEqual(["scheduled", "scheduled"]);
+    return { auth, stageId: stage!.id, entrants: made.map((e) => e.id), semis };
+  }
+
+  /** The stored `core.forfeit` the cascade wrote on `fixtureId` (the real producer's payload). */
+  async function cascadeForfeit(fixtureId: string) {
+    const rows = await sql<{ payload: Record<string, unknown> }[]>`
+      select payload from score_events where fixture_id = ${fixtureId} and type = 'core.forfeit' order by seq`;
+    expect(rows, `one cascade forfeit on ${fixtureId}`).toHaveLength(1);
+    return rows[0]!.payload;
+  }
+
+  /** The console's Activity-row line for that payload: its own seat statuses (`getEntrant`, the fixture page's read),
+   *  its own set (`disqualifiedForfeiters`), the real `buildRibbon`, the en catalog. */
+  async function consoleLine(auth: AuthCtx, f: Row, payload: Record<string, unknown>) {
+    const sides = await Promise.all([f.home_entrant_id!, f.away_entrant_id!].map((id) => getEntrant(auth, id)));
+    const en = (k: MessageKey) => msgFor("en", k);
+    return buildRibbon("core.forfeit", payload, (id) => id, en, undefined, disqualifiedForfeiters(sides)).text;
+  }
+
+  /** A twin's bracket as seed-relative rows: every id replaced by its seed, so two rigs compare byte for byte. */
+  async function bracketBySeed(stageId: string, entrants: readonly string[]) {
+    const seedOf = (id: string | null | undefined) => (id === null || id === undefined ? id : `seed${entrants.indexOf(id) + 1}`);
+    return (await rowsOf(stageId)).map((f) => ({
+      at: `${f.round_no}.${f.seq_in_round}`, status: f.status, home: seedOf(f.home_entrant_id), away: seedOf(f.away_entrant_id),
+      outcome: f.outcome === null ? null : { ...f.outcome, winner: seedOf(f.outcome.winner), loser: seedOf(f.outcome.loser) },
+    }));
+  }
+
+  for (const s of SPORTS) {
+    it(`K12 a DQ walkover reads "Disqualification recorded"; a withdrawal still reads "Withdrawal recorded"; the credit is byte-equal (${s.sport})`, async () => {
+      // Expected words: the declared key map read through the en catalog, and the brief's literal beside it.
+      const DQ_WORDS = msgFor("en", FORFEIT_RIBBON_KEY.disqualified);
+      const WD_WORDS = msgFor("en", FORFEIT_RIBBON_KEY.withdrew);
+      expect([DQ_WORDS, WD_WORDS]).toEqual(["Disqualification recorded", "Withdrawal recorded"]);
+
+      // Two twins, the same seeds: in one the first semi's away side is disqualified, in the other withdrawn.
+      const dqRig = await knockout(s);
+      const wdRig = await knockout(s);
+      const dqBoard = dqRig.semis[0]!;
+      const wdBoard = wdRig.semis[0]!;
+      const dqLoser = dqBoard.away_entrant_id!;
+      const wdLoser = wdBoard.away_entrant_id!;
+      expect(dqRig.entrants.indexOf(dqLoser), "premise: the twins' losers are the same seed").toBe(wdRig.entrants.indexOf(wdLoser));
+      await patchEntrant(dqRig.auth, dqLoser, { status: "disqualified" });
+      await withdrawEntrantCascade(wdRig.auth, wdLoser);
+      expect((await getEntrant(dqRig.auth, dqLoser)).status).toBe("disqualified");
+      expect((await getEntrant(wdRig.auth, wdLoser)).status).toBe("withdrawn");
+
+      // The stored payload: the cascade's own — her ENTRANT id, reason `withdrew` (C12: never `disqualified`).
+      const dqPayload = await cascadeForfeit(dqBoard.id);
+      const wdPayload = await cascadeForfeit(wdBoard.id);
+      expect(dqPayload, "the DQ's forfeit names her entrant, reason withdrew").toEqual({ by: dqLoser, reason: WITHDREW });
+      expect(wdPayload, "the withdrawal's, the same shape").toEqual({ by: wdLoser, reason: WITHDREW });
+
+      // The words: the disqualification says so; the withdrawal keeps its own (the negative pair).
+      expect(await consoleLine(dqRig.auth, dqBoard, dqPayload), "K12: the DQ walkover").toBe(DQ_WORDS);
+      expect(await consoleLine(wdRig.auth, wdBoard, wdPayload), "K12: the withdrawal walkover").toBe(WD_WORDS);
+
+      // The credit: the whole bracket, seed for seed, byte-equal between the twins — the walkover, its award, the seat
+      // it fed — so a DQ is credited exactly as a withdrawal (ruling 115) and nothing here moved it.
+      const dqBracket = await bracketBySeed(dqRig.stageId, dqRig.entrants);
+      const wdBracket = await bracketBySeed(wdRig.stageId, wdRig.entrants);
+      expect(dqBracket.length, "rows compared").toBeGreaterThan(0);
+      expect(JSON.stringify(dqBracket)).toBe(JSON.stringify(wdBracket));
+      const walked = dqBracket.find((r) => r.at === `${dqBoard.round_no}.${dqBoard.seq_in_round}`);
+      expect(walked, "the DQ's semi is the cascade's award").toEqual({
+        at: `${dqBoard.round_no}.${dqBoard.seq_in_round}`, status: "forfeited",
+        home: walked!.home, away: walked!.away,
+        outcome: { kind: "award", winner: walked!.home, loser: walked!.away, reason: WITHDREW },
+      });
     }, 120_000);
   }
 });

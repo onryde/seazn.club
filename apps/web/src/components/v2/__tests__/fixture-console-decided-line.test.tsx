@@ -213,12 +213,18 @@ describe("the console's decided line names its tag in full (audit 4.3)", () => {
 });
 
 // W3 T15 ruling 2 (controller, 2026-11-02): a disqualification runs the withdrawal cascade, which records
-// `core.forfeit{by: <her seat>, reason: "withdrew"}` on her open board. The console never labels her as having withdrawn:
-// the decided line keeps the walkover's "w/o" and names the reason in full as the DISQUALIFICATION, and the Activity
-// panel's row for that forfeit reads as the disqualification. Her status arrives on her side (`SideInfo.status`, the
-// fixture page's `getEntrant`). The withdrawal keeps today's words. Expected strings come from the en dictionary.
+// `core.forfeit{by: <her entrant id>, reason: "withdrew"}` on her open board. The console never labels her as having
+// withdrawn: the decided line keeps the walkover's "w/o" and names the reason in full as the DISQUALIFICATION, and the
+// Activity panel's row for that forfeit reads as the disqualification. Her status arrives on her side (`SideInfo.status`,
+// the fixture page's `getEntrant`). The withdrawal keeps today's words. Expected strings come from the en dictionary.
+//
+// W4 T18 (K12): the payload is the ENGINE's shape — `CoreForfeit.by` is the forfeiting ENTRANT (`EntrantId`, engine
+// core/events.ts), and the cascade writes her id (driven 2026-11-07: `{"by": "<entrant uuid>", "reason": "withdrew"}`
+// read back from score_events). This test used to feed `{by: "home"}`, a payload no writer produces, and the console's
+// seat-keyed set matched it — so the Activity row read "Withdrawal recorded" for every real disqualification while this
+// file stayed green.
 describe("a disqualified entrant's cascade walkover: the console says disqualified, never withdrew (W3 T15 ruling 2)", () => {
-  const FORFEIT = [ev("ev-1", 1, "core.forfeit", { by: "home", reason: "withdrew" })];
+  const FORFEIT = [ev("ev-1", 1, "core.forfeit", { by: HOME.id, reason: "withdrew" })];
   const award = { kind: "award", winner: AWAY.id, loser: HOME.id, reason: "withdrew" };
   const render = (status: string | undefined) =>
     renderToStaticMarkup(
