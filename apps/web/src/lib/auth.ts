@@ -4,7 +4,8 @@ import { cookies } from "next/headers";
 import { sql } from "@/lib/db";
 import { cacheGet, cacheSet, cacheDelPattern } from "@/lib/cache";
 import type { Organization, OrgMembership, OrgRole, User } from "@/lib/types";
-import { AuthError, PaymentRequiredError } from "@/lib/errors";
+import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
+import { QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
 import { getLimit, orgPlanKey } from "@/lib/entitlements";
 import { orgAddonForPlan } from "@/lib/org-addons";
 import { grantMonthly, walletIdFor } from "@/lib/credits";
@@ -66,6 +67,10 @@ function secretKey(): Uint8Array {
 
 /** Issue a signed session cookie for the given user id. */
 export async function createSession(userId: string): Promise<void> {
+  // The quick-match system user (V492) can never sign in (quick-match spec §7.1). Every door that signs a person in
+  // (magic-link consume, verify-email, Google, the claim and invite accepts, the funnel claim, staff impersonation) ends
+  // here, and this is the only place a session is signed, so one refusal covers them all, a door added later included.
+  if (userId === QUICK_MATCH_SYSTEM_USER_ID) throw new HttpError(403, "system user");
   const token = await new SignJWT({ uid: userId })
     .setProtectedHeader({ alg: SESSION_ALGORITHM })
     .setIssuedAt()
