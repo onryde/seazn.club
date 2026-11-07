@@ -2395,7 +2395,7 @@
   "bracket.unavailable": "Estos partidos no se pueden dibujar como un cuadro",
   "bracket.appearsOnceGenerated": "El cuadro aparece cuando se generan los partidos",
   "knockout.refusal.BYE_LINE_NOT_PLACEABLE": "Un descanso no se juega, así que nunca ocupa una pista ni un horario.",
-  "knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE": "Un sorteo confirmado no se puede deshacer. Vuelve a calcular la propuesta en su lugar.",
+  "knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE": "Este sorteo está confirmado y no se puede deshacer.",
   "knockout.refusal.STAGE_HAS_UNDECIDED_FIXTURES": "Este cuadro todavía tiene partidos sin resultado. Termínalos o resuélvelos primero.",
   "stage.err.swissRoundsRequired": "Una fase suiza necesita un número de rondas antes de poder guardarse. Pon Rondas en 1 o más y vuelve a aplicar.",
   "swiss.refusal.SWISS_ADHOC_REFUSED": "El sistema empareja las rondas suizas. Añade los amistosos en otra fase.",

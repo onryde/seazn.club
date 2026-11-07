@@ -88,6 +88,7 @@ import { ApiV1Error } from "@/lib/client-v1";
 import { JOINT_UNDO_SUPERSEDED_CODE } from "@/lib/joint-undo";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
+import { KNOCKOUT_REFUSALS, knockoutRefusalKey, type KnockoutRefusalCode } from "@/lib/knockout-refusals";
 import { SWISS_REFUSALS, swissRefusalKey, type SwissRefusalCode } from "@/lib/swiss-refusals";
 import type { AiParsePreviewResponse } from "@/server/api-v1/schemas";
 import { AiCompetitionConsole, JointReviewStep, type JointDivision } from "../ai-competition-console";
@@ -740,6 +741,34 @@ describe("the review step is wired to the console's own state", () => {
     expect(codes, "anti-vacuity: the three Undo refusals are among them").toEqual(
       expect.arrayContaining(["SWISS_UNDO_ROUND_STARTED", "SWISS_LATE_ENTRY_NOT_UNDOABLE", "SWISS_ROUNDS_CHANGE_NOT_UNDOABLE"]),
     );
+  });
+
+  // W4 B1b review finding 2: the knockout family reaches this card too. Since W4 T5 a division's rewind stops at a confirmed
+  // draw (history.ts `UNDO_BARRIER_TYPES.seed_confirmed` → `knockoutRefusal("SEED_CONFIRM_NOT_UNDOABLE")`), and the joint Undo
+  // is a `restoreCheckpoint` per division, so that code lands in `failed[]`. Swept over every knockout code, as the Swiss
+  // case above is; the server's sentence is a sentinel for the same reason.
+  it("says every knockout refusal in the reader's own copy, never the server's sentence", async () => {
+    const codes = Object.keys(KNOCKOUT_REFUSALS) as KnockoutRefusalCode[];
+    let checked = 0;
+    for (const code of codes) {
+      const LOCAL = enText[knockoutRefusalKey(code)];
+      expect(typeof LOCAL, `${knockoutRefusalKey(code)} is missing from en/ui.json`).toBe("string");
+      const SERVER = `server sentence for ${code}`;
+      const ctx = await applied(() => ({
+        restored: [{ division_id: "d1", watermark: 3, steps: 1 }],
+        failed: [{ division_id: "d2", reason: SERVER, code }],
+        ok: false,
+      }));
+      ctx.undo();
+      await flush();
+      const html = renderToStaticMarkup(typed(ctx.island.tree(), JointReviewStep));
+      expect(html, `${code}: the division is still named`).toContain("Under 14s");
+      expect(html, `${code}: the refusal is not said in the reader's language`).toContain(esc(LOCAL!));
+      expect(html, `${code}: the server's sentence leaked into a translated card`).not.toContain(SERVER);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every knockout code was rendered").toBe(codes.length);
+    expect(codes, "anti-vacuity: the Undo barrier is among them").toContain("SEED_CONFIRM_NOT_UNDOABLE");
   });
 
   it("still shows an unrecognised refusal's own message, rather than swallowing it", async () => {

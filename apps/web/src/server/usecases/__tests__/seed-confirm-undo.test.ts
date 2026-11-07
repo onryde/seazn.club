@@ -3,8 +3,8 @@
 // never recorded. History knew nothing of it, so an Undo after the confirm inverted the step BEFORE it: the bracket's own
 // day-one generation, deleting the seeded draw (and a checkpoint restore, a loop of Undos, did the same). The confirm now
 // appends a `seed_confirmed` ledger row — an undo barrier like an organiser's late entry (history.ts `UNDO_BARRIER_TYPES`)
-// — and Undo, Redo and Restore refuse to step across it by name: SEED_CONFIRM_NOT_UNDOABLE, 409, "A confirmed draw can't
-// be undone. Recompute the proposal instead." (plan Task 5; the code, status and sentence are the plan's, typed here).
+// — and Undo, Redo and Restore refuse to step across it by name: SEED_CONFIRM_NOT_UNDOABLE, 409, "This draw is confirmed
+// and can't be undone." (plan Task 5's code and status; the sentence is B1b fix round 1 I1's, since no product path re-opens a confirmed draw).
 //
 // Every expected seat is read BEFORE the step under test, never from the code under test; every refusal is asserted
 // whole, with the rows and the ledger it must leave untouched.

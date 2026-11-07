@@ -72,10 +72,12 @@ describe("KNOCKOUT_REFUSALS (W4 app-A)", () => {
     });
   });
 
-  it("SEED_CONFIRM_NOT_UNDOABLE: 409 (a state of the division, resolved another way), with the plan's sentence", () => {
+  it("SEED_CONFIRM_NOT_UNDOABLE: 409, and it names no recovery (B1b fix round 1, I1: no product path re-opens a confirmed draw)", () => {
+    // The plan's second sentence, "Recompute the proposal instead", sent the organiser to an action the product refuses: once a proposal is
+    // confirmed, Recompute answers 409 SEEDING_ALREADY_CONFIRMED forever, and no writer moves a proposal out of `confirmed`.
     expect(KNOCKOUT_REFUSALS.SEED_CONFIRM_NOT_UNDOABLE).toEqual({
       status: 409,
-      en: "A confirmed draw can't be undone. Recompute the proposal instead.",
+      en: "This draw is confirmed and can't be undone.",
       key: "knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE",
     });
   });

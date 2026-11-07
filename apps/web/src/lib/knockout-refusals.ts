@@ -35,7 +35,7 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
   },
   SEED_CONFIRM_NOT_UNDOABLE: {
     status: 409,
-    en: "A confirmed draw can't be undone. Recompute the proposal instead.",
+    en: "This draw is confirmed and can't be undone.",
     key: "knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE",
   },
   STAGE_HAS_UNDECIDED_FIXTURES: {

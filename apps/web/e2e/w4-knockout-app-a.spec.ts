@@ -343,7 +343,7 @@ test.describe("K1 Undo refuses across a confirmed draw", () => {
     );
     await undo.click();
     expect((await answered).status(), "the Undo is refused").toBe(409);
-    await expect(page.getByTestId("history-error")).toHaveText("A confirmed draw can't be undone. Recompute the proposal instead.", {
+    await expect(page.getByTestId("history-error")).toHaveText("This draw is confirmed and can't be undone.", {
       timeout: 20_000,
     });
     expect((await plateRows()).map((f) => [f.id, f.home_entrant_id, f.away_entrant_id]), "the Plate keeps every seat").toEqual(seatsBefore);
