@@ -28,6 +28,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, withDb } from "../helpers";
 import { releaseSettingsOrg, seedCompetition, seedSettingsOrg, sponsorsUrl, type SeededOrg } from "../settings-support";
 import { reportLinkPath } from "../../src/lib/sponsor-report";
+import { routes } from "../../src/lib/routes";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
 
 const DIR = process.env.SPONSOR_CAPTURE_DIR;
@@ -80,7 +81,7 @@ test.beforeAll(async ({ request }) => {
   expect(fixtureIds.length, "premise: two entrants seat one fixture").toBe(1);
   const fixtureId = fixtureIds[0]!;
   const divRead = await apiJson<{ slug: string }>(request, `/api/v1/divisions/${div.data!.id}`);
-  matchPath = `/shared/${org.slug}/${comp.slug}/${divRead.data!.slug}/fixtures/${fixtureId}`;
+  matchPath = routes.publicFixture(org.slug, comp.slug, divRead.data!.slug, fixtureId);
 
   // One sponsor per tier, the title's name the long one; the title and gold ticked onto the stream; the dial Normal.
   const ids: Record<string, string> = {};

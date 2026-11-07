@@ -23,6 +23,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { TAG, activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, withDb } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { SPONSOR_SHORT_CODE_ALPHABET, SPONSOR_SHORT_CODE_MAX_LENGTH } from "../src/lib/sponsor-short-code";
+import { routes } from "../src/lib/routes";
 
 const SPONSOR_HOST = "sponsor-s10.example";
 /** A realistic long title sponsor (AGENTS.md: a 43-character name is what found the last phone overflow). */
@@ -75,7 +76,7 @@ async function rig(page: Page): Promise<Rig> {
   return {
     orgId: org.id,
     fixtureId: fixtureIds[0]!,
-    publicPath: `/shared/${org.slug}/${comp.data!.slug}/${div.data!.slug}/fixtures/${fixtureIds[0]}`,
+    publicPath: routes.publicFixture(org.slug, comp.data!.slug, div.data!.slug, fixtureIds[0]!),
     titleId,
     goldId,
   };
