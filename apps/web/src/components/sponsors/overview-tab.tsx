@@ -92,14 +92,16 @@ export function OverviewTab(props: OverviewTabProps) {
   /** One number with its label: a labelled line on a phone card, a right-aligned cell under the header from `md`. On the
    *  phone line the label wraps and a value never shrinks (`shrink-0`), so a long label cannot squeeze a value out. The
    *  Coming soon legend (`caption`) is the one exception: a caption, not a value, so it may wrap, right-aligned under
-   *  itself - nl's "Binnenkort beschikbaar" does not fit beside its label on one line at 320 (fix round 1, I-new). */
+   *  itself - nl's "Binnenkort beschikbaar" does not fit beside its label on one line at 320 (fix round 1, I-new). It keeps
+   *  its longest word as its floor (no `min-w-0`): with none, flex shrinks it in proportion to its width and es
+   *  "Próximamente" crosses the card's border at 320 (ci-fix review I1). */
   const stat = (key: string, field: string, label: string, value: React.ReactNode, accent = false, caption = false) => (
     <div className="flex min-w-0 items-baseline justify-between gap-3 md:block md:text-right">
       <dt className="text-slate-500 md:sr-only" data-row={key}>
         {label}
       </dt>
       <dd
-        className={`${caption ? "min-w-0 text-right" : "shrink-0"} font-semibold tabular-nums ${accent ? "text-purple-700" : "text-slate-800"}`}
+        className={`${caption ? "text-right" : "shrink-0"} font-semibold tabular-nums ${accent ? "text-purple-700" : "text-slate-800"}`}
         data-testid={`sponsor-overview-${field}`}
         data-row={key}
       >

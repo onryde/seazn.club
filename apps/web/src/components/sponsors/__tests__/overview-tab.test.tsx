@@ -23,6 +23,7 @@
 //   U5  competition note  drop `period.kind === "competition" &&`              -> "the competition-click footnote..." (fix round 1, m4)
 //   U6  legend dropped    null viewers draw nothing instead of the legend      -> "viewers with no number", "a row reads its own numbers"
 //   U7  legend unwrapped  the Coming soon dd keeps `shrink-0`                  -> "the phone line" (nl, fix round 1 I-new)
+//   U8  legend floorless  the Coming soon dd takes `min-w-0`                   -> "the phone line" (es, ci-fix review I1)
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { dirname, join } from "node:path";
@@ -378,6 +379,13 @@ describe("the phone line - the viewers label and its Coming soon legend fit a 32
     expect(dd("s2"), "a number never shrinks off its line").toContain("shrink-0");
     // s1's viewers are null: the legend. With `shrink-0` it is one unbreakable line; without it, only its longest word is.
     const legendWraps = !dd("s1").includes("shrink-0");
+    // The floors this model prices: a flex item with no `min-w-0` cannot shrink below its longest word. With `min-w-0` the
+    // legend's floor is 0, flex shrinks it in proportion to its width, and es "Próximamente" lands narrower than itself and
+    // crosses the border (ci-fix review I1) - the sum below would no longer bound the line.
+    expect(dd("s1"), "the legend keeps its longest word as its floor").not.toContain("min-w-0");
+    const labels = m.island.tree().filter((e) => e.type === "dt" && propsOf(e)["data-row"] === "s1");
+    expect(labels.length, "the row's four labels").toBe(4);
+    for (const dt of labels) expect(cls(dt), "a label keeps its longest word as its floor").not.toContain("min-w-0");
     let checked = 0;
     const over: string[] = [];
     for (const locale of LOCALES) {
