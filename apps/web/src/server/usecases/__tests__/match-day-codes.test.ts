@@ -12,6 +12,7 @@ vi.mock("next/headers", () => ({
 
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
   listMatchDayCodes,
@@ -27,7 +28,8 @@ import { POST as generatePost } from "@/app/api/v1/stages/[id]/generate/route";
 
 // Every mint seals (DEVICE_LINK_KEK). A throwaway key of this file's own, never the developer's .env.local one: CI's
 // unit job has no DEVICE_LINK_KEK at all. Never printed; restored in afterAll.
-vi.stubEnv("DEVICE_LINK_KEK", randomBytes(32).toString("hex"));
+const KEK = randomBytes(32).toString("hex");
+vi.stubEnv("DEVICE_LINK_KEK", KEK);
 // The URL is built on the site origin; pinned here so a developer's http://localhost .env.local does not decide it.
 vi.stubEnv("OAUTH_BASE_URL", "https://md.test.seazn.club");
 
@@ -199,6 +201,81 @@ describe.skipIf(!HAS_DB)("match day codes", () => {
     // A code whose day is over leaves the list.
     vi.setSystemTime(new Date("2026-11-08T23:00:00.000Z"));
     expect(await listMatchDayCodes(day.auth, day.comp.id)).toEqual([]);
+  });
+
+  // MD-1 review I2: the list re-shows a credential, so it shows only an envelope that opens to THIS row's token. A
+  // swapped or restored token_enc (the envelope has no AAD) would otherwise show the desk a working QR of another code
+  // under this row's scope and day; one envelope that will not open would otherwise 500 the whole list.
+  it("list skips a row whose envelope opens to another code's token, and logs it without the token", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date(T0) });
+    const narrow = await mintMatchDayCode(day.auth, day.comp.id, { scope: { kind: "competition" }, canApprove: false });
+    const wide = await mintMatchDayCode(day.auth, day.comp.id, { scope: { kind: "competition" }, canApprove: true });
+    await sql`update match_day_codes set token_enc = (select token_enc from match_day_codes where id = ${wide.row.id})
+               where id = ${narrow.row.id}`;
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const listed = await listMatchDayCodes(day.auth, day.comp.id);
+      expect(listed.map((c) => c.id)).toEqual([wide.row.id]);
+      expect(listed.filter((c) => c.url === wide.url)).toHaveLength(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]![0]).toMatchObject({ codeId: narrow.row.id, competitionId: day.comp.id });
+      const logged = JSON.stringify(warn.mock.calls);
+      expect(logged).not.toContain(tokenOf(wide.url));
+      expect(logged).not.toContain(tokenOf(narrow.url));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("list skips a row whose envelope will not open, and still lists the rest", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date(T0) });
+    const broken = await mintMatchDayCode(day.auth, day.comp.id, { scope: { kind: "competition" }, canApprove: false });
+    const good = await mintMatchDayCode(day.auth, day.comp.id, { scope: { kind: "competition" }, canApprove: false });
+    // One flipped bit in the sealed body: the envelope is well-formed and its GCM tag no longer authenticates.
+    await sql`update match_day_codes
+                 set token_enc = set_byte(token_enc, length(token_enc) - 1, get_byte(token_enc, length(token_enc) - 1) # 1)
+               where id = ${broken.row.id}`;
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const listed = await listMatchDayCodes(day.auth, day.comp.id);
+      expect(listed.map((c) => [c.id, c.url])).toEqual([[good.row.id, good.url]]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]![0]).toMatchObject({ codeId: broken.row.id, competitionId: day.comp.id });
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(tokenOf(broken.url));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("list without DEVICE_LINK_KEK is still 503, not an empty list", async () => {
+    await mintMatchDayCode(day.auth, day.comp.id, { scope: { kind: "competition" }, canApprove: false });
+    vi.stubEnv("DEVICE_LINK_KEK", "");
+    try {
+      expect(await statusOf(listMatchDayCodes(day.auth, day.comp.id))).toBe(503);
+    } finally {
+      vi.stubEnv("DEVICE_LINK_KEK", KEK);
+    }
+  });
+
+  // MD-1 review I1: §3 logs every link opened and every approval against its code. The log is the only record of what
+  // a printed one-day credential did, so it outlives the fixture or stage it names (a regenerate replaces exactly the
+  // stage an approval was made on).
+  it("a use row outlives its fixture and its stage", async () => {
+    const { row } = await mintMatchDayCode(day.auth, day.comp.id, { scope: { kind: "competition" }, canApprove: true });
+    const fixtureId = day.comp.fixtures[0]!.id;
+    await logMatchDayUse(row.id, { kind: "open", fixtureId });
+    await logMatchDayUse(row.id, { kind: "approve", stageId: day.comp.stageId, approval: "swiss" });
+    await sql`delete from fixtures where id = ${fixtureId}`;
+    await sql`delete from stages where id = ${day.comp.stageId}`;
+    const [gone] = await sql<{ n: number }[]>`
+      select (select count(*) from fixtures where id = ${fixtureId})::int + (select count(*) from stages where id = ${day.comp.stageId})::int as n`;
+    expect(gone!.n, "the fixture and the stage are really gone").toBe(0);
+    const uses = await sql<{ kind: string; fixture_id: string | null; stage_id: string | null }[]>`
+      select kind, fixture_id, stage_id from match_day_code_uses where code_id = ${row.id} order by id`;
+    expect(uses).toEqual([
+      { kind: "open", fixture_id: fixtureId, stage_id: null },
+      { kind: "approve", fixture_id: null, stage_id: day.comp.stageId },
+    ]);
   });
 
   it("matchDayActor acts as the issuer, by the code, with no role", async () => {

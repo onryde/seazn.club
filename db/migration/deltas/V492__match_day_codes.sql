@@ -43,12 +43,16 @@ create index on match_day_codes (competition_id, created_at desc);
 create index on match_day_codes (org_id, created_at);
 
 -- Every match a code opened and every approval it made (§3 "Every link opened and every approval is logged").
+-- An audit trail of what a printed one-day credential did, so it outlives what it names (MD-1 review I1): fixture_id
+-- and stage_id are plain ids with no foreign key, as V430 keeps issued_by. A format change, a stage regenerate or a
+-- fixture delete leaves the row in place, naming an id that is gone. The log goes only with its code (code_id
+-- cascades), and a code goes only with its competition or its org.
 create table match_day_code_uses (
   id         bigint generated always as identity primary key,
   code_id    uuid not null references match_day_codes(id) on delete cascade,
   kind       text not null check (kind in ('open','approve')),
-  fixture_id uuid null references fixtures(id) on delete cascade,
-  stage_id   uuid null references stages(id) on delete cascade,
+  fixture_id uuid null,
+  stage_id   uuid null,
   approval   text null check (approval in ('swiss','draw')),
   at         timestamptz not null default now(),
   check ((kind = 'open') = (fixture_id is not null)),
