@@ -582,7 +582,7 @@
   "sponsors.overview.deletedFootnote": "Un sponsor supprimé garde ses affichages. Ses clics ont été supprimés avec lui, d'où le tiret.",
   "sponsors.overview.notAvailable": "non disponible",
   "sponsors.overview.competitionClicksFootnote": "Les clics sur le tableau des sponsors d'une page de compétition ne sont liés à aucun match : ils ne comptent que dans {thisYear} et {last30}. Les clics depuis les pages de match et les codes du direct comptent ici.",
-  "sponsors.viewers.comingSoon": "Bientôt",
+  "sponsors.viewers.comingSoon": "Bientôt disponible",
   "sponsors.share.title": "Lien du rapport pour {name}",
   "sponsors.share.help": "Toute personne disposant du lien peut voir les chiffres de ce sponsor pour ces dates sans se connecter. Révoquez-le pour qu'il ne s'ouvre plus.",
   "sponsors.share.from": "Du",

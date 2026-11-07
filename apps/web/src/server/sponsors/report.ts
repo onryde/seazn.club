@@ -12,7 +12,8 @@ import "server-only";
 //   - Link clicks  = count(*) of `sponsor_clicks` in the period, every source. `sponsors.click_count` is NOT read: it is an
 //                    all-time counter that predates the click rows and cannot be cut to a period. Clicks are not people — the
 //                    /s/ route drops automated previews and repeat taps inside 30 s (S10), nothing more.
-//   - Viewer impressions / peak viewers = null until Y1 (YouTube Connect's viewer table) fills them.
+//   - Viewer impressions / peak viewers = null: viewer counts (PR B) are deferred (owner ruling 2026-11-01), and the pages
+//     show "Coming soon" for them.
 //   - The PERIOD (lib/sponsor-report.ts): half-open UTC windows from `now` for "This year" / "Last 30 days"; "One competition"
 //     is every airing and click whose FIXTURE is in it, with no time bound, so a click with no fixture is not counted there.
 //   - A DELETED sponsor (R16, Review Focus 4): its airings survive with sponsor_id null and their `sponsor_name` snapshot, so it

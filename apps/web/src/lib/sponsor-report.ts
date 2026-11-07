@@ -22,7 +22,7 @@ export interface SponsorOverviewRow {
   name: string;
   timesShown: number;
   onScreenMs: number;
-  /** Null in PR A (Y1 fills it): shown as a dash, never 0. */
+  /** Null: viewer counts (PR B) are deferred (owner ruling 2026-11-01). Shown as "Coming soon", never a dash or 0. */
   viewerImpressions: number | null;
   peakViewers: number | null;
   /** Null for a deleted sponsor: its click rows were deleted with it, so the count is unknown, not zero. */
@@ -125,7 +125,7 @@ export interface SponsorReportShowing {
   /** A SIGNED url for the programme frame (private bucket, TTL at most an hour), never the bare storage path; null when there
    *  is no frame, or it could not be signed - the page draws a neutral placeholder. */
   frameUrl: string | null;
-  /** Null in PR A (Y1 fills it): shown as a dash. */
+  /** Null: viewer counts (PR B) are deferred (owner ruling 2026-11-01). Not drawn per showing. */
   viewers: number | null;
   /** Null in PR A (Y2: it needs the broadcast's actual start time). */
   watchUrl: string | null;
@@ -145,7 +145,7 @@ export interface SponsorReport {
   timesShown: number;
   /** Σ time on screen of the period's CLOSED showings. */
   onScreenMs: number;
-  /** Null in PR A (Y1 fills it): shown as a dash, never 0. */
+  /** Null: viewer counts (PR B) are deferred (owner ruling 2026-11-01). Shown as "Coming soon", never a dash or 0. */
   viewerImpressions: number | null;
   /** Spec §5.2's "visits from the stream": the sponsor's `sponsor_clicks` with source `stream` in the period - never the
    *  all-sources Overview number. */
