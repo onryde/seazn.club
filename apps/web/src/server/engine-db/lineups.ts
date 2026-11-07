@@ -11,6 +11,12 @@ interface LineupRow {
   position_key: string | null;
   order_no: number | null;
   roles: string[] | null;
+  // Doubles serve order (S2-2 web finding #2; `lineups.pair_order`, V361). The
+  // pad's own read (`readLineup`, usecases/fixtures.ts) selects it and
+  // registry.tsx's `toLineupSlot` carries it; this SERVER fold did not, so a
+  // table tennis / badminton doubles fold named no serving person server-side
+  // while the scorer's screen did. Nullable: omitted from the slot when unset.
+  pair_order: number | null;
   // Shirt number (R8 sweep, WS-SQ). NOT a `lineups` column — it lives on
   // `entrant_members`, which is why both queries below reach it through a
   // LEFT join and why it is nullable twice over (undeclared number, or a
@@ -53,6 +59,9 @@ function buildLineup(entrantId: string, rows: readonly LineupRow[]): Lineup {
       // entirely for an undefined slot number. A carried `null` would be a
       // shape neither the engine nor the client fold ever produces.
       ...(r.squad_number != null ? { squadNumber: r.squad_number } : {}),
+      // Omitted when null, mirroring registry.tsx's `toLineupSlot` (and the
+      // engine's own `memberFromSlot`, which omits an undefined `pairOrder`).
+      ...(r.pair_order != null ? { pairOrder: r.pair_order } : {}),
     })),
   };
 }
@@ -69,12 +78,13 @@ export async function loadLineupPair(
 ): Promise<LineupPair> {
   const rows = await tx<LineupRow[]>`
     select l.entrant_id, l.person_id, l.slot, l.position_key, l.order_no, l.roles, l.role,
-           em.squad_number
+           l.pair_order, em.squad_number
     from lineups l
+    join persons p on p.id = l.person_id
     left join entrant_members em
       on em.entrant_id = l.entrant_id and em.person_id = l.person_id
     where l.fixture_id = ${fixtureId}
-    order by l.order_no nulls last, l.person_id
+    order by l.order_no nulls last, p.full_name, l.person_id
   `;
   return { home: buildLineup(homeEntrantId, rows), away: buildLineup(awayEntrantId, rows) };
 }
@@ -102,13 +112,14 @@ export async function loadLineupPairsForDivision(
   const rows = await tx<DivisionLineupRow[]>`
     select f.id as fixture_id, f.home_entrant_id, f.away_entrant_id,
            l.entrant_id, l.person_id, l.slot, l.position_key, l.order_no, l.roles, l.role,
-           em.squad_number
+           l.pair_order, em.squad_number
     from fixtures f
     join lineups l on l.fixture_id = f.id
+    join persons p on p.id = l.person_id
     left join entrant_members em
       on em.entrant_id = l.entrant_id and em.person_id = l.person_id
     where f.division_id = ${divisionId}
-    order by f.id, l.order_no nulls last, l.person_id
+    order by f.id, l.order_no nulls last, p.full_name, l.person_id
   `;
   // A plain array type, deliberately NOT `typeof rows` (postgres.js's
   // RowList carries query metadata a fresh `[]` cannot structurally satisfy).
