@@ -27,6 +27,7 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { apiJson, fixturePath, seedRosteredFixture, TAG, type RosteredFixture } from "../helpers";
 import { waitForHydration } from "../directory-kit";
+import { openMatchActions } from "../helpers/match-actions";
 
 const SHOTS = process.env.R7_SHOT_DIR ?? "/tmp/r7-shots";
 
@@ -110,6 +111,7 @@ test("R7 console: one ledger with provenance, a labelled band, handover beside t
   // The authority band exists, is labelled, and says what it costs.
   const band = page.locator('[data-role="match-actions"]');
   await expect(band).toHaveCount(1);
+  await openMatchActions(page); // closed behind its toggle from 768 px up
   await expect(band).toContainText(/cannot be undone/i);
 
   // Handover moved up beside the pad header — it used to be the last card on
