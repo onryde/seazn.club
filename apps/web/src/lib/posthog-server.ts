@@ -1,6 +1,7 @@
 import "server-only";
 import { PostHog } from "posthog-node";
-import { ORG_GROUP, type AnalyticsEvent } from "@/lib/analytics-events";
+import { EVENTS, ORG_GROUP, type AnalyticsEvent } from "@/lib/analytics-events";
+import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 
 // Server-side PostHog. Backend capture is the reliable path for revenue and
 // activation events (feature 1/2) — it doesn't depend on the browser staying
@@ -39,6 +40,10 @@ export interface CaptureArgs {
  * PostHog isn't configured, so call sites stay unconditional.
  */
 export async function captureServer(args: CaptureArgs): Promise<void> {
+  // Quick match (pre-flight D11): a guest's create runs the organizer use cases under the one system org, and each fires
+  // its organizer event. Those are not a club's funnel, so every event for that org is dropped here, at the one door,
+  // except the quick match's own.
+  if (args.orgId === QUICK_MATCH_SYSTEM_ORG_ID && args.event !== EVENTS.QUICK_MATCH_CREATED) return;
   const c = getClient();
   if (!c) return;
   try {

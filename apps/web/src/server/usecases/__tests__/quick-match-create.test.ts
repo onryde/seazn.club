@@ -12,14 +12,17 @@
 import { randomBytes as kekBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { EVENTS } from "@/lib/analytics-events";
 import { sql, withTenant } from "@/lib/db";
+import { captureServer } from "@/lib/posthog-server";
 import { isBye } from "@/lib/run-sheet-groups";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import type { EntrantKind } from "@seazn/engine/sport";
 import { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { listDivisionFixtures } from "../fixtures";
-import { createQuickMatchTree, sealNewHomeToken, systemAuth } from "../quick-match-create";
+import { createQuickMatch, createQuickMatchTree, sealNewHomeToken, systemAuth } from "../quick-match-create";
 import { quickMatchPreview } from "../quick-match-preview";
+import { offerFor } from "../quick-match-sports";
 import { hashHomeToken } from "../quick-match-tokens";
 import type { FixtureRow } from "../stages";
 import { seedOrg } from "./_seed";
@@ -31,6 +34,11 @@ vi.mock("@/lib/posthog-server", async (orig) => ({
   ...(await orig<typeof import("@/lib/posthog-server")>()),
   captureServer: vi.fn(),
 }));
+// The real offer, through a spy: Part B's Review Focus 5 case answers one call with an offer that refuses knockout.
+vi.mock("../quick-match-sports", async (orig) => {
+  const real = await orig<typeof import("../quick-match-sports")>();
+  return { ...real, offerFor: vi.fn(real.offerFor) };
+});
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const SYSTEM_ORG = QUICK_MATCH_SYSTEM_ORG_ID;
@@ -196,5 +204,91 @@ describe.skipIf(!HAS_DB)("createQuickMatchTree (Part A: the unguarded tree)", ()
     expect(CreateQuickMatch.safeParse(input()).success).toBe(false);
     expect(CreateQuickMatch.safeParse({ ...input(), kind: "doubles" }).success).toBe(false);
     expect(CreateQuickMatch.safeParse({ ...input(), kind: "pair" }).success).toBe(true);
+  });
+});
+
+describe.skipIf(!HAS_DB)("createQuickMatch (Part B: the guarded wrapper)", () => {
+  const base = () => ({ ...input(), kind: "pair" as const });
+  const reachedTree = () => { throw new Error("reached the tree"); };
+
+  it("refuses with 503 before it reads or writes anything when DEVICE_LINK_KEK is unset (Review Focus 4, E2)", async () => {
+    const visitorHash = v();
+    for (let i = 0; i < 5; i++) await createQuickMatch(base(), { visitorHash });   // at the cap: a seal placed after the count answers 429, not 503
+    const b = base();
+    vi.stubEnv("DEVICE_LINK_KEK", "");
+    try {
+      await expect(createQuickMatch(b, { visitorHash, _failBeforeGenerateForTests: reachedTree }))
+        .rejects.toMatchObject({ status: 503, code: "DEVICE_LINK_KEK_MISSING" });
+    } finally {
+      vi.stubEnv("DEVICE_LINK_KEK", KEK);
+    }
+    expect(await sql`select 1 from competitions where org_id = ${SYSTEM_ORG} and name = ${b.name}`).toHaveLength(0);
+  });
+
+  it("refuses the 6th alive match for one visitor with 429 QUICK_MATCH_TOO_MANY_ALIVE, before the tree", async () => {
+    const visitorHash = v();
+    for (let i = 0; i < 5; i++) await createQuickMatch(base(), { visitorHash });
+    // The early count answers before the tree; without it, the hook fires first and the rejection is "reached the tree".
+    await expect(createQuickMatch(base(), { visitorHash, _failBeforeGenerateForTests: reachedTree }))
+      .rejects.toMatchObject({ status: 429, code: "QUICK_MATCH_TOO_MANY_ALIVE" });
+  });
+
+  it("two concurrent creates at 4 alive: exactly one succeeds (the locked recount, B5f)", async () => {
+    const visitorHash = v();
+    for (let i = 0; i < 4; i++) await createQuickMatch(base(), { visitorHash });
+    const both = await Promise.allSettled([createQuickMatch(base(), { visitorHash }), createQuickMatch(base(), { visitorHash })]);
+    expect(both.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(both.find((r) => r.status === "rejected")).toMatchObject({ reason: { status: 429, code: "QUICK_MATCH_TOO_MANY_ALIVE" } });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from quick_matches where visitor_hash = ${visitorHash}`;
+    expect(n).toBe(5);
+  });
+
+  it("refuses knockout for a variant whose rules can end level, even when asked directly (Review Focus 5)", async () => {
+    // Engine 3.0.2: no OFFERED variant's knockout can end level (each plays its sport's preset deciders to a winner; the
+    // only `false` in the catalog is cricket's, which the probe excludes), so no real offer reaches this guard today:
+    // quick-match-offer.test.ts pins both directions of the declaration across every variant. Here the offer that
+    // says no is the guard's input, and the real offer beside it says yes, so only the guard can refuse.
+    const real = await offerFor("badminton", BADMINTON_V);
+    expect(real).toMatchObject({ offered: true, knockoutAllowed: true });
+    vi.mocked(offerFor).mockResolvedValueOnce({ ...real, knockoutAllowed: false });
+    await expect(createQuickMatch({ ...base(), format: "knockout" }, { visitorHash: v(), _failBeforeGenerateForTests: reachedTree }))
+      .rejects.toMatchObject({ status: 422, code: "QUICK_MATCH_FORMAT_NOT_OFFERED" });
+  });
+
+  it("refuses knockout with two sides (C16)", async () => {
+    expect((await offerFor("badminton", BADMINTON_V)).knockoutAllowed).toBe(true);   // so only the side count can refuse here
+    await expect(createQuickMatch({ ...base(), format: "knockout", sides: sides.slice(0, 2) }, { visitorHash: v(), _failBeforeGenerateForTests: reachedTree }))
+      .rejects.toMatchObject({ status: 422, code: "QUICK_MATCH_FORMAT_NOT_OFFERED" });
+  });
+
+  it("refuses a sport the probe excluded with QUICK_MATCH_SPORT_NOT_OFFERED", async () => {
+    const [g] = await sql<{ key: string }[]>`
+      select key from sport_variants where sport_key = 'generic' and is_system and org_id is null order by key limit 1`;   // excluded by the probe (Task 6, B6e)
+    await expect(createQuickMatch({ ...base(), sport_key: "generic", variant_key: g!.key, kind: "team" }, { visitorHash: v(), _failBeforeGenerateForTests: reachedTree }))
+      .rejects.toMatchObject({ status: 422, code: "QUICK_MATCH_SPORT_NOT_OFFERED" });
+  });
+
+  it("refuses a kind the sport does not take with QUICK_MATCH_KIND_NOT_OFFERED (D2)", async () => {
+    const { offered, kinds } = await offerFor("badminton", BADMINTON_V);
+    expect(offered).toBe(true);   // so the sport check cannot be what refuses
+    const missing = (["individual", "pair", "team"] as const).find((k) => !kinds.includes(k));
+    expect(missing, "badminton takes every kind: this test has nothing to witness").toBeDefined();
+    await expect(createQuickMatch({ ...base(), kind: missing! }, { visitorHash: v(), _failBeforeGenerateForTests: reachedTree }))
+      .rejects.toMatchObject({ status: 422, code: "QUICK_MATCH_KIND_NOT_OFFERED" });
+  });
+
+  it("a create emits quick_match_created once, carrying no name, email or token (D11)", async () => {
+    const cap = vi.mocked(captureServer);
+    cap.mockClear();
+    const b = { ...base(), email: "guest@example.com" };
+    const out = await createQuickMatch(b, { visitorHash: v() });
+    const ours = cap.mock.calls.map(([a]) => a).filter((a) => a.event === EVENTS.QUICK_MATCH_CREATED);
+    expect(ours).toHaveLength(1);
+    expect(ours[0]).toMatchObject({
+      orgId: SYSTEM_ORG,
+      properties: { quick_match_id: out.id, sport_key: "badminton", variant_key: BADMINTON_V, kind: "pair", format: "league", sides: 4, plays: 1 },
+    });
+    const wire = JSON.stringify(ours[0]);
+    for (const secret of [b.name, b.email, out.token]) expect(wire).not.toContain(secret);
   });
 });

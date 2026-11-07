@@ -11,6 +11,9 @@ import "server-only";
 // Two layers (pre-flight A9):
 //   - `createQuickMatchTree` is UNGUARDED: no offer, kind or format check. Its only callers are the offer probe
 //     (`__tests__/_quick-match-probe.ts`, which must not go through the offer it produces) and `createQuickMatch`.
+//   - `createQuickMatch` is GUARDED, and what a route calls: the home token sealed first, the per-visitor cap, the probe's
+//     offer (`offerFor`: sport × variant, the sport's kinds, the knockout offer), then the tree and the one analytics
+//     event (D11).
 //
 // The two-commit shape is §7.3's recorded deviation: the competition, division, stage and entrants are created by the
 // standard use cases, each in its own transaction (`withTenant` never nests), and the fixtures, the start, the status
@@ -19,7 +22,9 @@ import "server-only";
 // process crash between the commits leaves a private, unlisted competition with no `quick_matches` row, which plan 3's
 // sweep removes (pre-flight D1).
 import { sql, withTenant, type Tx } from "@/lib/db";
+import { EVENTS } from "@/lib/analytics-events";
 import { HttpError } from "@/lib/errors";
+import { captureServer } from "@/lib/posthog-server";
 import {
   QUICK_MATCH_ENDS_ON_DAYS,
   QUICK_MATCH_EXPIRY_DAYS,
@@ -36,6 +41,7 @@ import { createDivision } from "./divisions";
 import { createEntrants } from "./entrants";
 import { hardDeleteQuickMatchCompetition } from "./quick-match-delete";
 import { quickMatchPreview, quickMatchStageInput } from "./quick-match-preview";
+import { offerFor } from "./quick-match-sports";
 import { hashHomeToken, mintHomeToken, sealHomeToken } from "./quick-match-tokens";
 import { afterScheduleWrite, startDivisionInTx } from "./schedule";
 import { afterGenerateCommit, createStages, generateStageFixturesTx } from "./stages";
@@ -189,4 +195,69 @@ export async function createQuickMatchTree(
     });
     throw err;
   }
+}
+
+/**
+ * Create a guest's quick match: what plan 2's route calls. In this order, each step answering before the next runs:
+ *   0. the home token is minted, hashed and sealed BEFORE any read or write: a server without DEVICE_LINK_KEK refuses
+ *      503 DEVICE_LINK_KEK_MISSING having touched nothing, as device links seal before any write (E2, A4);
+ *   1. the early per-visitor count: QUICK_MATCH_MAX_ALIVE_PER_VISITOR alive already → 429 QUICK_MATCH_TOO_MANY_ALIVE,
+ *      before anything is built (the locked recount inside the tree is the race guard, B5f);
+ *   2. the offer: a sport × variant the probe did not prove → 422 SPORT_NOT_OFFERED; a kind the sport does not take →
+ *      422 KIND_NOT_OFFERED (D2); a knockout of a variant whose bracket could stall, or of two sides → 422
+ *      FORMAT_NOT_OFFERED (C23 with D10, C16);
+ *   3. the tree (`createQuickMatchTree`), which builds the whole match or nothing;
+ *   4. one `quick_match_created` event, carrying no name, email or token (D11).
+ */
+export async function createQuickMatch(
+  input: CreateQuickMatch,
+  ctx: { visitorHash: string; now?: Date; _failBeforeGenerateForTests?: () => void },
+): Promise<CreatedQuickMatch> {
+  const home = sealNewHomeToken();
+  const now = ctx.now ?? new Date();
+
+  if ((await alive(sql, ctx.visitorHash, now)) >= QUICK_MATCH_MAX_ALIVE_PER_VISITOR) throw tooManyAlive();
+
+  const { kind, ...rest } = input;
+  const offer = await offerFor(input.sport_key, input.variant_key);
+  if (!offer.offered) {
+    throw new HttpError(
+      422,
+      `${input.sport_key}/${input.variant_key} is not offered for quick matches`,
+      QUICK_MATCH_ERRORS.SPORT_NOT_OFFERED,
+    );
+  }
+  if (!offer.kinds.includes(kind)) {
+    throw new HttpError(422, `${input.sport_key} does not take '${kind}' sides`, QUICK_MATCH_ERRORS.KIND_NOT_OFFERED);
+  }
+  if (input.format === "knockout" && (!offer.knockoutAllowed || input.sides.length <= 2)) {
+    throw new HttpError(
+      422,
+      "a knockout is offered only for three or more sides, in a variant whose matches always produce a winner",
+      QUICK_MATCH_ERRORS.FORMAT_NOT_OFFERED,
+    );
+  }
+
+  const out = await createQuickMatchTree(rest, kind, {
+    visitorHash: ctx.visitorHash,
+    home,
+    now,
+    _failBeforeGenerateForTests: ctx._failBeforeGenerateForTests,
+  });
+
+  await captureServer({
+    event: EVENTS.QUICK_MATCH_CREATED,
+    distinctId: QUICK_MATCH_SYSTEM_USER_ID,
+    orgId: QUICK_MATCH_SYSTEM_ORG_ID,
+    properties: {
+      quick_match_id: out.id,
+      sport_key: input.sport_key,
+      variant_key: input.variant_key,
+      kind,
+      format: input.format,
+      sides: input.sides.length,
+      plays: input.plays,
+    },
+  });
+  return out;
 }
