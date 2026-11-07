@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { TAG, activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, divisionPath, expectNoHorizontalScroll, openBracket } from "./helpers";
+import { TAG, activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, divisionPath, expectNoHorizontalScroll, openBracket, overflowingIn } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 
 // W4 app A — the public bracket lane (batch B6b, Tasks 22 + 23). Whole file, never a -g slice (AGENTS.md rule 21).
@@ -48,11 +48,12 @@ async function crop(target: Locator | Page, name: string) {
 }
 
 /**
- * /present: bring the board to the bracket slide (titled with the stage's name), let its fade-in FINISH, and crop it.
+ * /present: bring the board to the bracket slide (titled with the stage's name), let its fade-in FINISH, run `check` on
+ * it (the layout checks belong to the slide being proven, not to whichever slide the board opened on), and crop it.
  * The board turns its own page every 9s (`SLIDE_MS`), so a shot is kept only if the bracket slide is still the one up
  * after it was taken; otherwise it tries again.
  */
-async function presentBracketSlide(page: Page, title: string, shot: string) {
+async function presentBracketSlide(page: Page, title: string, shot: string, check: () => Promise<void>) {
   const heading = page.locator(".animate-slide-in h2");
   for (let attempt = 0; attempt < 3; attempt++) {
     for (let i = 0; i < 4 && (await heading.textContent())?.trim() !== title; i++) await page.keyboard.press("ArrowRight");
@@ -61,6 +62,7 @@ async function presentBracketSlide(page: Page, title: string, shot: string) {
       const slide = document.querySelector(".animate-slide-in");
       return !!slide && slide.getAnimations().every((a) => a.playState === "finished");
     });
+    await check();
     const png = await page.screenshot({ fullPage: true });
     if ((await heading.textContent())?.trim() !== title) continue;
     if (process.env.B6B_SHOTS) writeFileSync(`${process.env.B6B_SHOTS}/${shot}.png`, png);
@@ -227,8 +229,17 @@ test.describe("ST-G7 the embed shows a finished bracket as a bracket", () => {
       const showBoard = page.getByTestId("kiosk-phone-card-show-board");
       if (await showBoard.isVisible()) await showBoard.click();
       await expect(page.locator("h2:visible").first(), `${w}: the board shows a slide`).toBeVisible({ timeout: STEP_MS });
-      await expectNoHorizontalScroll(page);
-      await presentBracketSlide(page, "Cup", `stg7-present-${w}`);
+      await presentBracketSlide(page, "Cup", `stg7-present-${w}`, async () => {
+        // The page check, on the settled bracket slide itself — unweakened.
+        await expectNoHorizontalScroll(page);
+        // AGENTS.md class 23: the tree scrolls inside the slide's own `overflow-x-auto` rail — a REACHABLE overflow,
+        // which is a feature; anything wider than its box that is not reachable (and not an ellipsis by design) is a clip.
+        const boxes = await overflowingIn(page, ".animate-slide-in", "div,span,a,p,h2", "the bracket slide is not in the DOM");
+        expect(boxes.clipped, `${w}: nothing on the bracket slide is clipped`).toEqual([]);
+        // The exemption is exercised, not assumed: a three-match tree is wider than a 320 phone, so there it must be
+        // the rail that scrolls (overflowingIn's `scrollable` is, by its split, only the auto/scroll kind).
+        if (w === 320) expect(boxes.scrollable.length, `${w}: the tree scrolls in its own rail (${boxes.scrollable.join("; ")})`).toBeGreaterThan(0);
+      });
     }
 
     // /present rotates its slides in the browser, so the slide LIST is read where the board receives it: its payload.
@@ -284,8 +295,10 @@ test.describe("ST-G26 a division whose final stage is a finished knockout crowns
     expect(final, "premise: the two pool winners meet in the final").toBeTruthy();
     await post(request, final!.id, "generic.result", { p1Score: 2, p2Score: 1 });
     expect((await apiJson(request, `/api/v1/stages/${koId}/complete`, "POST")).status).toBeLessThan(300);
-    const champion = added.ids.indexOf(final!.home_entrant_id!);
-    expect(champion, "premise: the final's home side won it").toBeGreaterThanOrEqual(0);
+    const decided = await apiJson<{ status: string; outcome: { winner?: string | null } | null }>(request, `/api/v1/fixtures/${final!.id}`);
+    expect(decided.status, JSON.stringify(decided.error)).toBe(200);
+    expect(decided.data!.status, "premise: the final is decided").toMatch(/decided|finalized/);
+    expect(decided.data!.outcome?.winner, "premise: the final's home side won it").toBe(final!.home_entrant_id);
 
     // The share image the division page itself names (the logic is unit-proven in opengraph-champion.test.tsx; this is
     // the real render, saved for review).
