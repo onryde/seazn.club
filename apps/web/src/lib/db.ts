@@ -292,6 +292,10 @@ export async function withTenant<T>(
      *  transaction is stale by the time the write commits. Keep it to reads
      *  and locks; everything it does runs with the pool's own privileges. */
     privilegedPrelude?: (tx: Tx) => Promise<void>;
+    /** Runs LAST, on this transaction's own connection, after `fn` returns and with the role set BACK to the pool's
+     *  (`reset role`): for a row in a SEALED table that must commit or roll back with `fn`'s writes — a log the spec
+     *  says every write carries (the Match Day code's use log, MD-1). It gets `fn`'s result; keep it to that write. */
+    privilegedEpilogue?: (tx: Tx, result: T) => Promise<void>;
   } = {},
 ): Promise<T> {
   // postgres types begin() as Promise<UnwrapPromiseArray<T>>; for non-array T
@@ -301,7 +305,12 @@ export async function withTenant<T>(
       if (opts.privilegedPrelude) await opts.privilegedPrelude(tx);
       await tx`select set_config('app.current_org', ${orgId}, true)`;
       await tx`set local role app_user`;
-      return fn(tx);
+      const result = await fn(tx);
+      if (opts.privilegedEpilogue) {
+        await tx`reset role`;
+        await opts.privilegedEpilogue(tx, result);
+      }
+      return result;
     }) as unknown as Promise<T>;
 
   if (guardMode() === "off") return run();

@@ -264,6 +264,7 @@ const contracts: Contract[] = [
         "approvals.kind": "draw (the seed proposal from groups into a knockout) or swiss (the next Swiss round).",
         "approvals.stage_id": "The stage to review and approve.",
         "approvals.label": "The stage's name.",
+        "approvals.round": "swiss only: the round awaiting pairing (the phone's \"Round 4 pairings are ready\"); null for a draw.",
         ...Object.fromEntries(
           ["courts.now", "courts.next", "courts.finished", "no_court", "online"].flatMap((at) =>
             Object.entries(MD_ROW).map(([field, text]) => [`${at}.${field}`, text]),
@@ -274,9 +275,9 @@ const contracts: Contract[] = [
     defs: {
       refusal: {
         twin: CaptureMatchdayRefusal,
-        description: "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at), 429 RATE_LIMITED (with Retry-After). The open and the approvals answer MD_OUT_OF_SCOPE, MD_NO_APPROVE, MD_STALE, MD_ALREADY and MD_TIES too.",
+        description: "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at). The open and the approvals answer MD_OUT_OF_SCOPE, MD_NO_APPROVE, MD_STALE, MD_ALREADY and MD_TIES too. A 429 RATE_LIMITED (with Retry-After) is the v1 envelope's own answer, outside this shape.",
         props: {
-          code: "The machine word the phone keys its copy on: an MD_ word, or one of the v1 envelope's own (RATE_LIMITED, NOT_FOUND, INTERNAL, …).",
+          code: "The machine word the phone keys its copy on: one of the plan's MD_ words, a closed list. The v1 envelope's own answers (429 RATE_LIMITED, 404 NOT_FOUND, 500 INTERNAL) are not md_ refusals and are outside this shape; the phone reads them by status.",
           message: "A plain English developer string; the phone never shows it.",
           opens_at: "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
         },
@@ -298,9 +299,9 @@ const contracts: Contract[] = [
     defs: {
       refusal: {
         twin: CaptureMatchdayRefusal,
-        description: "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at), 403 MD_OUT_OF_SCOPE (the match is not in the code's competition, venue or courts, or not on its day, at the moment of asking), 404 NOT_FOUND (no such match), 429 RATE_LIMITED (with Retry-After).",
+        description: "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at), 403 MD_OUT_OF_SCOPE (the match is not in the code's competition, venue or courts, or not on its day, at the moment of asking). A 404 NOT_FOUND (no such match) and a 429 RATE_LIMITED (with Retry-After) are the v1 envelope's own answers, outside this shape.",
         props: {
-          code: "The machine word the phone keys its copy on: an MD_ word, or one of the v1 envelope's own (RATE_LIMITED, NOT_FOUND, INTERNAL, …).",
+          code: "The machine word the phone keys its copy on: one of the plan's MD_ words, a closed list. The v1 envelope's own answers (429 RATE_LIMITED, 404 NOT_FOUND, 500 INTERNAL) are not md_ refusals and are outside this shape; the phone reads them by status.",
           message: "A plain English developer string; the phone never shows it.",
           opens_at: "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
         },

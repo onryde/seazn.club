@@ -338,6 +338,8 @@ export const CaptureMatchdayApproval = z.strictObject({
   stage_id: z.uuid(),
   division_name: z.string(),
   label: z.string(),
+  /** Swiss: the round awaiting pairing; a draw: null (MD-1 fix M1, the controller's ruling). */
+  round: z.number().int().min(1).nullable(),
 });
 export const CaptureMatchdayCourt = z.strictObject({
   court_id: z.uuid(),
@@ -362,10 +364,11 @@ export const CaptureMatchdayDay = z.strictObject({
   approvals: z.array(CaptureMatchdayApproval),
 });
 export type CaptureMatchdayDay = z.infer<typeof CaptureMatchdayDay>;
-/** Every refusal, the envelope's `error`: an MD_ word, or one of the v1 envelope's own (`RATE_LIMITED` 429 with
- *  Retry-After, `NOT_FOUND` 404, `INTERNAL`, …). `opens_at` rides MD_NOT_OPEN only. */
+/** Every md_ refusal, the envelope's `error`: one of the plan's MD_ words, a closed list (MD-1 fix M5). `opens_at` rides
+ *  MD_NOT_OPEN only. The v1 envelope's own answers (429 RATE_LIMITED, 404 NOT_FOUND, 500 INTERNAL) are not md_ refusals
+ *  and are outside this shape: the phone reads them by status, as on every v1 route. */
 export const CaptureMatchdayRefusal = z.strictObject({
-  code: z.string().min(1),
+  code: CaptureMatchdayRefusalCode,
   message: z.string(),
   opens_at: MdInstant.optional(),
 });

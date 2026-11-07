@@ -56,9 +56,9 @@ const SHA256: Record<string, string> = {
   "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
   "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",
   // MD-1 Task 3 (capture S4 Match Day design §5, §9.3): a Match Day code's day read.
-  "capture-matchday-day.v1.json": "be6de0259ba74785dd2f4625f356a603382d52b8a05a9d7cb52c43b04b58343e",
+  "capture-matchday-day.v1.json": "a926177fdeb2517337b1a4c6ac45ec3a83ef5466da10de3befc5712bb8fb772c",
   // MD-1 Task 4 (capture S4 Match Day design §6, §9.4): a Match Day code's open.
-  "capture-matchday-open.v1.json": "081fdc122cc21026d17bfe9d00249050fcd79a8d2f4e1eec109be2d0d2c3c352",
+  "capture-matchday-open.v1.json": "639fdcde15f06961ab705b83cb7fb7fa7e39111c6c3a83543e1500657b2644aa",
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -282,8 +282,8 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 17 },
   [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 63 },
-  [MD_DAY_DIR]: { file: MD_DAY, routes: [["refusal-", S.CaptureMatchdayRefusal, "#/$defs/refusal"], ["", S.CaptureMatchdayDay, ""]], count: 10 },
-  [MD_OPEN_DIR]: { file: MD_OPEN, routes: [["refusal-", S.CaptureMatchdayRefusal, "#/$defs/refusal"], ["", S.CaptureMatchdayOpen, ""]], count: 9 },
+  [MD_DAY_DIR]: { file: MD_DAY, routes: [["refusal-", S.CaptureMatchdayRefusal, "#/$defs/refusal"], ["", S.CaptureMatchdayDay, ""]], count: 12 },
+  [MD_OPEN_DIR]: { file: MD_OPEN, routes: [["refusal-", S.CaptureMatchdayRefusal, "#/$defs/refusal"], ["", S.CaptureMatchdayOpen, ""]], count: 10 },
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -555,7 +555,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 52 + 40 + 18 + 17 + 63 + 10 + 9);
+    expect(total).toBe(12 + 52 + 40 + 18 + 17 + 63 + 12 + 10);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -1571,6 +1571,16 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     // MD_NOT_OPEN carries opens_at, a UTC instant; a local time without a zone is refused.
     expect(fixture(MD_DAY_DIR, "refusal-valid-not-open")).toMatchObject({ code: "MD_NOT_OPEN", opens_at: "2026-11-07T23:00:00.000Z" });
     expect(fileAdmits(MD_DAY, "#/$defs/refusal", fixture(MD_DAY_DIR, "refusal-invalid-opens-at-local"))).toBe(false);
+    // Fix M1: an approval carries its round — the Swiss round awaiting pairing, null for a draw — and may not omit it.
+    const approvals = fixture(MD_DAY_DIR, "valid-approvals").approvals as Json[];
+    expect(approvals.map((a) => [a.kind, a.round])).toEqual([["draw", null], ["swiss", 4]]);
+    expect(fileAdmits(MD_DAY, "", fixture(MD_DAY_DIR, "invalid-approval-no-round"))).toBe(false);
+    // Fix M5: the refusal's code is the plan's closed list in both files; an envelope word is not an md_ refusal.
+    for (const [file, dir, name] of [[MD_DAY, MD_DAY_DIR, "refusal-invalid-envelope-word"], [MD_OPEN, MD_OPEN_DIR, "refusal-invalid-not-found"]] as const) {
+      const code = (defOf(contract(file), "refusal").properties as Record<string, Json>).code!;
+      expect(enumOf(code), file).toEqual([...PLAN_MD_WORDS].sort());
+      expect(fileAdmits(file, "#/$defs/refusal", fixture(dir, name)), name).toBe(false);
+    }
   });
 
   it("the open's answer validates against capture-matchday-open.v1.json: a link on the scoring pad's pattern, finished bare, and a refusal never a 200 (MD-1 Task 4)", () => {

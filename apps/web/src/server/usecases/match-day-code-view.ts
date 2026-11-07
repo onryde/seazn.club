@@ -41,7 +41,8 @@ export type MatchDayCodeRowView = {
   summary: string | null;
 };
 
-export type MatchDayApproval = { kind: "swiss" | "draw"; stage_id: string; division_name: string; label: string };
+/** `round`: a Swiss approval's round awaiting pairing (the phone's "Round 4 pairings are ready"); null for a draw. */
+export type MatchDayApproval = { kind: "swiss" | "draw"; stage_id: string; division_name: string; label: string; round: number | null };
 
 export type MatchDayCodeCourt = {
   court_id: string;
@@ -75,31 +76,50 @@ export type ScopeFixture = {
   status: string;
   scheduled_at: Date | null;
   finished_at: Date | null;
+  /** The match's stage's status: a no-court match is the day's only in an active stage (the desk's "no court yet"). */
+  stage_status: string;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  /** Its division is not archived: the desk's no-court lists draw from live divisions only. */
+  division_live: boolean;
 };
 
 const SCHEDULED = "scheduled";
+const ACTIVE_STAGE = "active";
 const within = (d: Date | null, from: Date, to: Date): boolean =>
   d !== null && new Date(d).getTime() >= from.getTime() && new Date(d).getTime() < to.getTime();
 
 /**
- * Whether a code covers a match (capture S4 design §3; owner 2026-11-07), judged at the moment of asking:
+ * Whether a code covers a match (capture S4 design §3; owner 2026-11-07), judged at the moment of asking. It admits
+ * exactly what the day read can list, so the open never mints a link for a match the list never offered (MD-1 fix I1):
  *  - the code's competition only;
  *  - WHERE: a whole-competition code covers every match, a court or none; a venue code its venue's courts; a courts code
  *    exactly its courts. A match with no court is covered by a whole-competition code only;
- *  - WHEN: the code's day, `[opens_at, expires_at)`. A match in play is today's whatever its plan (match-day.ts ruling m5);
- *    otherwise it is planned or finished within the day. A ready match with no court and no time — or planned before the
- *    day's end — is the desk's "no court yet" (match-day.ts `readBoard`'s no-court arm), so it is the day's too.
+ *  - a match on a court, WHEN: in play (today's whatever its plan, match-day.ts ruling m5), or planned or finished within
+ *    the code's day, `[opens_at, expires_at)`;
+ *  - a match with no court: the desk's two no-court lists (match-day.ts `readBoard`), in a live (not archived) division —
+ *    in play, or ready (`scheduled`, an active stage, both seats filled) and planned no later than the day's end or not
+ *    at all.
  */
 export function inScope(code: MatchDayCodeRow, f: ScopeFixture): boolean {
   if (f.competition_id !== code.competitionId) return false;
   const scope = code.scope;
   if (scope.kind === "venue" && (f.court_id === null || f.venue_id !== scope.venueId)) return false;
   if (scope.kind === "courts" && (f.court_id === null || !scope.courtIds.includes(f.court_id))) return false;
+  if (f.court_id === null) return noCourtListed(code, f);
   if (f.status === IN_PLAY) return true;
-  if (within(f.scheduled_at, code.opensAt, code.expiresAt) || within(f.finished_at, code.opensAt, code.expiresAt)) return true;
+  return within(f.scheduled_at, code.opensAt, code.expiresAt) || within(f.finished_at, code.opensAt, code.expiresAt);
+}
+
+/** A no-court match as `readBoard` lists it: `playingNoCourt` or `noCourt` (match-day.ts), the day bounded by the code. */
+function noCourtListed(code: MatchDayCodeRow, f: ScopeFixture): boolean {
+  if (!f.division_live) return false;
+  if (f.status === IN_PLAY) return true;
   return (
-    f.court_id === null &&
     f.status === SCHEDULED &&
+    f.stage_status === ACTIVE_STAGE &&
+    f.home_entrant_id !== null &&
+    f.away_entrant_id !== null &&
     (f.scheduled_at === null || new Date(f.scheduled_at).getTime() < code.expiresAt.getTime())
   );
 }
@@ -200,8 +220,16 @@ async function readApprovals(tx: Tx, code: MatchDayCodeRow): Promise<MatchDayApp
       );
     const swiss = s.kind === "swiss" && swissWaiting(own);
     if (!draw && !swiss) continue;
-    if (!stageInScope(code, code.competitionId, own.map((f) => ({ ...f, competition_id: code.competitionId })))) continue;
-    out.push({ kind: draw ? "draw" : "swiss", stage_id: s.id, division_name: s.division_name, label: s.name });
+    // The query reads live divisions only (`archived_at is null`), so every one of these matches is a live division's.
+    const judged = own.map((f) => ({ ...f, competition_id: code.competitionId, stage_status: s.status, division_live: true }));
+    if (!stageInScope(code, code.competitionId, judged)) continue;
+    out.push({
+      kind: draw ? "draw" : "swiss",
+      stage_id: s.id,
+      division_name: s.division_name,
+      label: s.name,
+      round: draw ? null : nextUnseatedSwissRound(own),
+    });
   }
   return out;
 }
@@ -240,6 +268,10 @@ export async function getMatchDayForCode(code: MatchDayCodeRow, now: Date): Prom
         status: r.status,
         scheduled_at: r.scheduled_at,
         finished_at: r.finished_at,
+        stage_status: r.stage_status,
+        home_entrant_id: r.home_entrant_id,
+        away_entrant_id: r.away_entrant_id,
+        division_live: board.liveDivisions.has(r.division_id),
       });
     const scope = code.scope;
     const courts = board.courts

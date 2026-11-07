@@ -11,7 +11,7 @@ import "server-only";
 // The token never leaves this module except inside the URL a session editor is shown, and it is never logged.
 import { createHash, randomBytes } from "node:crypto";
 import { dayKeyInTz, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { siteOrigin } from "@/lib/site-origin";
 import { resolveVenueTz } from "@/lib/tz";
@@ -272,13 +272,16 @@ export function matchDayActor(code: MatchDayCodeRow): AuthCtx {
   return { orgId: code.orgId, via: "match_day_code", userId: code.issuedBy, role: null, keyId: null };
 }
 
-/** Log a match opened or an approval made against the code that did it (§3). */
-export async function logMatchDayUse(codeId: string, use: MatchDayUse): Promise<void> {
+/** Log a match opened or an approval made against the code that did it (§3). On the pooled client, or on `db`: a
+ *  transaction holding the pool's own role (the table is sealed: `withTenant`'s `privilegedEpilogue`), so the row commits
+ *  or rolls back with the write it logs (MD-1 fix M4). */
+export async function logMatchDayUse(codeId: string, use: MatchDayUse, db?: Tx): Promise<void> {
+  const q = db ?? sql;
   if (use.kind === "open") {
-    await sql`insert into match_day_code_uses (code_id, kind, fixture_id) values (${codeId}, 'open', ${use.fixtureId})`;
+    await q`insert into match_day_code_uses (code_id, kind, fixture_id) values (${codeId}, 'open', ${use.fixtureId})`;
     return;
   }
-  await sql`
+  await q`
     insert into match_day_code_uses (code_id, kind, stage_id, approval)
     values (${codeId}, 'approve', ${use.stageId}, ${use.approval})`;
 }

@@ -31,32 +31,45 @@ type OpenRow = ScopeFixture & { sport_key: string };
  *  - outside the code's scope (competition, venue or courts, and the day) → `{kind: "refused"}`, nothing written;
  *  - `provideSealedLink` under the fixture's link lock, issued by the code's issuer: a finalized or cancelled match is
  *    `{kind: "finished"}` with nothing written; otherwise the live sealed link, or a new one beside it. NEVER a revoke.
- * One `match_day_code_uses` row per link answered, written after the transaction (the use log is pooled).
+ * One `match_day_code_uses` row per link answered, written in the same transaction (`privilegedEpilogue`: the use log is
+ * sealed), so a link handed out always has its row.
  */
 export async function openMatchForCode(code: MatchDayCodeRow, fixtureId: string, now: Date): Promise<MatchDayOpen> {
   assertUuid(fixtureId, "fixture");
   void now; // scope is the code's own day ([opensAt, expiresAt)); the door already judged `now` against it
   const origin = siteOrigin();
   if (!HTTPS_ORIGIN.test(origin)) throw new HttpError(503, "scoring links need https, and this server's origin is not https");
-  const got = await withTenant(code.orgId, async (tx): Promise<MatchDayOpen | { kind: "secret"; secret: string; sport_key: string }> => {
-    const [row] = await tx<OpenRow[]>`
-      select d.competition_id, f.court_id, c.venue_id, f.status, f.scheduled_at, f.finished_at, d.sport_key
-        from fixtures f
-        join divisions d on d.id = f.division_id
-        left join courts c on c.id = f.court_id
-       where f.id = ${fixtureId}
-         for share of f`;
-    if (!row) throw new HttpError(404, "fixture not found");
-    if (!inScope(code, row)) return { kind: "refused", code: "MD_OUT_OF_SCOPE" };
-    const link = await provideSealedLink(tx, fixtureId, code.issuedBy);
-    if (link.kind === "finished") return { kind: "finished" };
-    return { kind: "secret", secret: link.secret, sport_key: row.sport_key };
-  });
+  type Opened = MatchDayOpen | { kind: "secret"; secret: string; sport_key: string };
+  const got = await withTenant(
+    code.orgId,
+    async (tx): Promise<Opened> => {
+      const [row] = await tx<OpenRow[]>`
+        select d.competition_id, f.court_id, c.venue_id, f.status, f.scheduled_at, f.finished_at, d.sport_key,
+               s.status as stage_status, f.home_entrant_id, f.away_entrant_id, (d.archived_at is null) as division_live
+          from fixtures f
+          join divisions d on d.id = f.division_id
+          join stages s on s.id = f.stage_id
+          left join courts c on c.id = f.court_id
+         where f.id = ${fixtureId}
+           for share of f`;
+      if (!row) throw new HttpError(404, "fixture not found");
+      if (!inScope(code, row)) return { kind: "refused", code: "MD_OUT_OF_SCOPE" };
+      const link = await provideSealedLink(tx, fixtureId, code.issuedBy);
+      if (link.kind === "finished") return { kind: "finished" };
+      return { kind: "secret", secret: link.secret, sport_key: row.sport_key };
+    },
+    {
+      // Spec §3: every link opened is logged. In the link's own transaction (the use log is sealed, so on the pool's
+      // role): a link is never handed out without its row, and a row never written for a link that rolled back.
+      privilegedEpilogue: async (tx, opened) => {
+        if (opened.kind === "secret") await logMatchDayUse(code.id, { kind: "open", fixtureId }, tx);
+      },
+    },
+  );
   if (got.kind !== "secret") return got;
   const url = `${origin}/score/${got.secret}`;
   // An assumption made a guard: every secret is `mintDeviceLinkSecret`'s and the origin was checked above. Never with
   // the URL in the message.
   if (!CAPTURE_SCORING_LINK_URL_RE.test(url)) throw new Error("openMatchForCode: the scoring link does not match the contract's url pattern");
-  await logMatchDayUse(code.id, { kind: "open", fixtureId });
   return { kind: "link", url, sport_key: got.sport_key };
 }

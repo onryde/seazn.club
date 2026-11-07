@@ -343,6 +343,8 @@ export interface Board {
    *  for (the Match Day code's day read lists them under their court, capture S4 design §5). */
   finished: FixtureRow[];
   courtNames: Map<string, string>;
+  /** The competition's live (not archived) divisions: the ones the desk's no-court lists draw from (MD-1 fix I1). */
+  liveDivisions: ReadonlySet<string>;
 }
 
 /** Test-only (task F2): runs inside `readBoard`'s transaction right after the named read, so a test can put a concurrent write
@@ -628,6 +630,7 @@ export async function readBoard(
     playingNoCourt: playingNoCourtOf(rows, liveDivisions),
     finished: finishedToday,
     courtNames,
+    liveDivisions,
   };
 }
 

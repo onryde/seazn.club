@@ -51485,13 +51485,26 @@
                               },
                               "label": {
                                 "type": "string"
+                              },
+                              "round": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
                               "kind",
                               "stage_id",
                               "division_name",
-                              "label"
+                              "label",
+                              "round"
                             ],
                             "additionalProperties": false
                           }
@@ -51610,7 +51623,8 @@
                         "kind": "swiss",
                         "stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                         "division_name": "example",
-                        "label": "example"
+                        "label": "example",
+                        "round": 1
                       }
                     ]
                   },

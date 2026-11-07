@@ -214,8 +214,9 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
       const view = await getMatchDayForCode(code, NOW);
       expect(view.can_approve).toBe(true);
       expect(view.approvals).toEqual([
-        { kind: "draw", stage_id: finalsId, division_name: "Open", label: "Finals" },
-        { kind: "swiss", stage_id: swissId, division_name: "Swiss Open", label: "Swiss" },
+        // Fix M1: a draw has no round; a Swiss approval names the round awaiting pairing (round 1 played: round 2).
+        { kind: "draw", stage_id: finalsId, division_name: "Open", label: "Finals", round: null },
+        { kind: "swiss", stage_id: swissId, division_name: "Swiss Open", label: "Swiss", round: 2 },
       ]);
       expect(CaptureMatchdayDay.safeParse(view).success).toBe(true);
       // Round 2 seated: nothing waits until it is played.
@@ -225,6 +226,10 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
          where f.stage_id = ${swissId} and f.round_no = 2 and r1.stage_id = f.stage_id and r1.round_no = 1
            and r1.seq_in_round = f.seq_in_round`;
       expect((await getMatchDayForCode(code, NOW)).approvals.map((a) => a.kind)).toEqual(["draw"]);
+      // Round 2 played: round 3 is the one awaiting pairing now.
+      await sql`update fixtures set status = 'decided' where stage_id = ${swissId} and round_no = 2`;
+      const later = (await getMatchDayForCode(code, NOW)).approvals.find((a) => a.kind === "swiss");
+      expect(later).toEqual({ kind: "swiss", stage_id: swissId, division_name: "Swiss Open", label: "Swiss", round: 3 });
     });
 
     it("approvals is listed with can_approve false too", async () => {
@@ -233,7 +238,7 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
       const { code } = await codeFor(day, { kind: "competition" }, false);
       const view = await getMatchDayForCode(code, NOW);
       expect(view.can_approve).toBe(false);
-      expect(view.approvals).toEqual([{ kind: "draw", stage_id: finalsId, division_name: "Open", label: "Finals" }]);
+      expect(view.approvals).toEqual([{ kind: "draw", stage_id: finalsId, division_name: "Open", label: "Finals", round: null }]);
     });
 
     it("a venue code lists no approval for a stage with no match today on its courts", async () => {

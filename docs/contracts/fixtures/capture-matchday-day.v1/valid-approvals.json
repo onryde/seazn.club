@@ -30,13 +30,15 @@
       "kind": "draw",
       "stage_id": "3b8c9d0e-1f2a-4b3c-bd4e-6f7a8b9c0d1e",
       "division_name": "Men's singles",
-      "label": "Finals"
+      "label": "Finals",
+      "round": null
     },
     {
       "kind": "swiss",
       "stage_id": "4c9d0e1f-2a3b-4c4d-8e5f-7a8b9c0d1e2f",
       "division_name": "Open",
-      "label": "Swiss"
+      "label": "Swiss",
+      "round": 4
     }
   ]
 }

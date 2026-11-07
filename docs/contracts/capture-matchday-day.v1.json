@@ -660,13 +660,27 @@
           "label": {
             "description": "The stage's name.",
             "type": "string"
+          },
+          "round": {
+            "description": "swiss only: the round awaiting pairing (the phone's \"Round 4 pairings are ready\"); null for a draw.",
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "kind",
           "stage_id",
           "division_name",
-          "label"
+          "label",
+          "round"
         ],
         "additionalProperties": false
       }
@@ -688,13 +702,23 @@
   "additionalProperties": false,
   "$defs": {
     "refusal": {
-      "description": "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at), 429 RATE_LIMITED (with Retry-After). The open and the approvals answer MD_OUT_OF_SCOPE, MD_NO_APPROVE, MD_STALE, MD_ALREADY and MD_TIES too.",
+      "description": "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at). The open and the approvals answer MD_OUT_OF_SCOPE, MD_NO_APPROVE, MD_STALE, MD_ALREADY and MD_TIES too. A 429 RATE_LIMITED (with Retry-After) is the v1 envelope's own answer, outside this shape.",
       "type": "object",
       "properties": {
         "code": {
-          "description": "The machine word the phone keys its copy on: an MD_ word, or one of the v1 envelope's own (RATE_LIMITED, NOT_FOUND, INTERNAL, …).",
+          "description": "The machine word the phone keys its copy on: one of the plan's MD_ words, a closed list. The v1 envelope's own answers (429 RATE_LIMITED, 404 NOT_FOUND, 500 INTERNAL) are not md_ refusals and are outside this shape; the phone reads them by status.",
           "type": "string",
-          "minLength": 1
+          "enum": [
+            "MD_UNKNOWN",
+            "MD_WITHDRAWN",
+            "MD_ENDED",
+            "MD_NOT_OPEN",
+            "MD_OUT_OF_SCOPE",
+            "MD_NO_APPROVE",
+            "MD_STALE",
+            "MD_ALREADY",
+            "MD_TIES"
+          ]
         },
         "message": {
           "description": "A plain English developer string; the phone never shows it.",

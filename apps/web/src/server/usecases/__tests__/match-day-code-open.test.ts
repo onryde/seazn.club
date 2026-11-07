@@ -137,6 +137,44 @@ describe.skipIf(!HAS_DB)("open a match through a Match Day code", () => {
     expect(await linksOf(f[1]!)).toEqual([]);
   });
 
+  it("a no-court match the list does not show is MD_OUT_OF_SCOPE, even for a whole-competition code (fix I1)", async () => {
+    const { code } = await codeFor(day, { kind: "competition" });
+    const refused = { kind: "refused", code: "MD_OUT_OF_SCOPE" };
+    // The premise: f2 is the desk's "no court yet" (ready, active stage, both seats, live division), and it opens.
+    expect((await openMatchForCode(code, f[1]!, NOW)).kind).toBe("link");
+    await place(day, f[1]!, null, null);
+    expect((await openMatchForCode(code, f[1]!, NOW)).kind).toBe("link");
+    // An undecided seat (a later knockout round): not listed, so not opened.
+    await sql`update fixtures set home_entrant_id = null where id = ${f[2]!}`;
+    expect(await openMatchForCode(code, f[2]!, NOW)).toEqual(refused);
+    // A stage not yet started.
+    await place(day, f[5]!, null, null);
+    await sql`update stages set status = 'pending' where id = ${day.comp.stageId}`;
+    expect(await openMatchForCode(code, f[5]!, NOW)).toEqual(refused);
+    await sql`update stages set status = 'active' where id = ${day.comp.stageId}`;
+    expect((await openMatchForCode(code, f[5]!, NOW)).kind, "the premise: the stage was the only bar").toBe("link");
+    // An archived division: the same match, refused once its division is archived.
+    const before = (await linksOf(f[5]!)).length;
+    await sql`update divisions set archived_at = now() where id = ${day.comp.divisionId}`;
+    expect(await openMatchForCode(code, f[5]!, NOW)).toEqual(refused);
+    // In play with no court, in an archived division: not on the desk's list either.
+    await setStatus(f[1]!, "in_play");
+    expect(await openMatchForCode(code, f[1]!, NOW)).toEqual(refused);
+    expect(await linksOf(f[2]!)).toEqual([]);
+    expect(await linksOf(f[5]!)).toHaveLength(before);
+  });
+
+  it("the use row is written in the link's own transaction: a use that cannot be logged hands out no link (fix M4)", async () => {
+    const { code } = await codeFor(day, { kind: "competition" });
+    await openMatchForCode(code, f[0]!, NOW);
+    expect(await usesOf(code.id)).toEqual([{ kind: "open", fixture_id: f[0] }]);
+    // The code's row gone under the open (its use log cascades with it): the use insert breaks its foreign key, and the
+    // link minted in the same transaction rolls back with it.
+    await sql`delete from match_day_codes where id = ${code.id}`;
+    await expect(openMatchForCode(code, f[5]!, NOW)).rejects.toMatchObject({ code: "23503" });
+    expect(await linksOf(f[5]!)).toEqual([]);
+  });
+
   it("a finalized match is {kind:\"finished\"} (Review Focus 3), and so is a cancelled one: nothing minted", async () => {
     const { code } = await codeFor(day, { kind: "competition" });
     await setStatus(f[4]!, "finalized");
