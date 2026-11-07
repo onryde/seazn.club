@@ -368,9 +368,9 @@ describe("S9: the frame's moment id and storage key (pure)", () => {
   });
 });
 
-// Next hands the route its body as a stream it has already begun to read, so Node never discards what the route leaves
-// unread, and on a kept-alive connection the client's NEXT request waits behind bytes nobody reads (CI smoke: the fetch
-// after the 413 frame failed 6 s later). An answer given with the body unread closes the connection; never by reading the
+// Observed on CI: smoke's request after two refused 262 KB frames failed 6 s later on its kept-alive connection. The cause
+// is unconfirmed - a scratch Node server reproduces it only once something has begun reading the body, and what begins it
+// under Next was not established. So an answer given with the body unread closes the connection; never by reading the
 // rest - a declared overrun is never read.
 describe("S9: the connection after an answer (pure: every case is refused before any database read)", () => {
   it("Connection: close when the body was left unread - no bearer, a declared overrun, a chunked overrun - and not once it was read to its end, or there was none", async () => {

@@ -292,7 +292,10 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   // <html id="__next_error__"> body) carrying the main render's Flight data, and the browser draws the route's not-found
   // client-side (next 16.3.6 app-render.js, the errorRecovery path). The notice is therefore in the HTML only as escaped
   // Flight JSON, never as a `data-testid="..."` attribute - that is what e2e/sponsor-report.spec.ts reads after it draws.
-  // So: the status, THIS route's notice in any form, and nothing of the report, its sponsor's name included.
+  // The PROOF is the 404 status: the same URL answered 200 one step above, so the revoke is what changed it. `notice` holds on
+  // every render of this route (the not-found boundary rides in the 200 page's Flight data too), so it only says the answer
+  // came from this route. Of `leaked`, the half that matters is the sponsor's NAME, which the 200 page above did show; the
+  // testid half cannot be true on a 404, whose body Next leaves empty.
   const notice = closed?.body.includes("sponsor-report-not-found") ?? false;
   const leaked = (closed?.body.includes('data-testid="sponsor-report"') ?? false) || (closed?.body.includes(`Goldco ${tag}`) ?? false);
   const revokedIs404 = closed !== null && closed.status === 404 && notice && !leaked;

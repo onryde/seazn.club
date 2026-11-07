@@ -52,10 +52,10 @@ export async function POST(req: Request, { params }: Ctx) {
     return new Response(null, { status: 204 });
   });
   // An answer given with the body left unread (no bearer, a declared overrun, a chunked one cut at the bound, a failed read)
-  // closes the connection. Next hands this handler a body stream it has already begun to read, so Node never discards the
-  // rest, and the client's next request on a kept-alive connection would wait behind bytes nobody reads (CI smoke: the
-  // fetch after the 413 failed 6 s later). HTTP lets a server close rather than read on (RFC 9110 §15.5.14), and a declared
-  // overrun is never read, so the rest is not drained either.
+  // closes the connection. Observed on CI: smoke's request after two refused 262 KB frames failed 6 s later on its kept-alive
+  // connection. The cause is unconfirmed: a scratch Node server reproduces it only once something has begun reading the
+  // body (Node then no longer discards the rest), and what begins it under Next was not established. HTTP lets a server
+  // close rather than read on (RFC 9110 §15.5.14), and a declared overrun is never read, so the rest is not drained either.
   if (!body.readToEnd) res.headers.set("connection", "close");
   return res;
 }
