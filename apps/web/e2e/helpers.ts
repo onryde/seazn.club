@@ -411,12 +411,27 @@ export async function mintClaimPathForPlayerRow(
     if (!personId) {
       throw new Error(`mintClaimPathForPlayerRow: registration_players ${playerRowId} has no person_id yet`);
     }
-    await sql`
-      update person_claims set revoked_at = now()
-      where person_id = ${personId} and claimed_at is null and revoked_at is null`;
-    await sql`
-      insert into person_claims (org_id, person_id, email, token_hash, invited_by, expires_at)
-      values (${orgId}, ${personId}, ${email}, ${tokenHash}, null, now() + interval '14 days')`;
+    // Revoke-then-insert as ONE transaction, retried on a lost race. The app mints its own registration invite for the
+    // same person after the submit returns (`maybeInviteClaim`), so it can open a claim between this helper's revoke and
+    // its insert; `person_claims_open_uq` then rejects the insert (23505) — seen on main's e2e run 42023225099, on the
+    // first attempt AND the retry, while the very next run passed. Each retry revokes whatever the other writer opened
+    // and inserts again, so the open row that survives is this helper's, whose secret the caller holds.
+    const MAX_ATTEMPTS = 5;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await sql.begin(async (tx) => {
+          await tx`
+            update person_claims set revoked_at = now()
+            where person_id = ${personId} and claimed_at is null and revoked_at is null`;
+          await tx`
+            insert into person_claims (org_id, person_id, email, token_hash, invited_by, expires_at)
+            values (${orgId}, ${personId}, ${email}, ${tokenHash}, null, now() + interval '14 days')`;
+        });
+        return;
+      } catch (e) {
+        if ((e as { code?: string }).code !== "23505" || attempt >= MAX_ATTEMPTS) throw e;
+      }
+    }
   });
   return `/claim/${secret}`;
 }
