@@ -211,6 +211,12 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
       expect(seated[0]!.n, "the premise: round 1 is seated").toBe(2);
       await sql`update stages set status = 'complete' where id = ${leagueId}`;
       await sql`update fixtures set status = 'decided' where stage_id = ${swissId} and round_no = 1`;
+      // The pairing gate's own rule (stages.ts): an abandoned board holds the round until the organiser settles it, so it
+      // holds the approval too — the phone never offers a pairing the server would refuse STAGE_NOT_READY.
+      const [held] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${swissId} and round_no = 1 limit 1`;
+      await setStatus(held!.id, "abandoned");
+      expect((await getMatchDayForCode(code, NOW)).approvals.map((a) => a.kind), "an abandoned board holds the round").toEqual(["draw"]);
+      await setStatus(held!.id, "decided");
       const view = await getMatchDayForCode(code, NOW);
       expect(view.can_approve).toBe(true);
       expect(view.approvals).toEqual([

@@ -18,11 +18,12 @@ import { withTenant } from "@/lib/db";
 import { fixtureAwaitsSeedDraw, stageOwesDraw } from "@/lib/division-phase";
 import { DEFAULT_LOCALE, getDictionary } from "@/lib/i18n";
 import { seedingSourceReady } from "@/lib/seeding-source-ready";
-import { nextUnseatedSwissRound } from "@/lib/swiss-shell";
+import { isSwissBoardSeated, nextUnseatedSwissRound } from "@/lib/swiss-shell";
 import { readBoard, type FixtureRow } from "./match-day";
 import { IN_PLAY } from "./match-day-call";
 import { readRounds, roundOf } from "./match-day-rounds";
 import type { MatchDayCodeRow } from "./match-day-codes";
+import { DECIDED } from "./stages";
 import type { MatchDayCourtState } from "@/lib/match-day/types";
 
 type Tx = postgres.TransactionSql;
@@ -169,21 +170,19 @@ interface StageFixtureRow {
   finished_at: Date | null;
 }
 
-/** A Swiss board's status once its result is in (the V432 finished set less the held `needs_decision`, which owes the
- *  organiser's settle before anyone can be paired off it). */
-const SWISS_DONE = new Set(["decided", "finalized", "forfeited", "abandoned", "cancelled"]);
-
 /**
  * Swiss: the stage's next round is waiting to be paired — the desk's own `swissHasUnseated` (stages-panel.tsx, through
- * `nextUnseatedSwissRound`, the predicate stage-rail.tsx's "Pair next" reads) — AND the round before it is complete, so the
- * pairing can be computed now (§7's banner: "Round 3 complete · Round 4 pairings are ready"). A stage with no round seated
- * yet is the desk's first Generate, not an approval.
+ * `nextUnseatedSwissRound`, the predicate stage-rail.tsx's "Pair next" reads) — AND the pairing would be accepted now
+ * (§7's banner: "Round 3 complete · Round 4 pairings are ready"). That second half is the pairing gate's own rule
+ * (stages.ts, round > 1): every SEATED board of the round before is `DECIDED` (decided, finalized or forfeited). An
+ * abandoned board holds the round until the organiser settles it, as the gate says, so it holds the approval too. A stage
+ * with no round seated yet is the desk's first Generate, not an approval.
  */
 function swissWaiting(fixtures: readonly StageFixtureRow[]): boolean {
   const next = nextUnseatedSwissRound(fixtures);
-  if (next === null) return false;
-  const before = fixtures.filter((f) => f.round_no < next);
-  return before.length > 0 && before.every((f) => SWISS_DONE.has(f.status));
+  if (next === null || next < 2) return false;
+  const seatedPrev = fixtures.filter((f) => f.round_no === next - 1 && isSwissBoardSeated(f));
+  return seatedPrev.length > 0 && seatedPrev.every((f) => DECIDED.has(f.status));
 }
 
 /** The approvals waiting in the code's scope (§7), in the competition's division order then stage order. Listed whatever

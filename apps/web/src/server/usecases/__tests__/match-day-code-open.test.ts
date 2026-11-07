@@ -332,11 +332,11 @@ describe.skipIf(!HAS_DB)("open a match through a Match Day code", () => {
     };
 
     it("cannot finalize, forfeit, settle or abandon", async () => {
-      const winner = day.comp.fixtures[0]!.home;
+      const { home: winner, away } = day.comp.fixtures[0]!;
       // The device link's own refusals, word for word (scoring.ts): the same status and the same words.
       const events: [string, unknown, string][] = [
         ["core.finalize", {}, "403 Finalizing needs an organiser or scorer account"],
-        ["core.forfeit", { winner, reason: "no_show" }, "403 Only an organiser can record a walkover for a match"],
+        ["core.forfeit", { by: away, reason: "walkover" }, "403 Only an organiser can record a walkover for a match"],
         ["core.settle", { winner }, "403 Only an organiser can settle a match"],
         ["core.abandon", { reason: "weather" }, "403 Only an organiser can abandon a match"],
       ];
