@@ -30,6 +30,7 @@ import { findQuickMatchByCompetition } from "@/server/usecases/quick-match-home"
 import { hashVisitorKey, mintVisitorKey } from "@/server/usecases/quick-match-tokens";
 import { seedOrg } from "@/server/usecases/__tests__/_seed";
 import { fixturesOf, seedStage } from "@/server/usecases/__tests__/_sheets-rig";
+import { log } from "@/server/logger";
 import fr from "@/dictionaries/fr/ui.json";
 import en from "@/dictionaries/en/ui.json";
 import ScorePadPage from "../page";
@@ -129,12 +130,32 @@ function backAnchor(html: string): { tag: string; text: string } | null {
 const classesOf = (tag: string) => (/ class="([^"]*)"/.exec(tag)?.[1] ?? "").split(/\s+/).filter(Boolean);
 const lookup = () => vi.mocked(findQuickMatchByCompetition);
 
+/** Controller ruling 2026-11-08: the back link is an extra and never breaks scoring. A key that cannot open the home
+ *  token hides the link, renders the pad and logs ONE server warning with its own reason code, carrying neither the
+ *  token nor the envelope. The codes are the ruling's three cases, typed here, never read back from the page. */
+const REASON = {
+  kekMissing: "quick_match_back_link_kek_missing",
+  malformed: "quick_match_back_link_envelope_malformed",
+  rejected: "quick_match_back_link_envelope_rejected",
+} as const;
+// The repo's logger (pino, and through Sentry's pino integration, Sentry Logs): recorded, and kept off stdout.
+const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+/** The page's back-link warnings among everything logged at warn since the last `warn.mockClear()`. */
+const backLinkWarnings = () =>
+  warn.mock.calls.filter(([fields]) => {
+    const reason = (fields as { reason?: unknown } | undefined)?.reason;
+    return typeof reason === "string" && reason.startsWith("quick_match_back_link_");
+  });
+const reasonOf = (call: unknown[]) => (call[0] as { reason: string }).reason;
+
 describe.skipIf(!HAS_DB)("the pad's way back to the quick match (C12)", () => {
   it("a quick match's pad links to its home: /q/ + the creator's token, ph-no-capture, the spec's English copy", async () => {
     const { out, secret } = await quickMatchPad();
     lookup().mockClear();
+    warn.mockClear();
     const { tree, html } = await render(secret);
 
+    expect(backLinkWarnings(), "an opened home token is not a warning").toHaveLength(0);
     expect(find(tree, DeviceScorePad), "precondition: the pad itself renders").not.toBeNull();
     expect(out.token.startsWith("qm_"), "precondition: the creator was handed a home token").toBe(true);
     const a = backAnchor(html);
@@ -163,7 +184,9 @@ describe.skipIf(!HAS_DB)("the pad's way back to the quick match (C12)", () => {
     const { secret } = await ensureDeviceLink(auth, fixture!.id);
     expect(auth.orgId).not.toBe(QUICK_MATCH_SYSTEM_ORG_ID);
     lookup().mockClear();
+    warn.mockClear();
     const { tree, html } = await render(secret);
+    expect(backLinkWarnings(), "an ordinary pad has nothing to warn about").toHaveLength(0);
 
     expect(find(tree, DeviceScorePad), "precondition: the pad renders").not.toBeNull();
     expect(find(tree, QuickMatchBackLink)).toBeNull();
@@ -212,29 +235,67 @@ describe.skipIf(!HAS_DB)("the pad's way back to the quick match (C12)", () => {
     }
   });
 
-  it("DEVICE_LINK_KEK missing: the pad still renders, with no back link and no throw (A6, C8)", async () => {
+  it("DEVICE_LINK_KEK missing: the pad still renders, with no back link, no throw and one warning (A6, C8)", async () => {
     const { out, secret } = await quickMatchPad();
     vi.stubEnv("DEVICE_LINK_KEK", "");
     try {
       lookup().mockClear();
+      warn.mockClear();
       const { tree, html } = await render(secret);
       expect(find(tree, DeviceScorePad), "a missing KEK never takes the pad down").not.toBeNull();
       expect(lookup(), "precondition: the row was found, so the open was attempted").toHaveBeenCalledTimes(1);
       expect(find(tree, QuickMatchBackLink)).toBeNull();
       expect(html).not.toContain('href="/q/');
       expect(html).not.toContain(out.token);
+      const warned = backLinkWarnings();
+      expect(warned.map(reasonOf)).toEqual([REASON.kekMissing]);
+      expect(JSON.stringify(warned)).not.toContain(out.token);
     } finally {
       vi.stubEnv("DEVICE_LINK_KEK", KEK);
     }
   });
 
-  it("a damaged envelope is not a configuration gap: the error surfaces, it is never swallowed into a missing link", async () => {
+  it("a damaged envelope: the pad still renders, with no back link, no throw and one warning of its own reason", async () => {
     const { out, secret } = await quickMatchPad();
     await sql`update quick_matches set token_enc = ${Buffer.from([1, 2, 3])} where id = ${out.id}`;
     try {
-      await expect(render(secret)).rejects.toThrow(/envelope/);
+      warn.mockClear();
+      const { tree, html } = await render(secret);
+      expect(find(tree, DeviceScorePad), "a damaged row never takes the pad down").not.toBeNull();
+      expect(find(tree, QuickMatchBackLink)).toBeNull();
+      expect(html).not.toContain('href="/q/');
+      const warned = backLinkWarnings();
+      expect(warned.map(reasonOf)).toEqual([REASON.malformed]);
+      expect(JSON.stringify(warned)).not.toContain(out.token);
     } finally {
       await hardDeleteQuickMatchCompetition(out.competitionId);
+    }
+  });
+
+  it("a key rotated without re-sealing (the wrong KEK): the pad still renders, no back link, one warning of its own reason", async () => {
+    const { out, secret } = await quickMatchPad();
+    const [row] = await sql<{ token_enc: Uint8Array }[]>`select token_enc from quick_matches where id = ${out.id}`;
+    const envelope = Buffer.from(row!.token_enc);
+    let other = kekBytes(32).toString("hex");
+    while (other === KEK) other = kekBytes(32).toString("hex");
+    vi.stubEnv("DEVICE_LINK_KEK", other);
+    try {
+      lookup().mockClear();
+      warn.mockClear();
+      const { tree, html } = await render(secret);
+      expect(find(tree, DeviceScorePad), "a wrong key never takes the pad down").not.toBeNull();
+      expect(lookup(), "precondition: the row was found, so the open was attempted").toHaveBeenCalledTimes(1);
+      expect(find(tree, QuickMatchBackLink)).toBeNull();
+      expect(html).not.toContain('href="/q/');
+      expect(html).not.toContain(out.token);
+      const warned = backLinkWarnings();
+      expect(warned.map(reasonOf)).toEqual([REASON.rejected]);
+      const logged = JSON.stringify(warned);
+      expect(logged).not.toContain(out.token);
+      expect(logged, "the envelope is never logged, in either encoding").not.toContain(envelope.toString("hex"));
+      expect(logged).not.toContain(envelope.toString("base64"));
+    } finally {
+      vi.stubEnv("DEVICE_LINK_KEK", KEK);
     }
   });
 

@@ -46,6 +46,7 @@ import { HtmlLang } from "@/components/i18n/html-lang";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { findQuickMatchByCompetition } from "@/server/usecases/quick-match-home";
 import { openHomeToken } from "@/server/usecases/quick-match-tokens";
+import { log } from "@/server/logger";
 import { QuickMatchBackLink } from "@/components/v2/quick-match-back-link";
 import type { ReactNode } from "react";
 
@@ -332,9 +333,10 @@ export default async function ScorePadPage({
  * pre-flight D1) has no home to go back to. Expiry is not checked: the home answers an expired match honestly, and a
  * score revives the row (D5). The token is opened here, server-side; only the finished href reaches the client.
  *
- * A server without DEVICE_LINK_KEK cannot open the envelope (503 DEVICE_LINK_KEK_MISSING, pre-flight A6), and a missing
- * key must never take the scoring pad down (C8): the pad renders without the link. Any other failure (a damaged or
- * wrong-key envelope) is not a configuration gap, and is thrown.
+ * The link is an extra and must never break scoring (controller ruling 2026-11-08; pre-flight A6, C8): when the home
+ * token cannot be opened, whether the KEK is missing, the envelope is damaged, or a KEK was rotated without re-sealing,
+ * the pad renders without the link and the server logs ONE warning with that case's reason code. The warning carries
+ * the reason and the competition id only: never the token, the envelope, or the crypto error's own message.
  */
 async function quickMatchHomeHref(orgId: string, competitionId: string): Promise<string | null> {
   if (orgId !== QUICK_MATCH_SYSTEM_ORG_ID) return null;
@@ -344,10 +346,22 @@ async function quickMatchHomeHref(orgId: string, competitionId: string): Promise
   try {
     token = openHomeToken(row.tokenEnc);
   } catch (err) {
-    if (err instanceof HttpError && err.code === "DEVICE_LINK_KEK_MISSING") return null;
-    throw err;
+    log.warn({ reason: backLinkMiss(err), competitionId }, "quick match pad: back link hidden, the home token could not be opened");
+    return null;
   }
   return `/q/${token}`;
+}
+
+/** Why a quick match's home token could not be opened, one reason code per case of the 2026-11-08 ruling. */
+function backLinkMiss(err: unknown): string {
+  // No usable DEVICE_LINK_KEK: a configuration gap (quick-match-tokens.ts checks the key before any decryption).
+  if (err instanceof HttpError && err.code === "DEVICE_LINK_KEK_MISSING") return "quick_match_back_link_kek_missing";
+  // relay/crypto.ts `openWith` refuses an envelope too short or of an unknown version by name, before decrypting: the
+  // stored bytes are damaged.
+  if (err instanceof Error && err.message.startsWith("relay envelope ")) return "quick_match_back_link_envelope_malformed";
+  // Everything else is AES-GCM refusing to authenticate: the key is not the one that sealed it (a KEK rotated without
+  // re-sealing) or the bytes were altered. GCM cannot tell those two apart.
+  return "quick_match_back_link_envelope_rejected";
 }
 
 /** Doc 13 §7's dead end. Both lines arrive localised: no English literal is
