@@ -1,18 +1,21 @@
 -- V492 — Sponsors on stream (R4, spec docs/superpowers/specs/2026-10-27-sponsors-on-stream-design.md §4): the
 -- rotation's settings and assignments, the proof-of-display log and its frames, the tombstones of frame objects whose
 -- rows went (S9), tracked clicks, the sponsor report's links, and the on-screen short codes (owner ruling R7).
--- Greenfield: no backfill. Every existing sponsor starts OFF the stream (on_stream = false); the first tick (S12) turns
--- the org's settings row on itself (ruling R12).
+-- The new tables start empty, and the new sponsors column needs no backfill: every existing sponsor starts OFF the stream
+-- (on_stream = false); the first tick (S12) turns the org's settings row on itself (ruling R12). Beyond that column's
+-- default, existing data changes in one place only: the DATA CHANGE below.
 --
--- DATA CHANGE (final review 2, m9 - loud, by the house rule): `organizations.first_sponsor_row_at` is new, and this file
--- STAMPS it (now()) on every organisation that holds a `sponsors` row when it runs. No other existing row is written.
--- Why: an org that deleted every sponsor row fell back to V283's never-cleared `branding.sponsors` blob, so deleted
--- sponsors came back on the public board, the match page, slideshows, the embed and exports. V283 copied the blobs into
--- rows ONCE, but the blob is still writable (the legacy org PATCH's `sponsors`, a competition's free-form branding), so a
--- blob is not provably a copy and is NOT stripped: the read shim keeps it for an org that has NEVER had a row
--- (usecases/sponsors.ts resolveSponsors), and the stamp is how "never" is known after the rows are gone. An org that had
--- rows and deleted them all BEFORE this runs is not stamped (nothing records it); there are no prod sponsor customers
--- (owner, 2026-11-01).
+-- !! DATA CHANGE (fix batch 3, m9 - LOUD, by the house rule "data moves: loud + migration, no compat") !!
+-- This file DELETES the legacy `sponsors` key from `organizations.branding` AND `competitions.branding`, on every row that
+-- holds one, whatever it holds. Every other branding key (colours, logo, banner) is kept; nothing else is written.
+-- Why: V283 copied those blobs into `sponsors` rows ONCE and never cleared them, and resolveSponsors kept reading them as a
+-- fallback for an org with no rows - so an org that deleted its last sponsor saw the deleted sponsors come back on the
+-- public board, the match page, the slideshows, the embed and the exports. Sponsors now live in the `sponsors` table
+-- ONLY: the read fallback is gone (usecases/sponsors.ts) and so is the blob's last writer, the `sponsors` arm of
+-- PATCH /api/orgs/[id] (no UI called it).
+-- What is lost: a blob sponsor that never became a row - one written after V283 through that PATCH or into a
+-- competition's free-form branding - is deleted with no copy. Accepted: there are no prod sponsor customers (owner,
+-- 2026-11-01), and stg data is test-only.
 --
 -- Tests find this file by its SUFFIX (`__sponsor_rotation.sql`), never its number: a renumber before merge is a pure
 -- `git mv`.
@@ -46,22 +49,12 @@
 
 alter table sponsors add column on_stream boolean not null default false;
 
--- m9 (see the header's DATA CHANGE): when the org first held a sponsor row. Stamped by every writer's insert, through one
--- trigger (a sponsor is created under withTenant as app_user, a paid package activates one on the privileged client):
--- SECURITY DEFINER, like the tombstone trigger below, so the stamp never depends on the inserting role's grant on
--- organizations. Set once (`is null`), never cleared: deleting rows does not move it.
-alter table organizations add column first_sponsor_row_at timestamptz null;
-create function sponsors_stamp_first_row() returns trigger
-  language plpgsql security definer
-  set search_path = ${flyway:defaultSchema}, pg_temp as $$
-begin
-  update organizations set first_sponsor_row_at = now() where id = new.org_id and first_sponsor_row_at is null;
-  return null;
-end $$;
-create trigger sponsors_stamp_first_row after insert on sponsors
-  for each row execute function sponsors_stamp_first_row();
-update organizations o set first_sponsor_row_at = now()
- where o.first_sponsor_row_at is null and exists (select 1 from sponsors s where s.org_id = o.id);
+-- The header's DATA CHANGE: the legacy sponsor blob goes from both branding columns. The markers delimit the block the
+-- migration test runs (server/sponsors/__tests__/migration.test.ts); keep them.
+-- strip:begin
+update organizations set branding = branding - 'sponsors' where branding ? 'sponsors';
+update competitions  set branding = branding - 'sponsors' where branding ? 'sponsors';
+-- strip:end
 
 -- One row per scope: the org row (competition_id null) and any competition rows; a competition row overrides the org
 -- row (S12). NULLS NOT DISTINCT makes the org row unique too, and is the arbiter for S12's upsert.

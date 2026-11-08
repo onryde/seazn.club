@@ -90,7 +90,6 @@ interface Branding {
   logo?: string;
   banner?: string;
   colors?: { primary?: string };
-  sponsors?: { name: string; url?: string; logo?: string }[];
 }
 
 /** Slab chip — the hero's counters. */

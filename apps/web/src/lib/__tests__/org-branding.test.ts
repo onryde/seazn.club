@@ -1,8 +1,8 @@
 // Org branding blob merges (v3/10 #5): the brand colour shares one jsonb column with whatever else the blob holds — the
 // regression this pins is the wipe bug (writing one key used to replace the whole blob, deleting the others). The blob's
-// sponsor list and its merge went in R4 fix batch 3 (sponsors live in the `sponsors` table only).
+// sponsor list, its merge and its reader went in R4 fix batch 3 (sponsors live in the `sponsors` table only).
 import { describe, expect, it } from "vitest";
-import { brandingSponsors, mergeBrandColor } from "@/lib/org-branding";
+import { mergeBrandColor } from "@/lib/org-branding";
 
 describe("org branding merges", () => {
   const existing = {
@@ -20,13 +20,5 @@ describe("org branding merges", () => {
     const next = mergeBrandColor(existing, null);
     expect(next.colors).toBeUndefined();
     expect(next.banner).toBe(existing.banner);
-  });
-
-  it("brandingSponsors reads defensively", () => {
-    expect(brandingSponsors(null)).toEqual([]);
-    expect(brandingSponsors({ sponsors: "junk" })).toEqual([]);
-    expect(brandingSponsors({ sponsors: [{ name: "Acme" }, { nope: 1 }] })).toEqual([
-      { name: "Acme" },
-    ]);
   });
 });

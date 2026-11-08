@@ -1,8 +1,8 @@
 import "server-only";
 // Sponsor CRM (v10 PROMPT-56): first-class sponsor rows with tiers +
-// per-competition scoping. The branding blob (lib/org-branding) stays a
-// read shim — resolveSponsors falls back to it only when the table has no
-// rows for the org. Tiers and competition scoping are the Pro line
+// per-competition scoping. The rows are the ONLY source (R4 fix batch 3: the
+// legacy `branding.sponsors` blob is neither written nor read, and V492
+// strips it). Tiers and competition scoping are the Pro line
 // (`sponsors.tiers`); the un-tiered partner strip is free on every plan.
 // Monetization (`sponsors.monetize`) sells priced packages over the entry-fee
 // Connect rail: destination charge, platform application fee, billing-events
@@ -12,7 +12,6 @@ import { z } from "zod";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
-import { brandingSponsors } from "@/lib/org-branding";
 import { isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "@/lib/sponsor-clicks";
 import { patchOf } from "@/lib/zod-patch";
 import { getStripe } from "@/lib/stripe";
@@ -302,11 +301,13 @@ export async function reorderSponsors(
 }
 
 // ---------------------------------------------------------------------------
-// Public resolver (placement) — DB rows first, blob shim as fallback
+// Public resolver (placement) — the sponsors table only
 // ---------------------------------------------------------------------------
 
 export interface ResolvedSponsor {
-  id: string | null; // null = blob-shim entry (no tracked redirect)
+  // Never null from resolveSponsors since the blob shim went (R4 fix batch 3); the board's `sponsorHref` still takes a
+  // null (no tracked redirect) and is not narrowed here.
+  id: string | null;
   name: string;
   url: string | null;
   logo: string | null;
@@ -315,9 +316,9 @@ export interface ResolvedSponsor {
 
 /**
  * Sponsors for a public surface: competition-scoped rows first, then
- * org-wide, deduped by name, ordered tier rank → display_order. Falls back
- * to the branding blobs ONLY when the org has NEVER had a table row (final
- * review 2, m9: an org that deleted every row reads none, not its old blob).
+ * org-wide, deduped by name, ordered tier rank → display_order. The
+ * `sponsors` table is the only source: no rows means no sponsors (R4 fix
+ * batch 3, m9 — the branding-blob shim brought deleted sponsors back).
  * Runs on the privileged connection: public pages have no tenant context.
  * Orgs without `sponsors.tiers` get the un-tiered free strip — every row
  * collapses to `partner` so tier grouping stays a Pro-visible feature.
@@ -325,7 +326,7 @@ export interface ResolvedSponsor {
  * `onStream` (R4 S5, the stream's card source): only rows ticked onto the
  * stream, filtered BEFORE the name dedupe — a ticked row must never be hidden
  * behind an unticked one of the same name (a paid renewal inserts a new row
- * under the old name). And no blob shim: a blob entry has no row to tick.
+ * under the old name).
  */
 export async function resolveSponsors(
   orgId: string,
@@ -344,43 +345,13 @@ export async function resolveSponsors(
              array_position(${[...SPONSOR_TIERS]}::text[], tier),
              display_order, created_at, id`;
 
-  let resolved: ResolvedSponsor[];
-  if (rows.length > 0) {
-    resolved = rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      url: r.url,
-      logo: r.logo_path,
-      tier: r.tier,
-    }));
-  } else if (onStream) {
-    resolved = [];
-  } else {
-    // Blob shim: competition blob first then org blob, like the old render — ONLY for an org that has NEVER had a
-    // sponsor row (R4 S10 fix round 1, m6; final review 2, m9). Rows that exist but none active here (withdrawn, pending,
-    // another competition's) mean the org has moved to the table, and so do rows it has since DELETED: V283 backfilled
-    // the blobs but never cleared them, so reading them now would resurrect every withdrawn or deleted sponsor,
-    // untracked. "Never" is V492's `first_sponsor_row_at` stamp (set by the org's first row, kept when the rows go); the
-    // live `exists` beside it is the guard for a row the stamp somehow missed. Asked in the same read as the org's blob.
-    const [org] = await sql<{ branding: unknown; had_rows: boolean }[]>`
-      select o.branding,
-             (o.first_sponsor_row_at is not null or exists (select 1 from sponsors s where s.org_id = o.id)) as had_rows
-        from organizations o where o.id = ${orgId}`;
-    const comp = competitionId && org?.had_rows === false
-      ? await sql<{ branding: unknown }[]>`
-          select branding from competitions where id = ${competitionId}`
-      : [];
-    const blob = org?.had_rows === false ? org.branding : undefined;
-    resolved = [...brandingSponsors(comp[0]?.branding), ...brandingSponsors(blob)].map(
-      (s) => ({
-        id: null,
-        name: s.name,
-        url: s.url ?? null,
-        logo: s.logo ?? null,
-        tier: "partner" as const,
-      }),
-    );
-  }
+  const resolved: ResolvedSponsor[] = rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    url: r.url,
+    logo: r.logo_path,
+    tier: r.tier,
+  }));
 
   const seen = new Set<string>();
   const deduped = resolved.filter((s) => !seen.has(s.name) && seen.add(s.name));

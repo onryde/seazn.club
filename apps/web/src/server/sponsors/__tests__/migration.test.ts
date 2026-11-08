@@ -653,6 +653,61 @@ describe.skipIf(!HAS_DB)("V492 sponsors on stream — the constraints are real",
     expect([...created].sort()).toEqual([...NEW_TABLES, ...SEALED_TABLES].sort());
   });
 
+  // Fix batch 3, m9 (the header's DATA CHANGE): sponsors live in the `sponsors` table only, so V492 strips the legacy
+  // `branding.sponsors` blob from every organisation and competition. Expected values are the ruling's: the key is gone,
+  // every other key stays, a row without one is untouched. The block is the file's own text between its strip markers,
+  // run as the migration runs it, inside a transaction that is rolled back (it updates every row holding the key, so a
+  // commit would strip other suites' planted blobs mid-run).
+  it("DATA CHANGE: migrating strips `sponsors` from every organisation's and competition's branding and keeps every other key (counts reported; MUTATE: drop either update)", async () => {
+    const block = /-- strip:begin\n([\s\S]*?)-- strip:end/.exec(readFileSync(V492_FILE, "utf8"))?.[1];
+    expect(block, "V492 carries its strip block").toBeDefined();
+    const ROLLBACK = new Error("rolled back on purpose");
+    const BLOB = [{ name: "Old Faithful", url: "https://of.example" }];
+    const branded = { colors: { primary: "#112233" }, banner: "orgs/banner.png" };
+    // [label, table, branding before, branding after]: a list, a junk value (the key goes whatever it holds), a row with
+    // no key (untouched), a row that is ONLY the key (left as {}).
+    const CASES: readonly [string, "organizations" | "competitions", Record<string, unknown>, Record<string, unknown>][] = [
+      ["an org's list beside its colours", "organizations", { ...branded, sponsors: BLOB }, branded],
+      ["an org's junk value", "organizations", { sponsors: "junk" }, {}],
+      ["an org with no key", "organizations", branded, branded],
+      ["a competition's list beside its colours", "competitions", { ...branded, sponsors: BLOB }, branded],
+      ["a competition that is only the key", "competitions", { sponsors: BLOB }, {}],
+      ["a competition with no key", "competitions", branded, branded],
+    ];
+    const ids: string[] = [];
+    const [{ id: hostOrg }] = await sql<{ id: string }[]>`
+      insert into organizations (name, slug) values ('Blob Host', ${`blob-host-${uniq()}`}) returning id`;
+    for (const [, table, before] of CASES) {
+      const [row] = table === "organizations"
+        ? await sql<{ id: string }[]>`
+            insert into organizations (name, slug, branding) values ('Blob Org', ${`blob-${uniq()}`}, ${sql.json(before as never)}) returning id`
+        : await sql<{ id: string }[]>`
+            insert into competitions (org_id, name, slug, branding) values (${hostOrg}, 'Blob Cup', ${`blob-${uniq()}`}, ${sql.json(before as never)})
+            returning id`;
+      ids.push(row!.id);
+    }
+    let after: Record<string, unknown>[] = [];
+    await expect(sql.begin(async (tx) => {
+      await tx.unsafe(block!);
+      after = [];
+      for (const [i, [, table]] of CASES.entries()) {
+        const [row] = await tx<{ branding: Record<string, unknown> }[]>`select branding from ${tx(table)} where id = ${ids[i]!}`;
+        after.push(row!.branding);
+      }
+      throw ROLLBACK;
+    })).rejects.toBe(ROLLBACK);
+    let checked = 0;
+    for (const [i, [label, , , expected]] of CASES.entries()) {
+      expect(after[i], label).toEqual(expected);
+      expect(Object.keys(after[i]!), `${label}: the key is gone`).not.toContain("sponsors");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every case read back").toBe(6);
+    // ...and the rollback left the planted rows as they were.
+    const [kept] = await sql<{ branding: Record<string, unknown> }[]>`select branding from organizations where id = ${ids[0]!}`;
+    expect(kept!.branding).toEqual({ ...branded, sponsors: BLOB });
+  });
+
   it("the tombstone table is SEALED (S9 review m8): RLS enabled and forced, no policy, no grant — app_user can neither read nor write it", async () => {
     let checked = 0;
     for (const table of SEALED_TABLES) {

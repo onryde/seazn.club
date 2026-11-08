@@ -1,12 +1,16 @@
 // Sponsor CRM (v10 PROMPT-56): CRUD + entitlement gates + resolver order.
 // Tiers above partner and per-competition scoping are Pro `sponsors.tiers`;
 // the flat partner strip stays free. Real Postgres required.
+// R4 fix batch 3 (m9): sponsors come from the `sponsors` table ONLY. The legacy `branding.sponsors` blob is never read
+// (V492 strips it, the org PATCH no longer writes it); the cases below that still plant one prove it stays unread.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { embedDivisionData } from "@/server/embed-data";
 import { createCompetition } from "../competitions";
+import { orgBranding } from "../exports";
 import {
   createSponsor,
   deleteSponsor,
@@ -112,7 +116,7 @@ describe.skipIf(!HAS_DB)("sponsors usecase", () => {
     });
   });
 
-  it("resolveSponsors: table rows win over blob, scope + dedupe + rank", async () => {
+  it("resolveSponsors: table rows only (a stray blob is never read), scope + dedupe + rank", async () => {
     const { auth } = await seedOrg("pro");
     const comp = await createCompetition(auth, {
       ends_on: "2030-12-31",
@@ -120,7 +124,7 @@ describe.skipIf(!HAS_DB)("sponsors usecase", () => {
       visibility: "public",
       branding: {},
     });
-    // Blob sponsors exist but must be ignored once table rows exist.
+    // A stray blob (a value planted directly) is never read: rows are the only source.
     await sql`
       update organizations
       set branding = ${sql.json({ sponsors: [{ name: "Blob Relic" }] } as never)}
@@ -159,42 +163,37 @@ describe.skipIf(!HAS_DB)("sponsors usecase", () => {
     expect(flat.every((s) => s.tier === "partner")).toBe(true);
   });
 
-  it("resolveSponsors: blob shim only when the org has no rows", async () => {
+  // R4 fix batch 3 (m9): the EMPTY case, which used to fall back to the blob shim. An org with no rows shows nothing,
+  // however much a stray blob holds; its first row is all it shows.
+  it("resolveSponsors: an org with NO rows and a stray blob resolves to nothing - the blob is never read - and its first row is all it shows", async () => {
     const { auth } = await seedOrg("community");
     await sql`
       update organizations
       set branding = ${sql.json({ sponsors: [{ name: "Old Faithful", url: "https://of.example" }] } as never)}
       where id = ${auth.orgId}`;
-    const shim = await resolveSponsors(auth.orgId);
-    expect(shim).toEqual([
-      {
-        id: null,
-        name: "Old Faithful",
-        url: "https://of.example",
-        logo: null,
-        tier: "partner",
-      },
-    ]);
+    expect(await resolveSponsors(auth.orgId)).toEqual([]);
+    expect(await resolveSponsors(auth.orgId, undefined, { tiered: false }), "the free strip too").toEqual([]);
 
-    await createSponsor(auth, {
+    const row = await createSponsor(auth, {
       name: "New Row",
       tier: "partner",
       status: "active",
     });
-    const rows = await resolveSponsors(auth.orgId);
-    expect(rows.map((s) => s.name)).toEqual(["New Row"]);
+    expect(await resolveSponsors(auth.orgId)).toEqual([
+      { id: row.id, name: "New Row", url: null, logo: null, tier: "partner" },
+    ]);
   });
 
-  // R4 S10 fix round 1, m6: "no rows AT ALL", as the doc says — never "no ACTIVE rows". V283 backfilled the blobs into
-  // rows but never cleared them, so falling back on zero active rows brought every withdrawn sponsor back, untracked.
+  // R4 S10 fix round 1, m6: V283 backfilled the blobs into rows but never cleared them, so falling back on zero active
+  // rows brought every withdrawn sponsor back, untracked. Since fix batch 3 the blob is never read at all.
   it("m6: withdrawn sponsors never resurrect from the blob — rows that exist but none active resolve to NOTHING", async () => {
     const { auth } = await seedOrg("community");
     await sql`
       update organizations
       set branding = ${sql.json({ sponsors: [{ name: "Old Faithful", url: "https://of.example" }] } as never)}
       where id = ${auth.orgId}`;
-    // The positive pair first: an org with no rows at all reads its blob.
-    expect((await resolveSponsors(auth.orgId)).map((s) => [s.id, s.name])).toEqual([[null, "Old Faithful"]]);
+    // No rows at all (fix batch 3: flipped by design): the blob is not read either.
+    expect(await resolveSponsors(auth.orgId)).toEqual([]);
 
     const row = await createSponsor(auth, { name: "Backfilled", tier: "partner", status: "active" });
     expect((await resolveSponsors(auth.orgId)).map((s) => s.name)).toEqual(["Backfilled"]);
@@ -209,46 +208,74 @@ describe.skipIf(!HAS_DB)("sponsors usecase", () => {
     // Reactivated: the row again, still no blob.
     await patchSponsor(auth, row.id, { status: "active" });
     expect((await resolveSponsors(auth.orgId)).map((s) => s.name)).toEqual(["Backfilled"]);
-    // Deleted (final review 2, m9: flipped by design) — the org has no rows left, but it HAD one, so the blob stays unread:
-    // a deleted sponsor never comes back from it.
+    // Deleted (final review 2, m9): no rows left, and the blob stays unread - a deleted sponsor never comes back from it.
     await deleteSponsor(auth, row.id);
     expect(await resolveSponsors(auth.orgId)).toEqual([]);
   });
 
-  // Final review 2, m9 (a customer bug: deleted sponsors came back). V283 copied the blobs into rows ONCE and never cleared
-  // them, and the blob stays writable (the legacy org PATCH's `sponsors`, a competition's free-form branding), so an org
-  // that has never had a row still reads its blob. Once an org has had one (V492 stamps organizations.first_sponsor_row_at),
-  // the blob is never read again - deleting every row leaves the board EMPTY, not the old blob.
-  it("m9: an org deletes its last sponsor and the public board shows none - neither the org's blob nor the competition's; an org that never had a row still reads its blobs", async () => {
+  // Fix batch 3, m9 (a customer bug: deleted sponsors came back from V283's never-cleared blob). Sponsors come from the
+  // `sponsors` table only, so an org that deletes its last sponsor shows NONE on every surface that rendered the blob:
+  // the competition page's board and hero and the match page (resolveSponsors(org, competition, { tiered })), the free
+  // strip (tiered: false), both slideshows (resolveSponsors(org, competition)), the org-wide read, the embed
+  // (embedDivisionData) and the branded exports (orgBranding). A stray blob is planted on the org AND the competition
+  // (a competition's branding is a free-form record, so a client can still write one there) and is never read.
+  // Single sport on purpose: a sponsor belongs to an org and a competition, never a sport.
+  it("m9: an org deletes its last sponsor and every surface that rendered the blob shows none - a stray blob on the org or the competition included (counts reported)", async () => {
     const { auth } = await seedOrg("pro");
-    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: `Board Cup ${randomUUID().slice(0, 6)}`, visibility: "public", branding: {} });
+    const s = randomUUID().slice(0, 8);
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: `Board Cup ${s}`, visibility: "public", branding: {} });
+    await sql`
+      insert into sports (key, name, module_version, position_catalog)
+      values ('generic', 'Generic', '1.0.0', '{}') on conflict (key) do nothing`;
+    const [{ id: divisionId }] = await sql<{ id: string }[]>`
+      insert into divisions (org_id, competition_id, name, slug, sport_key, variant_key, status, config, module_version)
+      values (${auth.orgId}, ${comp.id}, 'Open', ${`open-${s}`}, 'generic', 'score', 'active', '{}', '1.0.0')
+      returning id`;
+    const [{ name: orgName }] = await sql<{ name: string }[]>`select name from organizations where id = ${auth.orgId}`;
     await sql`
       update organizations set branding = ${sql.json({ sponsors: [{ name: "Old Faithful", url: "https://of.example" }] } as never)}
        where id = ${auth.orgId}`;
     await sql`update competitions set branding = ${sql.json({ sponsors: [{ name: "Cup Relic" }] } as never)} where id = ${comp.id}`;
-    const board = async () => [
-      (await resolveSponsors(auth.orgId)).map((s) => s.name),
-      (await resolveSponsors(auth.orgId, comp.id)).map((s) => s.name),
+
+    const names = (list: readonly { name: string }[] | undefined) => (list ?? []).map((x) => x.name);
+    const SURFACES: readonly [string, () => Promise<string[]>][] = [
+      ["competition page board + hero, match page (tiered)", async () => names(await resolveSponsors(auth.orgId, comp.id, { tiered: true }))],
+      ["free strip (tiered: false)", async () => names(await resolveSponsors(auth.orgId, comp.id, { tiered: false }))],
+      ["slideshows (competition, division)", async () => names(await resolveSponsors(auth.orgId, comp.id))],
+      ["org-wide", async () => names(await resolveSponsors(auth.orgId))],
+      ["embed", async () => {
+        const res = await embedDivisionData(divisionId);
+        if (!res.ok) throw new Error(`premise: the embed resolves (${res.reason})`);
+        return names(res.data.sponsors);
+      }],
+      ["branded exports", async () => {
+        const branding = await orgBranding(auth.orgId, orgName, comp.id);
+        if (!branding) throw new Error("premise: a Pro org's exports are branded");
+        return names(branding.sponsors);
+      }],
     ];
-    const stamp = async () => (await sql<{ at: Date | null }[]>`select first_sponsor_row_at as at from organizations where id = ${auth.orgId}`)[0]!.at;
-    // The positive pair first: never had a row, so both blobs read (the competition's first) - and nothing is stamped.
-    expect(await board()).toEqual([["Old Faithful"], ["Cup Relic", "Old Faithful"]]);
-    expect(await stamp(), "no row yet, no stamp").toBeNull();
+    const board = async (label: string, expected: (surface: string) => string[]) => {
+      let checked = 0;
+      for (const [surface, read] of SURFACES) {
+        expect(await read(), `${label}: ${surface}`).toEqual(expected(surface));
+        checked++;
+      }
+      expect(checked, `${label}: anti-vacuity, every surface read`).toBe(6);
+    };
 
+    // The empty case first: no rows, so nothing - neither blob is read.
+    await board("no rows", () => []);
+    // The positive pair: rows show on every surface (the competition's first; the org-wide read sees only the org's).
     const first = await createSponsor(auth, { name: "Harbour Bank", tier: "gold", status: "active" });
-    const stamped = await stamp();
-    expect(stamped, "the first row stamps the org").not.toBeNull();
     const second = await createSponsor(auth, { name: "Quay Cafe", tier: "partner", status: "active", competition_id: comp.id });
-    expect(await stamp(), "a second row does not move the stamp").toEqual(stamped);
-    expect(await board()).toEqual([["Harbour Bank"], ["Quay Cafe", "Harbour Bank"]]);
+    await board("rows", (surface) => (surface === "org-wide" ? ["Harbour Bank"] : ["Quay Cafe", "Harbour Bank"]));
 
-    // The org deletes every sponsor: the board is empty on both scopes, a second read the same, and the stamp stays.
+    // The org deletes every sponsor: every surface is empty, and a second read the same.
     await deleteSponsor(auth, second.id);
     await deleteSponsor(auth, first.id);
     expect((await sql<{ n: number }[]>`select count(*)::int as n from sponsors where org_id = ${auth.orgId}`)[0]!.n, "premise: no rows left").toBe(0);
-    expect(await board(), "after the last delete").toEqual([[], []]);
-    expect(await board(), "a second read").toEqual([[], []]);
-    expect(await stamp(), "the stamp outlives the rows").toEqual(stamped);
+    await board("after the last delete", () => []);
+    await board("a second read", () => []);
   });
 
   it("m6: an org whose rows all belong to ANOTHER competition shows nothing on this one — not the blob", async () => {
@@ -267,8 +294,8 @@ describe.skipIf(!HAS_DB)("sponsors usecase", () => {
       update competitions
       set branding = ${sql.json({ sponsors: [{ name: "Comp Blob Relic" }] } as never)}
       where id = ${mine!.id}`;
-    // Positive pair first: with no rows at all, both blobs read — the competition's first.
-    expect((await resolveSponsors(auth.orgId, mine!.id)).map((s) => s.name)).toEqual(["Comp Blob Relic", "Blob Relic"]);
+    // No rows at all (fix batch 3: flipped by design): neither blob is read.
+    expect(await resolveSponsors(auth.orgId, mine!.id)).toEqual([]);
     await createSponsor(auth, { name: "Their Gold", tier: "gold", status: "active", competition_id: theirs!.id });
     expect(await resolveSponsors(auth.orgId, mine!.id)).toEqual([]);
     expect((await resolveSponsors(auth.orgId, theirs!.id)).map((s) => s.name)).toEqual(["Their Gold"]);
