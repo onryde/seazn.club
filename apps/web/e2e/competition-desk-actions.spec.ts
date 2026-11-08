@@ -433,6 +433,40 @@ const ROWS: Row[] = [
       await assertUsable(page, '[data-testid="pending-row"] button', "confirm or waive the ban");
     },
   },
+  {
+    // W4 T11 (X-LE-10, R24 pick 1A): a reinstated player waits to join a started knockout — the automatic arrival the app
+    // never places. Eight Started through the real doors, one withdrawn (the walkover) and reinstated through PATCH.
+    // "Open bracket" lands on the division's Fixtures tab, on the knockout's stage card. T19 adds the "Add to bracket"
+    // control there; until then the landing proves the tab and the stage, and T19 owes this row its press.
+    id: "late_players_waiting",
+    kind: "late_players_waiting",
+    label: en["knockout.lateWaiting.action"],
+    build: async (request) => {
+      const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+        name: `Actions late ${TAG} ${Math.random().toString(36).slice(2, 6)}`, visibility: "public", ends_on: "2030-12-31",
+      });
+      expect(comp.status, "create competition").toBe(201);
+      const div = await apiJson<{ id: string; slug: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`,
+        "POST", { name: "Open", sport_key: "badminton", variant_key: "bwf", config: {} });
+      expect(div.status, "create division").toBe(201);
+      const ents = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${div.data!.id}/entrants`, "POST",
+        Array.from({ length: 8 }, (_, i) => ({ kind: "individual", display_name: `Seed ${i + 1} ${TAG}`, seed: i + 1 })));
+      expect(ents.status, "add eight players").toBe(201);
+      const stageName = `Late Cup ${Math.random().toString(36).slice(2, 6)}`;
+      const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST",
+        { seq: 1, kind: "knockout", name: stageName, config: {} });
+      expect(stage.status, "create the knockout").toBe(201);
+      expect((await apiJson(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST")).status, "draw").toBe(200);
+      expect((await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status, "Start").toBe(200);
+      const leaver = ents.data![0]!.id;
+      expect((await apiJson(request, `/api/v1/entrants/${leaver}/withdraw`, "POST")).status, "withdraw").toBe(200);
+      expect((await apiJson(request, `/api/v1/entrants/${leaver}`, "PATCH", { status: "registered" })).status, "reinstate").toBe(200);
+      return { compSlug: comp.data!.slug, divSlug: div.data!.slug, landText: stageName };
+    },
+    land: async (page) => {
+      await expect(page).toHaveURL(/tab=fixtures/);
+    },
+  },
 ];
 
 test.describe("competition desk: every action label lands on the control it names", () => {

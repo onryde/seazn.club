@@ -263,6 +263,7 @@ const SAMPLE: { [K in Attention["kind"]]: Extract<Attention, { kind: K }> } = {
   result_missing: { kind: "result_missing", count: 2, fixtureIds: ["f1", "f2"] },
   registrations_waiting: { kind: "registrations_waiting", count: 2 },
   bans_waiting: { kind: "bans_waiting", count: 1 },
+  late_players_waiting: { kind: "late_players_waiting", count: 1, stageName: "Cup" },
 };
 
 const SIDES = [
