@@ -22,8 +22,9 @@
 //   nav-settings-tooltip-1280 Settings hovered. The browser's own `title` tooltip is NOT in the DOM and headless Chromium
 //                             paints none into a screenshot: the shot shows the hover state, the witness asserts the title.
 // Before each: Sponsors (folded to the home's entry below 350 — nav.tsx `hidden min-[350px]:flex`, so it is asserted HIDDEN
-// at 320, and above it the link AND its label span visible), Settings and Sign out visible, the bar's content inside its
-// box, and no page scroll.
+// at 320, and above it the link AND its label span visible), Settings and Sign out visible AND tappable inside the viewport
+// (elementFromPoint), the bar's content inside its box, and no page scroll. At 320 the logo org's crest stands alone (nav.tsx
+// folds its wordmark there: CI e2e 42438561906 measured that bar 354px wide, Sign out past the edge).
 //
 // ANTI-VACUITY (AGENTS.md class 10): the last test asserts every file exists, is a PNG, and that no two are
 // byte-identical — a capture that errored before a shot, or two states that never opened, cannot pass it.
@@ -263,8 +264,22 @@ test.describe("the org top bar (nav sign-off)", () => {
     }
   });
 
+  /** A control a person can tap: its box wholly inside the viewport, and a tap at its centre lands on IT (elementFromPoint, AGENTS.md
+   *  class 2 - `toBeVisible` passes for a button past the viewport's edge, and html's `overflow-x: clip` hides it without a scroll). */
+  async function expectTappable(control: Locator, width: number, what: string): Promise<void> {
+    const at = await control.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return { left: r.left, right: r.right, hit: hit !== null && (hit === el || el.contains(hit)) };
+    });
+    expect(at.left, `${width}: ${what} starts inside the viewport`).toBeGreaterThanOrEqual(0);
+    expect(at.right, `${width}: ${what} ends inside the viewport`).toBeLessThanOrEqual(width);
+    expect(at.hit, `${width}: a tap at ${what}'s centre reaches it`).toBe(true);
+  }
+
   /** The bar at this width, witnessed: Sponsors (hidden at 320, where the home's entry stands in), Settings, Sign out, the
-   *  bar's content inside its own box, no page scroll. */
+   *  bar's content inside its own box, Settings and Sign out tappable inside the viewport, no page scroll. CI e2e 42438561906
+   *  measured the logo org's bar 354px wide at 320, Sign out wholly past the edge: nav.tsx now folds a logo org's wordmark there. */
   async function witnessBar(o: StandInOrg, width: number): Promise<Locator> {
     const { page } = o;
     await page.setViewportSize({ width, height: 900 });
@@ -279,10 +294,16 @@ test.describe("the org top bar (nav sign-off)", () => {
       await expect(sponsors, `${width}: Sponsors is on the bar`).toBeVisible();
       await expect(sponsors.getByText(word("nav.sponsors"), { exact: true }), `${width}: its label is painted`).toBeVisible();
     }
-    await expect(header.getByTestId("nav-settings"), `${width}: the Settings icon`).toBeVisible();
-    await expect(header.getByRole("button", { name: word("nav.signOut"), exact: true }), `${width}: the Sign out icon`).toBeVisible();
+    const settings = header.getByTestId("nav-settings");
+    const signOut = header.getByRole("button", { name: word("nav.signOut"), exact: true });
+    await expect(settings, `${width}: the Settings icon`).toBeVisible();
+    await expect(signOut, `${width}: the Sign out icon`).toBeVisible();
     const fit = await header.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
     expect(fit.scroll, `${width}: the bar's content fits its box`).toBeLessThanOrEqual(fit.client);
+    await expectTappable(settings, width, "Settings");
+    await expectTappable(signOut, width, "Sign out");
+    // Whatever the wordmark does at this width, the home link keeps its name (nav.tsx folds it with `sr-only`, never `hidden`).
+    await expect(header.getByRole("link", { name: "Seazn Club" }), `${width}: the home link is still named Seazn Club`).toHaveAttribute("href", "/");
     await expectNoHorizontalScroll(page);
     return header;
   }
@@ -293,9 +314,16 @@ test.describe("the org top bar (nav sign-off)", () => {
       const crest = header.locator(`img[src="${NAV_LOGO_URL}"]`);
       await expect(crest, "witness: the org's logo").toBeVisible();
       await expect.poll(() => crest.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
+      await expectTappable(crest, width, "the club's crest");
+      // At 320 the club's crest takes the wordmark's place (its box leaves the row); from 768 both are drawn, the wordmark wider.
+      const drawn = (h: Locator) => h.locator('img[src="/logo-wide-night.png"]').evaluate((img) => img.getBoundingClientRect().width);
+      const crestWidth = await crest.evaluate((img) => img.getBoundingClientRect().width);
+      if (width === 320) expect(await drawn(header), "320: the wordmark gives its place to the crest").toBeLessThanOrEqual(1);
+      else expect(await drawn(header), `${width}: the wordmark beside the crest`).toBeGreaterThan(crestWidth);
       await header.screenshot({ path: navShotPath(`nav-logo-${width}`), animations: "disabled" });
 
       const bar = await witnessBar(longOrg!, width);
+      expect(await drawn(bar), `${width}: an org without a logo keeps its wordmark - the bar's only mark`).toBeGreaterThan(crestWidth);
       const chip = bar.locator('[data-tour="org-chip"]');
       // The org chip is the name's place from `sm` (640); at 320 the bar carries no name. From 640 the chip gives up width
       // before anything else (nav.tsx `shrink-[999]`: "a clipped club name costs nothing"), so its TEXT is the witness.
