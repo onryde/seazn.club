@@ -100,7 +100,8 @@ describe.skipIf(!HAS_DB)("Match Day code routes", () => {
     const day = await seedDay();
     authState.userId = day.auth.userId!;
     const minted = ((await (await mintPost(post({ scope: { kind: "competition" } }), ctx(day.comp.id))).json()) as Envelope<MatchDayCode>).data!;
-    const token = minted.url.slice(minted.url.lastIndexOf("/") + 1);
+    // A minted code always carries its url; only the list's unopenable rows are null (final review I3).
+    const token = minted.url!.slice(minted.url!.lastIndexOf("/") + 1);
     const bearer = { authorization: `Bearer ${token}` };
     const withBearer = (r: Request) => new Request(r, { headers: { ...Object.fromEntries(r.headers), ...bearer } });
     expect((await mintPost(withBearer(post({ scope: { kind: "competition" } })), ctx(day.comp.id))).status).toBe(403);
@@ -124,7 +125,7 @@ describe.skipIf(!HAS_DB)("Match Day code routes", () => {
     const day = await seedDay();
     authState.userId = day.auth.userId!;
     const code = ((await (await mintPost(post({ scope: { kind: "competition" } }), ctx(day.comp.id))).json()) as Envelope<MatchDayCode>).data!;
-    const token = code.url.slice(code.url.lastIndexOf("/") + 1);
+    const token = code.url!.slice(code.url!.lastIndexOf("/") + 1);
     const revoke = () => revokePost(new Request("https://test.local/x", { method: "POST" }), ctx(code.id));
 
     // A viewer may not withdraw it.
