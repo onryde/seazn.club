@@ -271,8 +271,9 @@ describe("DetailDock chip labels — DockChip.labelText (R3/football)", () => {
   });
 
   it("still resolves `label` through t() for every chip that declares no labelText — every pre-R3 dock is unchanged", () => {
-    const island = renderDock([chip({ id: "batRun4", label: "pad.cricket.dock.batRun4", labelText: undefined })]);
-    expect(chipButtonLabels(island)).toContain("T:pad.cricket.dock.batRun4");
+    // S2-4 Task 4: was cricket's no-ball "4 runs" chip; cricket has no dock any more, so a football flag chip stands in.
+    const island = renderDock([chip({ id: "ownGoal", label: "pad.football.dock.ownGoal", labelText: undefined })]);
+    expect(chipButtonLabels(island)).toContain("T:pad.football.dock.ownGoal");
   });
 
   it("labelText WINS when both are present — never concatenated, never merged", () => {
@@ -356,10 +357,11 @@ describe("DockChip.kind — a modifier is a tab, a person is a pill (R3/football
     expect(person).not.toContain("rounded-lg");
   });
 
-  it("leaves a dock that sets no kind on the pill — cricket sets none", () => {
+  it("leaves a dock that sets no kind on the pill", () => {
     // Every pre-R3 dock omits `kind`. If this ever stops being the pill, a
-    // signed-off sport moved without anyone asking for it.
-    for (const cls of chipClasses([chip("bat:4"), chip("wide")])) {
+    // signed-off sport moved without anyone asking for it. (S2-4 Task 4: the
+    // cricket dock this case named is gone; the chips are generic fixtures.)
+    for (const cls of chipClasses([chip("scorer:h1"), chip("assist:h2")])) {
       expect(cls).toContain("rounded-full");
       expect(cls).not.toContain("rounded-lg");
     }

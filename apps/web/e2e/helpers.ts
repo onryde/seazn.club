@@ -2464,6 +2464,26 @@ export async function pickCricketPeople(
   }
 }
 
+/**
+ * S2-4 Task 4 (gaps 3, 4): Wide, No-ball, Bye and Leg-bye each open a sheet that asks the runs, and the answer records
+ * the ball at once (no dock, no soft-commit hold). This taps the extra's tile, waits for its sheet, and taps the answer
+ * by its option id (`[data-choice-option-id]`, locale-free): the wide `"0"`-`"4"` runs run, the no-ball `"bat:0"`-`"bat:6"`
+ * off the bat or `"ran:1"`-`"ran:4"`, the bye and leg bye `"1"`-`"4"`. `tileId` is the tile's `data-tile-id`
+ * (`wide`, `extra-noball`, `extra-bye`, `extra-legbye`). The caller polls the ledger for the ball.
+ */
+export async function tapCricketExtra(
+  page: Page,
+  tileId: "wide" | "extra-noball" | "extra-bye" | "extra-legbye",
+  optionId: string,
+): Promise<void> {
+  const pad = page.locator('[data-testid="score-pad"]');
+  await pad.locator(`[data-tile-id="${tileId}"]`).click();
+  const sheet = pad.locator('[data-role="v3-sheet"]');
+  const option = sheet.locator(`[data-choice-option-id="${optionId}"]`);
+  await expect(option, `tapCricketExtra: the ${tileId} sheet offers "${optionId}"`).toBeVisible({ timeout: 10_000 });
+  await option.click();
+}
+
 /** Record a generic.result for one fixture (reads last_seq for optimistic concurrency). */
 export async function scoreFixture(
   request: APIRequestContext,

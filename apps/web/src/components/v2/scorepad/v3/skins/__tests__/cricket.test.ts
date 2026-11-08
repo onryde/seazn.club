@@ -1297,16 +1297,14 @@ describe("buildTiles", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// buildTiles — minor extras defaults (R2b task 4, `_INDEX.md`, owner ruling).
-// The extras TILES keep firing instantly at a sensible default; the DOCK
-// (below) is where the variable runs get entered. This block only proves
-// the TILE-tap defaults; the dock's own chip behaviour is proved further
-// down.
+// buildTiles — the extras (R2b task 4; S2-4 Task 4). The penalty tile records
+// its ball at the Law 41 award; the no-ball, bye, leg bye and wide open their
+// sheet, which asks the runs before the ball is recorded. The sheets' answers
+// are folded through the engine in pad-rules-cricket.test.ts.
 // ---------------------------------------------------------------------------
 
-describe("buildTiles — minor extras defaults (R2b task 4)", () => {
-  it("penalty defaults to 5 runs (Law 41), not the ordinary single every other minor extra gets", () => {
+describe("buildTiles — the extras (R2b task 4; S2-4 Task 4)", () => {
+  it("penalty defaults to 5 runs (Law 41), recorded on the tap", () => {
     const tiles = buildTiles(view());
     const penalty = tiles.find((tl) => tl.id === "extra-penalty")!;
     expect(penalty.action).toEqual({
@@ -1320,110 +1318,43 @@ describe("buildTiles — minor extras defaults (R2b task 4)", () => {
     });
   });
 
-  it("ignoring the dock leaves the plain no-ball extra unchanged — 1 run, bat 0 — the common path is untouched", () => {
+  it("the wide, no-ball, bye and leg bye tiles open their own sheet and record nothing on the tap", () => {
     const tiles = buildTiles(view());
-    const noball = tiles.find((tl) => tl.id === "extra-noball")!;
-    expect(noball.action).toEqual({
-      event: {
-        type: "cricket.ball",
-        payload: {
-          over: 0, ballInOver: 6, striker: "h1", nonStriker: "h2", bowler: "a1",
-          runs: { bat: 0, extras: { kind: "noball", runs: 1 } },
-        },
-      },
-    });
-  });
-
-  it("bye and leg bye tiles still default to the ordinary single — the penalty fix does not touch them", () => {
-    const tiles = buildTiles(view());
-    for (const kind of ["bye", "legbye"] as const) {
-      const tile = tiles.find((tl) => tl.id === `extra-${kind}`)!;
-      const action = tile.action as unknown as { event: { payload: { runs: unknown } } };
-      expect(action.event.payload.runs).toEqual({ bat: 0, extras: { kind, runs: 1 } });
+    const sheets = buildSheets(view(), t);
+    let checked = 0;
+    for (const [id, sheet] of [["wide", "wide"], ["extra-noball", "noball"], ["extra-bye", "bye"], ["extra-legbye", "legbye"]] as const) {
+      expect(tiles.find((tl) => tl.id === id)!.action, id).toEqual({ sheet });
+      expect(sheets[sheet], `${sheet} is a sheet the skin declares`).toBeDefined();
+      checked++;
     }
+    expect(checked).toBe(4);
   });
 });
 
 // ---------------------------------------------------------------------------
-// buildDock
+// buildDock — S2-4 Task 4: cricket has no dock, so no cricket ball waits on
+// the soft-commit timer. R2b had already removed the freeHit chip (the fold
+// derives a pending free hit; the flag could only be refused); Task 4 moved
+// the no-ball's bat runs and the bye and leg bye's runs onto their sheets.
 // ---------------------------------------------------------------------------
 
-// R2b (owner ruling, live-tile audit): the freeHit chip is GONE — it was
-// offered unconditionally (never gated on whether a free hit was actually
-// pending) and the engine refused it outright the moment it wasn't,
-// surfacing as a generic rejection the owner hit live (cricket.ts:1224,
-// "freeHit flagged but no free hit is pending"). Replaced by a READ-ONLY
-// indicator (buildScorebug, below) — the scorer no longer declares what the
-// fold already knows. Plain / wide / penalty balls return null (nothing to
-// enrich); soft-commit holds only for noball bat-runs and bye/legbye extras.
 describe("buildDock", () => {
-  it("is null for a plain ball — nothing to enrich, so no soft-commit hold", () => {
-    expect(buildDock("cricket.ball", t)).toBeNull();
-  });
-  it("is also null for a plain super-over ball", () => {
-    expect(buildDock("cricket.superover.ball", t)).toBeNull();
-  });
-  it("is null for every non-ball event type — never a stray dock on an admin action", () => {
-    expect(buildDock("cricket.toss", t)).toBeNull();
-    expect(buildDock("cricket.retire", t)).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// buildDock — payload-aware chips (R2b task 4, `_INDEX.md`, owner ruling).
-// The chassis now threads the held tap's own payload through as an
-// OPTIONAL 3rd argument (pad-host.tsx's widened HeldTap/resolveDockSpec) —
-// this is what lets the dock tell a no-ball apart from a plain single, both
-// of which dispatch the identical `cricket.ball` event TYPE.
-// ---------------------------------------------------------------------------
-
-describe("buildDock — payload-aware chips (R2b task 4)", () => {
-  it("omitting payload entirely (every pre-existing 2-arg call site): null dock, freeHit is gone", () => {
-    expect(buildDock("cricket.ball", t)).toBeNull();
-  });
-
-  it("a plain run tap has no dock — nothing to enrich", () => {
-    expect(buildDock("cricket.ball", t, { runs: { bat: 4 }, boundary: 4 })).toBeNull();
-  });
-
-  it("a no-ball's dock offers bat-run chips +1/+2/+3/+4/+6 — freeHit no longer among them", () => {
-    const payload = { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } };
-    const dock = buildDock("cricket.ball", t, payload)!;
-    expect(dock.chips.map((c) => c.id)).toEqual(["batRun1", "batRun2", "batRun3", "batRun4", "batRun6"]);
-  });
-
-  it("tapping a no-ball's +3 chip sets bat:3, preserving the noball extra verbatim — the WHOLE payload, not just bat", () => {
-    const payload = { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } };
-    const dock = buildDock("cricket.ball", t, payload)!;
-    const chip = dock.chips.find((c) => c.id === "batRun3")!;
-    expect(chip.mutate(payload)).toEqual({ runs: { bat: 3, extras: { kind: "noball", runs: 1 } } });
-  });
-
-  it("a no-ball's +4/+6 bat-run chip also stamps boundary, matching the plain run4/run6 tile's own convention", () => {
-    const payload = { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } };
-    const dock = buildDock("cricket.ball", t, payload)!;
-    const chip4 = dock.chips.find((c) => c.id === "batRun4")!;
-    expect(chip4.mutate(payload)).toEqual({ runs: { bat: 4, extras: { kind: "noball", runs: 1 } }, boundary: 4 });
-    const chip6 = dock.chips.find((c) => c.id === "batRun6")!;
-    expect(chip6.mutate(payload)).toEqual({ runs: { bat: 6, extras: { kind: "noball", runs: 1 } }, boundary: 6 });
-  });
-
-  it("bye and leg bye docks offer extra-run chips 2/3/4 that raise the EXTRA's own runs, bat stays 0 — freeHit no longer among them", () => {
-    for (const kind of ["bye", "legbye"] as const) {
-      const payload = { runs: { bat: 0, extras: { kind, runs: 1 } } };
-      const dock = buildDock("cricket.ball", t, payload)!;
-      expect(dock.chips.map((c) => c.id)).toEqual(["extraRun2", "extraRun3", "extraRun4"]);
-      const chip = dock.chips.find((c) => c.id === "extraRun3")!;
-      expect(chip.mutate(payload)).toEqual({ runs: { bat: 0, extras: { kind, runs: 3 } } });
-    }
-  });
-
-  it("a wide has no dock — engine refuses bat runs off a wide; nothing else to ask", () => {
-    expect(buildDock("cricket.ball", t, { runs: { bat: 0, extras: { kind: "wide", runs: 1 } } })).toBeNull();
-  });
-
-  it("a penalty has no dock — only the TILE default changed (5)", () => {
-    expect(buildDock("cricket.ball", t, { runs: { bat: 0, extras: { kind: "penalty", runs: 5 } } })).toBeNull();
+  it("is null for every cricket payload and event type — a plain run, each extra, a wicket, a super-over ball, an admin action", () => {
+    const payloads: [string, Record<string, unknown> | undefined][] = [
+      ["cricket.ball", undefined],
+      ["cricket.ball", { runs: { bat: 4 }, boundary: 4 }],
+      ["cricket.ball", { runs: { bat: 0, extras: { kind: "wide", runs: 1 } } }],
+      ["cricket.ball", { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }],
+      ["cricket.ball", { runs: { bat: 0, extras: { kind: "bye", runs: 1 } } }],
+      ["cricket.ball", { runs: { bat: 0, extras: { kind: "legbye", runs: 1 } } }],
+      ["cricket.ball", { runs: { bat: 0, extras: { kind: "penalty", runs: 5 } } }],
+      ["cricket.ball", { runs: { bat: 0 }, wicket: { kind: "bowled", out: "h1", bowlerCredited: true } }],
+      ["cricket.superover.ball", { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }],
+      ["cricket.toss", undefined],
+      ["cricket.retire", undefined],
+    ];
+    for (const [type, payload] of payloads) expect(buildDock(type, t, payload), `${type} ${JSON.stringify(payload)}`).toBeNull();
+    expect(payloads.length).toBe(11);
   });
 });
 
@@ -3122,11 +3053,8 @@ describe("cricketSkinV3", () => {
     expect(skin.key).toBe("cricket");
     expect(skin.tapModel).toBe("T");
     expect(skin.scorebug(view()).context).toContain("scorepad.skin.cricket.context.over");
-    expect(
-      skin.dock("cricket.ball", view(), {
-        runs: { bat: 0, extras: { kind: "noball", runs: 1 } },
-      })?.title,
-    ).toBe("pad.cricket.dock.title");
+    // S2-4 Task 4: cricket has no dock, not even for a no-ball.
+    expect(skin.dock("cricket.ball", view(), { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } })).toBeNull();
     expect(skin.dock("cricket.ball", view())).toBeNull();
     expect(skin.tiles(view()).length).toBeGreaterThan(0);
     expect(skin.phase!(view())).toBe("live");

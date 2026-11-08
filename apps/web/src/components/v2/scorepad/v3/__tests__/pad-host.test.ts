@@ -1104,18 +1104,19 @@ describe("soft-commit inventory — HOLD only when dock has chips", () => {
   // *.clock never reaches this gate (publishClock → pipeline.submit).
   const t = (key: string): string => key;
 
-  it("cricket: plain / wide immediate; noball / bye hold", async () => {
+  // S2-4 Task 4 (gaps 3, 4): the no-ball, bye and leg bye ask their runs on a sheet before the ball is recorded, so no
+  // cricket ball holds. pad-rules-cricket.test.ts sweeps every payload the skin emits; this pins one of each shape.
+  it("cricket: nothing holds — plain, wide, no-ball, bye, leg bye, a super-over ball and the toss are all immediate", async () => {
     const { buildDock } = await import("../skins/cricket");
-    expect(usesSoftCommit(buildDock("cricket.ball", t, { runs: { bat: 1 } }))).toBe(false);
-    expect(usesSoftCommit(buildDock("cricket.ball", t, { runs: { bat: 0, extras: { kind: "wide", runs: 1 } } }))).toBe(
-      false,
-    );
-    expect(
-      usesSoftCommit(buildDock("cricket.ball", t, { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } })),
-    ).toBe(true);
-    expect(
-      usesSoftCommit(buildDock("cricket.ball", t, { runs: { bat: 0, extras: { kind: "bye", runs: 1 } } })),
-    ).toBe(true);
+    const balls: [string, Record<string, unknown>][] = [
+      ["cricket.ball", { runs: { bat: 1 } }],
+      ["cricket.ball", { runs: { bat: 0, extras: { kind: "wide", runs: 1 } } }],
+      ["cricket.ball", { runs: { bat: 4, extras: { kind: "noball", runs: 1 } }, boundary: 4 }],
+      ["cricket.ball", { runs: { bat: 0, extras: { kind: "bye", runs: 2 } } }],
+      ["cricket.ball", { runs: { bat: 0, extras: { kind: "legbye", runs: 3 } } }],
+      ["cricket.superover.ball", { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }],
+    ];
+    for (const [type, payload] of balls) expect(usesSoftCommit(buildDock(type, t, payload)), JSON.stringify(payload)).toBe(false);
     expect(usesSoftCommit(buildDock("cricket.toss", t))).toBe(false);
   });
 

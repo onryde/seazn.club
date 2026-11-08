@@ -161,7 +161,7 @@ test("walkthrough — soft-commit vs immediate, visual", async ({ page }) => {
   // hold still. Time flows normally until then.
   await page.clock.install();
 
-  // ---- Cricket: plain (immediate) then noball (hold) ----
+  // ---- Cricket: plain (immediate) then a no-ball through its sheet (immediate) ----
   const cricket = await seedRosteredFixture(page.request, {
     label: `WT SoftCommit Cricket ${TAG}`,
     sportKey: "cricket",
@@ -184,15 +184,22 @@ test("walkthrough — soft-commit vs immediate, visual", async ({ page }) => {
     .toBe(1);
   await shot(page, "cricket-plain-no-dock");
 
+  // S2-4 Task 4 (gaps 3, 4): a no-ball asks its runs on a sheet, and the answer records the ball at once — no dock,
+  // no hold. The two shots are the open sheet and the pad after the answer.
   await beat(page);
-  await freezeClockForDock(page);
   await tile(page, "extra-noball").click();
-  await expect(dock(page), "noball: soft-commit dock").toBeVisible({ timeout: 5_000 });
-  await shot(page, "cricket-noball-dock");
-  await dock(page).getByRole("button", { name: "Send now", exact: true }).click();
-  await expect(dock(page)).toHaveCount(0, { timeout: 5_000 });
-  await page.clock.resume();
-  await shot(page, "cricket-noball-flushed");
+  const noBallSheet = pad(page).locator('[data-role="v3-sheet"]');
+  await expect(noBallSheet, "noball: its sheet opens").toBeVisible({ timeout: 10_000 });
+  await expect(dock(page), "noball: the tap holds nothing").toHaveCount(0);
+  await shot(page, "cricket-noball-sheet");
+  await noBallSheet.locator('[data-choice-option-id="bat:4"]').click();
+  await expect(dock(page), "noball: the answer opens no dock").toHaveCount(0, { timeout: 3_000 });
+  await expect
+    .poll(async () => (await ledger(page.request, cricket.fixtureId)).filter((e) => e.type === "cricket.ball").length, {
+      timeout: Math.min(2_500, HOLD_MS - 500),
+    })
+    .toBe(2);
+  await shot(page, "cricket-noball-recorded");
 
   // ---- Football: goal hold + clock immediate ----
   const football = await seedRosteredFixture(page.request, {

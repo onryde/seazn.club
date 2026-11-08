@@ -99,7 +99,6 @@ import {
   type ActivityDetailContext,
   type ContextSlot,
   type ContextStripSpec,
-  type DockChip,
   type DockSpec,
   type GuidedSheetSpec,
   type GuidedSheetStep,
@@ -721,11 +720,31 @@ function runPayload(base: Record<string, unknown>, runs: number): Record<string,
   return { ...base, runs: { bat: runs }, ...(boundary !== undefined ? { boundary } : {}) };
 }
 
-/** `runs` defaults to the single a bye or a leg bye opens with (the dock
- *  raises it). The wide, no-ball and penalty tiles pass the engine's own runs
- *  (`cricketPadRules.wideDefaultRuns` / `.noBallDefaultRuns` / `.penaltyRuns`). */
-function extraPayload(base: Record<string, unknown>, kind: string, runs = 1): Record<string, unknown> {
+/** A ball whose only runs are one extra's: the penalty tile (`cricketPadRules.penaltyRuns`) and the extras sheets'
+ *  runs-run answers (`extraSheet`). */
+function extraPayload(base: Record<string, unknown>, kind: string, runs: number): Record<string, unknown> {
   return { ...base, runs: { bat: 0, extras: { kind, runs } } };
+}
+
+/**
+ * S2-4 Task 4 (spec §4.2): the payload an extras sheet's `runs` answer records. The wide's and the no-ball's own run is
+ * the engine's (`wideDefaultRuns`, `noBallDefaultRuns`), and the runs run are added to it, since a ball carries one
+ * extra. A no-ball's runs off the bat go in `runs.bat`, the no-ball's own run stays its extra, and a 4 or a 6 off the
+ * bat sends `boundary`, the same rule as the run tiles (preflight W7; the phone's F13). Answer ids: the wide `"0"`-`"4"`,
+ * the no-ball `"bat:n"` or `"ran:n"`, the bye and leg bye `"1"`-`"4"`.
+ */
+function extraRunsPayload(base: Record<string, unknown>, kind: SheetExtra, answer: string): Record<string, unknown> {
+  if (kind === "wide") return extraPayload(base, kind, cricketPadRules.wideDefaultRuns + Number(answer));
+  if (kind !== "noball") return extraPayload(base, kind, Number(answer));
+  const [how, n] = answer.split(":");
+  if (how === "ran") return extraPayload(base, kind, cricketPadRules.noBallDefaultRuns + Number(n));
+  const bat = Number(n);
+  const boundary = cricketPadRules.boundaryValues.includes(bat) ? bat : undefined;
+  return {
+    ...base,
+    runs: { bat, extras: { kind, runs: cricketPadRules.noBallDefaultRuns } },
+    ...(boundary !== undefined ? { boundary } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1296,6 +1315,14 @@ const PRIMARY_RUNS = new Set<number>([0, 1]);
  *  member (pinned by pad-rules-cricket.test.ts). */
 const MINOR_EXTRA_KINDS: readonly string[] = ["noball", "bye", "legbye", "penalty"];
 
+/** S2-4 Task 4: the extras that open a sheet asking their runs (every extra but the penalty). Each is a
+ *  `cricketPadRules.extraKinds` member (pinned by pad-rules-cricket.test.ts). */
+type SheetExtra = "wide" | "noball" | "bye" | "legbye";
+const SHEET_EXTRAS: readonly SheetExtra[] = ["wide", "noball", "bye", "legbye"];
+function isSheetExtra(kind: string): kind is SheetExtra {
+  return (SHEET_EXTRAS as readonly string[]).includes(kind);
+}
+
 /**
  * R2b (owner sign-off finding, single-line label fix): the over-summary
  * tile's over number now rides INSIDE its `label` sentence ("End of over
@@ -1415,12 +1442,14 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
       }));
     }
 
+    // S2-4 Task 4 (gaps 3, 4): the wide asks its runs run on a sheet (`extraSheet`), so a wide and two run records
+    // `wideDefaultRuns + 2`, and nothing waits on a timer.
     tiles.push(ballTile({
       id: "wide",
       label: requiredVocabKey("kind", "wide"),
       kind: "standard",
       phases: ["live"],
-      action: { event: { type, payload: extraPayload(base, "wide", cricketPadRules.wideDefaultRuns) } },
+      action: { sheet: "wide" },
     }));
 
     tiles.push(ballTile({
@@ -1433,19 +1462,18 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
     }));
 
     for (const kind of MINOR_EXTRA_KINDS) {
-      // R2b task 4 (`_INDEX.md`, owner ruling): penalty runs default to one
-      // Law 41 award (`cricketPadRules.penaltyRuns`, five), not the ordinary
-      // single every OTHER minor extra opens with — a real, deliberate
-      // exception, not an oversight. A no ball opens at its ICC 21.15
-      // penalty (`noBallDefaultRuns`); a bye and a leg bye keep
-      // `extraPayload`'s own single.
-      const runs = kind === "penalty" ? cricketPadRules.penaltyRuns : kind === "noball" ? cricketPadRules.noBallDefaultRuns : undefined;
+      // R2b task 4 (`_INDEX.md`, owner ruling): penalty runs are one Law 41 award (`cricketPadRules.penaltyRuns`, five),
+      // recorded on the tap. S2-4 Task 4 (gaps 3, 4): the no ball, the bye and the leg bye open their sheet
+      // (`extraSheet`), which asks the runs before anything is recorded.
+      const action: TileSpec["action"] = isSheetExtra(kind)
+        ? { sheet: kind }
+        : { event: { type, payload: extraPayload(base, kind, cricketPadRules.penaltyRuns) } };
       tiles.push(ballTile({
         id: `extra-${kind}`,
         label: requiredVocabKey("kind", kind),
         kind: "minor",
         phases: ["live"],
-        action: { event: { type, payload: extraPayload(base, kind, runs) } },
+        action,
       }));
     }
   }
@@ -1597,100 +1625,19 @@ export function refusedEventTypes(view: PadHostView): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// dock() — needs `t` for DockSpec.title (this file's header).
-//
-// R2b (owner ruling, live-tile audit, 2026-08-17): this dock USED TO offer a
-// `freeHit` chip unconditionally on every ball — "shot type" (design doc
-// §3's cricket row) has no home in `CricketBall`'s `z.strictObject` schema,
-// so `freeHit` (the one genuinely optional `CricketBall` field) was what it
-// always offered instead. That chip is GONE. It was never gated on whether a
-// free hit was actually pending (by dock-render time the optimistic fold has
-// already advanced past the just-tapped ball, so `view.state`'s own
-// `freeHitPending` already reflects AFTER this ball, not before it — there
-// was no cheap way to gate it correctly from here), so tapping it on an
-// ordinary ball surfaced as a bare rejected-submission error (the fold's own
-// `"freeHit flagged but no free hit is pending"` check) — the owner hit this
-// live. `payload.freeHit` was also never load-bearing: the server derives
-// `freeHitPending` purely from the preceding no-ball
-// (`finishDelivery`/`freeHitPending`, cricket.ts), and the free-hit
-// dismissal restriction reads `fine.freeHitPending`, never the payload flag
-// — so the flag was validated but never consumed; its only possible effect
-// was an error. Replaced by a READ-ONLY indicator (`buildScorebug`, above)
-// and an activity-log note (`cricketBallDetail`, above) — the scorer no
-// longer declares what the fold already knows, and the client never sends
-// `freeHit: true` at all any more.
-//
-// `buildDock` returns null when there is nothing to enrich (plain run / wide /
-// penalty). Soft-commit only holds when chips exist (`usesSoftCommit`); an
-// empty dock used to HOLD for undo-proxy e2e only and delayed the overlay for
-// no enrichment (owner ruling 2026-09-13). Undo of an immediate ball goes
-// through `core.void` after send, same as any settled event.
-//
-// R2b task 4 (`_INDEX.md`, owner ruling): `heldPayload`, the optional 3rd
-// argument (the widened chassis contract, `SkinDefV3.dock`, ../types.ts),
-// is what lets THIS dock tell a no-ball apart from a plain single — both
-// dispatch the identical `cricket.ball` event TYPE, so `eventType` alone
-// can never answer "which tile was actually tapped". A no-ball's dock
-// offers bat-run chips (+1/+2/+3/+4/+6 — a no-ball is batted normally, so
-// this is legal; a WIDE is deliberately excluded even though it is also an
-// extra, because the engine refuses any bat run off one, cricket.ts:1229 —
-// "bat runs are impossible off a wide"). A bye/leg-bye's dock offers
-// extra-run chips (2/3/4) that raise the EXTRA's own `runs`, never `bat`.
-// Every other case — a plain run tap, a wide, a penalty, or the pre-existing
-// 2-arg call with no payload at all — returns null (nothing to hold for).
+// dock() — S2-4 Task 4 (gaps 3, 4): cricket has no dock. Every ball is recorded on the tap or the sheet answer that
+// makes it, and the chassis holds a tap for its soft-commit window only when the dock offers chips (`usesSoftCommit`),
+// so no cricket ball waits on a timer. The no-ball's bat-run chips and the bye and leg bye's extra-run chips are now
+// those sheets' first step (`extraSheet`), asked before the ball is recorded instead of offered while it is held.
+// Before them, R2b removed the `freeHit` chip: the fold derives a pending free hit from the preceding no-ball, and the
+// flag could only ever be refused (live-tile audit, 2026-08-17). Undo of any ball is `core.void` after the send.
 // ---------------------------------------------------------------------------
 
-const BAT_RUN_VALUES = [1, 2, 3, 4, 6] as const;
-const EXTRA_RUN_VALUES = [2, 3, 4] as const;
-
-/** A no-ball's dock chip that sets `runs.bat` to `n`, preserving the
- *  no-ball's own `runs.extras` verbatim (never dropped, never re-kinded) —
- *  and, for `n` in {4, 6}, also stamps `boundary`, mirroring `runPayload`'s
- *  own convention for the plain run4/run6 tiles exactly: the same two
- *  literal values, the same "boundary present only for 4 or 6" shape. */
-function batRunChip(n: (typeof BAT_RUN_VALUES)[number]): DockChip {
-  const boundary = cricketPadRules.boundaryValues.includes(n) ? n : undefined;
-  return {
-    id: `batRun${n}`,
-    label: `pad.cricket.dock.batRun${n}`,
-    mutate: (payload) => {
-      const extras = (payload.runs as { extras?: unknown } | undefined)?.extras;
-      return {
-        ...payload,
-        runs: { bat: n, ...(extras !== undefined ? { extras } : {}) },
-        ...(boundary !== undefined ? { boundary } : {}),
-      };
-    },
-  };
-}
-
-/** A bye/leg-bye's dock chip that raises the EXTRA's own `runs` to `n`.
- *  `bat` is read from (never assumed on top of) the current payload — it is
- *  always 0 for a real bye/leg-bye, but a chip should never silently touch
- *  a field it was not asked to change — and `extras.kind` is preserved
- *  verbatim so a leg-bye can never mutate into a bye or vice versa. */
-function extraRunChip(n: (typeof EXTRA_RUN_VALUES)[number]): DockChip {
-  return {
-    id: `extraRun${n}`,
-    label: `pad.cricket.dock.extraRun${n}`,
-    mutate: (payload) => {
-      const runs = payload.runs as { bat?: number; extras?: { kind?: string } } | undefined;
-      return { ...payload, runs: { bat: runs?.bat ?? 0, extras: { kind: runs?.extras?.kind, runs: n } } };
-    },
-  };
-}
-
-export function buildDock(eventType: string, t: TFn, heldPayload?: Record<string, unknown>): DockSpec | null {
-  if (!BALL_EVENT_TYPES.has(eventType)) return null;
-  const chips: DockChip[] = [];
-  const extraKind = (heldPayload?.runs as { extras?: { kind?: string } } | undefined)?.extras?.kind;
-  if (extraKind === "noball") {
-    for (const n of BAT_RUN_VALUES) chips.push(batRunChip(n));
-  } else if (extraKind === "bye" || extraKind === "legbye") {
-    for (const n of EXTRA_RUN_VALUES) chips.push(extraRunChip(n));
-  }
-  if (chips.length === 0) return null;
-  return { title: t("pad.cricket.dock.title"), chips };
+// The chassis's `SkinDefV3.dock` signature, kept so the soft-commit sweep (pad-rules-cricket.test.ts) can ask it about
+// every payload the skin emits; nothing in it is read.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function buildDock(_eventType: string, _t: TFn, _heldPayload?: Record<string, unknown>): DockSpec | null {
+  return null;
 }
 
 const BOWLER_BLOCK_MESSAGE_KEY: Record<Exclude<BowlerBlockReason, "noEligible" | "unpicked">, MessageKey> = {
@@ -2620,8 +2567,51 @@ function overSummarySheet(view: PadHostView): GuidedSheetSpec {
   };
 }
 
+/** Presentation: each extras sheet's title. */
+const EXTRA_SHEET_TITLE: Readonly<Record<SheetExtra, MessageKey>> = {
+  wide: "pad.cricket.sheet.wide.title",
+  noball: "pad.cricket.sheet.noball.title",
+  bye: "pad.cricket.sheet.bye.title",
+  legbye: "pad.cricket.sheet.legbye.title",
+};
+/** Presentation: the runs-run choices. A wide may run none (`wideDefaultRuns` alone); a no-ball's "ran 0" is its "0 off
+ *  the bat", so it starts at 1 (the phone's F25); a bye or a leg bye is at least one run. */
+const WIDE_RAN = [0, 1, 2, 3, 4] as const;
+const EXTRA_RAN = [1, 2, 3, 4] as const;
+const ranOption = (n: number, id: string = String(n)) => ({ id, label: `pad.cricket.sheet.extra.ran.${n}` });
+
+/** The `runs` step's options (spec §4.2; ids in `extraRunsPayload`'s doc). The no-ball's runs off the bat are the run
+ *  tiles' own values (`RUN_VALUES`, 0, 1, 2, 3, 4, 6). */
+function extraRunOptions(kind: SheetExtra): { id: string; label: string }[] {
+  if (kind === "wide") return WIDE_RAN.map((n) => ranOption(n));
+  if (kind !== "noball") return EXTRA_RAN.map((n) => ranOption(n));
+  return [
+    ...RUN_VALUES.map((n) => ({ id: `bat:${n}`, label: `pad.cricket.sheet.extra.bat.${n}` })),
+    ...EXTRA_RAN.map((n) => ranOption(n, `ran:${n}`)),
+  ];
+}
+
+/**
+ * S2-4 Task 4 (gaps 3, 4; spec §4.2): Wide, No-ball, Bye and Leg-bye each open a sheet that stays until a choice is
+ * made or it is cancelled, and the choice records the ball at once. Before it, a wide was one run always, and the
+ * no-ball, bye and leg bye were recorded on the tap and held for the soft-commit window while a dock offered their runs.
+ */
+function extraSheet(view: PadHostView, kind: SheetExtra): GuidedSheetSpec {
+  const state = asState(view.state);
+  const base = basePayload(state, asCfg(view.cfg), view.contextOverrides);
+  return {
+    event: ballEventType(state),
+    steps: [{ id: "runs", kind: "choice", title: EXTRA_SHEET_TITLE[kind], options: extraRunOptions(kind) }],
+    buildPayload: (answers) => extraRunsPayload(base, kind, answers.runs ?? ""),
+  };
+}
+
 export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
   return {
+    wide: extraSheet(view, "wide"),
+    noball: extraSheet(view, "noball"),
+    bye: extraSheet(view, "bye"),
+    legbye: extraSheet(view, "legbye"),
     wicket: wicketSheet(view),
     toss: tossSheet(view),
     retire: retireSheet(view),
