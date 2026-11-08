@@ -4,6 +4,7 @@ import { sql } from "@/lib/db";
 import { createSession, postAuthLanding } from "@/lib/auth";
 import { handler } from "@/lib/http";
 import { consumeVerificationToken } from "@/lib/verification";
+import { saveQuickMatchesForVerifiedUser } from "@/server/usecases/quick-match-save";
 import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
 import { headers } from "next/headers";
 import { clientIp } from "@/lib/client-ip";
@@ -43,6 +44,8 @@ export async function POST(req: Request) {
 
     await sql`update users set email_verified = true where id = ${userId}`;
     await createSession(userId);
+    // Quick match §7.7: keep the matches a guest typed this verified address on (never throws; logs and goes on).
+    await saveQuickMatchesForVerifiedUser(userId);
 
     const landing = await postAuthLanding(userId, next);
     return {

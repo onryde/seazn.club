@@ -3,6 +3,7 @@ import { NEXT_PATH_MAX_LENGTH } from "@/lib/types";
 import { createSession, postAuthLanding } from "@/lib/auth";
 import { handler } from "@/lib/http";
 import { consumeLoginLink } from "@/lib/login-link";
+import { saveQuickMatchesForVerifiedUser } from "@/server/usecases/quick-match-save";
 import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
 import { headers } from "next/headers";
 import { clientIp } from "@/lib/client-ip";
@@ -31,6 +32,8 @@ export async function POST(req: Request) {
     }
 
     await createSession(userId);
+    // Quick match §7.7: keep the matches a guest typed this verified address on (never throws; logs and goes on).
+    await saveQuickMatchesForVerifiedUser(userId);
 
     const landing = await postAuthLanding(userId, next);
     return {
