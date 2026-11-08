@@ -175,16 +175,17 @@ describe("clientIp", () => {
 
 // The origin stamp (owner OK 2026-11-07). Anyone with a Cloudflare zone of their own can send requests to the fly.dev origin
 // THROUGH Cloudflare's network: the peer is a genuine Cloudflare edge, there is no `cf-worker`, and `CF-Connecting-IP` says
-// whatever they chose. Only OUR zone's Transform Rule stamps `x-seazn-origin` with the value held in the `CF_ORIGIN_SECRET` Fly
-// secret, so with the secret set, Cloudflare's header is believed only on a request that carries that exact stamp. A missing or
-// wrong stamp falls back to Fly's peer - never a refusal. Unset, nothing changes. The header name and the fallback are the
-// brief's (README "Deploy step - client IP behind Cloudflare"), typed here, not read from the module.
-describe("the origin stamp: CF_ORIGIN_SECRET and x-seazn-origin", () => {
+// whatever they chose. Only OUR zone's Transform Rule stamps `x-seazn-origin-secret` with the value held in the
+// `CF_ORIGIN_SECRET` Fly secret, so with the secret set, Cloudflare's header is believed only on a request that carries that
+// exact stamp. A missing or wrong stamp falls back to Fly's peer - never a refusal. Unset, nothing changes. The header name and
+// the fallback are the brief's (README "Deploy step - client IP behind Cloudflare"), typed here, not read from the module.
+// The name carries `secret` so Sentry's own deny list masks it (fix round 1, I1; scrub-score-url.test.ts holds that proof).
+describe("the origin stamp: CF_ORIGIN_SECRET and x-seazn-origin-secret", () => {
   /** A 64-character hex value, the shape `openssl rand -hex 32` gives the runbook. */
   const SECRET = "0123456789abcdef".repeat(4);
   /** A visitor named by ANOTHER Cloudflare zone's request to our origin - any value its owner picked. */
   const FORGED = "192.0.2.200";
-  const stamped = (o: Record<string, string>, stamp = SECRET) => h({ ...o, "x-seazn-origin": stamp });
+  const stamped = (o: Record<string, string>, stamp = SECRET) => h({ ...o, "x-seazn-origin-secret": stamp });
   const run = (cases: Array<[Headers, string, string]>): number => {
     let checked = 0;
     for (const [headers, want, label] of cases) {
@@ -217,9 +218,11 @@ describe("the origin stamp: CF_ORIGIN_SECRET and x-seazn-origin", () => {
       [stamped(base, SECRET.slice(0, 32)), CF_EDGE, "a prefix"],
       [stamped(base, SECRET + SECRET), CF_EDGE, "the secret twice"],
       [stamped(base, ""), CF_EDGE, "empty"],
+      // The pre-rename name (6c336f65c9): a rule built from that README revision stamps a header web no longer reads.
+      [h({ ...base, "x-seazn-origin": SECRET }), CF_EDGE, "the right value under the pre-rename name x-seazn-origin"],
     ];
     expect(SECRET.toUpperCase(), "premise: the case-flipped stamp differs").not.toBe(SECRET);
-    expect(run(cases)).toBe(9);
+    expect(run(cases)).toBe(10);
   });
 
   it("a CF-Connecting-IP forged through ANOTHER zone (a Cloudflare-range peer, no cf-worker, no stamp): Fly's peer once the secret is set - and the forged value while it is not, the gap this closes", () => {

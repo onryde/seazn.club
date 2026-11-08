@@ -54,6 +54,20 @@ function sourceFiles(root: string): string[] {
   return out;
 }
 
+/** Every source file under `root`, tests included (the import check), relative to apps/web. */
+function everyFile(root: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name !== "node_modules") out.push(...everyFile(path));
+    } else if (entry.isFile() && SOURCE.test(entry.name)) {
+      out.push(relative(WEB, path));
+    }
+  }
+  return out;
+}
+
 const printer = ts.createPrinter({ removeComments: true });
 /** The file's executable text: comments removed by the TypeScript printer. */
 function code(path: string, text: string): string {
@@ -95,5 +109,33 @@ describe("the client's IP has one reader: lib/client-ip.ts", () => {
   it("no other source file reads x-forwarded-for, x-real-ip, fly-client-ip or cf-connecting-ip - it calls clientIp(headers)", () => {
     const offenders = [...reads].filter(([file]) => !(file in ALLOWED)).map(([file, found]) => `${file}: ${[...new Set(found)].join(", ")}`);
     expect(offenders, `reads found outside lib/client-ip.ts (${offenders.length} files):\n  ${offenders.join("\n  ")}\n`).toEqual([]);
+  });
+
+  // The literal scan above has one way round it: a header NAME exported from the reader and read through elsewhere
+  // (`h.get(XFF)`). So the reader exports no string constant at all (fix round 1, M5), and no file - tests included - imports
+  // from it anything but its non-string exports.
+  it("client-ip.ts exports no string constant, and no file imports one from it (import sites counted; zero is a failure)", () => {
+    const reader = code("src/lib/client-ip.ts", readFileSync(join(WEB, "src/lib/client-ip.ts"), "utf8"));
+    const exported = [...reader.matchAll(/export\s+(?:async\s+)?(?:function\*?|const|let|var|class)\s+(\w+)/g)].map((m) => m[1]!);
+    const strings = [...reader.matchAll(/export\s+(?:const|let|var)\s+(\w+)\s*(?::[^=]+)?=\s*["'`]/g)].map((m) => m[1]!);
+    expect(exported, "the reader's own exports are read (positive control)").toContain("clientIp");
+    expect(strings, "string constants exported from lib/client-ip.ts").toEqual([]);
+    const importable = new Set(exported.filter((name) => !strings.includes(name)));
+    const sites: string[] = [];
+    const bad: string[] = [];
+    for (const file of everyFile(SRC)) {
+      const text = readFileSync(join(WEB, file), "utf8");
+      if (!text.includes("client-ip")) continue;
+      for (const m of text.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+["'][^"']*\/client-ip["']/g)) {
+        sites.push(file);
+        for (const spec of m[1]!.split(",")) {
+          const name = spec.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]!;
+          if (name && !importable.has(name)) bad.push(`${file}: ${name}`);
+        }
+      }
+    }
+    console.info(`client-ip sweep: ${sites.length} named imports of lib/client-ip; importable: ${[...importable].join(", ")}`);
+    expect(sites.length, "import sites found").toBeGreaterThan(0);
+    expect(bad, `names imported from lib/client-ip that it does not export as a function or a list:\n  ${bad.join("\n  ")}\n`).toEqual([]);
   });
 });

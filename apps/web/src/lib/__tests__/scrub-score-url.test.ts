@@ -14,7 +14,7 @@ import {
   scrubScoreUrl,
   scrubSentryEvent,
 } from "../scrub-score-url";
-import { ORIGIN_STAMP_HEADER } from "../client-ip";
+import { requestHeaderSpanAttributes, transaction } from "./_sdk-span-data";
 
 /** The real shape: `dl_` + 32 random bytes as base64url (device-links.ts). */
 const TOKEN = "dl_Q2hvb3NlIGEgcmVhbGx5IGxvbmcgcmFuZG9tIHRva2Vu_Ab-9";
@@ -364,12 +364,15 @@ describe("scrubSentryEvent — the capture phone routes (A18)", () => {
   });
 });
 
-// Client-IP hardening (owner OK 2026-11-07): OUR Cloudflare zone stamps `x-seazn-origin` with the secret web holds as
-// CF_ORIGIN_SECRET (lib/client-ip.ts). A server event keeps its request headers, so without this every error and transaction
-// sent after the zone rule goes live would carry that secret to Sentry. Every event's request loses the stamp's VALUE.
-describe("scrubSentryEvent — the origin stamp (x-seazn-origin)", () => {
+// Client-IP hardening (owner OK 2026-11-07): OUR Cloudflare zone stamps `x-seazn-origin-secret` with the secret web holds as
+// CF_ORIGIN_SECRET (lib/client-ip.ts, which spells the same name: its own tests use this literal). A server event keeps its
+// request headers, and @sentry/nextjs copies them onto the root span as `http.request.header.*` attributes, so without this
+// every error and transaction sent after the zone rule goes live would carry that secret to Sentry. Two layers (fix round 1,
+// I1): the name carries `secret`, which the SDK's own deny list masks; and the scrub redacts the header and its attribute.
+describe("scrubSentryEvent — the origin stamp (x-seazn-origin-secret)", () => {
   /** The shape `openssl rand -hex 32` gives the runbook. */
   const STAMP = "0123456789abcdef".repeat(4);
+  const HEADER = "x-seazn-origin-secret";
   const stampedEvent = (url: string, headerName: string, type?: "transaction"): Event => ({
     event_id: "s1",
     ...(type ? { type } : {}),
@@ -377,14 +380,45 @@ describe("scrubSentryEvent — the origin stamp (x-seazn-origin)", () => {
     request: { method: "GET", url, headers: { [headerName]: STAMP, "user-agent": "ua/1", "cf-connecting-ip": "203.0.113.50" } },
   });
 
-  it("the name redacted below is lib/client-ip.ts's ORIGIN_STAMP_HEADER (this module is bundled for the browser, so it spells the name itself instead of importing that node-only one)", () => {
-    expect(ORIGIN_STAMP_HEADER).toBe("x-seazn-origin");
+  it("an event built from the SDK's OWN span header attributes (httpHeadersToSpanAttributes, the root span @sentry/nextjs writes), sendDefaultPii off and on: the value appears nowhere, and the scrub redacts the attribute in the trace data and in every span (count reported)", () => {
+    let checked = 0;
+    for (const sendDefaultPii of [false, true]) {
+      const incoming = { [HEADER]: STAMP, "user-agent": "ua/1" };
+      const attrs = requestHeaderSpanAttributes(incoming, sendDefaultPii);
+      const stampKeys = Object.keys(attrs).filter((k) => k.includes("seazn_origin"));
+      expect(stampKeys, `premise (${sendDefaultPii}): the SDK names the stamp header among its attributes`).toHaveLength(1);
+      const [stampKey] = stampKeys as [string];
+      // The name's first layer: Sentry's own deny list (`secret`) masks it before any scrub runs.
+      expect(attrs[stampKey], "the SDK masks a header whose name carries `secret`").toBe("[Filtered]");
+      const event = transaction({
+        name: "GET /live/club",
+        traceData: { ...attrs, "http.route": "/live/club" },
+        spans: [
+          { description: "GET /api/v1/public/fixtures/f1", data: { ...attrs } },
+          { description: "select", data: { "db.system": "postgresql" } },
+        ],
+        request: { method: "GET", url: "https://seazn.club/live/club", headers: incoming },
+      }) as Event;
+      const out = scrubSentryEvent(event);
+      expect(JSON.stringify(out), `sendDefaultPii ${sendDefaultPii}`).not.toContain(STAMP);
+      // The second layer, the scrub's own: "[redacted]", never the SDK's "[Filtered]", in the trace data and the span that held it.
+      expect(out.contexts?.trace?.data?.[stampKey]).toBe("[redacted]");
+      expect(out.spans?.[0]?.data?.[stampKey]).toBe("[redacted]");
+      expect(out.request?.headers?.[HEADER]).toBe("[redacted]");
+      // Everything else as the SDK wrote it.
+      const ua = Object.keys(attrs).find((k) => k.endsWith("user_agent"))!;
+      expect(out.contexts?.trace?.data?.[ua]).toBe(attrs[ua]);
+      expect(out.spans?.[0]?.data?.[ua]).toBe(attrs[ua]);
+      expect(out.spans?.[1]?.data).toEqual({ "db.system": "postgresql" });
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("an error or a transaction, on any route (a page, an API route, a capture route), either header case: the value is gone, every other header is kept (count reported)", () => {
     let checked = 0;
     for (const url of ["https://seazn.club/live/club", "https://seazn.club/api/v1/public/fixtures/f1", "https://seazn.club/api/v1/capture/codes/k3m9p2q7r4t8"]) {
-      for (const headerName of ["x-seazn-origin", "X-Seazn-Origin"]) {
+      for (const headerName of [HEADER, "X-Seazn-Origin-Secret"]) {
         for (const type of [undefined, "transaction"] as const) {
           const out = scrubSentryEvent(stampedEvent(url, headerName, type));
           expect(JSON.stringify(out), `${url} ${headerName} ${type}`).not.toContain(STAMP);
@@ -399,7 +433,7 @@ describe("scrubSentryEvent — the origin stamp (x-seazn-origin)", () => {
   });
 
   it("the input event is never mutated, and an event without the stamp is returned exactly as it came", () => {
-    const event = stampedEvent("https://seazn.club/live/club", "x-seazn-origin");
+    const event = stampedEvent("https://seazn.club/live/club", HEADER);
     const before = JSON.stringify(event);
     scrubSentryEvent(event);
     expect(JSON.stringify(event)).toBe(before);

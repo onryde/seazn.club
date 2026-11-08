@@ -26,6 +26,7 @@ const core = fromNextjs("@sentry/core") as {
     request?: { method?: string },
     routeName?: string,
   ): [string, Record<string, unknown>];
+  httpHeadersToSpanAttributes(headers: Record<string, string | string[] | undefined>, dataCollection?: boolean): Record<string, string>;
 };
 const outgoing = fromNextjs(path.join(path.dirname(fromNextjs.resolve("@sentry/core")), "integrations/http/get-outgoing-span-data.js")) as {
   getOutgoingRequestSpanData(request: unknown): { name: string; attributes: Record<string, unknown> };
@@ -55,6 +56,15 @@ export function outgoingRequestSpanData(url: string, method = "GET"): SpanData {
 /** What an OpenTelemetry http span becomes in a transaction's trace data: a sanitised `url` and the bare `http.query`. */
 export function otelTraceData(url: string, method = "GET"): SpanData {
   return otel.getRequestSpanData({ attributes: { "url.full": url, "http.request.method": method } });
+}
+/**
+ * The incoming request's headers as @sentry/nextjs copies them onto the ROOT span (`handleOnSpanStart` →
+ * `addHeadersAsAttributes` → `httpHeadersToSpanAttributes(headers, client.getDataCollectionOptions() ?? false)`):
+ * `http.request.header.<name, - → _>`, a value the SDK's deny list matches replaced with `[Filtered]`. `sendDefaultPii` is
+ * the config's flag (ours leaves it unset, i.e. `false`).
+ */
+export function requestHeaderSpanAttributes(headers: Record<string, string>, sendDefaultPii = false): SpanData {
+  return core.httpHeadersToSpanAttributes(headers, sendDefaultPii);
 }
 
 /**

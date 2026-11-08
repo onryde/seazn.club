@@ -13,8 +13,8 @@
 // ranges and may set `CF-Connecting-IP` to anything (developers.cloudflare.com/fundamentals/reference/http-headers);
 // Cloudflare marks every Worker subrequest with `cf-worker`, which is detected here. And anyone with a Cloudflare zone of
 // their own can proxy to the fly.dev origin through Cloudflare's network, so the peer is a genuine edge with no `cf-worker`.
-// The close is the ORIGIN STAMP (owner OK 2026-11-07): OUR zone's Transform Rule sets `x-seazn-origin` to a secret that web
-// holds as `CF_ORIGIN_SECRET`; with the secret set, `CF-Connecting-IP` is believed only on a request carrying that exact
+// The close is the ORIGIN STAMP (owner OK 2026-11-07): OUR zone's Transform Rule sets `x-seazn-origin-secret` to a secret that
+// web holds as `CF_ORIGIN_SECRET`; with the secret set, `CF-Connecting-IP` is believed only on a request carrying that exact
 // stamp, and a missing or wrong one falls back to Fly's peer (never a refusal). Unset, nothing changes - the ops order (rule
 // first, then the secret) is in the README's "Deploy step - client IP behind Cloudflare". Even so, a per-IP limit is a brake,
 // never an authorisation.
@@ -50,8 +50,10 @@ export function isCloudflarePeer(ip: string): boolean {
 const first = (v: string | null | undefined): string | undefined => v?.trim() || undefined;
 
 /** The header OUR Cloudflare zone's Transform Rule stamps on every request it forwards. Its value is a secret: never logged,
- *  echoed, or put into an error (Sentry events carry request headers, so `lib/scrub-score-url.ts` redacts it there). */
-export const ORIGIN_STAMP_HEADER = "x-seazn-origin";
+ *  echoed, or put into an error. The name carries `secret` so Sentry's own deny list masks it in the root span's
+ *  `http.request.header.*` attributes, and `lib/scrub-score-url.ts` redacts it there and in `request.headers` as well.
+ *  Not exported: the reader exports no header name (client-ip-readers.test.ts); scrub-score-url.ts spells it itself. */
+const ORIGIN_STAMP_HEADER = "x-seazn-origin-secret";
 
 /** Whether the request came through OUR zone. With `CF_ORIGIN_SECRET` set (read per request), its stamp must equal the secret,
  *  compared in constant time; a stamp of another length is a mismatch, never a throw. Unset or empty: not required. */

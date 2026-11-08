@@ -531,24 +531,40 @@ function scrubJoinCodeKeys<E extends Event>(event: E): E {
   return hit.n ? { ...event, request: { ...event.request, query_string: scrubbed } } : event;
 }
 
-/** OUR Cloudflare zone's origin stamp: `ORIGIN_STAMP_HEADER` in lib/client-ip.ts, spelled here because this module is
- *  bundled for the browser and that one imports `node:net`/`node:crypto` (scrub-score-url.test.ts pins the two together).
- *  Its value is the CF_ORIGIN_SECRET, and every server event carries its request's headers. */
-const ORIGIN_STAMP_HEADER = "x-seazn-origin";
+/** OUR Cloudflare zone's origin stamp: the header lib/client-ip.ts reads, spelled here because this module is bundled for the
+ *  browser and that one imports `node:net`/`node:crypto` (both modules' tests pin the same literal). Its value is the
+ *  CF_ORIGIN_SECRET. Every server event carries its request's headers, and @sentry/nextjs copies them onto the root span. */
+const ORIGIN_STAMP_HEADER = "x-seazn-origin-secret";
+/** The root span attribute the SDK writes the header into (`httpHeadersToSpanAttributes`: the name lower-cased, `-` → `_`). */
+const ORIGIN_STAMP_ATTRIBUTE = `http.request.header.${ORIGIN_STAMP_HEADER.replace(/-/g, "_")}`;
+const STAMP_REDACTED = "[redacted]";
 
-/** Any event's request loses the origin stamp's VALUE; the header stays as "[redacted]". A copy: the input is never mutated. */
+/** `record` with every key equal (any case) to `key` redacted - a copy - or `undefined` when there is none. */
+function redactKey<T extends Record<string, unknown>>(record: T, key: string): T | undefined {
+  let copy: T | undefined;
+  for (const k of Object.keys(record)) if (k.toLowerCase() === key) (copy ??= { ...record })[k as keyof T] = STAMP_REDACTED as T[keyof T];
+  return copy;
+}
+
+/**
+ * Any event loses the origin stamp's VALUE wherever the SDK puts it: `request.headers`, and its `http.request.header.*`
+ * attribute in the trace context's data and in every span's data (the SDK's deny list already masks the name; this does not
+ * depend on it). The key stays, as "[redacted]". A copy: the input is never mutated.
+ */
 function dropOriginStamp<E extends Event>(event: E): E {
-  const headers = event.request?.headers;
-  if (!headers || !Object.keys(headers).some((k) => k.toLowerCase() === ORIGIN_STAMP_HEADER)) return event;
-  return {
-    ...event,
-    request: {
-      ...event.request,
-      headers: Object.fromEntries(
-        Object.entries(headers).map(([k, v]) => [k, k.toLowerCase() === ORIGIN_STAMP_HEADER ? "[redacted]" : v]),
-      ),
-    },
-  };
+  let next: E = event;
+  const headers = event.request?.headers ? redactKey(event.request.headers, ORIGIN_STAMP_HEADER) : undefined;
+  if (headers) next = { ...next, request: { ...next.request, headers } };
+  const trace = next.contexts?.trace;
+  const traceData = trace && isData(trace.data) ? redactKey(trace.data, ORIGIN_STAMP_ATTRIBUTE) : undefined;
+  if (trace && traceData) next = { ...next, contexts: { ...next.contexts, trace: { ...trace, data: traceData } } };
+  let spans: typeof event.spans;
+  next.spans?.forEach((span, i) => {
+    const data = isData(span.data) ? redactKey(span.data, ORIGIN_STAMP_ATTRIBUTE) : undefined;
+    if (data) (spans ??= next.spans!.slice())[i] = { ...span, data };
+  });
+  if (spans) next = { ...next, spans };
+  return next;
 }
 
 /**
