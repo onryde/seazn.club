@@ -72,5 +72,13 @@ describe("fixture-console header — generic pre-result noise (R7 follow-ups ite
     const html = consoleHtml([["core.start", {}], ["generic.score", { by: "H", points: 1 }]]);
     expect(html, "a score exists, so the header still earns its place").not.toContain("— — —");
     expect(html).toMatch(/font-mono text-2xl/);
+    // S2-4 Task 10 fix round 1 holds a suppressed headline's line with an invisible reserve in the same type, so the
+    // regex above also matches the reserve: this says the headline itself shows, not its held room (final review M5).
+    expect(html, "the headline shows, so nothing is held in its place").not.toContain("console-headline-reserve");
+  });
+
+  it("holds the suppressed headline's line before any score (S2-4 Task 10 fix round 1, generic as well as cricket)", () => {
+    const html = consoleHtml([["core.start", {}]]);
+    expect(html).toContain('data-role="console-headline-reserve"');
   });
 });
