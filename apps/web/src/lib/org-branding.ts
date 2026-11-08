@@ -28,20 +28,6 @@ export function mergeBrandColor(existing: unknown, primary: string | null): OrgB
   return next;
 }
 
-/** Replace the sponsor list, keeping everything else in the blob. */
-export function mergeSponsors(existing: unknown, sponsors: Sponsor[]): OrgBranding {
-  const next = asBranding(existing);
-  if (sponsors.length === 0) delete next.sponsors;
-  else {
-    next.sponsors = sponsors.map((s) => ({
-      name: s.name,
-      ...(s.url ? { url: s.url } : {}),
-      ...(s.logo ? { logo: s.logo } : {}),
-    }));
-  }
-  return next;
-}
-
 /** Read sponsors out of a branding blob (org or competition). */
 export function brandingSponsors(branding: unknown): Sponsor[] {
   const list = asBranding(branding).sponsors;

@@ -13,12 +13,11 @@ import { fireOrgRevalidate } from "@/server/public-site/revalidate";
 import { dropPublicOrgRefs } from "@/server/public-site/public-ref-cache";
 import { handler } from "@/lib/http";
 import { HttpError } from "@/lib/errors";
-import { mergeBrandColor, mergeSponsors } from "@/lib/org-branding";
+import { mergeBrandColor } from "@/lib/org-branding";
 import { isValidIana } from "@/lib/tz";
 import { hasLocale } from "@/lib/i18n-constants";
 import { isRegistrationCurrency } from "@/lib/currency";
 import { EDITOR_ROLES, renameOrgSchema, type Organization } from "@/lib/types";
-import { isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "@/lib/sponsor-clicks";
 import { z } from "zod";
 
 const orgPatchSchema = z.union([
@@ -66,20 +65,8 @@ const orgPatchSchema = z.union([
       }).strict(),
     }).strict(),
   }).strict(),
-  // Sponsor slots (v3/10 #5): rendered on the public dashboard footer, the
-  // registration masthead and the slideshow. Reads are branding-gated.
-  z.object({
-    sponsors: z
-      .array(
-        z.object({
-          name: z.string().min(1).max(80),
-          // http(s) only (R4 S10 fix round 1, m1): a blob slot has no row, so the boards link it STRAIGHT out.
-          url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
-          logo: z.string().max(500).nullish(),
-        }),
-      )
-      .max(12),
-  }).strict(),
+  // No `sponsors` arm (R4 fix batch 3): sponsors live in the `sponsors` table only (/api/v1/orgs/{id}/sponsors). The
+  // arm wrote the legacy `branding.sponsors` blob, which V492 strips; a body naming it is refused like any unknown key.
 ]);
 
 /** Update an organization — rename or set branding logo (owners and admins). */
@@ -145,17 +132,13 @@ export async function PATCH(
       }
       updates.currency = body.currency;
     }
-    // Branding writes MERGE into the blob (lib/org-branding): colors and
-    // sponsors share the column, and neither may clobber the other.
-    if ("branding" in body || "sponsors" in body) {
+    // Branding writes MERGE into the blob (lib/org-branding): the colour must
+    // not clobber any other key the column holds.
+    if ("branding" in body) {
       const [current] = await sql<{ branding: unknown }[]>`
         select branding from organizations where id = ${id}`;
       if (!current) throw new HttpError(404, "Organization not found");
-      const merged =
-        "branding" in body
-          ? mergeBrandColor(current.branding, body.branding.colors.primary)
-          : mergeSponsors(current.branding, body.sponsors);
-      updates.branding = sql.json(merged as never);
+      updates.branding = sql.json(mergeBrandColor(current.branding, body.branding.colors.primary) as never);
     }
 
     if (Object.keys(updates).length === 0) throw new HttpError(400, "Nothing to update");

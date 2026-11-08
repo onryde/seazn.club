@@ -1,36 +1,25 @@
-// Org branding blob merges (v3/10 #5): colors and sponsors share one jsonb
-// column — the regression this pins is the wipe bug (writing one key used to
-// replace the whole blob, deleting the other).
+// Org branding blob merges (v3/10 #5): the brand colour shares one jsonb column with whatever else the blob holds — the
+// regression this pins is the wipe bug (writing one key used to replace the whole blob, deleting the others). The blob's
+// sponsor list and its merge went in R4 fix batch 3 (sponsors live in the `sponsors` table only).
 import { describe, expect, it } from "vitest";
-import { brandingSponsors, mergeBrandColor, mergeSponsors } from "@/lib/org-branding";
+import { brandingSponsors, mergeBrandColor } from "@/lib/org-branding";
 
 describe("org branding merges", () => {
   const existing = {
     colors: { primary: "#1d4ed8" },
-    sponsors: [{ name: "Acme", url: "https://acme.dev" }],
+    banner: "orgs/banner.png",
   };
 
-  it("setting a color keeps the sponsors", () => {
+  it("setting a color keeps every other key", () => {
     const next = mergeBrandColor(existing, "#0F766E");
     expect(next.colors).toEqual({ primary: "#0f766e" }); // lowercased
-    expect(next.sponsors).toEqual(existing.sponsors);
+    expect(next.banner).toBe(existing.banner);
   });
 
-  it("clearing the color keeps the sponsors", () => {
+  it("clearing the color keeps every other key", () => {
     const next = mergeBrandColor(existing, null);
     expect(next.colors).toBeUndefined();
-    expect(next.sponsors).toEqual(existing.sponsors);
-  });
-
-  it("replacing sponsors keeps the color", () => {
-    const next = mergeSponsors(existing, [{ name: "Bolt", logo: "https://x/l.png" }]);
-    expect(next.colors).toEqual({ primary: "#1d4ed8" });
-    expect(next.sponsors).toEqual([{ name: "Bolt", logo: "https://x/l.png" }]);
-  });
-
-  it("an empty sponsor list removes the key entirely", () => {
-    const next = mergeSponsors(existing, []);
-    expect("sponsors" in next).toBe(false);
+    expect(next.banner).toBe(existing.banner);
   });
 
   it("brandingSponsors reads defensively", () => {
