@@ -230,8 +230,16 @@ Same four for complete and confirm, with their own copy. Two extras:
   way to stop it for good.
 - Refresh: while a live row exists the banner polls with `band-poll` (every 10 s), and the page `router.refresh()`es
   once when it sees the row go `done`, so the new round appears without a reload.
-- Where: above the stage rail on `?tab=fixtures` (the desk's run sheet). **[call]** Not on the competition desk
-  card in this wave; the division pill's attention model can take a "blocked" attention later.
+- Where: **Option A** of the mockup — a full-width banner directly ABOVE the stage card on `?tab=fixtures` (since
+  Match Day E1 the stage rail sits inside the stage card header; on phones it is the "Stage tools" sheet). When the
+  division has more than one stage the banner names its stage ("Swiss · Pairing round 3 in about a minute"). The
+  confirm banner sits above the TARGET stage's card. **[call]** Not on the competition desk card in this wave; the
+  division pill's attention model can take a "blocked" attention later.
+- Switches: in the stage's **Format** tool, under a "Running the stage" group (there is no separate settings
+  panel; the stage tools are Format, Points, Tie-breaks, Bracket).
+- Copy: the mockup's wording is the source text for all banner states, the confirm variants ("Confirm now", tie fix
+  button) and the fix-button labels ("Open board 3", "Pick the tie"). Layout reference only — the build uses the
+  house theme. Mockup: `~/seazn-artifacts/2026-11-08_swiss-auto-advance-mockups/index.html` (local :8765).
 - Copy in all 4 locales. Phone (320/360/375/390/430), tablet (768/834) and desktop (1280): one column on phones,
   buttons ≥44 px, no horizontal scroll, wraps (no truncation of the reason line).
 
