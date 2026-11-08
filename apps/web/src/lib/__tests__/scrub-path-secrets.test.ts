@@ -72,6 +72,8 @@ const CHECKINS: string[] = [];
 const REPORTS: string[] = [];
 /** Player payment page tokens (`/r/pay/<token>`), from the REAL producer. */
 const PAYS: string[] = [];
+/** A quick match's home token (plan 1's minter; the `/q/<token>` route is plan 2 Task 5's): the fourth kind of credential. */
+const HOMES: string[] = Array.from({ length: MINTS }, () => mintHomeToken());
 const tomorrow = new Date(Date.now() + 24 * 3600_000);
 await (async () => {
   for (let i = 0; i < MINTS; i++) {
@@ -87,6 +89,7 @@ const KINDS: [string, string[]][] = [
   ["check-in", CHECKINS],
   ["sponsor report", REPORTS],
   ["player pay page", PAYS],
+  ["home", HOMES],
 ];
 
 describe("premise: the tokens are real and varied", () => {
@@ -120,7 +123,7 @@ describe("every route with a secret segment is scrubbed, or is knowingly public"
 
   it("the scan found the routes (anti-vacuity), and every one has a verdict; no verdict is stale", () => {
     const keys = routesFound.map((r) => r.key).sort();
-    expect(keys.length).toBeGreaterThanOrEqual(12);
+    expect(keys.length).toBeGreaterThanOrEqual(13);
     expect(keys, "a new [token]/[code]/[secret]/[ref] route needs a verdict in VERDICTS").toEqual(Object.keys(VERDICTS).sort());
   });
 
@@ -270,8 +273,9 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
       }
     }
     for (const prefix of Object.keys(PUBLIC_BUILDERS)) expect(builders.has(prefix), `${prefix} is no longer built anywhere: delete it`).toBe(true);
-    // (11 builders - 3 public) x 2 kinds; 14 before quick match plan 1 Task 9 added `/q`.
-    expect(scrubbed).toBeGreaterThanOrEqual(16);
+    // (11 builders - 3 public) x 4 kinds (invite, check-in, sponsor report, home); 16 at 2 kinds, before plan 2 Task 5
+    // added the home token as a kind.
+    expect(scrubbed).toBeGreaterThanOrEqual(32);
     expect(kept).toBe(Object.keys(PUBLIC_BUILDERS).length * KINDS.length);
   });
 });
@@ -285,7 +289,7 @@ describe("the credential URLs inside another URL (a sign-in next=): encoded at a
   ];
   it("sweeps every credential route's URLs x wrap x depth x hex case x token", () => {
     const credentialRoutes = secretRoutes().filter((r) => VERDICTS[r.key] === true);
-    expect(credentialRoutes.length).toBeGreaterThanOrEqual(9);
+    expect(credentialRoutes.length).toBeGreaterThanOrEqual(10);
     let checked = 0;
     const failures: string[] = [];
     for (const route of credentialRoutes) {
@@ -507,12 +511,11 @@ describe("the hooks scrub them wherever an event carries one", () => {
 // ---- a quick match's home token, `/q/<token>` -----------------------------------------------------------------------------
 //
 // Quick match plan 1 Task 9 (spec C12, O3, C19): the scoring pad links back to `/q/<home token>`, and whoever holds that token
-// can score every match of the quick match. The home PAGE (`app/q/[token]`) is plan 2's, so the file-system sweep above
-// cannot reach this route yet: until it does, this block is the route's sweep, on REAL home tokens from the real minter.
-// When plan 2 adds the route and its verdict, the sweeps above take it over too.
+// can score every match of the quick match. Plan 2 Task 5 added the page (`app/q/[token]`) and its verdict, so the file-system
+// sweeps above now reach the route with every kind of token, and the home tokens are a kind of their own (`KINDS`). This
+// block keeps the shapes the file system cannot list: the locale prefix, the calls under the page, a log line.
 
 describe("a quick match's home token, /q/<token>: scrubbed wherever a URL carries it", () => {
-  const HOMES = Array.from({ length: MINTS }, () => mintHomeToken());
   const sample = [HOMES[0]!, HOMES[7]!, HOMES[150]!, HOMES[299]!];
   /** Every shape the home URL takes: the page, behind an origin and the marketing locale prefix, with a query and a
    *  fragment, and the calls under it (plan 2's add-match route; the save hand-off spec C19 amended 2026-11-08 allows in a

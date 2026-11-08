@@ -11,7 +11,10 @@
 //    each credential segment) and from the route builders that scrubScoreUrl really changes (`routes.claim`, `routes.checkin`):
 //    a variable, property or function whose initialiser builds one of those URLs (`const claim_url = `${base}${routes.claim(s)}``)
 //    is secret-bound; so is the scrubbed `join_code` query parameter and its camelCase;
-//  - the names are followed through `useState` (`setLink(out.claim_url)` makes `link` secret-bound) and local `const`s;
+//  - the names are followed through `useState` (`setLink(out.claim_url)` makes `link` secret-bound) and local `const`s, through
+//    a `Promise.all` destructure by position (`const [names, href] = await Promise.all([…, homeHref(…)])`), and into the
+//    parameter of a function of the same file a secret is passed to (`scanColumn(href, …)` binds its `backHref`): the pad's
+//    way back to its quick match (`/q/<token>`) reaches its link only through both hops (quick match plan 2 Task 5, A6);
 //  - a secret handed to a COMPONENT as a prop is followed into that component's file: `<AuthForm next={`/claim/${token}`} />`
 //    makes `next` secret-bound there, and a template or `encodeURIComponent(...)` built from a bound name is bound too, so
 //    its `<a href={`/api/auth/google?next=${encodeURIComponent(next)}`}>` is a painter (review 2: the Google button's href
@@ -250,6 +253,17 @@ function learn(all: Source[]): Known {
         }
       };
       for (const e of known.endpoints) if (!isRoute && e.call.test(file.text)) addLocal(e.key);
+      // The parameters of the file's own named functions, so a secret passed to one binds the parameter it lands in.
+      const params = new Map<string, readonly ts.ParameterDeclaration[]>();
+      const collect = (n: ts.Node) => {
+        if (ts.isFunctionDeclaration(n) && n.name) params.set(n.name.text, n.parameters);
+        else if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
+          const init = unwrap(n.initializer);
+          if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) params.set(n.name.text, init.parameters);
+        }
+        ts.forEachChild(n, collect);
+      };
+      collect(file);
       const visit = (n: ts.Node) => {
         const secret = (x: ts.Expression) => isSecretValue(x, file, known, template, builders);
         if (ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) {
@@ -276,6 +290,16 @@ function learn(all: Source[]): Known {
           if (ts.isArrayBindingPattern(n.name) && n.name.elements.length === 2 && n.initializer?.getText(file).startsWith("useState")) {
             const [state, setter] = n.name.elements as unknown as ts.BindingElement[];
             if (ts.isIdentifier(state!.name) && ts.isIdentifier(setter!.name)) setters.set(setter!.name.text, state!.name.text);
+          } else if (ts.isArrayBindingPattern(n.name) && n.initializer) {
+            // `const [a, b] = await Promise.all([x, y])`: each name is as secret as the value in its place.
+            const init = unwrap(n.initializer);
+            const list = ts.isCallExpression(init) && init.expression.getText(file) === "Promise.all" ? init.arguments[0] : undefined;
+            if (list && ts.isArrayLiteralExpression(list)) {
+              n.name.elements.forEach((el, i) => {
+                const value = list.elements[i];
+                if (ts.isBindingElement(el) && ts.isIdentifier(el.name) && value && !ts.isSpreadElement(value) && secret(value)) addLocal(el.name.text);
+              });
+            }
           } else if (ts.isIdentifier(n.name) && n.initializer) {
             const init = unwrap(n.initializer);
             if (ts.isArrowFunction(init) || ts.isFunctionExpression(init) ? buildsSecret(init, file, known, template, builders) : secret(init)) {
@@ -291,6 +315,13 @@ function learn(all: Source[]): Known {
           addLocal(n.left.text);
         } else if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && setters.has(n.expression.text) && n.arguments.some((a) => secret(a))) {
           addLocal(setters.get(n.expression.text)!);
+        } else if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && params.has(n.expression.text)) {
+          // A secret passed to a function of this file binds the parameter it lands in.
+          const declared = params.get(n.expression.text)!;
+          n.arguments.forEach((arg, i) => {
+            const param = declared[i];
+            if (param && ts.isIdentifier(param.name) && secret(arg)) addLocal(param.name.text);
+          });
         } else if (isRoute && ts.isPropertyAssignment(n) && ts.isIdentifier(n.name) && secret(n.initializer)) {
           // A JSON field an API route replies with crosses to every client that reads it.
           addGlobal(n.name.text);
@@ -427,7 +458,17 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string }> = {
     verdict:
       "paints the MASKED link (`/join/abcd…wxyz`: first and last four characters, deliberate against shoulder-surfing); the full URL goes only to the clipboard",
   },
+  // A quick match's pad: its way back to the home, `/q/<home token>` (quick match plan 1 Task 9; plan 2 Task 5, A6).
+  "components/v2/quick-match-back-link.tsx": { verdict: true },
+  "app/score/[token]/page.tsx": {
+    verdict: "builds the quick match's home URL and hands it to QuickMatchBackLink as its href; the page paints it nowhere itself",
+    handoff: "components/v2/quick-match-back-link.tsx",
+  },
 };
+
+/** The files that paint a quick match's home URL, `/q/<token>`: every one must be FOUND by the scan, not just listed, or a
+ *  painter that loses its class goes unseen. Plan 2 Tasks 6, 7 and 9 add theirs (the Score form, the share link, the strip). */
+const QUICK_MATCH_PAINTERS = ["app/score/[token]/page.tsx", "components/v2/quick-match-back-link.tsx"];
 
 describe("every element that paints a scrubbed secret carries ph-no-capture, or its file says why not", () => {
   const all = sources();
@@ -468,6 +509,22 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     let sites = 0;
     for (const s of painters.values()) sites += s.length;
     expect(sites).toBeGreaterThanOrEqual(14);
+  });
+
+  it("the scan reaches every file that paints a quick match's home URL (A6): the pad's back link through two hops", () => {
+    let checked = 0;
+    for (const rel of QUICK_MATCH_PAINTERS) {
+      expect(painters.has(rel), `${rel} paints /q/<token>: the scan must find it`).toBe(true);
+      expect(PAINTERS[rel], `${rel} has a verdict`).toBeDefined();
+      checked++;
+    }
+    expect(checked).toBe(QUICK_MATCH_PAINTERS.length);
+    // The route the hops follow, so a refactor that breaks one of them reds here and not in a blind green.
+    expect(known.props).toEqual(
+      expect.arrayContaining([{ component: "QuickMatchBackLink", prop: "href", from: "app/score/[token]/page.tsx" }]),
+    );
+    const link = painters.get("components/v2/quick-match-back-link.tsx") ?? [];
+    expect(link.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true]);
   });
 
   it("the painter files and the verdict table are the same set", () => {

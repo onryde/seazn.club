@@ -48,6 +48,7 @@ import { findQuickMatchByCompetition } from "@/server/usecases/quick-match-home"
 import { tryOpenHomeToken } from "@/server/usecases/quick-match-tokens";
 import { log } from "@/server/logger";
 import { QuickMatchBackLink } from "@/components/v2/quick-match-back-link";
+import { routes } from "@/lib/routes";
 import type { ReactNode } from "react";
 
 export default async function ScorePadPage({
@@ -370,7 +371,7 @@ async function quickMatchHomeHref(orgId: string, competitionId: string): Promise
     }
     return null;
   }
-  return `/q/${opened.token}`;
+  return routes.quickMatch(opened.token);
 }
 
 /** Each (competition, reason) is warned about once per server process (ruling 2026-11-08): a waiting screen re-renders
