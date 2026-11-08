@@ -14,13 +14,36 @@ import "server-only";
 // history marker, not a change to the board: divisions.seq is not bumped (plan D7). The write merges server-side
 // (`config || jsonb`, a literal-key merge the table-writers source scan can read), never a spread of a read: a key another
 // writer committed while this one waited on the row survives.
+//
+// Plan Task 5 adds the arming (§4.2-§4.4):
+//   `rearmAutoActions`         re-derives a stage's live rows from the facts in the DB, inside the caller's transaction.
+//   `rearmAfterCommit`         the same in its own transaction, after the change that triggered it committed; never throws.
+//   `rearmFixtureStageAfterCommit`  the same for the stage of a fixture (an abandon, which reaches no `onDecided`).
+// Every fact-changing path calls one of them: a decide, void or correction (scoring.ts `onDecided`), an abandon
+// (`scoreEvent`), a draft (stages.ts `computeSeedProposal`), a switch (`setStageAutoAdvance`) and an unfreeze (history.ts
+// `setDivisionLocks`).
 import type postgres from "postgres";
-import { AUTO_ADVANCE_DONE_VISIBLE_MS, LIVE_AUTO_ACTION_STATES, autoAdvanceSwitchesFor } from "@/lib/auto-advance";
+import {
+  AUTO_ADVANCE_DONE_VISIBLE_MS,
+  LIVE_AUTO_ACTION_STATES,
+  autoAdvanceSwitchesFor,
+  deriveConfirmAction,
+  deriveSourceAction,
+  skipKey,
+  type AutoActionKind,
+  type LiveAutoActionState,
+  type SourceActionKind,
+  type SourceFixtureFact,
+} from "@/lib/auto-advance";
+import { isSwissBoardSeated } from "@/lib/swiss-shell";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { AutoActionView, StageAutoAdvanceOut, StageAutoAdvancePatch } from "@/server/api-v1/schemas";
+import { resolveSettleMs } from "@/server/auto-advance/settle";
 import { appendDivisionEvent } from "@/server/engine-db/competition";
+import { log } from "@/server/logger";
+import { DECIDED } from "./stages";
 
 type Tx = postgres.TransactionSql;
 
@@ -100,7 +123,7 @@ const switchesOf = (config: Record<string, unknown> | null): Record<SwitchKey, b
 });
 
 export async function setStageAutoAdvance(auth: AuthCtx, stageId: string, patch: StageAutoAdvancePatch): Promise<StageAutoAdvanceOut> {
-  return withTenant(auth.orgId, async (tx) => {
+  const { out, alarms } = await withTenant(auth.orgId, async (tx) => {
     const read = async () => {
       const [row] = await tx<StageRow[]>`select id, division_id, kind, progression, config from stages where id = ${stageId}`;
       return row;
@@ -132,8 +155,14 @@ export async function setStageAutoAdvance(auth: AuthCtx, stageId: string, patch:
         await appendDivisionEvent(tx, stage.division_id, STAGE_AUTO_ADVANCE_SWITCHED, { stage_id: stageId, key, on: after[key] }, auth.userId);
       }
     }
-    return { ...after, actions: await visibleActions(tx, { stageId }) };
+    // Arm in the same transaction (§4.2: "when either switch is turned on, so an already-complete round arms
+    // immediately"): an ON commits with the row it arms, an OFF with the rows it cancels, and the answer shows them. No
+    // restart: a switch is not a change to the facts, so a pending clock keeps its due time (a same-value call is idle).
+    const alarms = await rearmAutoActions(tx, stageId, { restartPending: false });
+    return { out: { ...after, actions: await visibleActions(tx, { stageId }) }, alarms };
   });
+  await publishAutoActionAlarms(alarms);
+  return out;
 }
 
 export async function listDivisionAutoActions(auth: AuthCtx, divisionId: string): Promise<AutoActionView[]> {
@@ -142,4 +171,279 @@ export async function listDivisionAutoActions(auth: AuthCtx, divisionId: string)
     if (!division) throw new HttpError(404, "division not found");
     return visibleActions(tx, { divisionId });
   });
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Arming (plan Task 5; spec §4.2-§4.4)
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** A row this call armed (wrote a fresh `due_at` on): the firer is to be woken for it at `dueAt`. */
+export interface ArmedAlarm {
+  rowId: string;
+  stageId: string;
+  dueAt: Date;
+}
+
+/** Wakes the firer for armed rows. A no-op until plan Task 10 replaces it with server/auto-advance/qstash.ts's publish;
+ *  until then the sweep (Task 9) is the only waker, so an armed row is late, never lost. Called AFTER the arming
+ *  transaction committed, so an alarm never names a row that rolled back. */
+export async function publishAutoActionAlarms(alarms: readonly ArmedAlarm[]): Promise<void> {
+  void alarms;
+}
+
+interface ArmStage {
+  id: string;
+  org_id: string;
+  division_id: string;
+  kind: string;
+  status: string;
+  config: Record<string, unknown> | null;
+  progression: unknown;
+  at: Date;
+  has_live: boolean;
+}
+
+interface LiveRow {
+  id: string;
+  kind: AutoActionKind;
+  state: LiveAutoActionState;
+  target_round: number | null;
+  target_proposal_id: string | null;
+  blocked_code: string | null;
+  detail: Record<string, unknown> | null;
+  leased: boolean;
+}
+
+/** What one kind wants, after the derivation: nothing live, or one row in one state on one target. */
+type Want =
+  | { state: "none" }
+  | { state: "waiting" | "pending" | "paused" | "blocked"; round: number | null; proposalId: string | null; code: string | null; detail: Record<string, unknown> | null };
+
+interface ArmCtx {
+  tx: Tx;
+  stage: ArmStage;
+  settleMs: number;
+  restartPending: boolean;
+  /** D1: a retiring row whose target a person already reached (round seated, stage complete, proposal confirmed). */
+  observablyDone: (row: LiveRow) => Promise<boolean>;
+}
+
+/** A block the derivation wrote carries `detail.derived: true`; a block the FIRER writes (Task 8: SCHEDULE_LOCKED,
+ *  AUTO_ADVANCE_FAILED, a refusal) never does. Only a derived block is re-derived on every call: a fire's block is the
+ *  firer's verdict, and moves only on a change that restarts the clock (a result, a draft, an unfreeze). */
+const isDerivedBlock = (row: LiveRow) => row.state === "blocked" && row.detail?.derived === true;
+
+async function retire(c: ArmCtx, row: LiveRow, reason: "superseded" | "switch_off"): Promise<void> {
+  const at = c.stage.at;
+  if (reason === "superseded" && (await c.observablyDone(row))) {
+    await c.tx`update stage_auto_actions set state = 'done', done_at = ${at}, result = ${c.tx.json({ by: "person" })}, updated_at = ${at}
+                where id = ${row.id}`;
+    return;
+  }
+  await c.tx`update stage_auto_actions set state = 'cancelled', result = ${c.tx.json({ reason })}, updated_at = ${at} where id = ${row.id}`;
+}
+
+/** Brings one kind's live row to `want`. Answers the alarm when this call wrote a fresh `due_at`. */
+async function settleKind(c: ArmCtx, kind: AutoActionKind, live: LiveRow | undefined, want: Want): Promise<ArmedAlarm | null> {
+  const { tx, stage } = c;
+  const at = stage.at;
+  // D2: a firer holds the row. Its fire decides what happens next; a re-derive under it would race the fire.
+  if (live?.leased) return null;
+  if (want.state === "none") {
+    if (live) await retire(c, live, "superseded");
+    return null;
+  }
+  if (live && (live.target_round !== want.round || live.target_proposal_id !== want.proposalId)) {
+    // A person's hold follows the proposal across a re-draft (plan Task 11): the hold is on the hand-off, not on one row
+    // of the proposals table, so it keeps its own release time (D9) rather than a fresh settle.
+    if (want.state === "paused" && live.state === "paused") {
+      await tx`update stage_auto_actions set target_proposal_id = ${want.proposalId}, updated_at = ${at} where id = ${live.id}`;
+      return null;
+    }
+    await retire(c, live, "superseded");
+    live = undefined;
+  }
+  const dueAt = new Date(at.getTime() + c.settleMs);
+  if (!live) {
+    // `paused` is derived only off a live paused row (deriveConfirmAction's livePaused), so a hold with no row to keep
+    // cannot be asked for. A guard rather than a silent insert: a paused row needs a hold's release time, not a settle.
+    if (want.state === "paused") throw new Error(`rearmAutoActions: a paused ${kind} row was derived for stage ${stage.id} with no live row to keep`);
+    const [row] = await tx<{ id: string }[]>`
+      insert into stage_auto_actions
+        (org_id, division_id, stage_id, kind, target_round, target_proposal_id, state, due_at, blocked_code, detail, created_at, updated_at)
+      values (${stage.org_id}, ${stage.division_id}, ${stage.id}, ${kind}, ${want.round}, ${want.proposalId}, ${want.state},
+              ${want.state === "pending" ? dueAt : null}, ${want.code}, ${want.detail === null ? null : tx.json(want.detail as never)}, ${at}, ${at})
+      returning id`;
+    return want.state === "pending" ? { rowId: row!.id, stageId: stage.id, dueAt } : null;
+  }
+  // Same target. A fire's block stands unless this change restarts the clock.
+  if (live.state === "blocked" && !isDerivedBlock(live) && !c.restartPending) return null;
+  switch (want.state) {
+    case "paused":
+      return null;
+    case "pending":
+      // A change to the facts restarts the window (§5.2); a call that changed nothing (a switch, the sweep) keeps it.
+      if (live.state === "pending" && !c.restartPending) return null;
+      await tx`update stage_auto_actions
+                  set state = 'pending', due_at = ${dueAt}, attempts = 0, lease_until = null, blocked_code = null, detail = null,
+                      updated_at = ${at}
+                where id = ${live.id}`;
+      return { rowId: live.id, stageId: stage.id, dueAt };
+    case "waiting":
+    case "blocked": {
+      // Written only when it moves, so `updated_at` (the banner's order) is the time the row last changed.
+      const detail = want.detail === null ? null : tx.json(want.detail as never);
+      await tx`update stage_auto_actions
+                  set state = ${want.state}, due_at = null, attempts = 0, lease_until = null, blocked_code = ${want.code},
+                      detail = ${detail}, updated_at = ${at}
+                where id = ${live.id}
+                  and (state, blocked_code, detail) is distinct from (${want.state}::text, ${want.code}::text, ${detail}::jsonb)`;
+      return null;
+    }
+  }
+}
+
+/**
+ * Re-derives a stage's live auto rows from the facts in the DB (§4.2-§4.4), inside the caller's transaction. Answers
+ * the alarms for the rows it armed; the caller publishes them after its commit (`publishAutoActionAlarms`).
+ *
+ * Arms only where a switch is ON (the stored flag) AND can act there (`autoAdvanceSwitchesFor`): the create door and
+ * the Format tool's Save take StageConfig whole, so a flag can be stored on a stage the PUT would refuse it for. A stage
+ * with neither pays one read. A switch that is off cancels its kind's live rows (`switch_off`, not sticky).
+ *
+ * `restartPending` (default true): a change to the facts restarts a pending row's clock and re-derives a fire's block.
+ * A call that changed no fact (the switch itself, the sweep) passes false and keeps both.
+ *
+ * Lock order: `auto-advance:<stageId>` only. A caller holding the division lock takes it first (the switch, a draft);
+ * nothing here takes the division lock.
+ */
+export async function rearmAutoActions(tx: Tx, stageId: string, opts: { restartPending?: boolean } = {}): Promise<ArmedAlarm[]> {
+  await tx`select pg_advisory_xact_lock(hashtext(${"auto-advance:" + stageId}))`;
+  // `clock_timestamp()`, read once after the lock: `now()` is the transaction's start, stale by however long the lock
+  // and the caller's own work took. Every write of this call stamps it, so `due_at - updated_at` is exactly the settle.
+  const [stage] = await tx<ArmStage[]>`
+    select s.id, s.org_id, s.division_id, s.kind, s.status, s.config, s.progression, clock_timestamp() as at,
+           exists (select 1 from stage_auto_actions a where a.stage_id = s.id and a.state in ${tx([...LIVE_AUTO_ACTION_STATES])}) as has_live
+      from stages s where s.id = ${stageId}`;
+  if (!stage) return [];
+  const can = autoAdvanceSwitchesFor(stage);
+  const sourceOn = stage.config?.autoPair === true && can.autoPair;
+  const confirmOn = stage.config?.autoConfirmHandoff === true && can.autoConfirmHandoff;
+  if (!sourceOn && !confirmOn && !stage.has_live) return [];
+
+  const liveRows = await tx<LiveRow[]>`
+    select id, kind, state, target_round, target_proposal_id, blocked_code, detail, coalesce(lease_until > now(), false) as leased
+      from stage_auto_actions where stage_id = ${stageId} and state in ${tx([...LIVE_AUTO_ACTION_STATES])}`;
+  const liveOf = (kind: AutoActionKind) => liveRows.find((r) => r.kind === kind);
+
+  let fixtures: SourceFixtureFact[] | null = null;
+  const readFixtures = async (): Promise<SourceFixtureFact[]> => {
+    if (fixtures !== null) return fixtures;
+    const rows = await tx<Omit<SourceFixtureFact, "decided">[]>`
+      select id, round_no, seq_in_round, home_entrant_id, away_entrant_id, outcome, ext_key, status
+        from fixtures where stage_id = ${stageId}`;
+    fixtures = rows.map((f) => ({ ...f, decided: DECIDED.has(f.status) }));
+    return fixtures;
+  };
+  const c: ArmCtx = {
+    tx,
+    stage,
+    settleMs: resolveSettleMs(),
+    restartPending: opts.restartPending ?? true,
+    observablyDone: async (row) => {
+      if (row.kind === "pair_round") return (await readFixtures()).some((f) => f.round_no === row.target_round && isSwissBoardSeated(f));
+      if (row.kind === "complete_stage") return stage.status === "complete";
+      const [p] = await tx<{ status: string }[]>`select status from stage_seed_proposals where id = ${row.target_proposal_id}`;
+      return p?.status === "confirmed";
+    },
+  };
+  const alarms: ArmedAlarm[] = [];
+  const keep = (a: ArmedAlarm | null) => {
+    if (a) alarms.push(a);
+  };
+
+  // The source half: pair the next round, or complete the stage after the last one.
+  const sourceKinds: readonly SourceActionKind[] = ["pair_round", "complete_stage"];
+  if (!sourceOn) {
+    for (const kind of sourceKinds) {
+      const live = liveOf(kind);
+      if (live && !live.leased) await retire(c, live, "switch_off");
+    }
+  } else {
+    // Only a skip is sticky (§4.2): a switch-off or a superseded row of the same target never stops it re-arming.
+    const skips = await tx<{ kind: SourceActionKind; target_round: number }[]>`
+      select kind, target_round from stage_auto_actions
+       where stage_id = ${stageId} and kind in ${tx([...sourceKinds])} and state = 'cancelled' and result ->> 'reason' = 'skip'`;
+    const derived = deriveSourceAction({
+      stageStatus: stage.status,
+      fixtures: await readFixtures(),
+      skipped: new Set(skips.map((s) => skipKey(s.kind, s.target_round))),
+    });
+    for (const kind of sourceKinds) {
+      const want: Want =
+        derived.state === "none" || derived.kind !== kind
+          ? { state: "none" }
+          : derived.state === "waiting"
+            ? { state: "waiting", round: derived.round, proposalId: null, code: null, detail: { openBoards: derived.openBoards } }
+            : derived.state === "blocked"
+              ? { state: "blocked", round: derived.round, proposalId: null, code: derived.code, detail: { derived: true, boards: derived.boards } }
+              : { state: "pending", round: derived.round, proposalId: null, code: null, detail: null };
+      keep(await settleKind(c, kind, liveOf(kind), want));
+    }
+  }
+
+  // The confirm half, on the TARGET stage: confirm the hand-off proposal.
+  const confirmLive = liveOf("confirm_handoff");
+  if (!confirmOn) {
+    if (confirmLive && !confirmLive.leased) await retire(c, confirmLive, "switch_off");
+  } else {
+    const [latest] = await tx<{ id: string; status: "draft" | "confirmed" | "stale"; computed: { ties?: unknown } | null }[]>`
+      select id, status, computed from stage_seed_proposals where stage_id = ${stageId} order by created_at desc, id desc limit 1`;
+    const ties = latest?.computed?.ties;
+    if (latest && !Array.isArray(ties)) {
+      // computeSeedProposal always writes `ties` (an array, maybe empty). A proposal without one cannot be judged for a
+      // tie, and arming it would confirm what may be an unresolved tie: refuse by name instead.
+      throw new Error(`rearmAutoActions: seed proposal ${latest.id} has no computed.ties array`);
+    }
+    const derived = deriveConfirmAction({
+      latest: latest ? { id: latest.id, status: latest.status, tieCount: (ties as unknown[]).length } : null,
+      livePaused: confirmLive?.state === "paused",
+    });
+    const want: Want =
+      derived.state === "none"
+        ? { state: "none" }
+        : derived.state === "blocked"
+          ? { state: "blocked", round: null, proposalId: derived.proposalId, code: derived.code, detail: { derived: true } }
+          : { state: derived.state, round: null, proposalId: derived.proposalId, code: null, detail: null };
+    keep(await settleKind(c, "confirm_handoff", confirmLive, want));
+  }
+  return alarms;
+}
+
+/**
+ * `rearmAutoActions` in its own transaction, AFTER the change that triggered it committed (a result, an unfreeze).
+ * Never throws: the change it follows already stands, and a failed arming is the sweep's to repair (Task 9), so a
+ * failure is logged as `auto_advance_rearm_failed` and swallowed. Publishes the alarms once its transaction commits.
+ */
+export async function rearmAfterCommit(orgId: string, stageId: string, opts: { restartPending?: boolean } = {}): Promise<void> {
+  try {
+    const alarms = await withTenant(orgId, (tx) => rearmAutoActions(tx, stageId, opts));
+    await publishAutoActionAlarms(alarms);
+  } catch (err) {
+    log.error({ err, orgId, stageId, event: "auto_advance_rearm_failed" }, "auto_advance_rearm_failed");
+  }
+}
+
+/** `rearmAfterCommit` for the stage of a fixture: an abandon decides nothing, so it never reaches `onDecided`, yet it
+ *  moves the stage's row (to blocked STAGE_NOT_READY, §5.6). Never throws, for the same reason. */
+export async function rearmFixtureStageAfterCommit(orgId: string, fixtureId: string): Promise<void> {
+  try {
+    const alarms = await withTenant(orgId, async (tx) => {
+      const [f] = await tx<{ stage_id: string | null }[]>`select stage_id from fixtures where id = ${fixtureId}`;
+      return f?.stage_id ? rearmAutoActions(tx, f.stage_id) : [];
+    });
+    await publishAutoActionAlarms(alarms);
+  } catch (err) {
+    log.error({ err, orgId, fixtureId, event: "auto_advance_rearm_failed" }, "auto_advance_rearm_failed");
+  }
 }

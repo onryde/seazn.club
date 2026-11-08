@@ -1,5 +1,6 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
 import { check, newSession, signIn, tag, v1, v1data } from "../harness.ts";
+import { resolveSettleMs } from "../../../apps/web/src/server/auto-advance/settle.ts";
 
 /**
  * Swiss auto-advance (spec docs/superpowers/specs/2026-11-08-swiss-auto-advance-design.md; plan 2026-11-08-swiss-auto-advance.md)
@@ -13,13 +14,19 @@ import { check, newSession, signIn, tag, v1, v1data } from "../harness.ts";
  * is refused AUTO_CONFIRM_NO_HANDOFF on the Swiss and taken on the knockout; turning a switch off is never refused; a body
  * naming no switch is a 400.
  *
+ * T5 (§4.2): arming from results. With the switch back on, Start and Pair round 1, then each board decided through the
+ * scorer's events route: one board open leaves `pair_round` 2 waiting and naming it; the last one decided arms the same row
+ * pending, due exactly one settle window after it was armed. The window is resolved from this process's environment by the
+ * server's own rule (`resolveSettleMs`): the spec's 60 s, or CI's e2e-only override when its flag is also set.
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=swissAutoAdvance runs it alone
  * (SELECTABLE_SUITES). Own fresh owner (Community plan: one competition, one division); keyless; no SQL.
  */
 export async function swissAutoAdvanceSuite(): Promise<void> {
   // T4: 6 (defaults off and an empty read; on, once in the history with a person; the same value again records nothing;
   //        the two refusals by name with the knockout's positive pair; off; the 400 on an empty body).
-  const EXPECTED_CHECKS = 6;
+  // T5: 1 (a decided round arms pair_round 2: waiting on the open board, then pending one settle window out).
+  const EXPECTED_CHECKS = 7;
   let checked = 0;
   const aaCheck = (label: string, cond: boolean) => {
     checked++;
@@ -91,7 +98,7 @@ export async function swissAutoAdvanceSuite(): Promise<void> {
     const events = await switched();
     const ok =
       on.status === 200 && out?.autoPair === true && out.autoConfirmHandoff === false && Array.isArray(out.actions) &&
-      stored === true && events.length === 1 && events[0]!.actor_id !== null;
+      stored === true && events.length === 1 && events[0].actor_id !== null;
     aaCheck(
       "saa T4: autoPair turns on on the Swiss - answered and stored on, one stage_auto_advance_switched entry naming the person" +
         (ok ? "" : ` - ${rig}, PUT ${on.status} ${JSON.stringify(on.json).slice(0, 200)}, stored ${String(stored)}, events ${JSON.stringify(events)}`),
@@ -152,6 +159,51 @@ export async function swissAutoAdvanceSuite(): Promise<void> {
     const ok = empty.status === 400 && events.length === 3;
     aaCheck(
       "saa T4: a body naming no switch is refused 400 and records nothing" + (ok ? "" : ` - PUT {} ${empty.status}, events ${events.length}`),
+      ok,
+    );
+  }
+
+  // Check 7 — T5: results arm the next round's pair. Switched back on before anything is decided, so the arming seen here
+  // is the results', not the switch's.
+  {
+    type Action = { id: string; stageId: string; kind: string; state: string; targetRound: number | null; dueAt: string | null; updatedAt: string; detail: unknown };
+    type Board = { id: string; stage_id: string; round_no: number; seq_in_round: number; home_entrant_id: string | null; away_entrant_id: string | null };
+    const live = async () => v1data<{ actions?: Action[] } | undefined>(await v1(owner, `/api/v1/divisions/${divId}/auto-advance`))?.actions ?? [];
+    const seqOf = async (id: string) => v1data<{ last_seq: number } | undefined>(await v1(owner, `/api/v1/fixtures/${id}/state`))?.last_seq;
+    const post = async (id: string, type: string, payload: unknown = {}) =>
+      (await v1(owner, `/api/v1/fixtures/${id}/events`, "POST", { expected_seq: await seqOf(id), type, payload })).status;
+    /** A played badminton win for home: two games to 21. Answers every event's status. */
+    const win = async (id: string) => [
+      await post(id, "core.start"),
+      await post(id, "badminton.game.summary", { home: 21, away: 10 }),
+      await post(id, "badminton.game.summary", { home: 21, away: 10 }),
+    ];
+
+    const on = await put(swissId, { autoPair: true });
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    const paired = await v1(owner, `/api/v1/stages/${swissId}/generate`, "POST");
+    const boards = (v1data<Board[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? [])
+      .filter((f) => f.stage_id === swissId && f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null)
+      .sort((a, b) => a.seq_in_round - b.seq_in_round);
+    const [b1, b2] = boards;
+    const first = b1 ? await win(b1.id) : [];
+    const waiting = await live();
+    const second = b2 ? await win(b2.id) : [];
+    const armed = await live();
+    const settle = resolveSettleMs(process.env);
+    const w = waiting[0];
+    const a = armed[0];
+    const openBoards = (w?.detail as { openBoards?: { fixtureId: string }[] } | null)?.openBoards;
+    const ok =
+      on.status === 200 && started.status < 300 && paired.status === 200 && boards.length === 2 &&
+      [...first, ...second].every((s) => s === 201) &&
+      waiting.length === 1 && w?.kind === "pair_round" && w.state === "waiting" && w.targetRound === 2 && w.stageId === swissId &&
+      openBoards?.length === 1 && openBoards[0]?.fixtureId === b2?.id &&
+      armed.length === 1 && a?.id === w.id && a.state === "pending" && a.targetRound === 2 && a.dueAt !== null &&
+      Date.parse(a.dueAt) - Date.parse(a.updatedAt) === settle;
+    aaCheck(
+      `saa T5: a decided round arms pair_round 2 - waiting on the one open board, then pending on the last result, due one settle window (${settle} ms) after it armed` +
+        (ok ? "" : ` - ${rig}, on ${on.status}, start ${started.status}, pair ${paired.status}, boards ${boards.length}, events ${JSON.stringify([...first, ...second])}, waiting ${JSON.stringify(waiting).slice(0, 300)}, armed ${JSON.stringify(armed).slice(0, 300)}`),
       ok,
     );
   }

@@ -378,7 +378,11 @@ describe.skipIf(!HAS_DB)("listDivisionAutoActions (plan Task 4)", () => {
       checked++;
     }
     expect(checked).toBe(4);
+    // Since Task 5 the PUT re-derives its stage before it answers. This Swiss has no fixtures, so the SQL row (no fact
+    // behind it) retires as superseded, and the answer carries what is left of the Swiss's own rows: never the KO's.
     const answer = await setStageAutoAdvance(r.auth, r.swissId, { autoPair: true });
-    expect(answer.actions.map((a) => a.id).sort(), "the Swiss's rows only").toEqual([waiting, recent].sort());
+    expect(answer.actions.map((a) => a.id), "the Swiss's rows only").toEqual([recent]);
+    const [retired] = await sql<{ state: string; result: unknown }[]>`select state, result from stage_auto_actions where id = ${waiting}`;
+    expect(retired).toEqual({ state: "cancelled", result: { reason: "superseded" } });
   });
 });

@@ -1,5 +1,6 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { TAG, addEntrantsViaApi, apiJson } from "./helpers";
+import { resolveSettleMs } from "../src/server/auto-advance/settle";
 
 // Swiss auto-advance (spec docs/superpowers/specs/2026-11-08-swiss-auto-advance-design.md), plan Task 4: the two per-stage
 // switches through the production-shaped server — `PUT /api/v1/stages/{id}/auto-advance` and the division's read,
@@ -21,9 +22,24 @@ const P_SETUP = {
 type Switches = { autoPair: boolean; autoConfirmHandoff: boolean; actions: unknown[] };
 type HistoryOut = { events: { type: string; actor_id: string | null }[] };
 type StageOut = { id: string; seq: number; config: Record<string, unknown> };
+type Action = {
+  id: string;
+  stageId: string;
+  kind: string;
+  state: string;
+  targetRound: number | null;
+  dueAt: string | null;
+  updatedAt: string;
+  detail: unknown;
+};
+type Board = { id: string; stage_id: string; round_no: number; seq_in_round: number; home_entrant_id: string | null; away_entrant_id: string | null };
 
-/** A badminton Swiss of three rounds (seq 1) feeding a knockout of its top four at setup (seq 2), four players. */
-async function rig(request: APIRequestContext, label: string) {
+/** A generic division decides a board with one `generic.result`, the cheapest played result there is. */
+const GENERIC_CONFIG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false };
+
+/** A Swiss of three rounds (seq 1) feeding a knockout of its top four at setup (seq 2), four players. Badminton unless
+ *  told otherwise. */
+async function rig(request: APIRequestContext, label: string, sport: "badminton" | "generic" = "badminton") {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `Auto-advance ${label} ${TAG}`,
@@ -32,9 +48,9 @@ async function rig(request: APIRequestContext, label: string) {
   expect(comp.status, "competition").toBeLessThan(300);
   const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
     name: "Open",
-    sport_key: "badminton",
-    variant_key: "bwf",
-    config: {},
+    ...(sport === "generic"
+      ? { sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG }
+      : { sport_key: "badminton", variant_key: "bwf", config: {} }),
   });
   expect(div.status, "division").toBeLessThan(300);
   const divisionId = div.data!.id;
@@ -65,6 +81,25 @@ async function switched(request: APIRequestContext, divisionId: string) {
   const h = await apiJson<HistoryOut>(request, `/api/v1/divisions/${divisionId}/history`);
   expect(h.status, "history").toBe(200);
   return h.data!.events.filter((e) => e.type === "stage_auto_advance_switched");
+}
+
+async function liveRows(request: APIRequestContext, divisionId: string): Promise<Action[]> {
+  const read = await apiJson<{ actions: Action[] }>(request, `/api/v1/divisions/${divisionId}/auto-advance`);
+  expect(read.status, JSON.stringify(read.error)).toBe(200);
+  return read.data!.actions;
+}
+
+/** One scorer event at the fixture's tip; answers the appended event's id (what a `core.void` names). */
+async function post(request: APIRequestContext, fixtureId: string, type: string, payload: Record<string, unknown> = {}): Promise<string> {
+  const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
+  expect(state.status, JSON.stringify(state.error)).toBe(200);
+  const res = await apiJson<{ event_id: string }>(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+    expected_seq: state.data!.last_seq,
+    type,
+    payload,
+  });
+  expect(res.status, `${type}: ${JSON.stringify(res.error)}`).toBe(201);
+  return res.data!.event_id;
 }
 
 async function storedConfig(request: APIRequestContext, divisionId: string, stageId: string) {
@@ -120,16 +155,59 @@ test.describe("Swiss auto-advance T4: the stage switches and the division read",
   });
 
   test("GET auto-advance lists live rows", async ({ request }) => {
-    // Nothing arms a row before Task 5, so the list is empty here; the shape is pinned now and Task 5 extends this case
-    // with the row the switch arms.
-    const r = await rig(request, "read");
-    const read = await apiJson<{ actions: unknown[] }>(request, `/api/v1/divisions/${r.divisionId}/auto-advance`);
-    expect(read.status).toBe(200);
-    expect(read.data).toEqual({ actions: [] });
-    expect((await put(request, r.swissId, { autoPair: true })).status).toBe(200);
-    const after = await apiJson<{ actions: unknown[] }>(request, `/api/v1/divisions/${r.divisionId}/auto-advance`);
-    expect(after.status).toBe(200);
-    expect(Array.isArray(after.data!.actions), "actions is a list").toBe(true);
+    // Task 5: the row is armed by the product, never written by hand. Results are decided through the scorer's events
+    // route, and the read is what the fixtures tab's banner will poll (Task 13).
+    const r = await rig(request, "read", "generic");
+    // The empty case first: nothing generated, so the switch arms nothing.
+    expect(await liveRows(request, r.divisionId)).toEqual([]);
+    const on = await put(request, r.swissId, { autoPair: true });
+    expect(on.status).toBe(200);
+    expect(on.data!.actions, "no fixtures: nothing to arm").toEqual([]);
+    expect((await apiJson(request, `/api/v1/divisions/${r.divisionId}/start`, "POST")).status, "Start").toBeLessThan(300);
+    expect((await apiJson(request, `/api/v1/stages/${r.swissId}/generate`, "POST")).status, "Pair round 1").toBe(200);
+
+    const all = await apiJson<Board[]>(request, `/api/v1/divisions/${r.divisionId}/fixtures`);
+    expect(all.status, JSON.stringify(all.error)).toBe(200);
+    const boards = all
+      .data!.filter((f) => f.stage_id === r.swissId && f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null)
+      .sort((a, b) => a.seq_in_round - b.seq_in_round);
+    expect(boards, "four players: two boards in round 1").toHaveLength(2);
+    const [b1, b2] = boards as [Board, Board];
+
+    // One board decided: round 2 waits, naming the open board.
+    await post(request, b1.id, "generic.result", { p1Score: 2, p2Score: 0 });
+    const waiting = await liveRows(request, r.divisionId);
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]).toMatchObject({
+      stageId: r.swissId,
+      kind: "pair_round",
+      state: "waiting",
+      targetRound: 2,
+      dueAt: null,
+      detail: { openBoards: [{ fixtureId: b2.id, round: 1, board: b2.seq_in_round }] },
+    });
+
+    // The last board decided: the same row counts down, due one settle window after it was armed. The window is read from
+    // the environment this run and its server share (the CI-only override, or the spec's 60 s).
+    const lastResult = await post(request, b2.id, "generic.result", { p1Score: 2, p2Score: 0 });
+    const [armed] = await liveRows(request, r.divisionId);
+    expect(armed).toMatchObject({ id: waiting[0]!.id, kind: "pair_round", state: "pending", targetRound: 2, detail: null });
+    const settle = resolveSettleMs(process.env);
+    expect(Date.parse(armed!.dueAt!) - Date.parse(armed!.updatedAt), "due one settle window after it armed").toBe(settle);
+
+    // A correction (the result voided, then decided the other way) restarts the clock: due later than before.
+    await post(request, b2.id, "core.void", { event_id: lastResult });
+    expect((await liveRows(request, r.divisionId))[0], "the void reopened the round").toMatchObject({ id: armed!.id, state: "waiting" });
+    await post(request, b2.id, "generic.result", { p1Score: 0, p2Score: 2 });
+    const [rearmed] = await liveRows(request, r.divisionId);
+    expect(rearmed).toMatchObject({ id: armed!.id, state: "pending" });
+    expect(Date.parse(rearmed!.dueAt!), "the clock restarted").toBeGreaterThan(Date.parse(armed!.dueAt!));
+    expect(Date.parse(rearmed!.dueAt!) - Date.parse(rearmed!.updatedAt)).toBe(settle);
+
+    // Switched off: the row is cancelled, so nothing is live (a cancelled row is history, never on the banner).
+    expect((await put(request, r.swissId, { autoPair: false })).data!.actions).toEqual([]);
+    expect(await liveRows(request, r.divisionId)).toEqual([]);
+
     // An unknown division is a 404, never an empty list.
     const unknown = await apiJson(request, `/api/v1/divisions/00000000-0000-4000-8000-000000000000/auto-advance`);
     expect(unknown.status).toBe(404);

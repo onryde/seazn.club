@@ -25,6 +25,7 @@ import { swissRefusal } from "./swiss-refusal";
 import { judgeSwissRounds, swissRoundsGuidance, swissRoundsNoticeOf, type SwissRoundsJudgement, type SwissRoundsNotice, type SwissRoundsShrunk } from "@/lib/swiss-rounds";
 import { isRootSwissStage } from "@/lib/open-entry-stages";
 import { autoAdvanceSwitchesFor } from "@/lib/auto-advance";
+import { publishAutoActionAlarms, rearmAfterCommit, rearmAutoActions } from "./auto-advance";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
   generateRoundRobin,
@@ -6344,7 +6345,7 @@ export async function departedEntrantIds(tx: Tx, divisionId: string): Promise<Se
  * kind outside REAL_TABLE_KINDS).
  */
 export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promise<SeedProposalOut> {
-  return withTenant(auth.orgId, async (tx) => {
+  const { out, alarms } = await withTenant(auth.orgId, async (tx) => {
     const [stage] = await tx<StageRow[]>`select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
     if (!stage.progression) {
@@ -6522,8 +6523,13 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
       values (${auth.orgId}, ${stageId}, ${tx.json(computed as never)}, 'draft')
       returning id`;
 
-    return { id: row!.id, stageId, status: "draft", computed };
+    // Swiss auto-advance (2026-11-08 spec §4.2): a new draft re-derives this stage's confirm row in the same
+    // transaction, so the draft and its countdown (or its tie block, D4) commit together. Division lock, then this.
+    const alarms = await rearmAutoActions(tx, stageId);
+    return { out: { id: row!.id, stageId, status: "draft" as const, computed }, alarms };
   });
+  await publishAutoActionAlarms(alarms);
+  return out;
 }
 
 /**
@@ -7004,7 +7010,9 @@ export async function markDependentSeedProposalsStale(auth: AuthCtx, sourceStage
     try {
       await computeSeedProposal(auth, dependentStageId);
     } catch {
-      // best-effort, see docstring
+      // best-effort, see docstring. The draft is stale and none replaced it (a source reopened by a void, say): its
+      // confirm row must not keep counting down on it (Swiss auto-advance §4.2), so re-derive it — to nothing.
+      await rearmAfterCommit(auth.orgId, dependentStageId);
     }
   }
 }
