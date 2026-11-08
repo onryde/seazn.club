@@ -12,6 +12,7 @@
 // single-sport: generic — the table carries no sport field and every constraint here is sport-blind.
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
+import { LIVE_AUTO_ACTION_STATES as LIVE } from "@/lib/auto-advance";
 import { sql, withTenant } from "@/lib/db";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
@@ -20,8 +21,10 @@ import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-// From the spec §4.2 table and the controller's ruling — typed here, not read back from the migration.
-const LIVE = ["waiting", "pending", "paused", "blocked"] as const;
+// The live set is the CODE's tuple (lib/auto-advance.ts), so the migration's partial-index predicate is held to what
+// the code arms and reads: a state added on one side only reds here. Its spec value (§4.2 plus the controller's
+// ruling) is pinned in lib/__tests__/auto-advance-derive.test.ts. The rest is typed from the spec, not read back from
+// the migration.
 const FINISHED = ["done", "cancelled"] as const;
 const ROUND_KINDS = ["pair_round", "complete_stage"] as const;
 
