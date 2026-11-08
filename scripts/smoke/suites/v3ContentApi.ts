@@ -159,7 +159,8 @@ export async function v3ContentApiSuite(
   const embed = await html(newSession(), `/embed/divisions/${divData.id}/standings`);
   check("v3: embed renders on pro", embed.status === 200 && embed.body.includes("seazn.club"));
   // R4 fix batch 3 (m9): sponsors live in the `sponsors` table only. The org PATCH's legacy `sponsors` arm (the
-  // branding-blob writer) is gone, so the route refuses it like any unknown key: a 400, and nothing reaches the page.
+  // branding-blob writer) is gone, so the route refuses it like any unknown key: a 400. That the blob is never read is
+  // the m9 unit test's (usecases/__tests__/sponsors.test.ts), so no page check follows.
   const legacyPatch = await v1(admin, `/api/orgs/${proOrgId}`, "PATCH", {
     sponsors: [{ name: `Acme ${tag}`, url: "https://acme.example" }],
   });
@@ -171,10 +172,6 @@ export async function v3ContentApiSuite(
   check("v3: sponsor row created for strip", stripRow.status === 201);
   const compPage2 = await html(newSession(), `/live/${proOrgSlug}/${compData.slug}`);
   check("v3: sponsor strip on pro dashboard", compPage2.body.includes(`Strip ${tag}`));
-  check(
-    "v3: the refused blob sponsor is on no page",
-    !compPage2.body.includes(`Acme ${tag}`),
-  );
 
   // ---- FREE PATH ------------------------------------------------------
   const free = newSession();
