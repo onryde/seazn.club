@@ -182,14 +182,22 @@ function realSlots(input: BuildInput): Map<string, Assignment> {
   return slots;
 }
 
-/** How bad a board is, for {@link fallbackBoard}: its blocking conflicts (court, person overlap, window, direct and
- *  round order — `isBlockingConflict`), its rest rows, and every card it left off. Lower is better. */
-function badness(board: readonly Assignment[], input: BuildInput): number {
+/**
+ * How bad a board is, for {@link fallbackBoard}, compared LEXICOGRAPHICALLY (ruling D31): first its blocking conflicts
+ * (court, person overlap, window, direct and round order — `isBlockingConflict`) plus every card it left off, then its
+ * rest rows. Not one sum: a rest breach files a row under each card of the pair, so it would weigh twice a dropped card
+ * and a board that silently leaves a match off would beat one that schedules it a little tight.
+ */
+function badness(board: readonly Assignment[], input: BuildInput): readonly [hard: number, rest: number] {
   const placed = new Set(board.map((a) => a.fixtureId));
-  const left = input.fixtures.filter((f) => !placed.has(f.id)).length;
+  const dropped = input.fixtures.filter((f) => !placed.has(f.id)).length;
   const rows = validateAssignments(board, input.config, input.existing ?? [], input.dependencies ?? []);
-  return left + rows.filter((c) => isBlockingConflict(c) || isRest(c)).length;
+  return [dropped + rows.filter(isBlockingConflict).length, rows.filter(isRest).length];
 }
+
+/** `a` is no worse than `b` under {@link badness}'s order. */
+const noWorse = (a: readonly [number, number], b: readonly [number, number]): boolean =>
+  a[0] !== b[0] ? a[0] < b[0] : a[1] <= b[1];
 
 /**
  * The greedy board an auto-pass fallback ships, given the engine's PLAIN greedy board for `input`. The ONE place both
@@ -203,9 +211,9 @@ function badness(board: readonly Assignment[], input: BuildInput): number {
  *   - LOCKED — the seed asked again with every such card LOCKED to its real slot, so new cards go around it. But the
  *     greedy placer starts a card only after its entrants' latest existing match, so with a pool's later rounds placed
  *     its round 1 lands after them: a round-order breach (measured: r1 at 15:00, after rounds 2-3).
- * Each is judged as REFLOW would ship it — its real-slot cards put back — by {@link badness}; fewer wins, and a tie goes
- * to LOCKED, because it respects the organiser's drags. With no such card the two are the same board and only PLAIN is
- * built.
+ * Each is judged as REFLOW would ship it — its real-slot cards put back — by {@link badness}: fewer blocking conflicts
+ * plus dropped cards wins, then fewer rest rows, and a full tie goes to LOCKED, because it respects the organiser's
+ * drags (rulings D30, D31). With no such card the two are the same board and only PLAIN is built.
  *
  * Returns the winner's own result, NOT the reconciled board: REFLOW reconciles it itself, and the engine's verdict
  * (`engine`, `status`, tiers) is the caller's to keep.
@@ -221,7 +229,7 @@ export async function fallbackBoard(input: BuildInput, plain: BuildResult): Prom
     }),
   );
   const asShipped = (r: BuildResult) => [...r.assignments.filter((a) => !slots.has(a.fixtureId)), ...slots.values()];
-  return badness(asShipped(locked), input) <= badness(asShipped(plain), input) ? locked : plain;
+  return noWorse(badness(asShipped(locked), input), badness(asShipped(plain), input)) ? locked : plain;
 }
 
 /**

@@ -37,7 +37,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { autoSchedule, putScheduleSettings } from "../schedule";
-import { buildScheduleHonouringRest, poolRestRules, withPoolRestGroups } from "../schedule-solver-rest";
+import { buildScheduleHonouringRest, fallbackBoard, poolRestRules, withPoolRestGroups } from "../schedule-solver-rest";
 import { seedCourts } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -773,6 +773,34 @@ describe("buildScheduleHonouringRest's judgement, over hand-built boards", () =>
 
     expect(await run(solve)).toBe(first);
     expect(build).toHaveBeenCalledTimes(1);
+  });
+
+  it("fallbackBoard: a locked board that DROPS a card loses to a plain board with one rest breach (ruling D31)", async () => {
+    // `a` was dragged to 09:00 on C1 (frozen, `current` only). `b` shares entrant e1 with it; `c` stands alone.
+    const fixtures = [{ id: "a" }, { id: "b" }, { id: "c" }];
+    const aReal = card("a", 0, "C1", { entrants: ["e1", "e2"] });
+    // PLAIN: the seed moved `a` (REFLOW puts it back), put `b` straight after it — no rest — and placed `c`.
+    const plain = resultOf(
+      [card("a", 240, "C1", { entrants: ["e1", "e2"] }), card("b", MATCH_MINUTES, "C2", { entrants: ["e1", "e3"] }), card("c", 120, "C2", { entrants: ["e4", "e5"] })],
+      "greedy",
+      "not_searched",
+    );
+    // LOCKED: `b` lawfully rested, but `c` left off the board.
+    const locked = resultOf([aReal, card("b", 2 * MATCH_MINUTES + DIVISION_REST, "C1", { entrants: ["e1", "e3"] })], "greedy", "not_searched");
+    const shippedPlain = [aReal, ...plain.assignments.filter((a) => a.fixtureId !== "a")];
+    const rows = engine.validateAssignments(shippedPlain, config, [], []);
+    expect(rows.filter((c) => c.reason === "rest").length, "premise: the plain board as shipped has a rest breach").toBeGreaterThan(0);
+    expect(rows.filter(engine.isBlockingConflict), "premise: and nothing blocking").toEqual([]);
+    expect(engine.validateAssignments(locked.assignments, config, [], []), "premise: the locked board is clean but short").toEqual([]);
+    const build = vi.spyOn(engine, "buildSchedule").mockResolvedValue(locked);
+
+    const out = await fallbackBoard(
+      { fixtures, config, frozen: ["a"], current: [aReal], solve: vi.fn(), log: engine.silentLogger } as unknown as BuildInput,
+      plain,
+    );
+
+    expect(build, "anti-vacuity: the locked rebuild was built and judged").toHaveBeenCalledTimes(1);
+    expect(out).toBe(plain);
   });
 
   it("throws, rather than mislabel a board, if the no-verdict rebuild ever comes back as a solver board", async () => {
