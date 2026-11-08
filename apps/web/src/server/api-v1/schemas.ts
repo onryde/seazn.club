@@ -41,6 +41,10 @@ import { PERSON_NAME_MAX } from "../../lib/person-name.ts";
 // Match Day D1: the format fields' bounds, shared with the division builder and the Format dialog (FMT5). Import-free,
 // so the standalone generator loads it like the files above.
 import { FORMAT_BOUNDS } from "../../lib/format-bounds.ts";
+// Swiss auto-advance (spec 2026-11-08 §4.2): the kind and state vocabulary of `stage_auto_actions`, one list for the table's
+// readers and this API. Client-safe and generator-safe: its imports are lib/swiss-shell.ts -> lib/fixture-bye.ts, relative
+// with `.ts`, and the latter's only import is `import type`.
+import { AUTO_ACTION_KINDS, AUTO_ACTION_STATES } from "../../lib/auto-advance.ts";
 // Task 9 (spectator surface W1) — the match-centre document schema, reused
 // verbatim as `PublicFixtureSummary.match_centre`'s type below rather than
 // restated: match-centre-schema.ts is pure Zod with no imports beyond zod
@@ -1269,6 +1273,12 @@ export const StageConfig = z
     qualified: z.array(z.string()).optional(),
     h2h_scope: z.literal("overall").optional(),
     rngSeed: z.number().optional(),
+    // Swiss auto-advance (spec 2026-11-08 §4.1): the stage's two switches, both OFF when absent. `autoPair` belongs to a Swiss
+    // stage (pair the next round, then complete the stage); `autoConfirmHandoff` to the TARGET stage, the one whose seed
+    // proposal is confirmed. Written by `PUT /stages/{id}/auto-advance`, which refuses an on where it can never act; listed
+    // here so a stored config round-trips and a Format Save carries them (`runReplaceStages`).
+    autoPair: z.boolean().optional(),
+    autoConfirmHandoff: z.boolean().optional(),
     // Shapes owned elsewhere — key allowed, value left to its own authority.
     points: z.unknown().optional(),
     carry_deltas: z.unknown().optional(),
@@ -3130,6 +3140,66 @@ export const FinishSwissResult = z.object({
   division_completed: z.boolean().optional(),
   seed_proposal: z.object({ id: Uuid, status: z.string() }).optional(),
 });
+
+/** PUT /stages/{id}/auto-advance (Swiss auto-advance spec §4.1; plan P1: not the Swiss-only, pre-start PATCH /stages/{id})
+ *  — a stage's two switches. Each key sent is that switch's new value, an omitted one is left as stored; at least one key,
+ *  and an unknown key is refused (strict). */
+export const StageAutoAdvancePatch = z
+  .strictObject({ autoPair: z.boolean(), autoConfirmHandoff: z.boolean() })
+  .partial()
+  .refine((p) => Object.keys(p).length > 0, "empty patch");
+export type StageAutoAdvancePatch = z.infer<typeof StageAutoAdvancePatch>;
+
+/** One `stage_auto_actions` row (V497) as the API serves it: what the clock will do to a stage next, or did. `targetRound`
+ *  is set for `pair_round` / `complete_stage` and `proposalId` for `confirm_handoff` (the table's target_shape CHECK).
+ *  `detail` is a blocked row's refusal params or a waiting row's open boards; `result` what was done, and by whom. */
+export const AutoActionView = z.object({
+  id: Uuid,
+  stageId: Uuid,
+  kind: z.enum(AUTO_ACTION_KINDS),
+  state: z.enum(AUTO_ACTION_STATES),
+  targetRound: z.number().int().nullable(),
+  proposalId: Uuid.nullable(),
+  dueAt: z.iso.datetime().nullable(),
+  doneAt: z.iso.datetime().nullable(),
+  blockedCode: z.string().nullable(),
+  detail: z.record(z.string(), z.unknown()).nullable(),
+  result: z.record(z.string(), z.unknown()).nullable(),
+  updatedAt: z.iso.datetime(),
+});
+export type AutoActionView = z.infer<typeof AutoActionView>;
+
+/** PUT /stages/{id}/auto-advance's answer: both switches as stored after the write, and the stage's rows as
+ *  `DivisionAutoActions` lists them. */
+export const StageAutoAdvanceOut = z.object({
+  autoPair: z.boolean(),
+  autoConfirmHandoff: z.boolean(),
+  actions: z.array(AutoActionView),
+});
+export type StageAutoAdvanceOut = z.infer<typeof StageAutoAdvanceOut>;
+
+/** POST /stages/{id}/auto-advance/skip (Swiss auto-advance spec §4.2, §4.6: "Skip this time") — which of the stage's live
+ *  auto actions to skip, and its TARGET (D33): the round the caller saw. A Skip is a person's word on one target, and the
+ *  banner it is clicked on polls every 10 s, so a Skip that named only the kind would land on whatever row of that kind is
+ *  live by then (the round after one the clock or another organiser just paired) and stick there.
+ *  - `pair_round`: `round` is required — the round the countdown pairs.
+ *  - `complete_stage`: `round` is optional — its target is the stage's last round (V497's target_shape), so the kind alone
+ *    names it; when sent it must be that round.
+ *  - `confirm_handoff`: accepted only so that it is refused BY NAME (AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE, D22: confirm is
+ *    stopped by pausing or the switch), not as a shapeless 400; a `round` is ignored. */
+export const AutoAdvanceSkip = z
+  .strictObject({ kind: z.enum(AUTO_ACTION_KINDS), round: z.number().int().positive().optional() })
+  .superRefine((b, ctx) => {
+    if (b.kind === "pair_round" && b.round === undefined) {
+      ctx.addIssue({ code: "custom", path: ["round"], message: "A pair_round skip names the round it skips." });
+    }
+  });
+export type AutoAdvanceSkip = z.infer<typeof AutoAdvanceSkip>;
+
+/** GET /divisions/{id}/auto-advance — every live row of the division's stages (waiting, pending, paused, blocked), and each
+ *  `done` row for 10 minutes after it was done (the banner's "Round 3 was paired automatically"), newest first. */
+export const DivisionAutoActions = z.object({ actions: z.array(AutoActionView) });
+export type DivisionAutoActions = z.infer<typeof DivisionAutoActions>;
 
 /** GET /stages/{id}/swiss-cut (W3 T17, RB3-19, X-SW-25) — who a correction moved across a completed Swiss's cut after its
  *  knockout began. `drift` is null when nothing moved (or there is nothing to compare: a running Swiss, an unseated or

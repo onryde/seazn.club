@@ -40,6 +40,7 @@ import { isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
 import { DEPARTED_STATUSES } from "./entrants";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { fillSlot, markDependentSeedProposalsStale, resolveBracketSeats, stampDepartedSeat } from "./stages";
+import { rearmAfterCommit, rearmFixtureStageAfterCommit } from "./auto-advance";
 import { detectSuspensions } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
 import {
@@ -363,6 +364,10 @@ export async function scoreEvent(
       advanced = [...result.released, ...filled.filter((id) => !result.released.includes(id))];
       await refreshDiscipline(auth, fixtureId);
       await refreshNews(auth, fixtureId);
+    } else if (input.type === "core.abandon") {
+      // Swiss auto-advance (2026-11-08 spec §5.6): an abandon decides nothing, so it never reaches onDecided, yet it
+      // blocks the round it sits in until a person decides or voids the board.
+      await rearmFixtureStageAfterCommit(auth.orgId, fixtureId);
     }
 
     if (cacheKey) await cacheSet(cacheKey, out, IDEM_TTL_SECONDS);
@@ -1143,6 +1148,9 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     // committed.
     await markDependentSeedProposalsStale(auth, context.stage_id);
   }
+  // Swiss auto-advance (2026-11-08 spec §4.2): a decide, void or correction re-derives the stage's auto rows and
+  // restarts a pending clock. After the commit above, in its own transaction, and it never throws.
+  if (context) await rearmAfterCommit(auth.orgId, context.stage_id);
   // Auto-advance (Jul3/08 §5, 16 Sep): when the flag is on and the stage just
   // finished, progression fires without a button.
   if (context && (context.outcome as { kind?: string } | null)?.kind !== undefined) {

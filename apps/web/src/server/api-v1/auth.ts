@@ -18,9 +18,10 @@ export type Scope = "read" | "write";
 
 export interface AuthCtx {
   orgId: string;
-  via: "session" | "api_key" | "device_link";
-  /** Session actor; null for API keys (recorded_by stays null on their
-   *  events). For device links: the ISSUING organiser (doc 13 §7 attribution
+  /** "system" is the clock (`systemAuth`): no door returns it, so no request ever carries it. */
+  via: "session" | "api_key" | "device_link" | "system";
+  /** Session actor; null for API keys and the system actor (recorded_by / actor_id stay null on
+   *  their events). For device links: the ISSUING organiser (doc 13 §7 attribution
    *  — recorded_by = issued_by, the issuer vouches for the device). */
   userId: string | null;
   role: OrgRole | null;
@@ -39,6 +40,24 @@ export interface AuthCtx {
 function recordAuthContext(ctx: AuthCtx): AuthCtx {
   setRequestActor({ orgId: ctx.orgId, userId: ctx.userId });
   return ctx;
+}
+
+/**
+ * The system actor (Swiss auto-advance spec §4.5, D11): work the clock does — auto-pair, auto-complete,
+ * auto-confirm — runs the SAME usecase the button runs, as this ctx, so the history never claims a person did it
+ * (a dedicated value, not `mintOrgOwnerAuth`, which impersonates the oldest owner).
+ * - `userId: null`: no person, so `recorded_by` / `division_events.actor_id` stay null (null actor = system).
+ * - `keyId: null`, no `keyScopes`: never an API key (whose scope gates fail closed on an empty scope set).
+ * - `role: "admin"`: organiser-equivalent for the usecases it calls, never `owner` — owner-only surfaces (billing,
+ *   Stripe Connect) stay shut to it.
+ * Every `via !== "session"` gate refuses it: those mint or use a person's capability, which the clock has none of.
+ * The org id comes from the caller's own row; a malformed one is refused rather than minting an org-less actor.
+ */
+export function systemAuth(orgId: string): AuthCtx {
+  if (!UUID_RE.test(orgId)) {
+    throw new Error(`systemAuth: not an organisation id: ${JSON.stringify(orgId)}`);
+  }
+  return recordAuthContext({ orgId, via: "system", userId: null, role: "admin", keyId: null });
 }
 
 const KEY_PREFIX = "sc_";

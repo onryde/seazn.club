@@ -47,6 +47,8 @@ import {
   type GenerateWrite,
 } from "./stages";
 import { swissRefusal } from "./swiss-refusal";
+import { LIVE_AUTO_ACTION_STATES } from "@/lib/auto-advance";
+import { rearmAfterCommit, recordPullBackSkip } from "./auto-advance";
 import { DEPARTED_STATUSES } from "./entrants";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
@@ -773,12 +775,18 @@ async function stepWrite(
         select f.id from fixtures f where f.id in ${tx(seatedIds)} and ${fixtureHasResultSql(tx, "f")} limit 1`;
       if (started) throw swissRefusal("SWISS_UNDO_ROUND_STARTED", { fixtureId: started.id });
       // Only rows that still exist: a later reshape may have deleted a shell the Pair seated.
-      const live = await tx<{ id: string; stage_id: string }[]>`
-        select id, stage_id from fixtures where id in ${tx(seatedIds)} order by id`;
+      const live = await tx<{ id: string; stage_id: string; round_no: number }[]>`
+        select id, stage_id, round_no from fixtures where id in ${tx(seatedIds)} order by id`;
       const ids = live.map((f) => f.id);
       await clearSwissFixtureSeats(tx, ids);
       unseated.push(...ids);
       unpairedStageIds.push(...new Set(live.map((f) => f.stage_id)));
+      // Swiss auto-advance (Review Focus 1): a step that takes a Pair away — the clock's or a person's; an Undo, or a Redo
+      // of such an Undo — pulls the round back on purpose, so the clock must not pair it again 60 s later: a sticky skip
+      // of each round it cleared, `by` this step's direction, where auto-pair is on, in this transaction. Re-armed after
+      // the commit (below).
+      const rounds = new Map(live.map((f) => [`${f.stage_id}:${f.round_no}`, f] as const));
+      for (const f of rounds.values()) await recordPullBackSkip(tx, f.stage_id, f.round_no, direction);
     }
     // A delete-side event records the rows it deletes AS THEY STAND NOW —
     // before the delete, so the appended event is self-contained. (A plain
@@ -895,6 +903,9 @@ async function stepWrite(
   // into undoing one step MORE.
   for (const stageId of write.unpairedStageIds) {
     await refoldStageTable(auth.orgId, { id: stageId, kind: "swiss" }, "drop");
+    // Swiss auto-advance: the next round's row (waiting on the boards just cleared) goes with them; the skip keeps the
+    // cleared round from arming. Never throws.
+    await rearmAfterCommit(auth.orgId, stageId);
   }
   return write;
 }
@@ -1512,7 +1523,10 @@ export async function setDivisionLocks(
     // multi-site scope locking is the Pro layer (Jul3/03 §7)
     await requireFeature(auth.orgId, "schedule.versioning");
   }
-  return withTenant(auth.orgId, async (tx) => {
+  const { row, rearm } = await withTenant(auth.orgId, async (tx) => {
+    // The value before, under the row lock, so a concurrent call cannot make one transition read as two (or none).
+    const [before] = await tx<{ schedule_locked: boolean }[]>`select schedule_locked from divisions where id = ${divisionId} for update`;
+    if (!before) throw new HttpError(404, "division not found");
     const [row] = await tx<{ schedule_locked: boolean; locked_scopes: unknown }[]>`
       update divisions set
         schedule_locked = coalesce(${input.schedule_locked ?? null}, schedule_locked),
@@ -1520,8 +1534,22 @@ export async function setDivisionLocks(
       where id = ${divisionId}
       returning schedule_locked, locked_scopes`;
     if (!row) throw new HttpError(404, "division not found");
-    return row;
+    // Swiss auto-advance (2026-11-08 spec §4.4): an auto action that fired into a frozen division blocked
+    // SCHEDULE_LOCKED. Unfreezing — this door is the only writer of the flag — re-arms every stage with a live row. Only
+    // the transition: a freeze, a scope edit or a second unfreeze changes nothing an auto action waits on.
+    const unfrozen = before.schedule_locked && !row.schedule_locked;
+    const rearm = unfrozen
+      ? (
+          await tx<{ stage_id: string }[]>`
+            select distinct stage_id from stage_auto_actions
+             where division_id = ${divisionId} and state in ${tx([...LIVE_AUTO_ACTION_STATES])}`
+        ).map((r) => r.stage_id)
+      : [];
+    return { row, rearm };
   });
+  // After the commit: the arming reads the unfrozen division. A fire's block is re-derived (restartPending).
+  for (const stageId of rearm) await rearmAfterCommit(auth.orgId, stageId, { restartPending: true });
+  return row;
 }
 
 /** State the console renders after undo/redo: the fold at the watermark.

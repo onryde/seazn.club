@@ -854,19 +854,22 @@ async function rankWithStoredLots(tx: Tx, inputs: StageInputs): Promise<Complete
 // Append a division_event under the division lock, assigning a gapless per-
 // division seq (doc 07 note 3). Returns the new seq. Callers that treat the
 // event as the division watermark also bump divisions.seq (doc 07).
+// `actorId` is the person who did it (Swiss auto-advance T4: a switch names
+// who flipped it); null, the default and every older caller's, is no person.
 export async function appendDivisionEvent(
   tx: Tx,
   divisionId: string,
   type: string,
   payload: unknown,
+  actorId: string | null = null,
 ): Promise<number> {
   const [{ seq: last }] = await tx<{ seq: number }[]>`
     select coalesce(max(seq), 0)::int as seq from division_events where division_id = ${divisionId}
   `;
   const seq = last + 1;
   await tx`
-    insert into division_events (division_id, seq, type, payload)
-    values (${divisionId}, ${seq}, ${type}, ${tx.json(payload as never)})
+    insert into division_events (division_id, seq, type, payload, actor_id)
+    values (${divisionId}, ${seq}, ${type}, ${tx.json(payload as never)}, ${actorId})
   `;
   return seq;
 }
@@ -907,6 +910,10 @@ export interface CompleteResult {
 export async function completeStageIfReady(
   orgId: string,
   stageId: string,
+  /** `onCompleted`: run inside the completion's transaction, right after the stage is marked complete (Swiss
+   *  auto-advance: `completeStage` retires the clock's complete_stage row there). Not run when the stage was already
+   *  complete, nor when it is not ready. */
+  opts: { onCompleted?: (tx: Tx) => Promise<unknown> } = {},
 ): Promise<CompleteResult> {
   return withTenant(orgId, async (tx) => {
     const inputs = await loadStageInputs(tx, stageId);
@@ -1093,6 +1100,7 @@ export async function completeStageIfReady(
     await pinStageTableRules(tx, stageId);
     await tx`update stages set status = 'complete' where id = ${stageId}`;
     await tx`update divisions set seq = ${lastSeq} where id = ${inputs.stage.division_id}`;
+    if (opts.onCompleted) await opts.onCompleted(tx);
     log.info({ event: "stage_completed", stageId, kind: inputs.kind }, "stage_completed");
 
     return { completed: true, events };

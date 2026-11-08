@@ -56,6 +56,7 @@ import {
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { PatchSwissStage } from "@/server/api-v1/schemas";
 import { tableStageCompletable } from "@/server/engine-db/competition";
+import { rearmAfterCommit } from "./auto-advance";
 import { firstOwnFormat, ownFormatLoss } from "./fixture-override-guards";
 import { fixtureHasResultSql, swissByeShellSql } from "./fixture-results-sql";
 import { LIVE_CALL_ALIASES, liveCallSql } from "./match-day-call";
@@ -608,6 +609,9 @@ export async function addSwissRound(auth: AuthCtx, stageId: string): Promise<{ r
     return { rounds: to, added, divisionId: stage.division_id, competitionId: await competitionOf(tx, stage.division_id) };
   });
   afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
+  // Swiss auto-advance (2026-11-08 spec §4.6, §5.18): a round added during the completion countdown keeps the stage open —
+  // the complete_stage row is superseded and the new round's pair arms in its place. Never throws.
+  await rearmAfterCommit(auth.orgId, stageId);
   return { rounds: write.rounds, shells_added: write.added };
 }
 
