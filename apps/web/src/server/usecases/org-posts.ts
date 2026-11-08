@@ -33,6 +33,7 @@ import { isLevelTable, pointsText } from "@seazn/engine/competition";
 import { entrantFoldCtx, loadEntrantMembersForFixture } from "@/server/engine-db/entrant-members";
 import { log } from "@/server/logger";
 import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
+import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { playerStatsWithoutWaiting } from "./player-stats";
 import { creditsNobody, forfeitLedgerOfReason } from "@/lib/forfeit-tag";
 import { outcomeTagWords } from "@/lib/outcome-text";
@@ -1732,6 +1733,49 @@ export async function generateWeeklyDigest(auth: AuthCtx, orgId: string): Promis
   return post;
 }
 
+/** The orgs the weekly sweep checks at `nowMs`: those with a decided fixture the fold touched near the window, or a
+ *  fixture scheduled in the coming week. Exported so a test can read the candidate set itself rather than infer it
+ *  from which digests appeared.
+ *
+ *  This used to be `select id from organizations`, with per-org work for every row — an entitlement round-trip plus
+ *  a tenant transaction each. That is O(all orgs) for a job whose real candidate set is tiny, and it stops finishing
+ *  rather than merely being slow: against a database holding ~7.3k organizations it exceeded a 30s limit outright.
+ *
+ *  So narrow to organizations that COULD produce a digest, in one query. The pre-filter is deliberately a
+ *  conservative NECESSARY condition, not a second copy of the emptiness rule: `digestForOrg` still computes the exact
+ *  window in the org's own timezone and still returns null when every section comes out empty. Duplicating that
+ *  decision here is how the two would drift apart later. The bounds are padded a day past the seven-day window so no
+ *  timezone offset can push a genuine candidate outside them — a superset only ever costs a wasted check, it can
+ *  never miss a digest.
+ *
+ *  The quick-match system org is excluded by id on BOTH arms (quick match plan 3 Task 8): it holds every guest's
+ *  quick match, so it has decided and scheduled fixtures every week, and it has no member to read a digest. That
+ *  must not rest on its community plan lacking `news.auto`; a plan change would otherwise start drafting digests of
+ *  strangers' matches into it. */
+export async function digestCandidateOrgIds(nowMs: number): Promise<string[]> {
+  const DAY = 24 * 3600_000;
+  const activityFrom = new Date(nowMs - 8 * DAY).toISOString();
+  const activityTo = new Date(nowMs + DAY).toISOString();
+  const upcomingTo = new Date(nowMs + 8 * DAY).toISOString();
+  const nowIso = new Date(nowMs).toISOString();
+  return (
+    await superuser<{ org_id: string }[]>`
+      select f.org_id
+        from match_states m
+        join fixtures f on f.id = m.fixture_id
+       where m.updated_at >= ${activityFrom}::timestamptz
+         and m.updated_at < ${activityTo}::timestamptz
+         and f.status = any(${[...DECIDED_STATUSES]})
+         and f.org_id <> ${QUICK_MATCH_SYSTEM_ORG_ID}
+      union
+      select f.org_id
+        from fixtures f
+       where f.scheduled_at >= ${nowIso}::timestamptz
+         and f.scheduled_at < ${upcomingTo}::timestamptz
+         and f.org_id <> ${QUICK_MATCH_SYSTEM_ORG_ID}`
+  ).map((r) => r.org_id);
+}
+
 /** The stg cron sweep (`/api/cron/news-digest`, no AuthCtx — a system
  *  trigger, not a user session). Every candidate org is checked through the
  *  resolver itself (`newsAutoCompetitionScope`, the same call and the same
@@ -1742,44 +1786,12 @@ export async function generateWeeklyDigest(auth: AuthCtx, orgId: string): Promis
 export async function sweepWeeklyDigests(
   nowMs: number = Date.now(),
 ): Promise<{ orgsTotal: number; orgsChecked: number; digestsCreated: number }> {
-  // This used to `select id from organizations` and then do per-org work for
-  // every row — an entitlement round-trip plus a tenant transaction each. That
-  // is O(all orgs) for a job whose real candidate set is tiny, and it stops
-  // finishing rather than merely being slow: against a database holding ~7.3k
-  // organizations it exceeded a 30s limit outright.
-  //
-  // So narrow to organizations that COULD produce a digest, in one query.
-  // The pre-filter is deliberately a conservative NECESSARY condition, not a
-  // second copy of the emptiness rule: `digestForOrg` still computes the exact
-  // window in the org's own timezone and still returns null when every section
-  // comes out empty. Duplicating that decision here is how the two would drift
-  // apart later. The bounds are padded a day past the seven-day window so no
-  // timezone offset can push a genuine candidate outside them — a superset only
-  // ever costs a wasted check, it can never miss a digest.
-  const DAY = 24 * 3600_000;
-  const activityFrom = new Date(nowMs - 8 * DAY).toISOString();
-  const activityTo = new Date(nowMs + DAY).toISOString();
-  const upcomingTo = new Date(nowMs + 8 * DAY).toISOString();
-  const nowIso = new Date(nowMs).toISOString();
   const cronWeek = isoWeekKeyUtc(nowMs);
 
   const [totals] = await superuser<{ count: number }[]>`select count(*)::int as count from organizations`;
   const orgsTotal = totals?.count ?? 0;
 
-  const candidates = (
-    await superuser<{ org_id: string }[]>`
-      select f.org_id
-        from match_states m
-        join fixtures f on f.id = m.fixture_id
-       where m.updated_at >= ${activityFrom}::timestamptz
-         and m.updated_at < ${activityTo}::timestamptz
-         and f.status = any(${[...DECIDED_STATUSES]})
-      union
-      select f.org_id
-        from fixtures f
-       where f.scheduled_at >= ${nowIso}::timestamptz
-         and f.scheduled_at < ${upcomingTo}::timestamptz`
-  ).map((r) => r.org_id);
+  const candidates = await digestCandidateOrgIds(nowMs);
 
   let digestsCreated = 0;
   for (const orgId of candidates) {
