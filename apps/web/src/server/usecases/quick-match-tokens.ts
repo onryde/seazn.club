@@ -8,7 +8,7 @@
 // Import-light on purpose: no database, no session — every helper is pure or reads its KEK from process.env per call.
 import { createHash, randomBytes } from "node:crypto";
 import { HttpError } from "@/lib/errors";
-import { hasValidKek, openWith, sealWith, type KekName } from "@/server/relay/crypto";
+import { hasValidKek, isWellFormedEnvelope, openWith, sealWith, type KekName } from "@/server/relay/crypto";
 
 export const QUICK_MATCH_TOKEN_PREFIX = "qm_";
 export const QUICK_MATCH_VISITOR_COOKIE = "seazn_qm_visitor";
@@ -52,11 +52,34 @@ export function sealHomeToken(secret: string): Buffer {
   return sealWith(HOME_TOKEN_KEK, secret);
 }
 
-/** Checked BEFORE openWith (pre-flight A6): without it crypto's kek() throws a plain Error, a 500 on every page that
- *  rebuilds the link. A tampered or wrong-key envelope stays a 500 — that is not a configuration gap. */
+/** The THROWING open, for a caller whose whole answer is the token. The KEK is checked BEFORE openWith (pre-flight A6),
+ *  so a missing or malformed key is the 503 DEVICE_LINK_KEK_MISSING rather than crypto's plain Error; a damaged or
+ *  wrong-key envelope throws openWith's own Error. A page that only rebuilds `/q/<token>` as an extra (the pad's back
+ *  link, the recent strip, the account list) must never 500 on it: it calls `tryOpenHomeToken` below instead
+ *  (controller ruling 2026-11-08). */
 export function openHomeToken(enc: Uint8Array): string {
   assertKekConfigured();
   return openWith(HOME_TOKEN_KEK, enc);
+}
+
+export type HomeTokenOpenRefusal = "kek_missing" | "malformed" | "rejected";
+export type HomeTokenOpen = { ok: true; token: string } | { ok: false; reason: HomeTokenOpenRefusal };
+
+/** The NON-throwing open (controller ruling 2026-11-08): the token, or why not, decided in this order.
+ *  - `kek_missing`: no usable DEVICE_LINK_KEK (unset or malformed), a configuration gap. Checked first, so under no key
+ *    the key is the answer whatever the row holds.
+ *  - `malformed`: the stored bytes are not an envelope (too short, or a version this envelope never had): a damaged row.
+ *  - `rejected`: a sound envelope that does not authenticate: the key is not the one that sealed it (a KEK rotated
+ *    without re-sealing) or the bytes were altered. AES-GCM cannot tell those two apart.
+ *  Decided by `hasValidKek` and `isWellFormedEnvelope`, never by an error's message. */
+export function tryOpenHomeToken(enc: Uint8Array): HomeTokenOpen {
+  if (!hasValidKek(HOME_TOKEN_KEK)) return { ok: false, reason: "kek_missing" };
+  if (!isWellFormedEnvelope(enc)) return { ok: false, reason: "malformed" };
+  try {
+    return { ok: true, token: openWith(HOME_TOKEN_KEK, enc) };
+  } catch {
+    return { ok: false, reason: "rejected" };
+  }
 }
 
 export function mintVisitorKey(): string {

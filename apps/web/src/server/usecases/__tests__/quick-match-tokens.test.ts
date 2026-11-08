@@ -1,6 +1,7 @@
 // Quick match home token and visitor key helpers (spec docs/superpowers/specs/2026-11-03-quick-match-design.md).
 // No database: every helper is pure or reads its KEK from process.env on each call (relay/crypto.ts kek(), hasValidKek),
 // so the "no KEK" cases stub the env in-process (pre-flight A15) and the afterEach restores the developer's own key.
+import { randomBytes } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "@/lib/errors";
 import { openWith, sealWith, type KekName } from "@/server/relay/crypto";
@@ -13,6 +14,7 @@ import {
   mintVisitorKey,
   openHomeToken,
   sealHomeToken,
+  tryOpenHomeToken,
 } from "../quick-match-tokens";
 
 const KEK = "a".repeat(64);
@@ -113,5 +115,94 @@ describe("quick match visitor key", () => {
     const bad = ["", "qv_", "qv_" + "x".repeat(42), "qv_" + "x".repeat(44), "qv_" + "!".repeat(43), "qm_" + "x".repeat(43), "x" + valid];
     for (const s of bad) expect(isVisitorKeyShaped(s)).toBe(false);
     expect(bad).toHaveLength(7);
+  });
+});
+
+// Controller ruling 2026-11-08 (Task 9 fix round 1): a page that rebuilds `/q/<token>` as an EXTRA (the pad's back link,
+// plan 2's strip, plan 3's list) must never 500 on it, so it asks `tryOpenHomeToken`, which never throws and names the
+// reason. The envelope layout comes from crypto.ts's own doc and e2e/lichess-token-seal.ts, never from the code under
+// test: [version 1][wrap IV 12][wrapped DEK 32][wrap tag 16][data IV 12][data tag 16][body].
+const LAYOUT_HEADER = 1 + 12 + 32 + 16 + 12 + 16;
+const LAYOUT_VERSION = 0x01;
+
+describe("tryOpenHomeToken: never throws, one reason per case", () => {
+  it("opens a good envelope: the token itself", () => {
+    vi.stubEnv("DEVICE_LINK_KEK", KEK);
+    const t = mintHomeToken();
+    expect(tryOpenHomeToken(sealHomeToken(t))).toEqual({ ok: true, token: t });
+  });
+
+  it("kek_missing: unset or malformed, checked BEFORE the envelope (a damaged row under no key still answers the key)", () => {
+    vi.stubEnv("DEVICE_LINK_KEK", KEK);
+    const good = sealHomeToken(mintHomeToken());
+    const keys = ["", "zz", "a".repeat(63), "a".repeat(64) + "\n", "g".repeat(64)];
+    let checked = 0;
+    for (const key of keys) {
+      vi.stubEnv("DEVICE_LINK_KEK", key);
+      for (const enc of [good, Buffer.from([1, 2, 3])]) {
+        expect(tryOpenHomeToken(enc), JSON.stringify(key)).toEqual({ ok: false, reason: "kek_missing" });
+        checked++;
+      }
+    }
+    expect(checked).toBe(keys.length * 2);
+  });
+
+  it("malformed: shorter than the header, or a version this envelope never had, under the RIGHT key", () => {
+    vi.stubEnv("DEVICE_LINK_KEK", KEK);
+    const good = sealHomeToken(mintHomeToken());
+    expect(good.length, "precondition: a real envelope is header + body").toBeGreaterThan(LAYOUT_HEADER);
+    expect(good[0]).toBe(LAYOUT_VERSION);
+    const withVersion = (v: number) => {
+      const b = Buffer.from(good);
+      b[0] = v;
+      return b;
+    };
+    const cases = [Buffer.alloc(0), Buffer.from([1, 2, 3]), good.subarray(0, LAYOUT_HEADER - 1), withVersion(0x00), withVersion(0x02), withVersion(0xff)];
+    for (const enc of cases) expect(tryOpenHomeToken(enc)).toEqual({ ok: false, reason: "malformed" });
+    expect(cases).toHaveLength(6);
+  });
+
+  it("rejected: well formed but not opened: a wrong but valid KEK, an altered body, tag or wrapped key, a header with no body", () => {
+    vi.stubEnv("DEVICE_LINK_KEK", KEK);
+    const t = mintHomeToken();
+    const good = sealHomeToken(t);
+    const flipped = (at: number) => {
+      const b = Buffer.from(good);
+      b[at] = b[at]! ^ 0x01;
+      return b;
+    };
+    // body (last byte), data tag (offset 73), wrapped DEK (offset 13): each authenticated, so each is refused.
+    const altered = [flipped(good.length - 1), flipped(1 + 12 + 32 + 16 + 12), flipped(1 + 12)];
+    const headerOnly = good.subarray(0, LAYOUT_HEADER);
+    let checked = 0;
+    for (const enc of [...altered, headerOnly]) {
+      expect(tryOpenHomeToken(enc)).toEqual({ ok: false, reason: "rejected" });
+      checked++;
+    }
+    vi.stubEnv("DEVICE_LINK_KEK", OTHER_KEK);
+    expect(tryOpenHomeToken(good), "a KEK rotated without re-sealing").toEqual({ ok: false, reason: "rejected" });
+    checked++;
+    expect(checked).toBe(5);
+    // The same envelope under the right key still opens: the refusals above were the alterations, not the fixture.
+    vi.stubEnv("DEVICE_LINK_KEK", KEK);
+    expect(tryOpenHomeToken(good)).toEqual({ ok: true, token: t });
+  });
+
+  it("never throws: 400 random byte strings, each answered malformed or rejected, both reasons reached", () => {
+    vi.stubEnv("DEVICE_LINK_KEK", KEK);
+    const seen = { malformed: 0, rejected: 0 };
+    for (let i = 0; i < 400; i++) {
+      const b = randomBytes(i % 200);
+      if (i % 2 === 0 && b.length > 0) b[0] = LAYOUT_VERSION;
+      const out = tryOpenHomeToken(b);
+      expect(out.ok, `random input ${i} cannot be a sealed home token`).toBe(false);
+      if (!out.ok) {
+        expect(["malformed", "rejected"]).toContain(out.reason);
+        seen[out.reason as "malformed" | "rejected"]++;
+      }
+    }
+    expect(seen.malformed + seen.rejected).toBe(400);
+    expect(seen.malformed, "anti-vacuity: the sweep reached the structural refusal").toBeGreaterThan(0);
+    expect(seen.rejected, "anti-vacuity: the sweep reached the authentication refusal").toBeGreaterThan(0);
   });
 });
