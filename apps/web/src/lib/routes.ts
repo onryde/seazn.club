@@ -148,4 +148,6 @@ export const routes = {
   /** A guest's quick match home (plan 2 A6): the home token IS the address, in the path and never a query string. Its
    *  `/q/` root is a scrubbed secret path (lib/scrub-score-url.ts SECRET_PATH_ROUTES). */
   quickMatch: (token: string) => `/q/${token}`,
+  /** The same home's save page (the reminder mail's "save it" link, plan 3 Task 2): the home token, under the same `/q/` root. */
+  quickMatchSave: (token: string) => `/q/${token}/save`,
 } as const;

@@ -220,6 +220,7 @@ async function remind(
   // A key that cannot open the token cannot build the link: a fault, before anything is claimed (the next run tries again).
   if (!opened.ok) throw new HttpError(503, "the home token cannot be opened", `QUICK_MATCH_HOME_TOKEN_${opened.reason.toUpperCase()}`);
   const home = `${ctx.baseUrl}${routes.quickMatch(opened.token)}`;
+  const save = `${ctx.baseUrl}${routes.quickMatchSave(opened.token)}`;
   return sql.begin(async (tx) => {
     const [claimed] = await tx<{ email: string; locale: string; name: string; expires_at: Date }[]>`
       update quick_matches
@@ -242,7 +243,7 @@ async function remind(
       // Worthless once the match has expired.
       expiresAt: expiryWithin(claimed.expires_at),
       ...(await quickMatchReminderEmail(
-        { name: claimed.name, link: home, saveLink: `${home}/save`, expiresAt: claimed.expires_at },
+        { name: claimed.name, link: home, saveLink: save, expiresAt: claimed.expires_at },
         // A guest has no account and the system org is no one's, so the setup form's own language.
         await recipientLocale(tx, { pick: claimed.locale, userId: null, orgDefault: null }),
       )),
