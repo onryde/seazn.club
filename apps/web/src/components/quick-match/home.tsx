@@ -15,9 +15,11 @@
 // Phone first: one column, each name wrapping or truncating inside a `min-w-0` chain, so a 40-character side never
 // widens a 320px screen. From `lg` the name, hero and actions hold a sticky left column beside the table and the list.
 import type { ReactNode } from "react";
+import { isLevelTable, pointsText, rankText } from "@seazn/engine/competition";
 import type { EntrantKind } from "@seazn/engine/sport";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
+import type { TKey } from "@/lib/i18n-runtime";
 import { QUICK_MATCH_EXPIRY_DAYS } from "@/lib/quick-match-constants";
 import { roundRoleFor } from "@/lib/round-role-label";
 import { compactScore } from "@/lib/match-day/view";
@@ -25,7 +27,7 @@ import { scoreLineOf, type LevelWords } from "@/lib/score/levels";
 import { setBreakdown } from "@/lib/public-site";
 import type { QuickMatchFixture, QuickMatchHome, QuickMatchSide } from "@/server/usecases/quick-match-home";
 import { QuickMatchStandings, type StandingsView } from "./standings";
-import { QuickMatchDraw, type DrawCard, type DrawRound } from "./draw";
+import { QuickMatchDraw, type DrawCard, type DrawRound, type DrawSeat } from "./draw";
 import { QuickMatchList, type MatchView, type ScoreSlot, type SeatView } from "./match-list";
 import { fixtureLabel, winnerOfLabel, type FixtureLabel } from "./fixture-label";
 
@@ -37,6 +39,8 @@ export interface QuickMatchCopy {
   plural: (key: string, count: number, vars?: Vars) => string;
   /** The public dictionary's live-level marks (TB, MTB, Ad) for a live score. */
   levels: LevelWords;
+  /** The PUBLIC dictionary: the public table's own column words (`table.abbr.*` and `table.col.*`) and its level mark. */
+  pub: (key: TKey, vars?: Vars) => string;
 }
 
 /** What Tasks 6, 7 and 8 put on the home. Each is optional: an empty slot renders nothing. */
@@ -79,16 +83,37 @@ interface Built {
   matches: MatchView[];
 }
 
-/** A settled set sport reads as its sets, winner first ("21–15 · 21–18"); anything else as the sport's own score line. */
+/** Each side's own line from the engine's summary (`ScoreSummary.perSide[{entrantId, line}]`), by entrant: null unless it
+ *  names both of the match's sides. */
+function perSideLines(f: QuickMatchFixture): { home: string; away: string } | null {
+  const perSide = (f.summary as { perSide?: unknown } | null)?.perSide;
+  if (!Array.isArray(perSide) || f.home === null || f.away === null) return null;
+  const lineOf = (entrantId: string) => {
+    const hit = perSide.find((p) => (p as { entrantId?: unknown } | null)?.entrantId === entrantId) as { line?: unknown } | undefined;
+    return typeof hit?.line === "string" ? hit.line : null;
+  };
+  const home = lineOf(f.home.entrantId);
+  const away = lineOf(f.away.entrantId);
+  return home === null || away === null ? null : { home, away };
+}
+
+/** A finished match's score, read in the result sentence's order (winner first; home first for a draw), so "Red beat Blue"
+ *  never sits beside "0–1": a set sport as its games ("21–15 · 21–18"), any other as the sides' own lines from the engine's
+ *  `perSide`; the published headline only when `perSide` does not name both sides. */
+function settledScore(f: QuickMatchFixture, sportKey: string): string | null {
+  const awayWon = f.away !== null && f.away.entrantId === f.winnerEntrantId;
+  const sets = setBreakdown(f.summary, sportKey);
+  if (sets !== null) return sets.sets.map((s) => (awayWon ? `${s.away}–${s.home}` : `${s.home}–${s.away}`)).join(" · ");
+  const lines = perSideLines(f);
+  if (lines !== null) return awayWon ? `${lines.away}–${lines.home}` : `${lines.home}–${lines.away}`;
+  const headline = (f.summary as { headline?: unknown } | null)?.headline;
+  return typeof headline === "string" && headline !== "" ? headline : null;
+}
+
+/** The score as it stands (live: the sport's own levels, in seat order) or as it ended (settled); null otherwise. */
 function scoreText(f: QuickMatchFixture, sportKey: string, levels: LevelWords): string | null {
-  if (f.phase === "settled") {
-    const sets = setBreakdown(f.summary, sportKey);
-    if (sets !== null) {
-      const awayWon = f.away !== null && f.away.entrantId === f.winnerEntrantId;
-      return sets.sets.map((s) => (awayWon ? `${s.away}–${s.home}` : `${s.home}–${s.away}`)).join(" · ");
-    }
-  }
-  if (f.phase !== "settled" && f.phase !== "live") return null;
+  if (f.phase === "settled") return settledScore(f, sportKey);
+  if (f.phase !== "live") return null;
   const line = scoreLineOf(f.summary);
   return line === null ? null : compactScore(line, levels);
 }
@@ -196,32 +221,35 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy): Built
       won: number;
       drawn: number;
       points: number;
-      rank?: number | null;
+      rank?: number;
+      level?: boolean;
       tieUnbroken?: boolean;
       tieBreak?: { with?: string[] };
     }[];
-    // The top of the table: the rank-1 row and every row it is still level with (a tie the engine split by lots is a tie).
-    // Before any match counts, the stored table still ranks every side (all level at 1): no leader and no place yet.
-    const anyPlayed = rows.some((r) => r.played > 0);
-    const top = rows.find((r) => r.rank === 1);
-    leaders = !anyPlayed || !top ? [] : [top.entrantId, ...(top.tieUnbroken ? (top.tieBreak?.with ?? []) : [])];
+    // The engine's level semantics, as the public table reads them: a table no counted fixture has reached is LEVEL
+    // (`isLevelTable`: every row `level`; the producer still stores positional ranks), so it has no leader and every place
+    // prints the level dash (`rankText`). Otherwise the top is the rank-1 row and every row its tie is still unbroken
+    // with (a tie split only by seed or lots is a tie): co-leaders, who share the top place.
+    const level = isLevelTable(rows);
+    const top = level ? undefined : rows.find((r) => r.rank === 1);
+    leaders = top ? [top.entrantId, ...(top.tieUnbroken ? (top.tieBreak?.with ?? []) : [])] : [];
     const draws = rows.some((r) => r.drawn > 0);
-    const columns = [
-      { key: "played", label: t("slideshow.col.played") },
-      { key: "won", label: t("slideshow.col.won") },
-      ...(draws ? [{ key: "drawn", label: t("slideshow.col.drawn") }] : []),
-      { key: "points", label: t("slideshow.col.points") },
-    ];
+    const columns = (["played", "won", ...(draws ? (["drawn"] as const) : []), "points"] as const).map((key) => ({
+      key,
+      abbr: copy.pub(`table.abbr.${key}`),
+      word: copy.pub(`table.col.${key}`),
+    }));
     standings = {
       title: t("quickMatch.home.standings"),
       rankLabel: t("ladder.rank"),
       sideLabel: t("quickMatch.home.sideCol"),
+      levelLabel: level ? copy.pub("table.level") : null,
       columns,
       rows: rows.map((r) => ({
         entrantId: r.entrantId,
-        place: anyPlayed && typeof r.rank === "number" ? String(r.rank) : "",
+        place: top && leaders.includes(r.entrantId) ? rankText(top, false) : rankText(r, level),
         name: nameOf(r.entrantId),
-        cells: columns.map((c) => String(r[c.key as "played" | "won" | "drawn" | "points"])),
+        cells: columns.map((c) => (c.key === "points" ? pointsText(r.points, home.pointsUnit) : String(r[c.key]))),
         leader: leaders.includes(r.entrantId),
       })),
     };
@@ -244,8 +272,12 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy): Built
   if (knockout) {
     const byRound = new Map<number, DrawCard[]>();
     for (const f of home.fixtures) {
-      const homeSeat = seat(f, f.home, f.homeSlotLabel);
-      const awaySeat = seat(f, f.away, f.awaySlotLabel);
+      // Settled: the score sits on the winner's line, read winner first (the mockup's card); live: under both seats.
+      const settled = !f.isBye && f.phase === "settled" ? settledScore(f, home.sport.key) : null;
+      const withScore = (s: SeatView): DrawSeat => (s.winner && settled !== null ? { ...s, score: settled } : s);
+      const homeSeat = withScore(seat(f, f.home, f.homeSlotLabel));
+      const awaySeat = withScore(seat(f, f.away, f.awaySlotLabel));
+      const onWinnerLine = homeSeat.score !== undefined || awaySeat.score !== undefined;
       // A bye's card lists the side going through first, then the bye.
       const [first, second] = f.isBye && f.home === null ? [awaySeat, homeSeat] : [homeSeat, awaySeat];
       const card: DrawCard = {
@@ -256,7 +288,7 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy): Built
         live: f.phase === "live",
         home: first,
         away: second,
-        score: f.isBye ? null : scoreText(f, home.sport.key, copy.levels),
+        score: f.phase === "live" ? scoreText(f, home.sport.key, copy.levels) : onWinnerLine ? null : settled,
       };
       byRound.set(f.roundNo, [...(byRound.get(f.roundNo) ?? []), card]);
     }
@@ -264,7 +296,10 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy): Built
   }
 
   return {
-    eyebrow: [t(home.sport.labelKey), t(KIND_KEY[home.kind]), t(FORMAT_KEY[home.row.format])].join(" · "),
+    // The kind only where the guest chose it (the setup page shows its kind switch only then): "Chess · League".
+    eyebrow: [t(home.sport.labelKey), ...(home.kindChosen ? [t(KIND_KEY[home.kind])] : []), t(FORMAT_KEY[home.row.format])].join(
+      " · ",
+    ),
     played: copy.plural("quickMatch.home.played", home.total, { played: home.played, days: QUICK_MATCH_EXPIRY_DAYS }),
     hero,
     winner,
@@ -290,55 +325,57 @@ export function QuickMatchHomeView({
   const { t } = copy;
   const v = buildHomeView(home, copy);
   return (
-    <main data-testid="qm-home" className="min-h-screen bg-night text-cream">
+    <div className="min-h-screen bg-night text-cream">
       {gantry(t)}
-      <div className="mx-auto grid w-full max-w-5xl min-w-0 gap-6 px-4 pb-10 pt-5 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-10 lg:pt-8">
-        <div className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
-          <div className="min-w-0">
-            <p data-testid="qm-eyebrow" className={`${LABEL} [overflow-wrap:anywhere]`}>
-              {v.eyebrow}
-            </p>
-            <h1
-              data-testid="qm-name"
-              className="app-display mt-1 text-[1.75rem] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere] lg:text-[2.25rem]"
-            >
-              {home.row.name}
-            </h1>
-            <p data-testid="qm-played" className="mt-1.5 text-[13px] leading-snug text-[#b7aede]">
-              {v.played}
+      <main data-testid="qm-home" className="min-w-0">
+        <div className="mx-auto grid w-full max-w-5xl min-w-0 gap-6 px-4 pb-10 pt-5 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-10 lg:pt-8">
+          <div className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
+            <div className="min-w-0">
+              <p data-testid="qm-eyebrow" className={`${LABEL} [overflow-wrap:anywhere]`}>
+                {v.eyebrow}
+              </p>
+              <h1
+                data-testid="qm-name"
+                className="app-display mt-1 text-[1.75rem] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere] lg:text-[2.25rem]"
+              >
+                {home.row.name}
+              </h1>
+              <p data-testid="qm-played" className="mt-1.5 text-[13px] leading-snug text-[#b7aede]">
+                {v.played}
+              </p>
+            </div>
+            {v.hero ? heroCard(v.hero, t, slots.score) : null}
+            {v.winner ? winnerCard(v.winner) : null}
+            {slots.share ? <div className="flex min-w-0 flex-wrap gap-2">{slots.share}</div> : null}
+          </div>
+          <div className="flex min-w-0 flex-col gap-6">
+            {v.standings ? <QuickMatchStandings view={v.standings} /> : null}
+            {v.draw ? (
+              <QuickMatchDraw
+                title={t("quickMatch.home.draw")}
+                rounds={v.draw}
+                byeLabel={t("bracket.slot.bye")}
+                liveLabel={t("quickMatch.home.live")}
+              />
+            ) : null}
+            {v.matches.length > 0 ? (
+              <QuickMatchList
+                title={t("quickMatch.home.all")}
+                matches={v.matches}
+                versus={t("quickMatch.home.versus")}
+                waits={t("quickMatch.home.waits")}
+                liveLabel={t("quickMatch.home.live")}
+                score={slots.score}
+              />
+            ) : null}
+            {home.row.format === "league" && slots.addMatch ? <div className="min-w-0">{slots.addMatch}</div> : null}
+            <p data-testid="qm-anyone" className="text-xs text-[#8d7fc0]">
+              {t("quickMatch.home.anyoneCanScore")}
             </p>
           </div>
-          {v.hero ? heroCard(v.hero, t, slots.score) : null}
-          {v.winner ? winnerCard(v.winner) : null}
-          {slots.share ? <div className="flex min-w-0 flex-wrap gap-2">{slots.share}</div> : null}
         </div>
-        <div className="flex min-w-0 flex-col gap-6">
-          {v.standings ? <QuickMatchStandings view={v.standings} /> : null}
-          {v.draw ? (
-            <QuickMatchDraw
-              title={t("quickMatch.home.draw")}
-              rounds={v.draw}
-              byeLabel={t("bracket.slot.bye")}
-              liveLabel={t("quickMatch.home.live")}
-            />
-          ) : null}
-          {v.matches.length > 0 ? (
-            <QuickMatchList
-              title={t("quickMatch.home.all")}
-              matches={v.matches}
-              versus={t("quickMatch.home.versus")}
-              waits={t("quickMatch.home.waits")}
-              liveLabel={t("quickMatch.home.live")}
-              score={slots.score}
-            />
-          ) : null}
-          {home.row.format === "league" && slots.addMatch ? <div className="min-w-0">{slots.addMatch}</div> : null}
-          <p data-testid="qm-anyone" className="text-xs text-[#8d7fc0]">
-            {t("quickMatch.home.anyoneCanScore")}
-          </p>
-        </div>
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }
 
@@ -432,27 +469,29 @@ function winnerCard(winner: NonNullable<Built["winner"]>): ReactNode {
  *  page never says which. Its own test id (`qm-dead-link`), never the pad's `scan-dead-link`. */
 export function QuickMatchDead({ locale, t }: { locale: Locale; t: QuickMatchCopy["t"] }) {
   return (
-    <main className="flex min-h-screen flex-col bg-night text-cream">
+    <div className="flex min-h-screen flex-col bg-night text-cream">
       {gantry(t)}
-      <section
-        data-testid="qm-dead-link"
-        aria-labelledby="qm-dead-title"
-        className="mx-auto flex w-full max-w-md min-w-0 flex-1 flex-col items-start justify-center gap-3 px-6 py-12"
-      >
-        <h1 id="qm-dead-title" data-testid="qm-dead-title" className="app-display text-2xl font-bold leading-tight text-cream">
-          {t("quickMatch.dead.title")}
-        </h1>
-        <p data-testid="qm-dead-hint" className="text-sm leading-relaxed text-[#b7aede]">
-          {t("quickMatch.dead.hint", { days: QUICK_MATCH_EXPIRY_DAYS })}
-        </p>
-        <a
-          data-testid="qm-dead-start"
-          href={`/${locale}/play`}
-          className="app-display mt-2 inline-flex min-h-11 max-w-full items-center justify-center rounded-xl bg-[color:var(--mk-lime)] px-5 py-2.5 text-center text-base font-bold leading-tight text-night focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cream"
+      <main className="flex min-w-0 flex-1 flex-col">
+        <section
+          data-testid="qm-dead-link"
+          aria-labelledby="qm-dead-title"
+          className="mx-auto flex w-full max-w-md min-w-0 flex-1 flex-col items-start justify-center gap-3 px-6 py-12"
         >
-          {t("quickMatch.dead.startNew")}
-        </a>
-      </section>
-    </main>
+          <h1 id="qm-dead-title" data-testid="qm-dead-title" className="app-display text-2xl font-bold leading-tight text-cream">
+            {t("quickMatch.dead.title")}
+          </h1>
+          <p data-testid="qm-dead-hint" className="text-sm leading-relaxed text-[#b7aede]">
+            {t("quickMatch.dead.hint", { days: QUICK_MATCH_EXPIRY_DAYS })}
+          </p>
+          <a
+            data-testid="qm-dead-start"
+            href={`/${locale}/play`}
+            className="app-display mt-2 inline-flex min-h-11 max-w-full items-center justify-center rounded-xl bg-[color:var(--mk-lime)] px-5 py-2.5 text-center text-base font-bold leading-tight text-night focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cream"
+          >
+            {t("quickMatch.dead.startNew")}
+          </a>
+        </section>
+      </main>
+    </div>
   );
 }

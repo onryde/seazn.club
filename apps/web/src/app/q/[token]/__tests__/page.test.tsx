@@ -20,6 +20,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { cloneElement, Fragment, isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { LEVEL_RANK } from "@seazn/engine/competition";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { t as tRuntime, plural as pluralRuntime } from "@/lib/i18n-runtime";
@@ -66,6 +67,7 @@ const SIDES = ["Ravi & Sam", "Priya & Tom", "Lee & Ana", "Jo & Max"];
 
 const en_ = (key: keyof typeof en, vars?: Record<string, string | number>) => tRuntime(en, key, vars);
 const fr_ = (key: keyof typeof fr, vars?: Record<string, string | number>) => tRuntime(fr, key, vars);
+const pub_ = (key: keyof typeof enPublic) => tRuntime(enPublic, key);
 const enPlayed = (played: number, count: number) =>
   pluralRuntime(en, "quickMatch.home.played", count, "en", { played, days: SPEC_EXPIRY_DAYS });
 
@@ -142,6 +144,30 @@ const words = (node: unknown) => textOf(node).replace(/\s+/g, " ").trim();
 const classOf = (el: ReactElement<Record<string, unknown>>) => String(el.props.className ?? "");
 /** The table's header cells, each read on its own (the place column's name is screen-reader text). */
 const headCells = (tree: ReactNode) => all(oneByTestId(tree, "qm-standings-head"), (el) => el.type === "th").map(words);
+const srOnly = (el: ReactElement<Record<string, unknown>>) => classOf(el).split(/\s+/).includes("sr-only");
+/** The numeric header cells (each names its column in a `title`): what it prints, what a screen reader reads, its title. */
+const numericHeads = (tree: ReactNode) =>
+  all(oneByTestId(tree, "qm-standings-head"), (el) => el.type === "th" && el.props.title !== undefined).map((th) => ({
+    shown: words(all(th, (el) => el.props["aria-hidden"] === "true")),
+    heard: words(all(th, srOnly)),
+    title: th.props.title,
+  }));
+/** The public table's own header, typed from its English dictionary as the mockup prints it: abbreviation and words. */
+const head = (shown: string, heard: string) => ({ shown, heard, title: heard });
+/** Each table row as printed: its place, its name, its numeric cells. */
+const tableRowsOf = (tree: ReactNode) =>
+  byTestId(tree, "qm-standings-row").map((r) => [
+    words(all(all(r, (el) => el.type === "td")[0], (el) => el.props["aria-hidden"] === "true")[0] ?? all(r, (el) => el.type === "td")[0]),
+    words(all(r, (el) => el.type === "th")[0]),
+    ...byTestId(r, "qm-cell").map(words),
+  ]);
+/** The landmarks: the banner (the header) sits outside the one `main`, so a screen reader can jump between them. */
+function expectBannerOutsideMain(tree: ReactNode) {
+  const mains = all(tree, (el) => el.type === "main");
+  expect(mains, "one main landmark").toHaveLength(1);
+  expect(all(mains[0], (el) => el.type === "header"), "the header is not inside main").toHaveLength(0);
+  expect(all(tree, (el) => el.type === "header"), "one banner").toHaveLength(1);
+}
 
 async function renderPage(token: string): Promise<{ tree: ReactNode; html: string; flight: string }> {
   const raw = await QuickMatchHomePage({ params: Promise.resolve({ token }) });
@@ -154,6 +180,8 @@ async function renderPage(token: string): Promise<{ tree: ReactNode; html: strin
 let BADMINTON_V: string;
 /** Football's offer, read from the real catalog: a team sport whose league match can end level (B5d). */
 let FOOTBALL: { variant: string; kind: CreateQuickMatch["kind"] };
+/** Chess's offer (the catalog's `boardgame`), read from the real catalog: FIDE's half-point table (win 1, draw ½). */
+let CHESS: { variant: string; kind: CreateQuickMatch["kind"] };
 
 beforeAll(async () => {
   if (!HAS_DB) return;
@@ -164,6 +192,9 @@ beforeAll(async () => {
   const football = (await listQuickMatchSports()).find((s) => s.sport_key === "football");
   if (!football) throw new Error("football is not offered on this database: run `npm run sync:sports`");
   FOOTBALL = { variant: football.variants[0]!.variant_key, kind: football.kinds[0]! };
+  const chess = (await listQuickMatchSports()).find((s) => s.sport_key === "boardgame");
+  if (!chess) throw new Error("chess is not offered on this database: run `npm run sync:sports`");
+  CHESS = { variant: chess.variants[0]!.variant_key, kind: chess.kinds[0]! };
 });
 
 afterAll(async () => {
@@ -207,6 +238,7 @@ const enCopy = (): QuickMatchCopy => ({
   t: (k, v) => tRuntime(en, k, v),
   plural: (k, n, v) => pluralRuntime(en, k, n, "en", v),
   levels: levelWords(enPublic),
+  pub: (k, v) => tRuntime(enPublic, k, v),
 });
 /** The slots T6, T7 and T8 fill: here, stand-ins that say where they were put. */
 const stubSlots = () => ({
@@ -239,7 +271,8 @@ describe("the home's modules", () => {
 // ── the empty case first ──────────────────────────────────────────────────────────────────────────────────────────────
 
 describe("the empty case: a quick match with no match left", () => {
-  // A state no producer makes (plan 1's read answers it too): two sides, a level table, no fixture.
+  // A state no producer makes (plan 1's read answers it too): two sides and no fixture. The table is as the producer
+  // stores an unplayed one (review m2): every row `level`, positional ranks, the tie unbroken and split by seed.
   const empty: QuickMatchHome = {
     row: {
       id: "qm-1", competitionId: "c-1", name: "Empty", format: "league", email: null, locale: "en",
@@ -249,6 +282,7 @@ describe("the empty case: a quick match with no match left", () => {
     stageId: "s-1",
     sport: { key: "badminton", labelKey: "sport.badminton", variantKey: "bwf", variantLabelKey: null },
     kind: "pair",
+    kindChosen: true,
     sides: [{ entrantId: "e-1", name: "One" }, { entrantId: "e-2", name: "Two" }],
     fixtures: [],
     next: null,
@@ -257,8 +291,12 @@ describe("the empty case: a quick match with no match left", () => {
     total: 0,
     standings: {
       stage_id: "s-1", pool_id: null, computed_through_seq: 0, updated_at: null,
-      rows: ["e-1", "e-2"].map((entrantId) => ({ entrantId, played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {}, rank: null, level: true })),
+      rows: ["e-1", "e-2"].map((entrantId, i, ids) => ({
+        entrantId, played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {}, rank: i + 1, level: true, tieUnbroken: true,
+        tieBreak: { key: "seed", note: "h2h_incomplete", with: ids.filter((x) => x !== entrantId) },
+      })),
     },
+    pointsUnit: "whole",
     allPlayed: false,
   };
 
@@ -271,7 +309,35 @@ describe("the empty case: a quick match with no match left", () => {
     const rows = byTestId(tree, "qm-standings-row");
     expect(rows.map(words)).toEqual([expect.stringContaining("One"), expect.stringContaining("Two")]);
     expect(rows.filter((r) => r.props["data-leader"] === "true"), "a level table has no leader").toHaveLength(0);
+    // The engine's level place (`LEVEL_RANK`), never the stored positional 1 and 2; a screen reader hears the words.
+    expect(tableRowsOf(tree).map((r) => r[0])).toEqual([LEVEL_RANK, LEVEL_RANK]);
+    for (const r of rows) expect(words(all(r, srOnly))).toBe(pub_("table.level"));
     expect(words(oneByTestId(tree, "qm-played"))).toBe(enPlayed(0, 0));
+  });
+
+  it("a settled match's score reads winner first from the engine's per-side lines; the headline only when they name no pair (h2)", async () => {
+    const side = (n: number) => ({ entrantId: `e-${n}`, name: `Side ${n}` });
+    // A goal sport (no set table): the away side won 0-1, so winner first is "1–0" and the stored order is wrong.
+    const settled = (summary: unknown, winnerEntrantId: string): QuickMatchFixture => ({
+      id: "f-1", roundNo: 1, fixtureNo: 1, seqInRound: 1, home: side(1), away: side(2), homeSlotLabel: null, awaySlotLabel: null,
+      status: "decided", summary, isBye: false, isFinal: false, winnerEntrantId, phase: "settled",
+    });
+    const football = (f: QuickMatchFixture): QuickMatchHome => ({
+      ...empty, sport: { ...empty.sport, key: "football", labelKey: "sport.football" }, fixtures: [f], played: 1, total: 1,
+    });
+    const scoreOf = async (f: QuickMatchFixture) => words(oneByTestId((await renderView(football(f))).tree, "qm-match-score"));
+    const perSide = [{ entrantId: "e-1", line: "0" }, { entrantId: "e-2", line: "1" }];
+    let checked = 0;
+    expect(await scoreOf(settled({ headline: "0–1", perSide }, "e-2"))).toBe("1–0");
+    checked++;
+    expect(await scoreOf(settled({ headline: "1–0", perSide: perSide.map((p) => ({ ...p, line: p.line === "0" ? "1" : "0" })) }, "e-1"))).toBe("1–0");
+    checked++;
+    // perSide naming only one side, or another match's sides: the published headline, as it stands.
+    for (const partial of [[perSide[0]], [{ entrantId: "e-8", line: "1" }, { entrantId: "e-9", line: "0" }], []]) {
+      expect(await scoreOf(settled({ headline: "0–1", perSide: partial }, "e-2")), JSON.stringify(partial)).toBe("0–1");
+      checked++;
+    }
+    expect(checked).toBe(5);
   });
 
   // Assumptions are guards: two states plan 1's read never produces are named refusals, never a blank or a code.
@@ -368,13 +434,18 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     const rows = byTestId(tree, "qm-standings-row");
     expect(rows).toHaveLength(4);
     expect(rows.filter((r) => r.props["data-leader"] === "true"), "nothing played: no leader yet").toHaveLength(0);
-    // ... and no place: the stored table ranks all four level at 1 before a match counts, which is no standing to print.
-    expect(rows.map((r) => words(all(r, (el) => el.type === "td")[0]))).toEqual(["", "", "", ""]);
+    // ... and no place: the stored table is LEVEL before a match counts (`isLevelTable`), so every place is the engine's
+    // level dash, as the public table prints it, never the positional ranks the producer stores.
+    expect(tableRowsOf(tree).map((r) => r[0])).toEqual([LEVEL_RANK, LEVEL_RANK, LEVEL_RANK, LEVEL_RANK]);
     // The mockup's columns, P then W then Pts (`resultColumns`' order), and no D before any draw; the place column is
-    // named for a screen reader only.
-    expect(headCells(tree)).toEqual(
-      [en_("ladder.rank"), en_("quickMatch.home.sideCol"), en_("slideshow.col.played"), en_("slideshow.col.won"), en_("slideshow.col.points")],
-    );
+    // named for a screen reader only, and each numeric column is named in words (review m5).
+    expect(headCells(tree).slice(0, 2)).toEqual([en_("ladder.rank"), en_("quickMatch.home.sideCol")]);
+    expect(numericHeads(tree)).toEqual([head("P", "Played"), head("W", "Won"), head("Pts", "Points")]);
+    // The table is named by its visible heading; the banner sits outside main.
+    const table = all(oneByTestId(tree, "qm-standings"), (el) => el.type === "table");
+    expect(table.map((el) => el.props["aria-labelledby"])).toEqual([oneByTestId(tree, "qm-standings-title").props.id]);
+    expect(oneByTestId(tree, "qm-standings-title").props.id).toBe("qm-standings-title");
+    expectBannerOutsideMain(tree);
 
     const matches = byTestId(tree, "qm-match");
     expect(matches).toHaveLength(6);
@@ -412,6 +483,7 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
       expect(words(start)).toBe(en_("quickMatch.dead.startNew"));
       expect(html, why).not.toContain("scan-dead-link");
       expect(byTestId(tree, "qm-home"), why).toHaveLength(0);
+      expectBannerOutsideMain(tree);
     };
     const home = async (token: string, why: string) => {
       const { tree } = await renderPage(token);
@@ -526,6 +598,13 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     expect(words(finalCard)).toContain(SIDES[0]!);   // the bye's holder is already seated in the final
     expect(words(finalCard)).toContain(en_("quickMatch.home.winnerOfTheSemi"));
     expect(words(finalCard)).not.toMatch(/\d/);
+    // The waiting seat's words wrap (review m4); a named seat truncates, its positive pair.
+    const finalNames = byTestId(finalCard, "qm-draw-name");
+    const waiting = finalNames.find((el) => words(el) === en_("quickMatch.home.winnerOfTheSemi"))!;
+    const named = finalNames.find((el) => words(el) === SIDES[0])!;
+    expect(classOf(waiting).split(" ")).toContain("break-words");
+    expect(classOf(waiting).split(" ")).not.toContain("truncate");
+    expect(classOf(named).split(" ")).toContain("truncate");
 
     // The list: the bye is not a match; the final waits on "the semi-final" (the same words as the draw), with no Score.
     const rows = byTestId(tree, "qm-match");
@@ -593,6 +672,37 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     await hardDeleteQuickMatchCompetition(out.competitionId);
   });
 
+  it("a knockout of 6: quarter-finals 1 and 2, and each semi-final seat waits on 'Winner of quarter-final n', as its card is named (ruling m8)", async () => {
+    locale.value = "en";
+    const out = await create(league({ format: "knockout", sides: ["S1", "S2", "S3", "S4", "S5", "S6"] }));
+    const h = await homeOf(out);
+    const rounds = [...new Set(h.fixtures.map((f) => f.roundNo))].sort((a, b) => a - b);
+    const realIn = (r: number) => h.fixtures.filter((f) => f.roundNo === r && !f.isBye);
+    // The rulebook: 6 sides in an 8-draw. Two seeds sit out, so TWO quarter-finals are played; two semi-finals; the final.
+    expect(rounds.map((r) => realIn(r).length)).toEqual([2, 2, 1]);
+    const { tree } = await renderView(h);
+    const cardOf = (id: string) => byTestId(tree, "qm-draw-card").find((c) => c.props["data-fixture-id"] === id)!;
+    const [qf1, qf2] = realIn(rounds[0]!);
+    expect([qf1, qf2].map((f) => words(oneByTestId(cardOf(f!.id), "qm-draw-round")))).toEqual(["Quarter-final 1", "Quarter-final 2"]);
+    const expectedFor = (feederId: string) => (feederId === qf1!.id ? "Winner of quarter-final 1" : "Winner of quarter-final 2");
+    const said: string[] = [];
+    for (const f of realIn(rounds[1]!)) {
+      const row = byTestId(tree, "qm-match").find((r) => r.props["data-fixture-id"] === f.id)!;
+      for (const [side, label] of [[f.home, f.homeSlotLabel], [f.away, f.awaySlotLabel]] as const) {
+        if (side !== null) continue;
+        const { round, seq } = (label as { params: { round: number; seq: number } }).params;
+        const feeder = h.fixtures.find((x) => x.roundNo === Number(round) && x.seqInRound === Number(seq))!;
+        const text = expectedFor(feeder.id);
+        expect(words(row)).toContain(text);
+        expect(byTestId(cardOf(f.id), "qm-draw-name").map(words)).toContain(text);
+        said.push(text);
+      }
+    }
+    // One seat of each semi-final waits on a quarter-final (the other holds a seed with a bye).
+    expect(said.sort()).toEqual(["Winner of quarter-final 1", "Winner of quarter-final 2"]);
+    await hardDeleteQuickMatchCompetition(out.competitionId);
+  });
+
   it("a decided knockout: the hero is the winner card, winners are marked in the draw, results read 'A beat B' (C15)", async () => {
     locale.value = "en";
     const out = await create(league({ format: "knockout", sides: SIDES.slice(0, 3) }));
@@ -631,8 +741,14 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
       // The draw marks the winner's line (in lime), and only it.
       const cardEl = byTestId(tree, "qm-draw-card").find((c) => c.props["data-fixture-id"] === f.id)!;
       const marked = byTestId(cardEl, "qm-draw-seat").filter((s) => s.props["data-winner"] === "true");
-      expect(marked.map(words)).toEqual([w.name]);
+      expect(byTestId(marked[0], "qm-draw-name").map(words)).toEqual([w.name]);
       expect(classOf(marked[0]!)).toContain("text-[color:var(--mk-lime)]");
+      // The score on the winner's line, as the list reads it (winner first); none on the loser's, none under the seats.
+      const lineScores = byTestId(cardEl, "qm-draw-seat").map((s) => byTestId(s, "qm-draw-seat-score").map(words));
+      expect(lineScores).toEqual(
+        byTestId(cardEl, "qm-draw-seat").map((s) => (s === marked[0] ? [words(oneByTestId(row, "qm-match-score"))] : [])),
+      );
+      expect(byTestId(cardEl, "qm-draw-score")).toHaveLength(0);
       checked++;
     }
     expect(checked).toBe(2);
@@ -672,20 +788,82 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     expect(stored.every((r) => r.drawn === 1)).toBe(true);
     expect(new Set(stored.map((r) => r.points)).size).toBe(1);
     expect(stored[0]!.points).toBeGreaterThan(0);
-    expect(headCells(tree)).toEqual([
-      en_("ladder.rank"), en_("quickMatch.home.sideCol"),
-      en_("slideshow.col.played"), en_("slideshow.col.won"), en_("slideshow.col.drawn"), en_("slideshow.col.points"),
-    ]);
+    expect(numericHeads(tree)).toEqual([head("P", "Played"), head("W", "Won"), head("D", "Drawn"), head("Pts", "Points")]);
     const tableRows = byTestId(tree, "qm-standings-row");
     expect(tableRows).toHaveLength(2);
     for (const r of tableRows) {
       expect(byTestId(r, "qm-cell").map(words)).toEqual(["1", "0", "1", String(stored[0]!.points)]);
     }
+    // Co-leaders share the top place (a counted table, so no level dash).
+    expect(tableRowsOf(tree).map((r) => r[0])).toEqual(["1", "1"]);
+    // One kind for football (a team): the guest chose none, so the eyebrow names none (h1).
+    expect(words(oneByTestId(tree, "qm-eyebrow"))).toBe("Football · League");
     // Level at the top: the card says so and names both sides, and both rows are marked as leaders.
     const card = oneByTestId(tree, "qm-winner");
     expect(words(oneByTestId(card, "qm-winner-kicker"))).toBe(en_("quickMatch.home.level"));
     expect(byTestId(card, "qm-winner-name").map(words).sort()).toEqual(["Blue team", "Red team"]);
     expect(tableRows.filter((r) => r.props["data-leader"] === "true")).toHaveLength(2);
+    await hardDeleteQuickMatchCompetition(out.competitionId);
+  });
+
+  it("football: the AWAY side wins 0-1 and the result reads winner first, 'Red team beat Blue team · 1–0', never '0–1' (h2)", async () => {
+    locale.value = "en";
+    const out = await create(league({ sport_key: "football", variant_key: FOOTBALL.variant, kind: FOOTBALL.kind, sides: ["Blue team", "Red team"] }));
+    const only = (await homeOf(out)).next!;
+    // Kick-off, one goal by the AWAY side, half time, full time.
+    for (const [seq, req] of [
+      { type: "core.start", payload: {} },
+      { type: "football.goal", payload: { by: only.away!.entrantId } },
+      { type: "football.period", payload: { phase: "HT" } },
+      { type: "football.period", payload: { phase: "FT" } },
+    ].entries()) {
+      await scoreEvent(systemAuth(), only.id, { expected_seq: seq, ...req });
+    }
+    const h = await homeOf(out);
+    const done = h.fixtures.find((f) => f.id === only.id)!;
+    expect(done.winnerEntrantId, "precondition: the away side won").toBe(only.away!.entrantId);
+
+    const { tree } = await renderPage(out.token);
+    const row = oneByTestId(tree, "qm-match");
+    expect(words(oneByTestId(row, "qm-match-sides"))).toBe(en_("quickMatch.home.result", { winner: only.away!.name, loser: only.home!.name }));
+    // The rulebook: the winner scored one goal, the loser none; read in the sentence's order.
+    expect(words(oneByTestId(row, "qm-match-score"))).toBe("1–0");
+    // The table, by the league convention (3 points for a win, 0 for a loss): no D column, no draw yet.
+    expect(numericHeads(tree)).toEqual([head("P", "Played"), head("W", "Won"), head("Pts", "Points")]);
+    expect(tableRowsOf(tree)).toEqual([
+      ["1", only.away!.name, "1", "1", "3"],
+      ["2", only.home!.name, "1", "0", "0"],
+    ]);
+    await hardDeleteQuickMatchCompetition(out.competitionId);
+  });
+
+  it("chess: the table prints FIDE's points (win 1, draw ½) in halves, the D column, the places, and an eyebrow with no kind (I1, h1)", async () => {
+    locale.value = "en";
+    const out = await create(league({ sport_key: "boardgame", variant_key: CHESS.variant, kind: CHESS.kind, sides: ["Ann", "Bo", "Cy"] }));
+    const h0 = await homeOf(out);
+    const idOf = new Map(h0.sides.map((s) => [s.name, s.entrantId]));
+    // The results, by pairing: Ann beats Bo; Ann and Cy draw by agreement; Bo and Cy draw by agreement.
+    let played = 0;
+    for (const f of h0.fixtures.filter((x) => !x.isBye)) {
+      const pair = [f.home!.name, f.away!.name].sort().join("-");
+      const payload = pair === "Ann-Bo" ? { winner: idOf.get("Ann"), method: "resign" } : { winner: null, method: "agreement" };
+      await scoreEvent(systemAuth(), f.id, { expected_seq: 0, type: "core.start", payload: {} });
+      await scoreEvent(systemAuth(), f.id, { expected_seq: 1, type: "boardgame.result", payload });
+      played++;
+    }
+    expect(played).toBe(3);   // the rulebook: a single round robin of 3 is 3·2/2 = 3 games
+
+    const { tree } = await renderPage(out.token);
+    expect(words(oneByTestId(tree, "qm-eyebrow"))).toBe("Chess · League");
+    expect(numericHeads(tree)).toEqual([head("P", "Played"), head("W", "Won"), head("D", "Drawn"), head("Pts", "Points")]);
+    // FIDE, by hand: Ann 1 + ½ = 1½; Cy ½ + ½ = 1; Bo 0 + ½ = ½. Each played 2.
+    expect(tableRowsOf(tree)).toEqual([
+      ["1", "Ann", "2", "1", "1", "1½"],
+      ["2", "Cy", "2", "0", "2", "1"],
+      ["3", "Bo", "2", "0", "1", "½"],
+    ]);
+    const card = oneByTestId(tree, "qm-winner");
+    expect(byTestId(card, "qm-winner-name").map(words)).toEqual(["Ann"]);
     await hardDeleteQuickMatchCompetition(out.competitionId);
   });
 
@@ -705,7 +883,7 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     expect(byTestId(card, "qm-winner-name").map(words)).toEqual([winner.name]);
     const leaders = byTestId(page.tree, "qm-standings-row").filter((row) => row.props["data-leader"] === "true");
     expect(leaders.map(words)).toEqual([expect.stringContaining(winner.name)]);
-    // The positive pair of the fresh table's blank places: once a match counts, the winner stands first.
+    // The positive pair of the fresh table's level dashes: once a match counts, the winner stands first.
     expect(words(all(leaders[0], (el) => el.type === "td")[0])).toBe("1");
     expect(byTestId(page.tree, "qm-hero")).toHaveLength(0);
 

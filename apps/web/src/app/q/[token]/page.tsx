@@ -34,6 +34,7 @@ export default async function QuickMatchHomePage({ params }: { params: Promise<{
     t: (key, vars) => t(ui, key, vars),
     plural: (key, count, vars) => plural(ui, key, count, locale, vars),
     levels: levelWords(pub),
+    pub: (key, vars) => t(pub, key, vars),
   };
 
   const row = await resolveQuickMatchToken(token);

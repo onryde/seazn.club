@@ -20,8 +20,12 @@ import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { isBye } from "@/lib/run-sheet-groups";
 import { variantWordKey } from "@/lib/variant-label-keys";
 import type { EntrantKind } from "@seazn/engine/sport";
+import { PLAIN_LAYOUT, type TableLayout } from "@seazn/engine/competition";
+import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
+import { tableLayoutFor } from "@/server/public-site/standings-view";
 import { listDivisionFixtures } from "./fixtures";
 import type { QuickMatchFormat } from "./quick-match-preview";
+import { offerFor } from "./quick-match-sports";
 import { hashHomeToken, isHomeTokenShaped } from "./quick-match-tokens";
 import { getStandings, type FixtureRow, type StandingsOut } from "./stages";
 
@@ -141,6 +145,9 @@ export interface QuickMatchHome {
   sport: { key: string; labelKey: MessageKey; variantKey: string; variantLabelKey: MessageKey | null };
   /** The entrants' one kind (D2): the eyebrow's "sport · kind · format". */
   kind: EntrantKind;
+  /** The sport offers more than one kind, so the guest CHOSE this one (the setup page's kind switch is shown only then):
+   *  the eyebrow names the kind only when this is true (chess and football have one kind, and say nothing of it). */
+  kindChosen: boolean;
   /** In seed order: the order the guest typed them (C20). */
   sides: QuickMatchSide[];
   /** In (round, fixture number) order, byes included. */
@@ -154,6 +161,9 @@ export interface QuickMatchHome {
   total: number;
   /** The stored table of a league stage; null for a knockout, which has none (§7.10). */
   standings: StandingsOut | null;
+  /** The unit the stored points are in (`TableLayout.unit`, the public table's own `tableLayoutFor` over the stage's
+   *  rules): "half" for chess's FIDE half-points, which print through the engine's `pointsText` ("1½"), else "whole". */
+  pointsUnit: TableLayout["unit"];
   allPlayed: boolean;
 }
 
@@ -275,6 +285,11 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
   const total = matches.length;
   const played = matches.filter((f) => SETTLED_FIXTURE_STATUSES.has(f.status)).length;
   const standings = stage.kind === "league" ? await getStandings(auth, stage.id) : null;
+  const pointsUnit =
+    stage.kind === "league"
+      ? tableLayoutFor((await withTenant(SYSTEM_ORG, (tx) => stageTableRulesDocs(tx, [stage.id])))[stage.id]).unit
+      : PLAIN_LAYOUT.unit;
+  const kindChosen = (await offerFor(division.sport_key, division.variant_key)).kinds.length > 1;
 
   return {
     row,
@@ -287,6 +302,7 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
       variantLabelKey: variantWordKey(division.sport_key, division.variant_key) ?? null,
     },
     kind: entrants[0]!.kind,
+    kindChosen,
     sides,
     fixtures,
     next: nextPlayable(fixtures),
@@ -294,6 +310,7 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
     played,
     total,
     standings,
+    pointsUnit,
     // The empty case first: no match at all is not "all played".
     allPlayed: total > 0 && played === total,
   };

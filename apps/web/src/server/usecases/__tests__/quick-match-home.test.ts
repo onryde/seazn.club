@@ -579,6 +579,10 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
       // The setup screen's own names for this sport and variant (C1: keys, never English names), and the kind chosen.
       expect(h.sport).toEqual({ key, labelKey: sport.labelKey, variantKey: variant.variant_key, variantLabelKey: variant.labelKey });
       expect(h.kind).toBe(kind);
+      // The kind is named only where the guest chose it: the setup screen shows its kind switch for >1 kind (h1).
+      expect(h.kindChosen, key).toBe(sport.kinds.length > 1);
+      // The table's points unit: FIDE's half-points for chess (win 1, draw ½), whole points for every other sport.
+      expect(h.pointsUnit, key).toBe(key === "boardgame" ? "half" : "whole");
       expect(h.total).toBe(quickMatchPreview({ format: "league", sides: 2, plays: 1 }).matchCount);
       expect(h.total).toBe(1);
       expect(h.next!.id).toBe(h.fixtures[0]!.id);

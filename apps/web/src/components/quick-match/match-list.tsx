@@ -13,7 +13,8 @@ import type { QuickMatchPhase } from "@/server/usecases/quick-match-home";
 export interface SeatView {
   /** The side's name, or null while the seat waits on a feeder's result. */
   name: string | null;
-  /** The name, or the words for a waiting seat ("Winner of the semi-final", "Winner of match 1": `winnerOfLabel`, D12). */
+  /** The name, or the words for a waiting seat, naming its feeder as the feeder's card does (`winnerOfLabel`): "Winner of
+   *  the semi-final" (a lone one), "Winner of quarter-final 2" (numbered), "Winner of match n" only for a round with no name. */
   label: string;
   /** This side won the match. */
   winner: boolean;
