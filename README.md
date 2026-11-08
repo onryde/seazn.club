@@ -212,7 +212,7 @@ matters:**
 
    ```
    (http.host in {"seazn.club" "www.seazn.club" "games.seazn.club"})
-     and not (http.request.uri.path eq "/ingest" or starts_with(http.request.uri.path, "/ingest/"))
+     and not (lower(http.request.uri.path) eq "/ingest" or starts_with(lower(http.request.uri.path), "/ingest/"))
    ```
 
    (Use the hosts `fly certs list` prints, not the three above.) **Never `ends_with` or `contains` on the host.** The
@@ -221,8 +221,9 @@ matters:**
    them. `contains` would also match any future host in the zone that points at another vendor, and would hand that
    vendor the secret. **`/ingest/*` is excluded** because `apps/web/next.config.js` rewrites `/ingest/:path*` to
    PostHog's ingest and asset hosts. A rewrite to an external host forwards the request's headers, so a stamped
-   `/ingest` request would carry the secret to PostHog. Those paths never reach a rate limiter, so an unstamped one
-   costs nothing. Before going on, confirm with Cloudflare Trace that the rule matches each host and skips `/ingest/x`.
+   `/ingest` request would carry the secret to PostHog. The path is compared lower-cased, so `/INGEST/x` is excluded
+   too. Those paths never reach a rate limiter, so an unstamped one costs nothing. Before going on, confirm with
+   Cloudflare Trace that the rule matches each host and skips `/ingest/x` and `/Ingest/x`.
 2. Only **then** set the matching value on that web app: `fly secrets set CF_ORIGIN_SECRET=<value> -a seazn-club-stg`
    (stg first), then `-a seazn-club-prod`. If the secret is set before the rule exists, its value differs from the
    rule's, or a host is missing from the filter, those requests carry no matching stamp. They fall back to
@@ -232,11 +233,24 @@ matters:**
    visitor.
    Nothing is ever refused for a missing stamp; requests only lose their per-visitor bucket. A mismatch is not silent:
    web logs a warning with the reason `origin_stamp_mismatch` at most once a minute per machine, and sends one
-   `origin_stamp_mismatch` warning to Sentry per process. Neither carries the header's value or the secret.
+   `origin_stamp_mismatch` warning to Sentry per process (its first mismatch). Each names `stamp` (`absent` or
+   `wrong`) and the request's `host` (lower-cased; `none` or `invalid` when there is no usable one), and never carries
+   the stamp's value or the secret.
 3. **After setting it, check it.** Sign in from two different networks (say, office wifi and a phone on mobile data).
-   Both must succeed, `fly logs -a <app>` must show no `origin_stamp_mismatch`, and Sentry must have no
-   `origin_stamp_mismatch` issue for that environment. If either shows up, unset the secret (rollback, below) before
-   finding the host or value at fault.
+   Both must succeed. Then read `origin_stamp_mismatch` in `fly logs -a <app>` and in Sentry for that environment:
+   - **`stamp: wrong`, on any host**, means our rule sends another value. That is a misconfiguration: unset the
+     secret (rollback, below), then fix the value.
+   - **`stamp: absent` on one of OUR hosts** (one `fly certs list` prints) means the rule does not reach that host or
+     path. That is a misconfiguration too: unset the secret, then fix the filter.
+   - **A few `stamp: absent` events from a host that is not ours** (another zone's name, a `*.fly.dev` name, `none`,
+     `invalid`) are someone sending `CF-Connecting-IP` through their own Cloudflare zone - a forgery attempt the stamp
+     is refusing. They are not a misconfiguration; leave the secret set.
+
+   Sentry holds only each process's first mismatch, so a forgery can be the one it shows: read `fly logs` too.
+   **Also check the header NAME** on the rule: it must be exactly `x-seazn-origin-secret`. A different name leaves
+   every request unstamped (`absent` on our hosts), and its value may already have reached Sentry or a log in clear -
+   the scrub only redacts names starting with `x-seazn-origin`, and the SDK only masks names carrying `secret`. If the
+   name was wrong, remove the rule and **rotate** the secret (below) with the correct name.
 
 **Rotation:** (1) `fly secrets unset CF_ORIGIN_SECRET -a <app>`; (2) change the rule's value in Cloudflare to the new
 secret and confirm with Trace; (3) `fly secrets set CF_ORIGIN_SECRET=<new value> -a <app>`; (4) repeat the step 3 check.
@@ -255,8 +269,9 @@ or echoed. It stays out of Sentry in two ways, and both are needed:
   `http.request.header.<name>` attribute. The header's name carries `secret`, which is on the SDK's own deny list, so
   that attribute reads `[Filtered]`. The earlier name, `x-seazn-origin`, was not on that list, and its value reached
   Sentry in clear in the trace data.
-- **Our scrub redacts it.** `lib/scrub-score-url.ts` rewrites it to `[redacted]` in `request.headers`, in the trace
-  context's data and in every span's data, on errors and transactions alike.
+- **Our scrub redacts it.** `lib/scrub-score-url.ts` rewrites every header whose name starts with `x-seazn-origin`
+  (any case, so a mistyped rule name too) to `[redacted]` in `request.headers`, in the trace context's data and in every
+  span's data, on errors and transactions alike.
 
 Do not rename the header without keeping both. An alternative is Cloudflare's **Authenticated Origin Pulls** (mTLS from
 Cloudflare to the origin). The zone-level variant presents Cloudflare's shared certificate, which proves "Cloudflare"
