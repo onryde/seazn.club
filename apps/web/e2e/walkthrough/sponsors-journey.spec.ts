@@ -62,8 +62,8 @@ import { routes } from "../../src/lib/routes";
 import { SCENE_CAROUSEL_MS } from "../../src/lib/sponsor-plan";
 import { SPONSOR_SHORT_CODE_PATTERN } from "../../src/lib/sponsor-short-code";
 
-/** Spec §3.2's two styles are a minor break's `lower_third` and a major's `banner`; a scene is a full-screen layer, so its
- *  carousel airs the bigger card. Typed here from the spec, never read off the page's own constant (`CAROUSEL_STYLE`). */
+/** Spec §3.4: every carousel showing is a `banner` (§3.2's bigger card; a scene is a full-screen layer). Typed here from
+ *  the spec, never read off the page's own constant (`CAROUSEL_STYLE`). */
 const SPEC_CAROUSEL_STYLE = "banner";
 
 // --- copy, read from the dictionaries the pages render from ------------------------------------------------------------
@@ -348,7 +348,7 @@ test("J3 + J4 the compositor's page reads the ticked sponsors with their short c
   const starts = lines.filter((l) => l.kind === "start");
   for (const l of starts) {
     expect(l.json.source, "a carousel showing").toBe("scene");
-    expect(l.json.style, "in the carousel's style (spec §3.2: the banner)").toBe(SPEC_CAROUSEL_STYLE);
+    expect(l.json.style, "in the carousel's style (spec §3.4: the banner)").toBe(SPEC_CAROUSEL_STYLE);
     expect([A.id, B.id], "a ticked sponsor's card — never C").toContain(l.json.cardId);
   }
   const byCard = startsByCard(lines);
@@ -426,7 +426,7 @@ test("J9 a second sport's fixture: the compositor page airs the sponsors on the 
   const starts = lines.filter((l) => l.kind === "start");
   for (const l of starts) {
     expect(l.json.source, "a carousel showing").toBe("scene");
-    expect(l.json.style, "in the carousel's style (spec §3.2: the banner)").toBe(SPEC_CAROUSEL_STYLE);
+    expect(l.json.style, "in the carousel's style (spec §3.4: the banner)").toBe(SPEC_CAROUSEL_STYLE);
     expect([A.id, B.id], "a ticked sponsor's card — never C").toContain(l.json.cardId);
   }
   const byCard = startsByCard(lines);

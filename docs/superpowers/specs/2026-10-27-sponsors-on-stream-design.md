@@ -181,6 +181,8 @@ MVP implementation reads `sponsors` (active, `on_stream = true`, `resolveSponsor
 - Scene layers (compositor Starting soon / Reconnecting, and the console's Break and Full time) carry a **sponsor
   carousel**: ticked sponsors, title and gold first, 10 s each, logged `source = "scene"`. This is how the three
   break-less sports reach sponsors.
+- **Every carousel showing is a `banner`** (§3.2's bigger card, logged `style = "banner"`): a scene is a full-screen
+  layer, so it never takes the lower third.
 
 ### 3.5 Slots
 

@@ -16,7 +16,15 @@
 //     whole life, as the real compositor beats (compositor spec §5.3). A composed runner that has played is `lost` after
 //     three missed beats (`STALE_HEARTBEAT_SECONDS_COMPOSED`), so a stand-in that only beat when a test had airings to
 //     send would race the server's stale rule. A background beat cannot fail the test where it runs: each problem is
-//     recorded, and `endStandInSessions` throws them once the sessions are ended.
+//     recorded, and `endStandInSessions` throws them once the sessions are ended. A keep-alive beat answered 410 records
+//     the session's state, end_reason and fail_reason, read from the database, so a red names what ended it.
+//     It repeats the LAST programme phase reported - a test's own beat (`postBeat`, `beatOk`) or a compositor page's
+//     `serve` - as the real compositor repeats its last phase, so a test's `live` beat and the keep-alive never flip the
+//     phase back and forth.
+//   * a session that never reports `live` (its log `waiting` only) ARMS phone-lost's no-camera rule (`composedNeverLive`,
+//     server/relay/domain/phone-lost.ts:124-132): its camera never appeared. CI runs e2e with `PHONE_LOST_LIVE_MINUTES=1`
+//     (e2e.yml), so such a session would be ended (`camera_never_live`) 60 s after it went live if anything checked it -
+//     a test that needs a session past a minute sends a `live` beat first.
 //   * the sponsor plan: read from `GET /api/v1/public/fixtures/{id}/overlay?sid&st`, the relay door the page itself polls
 //     (`overlayPollPath`, components/public-site/live-score-data.ts:152 — built by hand here, because that module's graph
 //     reaches `@/lib/client` and an e2e import of it risks a collection failure: hub-knockout.spec.ts:120). The relay door
@@ -199,7 +207,8 @@ export interface StandInSession extends StandInSessionRef {
   jobToken: string;
   /** The URL the session's facts carry, exactly as served. */
   overlayUrl: URL;
-  /** The programme phase the keep-alive reports: `waiting` until a compositor page serves another (`serve`). */
+  /** The programme phase the keep-alive repeats: the LAST one reported - by a beat the test sent (`postBeat`, `beatOk`)
+   *  or a compositor page's `serve` - and `waiting` until then (see the header). */
   programmePhase: ProgrammePhase;
 }
 
@@ -310,10 +319,23 @@ async function backgroundBeat(s: StandInSessionRef, token: string, body: Record<
       return;
     }
     if (accept410 && res.status() === 410 && text.includes("SESSION_ENDED")) return;
-    beatProblems.push(`${tag}: HTTP ${res.status()} ${text}`);
+    beatProblems.push(`${tag}: HTTP ${res.status()} ${text}${res.status() === 410 ? ` (${await endedBy(s.sid)})` : ""}`);
   } catch (err) {
     if (isReapedSocket(err)) console.log(`${tag}: lost to a reaped keep-alive socket (read ECONNRESET), tolerated`);
     else beatProblems.push(`${tag}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** What ended a session, for a 410's problem line: its state, end_reason and fail_reason as the database holds them. */
+async function endedBy(sid: string): Promise<string> {
+  try {
+    const [row] = await withDb((sql) => sql<{ state: string; end_reason: string | null; fail_reason: string | null }[]>`
+      select state, end_reason, fail_reason from fixture_stream_sessions where id = ${sid}`);
+    return row === undefined
+      ? "the session row is gone"
+      : `the session is ${row.state}, end_reason ${row.end_reason ?? "null"}, fail_reason ${row.fail_reason ?? "null"}`;
+  } catch (err) {
+    return `its end reason could not be read: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
 
@@ -331,9 +353,12 @@ function startKeepAlive(s: StandInSession, intervalMs: number): void {
   keepAlives.set(s.sid, { timer, wire });
 }
 
-/** One heartbeat, validated against the contract BEFORE it is sent. `token: null` sends no Authorization at all. */
+/** One heartbeat, validated against the contract BEFORE it is sent. `token: null` sends no Authorization at all. A body
+ *  that reports a programme phase makes it the session's: the keep-alive repeats it from the next tick (see the header). */
 export async function postBeat(s: StandInSession, body: Record<string, unknown>, opts: { token?: string | null } = {}): Promise<APIResponse> {
   expectContract("heartbeat", body, "the stand-in's heartbeat body");
+  // The contract just admitted the body, so a present `programmePhase` is one of its phases.
+  if (typeof body.programmePhase === "string") s.programmePhase = body.programmePhase as ProgrammePhase;
   const token = opts.token === undefined ? s.jobToken : opts.token;
   return s.request.post(`/api/internal/relay/sessions/${s.sid}/heartbeat`, {
     headers: token === null ? {} : { Authorization: `Bearer ${token}` },
@@ -341,7 +366,8 @@ export async function postBeat(s: StandInSession, body: Record<string, unknown>,
   });
 }
 
-/** A beat the server must take: 200, and a reply the contract admits. Returns the reply's `data`. */
+/** A beat the server must take: 200, and a reply the contract admits. Returns the reply's `data`. Through `postBeat`, so
+ *  its programme phase becomes the one the keep-alive repeats. */
 export async function beatOk(s: StandInSession, body: Record<string, unknown>, what: string): Promise<Record<string, unknown>> {
   const res = await postBeat(s, body);
   const text = await res.text();
