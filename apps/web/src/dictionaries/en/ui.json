@@ -8417,6 +8417,7 @@
   "quickMatch.home.versus": "v",
   "quickMatch.home.winnerOf": "winner of {n}",
   "quickMatch.home.winnerOfSemi": "Winner of semi-final {n}",
+  "quickMatch.home.winnerOfQuarter": "Winner of quarter-final {n}",
   "quickMatch.home.winnerOfMatch": "Winner of match {n}",
   "quickMatch.home.quarterFinal": "Quarter-final {n}",
   "quickMatch.home.semiFinal": "Semi-final {n}",

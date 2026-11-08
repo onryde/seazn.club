@@ -8417,6 +8417,7 @@
   "quickMatch.home.versus": "tegen",
   "quickMatch.home.winnerOf": "winnaar van wedstrijd {n}",
   "quickMatch.home.winnerOfSemi": "Winnaar van halve finale {n}",
+  "quickMatch.home.winnerOfQuarter": "Winnaar van kwartfinale {n}",
   "quickMatch.home.winnerOfMatch": "Winnaar van wedstrijd {n}",
   "quickMatch.home.quarterFinal": "Kwartfinale {n}",
   "quickMatch.home.semiFinal": "Halve finale {n}",

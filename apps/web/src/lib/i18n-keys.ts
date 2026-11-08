@@ -6008,6 +6008,7 @@ export type DictionaryKey =
   | "quickMatch.home.winner"
   | "quickMatch.home.winnerOf"
   | "quickMatch.home.winnerOfMatch"
+  | "quickMatch.home.winnerOfQuarter"
   | "quickMatch.home.winnerOfSemi"
   | "quickMatch.home.winnerOfTheQuarter"
   | "quickMatch.home.winnerOfTheSemi"
