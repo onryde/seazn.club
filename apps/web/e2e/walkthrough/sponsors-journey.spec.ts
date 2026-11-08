@@ -32,7 +32,7 @@
 // paint (a browser tooltip is not in the DOM; its text is asserted).
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { expectNoHorizontalScroll, withDb } from "../helpers";
 import { seedMemberIdentity, sponsorsUrl } from "../settings-support";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
@@ -466,22 +466,61 @@ test("J9 a second sport's fixture: the compositor page airs the sponsors on the 
   await expect(overviewRow(o.page, B.id).getByTestId("sponsor-overview-times"), "B's too").toHaveText(String(shownB));
 });
 
+const SPONSOR_PAGE_TITLE = "Harbourside";
+type SponsorHop = { url: string; status: number; location: string | undefined };
+
+/** Route ONE `/s/` hop on `ctx`: send it to the REAL server unchanged, record what the server answered, and hand back
+ *  the sponsor's page in its place.
+ *
+ *  Why route the hop and not the sponsor's host: Playwright calls a route handler "only for the first url if the response
+ *  is a redirect" (playwright-core types.d.ts, `page.route`). A route on the sponsor's own origin therefore never fires
+ *  behind the 302, and the browser goes to DNS, which `.example` never answers. CI run 42449692776 failed exactly this
+ *  way: `net::ERR_NAME_NOT_RESOLVED` with a context route on `A.url`'s origin in place. `public-fixture.spec.ts`'s header
+ *  records the same finding (CI run 41256296230), probed locally with the page in the same tab and in a popup.
+ *
+ *  `route.fetch` does not follow redirects here, so the server sees this browser's own request and records the click
+ *  from it. Its 302 and Location are asserted exactly, and that redirect target is the seam. The route is context-level,
+ *  so it also catches the first request of a new tab. */
+async function realSponsorHop(ctx: BrowserContext, pathname: string): Promise<{ hop: Promise<SponsorHop> }> {
+  let settle!: (hop: SponsorHop) => void;
+  let fail!: (err: unknown) => void;
+  const hop = new Promise<SponsorHop>((res, rej) => {
+    settle = res;
+    fail = rej;
+  });
+  await ctx.route(
+    (url) => url.pathname === pathname,
+    async (route) => {
+      try {
+        const real = await route.fetch({ maxRedirects: 0 });
+        settle({ url: route.request().url(), status: real.status(), location: real.headers()["location"] });
+        await route.fulfill({ status: 200, contentType: "text/html", body: `<!doctype html><title>${SPONSOR_PAGE_TITLE}</title>` });
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
+  return { hop };
+}
+
 test("J5 the short link the stream showed, followed logged out, redirects and counts one click; the board's link counts one more", async ({ browser }) => {
   test.setTimeout(6 * NAV_MS + 10 * ACT_MS);
   const o = owner();
   expect(codeA, "J3 read the code off the stream").toMatch(SPONSOR_SHORT_CODE_PATTERN);
   await expectOverview(o.page, A.id, "clicks", "0", "no click yet");
-  // A viewer of their own: no session, their own address (the click dedupe is per IP), the sponsor's site answered here.
+  // A viewer of their own: no session, their own address (the click dedupe is per IP). The sponsor's site is never reached:
+  // each `/s/` hop goes to the real server and the sponsor's page is handed back in its place (`realSponsorHop`).
   const visitor = await browser.newContext({ storageState: EMPTY_JAR, extraHTTPHeaders: { "fly-client-ip": "198.51.100.41" } });
   try {
-    await visitor.route(`${new URL(A.url).origin}/**`, (r) => r.fulfill({ status: 200, contentType: "text/html", body: "<title>Harbourside</title>" }));
+    const typed = await realSponsorHop(visitor, `/s/${codeA}`);
     const vp = await visitor.newPage();
     // What a viewer does with `seazn.club/s/<code>` on screen: types it (here, on this deployment's origin).
-    const res = await vp.goto(`/s/${codeA}`);
-    expect(vp.url(), "the short link lands on the sponsor's site").toBe(A.url);
-    const hop = res!.request().redirectedFrom();
-    expect(hop?.url(), "through the /s/ route").toMatch(new RegExp(`/s/${codeA}$`));
-    expect((await hop!.response())?.status(), "a redirect").toBe(302);
+    expect((await vp.goto(`/s/${codeA}`))?.status(), "the sponsor's page, in the hop's place").toBe(200);
+    const shortHop = await typed.hop;
+    expect(new URL(shortHop.url).pathname, "the code the viewer typed, on this deployment").toBe(`/s/${codeA}`);
+    expect(shortHop.status, "the real /s/ route redirects").toBe(302);
+    expect(shortHop.location, "to exactly the url the sponsor was created with").toBe(A.url);
+    await expect(vp, "the browser shows what the sponsor's url answered").toHaveTitle(SPONSOR_PAGE_TITLE);
     await expectOverview(o.page, A.id, "clicks", "1", "one click counted");
     await expect(overviewRow(o.page, B.id).getByTestId("sponsor-overview-clicks")).toHaveText("0");
 
@@ -490,8 +529,14 @@ test("J5 the short link the stream showed, followed logged out, redirects and co
     await dismissCookieBanner(vp);
     const boardLink = vp.getByTestId("mh-sponsors").locator(`a[href^="/s/${A.id}?"]`);
     await expect(boardLink).toBeVisible();
+    const tapped = await realSponsorHop(visitor, `/s/${A.id}`);
     const [tab] = await Promise.all([visitor.waitForEvent("page"), boardLink.click()]);
-    await tab.waitForURL(A.url);
+    const boardHop = await tapped.hop;
+    const asked = new URL(boardHop.url);
+    expect(asked.pathname + asked.search, "the board's own href: this match, the match board").toBe(`/s/${A.id}?f=${volley.fixtureId}&src=match`);
+    expect(boardHop.status, "the real /s/ route redirects").toBe(302);
+    expect(boardHop.location, "to exactly the url the sponsor was created with").toBe(A.url);
+    await expect(tab, "the new tab shows what the sponsor's url answered").toHaveTitle(SPONSOR_PAGE_TITLE);
     await expectOverview(o.page, A.id, "clicks", "2", "the board's click counted too");
   } finally {
     await visitor.close();
