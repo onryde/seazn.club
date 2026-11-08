@@ -356,6 +356,29 @@ describe.skipIf(!HAS_DB)("the pad's way back to the quick match (C12)", () => {
     expect(backLinkWarnings()).toHaveLength(0);
   });
 
+  it("a broken key on a waiting screen that polls: ONE warning for the competition, not one per refresh", async () => {
+    // The waiting screen re-renders this page every POLL_MS (router.refresh). Ruling 2026-11-08: a broken key logs at
+    // most once, not once per poll. Three renders stand in for three polls.
+    const { out, fixtureId, secret } = await quickMatchPad();
+    await sql`update fixtures set away_entrant_id = null where id = ${fixtureId}`;
+    vi.stubEnv("DEVICE_LINK_KEK", "");
+    try {
+      warn.mockClear();
+      let renders = 0;
+      for (let i = 0; i < 3; i++) {
+        const tree = (await ScorePadPage({ params: Promise.resolve({ token: secret }) })) as ReactElement;
+        expect(find(tree, ScanWaiting), "precondition: the waiting screen").not.toBeNull();
+        expect(find(tree, QuickMatchBackLink), "no link under a missing key, every time").toBeNull();
+        renders++;
+      }
+      expect(renders).toBe(3);
+      expect(backLinkWarnings().map(reasonOf)).toEqual([REASON.kekMissing]);
+      expect(JSON.stringify(backLinkWarnings())).not.toContain(out.token);
+    } finally {
+      vi.stubEnv("DEVICE_LINK_KEK", KEK);
+    }
+  });
+
   it("an ordinary org's waiting screen: no link, no lookup, the plain block it always had (the negative pair)", async () => {
     const { auth } = await seedOrg("pro");
     const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);

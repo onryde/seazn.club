@@ -364,13 +364,25 @@ async function quickMatchHomeHref(orgId: string, competitionId: string): Promise
   // The non-throwing open (quick-match-tokens.ts): kek_missing, malformed or rejected, never by an error's message.
   const opened = tryOpenHomeToken(row.tokenEnc);
   if (!opened.ok) {
-    log.warn(
-      { reason: `quick_match_back_link_${opened.reason}`, competitionId },
-      "quick match pad: back link hidden, the home token could not be opened",
-    );
+    const reason = `quick_match_back_link_${opened.reason}`;
+    if (firstWarning(`${competitionId}:${reason}`)) {
+      log.warn({ reason, competitionId }, "quick match pad: back link hidden, the home token could not be opened");
+    }
     return null;
   }
   return `/q/${opened.token}`;
+}
+
+/** Each (competition, reason) is warned about once per server process (ruling 2026-11-08): a waiting screen re-renders
+ *  this page every POLL_MS, and a broken key would otherwise log on every poll of every waiting phone. Bounded: past
+ *  WARNED_CAP keys it starts over, so a long-lived server cannot grow it without limit (the cost is one repeat line). */
+const WARNED_CAP = 1_000;
+const warned = new Set<string>();
+function firstWarning(key: string): boolean {
+  if (warned.has(key)) return false;
+  if (warned.size >= WARNED_CAP) warned.clear();
+  warned.add(key);
+  return true;
 }
 
 /** Doc 13 §7's dead end. Both lines arrive localised: no English literal is

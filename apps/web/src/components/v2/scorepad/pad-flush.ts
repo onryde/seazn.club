@@ -51,13 +51,21 @@ export async function flushMountedPads(capMs: number = PAD_FLUSH_CAP_MS): Promis
 
 /** One pad's flush, over its own queue and its own drain: release EVERY held tap now (`flushHeldBefore`, the same
  *  release a new tap performs, so each held entry's own `onDue` fires exactly once and its natural tick is cancelled),
- *  then drain until the queue is empty or `deadline` passes. The drain is the pad's own (`runDrain`), so the send order,
- *  the expected-seq rules and the ack handling are the pipeline's, not a second path. */
+ *  then drain until the queue is empty, a seq race is lost, or `deadline` passes. The drain is the pad's own
+ *  (`runDrain`), so the send order, the expected-seq rules and the ack handling are the pipeline's, not a second path. */
 export async function drainForNavigation(store: QueueStore, drain: () => Promise<void>, deadline: number): Promise<void> {
   await flushHeldBefore(store, Date.now());
+  const passesAtStart = new Map((await store.list()).map((e) => [e.idempotencyKey, e.conflictPasses ?? 0]));
   for (;;) {
     await drain();
-    if ((await store.list()).length === 0) return;
+    const left = await store.list();
+    if (left.length === 0) return;
+    // A seq race lost during this flush (ruling 2026-11-08): every further pass would spend another of the queue's
+    // conflict passes (pipeline.ts CONFLICT_PASS_CEILING), and the pass past it dead-letters the guest's point. Stop
+    // and leave: the point waits in IndexedDB for the pad's next mount, where the ordinary drain resolves the race. Read
+    // from the durable counter itself, never from an error message. An indeterminate 409 (slot unreadable) spends no
+    // pass, so it re-drains until the deadline like a network failure: nothing is lost either way.
+    if (left.some((e) => (e.conflictPasses ?? 0) > (passesAtStart.get(e.idempotencyKey) ?? 0))) return;
     if (Date.now() >= deadline) return;
     await new Promise<void>((resolve) => setTimeout(resolve, RETRY_GAP_MS));
   }

@@ -34,19 +34,24 @@ const success = (seq: number): AppendCallResult => ({
   data: { seq, state_summary: { seq }, outcome: null, status: "in_play" },
 });
 
-/** The server: answers appends in call order from a script, or never (a hung network). */
-function fakeTransport(script: AppendCallResult[] | "hang") {
+/** The server: answers appends in call order from a script; or never (a hung network); or "race-lost": every append is
+ *  a 409 whose slot another device holds, so each drain pass renegotiates, resends once, conflicts again and spends one
+ *  of the queue's conflict passes (pipeline.ts `sendOne`, CONFLICT_PASS_CEILING). */
+function fakeTransport(script: AppendCallResult[] | "hang" | "race-lost") {
   const appendCalls: { body: AppendEventBody }[] = [];
   const transport: PadTransport = {
     async appendEvent(_fixtureId, body) {
       appendCalls.push({ body });
       if (script === "hang") return new Promise<AppendCallResult>(() => {});
+      if (script === "race-lost") return { kind: "conflict", currentSeq: body.expected_seq + 1, message: "SEQ_CONFLICT" };
       const next = script[appendCalls.length - 1];
       if (!next) throw new Error(`fakeTransport: no scripted append left (call #${appendCalls.length})`);
       return next;
     },
-    async listEventsSince(): Promise<LedgerSlotEvent[]> {
-      return [];
+    async listEventsSince(_fixtureId, sinceSeq): Promise<LedgerSlotEvent[]> {
+      if (script !== "race-lost") return [];
+      // The slot the pad asked for, held by ANOTHER device: a race lost, never this pad's own write.
+      return [{ seq: sinceSeq + 1, type: "generic.score", payload: { by: "A", points: 9 }, recorded_by: "user-2", device_link_id: "dl-2" }];
     },
     async getLastSeq(): Promise<number> {
       throw new Error("fakeTransport: getLastSeq is not used by the pipeline hook");
@@ -158,7 +163,10 @@ describe("the quick match back link sends the held point before it leaves (spec 
     const onDue = vi.fn(() => {
       void pad.current.retryDrain();
     });
-    const held = await pad.current.submitHeld("generic.score", { by: "H", points: 1 }, HOLD_MS, onDue);
+    // The window is the caller's argument (pad-host passes HOLD_MS, 10s); a one-second one lets this case wait PAST it
+    // in real time and see whether the natural tick fires a second time after the early release.
+    const hold = 1_000;
+    const held = await pad.current.submitHeld("generic.score", { by: "H", points: 1 }, hold, onDue);
     expect(held, "precondition: the tap is held").not.toBeNull();
     expect(appendCalls, "precondition: a held tap has not been sent").toHaveLength(0);
     const start = Date.now();
@@ -167,12 +175,17 @@ describe("the quick match back link sends the held point before it leaves (spec 
     linkOnClick()(e);
 
     await vi.waitFor(() => expect(went).toHaveLength(1), { timeout: PAD_FLUSH_CAP_MS + 1_000 });
+    const took = Date.now() - start;
+    // Well under the cap: the flush stops the moment the queue is empty, it does not wait the cap out.
+    expect(took, "navigates as soon as the queue is empty").toBeLessThan(500);
+    expect(took, "inside the hold window: the release, not the window, sent it").toBeLessThan(hold);
     expect(e.preventDefault, "the browser's own navigation is held back until the pad is drained").toHaveBeenCalledTimes(1);
     expect(went[0]).toEqual({ href: HREF, sentBefore: 1 });
     expect(appendCalls[0]!.body.payload).toEqual({ by: "H", points: 1 });
+    // Past the window: a natural tick that was not cancelled would fire onDue (and a send) a second time now.
+    await new Promise((r) => setTimeout(r, hold + 300));
     expect(onDue, "released early, exactly once: the natural tick never also fires").toHaveBeenCalledTimes(1);
-    expect(Date.now() - start, "inside the hold window: the release, not the window, sent it").toBeLessThan(HOLD_MS);
-    await settle();
+    expect(appendCalls, "one tap, one send, even past the window").toHaveLength(1);
     expect(pad.current.queueDepth).toBe(0);
     vi.unstubAllGlobals();
     pad.unmount();
@@ -235,13 +248,38 @@ describe("the quick match back link sends the held point before it leaves (spec 
   });
 
   it("an unmounted pad is no longer asked: after unmount the link leaves at once", async () => {
-    const { transport } = fakeTransport([]);
+    // A pad that, if it were still asked, could never finish: a held tap and a server that never answers. Only the
+    // mount effect's cleanup keeps its flush out of the registry, so a missing cleanup makes THIS case time out.
+    const { transport, appendCalls } = fakeTransport("hang");
     const pad = mountPipeline(params(transport));
     await settle();
+    const held = await pad.current.submitHeld("generic.score", { by: "H", points: 1 }, 200, vi.fn());
+    expect(held, "precondition: a held tap").not.toBeNull();
     pad.unmount();
     const went: string[] = [];
-    expect(await leaveForHome(HREF, { capMs: 5_000, go: (href) => went.push(href) })).toBe("drained");
+    expect(await leaveForHome(HREF, { capMs: 2_000, go: (href) => went.push(href) })).toBe("drained");
     expect(went).toEqual([HREF]);
+    expect(appendCalls, "the unmounted pad was not asked to send").toHaveLength(0);
+  });
+
+  it("a race lost during the flush: ONE drain pass, then leave; the point stays queued, never dead-lettered", async () => {
+    // Ruling 2026-11-08: the flush's re-drain loop must not spend the queue's conflict passes (CONFLICT_PASS_CEILING,
+    // 2) and dead-letter the guest's point. One pass is what any drain does; after it the point waits in IndexedDB for
+    // the pad's next mount, where the ordinary pipeline resolves the race.
+    const { transport, appendCalls } = fakeTransport("race-lost");
+    const pad = mountPipeline(params(transport));
+    await settle();
+    await pad.current.submitHeld("generic.score", { by: "H", points: 1 }, HOLD_MS, () => void pad.current.retryDrain());
+    const went: string[] = [];
+    const start = Date.now();
+    expect(await leaveForHome(HREF, { capMs: PAD_FLUSH_CAP_MS, go: (href) => went.push(href) })).toBe("drained");
+    expect(went).toEqual([HREF]);
+    expect(Date.now() - start, "it stopped on the conflict, it did not re-drain until the cap").toBeLessThan(1_000);
+    const queued = await pad.current.queueStore.list();
+    expect(queued, "the point is still queued, not dropped").toHaveLength(1);
+    expect(queued[0]!.conflictPasses, "one pass spent, below the ceiling of 2").toBe(1);
+    expect(appendCalls, "one pass: the send and its one renegotiated resend").toHaveLength(2);
+    expect(pad.current.lastRejection, "nothing was dead-lettered (QUEUE_STALLED)").toBeNull();
   });
 });
 
