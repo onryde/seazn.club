@@ -15,11 +15,13 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
+import { cricket } from "@seazn/engine/sports/cricket";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { buildTemplateStages } from "@/lib/format-templates";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CreateStage } from "@/server/api-v1/schemas";
+import { scriptLedger, type Delivery } from "@/server/public-site/__tests__/cricket-ledger";
 import { appendEvent } from "@/server/engine-db";
 import { refreshCompletedBracketPlacement } from "@/server/engine-db/competition";
 import { unfillProposalSeats } from "@/server/engine-db/fed-seats";
@@ -295,6 +297,103 @@ async function callLine(r: Rig, name: string): Promise<void> {
     on conflict (division_id) do update set config = excluded.config`;
   await sql`update fixtures set scheduled_at = ${"2030-06-01T10:00:00.000Z"}, court_id = ${court}, venue_id = ${venue.id} where id = ${line.id}`;
   await callFixtureToCourt(r.auth, line.id, court);
+}
+
+// ---- the flip: cricket's fold can change a winner without passing through undecided (knockout-void-unfill.test.ts's recipe).
+const CRICKET_PARTIAL = { ballsPerInnings: 6, ballsPerOver: 6, playersPerSide: 3, minOversForResult: 1 };
+
+/** Four cricket teams, qualifying_main at q = 2: E1 v E4 and E2 v E3, the final's two players go through. */
+async function cricketRig(): Promise<Rig & { xiOf: Map<string, string[]> }> {
+  const { auth } = await seedOrg("pro");
+  await sql`
+    insert into sports (key, name, module_version, position_catalog)
+    values ('cricket', 'Cricket', ${cricket.version}, ${sql.json(cricket.positions as never)})
+    on conflict (key) do nothing`;
+  await sql`
+    insert into sport_variants (sport_key, key, name, config, is_system)
+    values ('cricket', 't20', 'T20', ${sql.json(cricket.variants.t20 as never)}, true)
+    on conflict do nothing`;
+  const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "W4 flip " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+  const division = await createDivision(auth, comp.id, { name: "T20", slug: "t20-" + randomUUID().slice(0, 6), sport_key: "cricket", variant_key: "t20", config: {} } as never);
+  await sql`update divisions set config = ${sql.json(cricket.configSchema.parse(CRICKET_PARTIAL) as never)} where id = ${division.id}`;
+  const squads: string[][] = [];
+  for (const name of ["E1", "E2", "E3", "E4"]) {
+    const xi: string[] = [];
+    for (let i = 1; i <= 3; i++) {
+      const [{ id }] = await sql<{ id: string }[]>`insert into persons (org_id, full_name) values (${auth.orgId}, ${`${name} ${i}`}) returning id`;
+      xi.push(id);
+    }
+    squads.push(xi);
+  }
+  const made = await createEntrants(
+    auth,
+    division.id,
+    ["E1", "E2", "E3", "E4"].map((display_name, i) => ({
+      kind: "team",
+      display_name,
+      seed: i + 1,
+      members: squads[i]!.map((person_id) => ({ person_id, squad_number: null, default_position_key: null, is_captain: false, roles: [] as string[] })),
+    })) as never,
+  );
+  const ids: string[] = [];
+  for (const [i, d] of buildTemplateStages("qualifying_main", { swissRounds: 5, poolCount: 2, legs: 1, qualified: 2 }).entries()) {
+    const [stage] = await createStages(auth, division.id, CreateStage.parse({ seq: i + 1, kind: d.kind, name: d.name, config: d.config, progression: d.progression }));
+    ids.push(stage!.id);
+  }
+  await startDivision(auth, division.id);
+  await generateStageFixtures(auth, ids[1]!);
+  return {
+    auth,
+    sport: { key: "cricket", variant: "t20", kind: "individual" },
+    divisionId: division.id,
+    stageIds: [ids[0]!, ids[1]!],
+    nameOf: new Map(made.map((e) => [e.id, e.display_name])),
+    idOf: new Map(made.map((e) => [e.display_name, e.id])),
+    dayOne: [...(await rowsOf(ids[1]!))],
+    xiOf: new Map(made.map((e, i) => [e.id, squads[i]!])),
+  };
+}
+
+/** Home makes 6 off six balls; away chases 7 with a no-ball hit for four and 2 off the last ball, and wins. Void the no-ball and
+ *  the same six balls make 2: the innings ends on the same delivery and home wins. Returns the no-ball's event id. */
+async function chaseWonOnANoBall(auth: AuthCtx, line: Row, xiOf: Map<string, string[]>): Promise<string> {
+  const home = xiOf.get(line.home_entrant_id!)!;
+  const away = xiOf.get(line.away_entrant_id!)!;
+  for (const [entrantId, xi] of [[line.home_entrant_id!, home], [line.away_entrant_id!, away]] as const) {
+    for (const [i, personId] of xi.entries()) {
+      await sql`
+        insert into lineups (fixture_id, entrant_id, person_id, slot, position_key, order_no, roles, role)
+        values (${line.id}, ${entrantId}, ${personId}, 'starting', null, ${i + 1}, ${sql.json([])}, 'player')`;
+    }
+  }
+  const dots: Delivery[] = [{ bat: 0 }, { bat: 0 }, { bat: 0 }, { bat: 0 }, { bat: 0 }];
+  const ledger = scriptLedger({
+    cfg: CRICKET_PARTIAL,
+    home,
+    away,
+    tossWonBy: "home",
+    elected: "bat",
+    innings: [
+      { batting: "home", bowlers: [away[0]!], deliveries: [1, 1, 1, 1, 1, 1].map((bat) => ({ bat }) as Delivery) },
+      { batting: "away", bowlers: [home[0]!], deliveries: [{ extra: "noball", runs: 1, bat: 4 }, ...dots, { bat: 2 }] },
+    ],
+  });
+  const entrantOf = { home: line.home_entrant_id!, away: line.away_entrant_id! } as const;
+  const events = ledger.events.map((ev) =>
+    ev.type === "cricket.toss"
+      ? { type: ev.type, payload: { ...(ev.payload as object), wonBy: entrantOf[(ev.payload as { wonBy: "home" | "away" }).wonBy] } }
+      : { type: ev.type, payload: ev.payload },
+  );
+  let noBall: string | null = null;
+  for (const [i, ev] of events.slice(0, -1).entries()) {
+    const out = await appendEvent(auth.orgId, line.id, i, { type: ev.type, payload: ev.payload, recordedBy: null });
+    if ((ev.payload as { runs?: { extras?: { kind?: string } } }).runs?.extras?.kind === "noball") noBall = out.event.id;
+  }
+  const last = events.at(-1)!;
+  const decided = await scoreEvent(auth, line.id, { expected_seq: events.length - 1, type: last.type, payload: last.payload });
+  expect(decided.outcome, "premise: the chase was won on the last ball").toMatchObject({ winner: line.away_entrant_id });
+  expect(noBall, "premise: the script recorded a no-ball").not.toBeNull();
+  return noBall!;
 }
 
 const names = (r: Rig, drift: { out: string[]; in: string[] } | null) =>
@@ -746,6 +845,55 @@ describe.runIf(HAS_DB)("W4 T14 a correction inside a completed knockout source (
       await playSource(r);
       expect(await refreshCompletedBracketPlacement(r.auth.orgId, r.stageIds[0])).toBe(false);
     }, 300_000);
+  });
+
+  describe("a defeat proves a lucky loser only where a seat was vacated", () => {
+    // Cricket only: it is the sport whose fold flips a winner without passing through undecided, so the old finalist is a loser
+    // at the very moment the line changes hands (knockout-void-unfill.test.ts). Expected by hand: E4 beat E1 on the no-ball and
+    // E3 beat E2, so the final is E3 v E4 and both go through. Void the no-ball and E1 won that line: E4 has no place left.
+    let swept = 0;
+    // The departed case: E2 lost her line, so she has left no seat in the cut's round (the final) and there is still no vacancy.
+    for (const departs of [null, "E2"] as const) {
+      it(`a flipped line with ${departs === null ? "nobody departed" : "only a beaten semi-finalist departed"}: the old finalist's seat goes at once, and a re-decided source seats the new one`, async () => {
+        const r = await cricketRig();
+        const source = await rowsOf(r.stageIds[0]);
+        const flip = source.find((f) => f.round_no === 1 && f.away_entrant_id === r.idOf.get("E4"));
+        const other = source.find((f) => f.round_no === 1 && f.id !== flip?.id);
+        expect(flip?.home_entrant_id, "premise: E1 v E4, E4 the chasers").toBe(r.idOf.get("E1"));
+        expect([other?.home_entrant_id, other?.away_entrant_id].sort(), "premise: E2 v E3").toEqual([r.idOf.get("E2"), r.idOf.get("E3")].sort());
+        const noBall = await chaseWonOnANoBall(r.auth, flip!, r.xiOf);
+        await post(r.auth, other!.id, "core.forfeit", { by: r.idOf.get("E2"), reason: "walkover" });
+        const final = await finalOf(r);
+        expect([final.home_entrant_id, final.away_entrant_id].sort(), "premise: the final is E4 v E3").toEqual([r.idOf.get("E3"), r.idOf.get("E4")].sort());
+        await post(r.auth, final.id, "core.forfeit", { by: r.idOf.get("E3"), reason: "walkover" });
+        expect((await completeStage(r.auth, r.stageIds[0])).completed, "rig: the source completed").toBe(true);
+        const confirmedId = await confirmLatest(r);
+        expect(await roundOne(r), "premise: the confirmed main draw").toEqual(["E3 v E4"]);
+        if (departs !== null) await withdrawEntrantCascade(r.auth, r.idOf.get(departs)!);
+
+        await undecide(r, final.id);
+        expect(await statusOf(confirmedId), "the final's void moves nobody: its two seats are the cut").toBe("confirmed");
+        expect(await roundOne(r)).toEqual(["E3 v E4"]);
+
+        const [{ n }] = await sql<{ n: number }[]>`select coalesce(max(seq), 0)::int as n from score_events where fixture_id = ${flip!.id}`;
+        const flipped = await scoreEvent(r.auth, flip!.id, { expected_seq: n, type: "core.void", payload: { event_id: noBall } });
+        expect(flipped.outcome, "premise: the fold never passed through undecided").toMatchObject({ kind: "win", winner: r.idOf.get("E1") });
+        const again = await finalOf(r);
+        expect([again.home_entrant_id, again.away_entrant_id].sort(), "premise: E1 took the final's seat").toEqual([r.idOf.get("E1"), r.idOf.get("E3")].sort());
+
+        expect(await statusOf(confirmedId), "E4 is a loser now, and no seat was vacated for a lucky loser to fill").toBe("stale");
+        expect(await roundOne(r), "her seat is gone from the main draw").toEqual(["- v -"]);
+
+        await post(r.auth, again.id, "core.forfeit", { by: r.idOf.get("E3"), reason: "walkover" });
+        expect(await offered(r), "the re-decided source re-proposes: E1 won the final, E3 lost it").toEqual(["E1", "E3"]);
+        await confirmLatest(r);
+        expect(await roundOne(r)).toEqual(["E1 v E3"]);
+        swept++;
+      }, 300_000);
+    }
+    it("anti-vacuity: both flip cases ran", () => {
+      expect(swept).toBe(2);
+    });
   });
 
   describe("unfillProposalSeats", () => {

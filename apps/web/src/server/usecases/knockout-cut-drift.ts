@@ -74,9 +74,14 @@ interface BracketLine {
   away_entrant_id: string | null;
 }
 
-/** Who `take` is proven to name while the source is undecided, or null when it cannot tell (see the header). */
-function provenBy(lines: readonly BracketLine[], take: readonly { kind: string; from?: unknown; to?: unknown; round?: unknown }[]): Set<string> | null {
+/** Who `take` is proven to name while the source is undecided, with the lines of its rank cuts' round (where a lucky loser's
+ *  vacancy would be), or null when it cannot tell (see the header). */
+function provenBy(
+  lines: readonly BracketLine[],
+  take: readonly { kind: string; from?: unknown; to?: unknown; round?: unknown }[],
+): { proven: Set<string>; cutLines: BracketLine[] } | null {
   const proven = new Set<string>();
+  const cutLines: BracketLine[] = [];
   const add = (id: string | null | undefined) => {
     if (id !== null && id !== undefined) proven.add(id);
   };
@@ -86,13 +91,17 @@ function provenBy(lines: readonly BracketLine[], take: readonly { kind: string; 
       for (const l of main.filter((x) => x.round_no === t.round)) add(bracketWinnerLoser(l.outcome, l.home_entrant_id, l.away_entrant_id).loser);
     } else if (t.kind === "rankRange" && t.from === 1 && typeof t.to === "number") {
       if (t.to === 1) {
-        for (const l of main.filter((x) => x.is_final)) add(bracketWinnerLoser(l.outcome, l.home_entrant_id, l.away_entrant_id).winner);
+        for (const l of main.filter((x) => x.is_final)) {
+          add(bracketWinnerLoser(l.outcome, l.home_entrant_id, l.away_entrant_id).winner);
+          cutLines.push(l);
+        }
         continue;
       }
       const rounds = [...new Set(main.map((l) => l.round_no))];
       const cutRound = rounds.find((r) => main.filter((l) => l.round_no === r).length * 2 === t.to);
       if (cutRound === undefined) return null;
       for (const l of main.filter((x) => x.round_no === cutRound)) {
+        cutLines.push(l);
         add(l.home_entrant_id);
         add(l.away_entrant_id);
       }
@@ -100,10 +109,10 @@ function provenBy(lines: readonly BracketLine[], take: readonly { kind: string; 
       return null;
     }
   }
-  return proven;
+  return { proven, cutLines };
 }
 
-async function provenCut(tx: Tx, dependent: BracketDependent, sourceStageId: string): Promise<Set<string> | null> {
+async function provenCut(tx: Tx, dependent: BracketDependent, sourceStageId: string, departed: ReadonlySet<string>): Promise<Set<string> | null> {
   const takes: { kind: string }[] = [];
   for (const s of dependent.progression.sources) {
     const source = await resolveProgressionSource(tx, { division_id: dependent.division_id, seq: dependent.seq }, s.stage);
@@ -112,10 +121,14 @@ async function provenCut(tx: Tx, dependent: BracketDependent, sourceStageId: str
   const lines = await tx<BracketLine[]>`
     select round_no, coalesce(is_final, false) as is_final, coalesce(third_place, false) as third_place, outcome, home_entrant_id, away_entrant_id
       from fixtures where stage_id = ${sourceStageId}`;
-  const proven = provenBy(lines, takes);
-  if (proven === null) return null;
-  // A lucky loser on a slate holds a place no seat in the cut's round proves. Her own defeat does, while it stands: a qualifier
-  // whose line was taken back has none, since their later losses went first (NEXT_MATCH_STARTED).
+  const read = provenBy(lines, takes);
+  if (read === null) return null;
+  const { proven, cutLines } = read;
+  // A lucky loser on a slate holds a place no seat in the cut's round proves. Her own defeat does, while it stands, and only
+  // where she has a vacancy to fill: someone who has left still seated in that round. Without one a defeat proves nothing but
+  // the defeat, as with a finalist whose line flipped (a void that never passes through undecided) and now holds no place.
+  const gone = (id: string | null) => id !== null && departed.has(id);
+  if (!cutLines.some((l) => gone(l.home_entrant_id) || gone(l.away_entrant_id))) return proven;
   for (const l of lines) {
     const { loser } = bracketWinnerLoser(l.outcome, l.home_entrant_id, l.away_entrant_id);
     if (loser !== null && loser !== undefined) proven.add(loser);
@@ -133,7 +146,7 @@ export async function slateStands(tx: Tx, dependent: BracketDependent, slate: Sl
   if (named.length === 0) return true;
   try {
     if (!decided) {
-      const proven = await provenCut(tx, dependent, sourceStageId);
+      const proven = await provenCut(tx, dependent, sourceStageId, departed);
       return proven === null || named.every((id) => proven.has(id));
     }
     // Everyone else in today's cut is left out: a lucky loser beside the slate's people, or another source's qualifiers.
