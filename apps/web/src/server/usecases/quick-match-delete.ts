@@ -1,7 +1,7 @@
 import "server-only";
 // Quick match (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §7.8): the hard delete of one quick match's
 // competition. PRIVILEGED — the pooled role, not a tenant transaction — because two of the rows it removes are reached
-// by no foreign key the database could cascade along, and its callers act for no organiser:
+// by no foreign key the database could cascade along, and its callers act for no organizer:
 //   - the create's compensation (quick-match-create.ts), when a create fails after its competition exists;
 //   - the expiry sweep (plan 3), for an unsaved match idle past its expiry.
 //

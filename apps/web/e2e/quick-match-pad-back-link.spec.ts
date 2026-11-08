@@ -6,14 +6,14 @@ import { QUICK_MATCH_SYSTEM_ORG_ID, QUICK_MATCH_SYSTEM_USER_ID } from "../src/li
 
 // Quick match plan 1, Task 9 (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §4 step 4, C12): the scoring
 // pad's way back to its quick match's home, in a real browser at 320, 768 and 1280. What a server render cannot see:
-//  - the link is VISIBLE, holds the 44px tap floor and is what a tap at its centre lands on (hit-test, not paint);
+//  - the link is VISIBLE, holds the 44px tap floor and is what a tap at its center lands on (hit-test, not paint);
 //  - the page never scrolls sideways (mobile first);
 //  - one element, ordered by width (AGENTS.md phone composition): ABOVE the pad from md up, UNDER it on a phone, so the
 //    board keeps its first-screen headroom on a 568px-tall phone.
 //
 // The seam itself (the real `createQuickMatch`, the real system-user mint, the real page) is proven in
 // src/app/score/[token]/__tests__/page.quick-match.test.tsx. Plan 1 has no route that creates a quick match (plan 2 adds
-// `/play` and `/q/[token]`), so this spec builds the fixture with the organiser API's real producers (create, generate,
+// `/play` and `/q/[token]`), so this spec builds the fixture with the organizer API's real producers (create, generate,
 // start, mint) and then hands that tree to the quick match system org in one SQL transaction, with a `quick_matches` row
 // whose home token is sealed the way the server seals it. The click itself is plan 2's: `/q/[token]` does not exist yet.
 //
@@ -44,7 +44,7 @@ function sealHomeTokenForE2e(plain: string): Buffer {
   return Buffer.concat([Buffer.from([0x01]), wrapIv, wrapped, wrapTag, dataIv, dataTag, body]);
 }
 
-/** Is `el`'s centre the thing a tap lands on (the element itself or one of its children)? Scrolled to the middle of
+/** Is `el`'s center the thing a tap lands on (the element itself or one of its children)? Scrolled to the middle of
  *  the viewport first, as run-sheet.spec.ts does: `elementFromPoint` is VIEWPORT-relative and returns null for anything
  *  below the fold, and on a 320x568 phone the link sits under the pad, below the fold. */
 async function hitTestable(el: Locator): Promise<boolean> {
@@ -67,7 +67,7 @@ test("quick match pad (C12): the way back is visible, hit-testable and 44px tall
   request,
 }) => {
   test.setTimeout(120_000);
-  // The organiser's real producers: a private badminton league of two, generated and started, and its pad link.
+  // The organizer's real producers: a private badminton league of two, generated and started, and its pad link.
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `QM back link ${TAG}`,
@@ -143,7 +143,7 @@ test("quick match pad (C12): the way back is visible, hit-testable and 44px tall
       await expect(pad.getByTestId("scan-scorebug-line"), "precondition: that sibling is the pad").toBeVisible();
       const [l, p] = [await boxOf(page, link, "the link"), await boxOf(page, pad, "the pad")];
       expect(l.height, `the 44px tap floor at ${viewport.width}`).toBeGreaterThanOrEqual(44);
-      expect(await hitTestable(link), `a tap at the link's centre lands on it at ${viewport.width}`).toBe(true);
+      expect(await hitTestable(link), `a tap at the link's center lands on it at ${viewport.width}`).toBe(true);
       if (viewport.width < 768) {
         expect(l.y, `under the pad on a ${viewport.width}px phone: the board keeps its headroom`).toBeGreaterThanOrEqual(p.y + p.height);
       } else {

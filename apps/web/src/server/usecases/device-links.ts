@@ -9,6 +9,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { systemAuth } from "@/lib/quick-match-auth";
+import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
 import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { hasValidKek, openWith, sealWith } from "@/server/relay/crypto";
 import { assertUuid, type AuthCtx } from "@/server/api-v1/auth";
@@ -278,10 +279,10 @@ export async function ensureDeviceLink(
  * credential (§7.4). In order:
  *   - the mint limit, per quick match (`qm-mint:<id>`, DEVICE_LINK_MINT_LIMIT), before anything is read;
  *   - a fixture id that is not a uuid → 404, before any query (Postgres would refuse the cast with a 22P02, a 500);
- *   - an expired row (one `findQuickMatchByCompetition` can still return) → 404 QUICK_MATCH_EXPIRED, as its home answers
- *     an expired token; a saved row has no expiry;
+ *   - an expired row (one `findQuickMatchByCompetition` can still return) → 404 `QUICK_MATCH_ERRORS.EXPIRED`, as its
+ *     home answers an expired token; a saved row has no expiry;
  *   - under the fixture's link lock, in the system org: a fixture outside THIS quick match's competition → 404 (the
- *     per-match check, §7.1 point 3: every quick match shares the one org); finalized or cancelled → 422; a match whose
+ *     per-match check, §7.1 point 3: every quick match shares the one org); finalized or `cancelled` → 422; a match whose
  *     two sides are not both known (a knockout round waiting for its feeders, a bye) → 422 QUICK_MATCH_SIDES_UNKNOWN (C18);
  *   - `ensureLocked`: the live sealed link re-opened (no write), or one minted that revokes any other.
  * A decided match still opens: its link may undo its own events until an organizer finalizes.
@@ -290,7 +291,7 @@ export async function ensureGuestDeviceLink(qm: QuickMatchRow, fixtureId: string
   await rateLimit(`qm-mint:${qm.id}`, DEVICE_LINK_MINT_LIMIT);
   assertUuid(fixtureId, "fixture");
   if (qm.expiresAt !== null && qm.expiresAt.getTime() <= Date.now()) {
-    throw new HttpError(404, "quick match not found or expired", "QUICK_MATCH_EXPIRED");
+    throw new HttpError(404, "quick match not found or expired", QUICK_MATCH_ERRORS.EXPIRED);
   }
   const auth = systemAuth();
   return withTenant(auth.orgId, async (tx) => {

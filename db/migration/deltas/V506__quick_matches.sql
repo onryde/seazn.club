@@ -1,7 +1,9 @@
 -- V506 — Quick match: the `quick_matches` table, and the one system org and system user that hold every guest quick match.
 -- (Spec docs/superpowers/specs/2026-11-03-quick-match-design.md §7.1-7.2, owner-approved 2026-11-06.)
 -- Flyway runs with outOfOrder=false, so the version number must rise in MERGE order: it is assigned at merge (main's max + 1
--- if needed), and nothing else in the repo names it — tests and code find this file by `V*__quick_matches.sql`.
+-- if needed). A renumber moves three things: this file's name, the `V492` on line 1 (migration-header-truth.test.ts fails
+-- a header that disagrees with its file name), and the comments and test premise messages that cite V492 by number
+-- (`git grep -n V492 -- apps`). No code or test finds this file by its name.
 --
 -- ── The system org and its user ──
 -- A guest has no account, so every quick match is a private competition in ONE platform org, "Seazn quick matches", and every
@@ -21,7 +23,7 @@
 -- One row per quick match: everything guest-specific, so the existing tables get no new column and "is this a quick match"
 -- is a join. `token_hash` finds the row from the home-page token; `token_enc` is its sealed envelope. `visitor_hash` is the
 -- hashed visitor cookie the per-visitor cap counts by. `expires_at` and `reminder_sent_at` drive the expiry sweep;
--- `saved_by_user_id` is set when a signed-in user keeps the match. `org_id` is denormalised, as on every tenant table, for RLS.
+-- `saved_by_user_id` is set when a signed-in user keeps the match. `org_id` is denormalized, as on every tenant table, for RLS.
 --
 -- Runs as the migrating role, which bypasses RLS (as V489 notes), so the seed inserts reach `organizations`.
 -- The seed inserts are idempotent: a re-run changes nothing. A pre-existing org holding the slug `seazn-quick-matches` under

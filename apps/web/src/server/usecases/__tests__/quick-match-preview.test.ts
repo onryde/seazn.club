@@ -202,7 +202,7 @@ describe("previewStageDraw — structure only, nothing quick-match specific", ()
   });
 });
 
-describe("quickMatchPreview — a seat it cannot name is refused, never shown blank or mislabelled", () => {
+describe("quickMatchPreview — a seat it cannot name is refused, never shown blank or mislabeled", () => {
   afterEach(() => {
     vi.doUnmock("../stages");
     vi.resetModules();

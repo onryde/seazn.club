@@ -28,6 +28,7 @@ import { captureServer } from "@/lib/posthog-server";
 import { systemAuth } from "@/lib/quick-match-auth";
 import {
   QUICK_MATCH_ENDS_ON_DAYS,
+  QUICK_MATCH_ERRORS,
   QUICK_MATCH_EXPIRY_DAYS,
   QUICK_MATCH_MAX_ALIVE_PER_VISITOR,
   QUICK_MATCH_SYSTEM_ORG_ID,
@@ -59,15 +60,9 @@ export interface CreatedQuickMatch {
   expiresAt: Date;
 }
 
-/** Every refusal's code (the third `HttpError` argument). The English message is for logs and API callers; plan 2 maps
- *  the code to copy. */
-export const QUICK_MATCH_ERRORS = {
-  TOO_MANY_ALIVE: "QUICK_MATCH_TOO_MANY_ALIVE",
-  FORMAT_NOT_OFFERED: "QUICK_MATCH_FORMAT_NOT_OFFERED",
-  SPORT_NOT_OFFERED: "QUICK_MATCH_SPORT_NOT_OFFERED",
-  KIND_NOT_OFFERED: "QUICK_MATCH_KIND_NOT_OFFERED",
-  VISITOR_INVALID: "QUICK_MATCH_VISITOR_INVALID",
-} as const;
+/** Every refusal's code. Defined in the import-free lib/quick-match-constants.ts, so device links can throw one without
+ *  this file's graph; re-exported here, the path its earlier callers use. */
+export { QUICK_MATCH_ERRORS };
 
 /** What `hashVisitorKey` returns (quick-match-tokens.ts): sha256 hex, 64 lowercase characters. The cap counts rows by
  *  this value, so anything else (an empty string, a raw cookie, a typo'd caller) would count against a visitor nobody is. */
@@ -211,8 +206,10 @@ export async function createQuickMatchTree(
  *   1. the early per-visitor count: QUICK_MATCH_MAX_ALIVE_PER_VISITOR alive already → 429 QUICK_MATCH_TOO_MANY_ALIVE,
  *      before anything is built (the locked recount inside the tree is the race guard, B5f);
  *   2. the offer: a sport × variant the probe did not prove → 422 SPORT_NOT_OFFERED; a kind the sport does not take →
- *      422 KIND_NOT_OFFERED (D2); a knockout of a variant whose bracket could stall, or of two sides → 422
- *      FORMAT_NOT_OFFERED (C23 with D10, C16);
+ *      422 KIND_NOT_OFFERED (D2); a knockout of two sides (C16), or of a variant where a bracket match can end level →
+ *      422 FORMAT_NOT_OFFERED. C23 as amended (owner ruling 2026-11-07): a knockout is offered only where a bracket match
+ *      cannot end level, decided by the engine's `bracketMayEndLevel` on the variant's cfg ⊕ the knockout stage's
+ *      defaults (`offer.knockoutAllowed`, quick-match-sports.ts); the probe checks the same question on real fixtures;
  *   3. the tree (`createQuickMatchTree`), which builds the whole match or nothing;
  *   4. one `quick_match_created` event, carrying no name, email or token (D11).
  */

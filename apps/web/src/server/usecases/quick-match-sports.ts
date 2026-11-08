@@ -9,8 +9,8 @@ import "server-only";
 //   - kinds: the sport's own entrant model (pre-flight D2: Singles/Doubles is the entrant kind, a per-sport axis, not a
 //     variant), read from the catalog rows before any division exists; chess is individual only (owner, 2026-10-26).
 //   - knockoutAllowed: C23's own premise, decided by the engine (owner ruling 2026-11-07): a knockout is offered only
-//     when no match of it can end level, because a level knockout result waits for an organiser's settle and a guest
-//     has no organiser. Asked of the cfg a quick match knockout actually plays (`quickMatchKnockoutCfg`: the variant
+//     when no match of it can end level, because a level knockout result waits for an organizer's settle and a guest
+//     has no organizer. Asked of the cfg a quick match knockout actually plays (`quickMatchKnockoutCfg`: the variant
 //     under the knockout stage's preset deciders, as `createStages` stores them) through `bracketMayEndLevel`
 //     (`knockoutMayEndLevel`). The probe's C23 check asks the same `knockoutMayEndLevel` of every real knockout fixture
 //     it creates, so the offer's composed answer is proven against the fold the match plays. The presets are why
@@ -54,14 +54,17 @@ const nothing = (): QuickMatchOffer => ({ offered: false, kinds: [], knockoutAll
  * The fold cfg of a quick match knockout's match, before any exists: the variant's config (what the division holds)
  * under the knockout stage's config as `createStages` stores it (`withStageDefaults`: the sport's preset deciders for a
  * knockout of this variant), resolved the way a fixture's fold is (`resolveFixtureCfg`: division ⊕ stage rules ⊕ the
- * bracket deciders, schema defaults filled). The probe checks this against every real knockout fixture it creates.
+ * bracket deciders, schema defaults filled). This is the cfg C23 is decided on, as amended (owner ruling 2026-11-07): a
+ * knockout is offered where a bracket match cannot end level, which `knockoutMayEndLevel` (the engine's
+ * `bracketMayEndLevel`) answers of the variant's cfg ⊕ the knockout stage's defaults. The probe checks real fixtures: it
+ * asks the same `knockoutMayEndLevel` of the fold of every knockout fixture it creates.
  */
 export function quickMatchKnockoutCfg(mod: AnySportModule, variant_key: string, variantConfig: unknown): unknown {
   const stage = withStageDefaults(mod, "knockout", variant_key, quickMatchStageInput({ format: "knockout", plays: 1, name: "" }).config);
   return resolveFixtureCfg({ config_snapshot: null, rules_override: null }, variantConfig, { kind: "knockout", config: stage }, mod);
 }
 
-/** C23 (owner ruling 2026-11-07): can a knockout match under `cfg` end level, so that it would wait for an organiser's
+/** C23 (owner ruling 2026-11-07): can a knockout match under `cfg` end level, so that it would wait for an organizer's
  *  settle? The engine's one answer (`bracketMayEndLevel`), shared by `offerFor` and the probe. */
 export function knockoutMayEndLevel(mod: AnySportModule, cfg: unknown): boolean {
   return bracketMayEndLevel(mod, "knockout", cfg);

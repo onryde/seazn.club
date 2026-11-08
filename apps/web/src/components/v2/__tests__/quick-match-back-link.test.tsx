@@ -182,7 +182,7 @@ describe("the quick match back link sends the held point before it leaves (spec 
     expect(e.preventDefault, "the browser's own navigation is held back until the pad is drained").toHaveBeenCalledTimes(1);
     expect(went[0]).toEqual({ href: HREF, sentBefore: 1 });
     expect(appendCalls[0]!.body.payload).toEqual({ by: "H", points: 1 });
-    // Past the window: a natural tick that was not cancelled would fire onDue (and a send) a second time now.
+    // Past the window: a natural tick that was not canceled would fire onDue (and a send) a second time now.
     await new Promise((r) => setTimeout(r, hold + 300));
     expect(onDue, "released early, exactly once: the natural tick never also fires").toHaveBeenCalledTimes(1);
     expect(appendCalls, "one tap, one send, even past the window").toHaveLength(1);

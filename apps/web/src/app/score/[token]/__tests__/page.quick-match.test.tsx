@@ -1,10 +1,10 @@
 // Quick match plan 1, Task 9 (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §4 step 4, C12; pre-flight
 // A6, A13, B9, C8, C18): the pad's way back. A guest scoring a quick match's fixture on `/score/[token]` gets a link to
-// that quick match's home, `/q/<home token>`, labelled `quickMatch.backToMatch`. Every other pad gets none.
+// that quick match's home, `/q/<home token>`, labeled `quickMatch.backToMatch`. Every other pad gets none.
 //
 // The real producers on both ends, no fixture on either (AGENTS.md class 1, the inert seam): the quick match is made by
 // `createQuickMatch`, the pad's link is minted through the guest's own door (`ensureGuestDeviceLink`, Task 8), and the page under test is the REAL async server component, rendered to
-// HTML. Assertions on that HTML anchor on `="` (AGENTS.md: React serialises an omitted prop as "$undefined").
+// HTML. Assertions on that HTML anchor on `="` (AGENTS.md: React serializes an omitted prop as "$undefined").
 //
 // Expected values come from the producer or the spec, never from the page: the href is `/q/` + the token
 // `createQuickMatch` handed its creator; the English copy is the spec's (C12, plan 1 Task 9 "Back to the quick match").

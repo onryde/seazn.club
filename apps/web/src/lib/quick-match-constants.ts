@@ -2,8 +2,9 @@
 // system org and system user that hold every guest-created quick match, and the limits the create path enforces itself.
 //
 // Import-free on purpose: `server/api-v1/schemas.ts` imports this file relatively, so nothing here may pull in a module.
-// The ids and the email are written verbatim into the `V*__quick_matches.sql` migration that seeds the rows; change one
-// and you change both.
+// The ids, the slug and the email are written verbatim into the migration that seeds the rows,
+// db/migration/deltas/V492__quick_matches.sql (its number is reassigned at merge if main has moved past it); change one
+// and you change both. quick-match-migration.test.ts compares the seeded rows with these values.
 
 /** The system org that holds every quick match. Private, no human members. */
 export const QUICK_MATCH_SYSTEM_ORG_ID = "00000000-0000-4000-8000-00000000a001";
@@ -26,3 +27,15 @@ export const QUICK_MATCH_EXPIRY_DAYS = 7;
 export const QUICK_MATCH_REMINDER_HOURS_BEFORE = 24;
 /** The competition's `ends_on`, this many days after it is created. */
 export const QUICK_MATCH_ENDS_ON_DAYS = 365;
+
+/** Every quick match refusal's code (the third `HttpError` argument). The English message is for logs and API callers;
+ *  plan 2 maps the code to copy, so a code a quick match path throws belongs here. quick-match-create.ts re-exports it. */
+export const QUICK_MATCH_ERRORS = {
+  TOO_MANY_ALIVE: "QUICK_MATCH_TOO_MANY_ALIVE",
+  FORMAT_NOT_OFFERED: "QUICK_MATCH_FORMAT_NOT_OFFERED",
+  SPORT_NOT_OFFERED: "QUICK_MATCH_SPORT_NOT_OFFERED",
+  KIND_NOT_OFFERED: "QUICK_MATCH_KIND_NOT_OFFERED",
+  VISITOR_INVALID: "QUICK_MATCH_VISITOR_INVALID",
+  /** A guest's Score tap on a quick match past its expiry (`ensureGuestDeviceLink`, device-links.ts). */
+  EXPIRED: "QUICK_MATCH_EXPIRED",
+} as const;

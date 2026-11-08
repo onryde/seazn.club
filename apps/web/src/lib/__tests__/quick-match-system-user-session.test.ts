@@ -52,6 +52,7 @@ import { HttpError } from "@/lib/errors";
 import { QUICK_MATCH_SYSTEM_USER_EMAIL, QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
 import { createInvite } from "@/server/usecases/invites";
 import { POST as INVITE_CLAIM } from "@/app/api/invites/[token]/claim/route";
+import { POST as IMPERSONATE } from "@/app/api/admin/users/[id]/impersonate/route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const RUN = `sus-${randomUUID().slice(0, 8)}`;
@@ -188,5 +189,57 @@ describe.skipIf(!HAS_DB)("the doors that mint a session refuse the system user (
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     expect(await impersonations(staff.id, target.id)).toBe(1);
     expect(await audits(staff.id, target.id)).toBe(1);
+  });
+
+  // ---- the impersonate route, as staff reach it: the URL's id is free text -----------------------------------------
+  // Postgres reads an uppercase uuid as the same row, so the route must hand the guard the DATABASE's id. Handed the raw
+  // URL id, `createImpersonationToken`'s string compare misses the system user and writes a token row and an audit entry
+  // before `createSession` refuses the page that opens it (review D9).
+
+  const seedStaff = async (): Promise<{ id: string }> => {
+    const staff = await seedUser("staff");
+    await sql`update users set is_staff = true, staff_role = 'support' where id = ${staff.id}`;
+    return staff;
+  };
+  const impersonateViaRoute = async (staffId: string, targetId: string) => {
+    h.jar.clear();
+    await createSession(staffId);
+    const res = await IMPERSONATE(new Request(`https://signin.test/api/admin/users/${targetId}/impersonate`, { method: "POST" }), {
+      params: Promise.resolve({ id: targetId }),
+    });
+    h.jar.clear();
+    return { status: res.status, body: (await res.json()) as { ok: boolean; error?: string; data?: { url: string } } };
+  };
+  /** Everything this staff member's impersonations wrote, whatever case the target id was written in: the audit log's
+   *  `target_id` is text, so a count keyed on the lowercase id would miss an uppercase write and read zero. */
+  const startedBy = async (actorId: string) => ({
+    tokens: (await sql<{ n: number }[]>`
+      select count(*)::int as n from impersonation_sessions where actor_id = ${actorId}`)[0]!.n,
+    audits: (await sql<{ n: number }[]>`
+      select count(*)::int as n from staff_audit_log where actor_id = ${actorId} and action = 'impersonate_start'`)[0]!.n,
+  });
+
+  it("the route refuses the system user's id written in uppercase: 403, no impersonation token, no audit entry", async () => {
+    const staff = await seedStaff();
+    const upper = QUICK_MATCH_SYSTEM_USER_ID.toUpperCase();
+    expect(upper, "premise: the uppercase id is a different string from the constant").not.toBe(QUICK_MATCH_SYSTEM_USER_ID);
+
+    const res = await impersonateViaRoute(staff.id, upper);
+
+    expect(res).toEqual({ status: 403, body: { ok: false, error: "Cannot impersonate the system user" } });
+    expect(await startedBy(staff.id)).toEqual({ tokens: 0, audits: 0 });
+  });
+
+  it("positive pair: the same route, given an ordinary user's id in uppercase, still starts one impersonation", async () => {
+    const staff = await seedStaff();
+    const target = await seedUser("target");
+
+    const res = await impersonateViaRoute(staff.id, target.id.toUpperCase());
+
+    expect(res.status).toBe(200);
+    expect(res.body.data?.url).toMatch(/\/admin\/impersonate\?token=[0-9a-f]{64}$/);
+    expect(await startedBy(staff.id)).toEqual({ tokens: 1, audits: 1 });
+    expect(await impersonations(staff.id, target.id), "the token row names the database's id").toBe(1);
+    expect(await audits(staff.id, target.id), "the audit entry names the database's id, not the URL's").toBe(1);
   });
 });

@@ -18,7 +18,7 @@
 //   3. THE COUNTS (D3, offered variants only): for each kind the sport takes, a league of 2..6 sides and, where a knockout
 //      is offered, a knockout of 3..6 — each asserting that its generated non-bye fixtures, the create's `matchCount` and
 //      the preview's `matchCount` are one number, and, for a knockout, that no bracket match it seats can end level
-//      (C23's premise: a level knockout result waits for an organiser, and a guest has none).
+//      (C23's premise: a level knockout result waits for an organizer, and a guest has none).
 // Every create is hard-deleted after it is read.
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -133,18 +133,18 @@ async function fixtureFold(auth: AuthCtx, fixtureId: string): Promise<FixtureFol
     where f.id = ${fixtureId}`);
   if (!row) throw new Error(`probe: fixture ${fixtureId} not found`);
   if (!row.home_entrant_id || !row.away_entrant_id) throw new Error(`probe: fixture ${fixtureId} has an empty seat`);
-  const module = resolveModule(row.sport_key, row.module_version);
+  const mod = resolveModule(row.sport_key, row.module_version);
   const cfg = resolveFixtureCfg(
     { config_snapshot: row.config_snapshot, rules_override: row.rules_override },
     row.division_config,
     { kind: row.stage_kind, config: row.stage_config },
-    module,
+    mod,
   );
   const lineups: LineupPair = {
     home: { entrantId: row.home_entrant_id, slots: [] },
     away: { entrantId: row.away_entrant_id, slots: [] },
   };
-  return { module, cfg, lineups };
+  return { module: mod, cfg, lineups };
 }
 
 /**
@@ -316,7 +316,7 @@ export async function runQuickMatchProbe(
               countFailures.push(`${name} ${k} ${format} of ${n}: generated ${generated}, create said ${out.matchCount}, preview said ${previewed}`);
             }
             // C23's premise, as a guard: a knockout is offered only where no bracket match can end level, because a
-            // level result waits for an organiser's settle and a guest has none. Asked of a seated first-round match's
+            // level result waits for an organizer's settle and a guest has none. Asked of a seated first-round match's
             // own fold cfg (the stage's preset deciders included), through the one helper `offerFor` decides with.
             if (format === "knockout") {
               const seated = matches.find((f) => f.home_entrant_id !== null && f.away_entrant_id !== null);

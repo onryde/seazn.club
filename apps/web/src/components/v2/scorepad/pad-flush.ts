@@ -50,7 +50,7 @@ export async function flushMountedPads(capMs: number = PAD_FLUSH_CAP_MS): Promis
 }
 
 /** One pad's flush, over its own queue and its own drain: release EVERY held tap now (`flushHeldBefore`, the same
- *  release a new tap performs, so each held entry's own `onDue` fires exactly once and its natural tick is cancelled),
+ *  release a new tap performs, so each held entry's own `onDue` fires exactly once and its natural tick is canceled),
  *  then drain until the queue is empty, a seq race is lost, or `deadline` passes. The drain is the pad's own
  *  (`runDrain`), so the send order, the expected-seq rules and the ack handling are the pipeline's, not a second path. */
 export async function drainForNavigation(store: QueueStore, drain: () => Promise<void>, deadline: number): Promise<void> {

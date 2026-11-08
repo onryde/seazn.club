@@ -25,7 +25,7 @@ import { POST } from "@/app/api/v1/fixtures/[id]/events/route";
 import { isChessSport } from "@/lib/chess-individual-only-rule";
 import { sql } from "@/lib/db";
 import offerJson from "@/lib/quick-match-offer.generated.json";
-import { QUICK_MATCH_SYSTEM_ORG_ID, QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
+import { QUICK_MATCH_ERRORS, QUICK_MATCH_SYSTEM_ORG_ID, QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
 import { DEVICE_LINK_MINT_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { requireFixtureActor, type AuthCtx } from "@/server/api-v1/auth";
 import type { AppendEventRequest, CreateQuickMatch } from "@/server/api-v1/schemas";
@@ -276,6 +276,9 @@ describe.skipIf(!HAS_DB)("ensureGuestDeviceLink (§7.4, C4, C18)", () => {
     expect(await resolveQuickMatchToken(out.token)).toBeNull();   // precondition: the home itself refuses it
     const stale = await findQuickMatchByCompetition(out.competitionId);   // the one read that ignores expiry (T9)
     await expect(ensureGuestDeviceLink(stale!, f0!.id)).rejects.toMatchObject({ status: 404, code: EXPIRED });
+    // Plan 2 maps every code in QUICK_MATCH_ERRORS and nothing else, so the code the thrower sends must be one of its
+    // members (review G2), under the value the plan names.
+    expect(QUICK_MATCH_ERRORS.EXPIRED).toBe(EXPIRED);
     expect(await linksOn(f0!.id)).toBe(0);
     // Saved (§7.7): no expiry, alive however old its activity.
     const saver = await makeUser("qm-saver");
@@ -292,7 +295,7 @@ describe.skipIf(!HAS_DB)("ensureGuestDeviceLink (§7.4, C4, C18)", () => {
     expect(played).toMatchObject({ kind: "decided" });
     const decided = await ensureGuestDeviceLink(row, f0!.id);
     expect(decided).toMatchObject({ minted: false, secret: first.secret });
-    // Finalized (only an organiser account may, never the link): nothing left to score, so no link.
+    // Finalized (only an organizer account may, never the link): nothing left to score, so no link.
     if (played.kind !== "decided") throw new Error("unreachable");
     await scoreEvent(systemAuth(), f0!.id, { expected_seq: played.lastSeq, type: "core.finalize", payload: {} });
     await expect(ensureGuestDeviceLink(row, f0!.id)).rejects.toMatchObject({ status: 422 });
@@ -434,7 +437,7 @@ describe.skipIf(!HAS_DB)("a score through the guest link (real producer and cons
     const { secret } = await ensureGuestDeviceLink(row, f0!.id);
     const [start, play] = await firstRallyFor(f0!.id);
     expect((await post(secret, f0!.id, start!)).status).toBe(201);
-    // Another actor's event (an organiser account's: the system user's session), for the void case.
+    // Another actor's event (an organizer account's: the system user's session), for the void case.
     const other = await scoreEvent(systemAuth(), f0!.id, play!);
     const [{ id: otherId }] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${f0!.id} and seq = ${other.seq}`;
     await age(row.id);

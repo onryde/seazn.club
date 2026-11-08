@@ -23,7 +23,9 @@ export async function POST(
     if (!user) throw new HttpError(404, "User not found");
     if (user.is_staff) throw new HttpError(403, "Cannot impersonate staff accounts");
 
-    const token = await createImpersonationToken(staff.id, id);
+    // The database's id, never the URL's: Postgres finds a uuid in any letter case, but the system-user guard inside
+    // `createImpersonationToken` compares strings, so an uppercase URL id would pass it.
+    const token = await createImpersonationToken(staff.id, user.id);
     const url = `${baseUrl(req)}/admin/impersonate?token=${token}`;
     return { url };
   });

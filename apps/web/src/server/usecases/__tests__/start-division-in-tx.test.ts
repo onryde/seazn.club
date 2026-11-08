@@ -31,7 +31,7 @@ import { createStages, generateStageFixtures } from "../stages";
 import { putScheduleSettings, startDivisionInTx } from "../schedule";
 import { GENERIC_CONFIG, seedCourts, seedOrg } from "./_seed";
 
-// No organiser analytics leave a test run (the seed's create path fires them).
+// No organizer analytics leave a test run (the seed's create path fires them).
 vi.mock("@/lib/posthog-server", () => ({ captureServer: vi.fn().mockResolvedValue(undefined) }));
 
 const HAS_DB = !!process.env.DATABASE_URL;

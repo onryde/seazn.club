@@ -223,7 +223,7 @@ describe.skipIf(!HAS_DB)("createQuickMatchTree (Part A: the unguarded tree)", ()
     expect(stages).toEqual([{ id: out.stageId, kind: "league" }]);
   });
 
-  it("the system org holds more alive quick matches than community's competitions.max_active (§9 quota; D6's behaviour test)", async () => {
+  it("the system org holds more alive quick matches than community's competitions.max_active (§9 quota; D6's behavior test)", async () => {
     const [entitlement] = await sql<{ int_value: number }[]>`
       select int_value from plan_entitlements where plan_key = 'community' and feature_key = 'competitions.max_active'`;   // the plan's own row
     const cap = entitlement!.int_value;

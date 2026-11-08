@@ -51,7 +51,7 @@ const EMPTY_SEAT: QuickMatchPreviewSide = { seed: null, feeder: null };
 function seatOf(seed: number | null, from: PreviewDrawFeed | null, where: string): QuickMatchPreviewSide {
   // A loser feed (a third-place match) is not "the winner of" anything, and a match seat with neither a seed nor a
   // feeder has no name at all. Neither occurs in a quick match stage (no third place; the generator seats or feeds
-  // every match seat); refuse rather than show a blank or a mislabelled side.
+  // every match seat); refuse rather than show a blank or a mislabeled side.
   if (from?.side === "loser") throw new Error(`quickMatchPreview cannot name ${where}: it is fed by a loser`);
   if (seed === null && from === null) throw new Error(`quickMatchPreview cannot name ${where}: no seed and no feeder`);
   return { seed, feeder: from ? { round: from.round, seq: from.seq } : null };

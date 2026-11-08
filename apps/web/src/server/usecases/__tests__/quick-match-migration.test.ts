@@ -1,6 +1,6 @@
 // Quick match plan 1, Task 1 — the `V*__quick_matches.sql` migration (spec 2026-11-03-quick-match-design.md §7.1-7.2).
 // The table holds every guest-specific fact; the system org and its user are the one tenant and the one actor every guest
-// row belongs to. Behaviour only: the entitlement values the create path needs are proven by the tests that need them
+// row belongs to. Behavior only: the entitlement values the create path needs are proven by the tests that need them
 // (Task 5's quota, Task 8's device link), never pinned here (pre-flight D6; standing rule, owner 2026-10-20).
 //
 // Catalog reads are scoped to current_schema(): a shared database may hold the same table in another schema.
@@ -9,6 +9,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import {
   QUICK_MATCH_SYSTEM_ORG_ID,
+  QUICK_MATCH_SYSTEM_ORG_SLUG,
   QUICK_MATCH_SYSTEM_USER_EMAIL,
   QUICK_MATCH_SYSTEM_USER_ID,
 } from "@/lib/quick-match-constants";
@@ -42,6 +43,9 @@ describe.skipIf(!HAS_DB)("quick_matches migration", () => {
       slug: "seazn-quick-matches",
       created_by: QUICK_MATCH_SYSTEM_USER_ID,
     });
+    // The literal above is the migration's own value; this ties the code's constant to the seeded row, so the two cannot
+    // drift apart (the constants file says "change one and you change both").
+    expect(org!.slug, "QUICK_MATCH_SYSTEM_ORG_SLUG names the seeded org").toBe(QUICK_MATCH_SYSTEM_ORG_SLUG);
     const members = await sql`select 1 from org_members where org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
     expect(members).toHaveLength(0);
   });
