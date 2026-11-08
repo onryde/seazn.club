@@ -233,6 +233,23 @@ interface ReminderRow {
 const remindersOf = (quickMatchId: string) => sql<ReminderRow[]>`
   select id, kind, ref_type, org_id, recipient, recipient_user_id, transactional, status, attempts, subject, expires_at, created_at
     from email_outbox where kind = 'quick_match_reminder' and ref_id = ${quickMatchId} order by created_at, id`;
+/** Branch review B m6 (controller, PO rec 2026-11-08): the reason a touch ends a reminder queued for the expiry it moved. The fix
+ *  round's word, typed here, so a rename in the code reds this file. */
+const REARMED_REASON = "quick_match_rearmed";
+/** How an outbox row ended: its status, its reason, and whether its sealed body is gone. */
+const outboxEnd = async (id: string): Promise<{ status: string; last_error: string | null; cleared: boolean }> => {
+  const [r] = await sql<{ status: string; last_error: string | null; cleared: boolean }[]>`
+    select status, last_error, body_sealed is null as cleared from email_outbox where id = ${id}`;
+  if (!r) throw new Error(`precondition: outbox row ${id} exists`);
+  return r;
+};
+/** The worker's tick over one row, past the first-attempt window it leaves to a request (as the reminder test above does). */
+async function sendDue(outboxId: string): Promise<void> {
+  await sql`update email_outbox set created_at = now() - make_interval(secs => ${FIRST_ATTEMPT_WINDOW_MS / 1000 + 60}) where id = ${outboxId}`;
+  await runOutboxTick({ onlyIds: [outboxId], sleep: async () => undefined });
+}
+/** Every mail the transport was handed for this address. */
+const sentTo = (to: string) => deliverMock.mock.calls.map((c) => c[0] as { to: string }).filter((m) => m.to === to);
 
 /** A saver: a real account. */
 async function saver(tag: string): Promise<string> {
@@ -618,11 +635,18 @@ describe.skipIf(!HAS_DB)("the expiry sweep (DB)", () => {
   it.each([
     ["the home's own touch", "home"],
     ["a score through the guest link", "score"],
-  ] as const)("activity after the reminder re-arms it: %s, and the match is reminded again before its new expiry", async (_, door) => {
-    const due = await create({ email: address(`rearm-${door}`) });
+  ] as const)("activity after the reminder re-arms it: %s, the old reminder still queued never sends (m6), and the match is reminded again before its new expiry", async (_, door) => {
+    const to = address(`rearm-${door}`);
+    const due = await create({ email: to });
     await expiresIn(due.id, 23);
     expect(await sweepQuickMatches({ baseUrl: BASE, onlyIds: [due.id] })).toEqual({ ...ZERO, checked: 1, reminded: 1 });
     expect((await stateOf(due.id))!.reminder_sent_at).not.toBeNull();
+    const [old] = await remindersOf(due.id);
+    expect(await outboxEnd(old!.id), "premise: the reminder is queued, with its body, and nothing has sent it").toEqual({
+      status: "queued",
+      last_error: null,
+      cleared: false,
+    });
 
     if (door === "home") {
       await touchQuickMatchActivity(due.id);
@@ -635,12 +659,21 @@ describe.skipIf(!HAS_DB)("the expiry sweep (DB)", () => {
     const s = await stateOf(due.id);
     expect(s!.reminder_sent_at, "the activity re-armed the reminder").toBeNull();
     expect(s!.expires_at!.getTime() - s!.last_activity_at.getTime()).toBe(SPEC_EXPIRY_DAYS * DAY_MS);
+    // m6: the "deleted tomorrow" mail still queued is about an expiry the activity just moved 7 days out. It ends, cancelled, on
+    // the outbox's own cancel path (reason in CANCELLED_REASONS), and the worker passes it by.
+    expect(await outboxEnd(old!.id), "the stale reminder ended unsent").toEqual({ status: "expired", last_error: REARMED_REASON, cleared: true });
+    await sendDue(old!.id);
+    expect(sentTo(to), "the cancelled reminder never sends").toHaveLength(0);
     // Seven days out: no reminder yet.
     expect(await sweepQuickMatches({ baseUrl: BASE, onlyIds: [due.id] })).toEqual({ ...ZERO, checked: 1 });
     // The new expiry approaches: the second reminder.
     await expiresIn(due.id, 22);
     expect(await sweepQuickMatches({ baseUrl: BASE, onlyIds: [due.id] })).toEqual({ ...ZERO, checked: 1, reminded: 1 });
-    expect(await remindersOf(due.id), "one reminder per arming").toHaveLength(2);
+    const rows = await remindersOf(due.id);
+    expect(rows, "one reminder per arming").toHaveLength(2);
+    // The positive pair: the live reminder does send, through the same worker tick.
+    await sendDue(rows[1]!.id);
+    expect(sentTo(to), "the new expiry's reminder is mailed").toHaveLength(1);
   });
 
   it.each([
