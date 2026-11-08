@@ -566,7 +566,9 @@ describe("Nav > Player home folds first (OWNER RULING 6.1), and only where the b
         if (logo) {
           expect(toks.filter((t) => /^max-\[\d+px\]:sr-only$/.test(t)), `${where}: exactly one fold`).toHaveLength(1);
           expect(toks, `${where}: still drawn 28px tall at its own ratio where it shows`).toEqual(expect.arrayContaining(["h-7", "w-auto"]));
-          expect(wordmarkFoldBelow(cls), `${where}: a phone width - sm (640) and up never fold`).toBeLessThan(640);
+          // Folds only where it must: the bar fits WITH the wordmark from 354 (28 x 4 + 204 + 38), so the fold stops by the 360
+          // matrix width - a fold reaching further up (say `max-[639px]`) would take the mark from phones that have room for it.
+          expect(wordmarkFoldBelow(cls), `${where}: the fold stops by 360 - from there the wordmark fits beside the crest`).toBeLessThanOrEqual(360);
           const crest = tokens(imgClass(html, LOGO_URL));
           expect(crest.length, `${where}: the crest is in the bar`).toBeGreaterThan(0);
           expect(crest.filter((t) => /(?:hidden|sr-only)$/.test(t)), `${where}: the crest never folds - it is the club's mark`).toEqual([]);

@@ -207,10 +207,11 @@ test("J10 the top bar: Sponsors is a labelled link to the hub; Settings and Sign
     await expect(signOut, `@${width}: Sign out is on the bar`).toBeVisible();
     await expect(signOut).toHaveAttribute("title", signOutWord);
     expect((await signOut.innerText()).trim(), "an icon alone: no painted word").toBe("");
+    // Before the hover, so a tour over the bar is named here rather than read as the hover's timeout.
+    await expect(page.getByRole("dialog", { name: tourWord }), `@${width}: no product tour over the bar (marked seen in setup)`).toHaveCount(0);
     // The tooltip is the browser's own (`title`): hovering is what a mouse user does; its paint is not in the DOM.
     await settings.hover();
     await expect(settings).toHaveAttribute("title", settingsWord);
-    await expect(page.getByRole("dialog", { name: tourWord }), `@${width}: no product tour over the bar (marked seen in setup)`).toHaveCount(0);
     await expectNoHorizontalScroll(page);
   };
 
