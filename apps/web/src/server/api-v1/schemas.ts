@@ -794,7 +794,8 @@ export const PatchedEntrant = Entrant.extend({ cascade: WithdrawCascadeReport.op
  *  running. (a) re-paired the unstarted round with the newcomer (`repaired`: the players whose opponent changed; a
  *  board the odd→even field needed is `new_board`); (b) seated the newcomer against the round's bye holder
  *  (`bye_holder_id`, ruling C3) on a new board (`new_board`); (c) the newcomer joins round `round`'s Pair. */
-export const LateEntryResult = z.object({
+export const SwissLateEntryResult = z.object({
+  format: z.literal("swiss"),
   entrant_id: Uuid,
   stage_id: Uuid,
   case: z.enum(["a", "b", "c"]),
@@ -803,9 +804,34 @@ export const LateEntryResult = z.object({
   new_board: z.object({ fixture_id: Uuid, scheduled: z.boolean() }).optional(),
   bye_holder_id: Uuid.optional(),
 });
+export type SwissLateEntryResult = z.infer<typeof SwissLateEntryResult>;
+
+/** W4 T9/T10 (rules X-LE-3…X-LE-13, design 2026-11-04 §4.1): what "Add late player" did with an entrant added to a
+ *  division whose root knockout is drawn. `bye` — the newcomer took the lowest-seeded holder's round-1 bye and plays
+ *  `opponent_id` on `fixture_id`; `withdrawn_slot` — the newcomer took a withdrawn entrant's round-1 seat (its walkover
+ *  reversed) against `opponent_id`; `waiting` — an automatic arrival (registration, import, Reinstate) is held for one
+ *  organiser tap (ruling 271); `refused` / `rebuild_offered` — round 1 has no slot left (`reason`), and when nothing has
+ *  started a Rebuild is offered. `scheduled`: the new match found a free slot (else it is unscheduled and flagged,
+ *  X-LE-12). */
+export const KnockoutLateEntryResult = z.object({
+  format: z.literal("knockout"),
+  entrant_id: Uuid,
+  stage_id: Uuid,
+  case: z.enum(["bye", "withdrawn_slot", "waiting", "refused", "rebuild_offered"]),
+  fixture_id: Uuid.optional(),
+  opponent_id: Uuid.optional(),
+  scheduled: z.boolean().optional(),
+  reason: z.string().optional(),
+});
+export type KnockoutLateEntryResult = z.infer<typeof KnockoutLateEntryResult>;
+
+/** A late add's answer, by the entry stage's FORMAT: a running root Swiss (W3) or a drawn root knockout (W4). Every
+ *  reader narrows on `format` before it reads a case. */
+export const LateEntryResult = z.discriminatedUnion("format", [SwissLateEntryResult, KnockoutLateEntryResult]);
 export type LateEntryResult = z.infer<typeof LateEntryResult>;
 
-/** POST /divisions/{id}/entrants response row: the entrant, plus `late_entry` when it joined a running Swiss. */
+/** POST /divisions/{id}/entrants response row: the entrant, plus `late_entry` when it joined a running Swiss or a
+ *  drawn root knockout. */
 export const CreatedEntrant = Entrant.extend({ late_entry: LateEntryResult.optional() });
 
 // ---------------------------------------------------------------------------

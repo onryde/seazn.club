@@ -15,7 +15,7 @@
 //
 // VOCABULARY. A field member is an "entrant" (the desk's noun: a doubles pair or a team is one); a board is a "match"
 // on screen — `board` is internal vocabulary, as in `reshapeNotice` and `swiss-legend.ts`.
-import type { LateEntryResult } from "@/server/api-v1/schemas";
+import type { LateEntryResult, SwissLateEntryResult } from "@/server/api-v1/schemas";
 import type { MessageKey } from "@/lib/messages";
 import { swissFirstRoundIn } from "@/lib/swiss-late-entry";
 import { nextUnseatedSwissRound } from "@/lib/swiss-shell";
@@ -64,7 +64,8 @@ export interface LateEntryNoticeOptions {
 /**
  * The notice for one "Add late player" press: one result per created entrant (a CSV batch has several), each case's
  * lines in turn. Empty in, empty out. A line repeated across the batch (two re-pairs of one round both owe the same
- * reprint) is said once.
+ * reprint) is said once. Swiss results only (W4 T9, pre-flight C8): a knockout late entry's `case` is a different
+ * vocabulary (`bye`, `withdrawn_slot`, …) and says nothing here.
  */
 export function lateEntryNotice(
   results: readonly LateEntryResult[],
@@ -84,13 +85,14 @@ export function lateEntryNotice(
     said.add(id);
     out.push(line);
   };
-  const unscheduled = (r: LateEntryResult) => {
+  const unscheduled = (r: SwissLateEntryResult) => {
     if (r.new_board !== undefined && !r.new_board.scheduled) {
       push({ key: "swiss.lateEntry.newMatchUnscheduled", params: {}, tone: "todo" });
     }
   };
 
   for (const r of results) {
+    if (r.format !== "swiss") continue;
     const name = nameOf(r.entrant_id);
     switch (r.case) {
       case "a": {

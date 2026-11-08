@@ -10996,79 +10996,140 @@
                               ]
                             },
                             "late_entry": {
-                              "type": "object",
-                              "properties": {
-                                "entrant_id": {
-                                  "type": "string",
-                                  "format": "uuid",
-                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                },
-                                "stage_id": {
-                                  "type": "string",
-                                  "format": "uuid",
-                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                },
-                                "case": {
-                                  "type": "string",
-                                  "enum": [
-                                    "a",
-                                    "b",
-                                    "c"
-                                  ]
-                                },
-                                "round": {
-                                  "type": "integer",
-                                  "minimum": 1,
-                                  "maximum": 9007199254740991
-                                },
-                                "repaired": {
+                              "oneOf": [
+                                {
                                   "type": "object",
                                   "properties": {
-                                    "changed_entrant_ids": {
-                                      "type": "array",
-                                      "items": {
-                                        "type": "string",
-                                        "format": "uuid",
-                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                      }
+                                    "format": {
+                                      "type": "string",
+                                      "const": "swiss"
+                                    },
+                                    "entrant_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "stage_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "case": {
+                                      "type": "string",
+                                      "enum": [
+                                        "a",
+                                        "b",
+                                        "c"
+                                      ]
+                                    },
+                                    "round": {
+                                      "type": "integer",
+                                      "minimum": 1,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "repaired": {
+                                      "type": "object",
+                                      "properties": {
+                                        "changed_entrant_ids": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "changed_entrant_ids"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "new_board": {
+                                      "type": "object",
+                                      "properties": {
+                                        "fixture_id": {
+                                          "type": "string",
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                        },
+                                        "scheduled": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "fixture_id",
+                                        "scheduled"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "bye_holder_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                     }
                                   },
                                   "required": [
-                                    "changed_entrant_ids"
+                                    "format",
+                                    "entrant_id",
+                                    "stage_id",
+                                    "case",
+                                    "round"
                                   ],
                                   "additionalProperties": false
                                 },
-                                "new_board": {
+                                {
                                   "type": "object",
                                   "properties": {
+                                    "format": {
+                                      "type": "string",
+                                      "const": "knockout"
+                                    },
+                                    "entrant_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "stage_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "case": {
+                                      "type": "string",
+                                      "enum": [
+                                        "bye",
+                                        "withdrawn_slot",
+                                        "waiting",
+                                        "refused",
+                                        "rebuild_offered"
+                                      ]
+                                    },
                                     "fixture_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "opponent_id": {
                                       "type": "string",
                                       "format": "uuid",
                                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                     },
                                     "scheduled": {
                                       "type": "boolean"
+                                    },
+                                    "reason": {
+                                      "type": "string"
                                     }
                                   },
                                   "required": [
-                                    "fixture_id",
-                                    "scheduled"
+                                    "format",
+                                    "entrant_id",
+                                    "stage_id",
+                                    "case"
                                   ],
                                   "additionalProperties": false
-                                },
-                                "bye_holder_id": {
-                                  "type": "string",
-                                  "format": "uuid",
-                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                 }
-                              },
-                              "required": [
-                                "entrant_id",
-                                "stage_id",
-                                "case",
-                                "round"
-                              ],
-                              "additionalProperties": false
+                              ]
                             }
                           },
                           "required": [
@@ -11172,79 +11233,140 @@
                                 ]
                               },
                               "late_entry": {
-                                "type": "object",
-                                "properties": {
-                                  "entrant_id": {
-                                    "type": "string",
-                                    "format": "uuid",
-                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                  },
-                                  "stage_id": {
-                                    "type": "string",
-                                    "format": "uuid",
-                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                  },
-                                  "case": {
-                                    "type": "string",
-                                    "enum": [
-                                      "a",
-                                      "b",
-                                      "c"
-                                    ]
-                                  },
-                                  "round": {
-                                    "type": "integer",
-                                    "minimum": 1,
-                                    "maximum": 9007199254740991
-                                  },
-                                  "repaired": {
+                                "oneOf": [
+                                  {
                                     "type": "object",
                                     "properties": {
-                                      "changed_entrant_ids": {
-                                        "type": "array",
-                                        "items": {
-                                          "type": "string",
-                                          "format": "uuid",
-                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                        }
+                                      "format": {
+                                        "type": "string",
+                                        "const": "swiss"
+                                      },
+                                      "entrant_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "stage_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "case": {
+                                        "type": "string",
+                                        "enum": [
+                                          "a",
+                                          "b",
+                                          "c"
+                                        ]
+                                      },
+                                      "round": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "repaired": {
+                                        "type": "object",
+                                        "properties": {
+                                          "changed_entrant_ids": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "format": "uuid",
+                                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "changed_entrant_ids"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "new_board": {
+                                        "type": "object",
+                                        "properties": {
+                                          "fixture_id": {
+                                            "type": "string",
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                          },
+                                          "scheduled": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "fixture_id",
+                                          "scheduled"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "bye_holder_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                       }
                                     },
                                     "required": [
-                                      "changed_entrant_ids"
+                                      "format",
+                                      "entrant_id",
+                                      "stage_id",
+                                      "case",
+                                      "round"
                                     ],
                                     "additionalProperties": false
                                   },
-                                  "new_board": {
+                                  {
                                     "type": "object",
                                     "properties": {
+                                      "format": {
+                                        "type": "string",
+                                        "const": "knockout"
+                                      },
+                                      "entrant_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "stage_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "case": {
+                                        "type": "string",
+                                        "enum": [
+                                          "bye",
+                                          "withdrawn_slot",
+                                          "waiting",
+                                          "refused",
+                                          "rebuild_offered"
+                                        ]
+                                      },
                                       "fixture_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "opponent_id": {
                                         "type": "string",
                                         "format": "uuid",
                                         "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                       },
                                       "scheduled": {
                                         "type": "boolean"
+                                      },
+                                      "reason": {
+                                        "type": "string"
                                       }
                                     },
                                     "required": [
-                                      "fixture_id",
-                                      "scheduled"
+                                      "format",
+                                      "entrant_id",
+                                      "stage_id",
+                                      "case"
                                     ],
                                     "additionalProperties": false
-                                  },
-                                  "bye_holder_id": {
-                                    "type": "string",
-                                    "format": "uuid",
-                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                   }
-                                },
-                                "required": [
-                                  "entrant_id",
-                                  "stage_id",
-                                  "case",
-                                  "round"
-                                ],
-                                "additionalProperties": false
+                                ]
                               }
                             },
                             "required": [

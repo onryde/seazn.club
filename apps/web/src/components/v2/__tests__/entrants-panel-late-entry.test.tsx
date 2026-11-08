@@ -163,9 +163,10 @@ function mount(over: Record<string, unknown> = {}) {
   return { island, submit, lines, error };
 }
 
+// W4 T9: the server's answer carries its format (`LateEntryResult` is a union); every row here is a Swiss one.
 const created = (late_entry?: Record<string, unknown>) => () => ({
   ...entrant("e9", "Zoe"),
-  ...(late_entry ? { late_entry } : {}),
+  ...(late_entry ? { late_entry: { format: "swiss", ...late_entry } } : {}),
 });
 
 describe("EntrantsPanel — the late-entry notice after an add (W3 T10)", () => {

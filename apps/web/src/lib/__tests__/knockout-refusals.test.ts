@@ -29,6 +29,8 @@ const PLAN_CODES = [
   "KO_REDRAW_WOULD_CLEAR_SETUP",
   // B2 fix round 2 (item 2): Start reconciles in place only; a redraw is Update draw's, refused at Start by name.
   "KO_START_NEEDS_UPDATE_DRAW",
+  // T9 (X-LE-2): a fed knockout never takes a late player; the refusal names the stage that fills it.
+  "KO_LATE_ENTRY_FED_STAGE",
 ] as const;
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
@@ -96,6 +98,21 @@ describe("KNOCKOUT_REFUSALS (W4 app-A)", () => {
       en: "This bracket still has matches without a result. Finish or settle them first.",
       key: "knockout.refusal.STAGE_HAS_UNDECIDED_FIXTURES",
     });
+  });
+
+  it("KO_LATE_ENTRY_FED_STAGE: 422 (re-sending changes nothing), with the plan's sentence naming the feeding stage", () => {
+    expect(KNOCKOUT_REFUSALS.KO_LATE_ENTRY_FED_STAGE).toEqual({
+      status: 422,
+      en: "This knockout is filled from {stage}. Add the player there.",
+      key: "knockout.refusal.KO_LATE_ENTRY_FED_STAGE",
+    });
+    // The server's sentence names the stage (its `{stage}` filled from the details the client renders the key with).
+    const err = knockoutRefusal("KO_LATE_ENTRY_FED_STAGE", { stage: "Groups" });
+    expect(err).toMatchObject({ status: 422, code: "KO_LATE_ENTRY_FED_STAGE", message: "This knockout is filled from Groups. Add the player there." });
+    expect(err.extra).toMatchObject({ stage: "Groups" });
+    // A placeholder with no value is a sentence with a hole in it: refused by name, never sent as "{stage}".
+    expect(() => knockoutRefusal("KO_LATE_ENTRY_FED_STAGE")).toThrow(/KO_LATE_ENTRY_FED_STAGE.*stage/);
+    expect(() => knockoutRefusal("KO_LATE_ENTRY_FED_STAGE", { other: 1 })).toThrow(/stage/);
   });
 
   it("knockoutRefusal builds the HttpError from the row: status, code, English and details", () => {

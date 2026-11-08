@@ -19,7 +19,7 @@ import {
   swissLatecomerLines,
   type LateEntryNoticeLine,
 } from "@/lib/swiss-late-entry-notice";
-import type { LateEntryResult } from "@/server/api-v1/schemas";
+import type { LateEntryResult, SwissLateEntryResult } from "@/server/api-v1/schemas";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
@@ -39,7 +39,8 @@ const BEN = "e-ben";
 const CAI = "e-cai";
 const NAMES: Record<string, string> = { [ELIF]: "Elif", [ANA]: "Ana", [BEN]: "Ben", [CAI]: "Cai" };
 
-const result = (o: Partial<LateEntryResult> & Pick<LateEntryResult, "case" | "round">): LateEntryResult => ({
+const result = (o: Partial<SwissLateEntryResult> & Pick<SwissLateEntryResult, "case" | "round">): SwissLateEntryResult => ({
+  format: "swiss",
   entrant_id: ELIF,
   stage_id: STAGE,
   ...o,
@@ -372,5 +373,25 @@ describe("swiss late-entry copy in all four locales", () => {
     }
     // 7 plain keys + 3 plural bases × 2 forms, × 4 locales.
     expect(checked).toBe((7 + 3 * 2) * 4);
+  });
+});
+
+// W4 T9 (pre-flight C8): `LateEntryResult` is a union by format, and a knockout late entry's `case` is its own
+// vocabulary. The Swiss notice says nothing for one — never a Swiss sentence read off a knockout `case` — whether it
+// arrives alone or beside a Swiss result in one batch.
+describe("swiss late-entry notice: a knockout result is not a Swiss one", () => {
+  const KNOCKOUT_CASES = ["bye", "withdrawn_slot", "waiting", "refused", "rebuild_offered"] as const;
+  it("says nothing for any knockout case, alone or in a batch", () => {
+    let checked = 0;
+    for (const c of KNOCKOUT_CASES) {
+      const ko: LateEntryResult = { format: "knockout", entrant_id: BEN, stage_id: STAGE, case: c, opponent_id: ANA };
+      expect(lateEntryNotice([ko], NAMES, { locale: "en" }), c).toEqual([]);
+      // Beside a Swiss (c): exactly the Swiss line, once.
+      expect(render(lateEntryNotice([ko, result({ case: "c", round: 2 })], NAMES, { locale: "en" })), c).toEqual([
+        { text: "Elif joins from round 2.", tone: "done" },
+      ]);
+      checked++;
+    }
+    expect(checked).toBe(KNOCKOUT_CASES.length);
   });
 });

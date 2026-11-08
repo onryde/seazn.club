@@ -24,7 +24,7 @@ import type postgres from "postgres";
 import { pairKey, pairRound } from "@seazn/engine/scheduling";
 import { EngineError } from "@seazn/engine/core";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { ScheduleConfig, type LateEntryResult } from "@/server/api-v1/schemas";
+import { ScheduleConfig, type LateEntryResult, type SwissLateEntryResult } from "@/server/api-v1/schemas";
 import { decideSwissLateEntry, type LateEntryBoard } from "@/lib/swiss-late-entry";
 import { isRootSwissStage } from "@/lib/open-entry-stages";
 import { isSwissByeShellExtKey, mintSwissBoardExtKeys } from "@/lib/swiss-shell";
@@ -51,7 +51,7 @@ import {
 
 type Tx = postgres.TransactionSql;
 
-export type { LateEntryResult };
+export type { LateEntryResult, SwissLateEntryResult };
 
 /** Who brought the entrant in. Only `"organiser"` is an "Add late player" (an Undo barrier, and the only source that
  *  may re-pair or take the bye); every other source is an automatic arrival and takes case (c). */
@@ -242,7 +242,7 @@ export async function admitSwissLateEntrant(
   divisionId: string,
   entrantId: string,
   source: LateEntrySource,
-): Promise<LateEntryResult | null> {
+): Promise<SwissLateEntryResult | null> {
   // T9 review m7: most arrivals land in a division with no running Swiss (setup, or another format) and must not queue on
   // its lock, so both questions are read BEFORE it. Started is one-way (no write moves a division back from active or
   // completed), so a "started" read here stays true under the lock; the stage itself is re-read under it below. A Start
@@ -359,10 +359,10 @@ export async function admitSwissLateEntrant(
     newcomer: entrantId,
   });
 
-  const recordC = async (round: number): Promise<LateEntryResult> => {
+  const recordC = async (round: number): Promise<SwissLateEntryResult> => {
     await stampFirstRound(tx, entrantId, stage.id, round);
     await appendLateEntryRow(tx, divisionId, { stage_id: stage.id, entrant_id: entrantId, case: "c", round, source }, actorId);
-    return { entrant_id: entrantId, stage_id: stage.id, case: "c", round };
+    return { format: "swiss", entrant_id: entrantId, stage_id: stage.id, case: "c", round };
   };
 
   switch (decision.kind) {
@@ -404,7 +404,7 @@ interface ApplyCtx {
 }
 
 /** Case (a): clear the round's seats, then pair it again with the newcomer in its field — `swissGen`, the one Pair. */
-async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<LateEntryResult> {
+async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<SwissLateEntryResult> {
   const { divisionId, stage, entrantId, round } = ctx;
   const inRound = ctx.rows.filter((f) => f.round_no === round);
   const before = places(inRound);
@@ -431,7 +431,7 @@ async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<LateEntryResult> {
   const after = (await stageRows(tx, stage.id)).filter((f) => f.round_no === round);
   // A board the odd→even field needed (`reconcileSwissRoundShells` mints it) takes the round's next free slot.
   const minted = after.filter((f) => !beforeIds.has(f.id) && !isSwissByeShellExtKey(f.ext_key));
-  let newBoard: LateEntryResult["new_board"];
+  let newBoard: SwissLateEntryResult["new_board"];
   for (const f of minted) {
     const slot = await nextFreeRoundSlot(tx, divisionId, round, after);
     if (slot) await placeBoard(tx, f.id, slot);
@@ -462,6 +462,7 @@ async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<LateEntryResult> {
     ctx.actorId,
   );
   return {
+    format: "swiss",
     entrant_id: entrantId,
     stage_id: stage.id,
     case: "a",
@@ -485,7 +486,7 @@ async function placeBoard(tx: Tx, fixtureId: string, slot: { scheduled_at: strin
 async function takeBye(
   tx: Tx,
   ctx: ApplyCtx & { bye: SwissExistingFixture; pairing: { home: string; away: string } },
-): Promise<LateEntryResult> {
+): Promise<SwissLateEntryResult> {
   const { divisionId, stage, entrantId, round, bye, pairing } = ctx;
   const inRound = ctx.rows.filter((f) => f.round_no === round);
   const boards = inRound.filter((f) => !isSwissByeShellExtKey(f.ext_key));
@@ -522,6 +523,7 @@ async function takeBye(
     ctx.actorId,
   );
   return {
+    format: "swiss",
     entrant_id: entrantId,
     stage_id: stage.id,
     case: "b",
@@ -543,7 +545,11 @@ export async function afterSwissLateEntry(
   competitionId: string,
   results: readonly (LateEntryResult | null | undefined)[],
 ): Promise<void> {
-  const moved = results.filter((r): r is LateEntryResult => r != null && (r.case === "a" || r.case === "b"));
+  // W4 T9 (C8): a knockout late entry carries its own after-write (`afterKnockoutLateEntry`); only a Swiss (a) or (b)
+  // moved a Swiss round.
+  const moved = results.filter(
+    (r): r is SwissLateEntryResult => r != null && r.format === "swiss" && (r.case === "a" || r.case === "b"),
+  );
   if (moved.length === 0) return;
   const rounds = [...new Map(moved.map((r) => [`${r.stage_id}|${r.round}`, r])).values()];
   const fixtureIds = await withTenant(orgId, async (tx) => {

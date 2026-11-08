@@ -39,6 +39,8 @@ import { openRosterSeatGate } from "./online-seat-gate";
 import type { LateEntryResult } from "@/server/api-v1/schemas";
 // W3 T9: an entrant added (or reinstated) while the division's Swiss is running is a late player.
 import { admitSwissLateEntrant, afterSwissLateEntry, hasRootSwissStage } from "./swiss-late-entry";
+// W4 T9: and while its root knockout is drawn (X-LE-1).
+import { hasRootKnockoutStage } from "./knockout-late-entry";
 // Type-only: withdrawal.ts imports this module, so its value is reached by a dynamic import (`patchEntrant`).
 import type { WithdrawCascadeOut } from "./withdrawal";
 
@@ -416,14 +418,20 @@ export async function createEntrants(
     // bracket). Open-window formats are the exception: ladders and americano
     // sessions take late joiners by design (Jul3/08 §6), and a running Swiss
     // takes a late player (W3 T9, ruling 250 — `admitSwissLateEntrant` below
-    // decides how, or refuses by name when no round is left or it is over).
+    // decides how, or refuses by name when no round is left or it is over),
+    // and so does a drawn ROOT knockout, into its round 1 (W4 T9, X-LE-1 —
+    // `isRootKnockoutStage`; a fed knockout never takes one, X-LE-2).
     // Withdrawals stay available in every state.
     if (division.status === "active" || division.status === "completed") {
       const [openFormat] = await tx`
         select 1 from stages
         where division_id = ${divisionId} and kind in ('ladder', 'americano')
         limit 1`;
-      if (!openFormat && !(await hasRootSwissStage(tx, divisionId))) {
+      if (
+        !openFormat &&
+        !(await hasRootSwissStage(tx, divisionId)) &&
+        !(await hasRootKnockoutStage(tx, divisionId))
+      ) {
         throw new HttpError(
           422,
           "This tournament has started — the entrant list is locked. Withdrawing entrants still works.",

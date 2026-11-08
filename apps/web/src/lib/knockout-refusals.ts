@@ -29,7 +29,10 @@ export type KnockoutRefusalCode =
   | "KO_REDRAW_WOULD_CLEAR_SETUP"
   // B2 fix round 2 (item 2): Start reconciles a root knockout in place only; a change that needs the bracket drawn again is
   // Update draw's (its notice says what moved), so Start refuses it by name and names the button.
-  | "KO_START_NEEDS_UPDATE_DRAW";
+  | "KO_START_NEEDS_UPDATE_DRAW"
+  // T9 (X-LE-2): a late player asked into a knockout an earlier stage fills (`{stage}`: that stage's name) — a fed
+  // bracket never takes one; its field is the source's.
+  | "KO_LATE_ENTRY_FED_STAGE";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -78,6 +81,11 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 409,
     en: "The draw needs updating — press Update draw first.",
     key: "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW",
+  },
+  KO_LATE_ENTRY_FED_STAGE: {
+    status: 422,
+    en: "This knockout is filled from {stage}. Add the player there.",
+    key: "knockout.refusal.KO_LATE_ENTRY_FED_STAGE",
   },
 };
 

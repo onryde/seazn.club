@@ -3,7 +3,8 @@
 // `enrollEntrants` (`server/usecases/entrants.ts`) refuses a new entrant once a
 // division is active/completed — UNLESS the division has a stage of one of
 // these kinds, because ladders and americano sessions take late joiners by
-// design (Jul3/08 §6), and a running root Swiss takes a late player (W3 T9).
+// design (Jul3/08 §6), a running root Swiss takes a late player (W3 T9), and
+// so does a root knockout — its round 1, while a slot is free (W4 T9).
 // Read the predicate there carefully before changing this:
 // it is `exists(... kind in ('ladder','americano'))` over the WHOLE division,
 // so ONE open-format stage exempts the division. It is not "every stage".
@@ -15,11 +16,23 @@
 // here and `__tests__/open-entry-stages.test.ts` reds if the two drift.
 export const OPEN_ENTRY_STAGE_KINDS: readonly string[] = ["ladder", "americano"];
 
-/** A stage row as the guard reads it. `progression` and `config` decide whether a Swiss is a ROOT Swiss. */
+/** A stage row as the guard reads it. `progression` and `config` decide whether a Swiss is a ROOT Swiss; `seq` (the
+ *  stage's order in its division) decides which stage is the division's ENTRY stage — a list without it is read in its
+ *  own order, which is how every caller holds it (`listStages` orders by `seq`). */
 export interface EntryStage {
   kind: string;
   progression: unknown;
   config: unknown;
+  seq?: number;
+}
+
+/** No progression source and no `qualified` field stored on its config: the stage draws from the live roster. A config
+ *  that is not an object is a stage nothing wrote, and draws from nothing. */
+function drawsFromRoster(stage: EntryStage): boolean {
+  if (stage.progression != null) return false;
+  const config = stage.config;
+  if (typeof config !== "object" || config === null || Array.isArray(config)) return false;
+  return !Object.hasOwn(config, "qualified");
 }
 
 /**
@@ -33,15 +46,52 @@ export interface EntryStage {
  * treated as a root Swiss.
  */
 export function isRootSwissStage(stage: EntryStage): boolean {
-  if (stage.kind !== "swiss" || stage.progression != null) return false;
-  const config = stage.config;
-  if (typeof config !== "object" || config === null || Array.isArray(config)) return false;
-  return !Object.hasOwn(config, "qualified");
+  return stage.kind === "swiss" && drawsFromRoster(stage);
 }
 
-/** One stage exempts the WHOLE division at Start: an open-format stage, or a root Swiss (`exists`, not "every"). */
+/** W4 T9 (X-LE-1, X-LE-8): the stage kinds a late player can join as a division's entry stage. `stepladder` and
+ *  `page_playoff` are here for a legacy STANDALONE stage created over the API before X-SP-6's refusal (case (2) only);
+ *  `double_elim` is not (W4 scope: late entry is the single-elimination bracket's). */
+export const ROOT_KNOCKOUT_KINDS: readonly string[] = ["knockout", "stepladder", "page_playoff"];
+
+/** The division's ENTRY stage: its lowest `seq`, or — for rows that carry no `seq` — the first in the list. */
+export function divisionEntryStage<T extends EntryStage>(stages: readonly T[]): T | undefined {
+  let first: T | undefined;
+  for (const s of stages) {
+    if (first === undefined || (typeof s.seq === "number" && typeof first.seq === "number" && s.seq < first.seq)) first = s;
+  }
+  return first;
+}
+
+/**
+ * W4 T9 (X-LE-1, ruling 263; pre-flight C11): a ROOT knockout — a `ROOT_KNOCKOUT_KINDS` stage that draws from the live
+ * roster (no progression source, no stored `qualified` field) AND is its division's ENTRY stage (`divisionEntryStage`:
+ * the lowest `seq`). The second half is not redundant: a knockout fed by a group stage carries no progression on stg
+ * (65 such stages, the Task 0 census) and fills from a seed proposal, so "no progression" alone would open a fed bracket
+ * to late players (an X-LE-2 breach). `stage` must be an element of `division`.
+ *
+ * The ONE predicate: the Start lock (`hasRootKnockoutStage`), the admission (`usecases/knockout-late-entry.ts`) and this
+ * client mirror all read it, so they cannot disagree.
+ */
+export function isRootKnockoutStage(stage: EntryStage, division: readonly EntryStage[]): boolean {
+  if (!ROOT_KNOCKOUT_KINDS.includes(stage.kind) || !drawsFromRoster(stage)) return false;
+  return divisionEntryStage(division) === stage;
+}
+
+/** A root knockout that still takes a late player: not `complete` (a finished bracket has no round-1 slot left). */
+export function isRunningRootKnockout(
+  stage: EntryStage & { status: string },
+  division: readonly (EntryStage & { status: string })[],
+): boolean {
+  return isRootKnockoutStage(stage, division) && stage.status !== "complete";
+}
+
+/** One stage exempts the WHOLE division at Start: an open-format stage, a root Swiss, or a root knockout (`exists`, not
+ *  "every"). */
 function keepsListOpen(stages: readonly EntryStage[]): boolean {
-  return stages.some((s) => OPEN_ENTRY_STAGE_KINDS.includes(s.kind) || isRootSwissStage(s));
+  return stages.some(
+    (s) => OPEN_ENTRY_STAGE_KINDS.includes(s.kind) || isRootSwissStage(s) || isRootKnockoutStage(s, stages),
+  );
 }
 
 /**
@@ -65,12 +115,14 @@ export function startClosesEntrantList(stages: readonly EntryStage[]): boolean {
 
 /**
  * The Start dialog's entrants line: `"closes"` (the list closes), `"swiss_late"` (a root Swiss keeps taking late
- * players; said whenever it is true, beside a ladder too), or `null` (an open-format division: the line would be
- * false either way, so it is omitted).
+ * players; said whenever it is true, beside a ladder too), `"knockout_late"` (W4 T9: a root knockout takes a late
+ * player into round 1 while it has a free slot — said when no root Swiss is there to say it first), or `null` (an
+ * open-format division: the line would be false either way, so it is omitted).
  */
-export type StartEntrantsLine = "closes" | "swiss_late" | null;
+export type StartEntrantsLine = "closes" | "swiss_late" | "knockout_late" | null;
 export function startEntrantsLine(stages: readonly EntryStage[]): StartEntrantsLine {
   if (stages.some(isRootSwissStage)) return "swiss_late";
+  if (stages.some((s) => isRootKnockoutStage(s, stages))) return "knockout_late";
   return startClosesEntrantList(stages) ? "closes" : null;
 }
 
@@ -95,8 +147,11 @@ export function entrantListLocked(
   stages: readonly (EntryStage & { status: string })[],
 ): boolean {
   if (!ENTRANT_LIST_LOCKED_STATUSES.includes(divisionStatus)) return false;
-  // Right now, a finished root Swiss exempts nothing: the add would only come back SWISS_OVER (review I1).
-  return !stages.some((s) => OPEN_ENTRY_STAGE_KINDS.includes(s.kind) || isRunningRootSwiss(s));
+  // Right now, a finished root Swiss exempts nothing: the add would only come back SWISS_OVER (review I1). Nor does a
+  // finished root knockout (W4 T9): it has no round-1 slot left, so the add would only come back refused.
+  return !stages.some(
+    (s) => OPEN_ENTRY_STAGE_KINDS.includes(s.kind) || isRunningRootSwiss(s) || isRunningRootKnockout(s, stages),
+  );
 }
 
 /**

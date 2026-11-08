@@ -101,6 +101,10 @@ export function StartConfirmDialog({
         {entrantsLine === "swiss_late" && (
           <li data-testid="start-confirm-entrants-swiss">{msg("launch.confirm.entrantsSwiss")}</li>
         )}
+        {/* W4 T9 (X-LE-1): a root knockout takes a late player into round 1 while a slot is free. */}
+        {entrantsLine === "knockout_late" && (
+          <li data-testid="start-confirm-entrants-knockout">{msg("launch.confirm.entrantsKnockout")}</li>
+        )}
         {/* Grouped with the entrants line because both are things that CHANGE;
             the two below are clarifications about what does not lock. The
             sentence states the status move and stops there — published and
