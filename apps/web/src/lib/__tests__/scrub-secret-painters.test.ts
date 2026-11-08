@@ -158,6 +158,8 @@ interface Known {
   local: Map<string, Set<string>>;
   /** Secrets handed to a component as a prop, and the call site: `<AuthForm next={`/claim/${token}`} />` -> AuthForm / next. */
   props: { component: string; prop: string; from: string }[];
+  /** Where each component of the scanned tree is declared (`componentDecls`): the files a prop hop can land in. */
+  components: Map<string, { fileName: string; exported: boolean }[]>;
 }
 
 /** Is this expression a credential URL, or a value derived straight from one (a template, a builder call, a bound name)? */
@@ -226,7 +228,13 @@ function learn(all: Source[]): Known {
   const components = componentDecls(all);
   const byDir = new Map<string, Source[]>();
   for (const s of all) if (s.tsx) byDir.set(path.dirname(s.file.fileName), [...(byDir.get(path.dirname(s.file.fileName)) ?? []), s]);
-  const known: Known = { endpoints: [], global: new Set(SEED_NAMES), local: new Map(all.map((s) => [s.file.fileName, new Set<string>(SEED_NAMES)])), props: [] };
+  const known: Known = {
+    endpoints: [],
+    global: new Set(SEED_NAMES),
+    local: new Map(all.map((s) => [s.file.fileName, new Set<string>(SEED_NAMES)])),
+    props: [],
+    components,
+  };
   for (let changed = true; changed; ) {
     changed = false;
     for (const { file, rel } of all) {
@@ -368,6 +376,10 @@ function sitesIn(file: ts.SourceFile, known: Known): Site[] {
   const secret = new Set([...known.global, ...known.local.get(file.fileName)!]);
   const { template, builders } = secretVocabulary();
   const out: Site[] = [];
+  // A component the prop hop follows (`learn`): declared in the tree, and exported or in this file. Any other uppercase tag
+  // (`Link` from next/link, a third-party component) lands in a file the scan never reads, so its site is checked HERE.
+  const followed = (tag: string) =>
+    isComponentTag(tag) && (known.components.get(tag) ?? []).some((d) => d.exported || d.fileName === file.fileName);
   const carries = (el: ts.JsxOpeningLikeElement) =>
     el.attributes.properties.some((a) => {
       if (!ts.isJsxAttribute(a) || a.name.getText(file) !== "className") return false;
@@ -396,7 +408,7 @@ function sitesIn(file: ts.SourceFile, known: Known): Site[] {
           if (!NOT_PAINTED_ATTR.test(par.name.getText(file))) {
             const open = par.parent.parent as ts.JsxOpeningLikeElement;
             const tag = open.tagName.getText(file);
-            out.push({ line, names: hit, tag, blocked: ancestorsBlocked(open), component: isComponentTag(tag), how: `attribute ${par.name.getText(file)}` });
+            out.push({ line, names: hit, tag, blocked: ancestorsBlocked(open), component: followed(tag), how: `attribute ${par.name.getText(file)}` });
           }
         } else if (!hasJsx(n.expression)) {
           // A text child: `{link}`, `{t(..., { masked })}`. (An expression with JSX in it paints through that JSX.)
@@ -409,6 +421,13 @@ function sitesIn(file: ts.SourceFile, known: Known): Site[] {
   };
   visit(file);
   return out;
+}
+
+/** The sites of a hand-off file that do NOT hand the secret to a component declared in one of its named target files: a
+ *  site painted here, or a prop handed to some other component, is not the hand-off its verdict names. */
+function strayHandoffs(sites: Site[], targets: string[], known: Known): Site[] {
+  const files = new Set(targets.map((t) => path.join(SRC_DIR, t)));
+  return sites.filter((s) => !s.component || !(known.components.get(s.tag) ?? []).some((d) => files.has(d.fileName)));
 }
 
 // ---- the verdicts ---------------------------------------------------------------------------------------------------------
@@ -644,7 +663,8 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
           handoffs++;
           expect(PAINTERS[target]?.verdict, `${rel} hands the secret to ${target}, which must be verdict true`).toBe(true);
         }
-        expect((painters.get(rel) ?? []).every((s) => s.component), `${rel}: a hand-off file paints only through components`).toBe(true);
+        const strays = strayHandoffs(painters.get(rel) ?? [], targets, known).map((s) => `${rel}:${s.line} <${s.tag}> ${s.how}`);
+        expect(strays, `${rel}: a hand-off file paints only through its named targets' components:\n${strays.join("\n")}`).toEqual([]);
       }
       if (verdict === true) continue;
       expect((painters.get(rel) ?? []).length, `${rel}: stale entry`).toBeGreaterThan(0);
@@ -660,9 +680,9 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
 // expression only, so a credential URL written INLINE, `<a href={routes.quickMatch(token)}>`, named nothing it knew and
 // went unflagged. These files are parsed exactly as the scan parses the app's sources, and learned on their own.
 describe("the scan flags a credential URL written inline in JSX, not only a name bound to one", () => {
-  const sitesOf = (body: string): Site[] => {
+  const sitesOf = (body: string, decls = ""): Site[] => {
     const rel = "components/__painter-fixture__/inline.tsx";
-    const text = `import { routes } from "@/lib/routes";\nexport function Inline({ token }: { token: string }) {\n  return ${body};\n}\n`;
+    const text = `import { routes } from "@/lib/routes";\nexport function Inline({ token }: { token: string }) {\n  return ${body};\n}\n${decls}`;
     const src: Source = {
       rel,
       tsx: true,
@@ -682,12 +702,58 @@ describe("the scan flags a credential URL written inline in JSX, not only a name
   it("an inline credential template, and one printed as text, are painters too", () => {
     expect(shape(sitesOf(`<a href={\`/claim/\${token}\`}>claim</a>`))).toEqual([["a", "attribute href", false]]);
     expect(shape(sitesOf(`<code>{routes.checkin(token)}</code>`))).toEqual([["code", "text", false]]);
-    // Handed to a component inline: a site of this file, checked in the component's own file.
-    expect(sitesOf(`<Island path={routes.quickMatch(token)} />`).map((s) => [s.tag, s.component])).toEqual([["Island", true]]);
+    // Handed to a component declared in the tree inline: a site of this file, checked in the component's own file.
+    const island = `function Island(_: { path: string }) {\n  return null;\n}\n`;
+    expect(sitesOf(`<Island path={routes.quickMatch(token)} />`, island).map((s) => [s.tag, s.component])).toEqual([["Island", true]]);
   });
 
+  it("an uppercase tag the tree does not declare (`Link`, from next/link) is no hand-off: the scan cannot follow it, so it is a painter here", () => {
+    // Review minor (T7): every uppercase tag used to count as a component, so `<Link href={routes.quickMatch(token)}>` was
+    // skipped as "checked in its own file", a file the scan never reads.
+    expect(sitesOf(`<Link href={routes.quickMatch(token)}>open</Link>`).map((s) => [s.tag, s.how, s.blocked, s.component])).toEqual([
+      ["Link", "attribute href", false, false],
+    ]);
+    expect(sitesOf(`<Link className="ph-no-capture" href={routes.quickMatch(token)}>open</Link>`).map((s) => [s.tag, s.blocked, s.component])).toEqual([
+      ["Link", true, false],
+    ]);
+  });
   it("an inline URL the scrubber leaves alone is not a painter (the negative pair)", () => {
     expect(sitesOf(`<a href={routes.me()}>me</a>`)).toEqual([]);
     expect(sitesOf(`<a href={\`/about/\${token}\`}>about</a>`)).toEqual([]);
+  });
+});
+
+// The hand-off rule, on a page and the form it hands its link to, parsed and learned exactly as the app's sources are.
+describe("a hand-off file passes its secret only to its named targets' components", () => {
+  const fixture = (rel: string, text: string): Source => ({
+    rel,
+    tsx: true,
+    file: ts.createSourceFile(path.join(SRC_DIR, rel), text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX),
+  });
+  const FORM = "components/__painter-fixture__/form.tsx";
+  const OTHER = "components/__painter-fixture__/other.tsx";
+  const strays = (body: string): string[] => {
+    const page = fixture(
+      "app/__painter-fixture__/page.tsx",
+      `import Link from "next/link";\nimport { routes } from "@/lib/routes";\nimport { Form } from "@/components/__painter-fixture__/form";\nimport { Other } from "@/components/__painter-fixture__/other";\nexport default function Page({ token }: { token: string }) {\n  return <main>${body}</main>;\n}\n`,
+    );
+    const form = fixture(FORM, `export function Form({ next }: { next: string }) {\n  return <a className="ph-no-capture" href={next}>go</a>;\n}\n`);
+    const other = fixture(OTHER, `export function Other({ next }: { next: string }) {\n  return <a className="ph-no-capture" href={next}>go</a>;\n}\n`);
+    const known = learn([page, form, other]);
+    return strayHandoffs(sitesIn(page.file, known), [FORM], known).map((s) => `<${s.tag}> ${s.how}`);
+  };
+
+  it("the named target's component is the hand-off (the positive pair)", () => {
+    expect(strays(`<Form next={routes.quickMatch(token)} />`)).toEqual([]);
+  });
+
+  it("an inline-href <Link> beside it is a stray: the link is painted in this file, not handed off", () => {
+    expect(strays(`<Form next={routes.quickMatch(token)} /><Link href={routes.quickMatch(token)}>open</Link>`)).toEqual([
+      "<Link> attribute href",
+    ]);
+  });
+
+  it("a component of the tree that is not one of the named targets is a stray too", () => {
+    expect(strays(`<Form next={routes.quickMatch(token)} /><Other next={routes.quickMatch(token)} />`)).toEqual(["<Other> attribute next"]);
   });
 });
