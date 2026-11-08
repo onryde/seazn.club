@@ -126,6 +126,44 @@ describe("ActionFormList — zero-field, zero-attribution fast path", () => {
   });
 });
 
+// S2-4 (cricket) Task 8 — `onOpenSheet` (SkinDefV3.moreSheet): an entry the host answers with the skin's own sheet
+// neither submits nor expands its generic form; an entry it declines (false) behaves exactly as before.
+describe("ActionFormList — an entry the skin answers with its own sheet (onOpenSheet)", () => {
+  const change = action({
+    type: "cricket.bowler.change",
+    labelKey: label("Change bowler"),
+    fields: [{ kind: "enum", path: "reason", values: ["incapacitated", "suspended", "other"], optional: true }],
+    attribution: [{ kind: "person", path: "bowler" }],
+  });
+
+  it("a tap the host answers opens nothing here: no submit, no generic form; a declined tap expands as before", () => {
+    const asked: string[] = [];
+    const calls: unknown[] = [];
+    let answer = true;
+    const island = renderIsland(ActionFormList, {
+      actions: [change],
+      t,
+      submittingType: null,
+      onSubmit: (...args) => calls.push(args),
+      squads: NO_SQUADS,
+      lineups: NO_LINEUPS,
+      personNames: NO_NAMES,
+      onOpenSheet: (type) => {
+        asked.push(type);
+        return answer;
+      },
+    });
+    click(buttonsOf(island.tree())[0]!);
+    expect(asked).toEqual(["cricket.bowler.change"]);
+    expect(calls).toEqual([]);
+    expect(island.text(), "the generic form stays closed").not.toContain("scorepad.action.confirm");
+    answer = false;
+    click(buttonsOf(island.tree())[0]!);
+    expect(asked).toEqual(["cricket.bowler.change", "cricket.bowler.change"]);
+    expect(island.text(), "declined: the generic form expands").toContain("scorepad.action.confirm");
+  });
+});
+
 describe("ActionFormList — an action with fields expands, validates, and confirms", () => {
   const withField = action({
     type: "cricket.review",

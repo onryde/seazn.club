@@ -54,10 +54,10 @@ const cricket = cricketModule;
 // thing and uses this exact pattern for the same reason).
 const padSpecFor = cricketModule.padSpec;
 const ALL_EVENT_TYPES = new Set(Object.keys(cricketModule.eventSchemas));
-/** S2-4 Task 1: `cricket.bowler.change` (engine ruling 278, CK-BC-1) is declared by the engine but has no pad surface until
- *  Task 8 gives it one, so the skin refuses it everywhere (`refusedEventTypes`). Task 8 empties this list. Named, never
- *  silently skipped: the totality test asserts each is declared AND reached by no surface. */
-const NOT_YET_SURFACED: readonly string[] = ["cricket.bowler.change"];
+/** S2-4 Task 1 named `cricket.bowler.change` (engine ruling 278, CK-BC-1) here while it had no pad surface. Task 8 gave it
+ *  one, the More sheet while an over is in progress (`liveState` below has one), so the list is empty and the change must
+ *  be reached like every other type. Kept, empty, so a future declared-but-unsurfaced type is named, never skipped. */
+const NOT_YET_SURFACED: readonly string[] = [];
 
 // ---------------------------------------------------------------------------
 // cfg construction — mirrors __tests__/cricket-skin.test.ts's own cfgFor,
@@ -295,6 +295,8 @@ describe("cricket dispatch-guard totality (R2/task E headline)", () => {
     // The named exception holds both ways: each is a type the engine declares, and no surface reaches it yet.
     for (const type of NOT_YET_SURFACED) expect(ALL_EVENT_TYPES.has(type), `${type} is declared`).toBe(true);
     expect(NOT_YET_SURFACED.filter((t) => union.has(t)), "a not-yet-surfaced type reached a surface").toEqual([]);
+    // S2-4 Task 8: the mid-over bowler change is reached through More (ruling 84: no tile, no dedicated sheet).
+    expect(viaMore.has("cricket.bowler.change"), "the bowler change is in More while an over is in progress").toBe(true);
 
     // The dispatch guard's other half, read statically: nothing reachable
     // here invents a type the engine does not declare. createSkinDispatch

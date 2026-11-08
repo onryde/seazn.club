@@ -3157,6 +3157,12 @@ export function PadHostV3(props: PadHostV3Props) {
                   squads={squads}
                   lineups={props.lineups}
                   personNames={personNames}
+                  // S2-4 (cricket) Task 8: an entry the skin answers with its own sheet (SkinDefV3.moreSheet, types.ts).
+                  onOpenSheet={(type) => {
+                    const spec = props.skin.moreSheet?.(type, view) ?? null;
+                    if (spec !== null) setOpenSheet({ kind: "guided", spec });
+                    return spec !== null;
+                  }}
                 />
               </div>
             </div>

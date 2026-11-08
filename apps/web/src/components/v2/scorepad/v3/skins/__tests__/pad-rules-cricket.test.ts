@@ -13,7 +13,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { foldMatch, initSquads, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
 import { cricketPadRules } from "@seazn/engine/pad";
-import { cricket, eligibleBowlers, soEligibleBatters, type CricketCfg, type CricketState } from "@seazn/engine/sports/cricket";
+import { cricket, CricketBowlerChange, eligibleBowlers, eligibleChangeBowlers, oversUsed, soEligibleBatters, type CricketCfg, type CricketState } from "@seazn/engine/sports/cricket";
 import { ballSeq, cricketEnvelopes, cricketLineups, tiedWithSuperOver, type CricketEventSpec } from "../../__tests__/_cricket-fold";
 import uiEn from "@/dictionaries/en/ui.json";
 import { GuidedSheet, answerStep, currentStep, initialSheetState } from "../../guided-sheet";
@@ -21,7 +21,7 @@ import { dedicatedEventTypes, moreActions, softCommitPlan } from "../../pad-host
 import { TileGrid } from "../../tile-grid";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import type { GuidedSheetSpec, GuidedSheetStep, PadHostView, TileSpec } from "../../types";
-import { bowlerBlocked, bowlerBlockReason, buildContext, buildDock, buildScorebug, buildSheets, buildTiles, KEEPER_POSITION, KEEPER_ROLE, refusedEventTypes, resolvePeople, swapCandidates, type TFn } from "../cricket";
+import { bowlerBlocked, bowlerBlockReason, bowlerChangeOpen, buildContext, buildDock, buildScorebug, buildSheets, buildTiles, cricketSkinV3, KEEPER_POSITION, KEEPER_ROLE, refusedEventTypes, resolvePeople, swapCandidates, type TFn } from "../cricket";
 
 const t: TFn = (key) => key;
 const T20 = cricket.configSchema.parse(cricket.variants.t20);
@@ -621,21 +621,50 @@ const MID_OVER: readonly CricketEventSpec[] = firstOver(5);
 const OVER_END: readonly CricketEventSpec[] = firstOver(6);
 const ctxOf = (view: PadHostView) => ({ state: view.state, summary: {}, phase: "live" as const, band: 3 as const });
 
-describe("S2-4 T1: the bowler change has no surface yet", () => {
-  it("S2-4 T1: More never lists cricket.bowler.change", () => {
+const BOWLER_CHANGE = "cricket.bowler.change";
+/** The More sheet's entries, built exactly as the host builds them (`moreActions` over the skin's dedicated and refused
+ *  sets). */
+function moreOf(view: PadHostView) {
+  const cfg = view.cfg as CricketCfg;
+  return moreActions(
+    cricket.padSpec!(cfg),
+    ctxOf(view),
+    dedicatedEventTypes(buildTiles(view, t), buildSheets(view, t), [], buildScorebug(view, t)),
+    new Set(refusedEventTypes(view)),
+  );
+}
+/** A tied one-over match, then one super-over ball: a super over with its over in progress (`currentBowler` set). */
+const SUPER_OVER_CFG = tiedWithSuperOver();
+const SUPER_OVER_MID: readonly CricketEventSpec[] = (() => {
+  const side = (striker: string, nonStriker: string, bowler: string): CricketEventSpec[] =>
+    [1, 2, 3, 4, 5, 6].map((n) => ["cricket.ball", { over: 0, ballInOver: n, striker, nonStriker, bowler, runs: { bat: 0 } }]);
+  return [
+    ["core.start"],
+    ...side("H-1", "H-2", "A-11"),
+    ...side("A-1", "A-2", "H-11"),
+    ["cricket.superover.ball", { over: 0, ballInOver: 1, striker: "A-1", nonStriker: "A-2", bowler: "H-1", runs: { bat: 0 } }],
+  ];
+})();
+
+describe("S2-4 T1, rewritten by T8 (preflight W3): the bowler change is in More exactly when it is open", () => {
+  it("More lists cricket.bowler.change exactly when bowlerChangeOpen", () => {
+    const states: Record<string, [CricketCfg, readonly CricketEventSpec[]]> = {
+      START: [T20, START],
+      MID_OVER: [T20, MID_OVER],
+      OVER_END: [T20, OVER_END],
+      SUPER_OVER: [SUPER_OVER_CFG, SUPER_OVER_MID],
+    };
+    const listedIn: string[] = [];
     let checked = 0;
-    for (const specs of [START, MID_OVER, OVER_END]) {
-      const view = viewOf(T20, specs);
-      const more = moreActions(
-        cricket.padSpec!(T20),
-        ctxOf(view),
-        dedicatedEventTypes(buildTiles(view, t), buildSheets(view, t), [], buildScorebug(view, t)),
-        new Set(refusedEventTypes(view)),
-      );
-      expect(more.map((a) => a.type)).not.toContain("cricket.bowler.change");
+    for (const [name, [cfg, specs]] of Object.entries(states)) {
+      const view = viewOf(cfg, specs);
+      const listed = moreOf(view).some((action) => action.type === BOWLER_CHANGE);
+      same(listed, bowlerChangeOpen(view.state as CricketState, cfg), `${name}: More lists the change exactly when it is open`);
+      if (listed) listedIn.push(name);
       checked++;
     }
-    expect(checked).toBe(3);
+    expect(listedIn, "an over in progress in a main innings, and nowhere else").toEqual(["MID_OVER"]);
+    expect(checked).toBe(4);
   });
 });
 
@@ -1129,6 +1158,124 @@ describe("S2-4 T7: the hand strike swap is the pair reversed (CK-SS-1, ruling 76
     same(swapCandidates(innings, "striker", state.phase), [], "the super over's striker offers no swap");
     same(swapCandidates(innings, "nonStriker", state.phase), [], "nor its non-striker");
     same(strikerSlot(view)?.readOnly, true, "the striker chip is read-only in a super over");
+  });
+});
+
+describe("S2-4 T8: a mid-over bowler change (CK-BC-1, ruling 75; MCC Law 17.8)", () => {
+  const skin = cricketSkinV3(t);
+  /** The sheet the host opens for More's entry: the skin's own `moreSheet`, the seam pad-host.tsx calls. */
+  function changeSheet(view: PadHostView): GuidedSheetSpec {
+    const sheet = skin.moreSheet?.(BOWLER_CHANGE, view) ?? null;
+    if (sheet === null) throw new Error("premise: the change is open, so More's entry opens its sheet");
+    return sheet;
+  }
+  function candidatesOf(sheet: GuidedSheetSpec): readonly string[] {
+    const step = sheet.steps.find((s) => s.id === "bowler");
+    if (step?.kind !== "person") throw new Error("premise: the change asks who comes on");
+    return step.candidates ?? [];
+  }
+  /** What the engine says may complete the over, on the folded state. */
+  function engineCandidates(cfg: CricketCfg, state: CricketState): string[] {
+    return eligibleChangeBowlers(state.orders.away, openInnings(state).fine, cfg.maxOversPerBowler, cfg.ballsPerOver);
+  }
+  const changeTo = (bowler: string): CricketEventSpec => [BOWLER_CHANGE, { bowler, reason: "incapacitated" }];
+  const NEW_BOWLER = "A-9";
+
+  it("mid-over More lists Change bowler, which offers eligibleChangeBowlers, folds, and the over's next ball names the new bowler", () => {
+    const view = viewOf(T20, MID_OVER);
+    const entry = moreOf(view).find((action) => action.type === BOWLER_CHANGE);
+    same(entry?.labelKey.key, "pad.cricket.action.bowlerChange", "More lists the engine's Change bowler");
+    const sheet = changeSheet(view);
+    const expected = engineCandidates(T20, view.state as CricketState);
+    expect(expected, "premise: the over's bowler cannot complete his own over").not.toContain(OPENING_BOWLER);
+    expect(expected.length, "premise: someone may come on").toBeGreaterThan(0);
+    same(candidatesOf(sheet), expected, "the sheet offers the engine's eligibleChangeBowlers");
+    same(choiceIds(sheet, "reason"), [...CricketBowlerChange.shape.reason.unwrap().options], "the reasons are the event's own enum");
+    const { asked, event } = walk(sheet, (step) => (step.id === "bowler" ? NEW_BOWLER : "incapacitated"));
+    same(asked, ["bowler", "reason"], "the sheet asks who, then why");
+    same(event, { type: BOWLER_CHANGE, payload: { bowler: NEW_BOWLER, reason: "incapacitated" } }, "the payload");
+    const changed = openInnings(foldEmitted(T20, MID_OVER, event));
+    same([changed.fine.currentBowler, changed.fine.overSpells], [NEW_BOWLER, [{ bowler: OPENING_BOWLER, legalBalls: 5 }]], "the fold takes the change on the write path");
+
+    const after: CricketEventSpec[] = [...MID_OVER, [event.type, event.payload]];
+    const dot = tilePayload(buildTiles(viewOf(T20, after), t).find((tile) => tile.id === "run0"));
+    same(dot.bowler, NEW_BOWLER, "the over's next ball names the new bowler");
+    const overDone = openInnings(foldEmitted(T20, after, { type: "cricket.ball", payload: dot }));
+    same([overDone.legalBalls, overDone.fine.prevOverBowlers], [6, [OPENING_BOWLER, NEW_BOWLER]], "and folds, ending the split over");
+  });
+
+  it("no Change bowler before the first ball, at an over's end, in a super over or in an over-totals innings", () => {
+    const states: Record<string, [CricketCfg, readonly CricketEventSpec[]]> = {
+      "before the first ball": [T20, START],
+      "at an over's end": [T20, OVER_END],
+      "in a super over": [SUPER_OVER_CFG, SUPER_OVER_MID],
+      "in an over-totals innings": [T20, [...START, ["cricket.innings.summary", { runs: 3, wickets: 0, legalBalls: 3, partial: true }]]],
+    };
+    let checked = 0;
+    for (const [name, [cfg, specs]] of Object.entries(states)) {
+      const view = viewOf(cfg, specs);
+      const state = view.state as CricketState;
+      same(moreOf(view).some((action) => action.type === BOWLER_CHANGE), false, `${name}: More does not list the change`);
+      same(refusedEventTypes(view).includes(BOWLER_CHANGE), true, `${name}: the skin refuses it`);
+      same(skin.moreSheet?.(BOWLER_CHANGE, view) ?? null, null, `${name}: no sheet opens`);
+      // The positive pair: the engine refuses the change here, so withholding it hides nothing the fold would take.
+      const fielding = resolvePeople(state, {}, cfg).bowlingSide === "away" ? "A-9" : "H-9";
+      expect(() => foldEmitted(cfg, specs, { type: BOWLER_CHANGE, payload: { bowler: fielding } }), `${name}: the engine refuses it`).toThrow();
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("a second change in the same over does not offer the bowler who just left", () => {
+    const once: CricketEventSpec[] = [...MID_OVER, changeTo(NEW_BOWLER)];
+    const view = viewOf(T20, once);
+    same(bowlerChangeOpen(view.state as CricketState, T20), true, "the change is still open after one");
+    const offered = candidatesOf(changeSheet(view));
+    same(offered, engineCandidates(T20, view.state as CricketState), "the sheet offers the engine's list again");
+    same([offered.includes(OPENING_BOWLER), offered.includes(NEW_BOWLER)], [false, false], "neither the bowler who left nor the one bowling");
+    const third = offered[0]!;
+    const twice = openInnings(foldEmitted(T20, once, { type: BOWLER_CHANGE, payload: { bowler: third, reason: "other" } }));
+    same(twice.fine.overSpells, [{ bowler: OPENING_BOWLER, legalBalls: 5 }, { bowler: NEW_BOWLER, legalBalls: 0 }], "the second change folds");
+    expect(() => foldEmitted(T20, once, { type: BOWLER_CHANGE, payload: { bowler: OPENING_BOWLER } }), "the engine refuses the one who left").toThrow();
+  });
+
+  it("after a split over both bowlers are greyed for the next over (Review Focus 4)", () => {
+    const splitOver = (cfg: CricketCfg): CricketEventSpec[] => {
+      const next = ballSeq(cfg.ballsPerOver);
+      const by = (bowler: string) => next("cricket.ball", { striker: STRIKER, nonStriker: NON_STRIKER, bowler });
+      return [...START, by(OPENING_BOWLER), by(OPENING_BOWLER), by(OPENING_BOWLER), changeTo(NEW_BOWLER), by(NEW_BOWLER), by(NEW_BOWLER), by(NEW_BOWLER)];
+    };
+    const view = viewOf(T20, splitOver(T20));
+    const state = view.state as CricketState;
+    const fine = openInnings(state).fine;
+    expect([fine.currentBowler, fine.prevOverBowlers], "premise: the split over has ended").toEqual([null, [OPENING_BOWLER, NEW_BOWLER]]);
+    const people = resolvePeople(state, {}, T20);
+    const blocked = bowlerBlocked(t, state, people, T20);
+    same(Object.keys(blocked).sort(), [OPENING_BOWLER, NEW_BOWLER].sort(), "the picker greys both bowlers of the split over, and no one else");
+    for (const bowler of [OPENING_BOWLER, NEW_BOWLER]) {
+      same(blocked[bowler], "pad.cricket.context.bowler.blocked.prevOver.short", `${bowler}: greyed for the previous over (Law 17.7)`);
+      same(bowlerBlockReason(state, { ...people, bowler }, T20), "prevOver", `${bowler}: the tiles' reason is the previous over`);
+    }
+
+    // CK-BO-3: each part over counts as a whole one toward the quota. With a one-over quota, both are spent after the
+    // split over (3 legal balls each, so the whole-over count alone would leave both a full over).
+    const ONE_OVER = cricket.configSchema.parse({ ...cricket.variants.t20, maxOversPerBowler: 1 });
+    // Over 2 is A-10's, so neither split-over bowler is barred by the previous over any more: only the quota is left.
+    const secondOver: CricketEventSpec[] = [1, 2, 3, 4, 5, 6].map((n) => [
+      "cricket.ball",
+      { over: 1, ballInOver: n, striker: NON_STRIKER, nonStriker: STRIKER, bowler: "A-10", runs: { bat: 0 } },
+    ]);
+    const later = viewOf(ONE_OVER, [...splitOver(ONE_OVER), ...secondOver]);
+    const laterState = later.state as CricketState;
+    const laterFine = openInnings(laterState).fine;
+    expect([laterFine.currentBowler, laterFine.prevOverBowler, laterFine.prevOverBowlers], "premise: over 2, A-10's, has ended").toEqual([null, "A-10", undefined]);
+    for (const bowler of [OPENING_BOWLER, NEW_BOWLER]) {
+      same(oversUsed(laterFine, bowler, ONE_OVER.ballsPerOver), 1, `${bowler}: the part over is one over used`);
+      same(bowlerBlockReason(laterState, { ...resolvePeople(laterState, {}, ONE_OVER), bowler }, ONE_OVER), "quota", `${bowler}: out of the quota`);
+    }
+    const laterBlocked = bowlerBlocked(t, laterState, resolvePeople(laterState, {}, ONE_OVER), ONE_OVER);
+    same(laterBlocked[OPENING_BOWLER], "pad.cricket.context.bowler.blocked.quota.short", "the opening bowler is greyed for the quota");
+    same(laterBlocked[NEW_BOWLER], "pad.cricket.context.bowler.blocked.quota.short", "and so is the one who completed the over");
   });
 });
 

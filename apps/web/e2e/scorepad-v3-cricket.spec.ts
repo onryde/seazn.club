@@ -2256,3 +2256,73 @@ test("S2-4 T7: a swap of ends from the striker chip, and the next ball folds", a
   expect([next.payload.striker, next.payload.nonStriker], "the next ball follows the reversed pair").toEqual([id("NonStriker"), id("Striker")]);
   await expect(pad(page).locator('[data-role="v3-scorebug"]'), "one run").toContainText("1/0");
 });
+
+// S2-4 Task 8 (CK-BC-1, ruling 75; MCC Law 17.8; preflight W4): the mid-over bowler change lives in More (ruling 84: no
+// tile). More's "Change bowler" opens the skin's own sheet, which offers only who may complete the over (never the bowler
+// bowling it, never a batter); the change is recorded, the over's next balls name the new bowler, and at the over's end
+// the bowler picker greys BOTH bowlers of the split over for the previous over (Review Focus 4).
+test("S2-4 T8: a mid-over change from More, then the next over greys both bowlers", async ({ page }) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket BowlerChange ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 BC Striker ${TAG}` }, { fullName: `V3 BC NonStriker ${TAG}` }],
+    away: [{ fullName: `V3 BC BowlerA ${TAG}` }, { fullName: `V3 BC BowlerB ${TAG}` }, { fullName: `V3 BC BowlerC ${TAG}` }],
+    emitCoreStart: true,
+  });
+  const id = (name: string) => fx.personIds[`V3 BC ${name} ${TAG}`]!;
+  for (let ball = 1; ball <= 3; ball++) {
+    await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+      over: 0,
+      ballInOver: ball,
+      striker: id("Striker"),
+      nonStriker: id("NonStriker"),
+      bowler: id("BowlerA"),
+      runs: { bat: 0 },
+    });
+  }
+  await openConsoleAlreadyLive(page, fx);
+  const events = async () => await ledger(page.request, fx.fixtureId);
+  const balls = async () => (await events()).filter((e) => e.type === "cricket.ball");
+
+  await pad(page).locator('[data-tile-id="more"]').click();
+  const sheet = sheetRoot(page);
+  await sheet.getByRole("button", { name: "Change bowler", exact: true }).click();
+  await expect(sheet.getByText("Who completes the over?")).toBeVisible({ timeout: 10_000 });
+  await expect(sheet.locator(`[data-candidate-id="${id("BowlerA")}"]`), "not the bowler bowling the over").toHaveCount(0);
+  await expect(sheet.locator(`[data-candidate-id="${id("Striker")}"]`), "never a batter").toHaveCount(0);
+  await expect(sheet.locator(`[data-candidate-id="${id("BowlerC")}"]`)).toBeVisible();
+  await sheet.locator(`[data-candidate-id="${id("BowlerB")}"]`).click();
+  await sheet.locator('[data-choice-option-id="incapacitated"]').click();
+  await expect
+    .poll(async () => (await events()).filter((e) => e.type === "cricket.bowler.change").map((e) => e.payload), { timeout: 20_000 })
+    .toEqual([{ bowler: id("BowlerB"), reason: "incapacitated" }]);
+  await expect(
+    pad(page).locator('[data-role="context-strip"]').getByText(`Bowler: V3 BC BowlerB ${TAG}`, { exact: true }),
+    "the bowler chip names who completes the over",
+  ).toBeVisible({ timeout: 10_000 });
+
+  for (let n = 4; n <= 6; n++) {
+    await pad(page).locator('[data-tile-id="run0"]').click();
+    await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(n);
+  }
+  expect((await balls()).slice(3).map((e) => e.payload.bowler), "the over's last three balls are the new bowler's").toEqual([
+    id("BowlerB"),
+    id("BowlerB"),
+    id("BowlerB"),
+  ]);
+
+  // Over 2: nobody is picked, and the picker greys both bowlers of the split over for the previous over.
+  await expect(pad(page).locator('[data-tile-id="run0"]'), "over 2 waits for its bowler").toHaveAttribute("data-tile-disabled", "true", {
+    timeout: 10_000,
+  });
+  const strip = await openContextPicker(page, "Bowler");
+  for (const bowler of ["BowlerA", "BowlerB"]) {
+    const candidate = strip.locator(`[data-candidate-id="${id(bowler)}"]`);
+    await expect(candidate, `${bowler} is greyed`).toHaveAttribute("data-blocked", "true", { timeout: 10_000 });
+    await expect(candidate).toBeDisabled();
+    await expect(candidate, `${bowler}: the previous over`).toContainText("Bowled the last over");
+  }
+  await expect(strip.locator(`[data-candidate-id="${id("BowlerC")}"]`)).not.toHaveAttribute("data-blocked", "true");
+});

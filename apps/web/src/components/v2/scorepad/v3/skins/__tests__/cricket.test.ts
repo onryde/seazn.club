@@ -44,6 +44,7 @@ import type { InningsFidelity, TFn } from "../cricket";
 import { filterTilesByBand, tileEventType } from "../../pad-host";
 import type { Dict } from "@/lib/i18n-constants";
 import { t as realT } from "@/lib/i18n-runtime";
+import uiEn from "@/dictionaries/en/ui.json";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -420,6 +421,21 @@ describe("freeHitPending", () => {
 // payload, ... }` rather than positional args. Assertions are byte-
 // identical to before this rewrite; only the call shape changed.
 describe("cricketBallDetail", () => {
+  // S2-4 Task 8 (CK-BC-1, Law 17.8): the change's row in History names who came on, in the dictionary's own words.
+  it("a bowler change row in History names who completes the over", () => {
+    const tEn: TFn = (key, vars) => realT(uiEn as Dict, key, vars);
+    const copy: string = uiEn["pad.cricket.activity.bowlerChange"];
+    if (!copy.includes("{name}")) throw new Error("premise: the dictionary words the row with {name}");
+    const payload = { bowler: "a9", reason: "incapacitated" };
+    expect(cricketBallDetail({ t: tEn, eventType: "cricket.bowler.change", payload, personNames: { a9: "Sam Bowler" } })).toBe(
+      copy.replace("{name}", "Sam Bowler"),
+    );
+    // An unresolved id never reaches the prose: the shared unknown-person word does.
+    expect(cricketBallDetail({ t: tEn, eventType: "cricket.bowler.change", payload, personNames: {} })).toBe(
+      copy.replace("{name}", uiEn["eventCopy.unknownPerson"]),
+    );
+  });
+
   it("returns undefined for a non-ball event type — the generic resolveDetail hook must not touch toss/review/retire/etc.", () => {
     expect(cricketBallDetail({ t, eventType: "cricket.toss", payload: {} })).toBeUndefined();
     expect(cricketBallDetail({ t, eventType: "cricket.review", payload: {} })).toBeUndefined();
@@ -4172,9 +4188,12 @@ describe("refusedEventTypes (F2) — every type the fold refuses in a super over
     expect(refusedEventTypes(v)).not.toContain("cricket.superover.ball");
   });
 
-  // S2-4 Task 1: the bowler change has no surface until Task 8, so it is the one type refused in every phase.
-  it("lists only cricket.bowler.change outside a super over — live, pre, and done phases refuse nothing else", () => {
-    expect(refusedEventTypes(view())).toEqual(["cricket.bowler.change"]); // live (view()'s default)
+  // S2-4 Task 8: outside a super over the one refusal is the bowler change, and only while it is not open
+  // (`bowlerChangeOpen`): view()'s default is mid-over with a1 bowling and a2/a3 free, so it is open there.
+  it("outside a super over refuses only cricket.bowler.change, and only while the change is not open", () => {
+    expect(refusedEventTypes(view())).toEqual([]); // live, mid-over (view()'s default)
+    const overEnd = innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null } });
+    expect(refusedEventTypes(view({ state: state({ innings: [overEnd] }) }))).toEqual(["cricket.bowler.change"]);
     expect(refusedEventTypes(view({ state: state({ phase: "pre" }) }))).toEqual(["cricket.bowler.change"]);
     expect(refusedEventTypes(view({ state: state({ phase: "done" }) }))).toEqual(["cricket.bowler.change"]);
   });

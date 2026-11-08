@@ -87,7 +87,7 @@ import type { EventEnvelope } from "@seazn/engine/core";
 // narrow the bowler chip's candidates, not merely to test one name), which is
 // exactly what the engine's own filter already is, so the mirror is DELETED
 // and the rule imported. Same reasoning `nextBattingSide` was granted on.
-import { activeInnings, chaseTarget as engineChaseTarget, cricket as cricketModule, type CricketState, eligibleBowlers, eligibleIncomingBatters, nextBattingSide, reviewsRemaining, soBattingSideAt, soEligibleBatters, suggestedIncomingBatter } from "@seazn/engine/sports/cricket";
+import { activeInnings, chaseTarget as engineChaseTarget, cricket as cricketModule, CricketBowlerChange, type CricketState, eligibleBowlers, eligibleChangeBowlers, eligibleIncomingBatters, nextBattingSide, reviewsRemaining, soBattingSideAt, soEligibleBatters, suggestedIncomingBatter } from "@seazn/engine/sports/cricket";
 // Pad wave P2: every closed rule set this skin offers (dismissal modes, extras, who is credited, the free hit, toss/retire/
 // review/close options, the penalty and wide runs, balls per over) is the engine's own declaration, read here and never copied.
 import { cricketPadRules, POST_PHASES } from "@seazn/engine/pad";
@@ -120,6 +120,8 @@ import {
 // ---------------------------------------------------------------------------
 
 const BALL_EVENT_TYPES = new Set(["cricket.ball", "cricket.superover.ball"]);
+/** S2-4 Task 8 (CK-BC-1, ruling 278): the mid-over bowler change, offered in More (ruling 84). */
+const BOWLER_CHANGE = "cricket.bowler.change";
 
 // ---------------------------------------------------------------------------
 // Defensive shape probes — `view.cfg`/`view.state` are `unknown` by
@@ -172,6 +174,14 @@ interface CricketFineShape {
    *  and has not faced yet. That crease end stays editable, like a new-over
    *  bowler, until they face. */
   unfacedIncoming?: string;
+  /** S2-4 Task 8 (CK-BC-1, CK-BO-3, ruling 278) — mirrors `FineInnings`' split-over facts, read by the engine's own
+   *  `eligibleBowlers`/`eligibleChangeBowlers`/`oversUsed` and by `bowlerBlockReason`/`bowlerBlocked`: every bowler of
+   *  a previous over a mid-over change split (none of them bowls the next), the spells of the over in progress before
+   *  its change(s), and the part overs (each a whole over toward the quota) with their legal balls. */
+  prevOverBowlers?: string[];
+  overSpells?: { bowler: string; legalBalls: number }[];
+  partOvers?: Record<string, number>;
+  partOverBalls?: Record<string, number>;
 }
 interface CricketInningsShape {
   battingSide?: "home" | "away";
@@ -283,6 +293,8 @@ function opponentSide(side: "home" | "away"): "home" | "away" {
  * (`fine` absent) stay read-only: the fold refuses a mid-over swap, and a
  * summary innings cannot accept a ball.
  */
+// S2-4 Task 8: mid-over the chip stays read-only. A mid-over change of bowler (Law 17.8) is its own event, offered
+// in More (`bowlerChangeOpen`, ruling 84), never a pick on this chip: a ball naming another bowler mid-over is refused.
 export function bowlerIsReadOnly(innings: CricketInningsShape | null): boolean {
   if (innings == null) return false;
   if (innings.closed === true) return true;
@@ -651,6 +663,13 @@ export function resolvePeople(
 
 export type BowlerBlockReason = "prevOver" | "notInLineup" | "quota" | "noEligible" | "unpicked";
 
+/** S2-4 Task 8 (Law 17.7, 17.8; Review Focus 4): whether `bowler` bowled the previous over, in whole or in part. After
+ *  a split over every one of its bowlers is barred from the next (`fine.prevOverBowlers`), not only the last
+ *  (`prevOverBowler`), the same two facts the engine's `eligibleBowlers` reads. */
+function bowledPrevOver(fine: CricketFineShape | null, bowler: string): boolean {
+  return bowler === (fine?.prevOverBowler ?? null) || fine?.prevOverBowlers?.includes(bowler) === true;
+}
+
 /**
  * R2b live bug PART 2 (owner-reported, reproduced against real data,
  * 2026-08-17): `resolvePeople`'s own default (above) already stops
@@ -720,7 +739,7 @@ export function bowlerBlockReason(
   if (people.bowler === "") {
     return eligibleBowlers(bowlingOrder, fine, cfg.maxOversPerBowler, bpo).length > 0 ? "unpicked" : "noEligible";
   }
-  if (people.bowler === (fine?.prevOverBowler ?? null)) return "prevOver";
+  if (bowledPrevOver(fine, people.bowler)) return "prevOver";
   if (!bowlingOrder.includes(people.bowler)) return "notInLineup";
   // Consecutive-over and lineup membership are both already ruled out above,
   // so the engine filter rejecting this name can only mean the quota.
@@ -1021,6 +1040,12 @@ export function foldFreeHitPending(state: CricketStateShape): boolean {
  */
 export function cricketBallDetail(ctx: ActivityDetailContext): string | undefined {
   const { t, eventType, payload, history, cfg, personNames } = ctx;
+  // S2-4 Task 8: a mid-over change row names who completes the over (the bowler who came on).
+  if (eventType === BOWLER_CHANGE) {
+    const bowler = (payload as { bowler?: unknown }).bowler;
+    const name = typeof bowler === "string" ? personNames?.[bowler] : undefined;
+    return t("pad.cricket.activity.bowlerChange", { name: name ?? t("eventCopy.unknownPerson") });
+  }
   if (!BALL_EVENT_TYPES.has(eventType)) return undefined;
   const p = payload as {
     wicket?: { kind?: string };
@@ -1641,20 +1666,84 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
  * gate is added anyway ... it must not silently start passing a live tap
  * through if that cfg exclusivity ever changes").
  */
-/** S2-4 Task 1: the engine's mid-over bowler change (ruling 278, CK-BC-1) has no pad surface yet. Task 8 gives it one and
- *  narrows this to "refused exactly when the change is not open". */
-const NOT_YET_SURFACED = ["cricket.bowler.change"];
-
+/** S2-4 Task 8: the mid-over bowler change is refused exactly when it is not open (`bowlerChangeOpen`): one condition,
+ *  two readers, so More lists it exactly when the fold would take it. */
 export function refusedEventTypes(view: PadHostView): string[] {
   const state = asState(view.state);
-  if (state.phase !== "super_over") return [...NOT_YET_SURFACED];
+  const changeRefused = bowlerChangeOpen(state, asCfg(view.cfg)) ? [] : [BOWLER_CHANGE];
+  if (state.phase !== "super_over") return changeRefused;
   // Pad wave P2 (review, trace c): every cricket.* type the fold refuses in a
   // super over, read off the engine (`superOverEventTypes`: its own balls and
   // a player line pass; every other type's handler refuses it on phase). The
   // hand list it replaces named five and missed New ball, Powerplay,
   // Interruption and Revise, each a live refusal in the More sheet.
   const accepted = cricketPadRules.superOverEventTypes;
-  return Object.keys(cricketPadRules.eventBands).filter((type) => !accepted.includes(type));
+  const refused = Object.keys(cricketPadRules.eventBands).filter((type) => !accepted.includes(type));
+  return [...refused, ...changeRefused.filter((type) => !refused.includes(type))];
+}
+
+/**
+ * S2-4 Task 8 (CK-BC-1, ruling 278; MCC Law 17.8) — whether a mid-over bowler change is open: a main innings in play
+ * (`phase === "live"`, so never a super over), scored ball by ball (a summary innings has no bowler), with an over in
+ * progress (`fine.currentBowler` set: before an over's first ball the next bowler is simply named on it), and someone
+ * left who may complete it (the engine's own `eligibleChangeBowlers`). The engine refuses the change in each other
+ * case, so More lists it only here (`refusedEventTypes`) and its sheet offers exactly that list (`bowlerChangeSheet`).
+ */
+export function bowlerChangeOpen(state: CricketStateShape, cfg: CricketCfgShape): boolean {
+  if (state.phase !== "live") return false;
+  const innings = scoringInnings(state, cfg);
+  const fine = innings?.fine ?? null;
+  if (innings === null || innings.closed === true || fine === null || fine.currentBowler == null) return false;
+  return changeCandidates(state, innings, cfg).length > 0;
+}
+
+/** Who may complete the over in progress: the engine's `eligibleChangeBowlers` over the fielding side's order. */
+function changeCandidates(state: CricketStateShape, innings: CricketInningsShape, cfg: CricketCfgShape): string[] {
+  const order = state.orders?.[opponentSide(innings.battingSide ?? "home")] ?? [];
+  return eligibleChangeBowlers(order, innings.fine ?? null, cfg.maxOversPerBowler, ballsPerOverOf(cfg));
+}
+
+/**
+ * S2-4 Task 8 — the bowler change's sheet, opened from More (`moreSheet`; ruling 84: no tile). Who comes on is the
+ * engine's `eligibleChangeBowlers` (never anyone who has bowled in this over, so a second change in the same over never
+ * offers the bowler who just left, nor the previous over's bowlers, nor one at quota), and why is the event's own schema
+ * enum (`CricketBowlerChange.reason`), never a typed list.
+ */
+export function bowlerChangeSheet(view: PadHostView): GuidedSheetSpec {
+  const state = asState(view.state);
+  const cfg = asCfg(view.cfg);
+  const innings = scoringInnings(state, cfg);
+  const side = opponentSide(innings?.battingSide ?? "home");
+  return {
+    event: BOWLER_CHANGE,
+    steps: [
+      {
+        id: "bowler",
+        kind: "person",
+        title: "pad.cricket.sheet.bowlerChange.bowler.title",
+        pool: "onfield",
+        side,
+        candidates: innings === null ? [] : changeCandidates(state, innings, cfg),
+      },
+      {
+        id: "reason",
+        kind: "choice",
+        title: "pad.cricket.sheet.bowlerChange.reason.title",
+        options: BOWLER_CHANGE_REASONS.map((id) => ({ id, label: requiredVocabKey("reason", id) })),
+      },
+    ],
+    buildPayload: (answers) => ({ bowler: answers.bowler, reason: answers.reason }),
+  };
+}
+
+/** `CricketBowlerChange.reason`'s values, read off the event's own schema (Law 17.8's two causes, or another). */
+const BOWLER_CHANGE_REASONS: readonly string[] = CricketBowlerChange.shape.reason.unwrap().options;
+
+/** `SkinDefV3.moreSheet`: More's bowler change opens `bowlerChangeSheet`, narrowed to who may come on, instead of the
+ *  generic form (which offers both whole sides). Null for every other More action, and while the change is not open. */
+export function moreSheet(eventType: string, view: PadHostView): GuidedSheetSpec | null {
+  if (eventType !== BOWLER_CHANGE) return null;
+  return bowlerChangeOpen(asState(view.state), asCfg(view.cfg)) ? bowlerChangeSheet(view) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1803,7 +1892,7 @@ export function bowlerBlocked(
   const out: Record<string, string> = {};
   for (const id of bowlingOrder) {
     if (eligible.has(id)) continue;
-    const reason = id === (fine?.prevOverBowler ?? null) ? ("prevOver" as const) : ("quota" as const);
+    const reason = bowledPrevOver(fine, id) ? ("prevOver" as const) : ("quota" as const);
     out[id] = bowlerBlockShortMessage(t, reason, cfg);
   }
   return out;
@@ -2888,6 +2977,7 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     // sheet re-offer review/retire/inningsClose/declare/overSummary as
     // dead-end taps during a super over (this function's own doc, above).
     refusedEventTypes,
+    moreSheet,
     // D2 (R2 sign-off): the skin supplies per-ball detail so the activity
     // panel's rows differ from one another. Declared HERE rather than the
     // chassis importing `cricketBallDetail` directly — sport vocabulary stays

@@ -1446,6 +1446,18 @@ export interface SkinDefV3<View = unknown> {
    */
   refusedEventTypes?(view: View): readonly string[];
   /**
+   * S2-4 (cricket) Task 8 — a More entry the skin answers with its OWN guided sheet instead of the generic form.
+   *
+   * The More sheet (`ActionFormList`) renders every listed `padSpec` action as a generic form whose person picker
+   * offers both whole sides (`candidatesForPerson`). For an action whose legal people the skin can narrow from the
+   * fold, that is an offer of names the engine refuses. Returning a sheet here makes tapping the entry open that sheet
+   * (the same `GuidedSheet` a tile's `{sheet}` opens) and nothing else changes: the entry is still listed by
+   * `moreActions` (the sheet is NOT one of `sheets()`, so `dedicatedEventTypes` does not claim its type), and still
+   * withheld by `refusedEventTypes`. `null` keeps the generic form. First use: cricket's mid-over bowler change, whose
+   * candidates are the engine's `eligibleChangeBowlers` (ruling 84: the change lives in More, not on a tile).
+   */
+  moreSheet?(eventType: string, view: View): GuidedSheetSpec | null;
+  /**
    * R6/task A (owner ruling R6-4) — THE PAD'S CLOCK, opted into one sport at a
    * time exactly like `phase`/`context`/`swap` above.
    *
