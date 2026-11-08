@@ -67,6 +67,10 @@ const AMENDED_TEXT: Readonly<Record<string, { says: string; by: string }>> = {
     says: "Every event that records a forfeit, walkover, retirement or double walkover is organiser-only, through the X-ST-2 predicate, except as X-SE-3 admits.",
     by: "W2e Task 2 review M2 (2026-10-28): X-SE-3 (W2e D13) admits a scorer's forfeit that ends its own side's match-ending sanction; the row names that exception instead of reading as absolute",
   },
+  "X-DW-3": {
+    says: "A double walkover is refused where the fixture has no next match (final, last rung, third-place match) with guidance: reschedule, record a walkover if one side turned up, or settle as a last resort; the fixture stays open. A vacant title, joint winners and a vacant 3rd are X-CH-3, X-CH-4 and X-TP-7 (rulings 267 and 274).",
+    by: "W4 rulings 267 and 274 (2026-11-04, W4 rulebook RB4-C3, RB4-C4, RB4-T6; engine c42a4b7, arriving with the S2-4 engine snapshot, controller ruling): the vacant title and joint winners it handed to W4 are X-CH-3, X-CH-4 and X-TP-7",
+  },
   "FB-AB-1": {
     says: "Football abandon under abandonPolicy award: leader wins with the real score; level = draw with the real score in draw kinds; in brackets a level abandon stays abandoned for the desk to settle, never needs_decision.",
     by: "Task 14 fix round 1 M-1: spec §5.4 rule 2, a level abandon in a bracket stays abandoned (HK-AB-1 and IH-AB-1 say \"Same as FB-AB-1\", so they take it by reference and keep Appendix A's text)",
