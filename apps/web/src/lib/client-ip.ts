@@ -60,7 +60,7 @@ const ORIGIN_STAMP_HEADER = "x-seazn-origin-secret";
 
 /** Whether the request came through OUR zone. With `CF_ORIGIN_SECRET` set (read per request), its stamp must equal the secret,
  *  compared in constant time; a stamp of another length is "wrong", never a throw. Unset or empty: not required ("ok"). */
-function originStamp(headers: Headers): "ok" | "absent" | "wrong" {
+function originStamp(headers: Headers): "ok" | StampMismatch {
   const secret = process.env.CF_ORIGIN_SECRET;
   if (!secret) return "ok";
   const stamp = headers.get(ORIGIN_STAMP_HEADER);
@@ -82,39 +82,45 @@ function reportedHost(headers: Headers): string {
 
 /** The reason code a stamp mismatch is reported under, beside its two non-secret discriminators (the stamp's kind, the host). */
 const STAMP_MISMATCH = "origin_stamp_mismatch";
-/** At most one `log.warn` this often per process; Sentry hears of it once per process. */
+type StampMismatch = "absent" | "wrong";
+/** Per KIND: at most one `log.warn` this often, and one Sentry message, per process. Kept apart so a flood of forged
+ *  `absent` stamps (another zone's requests, expected noise) never uses up what a real `wrong` (a misconfiguration) needs. */
 const STAMP_MISMATCH_WARN_EVERY_MS = 60_000;
-let stampMismatchWarnedAt: number | undefined;
-let stampMismatchSent = false;
+const stampMismatchWarnedAt: Partial<Record<StampMismatch, number>> = {};
+const stampMismatchSent = new Set<StampMismatch>();
 
 /**
  * A Cloudflare peer named a visitor but did not carry our stamp while the secret is set: the request keys on the EDGE, so a
  * misconfigured rule (another host, a typo, a rotation half done) puts every visitor of that colo in one bucket - sign-in
- * first. Never silent: a throttled warn, and one Sentry warning per process. Neither carries a header value or the secret.
+ * first. Never silent: per kind, a throttled warn and one Sentry warning per process. Neither carries a header value
+ * (beyond a sanitised host) or the secret.
  */
-function reportStampMismatch(stamp: "absent" | "wrong", headers: Headers): void {
+function reportStampMismatch(stamp: StampMismatch, headers: Headers): void {
   const now = Date.now();
-  const warnDue = stampMismatchWarnedAt === undefined || now - stampMismatchWarnedAt >= STAMP_MISMATCH_WARN_EVERY_MS;
-  if (!warnDue && stampMismatchSent) return;
+  const last = stampMismatchWarnedAt[stamp];
+  const warnDue = last === undefined || now - last >= STAMP_MISMATCH_WARN_EVERY_MS;
+  const sendDue = !stampMismatchSent.has(stamp);
+  if (!warnDue && !sendDue) return;
   const host = reportedHost(headers);
   if (warnDue) {
-    stampMismatchWarnedAt = now;
+    stampMismatchWarnedAt[stamp] = now;
     log.warn(
       { reason: STAMP_MISMATCH, stamp, host },
       "CF-Connecting-IP not believed: a Cloudflare peer without our zone's origin stamp while CF_ORIGIN_SECRET is set - " +
         "keyed on the Cloudflare edge (README: Deploy step - client IP behind Cloudflare)",
     );
   }
-  if (!stampMismatchSent) {
-    stampMismatchSent = true;
+  if (sendDue) {
+    stampMismatchSent.add(stamp);
     Sentry.captureMessage(STAMP_MISMATCH, { level: "warning", tags: { stamp, host } });
   }
 }
 
 /** Tests only: a fresh process's report state. */
 export function __resetOriginStampReportForTests(): void {
-  stampMismatchWarnedAt = undefined;
-  stampMismatchSent = false;
+  delete stampMismatchWarnedAt.absent;
+  delete stampMismatchWarnedAt.wrong;
+  stampMismatchSent.clear();
 }
 
 /** The client IP a per-IP limiter keys on (see the header for the order and why). */

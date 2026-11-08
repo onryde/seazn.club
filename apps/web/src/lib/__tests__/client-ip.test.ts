@@ -332,7 +332,7 @@ describe("the origin stamp: CF_ORIGIN_SECRET and x-seazn-origin-secret", () => {
 // "absent" or "wrong", and the request's `host` (lower-cased; "none" when missing, "invalid" when it is not a host name), so
 // forgery through another zone (absent, a host not ours) reads apart from misconfiguration (wrong, or absent on our host).
 // The interval, the code and the discriminators are the controller's rulings, typed here. The fallback is unchanged.
-describe("a stamp mismatch is reported: a throttled log.warn and one Sentry warning per process", () => {
+describe("a stamp mismatch is reported: per kind, a throttled log.warn and one Sentry warning per process", () => {
   const SECRET = "fedcba9876543210".repeat(4);
   const WRONG = "0000000000000000".repeat(4);
   const MINUTE = 60_000;
@@ -375,38 +375,78 @@ describe("a stamp mismatch is reported: a throttled log.warn and one Sentry warn
     expect(capture, "no Sentry message").not.toHaveBeenCalled();
   });
 
-  it("a missing or a wrong stamp: the first is warned and sent to Sentry; then one warn a minute (60s after the last, to the millisecond) and never a second Sentry message (fake clock, steps reported)", () => {
+  it("each kind alone, missing then wrong: the first is warned and sent to Sentry; then one warn a minute (60s after the last, to the millisecond) and never a second Sentry message (fake clock, steps reported)", () => {
     vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
-    const t0 = Date.now();
-    // [ms after t0, stamp, warns so far]
-    const steps: Array<[number, string | undefined, number]> = [
-      [0, undefined, 1],
-      [1_000, WRONG, 1],
-      [MINUTE - 1, undefined, 1],
-      [MINUTE, WRONG, 2],
-      [MINUTE + 1, undefined, 2],
-      [2 * MINUTE - 1, WRONG, 2],
-      [2 * MINUTE, undefined, 3],
-      [10 * MINUTE, WRONG, 4],
+    // [ms after the walk's start, warns so far]
+    const walk: Array<[number, number]> = [
+      [0, 1],
+      [1_000, 1],
+      [MINUTE - 1, 1],
+      [MINUTE, 2],
+      [MINUTE + 1, 2],
+      [2 * MINUTE - 1, 2],
+      [2 * MINUTE, 3],
+      [10 * MINUTE, 4],
     ];
-    for (const [at, stamp, warns] of steps) {
-      vi.setSystemTime(t0 + at);
-      expect(clientIp(mismatch(stamp)), `+${at}ms: still Fly's peer`).toBe(CF_EDGE);
-      expect(warn, `+${at}ms`).toHaveBeenCalledTimes(warns);
-      expect(capture, `+${at}ms: one Sentry message per process`).toHaveBeenCalledTimes(1);
+    let checked = 0;
+    for (const stamp of [undefined, WRONG]) {
+      __resetOriginStampReportForTests();
+      warn.mockClear();
+      capture.mockClear();
+      const t0 = Date.now();
+      for (const [at, warns] of walk) {
+        vi.setSystemTime(t0 + at);
+        expect(clientIp(mismatch(stamp)), `${stamp ? "wrong" : "absent"} +${at}ms: still Fly's peer`).toBe(CF_EDGE);
+        expect(warn, `${stamp ? "wrong" : "absent"} +${at}ms`).toHaveBeenCalledTimes(warns);
+        expect(capture, `${stamp ? "wrong" : "absent"} +${at}ms: one Sentry message per process`).toHaveBeenCalledTimes(1);
+        checked++;
+      }
     }
-    expect(steps).toHaveLength(8);
+    expect(checked).toBe(16);
   });
 
-  it("a matching request between two mismatches neither warns nor restarts the minute", () => {
+  // Fix round 2 ruling: the throttle and the Sentry flag are kept PER KIND. Forged `absent` stamps through another zone are
+  // expected noise; they must never use up the minute or the process's one Sentry message that a real `wrong` (our rule
+  // sending another value: a misconfiguration) needs.
+  it("a flood of absent never hides a wrong, nor the other way round: absent, absent, then wrong inside the minute still warns AND still reaches Sentry (fake clock)", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    const kinds = () => warn.mock.calls.map((c: unknown[]) => (c[0] as { stamp: string }).stamp);
+    const sent = () => capture.mock.calls.map((c) => (c[1] as { tags: { stamp: string } }).tags.stamp);
+    const t0 = Date.now();
+    clientIp(mismatch(undefined, "attacker.example"));
+    vi.setSystemTime(t0 + 1_000);
+    for (let i = 0; i < 50; i++) clientIp(mismatch(undefined, "attacker.example"));
+    expect([kinds(), sent()], "the flood: one warn, one Sentry message").toEqual([["absent"], ["absent"]]);
+    vi.setSystemTime(t0 + 2_000);
+    clientIp(mismatch(WRONG));
+    expect([kinds(), sent()], "the wrong inside the absent's minute").toEqual([["absent", "wrong"], ["absent", "wrong"]]);
+    vi.setSystemTime(t0 + 3_000);
+    clientIp(mismatch(WRONG));
+    clientIp(mismatch());
+    expect([kinds(), sent()], "each kind is still throttled on its own").toEqual([["absent", "wrong"], ["absent", "wrong"]]);
+    // Each kind's minute runs from ITS last warn: absent's at +60s, wrong's at +62s.
+    vi.setSystemTime(t0 + MINUTE);
+    clientIp(mismatch(WRONG));
+    clientIp(mismatch());
+    expect(kinds(), "+60s: absent's minute is up, wrong's is not").toEqual(["absent", "wrong", "absent"]);
+    vi.setSystemTime(t0 + MINUTE + 2_000);
+    clientIp(mismatch(WRONG));
+    expect(kinds(), "+62s: wrong's minute is up").toEqual(["absent", "wrong", "absent", "wrong"]);
+    expect(sent(), "still one Sentry message per kind").toEqual(["absent", "wrong"]);
+  });
+
+  it("a matching request between two mismatches of a kind neither warns nor restarts that kind's minute", () => {
     vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
     const t0 = Date.now();
     clientIp(mismatch());
     vi.setSystemTime(t0 + 30_000);
     expect(clientIp(mismatch(SECRET))).toBe(VISITOR);
+    vi.setSystemTime(t0 + MINUTE - 1);
+    clientIp(mismatch());
+    expect(warn, "+59.999s: still inside the minute").toHaveBeenCalledTimes(1);
     vi.setSystemTime(t0 + MINUTE);
-    clientIp(mismatch(WRONG));
-    expect(warn).toHaveBeenCalledTimes(2);
+    clientIp(mismatch());
+    expect(warn, "+60s: the minute ran from the first mismatch, not the match").toHaveBeenCalledTimes(2);
   });
 
   it("carries the reason code, the stamp's kind and the host, and nothing else: no stamp, no secret, no address from any header, in the warn or the Sentry message", () => {

@@ -232,10 +232,10 @@ matters:**
    `claim-signin`, `invite-claim` and `funnel-claim` (10 a minute each) are then counted per Cloudflare colo, not per
    visitor.
    Nothing is ever refused for a missing stamp; requests only lose their per-visitor bucket. A mismatch is not silent:
-   web logs a warning with the reason `origin_stamp_mismatch` at most once a minute per machine, and sends one
-   `origin_stamp_mismatch` warning to Sentry per process (its first mismatch). Each names `stamp` (`absent` or
-   `wrong`) and the request's `host` (lower-cased; `none` or `invalid` when there is no usable one), and never carries
-   the stamp's value or the secret.
+   for each kind of mismatch (`absent` and `wrong`, kept apart), web logs a warning with the reason
+   `origin_stamp_mismatch` at most once a minute per machine, and sends one `origin_stamp_mismatch` warning to Sentry
+   per process. Each names `stamp` (`absent` or `wrong`) and the request's `host` (lower-cased; `none` or `invalid` when
+   there is no usable one), and never carries the stamp's value or the secret.
 3. **After setting it, check it.** Sign in from two different networks (say, office wifi and a phone on mobile data).
    Both must succeed. Then read `origin_stamp_mismatch` in `fly logs -a <app>` and in Sentry for that environment:
    - **`stamp: wrong`, on any host**, means our rule sends another value. That is a misconfiguration: unset the
@@ -246,7 +246,8 @@ matters:**
      `invalid`) are someone sending `CF-Connecting-IP` through their own Cloudflare zone - a forgery attempt the stamp
      is refusing. They are not a misconfiguration; leave the secret set.
 
-   Sentry holds only each process's first mismatch, so a forgery can be the one it shows: read `fly logs` too.
+   Sentry holds each process's first `absent` and its first `wrong` separately, so a flood of forged `absent` cannot
+   hide a `wrong`; read `fly logs` for the hosts of later ones.
    **Also check the header NAME** on the rule: it must be exactly `x-seazn-origin-secret`. A different name leaves
    every request unstamped (`absent` on our hosts), and its value may already have reached Sentry or a log in clear -
    the scrub only redacts names starting with `x-seazn-origin`, and the SDK only masks names carrying `secret`. If the
