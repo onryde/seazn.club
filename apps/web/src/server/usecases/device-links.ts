@@ -283,7 +283,8 @@ export async function ensureDeviceLink(
  *     home answers an expired token; a saved row has no expiry;
  *   - under the fixture's link lock, in the system org: a fixture outside THIS quick match's competition → 404 (the
  *     per-match check, §7.1 point 3: every quick match shares the one org); finalized or `cancelled` → 422; a match whose
- *     two sides are not both known (a knockout round waiting for its feeders, a bye) → 422 QUICK_MATCH_SIDES_UNKNOWN (C18);
+ *     two sides are not both known (a knockout round waiting for its feeders, a bye) → 422 `QUICK_MATCH_ERRORS.SIDES_UNKNOWN`
+ *     (C18);
  *   - `ensureLocked`: the live sealed link re-opened (no write), or one minted that revokes any other.
  * A decided match still opens: its link may undo its own events until an organizer finalizes.
  */
@@ -300,7 +301,7 @@ export async function ensureGuestDeviceLink(qm: QuickMatchRow, fixtureId: string
     const [seats] = await tx<{ home_entrant_id: string | null; away_entrant_id: string | null }[]>`
       select home_entrant_id, away_entrant_id from fixtures where id = ${fixtureId}`;
     if (!seats?.home_entrant_id || !seats.away_entrant_id) {
-      throw new HttpError(422, "this match's sides are not known yet", "QUICK_MATCH_SIDES_UNKNOWN");
+      throw new HttpError(422, "this match's sides are not known yet", QUICK_MATCH_ERRORS.SIDES_UNKNOWN);
     }
     return ensureLocked(tx, auth, fixtureId, "quick-match");
   });

@@ -49,8 +49,17 @@ export const QUICK_MATCH_ERRORS = {
    *  DEVICE_LINK_KEK, an unexpected error. The setup page shows its generic line (plan 2 T3). */
   CREATE_FAILED: "QUICK_MATCH_CREATE_FAILED",
   /** A Score tap on a match whose two sides are not both known yet: a knockout seat waiting for its feeders, or a bye
-   *  (`ensureGuestDeviceLink`, device-links.ts, spec C18). That thrower writes this same literal. */
+   *  (`ensureGuestDeviceLink`, device-links.ts, spec C18). The home shows `quickMatch.flash.notReady`. */
   SIDES_UNKNOWN: "QUICK_MATCH_SIDES_UNKNOWN",
+  /** A Score tap past the mint limit (DEVICE_LINK_MINT_LIMIT, per quick match): the limiter's own 429 carries no code, so
+   *  the Score route names it for the home's `?e=` (plan 2 T6, pre-flight A7). The home shows `quickMatch.flash.linkLimit`. */
+  LINK_LIMITED: "QUICK_MATCH_LINK_LIMITED",
+  /** A home action naming a match that is not part of this quick match: a fixture of another quick match or org, or a
+   *  fixture id that is no uuid (the Score route, plan 2 T6). The home shows `quickMatch.flash.notFound`. */
+  NOT_FOUND: "QUICK_MATCH_NOT_FOUND",
+  /** A home action refused or failed with no code of its own to show: a finalized or cancelled match (the device link's
+   *  code-less 422), a server without DEVICE_LINK_KEK, an unexpected error (plan 2 T6). The home shows its generic line. */
+  ACTION_FAILED: "QUICK_MATCH_ACTION_FAILED",
   /** "Add a match" past `QUICK_MATCH_MAX_ADHOC` extra matches (plan 2 Task 8, pre-flight D4). */
   ADHOC_LIMIT: "QUICK_MATCH_ADHOC_LIMIT",
   /** A programmer error, never a guest's refusal (500): a create given an email but no base URL to build the link mail's
