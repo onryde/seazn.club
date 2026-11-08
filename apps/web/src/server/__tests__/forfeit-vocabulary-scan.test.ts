@@ -98,6 +98,7 @@ const UNREAD_WRITERS: Record<string, { writes: number; why: string }> = {
   "apps/web/src/server/public-site/__tests__/match-centre-forfeit.test.ts": { writes: 1, why: "Task 13's per-reason sentences: `reason` drawn from FORFEIT_REASONS itself, folded in memory, never posted" },
   "apps/web/src/server/public-site/__tests__/timeline.test.ts": { writes: 3, why: "Task 12's forfeit-copy sweeps: `reason` drawn from FORFEIT_REASONS itself (two), and a reason-less legacy fixture — rendered as timeline lines, never posted" },
   "apps/web/src/server/usecases/__tests__/organiser-only-events.test.ts": { writes: 1, why: "`reason: c.reason` from the authority case table" },
+  "apps/web/src/server/usecases/__tests__/quick-match-device-link.test.ts": { writes: 1, why: "quick match spec C23's refusal table: a guest link's forfeit with an empty `{}` payload, refused 403 (\"Only an organiser can record a walkover for a match\") before its payload is read, and the case asserts nothing lands — no reason exists to be free text" },
   "apps/web/src/server/usecases/withdrawal.ts": { writes: 1, why: "`REASON` (\"withdrew\"), the withdrawal cascade's own constant" },
   "scripts/smoke/suites/walkoverCredit.ts": { writes: 6, why: "walkoverCreditSuite's `reason: WALKOVER`, its constant \"walkover\" typed `ForfeitReason` (tsc refuses free text and \"bye\", which core.forfeit rejects) and checked against AWARD_REASONS at run time" },
 };
