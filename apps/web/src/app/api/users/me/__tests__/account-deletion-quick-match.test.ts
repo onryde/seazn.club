@@ -45,7 +45,7 @@ vi.mock("@/lib/posthog-server", async (orig) => ({
 import { sql } from "@/lib/db";
 import { createSession } from "@/lib/auth";
 import { resolveQuickMatchToken } from "@/server/usecases/quick-match-home";
-import { saveQuickMatchForUser } from "@/server/usecases/quick-match-save";
+import { saveQuickMatchForUser, saveQuickMatchesForVerifiedUser } from "@/server/usecases/quick-match-save";
 import {
   addressFor,
   createTypedMatch,
@@ -130,6 +130,27 @@ describe.skipIf(!HAS_DB)("DELETE /api/users/me lets go of the account's quick ma
 
     // In sequence: the released match is anybody's to save again.
     expect(await saveQuickMatchForUser(other, kept.id)).toBe("saved");
+  });
+
+  it("m9: a match saved by the sign-in holds no address, and the deletion still releases it (by its saver, not its address)", async () => {
+    const email = addressFor("forgotten");
+    const leaver = await account(email);
+    const typed = await createTypedMatch(email);
+    expect(await saveQuickMatchesForVerifiedUser(leaver)).toEqual({ savedByEmail: 1 });
+    await sql`update quick_matches set last_activity_at = now() - interval '2 days' where id = ${typed.id}`;
+    const saved = await saveStateOf(typed.id);
+    expect([saved.saved_by_user_id, saved.email], "premise: saved by the leaver, and its address already forgotten").toEqual([
+      leaver,
+      null,
+    ]);
+
+    expect(await deleteAccount(leaver)).toBe(200);
+
+    const r = await saveStateOf(typed.id);
+    expect(r.saved_by_user_id, "released: found by its saver, with no address left to find it by").toBeNull();
+    expect(r.expires_at?.getTime(), "7 days after its last activity (C1)").toBe(r.last_activity_at.getTime() + SPEC_EXPIRY_DAYS * DAY_MS);
+    expect(r.reminder_sent_at).toBeNull();
+    expect(await resolveQuickMatchToken(typed.token), "alive for friends with the link").not.toBeNull();
   });
 
   it("a refused deletion (no confirmation) releases nothing", async () => {

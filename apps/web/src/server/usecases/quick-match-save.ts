@@ -7,8 +7,11 @@ import "server-only";
 //     `saveQuickMatchesForVerifiedUser`, called at all six doors that start a session and never at staff impersonation
 //     (quick-match-save-doors.test.ts stops a seventh door from shipping without it);
 //   - the Save button's one match, for whoever presses it, address or none (C3): `saveQuickMatchForUser`.
-// Both go through `saveInTx`: the saver set, the expiry cleared, the reminder marked spent and any queued reminder ended,
-// in ONE `withTenant(system org)` transaction. The tenant is load-bearing: `cancelQueuedEmails` fences on
+// Both go through `saveInTx`: the saver set, the expiry cleared, the typed address forgotten, the reminder marked spent and
+// any queued reminder ended, in ONE `withTenant(system org)` transaction. The address goes because the saver is known now
+// (branch review B m9, controller PO rec 2026-11-08): a guest typed it and nobody verified it, a saved match is never
+// reminded, and a stranger's address is not kept for ever. V493's `email_lower` is generated from it, so it goes too.
+// The tenant is load-bearing: `cancelQueuedEmails` fences on
 // `current_org_id()`, and on the pool it ends only org-less rows, which is nothing of the system org's (cancel.ts G-7).
 //
 // A match past its expiry that the sweep has not reached yet is never revived (D13): the button hears `gone`, as the
@@ -38,7 +41,7 @@ type Which = { ids: readonly string[] } | { email: string };
 
 /**
  * THE save, on the caller's system-org transaction: every row `which` names that nobody has saved and that has not
- * expired becomes `userId`'s, with no expiry and its reminder marked spent (a reminder already sent keeps its time), and
+ * expired becomes `userId`'s, with no expiry, no address and its reminder marked spent (a reminder already sent keeps its time), and
  * any queued reminder for those rows ends with `quick_match_saved`. Returns the ids it saved. Row locks make a race
  * safe: a second save waiting on the row re-reads `saved_by_user_id is null` and saves nothing.
  */
@@ -51,7 +54,7 @@ async function saveInTx(tx: Tx, userId: string, which: Which): Promise<string[]>
     "email" in which ? tx`email_lower = lower(${which.email})` : tx`id = any(${which.ids as string[]}::uuid[])`;
   const rows = await tx<{ id: string }[]>`
     update quick_matches
-       set saved_by_user_id = ${userId}, expires_at = null, reminder_sent_at = coalesce(reminder_sent_at, now())
+       set saved_by_user_id = ${userId}, expires_at = null, email = null, reminder_sent_at = coalesce(reminder_sent_at, now())
      where ${named}
        and saved_by_user_id is null
        and (expires_at is null or expires_at > now())
@@ -126,7 +129,8 @@ export async function saveQuickMatchForUser(userId: string, quickMatchId: string
  * A deleted account lets go of its quick matches (D8), on the deletion's own transaction (the pooled client, before the
  * account's address is anonymised): the matches it saved expire again `QUICK_MATCH_EXPIRY_DAYS` after their last
  * activity, so friends with the link keep scoring until then, and the reminder is owed again (the save had marked it
- * sent); its address leaves every match it was typed on.
+ * sent); its address leaves every match it was typed on. The matches it saved are found by their saver, never by the
+ * address: a saved match holds none (m9), so a released one has no address to be reminded at either.
  */
 export async function releaseQuickMatchesOfDeletedAccount(tx: Tx, a: { userId: string; email: string }): Promise<void> {
   await tx`

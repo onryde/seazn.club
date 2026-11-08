@@ -144,6 +144,16 @@ const someone = () => account(addressFor("someone"));
 /** The clock's state: past its expiry, not yet reached by the sweep (D13). */
 const expire = (id: string) => sql`update quick_matches set expires_at = now() - interval '1 minute' where id = ${id}`;
 
+/** The address columns of one row, read on the pool: the typed `email` and V493's generated `email_lower` beside it. */
+const addressOf = async (id: string): Promise<{ email: string | null; email_lower: string | null }> => {
+  const [r] = await sql<{ email: string | null; email_lower: string | null }[]>`
+    select email, email_lower from quick_matches where id = ${id}`;
+  if (!r) throw new Error(`precondition: quick match ${id} has a row`);
+  return r;
+};
+/** Branch review B m9 (controller, PO rec 2026-11-08): a saved match forgets the address typed on it; the saver is known now. */
+const FORGOTTEN = { email: null, email_lower: null };
+
 /** The `quick_match_saved` events sent so far, the after-response window not run. */
 const sentSoFar = () =>
   ph.capture.mock.calls
@@ -282,6 +292,30 @@ describe.skipIf(!HAS_DB)(
       expect(f.expires_at).toBeNull();
       expect(f.reminder_sent_at, "a saved match is never reminded (C2)").not.toBeNull();
       expect((await saveStateOf(reminded.id)).reminder_sent_at).toEqual(sentAt);
+      // m9: the address the guest typed goes with the save, and the generated lower-case copy follows it.
+      expect(await addressOf(fresh.id), "a saved match holds no address").toEqual(FORGOTTEN);
+      expect(await addressOf(reminded.id)).toEqual(FORGOTTEN);
+    });
+
+    it("m9 in sequence: the save forgets the address, and a later match typed with it is still found by the next sign-in", async () => {
+      const email = addressFor("forget");
+      const first = await createTypedMatch(email.toUpperCase());
+      expect(await addressOf(first.id), "premise: the row holds the address as typed, and its folded copy").toEqual({
+        email: email.toUpperCase(),
+        email_lower: email.toLowerCase(),
+      });
+      const user = await account(email);
+      expect(await saveQuickMatchesForVerifiedUser(user)).toEqual({ savedByEmail: 1 });
+      expect(await addressOf(first.id)).toEqual(FORGOTTEN);
+
+      // The by-email path keys on the UNSAVED rows' address: a match typed with it afterwards is found and saved too.
+      const second = await createTypedMatch(email);
+      expect(await saveQuickMatchesForVerifiedUser(user)).toEqual({ savedByEmail: 1 });
+      expect((await saveStateOf(second.id)).saved_by_user_id).toBe(user);
+      expect(await addressOf(second.id)).toEqual(FORGOTTEN);
+      // And the first stays the account's, its expiry still cleared.
+      expect((await saveStateOf(first.id)).saved_by_user_id).toBe(user);
+      expect((await saveStateOf(first.id)).expires_at).toBeNull();
     });
 
     it("a second sign-in saves nothing more and changes nothing (idempotent)", async () => {
@@ -353,6 +387,8 @@ describe.skipIf(!HAS_DB)("saveQuickMatchForUser: the Save button's one match (C3
 
     expect(await saveQuickMatchForUser(presser, typed.id)).toBe("saved");
     expect((await saveStateOf(typed.id)).saved_by_user_id).toBe(presser);
+    // m9: the stranger's address is not kept on a match its presser now holds.
+    expect(await addressOf(typed.id)).toEqual(FORGOTTEN);
   });
 
   it("gone: an expired match the sweep has not reached is never revived (D13)", async () => {
