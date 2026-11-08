@@ -6112,6 +6112,8 @@
   "runsheet.unscheduled.title": "Pas encore programmé",
   "runsheet.round.done.one": "{done} sur {total} terminé",
   "runsheet.round.done.other": "{done} sur {total} terminés",
+  "runsheet.round.byes.one": "Exemption",
+  "runsheet.round.byes.other": "{count} exemptions",
   "runsheet.noTimeYet": "Pas encore d'horaire",
   "runsheet.now": "MAINTENANT",
   "runsheet.action.openPad": "Ouvrir le marqueur",

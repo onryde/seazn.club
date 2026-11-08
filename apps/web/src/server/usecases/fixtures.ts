@@ -9,7 +9,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { PatchFixture, PutLineup, ScheduleConflict } from "@/server/api-v1/schemas";
 import { type BoardFixtureRow, type FixtureRow } from "./stages";
 import { fixtureHasResultSql } from "./fixture-results-sql";
-import { byeLineSql } from "@/server/engine-db/system-bye-sql";
+import { awaitsWalkoverSql, byeLineSql } from "@/server/engine-db/system-bye-sql";
 import { activeAbandonReasonSql, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { streamUrlSchema } from "@/lib/stream-url";
 import { feedsNextMatch, type FeedEdges } from "@/lib/bracket-next-match";
@@ -386,7 +386,9 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
              -- Rebase ruling D3: that abandon is the organiser's online No result (the settle; the line is not held).
              ${hasActiveAbandonSql(tx, "f", { noResult: true })} as no_result,
              -- W2c Task 19 (S4): the match plays a format of its own (the run sheet's "Format changed" chip).
-             f.rules_override is not null as format_changed
+             f.rules_override is not null as format_changed,
+             -- W4 B1b fix round 1 (Q1): a waiting bye line whose award will be a walkover (a match owed; the round bar counts it).
+             ${awaitsWalkoverSql(tx, "f")} as awaits_walkover
       from fixtures f
       left join venues ven on ven.id = f.venue_id
       where f.division_id = ${divisionId}

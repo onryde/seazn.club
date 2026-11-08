@@ -29,7 +29,7 @@ import { CreateStage } from "@/server/api-v1/schemas";
 import { appendEvent } from "@/server/engine-db";
 import { byeLineSql } from "@/server/engine-db/system-bye-sql";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
-import { fixtureRow, post, rowsOf as bracketRows } from "@/server/engine-db/__tests__/helpers/w2b-rig";
+import { fixtureRow, playBadminton, post, rowsOf as bracketRows } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -41,7 +41,10 @@ import { getCompetitionDesk } from "../competition-desk";
 import { listDivisionFixtures, listDivisionFixturesForBoard } from "../fixtures";
 import { buildRunSheet, isBye, roundDone, type RunSheetBlock, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import { isUnscheduledFixture } from "@/lib/division-phase";
-import { runSheetCounts, runSheetKeeps } from "@/components/v2/desk/run-sheet";
+import { RunSheet, runSheetCounts, runSheetKeeps } from "@/components/v2/desk/run-sheet";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import enUi from "@/dictionaries/en/ui.json";
+import { listDivisionCardStats } from "../card-stats";
 import { RunSheetRow } from "@/components/v2/desk/run-sheet-row";
 import type { FixtureRow } from "../stages";
 import { boardMovable, inBoardTray } from "@/components/v2/board/types";
@@ -359,13 +362,16 @@ describe.runIf(HAS_DB)("W4 T3 K2 a bracket bye line never takes or keeps a court
       nowMs,
     });
     expect(sheetRowsOf(blocks).some((f) => f.id === rig.byeLineId), "the bye stays on the sheet, a ghost row in its round (R7b)").toBe(true);
-    // Owner-approved quirk (B1a shots): the round bar counts the line waiting on its award in the total, never as done.
-    // Expected = the stored lines of the bye's round (the bye and the real line beside it).
+    // B1b fix round 1 (Q1, supersedes the B1a quirk): the round bar counts a waiting line only when the server says its award
+    // will be a walkover (`awaits_walkover`). A day-one setup bye has no feeder at all - the confirm awards it as a bye - so
+    // it is no match: the bye's round counts the real line beside it alone.
+    expect(bye.awaits_walkover, "the server's flag: a day-one bye awaits no walkover").toBe(false);
+    expect(real.map((f) => f.awaits_walkover), "positive pair: nor does a real line").toEqual([false, false]);
     const koBlock = blocks.find((x) => x.kind === "bracket" && x.stageId === rig.koStageId);
     const byeRound = koBlock && koBlock.kind === "bracket" ? koBlock.rounds.find((r) => r.fixtures.some((f) => f.id === rig.byeLineId)) : undefined;
     const byeRoundNo = bye.round_no;
     expect(ko.filter((f) => f.round_no === byeRoundNo).length, "anti-vacuity: the bye shares its round with a real line").toBe(2);
-    expect(roundDone(byeRound?.fixtures ?? [], new Set()), "day one: 0 of 2, the waiting bye owed, not done").toEqual({ done: 0, total: 2 });
+    expect(roundDone(byeRound?.fixtures ?? [], new Set()), "day one: 0 of 1, the waiting bye no match").toEqual({ done: 0, total: 1 });
     const ctx = { stageId: rig.koStageId, nowMs, matchMinutes: 30 };
     expect(runSheetCounts(blocks, ctx).unscheduled, "the Unscheduled chip counts the two real lines only").toBe(2);
     const keep = { ...ctx, tz: "UTC", today: dayKeyInTz(nowMs, "UTC") };
@@ -642,9 +648,11 @@ describe.runIf(HAS_DB)("W4 T3 K2 a bracket bye line never takes or keeps a court
     expect(WRONG_BYE_SENTENCES, "anti-vacuity: the right name differs from a side swap and from a missing feed").not.toContain(want);
     expect(tieRow.html, "names the feeder whose winner walks over her dead seat").toContain(want);
 
-    // Owner-approved quirk (B1a shots): the round bar. The dead-seat tie is owed its walkover, so it counts in its round's
-    // total and never as done — a round whose only line it is reads "0 of 1", never "0 of 0" — and once the walkover
-    // lands it is done, the total unchanged. Expected totals = the round's lines in the stored bracket.
+    // B1b fix round 1 (Q1): the round bar. Her seat's feeder (`a`) handed on a winner who has withdrawn, so the server flags
+    // the tie as awaiting its walkover (`awaits_walkover`): it counts in its round's total and never as done, and once the
+    // walkover lands it is done, the total unchanged. Expected totals = the round's lines in the stored bracket. (The final-round
+    // shape - a round whose ONLY line is such a tie - is driven for real below, not filtered out of this one: Q2.)
+    expect(sheetTie.awaits_walkover, "the server flags the dead-seat tie as awaiting its walkover").toBe(true);
     const tieRound = rows.find((r) => r.id === tieId)!.round_no;
     const linesInRound = rows.filter((r) => r.round_no === tieRound).length;
     expect(linesInRound, "anti-vacuity: the tie's round holds the tie and its sibling").toBe(2);
@@ -660,8 +668,6 @@ describe.runIf(HAS_DB)("W4 T3 K2 a bracket bye line never takes or keeps a court
     };
     const waitingRound = await roundOf();
     expect(roundDone(waitingRound, new Set()), "waiting: the tie counts in its round, not as done").toEqual({ done: 0, total: linesInRound });
-    const tieAlone = waitingRound.filter((f) => f.id === tieId);
-    expect(roundDone(tieAlone, new Set()), "a round whose only line is the waiting tie: 0 of 1, never 0 of 0").toEqual({ done: 0, total: 1 });
 
     const arriving = await play(b.id);
     const tie = await rowOf(s.stageId, tieId);
@@ -671,5 +677,139 @@ describe.runIf(HAS_DB)("W4 T3 K2 a bracket bye line never takes or keeps a court
     ]);
     expect(roundDone(await roundOf(), new Set()), "the walkover landed: done, the total unchanged").toEqual({ done: 1, total: linesInRound });
     expect(slot(tie), "the withdrew walkover keeps the slot it held").toEqual(placed);
+  }, 180_000);
+});
+
+// W4 B1b fix round 1 (Q1/Q2, controller ruling): the round bar and the desk count by ONE exact rule, driven here through the REAL
+// final-round shapes rather than a round filtered down to one line. A knockout of four: the two semi-finals, then the final alone in
+// its round. Expected values come from the scenario (which lines are matches), never from the code under test; the desk's
+// "N of M played" is held to the sum of the knockout's own round bars at every step, so the two can never tell different stories.
+//
+// single-sport: badminton — the rule reads the feed edges, seats, labels, status and outcome; no sport field.
+describe.skipIf(!HAS_DB)("W4 B1b Q1/Q2: the final-round shapes — the round bar and the desk agree, and no bar reads '0 of 0'", () => {
+  const AT = new Date("2030-07-01T10:00:00Z");
+  /** The knockout's round bars, off the division page's own read (`listDivisionFixtures`, adapted as the Fixtures tab does). */
+  async function barsOf(s: { auth: AuthCtx; divisionId: string; stageId: string }) {
+    const wire = await listDivisionFixtures(s.auth, s.divisionId);
+    const blocks = buildRunSheet({ fixtures: wire.map(toSheetRow), stages: [{ id: s.stageId, seq: 1, kind: "knockout" }], tz: "UTC", nowMs: AT.getTime() });
+    const bracket = blocks.find((x) => x.kind === "bracket");
+    const rounds = bracket && bracket.kind === "bracket" ? bracket.rounds : [];
+    return { wire, blocks, rounds: rounds.map((r) => ({ round: r.round, ...roundDone(r.fixtures, new Set()) })) };
+  }
+  /** The bar's words as a person reads them, from the real `RunSheet` the stage card mounts. */
+  function barWords(blocks: readonly RunSheetBlock[], stageId: string): string[] {
+    const html = renderToStaticMarkup(
+      createElement(DictProvider, {
+        dict: enUi as never,
+        locale: "en",
+        children: createElement(RunSheet, {
+          blocks: [...blocks],
+          stages: [{ id: stageId, kind: "knockout", name: "Cup" }],
+          tz: "UTC",
+          orgTz: "UTC",
+          nowMs: AT.getTime(),
+          matchMinutes: 30,
+          entrantNames: {},
+          canEdit: true,
+          hrefFor: () => "#",
+          filter: "all",
+          onFilter: () => {},
+          stageId,
+          embedded: true,
+        }),
+      }),
+    );
+    return [...html.matchAll(/<header[^>]*data-testid="run-sheet-round-bar"[^>]*>([\s\S]*?)<\/header>/g)].map((m) =>
+      m[1]!.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().replace(/\s+·/g, " ·"),
+    );
+  }
+  const deskOf = async (s: { auth: AuthCtx; competitionId: string; divisionId: string }) => {
+    const d = (await getCompetitionDesk(s.auth, s.competitionId, AT)).divisions.get(s.divisionId)!;
+    return { played: d.played, total: d.total };
+  };
+  const sum = (rounds: { done: number; total: number }[]) => ({
+    played: rounds.reduce((n, r) => n + r.done, 0),
+    total: rounds.reduce((n, r) => n + r.total, 0),
+  });
+  /** The bye slot label on either side of a wire row (the same stored marker `byeLabelled` reads off a raw row). */
+  const wireByeLabelled = (f: { home_slot_label: unknown; away_slot_label: unknown }) =>
+    [f.home_slot_label, f.away_slot_label].some((l) => (l as { key?: unknown } | null)?.key === "bracket.slot.bye");
+  const EN = enUi as Record<string, string>;
+  const DONE = (done: number, total: number) => EN[total === 1 ? "runsheet.round.done.one" : "runsheet.round.done.other"]!.replace("{done}", String(done)).replace("{total}", String(total));
+
+  it("a final waiting on a dead seat whose feeder's winner withdrew: 'Final · 0 of 1' (owed, not done), the desk agrees; the walkover lands '1 of 1'", async () => {
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 4 });
+    const rows = await bracketRows(s.stageId);
+    const semis = rows.filter((r) => r.winner_to_fixture !== null);
+    expect(semis.length, "rig: two semi-finals").toBe(2);
+    const final = rows.find((r) => r.winner_to_fixture === null)!;
+    expect(rows.filter((r) => r.round_no === final.round_no).length, "premise: the final is alone in its round").toBe(1);
+    const [sf1, sf2] = semis as [(typeof semis)[number], (typeof semis)[number]];
+    const w1 = (await playBadminton(s.auth, sf1.id, true)).home_entrant_id!;
+    await withdrawEntrantCascade(s.auth, w1);
+
+    const waiting = await barsOf(s);
+    const wireFinal = waiting.wire.find((f) => f.id === final.id)!;
+    expect([wireFinal.status, wireFinal.outcome, wireByeLabelled(wireFinal)], "premise: her seat is dead and the final waits, pre-award").toEqual(["scheduled", null, true]);
+    expect(wireFinal.awaits_walkover, "the server flags it: its dead seat's feeder handed on a winner who withdrew").toBe(true);
+    expect(waiting.rounds, "the semis 1 of 2; the final owed its walkover, 0 of 1").toEqual([
+      { round: sf1.round_no, done: 1, total: 2 },
+      { round: final.round_no, done: 0, total: 1 },
+    ]);
+    expect(barWords(waiting.blocks, s.stageId).at(-1), "the final's bar, as read").toBe(`Final · ${DONE(0, 1)}`);
+    expect(await deskOf(s), "the desk says what the bars add up to").toEqual(sum(waiting.rounds));
+
+    const arriving = (await playBadminton(s.auth, sf2.id, true)).home_entrant_id!;
+    const landed = await barsOf(s);
+    const finalNow = landed.wire.find((f) => f.id === final.id)!;
+    expect([finalNow.status, finalNow.outcome], "the arrival walks over her dead seat").toEqual([
+      "forfeited",
+      { kind: "award", winner: arriving, loser: w1, reason: "withdrew" },
+    ]);
+    expect(finalNow.awaits_walkover, "settled: it awaits nothing").toBe(false);
+    expect(landed.rounds, "every line done, the totals unchanged").toEqual([
+      { round: sf1.round_no, done: 2, total: 2 },
+      { round: final.round_no, done: 1, total: 1 },
+    ]);
+    expect(barWords(landed.blocks, s.stageId).at(-1)).toBe(`Final · ${DONE(1, 1)}`);
+    expect(await deskOf(s), "the desk agrees after the walkover too").toEqual(sum(landed.rounds));
+  }, 180_000);
+
+  it("a final whose dead seat's feeder handed on nobody (a double walkover): its bye is no match — 'Final · Bye', never '0 of 0'; the desk leaves it out", async () => {
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 4 });
+    const rows = await bracketRows(s.stageId);
+    const semis = rows.filter((r) => r.winner_to_fixture !== null);
+    const final = rows.find((r) => r.winner_to_fixture === null)!;
+    const [sf1, sf2] = semis as [(typeof semis)[number], (typeof semis)[number]];
+    const dw = await post(s.auth, sf1.id, "core.forfeit", { by: "both", reason: "walkover" });
+    expect([dw.status, dw.outcome], "rig: the double walkover is recorded").toEqual(["forfeited", { kind: "double_walkover" }]);
+
+    // The server stamps the dead seat late (W2b X-DW-2: nothing is decided about the final until its other feeder resolves), so
+    // until then the final is an ordinary line waiting on two feeders, and it counts.
+    const early = await barsOf(s);
+    const earlyFinal = early.wire.find((f) => f.id === final.id)!;
+    expect([earlyFinal.status, wireByeLabelled(earlyFinal), earlyFinal.awaits_walkover], "premise: not yet stamped, no bye line").toEqual(["scheduled", false, false]);
+    expect(early.rounds.at(-1), "the final still waits: 0 of 1").toEqual({ round: final.round_no, done: 0, total: 1 });
+
+    const arriving = (await playBadminton(s.auth, sf2.id, true)).home_entrant_id!;
+    const after = await barsOf(s);
+    const finalNow = after.wire.find((f) => f.id === final.id)!;
+    expect([finalNow.status, finalNow.outcome, wireByeLabelled(finalNow)], "the final is a bye to the arrival: no feeder winner left the seat").toEqual([
+      "forfeited",
+      { kind: "award", winner: arriving, loser: null, reason: "bye" },
+      true,
+    ]);
+    expect(after.rounds, "the semis 2 of 2; the final has no line that counts").toEqual([
+      { round: sf1.round_no, done: 2, total: 2 },
+      { round: final.round_no, done: 0, total: 0 },
+    ]);
+    const words = barWords(after.blocks, s.stageId);
+    expect(words.length, "anti-vacuity: both rounds draw a bar").toBe(2);
+    expect(words.at(-1), "the final's bar says it is a bye").toBe(`Final · ${EN["runsheet.round.byes.one"]}`);
+    expect(words.join(" | "), "no bar reads 0 of 0").not.toContain(DONE(0, 0));
+    expect((await deskOf(s)).total, "the desk's total leaves the bye out, as the bars do").toBe(sum(after.rounds).total);
+    const raw = (await listDivisionCardStats(s.auth, s.competitionId)).get(s.divisionId)!;
+    const desk = await deskOf(s);
+    expect([raw.played - desk.played, raw.total - desk.total], "the desk takes exactly the one bye line out of both numbers").toEqual([1, 1]);
   }, 180_000);
 });

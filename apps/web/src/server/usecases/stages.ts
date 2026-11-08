@@ -74,6 +74,7 @@ import { pinStageTableRules, stageTableRulesDocs, type StageTableRulesDoc } from
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { killsLoserEdge, lockDivisionConfigShared, lockStageSeats } from "@/server/engine-db/fed-seats";
 import { completionEngineStatus, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { deadSeatLeaverSql } from "@/server/engine-db/system-bye-sql";
 import { forfeitPlayedFacts, playedFor } from "@/server/engine-db/forfeit-played";
 import { FIXTURE_DELETED_REASON, ROUND_VOIDED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
@@ -349,6 +350,11 @@ export interface FixtureRow {
   /** W2c Task 19 (S4): the match has a format of its own over its stage's (`fixtures.rules_override is not null`) - the run
    *  sheet's "Format changed" chip reads it. Read by `listDivisionFixtures` only; the v1 list route strips it. */
   format_changed?: boolean;
+  /** W4 B1b fix round 1 (Q1): a bye line still waiting on its award whose award will be a WALKOVER - its dead seat's feeder
+   *  handed on a winner who has withdrawn (`awaitsWalkoverSql`, the fragment `awardSeededByes` writes the award from) - so a
+   *  match owed. The run sheet's round bar counts it in its total (never as done); every other waiting bye line becomes a
+   *  bye and is no match. Read by `listDivisionFixtures` only; the v1 list route strips it. */
+  awaits_walkover?: boolean;
 }
 
 export async function listStages(auth: AuthCtx, divisionId: string): Promise<StageRow[]> {
@@ -4973,13 +4979,12 @@ export async function stampDepartedSeat(tx: Tx, fixtureId: string, slot: number)
 async function awardSeededByes(tx: Tx, stageId: string): Promise<string[]> {
   const rows = await tx<{ id: string; withdrew: boolean }[]>`
     with lines as (
+      -- W4 B1b fix round 1 (Q1): who held the dead seat is deadSeatLeaverSql, the same fragment the run sheet and the desk
+      -- read (awaitsWalkoverSql) to count this line before its award. Over the rows below (one seat filled, the other empty
+      -- and bye-labelled) its phantom slot is exactly the empty side, as the inline case it replaces read it.
+      -- NOTE: no backticks in this comment. It lives inside a JS tagged template literal, where a backtick ENDS the SQL.
       select f.id, coalesce(f.home_entrant_id, f.away_entrant_id) as winner,
-             (select src.outcome ->> 'winner' from fixtures src
-                join entrants e on e.id::text = src.outcome ->> 'winner'
-               where src.winner_to_fixture = f.id
-                 and src.winner_to_slot = case when f.home_entrant_id is null then 1 else 2 end
-                 and e.status = 'withdrawn'
-               limit 1) as withdrawn
+             ${deadSeatLeaverSql(tx, "f")} as withdrawn
         from fixtures f
        where f.stage_id = ${stageId}
          and f.status = 'scheduled'

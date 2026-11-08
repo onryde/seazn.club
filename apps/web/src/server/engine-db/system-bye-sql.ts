@@ -52,3 +52,44 @@ export function byeLineSql(tx: Tx | postgres.Sql, on = "f") {
       or (${f}.away_entrant_id is null and ${f}.away_slot_label ->> 'key' = ${BYE_SLOT_LABEL.key})),
     false))`;
 }
+
+/** The phantom side of a pre-award bye line as its feed slot (1 = home, 2 = away), or null: `byePhantomSide`'s SQL twin
+ *  (lib/bye-line.ts) — the EMPTY side carrying the bye slot label, home first. */
+function phantomSlotSql(tx: Tx | postgres.Sql, on: string) {
+  const f = tx(on);
+  return tx`case
+    when ${f}.home_entrant_id is null and ${f}.home_slot_label ->> 'key' = ${BYE_SLOT_LABEL.key} then 1
+    when ${f}.away_entrant_id is null and ${f}.away_slot_label ->> 'key' = ${BYE_SLOT_LABEL.key} then 2
+  end`;
+}
+
+/**
+ * W4 B1b fix round 1 (Q1): who held a bye line's DEAD SEAT, as SQL over the fixtures row `on` — the winner its phantom side's
+ * feeder handed on (`winner_to_fixture` / `winner_to_slot`), when that entrant has since withdrawn (owner ruling 116) — or
+ * null. THE one answer to "walkover or bye": `awardSeededByes` (usecases/stages.ts) writes the award from it (non-null: a
+ * `withdrew` walkover over her seat, a match; null: a `bye`, no match), and `awaitsWalkoverSql` below tells the run sheet and
+ * the desk the same thing BEFORE the award, so the count and the award cannot disagree. A day-one setup bye has no feeder; a
+ * feeder that handed on nobody (a double walkover, a void) has no winner; a disqualified winner is not `withdrawn` — each null.
+ */
+export function deadSeatLeaverSql(tx: Tx | postgres.Sql, on = "f") {
+  return tx`(select src.outcome ->> 'winner' from fixtures src
+       join entrants e on e.id::text = src.outcome ->> 'winner'
+      where src.winner_to_fixture = ${tx(on)}.id
+        and src.winner_to_slot = ${phantomSlotSql(tx, on)}
+        and e.status = 'withdrawn'
+      limit 1)`;
+}
+
+/**
+ * W4 B1b fix round 1 (Q1): a bye line still waiting on its award (`scheduled`, no outcome, a phantom side) whose award will be a
+ * WALKOVER (`deadSeatLeaverSql` non-null) — so it is a match owed, which the run sheet's round bar and the desk count in their
+ * totals (never as played). Never null; the feeder probe runs only for a waiting bye line.
+ */
+export function awaitsWalkoverSql(tx: Tx | postgres.Sql, on = "f") {
+  const f = tx(on);
+  return tx`(case
+    when ${f}.status = 'scheduled' and ${f}.outcome is null and ${phantomSlotSql(tx, on)} is not null
+      then ${deadSeatLeaverSql(tx, on)} is not null
+    else false
+  end)`;
+}

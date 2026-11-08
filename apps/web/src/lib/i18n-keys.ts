@@ -6710,6 +6710,8 @@ export type DictionaryKey =
   | "runsheet.round.batchCloses"
   | "runsheet.round.batchOpens"
   | "runsheet.round.batchesLabel"
+  | "runsheet.round.byes.one"
+  | "runsheet.round.byes.other"
   | "runsheet.round.confirmBody.one"
   | "runsheet.round.confirmBody.other"
   | "runsheet.round.confirmBodyReinvite.one"

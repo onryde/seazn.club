@@ -426,6 +426,11 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
     const WIN = { kind: "win", winner: "e1" };
     const BYE_AWARD = { kind: "award", winner: "e1", loser: null, reason: "bye" };
     const parse = (line: string): { done: number; total: number } => {
+      // W4 B1b Q1: a round with no line that counts says it is a bye, never "0 of 0" - nothing done, nothing to do.
+      const facts = line.split(" · ")[1];
+      for (const key of ["runsheet.round.byes.one", "runsheet.round.byes.other"]) {
+        if (facts === UI[key]!.replace("{count}", String(facts?.match(/\d+/)?.[0] ?? ""))) return { done: 0, total: 0 };
+      }
       for (const key of ["runsheet.round.done.one", "runsheet.round.done.other"]) {
         const rx = new RegExp(UI[key]!.replace("{done}", "(\\d+)").replace("{total}", "(\\d+)"));
         const m = rx.exec(line);
@@ -538,5 +543,49 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
     expect(html).toContain("data-run-sheet-day");
     expect(html).toContain('data-run-sheet-block="unscheduled"');
     expect(html).not.toContain('data-run-sheet-block="rounds"');
+  });
+});
+
+// W4 B1b fix round 1 (Q1, controller ruling): a knockout round's bar NEVER reads "0 of 0". A round with no line that counts - a
+// final settled as a bye (its dead seat's feeder handed on nobody), a round of day-one setup byes still waiting on the confirm -
+// says it is a bye ("Bye", "2 byes") in the reader's language instead. A final waiting on a dead seat whose feeder's winner
+// withdrew (`awaits_walkover`, the server's flag) is owed its walkover and reads "0 of 1". Every sentence from the dictionaries.
+describe("a knockout round with no line that counts says it is a bye, never '0 of 0' (W4 B1b Q1)", () => {
+  const BYE_LABEL = { key: "bracket.slot.bye", params: {} };
+  const SEED = { key: "slot.rank", params: { rank: 1 } };
+  const FED = { key: "slot.winner_match", params: { round: 1, seq: 1 } };
+  const byes = (count: number, dict: Record<string, string> = UI) =>
+    dict[count === 1 ? "runsheet.round.byes.one" : "runsheet.round.byes.other"]!.replace("{count}", String(count));
+  const KO = stage("knockout");
+
+  it("the empty case first: a knockout's final with two seats waiting reads '0 of 1', no bye word", () => {
+    const html = sheet([fx(1, { home_entrant_id: null, away_entrant_id: null, home_slot_label: FED, away_slot_label: FED, scheduled_at: null })], KO);
+    expect(bars(html)).toEqual([`Final · ${done(0, 1)}`]);
+  });
+
+  it("every locale: a final settled as a bye reads 'Bye'; a final awaiting its walkover reads '0 of 1'; neither reads '0 of 0'", () => {
+    const awardedBye = fx(1, { away_entrant_id: null, away_slot_label: BYE_LABEL, status: "forfeited", scheduled_at: null, outcome: { kind: "award", winner: "e1", loser: null, reason: "bye" } });
+    const awaitingWalkover = fx(1, { home_entrant_id: null, away_entrant_id: null, home_slot_label: BYE_LABEL, away_slot_label: FED, scheduled_at: null, awaits_walkover: true });
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const dict = DICTS[locale] as Record<string, string>;
+      expect(typeof dict["runsheet.round.byes.one"] === "string" && typeof dict["runsheet.round.byes.other"] === "string", `${locale}: the bye words exist`).toBe(true);
+      const bye = bars(sheet([awardedBye], KO, { locale }));
+      expect(bye.length, `${locale}: one bar`).toBe(1);
+      expect(bye[0]!.split(" · ")[1], `${locale}: the settled bye says it is a bye`).toBe(byes(1, dict));
+      expect(bye[0], `${locale}: never 0 of 0`).not.toContain(done(0, 0, dict));
+      const owed = bars(sheet([awaitingWalkover], KO, { locale }));
+      expect(owed[0]!.split(" · ")[1], `${locale}: the walkover is owed`).toBe(done(0, 1, dict));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every locale").toBe(LOCALES.length);
+  });
+
+  it("a round of two setup byes still waiting on the confirm says '2 byes'; beside one real line it counts the line alone", () => {
+    const waitingBye = (no: number) =>
+      fx(no, { home_entrant_id: null, away_entrant_id: null, home_slot_label: SEED, away_slot_label: BYE_LABEL, scheduled_at: null, seq_in_round: no });
+    expect(bars(sheet([waitingBye(1), waitingBye(2)], KO)).map((b) => b.split(" · ")[1]), "two byes").toEqual([byes(2)]);
+    const real = fx(3, { scheduled_at: null, seq_in_round: 3 });
+    expect(bars(sheet([waitingBye(1), real], KO)).map((b) => b.split(" · ")[1]), "the bye beside a match: 0 of 1").toEqual([done(0, 1)]);
   });
 });

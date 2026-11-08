@@ -6112,6 +6112,8 @@
   "runsheet.unscheduled.title": "Aún sin programar",
   "runsheet.round.done.one": "{done} de {total} terminado",
   "runsheet.round.done.other": "{done} de {total} terminados",
+  "runsheet.round.byes.one": "Descanso",
+  "runsheet.round.byes.other": "{count} descansos",
   "runsheet.noTimeYet": "Sin hora todavía",
   "runsheet.now": "AHORA",
   "runsheet.action.openPad": "Abrir marcador",

@@ -6112,6 +6112,8 @@
   "runsheet.unscheduled.title": "Nog niet ingepland",
   "runsheet.round.done.one": "{done} van {total} afgerond",
   "runsheet.round.done.other": "{done} van {total} afgerond",
+  "runsheet.round.byes.one": "Bye",
+  "runsheet.round.byes.other": "{count} byes",
   "runsheet.noTimeYet": "Nog geen tijd",
   "runsheet.now": "NU",
   "runsheet.action.openPad": "Scorebord openen",

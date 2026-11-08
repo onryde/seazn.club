@@ -44,6 +44,8 @@ export async function GET(req: Request, { params }: Ctx) {
         "no_result",
         // W2c Task 19 (S4): the run sheet's "Format changed" chip read, not part of the published `Fixture` contract either.
         "format_changed",
+        // W4 B1b fix round 1 (Q1): the run sheet's round-bar count read, not part of the published `Fixture` contract either.
+        "awaits_walkover",
       ),
     );
   });

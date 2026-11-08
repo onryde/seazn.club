@@ -1024,14 +1024,17 @@ function RowWithNow({
   );
 }
 
-/** "0 of 2 done": the round's own fact, `roundDone` (the stage card's own count of the real matches in it, held settles open), in the
- *  plural the locale picks for the total. */
+/** "0 of 2 done": the round's own fact, `roundDone` (the stage card's own count of the lines in it that count, held settles open), in the
+ *  plural the locale picks for the total. W4 B1b fix round 1 (Q1): a round with NO line that counts - every line in it a bye (a
+ *  final settled as a bye, setup byes waiting on the confirm) - never reads "0 of 0": it says it is a bye ("Bye", "2 byes"). A bar
+ *  is drawn only over a round with rows (`roundsWithRows`, the non-empty `sections`), so `fixtures` is never empty here. */
 function roundDoneText(
   msgPlural: (key: string, count: number, vars?: Record<string, string | number>) => string,
   fixtures: readonly RunSheetFixture[],
   held: ReadonlySet<string>,
 ): string {
   const { done, total } = roundDone(fixtures, held);
+  if (total === 0) return msgPlural("runsheet.round.byes", fixtures.length);
   return msgPlural("runsheet.round.done", total, { done, total });
 }
 

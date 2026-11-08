@@ -6112,6 +6112,8 @@
   "runsheet.unscheduled.title": "Not yet scheduled",
   "runsheet.round.done.one": "{done} of {total} done",
   "runsheet.round.done.other": "{done} of {total} done",
+  "runsheet.round.byes.one": "Bye",
+  "runsheet.round.byes.other": "{count} byes",
   "runsheet.noTimeYet": "No time yet",
   "runsheet.now": "NOW",
   "runsheet.action.openPad": "Open pad",

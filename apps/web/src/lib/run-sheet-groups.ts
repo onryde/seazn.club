@@ -27,7 +27,7 @@ import { zonedTimeInput } from "@/lib/zoned-datetime";
 import type { FixtureRow } from "@/server/usecases/stages";
 import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import { isUnseatedSwissByeShell } from "@/lib/swiss-shell";
-import { byePhantomSide, isWaitingByeLine } from "@/lib/bye-line";
+import { isWaitingByeLine } from "@/lib/bye-line";
 import type { CameraPolicy } from "@/lib/camera-policy";
 import type { NeedsReason } from "@/server/external-play/types";
 import { stageCounts } from "@/lib/stage-card/summaries";
@@ -73,6 +73,8 @@ export type RunSheetFixture = Pick<
   | "abandon_reason"
   // W2c Task 19 (S4): the match plays a format of its own - the "Format changed" chip (`desk/run-sheet-tags.ts`).
   | "format_changed"
+  // W4 B1b fix round 1 (Q1): a waiting bye line whose award will be a walkover - counted by the round bar (`countsAsMatch`).
+  | "awaits_walkover"
 > &
   // Match Day E1 fix rounds 1 and 3: a group stage's row says which pool it is (the row's pool chip) and ties in time read by pool
   // (`stageRoundSections`). OPTIONAL on purpose: the wire row always carries it (`toRunSheetFixture` spreads the whole row), but a hand-built
@@ -182,7 +184,7 @@ export const ROUND_SEQUENCE_STAGE_KINDS: ReadonlySet<string> = new Set(["league"
  *  predicate the desk and the board read too) — a bracket's pre-award bye line, a seed filled but not awarded, a
  *  withdrawal's dead seat waiting on the side that walks over it. The server never places one (BYE_LINE_NOT_PLACEABLE),
  *  so the stage rail's "to schedule" badge, the Unscheduled chip and the row's Set time must never see it either. */
-export function isBye(f: RunSheetFixture): boolean {
+export function isBye(f: MatchLineRow): boolean {
   if (isUnseatedSwissByeShell(f)) return true;
   // The wire row's `ext_key` is optional (`FixtureRow`); absent is no key.
   if (isWaitingByeLine({ ...f, ext_key: f.ext_key ?? null })) return true;
@@ -190,6 +192,33 @@ export function isBye(f: RunSheetFixture): boolean {
   if (o?.kind !== "award") return false;
   const empty = f.home_entrant_id === null ? "home" : f.away_entrant_id === null ? "away" : null;
   return empty !== null && unseatedForfeitLoser(f, empty) === null;
+}
+
+/** The columns `isBye` and `countsAsMatch` read: a run-sheet row has them all, and so does the desk's own fixture read
+ *  (usecases/competition-desk.ts), which is how the desk asks the run sheet's question rather than a twin of it. */
+export interface MatchLineRow {
+  status: string;
+  outcome: unknown;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  home_slot_label: unknown;
+  away_slot_label: unknown;
+  ext_key?: string | null;
+  /** The server's flag (`awaitsWalkoverSql`): a waiting bye line whose award will be a walkover. Absent is no. */
+  awaits_walkover?: boolean;
+}
+
+/**
+ * W4 B1b fix round 1 (Q1, controller ruling): does this row count in an "N of M" - a round bar's and the desk's alike? Every real
+ * match does (`isBye` false). A bye line does NOT - a setup bye, a bye award, a Swiss bye - with ONE exception: a bye line still
+ * waiting on its award that the server says will be a WALKOVER (`awaits_walkover`: its dead seat's feeder handed on a winner who
+ * has withdrawn, ruling 116). That line is a match owed - counted, never as done until the walkover lands. A day-one setup bye (no
+ * feeder) and a dead seat whose feeder handed on nobody (a double walkover, a void) become byes, so they never count. The flag
+ * counts only on a line still waiting (`isWaitingByeLine`): a settled row is what its award made it.
+ */
+export function countsAsMatch(f: MatchLineRow): boolean {
+  if (!isBye(f)) return true;
+  return f.awaits_walkover === true && isWaitingByeLine({ ...f, ext_key: f.ext_key ?? null });
 }
 
 /** A settled fixture with no time is a RESULT, not open scheduling work —
@@ -459,26 +488,18 @@ function inReadingOrder(poolOrder: ReadonlyMap<string, number>): (a: RunSheetFix
 }
 
 /**
- * A knockout line still waiting on its award: a phantom side (`byePhantomSide`) and nothing settled (`isWaitingByeLine`) - the
- * day-one bye, or a dead seat waiting on the side that walks over it (owner-approved quirk, W4 B1a shots). Which of the two it
- * will become is not on the row, so `roundDone` counts it in the total and never as done. The Swiss bye shell is no such line:
- * it has no phantom side until Pair seats it as a bye, never a match.
- */
-function awaitsItsAward(f: RunSheetFixture): boolean {
-  return byePhantomSide(f) !== null && isWaitingByeLine({ ...f, ext_key: f.ext_key ?? null });
-}
-
-/**
- * "N of M done" for one round: M is every real match in it (byes are no match) plus every knockout line still waiting on its
- * award (`awaitsItsAward`: owed, so a final waiting on a dead seat reads "0 of 1", never "0 of 0"), N what the stage card itself
- * counts as finished - `stageCounts`' `played` bucket, the number the Complete button waits on. A walkover, an abandonment and a
- * cancellation are done (nothing is left to play); a match held for its settle is not (`held` is the ids the page lists as
- * awaiting it). Once its award lands a waiting line is what it became: a walkover is done, a bye leaves the count. Over real
- * matches only, the bars of a stage's rounds add up to the stage's own counts line.
+ * "N of M done" for one round: M is every line in it that counts (`countsAsMatch`: every real match, plus a bye line awaiting
+ * its walkover - owed, so a final waiting on a dead seat whose feeder's winner withdrew reads "0 of 1"; every other bye line is no
+ * match), N what the stage card itself counts as finished - `stageCounts`' `played` bucket, the number the Complete button
+ * waits on. A walkover, an abandonment and a cancellation are done (nothing is left to play); a match held for its settle is not
+ * (`held` is the ids the page lists as awaiting it), nor a line still awaiting its walkover (`scheduled`). Once its award lands a
+ * waiting line is what it became: a walkover is done, a bye leaves the count. A round with no line that counts is `total: 0`,
+ * which the bar says as a bye, never "0 of 0" (run-sheet.tsx). Over real matches only, the bars of a stage's rounds add up to the
+ * stage's own counts line; the desk's "N of M played" asks `countsAsMatch` too (W4 B1b fix round 1, Q1).
  */
 export function roundDone(fixtures: readonly RunSheetFixture[], held: ReadonlySet<string>): { done: number; total: number } {
-  const real = fixtures.filter((f) => !isBye(f));
-  return { done: stageCounts(real, held).played, total: real.length + fixtures.filter(awaitsItsAward).length };
+  const counted = fixtures.filter(countsAsMatch);
+  return { done: stageCounts(counted, held).played, total: counted.length };
 }
 
 /**
