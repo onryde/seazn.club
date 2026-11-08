@@ -2398,6 +2398,7 @@
   "knockout.refusal.BYE_LINE_NOT_PLACEABLE": "Une exemption ne se joue pas : elle n'occupe jamais de terrain ni d'horaire.",
   "knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE": "Ce tirage est confirmé et ne peut pas être annulé.",
   "knockout.refusal.STAGE_HAS_UNDECIDED_FIXTURES": "Ce tableau a encore des matchs sans résultat. Terminez-les ou tranchez-les d'abord.",
+  "knockout.refusal.COUNTRY_SEPARATION_NOT_OFFERED": "La séparation par pays n'est pas proposée : Seazn ne connaît pas le pays des joueurs ni des équipes.",
   "stage.err.swissRoundsRequired": "Une phase suisse a besoin d'un nombre de tours avant de pouvoir être enregistrée. Mettez Tours à 1 ou plus, puis appliquez à nouveau.",
   "swiss.refusal.SWISS_ADHOC_REFUSED": "Les tours suisses sont appariés automatiquement. Ajoutez les matchs amicaux dans une autre phase.",
   "swiss.refusal.SWISS_BYE_NOT_PLACEABLE": "Une exemption ne se joue pas : elle n'occupe ni terrain ni horaire.",

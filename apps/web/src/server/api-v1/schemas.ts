@@ -32,6 +32,8 @@ import { FIXTURE_STATUSES } from "../../lib/fixture-status.ts";
 // W3 T18 (RB3-7(c)): the sentence a requested half/zero bye is refused with — the table's own constant (client-safe and
 // strip-types-safe: its only import is `import type`), so this schema, `http.ts`'s reader and the table row say one thing.
 import { SWISS_REQUESTED_BYES_DEFERRED_MESSAGE } from "../../lib/swiss-refusals.ts";
+// W4 T7 (RB4-D9, X-SD-10): the same pattern for a country-separation request — the knockout table owns the sentence.
+import { COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE } from "../../lib/knockout-refusals.ts";
 // A PATCH twin whose omitted fields stay omitted (zod 4's `.partial()` fills a `.default()`); pure zod, relative + `.ts`.
 import { patchOf } from "../../lib/zod-patch.ts";
 // The entrant name limit, shared with the console's Name field (entrants-panel.tsx).
@@ -1243,6 +1245,10 @@ export const StageConfig = z
     byes: z.array(z.string()).optional(),
     slotOrder: z.array(z.number().int().nullable()).optional(),
     bracketReset: z.boolean().optional(),
+    // W4 T7 (RB4-D9, X-SD-10): country separation is not offered — Seazn holds no country for a player or a team — so the
+    // one key a client would reach for refuses by NAME (`http.ts` answers 400 COUNTRY_SEPARATION_NOT_OFFERED). Any value
+    // fails: the key accepts nothing. Club separation (RB4-D7/D8) is deferred (ruling 272) and has no key at all.
+    countrySeparation: z.never({ error: COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE }).optional(),
     // Americano / Mexicano.
     mode: z.enum(["americano", "mexicano"]).optional(),
     courtCount: z.number().int().min(1).optional(),

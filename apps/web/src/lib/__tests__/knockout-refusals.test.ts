@@ -21,6 +21,8 @@ const PLAN_CODES = [
   "SEED_CONFIRM_NOT_UNDOABLE",
   // T6 (AN-2): a bracket completes only with every match decided.
   "STAGE_HAS_UNDECIDED_FIXTURES",
+  // T7 (RB4-D9, X-SD-10): country separation is not offered — refused by name at the body door.
+  "COUNTRY_SEPARATION_NOT_OFFERED",
 ] as const;
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;

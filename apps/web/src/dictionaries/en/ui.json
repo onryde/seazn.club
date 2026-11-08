@@ -2398,6 +2398,7 @@
   "knockout.refusal.BYE_LINE_NOT_PLACEABLE": "A bye is not played, so it never takes a court or a time.",
   "knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE": "This draw is confirmed and can't be undone.",
   "knockout.refusal.STAGE_HAS_UNDECIDED_FIXTURES": "This bracket still has matches without a result. Finish or settle them first.",
+  "knockout.refusal.COUNTRY_SEPARATION_NOT_OFFERED": "Country separation isn't offered: Seazn holds no country for players or teams.",
   "stage.err.swissRoundsRequired": "A Swiss stage needs a number of rounds before it can be saved. Set Rounds to 1 or more and apply again.",
   "swiss.refusal.SWISS_ADHOC_REFUSED": "Swiss rounds are paired by the system. Add friendlies in another stage.",
   "swiss.refusal.SWISS_BYE_NOT_PLACEABLE": "A bye is not played, so it takes no court or time.",

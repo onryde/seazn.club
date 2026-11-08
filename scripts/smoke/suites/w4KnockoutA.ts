@@ -1,5 +1,6 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
 import { type Session, appendScoreEvent, check, newSession, signIn, tag, v1, v1data } from "../harness.ts";
+import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swiss-draw.ts";
 
 /**
  * Format matrix W4 knockout app-A (spec 2026-11-04-format-matrix-w4-knockout-design.md) — the app PR's smoke proof, over real
@@ -22,14 +23,18 @@ import { type Session, appendScoreEvent, check, newSession, signIn, tag, v1, v1d
  * semis and the final decided, the third-place match unplayed: Complete is refused 409 STAGE_HAS_UNDECIDED_FIXTURES naming
  * that line, the stage stays active; with the third-place match decided the same Complete goes through.
  *
+ * T7 (X-SD-7, K5): the unseeded are drawn with the stage's own seed. Six unseeded players registered one at a time: the
+ * byes go to the draw's top two (RB4-D2 over `lib/swiss-draw.ts`), never the first two to register by rule, and an Undo then a
+ * fresh Generate seats the same bracket.
+ *
  * Own fresh owner; keyless; every read and write is a v1 route. Every check is counted, and a run that checked nothing fails.
  * SMOKE_ONLY=w4KnockoutA runs it alone (SELECTABLE_SUITES).
  */
 export async function w4KnockoutASuite(): Promise<void> {
   // T2: 1 (a called final survives a void of its feeder). T3: 1 (an awarded bye holds no court). T4: 1 (the final keeps
   // its slot across an 8 → 9 Rebuild). T5: 1 (Undo refuses across a confirmed draw). T6: 1 (Complete refuses a bracket
-  // with its third-place match unplayed).
-  const EXPECTED_CHECKS = 5;
+  // with its third-place match unplayed). T7: 1 (an unseeded draw replays).
+  const EXPECTED_CHECKS = 6;
   let checked = 0;
   const w4Check = (label: string, cond: boolean) => {
     checked++;
@@ -327,6 +332,71 @@ export async function w4KnockoutASuite(): Promise<void> {
     w4Check(
       "w4a X-CH-7: Complete on a knockout whose third-place match is unplayed is refused 409 STAGE_HAS_UNDECIDED_FIXTURES naming it; decided, it completes" +
         (ok ? "" : ` — generate ${generated.status}, start ${started.status}, semis ${semis.length}, final ${final?.id ?? "none"} ${finalWon ?? "-"}, bronze ${bronze?.id ?? "none"}, complete ${refused.status} ${JSON.stringify(refused.json).slice(0, 200)}, stage ${stageAfter ?? "-"}, then ${done.status} ${JSON.stringify(done.json).slice(0, 160)}`),
+      ok,
+    );
+  }
+
+  // The draw and reconcile checks (T7, T8) share their own competition, so the first one's division count is never a cap.
+  const drawComp = v1data<{ id: string } | undefined>(
+    await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W4 Knockout A draw ${tag}`, visibility: "private" }),
+  );
+  /** A badminton division on the draw competition, `n` players registered ONE POST each (registration order is then the
+   *  server's own tie-break, `seed nulls last, created_at, id`), unseeded unless `seeded`, and a knockout stage. */
+  async function drawKnockout(label: string, n: number, seeded = false) {
+    const divId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/competitions/${drawComp?.id}/divisions`, "POST", { name: label, sport_key: "badminton", variant_key: "bwf", config: {} }),
+    )?.id;
+    const registered: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const e = v1data<{ id: string }[] | undefined>(
+        await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST", [
+          { kind: "individual", display_name: `${label} P${i + 1} ${tag}`, ...(seeded ? { seed: i + 1 } : {}) },
+        ]),
+      )?.[0];
+      if (e) registered.push(e.id);
+    }
+    const stageId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "knockout", name: label, config: {} }),
+    )?.id;
+    const fixtures = async () =>
+      (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    return { divId, stageId, registered, fixtures };
+  }
+  const seatsOf = (rows: Fx[]) => rows.map((f) => `${f.round_no}:${f.seq_in_round}:${f.home_entrant_id ?? "-"}|${f.away_entrant_id ?? "-"}`).sort().join(",");
+  const byeHoldersOf = (rows: Fx[]) =>
+    rows
+      .filter((f) => f.round_no === 1 && (f.home_entrant_id === null) !== (f.away_entrant_id === null))
+      .map((f) => (f.home_entrant_id ?? f.away_entrant_id)!)
+      .sort();
+
+  // Check 6 (T7, X-SD-7; K5): six unseeded players. Expected: the byes go to the top two of the stage's draw
+  // (`swissRoundOneOrder(swissDrawSeed(stage), registration order)`, RB4-D2), the first-round pairs are the fold's (draw
+  // positions 5 v 4 and 3 v 6, the standard 8-bracket), and an Undo then a fresh Generate seats exactly the same bracket.
+  {
+    const ko = await drawKnockout("Draw", 6);
+    const gen1 = await v1(owner, `/api/v1/stages/${ko.stageId}/generate`, "POST");
+    const first = await ko.fixtures();
+    const drawn = ko.stageId ? swissRoundOneOrder(swissDrawSeed(ko.stageId), ko.registered.map((id) => ({ id, seed: null }))) : [];
+    const wantByes = [drawn[0], drawn[1]].sort().join(",");
+    const pair = (a?: string, b?: string) => [a, b].sort().join("|");
+    const realPairs = first
+      .filter((f) => f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null)
+      .map((f) => pair(f.home_entrant_id!, f.away_entrant_id!))
+      .sort()
+      .join(",");
+    const wantPairs = [pair(drawn[4], drawn[3]), pair(drawn[2], drawn[5])].sort().join(",");
+    const undo = await v1(owner, `/api/v1/divisions/${ko.divId}/undo`, "POST", {});
+    const emptied = (await ko.fixtures()).length;
+    const gen2 = await v1(owner, `/api/v1/stages/${ko.stageId}/generate`, "POST");
+    const second = await ko.fixtures();
+    const ok =
+      ko.registered.length === 6 && gen1.status === 200 && first.length === 7 && drawn.length === 6 &&
+      byeHoldersOf(first).join(",") === wantByes && realPairs === wantPairs &&
+      undo.status === 200 && emptied === 0 &&
+      gen2.status === 200 && seatsOf(second) === seatsOf(first);
+    w4Check(
+      "w4a X-SD-7: six unseeded players are drawn with the stage's seed — the byes to the draw's top two — and Undo + Generate seats the same bracket" +
+        (ok ? "" : ` — players ${ko.registered.length}, generate ${gen1.status}, lines ${first.length}, byes ${byeHoldersOf(first).join(",")} vs ${wantByes}, pairs ${realPairs} vs ${wantPairs}, undo ${undo.status} ${JSON.stringify(undo.json).slice(0, 160)}, left ${emptied}, generate ${gen2.status}, same ${seatsOf(second) === seatsOf(first)}`),
       ok,
     );
   }

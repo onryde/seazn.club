@@ -18,7 +18,9 @@ export type KnockoutRefusalCode =
   // T5 (K1): an Undo, Redo or Restore that would step across a seed confirm (history.ts `UNDO_BARRIER_TYPES`).
   | "SEED_CONFIRM_NOT_UNDOABLE"
   // T6 (AN-2): Complete on a bracket the engine would complete while a line is still owed a result (`fixture_ids`).
-  | "STAGE_HAS_UNDECIDED_FIXTURES";
+  | "STAGE_HAS_UNDECIDED_FIXTURES"
+  // T7 (RB4-D9, X-SD-10): a stage config naming `countrySeparation` — refused by name at the BODY door (400).
+  | "COUNTRY_SEPARATION_NOT_OFFERED";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -26,6 +28,11 @@ export interface KnockoutRefusalRow {
   en: string;
   key: MessageKey;
 }
+
+/** RB4-D9 (X-SD-10): the stage-config schema's never-key carries this sentence (`api-v1/schemas.ts` `StageConfig`), and
+ *  `api-v1/http.ts` names the refusal by it. One literal, so the schema, the envelope and the table row say one thing. */
+export const COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE =
+  "Country separation isn't offered: Seazn holds no country for players or teams.";
 
 export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> = {
   BYE_LINE_NOT_PLACEABLE: {
@@ -42,6 +49,11 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 409,
     en: "This bracket still has matches without a result. Finish or settle them first.",
     key: "knockout.refusal.STAGE_HAS_UNDECIDED_FIXTURES",
+  },
+  COUNTRY_SEPARATION_NOT_OFFERED: {
+    status: 400,
+    en: COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE,
+    key: "knockout.refusal.COUNTRY_SEPARATION_NOT_OFFERED",
   },
 };
 

@@ -2398,6 +2398,7 @@
   "knockout.refusal.BYE_LINE_NOT_PLACEABLE": "Een bye wordt niet gespeeld, dus neemt nooit een veld of een tijd in.",
   "knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE": "Deze loting is bevestigd en kan niet ongedaan worden gemaakt.",
   "knockout.refusal.STAGE_HAS_UNDECIDED_FIXTURES": "Dit schema heeft nog wedstrijden zonder uitslag. Speel ze eerst uit of beslis ze.",
+  "knockout.refusal.COUNTRY_SEPARATION_NOT_OFFERED": "Scheiding per land wordt niet aangeboden: Seazn kent het land van spelers en teams niet.",
   "stage.err.swissRoundsRequired": "Een Zwitserse fase heeft een aantal rondes nodig voordat die kan worden opgeslagen. Zet Rondes op 1 of meer en pas het opnieuw toe.",
   "swiss.refusal.SWISS_ADHOC_REFUSED": "Zwitserse rondes worden door het systeem gekoppeld. Voeg vriendschappelijke wedstrijden toe in een andere fase.",
   "swiss.refusal.SWISS_BYE_NOT_PLACEABLE": "Een bye wordt niet gespeeld, dus neemt geen veld of tijd in.",

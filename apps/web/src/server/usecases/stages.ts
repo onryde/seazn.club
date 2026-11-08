@@ -1606,6 +1606,44 @@ export async function swissActiveEntrants(tx: Tx, divisionId: string, stageId: s
   return rows.map((e) => ({ id: e.id, seed: e.seed, swiss_first_round: swissFirstRoundIn(e, stageId) }));
 }
 
+/**
+ * W4 T7 (K5; RB4-D3, RB4-D6, X-SD-6/X-SD-9): whether a knockout's Generate DRAWS its field — the unseeded entrants placed
+ * at random (`knockoutDrawOrder`), never in registration order. Not when an API `slotOrder` is set (RB4-D6: the slot map
+ * overrides the draw, and it indexes into the field as given), nor when the stage draws from `config.qualified` (a fed
+ * stage: that order IS the seeding), nor when nobody is unseeded (a wholly seeded field is the fold alone, X-SW-22's rule).
+ */
+export function knockoutDraws(active: readonly ActiveEntrant[], cfg: Record<string, unknown>): boolean {
+  return !Array.isArray(cfg.slotOrder) && !Array.isArray(cfg.qualified) && active.some((e) => e.seed === null);
+}
+
+/**
+ * W4 T7 (K5; RB4-D3/D4): a root knockout's field in DRAW order — the seeded first, by seed (the engine folds them,
+ * RB4-D1/D2), then the unseeded shuffled with the stage's own seed (`swissRoundOneOrder(swissDrawSeed(stageId), …)`, the
+ * W3 draw: one PRNG, one seed rule, so the same stage and the same field always draw the same bracket — RB4-D4, and a
+ * Rebuild reuses it, RB4-D5). `active` itself (a copy, in its order) when the stage does not draw (`knockoutDraws`).
+ */
+export function knockoutDrawOrder(stageId: string, active: readonly ActiveEntrant[], cfg: Record<string, unknown>): ActiveEntrant[] {
+  if (!knockoutDraws(active, cfg)) return [...active];
+  const byId = new Map(active.map((e) => [e.id, e]));
+  return swissRoundOneOrder(swissDrawSeed(stageId), active).map((id) => {
+    const e = byId.get(id);
+    if (e === undefined) throw new Error(`knockoutDrawOrder: the draw returned ${id}, which is not in the field`);
+    return e;
+  });
+}
+
+/** W4 T7 (RB4-D4): the draw seed the stage's newest Generate recorded (`fixtures_generated.payload.draw_seed`), or null —
+ *  nothing generated yet, or that Generate drew nothing (a seeded field, an API slot map, a fed stage). The desk shows it
+ *  (Task 20). */
+export async function readStageDrawSeed(tx: Tx, stageId: string): Promise<number | null> {
+  const [row] = await tx<{ seed: unknown }[]>`
+    select e.payload->'draw_seed' as seed from division_events e
+    where e.division_id = (select division_id from stages where id = ${stageId})
+      and e.type = 'fixtures_generated' and e.payload->>'stage_id' = ${stageId}
+    order by e.seq desc limit 1`;
+  return typeof row?.seed === "number" ? row.seed : null;
+}
+
 /** Review m4: a Swiss round's field (`swissFieldForRound`) under 2 is refused exactly as generateStageFixturesTx refuses a
  *  roster under 2 — the same code, message and data, so every reader of that refusal reads this one too. Nothing is
  *  written first: both callers in `swissGen` throw before any reconcile or mint. */
@@ -3552,8 +3590,12 @@ export async function generateStageFixturesTx(
       entrants = qualified.filter((id) => activeIds.has(id)).map((id, i) => ({ id, seed: i + 1, swiss_first_round: null }));
     }
   } else {
-    entrants = active;
+    // W4 T7 (K5, X-SD-6): a root knockout draws its unseeded entrants with the stage's own seed — main placed them in the
+    // active select's order (`seed nulls last, created_at, id`), so the byes went to the earliest registrants.
+    entrants = stage.kind === "knockout" ? knockoutDrawOrder(stageId, active, stage.config) : active;
   }
+  // RB4-D4: the seed is recorded on this Generate's ledger row only when the draw was used.
+  const knockoutDrawSeed = stage.kind === "knockout" && qualified === null && knockoutDraws(active, stage.config) ? swissDrawSeed(stageId) : null;
   if (entrants.length < 2) {
     throw new EngineError("STAGE_NOT_READY", "need at least 2 active entrants to generate", {
       stageId,
@@ -3967,7 +4009,7 @@ export async function generateStageFixturesTx(
     await tx`
       insert into division_events (division_id, seq, type, payload)
       values (${stage.division_id}, ${last + 1}, 'fixtures_generated',
-              ${tx.json({ stage_id: stageId, fixture_ids: createdIds, ...(swissAudit ?? {}) } as never)})`;
+              ${tx.json({ stage_id: stageId, fixture_ids: createdIds, ...(swissAudit ?? {}), ...(knockoutDrawSeed !== null ? { draw_seed: knockoutDrawSeed } : {}) } as never)})`;
     await tx`update divisions set seq = ${last + 1}, edit_watermark = null
              where id = ${stage.division_id}`;
   }

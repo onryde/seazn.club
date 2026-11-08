@@ -2,6 +2,7 @@ import { test, expect, type APIRequestContext } from "@playwright/test";
 import { TAG, activeOrgIdFromRequest, apiJson, divisionPath, seedVenueWithCourts } from "./helpers";
 import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { swissDrawSeed, swissRoundOneOrder } from "../src/lib/swiss-draw";
 
 // W4 knockout app-A (spec 2026-11-04-format-matrix-w4-knockout-design.md). One describe per rule, each driven through the
 // real product: the v1 routes the desk and the pad call, and read back on the division's run sheet.
@@ -453,5 +454,72 @@ test.describe("X-CH-7 Complete refuses an unfinished bracket", () => {
     await complete.click();
     await expect.poll(stageStatus, { timeout: 20_000 }).toBe("complete");
     await expect(page.getByTestId("schedule-warning")).toHaveCount(0);
+  });
+});
+
+// X-SD-7 / X-SD-8 (W4 T7, K5): a knockout's unseeded players are DRAWN with the stage's own seed, never placed in
+// registration order — main handed the byes to the first two to register. The seed is the stage's, so the same field
+// draws the same bracket every time: an Undo then a fresh Generate, and a Rebuild, both seat it again. Expected seats come
+// from the draw (`lib/swiss-draw.ts` over the field in registration order) and the rulebook (RB4-D2: the byes go to the
+// draw's top two), never from the stage code; read back on the run sheet.
+test.describe("X-SD-7 the draw replays", () => {
+  test("six unseeded players: the byes go to the draw's top two, and Undo + Generate, then Rebuild, seat the same bracket", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Draw cup ${TAG}`, visibility: "private" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "badminton",
+      variant_key: "bwf",
+      config: {},
+    });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    // One POST each, so registration order is the server's own tie-break (`seed nulls last, created_at, id`).
+    const registered: { id: string; display_name: string }[] = [];
+    for (const n of ["Ana", "Ben", "Cas", "Dee", "Eli", "Fay"]) {
+      const added = await apiJson<{ id: string; display_name: string }[]>(request, `/api/v1/divisions/${divisionId}/entrants`, "POST", [
+        { kind: "individual", display_name: `Draw ${n} ${TAG}` },
+      ]);
+      expect(added.status, JSON.stringify(added.error)).toBe(201);
+      registered.push(added.data![0]!);
+    }
+    const nameOf = new Map(registered.map((e) => [e.id, e.display_name]));
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "knockout", name: "Cup", config: {} });
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    const stageId = stage.data!.id;
+    const drawn = swissRoundOneOrder(swissDrawSeed(stageId), registered.map((e) => ({ id: e.id, seed: null })));
+    const rows = async () => (await stageFixtures(request, divisionId, stageId)) as Seated[];
+    const seats = (fx: Seated[]) => fx.map((f) => `${f.round_no}:${f.seq_in_round}:${f.home_entrant_id ?? "-"}|${f.away_entrant_id ?? "-"}`).sort();
+    const byeHolders = (fx: Seated[]) =>
+      fx
+        .filter((f) => f.round_no === 1 && (f.home_entrant_id === null) !== (f.away_entrant_id === null))
+        .map((f) => nameOf.get((f.home_entrant_id ?? f.away_entrant_id)!)!)
+        .sort();
+
+    expect((await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST")).status).toBe(200);
+    const first = await rows();
+    expect(first.length, "premise: a bracket of eight, seven lines").toBe(7);
+    const want = [nameOf.get(drawn[0]!)!, nameOf.get(drawn[1]!)!].sort();
+    expect(byeHolders(first), "RB4-D2/D3: the byes go to the draw's top two").toEqual(want);
+
+    const undo = await apiJson(request, `/api/v1/divisions/${divisionId}/undo`, "POST", {});
+    expect(undo.status, JSON.stringify(undo.error)).toBe(200);
+    expect((await rows()).length, "Undo took the bracket away").toBe(0);
+    expect((await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST")).status).toBe(200);
+    expect(seats(await rows()), "RB4-D4: the same field draws the same bracket").toEqual(seats(first));
+    const rebuilt = await apiJson(request, `/api/v1/stages/${stageId}/rebuild`, "POST");
+    expect(rebuilt.status, JSON.stringify(rebuilt.error)).toBe(200);
+    expect(seats(await rows()), "RB4-D5: a Rebuild reuses the stage's seed").toEqual(seats(first));
+
+    expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await showAllFixtures(page);
+    for (const name of want) {
+      await expect(page.getByTestId("run-sheet-bye").filter({ hasText: name }), `the run sheet shows ${name}'s bye`).toHaveCount(1, { timeout: 20_000 });
+    }
   });
 });

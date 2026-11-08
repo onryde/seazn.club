@@ -16825,6 +16825,9 @@
                           "bracketReset": {
                             "type": "boolean"
                           },
+                          "countrySeparation": {
+                            "not": {}
+                          },
                           "mode": {
                             "type": "string",
                             "enum": [
@@ -17253,6 +17256,9 @@
                             },
                             "bracketReset": {
                               "type": "boolean"
+                            },
+                            "countrySeparation": {
+                              "not": {}
                             },
                             "mode": {
                               "type": "string",
@@ -18219,6 +18225,9 @@
                           "bracketReset": {
                             "type": "boolean"
                           },
+                          "countrySeparation": {
+                            "not": {}
+                          },
                           "mode": {
                             "type": "string",
                             "enum": [
@@ -18647,6 +18656,9 @@
                             },
                             "bracketReset": {
                               "type": "boolean"
+                            },
+                            "countrySeparation": {
+                              "not": {}
                             },
                             "mode": {
                               "type": "string",
