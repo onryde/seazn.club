@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { headers } from "next/headers";
+import { clientIp } from "@/lib/client-ip";
 import { sql } from "@/lib/db";
 import { handler } from "@/lib/http";
 import { rateLimit, EMAIL_LIMIT } from "@/lib/rate-limit";
@@ -29,7 +30,7 @@ const schema = z
  *  `login_url` convention). */
 export async function POST(req: Request) {
   return handler(async () => {
-    const ip = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+    const ip = clientIp(await headers());
     await rateLimit(`funnel-start:${ip}`, EMAIL_LIMIT);
 
     // `locale` is kept out of the payload: the claim re-reads the draft's payload strictly. It rides its own column instead.

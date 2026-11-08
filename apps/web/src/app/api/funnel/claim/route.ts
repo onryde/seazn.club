@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { headers } from "next/headers";
+import { clientIp } from "@/lib/client-ip";
 import { handler } from "@/lib/http";
 import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
 import { sql } from "@/lib/db";
@@ -49,7 +50,7 @@ async function resolveOrCreateVerifiedUser(email: string): Promise<string | null
  *  draft, and return where to land: inside the competition. */
 export async function POST(req: Request) {
   return handler(async () => {
-    const ip = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+    const ip = clientIp(await headers());
     await rateLimit(`funnel-claim:${ip}`, AUTH_LIMIT);
 
     const { token } = schema.parse(await req.json());

@@ -51,25 +51,23 @@ import { headers } from "next/headers";
 import { previewJoinEntry } from "@/server/usecases/registration-submit";
 import { HttpError } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/client-ip";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { JoinForm } from "./join-form";
 import { routes } from "@/lib/routes";
 
-/** Same extraction the sibling API route's own `clientIp` uses
- *  (register/join/route.ts) and `publicRateLimit` (server/usecases/public.ts)
- *  — kept local rather than shared, since a Server Component reads it off
- *  `headers()` (the Next request-scoped store) instead of a route's own
- *  `Request`. `headers()` throws SYNCHRONOUSLY outside a real request — the
- *  shape of this page called directly in tests (no jsdom; see
- *  resolve-locale.ts's identical guard) — so this falls back to "unknown"
+/** The shared reader (`lib/client-ip.ts`) the sibling API route keys the same
+ *  bucket on, read off `headers()` (the Next request-scoped store) since a
+ *  Server Component has no `Request`. `headers()` throws SYNCHRONOUSLY outside
+ *  a real request — the shape of this page called directly in tests (no jsdom;
+ *  see resolve-locale.ts's identical guard) — so this falls back to "unknown"
  *  the same way that module does, rather than breaking every existing test
  *  here that renders the page with no join_code at all. */
-async function clientIp(): Promise<string> {
+async function requestClientIp(): Promise<string> {
   try {
-    const h = await headers();
-    return h.get("x-forwarded-for")?.split(",")[0]?.trim() ?? h.get("x-real-ip") ?? "unknown";
+    return clientIp(await headers());
   } catch {
     return "unknown";
   }
@@ -99,7 +97,7 @@ export default async function RegisterJoinPage({ params, searchParams }: Props) 
   let throttled = false;
   if (join_code) {
     try {
-      await rateLimit(`regjoinpreview:${await clientIp()}`, { max: 5, windowSeconds: 300 });
+      await rateLimit(`regjoinpreview:${await requestClientIp()}`, { max: 5, windowSeconds: 300 });
     } catch (err) {
       if (!(err instanceof HttpError && err.status === 429)) throw err;
       throttled = true;

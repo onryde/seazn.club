@@ -11,6 +11,8 @@
 //
 // Every limiter that keys on it moves with it: capture's failed-401 budget (`clientIpOf`, its route pin is
 // limits-route.test.ts), the public read limiters (`publicClientIp`), and the /s/ redirect's miss budget and click dedupe.
+// The auth, registration, device-link, consent, funnel and format-preview limiters are pinned in client-ip-limiters.test.ts,
+// and client-ip-readers.test.ts fails any other source file that reads one of these headers itself.
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
