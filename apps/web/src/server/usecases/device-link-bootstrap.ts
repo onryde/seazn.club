@@ -35,7 +35,7 @@ export type DeviceLinkBootstrapSide = {
   name: string;
   kind: string;
   members: { person_id: string; full_name: string }[];
-  /** In `readLineup`'s order: `order_no`, then name. */
+  /** In `readLineup`'s order: `order_no`, then name, then person (engine-db/lineups.ts's order, so both agree). */
   lineup: DeviceLinkBootstrapLineupRow[];
 };
 

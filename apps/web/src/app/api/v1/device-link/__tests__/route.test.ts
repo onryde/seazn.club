@@ -102,6 +102,24 @@ const RIVERSIDE: Member[] = [
  *  pads read each lineup row's team-sheet fields off the bootstrap. Northgate's people are looked up by name in SQL, so no
  *  id comes from the code under test. */
 async function seedFootball(auth: AuthCtx) {
+  const s = await seedFootballTeams(auth, NORTHGATE);
+  const id = (name: string) => s.people.find((p) => p.full_name === name)!.id;
+  return {
+    fixture: s.fixture,
+    northgate: s.northgate,
+    side: s.side,
+    other: s.other,
+    secret: s.secret,
+    dan: id("Dan Moss"),
+    ade: id("Ade Okafor"),
+    cal: id("Cal Reyes"),
+    eve: id("Eve Hart"),
+    fay: id("Fay Lund"),
+  };
+}
+
+/** The league behind `seedFootball`, with Northgate's roster given: its people come back from SQL (`people`). */
+async function seedFootballTeams(auth: AuthCtx, roster: Member[]) {
   const suffix = randomUUID().slice(0, 6);
   const competition = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -119,7 +137,7 @@ async function seedFootball(auth: AuthCtx) {
     auth,
     division.id,
     [
-      { display_name: "Northgate", members: NORTHGATE },
+      { display_name: "Northgate", members: roster },
       { display_name: "Riverside", members: RIVERSIDE },
     ].map((t, i) => ({
       kind: "team" as const,
@@ -141,23 +159,11 @@ async function seedFootball(auth: AuthCtx) {
   const northgate = entrants.find((e) => e.display_name === "Northgate")!.id;
   const people = await sql<{ id: string; full_name: string }[]>`
     select p.id, p.full_name from entrant_members em join persons p on p.id = em.person_id where em.entrant_id = ${northgate}`;
-  const id = (name: string) => people.find((p) => p.full_name === name)!.id;
   const link = await createDeviceLink(auth, fixture!.id, null);
   // Northgate's side of the fixture, by entrant id: the draw decides which seat it is.
   const side: "home" | "away" = fixture!.home_entrant_id === northgate ? "home" : "away";
   const other: "home" | "away" = side === "home" ? "away" : "home";
-  return {
-    fixture: fixture!,
-    northgate,
-    side,
-    other,
-    secret: link.secret,
-    dan: id("Dan Moss"),
-    ade: id("Ade Okafor"),
-    cal: id("Cal Reyes"),
-    eve: id("Eve Hart"),
-    fay: id("Fay Lund"),
-  };
+  return { fixture: fixture!, northgate, side, other, secret: link.secret, people };
 }
 
 /** Northgate's team sheet: Dan GK starting 1 captain; Ade FW starting 2; Cal starting 3 (no number); Eve bench 4; Fay
@@ -257,6 +263,36 @@ describe.skipIf(!HAS_DB)("GET /api/v1/device-link", () => {
       person_id, pair_order: n, slot: "starting", position_key: null, order_no: n, role: "player", roles: [], squad_number: null,
     });
     expect(after.sides.home!.lineup).toEqual([pairRow(b!.person_id, 1), pairRow(a!.person_id, 2)]);
+  });
+
+  it("breaks a tie of order_no and name by person, as the server's engine-db read does", async () => {
+    // Batch C ruling 2: the bootstrap's rows and the server's (engine-db/lineups.ts) agree row for row, so people with the
+    // same name at the same order_no come back in person_id order. Uuid order is byte order, the order of the lowercase hex
+    // text, so `byId` (the ids' own string order) is the rule, not anything the code under test returns.
+    //
+    // Why eight people, all "Sam Lee", at order_no 2,1,2,1,… by id: with fewer than seven rows, or rows already in order,
+    // Postgres's sort keeps the input order, and the lineup's primary key (fixture, entrant, person) feeds the rows in id
+    // order, so the tie would come back right with or without the key. Eight alternating rows make the sort move the ties
+    // (seen on Postgres: 2,6,4,8 and 5,3,1,7 for ids 1..8), so dropping `l.person_id` reds here.
+    const { auth } = await seedOrg();
+    const roster: Member[] = Array.from({ length: 8 }, () => ({ full_name: "Sam Lee", squad_number: null }));
+    const s = await seedFootballTeams(auth, roster);
+    const byId = s.people.map((p) => p.id).sort();
+    expect(byId.length, "premise: eight people").toBe(8);
+    expect(new Set(s.people.map((p) => p.full_name)), "premise: one name").toEqual(new Set(["Sam Lee"]));
+    const orderNo = (rank: number) => (rank % 2 === 0 ? 2 : 1);
+    const row = (personId: string) => ({
+      person_id: personId, slot: "starting" as const, position_key: null, order_no: orderNo(byId.indexOf(personId)), roles: [],
+    });
+    // Order 1 first (ranks 1,3,5,7), then order 2 (ranks 0,2,4,6), each by id.
+    const expected = [1, 3, 5, 7, 0, 2, 4, 6].map((rank) => byId[rank]);
+    // Both write orders: whichever order the rows went in, they come back by person.
+    for (const written of [byId, [...byId].reverse()]) {
+      await putLineup(auth, s.fixture.id, s.northgate, { slots: written.map(row) } as never);
+      const rows = (await call(s.secret)).body.data!.sides[s.side]!.lineup;
+      expect(rows.map((r) => r.order_no), "premise: the order_no ties").toEqual([1, 1, 1, 1, 2, 2, 2, 2]);
+      expect(rows.map((r) => r.person_id), `written ${written === byId ? "by id" : "reversed"}`).toEqual(expected);
+    }
   });
 
   it("carries every lineup row's team-sheet fields, starters then bench, as readLineup orders them", async () => {
