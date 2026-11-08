@@ -302,8 +302,11 @@ test.describe("K1 Undo refuses across a confirmed draw", () => {
       progression: { sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 4 }] }], placement: "rank_order", timing: "setup" },
     });
     expect(plate.status, JSON.stringify(plate.error)).toBe(201);
-    expect((await apiJson(request, `/api/v1/stages/${plate.data!.id}/generate`, "POST")).status, "the Plate's day-one draw").toBe(200);
+    // Main first, the Plate's day-one draw after it, as Start would: the newest step Undo can invert is then the Plate's
+    // own generation (no result on it), so only the confirm's barrier can refuse it. Generated the other way round, Undo
+    // targets the Main draw's generation, whose matches have results, and the results guard refuses before the barrier.
     expect((await apiJson(request, `/api/v1/stages/${main.data!.id}/generate`, "POST")).status).toBe(200);
+    expect((await apiJson(request, `/api/v1/stages/${plate.data!.id}/generate`, "POST")).status, "the Plate's day-one draw").toBe(200);
     expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
 
     const mainRows = async () => (await stageFixtures(request, divisionId, main.data!.id)) as Seated[];
