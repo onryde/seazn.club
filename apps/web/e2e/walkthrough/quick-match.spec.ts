@@ -527,7 +527,7 @@ async function expectTable(p: Page, table: readonly Tally[]): Promise<void> {
 // ── the journeys ────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A realistic long side name (AGENTS.md: the defect a short name hides): 40 characters before the run's tag. */
-const LONG = `The Extraordinarily Long-Named Champion ${TAG}`;
+const LONG = `The Extraordinarily Long-Named Champion Club ${TAG}`;
 
 let league: (Made & { results: Played[]; table: Tally[] }) | null = null;
 let cup: (Made & { champion: string }) | null = null;
