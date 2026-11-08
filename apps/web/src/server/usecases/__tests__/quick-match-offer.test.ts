@@ -20,7 +20,8 @@ import { resolveModule } from "@/server/engine-db/registry";
 import { listQuickMatchSports, offerFor, type QuickMatchOfferJson } from "../quick-match-sports";
 import { bracketMayEndLevel, stageDefaultsFor } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { decidingPrefix, runQuickMatchProbe } from "./_quick-match-probe";
+import { decidingPrefix, probeVariantsOf, runQuickMatchProbe, walkableVariants } from "./_quick-match-probe";
+import { seedFootballCatalog } from "./_seed";
 
 const KEK = kekBytes(32).toString("hex");
 vi.stubEnv("DEVICE_LINK_KEK", KEK);   // A15: the probe seals a home token per create
@@ -161,6 +162,47 @@ describe.skipIf(!HAS_DB || WRITING)("quick match offer", () => {
   it("offerFor of an unknown sport or variant offers nothing (the empty case)", async () => {
     expect(await offerFor("badminton", "no-such-variant")).toEqual({ offered: false, kinds: [], knockoutAllowed: false });
     expect(await offerFor("no-such-sport", "x")).toEqual({ offered: false, kinds: [], knockoutAllowed: false });
+  });
+
+  it("the probe walks the engine's declared presets only, beside the system row other suites seed (CI run 42437980218)", async () => {
+    // `seedFootballCatalog` (_seed.ts) is what a dozen suites in the same shared database run: it leaves a SYSTEM row
+    // `football/default` (config {}) that no engine preset declares and `sync:sports` would prune. The drift pin walked
+    // it and offered it. The expected keys come from the engine's own declaration, never from the probe.
+    await seedFootballCatalog();
+    const [sport] = await sql<{ module_version: string }[]>`select module_version from sports where key = 'football'`;
+    const raw = await sql<{ key: string }[]>`
+      select key from sport_variants where sport_key = 'football' and is_system and org_id is null`;
+    expect(raw.map((r) => r.key), "premise: the seeded system row is in the catalog").toContain("default");
+    const declared = Object.keys(resolveModule("football", sport!.module_version).variants);
+    expect(declared, "premise: the engine declares no `default` preset").not.toContain("default");
+    const walked = (await probeVariantsOf("football", sport!.module_version)).map((v) => v.key);
+    expect(walked.length, "anti-vacuity: presets walked").toBeGreaterThan(0);
+    expect([...walked].sort()).toEqual([...declared].sort());
+    expect(walked).not.toContain("default");
+  });
+});
+
+describe("walkableVariants: the probe's variants are the engine's declared presets, each with its catalog row", () => {
+  // Pure: no database. The catalog rows are stand-ins; the keys are the engine's own (football's declared presets).
+  const declared = Object.keys(builtinModules.find((m) => m.key === "football")!.variants);
+  const row = (key: string) => ({ key, config: {} });
+
+  it("drops a system row no preset declares and keeps the catalog's order", () => {
+    expect(declared.length).toBeGreaterThan(1);
+    const rows = [row("default"), ...declared.map(row), row("zz-seeded")];
+    expect(walkableVariants("football", declared, rows).map((r) => r.key)).toEqual(declared);
+    const reversed = [...declared].reverse().map(row);
+    expect(walkableVariants("football", declared, reversed).map((r) => r.key), "the rows' order, not the declaration's").toEqual([...declared].reverse());
+  });
+
+  it("a declared preset with no catalog row throws, naming it (the catalog is not synced)", () => {
+    const [first, ...rest] = declared;
+    expect(() => walkableVariants("football", declared, rest.map(row))).toThrow(new RegExp(`football.*\\b${first}\\b.*sync:sports`));
+  });
+
+  it("the empty cases throw: no catalog rows at all, and a sport that declares no preset", () => {
+    expect(() => walkableVariants("football", declared, [])).toThrow(/sync:sports/);
+    expect(() => walkableVariants("football", [], [row("default")])).toThrow(/declares no variant/);
   });
 });
 

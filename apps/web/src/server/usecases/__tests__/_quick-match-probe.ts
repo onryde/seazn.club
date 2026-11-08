@@ -3,7 +3,7 @@
 // `@seazn/engine/testkit`, which must never reach a production bundle.
 //
 // For every sport module (swept with the engine's own `forEachSportAsync`, which reports how many it visited) × each of
-// its system variants:
+// its system variants the engine declares (`walkableVariants`: never a system row another suite seeded):
 //   1. generic is excluded with QUICK_MATCH_GENERIC and nothing is created: the probe is the one source that keeps it off
 //      the setup screen and out of the API (B6e). A LINEUP sport (cricket) is excluded the same way, by name, with
 //      QUICK_MATCH_LINEUP_SPORT (spec C11, controller ruling 2026-11-07): the engine's walk CAN score cricket with no
@@ -225,6 +225,30 @@ function probeCreate(
 }
 
 /**
+ * The variants the probe walks for one sport: the presets the engine DECLARES (`module.variants`, the set `sync:sports`
+ * upserts and prunes to), each with its catalog row, in the catalog's order. A shared test database also holds SYSTEM
+ * rows other suites seed for their own fixtures (`seedFootballCatalog`'s `football/default`, config {}); a synced catalog
+ * never has them, and walking one offered what no guest is shown (CI run 42437980218). A declared preset with no row, and
+ * a sport that declares none, throw: the catalog is not synced, and an empty walk would prove nothing.
+ */
+export function walkableVariants<R extends { key: string }>(sport_key: string, declared: readonly string[], rows: readonly R[]): R[] {
+  if (declared.length === 0) throw new Error(`probe: the engine declares no variant for ${sport_key}`);
+  const missing = declared.filter((k) => !rows.some((r) => r.key === k));
+  if (missing.length > 0) {
+    throw new Error(`probe: sport ${sport_key} has no system variant row for ${missing.join(", ")} (run \`npm run sync:sports\`)`);
+  }
+  return rows.filter((r) => declared.includes(r.key));
+}
+
+/** One sport's walkable variants (`walkableVariants`), read for the catalog's pinned module version. */
+export async function probeVariantsOf(sport_key: string, module_version: string): Promise<{ key: string; config: unknown }[]> {
+  const rows = await sql<{ key: string; config: unknown }[]>`
+    select key, config from sport_variants
+    where sport_key = ${sport_key} and is_system and org_id is null order by key`;
+  return walkableVariants(sport_key, Object.keys(resolveModule(sport_key, module_version).variants), rows);
+}
+
+/**
  * Run the whole probe (module header). Throws when any case is unproven (naming it and both budgets), when a count
  * case disagrees (naming it), when `offered` is empty, or when it lacks badminton. `checked` counts sport × variant
  * cases, `countCases` the D3 creates, `knockoutCases` the knockouts among them (each one also asked C23's bracket
@@ -246,10 +270,7 @@ export async function runQuickMatchProbe(
   const visited = await forEachSportAsync(async ({ key: sport_key }) => {
     const [sport] = await sql<{ module_version: string }[]>`select module_version from sports where key = ${sport_key}`;
     if (!sport) throw new Error(`probe: sport ${sport_key} has no catalog row (run \`npm run sync:sports\`)`);
-    const variants = await sql<{ key: string; config: unknown }[]>`
-      select key, config from sport_variants
-      where sport_key = ${sport_key} and is_system and org_id is null order by key`;
-    if (variants.length === 0) throw new Error(`probe: sport ${sport_key} has no system variant (run \`npm run sync:sports\`)`);
+    const variants = await probeVariantsOf(sport_key, sport.module_version);
 
     for (const variant of variants) {
       const variant_key = variant.key;
