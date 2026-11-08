@@ -189,6 +189,8 @@ describe("systemAuth is refused by every session-only gate", () => {
     const pureInTree = pureGateNamesInTree();
     expect(pureInTree.length, "zero pure gates found in the tree").toBeGreaterThan(0);
     const pure = SESSION_ONLY_SITES.filter((s) => s.pure);
+    // The NAMES, not only the count: a pure flag moved from one site to another keeps every count equal.
+    expect(pure.map((s) => s.name).sort(), "the table's pure flags disagree with the tree's pure gates").toEqual(pureInTree);
     let checked = 0;
     for (const site of pure) {
       for (const via of Object.keys(CTX) as AuthCtx["via"][]) {

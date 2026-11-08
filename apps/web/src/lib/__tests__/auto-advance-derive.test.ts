@@ -33,7 +33,7 @@ import {
   type SourceFacts,
   type SourceFixtureFact,
 } from "@/lib/auto-advance";
-import { FIXTURE_STATUSES } from "@/lib/fixture-status";
+import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { isSwissBoardSeated, planSwissShells } from "@/lib/swiss-shell";
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -200,6 +200,43 @@ describe("deriveSourceAction: the ladder, rung by rung", () => {
       round: 3,
       code: "STAGE_NOT_READY",
       boards: [ref(r2[2]!), ref(r2[0]!)],
+    });
+  });
+
+  it("a seated cancelled board blocks like an abandoned one", () => {
+    // Rung 7 (spec §3: "abandoned/cancelled block"). A cancelled board is LOCKED (lib/fixture-status.ts: no further
+    // append), so it can never become decided: counted as open, it would hold the row in `waiting` for ever. Held to
+    // the declarations first, so a change to either reds here before the cases below.
+    expect(LOCKED_FIXTURE_STATUSES.has("cancelled")).toBe(true);
+    expect(DECIDED.has("cancelled")).toBe(false);
+    // Pair: round 2 holds a cancelled board, an in-play one and a decided one. The wrong answer (cancelled read as
+    // merely open) is `waiting` naming boards 1 and 2; the right one is blocked naming the cancelled board alone.
+    const r2 = [seated(2, 2, "cancelled"), seated(2, 1, "in_play"), seated(2, 3, "decided")];
+    const pairFacts = [seated(1, 1, "decided"), seated(1, 2, "decided"), seated(1, 3, "decided"), ...r2, shell(3, 1)];
+    expect(deriveSourceAction(facts(pairFacts))).toEqual({
+      state: "blocked",
+      kind: "pair_round",
+      round: 3,
+      code: "STAGE_NOT_READY",
+      boards: [ref(r2[0]!)],
+    });
+    // With an abandoned board beside it: both named, in board order (cancelled board 3 listed before abandoned board 1).
+    const mixed = [seated(1, 1, "decided"), seated(1, 2, "decided"), seated(1, 3, "decided"), seated(2, 3, "cancelled"), seated(2, 1, "abandoned"), seated(2, 2, "decided"), shell(3, 1)];
+    expect(deriveSourceAction(facts(mixed))).toEqual({
+      state: "blocked",
+      kind: "pair_round",
+      round: 3,
+      code: "STAGE_NOT_READY",
+      boards: [ref(mixed[4]!), ref(mixed[3]!)],
+    });
+    // Complete: the last round settled except one cancelled board, so completing the stage blocks too.
+    const last = [seated(1, 1, "decided"), seated(2, 1, "decided"), seated(2, 2, "cancelled")];
+    expect(deriveSourceAction(facts(last))).toEqual({
+      state: "blocked",
+      kind: "complete_stage",
+      round: 2,
+      code: "STAGE_NOT_READY",
+      boards: [ref(last[2]!)],
     });
   });
 

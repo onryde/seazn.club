@@ -91,6 +91,11 @@ export type DerivedSource =
 
 const NONE: DerivedSource = { state: "none" };
 
+/** Seated boards that will never settle on their own and need a person (spec §3: "abandoned/cancelled block"). An
+ *  abandoned board waits for the organiser to decide or void it; a cancelled one is locked (lib/fixture-status.ts), so
+ *  it can never become decided. Counted as merely open, either would hold the row in `waiting` for ever. */
+const BLOCKING_BOARD_STATUSES: ReadonlySet<string> = new Set(["abandoned", "cancelled"]);
+
 function boardRefs(fixtures: readonly SourceFixtureFact[]): BoardRef[] {
   return fixtures
     .map((f) => ({ fixtureId: f.id, round: f.round_no, board: f.seq_in_round }))
@@ -108,8 +113,8 @@ function boardRefs(fixtures: readonly SourceFixtureFact[]): BoardRef[] {
  *     board. Otherwise pair round t, and the scope is the seated boards of round t-1 (what Pair itself checks).
  *  5. An empty scope: none. "The previous round has at least one seated board" (spec §4.1).
  *  6. That kind and round was skipped: none. A skip is sticky for its target only.
- *  7. A scope board is abandoned and not decided: blocked STAGE_NOT_READY, naming those boards. Before rung 8,
- *     because an abandoned board needs a person and waiting would never end.
+ *  7. A scope board is abandoned or cancelled and not decided: blocked STAGE_NOT_READY, naming those boards. Before
+ *     rung 8, because such a board needs a person and waiting would never end.
  *  8. A scope board is not decided: waiting, naming the open boards.
  *  9. Otherwise: pending (the settle window counts down).
  */
@@ -131,8 +136,8 @@ export function deriveSourceAction(f: SourceFacts): DerivedSource {
   // 6.
   if (f.skipped.has(skipKey(kind, round))) return NONE;
   // 7.
-  const abandoned = scope.filter((x) => x.status === "abandoned" && !x.decided);
-  if (abandoned.length > 0) return { state: "blocked", kind, round, code: "STAGE_NOT_READY", boards: boardRefs(abandoned) };
+  const stuck = scope.filter((x) => BLOCKING_BOARD_STATUSES.has(x.status) && !x.decided);
+  if (stuck.length > 0) return { state: "blocked", kind, round, code: "STAGE_NOT_READY", boards: boardRefs(stuck) };
   // 8.
   const open = scope.filter((x) => !x.decided);
   if (open.length > 0) return { state: "waiting", kind, round, openBoards: boardRefs(open) };
