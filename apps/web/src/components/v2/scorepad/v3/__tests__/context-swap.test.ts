@@ -41,6 +41,7 @@
 // function — sees every button (same precedent as attribution-picker.tsx's
 // `renderAttributionItem`).
 import { describe, it, expect } from "vitest";
+import { isValidElement } from "react";
 import type { LineupPolicy, LineupRejectionReason, SideSquad, SquadMember, SquadState } from "@seazn/engine/core";
 import { reduceLineupEvent } from "@seazn/engine/core";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
@@ -1567,5 +1568,157 @@ describe("ContextStrip rendering — mode slots (R8)", () => {
     expect(line).toBeDefined();
     expect(textOf(line)).toBe("Set when this innings began.");
     expect(propsOf(line)["data-message-tone"]).toBe("info");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S2-4 (cricket) Task 10, gap 8 — the strip holds its height. `ContextSlot.messageReserve` holds a slot's message line
+// and `ContextStripSpec.modeReserve` holds the mode statements' room, each as one grid cell whose reserved twins are
+// laid out INVISIBLY under whatever shows, so the cell is as tall as the tallest of them whether anything shows or not.
+// The twins are never a fact: no `data-role`, `aria-hidden`, `invisible`. Only a browser can measure the height itself
+// (`e2e/scorepad-v3-cricket-steady-layout.spec.ts`); these pin the markup the browser lays out.
+// ---------------------------------------------------------------------------
+
+describe("ContextStrip rendering — reserved room (S2-4 Task 10)", () => {
+  const baseSquad = squad([member({ personId: "arjun", onField: true })]);
+  const PROMPTS = ["Pick the bowler for over 2", "Pick the bowler for over 3"] as const;
+  const FINE = { label: "pad.cricket.context.mode.fine.label", message: "Set by its first ball." };
+  const COARSE = { label: "pad.cricket.context.mode.coarse.label", message: "Set by its first over summary." };
+
+  function render(spec: ContextStripSpec) {
+    return renderIsland(ContextStrip, { spec, view: { squad: baseSquad }, personNames: { arjun: "Arjun" }, t, onSelect: () => {} });
+  }
+  const bowler = (over: Partial<ContextStripSpec["slots"][number]> = {}): ContextStripSpec["slots"][number] => ({
+    id: "bowler",
+    label: "pad.context.bowler",
+    personId: "arjun",
+    pool: "onfield",
+    required: true,
+    ...over,
+  });
+  const byProp = (tree: ReturnType<typeof walk>, key: string, value: string) => tree.filter((el) => propsOf(el)[key] === value);
+  const classOf = (el: ReturnType<typeof walk>[number]) => (propsOf(el).className as string | undefined) ?? "";
+  /** The reserve cell's direct children: every one must sit in the SAME grid cell, or the cell reserves nothing. */
+  const flat = (node: unknown): unknown[] => (Array.isArray(node) ? node.flatMap(flat) : [node]);
+  const childrenOf = (el: ReturnType<typeof walk>[number]) =>
+    flat(propsOf(el).children).filter(isValidElement) as ReturnType<typeof walk>;
+
+  it("a held message line with no message renders the reserved prompts invisibly, and no message a locator can find", () => {
+    const tree = render({ slots: [bowler({ messageReserve: PROMPTS })] }).tree();
+    const cells = byProp(tree, "data-context-reserve", "message");
+    expect(cells, "one reserve cell for the bowler's line").toHaveLength(1);
+    expect(propsOf(cells[0]!)["data-context-reserve-slot"]).toBe("bowler");
+    expect(classOf(cells[0]!).split(" ")).toContain("grid");
+    const twins = childrenOf(cells[0]!);
+    expect(twins.map((el) => textOf(el))).toEqual([...PROMPTS]);
+    for (const twin of twins) {
+      expect(propsOf(twin)["aria-hidden"]).toBe("true");
+      expect(propsOf(twin)["data-role"]).toBeUndefined();
+      expect(classOf(twin).split(" ")).toEqual(expect.arrayContaining(["invisible", "col-start-1", "row-start-1"]));
+    }
+    expect(byProp(tree, "data-role", "context-slot-message"), "nothing shows, so nothing is a message").toHaveLength(0);
+  });
+
+  it("a held message line WITH its message lays the message over the twins, in the same cell, in the same type", () => {
+    const tree = render({ slots: [bowler({ personId: undefined, message: PROMPTS[0], messageReserve: PROMPTS })] }).tree();
+    const cell = byProp(tree, "data-context-reserve", "message")[0]!;
+    const kids = childrenOf(cell);
+    expect(kids, "two twins and the visible message").toHaveLength(3);
+    const visible = kids.find((el) => propsOf(el)["data-role"] === "context-slot-message")!;
+    expect(textOf(visible)).toBe(PROMPTS[0]);
+    expect(propsOf(visible)["aria-hidden"]).toBeUndefined();
+    expect(classOf(visible).split(" ")).toEqual(expect.arrayContaining(["col-start-1", "row-start-1", "text-xs", "font-medium"]));
+    expect(classOf(visible).split(" ")).not.toContain("invisible");
+    // The twins are set in the visible line's own type, or the cell would reserve a different height than it shows.
+    for (const twin of kids.filter((el) => el !== visible)) {
+      expect(classOf(twin).split(" ")).toEqual(expect.arrayContaining(["text-xs", "font-medium"]));
+    }
+    expect(byProp(tree, "data-role", "context-slot-message"), "exactly one message").toHaveLength(1);
+  });
+
+  it("the mode's room, before any mode: both statements reserved invisibly, with the lock, and no `context-mode` yet", () => {
+    const tree = render({ slots: [bowler()], modeReserve: [FINE, COARSE] }).tree();
+    const cells = byProp(tree, "data-context-reserve", "mode");
+    expect(cells).toHaveLength(1);
+    const twins = childrenOf(cells[0]!).filter((el) => propsOf(el)["aria-hidden"] === "true");
+    expect(twins, "one twin per reserved statement").toHaveLength(2);
+    const lines = (el: ReturnType<typeof walk>[number]) => walk(el).filter((n) => n.type === "p").map((n) => textOf(n));
+    expect(twins.map(lines)).toEqual([
+      [FINE.label, FINE.message],
+      [COARSE.label, COARSE.message],
+    ]);
+    for (const twin of twins) {
+      expect(classOf(twin).split(" ")).toEqual(expect.arrayContaining(["invisible", "col-start-1", "row-start-1"]));
+      expect(walk(twin).some((el) => el.type === "svg"), "the twin carries the lock, as the statement does").toBe(true);
+      expect(walk(twin).some((el) => propsOf(el)["data-role"] !== undefined)).toBe(false);
+    }
+    expect(byProp(tree, "data-role", "context-mode"), "no mode is stated before one is locked").toHaveLength(0);
+  });
+
+  it("the mode's room, once a mode shows: the statement is laid over its twins, in the same cell", () => {
+    const tree = render({
+      slots: [bowler(), { id: "mode", kind: "mode", label: FINE.label, pool: "onfield", required: false, message: FINE.message, messageTone: "info" }],
+      modeReserve: [FINE, COARSE],
+    }).tree();
+    const cell = byProp(tree, "data-context-reserve", "mode")[0]!;
+    const visibleCell = childrenOf(cell).find((el) => propsOf(el)["aria-hidden"] === undefined)!;
+    expect(classOf(visibleCell).split(" ")).toEqual(expect.arrayContaining(["col-start-1", "row-start-1"]));
+    const mode = walk(visibleCell).filter((el) => propsOf(el)["data-role"] === "context-mode");
+    expect(mode).toHaveLength(1);
+    expect(textOf(mode[0]!)).toBe(FINE.label);
+    expect(byProp(tree, "data-role", "context-mode"), "the statement renders once, not once per twin").toHaveLength(1);
+  });
+
+  it("a chip that holds its width lays its label over invisible twins of every name it may take, and of the bare label", () => {
+    const squadOfTwo = squad([member({ personId: "arjun", onField: true }), member({ personId: "kannan", onField: true })]);
+    const island = renderIsland(ContextStrip, {
+      spec: { slots: [bowler({ chipReserve: ["arjun", "kannan"] })] },
+      view: { squad: squadOfTwo },
+      personNames: { arjun: "Arjun", kannan: "Kannan Ramaswamy" },
+      t,
+      onSelect: () => {},
+    });
+    const chip = island.tree().find((el) => propsOf(el)["data-role"] === "context-chip")!;
+    const twins = walk(chip).filter((el) => propsOf(el)["aria-hidden"] === "true" && classOf(el).includes("col-start-1"));
+    expect(twins.map((el) => textOf(el))).toEqual(["pad.context.bowler", "pad.context.bowler: Arjun", "pad.context.bowler: Kannan Ramaswamy"]);
+    for (const twin of twins) expect(classOf(twin).split(" ")).toEqual(expect.arrayContaining(["invisible", "max-md:hidden"]));
+    const visible = walk(chip).filter((el) => el.type === "span" && propsOf(el)["aria-hidden"] === undefined && typeof propsOf(el).children === "string");
+    expect(visible.map((el) => textOf(el)), "the one label a reader meets").toEqual(["pad.context.bowler: Arjun"]);
+    // The dot's room is held while the chip is set, invisibly, and not on a phone.
+    const dot = walk(chip).find((el) => classOf(el).includes("h-1.5"))!;
+    expect(classOf(dot).split(" ")).toEqual(expect.arrayContaining(["invisible", "max-md:hidden"]));
+    expect(classOf(dot)).not.toContain("bg-lime-400");
+  });
+
+  it("an unset chip that holds its width shows its dot in the same room, and is as wide as when set", () => {
+    const tree = render({ slots: [bowler({ personId: undefined, chipReserve: ["arjun"] })] }).tree();
+    const chip = tree.find((el) => propsOf(el)["data-role"] === "context-chip")!;
+    const dot = walk(chip).find((el) => classOf(el).includes("h-1.5"))!;
+    expect(classOf(dot)).toContain("bg-lime-400");
+    expect(classOf(dot)).not.toContain("invisible");
+    const twins = walk(chip).filter((el) => propsOf(el)["aria-hidden"] === "true" && classOf(el).includes("col-start-1"));
+    expect(twins.map((el) => textOf(el)), "the same twins as the set chip").toEqual(["pad.context.bowler", "pad.context.bowler: Arjun"]);
+  });
+
+  it("a read-only chip holds its width the same way", () => {
+    const tree = render({ slots: [bowler({ readOnly: true, chipReserve: ["arjun"] })] }).tree();
+    const chip = tree.find((el) => propsOf(el)["data-role"] === "context-chip")!;
+    expect(propsOf(chip)["data-readonly"]).toBe("true");
+    expect(walk(chip).filter((el) => propsOf(el)["aria-hidden"] === "true" && classOf(el).includes("col-start-1"))).toHaveLength(2);
+    expect(walk(chip).some((el) => classOf(el).includes("h-1.5")), "the dot's room, so it is as wide as the button").toBe(true);
+  });
+
+  it("regression pin: a chip that reserves nothing is the chip it always was", () => {
+    const tree = render({ slots: [bowler()] }).tree();
+    const chip = tree.find((el) => propsOf(el)["data-role"] === "context-chip")!;
+    expect(walk(chip).some((el) => classOf(el).includes("grid"))).toBe(false);
+    expect(walk(chip).some((el) => classOf(el).includes("h-1.5")), "a set chip has no dot").toBe(false);
+  });
+
+  it("regression pin: a strip that reserves nothing renders no reserve cell, and its message line as before", () => {
+    const tree = render({ slots: [bowler({ message: "Pick the bowler for over 2" })] }).tree();
+    expect(tree.filter((el) => propsOf(el)["data-context-reserve"] !== undefined)).toHaveLength(0);
+    const line = byProp(tree, "data-role", "context-slot-message")[0]!;
+    expect(classOf(line)).toBe("text-xs font-medium text-red-600");
   });
 });

@@ -97,6 +97,7 @@ import {
   type Blocked,
   MORE_SHEET_KEY,
   type ActivityDetailContext,
+  type ContextModeReserve,
   type ContextSlot,
   type ContextStripSpec,
   type DockSpec,
@@ -1337,8 +1338,17 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   // `buildContext`'s own gate) so a stray pending flag can never survive
   // into a finished match's display. `id: "freeHit"` is the stable,
   // i18n-independent Playwright hook (`StripItem.id`, types.ts).
-  if ((state.phase === "live" || state.phase === "super_over") && foldFreeHitPending(state)) {
-    strip.push({ id: "freeHit", value: t("scorepad.skin.cricket.header.freeHit"), accent: true });
+  //
+  // S2-4 Task 10 (gap 8): the slot is HELD while the match is live (`StripItem.reserved`), so the free hit's coming
+  // and going after a no ball never re-centres the strip or wraps it onto a second line at a desktop width. A held slot
+  // prints nothing and carries no id: the `freeHit` locator still counts zero while no free hit is pending.
+  if (state.phase === "live" || state.phase === "super_over") {
+    const freeHit = t("scorepad.skin.cricket.header.freeHit");
+    strip.push(
+      foldFreeHitPending(state)
+        ? { id: "freeHit", value: freeHit, accent: true, reserve: [freeHit] }
+        : { value: "", accent: true, reserved: true, reserve: [freeHit] },
+    );
   }
 
   return {
@@ -1579,10 +1589,11 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   // R2b (Q1 owner ruling): the over-by-over entry point — hidden once this
   // innings is ball-level, where the fold refuses `cricket.innings.summary`
   // just as firmly (cricket.ts:1402-1404), the mirror image of the guard
-  // above. `primary`/span-2 even when it co-occurs with run0/run1 (innings
+  // above. `primary` even when it co-occurs with run0/run1 (innings
   // unopened): a genuine, first-tap fork in how the WHOLE innings gets
   // scored earns the same weight as the two most-common ball outcomes, not
-  // less — `assertTileHierarchy`'s ">2 primaries" convention (tile-grid.tsx)
+  // less (one column since S2-4 Task 10, see `span` below) —
+  // `assertTileHierarchy`'s ">2 primaries" convention (tile-grid.tsx)
   // is advisory only and not wired to any skin's real output yet (R1 fix
   // round 1's own note), so this is a deliberate exception, not a defect.
   if (fidelity !== "fine") {
@@ -1614,7 +1625,11 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
       // from the closed innings' own final legalBalls.
       labelText: t(overLabel, { over: nextOverNumber(scoring, bpo) }),
       kind: "primary",
-      span: 2,
+      // S2-4 Task 10 (gap 8): one column, not two. The tile goes the moment the innings' first ball locks it to
+      // ball-by-ball; at two columns it took a desktop row of its own beside the empty fourth column of Review /
+      // Retire / Close innings, so that first ball pulled every tile row below it up by one. At one column it fills
+      // that fourth column, and on a phone it still shares its row with Close innings as a half (`SPAN_CLASS`).
+      span: 1,
       phases: ["live"],
       action: { sheet: "overSummary" },
     })));
@@ -2082,6 +2097,18 @@ function modeSlot(innings: CricketInningsShape | null, t: TFn): ContextSlot | nu
   };
 }
 
+/** S2-4 Task 10 (gap 8): the room the strip holds for the innings' mode statement, both lanes worded as `modeSlot` words
+ *  them, so the line the innings' first ball (or first over summary) brings never makes the strip taller. */
+function modeReserve(t: TFn): ContextModeReserve[] {
+  return Object.values(MODE_COPY).map((copy) => ({ label: copy.label, message: t(copy.message) }));
+}
+
+/** S2-4 Task 10 (gap 8): the bowler's prompt the strip holds a line for while the lane asks for picks, for this over
+ *  and the next, so the line is already there when an over ends and "Pick the bowler for over N" arrives. */
+function bowlerPromptReserve(t: TFn, over: number): string[] {
+  return [over, over + 1].map((n) => t("pad.cricket.context.bowler.unpicked", { over: n }));
+}
+
 export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextStripSpec | null {
   const state = asState(view.state);
   if (state.phase !== "live" && state.phase !== "super_over") return null;
@@ -2090,6 +2117,9 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
   const scoring = scoringInnings(state, cfg);
   const people = resolvePeople(state, view.contextOverrides, cfg);
   const battingOrder = state.orders?.[people.battingSide] ?? [];
+  // S2-4 Task 10 (gap 8): each chip holds the width of every person it may name (`ContextSlot.chipReserve`), so a
+  // chip that empties at an over's end, or names a new batter, never reflows the strip's chip row at a desktop width.
+  const bowlingOrder = state.orders?.[people.bowlingSide] ?? [];
   const soDismissed = state.superOver?.dismissed?.[people.battingSide] ?? [];
   const batterCandidates =
     state.phase === "super_over"
@@ -2107,7 +2137,9 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
 
   // Unopened innings (before ball 1 of innings 1 or 2, or a super-over gap):
   // the strip used to be absent, so opening pair/bowler could never be
-  // changed. Show it, chips editable, no mode slot (nothing has locked in).
+  // changed. Show it, chips editable, no mode slot (nothing has locked in);
+  // its room is held (`modeReserve`, S2-4 Task 10), so the first ball's mode
+  // line does not push the strip taller.
   if (scoring === null) {
     const blockReason = bowlerBlockReason(state, people, cfg);
     return {
@@ -2119,6 +2151,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
           personId: people.striker || undefined,
           pool: "onfield",
           required: true,
+          chipReserve: battingOrder,
           candidates: batterCandidates,
           blocked: otherEndBlock(people.nonStriker),
           message: openersMessage,
@@ -2129,6 +2162,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
           personId: people.nonStriker || undefined,
           pool: "onfield",
           required: true,
+          chipReserve: battingOrder,
           candidates: batterCandidates,
           blocked: otherEndBlock(people.striker),
         },
@@ -2138,12 +2172,15 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
           personId: people.bowler || undefined,
           pool: "onfield",
           required: true,
+          chipReserve: bowlingOrder,
           candidates: state.orders?.[people.bowlingSide] ?? [],
           blocked: bowlerBlocked(t, state, people, cfg),
           readOnly: bowlerIsReadOnly(null) ? true : undefined,
           message: blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg, nextOver) : undefined,
+          messageReserve: bowlerPromptReserve(t, nextOver),
         },
       ],
+      modeReserve: modeReserve(t),
     };
   }
 
@@ -2182,6 +2219,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         personId: people.striker || undefined,
         pool: "onfield",
         required: true,
+        chipReserve: battingOrder,
         readOnly: strikerLocked ? true : undefined,
         candidates: strikerCandidates,
         // The swap's one candidate IS the other end's batter, so he is not greyed as "at the other end": he carries the
@@ -2197,6 +2235,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         personId: people.nonStriker || undefined,
         pool: "onfield",
         required: true,
+        chipReserve: battingOrder,
         readOnly: nonStrikerLocked ? true : undefined,
         candidates: nonStrikerLocked ? undefined : unlockedIncoming(people.striker),
         blocked: nonStrikerLocked ? undefined : otherEndBlock(people.striker),
@@ -2208,13 +2247,17 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         personId: people.bowler || undefined,
         pool: "onfield",
         required: true,
+        chipReserve: bowlingOrder,
         candidates: state.orders?.[people.bowlingSide] ?? [],
         blocked: inningsClosed ? {} : bowlerBlocked(t, state, people, cfg),
         readOnly: inningsClosed || bowlerReadOnly ? true : undefined,
         message: closedMessage ?? (blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg, nextOver) : undefined),
+        // S2-4 Task 10 (gap 8): held only where the prompt can come — an over-by-over innings never asks for a bowler.
+        messageReserve: asksForPicks ? bowlerPromptReserve(t, nextOver) : undefined,
       },
       ...(mode ? [mode] : []),
     ],
+    modeReserve: modeReserve(t),
   };
 }
 

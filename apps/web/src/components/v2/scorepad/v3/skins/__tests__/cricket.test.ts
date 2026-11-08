@@ -11,7 +11,7 @@ import { cricketPadRules, POST_PHASES } from "@seazn/engine/pad";
 import { ballSeq, cricketEnvelopes, foldCricket, tiedWithSuperOver, type CricketEventSpec } from "../../__tests__/_cricket-fold";
 import { answerStep, backStep, currentStep, initialSheetState } from "../../guided-sheet";
 import { assertDisabledTilesExplained } from "../../tile-grid";
-import type { GuidedSheetSpec, PadHostView, SkinDefV3 } from "../../types";
+import { assertScorebugSpec, type GuidedSheetSpec, type PadHostView, type SkinDefV3 } from "../../types";
 import {
   ballEventType,
   closeReasonLabel,
@@ -911,7 +911,9 @@ describe("buildScorebug", () => {
   describe("revised target (regression: v2's ck-revised-target had no v3 equivalent)", () => {
     it("appends nothing to the strip when there is no revised target", () => {
       const spec = buildScorebug(view(), t);
-      expect(spec.strip).toHaveLength(4);
+      // The four base items, then the free-hit slot held empty (S2-4 Task 10) — no target among them.
+      expect(spec.strip).toHaveLength(5);
+      expect(spec.strip.some((s) => s.label === "scorepad.skin.cricket.header.target")).toBe(false);
     });
 
     // Major 3 (this wave's own Blocker/Major review): these four fixtures
@@ -937,7 +939,8 @@ describe("buildScorebug", () => {
         }),
         t,
       );
-      expect(spec.strip).toHaveLength(5);
+      // Four base items, the target, then the held free-hit slot (S2-4 Task 10), which stays LAST.
+      expect(spec.strip).toHaveLength(6);
       expect(spec.strip[0]).toEqual({ value: "▸Home One", accent: true });
       expect(spec.strip[1]).toEqual({ value: "Home Two" });
       expect(spec.strip[3]).toEqual({ value: "⚾Away One" });
@@ -946,6 +949,7 @@ describe("buildScorebug", () => {
         value: "165",
         accent: true,
       });
+      expect(spec.strip[5]?.reserved).toBe(true);
     });
 
     it("captions it DLS par only when cfg.dls is enabled AND the fold sourced it from dls", () => {
@@ -1046,13 +1050,32 @@ describe("buildScorebug — free hit indicator (R2b)", () => {
       id: "freeHit",
       value: "scorepad.skin.cricket.header.freeHit",
       accent: true,
+      // S2-4 Task 10: the slot reserves its own width, the same in both states (`StripItem.reserve`).
+      reserve: ["scorepad.skin.cricket.header.freeHit"],
     });
+    expect(assertScorebugSpec(spec)).toEqual([]);
   });
 
-  it("is absent when nothing is pending — the base 4-item strip is untouched", () => {
+  it("is absent when nothing is pending — no free-hit item, its slot held empty (S2-4 Task 10)", () => {
     const spec = buildScorebug(view(), t);
     expect(spec.strip.find((s) => s.id === "freeHit")).toBeUndefined();
-    expect(spec.strip).toHaveLength(4);
+    // The four base items are untouched; the fifth HOLDS the free hit's width and reports nothing: no value, no id.
+    expect(spec.strip).toHaveLength(5);
+    expect(spec.strip[4]).toEqual({
+      value: "",
+      accent: true,
+      reserved: true,
+      reserve: ["scorepad.skin.cricket.header.freeHit"],
+    });
+    expect(assertScorebugSpec(spec)).toEqual([]);
+  });
+
+  it("S2-4 Task 10: the held slot and the free hit reserve the same width, so the strip does not move when one comes", () => {
+    const pending = buildScorebug(view({ state: freeHitState() }), t).strip;
+    const clear = buildScorebug(view(), t).strip;
+    expect(pending).toHaveLength(clear.length);
+    expect(pending.at(-1)?.reserve).toEqual(clear.at(-1)?.reserve);
+    expect(pending.at(-1)?.reserve).toEqual(["scorepad.skin.cricket.header.freeHit"]);
   });
 
   it("reads the fold, not the event list: a no ball in view.events with the fold's flag clear shows nothing (a taken-back no ball)", () => {
@@ -1240,7 +1263,9 @@ describe("buildTiles", () => {
   it("the over-summary tile is shown, alongside the run tiles, when no innings is open yet", () => {
     const tiles = buildTiles(view({ state: state({ innings: [] }) }));
     const over = tiles.find((tl) => tl.id === "overSummary");
-    expect(over).toMatchObject({ kind: "primary", span: 2, phases: ["live"], action: { sheet: "overSummary" } });
+    // S2-4 Task 10 (gap 8): one column, so it fills the fourth column beside Review / Retire / Close innings at a desktop
+    // width and takes no row of its own; the first ball, which removes it, then pulls no tile row up.
+    expect(over).toMatchObject({ kind: "primary", span: 1, phases: ["live"], action: { sheet: "overSummary" } });
     expect(tiles.some((tl) => tl.id === "run0")).toBe(true); // Q1: both lanes available pre-commitment
   });
 
@@ -4252,5 +4277,97 @@ describe("W1: raising the band on a COARSE innings surfaces no ball tile", () =>
     const sheets = buildSheets(v, t);
     const kept = filterTilesByBand(buildTiles(v), sheets, [], spec.fidelity, 3);
     expect(kept.some((tl) => tileEventType(tl, sheets, []) === "cricket.ball")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S2-4 Task 10 (gap 8) — the strip holds the room of what can come, so a ball never makes it taller. Two things used
+// to arrive with a ball and push everything under them down: the innings' mode statement (its first ball locks the
+// lane) and the bowler's prompt (every over's end). The strip now reserves both (`ContextStripSpec.modeReserve`,
+// `ContextSlot.messageReserve`); the chassis lays the reserve out invisibly (context-swap.test.ts), and the e2e
+// probe measures the result (`e2e/scorepad-v3-cricket-steady-layout.spec.ts`). Expected copy is the dictionary's KEYS,
+// worded through this file's `t`, never read back from the builder.
+// ---------------------------------------------------------------------------
+
+describe("S2-4 Task 10 (gap 8): the strip holds the room of what a ball can bring", () => {
+  const LANES = [
+    { label: "pad.cricket.context.mode.fine.label", message: "pad.cricket.context.mode.fine.message" },
+    { label: "pad.cricket.context.mode.coarse.label", message: "pad.cricket.context.mode.coarse.message" },
+  ];
+  const prompt = (over: number) => t("pad.cricket.context.bowler.unpicked", { over });
+  const bowlerOf = (spec: ReturnType<typeof buildContext>) => spec!.slots.find((s) => s.id === "bowler")!;
+  const cfgT20 = cricket.configSchema.parse({});
+  /** A real fold: `n` dot balls by A-11 to H-1 (dots never move the strike, so the pair stays put). */
+  function dots(n: number) {
+    const b = ballSeq();
+    const events: CricketEventSpec[] = [["core.start"]];
+    for (let i = 0; i < n; i++) events.push(b("cricket.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-11" }));
+    return foldCricket(cfgT20, events);
+  }
+
+  it("before the first ball no mode is stated, and the room for both lanes' statements is held", () => {
+    const spec = buildContext(view({ state: state({ innings: [] }) }), t)!;
+    expect(spec.slots.some((s) => s.kind === "mode"), "nothing has locked in, so no mode is stated").toBe(false);
+    expect(spec.modeReserve).toEqual(LANES);
+  });
+
+  it("once a lane is locked the same room is held, and the statement shown is one of the two it holds", () => {
+    let checked = 0;
+    for (const st of [state({ innings: [] }), state(), state({ innings: [innings({ fine: null })] })]) {
+      const spec = buildContext(view({ state: st }), t)!;
+      expect(spec.modeReserve).toEqual(LANES);
+      const mode = spec.slots.find((s) => s.kind === "mode");
+      if (mode) expect(LANES).toContainEqual({ label: mode.label, message: mode.message });
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("the bowler's line holds the prompt an over's end brings before it comes, on a real fold", () => {
+    const midOver = dots(5);
+    const overEnd = dots(6);
+    expect(currentInnings(midOver)?.fine?.currentBowler, "fixture guard: mid-over the fold has a bowler").toBe("A-11");
+    expect(currentInnings(overEnd)?.fine?.currentBowler ?? null, "fixture guard: the over has ended").toBeNull();
+    const held = bowlerOf(buildContext(view({ cfg: cfgT20, state: midOver }), t));
+    expect(held.message, "mid-over nothing is asked").toBeUndefined();
+    expect(held.messageReserve).toEqual([prompt(1), prompt(2)]);
+    const asked = bowlerOf(buildContext(view({ cfg: cfgT20, state: overEnd }), t));
+    expect(asked.message, "the over's end asks for over 2's bowler").toBe(prompt(2));
+    expect(held.messageReserve, "and that prompt was already held mid-over").toContain(asked.message);
+    expect(asked.messageReserve, "the line stays held while it shows").toContain(asked.message);
+  });
+
+  it("before the first ball the bowler's line is held too, for over 1's prompt and over 2's", () => {
+    const spec = buildContext(view({ state: state({ innings: [] }) }), t)!;
+    expect(bowlerOf(spec).messageReserve).toEqual([prompt(1), prompt(2)]);
+  });
+
+  it("an over-by-over innings holds no bowler line: it never asks for a bowler, so the room would be dead space", () => {
+    const spec = buildContext(view({ state: state({ innings: [innings({ fine: null })] }) }), t)!;
+    expect(bowlerOf(spec).messageReserve).toBeUndefined();
+    // Positive pair: the ball-by-ball innings of the same fixture does hold it.
+    expect(bowlerOf(buildContext(view(), t)).messageReserve?.length).toBe(2);
+  });
+
+  it("each person chip holds the width of every person it may name: the batting order for the ends, the fielding order for the bowler", () => {
+    let checked = 0;
+    // Before the first ball, mid-over, and at an over's end (the bowler's chip empties there).
+    for (const st of [state({ innings: [] }), state(), state({ innings: [innings({ legalBalls: 6, fine: { striker: "h1", nonStriker: "h2", currentBowler: null, freeHitPending: false } })] })]) {
+      const spec = buildContext(view({ state: st }), t)!;
+      const reserveOf = (id: string) => spec.slots.find((s) => s.id === id)!.chipReserve;
+      expect(reserveOf("striker")).toEqual(["h1", "h2", "h3"]);
+      expect(reserveOf("nonStriker")).toEqual(["h1", "h2", "h3"]);
+      expect(reserveOf("bowler")).toEqual(["a1", "a2", "a3"]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("only the bowler's line is held: the batters' chips keep no reserved line", () => {
+    for (const st of [state({ innings: [] }), state()]) {
+      const spec = buildContext(view({ state: st }), t)!;
+      const held = spec.slots.filter((s) => s.messageReserve !== undefined).map((s) => s.id);
+      expect(held).toEqual(["bowler"]);
+    }
   });
 });

@@ -600,8 +600,52 @@ export interface ContextSlot {
    * row exactly as it renders without it.
    */
   candidateMeta?: Readonly<Record<string, CandidateMeta>>;
+  /**
+   * S2-4 (cricket) Task 10, gap 8 — HEIGHT RESERVATION for this slot's message line, the strip's twin of
+   * `StripItem.reserve`. Every message the line can take next, pre-localised like `message`, laid out INVISIBLY in one
+   * cell with the visible message, so the line is as tall as the tallest of them whether a message shows or not. The
+   * strip then keeps its height when the message comes and goes (cricket's "Pick the bowler for over N" at each over's
+   * end), and nothing under it moves.
+   *
+   * Never read, never announced (`aria-hidden`), never a `data-role`: a locator on `context-slot-message` still counts
+   * zero while no message shows. Absent (every slot before this) renders exactly as before. Ignored on a `kind: "mode"`
+   * slot, whose room `ContextStripSpec.modeReserve` holds.
+   */
+  messageReserve?: readonly string[];
+  /**
+   * S2-4 (cricket) Task 10, gap 8 — WIDTH RESERVATION for this slot's chip: every person it may name (ids, worded like
+   * `personId`). At a desktop width the chip is laid out as wide as the widest of "Label: name" over them, and as the
+   * bare unset "Label" — and its unset dot always takes its room — so the chip is one width whoever it names, or nobody.
+   * The chip row is a wrapping flex row there, so a chip that narrowed when the bowler emptied at an over's end could
+   * pull a wrapped chip up a row and make the whole strip shorter; this holds the row's shape.
+   *
+   * Phones are unchanged: a chip is the full width of the strip there already, so the twins are `max-md:hidden`. The
+   * twins are `aria-hidden` and invisible: the chip's accessible name is its visible label alone. Absent (every slot
+   * before this) renders exactly as before.
+   */
+  chipReserve?: readonly string[];
 }
-export interface ContextStripSpec { slots: ContextSlot[] }
+
+/** S2-4 (cricket) Task 10 — one mode statement a strip may show, for `ContextStripSpec.modeReserve`. `label` is an i18n
+ *  KEY, like `ContextSlot.label`; `message` is pre-localised, like `ContextSlot.message`. */
+export interface ContextModeReserve {
+  label: string;
+  message?: string;
+}
+
+export interface ContextStripSpec {
+  slots: ContextSlot[];
+  /**
+   * S2-4 (cricket) Task 10, gap 8 — the room the strip's mode statements take, held whether a mode shows or not. Every
+   * statement the strip can show here, laid out INVISIBLY in one cell with the visible `kind: "mode"` slots, so the
+   * cell is as tall as the tallest of them. First use: cricket, whose innings states its lane only once its first ball
+   * or over summary has locked it; before that the strip shows no mode (nothing has locked in), and holds its room.
+   *
+   * Never read, never announced, no `data-role`: `context-mode` still counts zero while no mode shows. Absent (every
+   * sport before this) renders exactly as before.
+   */
+  modeReserve?: readonly ContextModeReserve[];
+}
 
 /**
  * R2/task C (G2 — controller ruling 2026-08-16, binding, `docs/superpowers/

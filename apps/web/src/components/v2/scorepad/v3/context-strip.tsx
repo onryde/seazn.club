@@ -228,19 +228,45 @@ export function isStatic(slot: Pick<ContextSlot, "readOnly" | "kind">): boolean 
  * and by the mode statement, which renders its own so the sentence stays
  * glued to the line it explains.
  */
-function renderSlotMessage(slot: ContextSlot) {
+function renderSlotMessage(slot: ContextSlot, cell = "") {
   return (
     <p
       key={`${slot.id}-message`}
       data-role="context-slot-message"
       data-slot-id={slot.id}
       data-message-tone={slot.messageTone ?? "alert"}
-      className={`text-xs font-medium ${
+      className={`${cell}${SLOT_MESSAGE_CLASS} ${
         (slot.messageTone ?? "alert") === "info" ? "text-amber-700" : "text-red-600"
       }`}
     >
       {slot.message}
     </p>
+  );
+}
+
+/** S2-4 Task 10 (gap 8): the classes a message line and its invisible reserve twins share, so the two lay out alike. */
+const SLOT_MESSAGE_CLASS = "text-xs font-medium";
+/** One cell of a reserving grid: every child overlaps in it, so the cell is as tall as the tallest. */
+const RESERVE_CELL = "col-start-1 row-start-1 min-w-0 ";
+
+/**
+ * S2-4 Task 10 (gap 8) — a slot's message line when the slot holds its room (`ContextSlot.messageReserve`): one grid
+ * cell holding every reserved message INVISIBLY, with the visible message, if any, laid over them. The cell is as tall
+ * as the tallest, message or not, so the strip keeps its height as the message comes and goes. The twins carry no
+ * `data-role` and are `aria-hidden`; only the visible line is `context-slot-message`.
+ */
+function renderSlotFoot(slot: ContextSlot) {
+  const reserve = slot.messageReserve ?? [];
+  if (reserve.length === 0) return renderSlotMessage(slot);
+  return (
+    <div key={`${slot.id}-message-reserve`} data-context-reserve="message" data-context-reserve-slot={slot.id} className="grid">
+      {reserve.map((message, i) => (
+        <p key={i} aria-hidden="true" className={`invisible ${RESERVE_CELL}${SLOT_MESSAGE_CLASS}`}>
+          {message}
+        </p>
+      ))}
+      {!!slot.message && renderSlotMessage(slot, RESERVE_CELL)}
+    </div>
   );
 }
 
@@ -266,42 +292,96 @@ function renderSlotMessage(slot: ContextSlot) {
  */
 function renderModeStatement(slot: ContextSlot, personNames: Readonly<Record<string, string>>, t: TFn) {
   return (
-    <div key={`${slot.id}-mode`} className="flex flex-col gap-0.5">
+    <div key={`${slot.id}-mode`} className={MODE_WRAP_CLASS}>
       {/* `data-role` sits on the STATEMENT LINE, not on this wrapper: a
           wrapper carrying it would make `toHaveText` on the role return the
           statement CONCATENATED with its own message ("This innings:
           Over-by-overSet when this innings began, …"), which is what the
           first version of this did and what the e2e caught. The message keeps
           its own long-standing `context-slot-message` role. */}
-      <p
-        data-role="context-mode"
-        data-slot-kind="mode"
-        className="flex items-start gap-1.5 text-sm font-medium text-slate-700"
-      >
-        {/* The pad's own inline-SVG idiom (detail-dock.tsx, recording-chip.tsx):
-            a 16-unit box, stroke-only, `currentColor`. `aria-hidden` because
-            the label's own noun already carries the meaning in text — a screen
-            reader announcing a lock as well would say it twice. `mt-0.5`
-            keeps it optically centred on the first line when the label wraps
-            at 320. */}
-        <svg
-          aria-hidden="true"
-          viewBox="0 0 16 16"
-          className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={1.5}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M5.25 7V5a2.75 2.75 0 0 1 5.5 0v2" />
-          <rect x="3.25" y="7" width="9.5" height="6.25" rx="1.75" />
-        </svg>
+      <p data-role="context-mode" data-slot-kind="mode" className={MODE_LINE_CLASS}>
+        {lockGlyph()}
         <span className="break-words">{chipLabel(slot, personNames, t)}</span>
       </p>
       {!!slot.message && renderSlotMessage(slot)}
     </div>
   );
+}
+
+const MODE_WRAP_CLASS = "flex flex-col gap-0.5";
+const MODE_LINE_CLASS = "flex items-start gap-1.5 text-sm font-medium text-slate-700";
+
+/** The pad's own inline-SVG idiom (detail-dock.tsx, recording-chip.tsx): a 16-unit box, stroke-only, `currentColor`.
+ *  `aria-hidden` because the label's own noun already carries the meaning in text — a screen reader announcing a lock
+ *  as well would say it twice. `mt-0.5` keeps it optically centred on the first line when the label wraps at 320. */
+function lockGlyph() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M5.25 7V5a2.75 2.75 0 0 1 5.5 0v2" />
+      <rect x="3.25" y="7" width="9.5" height="6.25" rx="1.75" />
+    </svg>
+  );
+}
+
+/**
+ * S2-4 Task 10 (gap 8) — the strip's mode statements, in the room `ContextStripSpec.modeReserve` holds for them. Each
+ * reserved statement is laid out INVISIBLY in one grid cell (the same markup as `renderModeStatement`, with no
+ * `data-role` and `aria-hidden`), and the visible statements, if any, over them: the cell is as tall as the tallest
+ * statement whether a mode shows or not. Without a reserve the statements render exactly as before.
+ */
+function renderModes(spec: ContextStripSpec, personNames: Readonly<Record<string, string>>, t: TFn) {
+  const modes = spec.slots.filter((slot) => slot.kind === "mode").map((slot) => renderModeStatement(slot, personNames, t));
+  const reserve = spec.modeReserve ?? [];
+  if (reserve.length === 0) return modes;
+  return (
+    <div key="mode-reserve" data-context-reserve="mode" className="grid">
+      {reserve.map((statement, i) => (
+        <div key={i} aria-hidden="true" className={`invisible ${RESERVE_CELL}${MODE_WRAP_CLASS}`}>
+          <p className={MODE_LINE_CLASS}>
+            {lockGlyph()}
+            <span className="break-words">{t(statement.label)}</span>
+          </p>
+          {!!statement.message && <p className={SLOT_MESSAGE_CLASS}>{statement.message}</p>}
+        </div>
+      ))}
+      <div className={`${RESERVE_CELL}flex flex-col gap-2`}>{modes}</div>
+    </div>
+  );
+}
+
+/**
+ * S2-4 Task 10 (gap 8) — the inside of a chip that holds its width (`ContextSlot.chipReserve`): the unset dot's room,
+ * always (the dot itself only when `dot`; an empty room is invisible, and `max-md:hidden` so a phone chip is unchanged),
+ * then the label in one grid cell over its invisible twins, the bare label and "Label: name" for every person the chip
+ * may name. At a desktop width the chip is then one width whoever it names, or nobody, and the wrapping chip row keeps
+ * its shape. The twins are `aria-hidden` and `max-md:hidden`; the accessible name is the visible label alone.
+ */
+function reservedChipBody(slot: ContextSlot, personNames: Readonly<Record<string, string>>, t: TFn, dot: boolean) {
+  const twins = [t(slot.label), ...(slot.chipReserve ?? []).map((id) => chipLabel({ ...slot, personId: id }, personNames, t))];
+  return [
+    <span
+      key="dot"
+      aria-hidden="true"
+      className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot ? "bg-lime-400" : "invisible max-md:hidden"}`}
+    />,
+    <span key="label" className="grid min-w-0">
+      {twins.map((text, i) => (
+        <span key={i} aria-hidden="true" className={`invisible ${RESERVE_CELL}break-words max-md:hidden`}>
+          {text}
+        </span>
+      ))}
+      <span className={`${RESERVE_CELL}break-words max-md:truncate`}>{chipLabel(slot, personNames, t)}</span>
+    </span>,
+  ];
 }
 
 function chipLabel(slot: ContextSlot, personNames: Readonly<Record<string, string>>, t: TFn): string {
@@ -367,7 +447,11 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
                 style={{ minHeight: 44 }}
                 className="inline-flex min-w-0 max-w-full cursor-default items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 max-md:w-full"
               >
-                <span className="break-words max-md:truncate">{chipLabel(slot, personNames, t)}</span>
+                {slot.chipReserve === undefined ? (
+                  <span className="break-words max-md:truncate">{chipLabel(slot, personNames, t)}</span>
+                ) : (
+                  reservedChipBody(slot, personNames, t, false)
+                )}
               </span>
             );
           }
@@ -391,10 +475,14 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
                     : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
               }`}
             >
-              {unset && !active && (
+              {slot.chipReserve === undefined && unset && !active && (
                 <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-lime-400" />
               )}
-              <span className="break-words max-md:truncate">{chipLabel(slot, personNames, t)}</span>
+              {slot.chipReserve === undefined ? (
+                <span className="break-words max-md:truncate">{chipLabel(slot, personNames, t)}</span>
+              ) : (
+                reservedChipBody(slot, personNames, t, unset && !active)
+              )}
             </button>
           );
         })}
@@ -436,10 +524,12 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
           (cricket never sets `""`), but the divergence between "absent"
           and "empty" was a landmine for the next skin to compute one. */}
       {/* WS-M round 2 — each mode statement, with its own message glued to it. */}
-      {spec.slots.filter((slot) => slot.kind === "mode").map((slot) => renderModeStatement(slot, personNames, t))}
+      {renderModes(spec, personNames, t)}
+      {/* S2-4 Task 10: a slot that holds its message line's room (`messageReserve`) renders it with or without a
+          message, so the strip keeps its height (`renderSlotFoot`). */}
       {spec.slots
-        .filter((slot) => !!slot.message && slot.kind !== "mode")
-        .map((slot) => renderSlotMessage(slot))}
+        .filter((slot) => slot.kind !== "mode" && (!!slot.message || (slot.messageReserve?.length ?? 0) > 0))
+        .map((slot) => renderSlotFoot(slot))}
     </div>
   );
 }
