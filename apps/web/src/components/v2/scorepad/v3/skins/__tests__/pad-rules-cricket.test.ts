@@ -357,6 +357,34 @@ describe("S2-4 T5: the wicket sheet asks the keeper, the runs completed, and the
     expect(checked).toBe(2);
   });
 
+  it("a wicket on the chase's last ball whose runs tie it into a super over asks no next batter (review I1)", () => {
+    const SIX = tiedWithSuperOver();
+    // Home make 1 off their six balls; away are 0 off five, so a run out with 1 completed on the sixth ties the match.
+    const fiveOfSix: CricketEventSpec[] = [
+      ...START,
+      ...[1, 2, 3, 4, 5].map((n) => ball(0, n)),
+      ball(0, 6, { runs: { bat: 1 } }),
+      ...[1, 2, 3, 4, 5].map((n): CricketEventSpec => ["cricket.ball", { over: 0, ballInOver: n, striker: "A-1", nonStriker: "A-2", bowler: "H-11", runs: { bat: 0 } }]),
+    ];
+    const lastBall = viewOf(SIX, fiveOfSix);
+    let checked = 0;
+    for (const [completed, asks] of [["1", false], ["0", false]] as const) {
+      const { asked, event } = walk(buildSheets(lastBall, t).wicket, (step) => {
+        if (step.id === "kind") return "runout";
+        if (step.id === "out") return "A-1";
+        if (step.id === "fielder") return "H-7";
+        if (step.id === "completed") return completed;
+        return firstCandidate(step);
+      });
+      same(asked.includes("incoming"), asks, `last ball, completed ${completed}: who walks in is asked`);
+      const after = foldEmitted(SIX, fiveOfSix, event);
+      same(after.innings.at(-1)?.closed, true, `last ball, completed ${completed}: the main innings is over`);
+      same(after.phase, completed === "1" ? "super_over" : "done", `completed ${completed}: a tie goes to a super over, a loss ends it`);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("the keeper keys are in the engine's position catalog (preflight W10)", () => {
     same((cricket.positions.roles ?? []).some((role) => role.key === KEEPER_ROLE), true, "the keeper role is the catalog's");
     same(cricket.positions.groups.some((group) => group.key === KEEPER_POSITION), true, "the keeper position is the catalog's");

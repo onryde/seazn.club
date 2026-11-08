@@ -2380,10 +2380,10 @@ export function keeperCandidates(view: PadHostView, side: "home" | "away", bowle
 /**
  * S2-4 Task 5 (gap 7): whether recording `payload` closes the innings being scored. A trial of the engine's own fold
  * (`cricket.apply`, strict, as the server folds it) on the pad's state, with an envelope shaped as the pad's optimistic
- * ones (`pendingToEnvelope`). True when that innings is closed afterwards. A ball that ends the match or the super over
- * closes its innings too, so the brief's second clause (the phase leaves `live`/`super_over`) is this one; a check of it
- * was dropped because no case could tell the two apart (S2-4 Task 5, mutation m5e). A refusal reads false, so the scorer
- * is still asked. The phone's `endsInnings` states the same rule (preflight D5).
+ * ones (`pendingToEnvelope`). True when that innings is closed afterwards, or the phase moves. The phase clause is the
+ * one that decides a wicket tying the chase into a super over: the main innings closes, but `activeInnings` then reads
+ * the super over's list, which is empty (Batch B review I1, mutation m5e). A refusal reads false, so the scorer is still
+ * asked. The phone's `endsInnings` states the same rule (preflight D5).
  */
 export function wicketEndsInnings(view: PadHostView, payload: Record<string, unknown>): boolean {
   const last = view.events.at(-1);
@@ -2406,6 +2406,7 @@ export function wicketEndsInnings(view: PadHostView, payload: Record<string, unk
     // `apply` parses the payload itself (`parsePayload`, as the server's fold does), so the envelope's payload type is
     // the module's to check, not this caller's.
     const after = cricketModule.apply(state, envelope as Parameters<typeof cricketModule.apply>[1], { strict: true, squads: view.squads });
+    if (after.phase !== state.phase) return true;
     return activeInnings(after).list[index]?.closed === true;
   } catch {
     return false;
