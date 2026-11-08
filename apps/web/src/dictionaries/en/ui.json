@@ -5849,6 +5849,7 @@
   "pad.cricket.tile.runs.6": "6",
   "pad.cricket.context.striker": "Striker",
   "pad.cricket.context.batter.blocked.otherEnd": "Already at the other end",
+  "pad.cricket.context.batter.swap": "Swap ends",
   "pad.cricket.context.nonStriker": "Non-striker",
   "pad.cricket.context.openers.unpicked": "Pick the two openers",
   "pad.cricket.context.bowler": "Bowler",

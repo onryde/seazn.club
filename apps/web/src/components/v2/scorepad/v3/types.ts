@@ -593,6 +593,13 @@ export interface ContextSlot {
    * why the TILES are blocked; this says why a CANDIDATE is.
    */
   blocked?: Blocked;
+  /**
+   * S2-4 (cricket) Task 7 — per-candidate decoration for this slot's picker, the same `CandidateMeta` the swap and
+   * guided sheets already render (`renderCandidateRow`). First use: cricket's striker chip, whose one candidate after
+   * a ball is the non-striker, tagged "Swap ends" so the pick reads as the hand strike swap it is. Absent keeps every
+   * row exactly as it renders without it.
+   */
+  candidateMeta?: Readonly<Record<string, CandidateMeta>>;
 }
 export interface ContextStripSpec { slots: ContextSlot[] }
 

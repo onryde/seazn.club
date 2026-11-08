@@ -5849,6 +5849,7 @@
   "pad.cricket.tile.runs.6": "6",
   "pad.cricket.context.striker": "Batteur",
   "pad.cricket.context.batter.blocked.otherEnd": "Déjà à l'autre bout",
+  "pad.cricket.context.batter.swap": "Changer de bout",
   "pad.cricket.context.nonStriker": "Non-frappeur",
   "pad.cricket.context.openers.unpicked": "Choisissez les deux batteurs d'ouverture",
   "pad.cricket.context.bowler": "Lanceur",

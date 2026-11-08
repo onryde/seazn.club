@@ -290,12 +290,33 @@ export function bowlerIsReadOnly(innings: CricketInningsShape | null): boolean {
   return innings.fine.currentBowler != null;
 }
 
-function creaseEndLocked(scoring: CricketInningsShape | null, end: "striker" | "nonStriker"): boolean {
-  const id = scoring?.fine?.[end];
-  if (typeof id !== "string" || id.length === 0) return false;
-  // Same window as a new-over bowler: the incoming batter can be renamed
-  // until they face. The surviving partner stays locked even at 0 balls.
-  return scoring?.fine?.unfacedIncoming !== id;
+/**
+ * S2-4 Task 7 (CK-SS-1, ruling 277; S2-4 rulings 76, 84) — who a crease end's chip may name instead of the fold's batter.
+ *
+ * - `null`: the end is editable as before. An end the fold has not named (a super over's vacant end) or the incoming
+ *   batter who has not faced yet (`fine.unfacedIncoming`, the same window as a new-over bowler) takes any eligible
+ *   batter (`buildContext`'s incoming list).
+ * - `[otherEnd]`: a batter who has faced, in an open main innings, may only swap ends with his partner. The engine takes
+ *   a ball that names exactly the fold's pair reversed (the hand strike swap) and refuses any other pair, so the other
+ *   end's batter is the one name the fold accepts here; no third batter comes in by this door.
+ * - `[]`: read-only. A closed innings, and a super over: the engine takes any pair there (`cricket.ts:1603-1622`), but
+ *   ruling 76 scopes the swap to a main innings, so the pad offers none (preflight W9; the phone's F28).
+ *
+ * The swap is on the striker chip (owner, 2026-11-07, "Keep them"; spec §7.2's deviation note): `buildContext` reads
+ * this for both ends, but opens only the striker's for a swap.
+ */
+export function swapCandidates(
+  scoring: CricketInningsShape | null,
+  end: "striker" | "nonStriker",
+  phase: CricketStateShape["phase"],
+): string[] | null {
+  const fine = scoring?.fine;
+  const id = fine?.[end];
+  if (typeof id !== "string" || id.length === 0) return null;
+  if (fine?.unfacedIncoming === id) return null;
+  if (phase !== "live" || scoring?.closed === true) return [];
+  const other = fine?.[end === "striker" ? "nonStriker" : "striker"];
+  return typeof other === "string" && other.length > 0 ? [other] : [];
 }
 
 /**
@@ -603,6 +624,17 @@ export function resolvePeople(
         : "nonStriker"
       : null;
   const replacement = soEligible[0] ?? "";
+  // Review Focus 1: mid-over the fold's bowler wins over a pending pick. After a take-back reopens an over, a pick made
+  // at its end is stale, and a ball naming it would be a second bowler mid-over, which the fold refuses.
+  const bowler = fine?.currentBowler ?? overrides.bowler ?? "";
+  // S2-4 Task 7 (CK-SS-1, ruling 76): the hand strike swap. A pick naming the fold's OTHER end at a main-innings end
+  // puts the fold's striker and non-striker at each other's ends: the pair reversed and nothing else (the one other
+  // pair the engine accepts on the write path). `swapCandidates` offers it on the striker chip only.
+  if (!soMode && foldStriker !== null && foldNonStriker !== null) {
+    if (overrides.striker === foldNonStriker || overrides.nonStriker === foldStriker) {
+      return { battingSide, bowlingSide, striker: foldNonStriker, nonStriker: foldStriker, bowler };
+    }
+  }
   const striker = overrides.striker ?? foldStriker ?? (vacantEnd === "striker" ? replacement : "");
   let nonStriker = overrides.nonStriker ?? foldNonStriker ?? (vacantEnd === "nonStriker" ? replacement : "");
   // One person never stands at both ends: the picker greys the other end's batter, so this is defence only, and it asks
@@ -613,9 +645,7 @@ export function resolvePeople(
     bowlingSide,
     striker,
     nonStriker,
-    // Review Focus 1: mid-over the fold's bowler wins over a pending pick. After a take-back reopens an over, a pick made
-    // at its end is stale, and a ball naming it would be a second bowler mid-over, which the fold refuses.
-    bowler: fine?.currentBowler ?? overrides.bowler ?? "",
+    bowler,
   };
 }
 
@@ -1821,6 +1851,9 @@ export function bowlerBlocked(
 // until they face. ContextSlot.readOnly, ../types.ts. The two names
 // stay in the strip regardless: they are real, useful information
 // (who is on strike right now) even when a scorer cannot reassign them.
+// S2-4 Task 7 (CK-SS-1): the engine now takes one other pair, the fold's
+// pair reversed, so a faced striker's chip opens on the non-striker alone
+// (the hand strike swap, `swapCandidates`); any other pick is still refused.
 //
 // DEFECT 3 (found by a later review, 2026-08-16, same plan doc): blocker 2's
 // own bowler comment left the chip unconditionally tappable and flagged,
@@ -2036,11 +2069,21 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
   const reason = inningsClosed ? null : bowlerBlockReason(state, people, cfg);
   const blockReason = reason === "unpicked" && !asksForPicks ? null : reason;
   const mode = modeSlot(innings, t);
-  const strikerLocked = inningsClosed || creaseEndLocked(innings, "striker");
-  const nonStrikerLocked = inningsClosed || creaseEndLocked(innings, "nonStriker");
+  // S2-4 Task 7: a faced striker's chip swaps ends with the non-striker (`swapCandidates`). The non-striker's chip stays
+  // read-only once he has faced, because the swap is on the striker chip (owner, 2026-11-07, "Keep them"), and while a
+  // swap is pending, so the one pick that moved both ends is the only one in play.
+  const strikerSwap = inningsClosed ? [] : swapCandidates(innings, "striker", state.phase);
+  const strikerLocked = strikerSwap !== null && strikerSwap.length === 0;
+  const swapPending = strikerSwap !== null && strikerSwap.length > 0 && people.striker !== innings.fine?.striker;
+  const nonStrikerLocked = inningsClosed || swapPending || swapCandidates(innings, "nonStriker", state.phase) !== null;
+  // After a pending swap the chip already names the fold's other end, so its one candidate is the batter it displaced:
+  // picking him swaps back (`resolvePeople`).
+  const swapTo = (strikerSwap ?? []).map((id) => (id === people.striker ? people.nonStriker : id));
   const dismissed = innings.fine?.dismissed ?? [];
   const unlockedIncoming = (otherEnd: string): string[] =>
     eligibleIncomingBatters(battingOrder, dismissed, [otherEnd]);
+  const strikerCandidates = strikerLocked ? undefined : strikerSwap === null ? unlockedIncoming(people.nonStriker) : swapTo;
+  const swapHint = t("pad.cricket.context.batter.swap");
   return {
     slots: [
       ...(superOverSlot ? [superOverSlot] : []),
@@ -2051,8 +2094,12 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         pool: "onfield",
         required: true,
         readOnly: strikerLocked ? true : undefined,
-        candidates: strikerLocked ? undefined : unlockedIncoming(people.nonStriker),
-        blocked: strikerLocked ? undefined : otherEndBlock(people.nonStriker),
+        candidates: strikerCandidates,
+        // The swap's one candidate IS the other end's batter, so he is not greyed as "at the other end": he carries the
+        // swap hint instead.
+        blocked: strikerLocked || strikerSwap !== null ? undefined : otherEndBlock(people.nonStriker),
+        candidateMeta:
+          strikerLocked || strikerSwap === null ? undefined : Object.fromEntries(swapTo.map((id) => [id, { tag: swapHint }])),
         message: closedMessage ?? (asksForPicks ? openersMessage : undefined),
       },
       {

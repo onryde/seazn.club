@@ -2209,3 +2209,50 @@ test("S2-4 T4: a double tap on a run tile while the extras sheet is open records
   expect(rows[0]!.payload.runs, "a wide and 1 run").toEqual({ bat: 0, extras: { kind: "wide", runs: 2 } });
   await expect(run1, "the tiles are back once the sheet is answered").toBeEnabled();
 });
+
+// S2-4 Task 7 (CK-SS-1, ruling 76; preflight W4): the hand strike swap is a tap on the striker chip (owner, 2026-11-07,
+// "Keep them"). After a ball the chip offers the non-striker alone, tagged "Swap ends", never a third batter; the pick
+// moves both chips, the next ball names the pair reversed and the server folds it on the write path, and the ball after
+// it follows from the reversed pair.
+test("S2-4 T7: a swap of ends from the striker chip, and the next ball folds", async ({ page }) => {
+  test.setTimeout(90_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket Swap ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 SW Striker ${TAG}` }, { fullName: `V3 SW NonStriker ${TAG}` }, { fullName: `V3 SW Three ${TAG}` }],
+    away: [{ fullName: `V3 SW Bowler ${TAG}` }],
+    emitCoreStart: true,
+  });
+  const id = (name: string) => fx.personIds[`V3 SW ${name} ${TAG}`]!;
+  await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+    over: 0,
+    ballInOver: 1,
+    striker: id("Striker"),
+    nonStriker: id("NonStriker"),
+    bowler: id("Bowler"),
+    runs: { bat: 0 },
+  });
+  await openConsoleAlreadyLive(page, fx);
+  const balls = async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball");
+
+  const strip = await openContextPicker(page, "Striker");
+  const swap = strip.locator(`[data-candidate-id="${id("NonStriker")}"]`);
+  await expect(swap, "the striker chip offers the non-striker").toBeVisible({ timeout: 10_000 });
+  await expect(swap, "tagged as the swap").toContainText("Swap ends");
+  await expect(strip.locator(`[data-candidate-id="${id("Three")}"]`), "never a third batter").toHaveCount(0);
+  await swap.click();
+  await expect(strip.getByRole("button", { name: `Striker: V3 SW NonStriker ${TAG}`, exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(strip.getByText(`Non-striker: V3 SW Striker ${TAG}`, { exact: true }), "both ends moved").toBeVisible();
+
+  await pad(page).locator('[data-tile-id="run0"]').click();
+  await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(2);
+  const swapped = (await balls())[1]!;
+  expect([swapped.payload.striker, swapped.payload.nonStriker], "the pair reversed").toEqual([id("NonStriker"), id("Striker")]);
+
+  await pad(page).locator('[data-tile-id="run1"]').click();
+  await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(3);
+  const next = (await balls())[2]!;
+  expect([next.payload.striker, next.payload.nonStriker], "the next ball follows the reversed pair").toEqual([id("NonStriker"), id("Striker")]);
+  await expect(pad(page).locator('[data-role="v3-scorebug"]'), "one run").toContainText("1/0");
+});

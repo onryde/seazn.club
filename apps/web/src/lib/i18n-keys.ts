@@ -4813,6 +4813,7 @@ export type DictionaryKey =
   | "pad.cricket.action.wicket.field.fielderAssist"
   | "pad.cricket.action.wicket.field.incoming"
   | "pad.cricket.context.batter.blocked.otherEnd"
+  | "pad.cricket.context.batter.swap"
   | "pad.cricket.context.bowler"
   | "pad.cricket.context.bowler.blocked.noEligible"
   | "pad.cricket.context.bowler.blocked.notInLineup"

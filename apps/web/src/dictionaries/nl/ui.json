@@ -5849,6 +5849,7 @@
   "pad.cricket.tile.runs.6": "6",
   "pad.cricket.context.striker": "Batter",
   "pad.cricket.context.batter.blocked.otherEnd": "Al aan de andere kant",
+  "pad.cricket.context.batter.swap": "Wissel van kant",
   "pad.cricket.context.nonStriker": "Andere batter",
   "pad.cricket.context.openers.unpicked": "Kies de twee openingsbatters",
   "pad.cricket.context.bowler": "Bowler",

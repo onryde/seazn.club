@@ -21,7 +21,7 @@ import { dedicatedEventTypes, moreActions, softCommitPlan } from "../../pad-host
 import { TileGrid } from "../../tile-grid";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import type { GuidedSheetSpec, GuidedSheetStep, PadHostView, TileSpec } from "../../types";
-import { bowlerBlocked, bowlerBlockReason, buildContext, buildDock, buildScorebug, buildSheets, buildTiles, KEEPER_POSITION, KEEPER_ROLE, refusedEventTypes, resolvePeople, type TFn } from "../cricket";
+import { bowlerBlocked, bowlerBlockReason, buildContext, buildDock, buildScorebug, buildSheets, buildTiles, KEEPER_POSITION, KEEPER_ROLE, refusedEventTypes, resolvePeople, swapCandidates, type TFn } from "../cricket";
 
 const t: TFn = (key) => key;
 const T20 = cricket.configSchema.parse(cricket.variants.t20);
@@ -1020,6 +1020,115 @@ describe("S2-4 T6: + Out off a wide or a no-ball offers only the engine's kinds"
     same(choiceIds(sheets.bye!, "runs").includes("out"), false, "bye");
     same(choiceIds(sheets.legbye!, "runs").includes("out"), false, "leg bye");
     same(sheets.bye!.steps.length + sheets.legbye!.steps.length, 2, "one step each");
+  });
+});
+
+/** The batting side's third name: the batter who walks in after the first wicket (`cricketLineups`' order). */
+const THIRD = "H-3";
+
+describe("S2-4 T7: the hand strike swap is the pair reversed (CK-SS-1, ruling 76)", () => {
+  const strikerSlot = (view: PadHostView) => buildContext(view, t)?.slots.find((s) => s.id === "striker");
+  const ONE_BALL: readonly CricketEventSpec[] = [...START, ball(0, 1)];
+
+  it("the striker chip on a faced pair offers only the non-striker, and the next ball names the pair reversed and folds on the write path", () => {
+    const view = viewOf(T20, ONE_BALL);
+    const innings = openInnings(view.state as CricketState);
+    expect([innings.fine.striker, innings.fine.nonStriker], "premise: the fold's pair after a dot ball").toEqual([STRIKER, NON_STRIKER]);
+    same(swapCandidates(innings, "striker", "live"), [NON_STRIKER], "the faced striker's end offers the non-striker alone");
+    const slot = strikerSlot(view);
+    same([slot?.readOnly, slot?.candidates], [undefined, [NON_STRIKER]], "the striker chip opens on the non-striker alone");
+    same(slot?.candidateMeta?.[NON_STRIKER]?.tag, "pad.cricket.context.batter.swap", "the candidate carries the swap hint");
+    same(slot?.blocked, undefined, "and is not greyed as 'at the other end'");
+    // The swap is on the striker chip: the non-striker's stays read-only (owner, 2026-11-07, "Keep them").
+    same(buildContext(view, t)?.slots.find((s) => s.id === "nonStriker")?.readOnly, true, "the non-striker chip is read-only");
+
+    const swapped = { ...view, contextOverrides: { striker: NON_STRIKER } };
+    same(resolvePeople(view.state as CricketState, swapped.contextOverrides, T20), {
+      battingSide: "home", bowlingSide: "away", striker: NON_STRIKER, nonStriker: STRIKER, bowler: OPENING_BOWLER,
+    }, "the pick puts the fold's pair at each other's ends");
+    const dot = tilePayload(buildTiles(swapped, t).find((tile) => tile.id === "run0"));
+    same([dot.striker, dot.nonStriker], [NON_STRIKER, STRIKER], "the next ball names the pair reversed");
+    const after = openInnings(foldEmitted(T20, ONE_BALL, { type: "cricket.ball", payload: dot }));
+    same([after.fine.striker, after.fine.nonStriker, after.legalBalls], [NON_STRIKER, STRIKER, 2], "the fold takes it on the write path");
+    // The positive pair: the fold refuses any other pair, so the swap is the one pick the striker chip may offer.
+    const third = tilePayload(buildTiles({ ...view, contextOverrides: { striker: THIRD } }, t).find((tile) => tile.id === "run0"));
+    expect(() => foldEmitted(T20, ONE_BALL, { type: "cricket.ball", payload: third }), "a third batter at a faced end is refused").toThrow();
+    // A swap pending, the chip's one candidate is the batter it displaced: picking him swaps back.
+    same(strikerSlot(swapped)?.candidates, [STRIKER], "the swapped chip offers the swap back");
+    same(resolvePeople(view.state as CricketState, { striker: STRIKER }, T20).striker, STRIKER, "and the swap back is the fold's pair");
+  });
+
+  it("no third batter is ever offered at a faced end", () => {
+    const states: Record<string, readonly CricketEventSpec[]> = {
+      "after a dot ball": ONE_BALL,
+      "after a single (the ends crossed)": [...START, ball(0, 1, { runs: { bat: 1 } })],
+      "mid-over": MID_OVER,
+      "at an over's end": OVER_END,
+      "after a wicket (the incoming batter unfaced)": [...ONE_BALL, ball(0, 2, { wicket: { kind: "bowled", out: STRIKER, bowlerCredited: true } })],
+      "after the incoming batter faced": [
+        ...ONE_BALL,
+        ball(0, 2, { wicket: { kind: "bowled", out: STRIKER, bowlerCredited: true } }),
+        ["cricket.ball", { over: 0, ballInOver: 3, striker: THIRD, nonStriker: NON_STRIKER, bowler: OPENING_BOWLER, runs: { bat: 0 } }],
+      ],
+    };
+    let checked = 0;
+    for (const [name, specs] of Object.entries(states)) {
+      const view = viewOf(T20, specs);
+      const innings = openInnings(view.state as CricketState);
+      for (const end of ["striker", "nonStriker"] as const) {
+        const offered = swapCandidates(innings, end, "live");
+        if (offered === null) {
+          // Not a faced end: the incoming batter, who may be renamed until he faces.
+          expect(innings.fine.unfacedIncoming, `${name}: ${end} is editable only as the unfaced incoming batter`).toBe(innings.fine[end]);
+          continue;
+        }
+        const other = innings.fine[end === "striker" ? "nonStriker" : "striker"];
+        if (other === null) throw new Error(`premise: ${name}: a main innings fills both ends`);
+        expect(offered.length, `${name}: ${end} offers at most one batter`).toBeLessThanOrEqual(1);
+        same(offered, [other], `${name}: ${end} offers only the other end's batter`);
+        if (end === "striker") same(strikerSlot(view)?.candidates, [other], `${name}: the striker chip offers only the other end's batter`);
+        checked++;
+      }
+    }
+    // Five states with both ends faced, and one with the incoming batter unfaced at the striker's end.
+    expect(checked).toBe(11);
+  });
+
+  it("a swap with the unfaced incoming batter folds, and while it is pending the non-striker chip takes no second pick", () => {
+    // A run out of the non-striker: the incoming batter walks in at the non-striker's end and has not faced.
+    const specs: CricketEventSpec[] = [...ONE_BALL, ball(0, 2, { wicket: { kind: "runout", out: NON_STRIKER, fielder: FIELDER, bowlerCredited: false } })];
+    const view = viewOf(T20, specs);
+    const innings = openInnings(view.state as CricketState);
+    expect([innings.fine.striker, innings.fine.nonStriker, innings.fine.unfacedIncoming], "premise: the incoming batter is at the non-striker's end").toEqual([STRIKER, THIRD, THIRD]);
+    const nonStrikerOf = (v: PadHostView) => buildContext(v, t)?.slots.find((s) => s.id === "nonStriker");
+    same(nonStrikerOf(view)?.readOnly, undefined, "before the swap the incoming batter's chip may be renamed");
+    same(strikerSlot(view)?.candidates, [THIRD], "the striker chip offers the swap with him");
+    const swapped: PadHostView = { ...view, contextOverrides: { striker: THIRD } };
+    same(nonStrikerOf(swapped)?.readOnly, true, "a swap pending, the non-striker chip is read-only (a second pick would fight it)");
+    const dot = tilePayload(buildTiles(swapped, t).find((tile) => tile.id === "run0"));
+    same([dot.striker, dot.nonStriker], [THIRD, STRIKER], "the ball names the pair reversed");
+    same(openInnings(foldEmitted(T20, specs, { type: "cricket.ball", payload: dot })).fine.striker, THIRD, "and folds on the write path");
+  });
+
+  it("the super over offers no swap", () => {
+    const cfg = tiedWithSuperOver();
+    const side = (striker: string, nonStriker: string, bowler: string): CricketEventSpec[] =>
+      [1, 2, 3, 4, 5, 6].map((n) => ["cricket.ball", { over: 0, ballInOver: n, striker, nonStriker, bowler, runs: { bat: 0 } }]);
+    const main: CricketEventSpec[] = [["core.start"], ...side("H-1", "H-2", "A-11"), ...side("A-1", "A-2", "H-11")];
+    const superOver: CricketEventSpec[] = [
+      ...main,
+      ["cricket.superover.ball", { over: 0, ballInOver: 1, striker: "A-1", nonStriker: "A-2", bowler: "H-1", runs: { bat: 0 } }],
+    ];
+    const view = viewOf(cfg, superOver);
+    const state = view.state as CricketState;
+    expect(state.phase, "premise: a super over").toBe("super_over");
+    const innings = state.superOver?.innings.at(-1);
+    if (innings?.fine == null) throw new Error("premise: a ball-by-ball super-over innings is open");
+    expect([innings.fine.striker, innings.fine.nonStriker], "premise: both ends faced").toEqual(["A-1", "A-2"]);
+    // Pinned, never read from the engine (preflight W9, D2): the engine takes any pair in a super over; ruling 76 does not.
+    same(swapCandidates(innings, "striker", state.phase), [], "the super over's striker offers no swap");
+    same(swapCandidates(innings, "nonStriker", state.phase), [], "nor its non-striker");
+    same(strikerSlot(view)?.readOnly, true, "the striker chip is read-only in a super over");
   });
 });
 

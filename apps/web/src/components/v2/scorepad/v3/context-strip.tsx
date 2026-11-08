@@ -416,6 +416,7 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
           },
           t("scorepad.attribution.noRoster"),
           activeSlot.blocked,
+          activeSlot.candidateMeta,
         )}
       {/* R2b (owner ruling, bowler-eligibility block, 2026-08-17):
           ContextSlot.message (types.ts) — a pre-localised raw string,

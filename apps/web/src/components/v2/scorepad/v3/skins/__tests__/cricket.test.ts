@@ -1758,9 +1758,15 @@ describe("G5 — context overrides supersede the fold", () => {
 // stops pretending they can be reassigned.
 // ---------------------------------------------------------------------------
 
-describe("buildContext — striker/non-striker are read-only (blocker 2)", () => {
-  it("marks striker readOnly", () => {
-    expect(buildContext(view())!.slots.find((s) => s.id === "striker")!.readOnly).toBe(true);
+describe("buildContext — striker/non-striker are read-only (blocker 2), but for the striker's swap (S2-4 T7)", () => {
+  // S2-4 Task 7 (CK-SS-1, ruling 76): the engine now takes ONE other pair on the write path, the fold's pair reversed,
+  // so a faced striker's chip opens on the non-striker alone (the hand strike swap). Any other pick is still refused,
+  // which is blocker 2's reason, so no third batter is ever offered.
+  it("a faced striker offers the swap: the non-striker alone, tagged with the swap hint", () => {
+    const striker = buildContext(view())!.slots.find((s) => s.id === "striker")!;
+    expect(striker.readOnly).toBeUndefined();
+    expect(striker.candidates).toEqual(["h2"]);
+    expect(striker.candidateMeta).toEqual({ h2: { tag: "pad.cricket.context.batter.swap" } });
   });
 
   it("marks nonStriker readOnly", () => {
@@ -1832,7 +1838,7 @@ describe("buildContext — incoming batter stays editable until they face", () =
     expect(striker.candidates).not.toContain("h2");
   });
 
-  it("locks both ends again once the incoming batter is no longer marked unfaced", () => {
+  it("once the incoming batter is no longer marked unfaced, the non-striker locks and the striker offers only the swap (S2-4 T7)", () => {
     const spec = buildContext(
       view({
         state: state({
@@ -1840,7 +1846,9 @@ describe("buildContext — incoming batter stays editable until they face", () =
         }),
       }),
     )!;
-    expect(spec.slots.find((s) => s.id === "striker")!.readOnly).toBe(true);
+    const striker = spec.slots.find((s) => s.id === "striker")!;
+    expect(striker.readOnly).toBeUndefined();
+    expect(striker.candidates).toEqual(["h2"]);
     expect(spec.slots.find((s) => s.id === "nonStriker")!.readOnly).toBe(true);
   });
 });
@@ -1878,10 +1886,10 @@ describe("buildContext — bowler read-only tracks the fold's own over boundary 
     expect(buildContext(v)!.slots.find((s) => s.id === "bowler")!.readOnly).toBe(true);
   });
 
-  it("striker/nonStriker stay readOnly regardless of the bowler boundary state — the two concerns are independent", () => {
+  it("the crease chips do not follow the bowler boundary — at an over's end too the striker offers only the swap and the non-striker is read-only", () => {
     const v = view({ state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null } })] }) });
     const spec = buildContext(v)!;
-    expect(spec.slots.find((s) => s.id === "striker")!.readOnly).toBe(true);
+    expect(spec.slots.find((s) => s.id === "striker")!.candidates).toEqual(["h2"]);
     expect(spec.slots.find((s) => s.id === "nonStriker")!.readOnly).toBe(true);
   });
 
