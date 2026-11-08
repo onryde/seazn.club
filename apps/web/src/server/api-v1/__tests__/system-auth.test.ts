@@ -139,6 +139,25 @@ function gateSitesInTree(): Map<string, number> {
   return found;
 }
 
+/** How many gate sites the tree holds, summed over every file the scan finds. */
+function gateSiteTotalInTree(): number {
+  return [...gateSitesInTree().values()].reduce((a, b) => a + b, 0);
+}
+
+/** The pure gates, read off the tree rather than the table: an EXPORTED, non-async function whose own body holds the
+ *  gate. It can only throw or return, so it never reaches the DB, and that is what lets the positive pair below run it
+ *  as a session with no database. A function ends at the first `}` in column 0. */
+function pureGateNamesInTree(): string[] {
+  const names: string[] = [];
+  for (const file of gateSitesInTree().keys()) {
+    const text = readFileSync(path.join(SRC, file), "utf8");
+    for (const m of text.matchAll(/^export function (\w+)\([\s\S]*?\n\}/gm)) {
+      if (/\.via !== "session"/.test(m[0])) names.push(m[1]!);
+    }
+  }
+  return names.sort();
+}
+
 describe("systemAuth is refused by every session-only gate", () => {
   it("the sweep covers every `via !== \"session\"` site in the tree", () => {
     const inTree = gateSitesInTree();
@@ -152,17 +171,23 @@ describe("systemAuth is refused by every session-only gate", () => {
   });
 
   it("systemAuth is refused by every session-only gate", async () => {
+    // The count is held to the TREE, never to the table the loop walks: a site dropped from the table leaves this
+    // loop one short of the scan, and this test reds on its own, not only through the coverage test above.
+    const treeTotal = gateSiteTotalInTree();
+    expect(treeTotal, "zero gates found — the scan is looking in the wrong place").toBeGreaterThan(0);
     let checked = 0;
     for (const site of SESSION_ONLY_SITES) {
       const err = await refusal(() => site.run(systemAuth(ORG)));
       expect(err?.status, `${site.name} (${site.file}) let the system actor through`).toBe(403);
       checked++;
     }
-    expect(checked).toBe(SESSION_ONLY_SITES.length);
-    expect(checked).toBeGreaterThan(0);
+    expect(checked, "the sweep ran fewer gates than the tree holds").toBe(treeTotal);
   });
 
   it("each pure gate admits a session and refuses every other door (the positive pair)", async () => {
+    // Held to the tree as well: the pure gates the scan reads off the source, times every door.
+    const pureInTree = pureGateNamesInTree();
+    expect(pureInTree.length, "zero pure gates found in the tree").toBeGreaterThan(0);
     const pure = SESSION_ONLY_SITES.filter((s) => s.pure);
     let checked = 0;
     for (const site of pure) {
@@ -172,7 +197,8 @@ describe("systemAuth is refused by every session-only gate", () => {
         checked++;
       }
     }
-    expect(pure.length).toBeGreaterThan(0);
-    expect(checked).toBe(pure.length * Object.keys(CTX).length);
+    expect(checked, `the positive pair ran fewer pure gates than the tree holds (${pureInTree.join(", ")})`).toBe(
+      pureInTree.length * Object.keys(CTX).length,
+    );
   });
 });
