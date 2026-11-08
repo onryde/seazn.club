@@ -252,7 +252,12 @@ test("J1 a sponsor added through the form — name, link, tier — is stored as 
     await expect(add).toBeEnabled({ timeout: 1_000 });
   }).toPass({ timeout: NAV_MS });
   await tab.getByLabel(say(EN_UI, "settings.org.sponsors.link"), { exact: true }).fill(A.url);
-  await tab.getByLabel(say(EN_UI, "sponsors.tierLabel"), { exact: true }).selectOption(A.tier);
+  // The tier <select> sits INSIDE its <label> (org-sponsors.tsx), so `getByLabel` - which matches the label's whole text
+  // content - read "TierTitleGoldSilverPartner" and never matched "Tier" exactly (CI e2e 42444160080). By role it is found by
+  // its accessible name, which skips the control itself: exactly "Tier", what a screen reader announces.
+  const tier = tab.getByRole("combobox", { name: say(EN_UI, "sponsors.tierLabel"), exact: true });
+  await tier.selectOption(A.tier);
+  await expect(tier, "the tier picked").toHaveValue(A.tier);
   await expect(name).toHaveValue(A.name);
   await add.click();
   await expect(tab.getByRole("button", { name: say(EN_UI, "settings.org.sponsors.remove", { name: A.name }), exact: true }), "the new row").toBeVisible();
