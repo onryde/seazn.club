@@ -16,15 +16,150 @@
 
 Re-pinned against origin/main 1b224951d4 on 2026-11-07 (drift accepted). See the re-pin log at the end.
 
+## Pre-flight amendments (2026-11-08)
+
+These are the rulings recorded in the SDD ledger (`.superpowers/sdd/2026-11-06-quick-match-2-surfaces/progress.md`, under "Pre-flight rulings (2026-11-08)") over the pre-flight scan beside it. Each is a controller ruling (PO rec, autonomous mandate, owner 2026-11-07), not an owner ruling. **Where an amendment and the task text below conflict, the amendment wins.** Re-pinned on HEAD d4d9fc5709: `package.json:60` (gen-keys) and `:62` (check); `stages.ts` `addFixture` `:7322`, refusals `:7352` (bracket), `:7355` (complete), `:7359` (self), `:7378` (outside division), `adhoc-` `:7434`, `StandingsOut` `:6239-6247`, `getStandings` `:6250`; `scoreLineOf` `lib/score/levels.ts:112`; `withDb` `e2e/helpers.ts:539` and `mobile.spec.ts:64,292-307,1661-1667,4701-4707` hold on HEAD. The scan's `+1` shift applies only after a rebase onto main, so re-pin these at rebase.
+
+### Preconditions and batches
+
+- **Plan 2 starts after plan 1's batch 4 (T8 ∥ T9) closes.** Plan 1 T9 writes `ui.json` ×4, `i18n-keys.ts` and `quick-match-back-link.tsx`, which plan 2's T1 and T5 also write. Plan 2 T6 consumes plan 1 T8's `ensureGuestDeviceLink` (A7, C13).
+- **Batches** (same worktree; each implementer commits only its own paths; a task review per task; the next batch starts only after the batch's reviews close; the scoped gate is re-run at each boundary):
+  - **P2-B1: T1 ∥ T2 ∥ T3.** T1 owns the dictionaries ×8, `i18n-keys.ts`, `lib/quick-match-constants.ts` and `server/usecases/quick-match-create.ts` (the codes move out, A4). T2 owns `server/usecases/quick-match-preview.ts` and its new test. T3 owns `app/api/quick-match/**`, `server/usecases/quick-match-visitor.ts` and `lib/rate-limit.ts`.
+  - **P2-B2: T4 ∥ T5.** T4 owns `app/[lang]/(marketing)/play/**`, `components/quick-match/{setup-form,recent-strip}.tsx`, their tests and `eslint.config.mjs`. T5 owns `app/q/[token]/page.tsx` and its test, `components/quick-match/{home,standings,draw,match-list}.tsx`, `lib/routes.ts`, `lib/scrub-score-url.ts`, `lib/__tests__/{_route-scan.ts,scrub-path-secrets.test.ts,scrub-secret-painters.test.ts}`, `server/usecases/quick-match-home.ts` and plan 1's `components/v2/quick-match-back-link.tsx`.
+  - **P2-B3: (T6 → T7 → T8) ∥ T9.** T6, T7 and T8 all write `home.tsx`, so they run in sequence, by one implementer or three in turn. T9 owns `app/[lang]/(marketing)/page.tsx` and its tests, `components/marketing/quick-match-cta.tsx`, `components/quick-match/recent-strip.tsx` and `quick-match-home.ts` (T5 is done by then). **No task after T1 edits a dictionary while a parallel lane is open.** A key found missing goes to the controller, who adds it in one commit between lanes.
+  - **P2-B4: T10 ∥ T11.** T10 owns `e2e/quick-match.spec.ts` and `e2e/mobile.spec.ts`. T11 owns `scripts/smoke/**`. Then push and run the CI dispatch (E2).
+- **Every UI dispatch (T4, T5, T7, T8, T9) invokes the `frontend-design` skill (E6)** and lists its screenshots as **owed**: 320, 768 and 1280 of each changed screen, taken from the CI e2e run's artifacts or a CI-run capture spec, and served for sign-off on local :8765. No local server (D8).
+- **Board vs build before merge (E6):** check every control in the mockups. In `setup.html`: the pencil on the name heading, the "n of 6" count, the × on rows 3 to 6 (D5), the docked night Start bar with its count, and "Winners meet". In `home.html`: the leader-row highlight in standings, match numbers in the list, the Live badge inside a draw card, lime winners in the draw, "waits", and "winner of n" in the list. Note any control that is missing, as a finding.
+
+### Copy and constants (T1)
+
+- **A1, B1, A4 (adopted from the controller's dispatch):** T1 writes the whole key list in one pass. On top of the listed keys it adds:
+  - setup labels: `quickMatch.setup.nameLabel`, `.sideLabel` "Side {n}" (the accessible name T10 fills by), `.removeSide` "Remove side {n}", `.emailLabel`;
+  - errors: `quickMatch.errors.sportNotOffered`, `.kindNotOffered`, `.unavailable` (empty offer, Q2) and `.generic` (the 503 `DEVICE_LINK_KEK_MISSING`, the 400, a network failure, or anything unmapped);
+  - draw lines: `quickMatch.setup.winnersMeet` "Winners meet", `quickMatch.home.winnerOfSemi` "Winner of semi-final {n}", `quickMatch.home.winnerOfMatch` "Winner of match {n}", and the existing list key `winnerOf` "winner of {n}";
+  - home: `quickMatch.home.versus` "v", `quickMatch.home.drew` (B5d), `quickMatch.home.qrAlt`, `quickMatch.home.shareNative` (D14), and `quickMatch.addMatch.{home,away,submit}`;
+  - refusal flashes (D3): `quickMatch.flash.{linkLimit,adhocLimit,notReady,sameSide,notFound,generic}`;
+  - dead screen (D16): `quickMatch.dead.{title,hint,startNew}`.
+- **Where keys live:** kind words (`individual`/`pair`/`team`) and format words (`league`/`knockout`) live ONCE in `ui.json`, because the home reads them through `msgFor`. The setup page loads both `getDictionary(lang, "marketing")` and `getDictionary(lang, "ui")`, as `[lang]/(marketing)/formats/page.tsx:40` does. Sport and variant names are the existing ui keys (`sport.*`, `variant.*`), resolved on the server. Standings headers reuse `slideshow.col.*`.
+- **Plurals** use `plural()` (`lib/i18n-runtime.ts:39`) with `.one` and `.other` keys in all 4 locales for `startCount`, `sidesCount` and `home.played`. Numbers are never typed into copy: `errors.tooManyAlive` interpolates `{max}` from `QUICK_MATCH_MAX_ALIVE_PER_VISITOR`, `home.played` interpolates `{days}` from `QUICK_MATCH_EXPIRY_DAYS`, and `flash.adhocLimit` interpolates `{max}` from `QUICK_MATCH_MAX_ADHOC`.
+- **Codes and constants:** `QUICK_MATCH_ERRORS` (every code, including `SIDES_UNKNOWN`) moves to `lib/quick-match-constants.ts`, which stays import-free. `quick-match-create.ts` imports and re-exports it, so plan 1's tests are unchanged. Also add `QUICK_MATCH_MAX_ADHOC = 10` and the code `QUICK_MATCH_ADHOC_LIMIT` (D4).
+- **T1 verify** adds `src/lib/__tests__/dictionary-copy-truth.test.ts`. Mutate once: drop a `.one` key from `fr` and confirm that parity or the test goes red.
+
+### T2, re-scoped (D1, A2, A3, B2, C2)
+
+- **Drop both routes and their test.** T2 becomes `quickMatchPreviewTable()`, appended to `server/usecases/quick-match-preview.ts`. It returns the `league` counts for sides 2..6 × plays 1..4 (20 entries) and the `knockout` preview for sides 3..6 (4 entries), keyed `"<format>:<sides>:<plays>"`. It is computed only over in-range values, so the `RangeError` cannot be reached. Test file: `server/usecases/__tests__/quick-match-preview-table.test.ts`, with no DB. It asserts:
+  - the exact key set and a count of 24 (anti-vacuity);
+  - every league count equals the rulebook's `plays × n(n−1)/2`;
+  - every knockout `matchCount` equals `n − 1`.
+
+  Expected values come from the rulebook, never from the code. Mutate once by dropping one league entry.
+- T4's page calls the table on the server and passes it to the island. The island never fetches a count. The Start count is a lookup, so it is never stale or out of order.
+
+### T3 (D2, B3)
+
+- Add `QUICK_MATCH_CREATE_LIMIT: RateLimitConfig = { max: 20, windowSeconds: 600, failClosed: false }` to `lib/rate-limit.ts`, keyed `quick-match-create:${ip}`. Do not use `EMAIL_LIMIT`.
+- **Read the visitor cookie from `req.cookies`**, not from `next/headers`. The test then feeds the real `Set-Cookie` value back as a `Cookie` header. "Malformed" means `!isVisitorKeyShaped(value)` (`quick-match-tokens.ts:76`).
+- **Tests:**
+  - stub `DEVICE_LINK_KEK` with `vi.stubEnv`;
+  - the limiter case asserts that no `quick_matches` row exists for that visitor hash, which proves the limiter runs before any DB touch;
+  - a blank-cookie create still works (Review Focus 4).
+- **Mutations, one at a time:** make the cookie-shape guard `return true` (the malformed-cookie test goes red), and move the limiter after the create (the no-row assertion goes red).
+
+### T4 (B4, C1, C3, D5, D6, D15, Q2)
+
+- The client imports `QuickMatchSport`/`QuickMatchPreview` as whole-statement `import type` only. Extend the type-only lint block (`eslint.config.mjs:141`) with `src/components/quick-match/**`. Server components in that folder take their data as props.
+- **The page resolves names on the server.** It passes `sports: { sport_key, name, kinds: { kind, label }[], variants: { key, name, knockoutAllowed }[], defaultVariant }[]`, where `defaultVariant = pickVariant(sport_key, variants)` (`lib/preferred-variant.ts:19`) and the default kind is `kinds[0]`. Chips keep catalog order. Declare `export const dynamic = "force-dynamic"`.
+- **Form rules (each pinned by a test):**
+  - Changing the sport resets the kind and the variant to that sport's defaults.
+  - Fewer than 3 filled sides, or a variant with `knockoutAllowed: false`, resets the format to league.
+  - The kind switch is hidden for a one-kind sport. Test it with chess, whose body sends `kind: "individual"`.
+  - Each side row from 3 to 6 has a × control with `removeSide`. Start is disabled while any row is blank.
+  - The body is exactly `{ name, sport_key, variant_key, kind, format, sides, plays, email, locale }`. It sends `format: "league"` when the format row is hidden and `email: null` when the email is blank. Inputs set `maxLength` 80 (name) and 60 (sides).
+- **Knockout unavailable (D15):** follow spec §5: the row shows League alone plus `knockoutUnavailable` as one line, with no disabled button. Test it with a mocked `knockoutAllowed: false`. There is no e2e for it, because v1 cannot reach it.
+- **Double tap (B4f):** the form locks on the first submit until `location.assign`, and unlocks on an error. Test: two `onSubmit` calls make one `fetch`.
+- **Error mapping:** map every code in `QUICK_MATCH_ERRORS` to its key. A 429 with no code maps to `errors.rateLimited`; anything else maps to `errors.generic`. Test each one.
+- **Draw preview:** map seed i to the i-th typed name, and resolve a feeder that points at a bye line to that line's holder (ledger `:15`). Name rounds with `roundRoleLabel` (`lib/round-role-label.ts:21`). The final's away line with two feeders reads `winnersMeet`.
+- **Suggested name (B4h):** the island fills it after mount, with the guest's own date (`Intl.DateTimeFormat(lang, { weekday: "short", day: "numeric", month: "short" })`), and it follows the sport until the guest edits it. Test both directions.
+- **Empty offer (Q2), tested first:** with zero sports, the page renders `errors.unavailable` and no Start button.
+- The page test mocks `listQuickMatchSports`. **Step 5 is replaced** by the owed CI screenshots (see Preconditions).
+
+### T5 (A6, A14, B5, C10, D10, D12, D13, D16, Q3)
+
+- **Routes and scrubbing (A6):** add `quickMatch: (token: string) => \`/q/${token}\`` to `lib/routes.ts` beside `checkin`. Every producer of the URL uses it, including plan 1's back link, whose concatenation T5 rewrites. Change the pin at `scrub-secret-painters.test.ts:426` to `["checkin", "claim", "quickMatch"]`. Add a test that the painter scan's file list includes `home.tsx` and `quick-match-back-link.tsx`; T7 and T9 extend it with their painters. Mutation: remove `ph-no-capture` from the back link and confirm the scan goes red.
+- **Feeder names (D12):** add `seqInRound` (from `seq_in_round`) to `QuickMatchFixture` in `quick-match-home.ts`, and test it on a knockout of 5.
+  - Resolve a slot label's `{round, seq}` to its feeder fixture. The list prints `winnerOf {n}` with the feeder's match number. The draw prints `winnerOfSemi {n}` when the feeder is a semi-final, and `winnerOfMatch {n}` otherwise. Never print `resolveSlotLabel`'s `R1·2` code.
+  - Match number n = the 1-based index among non-bye fixtures in play order. The same n appears on the list badge and in "match n of total".
+- **Score text and settled results:**
+  - Scores come from `scoreLineOf` (`lib/score/levels.ts:112`). Write no third headline cutter.
+  - A settled fixture with `winnerEntrantId === null` renders as `drew`, never "A beat B". Test with a football league.
+  - A shared rank 1 makes the winner card read `level` and name the tied leaders.
+  - Rounds are named by bracket role with `roundRoleLabel`; a semi-final of an 8-draw is never "Round 2".
+  - Reuse `SETTLED_FIXTURE_STATUSES`. Add no new status-literal set.
+- **Page setup:** `robots: { index: false }`. The locale is `resolveLocale()` with no `orgDefault` (D10).
+- **No client DTO leak (A14):** a test creates a quick match WITH an email, prerenders `/q/<token>`, and asserts that neither the email nor any `token_enc` byte appears in the HTML or the flight payload. Mutate once by passing `home` to a client island; the test must go red. Every island takes a minimal DTO only.
+- **Save hidden (D13):** do not render "Save this match" in plan 2. Plan 3 renders it with its route.
+- **Dead link (D16):** the dead screen reads `dead.title` "This link has ended or doesn't exist", plus `dead.hint` and a `dead.startNew` link to `/${locale}/play`. Use `data-testid="qm-dead-link"`, never `scan-dead-link`.
+- **Void (Q3):** one DB page test. Score a fixture to decided, void the deciding event through the existing void use case, and assert that the hero reads Live and no winner card shows.
+- **Review Focus 3:** retitle the params test to what it asserts (an exact token resolves; a changed token is dead). Witness the trailing slash and `?utm` in T10. **Step 5 is replaced** by the owed CI screenshots.
+
+### T6 to T8: refusals (D3, A7, A8, B6, B8, D4)
+
+- **Every refusal of a guest form post is a 303** to `routes.quickMatch(token)` with `?e=<code>`, rendered as localized `quickMatch.flash.*` copy on the home. It is never JSON. An unknown token is the exception: it gets a 303 to the same path, which renders the dead screen.
+- **T6:**
+  - Its Files list adds the mint limiter's 429 (`rateLimit("qm-mint:"+id)`, `lib/rate-limit.ts:105`), mapped to `flash.linkLimit`.
+  - New tests: driven by `__setRateLimitCounterForTests`, the 429 becomes a 303 with `e=` and no `device_links` row is written; a waiting final becomes a 303 with `notReady`.
+- **T7:**
+  - Files: also modifies `home.tsx` to mount the island. There is no `page.tsx` change and no `baseUrlFromHeaders`.
+  - The island takes `path = routes.quickMatch(token)` and builds `new URL(path, window.location.origin)`; tests stub the origin.
+  - Add the existing `ShareButton` (`components/share-button.tsx`, `navigator.share`) beside Copy (D14), with label `shareNative`. Keep the QR behind the toggle.
+  - Extend T5's painter-file assertion with `share.tsx`.
+- **T8:**
+  - Files: also modifies `home.tsx` to mount `add-match.tsx`. The island takes only `{ fixtures: { id, label }[], sides: { id, name }[] }`.
+  - The route runs its checks in this order: token, knockout, membership (compare both ids against `home.sides` BEFORE `addFixture`, so a non-UUID is a flash and not a JSON 400), same side, then the cap. The cap is ad-hoc fixtures (`ext_key like 'adhoc-%'`) `>= QUICK_MATCH_MAX_ADHOC` → `flash.adhocLimit`. Also apply `rateLimit("qm-add:"+id, MUTATION_LIMIT)` (`lib/rate-limit.ts:102`).
+  - **New Step 5:** mutate each of the route's own guards one at a time (knockout, membership, same side, cap). Each mutation reds its own test.
+  - Tests use `playToDecided` on badminton, with the reason line: "`firstRallyFor` throws for chess (`_quick-match-probe.ts:194`); the add-match path is sport-agnostic".
+  - Add tests for the 11th ad-hoc add (refused) and a second add after the first (allowed).
+
+### T9 (A9, A10, B9, D11)
+
+- **Strip read (A10):** add `listRecentQuickMatches(visitorHash, limit = 5)` INSIDE `quick-match-home.ts`, with `resolveQuickMatchToken`'s predicate for an alive row (null expiry or a future one), newest first. It returns `{ token, name, createdAt }`.
+- **Strip contents (D11):** the strip shows the name and the created date (localized `Intl.DateTimeFormat`). It has no "n of m played".
+- **Fail soft (A9):** a row whose `openHomeToken` throws is skipped. A throw from the whole read renders nothing and logs once. The marketing page never 500s. Test: with `DEVICE_LINK_KEK` unset, the page renders the CTA and no strip.
+- **Where the tests live (B9c, E7):** test the strip through the marketing page's DB test under `src/app` (`ci.yml:1317` runs it), not as a `src/components` DB test. Strip links use `routes.quickMatch` and carry `ph-no-capture`, and T5's painter-file assertion gains `recent-strip.tsx`.
+
+### T10 e2e and T11 smoke (D7, D8, D9, A11, B10, E2)
+
+- **CI only (E2):** push, then `gh workflow run e2e.yml --ref feat/quick-match`. Never run local Playwright or a local server. Read the run's own report, and treat a serial file's count as a floor (`mobile.spec.ts:64`).
+- **`mobile.spec.ts`, at all seven widths:** league setup → home → Score → Start → one rally → back home. It asserts `expectNoHorizontalScroll` on `/en/play`, the home and the pad, and that the back link sits inside the viewport at 320.
+- **`quick-match.spec.ts` (1280):**
+  - **League:** run the league flow, then `page.goBack()` from the pad: the home is fresh and reads Live, which also tests bfcache on a `no-store` page. Then go forward and tap "Back to the quick match".
+  - **URL forms:** open the home with a trailing slash and with `?utm_source=x`; both render it.
+  - **Knockout of 4:** a real knockout shows The draw and a waiting final with no Score button.
+  - **Widths at 1280:** `expectNoHorizontalScroll` on `/en/play` and on the home.
+- **Selectors (A11):**
+  - click the Badminton chip explicitly;
+  - match exact singular copy: `Start playing · 1 match` and `0 of 1 match played`;
+  - read Live as `getByTestId("qm-hero").getByText("Live")`;
+  - derive `HOLD_BUDGET_MS` from the imported hold constant (precedent `mobile.spec.ts:55`).
+- **New T11, smoke (D9):** create `scripts/smoke/suites/quickMatch.ts` with plan 3 T7's shape (`index.ts` `SELECTABLE_SUITES`, `main.ts` after `funnelReminder`). It runs create → home "0 of 1" → Score 303 to `/score/dl_` → one rally with the device link → home Live, and cleans up in `finally`. Plan 3 T7 then EXTENDS it with the sweep step instead of creating it. Its PR run is the proof; there is no local run against stg without the owner's go.
+
+### Not changed, recorded
+
+- **E1:** transient; the tree is clean at d4d9fc5709.
+- **E3:** pins above.
+- **E4:** V492 is renumbered at merge, per the owner's ruling of 2026-11-07.
+- **E5:** no captcha in v1 (spec §7.9's default). Adding the create to Turnstile after #1136 merges is **OWED TO OWNER**.
+- **E8:** OK.
+
 ## Global Constraints
 
-- Plan 1's Global Constraints apply in full (no code before the owner's go, no commits, no engine change, caps, tokens never in query strings).
-- **Copy** (C10, C14): every string a guest reads is a dictionary key present in all four locales; `npm run i18n:check` (repo root, `package.json:61`, `scripts/i18n/check-parity.ts`) must pass after each task that adds keys, **and** `npm run i18n:gen-keys` (repo root, `package.json:59`, `scripts/i18n/gen-keys.ts`) must be re-run so the generated `src/lib/i18n-keys.ts` union carries them. Parity only compares the locales with each other, so it stays green on a stale union; CI regenerates the union and fails on a diff (`scripts/i18n/gen-keys.ts:1-10`). No internal word on screen (§4): never "stage", "variant", "legs", "entrant", "fixture", "division".
+- Plan 1's Global Constraints apply in full (no engine change, caps, tokens never in query strings). O9 was lifted on 2026-11-07: work commits on `feat/quick-match` in its worktree, each implementer committing only its own paths (`git commit -- <paths>`). The "Pre-flight amendments (2026-11-08)" section below overrides any task text it conflicts with.
+- **Copy** (C10, C14): every string a guest reads is a dictionary key present in all four locales; `npm run i18n:check` (repo root, `package.json:62`, `scripts/i18n/check-parity.ts`) must pass after each task that adds keys, **and** `npm run i18n:gen-keys` (repo root, `package.json:60`, `scripts/i18n/gen-keys.ts`) must be re-run so the generated `src/lib/i18n-keys.ts` union carries them. Parity only compares the locales with each other, so it stays green on a stale union; CI regenerates the union and fails on a diff (`scripts/i18n/gen-keys.ts:1-10`). No internal word on screen (§4): never "stage", "variant", "legs", "entrant", "fixture", "division".
 - **Night stage** (O10, O11, §8): both pages use the product's own tokens (`--mk-night`, `--mk-night-2`, `--mk-cream`, `--mk-lime` at `globals.css:532-535`, the `.mk-display` face at `:552`, the `.mk-funnel-night` input treatment at `:768-772`, `.bottom-bar` and `.bottom-bar-spacer` at `:502-514` for the docked Start button). `.bottom-bar` itself paints a light surface (`bg-white/95`, `border-purple-100`, `globals.css:503`) while the mockup's bar is night (`.qm-bottombar`, `setup.html:49`), so the setup page keeps the class for its docking and safe-area padding and overrides the surface with the night tokens. Lime is never text on a light background (`globals.css:787-788`); these pages are night, so lime plates and lime action text are allowed as the hero uses them.
 - **Widths** (§8): 320, 768 and 1280 with no horizontal scroll; `html, body { overflow-x: clip }` (`globals.css:66-71`) is a backstop, not a license. Because of that clip, a bare `document.documentElement.scrollWidth === window.innerWidth` reads clean on an overflowing page; measure with `expectNoHorizontalScroll` (`e2e/helpers.ts:57`), which lifts the clip before reading, as the suite's own CONTROL test proves (`e2e/mobile.spec.ts:292-307`).
-- **Locale:** the setup page takes `lang` from the `[lang]` segment and stores it on the row; the home and pad resolve with `resolveLocale({ orgDefault: row.locale })` (`lib/resolve-locale.ts:43`).
+- **Locale** (amended 2026-11-08, D10): the setup page takes `lang` from the `[lang]` segment and stores it on the row, which serves the email only (plan 3). The home resolves the VIEWER's locale with `resolveLocale()` and no `orgDefault`, exactly as the pad does (`app/score/[token]/page.tsx:56`). `orgDefault` outranks Accept-Language (`lib/resolve-locale.ts:7-12`), so passing `row.locale` would show a friend the creator's language on the home and their own on the pad.
 - **Route handlers** wrap in `handler` from `@/lib/http` and throw `HttpError`; JSON bodies parse with the zod schemas from plan 1. Current `handler` facts (`lib/http.ts:72-144`): it answers `{ ok: true, data }` with status 200; a route that needs another status (201) or a header (`Cache-Control`, `Set-Cookie`) returns its own `NextResponse`, which `handler` passes through unwrapped (`:78-83`); a `ZodError` becomes **400** `{ ok: false, error: "Invalid input", issues }` (`:85-90`); an `HttpError` answers `{ ok: false, error, code? }` with its own status and headers (`:116-137`). A route that ends on a page redirects with `redirectLocal(path, 303)` (`lib/http.ts:45`). In Next 16, `params` is a Promise in both pages and route handlers: `const { token } = await params` (`app/score/[token]/page.tsx:48-53`).
-- **e2e:** against a pre-compiled production server on :3000, never `next dev` (`playwright.config.ts:6-15`; local recipe `docs/runbooks/e2e-local.md`, with `E2E_PROD_TARGET=1` and `DATABASE_URL`); run one spec with `npx playwright test e2e/<name>.spec.ts --project=parallel` from `apps/web`. The seven width projects (`mobile-320`, `mobile-360`, `mobile-se` 375, `mobile-14` 390, `mobile-430`, `tablet-768`, `tablet-834`, `playwright.config.ts:268-339`) run only `mobile.spec.ts`. Every project loads the shared Pro session (`storageState: AUTH_STATE`, e.g. `:242`), so a guest spec clears it with `test.use({ storageState: { cookies: [], origins: [] } })` (precedent `e2e/credits-tab-shots.spec.ts:25`). On CI, `e2e.yml` runs on a push to `main` or by `workflow_dispatch` with a `pr` input (`.github/workflows/e2e.yml:99-107`); it sets `DEVICE_LINK_KEK` (`:578`) and `NEXT_PUBLIC_SCOREPAD_HOLD_MS=3000` (`:633`) and runs with no Redis, so every rate limit is inert there (`:566`). Which run path (local or CI) this plan may use is open: see Blockers in the re-pin log.
+- **e2e:** against a pre-compiled production server on :3000, never `next dev` (`playwright.config.ts:6-15`; local recipe `docs/runbooks/e2e-local.md`, with `E2E_PROD_TARGET=1` and `DATABASE_URL`); run one spec with `npx playwright test e2e/<name>.spec.ts --project=parallel` from `apps/web`. The seven width projects (`mobile-320`, `mobile-360`, `mobile-se` 375, `mobile-14` 390, `mobile-430`, `tablet-768`, `tablet-834`, `playwright.config.ts:268-339`) run only `mobile.spec.ts`. Every project loads the shared Pro session (`storageState: AUTH_STATE`, e.g. `:242`), so a guest spec clears it with `test.use({ storageState: { cookies: [], origins: [] } })` (precedent `e2e/credits-tab-shots.spec.ts:25`). On CI, `e2e.yml` runs on a push to `main` or by `workflow_dispatch` with a `pr` input (`.github/workflows/e2e.yml:99-107`); it sets `DEVICE_LINK_KEK` (`:578`) and `NEXT_PUBLIC_SCOREPAD_HOLD_MS=3000` (`:633`) and runs with no Redis, so every rate limit is inert there (`:566`). Run path (amended 2026-11-08, E2): CI only. Push `feat/quick-match`, then `gh workflow run e2e.yml --ref feat/quick-match` (ALWAYS `--ref`). No `pr` input is needed: with it empty, every job checks out `github.sha`, the dispatched ref's head (`e2e.yml:726,1387,1777`). No local Playwright and no local web server.
 
 ## Review Focus
 
@@ -141,7 +276,7 @@ Re-pinned against origin/main 1b224951d4 on 2026-11-07 (drift accepted). See the
 
 **Interfaces:**
 - Consumes: plan 1 `resolveQuickMatchToken`, `readQuickMatchHome`, `nextPlayable`; `resolveLocale` (`@/lib/resolve-locale`), `msgFor` (`@/lib/messages-i18n`, as the pad imports it, `app/score/[token]/page.tsx:40`), `getDictionary(locale, "ui")`; `HtmlLang` (`@/components/i18n/html-lang`).
-- Produces: `QuickMatchHomeView({ home, locale, t, tokenPath }: { home: QuickMatchHome; locale: Locale; t: (k: MessageKey, v?) => string; tokenPath: string })`. Sections in the mockup's order: eyebrow `sport · kind · format`; name; `home.played` line; hero (`upNext` with `next`, or `live` with the in-play fixture's current score from its `summary`, or the winner card when `allPlayed`); actions row (Share → Task 7, Save → plan 3); `standings.tsx` for league (columns P, W, Pts; `StandingsOut.rows` is `unknown[]`, `stages.ts:6162-6170`, so read each row as `StandingsRowLike`, `lib/public-site.ts:207`, whose `played`/`won`/`points` keys and P-then-W order `resultColumns` declares, `:232`) or `draw.tsx` for knockout (rounds as cards: `semiFinal {n}` for the penultimate round of a 4-draw, `final` for `is_final`, `round {n}` otherwise, winners in lime); `match-list.tsx` (unplayed with a Score form button, waiting ones with `waits`, finished at the bottom as "A beat B" with the summary scores); `addMatch` (league only, Task 8); `anyoneCanScore`.
+- Produces: `QuickMatchHomeView({ home, locale, t, tokenPath }: { home: QuickMatchHome; locale: Locale; t: (k: MessageKey, v?) => string; tokenPath: string })`. Sections in the mockup's order: eyebrow `sport · kind · format`; name; `home.played` line; hero (`upNext` with `next`, or `live` with the in-play fixture's current score from its `summary`, or the winner card when `allPlayed`); actions row (Share → Task 7, Save → plan 3); `standings.tsx` for league (columns P, W, Pts; `StandingsOut.rows` is `unknown[]`, `stages.ts:6239-6247`, so read each row as `StandingsRowLike`, `lib/public-site.ts:207`, whose `played`/`won`/`points` keys and P-then-W order `resultColumns` declares, `:232`) or `draw.tsx` for knockout (rounds as cards: `semiFinal {n}` for the penultimate round of a 4-draw, `final` for `is_final`, `round {n}` otherwise, winners in lime); `match-list.tsx` (unplayed with a Score form button, waiting ones with `waits`, finished at the bottom as "A beat B" with the summary scores); `addMatch` (league only, Task 8); `anyoneCanScore`.
   The dead-link screen reuses `DeadLink`'s shape from the pad page (a page-local function, `app/score/[token]/page.tsx:319-330`, `data-testid="scan-dead-link"`) with `quickMatch.dead.*` copy for an unknown or expired token. The token is read from the route's `params` only (`const { token } = await params`, a Promise in Next 16), trimmed (Review Focus 3).
   Every element that paints a `/q/<token>` URL carries `ph-no-capture` (`scrub-secret-painters.test.ts:1-24`): from this task on, the scan treats `/q/` as a secret route. That covers this page, Task 7's share, Task 9's strip, and plan 1's `quick-match-back-link.tsx`. If plan 1 shipped the back link without the class, add it here. A file that paints the URL but not the secret instead takes a verdict in the scan's `PAINTERS` (`:382`).
 
@@ -196,8 +331,8 @@ Re-pinned against origin/main 1b224951d4 on 2026-11-07 (drift accepted). See the
 - Test: `src/app/q/[token]/__tests__/add-match-route.test.ts`
 
 **Interfaces:**
-- Consumes: plan 1 `systemAuth`, `resolveQuickMatchToken`, `readQuickMatchHome` (for the stage id and the sides); `addFixture(auth, stageId, { home_entrant_id, away_entrant_id })` (`stages.ts:7245`).
-- Produces: `POST /q/[token]/add-match` with form fields `home`, `away` (entrant ids) → 303 back to `/q/[token]` via `redirectLocal(..., 303)` (`lib/http.ts:45`; `params` awaited); 422 when the quick match is a knockout, when `home === away`, or when either id is not one of this quick match's sides. `addFixture` refuses all three itself too (a bracket kind `stages.ts:7275`, the same entrant twice `:7282`, an entrant outside the stage's division `:7301`), and it names the new row `adhoc-<n>` (`:7357`). So each test must reach the ROUTE's own check, and the route's checks are mutated one at a time (AGENTS.md class 3: two guards covering for each other are each untested). The route's check is also the per-match guard (§7.1 point 3), and its refusal carries the guest's copy.
+- Consumes: plan 1 `systemAuth`, `resolveQuickMatchToken`, `readQuickMatchHome` (for the stage id and the sides); `addFixture(auth, stageId, { home_entrant_id, away_entrant_id })` (`stages.ts:7322`).
+- Produces: `POST /q/[token]/add-match` with form fields `home`, `away` (entrant ids) → 303 back to `/q/[token]` via `redirectLocal(..., 303)` (`lib/http.ts:45`; `params` awaited); 422 when the quick match is a knockout, when `home === away`, or when either id is not one of this quick match's sides. `addFixture` refuses all three itself too (a bracket kind `stages.ts:7352`, the same entrant twice `:7359`, an entrant outside the stage's division `:7378`), and it names the new row `adhoc-<n>` (`:7434`). So each test must reach the ROUTE's own check, and the route's checks are mutated one at a time (AGENTS.md class 3: two guards covering for each other are each untested). The route's check is also the per-match guard (§7.1 point 3), and its refusal carries the guest's copy.
 
 - [ ] **Step 1: Write the failing tests**: on a league of 2 with the one match played, adding a match creates a 2nd fixture in round 2 with `ext_key 'adhoc-1'`, the home then shows "1 of 2" and the hero is "Up next" again (Review Focus 5); on a knockout the route returns 422; an entrant id from another quick match returns 422.
 - [ ] **Step 2: Run to verify failure**
@@ -333,4 +468,4 @@ None of the plan's pinned files changed in a way that broke a pin. What follows 
 
 ### Blockers
 
-1. **No allowed way to run the e2e and the width checks.** Task 10's e2e and the Task 4 and Task 5 width checks assume a local production server, and the in-repo `AGENTS.md` permits running a specific spec locally. But the owner's later standing rules, recorded in session memory, send agent e2e to CI (2026-10-19: `gh workflow run e2e.yml --ref <branch> -f pr=<n>`) and bar local web servers (2026-10-24). O9 (no remote, nothing committed) rules out the push a CI dispatch needs, and `e2e.yml` never runs on a PR (`:99-107`). Under O9 plus those rules, no permitted run path exists. Not resolved here: the owner chooses, for example a branch exception to O9, or one local prod-server run under the blank-PostHog recipe.
+1. **RESOLVED 2026-11-07** (ledger: O9 lifted; e2e by CI dispatch with `--ref`; see Pre-flight amendments E2). Original text: **No allowed way to run the e2e and the width checks.** Task 10's e2e and the Task 4 and Task 5 width checks assume a local production server, and the in-repo `AGENTS.md` permits running a specific spec locally. But the owner's later standing rules, recorded in session memory, send agent e2e to CI (2026-10-19: `gh workflow run e2e.yml --ref <branch> -f pr=<n>`) and bar local web servers (2026-10-24). O9 (no remote, nothing committed) rules out the push a CI dispatch needs, and `e2e.yml` never runs on a PR (`:99-107`). Under O9 plus those rules, no permitted run path exists. Not resolved here: the owner chooses, for example a branch exception to O9, or one local prod-server run under the blank-PostHog recipe.
