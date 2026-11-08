@@ -49,7 +49,7 @@ const MD_ROW: Record<string, string> = {
   away: "The second side's name; null while the seat has no entrant.",
   status: "upcoming (not started), in_play, or finished (decided, finalized, held, abandoned, forfeited or cancelled).",
   scheduled_at: "The match's planned start as a UTC instant; null when it has none.",
-  summary: "The match's short score while it plays, or its result once finished (the scoreboard's headline); null before any.",
+  summary: "The short score as the Match Day desk shows it in a row: a set sport's sets won, then the games and live points of the set in play (\"1–1 · 14–9\"; tennis \"1–0 · 3–2 · 40–30\", \"TB 3–2\"), the sport's own headline otherwise; the same form once finished (\"2–0\"). Never the full headline with every set's score. null before any.",
 };
 
 // ---------------------------------------------------------------------------------------------------------------

@@ -6,7 +6,7 @@
 // One sport on purpose: the read reads no sport — a row's `sport_key` is copied from its division, and only decides which
 // pad the phone opens (§5 "Several sports in one competition need no special handling").
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
@@ -20,6 +20,8 @@ import { getMatchDayForCode } from "../match-day-code-view";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
+import { startDivision } from "../schedule";
+import { scoreEvent } from "../scoring";
 import { ensureDeviceLink } from "../device-links";
 import { at, iso, place, seedDay, setStatus, T0, type Day } from "./_match-day-seed";
 import { GET } from "@/app/api/v1/match-day-code/route";
@@ -133,6 +135,51 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
     // Every one of the six is accounted for exactly once, except yesterday's.
     const listed = [...view.courts.flatMap((c) => [...(c.now ? [c.now] : []), ...c.next, ...c.finished]), ...view.no_court].map((r) => r.fixture_id);
     expect(listed.sort()).toEqual([f[0], f[1], f[2], f[3], f[4]].sort());
+  });
+
+  it("a row's summary is the desk's short score, never the full headline: a badminton match in play and a finished one", async () => {
+    // single-sport: badminton — a set sport, whose full headline carries every game's score (the controller's ruling: the
+    // phone's 320 dp row shows the desk's short form, `compactScore`, court-list.tsx's row score).
+    const div = await createDivision(day.auth, day.comp.id, {
+      name: "Shuttle",
+      slug: "shuttle-" + randomUUID().slice(0, 6),
+      sport_key: "badminton",
+      variant_key: "bwf",
+      config: {},
+    });
+    await createEntrants(day.auth, div.id, ["B1", "B2", "B3", "B4"].map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })));
+    const [stage] = await createStages(day.auth, div.id, { seq: 1, kind: "league", name: "League", config: {}, progression: null });
+    await startDivision(day.auth, div.id);
+    await generateStageFixtures(day.auth, stage!.id);
+    const [playing, done] = await sql<{ id: string; home_entrant_id: string; away_entrant_id: string }[]>`
+      select id, home_entrant_id, away_entrant_id from fixtures where stage_id = ${stage!.id}
+         and home_entrant_id is not null and away_entrant_id is not null order by round_no, seq_in_round limit 2`;
+    const send = async (id: string, type: string, payload: unknown = {}) => {
+      const [{ n }] = await sql<{ n: number }[]>`select coalesce(max(seq), 0)::int as n from score_events where fixture_id = ${id}`;
+      await scoreEvent(day.auth, id, { expected_seq: n, type, payload } as never);
+    };
+    // In play on Court 3: the first game 21–15 to home, then 9–4 in the second.
+    await place(day, playing!.id, 0, day.courts.c3);
+    await send(playing!.id, "core.start");
+    await send(playing!.id, "badminton.game.summary", { home: 21, away: 15 });
+    for (let i = 0; i < 9; i++) await send(playing!.id, "badminton.rally", { wonBy: playing!.home_entrant_id });
+    for (let i = 0; i < 4; i++) await send(playing!.id, "badminton.rally", { wonBy: playing!.away_entrant_id });
+    // Finished on Court 2 today: 21–15, 21–18.
+    await place(day, done!.id, -60, day.courts.c2);
+    await send(done!.id, "core.start");
+    await send(done!.id, "badminton.game.summary", { home: 21, away: 15 });
+    await send(done!.id, "badminton.game.summary", { home: 21, away: 18 });
+    await sql`update fixtures set finished_at = ${iso(-10)} where id = ${done!.id}`;
+
+    const [{ headline }] = await sql<{ headline: string }[]>`select summary->>'headline' as headline from match_states where fixture_id = ${playing!.id}`;
+    expect(headline, "premise: the engine's headline is the long form").toContain("21");
+    const { code } = await codeFor(day, { kind: "competition" });
+    const view = await getMatchDayForCode(code, NOW);
+    const rows = view.courts.flatMap((c) => [...(c.now ? [c.now] : []), ...c.next, ...c.finished]);
+    // As the desk's court row shows them: sets won · live points; the same form once finished.
+    expect(rows.find((r) => r.fixture_id === playing!.id)).toMatchObject({ status: "in_play", summary: "1–0 · 9–4" });
+    expect(rows.find((r) => r.fixture_id === done!.id)).toMatchObject({ status: "finished", summary: "2–0" });
+    expect(CaptureMatchdayDay.safeParse(view).success).toBe(true);
   });
 
   it("finished is today's, newest first", async () => {

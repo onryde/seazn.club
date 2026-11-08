@@ -331,6 +331,8 @@ export const CaptureMatchdayRow = z.strictObject({
   away: z.string().nullable(),
   status: z.enum(["upcoming", "in_play", "finished"]),
   scheduled_at: MdInstant.nullable(),
+  /** The short score as the Match Day desk shows it in a row (`compactScore`, lib/match-day/view.ts): "1–1 · 14–9" while a set
+   *  sport plays, "2–0" once finished, the sport's own headline otherwise. Never the engine's full headline. */
   summary: z.string().nullable(),
 });
 export const CaptureMatchdayApproval = z.strictObject({

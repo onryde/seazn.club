@@ -17,6 +17,8 @@ import type { ProgressionSpec } from "@seazn/engine/competition";
 import { withTenant } from "@/lib/db";
 import { fixtureAwaitsSeedDraw, stageOwesDraw } from "@/lib/division-phase";
 import { DEFAULT_LOCALE, getDictionary } from "@/lib/i18n";
+import { compactScore, scoreLine } from "@/lib/match-day/view";
+import { levelWords, type LevelWords } from "@/lib/score/levels";
 import { seedingSourceReady } from "@/lib/seeding-source-ready";
 import { isSwissBoardSeated, nextUnseatedSwissRound } from "@/lib/swiss-shell";
 import { readBoard, type FixtureRow } from "./match-day";
@@ -38,7 +40,10 @@ export type MatchDayCodeRowView = {
   away: string | null;
   status: "upcoming" | "in_play" | "finished";
   scheduled_at: string | null;
-  /** The desk's short score (`match_states.summary.headline`), or the result once finished; null before any. */
+  /** The short score as the Match Day desk shows it in a row (`compactScore(scoreLine(…))`, lib/match-day/view.ts): a set
+   *  sport's sets won · games · live points ("1–1 · 14–9"), the sport's own headline otherwise; the same form once finished.
+   *  Never the engine's full headline, which carries every set's score and pushes the names off a 320 dp phone row (the
+   *  controller's ruling, MD-1 follow-up). Null before the engine has published a summary. */
   summary: string | null;
 };
 
@@ -133,6 +138,12 @@ export function stageInScope(code: MatchDayCodeRow, competitionId: string, fixtu
   if (competitionId !== code.competitionId) return false;
   if (code.scope.kind === "competition") return true;
   return fixtures.some((f) => inScope(code, f));
+}
+
+/** A row's short score: the desk's own one-line form (court-list.tsx's row score), or null before any summary. */
+function shortScore(r: Pick<FixtureRow, "summary">, words: LevelWords): string | null {
+  const line = scoreLine(r);
+  return line === null ? null : compactScore(line, words);
 }
 
 const statusOf = (status: string): MatchDayCodeRowView["status"] =>
@@ -257,6 +268,8 @@ async function scopeLabel(tx: Tx, code: MatchDayCodeRow, compName: string, court
  */
 export async function getMatchDayForCode(code: MatchDayCodeRow, now: Date): Promise<MatchDayCodeView> {
   const dict = await getDictionary(DEFAULT_LOCALE, "ui");
+  // The live level's marks (TB, MTB, Ad) in English, as the round codes are: the desk reads them from the public dictionary.
+  const words = levelWords(await getDictionary(DEFAULT_LOCALE, "public"));
   return withTenant(code.orgId, async (tx) => {
     const board = await readBoard(tx, code.competitionId, now, { noCourt: code.scope.kind === "competition", finished: true });
     const venueOfCourt = new Map(board.courts.map((c) => [c.court_id, c.venue_id]));
@@ -294,7 +307,7 @@ export async function getMatchDayForCode(code: MatchDayCodeRow, now: Date): Prom
       away: r.away,
       status: statusOf(r.status),
       scheduled_at: isoOrNull(r.scheduled_at),
-      summary: r.headline,
+      summary: shortScore(r, words),
     });
     const label = await scopeLabel(tx, code, board.comp.name, board.courtNames, board.courts.map((c) => c.court_id));
     const approvals = await readApprovals(tx, code);
