@@ -194,6 +194,16 @@ order:
    is already set: the composed Machine's CPU p95 on a stream with a ticked sponsor, against
    the same stream without one. Any measurable p95 rise goes to the owner before prod is set
    (spec §3.6.3).
+5. **Prod only:** the frame path has been proven on stg, on a real composed stream with a
+   ticked sponsor, after `RELAY_AIRINGS=1` is set there (not before: without it no frame is
+   grabbed, so there is nothing to check):
+   - an object lands in the private `sponsor-frames` bucket for the airing;
+   - `/r/sponsor/<token>` (a report link made in the Sponsors hub) renders it through a
+     signed URL, and the bare object URL is refused;
+   - the daily sweep's `relay sweep` log line carries `framesBucketPublic: false`;
+   - an orphan purge removes an object: delete that airing row (stg data is test data), wait
+     until its session ended more than 24 h ago (`ORPHAN_FRAME_GRACE_MS`), and the next sweep's
+     line shows `framesPurged` of at least 1 and the object is gone from the bucket.
 
 Before that, leave it unset — a Machine without it sends no airings and grabs no frames, so the
 report's "Times shown" stays 0. Streams already running keep the env they booted with.
