@@ -18,7 +18,7 @@
 //
 // Expected values are typed from the spec and the dictionaries (the home is `/q/<token>` on the page's origin; the words are
 // T1's keys), never read back from the island. Sport: not applicable (the island shares a path; it knows no sport).
-import { isValidElement, type ReactElement, type ReactNode } from "react";
+import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
@@ -232,6 +232,31 @@ describe("Copy", () => {
     await click(copyOf(i));
     expect(clipboard.writeText.mock.calls).toEqual([[HOME_URL], [HOME_URL]]);
     expect(textOf(copyOf(i))).toBe(LABELS.copied);
+  });
+
+  it("a second Copy while 'Copied' still shows is announced again: the live region stays, its words are a NEW node per copy", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    browser({ clipboard: clipboardTaking() });
+    const i = mount();
+    // The region is there from first paint: a live region inserted with its words already in it is not announced.
+    expect(textOf(one(i.tree(), "qm-share-status"))).toBe("");
+    const words = () => {
+      const nodes = Children.toArray(propsOf(one(i.tree(), "qm-share-status")).children as ReactNode).filter(isValidElement);
+      expect(nodes, "the status holds its words in one node").toHaveLength(1);
+      return nodes[0]!;
+    };
+    await click(copyOf(i));
+    const first = words();
+    expect(textOf(first)).toBe(LABELS.copied);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(textOf(copyOf(i)), "inside the 2 s: the button still says Copied").toBe(LABELS.copied);
+    await click(copyOf(i));
+    const second = words();
+    expect(textOf(second)).toBe(LABELS.copied);
+    // Same words, so only a replaced node is a change a screen reader hears.
+    expect(second.key, "the second copy's words are a new node").not.toBe(first.key);
+    await click(copyOf(i));
+    expect(new Set([first.key, second.key, words().key]).size, "and a third, a third").toBe(3);
   });
 
   it.each([

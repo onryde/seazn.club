@@ -65,6 +65,8 @@ export function QuickMatchShare({ path, title, labels }: QuickMatchShareProps) {
   /** The drawn symbol; null while none is drawn (or one is being drawn); "failed" when the last try did not land. */
   const [qr, setQr] = useState<SeaznQr | "failed" | null>(null);
   const [copied, setCopied] = useState(false);
+  /** Successful copies so far: keys the announced words, so each copy is a new node in the live region. */
+  const [copies, setCopies] = useState(0);
   const drawing = useRef(false);
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const field = useRef<HTMLInputElement>(null);
@@ -110,6 +112,7 @@ export function QuickMatchShare({ path, title, labels }: QuickMatchShareProps) {
       return;
     }
     setCopied(true);
+    setCopies((n) => n + 1);
     if (copiedTimer.current !== null) clearTimeout(copiedTimer.current);
     copiedTimer.current = setTimeout(() => {
       copiedTimer.current = null;
@@ -157,9 +160,10 @@ export function QuickMatchShare({ path, title, labels }: QuickMatchShareProps) {
           />
         </button>
       </div>
-      {/* "Copied" read out, not only shown: the button's own words change silently for a screen reader. */}
+      {/* "Copied" read out, not only shown: the button's own words change silently for a screen reader. The region stays
+          mounted; its words are keyed on each copy, so a second Copy inside the 2 s (same words) is a new node, and heard. */}
       <span data-testid="qm-share-status" role="status" className="sr-only">
-        {copied ? labels.copied : ""}
+        <span key={copies}>{copied ? labels.copied : ""}</span>
       </span>
       {open ? (
         // White under the symbol and its caption: a QR scans dark on light, and the caption is slate on white.
