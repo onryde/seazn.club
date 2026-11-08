@@ -19,7 +19,7 @@
 // Sport: not applicable; the quick match is the rig's one sport (its header says why).
 // Real Postgres required; skipped without DATABASE_URL.
 import { randomBytes as kekBytes } from "node:crypto";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.stubEnv("DEVICE_LINK_KEK", kekBytes(32).toString("hex")); // every quick match create seals a home token
 vi.stubEnv("EMAIL_OUTBOX_KEK", kekBytes(32).toString("hex")); // a queued mail holds a sealed body, so "the end cleared it" can fail
@@ -48,8 +48,11 @@ vi.mock("@/lib/posthog-server", async (orig) => ({
 
 import { sql } from "@/lib/db";
 import { createSession } from "@/lib/auth";
+import { createLoginLink } from "@/lib/login-link";
+import { resolveOrCreateUser } from "@/lib/users";
+import { POST as CONSUME } from "@/app/api/auth/magic-link/consume/route";
 import { resolveQuickMatchToken } from "@/server/usecases/quick-match-home";
-import { sweepQuickMatches } from "@/server/usecases/quick-match-sweep";
+import { sweepQuickMatches, type QuickMatchSweepReport } from "@/server/usecases/quick-match-sweep";
 import { saveQuickMatchForUser, saveQuickMatchesForVerifiedUser } from "@/server/usecases/quick-match-save";
 import {
   addressFor,
@@ -98,6 +101,14 @@ const mailOf = (quickMatchId: string) => sql<Mail[]>`
 const QUEUED = { status: "queued", last_error: null, cleared: false };
 const ENDED_BY_DELETION = { status: "expired", last_error: DELETED_REASON, cleared: true };
 
+const ZERO: QuickMatchSweepReport = { checked: 0, rearmed: 0, reminded: 0, expired: 0, orphans: 0, failed: 0, deferred: 0 };
+
+beforeAll(async () => {
+  // The sign-in's landing imports these lazily; loaded once here, as the sign-in door suite does (auth/__tests__/_verify-link.ts).
+  if (!HAS_DB) return;
+  await import("@/server/usecases/me");
+  await import("@/lib/activation");
+});
 beforeEach(() => jar.clear());
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -210,6 +221,79 @@ describe.skipIf(!HAS_DB)("DELETE /api/users/me lets go of the account's quick ma
       { kind: "quick_match_link", ...ENDED_BY_DELETION },
     ]);
     expect(await mailOf(other.id), "another address's mail is not this deletion's").toEqual(othersBefore);
+  });
+
+  it("m2, the lifecycle in one chain of REAL calls: the sweep reminds, the sign-in saves, the deletion releases, the sweeps judge again", async () => {
+    // No row and no SQL write is made by hand from here: the match by the real create, the account by the real passwordless
+    // sign-up (`resolveOrCreateUser`, unverified), the reminder by the real sweep on its own clock, the save by the real
+    // magic-link door, the release by the real DELETE. SQL below only reads.
+    const email = addressFor("chain");
+    const typed = await createTypedMatch(email);
+    const created = await saveStateOf(typed.id);
+    expect(await mailOf(typed.id), "the create queued its link mail").toEqual([{ kind: "quick_match_link", ...QUEUED }]);
+
+    // 1. The sweep, 6.5 days on: inside the reminder's 24 hours (C2), not yet past the 7 days (C1). ONE reminder.
+    const clock = remindClock();
+    expect(await sweepQuickMatches({ baseUrl: BASE, now: clock, onlyIds: [typed.id] })).toEqual({ ...ZERO, checked: 1, reminded: 1 });
+    expect(await saveStateOf(typed.id), "claimed: the stamp is the run's clock; nothing else moved").toEqual({
+      ...created,
+      reminder_sent_at: clock,
+    });
+    expect(await mailOf(typed.id)).toEqual([
+      { kind: "quick_match_link", ...QUEUED },
+      { kind: "quick_match_reminder", ...QUEUED },
+    ]);
+
+    // 2. The person signs up and signs in through the magic link: the door saves the match typed with the address.
+    const userId = await resolveOrCreateUser(email);
+    if (!userId) throw new Error("precondition: the passwordless sign-up made an account");
+    users.push(userId);
+    const signIn = await CONSUME(
+      new Request("http://test.local/api/auth/magic-link/consume", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: await createLoginLink(userId) }),
+      }),
+    );
+    expect(signIn.status, await signIn.clone().text()).toBe(200);
+    expect(await saveStateOf(typed.id), "saved: no expiry, no address (m9), the reminder's stamp kept").toEqual({
+      ...created,
+      saved_by_user_id: userId,
+      email: null,
+      expires_at: null,
+      reminder_sent_at: clock,
+    });
+    expect(await mailOf(typed.id), "the save ended the queued reminder (D9); the link mail is not a reminder").toEqual([
+      { kind: "quick_match_link", ...QUEUED },
+      { kind: "quick_match_reminder", status: "expired", last_error: "quick_match_saved", cleared: true },
+    ]);
+
+    // 3. The account is deleted: the match is released, and the mail still queued to the address ends (m4).
+    expect(await deleteAccount(userId)).toBe(200);
+    const released = await saveStateOf(typed.id);
+    expect(released, "released: unsaved, 7 days after its last activity (C1), the reminder owed again, still no address").toEqual({
+      ...created,
+      expires_at: new Date(created.last_activity_at.getTime() + SPEC_EXPIRY_DAYS * DAY_MS),
+      email: null,
+      saved_by_user_id: null,
+      reminder_sent_at: null,
+    });
+    expect(await mailOf(typed.id)).toEqual([
+      { kind: "quick_match_link", ...ENDED_BY_DELETION },
+      { kind: "quick_match_reminder", status: "expired", last_error: "quick_match_saved", cleared: true },
+    ]);
+    expect(await resolveQuickMatchToken(typed.token), "friends with the link can still open it").not.toBeNull();
+
+    // 4. The sweep again, on the same clock: alive, and no address left to remind (m9), so nothing is queued.
+    expect(await sweepQuickMatches({ baseUrl: BASE, now: clock, onlyIds: [typed.id] })).toEqual({ ...ZERO, checked: 1 });
+    expect(await saveStateOf(typed.id)).toEqual(released);
+    expect(await mailOf(typed.id), "no second reminder").toHaveLength(2);
+
+    // 5. And once the released expiry has passed, the sweep deletes it with its mail (§7.8).
+    const past = new Date(released.expires_at!.getTime() + 60_000);
+    expect(await sweepQuickMatches({ baseUrl: BASE, now: past, onlyIds: [typed.id] })).toEqual({ ...ZERO, checked: 1, expired: 1 });
+    expect(await sql`select 1 from quick_matches where id = ${typed.id}`).toHaveLength(0);
+    expect(await mailOf(typed.id)).toHaveLength(0);
   });
 
   it("a refused deletion (no confirmation) releases nothing", async () => {
