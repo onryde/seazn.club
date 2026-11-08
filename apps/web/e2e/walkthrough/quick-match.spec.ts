@@ -6,6 +6,8 @@
 //   (A) a badminton LEAGUE of three, one side named with 40+ characters. Marketing page → "Quick match" → the setup
 //       form → Start → the home → for EACH match: Score → Start match → every rally tapped on the pad until the match
 //       is decided → "Back to the quick match" → the home read back (the winner-first result, the table, the next match).
+//       Before the first match, Share (plan 2 T7): Copy puts the home's link on the clipboard, Show QR draws its QR,
+//       and the copied link opens the same home in a second browser with no cookie.
 //       At the end: three results, a table derived by hand from the rallies tapped, and the record agreeing.
 //   (B) a badminton KNOCKOUT of three: the lone "Semi-final" (unnumbered) and the bye, the semi tapped, "Winner of the
 //       semi-final" resolving to its winner's name, the final tapped, the champion on the draw.
@@ -28,9 +30,9 @@
 // - Every sentence a person reads: the en dictionaries, never retyped. The level dash: the engine's `LEVEL_RANK`.
 //
 // ── EXTENSION POINTS ──────────────────────────────────────────────────────────────────────────────────────────────
-// Share (plan 2 T7), Add a match (plan 2 T8) and Save (plan 3) are being built now and EXTEND this file. Each has a
-// marked `EXTENSION POINT` below, at the place in the journey where it belongs, naming the state the page is in there.
-// This file deliberately covers none of them.
+// Share (plan 2 T7), Add a match (plan 2 T8) and Save (plan 3) EXTEND this file, each at a marked `EXTENSION POINT`
+// below, at the place in the journey where it belongs, naming the state the page is in there. Share is filled in (step
+// 3b); Add a match and Save are not yet.
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -146,6 +148,9 @@ const LEG_CAP_MS = 20 * 60_000;
 /** Per match: Score → the pad, Back → the home, one reload of the home; Score, Start match, Back and a confirm; the
  *  ledger caught up before the deciding rally and the record read after it. */
 const PER_MATCH = { navs: 3, acts: 4, reads: 2 } as const;
+/** Share (step 3b): the QR drawn (its encoder and logo load on the tap) and the second browser's page load; Copy, the
+ *  clipboard read, Show QR and its close. */
+const SHARE = { navs: 2, acts: 4 } as const;
 
 function budgetFor(c: { navs: number; acts: number; reads: number; plans: readonly (readonly Game[])[] }): number {
   const taps = c.plans.reduce((n, p) => n + tapsOf(p), 0);
@@ -527,7 +532,7 @@ const LONG = `The Extraordinarily Long-Named Champion ${TAG}`;
 let league: (Made & { results: Played[]; table: Tally[] }) | null = null;
 let cup: (Made & { champion: string }) | null = null;
 
-test("(A) a guest plays a badminton league of three from the marketing page to its final table, every rally tapped", async () => {
+test("(A) a guest plays a badminton league of three from the marketing page to its final table, every rally tapped", async ({ browser }) => {
   const rules = rulesFor("league");
   const sides = [LONG, `Priya Raman ${TAG}`, `Jo Okafor ${TAG}`];
   expect(LONG.replace(` ${TAG}`, "").length, "premise: the long side is 40+ characters").toBeGreaterThanOrEqual(40);
@@ -543,7 +548,7 @@ test("(A) a guest plays a badminton league of three from the marketing page to i
   ];
   expect(plans, "one plan per match a round robin of three plays").toHaveLength(total);
   plans.forEach((g, i) => checkPlan(rules, g, `league match ${i + 1}`));
-  setBudget(budgetFor({ navs: 3, acts: 16, reads: 2, plans }));
+  setBudget(budgetFor({ navs: 3 + SHARE.navs, acts: 16 + SHARE.acts, reads: 2, plans }));
 
   // ---- 1. The marketing page's Quick match, to the setup page ----
   await page.goto("/en");
@@ -576,11 +581,44 @@ test("(A) a guest plays a badminton league of three from the marketing page to i
   for (const name of sides) await expect(tableRow(page, name).getByTestId("qm-cell")).toHaveText(["0", "0", "0"]);
   await expectNoHorizontalScroll(page);
 
-  // ── EXTENSION POINT: Share (plan 2 T7) ──────────────────────────────────────────────────────────────────────────
-  // The home as first created: nothing played, `made.path` is `/q/<token>`, the guest's visitor cookie is set. Share
-  // goes HERE: open the home's share control, read the link it offers (never construct it), and follow it in a SECOND
-  // context with no cookie (`browser.newContext({ storageState: await consentedAnonymousState() })`). That context must
-  // NOT play a match unless it also appends to `results` below, or the table tallied by hand stops being true.
+  // ── EXTENSION POINT: Share (plan 2 T7), filled ──────────────────────────────────────────────────────────────────
+  // The home as first created: nothing played, `made.path` is `/q/<token>`, the guest's visitor cookie is set.
+
+  // ---- 3b. Share: Copy is on first paint (one tap), the QR behind Show QR; the copied link opens the home elsewhere ----
+  const origin = new URL(page.url()).origin;
+  await guest!.grantPermissions(["clipboard-read", "clipboard-write"], { origin });
+  const copy = page.getByTestId("qm-share-copy");
+  await expect(copy, "Copy is on the home's first paint, behind no toggle").toHaveText(ui("quickMatch.home.copy"));
+  await expect(page.getByTestId("qm-share-qr"), "the QR is closed on first paint").toHaveCount(0);
+  await copy.click();
+  await expect(copy).toHaveText(ui("quickMatch.home.copied"));
+  // The link as the home offers it (the clipboard), never constructed: this page's own address on this origin.
+  const shared = await page.evaluate(() => navigator.clipboard.readText());
+  expect(shared, "the clipboard holds the home's own link").toBe(page.url());
+  expect(new URL(shared).pathname, "the home, never the pad's device link").toBe(made.path);
+  const showQr = page.getByTestId("qm-share-toggle");
+  await expect(showQr).toHaveText(ui("dlink.showQr"));
+  await showQr.click();
+  await expect(showQr).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("qm-share-qr"), "the Seazn QR of the link, drawn on the tap").toBeVisible({ timeout: STEP_MS });
+  await expectNoHorizontalScroll(page);
+  await showQr.click();
+  await expect(page.getByTestId("qm-share-qr"), "Show QR again closes it").toHaveCount(0);
+  // A friend opens the copied link: a second browser with no cookie lands on the same home. It plays nothing, so the
+  // table tallied below from `results` stays true.
+  const friend = await browser.newContext({ storageState: await consentedAnonymousState(), viewport: PHONE });
+  try {
+    const theirs = await friend.newPage();
+    await theirs.goto(shared);
+    await expect(theirs.getByTestId("qm-name"), "the shared link opens this home with no cookie").toHaveText(made.name, {
+      timeout: STEP_MS,
+    });
+    await expect(theirs.getByTestId("qm-played")).toHaveText(
+      plural(ui, "quickMatch.home.played", total, { played: 0, days: QUICK_MATCH_EXPIRY_DAYS }),
+    );
+  } finally {
+    await friend.close();
+  }
 
   // ---- 4 and 5. Each match: Score, every rally, Back, and the home read back ----
   const results: Played[] = [];
