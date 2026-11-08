@@ -13,7 +13,8 @@ import "server-only";
 // and then a second reminder before the new expiry. It ends on the outbox's cancel path with QUICK_MATCH_REARMED_REASON, on
 // the system org's tenant handle (`cancelQueuedEmails` fences on `current_org_id()`: on the pool it would end nothing of the
 // system org's, cancel.ts G-7). Only a re-armed match whose reminder is still queued opens that transaction: one indexed read
-// of the outbox (`email_outbox_ref_idx`) decides it, so a scored rally on a match with nothing queued pays one read.
+// of the outbox by kind and ref decides it (EXPLAIN: an Index Scan on `email_outbox_replace_idx`, the kind, ref type and ref
+// as its Index Cond), so a scored rally on a match with nothing queued pays one read.
 //
 // Two doors, one rule:
 //   - `touchQuickMatchActivity(id)`: the home's own actions (plan 2's Score tap);
