@@ -3,8 +3,9 @@
 // each with its match number (D12: the 1-based index among non-bye matches, the number "match n of total" says too).
 //
 // A SERVER component that takes its words already resolved (`MatchView`, built by home.tsx): nothing here reads a
-// dictionary, a token or a database. A row's Score control is a slot (`score`), filled by plan 2 Task 6; a row that
-// waits (a side still unknown, C18) or is finished never gets one. Long side names wrap rather than push the row wider
+// dictionary, a token or a database. A row's Score control is a slot (`score`), filled by plan 2 Task 6 (the page's
+// `QuickMatchScoreForm`, described by the row's `matchSidesId`); a row that waits (a side still unknown, C18) or is
+// finished never gets one. Long side names wrap rather than push the row wider
 // than a 320px screen (`min-w-0` on every flex child, `[overflow-wrap:anywhere]` on the text).
 import type { ReactNode } from "react";
 import type { QuickMatchPhase } from "@/server/usecases/quick-match-home";
@@ -36,6 +37,10 @@ export interface MatchView {
 }
 
 export type ScoreSlot = (fixture: { id: string; live: boolean }, place: "hero" | "row") => ReactNode;
+
+/** The id of a row's sides line ("A v B"): a row's Score control is described by it, so each of the list's "Score" buttons
+ *  names its own match to a screen reader (plan 2 Task 6). */
+export const matchSidesId = (fixtureId: string): string => `qm-match-sides-${fixtureId}`;
 
 /** The red-dot Live mark, shared by the list and the draw. */
 export function QuickMatchLiveBadge({ label }: { label: string }) {
@@ -115,6 +120,7 @@ export function QuickMatchRow({
         {m.n}
       </span>
       <p
+        id={matchSidesId(m.id)}
         data-testid="qm-match-sides"
         className={`min-w-0 flex-1 text-sm leading-snug [overflow-wrap:anywhere] ${settled ? "text-[#d9d2f2]" : "text-cream"}`}
       >

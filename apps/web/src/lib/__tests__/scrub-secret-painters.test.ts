@@ -464,6 +464,9 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string }> = {
     verdict: "builds the quick match's home URL and hands it to QuickMatchBackLink as its href; the page paints it nowhere itself",
     handoff: "components/v2/quick-match-back-link.tsx",
   },
+  // The home's Score control: its form's action is `/q/<home token>/score/<fixture>` (quick match plan 2 Task 6). The page
+  // builds it and hands it over as a prop, painting nothing itself, so the scan finds the painter here, not on the page.
+  "components/quick-match/score-form.tsx": { verdict: true },
   // The recent strip: each row links to its home, `/q/<home token>` (quick match plan 2 Task 9).
   "components/quick-match/recent-strip.tsx": { verdict: true },
 };
@@ -473,6 +476,7 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string }> = {
 const QUICK_MATCH_PAINTERS = [
   "app/score/[token]/page.tsx",
   "components/v2/quick-match-back-link.tsx",
+  "components/quick-match/score-form.tsx",
   "components/quick-match/recent-strip.tsx",
 ];
 
@@ -534,6 +538,15 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     // The recent strip's one row link (plan 2 Task 9): a host <a>, so its class is checked here and not handed off.
     const strip = painters.get("components/quick-match/recent-strip.tsx") ?? [];
     expect(strip.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true]);
+  });
+
+  it("the home's Score form (Task 6): the page hands its action to QuickMatchScoreForm, whose host <form> carries the class", () => {
+    // The hop the scan follows: the home page builds `${routes.quickMatch(token)}/score/${id}` straight into the prop.
+    expect(known.props).toEqual(
+      expect.arrayContaining([{ component: "QuickMatchScoreForm", prop: "action", from: "app/q/[token]/page.tsx" }]),
+    );
+    const form = painters.get("components/quick-match/score-form.tsx") ?? [];
+    expect(form.filter((site) => site.how === "attribute action" && site.tag === "form").map((site) => site.blocked)).toEqual([true]);
   });
 
   it("the painter files and the verdict table are the same set", () => {

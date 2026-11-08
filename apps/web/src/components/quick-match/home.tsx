@@ -20,7 +20,7 @@ import type { EntrantKind } from "@seazn/engine/sport";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import type { TKey } from "@/lib/i18n-runtime";
-import { QUICK_MATCH_EXPIRY_DAYS } from "@/lib/quick-match-constants";
+import { QUICK_MATCH_ERRORS, QUICK_MATCH_EXPIRY_DAYS } from "@/lib/quick-match-constants";
 import { roundRoleFor } from "@/lib/round-role-label";
 import { compactScore } from "@/lib/match-day/view";
 import { scoreLineOf, type LevelWords } from "@/lib/score/levels";
@@ -62,6 +62,26 @@ const FORMAT_KEY = {
   league: "quickMatch.format.league",
   knockout: "quickMatch.format.knockout",
 } as const satisfies Record<QuickMatchHome["row"]["format"], MessageKey>;
+
+/**
+ * The home's flash (pre-flight D3): a home action's refusal lands back here as `?e=<code>` (QUICK_MATCH_ERRORS), and each
+ * code reads as its own `quickMatch.flash.*` line in the viewer's language. The codes are the Score route's
+ * (app/q/[token]/score/[fixtureId]/route.ts); Task 8 adds Add-a-match's. A repeated `?e=` reads its first, a blank one is
+ * no flash, and anything else (a crafted value, a code of another page) is the generic line: the raw value never reaches
+ * the page.
+ */
+const FLASH_KEYS: Readonly<Record<string, MessageKey>> = {
+  [QUICK_MATCH_ERRORS.LINK_LIMITED]: "quickMatch.flash.linkLimit",
+  [QUICK_MATCH_ERRORS.NOT_FOUND]: "quickMatch.flash.notFound",
+  [QUICK_MATCH_ERRORS.SIDES_UNKNOWN]: "quickMatch.flash.notReady",
+  [QUICK_MATCH_ERRORS.EXPIRED]: "quickMatch.flash.expired",
+  [QUICK_MATCH_ERRORS.ACTION_FAILED]: "quickMatch.flash.generic",
+};
+export function homeFlashKey(e: string | string[] | undefined): MessageKey | null {
+  const raw = (Array.isArray(e) ? e[0] : e)?.trim();
+  if (!raw) return null;
+  return Object.hasOwn(FLASH_KEYS, raw) ? FLASH_KEYS[raw]! : "quickMatch.flash.generic";
+}
 
 /** A refusal for a state plan 1's read never produces: a page that hit it would otherwise print a blank or a code. */
 export class QuickMatchHomeShapeError extends Error {
@@ -317,10 +337,13 @@ export function QuickMatchHomeView({
   home,
   copy,
   slots = {},
+  flash = null,
 }: {
   home: QuickMatchHome;
   copy: QuickMatchCopy;
   slots?: QuickMatchSlots;
+  /** A refused action's line (`homeFlashKey`), already in the viewer's words; null for none. */
+  flash?: string | null;
 }) {
   const { t } = copy;
   const v = buildHomeView(home, copy);
@@ -330,6 +353,16 @@ export function QuickMatchHomeView({
       <main data-testid="qm-home" className="min-w-0">
         <div className="mx-auto grid w-full max-w-5xl min-w-0 gap-6 px-4 pb-10 pt-5 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-10 lg:pt-8">
           <div className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
+            {/* First in the page: the redirect lands at the top, so the refusal is the first thing seen and read. */}
+            {flash ? (
+              <p
+                role="alert"
+                data-testid="qm-flash"
+                className="min-w-0 rounded-xl border border-[rgb(239_68_68/0.55)] bg-[rgb(239_68_68/0.14)] px-3 py-2.5 text-sm leading-snug text-cream [overflow-wrap:anywhere]"
+              >
+                {flash}
+              </p>
+            ) : null}
             <div className="min-w-0">
               <p data-testid="qm-eyebrow" className={`${LABEL} [overflow-wrap:anywhere]`}>
                 {v.eyebrow}
