@@ -433,6 +433,16 @@ describe("a stamp mismatch is reported: per kind, a throttled log.warn and one S
     clientIp(mismatch(WRONG));
     expect(kinds(), "+62s: wrong's minute is up").toEqual(["absent", "wrong", "absent", "wrong"]);
     expect(sent(), "still one Sentry message per kind").toEqual(["absent", "wrong"]);
+
+    // The other way round (fix round 3): a fresh process, wrong first, then absent inside wrong's minute - both warn and
+    // both reach Sentry.
+    __resetOriginStampReportForTests();
+    warn.mockClear();
+    capture.mockClear();
+    clientIp(mismatch(WRONG));
+    vi.setSystemTime(t0 + MINUTE + 3_000);
+    clientIp(mismatch());
+    expect([kinds(), sent()], "wrong, then absent inside its minute").toEqual([["wrong", "absent"], ["wrong", "absent"]]);
   });
 
   it("a matching request between two mismatches of a kind neither warns nor restarts that kind's minute", () => {
@@ -480,7 +490,11 @@ describe("a stamp mismatch is reported: per kind, a throttled log.warn and one S
       [undefined, null, "absent", "none"],
       [undefined, "evil.example/<script>", "absent", "invalid"],
       [WRONG, `${"a".repeat(250)}.example`, "wrong", "invalid"],
+      // Sentry drops a tag value over 200 characters (fix round 3): 200 is echoed, 201 is not.
+      [undefined, `${"a".repeat(192)}.example`, "absent", `${"a".repeat(192)}.example`],
+      [undefined, `${"a".repeat(193)}.example`, "absent", "invalid"],
     ];
+    expect([cases[9]![1]!.length, cases[10]![1]!.length], "premise: the two lengths").toEqual([200, 201]);
     let checked = 0;
     for (const [stamp, host, kind, named] of cases) {
       __resetOriginStampReportForTests();
@@ -491,7 +505,7 @@ describe("a stamp mismatch is reported: per kind, a throttled log.warn and one S
       expect(capture.mock.calls, `${kind} ${host}`).toEqual([["origin_stamp_mismatch", { level: "warning", tags: { stamp: kind, host: named } }]]);
       checked++;
     }
-    expect(checked).toBe(9);
+    expect(checked).toBe(11);
   });
 
   it("another process (the state reset) reports again: one more warn and one more Sentry message", () => {

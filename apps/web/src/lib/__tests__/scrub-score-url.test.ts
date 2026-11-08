@@ -436,7 +436,8 @@ describe("scrubSentryEvent — the origin stamp (x-seazn-origin-secret)", () => 
   // clear) must still never reach Sentry. Every header whose name STARTS with `x-seazn-origin`, any case, is redacted, and
   // so is its root-span attribute (`http.request.header.x_seazn_origin…`). The names are the brief's typos, typed here.
   it("a mistyped stamp name (any header starting x-seazn-origin, any case) is redacted in the request, the trace data and every span, even where the SDK leaves it in clear; a name outside the prefix is kept (counts reported)", () => {
-    const typos = ["x-seazn-origin", "x-seazn-origin-secert", "X-Seazn-Origin-Stamp", "x-seazn-origin-secret-2", "X-SEAZN-ORIGINSECRET"];
+    // `x_seazn_origin_secret`: the right name with `_` for `-` (fix round 3) - redacted as the same header.
+    const typos = ["x-seazn-origin", "x-seazn-origin-secert", "X-Seazn-Origin-Stamp", "x-seazn-origin-secret-2", "X-SEAZN-ORIGINSECRET", "x_seazn_origin_secret"];
     let checked = 0;
     let inClear = 0;
     for (const name of typos) {
@@ -457,11 +458,11 @@ describe("scrubSentryEvent — the origin stamp (x-seazn-origin-secret)", () => 
       expect(out.spans?.[0]?.data?.[stampKey!], name).toBe("[redacted]");
       checked++;
     }
-    expect(checked).toBe(5);
+    expect(checked).toBe(6);
     // The SDK masks only the names carrying `secret`: the rest reach the scrub in clear, so this test witnesses the scrub.
     expect(inClear, "typos the SDK passes in clear").toBeGreaterThan(0);
 
-    const outside = ["x-seazn-orig", "x-other-seazn-origin", "seazn-origin-secret"];
+    const outside = ["x-seazn-orig", "x_seazn_orig", "x-other-seazn-origin", "seazn-origin-secret"];
     const kept: Record<string, string> = Object.fromEntries(outside.map((n) => [n, "keep-me"]));
     const keptAttrs = requestHeaderSpanAttributes(kept, false);
     const out = scrubSentryEvent(
@@ -470,7 +471,9 @@ describe("scrubSentryEvent — the origin stamp (x-seazn-origin-secret)", () => 
     expect(out.request?.headers).toEqual(kept);
     expect(out.contexts?.trace?.data).toEqual(keptAttrs);
     expect(out.spans?.[0]?.data).toEqual(keptAttrs);
-    expect(Object.keys(keptAttrs), "outside names counted").toHaveLength(3);
+    expect(Object.keys(kept), "outside header names counted").toHaveLength(4);
+    // `x-seazn-orig` and `x_seazn_orig` are one attribute to the SDK (`-` → `_`).
+    expect(Object.keys(keptAttrs), "outside attributes counted").toHaveLength(3);
   });
 
   it("the input event is never mutated - its request headers, trace data and span data - and an event without the stamp is returned exactly as it came", () => {
@@ -481,10 +484,19 @@ describe("scrubSentryEvent — the origin stamp (x-seazn-origin-secret)", () => 
       spans: [{ description: "GET /live/club", data: { ...attrs } }, { description: "select", data: { "db.system": "postgresql" } }],
       request: { method: "GET", url: "https://seazn.club/live/club", headers: { [HEADER]: STAMP, "x-seazn-origin-secert": STAMP } },
     }) as Event;
-    const before = JSON.stringify(event);
-    expect(before, "premise: the stamp is in all three places").toContain(STAMP);
-    scrubSentryEvent(event);
-    expect(JSON.stringify(event)).toBe(before);
+    // Each place is checked on its own (fix round 3), so a scrub that mutates one of them cannot hide behind the others.
+    const headersBefore = structuredClone(event.request?.headers);
+    const traceBefore = structuredClone(event.contexts?.trace?.data);
+    const spansBefore = structuredClone(event.spans?.map((sp) => sp.data));
+    expect(JSON.stringify(headersBefore), "premise: the stamp is in the request headers").toContain(STAMP);
+    expect(JSON.stringify(traceBefore), "premise: the stamp is in the trace data").toContain(STAMP);
+    expect(JSON.stringify(spansBefore?.[0]), "premise: the stamp is in the first span's data").toContain(STAMP);
+    const out = scrubSentryEvent(event);
+    expect(JSON.stringify(out), "premise: the scrub did redact (a copy)").not.toContain(STAMP);
+    expect(event.request?.headers, "the input's request headers").toEqual(headersBefore);
+    expect(event.contexts?.trace?.data, "the input's trace data").toEqual(traceBefore);
+    expect(event.spans?.[0]?.data, "the input's first span data").toEqual(spansBefore?.[0]);
+    expect(event.spans?.[1]?.data, "the input's second span data").toEqual(spansBefore?.[1]);
     const unstamped = transaction({
       name: "GET /live/club",
       traceData: { "http.request.header.user_agent": "ua/1" },

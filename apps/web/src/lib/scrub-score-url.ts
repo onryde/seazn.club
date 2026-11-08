@@ -541,11 +541,15 @@ const ORIGIN_STAMP_PREFIX = "x-seazn-origin";
 const ORIGIN_STAMP_ATTRIBUTE_PREFIX = `http.request.header.${ORIGIN_STAMP_PREFIX.replace(/-/g, "_")}`;
 const STAMP_REDACTED = "[redacted]";
 
-/** `record` with every key that starts (any case) with `prefix` redacted - a copy - or `undefined` when there is none. */
+/** A key as the prefix check reads it: lower-cased, `_` as `-` (so `x_seazn_origin_secret` is the same header). */
+const stampKey = (k: string): string => k.toLowerCase().replace(/_/g, "-");
+
+/** `record` with every key that starts (any case, `_` or `-`) with `prefix` redacted - a copy - or `undefined` when none. */
 function redactPrefixed<T extends Record<string, unknown>>(record: T, prefix: string): T | undefined {
+  const want = stampKey(prefix);
   let copy: T | undefined;
   for (const k of Object.keys(record)) {
-    if (k.toLowerCase().startsWith(prefix)) (copy ??= { ...record })[k as keyof T] = STAMP_REDACTED as T[keyof T];
+    if (stampKey(k).startsWith(want)) (copy ??= { ...record })[k as keyof T] = STAMP_REDACTED as T[keyof T];
   }
   return copy;
 }

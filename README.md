@@ -238,20 +238,27 @@ matters:**
    there is no usable one), and never carries the stamp's value or the secret.
 3. **After setting it, check it.** Sign in from two different networks (say, office wifi and a phone on mobile data).
    Both must succeed. Then read `origin_stamp_mismatch` in `fly logs -a <app>` and in Sentry for that environment:
-   - **`stamp: wrong`, on any host**, means our rule sends another value. That is a misconfiguration: unset the
-     secret (rollback, below), then fix the value.
-   - **`stamp: absent` on one of OUR hosts** (one `fly certs list` prints) means the rule does not reach that host or
-     path. That is a misconfiguration too: unset the secret, then fix the filter.
+   - **`stamp: wrong`** can mean our rule sends another value: a misconfiguration.
+   - **`stamp: absent` on one of OUR hosts** (one `fly certs list` prints) can mean the rule does not reach that host
+     or path: a misconfiguration too.
    - **A few `stamp: absent` events from a host that is not ours** (another zone's name, a `*.fly.dev` name, `none`,
      `invalid`) are someone sending `CF-Connecting-IP` through their own Cloudflare zone - a forgery attempt the stamp
      is refusing. They are not a misconfiguration; leave the secret set.
+
+   **Both of the first two can be faked.** The sender controls `Host`, and can send our header name with any value,
+   so a forger can produce `absent` or `wrong` on our own host name. **Never unset the secret on a few events alone.**
+   Unset it (rollback, below) and then fix the rule only once one of these holds:
+   - Cloudflare Trace (or the rule's match preview) shows that our rule misses that host or path, or that the value
+     it sends is not the one just set.
+   - The warnings repeat steadily, in step with real traffic: one a minute per machine, every minute, while people
+     are using the site.
 
    Sentry holds each process's first `absent` and its first `wrong` separately, so a flood of forged `absent` cannot
    hide a `wrong`; read `fly logs` for the hosts of later ones.
    **Also check the header NAME** on the rule: it must be exactly `x-seazn-origin-secret`. A different name leaves
    every request unstamped (`absent` on our hosts), and its value may already have reached Sentry or a log in clear -
-   the scrub only redacts names starting with `x-seazn-origin`, and the SDK only masks names carrying `secret`. If the
-   name was wrong, remove the rule and **rotate** the secret (below) with the correct name.
+   the scrub only redacts names starting with `x-seazn-origin` (`_` or `-`), and the SDK only masks names carrying
+   `secret`. If the name was wrong, remove the rule and **rotate** the secret (below) with the correct name.
 
 **Rotation:** (1) `fly secrets unset CF_ORIGIN_SECRET -a <app>`; (2) change the rule's value in Cloudflare to the new
 secret and confirm with Trace; (3) `fly secrets set CF_ORIGIN_SECRET=<new value> -a <app>`; (4) repeat the step 3 check.
@@ -271,8 +278,8 @@ or echoed. It stays out of Sentry in two ways, and both are needed:
   that attribute reads `[Filtered]`. The earlier name, `x-seazn-origin`, was not on that list, and its value reached
   Sentry in clear in the trace data.
 - **Our scrub redacts it.** `lib/scrub-score-url.ts` rewrites every header whose name starts with `x-seazn-origin`
-  (any case, so a mistyped rule name too) to `[redacted]` in `request.headers`, in the trace context's data and in every
-  span's data, on errors and transactions alike.
+  (any case, `_` or `-`, so a mistyped rule name too) to `[redacted]` in `request.headers`, in the trace context's
+  data and in every span's data, on errors and transactions alike.
 
 Do not rename the header without keeping both. An alternative is Cloudflare's **Authenticated Origin Pulls** (mTLS from
 Cloudflare to the origin). The zone-level variant presents Cloudflare's shared certificate, which proves "Cloudflare"

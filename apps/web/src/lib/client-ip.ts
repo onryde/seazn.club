@@ -73,11 +73,14 @@ function originStamp(headers: Headers): "ok" | StampMismatch {
 
 /** A host name (and port) as a report may carry it; anything else is not echoed. */
 const REPORTABLE_HOST = /^[a-z0-9.-]{1,253}(?::\d{1,5})?$/;
-/** The request's `Host`, for a report: lower-cased, "none" when missing, "invalid" when it is not a host name. */
+/** Sentry drops a tag value longer than this, and the host is a tag. */
+const REPORTABLE_HOST_MAX = 200;
+/** The request's `Host`, for a report: lower-cased, "none" when missing, "invalid" when it is not a host name or is longer
+ *  than a Sentry tag may be. */
 function reportedHost(headers: Headers): string {
   const host = headers.get("host")?.trim().toLowerCase();
   if (!host) return "none";
-  return REPORTABLE_HOST.test(host) ? host : "invalid";
+  return host.length <= REPORTABLE_HOST_MAX && REPORTABLE_HOST.test(host) ? host : "invalid";
 }
 
 /** The reason code a stamp mismatch is reported under, beside its two non-secret discriminators (the stamp's kind, the host). */
