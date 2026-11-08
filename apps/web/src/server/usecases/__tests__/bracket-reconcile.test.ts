@@ -808,3 +808,49 @@ describe.skipIf(!HAS_DB)("fix round 1 m6: a change in place clears the Redo it w
     expect([isByeLine(bye as never), bye.scheduled_at], "the bye holds no time").toEqual([true, null]);
   });
 });
+
+// B2 regression (coordinator, W4 B4): a Generate over a root knockout that already has its lines answers from
+// `reconcileKnockoutGenerate` — a named no-op or a change in place — and returned before the trailing `wireCrossFeeds`
+// every other Generate runs, so a declared cross-stage edge (`stages.config.cross_feeds`, Jul3/08 §4) whose target was
+// generated after the knockout was never wired by it (app/score/[token]/__tests__/page.test.tsx "a seat fed from ANOTHER
+// stage (knockout)"). Expected: the edge the config declares, on the source row — the declaration is typed here.
+describe.skipIf(!HAS_DB)("B2 regression: a reconciled Generate still wires cross-stage feeds", () => {
+  /** `r`'s knockout plus a second root knockout (seq 2) generated after it, and a declared edge from the first semi-final's
+   *  LOSER (its winner already feeds the final) into the second stage's first line, slot 2. Returns the two row ids. */
+  async function crossRig(r: Rig): Promise<{ semi: string; target: string }> {
+    const [plate] = await createStages(r.auth, r.divisionId, { seq: 2, kind: "knockout", name: "Plate", config: {}, progression: null });
+    await generateStageFixtures(r.auth, plate!.id);
+    const rounds = Math.max(...(await rowsOf(r.stageId)).map((x) => x.round_no));
+    const [semi] = await sql<{ id: string; ext_key: string }[]>`
+      select id, ext_key from fixtures where stage_id = ${r.stageId} and round_no = ${rounds - 1} order by seq_in_round limit 1`;
+    const [target] = await sql<{ id: string; ext_key: string }[]>`
+      select id, ext_key from fixtures where stage_id = ${plate!.id} order by round_no, seq_in_round limit 1`;
+    await sql`
+      update stages set config = config || ${sql.json({
+        cross_feeds: [{ from_ext_key: semi!.ext_key, side: "loser", to_stage_seq: 2, to_ext_key: target!.ext_key, slot: 2 }],
+      } as never)}
+      where id = ${r.stageId}`;
+    return { semi: semi!.id, target: target!.id };
+  }
+  const edgeOf = async (id: string) =>
+    (await sql<{ loser_to_fixture: string | null; loser_to_slot: number | null }[]>`
+      select loser_to_fixture, loser_to_slot from fixtures where id = ${id}`)[0]!;
+
+  for (const c of [
+    { name: "a named no-op (nothing changed)", kind: "noop", change: async (_r: Rig) => {} },
+    { name: "a change in place (a newcomer takes a bye)", kind: "in_place", change: async (r: Rig) => void (await r.add("P7")) },
+  ] as const) {
+    it(`B2 regression: ${c.name} wires the declared cross-stage edge`, async () => {
+      const r = await rig({ n: 6 });
+      const { semi, target } = await crossRig(r);
+      expect(await edgeOf(semi), "premise: declared after both stages generated, so not yet wired").toEqual({ loser_to_fixture: null, loser_to_slot: null });
+      await c.change(r);
+      const out = await generateStageFixtures(r.auth, r.stageId);
+      expect(out.reconcile?.kind, "premise: the reconcile path answered").toBe(c.kind);
+      expect(await edgeOf(semi), "the declared edge, wired").toEqual({ loser_to_fixture: target, loser_to_slot: 2 });
+      // Second call: idempotent, never an overwrite.
+      await generateStageFixtures(r.auth, r.stageId);
+      expect(await edgeOf(semi), "a second Generate leaves the edge as it is").toEqual({ loser_to_fixture: target, loser_to_slot: 2 });
+    });
+  }
+});

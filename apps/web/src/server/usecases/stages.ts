@@ -3628,6 +3628,10 @@ async function reconcileKnockoutGenerate(
     // Generate writes one only when it creates fixtures (`fixture_ids` is Undo's delete list), and this creates none.
     await tx`update divisions set edit_watermark = null where id = ${stage.division_id}`;
   }
+  // Cross-format feeds (Jul3/08 §4), as every other Generate's trailing pass wires them: a declared edge whose target was
+  // generated after this bracket is wired by this Generate, a no-op or not (`wireCrossFeeds` fills NULL edges only, so
+  // it never overwrites). The regenerate branch above runs the full Generate, which wires them itself.
+  await wireCrossFeeds(tx, stage.division_id);
   const fixtures = await readStageFixtureRows(tx, stage.id);
   const [division] = await tx<{ competition_id: string }[]>`
     select competition_id from divisions where id = ${stage.division_id}`;
