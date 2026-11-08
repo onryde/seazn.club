@@ -8,6 +8,12 @@ import type { LiveFixtureData, OverlayLiveData } from "@/components/public-site/
 import type { RecentEvent } from "@/lib/overlay-recent-types";
 import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss, OverlayHighlights } from "@/lib/overlay-cricket";
 import { carromTossOf } from "@/lib/overlay-toss";
+import { latestClockAnchor } from "@/components/v2/scorepad/v3/clock";
+import {
+  clockPeriodsOf,
+  matchTimeCfgOf,
+  type MatchTimeCfg,
+} from "@/components/v2/scorepad/v3/skins/football-match-time";
 
 interface RowSnapshot {
   status: string;
@@ -133,6 +139,61 @@ function clockOf(state: unknown, active: FoldedFixture["active"]): OverlayLiveDa
   };
 }
 
+/** Football's own event namespace. `FoldedFixture` names no sport, and the stream is the authority: every football
+ *  event but the kernel's `core.*` ones is a `football.*` type (the pad builds its clock type the same way,
+ *  `${module.key}.clock`). A football stream with no `football.*` event has no stamp to anchor on either way. */
+const FOOTBALL_PREFIX = "football.";
+const FOOTBALL_CLOCK = "football.clock";
+/** Every anchor the overlay reads is foreign: a row's `recordedAt` is the server's time. */
+const NOT_OWN: ReadonlySet<string> = new Set();
+
+const isFootball = (active: FoldedFixture["active"]) => active.some((e) => e.type.startsWith(FOOTBALL_PREFIX));
+
+/** The fields match time reads, copied off the parsed cfg so the wire carries those and nothing else. */
+function matchTimeOf(cfg: unknown): MatchTimeCfg {
+  const c = matchTimeCfgOf(cfg);
+  return {
+    halves: c.halves,
+    halfMinutes: c.halfMinutes,
+    extraTime: { enabled: c.extraTime.enabled, halfMinutes: c.extraTime.halfMinutes },
+    ...(c.periodSeconds === undefined ? {} : { periodSeconds: { ...c.periodSeconds } }),
+  };
+}
+
+/**
+ * S2-5 ruling 110 — FOOTBALL's clock is the shared one the console and the phone read (design §7.2), not `clockOf`'s
+ * newest stamp of any kind: anchored on the newest standing `football.clock` event (Start, Pause or Correct, from any
+ * screen; a goal or a card never moves it), at that row's `recordedAt` — the server's time, which the stage reads
+ * through its measured server offset — and spelled in match time (`matchTime`, §7.4).
+ *
+ *  - No clock event in the match yet: NO clock. A goal stamped before anyone started the clock is not a clock, and
+ *    "a stale clock on air is worse than no clock".
+ *  - The match in a phase that is no clock period (a break before a shootout, the shootout, the end): no clock, so
+ *    the stage holds what it last showed, as it does today.
+ *  - The anchor in the current period: its reading, running or paused.
+ *  - The anchor in an EARLIER period: this period has had no clock event yet, and a period marker stops the clock in
+ *    the fold, so the period stands at its own start, paused (§7.2: "0, stopped") — `45:00` before the second half's
+ *    Start, as on the console.
+ *  - The anchor in a LATER period than the fold's phase (a voided whistle): no clock rather than a wrong one.
+ */
+function footballClockOf(state: unknown, active: FoldedFixture["active"]): OverlayLiveData["clock"] {
+  if (typeof state !== "object" || state === null) return undefined;
+  const s = state as { phase?: unknown; cfg?: unknown };
+  if (typeof s.phase !== "string") return undefined;
+  const anchor = latestClockAnchor(active, FOOTBALL_CLOCK, NOT_OWN);
+  if (anchor === null) return undefined;
+  const matchTime = matchTimeOf(s.cfg);
+  const periods = clockPeriodsOf(matchTime);
+  const now = periods.indexOf(s.phase);
+  if (now < 0) return undefined;
+  const nominalSeconds = nominalSecondsOf(state, s.phase);
+  const base = { phase: s.phase, anchorAtWallMs: anchor.recordedAtMs, matchTime, ...(nominalSeconds === undefined ? {} : { nominalSeconds }) };
+  if (anchor.period === s.phase) return { ...base, anchorSeconds: anchor.elapsed, running: anchor.running };
+  const then = periods.indexOf(anchor.period);
+  if (then < 0 || then > now) return undefined;
+  return { ...base, anchorSeconds: 0, running: false };
+}
+
 /** Cricket's innings, by shape: an `innings[]` whose entries carry the four
  *  numbers. Anything else (no innings, or innings without `legalBalls`) is
  *  not cricket's state and yields nothing. */
@@ -199,7 +260,7 @@ export function projectOverlayLiveData(input: {
       : {}),
   };
   if (!folded) return out;
-  const clock = clockOf(folded.state, folded.active);
+  const clock = isFootball(folded.active) ? footballClockOf(folded.state, folded.active) : clockOf(folded.state, folded.active);
   if (clock) out.clock = clock;
   const cricket = cricketOf(folded.state);
   if (cricket) out.cricket = cricket;

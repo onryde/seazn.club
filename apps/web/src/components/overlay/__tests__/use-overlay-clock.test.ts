@@ -13,7 +13,7 @@
 // callback, so this file keeps the captured-setInterval form on purpose.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
-import { useOverlayClock, NO_CLOCK_STATUSES } from "../use-overlay-clock";
+import { useOverlayClock, NO_CLOCK_STATUSES, clockLabelAt, heldOffset } from "../use-overlay-clock";
 import { VOID_STATUSES } from "@/components/v2/stages-panel";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 
@@ -324,3 +324,172 @@ describe("useOverlayClock — the ceiling (F16)", () => {
     expect(h.read()).toBe("13:41");
   });
 });
+
+// ---------------------------------------------------------------------------
+// S2-5 ruling 110 — the viewers' overlay follows the SHARED football clock (design §7.2, §7.4, §10): the projection's
+// anchor is the newest `football.clock` event at its server `recorded_at` (`server/overlay/project.ts`), and the label
+// is read on the SERVER's clock (this machine's plus the measured offset), minus the presentation delay, in match time
+// with ruling 109's added time. Every expected label below is worked by hand from those rules, never computed by the
+// code under test. The cases above this line are other sports' (and football's before ruling 110), untouched.
+// ---------------------------------------------------------------------------
+const S0 = 1_000_000_000;
+/** 2 × 45, no extra time: the wire's `matchTime`, as the projection copies it off the engine's cfg. */
+const MT = { halves: 2 as const, halfMinutes: 45, extraTime: { enabled: false, halfMinutes: 15 } };
+/** Start at H1 600 s, recorded at S0 (server time). */
+const FOOTBALL: NonNullable<Clock> = {
+  phase: "H1",
+  anchorSeconds: 600,
+  anchorAtWallMs: S0,
+  running: true,
+  nominalSeconds: 45 * 60,
+  matchTime: MT,
+};
+
+function footballHarness(clock: Clock, serverOffsetMs: () => number | null, delayMs = 0) {
+  let latest: string | null = null;
+  const island = renderIsland(
+    (p: { clock: Clock }) => {
+      latest = useOverlayClock(p.clock, "in_play", delayMs, serverOffsetMs);
+      return null;
+    },
+    { clock },
+  );
+  return { island, read: () => latest };
+}
+
+describe("useOverlayClock — football follows the shared clock (S2-5 ruling 110)", () => {
+  it("a football overlay reads match time: {H2, 0} reads 45:00, {H2, 2850} paused reads 90+2:30", () => {
+    expect(clockLabelAt({ ...FOOTBALL, phase: "H2", anchorSeconds: 0, running: false }, S0, 0, null)).toBe("45:00");
+    expect(clockLabelAt({ ...FOOTBALL, phase: "H2", anchorSeconds: 2_850, running: false }, S0, 0, null)).toBe("90+2:30");
+    // Running from {H2, 0}: 61 s on the server's clock is 46:01.
+    expect(clockLabelAt({ ...FOOTBALL, phase: "H2", anchorSeconds: 0 }, S0 + 61_000, 0, 0)).toBe("46:01");
+  });
+
+  it("the widest reading the bug must hold: the second half of extra time, 15 minutes over, reads 120+15:00", () => {
+    const et = { ...MT, extraTime: { enabled: true, halfMinutes: 15 } };
+    // ET_H2 starts at 105:00 and ends at 120:00; 1 800 s into it is 15:00 past its end.
+    expect(clockLabelAt({ ...FOOTBALL, phase: "ET_H2", anchorSeconds: 1_800, running: false, matchTime: et }, S0, 0, null)).toBe(
+      "120+15:00",
+    );
+  });
+
+  it("a viewer machine 5 minutes fast reads the server's clock, the same label as a correct machine", () => {
+    stubTick();
+    const now = vi.spyOn(Date, "now").mockReturnValue(S0 + 130_000);
+    const correct = footballHarness(FOOTBALL, () => 0);
+    expect(correct.read(), "a correct machine at S0 + 130 s: 600 + 130").toBe("12:10");
+    correct.island.unmount();
+
+    now.mockReturnValue(S0 + 300_000 + 130_000); // the same instant, on a machine five minutes fast
+    const fast = footballHarness(FOOTBALL, () => -300_000);
+    expect(fast.read(), "through the offset: the server's S0 + 130 s").toBe("12:10");
+    expect(fast.read(), "not this machine's own clock, five minutes on (600 + 430)").not.toBe("17:10");
+  });
+
+  it("the delay offset still applies on top of the server offset", () => {
+    stubTick();
+    // Server now is S0 + 160 s (this machine reads it five minutes fast); the picture is 30 s behind: S0 + 130 s.
+    vi.spyOn(Date, "now").mockReturnValue(S0 + 300_000 + 160_000);
+    const h = footballHarness(FOOTBALL, () => -300_000, 30_000);
+    expect(h.read()).toBe("12:10");
+  });
+
+  it("a paused football clock holds, and arms no timer", () => {
+    const t = stubTick();
+    const now = vi.spyOn(Date, "now").mockReturnValue(S0 + 5_000);
+    const h = footballHarness({ ...FOOTBALL, anchorSeconds: 761, running: false }, () => -300_000);
+    expect(h.read()).toBe("12:41");
+    now.mockReturnValue(S0 + 600_000);
+    vi.advanceTimersByTime(0);
+    expect(h.read(), "wall time alone never moves a paused clock").toBe("12:41");
+    expect(t.armed(), "no 1 Hz tick for a paused clock").toBe(0);
+  });
+
+  it("an offset that forms after mount is taken at the next tick; it is held until it moves by 1 s or more", () => {
+    const t = stubTick();
+    let measured: number | null = null;
+    // The machine is five minutes fast; until a poll is answered there is no offset, and it reads its own clock.
+    const now = vi.spyOn(Date, "now").mockReturnValue(S0 + 300_000 + 130_000);
+    const h = footballHarness(FOOTBALL, () => measured);
+    expect(h.read(), "no offset yet: this machine's clock (600 + 430)").toBe("17:10");
+    measured = -300_000;
+    now.mockReturnValue(S0 + 300_000 + 131_000); t.tick();
+    expect(h.read(), "the offset forms: the server's S0 + 131 s").toBe("12:11");
+    measured = -300_400; // a 400 ms move: held at -300 000 (read through -300 400 it would show 12:11 again)
+    now.mockReturnValue(S0 + 300_000 + 132_000); t.tick();
+    expect(h.read()).toBe("12:12");
+    measured = -301_500; // a 1 500 ms move from the held offset: taken (held, it would show 12:13)
+    now.mockReturnValue(S0 + 300_000 + 133_000); t.tick();
+    expect(h.read()).toBe("12:11");
+    measured = null; // a measurement that goes back to unknown keeps the held offset
+    now.mockReturnValue(S0 + 300_000 + 134_000); t.tick();
+    expect(h.read()).toBe("12:12");
+  });
+
+  it("a football clock ticks on its match time even with no nominal length on the wire", () => {
+    const t = stubTick();
+    const now = vi.spyOn(Date, "now").mockReturnValue(S0 + 130_000);
+    const h = footballHarness({ ...FOOTBALL, nominalSeconds: undefined }, () => 0);
+    expect(h.read()).toBe("12:10");
+    now.mockReturnValue(S0 + 131_000); t.tick();
+    expect(h.read(), "it advances: a football cfg always has its lengths").toBe("12:11");
+    expect(t.armed()).toBe(1);
+  });
+
+  it("a poll that brings a different football cfg is a new clock: 30-minute halves start the second half at 30:00", () => {
+    stubTick();
+    vi.spyOn(Date, "now").mockReturnValue(S0);
+    const second = { ...FOOTBALL, phase: "H2", anchorSeconds: 0, running: false };
+    const h = footballHarness(second, () => 0);
+    expect(h.read()).toBe("45:00");
+    h.island.rerender({ clock: { ...second, matchTime: { ...MT, halfMinutes: 30 } } });
+    expect(h.read()).toBe("30:00");
+    // The hold keeps what was last SHOWN — the new cfg's reading, not the first poll's.
+    h.island.rerender({ clock: undefined });
+    expect(h.read(), "held across a clockless poll").toBe("30:00");
+  });
+
+  it("heldOffset: the pad's re-seat rule — forms, then moves by OFFSET_RESEAT_MS (1 000 ms) or more", () => {
+    expect(heldOffset(null, null)).toBeNull();
+    expect(heldOffset(null, -300_000)).toBe(-300_000);
+    expect(heldOffset(-300_000, null)).toBe(-300_000);
+    expect(heldOffset(-300_000, -300_999)).toBe(-300_000);
+    expect(heldOffset(-300_000, -301_000)).toBe(-301_000);
+    expect(heldOffset(-300_000, -299_000)).toBe(-299_000);
+  });
+
+  it("a non-football clock never reads the server offset: the same reading as with none", () => {
+    // ANCHOR is the file's own (H1 761 at 1 000 000, a 45-minute half, no matchTime). Five seconds on it reads 12:46,
+    // as the first case of this file reads it; an offset of five minutes must change nothing.
+    const t = stubTick();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    let latest: string | null = null;
+    renderIsland(
+      (p: { clock: Clock }) => {
+        latest = useOverlayClock(p.clock, "in_play", 0, () => -300_000);
+        return null;
+      },
+      { clock: ANCHOR },
+    );
+    now.mockReturnValue(1_005_000); t.tick();
+    expect(latest).toBe("12:46");
+  });
+
+  it("a non-football fixture keeps formatClockCapped's `45+` past the nominal, whatever the offset", () => {
+    const t = stubTick();
+    const now = vi.spyOn(Date, "now").mockReturnValue(2_000_000);
+    let latest: string | null = null;
+    renderIsland(
+      (p: { clock: Clock }) => {
+        latest = useOverlayClock(p.clock, "in_play", 0, () => -300_000);
+        return null;
+      },
+      // 2 690 s at 2 000 000: twenty seconds on is 2 710 s, past the 2 700 s half. Read through the offset it would sit
+      // at the anchor, 44:50; without it, it is in added time.
+      { clock: { ...ANCHOR, anchorSeconds: 2_690, anchorAtWallMs: 2_000_000 } },
+    );
+    now.mockReturnValue(2_020_000); t.tick();
+    expect(latest).toBe("45+");
+  });
+});
+

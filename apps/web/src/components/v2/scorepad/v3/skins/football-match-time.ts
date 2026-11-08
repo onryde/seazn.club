@@ -61,6 +61,12 @@ function periodTable(cfg: MatchTimeCfg): PeriodSpan[] {
   return table;
 }
 
+/** The clock periods this cfg can reach, in match order (S2-5 ruling 110: the viewers' overlay shows a football clock
+ *  only in one of them, and reads a new one as starting from its own start). */
+export function clockPeriodsOf(cfg: MatchTimeCfg): string[] {
+  return periodTable(cfg).map((period) => period.label);
+}
+
 /** One group's lengths: the scalar, unless `periodSeconds` gives the group
  *  UNEQUAL values — then each period it names takes its own. */
 function groupLengths(

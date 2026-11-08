@@ -7,7 +7,7 @@
 // 92:30 (ruling 109, owner, 2026-11-08: "A"). The phone plan mirrors these
 // vectors, so a row changed here is a row changed there.
 import { describe, expect, it } from "vitest";
-import { matchClock, matchTimeCfgOf } from "../football-match-time";
+import { clockPeriodsOf, matchClock, matchTimeCfgOf } from "../football-match-time";
 import { buildFootballClock, readClock } from "../football";
 import { buildClock } from "../period-shared";
 import type { PadHostView } from "../../types";
@@ -124,3 +124,22 @@ describe("the football skin shows match time; hockey is unchanged", () => {
     expect(readClock({ asOf: { period: "H2", elapsed: 2850 } }, "H2", {})).toBe("90+2:30");
   });
 });
+
+// S2-5 ruling 110: the viewers' overlay shows a football clock only in a clock period, and reads a period after the
+// anchor's as starting from its own start — so the list is the engine's period order (F8), written here by hand.
+describe("clockPeriodsOf — the clock periods, in match order (ruling 110)", () => {
+  it("halves, then extra time when it is enabled", () => {
+    expect(clockPeriodsOf(matchTimeCfgOf({}))).toEqual(["H1", "H2"]);
+    expect(clockPeriodsOf(matchTimeCfgOf({ extraTime: { enabled: true, halfMinutes: 15 } }))).toEqual([
+      "H1",
+      "H2",
+      "ET_H1",
+      "ET_H2",
+    ]);
+  });
+
+  it("quarters at halves: 4", () => {
+    expect(clockPeriodsOf(matchTimeCfgOf({ halves: 4, halfMinutes: 20 }))).toEqual(["H1", "Q2", "Q3", "Q4"]);
+  });
+});
+

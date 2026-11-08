@@ -35,7 +35,24 @@
 // is measured from the write. On a failure the device's `/events` traffic
 // (requests, answers, failures, with times) is attached to the report, so a
 // recurrence names which of the two it was.
-import { test, expect, type APIRequestContext, type Browser, type BrowserContext, type Page } from "@playwright/test";
+//
+// THE VIEWERS' OVERLAY (ruling 110). Two tests also open the fixture's
+// broadcast overlay (`/overlay/fixtures/<id>?style=bug`) as an anonymous
+// viewer. Its clock follows the same `football.clock` anchor and reads it in
+// server time, through an offset it measures off its OWN polls' `Date` header,
+// so the Start test opens it on a machine five minutes fast and holds it to the
+// console within 1 s; the added-time test holds it to `45+2:00`. The overlay
+// polls every 15 s (`use-live-fixture.ts` POLL_MS, no realtime on a stub
+// Supabase), so its budget is OVERLAY_MS, not FOLLOW_MS.
+import {
+  test,
+  expect,
+  type APIRequestContext,
+  type Browser,
+  type BrowserContext,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 import { apiJson, expectNoHorizontalScroll, seedRosteredFixture, TAG, type RosteredFixture } from "../helpers";
 import { consentedAnonymousState } from "../scorepad-a11y-kit";
 import { ledger, openLiveConsole, pad, postEvent } from "../scorepad-v3-football-kit";
@@ -59,6 +76,11 @@ const BUDGET_MS = RIG_MS + 6 * FOLLOW_MS + 30_000;
 
 /** How long the acting screen's clock write may take to reach the ledger. */
 const LAND_MS = 20_000;
+
+/** How long the viewers' overlay may take to read the shared clock: its first
+ *  poll answer forms its server offset, and it polls every 15 s
+ *  (`use-live-fixture.ts` POLL_MS) — two polls, a page load and slack. */
+const OVERLAY_MS = 60_000;
 
 /** The device's `/events` traffic for the test now running: one line per
  *  request, answer and failure, with the time. Attached on a failure. */
@@ -151,6 +173,31 @@ async function gap(a: Screen, b: Screen): Promise<number> {
   return Math.abs(secondsOf(left) - secondsOf(right));
 }
 
+/** The viewers' overlay's clock cell, as an anonymous viewer whose machine is
+ *  `skewMs` off true (ruling 110). `page.clock` moves `Date` in the overlay's
+ *  page only, never the server's `Date` header. */
+async function openOverlay(browser: Browser, fixtureId: string, skewMs = 0): Promise<{ ctx: BrowserContext; clock: Locator }> {
+  const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  const viewer = await ctx.newPage();
+  if (skewMs !== 0) {
+    await viewer.clock.install({ time: Date.now() + skewMs });
+    await viewer.clock.resume();
+  }
+  const res = await viewer.goto(`/overlay/fixtures/${fixtureId}?style=bug`);
+  expect(res?.status(), "the viewers' overlay serves the fixture").toBe(200);
+  if (skewMs !== 0) {
+    const skew = (await viewer.evaluate(() => Date.now())) - Date.now();
+    expect(skew, "page.clock moved the overlay's Date").toBeGreaterThan(skewMs - 10_000);
+  }
+  return { ctx, clock: viewer.locator(".ovl-bug-clock") };
+}
+
+/** A screen and the overlay, read together, as seconds. */
+async function overlayGap(a: Screen, overlayClock: Locator): Promise<number> {
+  const [left, right] = await Promise.all([readingOf(a), overlayClock.innerText().catch(() => "")]);
+  return Math.abs(secondsOf(left) - secondsOf(right.trim()));
+}
+
 interface Rig {
   fx: RosteredFixture;
   console: ReturnType<typeof pad>;
@@ -222,9 +269,13 @@ async function startOn(page: Page, fx: RosteredFixture, from: Screen, other: Scr
   await toggleOn(page, fx, from, other, "Start");
 }
 
-test("S2-5 107: Start on the console runs the device pad's clock", async ({ page, browser }) => {
-  test.setTimeout(BUDGET_MS);
+test("S2-5 107: Start on the console runs the device pad's clock, and the viewers' overlay (110)", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(BUDGET_MS + 2 * OVERLAY_MS);
   const { fx, console: a, device, deviceCtx } = await rig(page, browser, "Start");
+  let overlayCtx: BrowserContext | undefined;
   try {
     const b = devicePad(device);
     await startOn(page, fx, a, b);
@@ -235,7 +286,25 @@ test("S2-5 107: Start on the console runs the device pad's clock", async ({ page
     // not a still copy of the console's first reading.
     const before = secondsOf(await readingOf(b));
     await expect.poll(async () => secondsOf(await readingOf(b)), { timeout: 5_000 }).toBeGreaterThanOrEqual(before + 2);
+
+    // Ruling 110: the viewers' overlay, on a machine five minutes fast, reads
+    // the console's match time. Read with no server offset it would sit five
+    // minutes ahead; through the offset its own polls measure, within 1 s.
+    const overlay = await openOverlay(browser, fx.fixtureId, 300_000);
+    overlayCtx = overlay.ctx;
+    await expect
+      .poll(() => overlayGap(a, overlay.clock), {
+        timeout: OVERLAY_MS,
+        message: "the fast viewer's overlay reads the console's match time, within 1 s",
+      })
+      .toBeLessThanOrEqual(1);
+    // ...and it is the shared time ticking, not a coincidence of one read.
+    await page.waitForTimeout(3_000);
+    await expect
+      .poll(() => overlayGap(a, overlay.clock), { timeout: 5_000, message: "still within 1 s three seconds later" })
+      .toBeLessThanOrEqual(1);
   } finally {
+    await overlayCtx?.close();
     await deviceCtx.close();
   }
 });
@@ -325,9 +394,10 @@ test("S2-5 108: the second half starts at 45:00 on both", async ({ page, browser
   }
 });
 
-test("S2-5 108: added time reads 45+2:00", async ({ page, browser }) => {
-  test.setTimeout(BUDGET_MS + 30_000);
+test("S2-5 108: added time reads 45+2:00, on the viewers' overlay too (110)", async ({ page, browser }) => {
+  test.setTimeout(BUDGET_MS + 30_000 + OVERLAY_MS);
   const { fx, console: a, device, deviceCtx } = await rig(page, browser, "Added time");
+  let overlayCtx: BrowserContext | undefined;
   try {
     const b = devicePad(device);
     // Two minutes past the nominal 45, paused (controller ruling W-9: 2820 s
@@ -349,7 +419,13 @@ test("S2-5 108: added time reads 45+2:00", async ({ page, browser }) => {
         await screen.screenshot({ path: `e2e-artifacts/football-shared-clock/added-time-${who}-${width}.png`, fullPage: true });
       }
     }
+    // Ruling 110: the overlay reads match time with added time, not the
+    // within-period "45+" every other sport's overlay caps at.
+    const overlay = await openOverlay(browser, fx.fixtureId);
+    overlayCtx = overlay.ctx;
+    await expect(overlay.clock, "the viewers' overlay reads the added time").toHaveText("45+2:00", { timeout: OVERLAY_MS });
   } finally {
+    await overlayCtx?.close();
     await deviceCtx.close();
   }
 });

@@ -22,6 +22,7 @@ import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/test
 import { builtinModules } from "@seazn/engine/sports";
 import { projectOverlayLiveData } from "../project";
 import type { FoldedFixture } from "@/server/engine-db/fold";
+import { clockLabelAt } from "@/components/overlay/use-overlay-clock";
 
 const moduleFor = (key: string) => {
   const m = builtinModules.find((mod) => mod.key === key);
@@ -40,6 +41,21 @@ const moduleFor = (key: string) => {
 const cfgFor = (key: string) => moduleFor(key).configSchema.parse(SIM_CONFIGS[key] ?? {});
 
 const WALL = "2026-09-07T14:00:00.000Z";
+
+/** Football's cfg as the engine parses it here, and the match-time fields the wire carries, read off it — so the
+ *  expected `matchTime` moves with the engine's own declaration. */
+const FOOTBALL_CFG = cfgFor("football") as {
+  halves: 2 | 4;
+  halfMinutes: number;
+  extraTime: { enabled: boolean; halfMinutes: number };
+  periodSeconds?: Record<string, number>;
+};
+const FOOTBALL_MATCH_TIME = {
+  halves: FOOTBALL_CFG.halves,
+  halfMinutes: FOOTBALL_CFG.halfMinutes,
+  extraTime: { enabled: FOOTBALL_CFG.extraTime.enabled, halfMinutes: FOOTBALL_CFG.extraTime.halfMinutes },
+  ...(FOOTBALL_CFG.periodSeconds === undefined ? {} : { periodSeconds: FOOTBALL_CFG.periodSeconds }),
+};
 
 /** Folds `stream` through the real module and returns what foldFixture would.
  *  A stream entry may carry its OWN `recordedAt` as a third slot — without
@@ -157,10 +173,13 @@ describe("projectOverlayLiveData", () => {
     expect(out.recent).toEqual(recent);
   });
 
-  it("football: a stamped goal in a running half anchors the clock at the stamp, on the last event's wall time", () => {
+  // S2-5 ruling 110: football's clock is the SHARED one (design §7.2) — anchored on the newest standing
+  // `football.clock` event, never on a goal. The stamped-goal anchor these cases used to pin is the rule ruling 110
+  // replaces, for football only; hockey and ice hockey keep it (the period-kernel cases below are untouched).
+  it("football: a Start anchors the clock at its stamp and its own wall time, and carries the cfg match time reads", () => {
     const f = folded("football", [
       ["core.start", {}],
-      ["football.goal", { by: "H", at: { period: "H1", elapsed: 761 } }],
+      ["football.clock", { at: { period: "H1", elapsed: 761 }, running: true }],
     ]);
     const out = projectOverlayLiveData({ row: ROW(2), folded: f, venueTz: "UTC" });
     expect(out.clock).toEqual({
@@ -171,9 +190,80 @@ describe("projectOverlayLiveData", () => {
       // F16 — the half's nominal length, from the cfg the fixture was folded
       // under. Derived from the module's OWN parsed config, never the literal
       // 45: the ceiling has to move when the competition's does.
-      nominalSeconds: (cfgFor("football") as { halfMinutes: number }).halfMinutes * 60,
+      nominalSeconds: FOOTBALL_CFG.halfMinutes * 60,
+      matchTime: FOOTBALL_MATCH_TIME,
     });
     expect(out.cricket).toBeUndefined();
+  });
+
+  it("football: no clock event yet — no football clock on air, even with a stamped goal", () => {
+    // The overlay's own rule: a stale clock on air is worse than no clock. A goal stamped before anyone started the
+    // shared clock is not a clock.
+    const f = folded("football", [
+      ["core.start", {}],
+      ["football.goal", { by: "H", at: { period: "H1", elapsed: 761 } }],
+    ]);
+    expect(projectOverlayLiveData({ row: ROW(2), folded: f, venueTz: "UTC" }).clock).toBeUndefined();
+  });
+
+  it("football: a goal after the clock event does not re-anchor a football overlay", () => {
+    // Start at H1 600 s, recorded S0; a goal stamped H1 690, recorded S0 + 100 s (a late stamp, as a scorer's is). At
+    // S0 + 130 s the label reads 12:10 (600 + 130), not 12:00 (the goal's 690 + 30).
+    const s0 = "2026-09-07T14:00:00.000Z";
+    const f = folded("football", [
+      ["core.start", {}, s0],
+      ["football.clock", { at: { period: "H1", elapsed: 600 }, running: true }, s0],
+      ["football.goal", { by: "H", at: { period: "H1", elapsed: 690 } }, "2026-09-07T14:01:40.000Z"],
+    ]);
+    const clock = projectOverlayLiveData({ row: ROW(3), folded: f, venueTz: "UTC" }).clock;
+    expect(clock).toMatchObject({ phase: "H1", anchorSeconds: 600, anchorAtWallMs: Date.parse(s0), running: true });
+    expect(clockLabelAt(clock!, Date.parse(s0) + 130_000, 0, 0)).toBe("12:10");
+  });
+
+  it("football: a Pause holds the reading; a later Start anchors on the Start", () => {
+    const f = folded("football", [
+      ["core.start", {}],
+      ["football.clock", { at: { period: "H1", elapsed: 0 }, running: true }, "2026-09-07T14:00:00.000Z"],
+      ["football.clock", { at: { period: "H1", elapsed: 761 }, running: false }, "2026-09-07T14:12:41.000Z"],
+    ]);
+    const paused = projectOverlayLiveData({ row: ROW(3), folded: f, venueTz: "UTC" }).clock!;
+    expect(paused).toMatchObject({ phase: "H1", anchorSeconds: 761, running: false });
+    expect(clockLabelAt(paused, Date.parse("2026-09-07T15:00:00.000Z"), 0, 0), "a paused clock holds").toBe("12:41");
+  });
+
+  it("football: a new period with no clock event of its own stands at its own start, paused — 45:00", () => {
+    expect(FOOTBALL_CFG.halfMinutes, "premise: 45-minute halves, so the second half starts at 45:00").toBe(45);
+    const f = folded("football", [
+      ["core.start", {}],
+      ["football.clock", { at: { period: "H1", elapsed: 0 }, running: true }],
+      ["football.period", { phase: "HT", at: { period: "H1", elapsed: 2700 } }],
+    ]);
+    const clock = projectOverlayLiveData({ row: ROW(3), folded: f, venueTz: "UTC" }).clock!;
+    expect(clock).toMatchObject({ phase: "H2", anchorSeconds: 0, running: false });
+    expect(clockLabelAt(clock, Date.parse(WALL) + 600_000, 0, 0)).toBe("45:00");
+  });
+
+  it("football: an anchor in a LATER period than the fold's phase, or a phase that is no clock period, is no clock", () => {
+    // States the engine reaches only through a voided whistle or a shootout; written by hand, the cfg the module's own.
+    const clockAt = (period: string) =>
+      ({ ...makeEnvelope(0, { type: "football.clock", payload: { at: { period, elapsed: 60 }, running: true } } as never), recordedAt: WALL });
+    const hand = (phase: string, anchorPeriod: string): FoldedFixture => ({
+      fixtureId: "fx-hand",
+      lastSeq: 1,
+      state: { phase, cfg: FOOTBALL_CFG },
+      summary: { headline: "x" } as FoldedFixture["summary"],
+      outcome: null,
+      active: [clockAt(anchorPeriod)],
+    });
+    expect(projectOverlayLiveData({ row: ROW(1), folded: hand("H1", "H2"), venueTz: "UTC" }).clock, "later period").toBeUndefined();
+    expect(projectOverlayLiveData({ row: ROW(1), folded: hand("PSO", "H2"), venueTz: "UTC" }).clock, "a shootout").toBeUndefined();
+    expect(projectOverlayLiveData({ row: ROW(1), folded: hand("PSO", "PSO"), venueTz: "UTC" }).clock, "a stamp in no clock period").toBeUndefined();
+    // …and the positive pair: the same hand-made stream in its own period is a clock.
+    expect(projectOverlayLiveData({ row: ROW(1), folded: hand("H2", "H2"), venueTz: "UTC" }).clock).toMatchObject({
+      phase: "H2",
+      anchorSeconds: 60,
+      running: true,
+    });
   });
 
   it("football: clockRunning false projects running false so the stage holds", () => {
@@ -203,27 +293,25 @@ describe("projectOverlayLiveData", () => {
     expect(out.clock, "a stale clock on air is worse than no clock").toBeUndefined();
   });
 
-  it("football: an UNSTAMPED event after the stamped one does not drag the anchor forward", () => {
-    // Review 2026-09-09 (I2). `applyEvent` only writes `asOf` for an event
-    // carrying an `at` (football.ts:2522), so this card leaves `asOf` at the
-    // goal's 761 while being the chronologically last envelope. Anchoring on
-    // the last envelope would pair 761 with the CARD's wall time, 90 s later —
-    // and the stage's `anchorSeconds + (now - anchorAtWallMs)` would jump
-    // BACKWARD by 90 s the moment the card was recorded.
-    const goalWall = "2026-09-07T14:00:00.000Z";
+  it("football: an UNSTAMPED event after the clock event does not drag the anchor forward", () => {
+    // Review 2026-09-09 (I2), re-pinned for ruling 110: the anchor is the clock event, and a card recorded 90 s later
+    // is no clock event. Anchoring on the last envelope would pair 761 with the CARD's wall time — and the stage's
+    // `anchorSeconds + (now - anchorAtWallMs)` would jump BACKWARD by 90 s the moment the card was recorded.
+    const clockWall = "2026-09-07T14:00:00.000Z";
     const cardWall = "2026-09-07T14:01:30.000Z";
     const f = folded("football", [
-      ["core.start", {}, goalWall],
-      ["football.goal", { by: "H", at: { period: "H1", elapsed: 761 } }, goalWall],
+      ["core.start", {}, clockWall],
+      ["football.clock", { at: { period: "H1", elapsed: 761 }, running: true }, clockWall],
       ["football.card", { by: "A", color: "yellow" }, cardWall],
     ]);
     const out = projectOverlayLiveData({ row: ROW(3), folded: f, venueTz: "UTC" });
     expect(out.clock).toEqual({
       phase: "H1",
       anchorSeconds: 761,
-      anchorAtWallMs: Date.parse(goalWall),
+      anchorAtWallMs: Date.parse(clockWall),
       running: true,
-      nominalSeconds: (cfgFor("football") as { halfMinutes: number }).halfMinutes * 60,
+      nominalSeconds: FOOTBALL_CFG.halfMinutes * 60,
+      matchTime: FOOTBALL_MATCH_TIME,
     });
     // The assertion that actually witnesses the regression: the wrong answer
     // is a DIFFERENT constant, not a missing field.
@@ -257,7 +345,7 @@ describe("projectOverlayLiveData", () => {
     const halfMinutes = (cfgFor("football") as { halfMinutes: number }).halfMinutes;
     const f = folded("football", [
       ["core.start", {}],
-      ["football.goal", { by: "H", at: { period: "H1", elapsed: 761 } }],
+      ["football.clock", { at: { period: "H1", elapsed: 761 }, running: true }],
     ]);
     const out = projectOverlayLiveData({ row: ROW(2), folded: f, venueTz: "UTC" });
     expect(out.clock!.nominalSeconds).toBe(halfMinutes * 60);

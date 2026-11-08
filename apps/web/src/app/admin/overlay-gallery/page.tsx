@@ -16,7 +16,7 @@ import {
   gallerySnapshots,
 } from "@/server/overlay/gallery-snapshots";
 import { OverlayGallery, type GalleryFrame } from "./overlay-gallery";
-import { parseGalleryStress, stressSides, stressTemplates } from "./gallery-stress";
+import { parseGalleryStress, parseStressClock, stressFootballClock, stressSides, stressTemplates } from "./gallery-stress";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +30,7 @@ const one = (v: string | string[] | undefined): string | undefined => (Array.isA
 function galleryData() {
   const now = Date.now();
   return {
+    now,
     snapshots: gallerySnapshots(now),
     variants: galleryResultVariants(now),
     startIso: new Date(now + 90 * 60_000).toISOString(),
@@ -56,6 +57,7 @@ export default async function AdminOverlayGalleryPage({
     name?: string | string[];
     away?: string | string[];
     code?: string | string[];
+    clock?: string | string[];
   }>;
 }) {
   await requireStaff();
@@ -76,7 +78,9 @@ export default async function AdminOverlayGalleryPage({
   );
   const templates = decidedOutcomeTemplates((k, v) => msgFor(locale, k, v));
 
-  const { snapshots, variants, startIso } = galleryData();
+  const { now, snapshots: sampled, variants, startIso } = galleryData();
+  // S2-5 ruling 110: `?clock=` holds football's live sample at a match-time reading (`gallery-stress.ts`).
+  const snapshots = stressFootballClock(sampled, parseStressClock(one(query.clock)), now);
   const variantSnapshots: Record<string, OverlayLiveData> = Object.fromEntries(
     variants.map(({ variant, snapshot }) => [`${variant.status}:${variant.sportKey}`, snapshot]),
   );
