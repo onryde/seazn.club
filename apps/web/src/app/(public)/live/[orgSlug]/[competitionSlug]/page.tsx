@@ -159,9 +159,9 @@ export default async function CompetitionHomePage({ params }: Props) {
   const locale = toLocale(hub.locale);
   const dict = await getDictionary(locale, "public");
 
-  // Sponsors (v10 PROMPT-56): table rows via the resolver (blob shim only for
-  // un-backfilled orgs). Tier grouping is Pro `sponsors.tiers` — without it
-  // every row collapses to the free flat partner strip.
+  // Sponsors (v10 PROMPT-56): the sponsors table's rows via the resolver, its
+  // only source. Tier grouping is Pro `sponsors.tiers` — without it every row
+  // collapses to the free flat partner strip.
   const tiered = await hasFeature(org.id, "sponsors.tiers", competition.id);
   const sponsors = await resolveSponsors(org.id, competition.id, { tiered });
 
