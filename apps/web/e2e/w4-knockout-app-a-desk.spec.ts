@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { TAG, addEntrantsViaApi, apiJson, competitionPath, expectNoHorizontalScroll, fixturePath, scoreFixture } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { waitForHydration } from "./directory-kit";
 
 // W4 app PR A, lane B-desk (Tasks 18 + 21). Whole file, never a -g slice (AGENTS.md rule 21).
 
@@ -173,7 +174,10 @@ test.describe("X-CH-8 the desk asks to complete a finished bracket", () => {
     // Its Complete stage completes it through the existing route; the warning then has nothing left to list.
     await page.reload();
     await expect(warning, "saved as completed with a stage open: the warning shows on arrival").toBeVisible();
-    await stageRow.locator(`[data-complete-stage="${k.stageId}"]`).click();
+    // A click on server-rendered markup before React hydrates is silently dropped (directory-kit.ts).
+    const completeStage = stageRow.locator(`[data-complete-stage="${k.stageId}"]`);
+    await waitForHydration(completeStage);
+    await completeStage.click();
     await expect.poll(() => stageStatus(request, k.stageId), { timeout: 30_000 }).toBe("complete");
     await expect(warning).toHaveCount(0);
 
@@ -205,6 +209,7 @@ test.describe("X-CH-8 the desk asks to complete a finished bracket", () => {
       await page.setViewportSize({ width: w, height: 900 });
       await expectNoHorizontalScroll(page);
     }
+    await waitForHydration(mark);
     await mark.click();
     await expect
       .poll(async () => (await apiJson<{ status: string }>(request, `/api/v1/competitions/${k.compId}`)).data?.status, { timeout: 30_000 })
