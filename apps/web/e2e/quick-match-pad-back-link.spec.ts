@@ -44,9 +44,12 @@ function sealHomeTokenForE2e(plain: string): Buffer {
   return Buffer.concat([Buffer.from([0x01]), wrapIv, wrapped, wrapTag, dataIv, dataTag, body]);
 }
 
-/** Is `el`'s centre the thing a tap lands on (the element itself or one of its children)? */
+/** Is `el`'s centre the thing a tap lands on (the element itself or one of its children)? Scrolled to the middle of
+ *  the viewport first, as run-sheet.spec.ts does: `elementFromPoint` is VIEWPORT-relative and returns null for anything
+ *  below the fold, and on a 320x568 phone the link sits under the pad, below the fold. */
 async function hitTestable(el: Locator): Promise<boolean> {
   return el.evaluate((node) => {
+    node.scrollIntoView({ block: "center" });
     const r = node.getBoundingClientRect();
     const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
     return !!hit && (hit === node || node.contains(hit));
@@ -149,6 +152,13 @@ test("quick match pad (C12): the way back is visible, hit-testable and 44px tall
       await expectNoHorizontalScroll(page);
       checked++;
     }
+    // The click itself, in a real browser: the link's handler asks the mounted pads to send what they hold (none here:
+    // the Confirm card mounts no pad) and then navigates to the home. `/q/[token]` is plan 2's route, so what loads
+    // there is not this spec's question; that the browser GOES there is (a handler that swallowed the click would
+    // strand the guest on the pad). The held-point sequence is proven through the real pipeline hook in
+    // src/components/v2/__tests__/quick-match-back-link.test.tsx.
+    await page.getByRole("link", { name: "Back to the quick match", exact: true }).click();
+    await page.waitForURL((url) => url.pathname === `/q/${homeToken}`, { timeout: 15_000 });
   } finally {
     await ctx.close();
     await withDb((sql) => sql`delete from competitions where id = ${competitionId} and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`);

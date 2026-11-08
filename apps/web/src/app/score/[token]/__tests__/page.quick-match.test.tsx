@@ -3,8 +3,7 @@
 // that quick match's home, `/q/<home token>`, labelled `quickMatch.backToMatch`. Every other pad gets none.
 //
 // The real producers on both ends, no fixture on either (AGENTS.md class 1, the inert seam): the quick match is made by
-// `createQuickMatch`, the pad's link is minted by the real mint as the system user (`ensureDeviceLink(systemAuth())`, the
-// same `ensureLocked` the guest mint runs), and the page under test is the REAL async server component, rendered to
+// `createQuickMatch`, the pad's link is minted through the guest's own door (`ensureGuestDeviceLink`, Task 8), and the page under test is the REAL async server component, rendered to
 // HTML. Assertions on that HTML anchor on `="` (AGENTS.md: React serialises an omitted prop as "$undefined").
 //
 // Expected values come from the producer or the spec, never from the page: the href is `/q/` + the token
@@ -22,9 +21,10 @@ import { sql } from "@/lib/db";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { DeviceScorePad } from "@/components/v2/device-score-pad";
 import { QuickMatchBackLink } from "@/components/v2/quick-match-back-link";
+import { ScanWaiting } from "@/components/v2/scan-waiting";
 import type { CreateQuickMatch } from "@/server/api-v1/schemas";
-import { ensureDeviceLink } from "@/server/usecases/device-links";
-import { createQuickMatch, systemAuth, type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
+import { ensureDeviceLink, ensureGuestDeviceLink } from "@/server/usecases/device-links";
+import { createQuickMatch, type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
 import { findQuickMatchByCompetition } from "@/server/usecases/quick-match-home";
 import { hashVisitorKey, mintVisitorKey } from "@/server/usecases/quick-match-tokens";
@@ -92,7 +92,7 @@ const twoSides = (): CreateQuickMatch => ({
   locale: "en",
 });
 
-/** A fresh quick match, its one fixture, and that fixture's pad link minted by the system user. */
+/** A fresh quick match, its one fixture, and that fixture's pad link minted through the guest's door (Task 8). */
 async function quickMatchPad(): Promise<{ out: CreatedQuickMatch; fixtureId: string; secret: string }> {
   const out = await createQuickMatch(twoSides(), { visitorHash: hashVisitorKey(mintVisitorKey()) });
   const [fx] = await sql<{ id: string }[]>`
@@ -100,7 +100,9 @@ async function quickMatchPad(): Promise<{ out: CreatedQuickMatch; fixtureId: str
     where division_id = ${out.divisionId} and home_entrant_id is not null and away_entrant_id is not null
     order by round_no, seq_in_round limit 1`;
   if (!fx) throw new Error(`precondition: quick match ${out.id} has a fixture with both sides`);
-  const { secret } = await ensureDeviceLink(systemAuth(), fx.id);
+  const row = await findQuickMatchByCompetition(out.competitionId);
+  if (!row) throw new Error(`precondition: quick match ${out.id} has its row`);
+  const { secret } = await ensureGuestDeviceLink(row, fx.id);
   return { out, fixtureId: fx.id, secret };
 }
 
@@ -117,6 +119,23 @@ function find(node: ReactNode, type: unknown): ReactElement | null {
   return find((node.props as { children?: ReactNode }).children, type);
 }
 
+/** The element whose direct children include an element of `type`: the wrapper a screen puts it in. */
+function parentOf(node: ReactNode, type: unknown): ReactElement | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const hit = parentOf(child as ReactNode, type);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (!isValidElement(node)) return null;
+  const children = (node.props as { children?: ReactNode }).children;
+  const direct = Array.isArray(children) ? children : [children];
+  if (direct.some((c) => isValidElement(c) && c.type === type)) return node;
+  return parentOf(children, type);
+}
+const classNameOf = (el: ReactElement | null) => ((el?.props as { className?: string } | undefined)?.className ?? "");
+
 async function render(secret: string): Promise<{ tree: ReactElement; html: string }> {
   const tree = (await ScorePadPage({ params: Promise.resolve({ token: secret }) })) as ReactElement;
   return { tree, html: renderToStaticMarkup(tree) };
@@ -128,6 +147,12 @@ function backAnchor(html: string): { tag: string; text: string } | null {
   return m ? { tag: m[1]!, text: m[2]!.replace(/<[^>]+>/g, "") } : null;
 }
 const classesOf = (tag: string) => (/ class="([^"]*)"/.exec(tag)?.[1] ?? "").split(/\s+/).filter(Boolean);
+/** The class attribute of the element that DIRECTLY wraps the back link, read whole from its `class="` to its closing
+ *  quote, so a token is matched exactly (never `/\bmd:…/`, which also matches inside `max-md:…`). */
+const linkParentClasses = (html: string) =>
+  (/<div class="([^"]*)"><a [^>]*data-testid="quick-match-back-link"/.exec(html)?.[1] ?? "").split(/\s+/).filter(Boolean);
+/** The class attribute of the block directly inside `<main>`: the wrapper every scan screen puts its content in. */
+const mainWrapperClass = (html: string) => /<main [^>]*><div class="([^"]*)">/.exec(html)?.[1];
 const lookup = () => vi.mocked(findQuickMatchByCompetition);
 
 /** Controller ruling 2026-11-08: the back link is an extra and never breaks scoring. A key that cannot open the home
@@ -135,8 +160,8 @@ const lookup = () => vi.mocked(findQuickMatchByCompetition);
  *  token nor the envelope. The codes are the ruling's three cases, typed here, never read back from the page. */
 const REASON = {
   kekMissing: "quick_match_back_link_kek_missing",
-  malformed: "quick_match_back_link_envelope_malformed",
-  rejected: "quick_match_back_link_envelope_rejected",
+  malformed: "quick_match_back_link_malformed",
+  rejected: "quick_match_back_link_rejected",
 } as const;
 // The repo's logger (pino, and through Sentry's pino integration, Sentry Logs): recorded, and kept off stdout.
 const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
@@ -162,6 +187,12 @@ describe.skipIf(!HAS_DB)("the pad's way back to the quick match (C12)", () => {
     expect(a, "the back link is painted").not.toBeNull();
     expect(a!.tag).toContain(`href="/q/${out.token}"`);
     expect(classesOf(a!.tag), "the href holds the home token, a capability (B9)").toContain("ph-no-capture");
+    // Placement, pinned as whole tokens of the class attribute: under the pad below md, a flex column to order it in.
+    expect(classesOf(a!.tag), "under the pad on a phone").toContain("max-md:order-last");
+    expect(a!.tag, "anchored: the token ends the class attribute").toMatch(/\smax-md:order-last"/);
+    expect(linkParentClasses(html), "the link's parent is the flex column that orders it").toEqual(
+      expect.arrayContaining(["flex", "flex-col"]),
+    );
     expect(a!.text).toContain(EN_LABEL);
     // Exactly one painting of the token: nothing else on the pad carries it.
     expect(html.split(out.token).length - 1).toBe(1);
@@ -193,6 +224,7 @@ describe.skipIf(!HAS_DB)("the pad's way back to the quick match (C12)", () => {
     expect(html).not.toContain('href="/q/');
     expect(html).not.toContain(EN_LABEL);
     expect(lookup(), "the org guard: an ordinary pad never asks").not.toHaveBeenCalled();
+    expect(mainWrapperClass(html), "an ordinary pad keeps the plain block it always had").toBe("mx-auto max-w-2xl");
   });
 
   it("two quick matches in the one system org: each pad links to its OWN home, never the other's", async () => {
@@ -297,6 +329,45 @@ describe.skipIf(!HAS_DB)("the pad's way back to the quick match (C12)", () => {
     } finally {
       vi.stubEnv("DEVICE_LINK_KEK", KEK);
     }
+  });
+
+  // Review Q3 (controller ruling 2026-11-08): a later round's pad can drop back to the waiting screen when a feeder's
+  // result is voided, and the guest there still needs the way home. The waiting screen's client component reads the
+  // app router, so these cases read the page's element tree (as page.test.tsx does for it) and render only the link.
+  it("the waiting screen keeps the way back: a seat emptied after the link was made, as a voided feeder leaves it", async () => {
+    const { out, fixtureId, secret } = await quickMatchPad();
+    // The guest door refuses an unknown side (C18), so the link exists first, exactly as it would before the void.
+    await sql`update fixtures set away_entrant_id = null where id = ${fixtureId}`;
+    lookup().mockClear();
+    warn.mockClear();
+    const tree = (await ScorePadPage({ params: Promise.resolve({ token: secret }) })) as ReactElement;
+    expect(find(tree, ScanWaiting), "precondition: the waiting screen").not.toBeNull();
+    expect(find(tree, DeviceScorePad), "precondition: no pad while a side is unknown").toBeNull();
+    const link = find(tree, QuickMatchBackLink);
+    expect(link, "the way back is on the waiting screen too").not.toBeNull();
+    const a = backAnchor(renderToStaticMarkup(link!));
+    expect(a!.tag).toContain(`href="/q/${out.token}"`);
+    expect(classesOf(a!.tag)).toEqual(expect.arrayContaining(["ph-no-capture", "max-md:order-last"]));
+    expect(a!.text).toContain(EN_LABEL);
+    const wrapper = parentOf(tree, QuickMatchBackLink);
+    expect(wrapper, "the link and the waiting screen share one wrapper").toBe(parentOf(tree, ScanWaiting));
+    expect(classNameOf(wrapper).split(/\s+/)).toEqual(expect.arrayContaining(["flex", "flex-col"]));
+    expect(lookup()).toHaveBeenCalledTimes(1);
+    expect(backLinkWarnings()).toHaveLength(0);
+  });
+
+  it("an ordinary org's waiting screen: no link, no lookup, the plain block it always had (the negative pair)", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const final = (await fixturesOf(stage.id)).find((f) => f.round_no === 2);
+    expect(final, "precondition: a knockout of four has a final").toBeTruthy();
+    const { secret } = await ensureDeviceLink(auth, final!.id);
+    lookup().mockClear();
+    const tree = (await ScorePadPage({ params: Promise.resolve({ token: secret }) })) as ReactElement;
+    expect(find(tree, ScanWaiting), "precondition: a final with no sides waits").not.toBeNull();
+    expect(find(tree, QuickMatchBackLink)).toBeNull();
+    expect(lookup(), "the org guard holds on the waiting screen too").not.toHaveBeenCalled();
+    expect(classNameOf(parentOf(tree, ScanWaiting))).toBe("mx-auto max-w-2xl");
   });
 
   it("a French viewer gets the French label, from the French dictionary", async () => {
