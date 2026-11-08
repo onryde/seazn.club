@@ -141,7 +141,16 @@ const eslintConfig = defineConfig([
     // REPLACES an earlier one's.
     // Match Day's `lib/match-day/*.ts` (its wire types, refusal codes and the pure estimate) are read by its client shell on
     // the same terms.
-    files: ["src/lib/round-column.ts", "src/lib/invite-status.ts", "src/lib/match-day/*.ts"],
+    // Quick match's `components/quick-match/**` (plan 2 pre-flight, T4): the setup island reads the server's preview table
+    // and offer types, and the folder's server components take their data as props, so none of them reaches a server
+    // module by value. Its tests are exempt: they drive the island with the real server producers, and never ship.
+    files: [
+      "src/lib/round-column.ts",
+      "src/lib/invite-status.ts",
+      "src/lib/match-day/*.ts",
+      "src/components/quick-match/**/*.{ts,tsx}",
+    ],
+    ignores: ["src/components/quick-match/**/__tests__/**"],
     rules: {
       "no-restricted-imports": [
         "error",
