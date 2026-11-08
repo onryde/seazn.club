@@ -156,19 +156,32 @@ function solverRestBreaches(
 }
 
 /**
- * The greedy fallback's input: `input` with every frozen card that is anchored only by `current` LOCKED to that slot.
- * The engine's fallback is the plain seed, which knows nothing of a `current`-only anchor and re-places such a card
- * (see `reflowExisting`'s doc comment); REFLOW then puts the card back on its real slot and keeps greedy's slots for
- * everything else, so the shipped board could carry the very rest breach, or a court clash, it was rejected for —
- * beside a card the organiser dragged. Locked, the seed places around the real slot instead.
+ * The greedy board placed AROUND THE REAL SLOTS: the engine asked again with `NO_VERDICT`, every frozen card that is
+ * anchored only by `current` (placed or dragged, not locked) first LOCKED to that slot. The ONE place both greedy
+ * fallbacks of the auto pass come from — the rest guard's below, and `reflowExisting`'s when the engine falls back on
+ * its own — so the two cannot drift.
+ *
+ * Why the lock: every engine fallback exit reports the PLAIN seed, which knows nothing of a `current`-only anchor and
+ * re-places such a card (see `reflowExisting`'s doc comment). REFLOW then puts the card back on its real slot and keeps
+ * greedy's slots for everything else, so the shipped board could carry a rest breach, or a court clash, beside a card
+ * the organiser dragged — under a strip that says the board is valid. Locked, the seed places around the real slot.
+ *
+ * The seed itself is the engine's, never assembled here: its construction (pins, legalisation) belongs to the engine,
+ * and a second copy of it is the placer/verifier fork this module exists to close.
  */
-function anchoredForFallback(input: BuildInput): readonly SchedulableFixture[] {
+export async function greedyAroundRealSlots(input: BuildInput): Promise<BuildResult> {
   const frozen = new Set(input.frozen ?? []);
   const at = new Map((input.current ?? []).map((a) => [a.fixtureId, a] as const));
-  return input.fixtures.map((f) => {
+  const fixtures = input.fixtures.map((f) => {
     const slot = f.locked === undefined && frozen.has(f.id) ? at.get(f.id) : undefined;
     return slot === undefined ? f : { ...f, locked: { court: slot.court, startAt: slot.startAt } };
   });
+  const out = await buildSchedule({ ...input, fixtures, solve: NO_VERDICT });
+  if (out.engine !== "greedy") {
+    // A solver that placed nothing cannot have produced a solver board: the engine changed under this code.
+    throw new Error(`greedyAroundRealSlots: the no-verdict rebuild returned engine "${out.engine}", not the greedy seed`);
+  }
+  return out;
 }
 
 /**
@@ -180,9 +193,7 @@ function anchoredForFallback(input: BuildInput): readonly SchedulableFixture[] {
  * "A card the solver placed" is read off the solver's own reply, and "a row it was handed" off its own request, never
  * re-derived from `frozen`/`locked`.
  *
- * The greedy board is rebuilt by asking the engine again with `NO_VERDICT`, never assembled here: the seed's
- * construction (pins, `current` anchoring, legalisation) belongs to the engine, and a second copy of it is the
- * placer/verifier fork this code exists to close. Only paid on the rejection path.
+ * The greedy board is {@link greedyAroundRealSlots}' — only paid on the rejection path.
  */
 export async function buildScheduleHonouringRest(input: BuildInput): Promise<BuildResult> {
   const placedBySolver = new Set<string>();
@@ -203,11 +214,7 @@ export async function buildScheduleHonouringRest(input: BuildInput): Promise<Bui
   if (!out.conflicts.some(isRest)) return out;
   const breaches = solverRestBreaches(out.assignments, input, placedBySolver, handedRows);
   if (breaches.length === 0) return out;
-  const fallback = await buildSchedule({ ...input, fixtures: anchoredForFallback(input), solve: NO_VERDICT });
-  if (fallback.engine !== "greedy") {
-    // A solver that placed nothing cannot have produced a solver board: the engine changed under this code.
-    throw new Error(`buildScheduleHonouringRest: the no-verdict rebuild returned engine "${fallback.engine}", not the greedy seed`);
-  }
+  const fallback = await greedyAroundRealSlots(input);
   input.log.error(
     { rejected: breaches.map((c) => `${c.fixtureId}:${c.reason}`) },
     "autoSchedule: the placement solver's board breaks a declared rest — falling back to the greedy seed",

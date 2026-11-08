@@ -402,7 +402,34 @@ describe.skipIf(!HAS_DB)("layer 2: the AUTO pass refuses a solver board that bre
     });
   }
 
-  it("REFLOW over a card the organiser dragged: the fallback places around it, and it stays where it was put", async () => {
+  it("REFLOW over a dragged card when the ENGINE refuses the solver's board: the greedy board is placed around it", async () => {
+    const rig = await seedPools(true);
+    // Dragged, NOT locked: 10:00 on the SECOND court — a slot the plain greedy seed would never choose for it.
+    const draggedAt = Date.parse(START_AT) + 60 * MIN;
+    await placeCard(rig.strict[0]!, draggedAt, rig.courts[1]!);
+    // CI's board puts the lax pool's round 2 on the dragged card's slot: a court clash, which the engine refuses on
+    // its own (court is blocking) before the rest guard is asked anything.
+    await solverReplies(ciBoard(rig));
+    const build = vi.spyOn(engine, "buildSchedule");
+
+    const out = await autoSchedule(rig.auth, rig.stageId, { only_unlocked: true, mode: "reflow" });
+
+    const enginesOwn = (await build.mock.results[0]!.value) as BuildResult;
+    expect(enginesOwn.engine, "premise: the engine fell back on its own").toBe("greedy");
+    expect(enginesOwn.status).toBe("verifier_rejected");
+    const seedSlot = enginesOwn.assignments.find((a) => a.fixtureId === rig.strict[0]);
+    expect(seedSlot?.startAt, "premise: the engine's plain seed put the dragged card somewhere else").not.toBe(draggedAt);
+    expect(out.solver.status, "the engine's verdict is reported as it was").toBe("verifier_rejected");
+    const dragged = out.assignments.find((a) => a.fixture_id === rig.strict[0]);
+    expect(Date.parse(dragged!.scheduled_at)).toBe(draggedAt);
+    expect(dragged!.court_id).toBe(rig.courts[1]);
+    expect(out.assignments, "every card is on the shipped board").toHaveLength(6);
+    const forbidden = new Set([REASON_CODE.rest, REASON_CODE.court]);
+    expect(out.conflicts.filter((c) => forbidden.has(c.code))).toEqual([]);
+    expect(minGapMinutes(out.assignments, rig.strict)).toBeGreaterThanOrEqual(STRICT_EXPECTED);
+  });
+
+  it("REFLOW over a card the organiser dragged when the REST GUARD refuses the solver's board: it stays where it was put", async () => {
     const rig = await seedPools(true);
     // Dragged, NOT locked: 10:00 on the SECOND court — a slot the plain greedy seed would never choose for it.
     const draggedAt = Date.parse(START_AT) + 60 * MIN;
