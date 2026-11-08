@@ -15,7 +15,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import enMarketing from "@/dictionaries/en/marketing.json";
 import enUi from "@/dictionaries/en/ui.json";
-import { QUICK_MATCH_ERRORS, QUICK_MATCH_MAX_PLAYS, QUICK_MATCH_MAX_SIDES } from "@/lib/quick-match-constants";
+import {
+  QUICK_MATCH_EMAIL_PATTERN,
+  QUICK_MATCH_ERRORS,
+  QUICK_MATCH_MAX_PLAYS,
+  QUICK_MATCH_MAX_SIDES,
+  QUICK_MATCH_NAME_MAX,
+  QUICK_MATCH_NON_BLANK_PATTERN,
+  QUICK_MATCH_SIDE_NAME_MAX,
+} from "@/lib/quick-match-constants";
+import { CreateQuickMatch } from "@/server/api-v1/schemas";
 import {
   quickMatchPreviewTable,
   type QuickMatchKnockoutCell,
@@ -122,6 +131,17 @@ const nameInput = (i: Island) => {
   if (!el) throw new Error("no name input");
   return el;
 };
+const emailInput = (i: Island) => {
+  const el = inputs(i, "email")[0];
+  if (!el) throw new Error("no email input");
+  return el;
+};
+/** The fold the email field sits in: the one `<details>` holding the email input. */
+const emailDetails = (i: Island) => {
+  const found = all(i).filter((el) => el.type === "details" && walk(el).some((c) => c.type === "input" && propsOf(c).name === "email"));
+  if (found.length !== 1) throw new Error(`expected one fold around the email field, found ${found.length}`);
+  return found[0]!;
+};
 
 function type(el: ReactElement | undefined, value: string) {
   if (!el) throw new Error("typing into a control that is not there");
@@ -199,13 +219,15 @@ describe("formatOffer: the format row (C16) and the knockout gate (C23/D15)", ()
 });
 
 describe("setupErrorKey: every refusal the create route can name has copy (T3's table)", () => {
-  // T3 report, "Map the codes": five codes have their own line; CREATE_FAILED and every other code read the generic one.
+  // T3 report, "Map the codes": five codes have their own line, and branch review A I2 adds the email's; CREATE_FAILED and
+  // every other code read the generic one.
   const OWN: Record<string, string> = {
     QUICK_MATCH_TOO_MANY_ALIVE: "quickMatch.errors.tooManyAlive",
     QUICK_MATCH_RATE_LIMITED: "quickMatch.errors.rateLimited",
     QUICK_MATCH_SPORT_NOT_OFFERED: "quickMatch.errors.sportNotOffered",
     QUICK_MATCH_KIND_NOT_OFFERED: "quickMatch.errors.kindNotOffered",
     QUICK_MATCH_FORMAT_NOT_OFFERED: "quickMatch.errors.formatNotOffered",
+    QUICK_MATCH_EMAIL_INVALID: "quickMatch.errors.emailInvalid",
   };
 
   it("maps every QUICK_MATCH_ERRORS code; the count is every code there is", () => {
@@ -254,6 +276,26 @@ describe("submitOutcome: what the followed 303 says", () => {
 
   it("only the PATH of a home is kept, so the page never navigates off this origin", () => {
     expect(submitOutcome({ url: "https://evil.example/q/qm_x", status: 200 })).toEqual({ kind: "home", path: "/q/qm_x" });
+  });
+
+  it("a home landed with the EMAIL_LIMITED line keeps that one ?e=, so the fetch path shows it too (B-m3); nothing else rides along", () => {
+    const limited = `?e=${QUICK_MATCH_ERRORS.EMAIL_LIMITED}`;
+    expect(submitOutcome({ url: `http://localhost:3000/q/qm_abc${limited}`, status: 200 })).toEqual({
+      kind: "home",
+      path: `/q/qm_abc${limited}`,
+    });
+    // Another origin still only gives its path, and its own line.
+    expect(submitOutcome({ url: `https://evil.example/q/qm_x${limited}&next=//evil.example`, status: 200 })).toEqual({
+      kind: "home",
+      path: `/q/qm_x${limited}`,
+    });
+    // Any other ?e= on a home is not the create's to print: the path alone (the positive pair of the line above).
+    for (const e of [QUICK_MATCH_ERRORS.ACTION_FAILED, "javascript:alert(1)", ""]) {
+      expect(submitOutcome({ url: `http://localhost:3000/q/qm_abc?e=${encodeURIComponent(e)}`, status: 200 }), e).toEqual({
+        kind: "home",
+        path: "/q/qm_abc",
+      });
+    }
   });
 });
 
@@ -413,6 +455,8 @@ describe("QuickMatchSetupForm: the screen as the mockup orders it", () => {
     expect(sideInputs(i).map((el) => propsOf(el)["aria-label"])).toEqual(["Side 1", "Side 2", "Side 3"]);
     expect(propsOf(sideInputs(i)[0]!).maxLength).toBe(60);
     expect(propsOf(nameInput(i)).maxLength).toBe(80);
+    // The browser's bounds are the schema's own (spec E1: 80 and 60).
+    expect([QUICK_MATCH_NAME_MAX, QUICK_MATCH_SIDE_NAME_MAX]).toEqual([80, 60]);
   });
 
   it("Knockout hides Each pair plays and shows the draw from the server's table: 4 sides, two semi-finals and a final", () => {
@@ -697,6 +741,82 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
       expect(assign).not.toHaveBeenCalled();
     }
     expect(cases).toHaveLength(4);
+  });
+
+  it("an address the schema refuses comes back as its own line, opens the email field, and keeps every name typed (A-I2)", async () => {
+    const { fetch } = stubFetch([
+      { url: `http://localhost:3000/en/play?e=${QUICK_MATCH_ERRORS.EMAIL_INVALID}`, status: 200 },
+      { url: "http://localhost:3000/q/qm_ok", status: 200 },
+    ]);
+    const i = mount({}, { hydrate: true });
+    expect(propsOf(emailDetails(i)).open, "premise: the email field starts folded").toBe(false);
+    type(nameInput(i), "Sunday doubles");
+    fillSides(i, ["Ravi & Sam", "Priya & Tom"]);
+    type(emailInput(i), "ravi@gmail");
+    await submit(i);
+    await flush();
+    expect(textOf(byTestId(i, "qm-setup-error")!)).toContain("Check the email address, or leave it blank.");
+    expect(propsOf(emailDetails(i)).open, "the field at fault is open").toBe(true);
+    expect(propsOf(nameInput(i)).value).toBe("Sunday doubles");
+    expect(sideInputs(i).map((el) => propsOf(el).value)).toEqual(["Ravi & Sam", "Priya & Tom"]);
+    expect(propsOf(emailInput(i)).value, "the address too, to correct").toBe("ravi@gmail");
+    type(emailInput(i), "ravi@gmail.com");
+    await submit(i);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("the no-JS path: ?e=EMAIL_INVALID renders the email field open with its line; any other refusal leaves it folded", () => {
+    const limited = mount({ initialError: QUICK_MATCH_ERRORS.EMAIL_INVALID });
+    expect(textOf(byTestId(limited, "qm-setup-error")!)).toContain("Check the email address, or leave it blank.");
+    expect(propsOf(emailDetails(limited)).open).toBe(true);
+    expect(propsOf(emailDetails(mount({ initialError: QUICK_MATCH_ERRORS.TOO_MANY_ALIVE }))).open).toBe(false);
+    expect(propsOf(emailDetails(mount())).open).toBe(false);
+  });
+
+  it("the inputs carry the schema's checks as patterns: a non-blank name and sides (A-M2), and the schema's email (A-I2)", () => {
+    const i = mount();
+    expect(propsOf(nameInput(i)).pattern).toBe(QUICK_MATCH_NON_BLANK_PATTERN);
+    expect(sideInputs(i).map((el) => propsOf(el).pattern)).toEqual([QUICK_MATCH_NON_BLANK_PATTERN, QUICK_MATCH_NON_BLANK_PATTERN]);
+    expect(propsOf(emailInput(i)).pattern).toBe(QUICK_MATCH_EMAIL_PATTERN);
+    expect(propsOf(emailInput(i)).type).toBe("email");
+  });
+
+  it("each pattern, as the browser runs it (anchored, `v` flag), agrees with CreateQuickMatch on a counted table", () => {
+    // The browser compiles a pattern as ^(?:p)$ with the `v` flag (HTML §4.10.5.3.6); a pattern that does not compile is
+    // ignored, which would silently drop the check.
+    const asBrowser = (p: string) => new RegExp(`^(?:${p})$`, "v");
+    const email = asBrowser(QUICK_MATCH_EMAIL_PATTERN);
+    const schemaTakesEmail = (v: string) => CreateQuickMatch.shape.email.safeParse(v).success;
+    const addresses = [
+      // refused by the schema: the review's realistic typos first
+      "ravi@gmail", "ravi.@gmail.com", "ravi@gmail.c", "ravi..s@gmail.com", ".ravi@gmail.com", "ravi@-gmail.com",
+      "ravi@gmail.com.", "ravi@gm_ail.com", "ravi gmail.com", "ravi@@gmail.com", "@gmail.com", "ravi@",
+      // taken by the schema
+      "ravi@gmail.com", "ravi+x@sub.gmail.co.uk", "o'neil@x.ie", "RAVI@GMAIL.COM", "a@b.cd", "first.last@example.org", "a-b@c-d.io",
+    ];
+    let refused = 0;
+    let taken = 0;
+    for (const a of addresses) {
+      const schema = schemaTakesEmail(a);
+      expect(email.test(a), `${a}: pattern agrees with the schema (${schema})`).toBe(schema);
+      if (schema) taken++;
+      else refused++;
+    }
+    expect([refused, taken], "anti-vacuity: both verdicts are exercised").toEqual([12, 7]);
+
+    // The non-blank pattern against the schema's trimmed min(1), on a side name and on the match name.
+    const nonBlank = asBrowser(QUICK_MATCH_NON_BLANK_PATTERN);
+    const names = ["", " ", "   ", "\t", "A", " A", "A ", " Ravi & Sam "];
+    const sideTakes = (v: string) => CreateQuickMatch.shape.sides.element.safeParse(v).success;
+    const nameTakes = (v: string) => CreateQuickMatch.shape.name.safeParse(v).success;
+    let checked = 0;
+    for (const n of names) {
+      expect(nonBlank.test(n), JSON.stringify(n)).toBe(sideTakes(n));
+      expect(nonBlank.test(n), JSON.stringify(n)).toBe(nameTakes(n));
+      checked++;
+    }
+    expect(checked).toBe(names.length);
+    expect(names.filter(sideTakes), "both verdicts").toHaveLength(4);
   });
 
   it("the server's ?e= (the no-JS path) shows on the first render; an unknown code reads the generic line", () => {

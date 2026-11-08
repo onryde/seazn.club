@@ -317,6 +317,30 @@ describe("the empty case: a quick match with no match left", () => {
     expect(words(oneByTestId(tree, "qm-played"))).toBe(enPlayed(0, 0));
   });
 
+  it("a SAVED match (no expiry) says how many are played and never 'kept N days'; the unsaved one still does (A-I3)", async () => {
+    // The spec's copy: a saved quick match is kept until its owner deletes it (plan 3 Task 2), so no countdown is true of it.
+    const saved = (played: number, total: number): QuickMatchHome => ({
+      ...empty,
+      row: { ...empty.row, expiresAt: null, savedByUserId: "u-1" },
+      played,
+      total,
+    });
+    const cases: [number, number, string][] = [
+      [1, 3, "1 of 3 matches played"],
+      [1, 1, "1 of 1 match played"],
+      [0, 0, "0 of 0 matches played"],
+    ];
+    for (const [played, total, line] of cases) {
+      const { tree } = await renderView(saved(played, total));
+      expect(words(oneByTestId(tree, "qm-played")), `${played}/${total}`).toBe(line);
+    }
+    expect(cases).toHaveLength(3);
+    // The positive pair: the same counts, unsaved, carry the spec's 7 days.
+    const { tree } = await renderView({ ...empty, played: 1, total: 3 });
+    expect(words(oneByTestId(tree, "qm-played"))).toBe(enPlayed(1, 3));
+    expect(enPlayed(1, 3)).toContain(`${SPEC_EXPIRY_DAYS} days`);
+  });
+
   it("a settled match's score reads winner first from the engine's per-side lines; the headline only when they name no pair (h2)", async () => {
     const side = (n: number) => ({ entrantId: `e-${n}`, name: `Side ${n}` });
     // A goal sport (no set table): the away side won 0-1, so winner first is "1–0" and the stored order is wrong.

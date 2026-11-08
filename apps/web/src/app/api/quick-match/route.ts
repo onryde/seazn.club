@@ -4,6 +4,8 @@
 // The form posts `application/x-www-form-urlencoded` and every answer is a 303 (controller dispatch 2026-11-08, D3):
 //   - a create lands on its home, `routes.quickMatch(token)` (A6): the home token rides the PATH, never a query string;
 //     the visitor cookie is set on that answer when this request had no usable key;
+//   - a create whose link mail a mail limit refused lands on its home all the same, with `?e=QUICK_MATCH_EMAIL_LIMITED` (branch
+//     review B m3, controller ruling 2026-11-08): the mail is what a limit costs, never the match;
 //   - a refusal lands back on the setup page, `/<locale>/play?e=<code>`, with a code from QUICK_MATCH_ERRORS, never on JSON.
 //     The locale is the form's own (the page that posted), else the visitor's explicit pick, else English.
 //
@@ -11,13 +13,15 @@
 //   1. the per-IP limit (QUICK_MATCH_CREATE_LIMIT, D2), before any database work (B3); only the form body is read first,
 //      for the locale a refusal returns to;
 //   2. the form, through plan 1's `CreateQuickMatch` schema (strict: a stray field is refused, not dropped);
-//   3. with an email only, a second, separate per-IP bucket for mail to an address a stranger typed (EMAIL_LIMIT, fail-closed
-//      as every mail-sending endpoint is; quick match plan 3 Amend T1 [B4]), then a per-RECIPIENT one keyed on the address's
-//      hash (QUICK_MATCH_RECIPIENT_LIMIT, 3 a day: one inbox, however the IP is spoofed), still before any database work;
-//   4. the visitor, from the REQUEST's cookie (B3a), minted when absent or malformed (`isVisitorKeyShaped`, B3b);
-//   5. plan 1's `createQuickMatch`: the seal, the per-visitor alive cap, the offer, the tree, or nothing. With an email it
-//      queues the link mail in its last transaction (plan 3 Task 1), and this route makes the mail's first attempt after
-//      the commit (`dispatchNow`, which never throws), as api/funnel/start does.
+//   3. the visitor, from the REQUEST's cookie (B3a), minted when absent or malformed (`isVisitorKeyShaped`, B3b);
+//   4. plan 1's `createQuickMatch`: the seal, the per-visitor alive cap, the offer, then, with an email only and only once
+//      all of those have passed (branch review B m3), the mail limits through its `mailAllowed` hook: a separate per-IP
+//      bucket for mail to an address a stranger typed (EMAIL_LIMIT, fail-closed as every mail-sending endpoint is; plan 3
+//      Amend T1 [B4]), then a per-RECIPIENT one keyed on the address's hash (QUICK_MATCH_RECIPIENT_LIMIT, 3 a day: one inbox,
+//      however the IP is spoofed). Either refusing, or the limiter being down, makes the match WITHOUT the email. Then the
+//      tree, or nothing. With an email it queues the link mail in its last transaction (plan 3 Task 1), and this route makes
+//      the mail's first attempt after the create returned, so after its post-commit work (`dispatchNow`, which never throws;
+//      branch review B m7), as api/funnel/start does.
 //
 // Cross-site posts are refused before this runs, as for every public mutating /api route: proxy.ts answers 403 to a POST whose
 // Origin names another host. The visitor cookie is SameSite=Lax, so a cross-site post never carries it either.
@@ -46,8 +50,18 @@ import { readOrMintVisitor, visitorCookieOptions } from "@/server/usecases/quick
 const CODES: ReadonlySet<string> = new Set(Object.values(QUICK_MATCH_ERRORS));
 
 /** The form itself is refused: the body is not a form (another content type, a broken body), or the schema refuses it. The
- *  guest's refusal, not a server fault. A ZodError thrown from deeper in the create is NOT this: it is a fault. */
-class FormRefused extends Error {}
+ *  guest's refusal, not a server fault. A ZodError thrown from deeper in the create is NOT this: it is a fault. `code` is
+ *  EMAIL_INVALID when the address is the form's ONLY fault (branch review A I2), so the setup page can say which field;
+ *  otherwise none, read as CREATE_FAILED. */
+class FormRefused extends Error {
+  constructor(
+    message: string,
+    options?: ErrorOptions,
+    readonly code?: string,
+  ) {
+    super(message, options);
+  }
+}
 
 /**
  * The form's fields as the schema's input. `sides` is a list (one field per side, in entry order); every other field is one
@@ -79,6 +93,7 @@ const isQuickMatchCode = (err: unknown): err is HttpError =>
 const isLimiter = (err: unknown): err is HttpError => err instanceof HttpError && err.status === 429 && err.code === undefined;
 
 function refusalCode(err: unknown): string {
+  if (err instanceof FormRefused && err.code !== undefined) return err.code;
   if (isQuickMatchCode(err)) return err.code!;
   if (isLimiter(err)) return QUICK_MATCH_ERRORS.RATE_LIMITED;
   return QUICK_MATCH_ERRORS.CREATE_FAILED;
@@ -90,6 +105,20 @@ const isServerFault = (err: unknown) => !(err instanceof FormRefused || isQuickM
 
 /** The per-recipient bucket's key: the sha256 of the lower-cased address, so the limiter's store never holds an address. */
 const recipientKey = (email: string): string => createHash("sha256").update(email.toLowerCase()).digest("hex");
+
+/** The two mail buckets, per IP then per recipient (the recipient's is not spent when the IP's refuses). A refusal from
+ *  either, or the limiter's fail-closed outage (the same code-less 429), answers no: the create then makes the match without
+ *  the email (branch review B m3). Anything else the limiter throws is the create's failure. */
+async function mailAllowed(ip: string, email: string): Promise<boolean> {
+  try {
+    await rateLimit(`quick-match-email:${ip}`, EMAIL_LIMIT);
+    await rateLimit(`quick-match-recipient:${recipientKey(email)}`, QUICK_MATCH_RECIPIENT_LIMIT);
+    return true;
+  } catch (err) {
+    if (isLimiter(err)) return false;
+    throw err;
+  }
+}
 
 /** The visitor's explicit pick, else English. A forged cookie that does not decode (`seazn_locale=%E0`) makes
  *  `explicitLocale`'s decodeURIComponent throw: English then, never a 500. */
@@ -112,16 +141,25 @@ export async function POST(req: NextRequest) {
       await rateLimit(`quick-match-create:${ip}`, QUICK_MATCH_CREATE_LIMIT);
       if (!form) throw new FormRefused("the quick match create takes a form");
       const parsed = CreateQuickMatch.safeParse(formInput(form));
-      if (!parsed.success) throw new FormRefused("the setup form failed the schema", { cause: parsed.error });
-      const input = parsed.data;
-      if (input.email !== null) {
-        await rateLimit(`quick-match-email:${ip}`, EMAIL_LIMIT);
-        await rateLimit(`quick-match-recipient:${recipientKey(input.email)}`, QUICK_MATCH_RECIPIENT_LIMIT);
+      if (!parsed.success) {
+        // Not vacuous: a failed parse always has an issue, and an empty list must not name the email.
+        const { issues } = parsed.error;
+        const emailOnly = issues.length > 0 && issues.every((issue) => issue.path[0] === "email");
+        throw new FormRefused(
+          "the setup form failed the schema",
+          { cause: parsed.error },
+          emailOnly ? QUICK_MATCH_ERRORS.EMAIL_INVALID : undefined,
+        );
       }
       const visitor = readOrMintVisitor(req.cookies);
-      const created = await createQuickMatch(input, { visitorHash: visitor.hash, baseUrl: baseUrl(req) });
+      const created = await createQuickMatch(parsed.data, {
+        visitorHash: visitor.hash,
+        baseUrl: baseUrl(req),
+        mailAllowed: (email) => mailAllowed(ip, email),
+      });
       if (created.outboxRowId !== null) await dispatchNow([created.outboxRowId]);
-      const res = redirectLocal(routes.quickMatch(created.token), 303);
+      const home = routes.quickMatch(created.token);
+      const res = redirectLocal(created.emailLimited ? `${home}?e=${QUICK_MATCH_ERRORS.EMAIL_LIMITED}` : home, 303);
       if (visitor.minted) res.cookies.set(QUICK_MATCH_VISITOR_COOKIE, visitor.key, visitorCookieOptions());
       return res;
     } catch (err) {

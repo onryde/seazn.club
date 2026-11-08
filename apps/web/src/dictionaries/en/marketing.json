@@ -505,6 +505,7 @@
   "quickMatch.errors.formatNotOffered": "That format isn't available for this match.",
   "quickMatch.errors.sportNotOffered": "Those match rules aren't available for quick matches.",
   "quickMatch.errors.kindNotOffered": "That choice of singles, doubles or team doesn't fit this sport. Choose again.",
+  "quickMatch.errors.emailInvalid": "Check the email address, or leave it blank.",
   "quickMatch.errors.unavailable": "Quick matches aren't available right now. Try again later.",
   "quickMatch.errors.generic": "We couldn't start your quick match. Try again."
 }

@@ -296,13 +296,32 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: every refusal is a 303 back to 
     ["a repeated name", { name: ["One", "Two"] }],
     ["plays out of range", { plays: "5" }],
     ["plays not a number", { plays: "twice" }],
-    ["a bad email", { email: "not-an-email" }],
+    // An email fault BESIDE another one is still the form's: only an email-only failure names the address (A-I2).
+    ["a bad email and one side", { email: "ravi@gmail", sides: ["Solo"] }],
   ])("a form the schema refuses (%s): QUICK_MATCH_CREATE_FAILED, in the form's own language", async (_why, over) => {
     const f = form({ ...over, locale: "fr" });
     vi.mocked(Sentry.captureException).mockClear();
     refusedTo(await post(f), "fr", "QUICK_MATCH_CREATE_FAILED");
     expect(reported(), "the form's own refusal is not a fault").toEqual([]);
     if (typeof f.name === "string") expect(await rowsNamed(f.name)).toHaveLength(0);
+  });
+
+  it("an address the schema refuses, and nothing else: QUICK_MATCH_EMAIL_INVALID, in the form's language, no row (A-I2; counted)", async () => {
+    // The review's realistic typos: a missing top-level domain, a dot before the @, a one-letter top-level domain; and one
+    // with no @ at all, and one past the 254 bound.
+    const bad = ["ravi@gmail", "ravi.@gmail.com", "ravi@gmail.c", "not-an-email", `${"a".repeat(250)}@x.io`];
+    let checked = 0;
+    for (const email of bad) {
+      const f = form({ email, locale: "es" });
+      vi.mocked(Sentry.captureException).mockClear();
+      refusedTo(await post(f), "es", QUICK_MATCH_ERRORS.EMAIL_INVALID);
+      expect(reported(), `${email}: a typo is not a fault`).toEqual([]);
+      expect(await rowsNamed(f.name as string), email).toHaveLength(0);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(bad.length);
+    // The positive pair: the corrected address lands.
+    landedToken(await post(form({ email: "guest@example.com" })));
   });
 
   it("a body that is not a form (JSON): refused to the visitor's own locale cookie, else English", async () => {

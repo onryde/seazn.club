@@ -90,6 +90,7 @@ const FLASH = {
   notReady: en["quickMatch.flash.notReady"],
   notFound: en["quickMatch.flash.notFound"],
   generic: en["quickMatch.flash.generic"],
+  emailLimited: en["quickMatch.flash.emailLimited"],
 };
 
 const league = (over: Partial<CreateQuickMatch> = {}): CreateQuickMatch => ({
@@ -422,6 +423,7 @@ describe.skipIf(!HAS_DB)("a refused tap lands back on the home with ?e=, which p
       [{ e: QUICK_MATCH_ERRORS.EXPIRED }, FLASH.generic],   // no flash of its own: an expiry lands on the dead screen (m1)
       [{ e: ` ${QUICK_MATCH_ERRORS.SIDES_UNKNOWN} ` }, FLASH.notReady],
       [{ e: [QUICK_MATCH_ERRORS.NOT_FOUND, QUICK_MATCH_ERRORS.LINK_LIMITED] }, FLASH.notFound],   // a repeated ?e= reads its first
+      [{ e: QUICK_MATCH_ERRORS.EMAIL_LIMITED }, FLASH.emailLimited],   // the create's own landing (B-m3)
     ];
     let checked = 0;
     for (const [search, flash] of cases) {
@@ -445,6 +447,11 @@ describe.skipIf(!HAS_DB)("a refused tap lands back on the home with ?e=, which p
       searchParams: Promise.resolve({ e: QUICK_MATCH_ERRORS.NOT_FOUND }),
     });
     expect(walk(tree as ReactElement).filter((el) => el.type === ClearFlashParam)).toHaveLength(1);
+    // The one code that is no refusal (B-m3): the match was made, so its line is a status, not an alert, in the same place.
+    const info = await homeAt(`/q/${out.token}?e=${QUICK_MATCH_ERRORS.EMAIL_LIMITED}`);
+    expect(info).toMatch(/<p role="status" data-testid="qm-flash" data-tone="info"/);
+    expect(info).not.toMatch(/role="alert"[^>]*data-testid="qm-flash"/);
+    expect(html, "the positive pair: a refusal is still an alert").toMatch(/<p role="alert" data-testid="qm-flash" data-tone="refusal"/);
   });
 
   it("an expiry that lands between the home's read and the mint: the bare home, no ?e= (the dead link), never reported", async () => {

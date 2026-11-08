@@ -24,6 +24,15 @@ export const QUICK_MATCH_KNOCKOUT_MIN_SIDES = QUICK_MATCH_MIN_SIDES + 1;
  *  never clips it (E1), and the setup inputs carry the same bound so the browser stops it first. */
 export const QUICK_MATCH_NAME_MAX = 80;
 export const QUICK_MATCH_SIDE_NAME_MAX = 60;
+/** The setup inputs' `pattern` for the match name and each side name: at least one non-space character. The schema TRIMS,
+ *  so a leading or trailing space is fine and only an all-space name is refused; this lets the browser say so first
+ *  (branch review A M2), where `required` alone passes "   ". */
+export const QUICK_MATCH_NON_BLANK_PATTERN = ".*\\S.*";
+/** The email input's `pattern`: zod 4's own `.email()` regex (what `CreateQuickMatch` checks), respelled to compile under the
+ *  `v` flag HTML patterns use (zod's bare `-` in a class is a syntax error there), and anchored by the browser. The
+ *  browser's own `type="email"` check passes `ravi@gmail`; this stops it, and the other addresses the schema refuses, before
+ *  the post (branch review A I2). The setup form's test proves it agrees with the schema on a counted table. */
+export const QUICK_MATCH_EMAIL_PATTERN = "(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+\\-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}";
 /** League plays per pair (legs), at most. */
 export const QUICK_MATCH_MAX_PLAYS = 4;
 /** Alive (unexpired, unsaved) quick matches one visitor key may hold. */
@@ -74,4 +83,12 @@ export const QUICK_MATCH_ERRORS = {
    *  link from (`createQuickMatch`, plan 3 Amend T1 [B2]). The create route always passes one, and reports a 5xx as a fault
    *  whatever its code. */
   BASE_URL_MISSING: "QUICK_MATCH_BASE_URL_MISSING",
+  /** NOT a refusal (branch review B m3, controller ruling 2026-11-08): the create MADE the match but sent no link mail, because
+   *  the per-IP mail bucket or the per-inbox one refused, or the limiter is down (both fail closed). The address is not stored.
+   *  The route lands on the new home with `?e=` this code, and the home prints `quickMatch.flash.emailLimited` as information,
+   *  never as an error: the link is right there to share or bookmark. */
+  EMAIL_LIMITED: "QUICK_MATCH_EMAIL_LIMITED",
+  /** The form's only fault is its email address, which `CreateQuickMatch`'s zod `.email()` refused (branch review A I2). The
+   *  setup screen shows `quickMatch.errors.emailInvalid`, keeping what was typed. */
+  EMAIL_INVALID: "QUICK_MATCH_EMAIL_INVALID",
 } as const;

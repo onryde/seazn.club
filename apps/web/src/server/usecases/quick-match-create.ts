@@ -72,6 +72,13 @@ export interface CreatedQuickMatch {
   outboxRowId: string | null;
 }
 
+/** What `createQuickMatch` answers: the match, and whether its link mail was dropped because `mailAllowed` said no. */
+export interface CreatedGuestQuickMatch extends CreatedQuickMatch {
+  /** True when the guest typed an email and `ctx.mailAllowed` refused it (branch review B m3): the match was made with NO
+   *  address stored and no mail queued. False without an email, and when the mail was queued. */
+  emailLimited: boolean;
+}
+
 /** Every refusal's code. Defined in the import-free lib/quick-match-constants.ts, so device links can throw one without
  *  this file's graph; re-exported here, the path its earlier callers use. */
 export { QUICK_MATCH_ERRORS };
@@ -255,13 +262,26 @@ export async function createQuickMatchTree(
  *      422 FORMAT_NOT_OFFERED. C23 as amended (owner ruling 2026-11-07): a knockout is offered only where a bracket match
  *      cannot end level, decided by the engine's `bracketMayEndLevel` on the variant's cfg ⊕ the knockout stage's
  *      defaults (`offer.knockoutAllowed`, quick-match-sports.ts); the probe checks the same question on real fixtures;
- *   3. the tree (`createQuickMatchTree`), which builds the whole match or nothing, and with an email queues its link mail;
- *   4. one `quick_match_created` event, carrying no name, email or token (D11).
+ *   3. with an email only, `ctx.mailAllowed(email)` (the route's mail limits): asked only once every refusal above has
+ *      passed, so a refused create spends no mail bucket. A no costs the MAIL, never the match (branch review B m3,
+ *      controller ruling 2026-11-08): the tree is built with no email, so no address is stored and no mail queued, and the
+ *      answer says `emailLimited`. Anything it throws is the create's failure. Absent, every mail is allowed;
+ *   4. the tree (`createQuickMatchTree`), which builds the whole match or nothing, and with an email queues its link mail;
+ *   5. one `quick_match_created` event, carrying no name, email or token (D11).
+ *
+ * Known gap (recorded): the tree's locked recount (the race guard, B5f) can still refuse TOO_MANY_ALIVE after step 3 spent
+ * the mail buckets, when two creates for one visitor race past the early count. Rare, and bounded by the alive cap.
  */
 export async function createQuickMatch(
   input: CreateQuickMatch,
-  ctx: { visitorHash: string; baseUrl?: string; now?: Date; _failBeforeGenerateForTests?: () => void },
-): Promise<CreatedQuickMatch> {
+  ctx: {
+    visitorHash: string;
+    baseUrl?: string;
+    now?: Date;
+    mailAllowed?: (email: string) => Promise<boolean>;
+    _failBeforeGenerateForTests?: () => void;
+  },
+): Promise<CreatedGuestQuickMatch> {
   if (!VISITOR_HASH_SHAPE.test(ctx.visitorHash)) {
     throw new HttpError(400, "visitorHash must be a visitor key's sha256 hex", QUICK_MATCH_ERRORS.VISITOR_INVALID);
   }
@@ -291,7 +311,8 @@ export async function createQuickMatch(
     );
   }
 
-  const out = await createQuickMatchTree(rest, kind, {
+  const emailLimited = rest.email !== null && ctx.mailAllowed !== undefined && !(await ctx.mailAllowed(rest.email));
+  const out = await createQuickMatchTree(emailLimited ? { ...rest, email: null } : rest, kind, {
     visitorHash: ctx.visitorHash,
     home,
     baseUrl: ctx.baseUrl,
@@ -313,5 +334,5 @@ export async function createQuickMatch(
       plays: input.plays,
     },
   });
-  return out;
+  return { ...out, emailLimited };
 }

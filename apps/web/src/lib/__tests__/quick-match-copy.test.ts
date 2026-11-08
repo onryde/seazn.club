@@ -65,6 +65,8 @@ const MARKETING_KEYS = [
   "quickMatch.errors.formatNotOffered",
   "quickMatch.errors.sportNotOffered",
   "quickMatch.errors.kindNotOffered",
+  // Branch review A I2: the address is the form's only fault.
+  "quickMatch.errors.emailInvalid",
   "quickMatch.errors.unavailable",
   "quickMatch.errors.generic",
 ] as const;
@@ -100,7 +102,6 @@ const UI_KEYS = [
   "quickMatch.home.result",
   "quickMatch.home.drawn",
   "quickMatch.home.versus",
-  "quickMatch.home.winnerOf",
   "quickMatch.home.winnerOfSemi",
   "quickMatch.home.winnerOfMatch",
   "quickMatch.home.quarterFinal",
@@ -114,6 +115,12 @@ const UI_KEYS = [
   "quickMatch.flash.sameSide",
   "quickMatch.flash.notFound",
   "quickMatch.flash.generic",
+  // Branch review B m3: a create the mail limit spared lands on its home with this line, as information.
+  "quickMatch.flash.emailLimited",
+  // Branch review A I3 (a saved match's played line, no countdown) and M6 (a settled row's secondary action).
+  "quickMatch.home.playedSaved.one",
+  "quickMatch.home.playedSaved.other",
+  "quickMatch.home.editResult",
   "quickMatch.dead.title",
   "quickMatch.dead.hint",
   "quickMatch.dead.startNew",
@@ -206,6 +213,7 @@ describe("quick match guest copy: plurals", () => {
     ["marketing", "quickMatch.setup.startCount"],
     ["marketing", "quickMatch.setup.sidesCount"],
     ["ui", "quickMatch.home.played"],
+    ["ui", "quickMatch.home.playedSaved"],
   ] as const;
 
   it("each plural family has .one and .other in every locale, and the noun changes where the copy has one", () => {
@@ -291,6 +299,15 @@ describe("quick match guest copy: plurals", () => {
     expect(plural(ui, "quickMatch.home.played", 1, "en", { played: 0, days: 7 })).toBe(
       "0 of 1 match played · kept 7 days after the last score",
     );
+    // A saved match (branch review A I3): the same count, no countdown.
+    expect(plural(ui, "quickMatch.home.playedSaved", 6, "en", { played: 2 })).toBe("2 of 6 matches played");
+    expect(plural(ui, "quickMatch.home.playedSaved", 1, "en", { played: 0 })).toBe("0 of 1 match played");
+    // The brief's words (controller ruling 2026-11-08), and the two new lines.
+    expect(ui["quickMatch.flash.emailLimited"]).toBe(
+      "We didn't email you the link — too many emails to that address today. Share or bookmark this page now.",
+    );
+    expect(m["quickMatch.errors.emailInvalid"]).toBe("Check the email address, or leave it blank.");
+    expect(ui["quickMatch.home.editResult"]).toBe("Edit result");
     // Task 1 review I2 and m1 (controller, 2026-11-08): the league line names no tie-break the standings do not use
     // (draws score points, so "most wins" was false), and the two offer refusals name nothing the guest did not choose.
     expect(m["quickMatch.setup.leagueHelp"]).toBe("Everyone plays everyone. Top of the table wins.");

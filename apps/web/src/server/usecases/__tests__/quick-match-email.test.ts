@@ -63,7 +63,9 @@ vi.mock("@/server/usecases/quick-match-tokens", async (orig) => {
   };
 });
 // The real post-commit work of the create, through a switch: the compensation case fails it once, AFTER the last transaction committed.
+// Every finished run is stamped in `order`, so a case can read whether the link mail's first attempt came after it (B-m7).
 const failAfterCommit = vi.hoisted(() => ({ armed: false }));
+const order = vi.hoisted(() => ({ seq: 0, hooksDone: [] as number[], dispatched: [] as { at: number; ids: readonly string[] }[] }));
 vi.mock("@/server/usecases/stages", async (orig) => {
   const real = await orig<typeof import("@/server/usecases/stages")>();
   return {
@@ -73,17 +75,45 @@ vi.mock("@/server/usecases/stages", async (orig) => {
         failAfterCommit.armed = false;
         throw new Error("armed: the work after the create's last commit failed");
       }
-      return real.afterGenerateCommit(...args);
+      const out = await real.afterGenerateCommit(...args);
+      order.hooksDone.push(++order.seq);
+      return out;
     },
   };
 });
+// The real first attempt, through a call-through spy that stamps when it was asked (B-m7: only after the create's hooks).
+vi.mock("@/server/email-outbox", async (orig) => {
+  const real = await orig<typeof import("@/server/email-outbox")>();
+  return {
+    ...real,
+    dispatchNow: async (...args: Parameters<typeof real.dispatchNow>) => {
+      order.dispatched.push({ at: ++order.seq, ids: [...args[0]] });
+      return real.dispatchNow(...args);
+    },
+  };
+});
+// A Redis outage, through a switch: the limiter fails a fail-closed bucket only when Redis is CONFIGURED and gives no count
+// (lib/rate-limit.ts). Locally no REDIS_URL is set, so the switch stands in for "configured"; the count's null is the counter's.
+const redis = vi.hoisted(() => ({ configured: false }));
+vi.mock("@/lib/cache", async (orig) => {
+  const real = await orig<typeof import("@/lib/cache")>();
+  return { ...real, cacheEnabled: () => redis.configured || real.cacheEnabled() };
+});
+// The home a create lands on reads the viewer's locale (D10); here, English.
+vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => "en") }));
 
 import * as Sentry from "@sentry/nextjs";
+import type { ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import enUi from "@/dictionaries/en/ui.json";
+import QuickMatchHomePage from "@/app/q/[token]/page";
 import { sql } from "@/lib/db";
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
 import { quickMatchLinkEmail, quickMatchReminderEmail } from "@/lib/email";
 import {
+  QUICK_MATCH_ERRORS,
   QUICK_MATCH_EXPIRY_DAYS,
+  QUICK_MATCH_MAX_ALIVE_PER_VISITOR,
   QUICK_MATCH_REMINDER_HOURS_BEFORE,
   QUICK_MATCH_SYSTEM_ORG_ID,
 } from "@/lib/quick-match-constants";
@@ -125,10 +155,12 @@ const form = (over: Fields = {}): Fields => ({
   sides, plays: "1", email: "", locale: "en", ...over,
 });
 
-async function post(fields: Fields, from: string = ip()) {
+async function post(fields: Fields, from: string = ip(), visitorKey?: string) {
   const body = new URLSearchParams();
   for (const [k, v] of Object.entries(fields)) for (const x of [v].flat()) body.append(k, x);
-  return POST(new NextRequest("http://localhost/api/quick-match", { method: "POST", body, headers: { "x-forwarded-for": from } }));
+  const headers: Record<string, string> = { "x-forwarded-for": from };
+  if (visitorKey !== undefined) headers.cookie = `seazn_qm_visitor=${visitorKey}`;
+  return POST(new NextRequest("http://localhost/api/quick-match", { method: "POST", body, headers }));
 }
 
 /** The token a create landed on: `/q/<token>`, the token alone in the path. */
@@ -140,7 +172,43 @@ function landedToken(res: Response): string {
 }
 
 const rowNamed = async (name: string) =>
-  (await sql<{ id: string; competition_id: string }[]>`select id, competition_id from quick_matches where name = ${name}`)[0];
+  (await sql<{ id: string; competition_id: string; email: string | null }[]>`
+    select id, competition_id, email from quick_matches where name = ${name}`)[0];
+
+/** Review B m3 (controller ruling 2026-11-08): a mail limit never costs the match. The create lands on its OWN home, the token
+ *  alone in the path, with `?e=QUICK_MATCH_EMAIL_LIMITED` and nothing else in the query, and returns the token. */
+function landedWithoutMail(res: Response): string {
+  expect(res.status).toBe(303);
+  const url = new URL(res.headers.get("location")!, "http://localhost");
+  expect(url.pathname, "the create landed on its home").toMatch(/^\/q\/qm_[A-Za-z0-9_-]{43}$/);
+  expect([...url.searchParams.entries()]).toEqual([["e", QUICK_MATCH_ERRORS.EMAIL_LIMITED]]);
+  return url.pathname.slice("/q/".length);
+}
+
+/** The match a mail limit spared: made, holding no address, with no mail queued for it. What reached the inbox is each
+ *  case's own count (an inbox at its limit was mailed before). */
+async function madeWithoutMail(name: string): Promise<void> {
+  const row = await rowNamed(name);
+  expect(row, "the match was made").toBeDefined();
+  expect(row!.email, "no address stored").toBeNull();
+  expect(await mailsAbout(row!.id), "no mail queued").toEqual([]);
+}
+
+/** The flash the landed home prints: its words and its role. */
+async function flashOnHome(location: string): Promise<{ text: string; role: string } | null> {
+  const url = new URL(location, "http://localhost");
+  const tree = await QuickMatchHomePage({
+    params: Promise.resolve({ token: url.pathname.slice("/q/".length) }),
+    searchParams: Promise.resolve(Object.fromEntries(url.searchParams)),
+  });
+  const html = renderToStaticMarkup(tree as ReactElement);
+  const tag = /<p([^>]*data-testid="qm-flash"[^>]*)>([\s\S]*?)<\/p>/.exec(html);
+  if (!tag) return null;
+  return {
+    text: tag[2]!.replace(/&#x27;/g, "'").replace(/&amp;/g, "&"),
+    role: /\brole="([^"]+)"/.exec(tag[1]!)?.[1] ?? "",
+  };
+}
 
 type OutboxRow = {
   id: string;
@@ -225,6 +293,10 @@ beforeEach(() => {
   for (const s of consoleSpies) s.mockClear();
   minted.tokens.length = 0;
   failAfterCommit.armed = false;
+  redis.configured = false;
+  order.seq = 0;
+  order.hooksDone.length = 0;
+  order.dispatched.length = 0;
 });
 
 afterEach(() => {
@@ -338,6 +410,21 @@ describe.skipIf(!HAS_DB)("the link mail at creation (POST /api/quick-match, the 
     expect(await rowNamed(f.name as string), "the compensation deleted the match").toBeUndefined();
     expect(await mailsTo(email), "and its mail, by its reference").toEqual([]);
     expect(sentTo(email), "nothing was sent for a match that does not exist").toEqual([]);
+    // Review B m7: the first attempt is never even asked for a compensated create, so no lease can race the delete.
+    expect(order.hooksDone, "premise: the hook never finished").toEqual([]);
+    expect(order.dispatched, "dispatchNow was never asked").toEqual([]);
+  });
+
+  it("the link mail's first attempt is asked once, for its own row, only after the create's post-commit work finished (B-m7)", async () => {
+    const email = address("after-hooks");
+    const f = form({ email });
+    landedToken(await post(f));
+    const row = await rowNamed(f.name as string);
+    const [m] = await mailsAbout(row!.id);
+    expect(order.hooksDone, "premise: the create's post-commit work ran once").toHaveLength(1);
+    expect(order.dispatched.map((d) => d.ids)).toEqual([[m!.id]]);
+    expect(order.dispatched[0]!.at, "dispatched after the hooks finished, never before").toBeGreaterThan(order.hooksDone[0]!);
+    expect(sentTo(email)).toHaveLength(1);
   });
 });
 
@@ -356,7 +443,7 @@ describe.skipIf(!HAS_DB)("the email send limit (plan 3 Amend T1 [B4]): EMAIL_LIM
     return seen;
   }
 
-  it("five emailed creates land; the sixth is refused before any row is written; an emailless create in the window still lands", async () => {
+  it("five emailed creates land mailed; the sixth lands on its home WITHOUT the email (B-m3); an emailless create in the window lands as usual", async () => {
     const theirs = ip();
     const seen = counter(theirs);
     const emails: string[] = [];
@@ -368,14 +455,15 @@ describe.skipIf(!HAS_DB)("the email send limit (plan 3 Amend T1 [B4]): EMAIL_LIM
     expect(emails.filter((e) => sentTo(e).length === 1), "premise: all five were mailed").toHaveLength(EMAIL_MAX);
 
     const sixth = address("limit-sixth");
-    const refused = form({ email: sixth, locale: "nl" });
-    const res = await post(refused, theirs);
-    expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe("/nl/play?e=QUICK_MATCH_RATE_LIMITED");
-    expect(await rowNamed(refused.name as string), "no row for the refused create").toBeUndefined();
-    expect(await mailsTo(sixth), "and no mail").toEqual([]);
-    expect(sentTo(sixth)).toEqual([]);
-    expect(vi.mocked(Sentry.captureException), "a refusal is not a fault").not.toHaveBeenCalled();
+    const spared = form({ email: sixth, locale: "nl" });
+    const res = await post(spared, theirs);
+    landedWithoutMail(res);
+    await madeWithoutMail(spared.name as string);
+    expect(await mailsTo(sixth), "no mail to that address at all").toEqual([]);
+    expect(sentTo(sixth), "and none sent").toEqual([]);
+    expect(vi.mocked(Sentry.captureException), "a mail limit is not a fault").not.toHaveBeenCalled();
+    // What the guest reads on the home it lands on: the info line (a status, not an alert), in the dictionary's words.
+    expect(await flashOnHome(res.headers.get("location")!)).toEqual({ text: enUi["quickMatch.flash.emailLimited"], role: "status" });
 
     const quiet = form();
     landedToken(await post(quiet, theirs));
@@ -384,7 +472,7 @@ describe.skipIf(!HAS_DB)("the email send limit (plan 3 Amend T1 [B4]): EMAIL_LIM
     // The bucket is its own key, with EMAIL_LIMIT's window, and only an emailed create takes it.
     const emailKey = `rl:quick-match-email:${theirs}`;
     const emailHits = seen.filter((s) => s.key === emailKey);
-    expect(emailHits, "one hit per emailed create, the refused one included; none for the emailless one").toHaveLength(EMAIL_MAX + 1);
+    expect(emailHits, "one hit per emailed create, the spared one included; none for the emailless one").toHaveLength(EMAIL_MAX + 1);
     expect(new Set(emailHits.map((s) => s.windowSeconds))).toEqual(new Set([EMAIL_WINDOW_S]));
     expect(seen.filter((s) => s.key === `rl:quick-match-create:${theirs}`), "the create's own limit still runs, every time").toHaveLength(
       EMAIL_MAX + 2,
@@ -398,7 +486,7 @@ describe.skipIf(!HAS_DB)("the per-recipient limit (T1 review I1): 3 link mails a
   const RECIPIENT_WINDOW_S = 24 * 3600;
   const recipientKey = (email: string) => `rl:quick-match-recipient:${createHash("sha256").update(email.toLowerCase()).digest("hex")}`;
 
-  it("three emailed creates to one inbox land from three IPs; the fourth is refused before any row; another inbox still lands; no key holds an address", async () => {
+  it("three emailed creates to one inbox land mailed from three IPs; the fourth lands WITHOUT the email (B-m3); another inbox is still mailed; no key holds an address", async () => {
     // The limiter's own test seam, counting every key as a real fixed window would (each create below comes from an IP of its
     // own, so neither the create limit nor EMAIL_LIMIT is what refuses).
     const counts = new Map<string, number>();
@@ -417,12 +505,11 @@ describe.skipIf(!HAS_DB)("the per-recipient limit (T1 review I1): 3 link mails a
 
     const fourth = form({ email: inbox, locale: "fr" });
     const res = await post(fourth, ip());
-    expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe("/fr/play?e=QUICK_MATCH_RATE_LIMITED");
-    expect(await rowNamed(fourth.name as string), "the refused create made no match").toBeUndefined();
+    landedWithoutMail(res);
+    await madeWithoutMail(fourth.name as string);
     expect(await mailsTo(inbox), "and queued no fourth mail").toHaveLength(RECIPIENT_MAX);
     expect(toInbox()).toHaveLength(RECIPIENT_MAX);
-    expect(vi.mocked(Sentry.captureException), "a refusal is not a fault").not.toHaveBeenCalled();
+    expect(vi.mocked(Sentry.captureException), "a mail limit is not a fault").not.toHaveBeenCalled();
 
     const other = address("other-inbox");
     landedToken(await post(form({ email: other }), ip()));
@@ -430,7 +517,7 @@ describe.skipIf(!HAS_DB)("the per-recipient limit (T1 review I1): 3 link mails a
 
     // The key is the address's hash, lower-cased first, with the ruling's window; nothing the limiter saw holds an address.
     const recipientHits = seen.filter((s) => s.key.startsWith("rl:quick-match-recipient:"));
-    expect(recipientHits.filter((s) => s.key === recipientKey(inbox)), "one bucket for every spelling, the refused one included").toHaveLength(
+    expect(recipientHits.filter((s) => s.key === recipientKey(inbox)), "one bucket for every spelling, the spared one included").toHaveLength(
       RECIPIENT_MAX + 1,
     );
     expect(recipientHits.filter((s) => s.key === recipientKey(other))).toHaveLength(1);
@@ -439,6 +526,84 @@ describe.skipIf(!HAS_DB)("the per-recipient limit (T1 review I1): 3 link mails a
     for (const { key } of seen) {
       for (const a of [inbox, inbox.toUpperCase(), other, inbox.split("@")[0]!]) expect(key.includes(a), `${key} holds an address`).toBe(false);
     }
+  });
+});
+
+describe.skipIf(!HAS_DB)("a mail limiter outage (Redis configured but unreachable) behaves as the limit itself (B-m3)", () => {
+  it("both mail buckets fail closed, so the match is made WITHOUT the email and the guest is told; the create's own limit fails open", async () => {
+    // Redis configured, and no count from it for any key: what `incrWindow` answers while Upstash is down.
+    redis.configured = true;
+    const seen: string[] = [];
+    __setRateLimitCounterForTests(async (key) => {
+      seen.push(key);
+      return null;
+    });
+    const theirs = ip();
+    const email = address("outage");
+    const f = form({ email });
+    const res = await post(f, theirs);
+    landedWithoutMail(res);
+    await madeWithoutMail(f.name as string);
+    expect(sentTo(email), "nothing sent").toEqual([]);
+    expect(vi.mocked(Sentry.captureException), "an outage that costs only the mail is not a fault").not.toHaveBeenCalled();
+    expect(await flashOnHome(res.headers.get("location")!)).toEqual({ text: enUi["quickMatch.flash.emailLimited"], role: "status" });
+    // The create's own bucket was asked and let it through (fail-open, D2); the per-IP mail bucket refused first, so the
+    // per-recipient one was never spent.
+    expect(seen).toEqual([`rl:quick-match-create:${theirs}`, `rl:quick-match-email:${theirs}`]);
+
+    // The positive pair: Redis answers again, and the same address is mailed.
+    redis.configured = false;
+    __setRateLimitCounterForTests(null);
+    const again = form({ email });
+    landedToken(await post(again));
+    expect(sentTo(email), "mailed once the limiter answers").toHaveLength(1);
+  });
+});
+
+describe.skipIf(!HAS_DB)("a create the create itself refuses spends NO mail bucket (B-m3: its refusals run first)", () => {
+  it("too many alive, a sport not offered, a kind not offered, a knockout of two: each refused with its code, no mail key asked (counted)", async () => {
+    const seen: string[] = [];
+    __setRateLimitCounterForTests(async (key) => {
+      seen.push(key);
+      return null; // inert, as with no Redis: only the keys asked are read
+    });
+    // A visitor already at the alive cap (the create's own count, D2/§7.2).
+    const full = mintVisitorKey();
+    for (let i = 0; i < QUICK_MATCH_MAX_ALIVE_PER_VISITOR; i++) landedToken(await post(form(), ip(), full));
+    const [generic] = await sql<{ key: string }[]>`
+      select key from sport_variants where sport_key = 'generic' and is_system and org_id is null order by key limit 1`;
+    const cases: { why: string; fields: Fields; visitor?: string; code: string }[] = [
+      { why: "too many alive", fields: {}, visitor: full, code: QUICK_MATCH_ERRORS.TOO_MANY_ALIVE },
+      { why: "a sport not offered", fields: { sport_key: "generic", variant_key: generic!.key, kind: "team" }, code: QUICK_MATCH_ERRORS.SPORT_NOT_OFFERED },
+      { why: "a kind not offered", fields: { kind: "team" }, code: QUICK_MATCH_ERRORS.KIND_NOT_OFFERED },
+      { why: "a knockout of two", fields: { format: "knockout" }, code: QUICK_MATCH_ERRORS.FORMAT_NOT_OFFERED },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      seen.length = 0;
+      const email = address(`refused-${checked}`);
+      const theirs = ip();
+      const f = form({ email, ...c.fields });
+      const res = await post(f, theirs, c.visitor);
+      expect(res.headers.get("location"), c.why).toBe(`/en/play?e=${c.code}`);
+      expect(await rowNamed(f.name as string), `${c.why}: no match`).toBeUndefined();
+      expect(seen, `${c.why}: only the create's own bucket`).toEqual([`rl:quick-match-create:${theirs}`]);
+      expect(await mailsTo(email)).toEqual([]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+
+    // The positive pair: the same form, not refused, spends each mail bucket once, after the create's own.
+    seen.length = 0;
+    const theirs = ip();
+    const email = address("not-refused");
+    landedToken(await post(form({ email }), theirs));
+    expect(seen).toEqual([
+      `rl:quick-match-create:${theirs}`,
+      `rl:quick-match-email:${theirs}`,
+      `rl:quick-match-recipient:${createHash("sha256").update(email.toLowerCase()).digest("hex")}`,
+    ]);
+    expect(sentTo(email)).toHaveLength(1);
   });
 });
 

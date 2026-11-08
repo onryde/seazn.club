@@ -23,6 +23,7 @@ import type {
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
 import { interpolate, plural } from "@/lib/i18n-runtime";
 import {
+  QUICK_MATCH_EMAIL_PATTERN,
   QUICK_MATCH_ERRORS,
   QUICK_MATCH_KNOCKOUT_MIN_SIDES,
   QUICK_MATCH_MAX_ALIVE_PER_VISITOR,
@@ -30,6 +31,7 @@ import {
   QUICK_MATCH_MAX_SIDES,
   QUICK_MATCH_MIN_SIDES,
   QUICK_MATCH_NAME_MAX,
+  QUICK_MATCH_NON_BLANK_PATTERN,
   QUICK_MATCH_SIDE_NAME_MAX,
 } from "@/lib/quick-match-constants";
 import { routes } from "@/lib/routes";
@@ -95,12 +97,14 @@ const ERROR_KEYS: Readonly<Record<string, string>> = {
   [QUICK_MATCH_ERRORS.SPORT_NOT_OFFERED]: "quickMatch.errors.sportNotOffered",
   [QUICK_MATCH_ERRORS.KIND_NOT_OFFERED]: "quickMatch.errors.kindNotOffered",
   [QUICK_MATCH_ERRORS.FORMAT_NOT_OFFERED]: "quickMatch.errors.formatNotOffered",
+  [QUICK_MATCH_ERRORS.EMAIL_INVALID]: "quickMatch.errors.emailInvalid",
 };
 export function setupErrorKey(code: string): string {
   return Object.hasOwn(ERROR_KEYS, code) ? ERROR_KEYS[code]! : "quickMatch.errors.generic";
 }
 
-/** Where the followed 303 landed. Only a home's PATH is kept, so the page can never be sent to another origin. */
+/** Where the followed 303 landed. Only a home's PATH is kept, so the page can never be sent to another origin, plus the one
+ *  `?e=` a create's own landing carries, EMAIL_LIMITED (branch review B m3): the home prints it as information. */
 export type SubmitOutcome = { kind: "home"; path: string } | { kind: "refused"; code: string };
 export function submitOutcome(res: { url: string; status: number }): SubmitOutcome {
   let url: URL | null = null;
@@ -109,7 +113,10 @@ export function submitOutcome(res: { url: string; status: number }): SubmitOutco
   } catch {
     url = null;
   }
-  if (url?.pathname.startsWith("/q/")) return { kind: "home", path: url.pathname };
+  if (url?.pathname.startsWith("/q/")) {
+    const limited = url.searchParams.get("e") === QUICK_MATCH_ERRORS.EMAIL_LIMITED;
+    return { kind: "home", path: limited ? `${url.pathname}?e=${QUICK_MATCH_ERRORS.EMAIL_LIMITED}` : url.pathname };
+  }
   const path = url?.pathname;
   const code = url !== null && LOCALES.some((l) => path === routes.quickMatchSetup(l)) ? url.searchParams.get("e") : null;
   if (code) return { kind: "refused", code };
@@ -249,6 +256,9 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
   const [typedName, setTypedName] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(initialError);
+  // The email field's fold: opened by a refusal of the address itself, so the field at fault is in view (A-I2), and then the
+  // guest's to open or close.
+  const [emailOpen, setEmailOpen] = useState(initialError === QUICK_MATCH_ERRORS.EMAIL_INVALID);
   const [submitting, setSubmitting] = useState(false);
   const locked = useRef(false);
   /** False in the server's HTML and until the script runs: that page must work as a plain form post (I1). */
@@ -347,6 +357,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
     locked.current = false;
     setSubmitting(false);
     setError(outcome.code);
+    if (outcome.code === QUICK_MATCH_ERRORS.EMAIL_INVALID) setEmailOpen(true);
   }
 
   const errorLine =
@@ -397,6 +408,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
           value={name}
           maxLength={QUICK_MATCH_NAME_MAX}
           required
+          pattern={QUICK_MATCH_NON_BLANK_PATTERN}
           autoComplete="off"
           aria-describedby="qm-name-hint"
           onChange={(e) => setTypedName(e.target.value)}
@@ -485,6 +497,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
                 value={row.name}
                 maxLength={QUICK_MATCH_SIDE_NAME_MAX}
                 required
+                pattern={QUICK_MATCH_NON_BLANK_PATTERN}
                 autoComplete="off"
                 aria-label={msg("quickMatch.setup.sideLabel", { n: k + 1 })}
                 onChange={(e) => renameSide(row.id, e.target.value)}
@@ -603,7 +616,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
         </span>
       </label>
 
-      <details className="mt-5">
+      <details className="mt-5" open={emailOpen} onToggle={(e) => setEmailOpen(e.currentTarget.open)}>
         <summary className="min-h-11 cursor-pointer py-3 text-sm text-[#b7aede] underline underline-offset-2 hover:text-[var(--mk-cream)]">
           {msg("quickMatch.setup.email")}
         </summary>
@@ -614,6 +627,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
             name="email"
             value={email}
             maxLength={254}
+            pattern={QUICK_MATCH_EMAIL_PATTERN}
             autoComplete="email"
             onChange={(e) => setEmail(e.target.value)}
             className="w-full rounded-lg border border-[#3b2a6e] bg-[#241650] px-3 py-2.5 text-sm text-[var(--mk-cream)] outline-none transition focus:border-[var(--mk-lime)]"

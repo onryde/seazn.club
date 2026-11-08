@@ -8,7 +8,7 @@
 //     match's live link or mints one, so a second tap, or a tap on a live or decided match, lands on the SAME link (Review
 //     Focus 1); only a finalized or cancelled match refuses;
 //   - a refusal lands back on the home, `routes.quickMatch(token)?e=<code>`, where the code (QUICK_MATCH_ERRORS) is printed as
-//     the viewer's own `quickMatch.flash.*` line (home.tsx `homeFlashKey`);
+//     the viewer's own `quickMatch.flash.*` line (home.tsx `homeFlash`);
 //   - an unknown, changed or expired token lands on its own `/q/<token>` with nothing added: the home's one dead screen, which
 //     never says which (D16). So does a row that expires between the token's read and the mint (the mint's own 404
 //     EXPIRED): the home it lands on reads the row expired too, and a flash there could only ever show on a live home,

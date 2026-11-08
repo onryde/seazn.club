@@ -71,17 +71,28 @@ const FORMAT_KEY = {
  * screen, which ignores `?e=` (D16; T6 review m1). A repeated `?e=` reads its first, a blank one is
  * no flash, and anything else (a crafted value, a code of another page) is the generic line: the raw value never reaches
  * the page.
+ *
+ * One code is no refusal: EMAIL_LIMITED, the create's own landing when a mail limit kept the link mail back (branch review
+ * B m3). The match was made; the line tells the guest to share or bookmark it, so it reads as information (`info`: a
+ * status, not an alert, and not in the refusal's red).
  */
-const FLASH_KEYS: Readonly<Record<string, MessageKey>> = {
-  [QUICK_MATCH_ERRORS.LINK_LIMITED]: "quickMatch.flash.linkLimit",
-  [QUICK_MATCH_ERRORS.NOT_FOUND]: "quickMatch.flash.notFound",
-  [QUICK_MATCH_ERRORS.SIDES_UNKNOWN]: "quickMatch.flash.notReady",
-  [QUICK_MATCH_ERRORS.ACTION_FAILED]: "quickMatch.flash.generic",
+export type HomeFlashTone = "refusal" | "info";
+export interface HomeFlash {
+  key: MessageKey;
+  tone: HomeFlashTone;
+}
+const FLASH: Readonly<Record<string, HomeFlash>> = {
+  [QUICK_MATCH_ERRORS.LINK_LIMITED]: { key: "quickMatch.flash.linkLimit", tone: "refusal" },
+  [QUICK_MATCH_ERRORS.NOT_FOUND]: { key: "quickMatch.flash.notFound", tone: "refusal" },
+  [QUICK_MATCH_ERRORS.SIDES_UNKNOWN]: { key: "quickMatch.flash.notReady", tone: "refusal" },
+  [QUICK_MATCH_ERRORS.ACTION_FAILED]: { key: "quickMatch.flash.generic", tone: "refusal" },
+  [QUICK_MATCH_ERRORS.EMAIL_LIMITED]: { key: "quickMatch.flash.emailLimited", tone: "info" },
 };
-export function homeFlashKey(e: string | string[] | undefined): MessageKey | null {
+const GENERIC_FLASH: HomeFlash = { key: "quickMatch.flash.generic", tone: "refusal" };
+export function homeFlash(e: string | string[] | undefined): HomeFlash | null {
   const raw = (Array.isArray(e) ? e[0] : e)?.trim();
   if (!raw) return null;
-  return Object.hasOwn(FLASH_KEYS, raw) ? FLASH_KEYS[raw]! : "quickMatch.flash.generic";
+  return Object.hasOwn(FLASH, raw) ? FLASH[raw]! : GENERIC_FLASH;
 }
 
 /** A refusal for a state plan 1's read never produces: a page that hit it would otherwise print a blank or a code. */
@@ -321,7 +332,11 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy): Built
     eyebrow: [t(home.sport.labelKey), ...(home.kindChosen ? [t(KIND_KEY[home.kind])] : []), t(FORMAT_KEY[home.row.format])].join(
       " · ",
     ),
-    played: copy.plural("quickMatch.home.played", home.total, { played: home.played, days: QUICK_MATCH_EXPIRY_DAYS }),
+    // A saved match has no expiry (plan 3 Task 2): it is kept until its owner deletes it, so its line carries no countdown (A-I3).
+    played:
+      home.row.expiresAt === null
+        ? copy.plural("quickMatch.home.playedSaved", home.total, { played: home.played })
+        : copy.plural("quickMatch.home.played", home.total, { played: home.played, days: QUICK_MATCH_EXPIRY_DAYS }),
     hero,
     winner,
     standings,
@@ -343,8 +358,8 @@ export function QuickMatchHomeView({
   home: QuickMatchHome;
   copy: QuickMatchCopy;
   slots?: QuickMatchSlots;
-  /** A refused action's line (`homeFlashKey`), already in the viewer's words; null for none. */
-  flash?: string | null;
+  /** The `?e=` line (`homeFlash`), already in the viewer's words, and its tone; null for none. */
+  flash?: { text: string; tone: HomeFlashTone } | null;
 }) {
   const { t } = copy;
   const v = buildHomeView(home, copy);
@@ -357,11 +372,16 @@ export function QuickMatchHomeView({
             {/* First in the page: the redirect lands at the top, so the refusal is the first thing seen and read. */}
             {flash ? (
               <p
-                role="alert"
+                role={flash.tone === "info" ? "status" : "alert"}
                 data-testid="qm-flash"
-                className="min-w-0 rounded-xl border border-[rgb(239_68_68/0.55)] bg-[rgb(239_68_68/0.14)] px-3 py-2.5 text-sm leading-snug text-cream [overflow-wrap:anywhere]"
+                data-tone={flash.tone}
+                className={`min-w-0 rounded-xl border px-3 py-2.5 text-sm leading-snug text-cream [overflow-wrap:anywhere] ${
+                  flash.tone === "info"
+                    ? "border-[rgb(183_174_222/0.45)] bg-[rgb(183_174_222/0.12)]"
+                    : "border-[rgb(239_68_68/0.55)] bg-[rgb(239_68_68/0.14)]"
+                }`}
               >
-                {flash}
+                {flash.text}
               </p>
             ) : null}
             <div className="min-w-0">

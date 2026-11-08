@@ -23,7 +23,7 @@ import type { Metadata } from "next";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { HtmlLang } from "@/components/i18n/html-lang";
 import {
-  homeFlashKey,
+  homeFlash,
   QuickMatchDead,
   QuickMatchHomeView,
   type QuickMatchCopy,
@@ -80,7 +80,7 @@ export default async function QuickMatchHomePage({
     );
   }
 
-  const flashKey = homeFlashKey(search?.e);
+  const flash = homeFlash(search?.e);
   const slots: QuickMatchSlots = {
     // Offered by the view on a live or ready match only (C11, C18), the hero's and each such row's.
     score: (fixture, place) => (
@@ -116,7 +116,12 @@ export default async function QuickMatchHomePage({
       <HtmlLang lang={locale} />
       {/* The flash is printed: `?e=` is spent, so a reload or a shared link does not print it again (T6 review m2). */}
       <ClearFlashParam />
-      <QuickMatchHomeView home={home} copy={copy} slots={slots} flash={flashKey ? copy.t(flashKey) : null} />
+      <QuickMatchHomeView
+        home={home}
+        copy={copy}
+        slots={slots}
+        flash={flash ? { text: copy.t(flash.key), tone: flash.tone } : null}
+      />
     </>
   );
 }
