@@ -8255,5 +8255,6 @@
   "sponsors.pkg.legend.show": "Afficher ce que donne chaque niveau",
   "sponsors.pkg.legend.hide": "Masquer ce que donne chaque niveau",
   "sponsors.showAgain": "Réafficher sur le site",
-  "sponsors.showAgainLabel": "Réafficher sur le site : {name}"
+  "sponsors.showAgainLabel": "Réafficher sur le site : {name}",
+  "quickMatch.backToMatch": "Retour au match rapide"
 }

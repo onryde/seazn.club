@@ -8255,5 +8255,6 @@
   "sponsors.pkg.legend.show": "Show what each tier gets",
   "sponsors.pkg.legend.hide": "Hide what each tier gets",
   "sponsors.showAgain": "Show on site again",
-  "sponsors.showAgainLabel": "Show on site again: {name}"
+  "sponsors.showAgainLabel": "Show on site again: {name}",
+  "quickMatch.backToMatch": "Back to the quick match"
 }

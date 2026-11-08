@@ -5909,6 +5909,7 @@ export type DictionaryKey =
   | "qrPoster.print"
   | "qrPoster.qrAlt"
   | "qrPoster.scan"
+  | "quickMatch.backToMatch"
   | "reason.all_out"
   | "reason.boarding"
   | "reason.charging"

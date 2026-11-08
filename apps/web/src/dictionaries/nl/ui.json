@@ -8255,5 +8255,6 @@
   "sponsors.pkg.legend.show": "Wat elk niveau oplevert tonen",
   "sponsors.pkg.legend.hide": "Wat elk niveau oplevert verbergen",
   "sponsors.showAgain": "Weer tonen op de site",
-  "sponsors.showAgainLabel": "Weer tonen op de site: {name}"
+  "sponsors.showAgainLabel": "Weer tonen op de site: {name}",
+  "quickMatch.backToMatch": "Terug naar de snelle wedstrijd"
 }

@@ -8255,5 +8255,6 @@
   "sponsors.pkg.legend.show": "Mostrar qué incluye cada nivel",
   "sponsors.pkg.legend.hide": "Ocultar qué incluye cada nivel",
   "sponsors.showAgain": "Volver a mostrar en el sitio",
-  "sponsors.showAgainLabel": "Volver a mostrar en el sitio: {name}"
+  "sponsors.showAgainLabel": "Volver a mostrar en el sitio: {name}",
+  "quickMatch.backToMatch": "Volver al partido rápido"
 }

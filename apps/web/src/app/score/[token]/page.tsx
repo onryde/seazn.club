@@ -43,6 +43,10 @@ import type { MessageKey } from "@/lib/messages";
 import { DEFAULT_LOCALE, getDictionary } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { HtmlLang } from "@/components/i18n/html-lang";
+import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
+import { findQuickMatchByCompetition } from "@/server/usecases/quick-match-home";
+import { openHomeToken } from "@/server/usecases/quick-match-tokens";
+import { QuickMatchBackLink } from "@/components/v2/quick-match-back-link";
 import type { ReactNode } from "react";
 
 export default async function ScorePadPage({
@@ -191,9 +195,12 @@ export default async function ScorePadPage({
   // stage, and the spec records these four catalog sites as a known gap to be
   // closed the day a team sport gains a stage-overridable teamSize.
   const lineupCatalog = lineupCatalogFor(sportModule, fixture.config);
-  const [state, events] = await Promise.all([
+  // Quick match C12: the pad's way back to its home, or null for every other pad. Read here, with the pad's own loads,
+  // so a waiting screen's poll never pays for it.
+  const [state, events, quickMatchHref] = await Promise.all([
     getFixtureState(read, fixture.id),
     listEvents(read, fixture.id, 0),
+    quickMatchHomeHref(link.org_id, fixture.competition_id),
   ]);
 
   const fixtureId = fixture.id; // a closure does not keep `fixture`'s null check
@@ -258,7 +265,11 @@ export default async function ScorePadPage({
 
   return (
     <main style={themeStyle} className="min-h-screen bg-court px-4 py-6">
-      <div className="mx-auto max-w-2xl">
+      {/* A quick match's pad (C12) is a flex column so its back link can sit above the pad from md up and under it on a
+          phone (the link's own `max-md:order-last`; quick-match-back-link.tsx says why). Every other pad keeps the
+          plain block it always had. The link sits outside the dictionary provider: its label is already resolved. */}
+      <div className={quickMatchHref ? "mx-auto flex max-w-2xl flex-col gap-3" : "mx-auto max-w-2xl"}>
+        {quickMatchHref ? <QuickMatchBackLink href={quickMatchHref} label={t("quickMatch.backToMatch")} /> : null}
         {inLocale(
         <DeviceScorePad
         token={token}
@@ -312,6 +323,31 @@ export default async function ScorePadPage({
       </div>
     </main>
   );
+}
+
+/**
+ * Quick match (spec C12; plan 1 Task 9): the href of the pad's way back to its quick match's home, `/q/<home token>`,
+ * or null for every other pad. Only the system org's links can belong to a quick match, so any other org's pad returns
+ * before a query. A system-org competition with no `quick_matches` row (a create that died before its last commit,
+ * pre-flight D1) has no home to go back to. Expiry is not checked: the home answers an expired match honestly, and a
+ * score revives the row (D5). The token is opened here, server-side; only the finished href reaches the client.
+ *
+ * A server without DEVICE_LINK_KEK cannot open the envelope (503 DEVICE_LINK_KEK_MISSING, pre-flight A6), and a missing
+ * key must never take the scoring pad down (C8): the pad renders without the link. Any other failure (a damaged or
+ * wrong-key envelope) is not a configuration gap, and is thrown.
+ */
+async function quickMatchHomeHref(orgId: string, competitionId: string): Promise<string | null> {
+  if (orgId !== QUICK_MATCH_SYSTEM_ORG_ID) return null;
+  const row = await findQuickMatchByCompetition(competitionId);
+  if (!row) return null;
+  let token: string;
+  try {
+    token = openHomeToken(row.tokenEnc);
+  } catch (err) {
+    if (err instanceof HttpError && err.code === "DEVICE_LINK_KEK_MISSING") return null;
+    throw err;
+  }
+  return `/q/${token}`;
 }
 
 /** Doc 13 §7's dead end. Both lines arrive localised: no English literal is
