@@ -23,13 +23,17 @@ import { deferred } from "@/lib/deferred";
 import { EVENTS } from "@/lib/analytics-events";
 import { captureServer } from "@/lib/posthog-server";
 import { QUICK_MATCH_EXPIRY_DAYS, QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
+import { endQueuedForDeletedAccount } from "@/server/email-outbox/account-deletion";
 import { QUICK_MATCH_SAVED_REASON, cancelQueuedEmails } from "@/server/email-outbox/cancel";
 import type { OutboxKind } from "@/server/email-outbox/constants";
+import type { EndedRow } from "@/server/email-outbox/hooks";
 import { log } from "@/server/logger";
 import { QUICK_MATCH_OUTBOX_REF_TYPE } from "./quick-match-delete";
 
 /** The reminder the sweep queues before expiry (C2; the kind is in OUTBOX_KINDS and the kind CHECK since V493). */
 const QUICK_MATCH_REMINDER_KIND: OutboxKind = "quick_match_reminder";
+/** A quick match's two mails: the link at creation and the reminder before expiry (both literal-address, V493). */
+const QUICK_MATCH_MAIL_KINDS: readonly OutboxKind[] = ["quick_match_link", QUICK_MATCH_REMINDER_KIND];
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -131,8 +135,17 @@ export async function saveQuickMatchForUser(userId: string, quickMatchId: string
  * activity, so friends with the link keep scoring until then, and the reminder is owed again (the save had marked it
  * sent); its address leaves every match it was typed on. The matches it saved are found by their saver, never by the
  * address: a saved match holds none (m9), so a released one has no address to be reminded at either.
+ *
+ * And every quick match mail still QUEUED to the address (its link, its reminder) ends unsent (branch review B m4, controller
+ * PO rec 2026-11-08), whichever match it is about: one a stranger saved has forgotten the address (m9), its queued link mail
+ * has not. It ends on the account deletion's own end path (`account_deleted`, email-outbox/account-deletion.ts), not
+ * `cancelQueuedEmails`: that one fences on `current_org_id()` and this transaction is the pooled one, on which it would end
+ * nothing of the system org's (cancel.ts G-7); a second, tenant transaction could fail apart from the deletion. The address
+ * is case-folded as the rest of the release folds it. Index-served: the predicate is `email_outbox_replace_idx`'s (kind,
+ * ref_type, lower(recipient)), partial on the live statuses that `status = 'queued'` implies. Returns the ended rows for
+ * the route's `afterEndedBadly` (neither kind has a hook; the route hands every ended row on regardless).
  */
-export async function releaseQuickMatchesOfDeletedAccount(tx: Tx, a: { userId: string; email: string }): Promise<void> {
+export async function releaseQuickMatchesOfDeletedAccount(tx: Tx, a: { userId: string; email: string }): Promise<EndedRow[]> {
   await tx`
     update quick_matches
        set saved_by_user_id = null,
@@ -142,4 +155,9 @@ export async function releaseQuickMatchesOfDeletedAccount(tx: Tx, a: { userId: s
   await tx`
     update quick_matches set email = null
      where email_lower = lower(${a.email}) and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
+  return endQueuedForDeletedAccount(
+    tx,
+    tx`(kind = any(${QUICK_MATCH_MAIL_KINDS as string[]}::text[]) and ref_type = ${QUICK_MATCH_OUTBOX_REF_TYPE}
+        and lower(recipient) = lower(${a.email}))`,
+  );
 }

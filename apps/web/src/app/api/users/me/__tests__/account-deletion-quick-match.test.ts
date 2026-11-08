@@ -5,10 +5,13 @@
 //   - every match the account saved expires again 7 days after its LAST ACTIVITY (C1), so friends with the link keep
 //     scoring until then; and it is saveable again;
 //   - the account's address leaves every match it was typed on, whoever saved it;
-//   - another account's saved match is untouched, and a refused deletion releases nothing.
+//   - another account's saved match is untouched, and a refused deletion releases nothing;
+//   - every quick match mail still QUEUED to the address (the link, the reminder) ends unsent (branch review B m4);
+//   - and the whole lifecycle in one chain of real calls: sweep reminder → sign-in save → deletion → sweeps (m2).
 //
 // Driven through the REAL DELETE /api/users/me (real createSession on a cookie jar, real requireUser), real Postgres,
-// quick matches made by the real create and saved by the real save. Stand-ins: `next/headers`, the limiter, Stripe, the
+// quick matches made by the real create, saved by the real save and reminded by the real sweep (on its own `now`, the
+// clock a test may pass it). Stand-ins: `next/headers`, the limiter, Stripe, the
 // outbox transport (the deletion notice is mailed after commit), PostHog. The expected expiry is the row's own
 // `last_activity_at` plus the spec's 7 days, typed here; the activity is set 2 days back first, so "now + 7 days" (the
 // wrong rule) cannot pass.
@@ -19,6 +22,7 @@ import { randomBytes as kekBytes } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.stubEnv("DEVICE_LINK_KEK", kekBytes(32).toString("hex")); // every quick match create seals a home token
+vi.stubEnv("EMAIL_OUTBOX_KEK", kekBytes(32).toString("hex")); // a queued mail holds a sealed body, so "the end cleared it" can fail
 
 vi.mock("@/lib/stripe", () => ({ getStripe: () => ({ subscriptions: { cancel: vi.fn(async () => ({})) } }) }));
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
@@ -45,6 +49,7 @@ vi.mock("@/lib/posthog-server", async (orig) => ({
 import { sql } from "@/lib/db";
 import { createSession } from "@/lib/auth";
 import { resolveQuickMatchToken } from "@/server/usecases/quick-match-home";
+import { sweepQuickMatches } from "@/server/usecases/quick-match-sweep";
 import { saveQuickMatchForUser, saveQuickMatchesForVerifiedUser } from "@/server/usecases/quick-match-save";
 import {
   addressFor,
@@ -77,6 +82,21 @@ async function deleteAccount(userId: string, confirm = "DELETE"): Promise<number
   await res.text();
   return res.status;
 }
+
+/** The account deletion's reason on a row it ends (email-outbox/account-deletion.ts ACCOUNT_DELETED_REASON), typed here. */
+const DELETED_REASON = "account_deleted";
+/** The base the sweep builds the reminder's links on (the route passes `baseUrl(req)`). */
+const BASE = "https://qm-account-deletion.test";
+/** The sweep's clock 6.5 days on: a fresh match (7 days, C1) is then inside its reminder's 24 hours (C2) and not yet past it. */
+const remindClock = () => new Date(Date.now() + 6.5 * DAY_MS);
+
+type Mail = { kind: string; status: string; last_error: string | null; cleared: boolean };
+/** Every outbox row about one quick match (its free-text ref, V470), by kind then age. */
+const mailOf = (quickMatchId: string) => sql<Mail[]>`
+  select kind, status, last_error, body_sealed is null as cleared from email_outbox
+   where ref_type = 'quick_match' and ref_id = ${quickMatchId} order by kind, created_at, id`;
+const QUEUED = { status: "queued", last_error: null, cleared: false };
+const ENDED_BY_DELETION = { status: "expired", last_error: DELETED_REASON, cleared: true };
 
 beforeEach(() => jar.clear());
 afterAll(async () => {
@@ -151,6 +171,45 @@ describe.skipIf(!HAS_DB)("DELETE /api/users/me lets go of the account's quick ma
     expect(r.expires_at?.getTime(), "7 days after its last activity (C1)").toBe(r.last_activity_at.getTime() + SPEC_EXPIRY_DAYS * DAY_MS);
     expect(r.reminder_sent_at).toBeNull();
     expect(await resolveQuickMatchToken(typed.token), "alive for friends with the link").not.toBeNull();
+  });
+
+  it("m4: every quick match mail still queued to the address ends unsent (link and reminder, case-folded, whoever holds the match); another address's stays", async () => {
+    const email = addressFor("m4");
+    const leaver = await account(email);
+    const typed = await createTypedMatch(email.toUpperCase()); // typed in capitals: its link mail is queued to them
+    const other = await createTypedMatch(addressFor("m4-other"));
+    // A match typed with the address and saved by a stranger: the save forgot the address (m9), its link mail did not.
+    const keptByStranger = await createTypedMatch(email);
+    expect(await saveQuickMatchForUser(await account(addressFor("m4-stranger")), keptByStranger.id)).toBe("saved");
+    // The real sweep queues the two unsaved matches' reminders.
+    expect(await sweepQuickMatches({ baseUrl: BASE, now: remindClock(), onlyIds: [typed.id, other.id, keptByStranger.id] })).toMatchObject({
+      reminded: 2,
+      failed: 0,
+    });
+    const link = (m: Mail) => m.kind === "quick_match_link";
+    expect(await mailOf(typed.id), "premise: its link and its reminder are queued").toEqual([
+      { kind: "quick_match_link", ...QUEUED },
+      { kind: "quick_match_reminder", ...QUEUED },
+    ]);
+    expect((await mailOf(keptByStranger.id)).filter(link), "premise: the stranger's match's link mail is queued").toEqual([
+      { kind: "quick_match_link", ...QUEUED },
+    ]);
+    const othersBefore = await mailOf(other.id);
+    expect(othersBefore, "premise: another address's link and reminder are queued").toEqual([
+      { kind: "quick_match_link", ...QUEUED },
+      { kind: "quick_match_reminder", ...QUEUED },
+    ]);
+
+    expect(await deleteAccount(leaver)).toBe(200);
+
+    expect(await mailOf(typed.id), "ended on the outbox's own path, with the deletion's reason, body gone").toEqual([
+      { kind: "quick_match_link", ...ENDED_BY_DELETION },
+      { kind: "quick_match_reminder", ...ENDED_BY_DELETION },
+    ]);
+    expect((await mailOf(keptByStranger.id)).filter(link), "found by the address it is queued to, not the match's").toEqual([
+      { kind: "quick_match_link", ...ENDED_BY_DELETION },
+    ]);
+    expect(await mailOf(other.id), "another address's mail is not this deletion's").toEqual(othersBefore);
   });
 
   it("a refused deletion (no confirmation) releases nothing", async () => {

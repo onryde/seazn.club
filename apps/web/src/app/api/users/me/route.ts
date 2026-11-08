@@ -180,9 +180,10 @@ export async function DELETE(req: Request) {
       const endedByDeletion = await anonymiseAccountEmails(tx, { userId: user.id, email: user.email, placeholder: anonEmail });
 
       // Quick matches (spec §7.7 amended, pre-flight D8): the matches this account saved expire again 7 days after their last
-      // activity (friends with the link keep scoring until then), and its address leaves every match it was typed on. Here,
-      // while the real address is still known, and in this transaction, so a deletion that rolls back releases nothing.
-      await releaseQuickMatchesOfDeletedAccount(tx, { userId: user.id, email: user.email });
+      // activity (friends with the link keep scoring until then), and its address leaves every match it was typed on; every quick
+      // match mail still queued to that address ends unsent (branch review B m4). Here, while the real address is still known, and
+      // in this transaction, so a deletion that rolls back releases and ends nothing. Its ended rows join the account's own below.
+      const endedQuickMatchMail = await releaseQuickMatchesOfDeletedAccount(tx, { userId: user.id, email: user.email });
 
       // Soft-delete: anonymize PII, mark deleted, schedule purge
       await tx`
@@ -214,7 +215,7 @@ export async function DELETE(req: Request) {
         ...(await accountDeletionEmail(await recipientLocale(tx, { pick: user.locale, userId: null, orgDefault: null }))),
       });
 
-      return { endedByDeletion, noticeId };
+      return { endedByDeletion: [...endedByDeletion, ...endedQuickMatchMail], noticeId };
     });
 
     await invalidateUser(user.id);

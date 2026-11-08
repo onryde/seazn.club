@@ -23,6 +23,11 @@ import "server-only";
 //   - NOT a row of any other literal-address kind (`registration_confirmation`, an org's invite ...) queued to the account's address. It is
 //     the organiser's: an entry, a payment, a refund or an invite they keep their record of (D5). A row is the account's only if it names
 //     the account, or is one of the account's own kinds about it.
+//   - ONE literal-address exception, not handled here: a quick match's own mail (its link, its reminder) still queued to the address. No
+//     organiser keeps a record of it (it is the system org's own mail about a guest's match) and the quick match spec §7.7 removes the
+//     address from every match that carries it, so the deletion ends it too (branch review B m4). This module knows no quick match (it must
+//     not import a usecase, no-import-cycle.test.ts claim 1): the quick match release (usecases/quick-match-save.ts) ends those rows on the
+//     same transaction, through `endQueuedForDeletedAccount` below, so they end exactly as the account's own do. Ended, not scrubbed.
 //
 // RESIDUAL (accepted): a pre-V472 invite queued to an address the account has SINCE CHANGED AWAY FROM is reached by neither arm. It names no
 // account (the account arm cannot find it) and no longer holds the account's current address (the legacy arm cannot find it), so that old
@@ -89,6 +94,21 @@ type Predicate = ReturnType<typeof namesAccount>;
 const toEnded = (r: EndedRecord): EndedRow => ({ id: r.id, kind: r.kind, refType: r.ref_type, refId: r.ref_id, status: "expired", meta: r.meta });
 
 /**
+ * Step 2's end, for the rows `where` selects that are still `queued`: `expired`, unsent, body and lease gone, `last_error =
+ * account_deleted`. Returns them for the caller to hand to `afterEndedBadly` after the commit. On the deletion's own privileged
+ * transaction. Exported for the quick match release (see the header's exception), so its rows end on this one path.
+ */
+export async function endQueuedForDeletedAccount(tx: Tx, where: Predicate): Promise<EndedRow[]> {
+  const rows = await tx<EndedRecord[]>`
+    update email_outbox
+       set status = 'expired', body_sealed = null, lease_until = null, last_error = ${ACCOUNT_DELETED_REASON},
+           status_at = now()
+     where ${where} and status = 'queued'
+    returning id, kind, ref_type, ref_id, meta`;
+  return rows.map(toEnded);
+}
+
+/**
  * Delete the account's sign-in links, end the account's queued rows and take the address out of all of its rows (see the header).
  * Returns the rows it ended, for the caller to hand to `afterEndedBadly` AFTER the transaction commits.
  *
@@ -101,21 +121,15 @@ export async function anonymiseAccountEmails(tx: Tx, a: { userId: string; email:
        and (ref_id = ${a.userId} or recipient = ${a.email})`;
 
   // Ended first, while the rows still hold the address the legacy arm finds them by; the scrub below then replaces it.
-  const endQueued = (where: Predicate) => tx<EndedRecord[]>`
-    update email_outbox
-       set status = 'expired', body_sealed = null, lease_until = null, last_error = ${ACCOUNT_DELETED_REASON},
-           status_at = now()
-     where ${where} and status = 'queued'
-    returning id, kind, ref_type, ref_id, meta`;
   const ended = [
-    ...(await endQueued(namesAccount(tx, a.userId))),
-    ...(await endQueued(legacyInviteAt(tx, a.email))),
-    ...(await endQueued(accountMail(tx, a.userId))),
+    ...(await endQueuedForDeletedAccount(tx, namesAccount(tx, a.userId))),
+    ...(await endQueuedForDeletedAccount(tx, legacyInviteAt(tx, a.email))),
+    ...(await endQueuedForDeletedAccount(tx, accountMail(tx, a.userId))),
   ];
 
   await tx`update email_outbox set recipient = ${a.placeholder} where ${namesAccount(tx, a.userId)}`;
   await tx`update email_outbox set recipient = ${a.placeholder} where ${legacyInviteAt(tx, a.email)}`;
   await tx`update email_outbox set recipient = ${a.placeholder} where ${accountMail(tx, a.userId)}`;
 
-  return ended.map(toEnded);
+  return ended;
 }
