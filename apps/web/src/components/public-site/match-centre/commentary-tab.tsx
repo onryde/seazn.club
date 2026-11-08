@@ -110,7 +110,12 @@ function OverGroup({
   inningsIndex: number;
   dict: PublicDict;
 }): ReactNode {
-  const bowler = over.bowler?.name ?? null;
+  // A split over (S2-4 Task 9; CK-BC-1, MCC Law 17.8) names every bowler who bowled it, in order, joined the way its
+  // ball lines join them (`overBowlerName`, match-centre.ts): the first alone would credit him the whole over.
+  const bowler =
+    over.bowlers !== undefined && over.bowlers.length > 1
+      ? over.bowlers.map((person) => person.name).join(" / ")
+      : (over.bowler?.name ?? null);
   // Two templates rather than one with an empty `{bowler}`: an absent value
   // would leave a dangling " · " a reader has to interpret.
   const header =

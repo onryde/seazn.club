@@ -38,6 +38,7 @@ import { courtSubLinesOracle, goldenMoments } from "@/lib/score/__tests__/_golde
 import {
   AWAY,
   HOME,
+  SPLIT_OVER_SCRIPT,
   SUPER_OVER_SCRIPT,
   TIE_NO_SUPER_OVER,
   lineLedger,
@@ -1340,6 +1341,48 @@ describe("buildMatchCentre — ball-by-ball commentary lines", () => {
     // could not witness that.
     expect(linesOf("en")[1]!.key).toBe("matchCentre.ballLine.runs.other");
     expect(linesOf("fr")[1]!.key).toBe("matchCentre.ballLine.runs.one");
+  });
+});
+
+// S2-4 Task 9 (CK-BC-1, MCC Law 17.8): an over a mid-over change split names every bowler who bowled it, in order.
+// The engine's `OverLog.bowlers` gives no per-ball split, so each ball line names the over's bowlers joined (the
+// spec gap the plan records), never the first bowler alone: a7 did not bowl the wicket.
+describe("buildMatchCentre — a split over (S2-4 Task 9)", () => {
+  const docOf = () => {
+    const ledger = scriptLedger(SPLIT_OVER_SCRIPT);
+    return buildMatchCentre(input({ events: ledger.events, cfg: ledger.cfg, locale: "en" }));
+  };
+
+  it("a split over names both bowlers in order and its ball lines never credit the first alone", () => {
+    const overs = docOf().cricket?.innings[0]?.overs ?? [];
+    expect(overs.map((over) => over.number), "premise: the split over and the one after it").toEqual([1, 2]);
+    const [split, next] = overs as [(typeof overs)[number], (typeof overs)[number]];
+    expect(split.bowler?.personId, "`bowler` stays the over's first bowler").toBe("a7");
+    expect(split.bowlers?.map((person) => [person.personId, person.name])).toEqual([
+      ["a7", "Player A7"],
+      ["a8", "Player A8"],
+    ]);
+    expect(next.bowlers, "an over with one bowler carries no list").toBeUndefined();
+    expect(next.bowler?.personId).toBe("a6");
+
+    const dict = enPublic as Dict;
+    const text = split.lines.map((line) => t(dict, line.key, line.params));
+    expect(text).toEqual([
+      "0.1 · Player A7 / Player A8 · 1 run",
+      "0.2 · Player A7 / Player A8 · 4 runs",
+      "0.3 · Player A7 / Player A8 · 0 runs",
+      "0.4 · Player A7 / Player A8 · 2 runs",
+      "0.5 · Player A7 / Player A8 · Wicket",
+      "0.6 · Player A7 / Player A8 · 0 runs",
+    ]);
+    expect(next.lines.map((line) => t(dict, line.key, line.params))[0], "a whole over names its one bowler").toBe("1.1 · Player A6 · 1 run"); // over 2, ball 1
+  });
+
+  it("the bowling card credits each bowler of the split over with their own balls, runs and wickets", () => {
+    const bowling = docOf().cricket?.innings[0]?.bowling ?? [];
+    const row = (id: string) => bowling.find((line) => line.person.personId === id);
+    expect([row("a7")?.overs, row("a7")?.runs, row("a7")?.wickets]).toEqual(["0.3", 5, 0]);
+    expect([row("a8")?.overs, row("a8")?.runs, row("a8")?.wickets]).toEqual(["0.3", 2, 1]);
   });
 });
 

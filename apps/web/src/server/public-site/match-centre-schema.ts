@@ -93,7 +93,9 @@ export const CricketInningsView = z.object({
   batting: z.array(CricketBattingRow), didNotBat: z.array(Person), bowling: z.array(CricketBowlingRow),
   fallOfWickets: z.array(z.object({ wicket: z.number(), runs: z.number(), over: z.string(), batter: Person })),
   partnerships: z.array(z.object({ batters: z.tuple([Person, Person]), runs: z.number(), balls: z.number(), wicket: z.union([z.number(), z.literal("unbroken")]) })),
-  overs: z.array(z.object({ number: z.number(), bowler: Person.nullable(), glyphs: z.array(z.string()), runs: z.number(), wickets: z.number(), scoreAfter: z.string(), lines: z.array(Msg) })), // glyph strings "1","4","W","wd","nb+2","·"
+  // `bowlers` (S2-4 Task 9; CK-BC-1, MCC Law 17.8): every bowler of an over a mid-over change split, in the order
+  // they bowled; `bowler` stays the first. Present only for a split over, the engine's `OverLog.bowlers` shape.
+  overs: z.array(z.object({ number: z.number(), bowler: Person.nullable(), bowlers: z.array(Person).optional(), glyphs: z.array(z.string()), runs: z.number(), wickets: z.number(), scoreAfter: z.string(), lines: z.array(Msg) })), // glyph strings "1","4","W","wd","nb+2","·"
 });
 export const CricketView = z.object({
   band: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]),

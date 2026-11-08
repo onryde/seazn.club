@@ -203,6 +203,36 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
   });
 });
 
+// S2-4 Task 9 (CK-BC-1, MCC Law 17.8): after a mid-over change the live bowler is the one now bowling, with his own
+// analysis — never the outgoing bowler's, and never the over's totals.
+describe("liveFromScorecard after a mid-over bowler change (S2-4 Task 9)", () => {
+  const ball = (seq: number, ballInOver: number, bowler: string, bat: number) =>
+    makeEnvelope(seq, {
+      type: "cricket.ball",
+      payload: { ...base, ballInOver, bowler, runs: { bat }, ...(bat === 4 ? { boundary: 4 } : {}) },
+    } as never);
+  // The striker and non-striker cross on an odd run; every run here is even, so the crease never moves.
+  const SPLIT = [
+    makeEnvelope(1, { type: "cricket.toss", payload: { wonBy: "H", elected: "bat" } } as never),
+    makeEnvelope(2, { type: "core.start", payload: {} } as never),
+    ball(3, 1, "A-p11", 2),
+    ball(4, 2, "A-p11", 6),
+    ball(5, 3, "A-p11", 0),
+    makeEnvelope(6, { type: "cricket.bowler.change", payload: { bowler: "A-p10", reason: "incapacitated" } } as never),
+    ball(7, 4, "A-p10", 4),
+    ball(8, 5, "A-p10", 0),
+  ];
+  const names = (id: string) => ({ ...NAMES, "A-p10": "Siraj" })[id];
+
+  it("after a change the overlay's bowler is the new bowler with his own figures", () => {
+    const live = liveFromScorecard(scorecardOf(SPLIT), names);
+    // Two balls since the change, 4 runs off them: the outgoing bowler's 8 off 3 are his, not the new bowler's.
+    expect(live?.bowler).toEqual({ name: "Siraj", overs: "0.2", maidens: 0, runs: 4, wickets: 0 });
+    // The over itself is still one over: all five balls, both bowlers'.
+    expect(live?.thisOver).toHaveLength(5);
+  });
+});
+
 describe("tossFromScorecard / lastClosedOverFromScorecard / scoringStartedFromScorecard", () => {
   const sides: [string, string] = [lineups.home.entrantId, lineups.away.entrantId];
 

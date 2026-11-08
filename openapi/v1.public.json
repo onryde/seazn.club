@@ -51483,6 +51483,29 @@
                                                     }
                                                   ]
                                                 },
+                                                "bowlers": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "personId": {
+                                                        "type": "string"
+                                                      },
+                                                      "name": {
+                                                        "type": "string"
+                                                      },
+                                                      "masked": {
+                                                        "type": "boolean"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "personId",
+                                                      "name",
+                                                      "masked"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  }
+                                                },
                                                 "glyphs": {
                                                   "type": "array",
                                                   "items": {
