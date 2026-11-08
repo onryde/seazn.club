@@ -22,6 +22,16 @@ import "server-only";
 // Every fact-changing path calls one of them: a decide, void or correction (scoring.ts `onDecided`), an abandon
 // (`scoreEvent`), a draft (stages.ts `computeSeedProposal`), a switch (`setStageAutoAdvance`) and an unfreeze (history.ts
 // `setDivisionLocks`).
+//
+// Plan Task 6 adds a person's hand on the clock (§4.2, §4.6, §5.4, §5.13, D22):
+//   `retireReachedAutoActions` a manual Pair (stages.ts `generateStageFixturesTx`), Complete (`completeStage`, inside the
+//                              completion's transaction) or Confirm (`confirmSeedProposal`) retires the row whose target it
+//                              reached, in its own transaction; each then calls `rearmAfterCommit` for the NEXT target (a
+//                              Pair through `afterGenerateCommit`; Add a round too, swiss-rounds-admin.ts).
+//   `recordAutoSkip`           the sticky skip of one target, `cancelled {reason: "skip", by}`.
+//   `recordPullBackSkip`       an Unpair (stages.ts `unpairSwissRound`) or an Undo of a Pair (history.ts `stepWrite`) of an
+//                              auto-pair stage records that skip, so the clock never re-pairs a round pulled back on purpose.
+//   `skipAutoAction`           `POST /stages/{id}/auto-advance/skip` `{ kind }`; confirm is never skippable.
 import type postgres from "postgres";
 import {
   AUTO_ADVANCE_DONE_VISIBLE_MS,
@@ -31,6 +41,7 @@ import {
   deriveSourceAction,
   skipKey,
   type AutoActionKind,
+  type CancelReason,
   type LiveAutoActionState,
   type SourceActionKind,
   type SourceFixtureFact,
@@ -246,11 +257,37 @@ interface ArmCtx {
  *  firer's verdict, and moves only on a change that restarts the clock (a result, a draft, an unfreeze). */
 const isDerivedBlock = (row: LiveRow) => row.state === "blocked" && row.detail?.derived === true;
 
-async function retire(c: ArmCtx, row: LiveRow, reason: "superseded" | "switch_off"): Promise<void> {
+/** The one sticky cancel reason (§4.2): a `cancelled` row whose `result.reason` is this is never re-armed for its target. */
+const SKIP_REASON = "skip" satisfies CancelReason;
+
+/** D1: the row's target was reached by a person (or a path that is not the clock): `done {by: "person"}`. */
+async function markDoneByPerson(tx: Tx, rowId: string, at: Date): Promise<void> {
+  await tx`update stage_auto_actions set state = 'done', done_at = ${at}, result = ${tx.json({ by: "person" })}, updated_at = ${at}
+            where id = ${rowId}`;
+}
+
+/**
+ * D1: whether a live row's target is already reached — its round has a seated board (`pair_round`), its stage is complete
+ * (`complete_stage`), its proposal is confirmed (`confirm_handoff`). The one predicate both the arming's retirement and a
+ * manual action's (`retireReachedAutoActions`) read.
+ */
+function targetReached(
+  tx: Tx,
+  stageStatus: string,
+  readFixtures: () => Promise<readonly Pick<SourceFixtureFact, "round_no" | "home_entrant_id" | "away_entrant_id" | "outcome">[]>,
+) {
+  return async (row: Pick<LiveRow, "kind" | "target_round" | "target_proposal_id">): Promise<boolean> => {
+    if (row.kind === "pair_round") return (await readFixtures()).some((f) => f.round_no === row.target_round && isSwissBoardSeated(f));
+    if (row.kind === "complete_stage") return stageStatus === "complete";
+    const [p] = await tx<{ status: string }[]>`select status from stage_seed_proposals where id = ${row.target_proposal_id}`;
+    return p?.status === "confirmed";
+  };
+}
+
+async function retire(c: ArmCtx, row: LiveRow, reason: Exclude<CancelReason, "skip">): Promise<void> {
   const at = c.stage.at;
   if (reason === "superseded" && (await c.observablyDone(row))) {
-    await c.tx`update stage_auto_actions set state = 'done', done_at = ${at}, result = ${c.tx.json({ by: "person" })}, updated_at = ${at}
-                where id = ${row.id}`;
+    await markDoneByPerson(c.tx, row.id, at);
     return;
   }
   await c.tx`update stage_auto_actions set state = 'cancelled', result = ${c.tx.json({ reason })}, updated_at = ${at} where id = ${row.id}`;
@@ -366,12 +403,7 @@ export async function rearmAutoActions(tx: Tx, stageId: string, opts: { restartP
     stage,
     settleMs: resolveSettleMs(),
     restartPending: opts.restartPending ?? true,
-    observablyDone: async (row) => {
-      if (row.kind === "pair_round") return (await readFixtures()).some((f) => f.round_no === row.target_round && isSwissBoardSeated(f));
-      if (row.kind === "complete_stage") return stage.status === "complete";
-      const [p] = await tx<{ status: string }[]>`select status from stage_seed_proposals where id = ${row.target_proposal_id}`;
-      return p?.status === "confirmed";
-    },
+    observablyDone: targetReached(tx, stage.status, readFixtures),
   };
   const alarms: ArmedAlarm[] = [];
   const keep = (a: ArmedAlarm | null) => {
@@ -389,7 +421,7 @@ export async function rearmAutoActions(tx: Tx, stageId: string, opts: { restartP
     // Only a skip is sticky (§4.2): a switch-off or a superseded row of the same target never stops it re-arming.
     const skips = await tx<{ kind: SourceActionKind; target_round: number }[]>`
       select kind, target_round from stage_auto_actions
-       where stage_id = ${stageId} and kind in ${tx([...sourceKinds])} and state = 'cancelled' and result ->> 'reason' = 'skip'`;
+       where stage_id = ${stageId} and kind in ${tx([...sourceKinds])} and state = 'cancelled' and result ->> 'reason' = ${SKIP_REASON}`;
     const derived = deriveSourceAction({
       stageStatus: stage.status,
       fixtures: await readFixtures(),
@@ -448,6 +480,127 @@ export async function rearmAfterCommit(orgId: string, stageId: string, opts: { r
   } catch (err) {
     log.error({ err, orgId, stageId, event: "auto_advance_rearm_failed" }, "auto_advance_rearm_failed");
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// A person's hand on the clock (plan Task 6; spec §4.2, §4.6, §5.4, §5.13, D22)
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * A manual Pair, Complete or Confirm retires, IN ITS OWN TRANSACTION, every live row of the stage whose target it reached
+ * (`targetReached`, D1): `done {by: "person"}`. So no countdown for a round a person has already paired stays up for even
+ * the moment between the action's commit and the next arming, and a fire that wakes in that moment finds nothing pending.
+ * It arms nothing: the NEXT target is the caller's `rearmAfterCommit`, after its commit, which never throws — so a manual
+ * action is never refused for the clock's sake (the arming can throw by name; this cannot, past the DB itself).
+ *
+ * A leased row is the firer's (D2): the clock's own call through the same usecase (Task 8) must not retire the row it is
+ * firing, and a person racing a fire leaves the row to the fire's re-derive. Answers how many rows it retired.
+ *
+ * Lock order: the caller's `division:` lock, then `auto-advance:<stageId>` (as `rearmAutoActions`).
+ */
+export async function retireReachedAutoActions(tx: Tx, stageId: string): Promise<number> {
+  await tx`select pg_advisory_xact_lock(hashtext(${"auto-advance:" + stageId}))`;
+  const live = await tx<(LiveRow & { stage_status: string; at: Date })[]>`
+    select a.id, a.kind, a.state, a.target_round, a.target_proposal_id, a.blocked_code, a.detail, false as leased,
+           s.status as stage_status, clock_timestamp() as at
+      from stage_auto_actions a join stages s on s.id = a.stage_id
+     where a.stage_id = ${stageId} and a.state in ${tx([...LIVE_AUTO_ACTION_STATES])}
+       and not coalesce(a.lease_until > clock_timestamp(), false)`;
+  if (live.length === 0) return 0;
+  const reached = targetReached(tx, live[0]!.stage_status, () =>
+    tx<Pick<SourceFixtureFact, "round_no" | "home_entrant_id" | "away_entrant_id" | "outcome">[]>`
+      select round_no, home_entrant_id, away_entrant_id, outcome from fixtures where stage_id = ${stageId}`);
+  let retired = 0;
+  for (const row of live) {
+    if (!(await reached(row))) continue;
+    await markDoneByPerson(tx, row.id, row.at);
+    retired++;
+  }
+  return retired;
+}
+
+/** Who skipped a round: a person's Skip, an Unpair of the round, or an Undo of its Pair from History. */
+export type AutoSkipBy = "person" | "unpair" | "undo";
+
+/**
+ * Records a sticky skip of one target (§4.2: "a `cancelled` row keeps its target; rearm never re-arms it"): the live row of
+ * that kind AND target becomes `cancelled {reason: "skip", by}`, or, when none is live, a `cancelled` row is inserted for
+ * the target. Idempotent: a target already skipped writes nothing more. A live row of the same kind on ANOTHER target is
+ * left to the caller's `rearmAfterCommit` (the derivation retires it once the skip stands).
+ *
+ * A leased row is closed too, its lease cleared: a skip is a person's word on the target, and a fire that still holds the
+ * row must find it no longer pending (Task 8 writes its outcome only onto the row it still holds).
+ *
+ * Lock order: the caller's `division:` lock (if any), then `auto-advance:<stageId>`.
+ */
+export async function recordAutoSkip(tx: Tx, stageId: string, kind: SourceActionKind, round: number, by: AutoSkipBy): Promise<void> {
+  await tx`select pg_advisory_xact_lock(hashtext(${"auto-advance:" + stageId}))`;
+  const result = tx.json({ reason: SKIP_REASON, by });
+  const closed = await tx`
+    update stage_auto_actions set state = 'cancelled', result = ${result}, lease_until = null, updated_at = clock_timestamp()
+     where stage_id = ${stageId} and kind = ${kind} and target_round = ${round} and state in ${tx([...LIVE_AUTO_ACTION_STATES])}
+    returning id`;
+  if (closed.length > 0) return;
+  // Only a SKIP counts as already skipped: a switch-off or superseded cancel of the same target is not sticky, so it must
+  // not stand in for one.
+  const [already] = await tx`
+    select 1 from stage_auto_actions
+     where stage_id = ${stageId} and kind = ${kind} and target_round = ${round} and state = 'cancelled'
+       and result ->> 'reason' = ${SKIP_REASON}
+     limit 1`;
+  if (already) return;
+  await tx`
+    insert into stage_auto_actions (org_id, division_id, stage_id, kind, target_round, state, result, created_at, updated_at)
+    select org_id, division_id, id, ${kind}, ${round}, 'cancelled', ${result}, clock_timestamp(), clock_timestamp()
+      from stages where id = ${stageId}`;
+}
+
+/**
+ * An Unpair of round N, or an Undo of its Pair from History (Review Focus 1): the organiser pulled the round back on
+ * purpose, so the clock must not pair it again 60 s later — a sticky skip of `pair_round` N, `by` the path that did it.
+ * Only where auto-pair is ON and can act (the arming's own gate): a stage that never used the clock gets no rows, and a
+ * switch turned on later arms what is ready then (§5.8). Answers whether it recorded one. The caller rearms after its
+ * commit.
+ */
+export async function recordPullBackSkip(tx: Tx, stageId: string, round: number, by: Exclude<AutoSkipBy, "person">): Promise<boolean> {
+  const [stage] = await tx<{ kind: string; progression: unknown; config: Record<string, unknown> | null }[]>`
+    select kind, progression, config from stages where id = ${stageId}`;
+  if (!stage || stage.config?.autoPair !== true || !autoAdvanceSwitchesFor(stage).autoPair) return false;
+  await recordAutoSkip(tx, stageId, "pair_round", round, by);
+  return true;
+}
+
+/**
+ * `POST /stages/{id}/auto-advance/skip` `{ kind }` (§4.6 "Skip this time"): the stage's live `pair_round` or
+ * `complete_stage` row is cancelled as a skip for its target only — the next target arms normally, and no correction ever
+ * re-arms this one (§5.13). Answers the row as it now stands.
+ *
+ * Refused, nothing written: 404 for an unknown stage; 422 AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE for `confirm_handoff` (D22:
+ * confirm is stopped by pausing or the switch, never skipped); 409 AUTO_ADVANCE_NOTHING_TO_SKIP when no row of that kind
+ * is live (the switch is off, nothing is armed, or it was skipped already).
+ */
+export async function skipAutoAction(auth: AuthCtx, stageId: string, kind: AutoActionKind): Promise<AutoActionView> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [stage] = await tx<{ id: string }[]>`select id from stages where id = ${stageId}`;
+    if (!stage) throw new HttpError(404, "stage not found");
+    if (kind === "confirm_handoff") {
+      throw new HttpError(
+        422,
+        "Confirming who moves on cannot be skipped. Pause it by reviewing the proposal, or turn automatic confirmation off.",
+        "AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE",
+      );
+    }
+    await tx`select pg_advisory_xact_lock(hashtext(${"auto-advance:" + stageId}))`;
+    const [live] = await tx<{ id: string; target_round: number }[]>`
+      select id, target_round from stage_auto_actions
+       where stage_id = ${stageId} and kind = ${kind} and state in ${tx([...LIVE_AUTO_ACTION_STATES])}`;
+    if (!live) throw new HttpError(409, "There is nothing of that kind waiting to happen on this stage.", "AUTO_ADVANCE_NOTHING_TO_SKIP");
+    await recordAutoSkip(tx, stageId, kind, live.target_round, "person");
+    const [row] = await tx<AutoActionRow[]>`
+      select id, stage_id, kind, state, target_round, target_proposal_id, due_at, done_at, blocked_code, detail, result, updated_at
+        from stage_auto_actions where id = ${live.id}`;
+    return toAutoActionView(row!);
+  });
 }
 
 /** `rearmAfterCommit` for the stage of a fixture: an abandon decides nothing, so it never reaches `onDecided`, yet it

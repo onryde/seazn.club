@@ -19,6 +19,11 @@ import { resolveSettleMs } from "../../../apps/web/src/server/auto-advance/settl
  * pending, due exactly one settle window after it was armed. The window is resolved from this process's environment by the
  * server's own rule (`resolveSettleMs`): the spec's 60 s, or CI's e2e-only override when its flag is also set.
  *
+ * T6 (§4.2, §4.6, §5.4, §5.13, D22): a person's hand on the clock. Pair next pressed inside round 2's countdown pairs once,
+ * and the row retires as done by a person while round 3 waits on round 2; a second press pairs nothing more. Then, round 2
+ * decided, Skip this time cancels round 3's countdown as a skip; a second Skip is refused 409 AUTO_ADVANCE_NOTHING_TO_SKIP
+ * and a Skip of the confirm 422 AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE, both by name.
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=swissAutoAdvance runs it alone
  * (SELECTABLE_SUITES). Own fresh owner (Community plan: one competition, one division); keyless; no SQL.
  */
@@ -26,7 +31,9 @@ export async function swissAutoAdvanceSuite(): Promise<void> {
   // T4: 6 (defaults off and an empty read; on, once in the history with a person; the same value again records nothing;
   //        the two refusals by name with the knockout's positive pair; off; the 400 on an empty body).
   // T5: 1 (a decided round arms pair_round 2: waiting on the open board, then pending one settle window out).
-  const EXPECTED_CHECKS = 7;
+  // T6: 2 (Pair next inside the window pairs once and retires the row as done by a person; Skip, then the two refusals by
+  //        name).
+  const EXPECTED_CHECKS = 9;
   let checked = 0;
   const aaCheck = (label: string, cond: boolean) => {
     checked++;
@@ -163,28 +170,42 @@ export async function swissAutoAdvanceSuite(): Promise<void> {
     );
   }
 
+  type Action = {
+    id: string;
+    stageId: string;
+    kind: string;
+    state: string;
+    targetRound: number | null;
+    dueAt: string | null;
+    updatedAt: string;
+    detail: unknown;
+    result: unknown;
+  };
+  type Board = { id: string; stage_id: string; round_no: number; seq_in_round: number; home_entrant_id: string | null; away_entrant_id: string | null };
+  /** The division's auto actions as the banner reads them: live, and done ones for 10 minutes. */
+  const live = async () => v1data<{ actions?: Action[] } | undefined>(await v1(owner, `/api/v1/divisions/${divId}/auto-advance`))?.actions ?? [];
+  const seqOf = async (id: string) => v1data<{ last_seq: number } | undefined>(await v1(owner, `/api/v1/fixtures/${id}/state`))?.last_seq;
+  const post = async (id: string, type: string, payload: unknown = {}) =>
+    (await v1(owner, `/api/v1/fixtures/${id}/events`, "POST", { expected_seq: await seqOf(id), type, payload })).status;
+  /** A played badminton win for home: two games to 21. Answers every event's status. */
+  const win = async (id: string) => [
+    await post(id, "core.start"),
+    await post(id, "badminton.game.summary", { home: 21, away: 10 }),
+    await post(id, "badminton.game.summary", { home: 21, away: 10 }),
+  ];
+  /** The Swiss's seated two-sided boards of a round, in board order. */
+  const roundBoards = async (round: number) =>
+    (v1data<Board[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? [])
+      .filter((f) => f.stage_id === swissId && f.round_no === round && f.home_entrant_id !== null && f.away_entrant_id !== null)
+      .sort((a, b) => a.seq_in_round - b.seq_in_round);
+
   // Check 7 — T5: results arm the next round's pair. Switched back on before anything is decided, so the arming seen here
   // is the results', not the switch's.
   {
-    type Action = { id: string; stageId: string; kind: string; state: string; targetRound: number | null; dueAt: string | null; updatedAt: string; detail: unknown };
-    type Board = { id: string; stage_id: string; round_no: number; seq_in_round: number; home_entrant_id: string | null; away_entrant_id: string | null };
-    const live = async () => v1data<{ actions?: Action[] } | undefined>(await v1(owner, `/api/v1/divisions/${divId}/auto-advance`))?.actions ?? [];
-    const seqOf = async (id: string) => v1data<{ last_seq: number } | undefined>(await v1(owner, `/api/v1/fixtures/${id}/state`))?.last_seq;
-    const post = async (id: string, type: string, payload: unknown = {}) =>
-      (await v1(owner, `/api/v1/fixtures/${id}/events`, "POST", { expected_seq: await seqOf(id), type, payload })).status;
-    /** A played badminton win for home: two games to 21. Answers every event's status. */
-    const win = async (id: string) => [
-      await post(id, "core.start"),
-      await post(id, "badminton.game.summary", { home: 21, away: 10 }),
-      await post(id, "badminton.game.summary", { home: 21, away: 10 }),
-    ];
-
     const on = await put(swissId, { autoPair: true });
     const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
     const paired = await v1(owner, `/api/v1/stages/${swissId}/generate`, "POST");
-    const boards = (v1data<Board[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? [])
-      .filter((f) => f.stage_id === swissId && f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null)
-      .sort((a, b) => a.seq_in_round - b.seq_in_round);
+    const boards = await roundBoards(1);
     const [b1, b2] = boards;
     const first = b1 ? await win(b1.id) : [];
     const waiting = await live();
@@ -204,6 +225,55 @@ export async function swissAutoAdvanceSuite(): Promise<void> {
     aaCheck(
       `saa T5: a decided round arms pair_round 2 - waiting on the one open board, then pending on the last result, due one settle window (${settle} ms) after it armed` +
         (ok ? "" : ` - ${rig}, on ${on.status}, start ${started.status}, pair ${paired.status}, boards ${boards.length}, events ${JSON.stringify([...first, ...second])}, waiting ${JSON.stringify(waiting).slice(0, 300)}, armed ${JSON.stringify(armed).slice(0, 300)}`),
+      ok,
+    );
+  }
+
+  // Check 8 — T6: Pair next pressed inside round 2's countdown pairs once; the row retires as done by a person and round 3
+  // waits on round 2. A second press pairs nothing more.
+  {
+    const before = (await live()).find((a) => a.state === "pending");
+    const paired = await v1(owner, `/api/v1/stages/${swissId}/generate`, "POST");
+    const r2 = await roundBoards(2);
+    const after = await live();
+    const retired = after.find((a) => a.id === before?.id);
+    const next = after.filter((a) => a.state !== "done");
+    const again = await v1(owner, `/api/v1/stages/${swissId}/generate`, "POST");
+    const r2Again = await roundBoards(2);
+    const r3 = await roundBoards(3);
+    const ok =
+      before?.kind === "pair_round" && before.targetRound === 2 && paired.status === 200 && r2.length === 2 &&
+      retired?.state === "done" && (retired.result as { by?: string } | null)?.by === "person" &&
+      next.length === 1 && next[0]?.kind === "pair_round" && next[0].state === "waiting" && next[0].targetRound === 3 &&
+      r2Again.length === 2 && r3.length === 0;
+    aaCheck(
+      "saa T6: Pair next inside round 2's countdown pairs it once; the row retires as done by a person and round 3 waits on round 2; a second press pairs nothing more" +
+        (ok ? "" : ` - before ${JSON.stringify(before)}, pair ${paired.status}, round 2 boards ${r2.length}, after ${JSON.stringify(after).slice(0, 300)}, second press ${again.status}, round 2 then ${r2Again.length}, round 3 ${r3.length}`),
+      ok,
+    );
+  }
+
+  // Check 9 — T6: Skip this time, sticky; a second Skip and a Skip of the confirm are refused by name.
+  {
+    const results: number[] = [];
+    for (const b of await roundBoards(2)) results.push(...(await win(b.id)));
+    const three = (await live()).find((a) => a.state === "pending");
+    const skip = (kind: string) => v1(owner, `/api/v1/stages/${swissId}/auto-advance/skip`, "POST", { kind });
+    const skipped = await skip("pair_round");
+    const row = v1data<Action | undefined>(skipped);
+    const left = (await live()).filter((a) => a.state !== "done");
+    const twice = await skip("pair_round");
+    const confirm = await skip("confirm_handoff");
+    const ok =
+      results.every((s) => s === 201) && three?.kind === "pair_round" && three.targetRound === 3 &&
+      skipped.status === 200 && row?.id === three.id && row.state === "cancelled" &&
+      (row.result as { reason?: string; by?: string } | null)?.reason === "skip" && (row.result as { by?: string }).by === "person" &&
+      left.length === 0 &&
+      twice.status === 409 && errorCode(twice) === "AUTO_ADVANCE_NOTHING_TO_SKIP" &&
+      confirm.status === 422 && errorCode(confirm) === "AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE";
+    aaCheck(
+      "saa T6: Skip this time cancels round 3's countdown as a skip and nothing stays live; a second Skip is refused 409 AUTO_ADVANCE_NOTHING_TO_SKIP and a Skip of the confirm 422 AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE" +
+        (ok ? "" : ` - events ${JSON.stringify(results)}, pending ${JSON.stringify(three)}, skip ${skipped.status} ${JSON.stringify(skipped.json).slice(0, 200)}, left ${JSON.stringify(left).slice(0, 200)}, twice ${twice.status} ${errorCode(twice) ?? "-"}, confirm ${confirm.status} ${errorCode(confirm) ?? "-"}`),
       ok,
     );
   }

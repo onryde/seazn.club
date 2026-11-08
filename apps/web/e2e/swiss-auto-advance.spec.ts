@@ -212,4 +212,55 @@ test.describe("Swiss auto-advance T4: the stage switches and the division read",
     const unknown = await apiJson(request, `/api/v1/divisions/00000000-0000-4000-8000-000000000000/auto-advance`);
     expect(unknown.status).toBe(404);
   });
+
+  test("Pair next inside the window pairs once and the banner row retires; Skip this time is sticky and refuses twice by name", async ({ request }) => {
+    // Task 6 (§4.2, §4.6, §5.4, §5.13, D22): a person's Pair inside the countdown retires the row as done by a person (the
+    // banner shows it done) and the next round waits; a second press pairs nothing more. Then Skip: the row is cancelled
+    // for its round and stays so; a second Skip is 409 AUTO_ADVANCE_NOTHING_TO_SKIP, and confirm is never skippable (422
+    // AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE). Expected values are the spec's, typed here.
+    const r = await rig(request, "manual", "generic");
+    expect((await put(request, r.swissId, { autoPair: true })).status).toBe(200);
+    expect((await apiJson(request, `/api/v1/divisions/${r.divisionId}/start`, "POST")).status, "Start").toBeLessThan(300);
+    expect((await apiJson(request, `/api/v1/stages/${r.swissId}/generate`, "POST")).status, "Pair round 1").toBe(200);
+    const roundBoards = async (round: number) => {
+      const all = await apiJson<Board[]>(request, `/api/v1/divisions/${r.divisionId}/fixtures`);
+      expect(all.status, JSON.stringify(all.error)).toBe(200);
+      return all
+        .data!.filter((f) => f.stage_id === r.swissId && f.round_no === round && f.home_entrant_id !== null && f.away_entrant_id !== null)
+        .sort((a, b) => a.seq_in_round - b.seq_in_round);
+    };
+    const r1 = await roundBoards(1);
+    expect(r1, "four players: two boards in round 1").toHaveLength(2);
+    for (const b of r1) await post(request, b.id, "generic.result", { p1Score: 2, p2Score: 0 });
+    const [two] = await liveRows(request, r.divisionId);
+    expect(two, "round 1 decided: round 2 counts down").toMatchObject({ kind: "pair_round", state: "pending", targetRound: 2 });
+
+    // Pair next by hand inside the window: paired once, and the row retires as done by a person.
+    expect((await apiJson(request, `/api/v1/stages/${r.swissId}/generate`, "POST")).status, "Pair next").toBe(200);
+    const seated = (await roundBoards(2)).length;
+    expect(seated, "four players: two boards in round 2").toBe(2);
+    const afterPair = await liveRows(request, r.divisionId);
+    expect(afterPair.find((a) => a.id === two!.id), "the banner row retired").toMatchObject({ state: "done", result: { by: "person" } });
+    expect(afterPair.filter((a) => a.state !== "done"), "round 3 waits on round 2").toEqual([
+      expect.objectContaining({ kind: "pair_round", state: "waiting", targetRound: 3 }),
+    ]);
+    // A second press while round 2 plays pairs nothing more.
+    await apiJson(request, `/api/v1/stages/${r.swissId}/generate`, "POST");
+    expect((await roundBoards(2)).length, "round 2 paired once").toBe(seated);
+    expect(await roundBoards(3), "round 3 not paired").toEqual([]);
+
+    // Skip this time: round 2 decided, round 3 counts down, and the skip cancels it for good.
+    for (const b of await roundBoards(2)) await post(request, b.id, "generic.result", { p1Score: 2, p2Score: 0 });
+    const three = (await liveRows(request, r.divisionId)).find((a) => a.state === "pending");
+    expect(three, "round 2 decided: round 3 counts down").toMatchObject({ kind: "pair_round", targetRound: 3 });
+    const skip = (kind: string) => apiJson<Action & { result: unknown }>(request, `/api/v1/stages/${r.swissId}/auto-advance/skip`, "POST", { kind });
+    const skipped = await skip("pair_round");
+    expect(skipped.status, JSON.stringify(skipped.error)).toBe(200);
+    expect(skipped.data).toMatchObject({ id: three!.id, state: "cancelled", targetRound: 3, result: { reason: "skip", by: "person" } });
+    expect((await liveRows(request, r.divisionId)).filter((a) => a.state !== "done"), "nothing live after the skip").toEqual([]);
+    const twice = await skip("pair_round");
+    expect([twice.status, twice.error?.code], "the second skip").toEqual([409, "AUTO_ADVANCE_NOTHING_TO_SKIP"]);
+    const confirm = await skip("confirm_handoff");
+    expect([confirm.status, confirm.error?.code], "confirm is never skipped").toEqual([422, "AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE"]);
+  });
 });

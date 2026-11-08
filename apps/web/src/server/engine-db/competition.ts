@@ -910,6 +910,10 @@ export interface CompleteResult {
 export async function completeStageIfReady(
   orgId: string,
   stageId: string,
+  /** `onCompleted`: run inside the completion's transaction, right after the stage is marked complete (Swiss
+   *  auto-advance: `completeStage` retires the clock's complete_stage row there). Not run when the stage was already
+   *  complete, nor when it is not ready. */
+  opts: { onCompleted?: (tx: Tx) => Promise<unknown> } = {},
 ): Promise<CompleteResult> {
   return withTenant(orgId, async (tx) => {
     const inputs = await loadStageInputs(tx, stageId);
@@ -1096,6 +1100,7 @@ export async function completeStageIfReady(
     await pinStageTableRules(tx, stageId);
     await tx`update stages set status = 'complete' where id = ${stageId}`;
     await tx`update divisions set seq = ${lastSeq} where id = ${inputs.stage.division_id}`;
+    if (opts.onCompleted) await opts.onCompleted(tx);
     log.info({ event: "stage_completed", stageId, kind: inputs.kind }, "stage_completed");
 
     return { completed: true, events };

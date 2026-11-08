@@ -3178,6 +3178,12 @@ export const StageAutoAdvanceOut = z.object({
 });
 export type StageAutoAdvanceOut = z.infer<typeof StageAutoAdvanceOut>;
 
+/** POST /stages/{id}/auto-advance/skip (Swiss auto-advance spec §4.2, §4.6: "Skip this time") — which of the stage's live
+ *  auto actions to skip. Every kind is accepted here so that `confirm_handoff` is refused BY NAME
+ *  (AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE, D22: confirm is stopped by pausing or the switch), not as a shapeless 400. */
+export const AutoAdvanceSkip = z.strictObject({ kind: z.enum(AUTO_ACTION_KINDS) });
+export type AutoAdvanceSkip = z.infer<typeof AutoAdvanceSkip>;
+
 /** GET /divisions/{id}/auto-advance — every live row of the division's stages (waiting, pending, paused, blocked), and each
  *  `done` row for 10 minutes after it was done (the banner's "Round 3 was paired automatically"), newest first. */
 export const DivisionAutoActions = z.object({ actions: z.array(AutoActionView) });

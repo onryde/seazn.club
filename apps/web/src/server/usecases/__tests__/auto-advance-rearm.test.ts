@@ -610,10 +610,14 @@ describe.skipIf(!HAS_DB)("rearmAutoActions: the confirm hand-off (plan Task 5)",
     const old = (await rowsOf(c.koId)).find((x) => x.id === first.id)!;
     expect([old.state, old.result]).toEqual(["cancelled", { reason: "superseded" }]);
 
-    // A person confirms it. The next source correction cannot re-draft (SEEDING_ALREADY_CONFIRMED), and its failed
-    // recompute re-derives the target anyway: the row retires as done by a person, not left counting down.
+    // A confirm lands while a firer holds the row (Task 8's claim; SQL stands in, then lapses): a manual Confirm retires the
+    // row in its own transaction (Task 6), but never a leased one (D2), so here the row outlives the confirm. The next
+    // source correction cannot re-draft (SEEDING_ALREADY_CONFIRMED), and its failed recompute re-derives the target anyway:
+    // the row retires as done by a person, not left counting down.
+    await sql`update stage_auto_actions set lease_until = now() + interval '2 minutes' where id = ${fresh.id}`;
     await confirmSeedProposal(c.r.auth, c.koId, { proposalId: draft.id });
-    expect((await liveOf(c.koId, "confirm_handoff"))?.id, "premise: confirming wrote nothing to the row").toBe(fresh.id);
+    expect((await liveOf(c.koId, "confirm_handoff"))?.id, "premise: the leased row outlived the confirm").toBe(fresh.id);
+    await sql`update stage_auto_actions set lease_until = now() - interval '1 second' where id = ${fresh.id}`;
     const [lastId] = [...bResults.keys()].filter((id) => id !== fid);
     await undo(c.r, lastId!, bResults.get(lastId!)!);
     expect((await latestProposal(c.koId))!.status, "premise: no re-draft after a confirm").toBe("confirmed");

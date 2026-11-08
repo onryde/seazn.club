@@ -25,7 +25,13 @@ import { swissRefusal } from "./swiss-refusal";
 import { judgeSwissRounds, swissRoundsGuidance, swissRoundsNoticeOf, type SwissRoundsJudgement, type SwissRoundsNotice, type SwissRoundsShrunk } from "@/lib/swiss-rounds";
 import { isRootSwissStage } from "@/lib/open-entry-stages";
 import { autoAdvanceSwitchesFor } from "@/lib/auto-advance";
-import { publishAutoActionAlarms, rearmAfterCommit, rearmAutoActions } from "./auto-advance";
+import {
+  publishAutoActionAlarms,
+  rearmAfterCommit,
+  rearmAutoActions,
+  recordPullBackSkip,
+  retireReachedAutoActions,
+} from "./auto-advance";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
   generateRoundRobin,
@@ -3310,6 +3316,9 @@ export async function unpairSwissRound(
     }
 
     const restored = await clearSwissFixtureSeats(tx, ids);
+    // Swiss auto-advance (Review Focus 1): the organiser pulled this round back on purpose, so the clock must not pair it
+    // again 60 s later — a sticky skip of its pair, in this transaction, where auto-pair is on. Re-armed after the commit.
+    await recordPullBackSkip(tx, stageId, round, "unpair");
 
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${stage.division_id}`;
@@ -3335,6 +3344,9 @@ export async function unpairSwissRound(
   // Ruling 257: a call ended on an emptied board put the board back on its pre-call court and time - name those, so the
   // public fixture document (`pub:v1:fixture:{id}`) does not serve the called slot for its 30s TTL.
   afterScheduleWrite(write.divisionId, write.competitionId, "schedule", write.restored);
+  // Swiss auto-advance: the next round's row (waiting on the boards just cleared) goes with them; the skip keeps the
+  // cleared round from arming. Never throws.
+  await rearmAfterCommit(auth.orgId, stageId);
   return { cleared: write.cleared, round: write.round };
 }
 
@@ -3450,6 +3462,9 @@ export async function afterGenerateCommit(auth: AuthCtx, stageId: string, write:
   // the bye win shows at once, Finn/Gus). The kind gate and the empty-fold rule are `refoldStageTable`'s.
   if (outcome.created > 0) await refoldStageTable(auth.orgId, { id: stageId, kind: write.kind }, "skip");
   await fireStageRevalidate(auth.orgId, stageId);
+  // Swiss auto-advance (§4.2): the Pair retired its round's row in its transaction; the next target (round N+1 waiting on
+  // the boards just seated) arms here, after the commit. Never throws.
+  await rearmAfterCommit(auth.orgId, stageId);
   // Activation funnel (feature 1): fixtures exist → the tournament is playable.
   if (outcome.created > 0) {
     await captureServer({
@@ -3983,6 +3998,10 @@ export async function generateStageFixturesTx(
     await tx`update divisions set seq = ${last + 1}, edit_watermark = null
              where id = ${stage.division_id}`;
   }
+  // Swiss auto-advance (2026-11-08 spec §4.2, §5.4): a Pair retires, in this transaction, the clock's row for the round it
+  // just seated (`done {by: "person"}`), so no countdown outlives the pairing it was counting down to. The next round arms
+  // after the commit (`afterGenerateCommit`). A leased row (the clock's own fire through this function) is left alone.
+  await retireReachedAutoActions(tx, stageId);
   const [division] = await tx<{ competition_id: string }[]>`
     select competition_id from divisions where id = ${stage.division_id}`;
   return {
@@ -5710,7 +5729,9 @@ export async function completeStage(
     if (!stage) throw new HttpError(404, "stage not found");
     return stage;
   });
-  const result = await completeStageIfReady(auth.orgId, stageId);
+  // Swiss auto-advance (2026-11-08 spec §4.2): the completion's own transaction retires the clock's complete_stage row
+  // (`done {by: "person"}`), so no completion countdown stands on a complete stage; the `finally` below re-derives after.
+  const result = await completeStageIfReady(auth.orgId, stageId, { onCompleted: (tx) => retireReachedAutoActions(tx, stageId) });
   if (!result.completed) return result;
 
   // R10g (review-r10f m2): from here the stage is complete (its completion
@@ -5729,6 +5750,9 @@ export async function completeStage(
     if (opts.publish ?? true) {
       afterScheduleWrite(current.division_id, current.competition_id, "schedule", []);
     }
+    // Swiss auto-advance: the stage is complete however this ends, so its rows re-derive to nothing — including a
+    // completion this call did not make (already complete: the transaction above returned before its retire). Never throws.
+    await rearmAfterCommit(auth.orgId, stageId);
   }
 }
 
@@ -6916,6 +6940,9 @@ export async function confirmSeedProposal(
       ...f,
       court_name: f.court_id !== null ? (courtNames.get(f.court_id) ?? f.court_id) : null,
     }));
+    // Swiss auto-advance (2026-11-08 spec §4.2): a person's Confirm retires the clock's confirm row for this proposal in
+    // the confirm's own transaction (`done {by: "person"}`); re-derived after the commit, below.
+    await retireReachedAutoActions(tx, stageId);
     return {
       filled: expandedEntries.length,
       fixtures,
@@ -6942,6 +6969,9 @@ export async function confirmSeedProposal(
   // same contract as every schedule write). A refused confirm throws out of
   // the transaction above and never reaches this line, so it sends nothing.
   afterScheduleWrite(committed.divisionId, committed.competitionId, "schedule", committed.filledFixtureIds);
+  // Swiss auto-advance: the confirm row retired in the transaction; this re-derives the target from the facts it left.
+  // Never throws.
+  await rearmAfterCommit(auth.orgId, stageId);
 
   // Step 5 — post-commit: re-run schedule validation so newly-real person
   // clashes surface as warnings, run not blocked (design's Fill algorithm;

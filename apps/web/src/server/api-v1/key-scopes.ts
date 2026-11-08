@@ -288,6 +288,8 @@ const RULES: RouteRule[] = [
   { method: "POST", path: "/stages/:id/seed-proposal/confirm", scope: "manage", pin: "stage" },
   // Swiss auto-advance (spec 2026-11-08 §4.1): the stage's two switches, an organiser's setting like its rules.
   { method: "PUT", path: "/stages/:id/auto-advance", scope: "manage", pin: "stage" },
+  // Swiss auto-advance (spec 2026-11-08 §4.6): "Skip this time", an organiser's call on the stage like the switches.
+  { method: "POST", path: "/stages/:id/auto-advance/skip", scope: "manage", pin: "stage" },
   { method: "GET", path: "/stages/:id/standings", scope: "read", pin: "stage" },
   { method: "POST", path: "/stages/:id/standings/override", scope: "manage", pin: "stage" },
 

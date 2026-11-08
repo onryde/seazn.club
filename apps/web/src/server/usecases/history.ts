@@ -48,7 +48,7 @@ import {
 } from "./stages";
 import { swissRefusal } from "./swiss-refusal";
 import { LIVE_AUTO_ACTION_STATES } from "@/lib/auto-advance";
-import { rearmAfterCommit } from "./auto-advance";
+import { rearmAfterCommit, recordPullBackSkip } from "./auto-advance";
 import { DEPARTED_STATUSES } from "./entrants";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
@@ -775,12 +775,17 @@ async function stepWrite(
         select f.id from fixtures f where f.id in ${tx(seatedIds)} and ${fixtureHasResultSql(tx, "f")} limit 1`;
       if (started) throw swissRefusal("SWISS_UNDO_ROUND_STARTED", { fixtureId: started.id });
       // Only rows that still exist: a later reshape may have deleted a shell the Pair seated.
-      const live = await tx<{ id: string; stage_id: string }[]>`
-        select id, stage_id from fixtures where id in ${tx(seatedIds)} order by id`;
+      const live = await tx<{ id: string; stage_id: string; round_no: number }[]>`
+        select id, stage_id, round_no from fixtures where id in ${tx(seatedIds)} order by id`;
       const ids = live.map((f) => f.id);
       await clearSwissFixtureSeats(tx, ids);
       unseated.push(...ids);
       unpairedStageIds.push(...new Set(live.map((f) => f.stage_id)));
+      // Swiss auto-advance (Review Focus 1): an Undo of a Pair — the clock's or a person's — pulls the round back on
+      // purpose, so the clock must not pair it again 60 s later: a sticky skip of each round it cleared, where auto-pair
+      // is on, in this transaction. Re-armed after the commit (below).
+      const rounds = new Map(live.map((f) => [`${f.stage_id}:${f.round_no}`, f] as const));
+      for (const f of rounds.values()) await recordPullBackSkip(tx, f.stage_id, f.round_no, "undo");
     }
     // A delete-side event records the rows it deletes AS THEY STAND NOW —
     // before the delete, so the appended event is self-contained. (A plain
@@ -897,6 +902,9 @@ async function stepWrite(
   // into undoing one step MORE.
   for (const stageId of write.unpairedStageIds) {
     await refoldStageTable(auth.orgId, { id: stageId, kind: "swiss" }, "drop");
+    // Swiss auto-advance: the next round's row (waiting on the boards just cleared) goes with them; the skip keeps the
+    // cleared round from arming. Never throws.
+    await rearmAfterCommit(auth.orgId, stageId);
   }
   return write;
 }
