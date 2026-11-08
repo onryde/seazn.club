@@ -179,12 +179,21 @@ describe("quickMatchPreviewTable — ONE table for every sport, and small enough
     expectTypeOf<Parameters<typeof quickMatchStageInput>[0]>().toEqualTypeOf<{ format: QuickMatchFormat; plays: number; name: string }>();
   });
 
-  it("serializes to a pinned 1,796-byte JSON payload, inside a 2 KiB budget", () => {
-    // The table rides in every /play page payload. The budget is the requirement; the exact length is a tripwire, so a
-    // change in the table's shape is re-pinned on purpose, never shipped by accident.
-    const size = JSON.stringify(quickMatchPreviewTable()).length;
-    expect(size).toBeLessThanOrEqual(2048);
-    expect(size).toBe(1796);
+  it("serializes inside a 2 KiB budget, and its shape holds exactly 124 keys", () => {
+    // The table rides in every /play page payload: the budget is the requirement.
+    const t = quickMatchPreviewTable();
+    expect(JSON.stringify(t).length).toBeLessThanOrEqual(2048);
+    // The shape's tripwire: every object key in the table, NOT descending into `role` (the engine's RoundRole may grow
+    // a field without the table changing shape). Hand count: 24 cell keys + 20 league `matchCount` + 4 knockout cells ×
+    // 3 (matchCount, byes, rounds) + 10 rounds (2 + 2 + 3 + 3) × 2 (role, pairs) + 28 seats × 1 (seed | winnerOf) +
+    // 10 winnerOf seats (every match but the final feeds one: n − 2 for n = 3..6) × 2 (round, pair) = 124.
+    const keysIn = (v: unknown): number =>
+      Array.isArray(v)
+        ? v.reduce((n: number, x) => n + keysIn(x), 0)
+        : v !== null && typeof v === "object"
+          ? Object.entries(v).reduce((n, [k, x]) => n + 1 + (k === "role" ? 0 : keysIn(x)), 0)
+          : 0;
+    expect(keysIn(t)).toBe(124);
   });
 });
 

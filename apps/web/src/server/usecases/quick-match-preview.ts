@@ -123,10 +123,10 @@ export interface QuickMatchKnockoutCell {
   rounds: QuickMatchDrawRound[];
 }
 /** Keyed `"<format>:<sides>:<plays>"`. A knockout carries no plays (its stage has no legs), so its key always ends `:1`:
- *  the island looks one up as `` `knockout:${sides}:1` ``. A key outside the table (one side, a knockout of two) is
- *  undefined: the form never offers it. */
-export type QuickMatchPreviewTable = { [key: `league:${number}:${number}`]: QuickMatchLeagueCell } & {
-  [key: `knockout:${number}:1`]: QuickMatchKnockoutCell;
+ *  the island looks one up as `` `knockout:${sides}:1` ``. A key outside the table (one side, a knockout of two) holds
+ *  nothing, and every lookup is typed `| undefined`, so the compiler makes each caller handle that miss. */
+export type QuickMatchPreviewTable = { [key: `league:${number}:${number}`]: QuickMatchLeagueCell | undefined } & {
+  [key: `knockout:${number}:1`]: QuickMatchKnockoutCell | undefined;
 };
 
 /** C16: two sides is always a league; the create refuses a knockout of two (QUICK_MATCH_FORMAT_NOT_OFFERED). */
