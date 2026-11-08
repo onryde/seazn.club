@@ -18,18 +18,18 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { LIVE_AUTO_ACTION_STATES } from "@/lib/auto-advance";
-import { sql, withTenant } from "@/lib/db";
+import { sql, withTenant, type Tx } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveSettleMs } from "@/server/auto-advance/settle";
 import { log } from "@/server/logger";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { createEntrants } from "../entrants";
+import { createEntrants, patchEntrant } from "../entrants";
 import { setDivisionLocks } from "../history";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { completeStage, computeSeedProposal, confirmSeedProposal, createStages, generateStageFixtures } from "../stages";
-import { rearmAfterCommit, rearmAutoActions, setStageAutoAdvance } from "../auto-advance";
+import { publishAutoActionAlarms, rearmAfterCommit, rearmAutoActions, setStageAutoAdvance } from "../auto-advance";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -205,6 +205,34 @@ async function ageDue(rowId: string, seconds: number): Promise<void> {
 
 const rearm = (r: { auth: AuthCtx }, stageId: string, opts?: { restartPending?: boolean }) =>
   withTenant(r.auth.orgId, (tx) => rearmAutoActions(tx, stageId, opts));
+
+/** `rearm`, counting the SQL statements it sends: a tagged-template call on the transaction is one statement (a
+ *  `tx(list)` helper or a `tx.json` value is not). */
+async function countedRearm(r: { auth: AuthCtx }, stageId: string) {
+  let statements = 0;
+  const alarms = await withTenant(r.auth.orgId, (tx) => {
+    const counted = new Proxy(tx, {
+      apply(target, thisArg, args: unknown[]) {
+        if (Array.isArray(args[0]) && "raw" in args[0]) statements++;
+        return Reflect.apply(target as unknown as (...a: unknown[]) => unknown, thisArg, args);
+      },
+    }) as Tx;
+    return rearmAutoActions(counted, stageId);
+  });
+  return { alarms, statements };
+}
+
+/** Polls (another connection) until some backend is blocked behind `pid`: on a lock, or on its uncommitted row. */
+async function waitBlockedBy(pid: number, ms = 15_000): Promise<number> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_stat_activity where ${pid}::int = any(pg_blocking_pids(pid))`;
+    if (n > 0) return n;
+    if (Date.now() > deadline) throw new Error(`waitBlockedBy: nothing blocked behind backend ${pid} after ${ms} ms`);
+    await new Promise((res) => setTimeout(res, 25));
+  }
+}
 
 const ref = (f: Board) => ({ fixtureId: f.id, round: f.round_no, board: f.seq_in_round });
 
@@ -433,8 +461,13 @@ describe.skipIf(!HAS_DB)("rearmAutoActions: what never arms (plan Task 5)", () =
     const fixtures = (await fixturesOf(league!.id)).filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null);
     expect(fixtures.length, "premise: the league is drawn").toBeGreaterThan(0);
     for (const f of fixtures) await win(r, f);
-    expect(await rearm(r, league!.id)).toEqual([]);
+    // The cost every decided fixture of every stage pays: the stage's lock and ONE read, then out (no live-row read, no
+    // fixture read). The positive pair: a Swiss with its switch on reads on.
+    const cheap = await countedRearm(r, league!.id);
+    expect(cheap).toEqual({ alarms: [], statements: 2 });
     expect(await divisionRowCount(divisionId)).toBe(0);
+    const swiss = await swissRig();
+    expect((await countedRearm(swiss, swiss.swissId)).statements, "a Swiss with its switch on reads past the stage").toBeGreaterThan(2);
   });
 
   it("a switch stored where it cannot act never arms (the arming gate): autoPair on a league, autoConfirmHandoff on an on_complete target", async () => {
@@ -678,5 +711,136 @@ describe.skipIf(!HAS_DB)("arming per sport (plan Task 5; Swiss × generic, badmi
     }
     expect(checked).toBe(SWISS_SPORTS.length);
     expect(checked).toBe(3);
+  });
+});
+
+describe.skipIf(!HAS_DB)("rearmAutoActions under concurrency, and what it never writes (plan Task 5, fix round 1)", () => {
+  it("two arms of one stage serialise on its lock: one live row, the later arm's clock, no failure", async () => {
+    // A complete round with no row: decided while the switch was off, then the switch stored on without its own arming
+    // (SQL stands in for the create door's StageConfig, which stores a flag and arms nothing).
+    const r = await swissRig({ autoPair: false });
+    await start(r);
+    await pair(r);
+    for (const f of await boards(r.swissId, 1)) await win(r, f);
+    await sql`update stages set config = config || ${sql.json({ autoPair: true })} where id = ${r.swissId}`;
+    expect(await rowsOf(r.swissId), "premise: a complete round, no row").toEqual([]);
+
+    const spy = vi.spyOn(log, "error");
+    try {
+      // A arms inside its open transaction and holds it; B (a result's rearmAfterCommit) starts while A is uncommitted.
+      let release!: () => void;
+      const gate = new Promise<void>((res) => (release = res));
+      let armedInA!: (pid: number) => void;
+      const aArmed = new Promise<number>((res) => (armedInA = res));
+      const a = withTenant(r.auth.orgId, async (tx) => {
+        const alarms = await rearmAutoActions(tx, r.swissId);
+        const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+        armedInA(pid);
+        await gate;
+        return alarms;
+      });
+      const pidA = await aArmed;
+      const b = rearmAfterCommit(r.auth.orgId, r.swissId);
+      // Deterministic, not a sleep: B is blocked behind A (on the stage's lock; without it, on A's uncommitted row in the
+      // one-live-row index) before A commits.
+      expect(await waitBlockedBy(pidA), "B waits behind A").toBe(1);
+      release();
+      const aAlarms = await a;
+      await b;
+      expect(aAlarms, "A armed the row").toHaveLength(1);
+
+      const live = (await rowsOf(r.swissId)).filter((x) => LIVE.has(x.state));
+      expect(live, "exactly one live row").toHaveLength(1);
+      expect([live[0]!.id, live[0]!.state]).toEqual([aAlarms[0]!.rowId, "pending"]);
+      expect(live[0]!.due_at!.getTime(), "B re-armed A's row after A committed: its clock, not A's").toBeGreaterThan(aAlarms[0]!.dueAt.getTime());
+      expect(spy.mock.calls.filter((c) => JSON.stringify(c).includes("auto_advance_rearm_failed")), "B did not fail").toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a re-derive that moves nothing writes nothing: a waiting row, and a derived block, keep their updated_at", async () => {
+    const r = await swissRig();
+    await start(r);
+    await pair(r);
+    const [b1, b2] = await boards(r.swissId, 1);
+    await win(r, b1!);
+    const stamp = async () => {
+      const [row] = await sql<{ id: string; state: string; updated_at: Date }[]>`
+        select id, state, updated_at from stage_auto_actions where stage_id = ${r.swissId} and state in ${sql([...LIVE])}`;
+      return row!;
+    };
+    let checked = 0;
+    for (const expected of ["waiting", "blocked"] as const) {
+      if (expected === "blocked") {
+        await post(r.auth, b2!.id, "core.start");
+        await post(r.auth, b2!.id, "core.abandon", { reason: "rain" });
+      }
+      const before = await stamp();
+      expect(before.state, "premise").toBe(expected);
+      await rearm(r, r.swissId);
+      await rearm(r, r.swissId, { restartPending: false });
+      const after = await stamp();
+      expect([after.id, after.state, after.updated_at.getTime()], expected).toEqual([before.id, expected, before.updated_at.getTime()]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a lease is judged at the arming's own clock, not its transaction's start", async () => {
+    const { r } = await roundOneDecided();
+    const armed = await expectArmed(await liveOf(r.swissId, "pair_round"), "round 1 decided");
+    await ageDue(armed.id, 30);
+    const [{ due }] = await sql<{ due: Date }[]>`select due_at as due from stage_auto_actions where id = ${armed.id}`;
+    await withTenant(r.auth.orgId, async (tx) => {
+      // The lease runs out 200 ms after this transaction began; the arming reads the clock 400 ms in, so it has lapsed.
+      await tx`update stage_auto_actions set lease_until = now() + interval '200 milliseconds' where id = ${armed.id}`;
+      await tx`select pg_sleep(0.4)`;
+      return rearmAutoActions(tx, r.swissId);
+    });
+    const after = (await liveOf(r.swissId, "pair_round"))!;
+    expect(after.id).toBe(armed.id);
+    expect(after.due_at!.getTime(), "the lapsed lease did not hold off the restart").toBeGreaterThan(due.getTime());
+  });
+
+  it("a field change whose recompute fails takes the stale draft's confirm row with it (markFieldChangeSeedProposalsStale)", async () => {
+    const c = await confirmRig(1);
+    await playLeague(c.r, c.leagueIds[0]!, c.entrantIds);
+    await completeStage(c.r.auth, c.leagueIds[0]!);
+    const armed = await expectArmed(await liveOf(c.koId, "confirm_handoff"), "the source completed");
+    // The target's slots are gone (SQL stands in for any change that leaves the knockout ungenerated), so the recompute
+    // after the withdrawal refuses SEEDING_RULES_MISSING. The withdrawal is the real producer.
+    await sql`delete from fixtures where stage_id = ${c.koId}`;
+    await patchEntrant(c.r.auth, c.entrantIds[3]!, { status: "withdrawn" });
+    expect((await latestProposal(c.koId))!.status, "premise: the draft went stale and nothing replaced it").toBe("stale");
+    expect(await liveOf(c.koId, "confirm_handoff"), "nothing counts down on a stale draft").toBeUndefined();
+    const retired = (await rowsOf(c.koId)).find((x) => x.id === armed.id)!;
+    expect([retired.state, retired.result]).toEqual(["cancelled", { reason: "superseded" }]);
+  });
+});
+
+describe("publishAutoActionAlarms never throws (plan Task 5, fix round 1)", () => {
+  it("a failing transport is logged, never thrown, so a committed draft or switch cannot become a 500; nothing armed sends nothing", async () => {
+    const alarm = { rowId: randomUUID(), stageId: randomUUID(), dueAt: new Date(0) };
+    const spy = vi.spyOn(log, "error");
+    try {
+      await expect(
+        publishAutoActionAlarms([alarm], async () => {
+          throw new Error("transport down");
+        }),
+      ).resolves.toBeUndefined();
+      expect(spy.mock.calls.filter((c) => JSON.stringify(c).includes("auto_advance_alarm_publish_failed")), "logged once").toHaveLength(1);
+      let sent = 0;
+      await publishAutoActionAlarms([], async (a) => {
+        sent += a.length + 1;
+      });
+      expect(sent, "the empty case: the transport is not called").toBe(0);
+      await publishAutoActionAlarms([alarm], async (a) => {
+        sent += a.length;
+      });
+      expect(sent, "one alarm handed to the transport").toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

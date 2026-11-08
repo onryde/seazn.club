@@ -184,11 +184,24 @@ export interface ArmedAlarm {
   dueAt: Date;
 }
 
-/** Wakes the firer for armed rows. A no-op until plan Task 10 replaces it with server/auto-advance/qstash.ts's publish;
- *  until then the sweep (Task 9) is the only waker, so an armed row is late, never lost. Called AFTER the arming
- *  transaction committed, so an alarm never names a row that rolled back. */
-export async function publishAutoActionAlarms(alarms: readonly ArmedAlarm[]): Promise<void> {
-  void alarms;
+/** The transport that wakes the firer. A no-op until plan Task 10 makes server/auto-advance/qstash.ts's publish the
+ *  default; until then the sweep (Task 9) is the only waker, so an armed row is late, never lost. */
+export type AlarmPublisher = (alarms: readonly ArmedAlarm[]) => Promise<void>;
+const noAlarmTransport: AlarmPublisher = async () => {};
+
+/**
+ * Wakes the firer for armed rows. Called AFTER the arming transaction committed (a draft, a switch, a result), so an
+ * alarm never names a row that rolled back. NEVER THROWS: the change it follows already stands, and a failed publish
+ * costs only latency (the sweep re-wakes the row), so it must never turn a committed draft or switch into a 500. A
+ * failure is logged as `auto_advance_alarm_publish_failed` and swallowed. Nothing armed, nothing sent.
+ */
+export async function publishAutoActionAlarms(alarms: readonly ArmedAlarm[], publish: AlarmPublisher = noAlarmTransport): Promise<void> {
+  if (alarms.length === 0) return;
+  try {
+    await publish(alarms);
+  } catch (err) {
+    log.error({ err, rowIds: alarms.map((a) => a.rowId), event: "auto_advance_alarm_publish_failed" }, "auto_advance_alarm_publish_failed");
+  }
 }
 
 interface ArmStage {
@@ -318,9 +331,12 @@ async function settleKind(c: ArmCtx, kind: AutoActionKind, live: LiveRow | undef
  * nothing here takes the division lock.
  */
 export async function rearmAutoActions(tx: Tx, stageId: string, opts: { restartPending?: boolean } = {}): Promise<ArmedAlarm[]> {
+  // Serialises two arms of one stage (a result and a draft, two results): without it the second reads no row, inserts
+  // its own, waits on the first's uncommitted row in the one-live-row index, and fails 23505 once that commits.
   await tx`select pg_advisory_xact_lock(hashtext(${"auto-advance:" + stageId}))`;
   // `clock_timestamp()`, read once after the lock: `now()` is the transaction's start, stale by however long the lock
-  // and the caller's own work took. Every write of this call stamps it, so `due_at - updated_at` is exactly the settle.
+  // and the caller's own work took. Every write of this call stamps it, so `due_at - updated_at` is exactly the settle,
+  // and a lease is judged against it too.
   const [stage] = await tx<ArmStage[]>`
     select s.id, s.org_id, s.division_id, s.kind, s.status, s.config, s.progression, clock_timestamp() as at,
            exists (select 1 from stage_auto_actions a where a.stage_id = s.id and a.state in ${tx([...LIVE_AUTO_ACTION_STATES])}) as has_live
@@ -332,7 +348,7 @@ export async function rearmAutoActions(tx: Tx, stageId: string, opts: { restartP
   if (!sourceOn && !confirmOn && !stage.has_live) return [];
 
   const liveRows = await tx<LiveRow[]>`
-    select id, kind, state, target_round, target_proposal_id, blocked_code, detail, coalesce(lease_until > now(), false) as leased
+    select id, kind, state, target_round, target_proposal_id, blocked_code, detail, coalesce(lease_until > ${stage.at}, false) as leased
       from stage_auto_actions where stage_id = ${stageId} and state in ${tx([...LIVE_AUTO_ACTION_STATES])}`;
   const liveOf = (kind: AutoActionKind) => liveRows.find((r) => r.kind === kind);
 

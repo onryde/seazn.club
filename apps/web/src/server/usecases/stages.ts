@@ -106,7 +106,7 @@ import { ONLINE_GAME_EXISTS_CODE } from "@/lib/open-round";
 import { byeAward, isOneSidedAwardBye } from "@/lib/fixture-bye";
 import { engineFixtureStatus as toBracketFixtureStatus } from "@/lib/fixture-engine-status";
 import { personalPointsLeaderboard } from "./americano";
-import type { AuthCtx } from "@/server/api-v1/auth";
+import { systemAuth, type AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStages } from "@/server/api-v1/schemas";
 import { z } from "zod";
 import { CreateStage } from "@/server/api-v1/schemas";
@@ -7065,13 +7065,18 @@ export async function markFieldChangeSeedProposalsStale(orgId: string, divisionI
   // (verified by reading its body: `withTenant(auth.orgId, …)` and the
   // proposal INSERT's `org_id`), and every caller here has already authorised
   // the write that changed the field. This is a system refresh of the org's
-  // OWN derived data, not a user action.
-  const systemCtx: AuthCtx = { orgId, via: "api_key", userId: null, role: null, keyId: null };
+  // OWN derived data, not a user action, so its actor is `systemAuth`'s (no
+  // person, never an API key), minted only when there is something to refresh.
+  if (affected.length === 0) return;
+  const systemCtx = systemAuth(orgId);
   for (const stageId of affected) {
     try {
       await computeSeedProposal(systemCtx, stageId);
     } catch {
-      // best-effort, see docstring
+      // best-effort, see docstring. As in markDependentSeedProposalsStale, a
+      // stale draft nothing replaced must not keep its confirm row counting
+      // down (Swiss auto-advance §4.2): re-derive it — to nothing.
+      await rearmAfterCommit(orgId, stageId);
     }
   }
 }
