@@ -11,7 +11,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { foldMatch, initSquads, type EventEnvelope } from "@seazn/engine/core";
+import { foldMatch, initSquads, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
 import { cricketPadRules } from "@seazn/engine/pad";
 import { cricket, eligibleBowlers, soEligibleBatters, type CricketCfg, type CricketState } from "@seazn/engine/sports/cricket";
 import { ballSeq, cricketEnvelopes, cricketLineups, tiedWithSuperOver, type CricketEventSpec } from "../../__tests__/_cricket-fold";
@@ -19,7 +19,7 @@ import uiEn from "@/dictionaries/en/ui.json";
 import { GuidedSheet, answerStep, currentStep, initialSheetState } from "../../guided-sheet";
 import { dedicatedEventTypes, moreActions, softCommitPlan } from "../../pad-host";
 import type { GuidedSheetSpec, GuidedSheetStep, PadHostView, TileSpec } from "../../types";
-import { bowlerBlocked, bowlerBlockReason, buildContext, buildDock, buildScorebug, buildSheets, buildTiles, refusedEventTypes, resolvePeople, type TFn } from "../cricket";
+import { bowlerBlocked, bowlerBlockReason, buildContext, buildDock, buildScorebug, buildSheets, buildTiles, KEEPER_POSITION, KEEPER_ROLE, refusedEventTypes, resolvePeople, type TFn } from "../cricket";
 
 const t: TFn = (key) => key;
 const T20 = cricket.configSchema.parse(cricket.variants.t20);
@@ -28,6 +28,8 @@ const STRIKER = "H-1";
 const NON_STRIKER = "H-2";
 const OPENING_BOWLER = "A-11";
 const FIELDER = "A-7";
+/** The fielding side's keeper: `cricketLineups()` gives the away side's second name the `wicketkeeper` role. */
+const KEEPER = "A-2";
 
 /** MCC Law 37.1.1 "Either batter is out Obstructing the field" (owner ruling Q1b: the skin asks who), and the house rulebook's
  *  fielder credit for it (DOMAIN.md, Dismissals; owner ruling Q1: the skin asks for the fielder). The one mode this batch moved. */
@@ -156,21 +158,25 @@ describe("the wicket sheet offers the engine's modes", () => {
             same(step.kind === "person" && step.optional === true, optional, `${kind}: the fielder step is optional`);
             return fielderAnswer;
           }
+          // S2-4 Task 5: a stumping names the keeper (the lineup's), and a run out its runs completed (none, here).
+          if (step.id === "keeper") return KEEPER;
+          if (step.id === "completed") return "0";
           if (step.kind === "person" && step.candidates?.[0] !== undefined) return step.candidates[0];
           throw new Error(`${kind}: unexpected step "${step.id}"`);
         });
         if (fielderAnswer === FIELDER) asked.set(kind, steps);
         const variable = cricketPadRules.variableOutKinds.includes(kind);
         const credited = cricketPadRules.fielderCreditedKinds.includes(kind);
+        const creditedTo = kind === "stumped" ? KEEPER : FIELDER;
         same(steps.includes("out"), variable, `${kind}: who's out asked`);
-        same(steps.includes("fielder") || steps.includes("fielderOptional"), credited, `${kind}: fielder asked`);
+        same(steps.includes("fielder") || steps.includes("fielderOptional") || steps.includes("keeper"), credited, `${kind}: fielder asked`);
         const wicket = (event.payload as { wicket: { out: string; fielder?: string; bowlerCredited: boolean } }).wicket;
         same(wicket.out, variable ? NON_STRIKER : STRIKER, `${kind}: out`);
         same(wicket.bowlerCredited, cricketPadRules.bowlerCreditedKinds.includes(kind), `${kind}: bowlerCredited`);
         // The seam's consumer: the engine takes the sheet's own payload on the write path, and credits the fielder it named.
         const innings = openInnings(foldEmitted(T20, START, event));
         same(innings.fine.dismissed, [wicket.out], `${kind}: the fold dismissed the batter the sheet named`);
-        same(innings.fine.fielding?.[FIELDER] !== undefined, credited && fielderAnswer === FIELDER, `${kind}: the fold credited the fielder`);
+        same(innings.fine.fielding?.[creditedTo] !== undefined, credited && fielderAnswer === FIELDER, `${kind}: the fold credited the fielder`);
         if (fielderAnswer === "") {
           same(wicket.fielder, undefined, `${kind}: a declined fielder is not written`);
           declined++;
@@ -180,6 +186,10 @@ describe("the wicket sheet offers the engine's modes", () => {
     // Ruling 242, pinned by name: obstructing asks who is out, then a fielder the scorer may decline; retired asks who is out.
     same(asked.get(OBSTRUCTED), ["kind", "out", "fielderOptional", "incoming"], "obstructed's steps");
     same(asked.get("retired"), ["kind", "out", "incoming"], "retired's steps");
+    // S2-4 Task 5 (gaps 5, 6): a stumping asks the keeper, not a fielder; a run out asks the runs completed.
+    same(asked.get("stumped"), ["kind", "keeper", "incoming"], "stumped's steps");
+    same(asked.get("runout"), ["kind", "out", "fielder", "completed", "incoming"], "run out's steps");
+    same(asked.get("caught"), ["kind", "fielder", "incoming"], "caught's steps");
     console.info(`[pad-rules-cricket] wicket modes walked: ${asked.size}, fielder declined: ${declined}`);
     expect(asked.size).toBe(10);
     expect(declined).toBe(LAWS_NO_FIELDER_NAMED.length);
@@ -193,6 +203,7 @@ describe("the wicket sheet offers the engine's modes", () => {
         if (step.id === "kind") return kind;
         if (step.id === "out") return STRIKER;
         if (step.id === "fielder" || step.id === "fielderOptional") return FIELDER;
+        if (step.id === "completed") return "0"; // S2-4 Task 5: a run out asks the runs completed
         if (step.kind === "person" && step.candidates?.[0] !== undefined) return step.candidates[0];
         throw new Error(`${kind}: unexpected step "${step.id}"`);
       });
@@ -201,6 +212,148 @@ describe("the wicket sheet offers the engine's modes", () => {
       folded++;
     }
     expect(folded).toBe(RULEBOOK_FREE_HIT.length);
+  });
+});
+
+/** A sheet's person step answered with its first candidate (the pad's suggestion first: the next batter, the keeper). */
+const firstCandidate = (step: GuidedSheetStep): string => {
+  if (step.kind === "person" && step.candidates?.[0] !== undefined) return step.candidates[0];
+  throw new Error(`unexpected step "${step.id}"`);
+};
+/** The ledger after `n` wickets, each a bowled the scorer records through the wicket sheet (the next batter its first
+ *  candidate), with the bowler changed at every over's end as the Laws require. `bpo` is the cfg's balls per over. */
+function afterWickets(cfg: CricketCfg, n: number, bpo = 6): CricketEventSpec[] {
+  const specs: CricketEventSpec[] = [...START];
+  for (let i = 0; i < n; i++) {
+    const legal = (viewOf(cfg, specs).state as CricketState).innings.at(-1)?.legalBalls ?? 0;
+    const picks = i === 0 ? OPENERS : legal % bpo === 0 ? { bowler: Math.floor(legal / bpo) % 2 === 0 ? OPENING_BOWLER : "A-10" } : {};
+    const { event } = walk(buildSheets(pickedOf(cfg, specs, picks), t).wicket, (step) => (step.id === "kind" ? "bowled" : firstCandidate(step)));
+    specs.push([event.type, event.payload]);
+  }
+  return specs;
+}
+/** The away side's team sheet changed by `edit`, the home side's as `cricketLineups()` builds it. */
+function awaySheet(edit: (slot: LineupPair["away"]["slots"][number]) => LineupPair["away"]["slots"][number]): LineupPair {
+  const lineups = cricketLineups();
+  return { ...lineups, away: { ...lineups.away, slots: lineups.away.slots.map(edit) } };
+}
+const withoutRoles = <S extends { roles?: readonly string[] }>(slot: S): S => ({ ...slot, roles: undefined });
+
+describe("S2-4 T5: the wicket sheet asks the keeper, the runs completed, and the next batter only when one walks in", () => {
+  it("stumped offers the keeper: by role, else by WK position, else the side without the bowler", () => {
+    const AWAY = Array.from({ length: 11 }, (_, i) => `A-${i + 1}`);
+    const cases: [name: string, lineups: LineupPair, keepers: string[]][] = [
+      ["by role", awaySheet((slot) => (slot.personId === "A-5" ? { ...slot, roles: [KEEPER_ROLE] } : withoutRoles(slot))), ["A-5"]],
+      ["by position", awaySheet((slot) => (slot.personId === "A-6" ? { ...withoutRoles(slot), positionKey: KEEPER_POSITION } : withoutRoles(slot))), ["A-6"]],
+      ["no keeper named", awaySheet(withoutRoles), AWAY.filter((id) => id !== OPENING_BOWLER)],
+    ];
+    let folded = 0;
+    for (const [name, lineups, keepers] of cases) {
+      const view = { ...pickedOf(T20, START), squads: initSquads(lineups) };
+      let offered: readonly string[] | undefined;
+      const { asked, event } = walk(buildSheets(view, t).wicket, (step) => {
+        if (step.id === "kind") return "stumped";
+        if (step.id === "keeper" && step.kind === "person") offered = step.candidates;
+        return firstCandidate(step);
+      });
+      same(offered, keepers, `${name}: the keeper step's candidates`);
+      same(asked.includes("fielder"), false, `${name}: a stumping asks no other fielder`);
+      const wicket = (event.payload as { wicket: { fielder?: string } }).wicket;
+      same(wicket.fielder, keepers[0], `${name}: the stumping credits the keeper`);
+      const innings = openInnings(foldEmitted(T20, START, event));
+      same(innings.fine.dismissed, [STRIKER], `${name}: the fold dismissed the striker`);
+      same(innings.fine.fielding?.[keepers[0]!] !== undefined, true, `${name}: the fold credited the keeper`);
+      folded++;
+    }
+    expect(folded).toBe(3);
+  });
+
+  it("a run out asks runs completed 0-3 and the batting side gets them", () => {
+    const offered = new Set<string>();
+    let folded = 0;
+    for (const n of [0, 1, 2, 3]) {
+      const spec = buildSheets(pickedOf(T20, START), t).wicket;
+      const { event } = walk(spec, (step) => {
+        if (step.id === "kind") return "runout";
+        if (step.id === "out") return NON_STRIKER;
+        if (step.id === "fielder") return FIELDER;
+        if (step.id === "completed" && step.kind === "choice") {
+          for (const option of step.options) offered.add(option.id);
+          return String(n);
+        }
+        return firstCandidate(step);
+      });
+      same((event.payload as { runs: { bat: number } }).runs.bat, n, `completed ${n}: runs.bat`);
+      const innings = openInnings(foldEmitted(T20, START, event));
+      same(innings.runs, n, `completed ${n}: the fold's runs go up by ${n}`);
+      same(innings.fine.dismissed, [NON_STRIKER], `completed ${n}: the batter named is out`);
+      folded++;
+    }
+    same([...offered], ["0", "1", "2", "3"], "the runs completed offered");
+    expect(folded).toBe(4);
+  });
+
+  it("the next batter is asked on an ordinary wicket and not on the innings' last legal ball, at all out, or on the super over's second wicket", () => {
+    const SIX = tiedWithSuperOver();
+    const lastBallOfInnings: CricketEventSpec[] = [...START, ...[1, 2, 3, 4, 5].map((n) => ball(0, n))];
+    const tied: CricketEventSpec[] = [
+      ...START,
+      ...[1, 2, 3, 4, 5, 6].map((n): CricketEventSpec => ["cricket.ball", { over: 0, ballInOver: n, striker: "H-1", nonStriker: "H-2", bowler: "A-11", runs: { bat: 0 } }]),
+      ...[1, 2, 3, 4, 5, 6].map((n): CricketEventSpec => ["cricket.ball", { over: 0, ballInOver: n, striker: "A-1", nonStriker: "A-2", bowler: "H-11", runs: { bat: 0 } }]),
+    ];
+    expect((viewOf(SIX, tied).state as CricketState).phase, "premise: a super over").toBe("super_over");
+    const firstSuperOverWicket = walk(buildSheets(pickedOf(SIX, tied, SUPER_OVER_PICKS), t).wicket, (step) =>
+      step.id === "kind" ? "bowled" : firstCandidate(step),
+    ).event;
+    const oneDownInSuperOver: CricketEventSpec[] = [...tied, [firstSuperOverWicket.type, firstSuperOverWicket.payload]];
+    const nineDown = afterWickets(T20, 9);
+    expect(openInnings(viewOf(T20, nineDown).state as CricketState).wickets, "premise: nine down").toBe(9);
+    const cases: [name: string, view: PadHostView, cfg: CricketCfg, specs: CricketEventSpec[], asks: boolean][] = [
+      ["an ordinary wicket", pickedOf(T20, START), T20, [...START], true],
+      ["the innings' last legal ball", viewOf(SIX, lastBallOfInnings), SIX, lastBallOfInnings, false],
+      ["the tenth wicket (all out)", viewOf(T20, nineDown), T20, nineDown, false],
+      ["the super over's second wicket", viewOf(SIX, oneDownInSuperOver), SIX, oneDownInSuperOver, false],
+    ];
+    let folded = 0;
+    for (const [name, view, cfg, specs, asks] of cases) {
+      const { asked, event } = walk(buildSheets(view, t).wicket, (step) => (step.id === "kind" ? "bowled" : firstCandidate(step)));
+      same(asked.includes("incoming"), asks, `${name}: who walks in is asked`);
+      const after = foldEmitted(cfg, specs, event);
+      // The ball folds as the server will, and (where nobody was asked) it did close the innings or the super over.
+      if (!asks) same(after.phase !== (view.state as CricketState).phase || (after.superOver ?? after).innings.at(-1)?.closed === true, true, `${name}: the innings is over`);
+      folded++;
+    }
+    expect(folded).toBe(4);
+  });
+
+  it("a run out whose completed runs win the chase asks no next batter", () => {
+    const SIX = tiedWithSuperOver();
+    // Home make 1 off their six balls, so away need 2.
+    const firstInnings: CricketEventSpec[] = [...START, ...[1, 2, 3, 4, 5].map((n) => ball(0, n)), ball(0, 6, { runs: { bat: 1 } })];
+    const chase = pickedOf(SIX, firstInnings, { striker: "A-1", nonStriker: "A-2", bowler: "H-11" });
+    let checked = 0;
+    for (const [completed, asks] of [["2", false], ["0", true]] as const) {
+      const { asked, event } = walk(buildSheets(chase, t).wicket, (step) => {
+        if (step.id === "kind") return "runout";
+        if (step.id === "out") return "A-1";
+        if (step.id === "fielder") return "H-7";
+        if (step.id === "completed") return completed;
+        return firstCandidate(step);
+      });
+      same(asked.includes("incoming"), asks, `completed ${completed}: who walks in is asked`);
+      const after = foldEmitted(SIX, firstInnings, event);
+      same(after.innings.at(-1)?.runs, Number(completed), `completed ${completed}: the fold's runs`);
+      same(after.innings.at(-1)?.closed, !asks, `completed ${completed}: the chase is won only with 2`);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the keeper keys are in the engine's position catalog (preflight W10)", () => {
+    same((cricket.positions.roles ?? []).some((role) => role.key === KEEPER_ROLE), true, "the keeper role is the catalog's");
+    same(cricket.positions.groups.some((group) => group.key === KEEPER_POSITION), true, "the keeper position is the catalog's");
+    // Pinned by name too, so a renamed catalog key goes red here rather than leaving the pad on a key nothing sets.
+    same([KEEPER_ROLE, KEEPER_POSITION], ["wicketkeeper", "WK"], "the keys");
   });
 });
 

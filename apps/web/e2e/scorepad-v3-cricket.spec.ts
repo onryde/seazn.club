@@ -2063,3 +2063,64 @@ test("S2-4 T2: the toss names the teams, and a Draft division's refusal says the
     .toEqual([["cricket.toss", fx.homeEntrantId, "bat"]]);
   await expect(banner, "no refusal once started").toHaveCount(0);
 });
+
+// S2-4 Task 5 (gaps 5, 6; preflight W4): a stumping asks the keeper and offers the keeper alone (the team sheet's
+// `wicketkeeper`), never the bowler or another fielder; a run out asks the runs completed, and 1 completed is 1 on the
+// score. Labels are the shipped English dictionary's ("Stumped", "Run out", "1 run" by option id).
+test("S2-4 T5: a stumping offers the keeper only, and a run out with 1 completed adds 1 to the score", async ({ page }) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket Keeper ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [
+      { fullName: `V3 KP Striker ${TAG}` },
+      { fullName: `V3 KP NonStriker ${TAG}` },
+      { fullName: `V3 KP Three ${TAG}` },
+      { fullName: `V3 KP Four ${TAG}` },
+    ],
+    away: [
+      { fullName: `V3 KP Bowler ${TAG}` },
+      { fullName: `V3 KP Keeper ${TAG}`, roles: ["wicketkeeper"] },
+      { fullName: `V3 KP Fielder ${TAG}` },
+    ],
+    emitCoreStart: true,
+  });
+  const id = (name: string) => fx.personIds[`V3 KP ${name} ${TAG}`]!;
+  // A dot ball opens the innings with its people, so the sheet's candidates are the fold's, not pending picks.
+  await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+    over: 0,
+    ballInOver: 1,
+    striker: id("Striker"),
+    nonStriker: id("NonStriker"),
+    bowler: id("Bowler"),
+    runs: { bat: 0 },
+  });
+  await openConsoleAlreadyLive(page, fx);
+  const balls = async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball");
+
+  await pad(page).locator('[data-tile-id="wicket"]').click();
+  const sheet = sheetRoot(page);
+  await sheet.getByRole("button", { name: "Stumped", exact: true }).click();
+  await expect(sheet.locator(`[data-candidate-id="${id("Keeper")}"]`), "the keeper is offered").toBeVisible({ timeout: 10_000 });
+  await expect(sheet.locator(`[data-candidate-id="${id("Bowler")}"]`), "the bowler is not").toHaveCount(0);
+  await expect(sheet.locator(`[data-candidate-id="${id("Fielder")}"]`), "nor another fielder").toHaveCount(0);
+  await sheet.locator(`[data-candidate-id="${id("Keeper")}"]`).click();
+  await expect(sheet.getByText("Who walks in?")).toBeVisible({ timeout: 10_000 });
+  await sheet.locator(`[data-candidate-id="${id("Three")}"]`).click();
+  await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(2);
+  expect((await balls())[1]!.payload.wicket).toMatchObject({ kind: "stumped", out: id("Striker"), fielder: id("Keeper") });
+
+  await pad(page).locator('[data-tile-id="wicket"]').click();
+  await sheet.getByRole("button", { name: "Run out", exact: true }).click();
+  await sheet.locator(`[data-candidate-id="${id("NonStriker")}"]`).click();
+  await sheet.locator(`[data-candidate-id="${id("Fielder")}"]`).click();
+  await sheet.locator('[data-choice-option-id="1"]').click();
+  await expect(sheet.getByText("Who walks in?")).toBeVisible({ timeout: 10_000 });
+  await sheet.locator(`[data-candidate-id="${id("Four")}"]`).click();
+  await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(3);
+  const runOut = (await balls())[2]!;
+  expect(runOut.payload.runs, "the run completed is the batter's").toEqual({ bat: 1 });
+  expect(runOut.payload.wicket).toMatchObject({ kind: "runout", out: id("NonStriker"), fielder: id("Fielder") });
+  await expect(pad(page).locator('[data-role="v3-scorebug"]'), "one run, two wickets").toContainText("1/2");
+});

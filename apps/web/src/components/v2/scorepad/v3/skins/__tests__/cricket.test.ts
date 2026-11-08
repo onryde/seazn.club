@@ -2625,7 +2625,7 @@ describe("buildSheets — wicket flow (D-15)", () => {
     expect(final.event.payload).toMatchObject({ wicket: { kind: "caught", out: "h1", fielder: "a2", bowlerCredited: true, incoming: "h3" } });
   });
 
-  it("runout asks BOTH who-out and fielder, in order", () => {
+  it("runout asks who-out, the fielder and (S2-4 Task 5) the runs completed, in order; the runs are the batter's", () => {
     const spec = wicketSpec();
     const s = initialSheetState();
     const afterKind = answerStep(spec, s, "runout");
@@ -2637,16 +2637,23 @@ describe("buildSheets — wicket flow (D-15)", () => {
     if (afterOut.done) throw new Error("expected not done");
     expect(currentStep(spec, afterOut.state)!.id).toBe("fielder");
     const afterFielder = answerStep(spec, afterOut.state, "a3");
-    const final = pickIncoming(spec, afterFielder);
+    if (afterFielder.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterFielder.state)!.id).toBe("completed");
+    const afterCompleted = answerStep(spec, afterFielder.state, "1");
+    const final = pickIncoming(spec, afterCompleted);
     expect(final.done).toBe(true);
     if (!final.done) throw new Error("expected done");
-    expect(final.event.payload).toMatchObject({ wicket: { kind: "runout", out: "h2", fielder: "a3", bowlerCredited: false, incoming: "h3" } });
+    expect(final.event.payload).toMatchObject({
+      runs: { bat: 1 },
+      wicket: { kind: "runout", out: "h2", fielder: "a3", bowlerCredited: false, incoming: "h3" },
+    });
   });
 
-  it("stumped skips who-out but asks for fielder, and bowlerCredited is true", () => {
+  it("stumped skips who-out and asks for the keeper (S2-4 Task 5), who is credited; bowlerCredited is true", () => {
     const spec = wicketSpec();
     const afterKind = answerStep(spec, initialSheetState(), "stumped");
     if (afterKind.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterKind.state)!.id).toBe("keeper");
     const afterFielder = answerStep(spec, afterKind.state, "a1");
     const final = pickIncoming(spec, afterFielder);
     if (!final.done) throw new Error("expected done");
@@ -2786,8 +2793,11 @@ describe("buildSheets — wicket kind gated by free hit (R2b-over)", () => {
     expect(currentStep(spec, afterOut.state)!.id).toBe("fielder");
     const afterFielder = answerStep(spec, afterOut.state, "a3");
     if (afterFielder.done) throw new Error("expected not done");
-    expect(currentStep(spec, afterFielder.state)!.id).toBe("incoming");
-    const runoutFinal = answerStep(spec, afterFielder.state, "h3");
+    expect(currentStep(spec, afterFielder.state)!.id).toBe("completed"); // S2-4 Task 5
+    const afterCompleted = answerStep(spec, afterFielder.state, "0");
+    if (afterCompleted.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterCompleted.state)!.id).toBe("incoming");
+    const runoutFinal = answerStep(spec, afterCompleted.state, "h3");
     if (!runoutFinal.done) throw new Error("expected done");
     expect(runoutFinal.event.payload).toMatchObject({
       wicket: { kind: "runout", out: "h2", fielder: "a3", bowlerCredited: false, incoming: "h3" },

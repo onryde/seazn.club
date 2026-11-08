@@ -87,7 +87,7 @@ import type { EventEnvelope } from "@seazn/engine/core";
 // narrow the bowler chip's candidates, not merely to test one name), which is
 // exactly what the engine's own filter already is, so the mirror is DELETED
 // and the rule imported. Same reasoning `nextBattingSide` was granted on.
-import { activeInnings, chaseTarget as engineChaseTarget, cricket as cricketModule, eligibleBowlers, eligibleIncomingBatters, nextBattingSide, reviewsRemaining, soBattingSideAt, soEligibleBatters, suggestedIncomingBatter } from "@seazn/engine/sports/cricket";
+import { activeInnings, chaseTarget as engineChaseTarget, cricket as cricketModule, type CricketState, eligibleBowlers, eligibleIncomingBatters, nextBattingSide, reviewsRemaining, soBattingSideAt, soEligibleBatters, suggestedIncomingBatter } from "@seazn/engine/sports/cricket";
 // Pad wave P2: every closed rule set this skin offers (dismissal modes, extras, who is credited, the free hit, toss/retire/
 // review/close options, the penalty and wide runs, balls per over) is the engine's own declaration, read here and never copied.
 import { cricketPadRules, POST_PHASES } from "@seazn/engine/pad";
@@ -106,6 +106,7 @@ import {
   type PadPhase,
   type ScorebugSpec,
   type SkinDefV3,
+  type StepPredicate,
   type StripItem,
   type TileSpec,
 } from "../types";
@@ -2178,9 +2179,33 @@ function incomingPersonStep(
  */
 function wicketSheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
+  const base = basePayload(state, asCfg(view.cfg), view.contextOverrides);
+  return {
+    event: ballEventType(state),
+    steps: wicketSteps(view, "fair", ALWAYS),
+    buildPayload: (answers) => wicketPayload(view, "fair", answers, base),
+  };
+}
+
+/** The delivery a wicket falls on: a fair ball (the Wicket tile's sheet), or a wide or a no-ball (their sheets' "+ Out",
+ *  S2-4 Task 6). */
+export type WicketDelivery = "fair" | "wide" | "noball";
+
+const ALWAYS: StepPredicate = () => true;
+
+/**
+ * S2-4 Task 5 (gaps 5, 6, 7): the wicket's steps, every one gated by `gate` (always, on the Wicket tile's own sheet; the
+ * extras sheets' "+ Out" answer, Task 6). Kind -> who is out (either-batter modes only) -> fielder (caught, run out) or
+ * the keeper (stumped) -> the optional fielder (obstructed) -> the runs completed (run out) -> who walks in, asked only
+ * when the innings goes on after this ball (`wicketEndsInnings`).
+ */
+export function wicketSteps(view: PadHostView, delivery: WicketDelivery, gate: StepPredicate): GuidedSheetStep[] {
+  const state = asState(view.state);
   const cfg = asCfg(view.cfg);
   const people = resolvePeople(state, view.contextOverrides, cfg);
   const base = basePayload(state, cfg, view.contextOverrides);
+  const and = (when: StepPredicate): StepPredicate => (answers) => gate(answers) && when(answers);
+  const kindIs = (kind: string): StepPredicate => (answers) => answers.kind === kind;
   // G6: exactly the two batters who can be run out — never an empty-string
   // placeholder (resolvePeople's own "order not populated yet" fallback) —
   // so a not-yet-populated crease offers zero candidates rather than a
@@ -2191,26 +2216,14 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
   // never disagree with the scorebug strip, nor with the engine after a
   // take-back or in a super over.
   const freeHit = foldFreeHitPending(state);
-  // R2b-over (review finding — the fourth instance of "the pad must never
-  // offer what the engine will refuse", `_INDEX.md`): while a free hit is
-  // pending the fold refuses every mode outside its free-hit set
-  // (`cricketPadRules.freeHitDismissalKinds`, the engine's
-  // FREE_HIT_DISMISSAL_KINDS), so the kind step narrows to it. Filtering the
-  // engine's mode list keeps its order.
-  const { wicketKinds, freeHitDismissalKinds, variableOutKinds, fielderCreditedKinds, fielderOptionalKinds, bowlerCreditedKinds } = cricketPadRules;
-  const fielderRequired = (kind: string) => fielderCreditedKinds.includes(kind) && !fielderOptionalKinds.includes(kind);
-  const fielderOptional = (kind: string) => fielderCreditedKinds.includes(kind) && fielderOptionalKinds.includes(kind);
-  const kindOptions = (freeHit ? wicketKinds.filter((k) => freeHitDismissalKinds.includes(k)) : wicketKinds).map((k) => ({
-    id: k,
-    label: requiredVocabKey("kind", k),
-  }));
+  const { variableOutKinds } = cricketPadRules;
 
   const steps: GuidedSheetStep[] = [
     {
       id: "kind",
       kind: "choice",
       title: "pad.cricket.sheet.wicket.kind.title",
-      options: kindOptions,
+      options: wicketKindsFor(delivery, freeHit).map((k) => ({ id: k, label: requiredVocabKey("kind", k) })),
       // Owner ruling (this task's own brief): never leave a silently
       // shortened list unexplained — a scorer expecting "bowled" and not
       // finding it needs to know why. `SheetChoiceStep.hintKey`'s own doc
@@ -2219,6 +2232,7 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
       // renamed from `hint` — R2b-cricket-over follow-up, hint-field
       // naming pass, 2026-08-17.)
       hintKey: freeHit ? "pad.cricket.sheet.wicket.kind.freeHitHint" : undefined,
+      when: gate,
     },
     {
       id: "out",
@@ -2231,7 +2245,7 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
       // (Law 37.1.1) or retired (Law 25.4.1): ask (ruling 242, CK-WK-3).
       // Every other mode is the striker's, and asking would be the wasted
       // tap D-15 exists to remove.
-      when: (answers) => variableOutKinds.includes(answers.kind ?? ""),
+      when: and((answers) => variableOutKinds.includes(answers.kind ?? "")),
     },
     {
       id: "fielder",
@@ -2240,8 +2254,19 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
       pool: "onfield",
       side: people.bowlingSide,
       // The modes the fold credits a named fielder for (FIELDER_CREDIT_COLUMN)
-      // and the Laws name one for: caught, stumped, run out.
-      when: (answers) => fielderRequired(answers.kind ?? ""),
+      // and the Laws name one for: caught and run out here; stumped asks for
+      // the keeper instead (next step).
+      when: and((answers) => fielderRequired(answers.kind ?? "") && answers.kind !== STUMPED),
+    },
+    {
+      // S2-4 Task 5 (gap 5): a stumping is the keeper's (Law 39), so the step offers the keeper alone, never the side.
+      id: "keeper",
+      kind: "person",
+      title: "pad.cricket.sheet.wicket.keeper.title",
+      pool: "onfield",
+      side: people.bowlingSide,
+      candidates: keeperCandidates(view, people.bowlingSide, people.bowler),
+      when: and(kindIs(STUMPED)),
     },
     {
       // Ruling 242 (CK-WK-2): obstructing the field credits a fielder when one
@@ -2256,32 +2281,130 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
       side: people.bowlingSide,
       optional: true,
       noneLabel: "pad.cricket.sheet.wicket.fielder.none",
-      when: (answers) => fielderOptional(answers.kind ?? ""),
+      when: and((answers) => fielderOptional(answers.kind ?? "")),
+    },
+    {
+      // S2-4 Task 5 (gap 6): the runs the batters completed before the run out count (Law 38.2.1).
+      id: "completed",
+      kind: "choice",
+      title: "pad.cricket.sheet.wicket.completed.title",
+      options: RUN_OUT_COMPLETED.map((n) => ({ id: String(n), label: `pad.cricket.sheet.wicket.completed.${n}` })),
+      when: and(kindIs(RUN_OUT)),
     },
   ];
   const incoming = incomingPersonStep(state, cfg, people, "pad.cricket.sheet.wicket.incoming.title");
-  if (incoming) steps.push(incoming);
+  // S2-4 Task 5 (gap 7): nobody walks in when this wicket ends the innings (its last legal ball, all out, the super
+  // over's second wicket, or a run out whose runs win the chase).
+  if (incoming) steps.push({ ...incoming, when: and((answers) => !wicketEndsInnings(view, wicketPayload(view, delivery, answers, base))) });
+  return steps;
+}
 
+/** The modes a wicket off `delivery` may be (the engine's `wicketKinds`, in its order), narrowed while a free hit is
+ *  pending to `freeHitDismissalKinds` (R2b-over: the pad never offers what the engine will refuse). */
+function wicketKindsFor(_delivery: WicketDelivery, freeHit: boolean): readonly string[] {
+  const { wicketKinds, freeHitDismissalKinds } = cricketPadRules;
+  return freeHit ? wicketKinds.filter((k) => freeHitDismissalKinds.includes(k)) : wicketKinds;
+}
+
+const STUMPED = "stumped";
+const RUN_OUT = "runout";
+/** Presentation: the runs completed a run out may carry. */
+const RUN_OUT_COMPLETED = [0, 1, 2, 3] as const;
+
+function fielderRequired(kind: string): boolean {
+  const { fielderCreditedKinds, fielderOptionalKinds } = cricketPadRules;
+  return fielderCreditedKinds.includes(kind) && !fielderOptionalKinds.includes(kind);
+}
+function fielderOptional(kind: string): boolean {
+  const { fielderCreditedKinds, fielderOptionalKinds } = cricketPadRules;
+  return fielderCreditedKinds.includes(kind) && fielderOptionalKinds.includes(kind);
+}
+
+/**
+ * The ball a wicket sheet's answers record. A stumping credits the keeper as its fielder; a run out's runs completed go
+ * to the batter on a fair ball.
+ */
+export function wicketPayload(
+  view: PadHostView,
+  delivery: WicketDelivery,
+  answers: Readonly<Record<string, string>>,
+  base: Record<string, unknown>,
+): Record<string, unknown> {
+  const { variableOutKinds, bowlerCreditedKinds } = cricketPadRules;
+  const people = resolvePeople(asState(view.state), view.contextOverrides, asCfg(view.cfg));
+  const kind = answers.kind ?? "";
+  const out = variableOutKinds.includes(kind) ? answers.out : people.striker;
+  const fielder =
+    kind === STUMPED ? answers.keeper
+    : fielderRequired(kind) ? answers.fielder
+    : fielderOptional(kind) ? answers.fielderOptional
+    : undefined;
+  const completed = kind === RUN_OUT ? Number(answers.completed ?? 0) : 0;
   return {
-    event: ballEventType(state),
-    steps,
-    buildPayload: (answers) => {
-      const kind = answers.kind ?? "";
-      const out = variableOutKinds.includes(kind) ? answers.out : people.striker;
-      const fielder = fielderRequired(kind) ? answers.fielder : fielderOptional(kind) ? answers.fielderOptional : undefined;
-      return {
-        ...base,
-        runs: { bat: 0 },
-        wicket: {
-          kind,
-          out,
-          ...(fielder ? { fielder } : {}),
-          ...(answers.incoming ? { incoming: answers.incoming } : {}),
-          bowlerCredited: bowlerCreditedKinds.includes(kind),
-        },
-      };
+    ...base,
+    runs: { bat: delivery === "fair" ? completed : 0 },
+    wicket: {
+      kind,
+      out,
+      ...(fielder ? { fielder } : {}),
+      ...(answers.incoming ? { incoming: answers.incoming } : {}),
+      bowlerCredited: bowlerCreditedKinds.includes(kind),
     },
   };
+}
+
+/** The keeper's catalog keys (`cricket.positions`: the `wicketkeeper` role and the `WK` group), pinned against the
+ *  engine's catalog by pad-rules-cricket.test.ts (preflight W10). */
+export const KEEPER_ROLE = "wicketkeeper";
+export const KEEPER_POSITION = "WK";
+
+/**
+ * S2-4 Task 5 (gap 5): who can have made a stumping. The fielding side's on-field members whose roles hold the keeper's;
+ * else whose position is the keeper's; else, when the team sheet names no keeper, the fielding side on the field without
+ * the bowler (who cannot keep to their own bowling).
+ */
+export function keeperCandidates(view: PadHostView, side: "home" | "away", bowler: string): string[] {
+  const onField = (view.squads[side]?.members ?? []).filter((m) => m.onField);
+  const byRole = onField.filter((m) => m.roles?.includes(KEEPER_ROLE));
+  if (byRole.length > 0) return byRole.map((m) => m.personId);
+  const byPosition = onField.filter((m) => m.positionKey === KEEPER_POSITION);
+  if (byPosition.length > 0) return byPosition.map((m) => m.personId);
+  return onField.map((m) => m.personId).filter((id) => id !== bowler);
+}
+
+/**
+ * S2-4 Task 5 (gap 7): whether recording `payload` closes the innings being scored. A trial of the engine's own fold
+ * (`cricket.apply`, strict, as the server folds it) on the pad's state, with an envelope shaped as the pad's optimistic
+ * ones (`pendingToEnvelope`). True when that innings is closed afterwards. A ball that ends the match or the super over
+ * closes its innings too, so the brief's second clause (the phase leaves `live`/`super_over`) is this one; a check of it
+ * was dropped because no case could tell the two apart (S2-4 Task 5, mutation m5e). A refusal reads false, so the scorer
+ * is still asked. The phone's `endsInnings` states the same rule (preflight D5).
+ */
+export function wicketEndsInnings(view: PadHostView, payload: Record<string, unknown>): boolean {
+  const last = view.events.at(-1);
+  const envelope: EventEnvelope = {
+    id: "pad-trial",
+    fixtureId: last?.fixtureId ?? "",
+    seq: (last?.seq ?? 0) + 1,
+    type: ballEventType(asState(view.state)),
+    payload,
+    recordedAt: last?.recordedAt ?? new Date(0).toISOString(),
+    recordedBy: last?.recordedBy ?? null,
+  };
+  try {
+    // `view.state` is the fold's own state (PadHostView's contract types it `unknown`); a state that is not one makes
+    // the engine throw, which reads as "not known to end", below.
+    const state = view.state as CricketState;
+    // The innings this ball is in: the open one, or, when the last is closed (or none has begun), the one it opens.
+    const { list } = activeInnings(state);
+    const index = list.length > 0 && list.at(-1)?.closed !== true ? list.length - 1 : list.length;
+    // `apply` parses the payload itself (`parsePayload`, as the server's fold does), so the envelope's payload type is
+    // the module's to check, not this caller's.
+    const after = cricketModule.apply(state, envelope as Parameters<typeof cricketModule.apply>[1], { strict: true, squads: view.squads });
+    return activeInnings(after).list[index]?.closed === true;
+  } catch {
+    return false;
+  }
 }
 
 /** Who won -> elected to. `CricketToss` requires both (`wonBy: EntrantId`,
