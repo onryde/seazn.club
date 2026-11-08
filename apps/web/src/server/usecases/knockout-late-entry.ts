@@ -24,7 +24,7 @@ import { DEPARTED_STATUSES } from "./entrants";
 import { fixtureStartedSql, stageHasStarted } from "./fixture-started-sql";
 import { knockoutRefusal } from "./knockout-refusal";
 import { OCCUPYING, afterScheduleWrite } from "./schedule";
-import { divisionHasStarted } from "./stages";
+import { divisionHasStarted, lockSwissBoardAppends } from "./stages";
 import { appendUndoBarrierRow, nextFreeRoundSlot, placeBoard, type LateEntrySource } from "./swiss-late-entry";
 
 type Tx = postgres.TransactionSql;
@@ -130,6 +130,30 @@ async function roundOneLines(tx: Tx, stage: KnockoutEntryStage): Promise<LateLin
   });
 }
 
+/**
+ * B3 fix round 1 (review #2): the append lock of every round-1 line and every line one feeds — the SAME `fixture:<id>`
+ * key each score append takes (append-event.ts), sorted, held to commit (`lockSwissBoardAppends`, the W3 T5 m1
+ * precedent) — taken by a PLACING path after its `division:` lock and BEFORE it reads `next_started`/`played`
+ * (`roundOneLines`). Scoring serialises on the fixture, never the division, so without it a scorer starting round 2
+ * could commit between that read and the surgery: a reopened bye then took its holder out of a round-2 match in play.
+ * With it the scorer either commits first (and the read sees round 2 started — X-LE-9 closes that bye) or waits and
+ * finds the line already reshaped. The one lock order (`division:` → `fixture:`, append-event.ts) holds: the surgery's
+ * own void and seat writes re-enter locks already held. An automatic arrival's marking places nothing, so it takes
+ * none and waits on no scorer.
+ */
+async function lockRoundOneAppends(tx: Tx, stage: KnockoutEntryStage): Promise<void> {
+  const rows = await tx<{ id: string; next: string | null }[]>`
+    select id, winner_to_fixture as next from fixtures where stage_id = ${stage.id} and round_no = 1`;
+  await lockSwissBoardAppends(tx, rows.flatMap((r) => (r.next === null ? [r.id] : [r.id, r.next])));
+}
+
+/** Whether `entrantId` sits in any line of `stageId` — a reinstated entrant the withdrawal left seated, or a player in. */
+async function holdsSeatIn(tx: Tx, stageId: string, entrantId: string): Promise<boolean> {
+  const [seat] = await tx`
+    select 1 from fixtures where stage_id = ${stageId} and ${entrantId} in (home_entrant_id, away_entrant_id) limit 1`;
+  return seat !== undefined;
+}
+
 /** The decision for `stage` as it stands (under the caller's `division:` lock). */
 export async function decideForStage(tx: Tx, stage: KnockoutEntryStage): Promise<KnockoutLateDecision> {
   return decideKnockoutLateEntry({
@@ -222,17 +246,24 @@ export async function applyKnockoutLateDecision(
  * Reinstate — is never placed by the app and never refused (a payment that has moved cannot be un-taken by a 409). It
  * WAITS: `knockout_waiting_stage_id` names the stage, the desk counts it (`late_players_waiting`), and the organiser's
  * one tap (`placeWaitingKnockoutEntrant`) runs the cases. Null — nothing marked — when the stage is complete (no round 1
- * left to join), or the entrant still sits on an undecided line of the stage (a reinstated bye holder whose round-2
- * opponent is not known yet: the withdrawal walked nothing over, so they never left the bracket). The write is
- * idempotent: a webhook retry sets the same stage again — one flag.
+ * left to join). B3 fix round 1 (review #1): an entrant who already HOLDS a seat in the stage (a reinstatement — the
+ * withdrawal left them seated) is marked only when the tap could act on it: their own round-1 line is a withdrawal's
+ * walkover against them that is still reversible (`decideWaitingEntrant`, the tap's own decision). A round-1 loser by
+ * play, a winner walked over in round 2, a player still on an undecided line: none of these is a late player, and a
+ * flag the tap can only refuse would sit on the desk for good. The write is idempotent: a webhook retry is one flag.
  */
 async function markWaiting(tx: Tx, stage: KnockoutEntryStage, entrantId: string): Promise<KnockoutLateEntryResult | null> {
   if (stage.status === "complete") return null;
-  const [{ in_bracket: inBracket }] = await tx<{ in_bracket: boolean }[]>`
-    select exists (select 1 from fixtures f
-                    where f.stage_id = ${stage.id} and f.outcome is null
-                      and ${entrantId} in (f.home_entrant_id, f.away_entrant_id)) as in_bracket`;
-  if (inBracket) return null;
+  if (await holdsSeatIn(tx, stage.id, entrantId)) {
+    const decision = decideWaitingEntrant({
+      lines: await roundOneLines(tx, stage),
+      stageStarted: true, // read by a refusal's Rebuild offer only, and a refusal marks nothing
+      caseTwoOnly: CASE_TWO_ONLY_KINDS.includes(stage.kind),
+      entrantId,
+      holdsSeat: true,
+    });
+    if (decision.case !== "withdrawn_slot") return null;
+  }
   await tx`update entrants set knockout_waiting_stage_id = ${stage.id} where id = ${entrantId}`;
   return { format: "knockout", entrant_id: entrantId, stage_id: stage.id, case: "waiting" };
 }
@@ -258,6 +289,7 @@ export async function admitKnockoutLateEntrant(
   if (stage === null) return null;
   if (source !== "organiser") return markWaiting(tx, stage, entrantId);
   const [{ org_id: orgId }] = await tx<{ org_id: string }[]>`select org_id from divisions where id = ${divisionId}`;
+  await lockRoundOneAppends(tx, stage);
   const decision = await decideForStage(tx, stage);
   return applyKnockoutLateDecision(tx, { orgId, divisionId, actorId: auth?.userId ?? null, source }, stage, entrantId, decision);
 }
@@ -308,14 +340,13 @@ export async function placeWaitingKnockoutEntrant(auth: AuthCtx, stageId: string
     if (root === null || root.id !== stageId || e === undefined || e.waiting !== stageId || DEPARTED_STATUSES.has(e.status)) {
       throw knockoutRefusal("KO_LATE_ENTRY_NOT_WAITING");
     }
-    const [seat] = await tx`
-      select 1 from fixtures where stage_id = ${stageId} and ${entrantId} in (home_entrant_id, away_entrant_id) limit 1`;
+    await lockRoundOneAppends(tx, root);
     const decision = decideWaitingEntrant({
       lines: await roundOneLines(tx, root),
       stageStarted: await stageHasStarted(tx, root.id),
       caseTwoOnly: CASE_TWO_ONLY_KINDS.includes(root.kind),
       entrantId,
-      holdsSeat: seat !== undefined,
+      holdsSeat: await holdsSeatIn(tx, stageId, entrantId),
     });
     const base = { divisionId: st.division_id, competitionId: st.competition_id };
     if (decision.case === "refused") {

@@ -18,12 +18,13 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { buildTemplateStages } from "@/lib/format-templates";
 import { rb4L4ExpectedLine, type StoredByeLine } from "@/lib/__tests__/rb4-l4-oracle";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CreateStage } from "@/server/api-v1/schemas";
+import { appendEventInTx } from "@/server/engine-db/append-event";
 import { getCompetitionDesk } from "../competition-desk";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -278,20 +279,39 @@ describe.skipIf(!HAS_DB)("W4 T11: automatic arrivals into a drawn knockout wait 
     });
   }
 
-  it("K13 a reinstated player whose walkover winner has started round 2 is refused by the tap and keeps waiting", async () => {
+  /** Line 1's home player withdrawn (a walkover against them), line 2 played, and the round-2 line they feed started. */
+  async function walkoverWinnerStartsRoundTwo(r: Rig, gone: string, l1: Row, l2: Row, before?: () => Promise<void>) {
+    await withdrawEntrantCascade(r.auth, gone);
+    if (before) await before();
+    await homeWin(r.auth, l2);
+    await post(r.auth, l1.winner_to_fixture!, "core.start");
+  }
+
+  it("K13 a player reinstated AFTER their walkover winner started round 2 is not flagged: the tap could only refuse", async () => {
+    // B3 fix round 1 (review #1): main of T11 flagged them, and the tap answered "no slot left" forever.
     const r = await rig({ n: 8 });
     const rows = await rowsOf(r.stageId);
     const l1 = rows.find((x) => x.round_no === 1 && x.seq_in_round === 1)!;
     const l2 = rows.find((x) => x.round_no === 1 && x.seq_in_round === 2)!;
     expect(l1.winner_to_fixture, "premise: lines 1 and 2 feed one round-2 line").toBe(l2.winner_to_fixture);
     const gone = l1.home_entrant_id!;
-    await withdrawEntrantCascade(r.auth, gone);
-    // Line 2 played, then the round-2 line they feed starts.
-    await post(r.auth, l2.id, "core.start");
-    for (let g = 0; g < 2; g++) await post(r.auth, l2.id, "badminton.game.summary", { home: 21, away: 10 });
-    await post(r.auth, l1.winner_to_fixture!, "core.start");
+    await walkoverWinnerStartsRoundTwo(r, gone, l1, l2);
+    expect((await rowById(l1.id)).outcome, "premise: their own line is still a walkover against them").toMatchObject({ reason: "withdrew", loser: gone });
     await patchEntrant(r.auth, gone, { status: "registered" });
-    expect(await waitingOn(gone)).toBe(r.stageId);
+    expect(await waitingOn(gone)).toBeNull();
+    expect(await deskLate(r)).toEqual([]);
+  });
+
+  it("K13 a player flagged while their seat was reversible, whose walkover winner then starts round 2, is refused by the tap and keeps waiting", async () => {
+    const r = await rig({ n: 8 });
+    const rows = await rowsOf(r.stageId);
+    const l1 = rows.find((x) => x.round_no === 1 && x.seq_in_round === 1)!;
+    const l2 = rows.find((x) => x.round_no === 1 && x.seq_in_round === 2)!;
+    const gone = l1.home_entrant_id!;
+    await walkoverWinnerStartsRoundTwo(r, gone, l1, l2, async () => {
+      await patchEntrant(r.auth, gone, { status: "registered" });
+      expect(await waitingOn(gone), "flagged while the walkover was reversible").toBe(r.stageId);
+    });
     const answer = await placeWaitingKnockoutEntrant(r.auth, r.stageId, gone);
     expect(answer).toMatchObject({ case: "refused", reason: "KO_LATE_ENTRY_NO_SLOT" });
     expect(await waitingOn(gone), "a refused tap keeps them waiting").toBe(r.stageId);
@@ -513,4 +533,139 @@ describe.skipIf(!HAS_DB)("W4 T11: an import into a drawn knockout (football)", (
     expect(await placeWaitingKnockoutEntrant(auth, stage!.id, e!.id)).toMatchObject({ case: "rebuild_offered", reason: "KO_LATE_ENTRY_NO_SLOT" });
     expect(await waitingOn(e!.id)).toBe(stage!.id);
   });
+});
+
+/** A home win on `f` through the scorer's own events (badminton: two games). */
+async function homeWin(auth: AuthCtx, f: Row): Promise<void> {
+  await post(auth, f.id, "core.start");
+  for (let g = 0; g < 2; g++) await post(auth, f.id, "badminton.game.summary", { home: 21, away: 10 });
+}
+
+// B3 fix round 1 (review #1): an entrant who already holds a seat is flagged only when the tap could act — their own
+// round-1 line a withdrawal's walkover against them, still reversible. Main of T11 flagged every reinstated entrant not
+// on an undecided line, and the tap then answered "Round 1 complete; no slot left." forever: a stuck desk row.
+describe.skipIf(!HAS_DB)("B3 fix #1: a reinstated seat holder is flagged only when the tap can give the seat back", () => {
+  it("a round-1 loser BY PLAY, withdrawn and reinstated, is no late player: no marker, no desk row", async () => {
+    const r = await rig({ n: 8 });
+    const line = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && x.seq_in_round === 1)!;
+    await homeWin(r.auth, line);
+    const loser = line.away_entrant_id!;
+    const played = await rowById(line.id);
+    expect(played.outcome?.reason, "premise: decided by play, not a walkover").not.toBe("withdrew");
+    expect(played.outcome?.winner, "premise: the home player won").toBe(line.home_entrant_id);
+    await withdrawEntrantCascade(r.auth, loser);
+    await patchEntrant(r.auth, loser, { status: "registered" });
+    expect(await waitingOn(loser)).toBeNull();
+    expect(await deskLate(r)).toEqual([]);
+  });
+
+  it("a round-1 WINNER walked over in round 2, withdrawn and reinstated, is no late player: no marker, no desk row", async () => {
+    const r = await rig({ n: 8 });
+    const rows = await rowsOf(r.stageId);
+    const l1 = rows.find((x) => x.round_no === 1 && x.seq_in_round === 1)!;
+    const l2 = rows.find((x) => x.round_no === 1 && x.seq_in_round === 2)!;
+    expect(l1.winner_to_fixture, "premise: lines 1 and 2 feed one round-2 line").toBe(l2.winner_to_fixture);
+    await homeWin(r.auth, l1);
+    await homeWin(r.auth, l2);
+    const winner = l1.home_entrant_id!;
+    await withdrawEntrantCascade(r.auth, winner);
+    const r2 = await rowById(l1.winner_to_fixture!);
+    expect(r2.outcome, "premise: the withdrawal walked round 2 over, against them").toMatchObject({ kind: "award", reason: "withdrew", loser: winner });
+    await patchEntrant(r.auth, winner, { status: "registered" });
+    expect(await waitingOn(winner)).toBeNull();
+    expect(await deskLate(r)).toEqual([]);
+  });
+});
+
+/**
+ * B3 fix round 1 (review #2): a scorer starting a round-2 match, stopped INSIDE its transaction right after it took the
+ * match's append lock (`fixture:<id>`, as append-event.ts does), while a placing path runs. Deterministic, never a sleep
+ * race (the W3 T5 precedent, swiss-undo-pair-next.test.ts): the scorer is released only once Postgres reports the
+ * placing path blocked on the scorer's backend (`pg_blocking_pids`), or once it finished without waiting — the defect.
+ */
+async function againstAScorerInFlight<T>(orgId: string, fixtureId: string, place: () => Promise<T>) {
+  let release!: () => void;
+  const gate = new Promise<void>((res) => (release = res));
+  let holding!: (pid: number) => void;
+  const held = new Promise<number>((res) => (holding = res));
+  const scorer = withTenant(orgId, async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
+    const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+    holding(pid);
+    await gate;
+    await appendEventInTx(tx, orgId, fixtureId, 0, { type: "core.start", payload: {} });
+  }).then(
+    () => "committed" as const,
+    (e: unknown) => e,
+  );
+  const pid = await held;
+  let settled = false;
+  const placed = place().then(
+    (v) => ({ ok: v }),
+    (e: unknown) => ({ err: e }),
+  );
+  void placed.then(() => (settled = true));
+  let blocked = false;
+  for (let i = 0; i < 400 && !settled && !blocked; i++) {
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_stat_activity where ${pid}::int = any(pg_blocking_pids(pid))`;
+    blocked = n > 0;
+    if (!blocked) await new Promise((res) => setTimeout(res, 25));
+  }
+  release();
+  return { blocked, scorer: await scorer, placed: await placed };
+}
+
+/** Six seeded in eight (seeds 1 and 2 hold byes); the round-1 match feeding seed 2's round-2 line is played, so that
+ *  line is a real match a scorer can start. RB4-L4 names seed 2's bye — until its round 2 starts (X-LE-9). */
+async function seedTwoRoundTwoReady() {
+  const r = await rig({ n: 6 });
+  const rows = await rowsOf(r.stageId);
+  const stored = storedByeLines(rows);
+  const seeds = await seedsOf(r.divisionId);
+  const holderOfSeed = (n: number) => stored.find((b) => seeds.get(b.holderId) === n)!;
+  const b1 = holderOfSeed(1);
+  const b2 = holderOfSeed(2);
+  expect(rb4L4ExpectedLine(stored, seeds, rows.filter((x) => x.round_no === 1).length), "premise: RB4-L4 names seed 2's bye").toBe(b2.lineId);
+  const r2Id = rows.find((x) => x.id === b2.lineId)!.winner_to_fixture!;
+  const feeder = rows.find((x) => x.round_no === 1 && x.winner_to_fixture === r2Id && x.id !== b2.lineId)!;
+  await homeWin(r.auth, feeder);
+  const r2 = await rowById(r2Id);
+  expect([r2.home_entrant_id, r2.away_entrant_id].filter(Boolean).length, "premise: seed 2's round-2 line is seated both sides").toBe(2);
+  return { r, b1, b2, r2 };
+}
+
+describe.skipIf(!HAS_DB)("B3 fix #2: placing waits for a scorer starting round 2 (X-LE-9 under a race)", () => {
+  async function expectRoundTwoKept(r2: Row) {
+    const after = await rowById(r2.id);
+    expect([after.home_entrant_id, after.away_entrant_id], "round 2 keeps both players").toEqual([r2.home_entrant_id, r2.away_entrant_id]);
+    expect(after.status, "round 2 is under way").not.toBe("scheduled");
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${r2.id}`;
+    expect(n, "the scorer's start committed").toBe(1);
+  }
+
+  it("Add late player: the add waits, then takes seed 1's bye — never seed 2's, whose round 2 has started", async () => {
+    const { r, b1, r2 } = await seedTwoRoundTwoReady();
+    const out = await againstAScorerInFlight(r.orgId, r2.id, () => createEntrants(r.auth, r.divisionId, [entrant(SINGLES, "Late", null)]));
+    expect(out.blocked, "the add waited on round 2's append lock").toBe(true);
+    expect(out.scorer).toBe("committed");
+    expect("ok" in out.placed ? out.placed.ok[0]?.late_entry : out.placed.err).toMatchObject({
+      format: "knockout",
+      case: "bye",
+      fixture_id: b1.lineId,
+      opponent_id: b1.holderId,
+    });
+    await expectRoundTwoKept(r2);
+  }, 120_000);
+
+  it("the organiser's tap: it waits, then places the waiting player on seed 1's bye", async () => {
+    const { r, b1, r2 } = await seedTwoRoundTwoReady();
+    const { entrantId } = await confirmArrival(r, "Late");
+    expect(await waitingOn(entrantId), "premise: waiting").toBe(r.stageId);
+    const out = await againstAScorerInFlight(r.orgId, r2.id, () => placeWaitingKnockoutEntrant(r.auth, r.stageId, entrantId));
+    expect(out.blocked, "the tap waited on round 2's append lock").toBe(true);
+    expect(out.scorer).toBe("committed");
+    expect("ok" in out.placed ? out.placed.ok : out.placed.err).toMatchObject({ case: "bye", fixture_id: b1.lineId, opponent_id: b1.holderId });
+    await expectRoundTwoKept(r2);
+  }, 120_000);
 });
