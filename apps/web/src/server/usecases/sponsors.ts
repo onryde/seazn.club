@@ -33,7 +33,7 @@ import {
   recipientLocale,
 } from "@/server/email-outbox";
 import { log } from "@/server/logger";
-import { fireOrgRevalidate } from "@/server/public-site/revalidate";
+import { expireCompetitionShell, fireOrgRevalidate } from "@/server/public-site/revalidate";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { applicationFeeCents, feePercentFor } from "./registrations";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./dispute-recovery";
@@ -141,8 +141,17 @@ async function sponsorCompetitionId(orgId: string, id: string): Promise<string |
   });
 }
 
-/** Sponsor edits must show on the public tree promptly — same cache bust the
- *  org-branding PATCH fires (tail work; slug lookup included). */
+/** An ORGANISER's sponsor write (create, edit, reorder, delete): its author looks at the public page next, so the org tag
+ *  expires BEFORE the use-case resolves - `expireCompetitionShell` awaits the slug and fires `{ expire: 0 }` inside the
+ *  request (Next applies a request's revalidations when its handler finishes) and never rejects, the write having
+ *  committed. Never `bustPublicSponsors` here: its `deferred` is Next's `after()`, which runs once the response has gone
+ *  and fires its tags only when every tail task is done - smoke job 128625643038 read a free org's public page 3 ms after
+ *  the 201 and was served the cached page without the new partner sponsor. */
+async function expirePublicSponsors(orgId: string, op: string): Promise<void> {
+  await expireCompetitionShell(orgId, { op });
+}
+
+/** Sponsor changes nobody reads back at once (the paid-order and dispute webhooks): the same bust as tail work. */
 function bustPublicSponsors(orgId: string): void {
   deferred(async () => {
     const [org] = await sql<{ slug: string }[]>`
@@ -197,8 +206,8 @@ export async function createSponsor(
               ${input.status})
       returning ${tx(COLS)}`;
     return row!;
-  }).then((row) => {
-    bustPublicSponsors(auth.orgId);
+  }).then(async (row) => {
+    await expirePublicSponsors(auth.orgId, "sponsor.create");
     return row;
   });
 }
@@ -263,8 +272,8 @@ export async function patchSponsor(
     // R12: the first tick turns the org's rotation on. After the update (a refused tick leaves no row), in its transaction.
     if (patch.on_stream === true) await ensureOrgStreamSettings(tx, auth.orgId, auth.userId);
     return row;
-  }).then((row) => {
-    bustPublicSponsors(auth.orgId);
+  }).then(async (row) => {
+    await expirePublicSponsors(auth.orgId, "sponsor.patch");
     return row;
   });
 }
@@ -274,7 +283,7 @@ export async function deleteSponsor(auth: AuthCtx, id: string): Promise<void> {
     const [row] = await tx<{ id: string }[]>`
       delete from sponsors where id = ${id} returning id`;
     if (!row) throw new HttpError(404, "sponsor not found");
-  }).then(() => bustPublicSponsors(auth.orgId));
+  }).then(() => expirePublicSponsors(auth.orgId, "sponsor.delete"));
 }
 
 /** Persist a new display order: `ids` in the order they should render.
@@ -294,8 +303,8 @@ export async function reorderSponsors(
       reordered++;
     }
     return { reordered };
-  }).then((res) => {
-    bustPublicSponsors(auth.orgId);
+  }).then(async (res) => {
+    await expirePublicSponsors(auth.orgId, "sponsor.reorder");
     return res;
   });
 }
