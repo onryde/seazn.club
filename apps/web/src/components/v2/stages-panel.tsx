@@ -2580,8 +2580,13 @@ export function classifyActError(
   // W4 T6 (AN-2): Complete refused because a line of the bracket is still owed a result (STAGE_HAS_UNDECIDED_FIXTURES:
   // a third-place match unplayed beside a decided final). Amber — matches to finish — in the reader's language, never
   // the server's English sentence.
+  // B3 fix round 1 (review #6): a sentence that names something (KO_LATE_ENTRY_FED_STAGE's `{stage}`) takes it from the
+  // envelope's fields, which the server sends beside the code (`knockoutRefusal(code, details)` → `err.extra`).
   if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) {
-    return { tone: "warning", text: msg(knockoutRefusalKey(err.code)), refresh: false };
+    const vars = Object.fromEntries(
+      Object.entries(err.extra).filter((e): e is [string, string | number] => typeof e[1] === "string" || typeof e[1] === "number"),
+    );
+    return { tone: "warning", text: msg(knockoutRefusalKey(err.code), vars), refresh: false };
   }
   const precondition = generatePreconditionMessage(err, msg, stageName, matchName);
   if (precondition) return { tone: "warning", text: precondition, refresh: false };

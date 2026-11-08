@@ -45,3 +45,31 @@ describe("classifyActError — Complete refused on a bracket still owed a result
     expect(out.text).not.toBe(DICTS.en![KEY]);
   });
 });
+
+// B3 fix round 1 (review #6): a knockout refusal whose sentence names something (`{stage}`) takes the value from the
+// error envelope's fields — the server sends it beside the code (`knockoutRefusal(code, details)`, which `apiV1` hands
+// over as `err.extra`). Rendering the key bare painted a literal "{stage}" to the organiser.
+describe("classifyActError — a knockout refusal with a placeholder fills it from the envelope", () => {
+  const FED_CODE = "KO_LATE_ENTRY_FED_STAGE";
+  const FED_KEY = "knockout.refusal.KO_LATE_ENTRY_FED_STAGE";
+  const FED_SERVER = "This knockout is filled from Groups. Add the player there.";
+
+  it("names the feeding stage in each locale's own sentence, never a bare placeholder", () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(DICTS)) {
+      const local = dict[FED_KEY];
+      expect(typeof local === "string" && local.includes("{stage}"), `${locale}/${FED_KEY} names {stage}`).toBe(true);
+      const bound: typeof msg = (key, vars) => msgFor(locale as never, key, vars);
+      const out = classifyActError(new ApiV1Error(FED_SERVER, 422, FED_CODE, { stage: "Groups" }), bound, locale as never);
+      expect(out, locale).toEqual({ tone: "warning", text: local!.replace("{stage}", "Groups"), refresh: false });
+      expect(out.text, locale).not.toContain("{");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: four locales").toBe(4);
+  });
+
+  it("an envelope field that is no string or number fills nothing (the sentence's own placeholder never becomes [object Object])", () => {
+    const out = classifyActError(new ApiV1Error(FED_SERVER, 422, FED_CODE, { stage: { id: "s1" } }), msg, "en");
+    expect(out.text).not.toContain("[object");
+  });
+});
