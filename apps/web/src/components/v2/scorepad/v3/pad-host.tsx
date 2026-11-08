@@ -2107,7 +2107,7 @@ export function PadHostV3(props: PadHostV3Props) {
       // S2-4 (cricket) review I2: see PadHostView.sheetOpen (types.ts).
       sheetOpen: openSheet?.kind === "guided",
     }),
-    [cfg, props.stageKind, props.canOrganise, props.entrantNames, pipeline.state, pipeline.summary, phase, band, entitlements, personNames, squads, pipeline.events, contextOverrides, clockAt, openSheet],
+    [cfg, props.stageKind, props.canOrganise, props.entrantNames, pipeline.state, pipeline.summary, phase, band, entitlements, personNames, squads, pipeline.events, openSheet, contextOverrides, clockAt],
   );
 
   // `sheets` is resolved BEFORE the tiles so the band filter below can read a
