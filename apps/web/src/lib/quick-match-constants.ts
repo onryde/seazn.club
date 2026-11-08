@@ -27,6 +27,10 @@ export const QUICK_MATCH_EXPIRY_DAYS = 7;
 export const QUICK_MATCH_REMINDER_HOURS_BEFORE = 24;
 /** The competition's `ends_on`, this many days after it is created. */
 export const QUICK_MATCH_ENDS_ON_DAYS = 365;
+/** Extra league matches ("Add a match", the decider, spec C5) one quick match may hold: the `adhoc-<n>` fixtures that
+ *  anyone with the home link can add. Bounds anonymous writes (spec §4; plan 2 pre-flight D4). The refusal's copy,
+ *  `quickMatch.flash.adhocLimit`, interpolates this number as `{max}`. */
+export const QUICK_MATCH_MAX_ADHOC = 10;
 
 /** Every quick match refusal's code (the third `HttpError` argument). The English message is for logs and API callers;
  *  plan 2 maps the code to copy, so a code a quick match path throws belongs here. quick-match-create.ts re-exports it. */
@@ -44,4 +48,9 @@ export const QUICK_MATCH_ERRORS = {
   /** A create refused or failed with no code of its own to show: a form the schema refuses, a server without
    *  DEVICE_LINK_KEK, an unexpected error. The setup page shows its generic line (plan 2 T3). */
   CREATE_FAILED: "QUICK_MATCH_CREATE_FAILED",
+  /** A Score tap on a match whose two sides are not both known yet: a knockout seat waiting for its feeders, or a bye
+   *  (`ensureGuestDeviceLink`, device-links.ts, spec C18). That thrower writes this same literal. */
+  SIDES_UNKNOWN: "QUICK_MATCH_SIDES_UNKNOWN",
+  /** "Add a match" past `QUICK_MATCH_MAX_ADHOC` extra matches (plan 2 Task 8, pre-flight D4). */
+  ADHOC_LIMIT: "QUICK_MATCH_ADHOC_LIMIT",
 } as const;
