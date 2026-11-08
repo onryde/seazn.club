@@ -372,8 +372,14 @@ describe("S9: the frame's moment id and storage key (pure)", () => {
 // is unconfirmed - a scratch Node server reproduces it only once something has begun reading the body, and what begins it
 // under Next was not established. So an answer given with the body unread closes the connection; never by reading the
 // rest - a declared overrun is never read.
+//
+// Final review 2, m8: the route VERIFIES the token before it reads a byte (`verifyRelayToken` is DB-free, so this costs
+// nothing): a refused credential is the heartbeat's one 401 with the body unread, and so `Connection: close`, whatever the
+// body - a small JPEG included, which this file used to answer with the body read to its end and no close. That case
+// flips BY DESIGN. "Read to its end, no close" is now the admitted job token's alone: the DB suite's bound case below
+// ("read to its end: the connection stays open").
 describe("S9: the connection after an answer (pure: every case is refused before any database read)", () => {
-  it("Connection: close when the body was left unread - no bearer, a declared overrun, a chunked overrun - and not once it was read to its end, or there was none", async () => {
+  it("Connection: close when the body was left unread - no bearer, a refused token (m8: verified before the body, whatever it is), a declared overrun - and not when there was no body", async () => {
     const url = sc2FrameUrl(randomUUID(), sponsorMomentId(1, OVER_END.kind));
     const BAD = "not-a-relay-token";
     const CHUNK = 64 * 1024;
@@ -383,7 +389,7 @@ describe("S9: the connection after an answer (pure: every case is refused before
       ["no bearer, declared past the bound", declared(), "close"],
       ["a refused token, declared past the bound", { token: BAD, ...declared() }, "close"],
       ["a refused token, a chunked body past the bound", { token: BAD, body: countingStream(64, CHUNK).stream }, "close"],
-      ["a refused token, a JPEG read to its end", { token: BAD, body: jpegOf(2_000) }, null],
+      ["a refused token, a small JPEG (m8: flipped by design - the token is verified before the body is read)", { token: BAD, body: jpegOf(2_000) }, "close"],
       ["a refused token, no body", { token: BAD, body: null }, null],
     ];
     let checked = 0;
@@ -394,6 +400,35 @@ describe("S9: the connection after an answer (pure: every case is refused before
       checked++;
     }
     expect(checked, "anti-vacuity: every case").toBe(cases.length);
+  });
+
+  it("m8: a refused token reads NOT ONE byte of the body - a counted stream is never pulled, whatever its length - and answers the one 401; the frame's own job token beside it is read (pulled)", async () => {
+    const sid = randomUUID();
+    const url = sc2FrameUrl(sid, sponsorMomentId(1, OVER_END.kind));
+    const refused: [label: string, auth: { token?: string; authorization?: string }][] = [
+      ["a malformed token", { token: "not-a-relay-token" }],
+      ["an expired job token", { token: await mintRelayToken({ sid, scope: "relay-job", expiresAt: new Date(Date.now() - 1000), attempt: 1 }) }],
+      ["another session's job token", { token: await mintRelayToken({ sid: randomUUID(), scope: "relay-job", expiresAt: new Date(Date.now() + 60_000), attempt: 1 }) }],
+      ["this session's PAGE token", { token: await mintRelayToken({ sid, scope: "relay-page", expiresAt: new Date(Date.now() + 60_000) }) }],
+    ];
+    let checked = 0;
+    for (const [label, auth] of refused) {
+      for (const chunks of [1, 64]) {
+        const body = countingStream(chunks);
+        const res = await postFrame(url, { ...auth, body: body.stream });
+        expect(res.status, `${label}, ${chunks} chunk(s)`).toBe(401);
+        expect(await json(res), label).toMatchObject({ ok: false, code: "RELAY_TOKEN_INVALID" });
+        expect(body.seen.pulled, `${label}, ${chunks} chunk(s): bytes read before the refusal`).toBe(0);
+        expect(res.headers.get("connection"), label).toBe("close");
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: every refused token, both lengths").toBe(refused.length * 2);
+    // The positive pair: this session's job token is admitted past the gate, so the route reads the body - before the
+    // session is looked up (no row exists for this sid: what it answers next is the database's business, not this test's).
+    const admitted = countingStream(1);
+    await postFrame(url, { token: await mintRelayToken({ sid, scope: "relay-job", expiresAt: new Date(Date.now() + 60_000), attempt: 1 }), body: admitted.stream }).catch(() => null);
+    expect(admitted.seen.pulled, "the admitted token's body is read").toBeGreaterThan(0);
   });
 });
 

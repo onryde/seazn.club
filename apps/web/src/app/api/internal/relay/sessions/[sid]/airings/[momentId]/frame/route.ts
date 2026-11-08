@@ -3,6 +3,7 @@ import { HttpError } from "@/lib/errors";
 import { handler } from "@/lib/http";
 import { bearerOf } from "@/server/relay/bearer";
 import { readCapped } from "@/server/relay/record-body";
+import { verifyRelayToken } from "@/server/relay/tokens";
 import { AIRING_FRAME_MAX_BYTES, FrameStorageFailed, storeAiringFrame } from "@/server/sponsors/airings";
 
 type Ctx = { params: Promise<{ sid: string; momentId: string }> };
@@ -25,9 +26,11 @@ async function frameBody(req: Request, body: { readToEnd: boolean }): Promise<Ui
 
 /** POST …/airings/[momentId]/frame — R4 S9 (spec 2026-10-27 §3.6.3): the compositor's proof-of-play still, one JPEG per
  *  sponsor airing, posted 1.5 s after its `start` line (SC2, `HttpFrameUpload`). The relay JOB token as Bearer, the
- *  heartbeat's own: its PRESENCE is checked first (`bearerOf`, the same 401), then the body is read under its bound, and
- *  `storeAiringFrame` verifies the token before anything else — so every refused credential is the heartbeat's 401,
- *  whatever the body. 204 on success.
+ *  heartbeat's own: its PRESENCE is checked first (`bearerOf`, the same 401), then the token is VERIFIED before a byte of
+ *  the body is read (final review 2, m8: `verifyRelayToken` reads no database, so the order costs nothing), so every
+ *  refused credential is the heartbeat's one 401 with the body unread, whatever it is. Only then is the body read under
+ *  its bound; `storeAiringFrame` verifies the token again, as its own first check (it is called directly too). 204 on
+ *  success.
  *
  *  `momentId` is used AS GIVEN: SC2 percent-encodes it as one path segment (`12:sponsor.over_end` arrives as
  *  `12%3Asponsor.over_end`), and Next decodes each dynamic segment exactly once before the handler sees it
@@ -41,6 +44,7 @@ export async function POST(req: Request, { params }: Ctx) {
   const res = await handler(async () => {
     const { sid, momentId } = await params;
     const token = bearerOf(req);
+    await verifyRelayToken(token, { sid, scope: "relay-job" });
     try {
       await storeAiringFrame(sid, token, momentId, await frameBody(req, body));
     } catch (err) {
@@ -51,8 +55,8 @@ export async function POST(req: Request, { params }: Ctx) {
     }
     return new Response(null, { status: 204 });
   });
-  // An answer given with the body left unread (no bearer, a declared overrun, a chunked one cut at the bound, a failed read)
-  // closes the connection. Observed on CI: smoke's request after two refused 262 KB frames failed 6 s later on its kept-alive
+  // An answer given with the body left unread (no bearer, a refused token, a declared overrun, a chunked one cut at the
+  // bound, a failed read) closes the connection. Observed on CI: smoke's request after two refused 262 KB frames failed 6 s later on its kept-alive
   // connection. The cause is unconfirmed: a scratch Node server reproduces it only once something has begun reading the
   // body (Node then no longer discards the rest), and what begins it under Next was not established. HTTP lets a server
   // close rather than read on (RFC 9110 §15.5.14), and a declared overrun is never read, so the rest is not drained either.
