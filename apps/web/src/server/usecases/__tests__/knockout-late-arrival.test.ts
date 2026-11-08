@@ -17,6 +17,7 @@
 // the seats and the ledger, which no sport field reaches.
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import type postgres from "postgres";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -583,7 +584,12 @@ describe.skipIf(!HAS_DB)("B3 fix #1: a reinstated seat holder is flagged only wh
  * race (the W3 T5 precedent, swiss-undo-pair-next.test.ts): the scorer is released only once Postgres reports the
  * placing path blocked on the scorer's backend (`pg_blocking_pids`), or once it finished without waiting — the defect.
  */
-async function againstAScorerInFlight<T>(orgId: string, fixtureId: string, place: () => Promise<T>) {
+async function againstAScorerInFlight<T>(
+  orgId: string,
+  fixtureId: string,
+  place: () => Promise<T>,
+  append: (tx: postgres.TransactionSql) => Promise<unknown> = (tx) => appendEventInTx(tx, orgId, fixtureId, 0, { type: "core.start", payload: {} }),
+) {
   let release!: () => void;
   const gate = new Promise<void>((res) => (release = res));
   let holding!: (pid: number) => void;
@@ -593,7 +599,7 @@ async function againstAScorerInFlight<T>(orgId: string, fixtureId: string, place
     const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
     holding(pid);
     await gate;
-    await appendEventInTx(tx, orgId, fixtureId, 0, { type: "core.start", payload: {} });
+    await append(tx);
   }).then(
     () => "committed" as const,
     (e: unknown) => e,
@@ -668,4 +674,45 @@ describe.skipIf(!HAS_DB)("B3 fix #2: placing waits for a scorer starting round 2
     expect("ok" in out.placed ? out.placed.ok : out.placed.err).toMatchObject({ case: "bye", fixture_id: b1.lineId, opponent_id: b1.holderId });
     await expectRoundTwoKept(r2);
   }, 120_000);
+});
+
+// B3 fix round 2: the placing lock takes `fixture:` keys in BRACKET order — every round-1 line, then the lines they feed
+// — the global order of every bracket writer (fed-seats.ts `bracketOrder`: ascending (round_no, id)). Round 1 fixed
+// sorted all the keys together by id, so an add could hold a round-2 line while it queued on a round-1 line whose void
+// (holding its own lock, as every append does) then asked for that round-2 line to take its seat back: 40P01.
+describe.skipIf(!HAS_DB)("B3 fix #2 round 2: placing takes round 1's append locks before the lines they feed", () => {
+  /** Six seeded in eight, both round-1 matches played; the one whose round-2 line's id sorts BEFORE its own — the shape
+   *  where one id-sorted pass takes round 2's lock first. Re-rigged until one exists (each match ~1/2). */
+  async function playedLineFeedingAnEarlierId() {
+    for (let attempt = 1; attempt <= 8; attempt++) {
+      const r = await rig({ n: 6 });
+      const matches = (await rowsOf(r.stageId)).filter((x) => x.round_no === 1 && x.home_entrant_id !== null && x.away_entrant_id !== null);
+      expect(matches.length, "premise: two round-1 matches beside the two byes").toBe(2);
+      for (const m of matches) await homeWin(r.auth, m);
+      const line = matches.find((m) => m.winner_to_fixture! < m.id);
+      if (line !== undefined) return { r, line, attempts: attempt };
+    }
+    throw new Error("rig: eight draws without a round-1 match feeding a line whose id sorts before its own");
+  }
+
+  it("a void taking a round-1 result back, its line's lock held while an add waits: no 40P01, the void commits, then the add places", async () => {
+    const { r, line } = await playedLineFeedingAnEarlierId();
+    const next = line.winner_to_fixture!;
+    expect((await rowById(next)).home_entrant_id ?? (await rowById(next)).away_entrant_id, "premise: round 2 holds a seat").not.toBeNull();
+    const [last] = await sql<{ id: string; seq: number }[]>`
+      select id, seq from score_events where fixture_id = ${line.id} order by seq desc limit 1`;
+    const out = await againstAScorerInFlight(
+      r.orgId,
+      line.id,
+      () => createEntrants(r.auth, r.divisionId, [entrant(SINGLES, "Late", null)]),
+      (tx) => appendEventInTx(tx, r.orgId, line.id, last!.seq, { type: "core.void", payload: { event_id: last!.id }, voids: last!.id }),
+    );
+    expect(out.blocked, "the add waited on the round-1 line's append lock").toBe(true);
+    expect(out.scorer, "the void's take-back committed").toBe("committed");
+    expect("ok" in out.placed ? out.placed.ok[0]?.late_entry : out.placed.err).toMatchObject({ format: "knockout", case: "bye" });
+    const after = await rowById(line.id);
+    expect(after.outcome, "the void took the round-1 result back").toBeNull();
+    const fed = await rowById(next);
+    expect([fed.home_entrant_id, fed.away_entrant_id], "its winner left the round-2 seat").not.toContain(line.home_entrant_id);
+  }, 240_000);
 });

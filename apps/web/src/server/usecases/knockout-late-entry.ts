@@ -140,11 +140,17 @@ async function roundOneLines(tx: Tx, stage: KnockoutEntryStage): Promise<LateLin
  * finds the line already reshaped. The one lock order (`division:` → `fixture:`, append-event.ts) holds: the surgery's
  * own void and seat writes re-enter locks already held. An automatic arrival's marking places nothing, so it takes
  * none and waits on no scorer.
+ *
+ * B3 fix round 2: the `fixture:` keys go in BRACKET order — every round-1 line, then the lines they feed — the global
+ * order of every bracket writer (fed-seats.ts `bracketOrder`, ascending (round_no, id)). One id-sorted pass over both
+ * rounds could hold a round-2 line while queued on a round-1 line whose void, holding that line's lock as every append
+ * does, then asked for the round-2 line to take its seat back: 40P01. Each call sorts by id within its own round.
  */
 async function lockRoundOneAppends(tx: Tx, stage: KnockoutEntryStage): Promise<void> {
   const rows = await tx<{ id: string; next: string | null }[]>`
     select id, winner_to_fixture as next from fixtures where stage_id = ${stage.id} and round_no = 1`;
-  await lockSwissBoardAppends(tx, rows.flatMap((r) => (r.next === null ? [r.id] : [r.id, r.next])));
+  await lockSwissBoardAppends(tx, rows.map((r) => r.id));
+  await lockSwissBoardAppends(tx, rows.flatMap((r) => (r.next === null ? [] : [r.next])));
 }
 
 /** Whether `entrantId` sits in any line of `stageId` — a reinstated entrant the withdrawal left seated, or a player in. */
