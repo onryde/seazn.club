@@ -939,6 +939,29 @@ test.describe("X-QM-4 a corrected qualifier is re-proposed", () => {
     await expect(row).not.toContainText(q.nameOf.get(c.out)!);
   });
 
+  // The owner's ruling (RB4-Q3 seeds by rank): the same four in a new order is a new draw while nothing is lost by redrawing it.
+  // Expected from the final's own seats: its away side now wins, so it is rank 1 and its home side rank 2.
+  test("before the main draw starts, the final flipped: the seats go back and the same four are offered in the new order", async ({ page, request }) => {
+    test.setTimeout(300_000);
+    const q = await confirmedMainDraw(request, "Flipped final");
+    const seated = (rows: Line[]) => rows.filter((f) => f.round_no === 1).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]);
+    const { final } = await correctionOf(q.qualRows);
+    const four = new Set(seated(await q.mainRows()));
+    expect(four.size, "premise: four qualifiers seated").toBe(4);
+
+    await takeBack(request, final.id);
+    await awayWins(request, final.id);
+
+    expect(seated(await q.mainRows()).every((id) => id === null), "the confirmed order no longer stands: the seats go back").toBe(true);
+    await page.goto(await divisionPath(request, q.divisionId, "?tab=fixtures"));
+    await expect(page.locator('[data-progression-state="draft"]'), "a fresh draft waits on the desk with nobody asking").toBeVisible({ timeout: 20_000 });
+    const fresh = await propose(request, q.mainId);
+    expect(fresh.status, JSON.stringify(fresh.error)).toBe(201);
+    const offered = fresh.data!.computed.qualifiers.map((x) => x.entrantId);
+    expect(new Set(offered), "the same four").toEqual(four);
+    expect(offered.slice(0, 2), "the new winner seeded first").toEqual([final.away_entrant_id, final.home_entrant_id]);
+  });
+
   test("after the main draw starts: the bracket stands and the organiser's desk names who moved, at every width", async ({ page, request }) => {
     test.setTimeout(300_000);
     const q = await confirmedMainDraw(request, "Bracket stands");

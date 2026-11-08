@@ -7494,8 +7494,9 @@ export async function setupDependentsOf(tx: Tx, sourceStageId: string, divisionI
 /**
  * RB4-Q5, on one dependent of a knockout source that a decision just moved. The question is the same for a draft and a
  * confirmed proposal: does its slate still stand (`slateStands`)?
- *  - CONFIRMED and it does not: the seats go back unless the destination has started (`unfillProposalSeats`, whose guard
- *    that is: then the bracket stands and the desk warns, `getKnockoutCutDrift`), and the row goes stale.
+ *  - CONFIRMED and it does not, the same people in a new seed order included (a flipped final): the seats go back unless the
+ *    destination has started (`unfillProposalSeats`, whose guard that is: then the bracket stands, and the desk warns only if
+ *    the people moved, `getKnockoutCutDrift`), and the row goes stale.
  *  - DRAFT: while the source is undecided, only if it does not stand; once decided, whenever the stored ranks it was read
  *    from moved. That is the hash, not the slate: a draft whose hash moved is REFUSED at its confirm (a flipped final is the
  *    same four in a new order), and the draft panel's only button is Confirm, so leaving it would strand the organiser.

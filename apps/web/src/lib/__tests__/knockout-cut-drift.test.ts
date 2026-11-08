@@ -24,6 +24,10 @@ describe("knockoutCutDrift — who a correction moved across the line", () => {
     expect(knockoutCutDrift(["a", "b"], ["b", "a"], true)).toBeNull();
   });
 
+  it("nobody out: no warning (a departed qualifier's place is no correction; the sentence needs someone to replace)", () => {
+    expect(knockoutCutDrift(["a", "b", "c"], ["a", "b", "c", "e"], true)).toBeNull();
+  });
+
   it("names who is out and who is in, in the order handed in", () => {
     expect(knockoutCutDrift(["a", "b", "c", "d"], ["a", "b", "c", "e"], true)).toEqual({ out: ["d"], in: ["e"] });
   });

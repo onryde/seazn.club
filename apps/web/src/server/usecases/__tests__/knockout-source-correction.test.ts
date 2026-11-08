@@ -247,6 +247,12 @@ async function roundOne(r: Rig): Promise<string[]> {
 
 const offered = async (r: Rig) => (await getSeedProposal(r.auth, r.stageIds[1]))!.computed.qualifiers.map((q) => r.nameOf.get(q.entrantId));
 
+/** A proposal's own slate, by name, read from its row (a newer draft may be the one `offered` reads). */
+const offeredOnSlate = async (proposalId: string, r: Rig) => {
+  const [p] = await sql<{ computed: { qualifiers: { rank: number; entrantId: string }[] } }[]>`select computed from stage_seed_proposals where id = ${proposalId}`;
+  return [...p!.computed.qualifiers].sort((a, b) => a.rank - b.rank).map((q) => r.nameOf.get(q.entrantId));
+};
+
 const statusOf = async (proposalId: string) => {
   const [p] = await sql<{ status: string }[]>`select status from stage_seed_proposals where id = ${proposalId}`;
   return p?.status;
@@ -491,18 +497,6 @@ describe.runIf(HAS_DB)("W4 T14 a correction inside a completed knockout source (
       expect(await roundOne(draftRig), "and it still confirms").toEqual(["E1 v E4", "E2 v E3"]);
     }, 600_000);
 
-    it("the final flipped, the same four qualifiers: the confirmed bracket stands, though the source's ranks moved", async () => {
-      const r = await rig({ template: "qualifying_main" });
-      await playSource(r);
-      const confirmedId = await confirmLatest(r);
-      const final = await finalOf(r);
-      await undecide(r, final.id);
-      await playWin(r, (await rowsOf(r.stageIds[0])).find((f) => f.id === final.id)!, r.idOf.get("E2")!);
-      expect(await storedRanks(r), "anti-vacuity: the correction reached the stored ranks").toEqual(["E2", "E1", "E3", "E4", "E5", "E6", "E7", "E8"]);
-      expect(await statusOf(confirmedId)).toBe("confirmed");
-      expect(await roundOne(r)).toEqual(["E1 v E4", "E2 v E3"]);
-    }, 600_000);
-
     it("a table source keeps its behaviour (W5 owns the table half): a confirmed proposal is untouched by a correction", async () => {
       const r = await rig({ template: "league_ko", n: 4, q: 2 });
       await playSource(r);
@@ -514,23 +508,191 @@ describe.runIf(HAS_DB)("W4 T14 a correction inside a completed knockout source (
     }, 600_000);
   });
 
-  describe("after a withdrawal", () => {
-    it("a seated lucky loser does not read as a moved qualifier: an order-only correction leaves the bracket and the warning alone", async () => {
+  // The owner's ruling, overturning T14's first reading (RB4-Q3 seeds by rank, RB4-Q5 "every" dependent proposal): before
+  // the destination starts a re-seed costs nothing, and an organiser would otherwise play the wrong seeding. After it
+  // starts the same four are still the same four: the bracket stands and nobody is named.
+  describe("the final flipped: the same four, a new seeding order", () => {
+    const flipFinal = async (r: Rig, winner: string) => {
+      const final = await finalOf(r);
+      await undecide(r, final.id);
+      await playWin(r, (await rowsOf(r.stageIds[0])).find((f) => f.id === final.id)!, r.idOf.get(winner)!);
+    };
+
+    for (const s of [SINGLES, CHESS]) {
+    it(`a confirmed draw that has not started goes stale, its seats go back, and the re-proposal seats the new order; a second flip does it again [${s.key}]`, async () => {
+      const r = await rig({ template: "qualifying_main", sport: s });
+      await playSource(r);
+      const firstId = await confirmLatest(r);
+      expect(await roundOne(r), "premise: rank 1 v rank 4, rank 2 v rank 3").toEqual(["E1 v E4", "E2 v E3"]);
+
+      const final = await finalOf(r);
+      await undecide(r, final.id);
+      expect(await statusOf(firstId), "mid-correction the same four are proven: nothing moves yet").toBe("confirmed");
+      expect(await roundOne(r)).toEqual(["E1 v E4", "E2 v E3"]);
+
+      await playWin(r, (await rowsOf(r.stageIds[0])).find((f) => f.id === final.id)!, r.idOf.get("E2")!);
+      expect(await storedRanks(r), "anti-vacuity: the correction reached the stored ranks").toEqual(["E2", "E1", "E3", "E4", "E5", "E6", "E7", "E8"]);
+      expect(await statusOf(firstId), "the new winner takes rank 1: the confirmed order no longer stands").toBe("stale");
+      await expectDayOne(r);
+      expect(await offered(r), "re-proposed with nobody asking, in the new order").toEqual(["E2", "E1", "E3", "E4"]);
+
+      const secondId = await confirmLatest(r);
+      expect(await roundOne(r), "E2 now meets E4: rank 1 v rank 4").toEqual(["E2 v E4", "E1 v E3"]);
+
+      await flipFinal(r, "E1");
+      expect(await statusOf(secondId), "the second call: flipped back").toBe("stale");
+      await expectDayOne(r);
+      expect(await offered(r)).toEqual(["E1", "E2", "E3", "E4"]);
+    }, 900_000);
+    }
+
+    it("the same result re-recorded leaves a confirmed draw alone: the order did not move", async () => {
+      const r = await rig({ template: "qualifying_main" });
+      await playSource(r);
+      const confirmedId = await confirmLatest(r);
+      await flipFinal(r, "E1");
+      expect(await storedRanks(r), "premise: the same ranks").toEqual(["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"]);
+      expect(await statusOf(confirmedId)).toBe("confirmed");
+      expect(await roundOne(r)).toEqual(["E1 v E4", "E2 v E3"]);
+
+      // The second call, and the order it compares is the seeds', not the stored array's.
+      await sql`
+        update stage_seed_proposals set computed = jsonb_set(computed, '{qualifiers}',
+          (select jsonb_agg(q order by ord desc) from jsonb_array_elements(computed -> 'qualifiers') with ordinality as t(q, ord)))
+        where id = ${confirmedId}`;
+      await flipFinal(r, "E1");
+      expect(await statusOf(confirmedId)).toBe("confirmed");
+    }, 600_000);
+
+    it("a cut that is no whole round: nothing moves mid-correction, and once decided the seed who fell off the end stales it", async () => {
+      const r = await rig({ template: "qualifying_main", q: 3 });
+      await playSource(r);
+      const confirmedId = await confirmLatest(r);
+      expect(await offeredOnSlate(confirmedId, r), "premise: rank order").toEqual(["E1", "E2", "E3"]);
+      await correctQuarter(r, "E3", "E6", {
+        afterQuarter: async () => {
+          expect(await statusOf(confirmedId), "a cut of three cannot be proven line by line").toBe("confirmed");
+        },
+      });
+      expect(await statusOf(confirmedId), "E3, the last seed, is gone; the two left keep their order").toBe("stale");
+      expect(await offered(r), "and the re-proposal names who took the place").not.toContain("E3");
+    }, 600_000);
+
+    it("with a lucky loser in a departed qualifier's seat: the order moved, so the draw goes back and she is offered in that rank", async () => {
       const r = await rig({ template: "qualifying_main" });
       await playSource(r);
       const confirmedId = await confirmLatest(r);
       await withdrawEntrantCascade(r.auth, r.idOf.get("E4")!);
       expect(await roundOne(r), "premise: E5 took the seat").toEqual(["E1 v E5", "E2 v E3"]);
-      const final = await finalOf(r);
-      await undecide(r, final.id);
-      await playWin(r, (await rowsOf(r.stageIds[0])).find((f) => f.id === final.id)!, r.idOf.get("E2")!);
-      expect(await statusOf(confirmedId), "her name on the slate is no correction").toBe("confirmed");
-      expect(await roundOne(r)).toEqual(["E1 v E5", "E2 v E3"]);
+      await flipFinal(r, "E2");
+      expect(await statusOf(confirmedId)).toBe("stale");
+      await expectDayOne(r);
+      expect(await offered(r)).toEqual(["E2", "E1", "E3", "E5"]);
+    }, 600_000);
 
+    it("after the destination starts: the bracket stands and nobody is named, since the same four are the same four", async () => {
+      const r = await rig({ template: "qualifying_main" });
+      await playSource(r);
+      const confirmedId = await confirmLatest(r);
       const line = (await rowsOf(r.stageIds[1])).find((f) => f.home_entrant_id === r.idOf.get("E2") || f.away_entrant_id === r.idOf.get("E2"))!;
       await playWin(r, line, r.idOf.get("E2")!);
-      expect(await getKnockoutCutDrift(r.auth, r.stageIds[0]), "the lucky loser is seated: nobody to name").toBeNull();
+      await flipFinal(r, "E2");
+      expect(await statusOf(confirmedId)).toBe("confirmed");
+      expect(await roundOne(r)).toEqual(["E1 v E4", "E2 v E3"]);
+      expect(await getKnockoutCutDrift(r.auth, r.stageIds[0])).toBeNull();
     }, 600_000);
+  });
+
+  describe("after a withdrawal", () => {
+    it("a withdrawal is no correction (review #2): no warning whether their own line was played or a lucky loser took the seat, and a real correction still warns", async () => {
+      const r = await rig({ template: "qualifying_main" });
+      await playSource(r);
+      await confirmLatest(r);
+      // E4 plays her own main-draw line and loses it, then leaves: nobody takes a seat she already used.
+      const e4Line = (await rowsOf(r.stageIds[1])).find((f) => f.home_entrant_id === r.idOf.get("E4") || f.away_entrant_id === r.idOf.get("E4"))!;
+      await playWin(r, e4Line, r.idOf.get("E1")!);
+      await withdrawEntrantCascade(r.auth, r.idOf.get("E4")!);
+      expect(await roundOne(r), "premise: no lucky loser, the line was played").toEqual(["E1 v E4", "E2 v E3"]);
+      expect(await getKnockoutCutDrift(r.auth, r.stageIds[0]), "E5 is not coming in: nobody moved").toBeNull();
+
+      // The departure does not mute the warning a real correction is owed: E6 beats E3 this time.
+      await correctQuarter(r, "E3", "E6");
+      expect(names(r, await getKnockoutCutDrift(r.auth, r.stageIds[0]))).toEqual({ out: ["E3"], in: ["E6"] });
+    }, 900_000);
+
+    it("her own quarter-final corrected after she left: someone comes in where nobody is out, so there is no one to name", async () => {
+      const r = await rig({ template: "qualifying_main" });
+      await playSource(r);
+      await confirmLatest(r);
+      const e4Line = (await rowsOf(r.stageIds[1])).find((f) => f.home_entrant_id === r.idOf.get("E4") || f.away_entrant_id === r.idOf.get("E4"))!;
+      await playWin(r, e4Line, r.idOf.get("E1")!);
+      await withdrawEntrantCascade(r.auth, r.idOf.get("E4")!);
+      await correctQuarter(r, "E4", "E5");
+      expect(await storedRanks(r), "anti-vacuity: the correction moved E5 across the cut").not.toEqual(["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"]);
+      expect(await getKnockoutCutDrift(r.auth, r.stageIds[0])).toBeNull();
+    }, 600_000);
+
+    it("a qualifier leaves before their line and the lucky loser is seated: no warning", async () => {
+      const r = await rig({ template: "qualifying_main" });
+      await playSource(r);
+      await confirmLatest(r);
+      const other = (await rowsOf(r.stageIds[1])).find((f) => f.home_entrant_id === r.idOf.get("E2") || f.away_entrant_id === r.idOf.get("E2"))!;
+      await playWin(r, other, r.idOf.get("E2")!);
+      await withdrawEntrantCascade(r.auth, r.idOf.get("E4")!);
+      expect(await roundOne(r), "premise: E5 took the seat").toEqual(["E1 v E5", "E2 v E3"]);
+      expect(await getKnockoutCutDrift(r.auth, r.stageIds[0])).toBeNull();
+    }, 600_000);
+
+    const replayFinal = async (r: Rig, winner: string) => {
+      const final = await finalOf(r);
+      await undecide(r, final.id);
+      await playWin(r, (await rowsOf(r.stageIds[0])).find((f) => f.id === final.id)!, r.idOf.get(winner)!);
+    };
+
+    it("a departed qualifier on the slate, the same result re-recorded: the order of those left did not move, so the lucky loser keeps the seat", async () => {
+      const r = await rig({ template: "qualifying_main" });
+      await playSource(r);
+      const confirmedId = await confirmLatest(r);
+      await withdrawEntrantCascade(r.auth, r.idOf.get("E4")!);
+      await replayFinal(r, "E1");
+      expect(await statusOf(confirmedId)).toBe("confirmed");
+      expect(await roundOne(r)).toEqual(["E1 v E5", "E2 v E3"]);
+    }, 600_000);
+
+    it("a slate that names the lucky loser (confirmed after the withdrawal), the same result re-recorded: she is on today's cut, so it stands", async () => {
+      const r = await rig({ template: "qualifying_main" });
+      await playSource(r);
+      await withdrawEntrantCascade(r.auth, r.idOf.get("E4")!);
+      expect(await offered(r), "premise: the proposal offers her in that rank").toEqual(["E1", "E2", "E3", "E5"]);
+      const confirmedId = await confirmLatest(r);
+      const final = await finalOf(r);
+      await undecide(r, final.id);
+      expect(await statusOf(confirmedId), "mid-correction E4's seat is still proven, so E5's place is too").toBe("confirmed");
+      await playWin(r, (await rowsOf(r.stageIds[0])).find((f) => f.id === final.id)!, r.idOf.get("E1")!);
+      expect(await statusOf(confirmedId)).toBe("confirmed");
+      expect(await roundOne(r)).toEqual(["E1 v E5", "E2 v E3"]);
+
+      // Her own place does go at once: the quarter-final that made E4 a qualifier and E5 the loser is taken back.
+      const semi = await sourceLine(r, 2, "E4");
+      const quarter = await sourceLine(r, 1, "E4");
+      await undecide(r, final.id);
+      await undecide(r, semi.id);
+      await undecide(r, quarter.id);
+      expect(await statusOf(confirmedId), "nobody left to name for that place").toBe("stale");
+    }, 900_000);
+
+    it("a correction that makes a seated lucky loser a true qualifier does not name her as coming in: she is already there", async () => {
+      const r = await rig({ template: "qualifying_main" });
+      await playSource(r);
+      await confirmLatest(r);
+      await withdrawEntrantCascade(r.auth, r.idOf.get("E4")!);
+      expect(await roundOne(r), "premise: E5 took the seat").toEqual(["E1 v E5", "E2 v E3"]);
+      const other = (await rowsOf(r.stageIds[1])).find((f) => f.home_entrant_id === r.idOf.get("E2") || f.away_entrant_id === r.idOf.get("E2"))!;
+      await playWin(r, other, r.idOf.get("E2")!);
+      await correctQuarter(r, "E4", "E5");
+      await correctQuarter(r, "E3", "E6");
+      expect(names(r, await getKnockoutCutDrift(r.auth, r.stageIds[0]))).toEqual({ out: ["E3"], in: ["E6"] });
+    }, 900_000);
 
     it("a confirm's own walkover goes with its seats, and the same result re-recorded re-proposes (the shortfall's bye)", async () => {
       const r = await rig({ template: "qualifying_main" });

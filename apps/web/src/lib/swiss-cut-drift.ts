@@ -22,7 +22,8 @@ export interface SwissCutDrift {
  *  - the knockout has not begun (before that a corrected table is simply the table: nothing stands yet);
  *  - the two sets are the same people (order inside the cut is no drift: the bracket is seeded by rank, and a re-order
  *    inside the cut moves no one across the line);
- *  - nobody would come in (`currentTop` shorter than the cut: there is no one to name as taking the place).
+ *  - nobody would come in (`currentTop` shorter than the cut: there is no one to name as taking the place);
+ *  - nobody is out (`qualified` less someone who left: a place nobody holds moved no one, and the sentence names who is out).
  * Both lists keep the order they were handed in.
  */
 export function swissCutDrift(
@@ -36,7 +37,7 @@ export function swissCutDrift(
   const today = new Set(currentTop);
   const out = [...frozen].filter((id) => !today.has(id));
   const incoming = [...today].filter((id) => !frozen.has(id));
-  if (incoming.length === 0) return null;
+  if (incoming.length === 0 || out.length === 0) return null;
   return { out, in: incoming };
 }
 

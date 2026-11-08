@@ -9,7 +9,7 @@ const ENTRIES: { date: string; title: string; lines: string[] }[] = [
     date: "2026-11-08",
     title: "A correction inside a completed knockout reaches the stage it feeds",
     lines: [
-      "When a voided or re-recorded result moves the qualifiers of a completed knockout, the next stage's seed proposal goes stale, a confirmed one included, and the knockout's placement is recomputed. If the next stage has not started (a result, live play or a Match Day call), its seats go back to TBD and its schedule stays, and a fresh draft is proposed once the source is decided again. If it has started, the bracket stands.",
+      "When a voided or re-recorded result moves the qualifiers of a completed knockout, or their seed order, the next stage's seed proposal goes stale, a confirmed one included, and the knockout's placement is recomputed. If the next stage has not started (a result, live play or a Match Day call), its seats go back to TBD and its schedule stays, and a fresh draft is proposed once the source is decided again. If it has started, the bracket stands.",
       "POST /stages/{id}/seed-proposal and its confirm now answer 409 SEEDING_SOURCE_INCOMPLETE while a knockout source has an undecided match, even if that stage reads complete.",
     ],
   },

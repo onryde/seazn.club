@@ -376,6 +376,9 @@ export async function sourcesToTables(
   tx: Tx,
   target: { id: string; division_id: string; seq: number },
   sources: readonly ProgressionSource[],
+  /** Read a knockout's cut as its results make it, with no lucky loser in a departed qualifier's rank: who a CORRECTION moved
+   *  (`getKnockoutCutDrift`), where a withdrawal is not a correction. */
+  opts: { withoutLuckyLoser?: boolean } = {},
 ): Promise<{
   shapes: SourceShape[];
   tables: SourceTables[];
@@ -409,7 +412,7 @@ export async function sourcesToTables(
     // (RB4-V2, `luckyLoserCut`). The hash the proposal stores is over these tables, so a departure or a return after a
     // draft stales it.
     const departed = await departedEntrantIds(tx, target.division_id);
-    const cut = LUCKY_LOSER_SOURCE_KINDS.has(source.kind) ? rankCutOf(s.take) : null;
+    const cut = LUCKY_LOSER_SOURCE_KINDS.has(source.kind) && opts.withoutLuckyLoser !== true ? rankCutOf(s.take) : null;
     const pools =
       cut === null
         ? cutEligiblePools(source.kind, read, departed)

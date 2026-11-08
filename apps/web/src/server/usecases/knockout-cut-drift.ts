@@ -13,8 +13,12 @@ import "server-only";
 //     the source is decided again, and the slate stands until then.
 //
 // A departed entrant on a slate is no correction: her seat is the lucky loser's (or a walkover), so she is left out of both
-// sides of the comparison. Order inside the cut is no move either (a flipped final is the same four): the same reading as the
-// Swiss warning, and the brief's empty case.
+// sides of the comparison.
+//
+// The two questions differ on ORDER (owner's ruling, RB4-Q3: the bracket seeds by rank). A decided slate stands only if it
+// names the same people in the same seed order: before the destination starts a re-seed costs nothing and the organiser would
+// otherwise play the wrong seeding (a flipped final). Who a correction moved after it starts is people alone: the same four are
+// the same four, nobody is named, the Swiss reading.
 import type postgres from "postgres";
 import { resolveProgression, type ProgressionSpec } from "@seazn/engine/competition";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -42,14 +46,20 @@ export interface BracketDependent {
 
 /** The part of a stored proposal these reads compare. */
 interface Slate {
-  qualifiers: readonly { entrantId: string; source: { stageId: string } }[];
+  qualifiers: readonly { rank: number; entrantId: string; source: { stageId: string } }[];
 }
 
-const onSource = (slate: Slate, sourceStageId: string) => slate.qualifiers.filter((q) => q.source.stageId === sourceStageId).map((q) => q.entrantId);
+/** The slate's people from `sourceStageId`, in seed order (a stored qualifier's `rank` is its seed). */
+const onSource = (slate: Slate, sourceStageId: string) =>
+  slate.qualifiers
+    .filter((q) => q.source.stageId === sourceStageId)
+    .sort((a, b) => a.rank - b.rank)
+    .map((q) => q.entrantId);
 
-/** Today's cut for `dependent`, in seed order, less anyone departed: what a re-proposal would offer. */
-async function cutToday(tx: Tx, dependent: BracketDependent): Promise<string[]> {
-  const { shapes, tables } = await sourcesToTables(tx, dependent, dependent.progression.sources);
+/** Today's cut for `dependent`, in seed order, less anyone departed. As it stands, what a re-proposal would offer;
+ *  `withoutLuckyLoser`, what the results alone make it. */
+async function cutToday(tx: Tx, dependent: BracketDependent, opts: { withoutLuckyLoser?: boolean } = {}): Promise<string[]> {
+  const { shapes, tables } = await sourcesToTables(tx, dependent, dependent.progression.sources, opts);
   const { qualifiers } = resolveProgression(dependent.progression, shapes, tables, dependent.kind as never);
   const departed = await departedEntrantIds(tx, dependent.division_id);
   return [...qualifiers].sort((a, b) => a.seed - b.seed).map((q) => q.entrantId).filter((id) => !departed.has(id));
@@ -102,7 +112,15 @@ async function provenCut(tx: Tx, dependent: BracketDependent, sourceStageId: str
   const lines = await tx<BracketLine[]>`
     select round_no, coalesce(is_final, false) as is_final, coalesce(third_place, false) as third_place, outcome, home_entrant_id, away_entrant_id
       from fixtures where stage_id = ${sourceStageId}`;
-  return provenBy(lines, takes);
+  const proven = provenBy(lines, takes);
+  if (proven === null) return null;
+  // A lucky loser on a slate holds a place no seat in the cut's round proves. Her own defeat does, while it stands: a qualifier
+  // whose line was taken back has none, since their later losses went first (NEXT_MATCH_STARTED).
+  for (const l of lines) {
+    const { loser } = bracketWinnerLoser(l.outcome, l.home_entrant_id, l.away_entrant_id);
+    if (loser !== null && loser !== undefined) proven.add(loser);
+  }
+  return proven;
 }
 
 /**
@@ -113,14 +131,19 @@ export async function slateStands(tx: Tx, dependent: BracketDependent, slate: Sl
   const departed = await departedEntrantIds(tx, dependent.division_id);
   const named = onSource(slate, sourceStageId).filter((id) => !departed.has(id));
   if (named.length === 0) return true;
-  let today: Set<string> | null;
   try {
-    today = decided ? new Set(await cutToday(tx, dependent)) : await provenCut(tx, dependent, sourceStageId);
+    if (!decided) {
+      const proven = await provenCut(tx, dependent, sourceStageId);
+      return proven === null || named.every((id) => proven.has(id));
+    }
+    // Everyone else in today's cut is left out: a lucky loser beside the slate's people, or another source's qualifiers.
+    const onSlate = new Set(named);
+    const today = (await cutToday(tx, dependent)).filter((id) => onSlate.has(id));
+    return today.length === named.length && today.every((id, i) => id === named[i]);
   } catch (err) {
     if (err instanceof HttpError && err.code === "SEEDING_SOURCE_INCOMPLETE") return true;
     throw err;
   }
-  return today === null || named.every((id) => today.has(id));
 }
 
 /**
@@ -158,9 +181,10 @@ export async function getKnockoutCutDrift(auth: AuthCtx, sourceStageId: string):
          where f.stage_id = ${dependent.id} and s.id is not null`;
       const seated = new Set(seats.map((r) => r.id));
       const frozenSet = new Set(frozen);
-      // Someone seated who is not on the frozen cut already took a place the cut owes: a lucky loser in a departed
-      // qualifier's seat is no one to name as coming in.
-      const today = (await cutToday(tx, dependent)).filter((id) => frozenSet.has(id) || !seated.has(id));
+      // A withdrawal is no correction: read as the results make it, or the lucky loser a departure would offer reads as moved
+      // across the cut when her seat was already played. And someone seated who is not on the frozen cut already took a place
+      // the cut owes: a lucky loser a correction made a true qualifier is no one to name as coming in.
+      const today = (await cutToday(tx, dependent, { withoutLuckyLoser: true })).filter((id) => frozenSet.has(id) || !seated.has(id));
       const drift = knockoutCutDrift(frozen.filter((id) => !departed.has(id)), today, true);
       if (drift !== null) return drift;
     }
