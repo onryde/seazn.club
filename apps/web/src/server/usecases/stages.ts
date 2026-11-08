@@ -141,6 +141,7 @@ import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lo
 import { VENUE_NOT_FOUND_CODE, COURT_NOT_FOUND_CODE } from "./venues";
 import {
   cutEligiblePools,
+  departedLoseBestNth,
   descriptorKey,
   descriptorLabel,
   destinationSlotsBySeed,
@@ -6510,7 +6511,12 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
     // (seedNextStage seeds INTO it), so `next.kind` is the real targetKind
     // ruling 13's snake/bracket-target guard needs on this resolution path
     // too, not just at createStages' save-time validateStageProgression call.
-    const { qualifiers, newLotsDraws } = resolveProgression(progression, shapes, sourceTables, next.kind);
+    const { qualifiers, newLotsDraws } = resolveProgression(
+      progression,
+      shapes,
+      departedLoseBestNth(sourceTables, resolvedSources, await departedEntrantIds(tx, current.division_id)),
+      next.kind,
+    );
     // W2d T12 (spec §5.9): a cross-group draw best-Nth made is stored with its source, under the division lock held above.
     await persistCrossGroupDraws(tx, resolvedSources, newLotsDraws);
     const entrants = qualifiers.map((q) => q.entrantId);
@@ -6823,7 +6829,12 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // real targetKind ruling 13's snake/bracket-target guard needs to fire
     // on this resolution path too, not just at createStages' save-time
     // validateStageProgression call.
-    const { qualifiers, ties, newLotsDraws } = resolveProgression(progression, shapes, tables, stage.kind);
+    const { qualifiers, ties, newLotsDraws } = resolveProgression(
+      progression,
+      shapes,
+      departedLoseBestNth(tables, resolved, await departedEntrantIds(tx, stage.division_id)),
+      stage.kind,
+    );
     // W2d T12 (spec §5.9): stored under the division lock held above, so a re-proposal seats the same draw.
     await persistCrossGroupDraws(tx, resolved, newLotsDraws);
 

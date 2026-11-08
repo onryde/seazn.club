@@ -118,6 +118,35 @@ export function cutEligiblePools<P extends PoolTableRows>(
   });
 }
 
+/** Far below any record a table can hold. */
+const DEPARTED_RECORD = -1_000_000_000_000;
+
+/** Review #1 (RB4-V6, X-LL-5): `cutEligiblePools` closes a pool up and keeps her row at the bottom, since a table is never
+ *  shortened (a pool with no rank-N row is the engine's STAGE_NOT_READY). So a pool with no eligible Nth finisher hands
+ *  best-Nth HER, with the record that made her a pool winner, and she takes a place from an eligible Nth beside it. What the
+ *  engine compares there starts from the sport's primary key by its own rule (`primaryTableKey`, `validateCascade`'s "first"),
+ *  points or wins: both are sunk, and the ledgers go so that a stored order that predates the rule finds nothing either.
+ *
+ *  A copy for `resolveProgression` alone: the proposal's hash and the carry read her real record. Only a shortfall reaches her,
+ *  and only where a cut skips the departed (`CUT_SKIPS_DEPARTED_KINDS`): a knockout's cut is `luckyLoserCut`'s. `sources` is
+ *  parallel to `tables`. */
+export function departedLoseBestNth(
+  tables: readonly SourceTables[],
+  sources: readonly { kind: string }[],
+  departed: ReadonlySet<string>,
+): SourceTables[] {
+  return tables.map((table, i) => {
+    if (departed.size === 0 || !CUT_SKIPS_DEPARTED_KINDS.has(sources[i]!.kind)) return table;
+    return {
+      ...table,
+      pools: table.pools.map((p) => ({
+        ...p,
+        rows: p.rows.map((r) => (departed.has(r.entrantId) ? { ...r, points: DEPARTED_RECORD, won: DEPARTED_RECORD, metrics: {} } : r)),
+      })),
+    };
+  });
+}
+
 /** W4 T13 (K9; RB4-V2, RB4-E7; X-LL-1): a KNOCKOUT source's cut, `cut` wide, with every departed qualifier's place taken
  *  by the next lucky loser — `lucky` is the source's eligible losers in lucky-loser order (lib/lucky-loser.ts,
  *  `luckyLoserOrder`). The lucky loser takes her RANK, so every other qualifier keeps the seed the table gave them (the

@@ -6,9 +6,10 @@
 // knockout, a tie at the boundary after the backfill, a shortfall on both timings — is swiss-finish-now.test.ts's
 // "T15 Carry A" describe.
 import { describe, expect, it } from "vitest";
-import { resolveProgression, type StandingsRow } from "@seazn/engine/competition";
+import { resolveProgression, validateCascade, type SourceTables, type StandingsRow } from "@seazn/engine/competition";
+import { builtinModules } from "@seazn/engine/sports";
 import { StageKind } from "@/server/api-v1/schemas";
-import { cutEligiblePools, luckyLoserCut } from "../stage-seeding";
+import { cutEligiblePools, departedLoseBestNth, luckyLoserCut } from "../stage-seeding";
 
 const row = (entrantId: string, rank: number, tie?: string[]): StandingsRow => ({
   entrantId,
@@ -107,6 +108,86 @@ describe("cutEligiblePools (T15 Carry A)", () => {
     // The defect this replaces: the same cut over a table with the departed rows dropped refuses (STAGE_NOT_READY).
     const dropped = [{ pool: "", rows: five[0]!.rows.filter((r) => !departed.has(r.entrantId)).map((r, i) => ({ ...r, rank: i + 1 })) }];
     expect(() => cut(dropped)).toThrow(expect.objectContaining({ code: "STAGE_NOT_READY" }));
+  });
+});
+
+// Review #1 (RB4-V6 on a best-thirds groups_ko): a pool with no eligible Nth finisher still hands best-Nth her row, since a
+// table is never shortened (the engine refuses a pool with no rank-N row, STAGE_NOT_READY). She keeps the record that made
+// her a pool winner, so she won a best-third's place and left an eligible third out beside an empty seat.
+describe("departedLoseBestNth (review #1)", () => {
+  const rec = (entrantId: string, rank: number, points: number, won: number, metrics: Record<string, number> = {}): StandingsRow => ({
+    entrantId,
+    played: 2,
+    won,
+    drawn: 0,
+    lost: 2 - won,
+    points,
+    metrics,
+    rank,
+  });
+  /** Three pools of three: GONE won pool B and left; a real third in A and C, each with a losing record. */
+  const pools = () => [
+    { pool: "A", rows: [rec("A1", 1, 4, 2), rec("A2", 2, 2, 1), rec("A3", 3, 0, 0, { diff: -40 })] },
+    { pool: "B", rows: [rec("B1", 1, 2, 1), rec("B2", 2, 2, 1), rec("GONE", 3, 4, 2, { diff: 40 })] },
+    { pool: "C", rows: [rec("C1", 1, 4, 2), rec("C2", 2, 2, 1), rec("C3", 3, 0, 0, { diff: -10 })] },
+  ];
+  const spec = {
+    sources: [{ stage: "previous" as const, take: [{ kind: "topNPerGroup" as const, n: 2 }, { kind: "bestNth" as const, nth: 3, count: 2 }] }],
+    placement: "rank_order" as const,
+  };
+  const shapes = [{ poolKeys: ["A", "B", "C"] }];
+  const tablesOf = (order: string[]): SourceTables[] => [{ pools: pools(), crossGroup: { order } as never }];
+  const group = [{ kind: "group" }];
+  const departed = new Set(["GONE"]);
+  const ids = (t: readonly SourceTables[]) => resolveProgression(spec as never, shapes as never, t as never).qualifiers.map((q) => q.entrantId);
+
+  it("nobody departed, or a source kind whose cut keeps her: the tables come back as they were", () => {
+    const t = tablesOf(["points", "lots"]);
+    expect(departedLoseBestNth(t, group, new Set())).toEqual(t);
+    expect(departedLoseBestNth(t, [{ kind: "knockout" }], departed)).toEqual(t);
+    expect(departedLoseBestNth([], [], departed)).toEqual([]);
+  });
+
+  it("the premise: over her own record she wins a best-third's place", () => {
+    expect(ids(tablesOf(["points", "lots"]))).toContain("GONE");
+  });
+
+  it("she cannot win it, on every sport's own order: the engine requires each one to start from the sport's primary key", () => {
+    let swept = 0;
+    for (const m of builtinModules) {
+      const order = [m.primaryTableKey, "lots"];
+      const firstRefusal = validateCascade(order as never, { module: m, cfg: undefined, stageKind: "group", crossGroup: true } as never).filter((v) => v.reason === "first");
+      expect(firstRefusal, `${m.key}: the order starts where the engine requires`).toEqual([]);
+      expect(["points", "wins"], `${m.key}: departedLoseBestNth sinks this key`).toContain(m.primaryTableKey);
+      const got = ids(departedLoseBestNth(tablesOf(order), group, departed));
+      expect(got, m.key).not.toContain("GONE");
+      expect(new Set(got), `${m.key}: both real thirds, beside the six`).toEqual(new Set(["A1", "A2", "B1", "B2", "C1", "C2", "A3", "C3"]));
+      swept++;
+    }
+    expect(swept, "anti-vacuity: the engine's registry").toBe(builtinModules.length);
+    expect(swept).toBeGreaterThan(0);
+  });
+
+  it("the order of the eligible is untouched, and with no stored rules the engine's own default order sinks her too", () => {
+    const best = (t: readonly SourceTables[]) =>
+      resolveProgression(spec as never, shapes as never, t as never).qualifiers.filter((q) => q.descriptor.kind === "best_nth").map((q) => q.entrantId);
+    expect(best(departedLoseBestNth(tablesOf(["points", "diff", "lots"]), group, departed)), "C3's better difference first").toEqual(["C3", "A3"]);
+    expect(best(departedLoseBestNth([{ pools: pools() }], group, departed))).toEqual(["C3", "A3"]);
+    expect(best(departedLoseBestNth(tablesOf(["diff", "lots"]), group, departed)), "a stored order that predates the first-key rule").toEqual(["C3", "A3"]);
+  });
+
+  it("a true shortfall still reaches a departed row: two thin pools, two seats, one real third", () => {
+    const thin = pools().map((p) => (p.pool === "C" ? { ...p, rows: [rec("C1", 1, 4, 2), rec("C2", 2, 2, 1), rec("GONE2", 3, 4, 2, { diff: 40 })] } : p));
+    const out = departedLoseBestNth([{ pools: thin, crossGroup: { order: ["points", "lots"] } as never }], group, new Set(["GONE", "GONE2"]));
+    const best = resolveProgression(spec as never, shapes as never, out as never).qualifiers.filter((q) => q.descriptor.kind === "best_nth");
+    expect(best[0]!.entrantId, "the real third first").toBe("A3");
+    expect(["GONE", "GONE2"], "then a departed row: her seat resolves as a departed qualifier's does").toContain(best[1]!.entrantId);
+  });
+
+  it("the record stays hers everywhere else: only the copy handed to the engine is sunk", () => {
+    const t = tablesOf(["points", "lots"]);
+    departedLoseBestNth(t, group, departed);
+    expect(t[0]!.pools[1]!.rows[2]!.points, "the input is not written to (the carry and the hash read it)").toBe(4);
   });
 });
 

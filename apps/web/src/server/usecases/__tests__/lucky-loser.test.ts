@@ -108,7 +108,7 @@ async function playWin(r: Rig, f: Row, winner: string): Promise<void> {
 
 /** `n` entrants named E1..En (seeded 1..n unless `unseeded`), the template's two stages from the REAL catalogue at `q`,
  *  Started, and the second stage's day-one draw generated. Nothing played. */
-async function rig(opts: { template: Template; n: number; q: number; sport?: SportPick; unseeded?: boolean }): Promise<Rig> {
+async function rig(opts: { template: Template; n: number; q: number; sport?: SportPick; unseeded?: boolean; pools?: number }): Promise<Rig> {
   const s = opts.sport ?? SINGLES;
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "W4 T13 " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
@@ -124,7 +124,7 @@ async function rig(opts: { template: Template; n: number; q: number; sport?: Spo
     division.id,
     Array.from({ length: opts.n }, (_, i) => ({ kind: s.kind, display_name: `E${i + 1}`, seed: opts.unseeded ? null : i + 1, members: [] })),
   );
-  const drafts = buildTemplateStages(opts.template, { swissRounds: 5, poolCount: 2, legs: 1, qualified: opts.q });
+  const drafts = buildTemplateStages(opts.template, { swissRounds: 5, poolCount: opts.pools ?? 2, legs: 1, qualified: opts.q });
   expect(drafts.length, `rig: ${opts.template} is two stages`).toBe(2);
   expect(drafts[1]!.progression?.timing, "rig: the second stage is drawn at setup and seeded by a confirm").toBe("setup");
   const ids: string[] = [];
@@ -431,6 +431,82 @@ describe.runIf(HAS_DB)("W4 T13 a departed qualifier takes a lucky loser (K9)", (
     const seated = (await rowsOf(r.stageIds[1])).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((x): x is string => x !== null);
     expect(new Set(seated.map((id) => r.nameOf.get(id))), "the knockout seats them").toEqual(new Set(["E1", "E3", "E4", "E5"]));
   }, 300_000);
+
+  // Review #1: nine in three pools at q = 8 is the top two of each and the two best thirds. E2 wins her pool and leaves
+  // before the confirm: her pool closes up and has no eligible third, so the other two pools' thirds are the two best,
+  // and everyone still in the field qualifies. Expected: the roster less E2, by count.
+  describe("X-LL-5 a departed pool winner cannot win a best third's place (groups_ko, nine in three pools at q = 8)", () => {
+    const expected = (r: Rig) => new Set([...r.nameOf.values()].filter((n) => n !== "E2"));
+    const seated = async (r: Rig) =>
+      new Set((await rowsOf(r.stageIds[1])).filter((f) => f.round_no === 1).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).map((id) => (id === null ? "-" : r.nameOf.get(id)!)));
+
+    it("thirds with different records: eight qualifiers, no tie, every seat filled", async () => {
+      const r = await rig({ template: "groups_ko", n: 9, q: 8, pools: 3 });
+      // The favourite wins every line; E9 loses closer than E7, so the two thirds are not level.
+      for (const f of (await rowsOf(r.stageIds[0])).filter((x) => x.home_entrant_id !== null && x.away_entrant_id !== null)) {
+        const homeWins = num(r, f.home_entrant_id!) < num(r, f.away_entrant_id!);
+        const loser = homeWins ? f.away_entrant_id! : f.home_entrant_id!;
+        const against = r.nameOf.get(loser) === "E9" ? 19 : 10;
+        await post(r.auth, f.id, "core.start");
+        for (let g = 0; g < 2; g++) await post(r.auth, f.id, "badminton.game.summary", homeWins ? { home: 21, away: against } : { home: against, away: 21 });
+      }
+      const done = await completeStage(r.auth, r.stageIds[0]);
+      expect(done.completed, "rig: the source completed").toBe(true);
+      await withdraw(r, r.idOf.get("E2")!);
+
+      const p = await getSeedProposal(r.auth, r.stageIds[1]);
+      expect(p?.status).toBe("draft");
+      expect(new Set(p!.computed.qualifiers.map((q) => r.nameOf.get(q.entrantId)))).toEqual(expected(r));
+      expect(p!.computed.qualifiers.length, "eight, not seven").toBe(8);
+      expect(p!.computed.ties, "no tie: the two thirds are not level, and she is in no comparison").toEqual([]);
+
+      await confirmLatest(r);
+      expect(await seated(r), "every seat of round 1, nobody left out beside an empty one").toEqual(expected(r));
+    }, 300_000);
+
+    it("the on_complete door: the seeded list is the same eight, and her walkover line is not drawn", async () => {
+      const { auth } = await seedOrg("pro");
+      const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "W4 LL5 " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+      const division = await createDivision(auth, comp.id, { name: "Open", slug: "open-" + randomUUID().slice(0, 6), sport_key: SINGLES.key, variant_key: SINGLES.variant, config: {} });
+      const made = await createEntrants(auth, division.id, Array.from({ length: 9 }, (_, i) => ({ kind: SINGLES.kind, display_name: `E${i + 1}`, seed: i + 1, members: [] })));
+      const drafts = buildTemplateStages("groups_ko", { swissRounds: 5, poolCount: 3, legs: 1, qualified: 8 });
+      const ids: string[] = [];
+      for (const [i, d] of drafts.entries()) {
+        const progression = d.progression ? { ...d.progression, timing: "on_complete" as const } : d.progression;
+        const [stage] = await createStages(auth, division.id, CreateStage.parse({ seq: i + 1, kind: d.kind, name: d.name, config: d.config, progression }));
+        ids.push(stage!.id);
+      }
+      await startDivision(auth, division.id);
+      const r: Rig = {
+        auth,
+        divisionId: division.id,
+        sport: SINGLES,
+        stageIds: [ids[0]!, ids[1]!],
+        nameOf: new Map(made.map((e) => [e.id, e.display_name])),
+        idOf: new Map(made.map((e) => [e.display_name, e.id])),
+      };
+      for (const f of await rowsOf(ids[0]!)) await playWin(r, f, num(r, f.home_entrant_id!) < num(r, f.away_entrant_id!) ? f.home_entrant_id! : f.away_entrant_id!);
+      await withdraw(r, r.idOf.get("E2")!);
+      const done = await completeStage(auth, ids[0]!);
+      expect(done.completed, "rig: the source completed").toBe(true);
+      const [next] = await sql<{ config: { qualified?: string[] } }[]>`select config from stages where id = ${ids[1]!}`;
+      expect(new Set(next!.config.qualified?.map((id) => r.nameOf.get(id))), "the roster less her").toEqual(expected(r));
+      expect(next!.config.qualified?.length).toBe(8);
+    }, 300_000);
+
+    it("thirds dead level: still eight qualifiers; the tie for the seed order names only the two thirds, never her", async () => {
+      const r = await rig({ template: "groups_ko", n: 9, q: 8, pools: 3 });
+      await playSource(r, favourite(r));
+      await withdraw(r, r.idOf.get("E2")!);
+      const p = await getSeedProposal(r.auth, r.stageIds[1]);
+      expect(new Set(p!.computed.qualifiers.map((q) => r.nameOf.get(q.entrantId)))).toEqual(expected(r));
+      const tied = p!.computed.ties.flatMap((t) => t.entrantIds.map((id) => r.nameOf.get(id)));
+      expect(tied, "anti-vacuity: the two thirds are level in this rig").toContain("E9");
+      expect(tied, "she is in no tie").not.toContain("E2");
+      await confirmLatest(r);
+      expect(await seated(r)).toEqual(expected(r));
+    }, 300_000);
+  });
 
   it("X-LL-5 a departed group qualifier is replaced by the next-ranked entrant of that group (groups_ko, at the cut)", async () => {
     // Eight in two groups (the snake: A = E1 E4 E5 E8, B = E2 E3 E6 E7), the top two of each at q = 4: E1 and E4, E2 and
