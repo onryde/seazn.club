@@ -248,6 +248,19 @@ function renderSlotMessage(slot: ContextSlot, cell = "") {
 const SLOT_MESSAGE_CLASS = "text-xs font-medium";
 /** One cell of a reserving grid: every child overlaps in it, so the cell is as tall as the tallest. */
 const RESERVE_CELL = "col-start-1 row-start-1 min-w-0 ";
+/**
+ * S2-4 Task 10 fix round 1 (review I1) — a reserve twin's text is DRAWN, never in the DOM: the element is empty and
+ * carries the text in `data-reserve-text`, which this class paints as its `::after` content. The twin lays out exactly
+ * as the text would (same element, same type, same wrapping), but no `textContent` holds it, so `getByText` and every
+ * text locator meet the visible line alone (a DOM copy matched twice: a Playwright strict-mode violation in T7 and T8),
+ * and a screen reader never hears it (`invisible` is `visibility: hidden`, and the twin is `aria-hidden` as well).
+ */
+const RESERVE_TEXT = "after:content-[attr(data-reserve-text)]";
+
+/** The props of one reserve twin: empty, invisible, aria-hidden, its text drawn from `data-reserve-text`. */
+function reserveTwin(text: string, className: string) {
+  return { "aria-hidden": "true", "data-reserve-text": text, className: `invisible ${className} ${RESERVE_TEXT}` } as const;
+}
 
 /**
  * S2-4 Task 10 (gap 8) — a slot's message line when the slot holds its room (`ContextSlot.messageReserve`): one grid
@@ -261,9 +274,7 @@ function renderSlotFoot(slot: ContextSlot) {
   return (
     <div key={`${slot.id}-message-reserve`} data-context-reserve="message" data-context-reserve-slot={slot.id} className="grid">
       {reserve.map((message, i) => (
-        <p key={i} aria-hidden="true" className={`invisible ${RESERVE_CELL}${SLOT_MESSAGE_CLASS}`}>
-          {message}
-        </p>
+        <p key={i} {...reserveTwin(message, `${RESERVE_CELL}${SLOT_MESSAGE_CLASS}`)} />
       ))}
       {!!slot.message && renderSlotMessage(slot, RESERVE_CELL)}
     </div>
@@ -348,9 +359,9 @@ function renderModes(spec: ContextStripSpec, personNames: Readonly<Record<string
         <div key={i} aria-hidden="true" className={`invisible ${RESERVE_CELL}${MODE_WRAP_CLASS}`}>
           <p className={MODE_LINE_CLASS}>
             {lockGlyph()}
-            <span className="break-words">{t(statement.label)}</span>
+            <span {...reserveTwin(t(statement.label), "break-words")} />
           </p>
-          {!!statement.message && <p className={SLOT_MESSAGE_CLASS}>{statement.message}</p>}
+          {!!statement.message && <p {...reserveTwin(statement.message, SLOT_MESSAGE_CLASS)} />}
         </div>
       ))}
       <div className={`${RESERVE_CELL}flex flex-col gap-2`}>{modes}</div>
@@ -375,9 +386,7 @@ function reservedChipBody(slot: ContextSlot, personNames: Readonly<Record<string
     />,
     <span key="label" className="grid min-w-0">
       {twins.map((text, i) => (
-        <span key={i} aria-hidden="true" className={`invisible ${RESERVE_CELL}break-words max-md:hidden`}>
-          {text}
-        </span>
+        <span key={i} {...reserveTwin(text, `${RESERVE_CELL}break-words max-md:hidden`)} />
       ))}
       <span className={`${RESERVE_CELL}break-words max-md:truncate`}>{chipLabel(slot, personNames, t)}</span>
     </span>,

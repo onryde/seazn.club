@@ -2381,9 +2381,9 @@ test("cricket v3 pad: tiles + over-summary sheet + context strip hold the 44px f
   // read-only because the engine refuses any other pair under a strict
   // fold, and bowler is read-only until an over boundary (`currentBowler
   // === null`) because mid-over the same fold refuses it. Selecting on
-  // `button` therefore matched nothing here and the test failed at all
-  // seven widths — the 44px floor applies to the chip footprint, which is
-  // what a thumb meets, not to whether it happens to be a control.
+  // `button` would skip the read-only chips, and the 44px floor applies to
+  // every chip's footprint, which is what a thumb meets, not to whether it
+  // happens to be a control.
   const chips = pad.locator('[data-role="context-chip"]');
   await expect(chips.first(), "context strip must render once an innings exists").toBeVisible({ timeout: 20_000 });
   const chipCount = await chips.count();

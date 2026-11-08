@@ -43,23 +43,20 @@ async function ballCount(page: Page, fixtureId: string): Promise<number> {
   return (res.data ?? []).filter((e) => e.type === "cricket.ball").length;
 }
 
-/** Both regions in document coordinates, after two animation frames so a pending layout has landed. */
+/** Both regions in document coordinates, after two animation frames so a pending layout has landed. The query runs
+ *  after the frames, in the async body, so a missing region REJECTS with its name (a throw inside a rAF callback
+ *  would reject nothing and hang the evaluate until the test's budget; review M2). */
 async function measure(page: Page): Promise<Sample> {
-  return page.evaluate((roles) => {
-    return new Promise<Record<string, { top: number; height: number }>>((resolve) => {
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
-          const out: Record<string, { top: number; height: number }> = {};
-          for (const role of roles) {
-            const el = document.querySelector(`[data-testid="score-pad"] [data-role="${role}"]`);
-            if (!el) throw new Error(`steady layout: [data-role="${role}"] is not on the page`);
-            const rect = el.getBoundingClientRect();
-            out[role] = { top: rect.top + window.scrollY, height: rect.height };
-          }
-          resolve(out);
-        }),
-      );
-    });
+  return page.evaluate(async (roles) => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const out: Record<string, { top: number; height: number }> = {};
+    for (const role of roles) {
+      const el = document.querySelector(`[data-testid="score-pad"] [data-role="${role}"]`);
+      if (!el) throw new Error(`steady layout: [data-role="${role}"] is not on the page`);
+      const rect = el.getBoundingClientRect();
+      out[role] = { top: rect.top + window.scrollY, height: rect.height };
+    }
+    return out;
   }, REGIONS as readonly string[]) as Promise<Sample>;
 }
 
@@ -115,6 +112,20 @@ test("the tile grid and the context strip do not move across a dot, a 4, a wide 
     const idle = (await queue.textContent()) ?? "";
     const baseline = await measure(page);
 
+    // Premises (review M1): each event that brings something the layout reserves room for must be seen to bring it,
+    // or its sample proves nothing and still counts toward the 28.
+    const modeLine = pad(page).locator('[data-role="context-mode"]');
+    const freeHit = pad(page).locator('[data-strip-item-id="freeHit"]');
+    const bowlerPrompt = pad(page).locator('[data-role="context-slot-message"][data-slot-id="bowler"]');
+    await expect(modeLine, "premise: no mode is stated before the first ball").toHaveCount(0);
+    await expect(bowlerPrompt, "premise: no bowler prompt once the bowler is picked").toHaveCount(0);
+    const premise: Record<number, () => Promise<void>> = {
+      0: () => expect(modeLine, "premise: the first ball states the mode").toHaveCount(1),
+      3: () => expect(freeHit, "premise: the no ball brings the free hit").toBeVisible(),
+      4: () => expect(freeHit, "premise: the free hit is used up").toHaveCount(0),
+      6: () => expect(bowlerPrompt, "premise: the over's end asks for the next bowler").toBeVisible(),
+    };
+
     const events: { name: string; act: () => Promise<void> }[] = [
       { name: "a dot", act: () => pad(page).locator('[data-tile-id="run0"]').click() },
       { name: "a 4", act: () => pad(page).locator('[data-tile-id="run4"]').click() },
@@ -142,6 +153,7 @@ test("the tile grid and the context strip do not move across a dot, a 4, a wide 
       // Settled: no sheet open, and the queue reads as it did at rest before the first ball.
       await expect(pad(page).locator('[data-role="v3-sheet"]')).toHaveCount(0);
       await expect.poll(async () => (await queue.textContent()) ?? "", { timeout: 20_000 }).toBe(idle);
+      await premise[i]?.();
       const now = await measure(page);
       samples++;
       for (const region of REGIONS) {
