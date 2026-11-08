@@ -20,6 +20,7 @@ vi.mock("next/headers", () => ({
 }));
 
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { appendEvent } from "@/server/engine-db";
 import { CaptureMatchdayApprovalOk, CaptureMatchdayApprovalReview, CaptureMatchdayRefusal } from "@/server/api-v1/capture-schemas";
 import { mintMatchDayCode, type MatchDayCodeRow, type MatchDayScope } from "../match-day-codes";
@@ -313,6 +314,68 @@ describe.skipIf(!HAS_DB)("approvals through a Match Day code", () => {
       await sql`update stage_seed_proposals set status = 'stale' where stage_id = ${d.koId}`;
       expect(await refusalOf(reviewApprovalForCode(code, "draw", d.koId))).toEqual({ status: 409, code: "MD_STALE" });
       expect(await draftOf(d.koId), "nothing computed").toBeNull();
+    });
+  });
+
+  describe("fix round 1: no word outside the md_ list, and the use row never fails an approval", () => {
+    it("a seat filled after the draft (409 SEEDING_FIXTURES_ALREADY_FILLED) is MD_STALE, with no use row", async () => {
+      const d = await drawDivision(day);
+      const { code } = await codeFor(day, { kind: "competition" }, true);
+      const review = await reviewApprovalForCode(code, "draw", d.koId);
+      // The desk seats someone in the final by hand after the phone's review.
+      const [{ id: other }] = await sql<{ id: string }[]>`
+        select id from entrants where division_id = ${d.divisionId} and id <> all(${d.winners}::uuid[]) limit 1`;
+      await sql`update fixtures set home_entrant_id = ${other!} where id = ${d.finalId}`;
+      expect(await refusalOf(approveForCode(code, "draw", d.koId, { hash: review.hash }))).toEqual({ status: 409, code: "MD_STALE" });
+      expect((await seatsOf(d.finalId)).away_entrant_id, "nothing seated").toBeNull();
+      expect(await usesOf(code.id)).toEqual([]);
+    });
+
+    it("a coded refusal with no md_ word is a 500 with no word (logged with ids only)", async () => {
+      // A draw asked of a stage with no seeding rules: 422 SEEDING_RULES_MISSING from the compute.
+      const s = await swissDivision(day);
+      const { code, token } = await codeFor(day, { kind: "competition" }, true);
+      const warn = vi.spyOn(log, "warn");
+      try {
+        expect(await refusalOf(reviewApprovalForCode(code, "draw", s.stageId))).toEqual({ status: 500, code: "INTERNAL" });
+        const line = warn.mock.calls.find((c) => String(c[1]).includes("no md_ word"));
+        expect(line, "premise: the refusal was logged").toBeDefined();
+        expect(line![0]).toEqual({ codeId: code.id, stageId: s.stageId, kind: "draw", upstream: "SEEDING_RULES_MISSING", status: 422 });
+        expect(JSON.stringify(warn.mock.calls)).not.toContain(token);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("a draw with nobody left to seed: the review and the approve are MD_STALE (review M4)", async () => {
+      const d = await drawDivision(day);
+      const { code } = await codeFor(day, { kind: "competition" }, true);
+      const draft = (await draftOf(d.koId))!;
+      await sql`update stage_seed_proposals set computed = jsonb_set(computed, '{qualifiers}', '[]'::jsonb) where id = ${draft}`;
+      expect(await refusalOf(reviewApprovalForCode(code, "draw", d.koId))).toEqual({ status: 409, code: "MD_STALE" });
+      // The approve's own refusal (422 SEEDING_NOTHING_TO_FILL) in md_ words too.
+      expect(await refusalOf(approveForCode(code, "draw", d.koId, { hash: draft }))).toEqual({ status: 409, code: "MD_STALE" });
+      expect((await proposalsOf(d.koId)).find((p) => p.id === draft)?.status, "the draft is left for a recompute").toBe("draft");
+    });
+
+    it("an approval whose use row cannot be written still answers ok, and the failure is a warning with ids only", async () => {
+      const d = await drawDivision(day);
+      const { code, token } = await codeFor(day, { kind: "competition" }, true);
+      const review = await reviewApprovalForCode(code, "draw", d.koId);
+      // The code's row gone under the approve: the use insert breaks its foreign key.
+      await sql`delete from match_day_codes where id = ${code.id}`;
+      const warn = vi.spyOn(log, "warn");
+      try {
+        expect(await approveForCode(code, "draw", d.koId, { hash: review.hash })).toEqual({ ok: true });
+        const line = warn.mock.calls.find((c) => String(c[1]).includes("use row was not written"));
+        expect(line, "the failed write is warned").toBeDefined();
+        expect(line![0]).toEqual({ codeId: code.id, stageId: d.koId, kind: "draw", pg: "23503" });
+        expect(JSON.stringify(warn.mock.calls)).not.toContain(token);
+      } finally {
+        warn.mockRestore();
+      }
+      const seats = await seatsOf(d.finalId);
+      expect([seats.home_entrant_id, seats.away_entrant_id].sort(), "the approval committed").toEqual([...d.winners].sort());
     });
   });
 

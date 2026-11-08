@@ -12,13 +12,16 @@ import "server-only";
 // Only an md_ bearer resolved by `matchDayCodeOf` reaches these functions: they take the code's row, never an AuthCtx.
 //
 // Every refusal is one of the md_ words (capture-schemas.ts `CaptureMatchdayRefusalCode`): the stage usecases' own codes
-// are translated here (`MD_WORD_OF`), and anything else is the v1 envelope's own answer (404, 422), outside the md_ shape.
+// are translated here (`inMdWords`), and no other word ever leaves — a coded refusal it has no md_ word for is a 500. The
+// only other answers are the v1 envelope's own, by status (a codeless 404 or 422).
 import { EngineError } from "@seazn/engine/core";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { DEFAULT_LOCALE, getDictionary } from "@/lib/i18n";
 import { assertUuid } from "@/server/api-v1/auth";
-import type { CaptureMatchdayApprovalOk, CaptureMatchdayApprovalReview } from "@/server/api-v1/capture-schemas";
+import { CaptureMatchdayRefusalCode, type CaptureMatchdayApprovalOk, type CaptureMatchdayApprovalReview } from "@/server/api-v1/capture-schemas";
+import { ENGINE_HTTP } from "@/server/api-v1/http";
+import { log } from "@/server/logger";
 import { stageInScope, type ScopeFixture } from "./match-day-code-view";
 import { logMatchDayUse, matchDayActor, type MatchDayCodeRow } from "./match-day-codes";
 import { readRounds, roundOf } from "./match-day-rounds";
@@ -53,6 +56,8 @@ const MD_WORD_OF: Record<string, MdWord> = {
   SEEDING_ENTRANT_WITHDRAWN: "MD_STALE",
   SEEDING_SOURCE_INCOMPLETE: "MD_STALE",
   STAGE_NOT_READY: "MD_STALE",
+  // Minor M4: nobody left to seed (every qualifier gone): the draft is not approvable; review again once the field settles.
+  SEEDING_NOTHING_TO_FILL: "MD_STALE",
 };
 
 const MD_MESSAGE: Record<MdWord, string> = {
@@ -61,15 +66,34 @@ const MD_MESSAGE: Record<MdWord, string> = {
   MD_TIES: "this draw has ties to decide on the web desk",
 };
 
-/** `run`, its stage-usecase refusals translated to md_ words (409); every other error as it was. */
-async function inMdWords<T>(run: () => Promise<T>): Promise<T> {
+const MD_WORDS: ReadonlySet<string> = new Set(CaptureMatchdayRefusalCode.options);
+
+/** Who asked, for a log line: ids only, never the token. */
+type Asked = { codeId: string; stageId: string; kind: ApprovalKind };
+
+/**
+ * `run`, with every refusal it raises put in md_ words (review fix I1: no other word leaves an md_ route):
+ *  - an md_ word already (the Swiss pair's MD_ALREADY, MD_STALE) stays as it is;
+ *  - a word `MD_WORD_OF` names becomes that md_ word, 409;
+ *  - any other 409 (an HttpError, or an engine code `ENGINE_HTTP` answers 409) is MD_STALE: the state moved under the
+ *    review, so review again — SEEDING_FIXTURES_ALREADY_FILLED among them (a seat filled after the draft: a desk edit,
+ *    or a stage already seeded when its source completed);
+ *  - any other CODED refusal (a 422 SEEDING_RULES_MISSING, SCHEDULE_LOCKED, …) is a 500 with no word, logged with ids;
+ *  - a codeless HttpError (404 not found, 422 a round that is not a whole number) and any other error are unchanged:
+ *    the envelope answers them by status.
+ */
+async function inMdWords<T>(asked: Asked, run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (e) {
-    const code = e instanceof HttpError ? e.code : EngineError.is(e) ? e.code : undefined;
-    const word = code === undefined ? undefined : MD_WORD_OF[code];
-    if (word === undefined) throw e;
-    throw new HttpError(409, MD_MESSAGE[word], word);
+    const engine = EngineError.is(e);
+    const code = e instanceof HttpError ? e.code : engine ? e.code : undefined;
+    if (code === undefined || MD_WORDS.has(code)) throw e;
+    const status = e instanceof HttpError ? e.status : ENGINE_HTTP[code as keyof typeof ENGINE_HTTP];
+    const word = MD_WORD_OF[code] ?? (status === 409 ? "MD_STALE" : undefined);
+    if (word !== undefined) throw new HttpError(409, MD_MESSAGE[word], word);
+    log.warn({ ...asked, upstream: code, status }, "match day approval: a refusal with no md_ word, answered 500");
+    throw new HttpError(500, "this approval could not be completed", "INTERNAL");
   }
 }
 
@@ -141,7 +165,7 @@ const labelOf = (code: string, n: number, inRound: number): string => (inRound >
  *  if it needs one, and rolls the pairing back). Rows in board order, the bye with `away: null`; `round` is the round the
  *  day read lists as awaiting pairing, and the approve must hand it back with `hash` (Task 5). */
 async function swissReview(code: MatchDayCodeRow, stageId: string, divisionName: string): Promise<Review> {
-  const preview = await inMdWords(() => previewSwissNextRound(matchDayActor(code), stageId));
+  const preview = await inMdWords({ codeId: code.id, stageId, kind: "swiss" }, () => previewSwissNextRound(matchDayActor(code), stageId));
   const names = await namesOf(code, preview.pairings.flatMap((p) => (p.away === null ? [p.home] : [p.home, p.away])));
   const rows: Row[] = preview.pairings.map((p) => ({
     label: labelOf(`R${preview.round}`, p.board, preview.pairings.length),
@@ -163,7 +187,7 @@ async function liveDraft(code: MatchDayCodeRow, stageId: string): Promise<SeedPr
   const actor = matchDayActor(code);
   const latest = await getSeedProposal(actor, stageId);
   if (latest !== null && latest.status === "draft") return latest;
-  return inMdWords(() => computeSeedProposal(actor, stageId));
+  return inMdWords({ codeId: code.id, stageId, kind: "draw" }, () => computeSeedProposal(actor, stageId));
 }
 
 /** One row per knockout match a qualifier is drawn into, from each qualifier's `destinationSlot` (`{fixture}:{side}`),
@@ -202,6 +226,8 @@ async function drawRows(code: MatchDayCodeRow, stageId: string, proposal: SeedPr
 async function drawReview(code: MatchDayCodeRow, stageId: string, divisionName: string): Promise<Review> {
   const draft = await liveDraft(code, stageId);
   const rows = await drawRows(code, stageId, draft);
+  // Minor M4: a draft with nobody left to seed is no approval (its confirm refuses SEEDING_NOTHING_TO_FILL).
+  if (rows.length === 0) throw new HttpError(409, MD_MESSAGE.MD_STALE, "MD_STALE");
   return { kind: "draw", stage_id: stageId, division_name: divisionName, round: null, rows, hash: draft.id, ties: draft.computed.ties.length > 0 };
 }
 
@@ -237,16 +263,32 @@ export async function approveForCode(
   requireCanApprove(code);
   await stageForCode(code, stageId);
   const actor = matchDayActor(code);
+  const asked: Asked = { codeId: code.id, stageId, kind };
   if (kind === "swiss") {
-    await inMdWords(() => pairSwissNextRound(actor, stageId, input.hash, input.round ?? Number.NaN));
+    await inMdWords(asked, () => pairSwissNextRound(actor, stageId, input.hash, input.round ?? Number.NaN));
   } else {
     if (!UUID.test(input.hash)) throw new HttpError(404, "seed proposal not found");
-    await inMdWords(() => confirmSeedProposal(actor, stageId, { proposalId: input.hash }));
+    await inMdWords(asked, () => confirmSeedProposal(actor, stageId, { proposalId: input.hash }));
   }
-  // After the approval committed, on the pooled client (the use log is sealed): the stage usecases own their transactions,
-  // so the row is not in the approval's own one (the open's is; MD-1 Task 6 report, deviation).
-  await logMatchDayUse(code.id, { kind: "approve", stageId, approval: kind });
+  await logApproval(asked);
   return { ok: true };
+}
+
+/**
+ * The approval's use row (spec §3), after the approval committed, on the pooled client (the use log is sealed): the stage
+ * usecases own their transactions, so the row cannot be in the approval's own one (the controller's ruling, Task 6 fix
+ * round 1: keep it after the commit, never widen the privilegedEpilogue allow-list). A pino line first (review M1), so a
+ * crash before the insert still leaves a trace on the server; an insert that fails is a warning, never the approval's
+ * answer — the approval has committed, and a 500 would send the phone to MD_ALREADY on its retry.
+ */
+async function logApproval(asked: Asked): Promise<void> {
+  log.info(asked, "match_day_approve");
+  try {
+    await logMatchDayUse(asked.codeId, { kind: "approve", stageId: asked.stageId, approval: asked.kind });
+  } catch (e) {
+    const pg = (e as { code?: unknown }).code;
+    log.warn({ ...asked, pg: typeof pg === "string" ? pg : undefined }, "match day approval: its use row was not written");
+  }
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
