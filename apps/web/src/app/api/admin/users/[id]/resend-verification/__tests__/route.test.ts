@@ -83,6 +83,7 @@ import {
 import { makeUser } from "@/server/usecases/__tests__/_registration-fixtures";
 import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
+import { QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
 import { POST as resend } from "../route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -324,5 +325,51 @@ describe.skipIf(!HAS_DB)("POST /api/admin/users/[id]/resend-verification — the
     }
     expect(minted.calls, "nothing minted").toEqual([]);
     expect(driven, "anti-vacuity: every refusal was driven").toBe(3);
+  });
+
+  it("refuses the quick-match system user with createSession's 403, by its stored id: nothing minted, queued, mailed or logged; an ordinary account still gets its mail", async () => {
+    // Quick match plan 3 Task 8 (plan-1 final review): the system user (V492) is unverified and can never sign in
+    // (createSession refuses it), so a verify mail for it is a link that must never exist.
+    const [system] = await sql<{ email_verified: boolean }[]>`
+      select email_verified from users where id = ${QUICK_MATCH_SYSTEM_USER_ID} and deleted_at is null`;
+    expect(system, "premise: the system user is seeded (V492), live and unverified, so only the guard refuses it").toEqual({
+      email_verified: false,
+    });
+    const staff = await user("staff", { staff: true });
+    const ordinary = await user("target");
+    try {
+      // The id as stored, then in capitals: Postgres reads both as the same uuid, so a guard on the route's raw param
+      // would let the second one through. The guard compares the row's id, as createSession compares its argument.
+      const ids = [QUICK_MATCH_SYSTEM_USER_ID, QUICK_MATCH_SYSTEM_USER_ID.toUpperCase()];
+      let driven = 0;
+      for (const id of ids) {
+        driven += 1;
+        const pressed = await pressResend(staff.id, id);
+        expect(pressed.status, `${id}: ${JSON.stringify(pressed.body)}`).toBe(403);
+        expect(pressed.body.error).toBe("system user");
+        expect(pressed.mailed, `${id}: nothing mailed`).toEqual([]);
+      }
+      expect(driven, "anti-vacuity: both spellings were pressed").toBe(2);
+      expect(minted.calls, "nothing minted").toEqual([]);
+      const queued = await sql`
+        select id from email_outbox where kind = 'email_verification' and ref_type = 'user'
+           and lower(ref_id) = ${QUICK_MATCH_SYSTEM_USER_ID}`;
+      expect(queued, "nothing queued").toEqual([]);
+      const tokens = await sql`select 1 from email_verifications where user_id = ${QUICK_MATCH_SYSTEM_USER_ID}`;
+      expect(tokens, "no token").toEqual([]);
+      const logged = await sql`select 1 from staff_audit_log where actor_id = ${staff.id}`;
+      expect(logged, "a refused press is not logged as a resend").toEqual([]);
+
+      // Positive pair: the same staff member's same press, on an ordinary unverified account, is answered and mailed.
+      const pressed = await pressResend(staff.id, ordinary.id);
+      expect(pressed.status, JSON.stringify(pressed.body)).toBe(200);
+      expect(pressed.mailed.map((m) => m.to)).toEqual([ordinary.email]);
+    } finally {
+      // Only a broken guard writes these, and the system user is shared by every suite.
+      await sql`
+        delete from email_outbox where kind = 'email_verification' and ref_type = 'user'
+           and lower(ref_id) = ${QUICK_MATCH_SYSTEM_USER_ID}`;
+      await sql`delete from email_verifications where user_id = ${QUICK_MATCH_SYSTEM_USER_ID}`;
+    }
   });
 });
