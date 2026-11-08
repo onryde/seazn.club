@@ -18,7 +18,7 @@
 // every sport is plan 1's probe, through the same create.
 //
 // Real Postgres required; skipped without DATABASE_URL.
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { inspect } from "node:util";
@@ -269,7 +269,7 @@ describe.skipIf(!HAS_DB)("the link mail at creation (POST /api/quick-match, the 
         org_id: QUICK_MATCH_SYSTEM_ORG_ID, // the tenant insert policy refuses null (V470); the system org's own row
         recipient: email,
         recipient_user_id: null, // a literal address: a guest has no account
-        transactional: true,
+        transactional: false, // controller ruling 2026-11-08: the suppression list is honoured
         meta: {}, // never a token in meta
         subject: copy(locale, "quickMatchLink.subject", { name }),
       });
@@ -389,6 +389,79 @@ describe.skipIf(!HAS_DB)("the email send limit (plan 3 Amend T1 [B4]): EMAIL_LIM
     expect(seen.filter((s) => s.key === `rl:quick-match-create:${theirs}`), "the create's own limit still runs, every time").toHaveLength(
       EMAIL_MAX + 2,
     );
+  });
+});
+
+describe.skipIf(!HAS_DB)("the per-recipient limit (T1 review I1): 3 link mails a day to one inbox, keyed on the address's hash", () => {
+  /** The controller's numbers (ruling 2026-11-08): 3 per 24 h, on sha256(lower(email)). */
+  const RECIPIENT_MAX = 3;
+  const RECIPIENT_WINDOW_S = 24 * 3600;
+  const recipientKey = (email: string) => `rl:quick-match-recipient:${createHash("sha256").update(email.toLowerCase()).digest("hex")}`;
+
+  it("three emailed creates to one inbox land from three IPs; the fourth is refused before any row; another inbox still lands; no key holds an address", async () => {
+    // The limiter's own test seam, counting every key as a real fixed window would (each create below comes from an IP of its
+    // own, so neither the create limit nor EMAIL_LIMIT is what refuses).
+    const counts = new Map<string, number>();
+    const seen: { key: string; windowSeconds: number }[] = [];
+    __setRateLimitCounterForTests(async (key, windowSeconds) => {
+      seen.push({ key, windowSeconds });
+      const n = (counts.get(key) ?? 0) + 1;
+      counts.set(key, n);
+      return { count: n, ttlMs: windowSeconds * 1000 };
+    });
+    const inbox = address("inbox");
+    // One inbox, however it is spelled.
+    for (const email of [inbox, inbox.toUpperCase(), inbox]) landedToken(await post(form({ email }), ip()));
+    const toInbox = () => deliverMock.mock.calls.map((c) => c[0] as Sent).filter((m) => m.to.toLowerCase() === inbox);
+    expect(toInbox(), "premise: the three were mailed").toHaveLength(RECIPIENT_MAX);
+
+    const fourth = form({ email: inbox, locale: "fr" });
+    const res = await post(fourth, ip());
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/fr/play?e=QUICK_MATCH_RATE_LIMITED");
+    expect(await rowNamed(fourth.name as string), "the refused create made no match").toBeUndefined();
+    expect(await mailsTo(inbox), "and queued no fourth mail").toHaveLength(RECIPIENT_MAX);
+    expect(toInbox()).toHaveLength(RECIPIENT_MAX);
+    expect(vi.mocked(Sentry.captureException), "a refusal is not a fault").not.toHaveBeenCalled();
+
+    const other = address("other-inbox");
+    landedToken(await post(form({ email: other }), ip()));
+    expect(sentTo(other), "another inbox is not held by this one's bucket").toHaveLength(1);
+
+    // The key is the address's hash, lower-cased first, with the ruling's window; nothing the limiter saw holds an address.
+    const recipientHits = seen.filter((s) => s.key.startsWith("rl:quick-match-recipient:"));
+    expect(recipientHits.filter((s) => s.key === recipientKey(inbox)), "one bucket for every spelling, the refused one included").toHaveLength(
+      RECIPIENT_MAX + 1,
+    );
+    expect(recipientHits.filter((s) => s.key === recipientKey(other))).toHaveLength(1);
+    expect(new Set(recipientHits.map((s) => s.windowSeconds))).toEqual(new Set([RECIPIENT_WINDOW_S]));
+    expect(seen.length, "anti-vacuity: the limiter saw keys").toBeGreaterThan(0);
+    for (const { key } of seen) {
+      for (const a of [inbox, inbox.toUpperCase(), other, inbox.split("@")[0]!]) expect(key.includes(a), `${key} holds an address`).toBe(false);
+    }
+  });
+});
+
+describe.skipIf(!HAS_DB)("a suppressed address (T1 review m1: the quick match's mails are not transactional)", () => {
+  it("an address that bounced or complained gets no link mail: its row ends suppressed; the match is made; another address is mailed", async () => {
+    const email = address("suppressed");
+    await sql`insert into email_suppressions (email, type) values (${email}, 'complaint')`;
+    try {
+      const f = form({ email: email.toUpperCase() }); // the list matches case-folded
+      landedToken(await post(f));
+      const row = await rowNamed(f.name as string);
+      expect(row, "the match is made: the mail is a convenience").toBeDefined();
+      const [m, ...more] = await mailsAbout(row!.id);
+      expect(more).toEqual([]);
+      expect(m).toMatchObject({ kind: "quick_match_link", transactional: false, status: "suppressed" });
+      expect(sentTo(email.toUpperCase()), "the transport was never reached").toEqual([]);
+
+      const fine = address("not-suppressed");
+      landedToken(await post(form({ email: fine })));
+      expect(sentTo(fine), "positive pair: an address not on the list is mailed").toHaveLength(1);
+    } finally {
+      await sql`delete from email_suppressions where email = ${email}`;
+    }
   });
 });
 

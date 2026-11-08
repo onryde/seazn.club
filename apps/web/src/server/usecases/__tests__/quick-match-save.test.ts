@@ -445,7 +445,7 @@ describe.skipIf(!HAS_DB)("a save ends the match's queued reminder (D9), on the s
       subject: "QM save test reminder",
       html: "<p>reminder</p>",
       text: "reminder",
-      transactional: true,
+      transactional: false,
       expiresAt: expiryWithin(row!.expires_at),
     });
   }

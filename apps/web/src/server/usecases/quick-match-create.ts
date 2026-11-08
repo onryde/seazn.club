@@ -201,7 +201,9 @@ export async function createQuickMatchTree(
               refId: row!.id,
               orgId: auth.orgId,
               to: input.email,
-              transactional: true,
+              // Not transactional (controller ruling 2026-11-08): the link is on the guest's screen already; a suppressed
+              // address (a bounce, a complaint) is not mailed.
+              transactional: false,
               expiresAt: expiryWithin(expiresAt),
               ...(await quickMatchLinkEmail(
                 { name, link: `${ctx.baseUrl}${routes.quickMatch(ctx.home.token)}`, expiresAt },

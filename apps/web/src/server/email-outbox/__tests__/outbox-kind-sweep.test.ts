@@ -468,10 +468,11 @@ const SPEC_FACTS: KindFacts = {
   registration_joined: ["literal", false],
   registration_rejected: ["literal", false],
   registration_promotion_lapsed: ["literal", false],
-  // Quick match (§7.6, C2): both to the address the guest typed (L; a guest has no account), both T (the guest asked for the link,
-  // and the reminder is the one chance to keep the match).
-  quick_match_link: ["literal", true],
-  quick_match_reminder: ["literal", true],
+  // Quick match (§7.6, C2): both to the address the guest typed (L; a guest has no account), both N (controller ruling 2026-11-08,
+  // plan 3 T1 review m1): the link is already on the guest's screen, so the mail is a convenience, and a bounced or complaining
+  // address is honoured.
+  quick_match_link: ["literal", false],
+  quick_match_reminder: ["literal", false],
 };
 
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
@@ -549,7 +550,7 @@ describe("the spec's lists (no database)", () => {
     expect(SPEC_KINDS).toHaveLength(61);
   });
 
-  it("the legend has 29 literal kinds, SIXTEEN account kinds (sponsor deals' sponsor_deal_paid the sixteenth) and SIXTEEN staff kinds; THIRTY-FOUR are transactional", () => {
+  it("the legend has 29 literal kinds, SIXTEEN account kinds (sponsor deals' sponsor_deal_paid the sixteenth) and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
     const by = (to: string): string[] => SPEC_KINDS.filter((k) => SPEC_FACTS[k][0] === to);
     expect(by("literal")).toEqual([
       "magic_link",
@@ -625,8 +626,8 @@ describe("the spec's lists (no database)", () => {
       "staff_extra_org_allowance",
     ]);
     // Each kind keeps its sender's flag: the two phase-1 kinds, the trial-ending notice, seven of wave 3's eight, five of wave 4's
-    // nine and all seventeen of wave 5 are transactional; the registration, refund, dispute, sponsor and pass mails, the org invite
-    // and the four billing-group mails are not.
+    // nine and all seventeen of wave 5 are transactional; the registration, refund, dispute, sponsor and pass mails, the org invite,
+    // the four billing-group mails and the quick match's two are not.
     expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toEqual([
       "magic_link",
       "chess_invite",
@@ -662,14 +663,11 @@ describe("the spec's lists (no database)", () => {
       "staff_ai_run_cost",
       "staff_earn_grant_volume",
       "staff_extra_org_allowance",
-      // Quick match: both (the guest asked for the link; the reminder is the one chance to keep the match).
-      "quick_match_link",
-      "quick_match_reminder",
     ]);
     // The spec's legend: "The 19 N kinds are the senders that pass no `transactional: true` today", so 51 - 19 = 32 are T. Sponsor deals'
     // sponsor_deal_paid is N, and so is each of the 7 registration lifecycle kinds (P2's five, P5's two): 19 + 1 + 7 = 27 N, so
-    // 59 - 27 = 32 are T still; with the quick match design's two T kinds, 61 - 27 = 34.
-    expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toHaveLength(34);
+    // 59 - 27 = 32 are T still; the quick match design's two are N too (controller ruling 2026-11-08): 61 - 29 = 32.
+    expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toHaveLength(32);
   });
 
   it("the not-yet-moved list names only spec kinds, once each, in the registry's order, none of waves 1 to 4, and leaves at least one kind to sweep", () => {

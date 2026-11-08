@@ -137,5 +137,5 @@ export async function releaseQuickMatchesOfDeletedAccount(tx: Tx, a: { userId: s
      where saved_by_user_id = ${a.userId} and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
   await tx`
     update quick_matches set email = null
-     where lower(email) = lower(${a.email}) and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
+     where email_lower = lower(${a.email}) and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
 }

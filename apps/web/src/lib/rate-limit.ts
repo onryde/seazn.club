@@ -114,6 +114,14 @@ export const DEVICE_LINK_MINT_LIMIT: RateLimitConfig = { max: 10, windowSeconds:
 export const QUICK_MATCH_CREATE_LIMIT: RateLimitConfig = { max: 20, windowSeconds: 600, failClosed: false };
 
 /**
+ * A quick match create's link mail, per RECIPIENT: one inbox is mailed at most 3 times a day, however many IPs the sender
+ * rotates through (quick match plan 3 T1 review I1, controller ruling 2026-11-08). The key is the sha256 of the lower-cased
+ * address, never the address itself. Fail-closed, as every mail-sending limit is: a Redis outage refuses emailed creates only.
+ * Taken after EMAIL_LIMIT (per IP), before any database work.
+ */
+export const QUICK_MATCH_RECIPIENT_LIMIT: RateLimitConfig = { max: 3, windowSeconds: 24 * 3600, failClosed: true };
+
+/**
  * Cookie-consent recording (POST /api/consent), per IP. A person clicks the
  * banner once; 20 a minute leaves room for a household or venue behind one
  * NAT while capping a bot writing rows into `cookie_consents`. Fail-open —

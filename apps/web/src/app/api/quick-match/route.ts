@@ -12,7 +12,8 @@
 //      for the locale a refusal returns to;
 //   2. the form, through plan 1's `CreateQuickMatch` schema (strict: a stray field is refused, not dropped);
 //   3. with an email only, a second, separate per-IP bucket for mail to an address a stranger typed (EMAIL_LIMIT, fail-closed
-//      as every mail-sending endpoint is; quick match plan 3 Amend T1 [B4]), still before any database work;
+//      as every mail-sending endpoint is; quick match plan 3 Amend T1 [B4]), then a per-RECIPIENT one keyed on the address's
+//      hash (QUICK_MATCH_RECIPIENT_LIMIT, 3 a day: one inbox, however the IP is spoofed), still before any database work;
 //   4. the visitor, from the REQUEST's cookie (B3a), minted when absent or malformed (`isVisitorKeyShaped`, B3b);
 //   5. plan 1's `createQuickMatch`: the seal, the per-visitor alive cap, the offer, the tree, or nothing. With an email it
 //      queues the link mail in its last transaction (plan 3 Task 1), and this route makes the mail's first attempt after
@@ -24,6 +25,7 @@
 // Known gap (recorded, plan 2 T3 report): there is no server-side idempotency key. The setup form locks on its first submit
 // (pre-flight B4f); a second submit that gets past it (two tabs, a resubmit) creates a second match, bounded by the visitor's
 // alive cap and the per-IP limit.
+import { createHash } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 import type { NextRequest } from "next/server";
 import { explicitLocale } from "@/lib/explicit-locale";
@@ -31,7 +33,7 @@ import { handler, HttpError, redirectLocal } from "@/lib/http";
 import { DEFAULT_LOCALE, hasLocale, type Locale } from "@/lib/i18n-constants";
 import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
 import { baseUrl } from "@/lib/oauth";
-import { EMAIL_LIMIT, QUICK_MATCH_CREATE_LIMIT, rateLimit } from "@/lib/rate-limit";
+import { EMAIL_LIMIT, QUICK_MATCH_CREATE_LIMIT, QUICK_MATCH_RECIPIENT_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { routes } from "@/lib/routes";
 import { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { dispatchNow } from "@/server/email-outbox";
@@ -86,6 +88,9 @@ function refusalCode(err: unknown): string {
  *  plan cap included: logged and reported as `handler` reports one, then shown as CREATE_FAILED. */
 const isServerFault = (err: unknown) => !(err instanceof FormRefused || isQuickMatchCode(err) || isLimiter(err));
 
+/** The per-recipient bucket's key: the sha256 of the lower-cased address, so the limiter's store never holds an address. */
+const recipientKey = (email: string): string => createHash("sha256").update(email.toLowerCase()).digest("hex");
+
 /** The visitor's explicit pick, else English. A forged cookie that does not decode (`seazn_locale=%E0`) makes
  *  `explicitLocale`'s decodeURIComponent throw: English then, never a 500. */
 function cookieLocale(req: Request): Locale {
@@ -109,7 +114,10 @@ export async function POST(req: NextRequest) {
       const parsed = CreateQuickMatch.safeParse(formInput(form));
       if (!parsed.success) throw new FormRefused("the setup form failed the schema", { cause: parsed.error });
       const input = parsed.data;
-      if (input.email !== null) await rateLimit(`quick-match-email:${ip}`, EMAIL_LIMIT);
+      if (input.email !== null) {
+        await rateLimit(`quick-match-email:${ip}`, EMAIL_LIMIT);
+        await rateLimit(`quick-match-recipient:${recipientKey(input.email)}`, QUICK_MATCH_RECIPIENT_LIMIT);
+      }
       const visitor = readOrMintVisitor(req.cookies);
       const created = await createQuickMatch(input, { visitorHash: visitor.hash, baseUrl: baseUrl(req) });
       if (created.outboxRowId !== null) await dispatchNow([created.outboxRowId]);

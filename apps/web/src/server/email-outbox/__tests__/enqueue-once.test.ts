@@ -110,10 +110,10 @@ const SPEC_LEGEND: Record<string, [to: "account" | "literal" | "staff", transact
   registration_rejected: ["literal", false],
   registration_promotion_lapsed: ["literal", false],
   // Quick match (docs/superpowers/specs/2026-11-03-quick-match-design.md §7.6, C2): the link mail at creation and the one reminder
-  // before expiry, both to the address the guest typed (literal; there is no account), both transactional: the guest asked for the
-  // link, and the reminder is the only chance to keep the match.
-  quick_match_link: ["literal", true],
-  quick_match_reminder: ["literal", true],
+  // before expiry, both to the address the guest typed (literal; there is no account), both non-transactional (controller ruling
+  // 2026-11-08, plan 3 T1 review m1): the link is already on the guest's screen, so the suppression list is honoured.
+  quick_match_link: ["literal", false],
+  quick_match_reminder: ["literal", false],
 };
 
 /** A `db` that records the statements it is handed and answers like postgres.js does for an insert: a row list carrying the
