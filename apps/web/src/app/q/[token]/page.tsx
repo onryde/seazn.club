@@ -15,7 +15,7 @@
 // as `?e=<code>` (D3), printed as the viewer's `quickMatch.flash.*` line. The dead screen ignores `?e=`: a crafted one
 // must not give a dead link a reason (D16).
 //
-// Task 7: the Share slot. `QuickMatchShare` takes the home's PATH (`routes.quickMatch(token)`), never an absolute URL built
+// Task 7: the Share slot (the link, Copy and the share sheet on first paint; the QR behind "Show QR"). `QuickMatchShare` takes the home's PATH (`routes.quickMatch(token)`), never an absolute URL built
 // here: the island puts it on the page's own origin, so no forwarded host is trusted (B7). Its two shared children
 // (`ShareButton`, `SeaznQrImage`) read their own words through `useMsg`, so the island sits in a `DictProvider` holding
 // just those keys (`share.*`, `qr.*`) in the viewer's language: never the whole ui dictionary in the flight payload.
@@ -103,6 +103,8 @@ export default async function QuickMatchHomePage({
             copy: copy.t("quickMatch.home.copy"),
             copied: copy.t("quickMatch.home.copied"),
             qrAlt: copy.t("quickMatch.home.qrAlt"),
+            // The device link panel's "Show QR", in all four locales: the same words for the same control.
+            showQr: copy.t("dlink.showQr"),
             shareNative: copy.t("quickMatch.home.shareNative", { name: home.row.name }),
           }}
         />

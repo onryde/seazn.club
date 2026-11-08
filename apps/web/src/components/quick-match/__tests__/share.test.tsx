@@ -3,9 +3,11 @@
 // the island is driven through the no-DOM `renderIsland` harness, its handlers called as a browser calls them. What a browser
 // paints (the panel at 320, 768 and 1280, the QR's real scan) is the e2e's and the owed screenshots'.
 //
-// The contract:
-//   - First paint, and the server's HTML, is the "Share link" toggle alone, closed: no link, no QR (the home token is the
-//     scoring credential, O3), no native share button (the server cannot know the device has one).
+// The contract (controller ruling 2026-11-08, the amendment's T7 bullet: "Add the existing ShareButton beside Copy ... Keep
+// the QR behind the toggle"):
+//   - First paint: the link's field, Copy and (where the phone has a share sheet) the native share button, so sharing to
+//     WhatsApp is ONE tap. Only the QR is behind the "Show QR" toggle, closed on first paint, and never drawn before it.
+//     The server's HTML has no native share button (it cannot know the device has one) and no QR.
 //   - The link is the HOME's: `routes.quickMatch(token)` on the page's own origin (`window.location.origin`, B7: no
 //     x-forwarded-host trust), never the pad's device link. The QR encodes exactly that URL, built on the tap through the
 //     Seazn QR (the logo is `renderSeaznQr`'s own contract, src/lib/__tests__/seazn-qr.test.ts), and is painted `sensitive`.
@@ -58,6 +60,7 @@ const LABELS: QuickMatchShareProps["labels"] = {
   copy: en["quickMatch.home.copy"],
   copied: en["quickMatch.home.copied"],
   qrAlt: en["quickMatch.home.qrAlt"],
+  showQr: en["dlink.showQr"],
   shareNative: tRuntime(en, "quickMatch.home.shareNative", { name: NAME }),
 };
 const PROPS: QuickMatchShareProps = { path: routes.quickMatch(TOKEN), title: NAME, labels: LABELS };
@@ -112,30 +115,38 @@ afterEach(async () => {
   expect(reached, "every draw went through the double: the real helper (its logo fetch) never ran").toBe(0);
 });
 
-describe("first paint: the Share toggle alone, closed", () => {
-  it("the server's HTML is the closed toggle: no link, no token, no QR, no native share", () => {
+describe("first paint: the link, Copy and the share sheet at once; the QR behind its toggle, closed", () => {
+  it("the server's HTML: the field (blocked) and Copy, the closed Show QR toggle; no QR, no native share", () => {
     // The server render: no window, and the store reads its server snapshot (no origin, no navigator.share).
     const html = renderToStaticMarkup(<QuickMatchShare {...PROPS} />);
-    expect(html).toContain('data-testid="qm-share-toggle"');
-    expect(html).toContain('aria-expanded="false"');
-    expect(html).toContain(LABELS.share);
-    expect(html).not.toContain(TOKEN);
-    expect(html).not.toContain("<input");
+    const tag = (id: string) => new RegExp(`<[a-z]+[^>]*data-testid="${id}"[^>]*>`).exec(html)?.[0] ?? "";
+    expect(tag("qm-share-copy"), "Copy is on first paint").not.toBe("");
+    expect(html).toContain(`>${LABELS.copy}</button>`);
+    expect(tag("qm-share-toggle")).toContain('aria-expanded="false"');
+    expect(html).toContain(LABELS.showQr);
+    // The field holds the home PATH until the browser knows its origin: the token's one place in this HTML, and blocked.
+    const field = tag("qm-share-url");
+    expect(field).toMatch(/class="[^"]*\bph-no-capture\b/);
+    expect(field).toContain(`value="/q/${TOKEN}"`);
+    expect(html.split(TOKEN).length - 1, "the token is in the field and nowhere else").toBe(1);
     expect(html).not.toContain("<img");
+    expect(html).not.toContain('data-testid="qm-share-panel"');
     expect(html).not.toContain(en["share.whatsapp"]);
     expect(seaznQr.renderSeaznQr).not.toHaveBeenCalled();
   });
 
-  it("hydrated on a phone with a share sheet, it stays closed until the toggle is pressed: no link, no QR, no QR call", () => {
+  it("hydrated on a phone with a share sheet: the link, Copy and Share on WhatsApp with no tap; the QR closed and not drawn", () => {
     browser({ share: vi.fn(), clipboard: clipboardTaking() });
     const i = mount();
+    expect(propsOf(fieldOf(i))).toMatchObject({ value: HOME_URL, readOnly: true, "aria-label": LABELS.share });
+    expect(textOf(copyOf(i))).toBe(LABELS.copy);
+    expect(ofType(i.tree(), ShareButton), "one tap to the share sheet").toHaveLength(1);
     expect(propsOf(toggleOf(i))["aria-expanded"]).toBe(false);
     expect(propsOf(toggleOf(i))["aria-controls"], "no reference to a panel that is not there").toBeUndefined();
-    expect(textOf(toggleOf(i))).toBe(LABELS.share);
+    expect(textOf(toggleOf(i))).toBe(LABELS.showQr);
     expect(byTestId(i.tree(), "qm-share-panel")).toHaveLength(0);
-    expect(byTestId(i.tree(), "qm-share-url")).toHaveLength(0);
     expect(ofType(i.tree(), SeaznQrImage)).toHaveLength(0);
-    expect(ofType(i.tree(), ShareButton)).toHaveLength(0);
+    expect(ofType(i.tree(), SeaznQrPlaceholder)).toHaveLength(0);
     expect(seaznQr.renderSeaznQr).not.toHaveBeenCalled();
   });
 });
@@ -156,13 +167,13 @@ describe("opening: the home's link, the QR of exactly that link", () => {
     expect(qr).toHaveLength(1);
     expect(propsOf(qr[0]!)).toMatchObject({ qr: SYMBOL, alt: LABELS.qrAlt, sensitive: true, maxSize: PHONE_HANDOVER_QR_MAX_PX });
     expect(ofType(i.tree(), SeaznQrPlaceholder)).toHaveLength(0);
-    // The field shows the same link, read-only, named by the toggle's words.
-    expect(propsOf(fieldOf(i))).toMatchObject({ value: HOME_URL, readOnly: true, "aria-label": LABELS.share });
+    // The field shows the same link.
+    expect(propsOf(fieldOf(i)).value).toBe(HOME_URL);
     // It is the home's link, never the pad's device link.
     expect(HOME_URL).not.toMatch(/\/score\//);
   });
 
-  it("a second opening reuses the QR; a double tap while it is drawn draws it once; closing takes the link and QR away", async () => {
+  it("a second opening reuses the QR; a double tap while it is drawn draws it once; closing takes the QR away, not the link", async () => {
     browser({ clipboard: clipboardTaking() });
     const i = mount();
     click(toggleOf(i)); // open
@@ -173,26 +184,30 @@ describe("opening: the home's link, the QR of exactly that link", () => {
     expect(ofType(i.tree(), SeaznQrImage).map((el) => propsOf(el).qr), "the one symbol the helper drew").toEqual([SYMBOL]);
     click(toggleOf(i));
     expect(propsOf(toggleOf(i))["aria-expanded"]).toBe(false);
-    expect(byTestId(i.tree(), "qm-share-url")).toHaveLength(0);
+    expect(byTestId(i.tree(), "qm-share-panel")).toHaveLength(0);
     expect(ofType(i.tree(), SeaznQrImage)).toHaveLength(0);
+    expect(propsOf(fieldOf(i)).value, "the link and Copy stay").toBe(HOME_URL);
+    expect(byTestId(i.tree(), "qm-share-copy")).toHaveLength(1);
     click(toggleOf(i));
     expect(ofType(i.tree(), SeaznQrImage), "the second opening paints the symbol at once").toHaveLength(1);
     await flush();
     expect(seaznQr.renderSeaznQr).toHaveBeenCalledTimes(1);
   });
 
-  it("a QR that fails to draw leaves the link and Copy, shows no endless placeholder, and the next opening tries again", async () => {
+  it("a QR that fails to draw closes its toggle (no empty card, no endless placeholder), leaves the link and Copy, and the next tap tries again", async () => {
     browser({ clipboard: clipboardTaking() });
     seaznQr.renderSeaznQr.mockRejectedValueOnce(new Error("chunk failed to load"));
     const i = mount();
     click(toggleOf(i));
     await flush();
+    expect(propsOf(toggleOf(i))["aria-expanded"], "closed again, so its next tap is the retry").toBe(false);
+    expect(byTestId(i.tree(), "qm-share-panel")).toHaveLength(0);
     expect(ofType(i.tree(), SeaznQrImage)).toHaveLength(0);
     expect(ofType(i.tree(), SeaznQrPlaceholder)).toHaveLength(0);
     expect(propsOf(fieldOf(i)).value).toBe(HOME_URL);
     expect(byTestId(i.tree(), "qm-share-copy")).toHaveLength(1);
     click(toggleOf(i));
-    click(toggleOf(i));
+    expect(propsOf(toggleOf(i))["aria-expanded"]).toBe(true);
     await flush();
     expect(seaznQr.renderSeaznQr.mock.calls).toEqual([[HOME_URL], [HOME_URL]]);
     expect(ofType(i.tree(), SeaznQrImage)).toHaveLength(1);
@@ -205,7 +220,6 @@ describe("Copy", () => {
     const clipboard = clipboardTaking();
     browser({ clipboard });
     const i = mount();
-    click(toggleOf(i));
     const field = fakeField(i);
     await click(copyOf(i));
     expect(clipboard.writeText.mock.calls).toEqual([[HOME_URL]]);
@@ -226,7 +240,6 @@ describe("Copy", () => {
   ])("%s: Copy selects the whole link in its read-only field and never claims Copied", async (_why, nav) => {
     browser(nav());
     const i = mount();
-    click(toggleOf(i));
     const field = fakeField(i);
     await click(copyOf(i));
     await flush();
@@ -236,6 +249,7 @@ describe("Copy", () => {
     expect(propsOf(fieldOf(i)).readOnly).toBe(true);
     expect(textOf(copyOf(i))).toBe(LABELS.copy);
     expect(textOf(one(i.tree(), "qm-share-status"))).toBe("");
+    expect(propsOf(toggleOf(i))["aria-expanded"], "Copy never opens the QR").toBe(false);
   });
 });
 
@@ -243,7 +257,6 @@ describe("the native share sheet (D14)", () => {
   it("is offered beside Copy where navigator.share exists, with the home URL, the match's name and the message", () => {
     browser({ share: vi.fn(), clipboard: clipboardTaking() });
     const i = mount();
-    click(toggleOf(i));
     const shares = ofType(i.tree(), ShareButton);
     expect(shares).toHaveLength(1);
     expect(propsOf(shares[0]!)).toMatchObject({ url: HOME_URL, title: NAME, text: LABELS.shareNative });
@@ -264,9 +277,11 @@ describe("the native share sheet (D14)", () => {
     expect(inRow(copyOf(i)) && inRow(shares[0]!)).toBe(true);
   });
 
-  it("is not offered where navigator.share is missing (a desktop browser): Copy and the QR only", () => {
+  it("is not offered where navigator.share is missing (a desktop browser), open or closed: Copy and the QR only", () => {
     browser({ clipboard: clipboardTaking() });
     const i = mount();
+    expect(ofType(i.tree(), ShareButton)).toHaveLength(0);
+    expect(byTestId(i.tree(), "qm-share-copy")).toHaveLength(1);
     click(toggleOf(i));
     expect(ofType(i.tree(), ShareButton)).toHaveLength(0);
     expect(byTestId(i.tree(), "qm-share-copy")).toHaveLength(1);
@@ -330,6 +345,7 @@ describe("phone first", () => {
     expect(checked).toBe(4);
     expect(classOf(fieldOf(i))).toEqual(expect.arrayContaining(["w-full", "min-w-0"]));
     expect(classOf(one(i.tree(), "qm-share"))).toContain("min-w-0");
+    expect(classOf(one(i.tree(), "qm-share-actions"))).toEqual(expect.arrayContaining(["min-w-0", "flex-wrap"]));
     expect(classOf(one(i.tree(), "qm-share-panel"))).toContain("min-w-0");
   });
 });

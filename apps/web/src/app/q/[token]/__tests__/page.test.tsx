@@ -558,6 +558,7 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
           copy: dict["quickMatch.home.copy"],
           copied: dict["quickMatch.home.copied"],
           qrAlt: dict["quickMatch.home.qrAlt"],
+          showQr: dict["dlink.showQr"],
           shareNative: tRuntime(dict, "quickMatch.home.shareNative", { name: input.name }),
         });
         // ShareButton and the QR read their own words (`useMsg`): a provider in the viewer's locale holds exactly the
@@ -572,11 +573,15 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
         );
         expect(Object.keys(provided.dict).sort()).toEqual(wanted);
         for (const key of wanted) expect(provided.dict[key], `${lang} ${key}`).toBe(dict[key as keyof typeof dict]);
-        // The server's HTML: the closed toggle in the viewer's words, and no absolute home link anywhere (the island
-        // builds it in the browser, on the tap).
-        const toggle = /<button[^>]*data-testid="qm-share-toggle"[^>]*>/.exec(html)?.[0] ?? "";
-        expect(toggle).toContain('aria-expanded="false"');
-        expect(html).toContain(dict["quickMatch.home.share"]);
+        // The server's HTML: Copy on first paint (one tap, the ruling), the QR's toggle closed, all in the viewer's words;
+        // and no absolute home link anywhere (the island puts the path on the browser's own origin).
+        const tag = (id: string) => new RegExp(`<[a-z]+[^>]*data-testid="${id}"[^>]*>`).exec(html)?.[0] ?? "";
+        expect(tag("qm-share-copy"), `${lang}: Copy on first paint`).not.toBe("");
+        expect(html).toContain(`>${dict["quickMatch.home.copy"]}</button>`);
+        expect(tag("qm-share-toggle")).toContain('aria-expanded="false"');
+        expect(html).toContain(dict["dlink.showQr"]);
+        expect(tag("qm-share-url")).toMatch(/class="[^"]*\bph-no-capture\b/);
+        expect(html).not.toContain('data-testid="qm-share-panel"');
         expect(html).not.toMatch(/https?:\/\/[^"<\s]*\/q\//);
         checked++;
       } finally {

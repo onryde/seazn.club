@@ -184,11 +184,12 @@ test("Score (Task 6): a post for the waiting final lands back on the home with t
 //
 // The island's unit test (components/quick-match/__tests__/share.test.tsx) proves its wiring with doubles; this is what only
 // a browser shows: the link built on the page's real origin, the real clipboard, the Seazn QR as painted (it must decode to
-// exactly the home link, logo and all), the panel's width with a 43-character side on the page, and the share sheet handed
-// the home link. Desktop Chrome on Linux has no `navigator.share`, so each case sets it explicitly: removed for the first,
-// a recording stand-in for the second (the real sheet is the operating system's, which no browser test can open).
+// exactly the home link, logo and all), the row's width with a 43-character side on the page, and the share sheet handed
+// the home link. The link, Copy and the share sheet are on first paint (one tap to WhatsApp); only the QR is behind "Show
+// QR" (controller ruling 2026-11-08). Desktop Chrome on Linux has no `navigator.share`, so each case sets it explicitly:
+// removed for the first, a recording stand-in for the second (the real sheet is the operating system's).
 
-test("Share (Task 7): closed on first paint; opened, the home link, Copy to the clipboard and a QR of exactly it, at 320, 768 and 1280", async ({ guest: page }) => {
+test("Share (Task 7): the link and Copy on first paint, the QR closed; Copy fills the clipboard, Show QR draws exactly the link, at 320, 768 and 1280", async ({ guest: page }) => {
   await page.addInitScript(() => {
     delete (Navigator.prototype as { share?: unknown }).share;
   });
@@ -198,38 +199,42 @@ test("Share (Task 7): closed on first paint; opened, the home link, Copy to the 
   expect(new URL(homeUrl).pathname).toMatch(/^\/q\/qm_[A-Za-z0-9_-]+$/);
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(homeUrl).origin });
   await atEachWidth(page, async (width) => {
-    const toggle = page.getByTestId("qm-share-toggle");
-    await expect(toggle, `${width}`).toHaveText("Share link");
-    await expect(toggle, `${width}: closed on first paint`).toHaveAttribute("aria-expanded", "false");
-    await expect(page.getByTestId("qm-share-url"), `${width}: no link before the tap`).toHaveCount(0);
-    await expect(page.getByTestId("qm-share-qr"), `${width}: no QR before the tap`).toHaveCount(0);
-    await expectTappable(toggle, `${width}: Share link`);
-
-    await toggle.click();
-    await expect(toggle, `${width}`).toHaveAttribute("aria-expanded", "true");
+    // First paint, no tap: the link and Copy are there; the QR is not.
     const field = page.getByTestId("qm-share-url");
     await expect(field, `${width}: the home link on this origin`).toHaveValue(homeUrl);
+    await expect(field, `${width}`).toBeVisible();
     await expect(field, `${width}`).toHaveClass(/\bph-no-capture\b/);
+    const copy = page.getByTestId("qm-share-copy");
+    await expect(copy, `${width}`).toBeVisible();
+    await expect(copy, `${width}`).toHaveText("Copy link");
+    const toggle = page.getByTestId("qm-share-toggle");
+    await expect(toggle, `${width}`).toHaveText("Show QR");
+    await expect(toggle, `${width}: the QR is closed on first paint`).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByTestId("qm-share-qr"), `${width}: no QR before the tap`).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Share on WhatsApp" }), `${width}: no share sheet on this browser`).toHaveCount(0);
+    await expectTappable(copy, `${width}: Copy link`);
+    await expectTappable(toggle, `${width}: Show QR`);
 
-    // The Seazn QR, drawn on the tap: painted sensitive, whole device px per module, and it decodes to exactly the link.
+    // One tap copies, without opening anything.
+    await copy.click();
+    await expect(copy, `${width}`).toHaveText("Copied");
+    expect(await page.evaluate(() => navigator.clipboard.readText()), `${width}: the clipboard holds the home link`).toBe(homeUrl);
+    await expect(toggle, `${width}: Copy never opens the QR`).toHaveAttribute("aria-expanded", "false");
+
+    // Show QR: the Seazn QR, drawn on the tap, painted sensitive, whole device px per module, decoding to exactly the link.
+    await toggle.click();
+    await expect(toggle, `${width}`).toHaveAttribute("aria-expanded", "true");
     const qr = page.getByTestId("qm-share-qr");
     await expect(qr, `${width}`).toBeVisible();
     await expect(qr, `${width}`).toHaveClass(/\bph-no-capture\b/);
     await expectWholeModuleScale(page, qr, { minPerModule: 3, what: `${width}: the share QR` });
     await expectQrDecodesAsPainted(qr, homeUrl, `${width}: the share QR`);
-
-    const copy = page.getByTestId("qm-share-copy");
-    await expectTappable(copy, `${width}: Copy link`);
-    await copy.click();
-    await expect(copy, `${width}`).toHaveText("Copied");
-    expect(await page.evaluate(() => navigator.clipboard.readText()), `${width}: the clipboard holds the home link`).toBe(homeUrl);
   });
   // One tap enlarges it (D10), and the enlarged QR is blocked from replay too.
   await expectQrEnlarges(page, "qm-share-qr", { sensitive: true });
 });
 
-test("Share (Task 7): where the phone has a share sheet, 'Share on WhatsApp' hands it the home link, the name and the message", async ({ guest: page }) => {
+test("Share (Task 7): where the phone has a share sheet, 'Share on WhatsApp' is on first paint and ONE tap hands it the home link, the name and the message", async ({ guest: page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(Navigator.prototype, "share", {
       configurable: true,
@@ -242,12 +247,16 @@ test("Share (Task 7): where the phone has a share sheet, 'Share on WhatsApp' han
   await createThroughSetup(page, ["Ravi & Sam", "Priya & Tom"], "League");
   const homeUrl = page.url();
   const name = `e2e home ${TAG}`;
+  await atEachWidth(page, async (width) => {
+    const native = page.getByRole("button", { name: "Share on WhatsApp" });
+    await expect(native, `${width}: on first paint, no toggle`).toBeVisible();
+    await expect(page.getByTestId("qm-share-copy"), `${width}`).toBeVisible();
+    await expect(page.getByTestId("qm-share-qr"), `${width}: the QR stays closed`).toHaveCount(0);
+    await expectTappable(native, `${width}: Share on WhatsApp`);
+  });
   await page.setViewportSize({ width: 320, height: 900 });
-  await page.getByTestId("qm-share-toggle").click();
-  const native = page.getByRole("button", { name: "Share on WhatsApp" });
-  await expectTappable(native, "320: Share on WhatsApp");
-  await expectNoHorizontalScroll(page);
-  await native.click();
+  await page.getByRole("button", { name: "Share on WhatsApp" }).click();
+  // `ShareButton` hands the sheet `{ title, text, url }` (share-button.tsx); the text is quickMatch.home.shareNative (en).
   await expect
     .poll(() => page.evaluate(() => (window as unknown as { __qmShared?: ShareData[] }).__qmShared ?? []))
     .toEqual([{ title: name, text: `${name}: our quick match on Seazn. Open the link to score or follow the results.`, url: homeUrl }]);
