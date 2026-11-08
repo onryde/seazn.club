@@ -499,11 +499,15 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string | stri
     verdict: "writes the claim's `/claim/<token>` path into AuthForm's `next` prop inline and paints it nowhere itself",
     handoff: "components/auth-form.tsx",
   },
-  // The quick match home (plan 2 Task 6): builds `/q/<token>/score/<fixture>` inline into the Score form's `action`.
+  // The quick match home (plan 2 Tasks 6, 7): builds `/q/<token>/score/<fixture>` inline into the Score form's `action`,
+  // and `routes.quickMatch(token)` into the Share island's `path`.
   "app/q/[token]/page.tsx": {
-    verdict: "builds the home's own `/q/<token>` paths inline into its islands' props (the Score form's action) and paints them nowhere itself",
-    handoff: ["components/quick-match/score-form.tsx"],
+    verdict:
+      "builds the home's own `/q/<token>` paths inline into its islands' props (the Score form's action, the Share island's path) and paints them nowhere itself",
+    handoff: ["components/quick-match/score-form.tsx", "components/quick-match/share.tsx"],
   },
+  // The home's Share (plan 2 Task 7): the home link in its read-only field, handed to the share sheet; the QR is `sensitive`.
+  "components/quick-match/share.tsx": { verdict: true },
 };
 
 /** The files that paint a quick match's home URL, `/q/<token>`: every one must be FOUND by the scan, not just listed, or a
@@ -515,6 +519,7 @@ const QUICK_MATCH_PAINTERS = [
   "components/quick-match/recent-strip.tsx",
   // The home itself: it writes `routes.quickMatch(token)` inline into its islands' props (ledger CARRY to T7).
   "app/q/[token]/page.tsx",
+  "components/quick-match/share.tsx",
 ];
 
 describe("every element that paints a scrubbed secret carries ph-no-capture, or its file says why not", () => {
@@ -590,6 +595,20 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     expect(page.filter((site) => site.tag === "QuickMatchScoreForm").map((site) => [site.how, site.component])).toEqual([
       ["attribute action", true],
     ]);
+  });
+
+  it("the home's Share (Task 7): the page hands the home path to QuickMatchShare inline; the island's link field carries the class", () => {
+    // The hop: `path={routes.quickMatch(token)}`, written inline, so only the inline rule finds the page's site.
+    expect(known.props).toEqual(expect.arrayContaining([{ component: "QuickMatchShare", prop: "path", from: "app/q/[token]/page.tsx" }]));
+    const page = painters.get("app/q/[token]/page.tsx") ?? [];
+    expect(page.filter((site) => site.tag === "QuickMatchShare").map((site) => [site.how, site.component])).toEqual([["attribute path", true]]);
+    // In the island, the path becomes the URL its field shows, and the URL it hands to the share sheet (a component whose
+    // own file paints nothing of it: share-button.tsx is no painter).
+    const share = painters.get("components/quick-match/share.tsx") ?? [];
+    expect(share.filter((site) => site.tag === "input").map((site) => [site.how, site.blocked])).toEqual([["attribute value", true]]);
+    expect(share.filter((site) => site.tag === "ShareButton").map((site) => [site.how, site.component])).toEqual([["attribute url", true]]);
+    expect(known.props).toEqual(expect.arrayContaining([{ component: "ShareButton", prop: "url", from: "components/quick-match/share.tsx" }]));
+    expect(painters.has("components/share-button.tsx")).toBe(false);
   });
 
   it("the painter files and the verdict table are the same set", () => {

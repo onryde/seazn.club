@@ -14,7 +14,13 @@
 // Task 6: the Score slot (each playable match's form post into the pad) and the flash: a refused action lands back here
 // as `?e=<code>` (D3), printed as the viewer's `quickMatch.flash.*` line. The dead screen ignores `?e=`: a crafted one
 // must not give a dead link a reason (D16).
+//
+// Task 7: the Share slot. `QuickMatchShare` takes the home's PATH (`routes.quickMatch(token)`), never an absolute URL built
+// here: the island puts it on the page's own origin, so no forwarded host is trusted (B7). Its two shared children
+// (`ShareButton`, `SeaznQrImage`) read their own words through `useMsg`, so the island sits in a `DictProvider` holding
+// just those keys (`share.*`, `qr.*`) in the viewer's language: never the whole ui dictionary in the flight payload.
 import type { Metadata } from "next";
+import { DictProvider } from "@/components/i18n/dict-provider";
 import { HtmlLang } from "@/components/i18n/html-lang";
 import {
   homeFlashKey,
@@ -26,14 +32,19 @@ import {
 import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
 import { matchSidesId } from "@/components/quick-match/match-list";
 import { QuickMatchScoreForm } from "@/components/quick-match/score-form";
+import { QuickMatchShare } from "@/components/quick-match/share";
 import { getDictionary } from "@/lib/i18n";
 import { plural, t } from "@/lib/i18n-runtime";
+import { pickDictPrefixes } from "@/lib/i18n-subset";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { routes } from "@/lib/routes";
 import { levelWords } from "@/lib/score/levels";
 import { readQuickMatchHome, resolveQuickMatchToken } from "@/server/usecases/quick-match-home";
 
 export const dynamic = "force-dynamic";
+
+/** The words the Share island's shared children read for themselves: ShareButton's (`share.*`), the QR's (`qr.*`). */
+const SHARE_DICT_PREFIXES = ["share.", "qr."] as const;
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await resolveLocale();
@@ -81,6 +92,21 @@ export default async function QuickMatchHomePage({
         )}
         describedBy={place === "row" ? matchSidesId(fixture.id) : undefined}
       />
+    ),
+    share: (
+      <DictProvider dict={pickDictPrefixes(ui, SHARE_DICT_PREFIXES)} locale={locale}>
+        <QuickMatchShare
+          path={routes.quickMatch(token)}
+          title={home.row.name}
+          labels={{
+            share: copy.t("quickMatch.home.share"),
+            copy: copy.t("quickMatch.home.copy"),
+            copied: copy.t("quickMatch.home.copied"),
+            qrAlt: copy.t("quickMatch.home.qrAlt"),
+            shareNative: copy.t("quickMatch.home.shareNative", { name: home.row.name }),
+          }}
+        />
+      </DictProvider>
     ),
   };
   return (

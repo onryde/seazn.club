@@ -43,6 +43,8 @@ import * as standingsModule from "@/components/quick-match/standings";
 import * as drawModule from "@/components/quick-match/draw";
 import * as listModule from "@/components/quick-match/match-list";
 import { QuickMatchHomeShapeError, QuickMatchHomeView, type QuickMatchCopy } from "@/components/quick-match/home";
+import { QuickMatchShare } from "@/components/quick-match/share";
+import { DictProvider } from "@/components/i18n/dict-provider";
 import en from "@/dictionaries/en/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import enPublic from "@/dictionaries/en/public.json";
@@ -536,6 +538,56 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     } finally {
       locale.value = "en";
     }
+  });
+
+  it("Share (Task 7): the island gets the home's own PATH and the viewer's words, in a provider of only its children's keys", async () => {
+    const input = league({ sides: SIDES.slice(0, 2) });
+    const out = await create(input);
+    let checked = 0;
+    for (const [lang, dict] of [["en", en], ["fr", fr]] as const) {
+      locale.value = lang;
+      try {
+        const { tree, html } = await renderPage(out.token);
+        const shares = all(tree, (el) => el.type === QuickMatchShare);
+        expect(shares, lang).toHaveLength(1);
+        // The PATH, never an absolute URL: the island puts it on the page's own origin (B7). The spec's home link, typed.
+        expect(shares[0]!.props.path).toBe(`/q/${out.token}`);
+        expect(shares[0]!.props.title).toBe(input.name);
+        expect(shares[0]!.props.labels).toEqual({
+          share: dict["quickMatch.home.share"],
+          copy: dict["quickMatch.home.copy"],
+          copied: dict["quickMatch.home.copied"],
+          qrAlt: dict["quickMatch.home.qrAlt"],
+          shareNative: tRuntime(dict, "quickMatch.home.shareNative", { name: input.name }),
+        });
+        // ShareButton and the QR read their own words (`useMsg`): a provider in the viewer's locale holds exactly the
+        // `share.*` and `qr.*` keys, so they are not English on a French home, and the flight carries no whole dictionary.
+        const providers = all(tree, (el) => el.type === DictProvider && all(el.props.children, (c) => c.type === QuickMatchShare).length > 0);
+        expect(providers, lang).toHaveLength(1);
+        const provided = providers[0]!.props as { dict: Record<string, string>; locale: string };
+        expect(provided.locale).toBe(lang);
+        const wanted = Object.keys(dict).filter((k) => k.startsWith("share.") || k.startsWith("qr.")).sort();
+        expect(wanted, "anti-vacuity: ShareButton's two words and the QR's five").toEqual(
+          expect.arrayContaining(["share.whatsapp", "share.copied", "qr.tapToEnlarge", "qr.enlarge", "qr.enlarged.close"]),
+        );
+        expect(Object.keys(provided.dict).sort()).toEqual(wanted);
+        for (const key of wanted) expect(provided.dict[key], `${lang} ${key}`).toBe(dict[key as keyof typeof dict]);
+        // The server's HTML: the closed toggle in the viewer's words, and no absolute home link anywhere (the island
+        // builds it in the browser, on the tap).
+        const toggle = /<button[^>]*data-testid="qm-share-toggle"[^>]*>/.exec(html)?.[0] ?? "";
+        expect(toggle).toContain('aria-expanded="false"');
+        expect(html).toContain(dict["quickMatch.home.share"]);
+        expect(html).not.toMatch(/https?:\/\/[^"<\s]*\/q\//);
+        checked++;
+      } finally {
+        locale.value = "en";
+      }
+    }
+    expect(checked).toBe(2);
+    expect(fr["share.whatsapp"], "the French pass witnesses a translation").not.toBe(en["share.whatsapp"]);
+    // The dead screen offers no Share (D16: nothing to share).
+    expect(all((await renderPage(mintHomeToken())).tree, (el) => el.type === QuickMatchShare)).toHaveLength(0);
+    await hardDeleteQuickMatchCompetition(out.competitionId);
   });
 
   it("never ships the creator's email or the sealed token to the browser: not in the HTML, not in the flight (A14)", async () => {

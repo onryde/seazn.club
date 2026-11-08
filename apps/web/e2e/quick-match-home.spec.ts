@@ -1,5 +1,6 @@
 import { test as base, expect, type Locator, type Page } from "@playwright/test";
 import { expectNoHorizontalScroll, TAG } from "./helpers";
+import { expectQrDecodesAsPainted, expectQrEnlarges, expectWholeModuleScale } from "./helpers/qr-enlarge";
 import { consentedAnonymousState } from "./scorepad-a11y-kit";
 
 // Quick match plan 2 Task 5 (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §5 step 3, §8): the guest's home
@@ -177,6 +178,79 @@ test("Score (Task 6): a post for the waiting final lands back on the home with t
   await page.reload();
   await expect(page.getByTestId("qm-hero"), "the home itself is there").toContainText("Up next · Semi-final");
   await expect(page.getByTestId("qm-flash")).toHaveCount(0);
+});
+
+// ── Task 7: Share ───────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// The island's unit test (components/quick-match/__tests__/share.test.tsx) proves its wiring with doubles; this is what only
+// a browser shows: the link built on the page's real origin, the real clipboard, the Seazn QR as painted (it must decode to
+// exactly the home link, logo and all), the panel's width with a 43-character side on the page, and the share sheet handed
+// the home link. Desktop Chrome on Linux has no `navigator.share`, so each case sets it explicitly: removed for the first,
+// a recording stand-in for the second (the real sheet is the operating system's, which no browser test can open).
+
+test("Share (Task 7): closed on first paint; opened, the home link, Copy to the clipboard and a QR of exactly it, at 320, 768 and 1280", async ({ guest: page }) => {
+  await page.addInitScript(() => {
+    delete (Navigator.prototype as { share?: unknown }).share;
+  });
+  await createThroughSetup(page, [LONG, "Priya & Tom", "Lee & Ana", "Jo & Max"], "League");
+  // The home link a guest shares is the page's own address: `/q/<token>` on this origin, never the pad's device link.
+  const homeUrl = page.url();
+  expect(new URL(homeUrl).pathname).toMatch(/^\/q\/qm_[A-Za-z0-9_-]+$/);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(homeUrl).origin });
+  await atEachWidth(page, async (width) => {
+    const toggle = page.getByTestId("qm-share-toggle");
+    await expect(toggle, `${width}`).toHaveText("Share link");
+    await expect(toggle, `${width}: closed on first paint`).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByTestId("qm-share-url"), `${width}: no link before the tap`).toHaveCount(0);
+    await expect(page.getByTestId("qm-share-qr"), `${width}: no QR before the tap`).toHaveCount(0);
+    await expectTappable(toggle, `${width}: Share link`);
+
+    await toggle.click();
+    await expect(toggle, `${width}`).toHaveAttribute("aria-expanded", "true");
+    const field = page.getByTestId("qm-share-url");
+    await expect(field, `${width}: the home link on this origin`).toHaveValue(homeUrl);
+    await expect(field, `${width}`).toHaveClass(/\bph-no-capture\b/);
+    await expect(page.getByRole("button", { name: "Share on WhatsApp" }), `${width}: no share sheet on this browser`).toHaveCount(0);
+
+    // The Seazn QR, drawn on the tap: painted sensitive, whole device px per module, and it decodes to exactly the link.
+    const qr = page.getByTestId("qm-share-qr");
+    await expect(qr, `${width}`).toBeVisible();
+    await expect(qr, `${width}`).toHaveClass(/\bph-no-capture\b/);
+    await expectWholeModuleScale(page, qr, { minPerModule: 3, what: `${width}: the share QR` });
+    await expectQrDecodesAsPainted(qr, homeUrl, `${width}: the share QR`);
+
+    const copy = page.getByTestId("qm-share-copy");
+    await expectTappable(copy, `${width}: Copy link`);
+    await copy.click();
+    await expect(copy, `${width}`).toHaveText("Copied");
+    expect(await page.evaluate(() => navigator.clipboard.readText()), `${width}: the clipboard holds the home link`).toBe(homeUrl);
+  });
+  // One tap enlarges it (D10), and the enlarged QR is blocked from replay too.
+  await expectQrEnlarges(page, "qm-share-qr", { sensitive: true });
+});
+
+test("Share (Task 7): where the phone has a share sheet, 'Share on WhatsApp' hands it the home link, the name and the message", async ({ guest: page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, "share", {
+      configurable: true,
+      value: async function share(data: ShareData) {
+        const w = window as unknown as { __qmShared?: ShareData[] };
+        (w.__qmShared ??= []).push(data);
+      },
+    });
+  });
+  await createThroughSetup(page, ["Ravi & Sam", "Priya & Tom"], "League");
+  const homeUrl = page.url();
+  const name = `e2e home ${TAG}`;
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.getByTestId("qm-share-toggle").click();
+  const native = page.getByRole("button", { name: "Share on WhatsApp" });
+  await expectTappable(native, "320: Share on WhatsApp");
+  await expectNoHorizontalScroll(page);
+  await native.click();
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __qmShared?: ShareData[] }).__qmShared ?? []))
+    .toEqual([{ title: name, text: `${name}: our quick match on Seazn. Open the link to score or follow the results.`, url: homeUrl }]);
 });
 
 test("home (Task 5): an unknown link is the dead screen at 320, 768 and 1280, and it offers a new quick match", async ({ guest: page }) => {
