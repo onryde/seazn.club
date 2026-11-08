@@ -2438,6 +2438,7 @@ export type DictionaryKey =
   | "engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled"
   | "engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn"
   | "engineErrorReason.STAGE_SEAT_DEPARTED.seat_departed"
+  | "engineErrorReason.WRONG_PHASE.division_not_started"
   | "entrants.add.alreadyEntered"
   | "entrants.add.copyRoster"
   | "entrants.add.enroll"

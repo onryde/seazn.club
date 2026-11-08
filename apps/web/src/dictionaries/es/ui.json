@@ -4669,6 +4669,7 @@
   "engineError.LEVEL_RESULT_IN_BRACKET": "Introduce el ganador: un partido eliminatorio no puede terminar en empate.",
   "engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled": "Resuelve el partido o registra su desempate antes de finalizarlo: un partido eliminatorio no puede terminar en empate.",
   "engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn": "Ese participante ya no está en la competición: elige al otro.",
+  "engineErrorReason.WRONG_PHASE.division_not_started": "La competición todavía no ha comenzado. El organizador la inicia en la página de la división; después podrás registrar el sorteo.",
   "engineError.LEVEL_RESULT_SEATED": "Algo salió mal al colocar este resultado. Ya hemos sido avisados.",
   "engineError.FORFEIT_REASON_WRONG_PHASE": "Ese motivo no se puede registrar en este momento del partido.",
   "engineError.ABANDONED_SETTLE_OR_VOID": "Este partido fue abandonado. Para decidirlo, resuelve el partido. Si se va a volver a jugar, anula primero el abandono.",

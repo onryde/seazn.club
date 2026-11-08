@@ -409,6 +409,34 @@ describe("S2-4 T1: the bowler change has no surface yet", () => {
   });
 });
 
+describe("S2-4 T2: the toss names the teams", () => {
+  it("the toss names the teams, by entrant id, and folds", () => {
+    const names = { home: "Northfield Cricket Club", away: "Southgate Strollers" };
+    const view = { ...viewOf(T20, []), phase: "pre" as const, entrantNames: names };
+    const toss = buildSheets(view, t).toss;
+    const won = toss.steps.find((s) => s.id === "wonBy");
+    if (won?.kind !== "choice") throw new Error("premise: the toss asks who won as a choice");
+    same(choiceIds(toss, "wonBy"), [view.squads.home.entrantId, view.squads.away.entrantId], "toss options are the entrant ids");
+    same(won.options.map((o) => o.labelText), [names.home, names.away], "toss options read the team names");
+    // The key stays as the fallback label, so a side with no name still reads Home / Away.
+    same(won.options.map((o) => o.label), ["scorepad.attribution.home", "scorepad.attribution.away"], "toss fallback keys");
+    const nameless = buildSheets({ ...view, entrantNames: { home: names.home } }, t).toss.steps.find((s) => s.id === "wonBy");
+    if (nameless?.kind !== "choice") throw new Error("premise: the toss asks who won as a choice");
+    same(nameless.options.map((o) => o.labelText), [names.home, undefined], "a side with no name has no labelText");
+    // The seam's consumer: the walked payload folds, before core.start, on the write path.
+    let folded = 0;
+    for (const side of ["home", "away"] as const) {
+      const entrant = view.squads[side].entrantId;
+      expect(cricketPadRules.tossElections, "premise: bat is an election the engine offers").toContain("bat");
+      const { event } = walk(toss, (step) => (step.id === "wonBy" ? entrant : "bat"));
+      const folded_ = foldEmitted(T20, [], event);
+      same([folded_.tossTaken, folded_.battingFirst], [true, side], `${side}: the fold took the toss, and the winner bats`);
+      folded++;
+    }
+    expect(folded).toBe(2);
+  });
+});
+
 describe("the drift guard compared something", () => {
   it("made at least the plan's 16 comparisons", () => {
     console.info(`[pad-rules-cricket] facts compared: ${compared}`);

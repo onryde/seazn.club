@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import {
@@ -1888,4 +1890,61 @@ test("cricket v3: the soft-commit dock is revealed on screen when it opens", asy
     box!.y + box!.height,
     "the dock opened above the viewport — the reveal effect scrolled the wrong way",
   ).toBeGreaterThan(0);
+});
+
+// S2-4 Task 2 (cricket web pad fixes): the toss is a cricket scorer's first tap, before Start. It names the TEAMS (the
+// sheet asked "Home"/"Away" before), and in a division the organiser has not started yet (Draft) the scoring door refuses
+// it 422 WRONG_PHASE with reason division_not_started; the pad says so in its own words instead of the engine's generic
+// "doesn't apply at this point". Then the organiser starts the division and the same toss is recorded, so the refusal was
+// the gate's alone. Strings come from the shipped dictionary, never typed here.
+test("S2-4 T2: the toss names the teams, and a Draft division's refusal says the competition hasn't started", async ({ page }) => {
+  test.setTimeout(120_000);
+  const EN = JSON.parse(
+    readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+  ) as Record<string, string>;
+  const label = `V3 Cricket Draft Toss ${TAG}`;
+  const fx = await seedRosteredFixture(page.request, {
+    label,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `Draft H1 ${TAG}` }, { fullName: `Draft H2 ${TAG}` }],
+    away: [{ fullName: `Draft A1 ${TAG}` }, { fullName: `Draft A2 ${TAG}` }],
+    startDivision: false,
+  });
+  const homeName = `Home ${label}`;
+  const awayName = `Away ${label}`;
+
+  await openConsoleAlreadyLive(page, fx);
+  const tossOnce = async () => {
+    await pad(page).locator('[data-tile-id="toss"]').click();
+    const sheet = sheetRoot(page);
+    await expect(sheet.getByRole("button", { name: awayName, exact: true }), "the toss names the away team").toBeVisible();
+    await expect(sheet.getByRole("button", { name: EN["scorepad.attribution.home"]!, exact: true }), "not the bare side word").toHaveCount(0);
+    await sheet.getByRole("button", { name: homeName, exact: true }).click();
+    await sheet.getByRole("button", { name: EN["toss.bat"]!, exact: true }).click();
+    await sendHeldNow(page);
+  };
+
+  // 1. Draft: the tap is refused, in the scorer's words, and writes nothing.
+  await tossOnce();
+  const banner = pad(page).locator('[data-role="v3-rejection"]');
+  await expect(banner, "the refusal says the competition hasn't started").toHaveText(
+    EN["engineErrorReason.WRONG_PHASE.division_not_started"]!,
+    { timeout: 20_000 },
+  );
+  await expect(banner).not.toHaveText(EN["engineError.WRONG_PHASE"]!);
+  expect(await ledger(page.request, fx.fixtureId), "a refused toss writes nothing").toEqual([]);
+
+  // 2. The organiser starts the division; the same toss is recorded, naming the home team's entrant.
+  const started = await apiJson(page.request, `/api/v1/divisions/${fx.divisionId}/start`, "POST");
+  expect(started.status, `start -> ${JSON.stringify(started.error)}`).toBe(200);
+  await page.reload();
+  await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+  await tossOnce();
+  await expect
+    .poll(async () => (await ledger(page.request, fx.fixtureId)).map((e) => [e.type, e.payload.wonBy, e.payload.elected]), {
+      timeout: 20_000,
+    })
+    .toEqual([["cricket.toss", fx.homeEntrantId, "bat"]]);
+  await expect(banner, "no refusal once started").toHaveCount(0);
 });

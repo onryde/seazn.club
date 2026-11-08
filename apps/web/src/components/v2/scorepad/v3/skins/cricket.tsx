@@ -2370,10 +2370,12 @@ function tossSheet(view: PadHostView): GuidedSheetSpec {
         id: "wonBy",
         kind: "choice",
         title: "pad.cricket.sheet.toss.wonBy.title",
-        options: [
-          { id: squads.home.entrantId, label: "scorepad.attribution.home" },
-          { id: squads.away.entrantId, label: "scorepad.attribution.away" },
-        ],
+        // S2-4 Task 2: the team names; the key stays as the label for a side with no name.
+        options: (["home", "away"] as const).map((side) => ({
+          id: squads[side].entrantId,
+          label: side === "home" ? "scorepad.attribution.home" : "scorepad.attribution.away",
+          ...(view.entrantNames[side] ? { labelText: view.entrantNames[side] } : {}),
+        })),
       },
       {
         id: "elected",

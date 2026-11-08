@@ -2306,6 +2306,9 @@ export async function seedRosteredFixture(
      *  precondition of tennis's own `rosterlessServerSide` fallback. Nothing
      *  else in the seeded fixture changes. */
     skipLineups?: boolean;
+    /** Leave the division in setup (Draft): scoring is closed until it starts (S2-4 Task 2, the division gate's refusal).
+     *  Default true. `emitCoreStart` is refused in a Draft division, so the two are not combined. */
+    startDivision?: boolean;
   },
 ): Promise<RosteredFixture> {
   const kind = spec.entrantKind ?? "team";
@@ -2384,7 +2387,7 @@ export async function seedRosteredFixture(
 
   const { fixtureIds } = await createStageAndGenerate(request, divisionId);
   const fixtureId = fixtureIds[0]!;
-  await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+  if (spec.startDivision !== false) await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
 
   for (const [entrantId, roster] of spec.skipLineups
     ? []

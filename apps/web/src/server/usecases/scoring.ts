@@ -10,7 +10,7 @@ import { cacheGet, cacheSet, cacheDel, sendAfterDeleteOrBound } from "@/lib/cach
 import { rateLimit } from "@/lib/rate-limit";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { deferred } from "@/lib/deferred";
-import { divisionScoringClosed } from "@/lib/division-phase";
+import { DIVISION_GATE_REASON, divisionScoringClosed } from "@/lib/division-phase";
 import { EngineError, lastLiveEvent, scorerMayForfeit } from "@seazn/engine/core";
 import { foldEpochOf } from "@seazn/engine/sport";
 import { epochFloorOverrideOrOff, judgeEngineEpoch } from "./engine-epoch-override";
@@ -563,6 +563,8 @@ async function assertEntitledToScore(
   if (divisionScoringClosed(ctx.division_status)) {
     throw new EngineError("WRONG_PHASE", "division has not started — scoring is closed", {
       divisionStatus: ctx.division_status,
+      // S2-4 Task 2: the wire forwards it (api-v1/http.ts), so the pad can say the competition hasn't started.
+      reason: DIVISION_GATE_REASON.notStarted,
     });
   }
 

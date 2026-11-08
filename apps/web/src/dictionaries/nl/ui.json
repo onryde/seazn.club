@@ -4669,6 +4669,7 @@
   "engineError.LEVEL_RESULT_IN_BRACKET": "Voer de winnaar in — een knock-outwedstrijd kan niet gelijk eindigen.",
   "engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled": "Beslis de wedstrijd of leg de beslissing vast voordat je afrondt — een knock-outwedstrijd kan niet gelijk eindigen.",
   "engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn": "Die deelnemer doet niet meer mee aan de competitie — kies de andere.",
+  "engineErrorReason.WRONG_PHASE.division_not_started": "De competitie is nog niet begonnen. De organisator start die op de divisiepagina; daarna kun je de toss vastleggen.",
   "engineError.LEVEL_RESULT_SEATED": "Er ging iets mis bij het plaatsen van deze uitslag. We zijn op de hoogte.",
   "engineError.FORFEIT_REASON_WRONG_PHASE": "Die reden kan op dit moment in de wedstrijd niet worden vastgelegd.",
   "engineError.ABANDONED_SETTLE_OR_VOID": "Deze wedstrijd is gestaakt. Beslis de wedstrijd om hem af te ronden. Wordt hij overgespeeld, maak dan eerst het staken ongedaan.",

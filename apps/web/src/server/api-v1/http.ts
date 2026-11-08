@@ -10,6 +10,7 @@ import * as Sentry from "@sentry/nextjs";
 import { EngineError, type EngineErrorCode } from "@seazn/engine/core";
 import { isLevelResultReason } from "@/lib/level-result-reason";
 import { isSettleRefusalReason } from "@/lib/settle-refusal-reason";
+import { isDivisionGateReason } from "@/lib/division-phase";
 import { forfeitPhaseRefusalOf } from "@/lib/forfeit-phase-refusal";
 import { SWISS_ABANDONED_BOARDS_REASON, abandonedBoardsOf } from "@/lib/swiss-abandoned-refusal";
 import { ABANDONED_MATCHES_REASON, heldMatchesOf } from "@/lib/abandoned-matches-refusal";
@@ -304,6 +305,12 @@ async function v1Inner<T>(
       if (err.code === "LEVEL_RESULT_IN_BRACKET") {
         const reason = (err.data as { reason?: unknown } | undefined)?.reason;
         if (isLevelResultReason(reason)) extra = { reason };
+      }
+      // S2-4 Task 2: the scoring door's division gate (usecases/scoring.ts) names why scoring is closed; every other
+      // WRONG_PHASE (the engine's own phase guards) keeps the code's copy — so only that reason is forwarded.
+      if (err.code === "WRONG_PHASE") {
+        const reason = (err.data as { reason?: unknown } | undefined)?.reason;
+        if (isDivisionGateReason(reason)) extra = { reason };
       }
       // W2a ruling D-R8: SETTLE_NOT_APPLICABLE for a withdrawn winner (C17, D-R7) has its own copy; every other
       // SETTLE_NOT_APPLICABLE keeps the code's — so only a reason this codebase names is forwarded.
