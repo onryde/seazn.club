@@ -37,7 +37,10 @@ import { listQuickMatchSports, offerFor, type QuickMatchSport } from "@/server/u
 import { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { getDictionary } from "@/lib/i18n";
 import PlayPage, { dynamic, generateMetadata } from "../play/page";
-import { setupSports } from "../play/setup-props";
+import { refusalCode, setupSports } from "../play/setup-props";
+import { QuickMatchSetupForm, type SetupFormProps } from "@/components/quick-match/setup-form";
+import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -77,6 +80,23 @@ async function render(lang: string, search: Record<string, string | string[]> = 
   return html;
 }
 
+/** The props the page hands the island: found in the page's own element tree, before any render (what the page puts
+ *  in its payload, whatever the island then does with it). */
+async function islandProps(search: Record<string, string | string[]>): Promise<SetupFormProps> {
+  const root = await PlayPage({ params: Promise.resolve({ lang: "en" }), searchParams: Promise.resolve(search) });
+  const found: SetupFormProps[] = [];
+  const visit = (node: ReactNode) => {
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (!isValidElement(node)) return;
+    const el = node as ReactElement<{ children?: ReactNode }>;
+    if (el.type === QuickMatchSetupForm) found.push(el.props as unknown as SetupFormProps);
+    visit(el.props.children);
+  };
+  visit(root);
+  expect(found, "the page mounts one setup island").toHaveLength(1);
+  return found[0]!;
+}
+
 beforeEach(() => {
   getCurrentUser.mockResolvedValue(null);
 });
@@ -114,6 +134,27 @@ describe("/<lang>/play: the form", () => {
     expect(html).toContain(">Badminton<");
     expect(html).toContain(">Chess<");
     expect(html).toContain("Each pair plays");
+  });
+
+  it("works without the script: the server's Start is not disabled, and the names it posts are required (I1)", async () => {
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+    const html = await render("en");
+    const startTag = html.match(/<button[^>]*data-testid="qm-start"[^>]*>/)?.[0];
+    expect(startTag, "the Start button's tag").toBeDefined();
+    expect(startTag).not.toContain('disabled="');
+    const sides = html.match(/<input[^>]*name="sides"[^>]*>/g) ?? [];
+    expect(sides).toHaveLength(2);
+    for (const tag of sides) expect(tag).toContain('required="');
+    expect(html.match(/<input[^>]*name="name"[^>]*>/)?.[0]).toContain('required="');
+  });
+
+  it("clips the glow on its own layer, never on <main>, so the phone Start bar can stick (m6)", async () => {
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+    const html = await render("en");
+    const main = html.match(/<main[^>]*class="([^"]*)"/)?.[1];
+    expect(main, "the page's <main>").toBeDefined();
+    expect(main!.split(/\s+/)).not.toContain("overflow-hidden");
+    expect(html.match(/<div[^>]*data-testid="qm-glow"[^>]*>/)?.[0]).toMatch(/class="[^"]*\boverflow-hidden\b/);
   });
 
   it("renders no raw dictionary key (every word the island reads was handed over)", async () => {
@@ -157,9 +198,31 @@ describe("/<lang>/play?e=: a refusal read on the server (the no-JS path)", () =>
     expect(twice).toContain("Too many new matches from this network.");
   });
 
-  it("no ?e=: no error line (the positive pair above has one)", async () => {
+  it("no ?e=, or a blank one: no error line (the positive pair above has one)", async () => {
     vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
     expect(await render("en")).not.toContain('data-testid="qm-setup-error"');
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+    expect(await render("en", { e: "  " })).not.toContain('data-testid="qm-setup-error"');
+  });
+
+  it("the island is handed a known code or null, never the raw ?e= (m1)", async () => {
+    const crafted = "<img src=x onerror=alert(1)>";
+    const cases: [Record<string, string | string[]>, string | null][] = [
+      [{}, null],
+      [{ e: "" }, null],
+      [{ e: "   " }, null],
+      [{ e: crafted }, QUICK_MATCH_ERRORS.CREATE_FAILED],
+      [{ e: "QUICK_MATCH_TOO_MANY_ALIVE" }, QUICK_MATCH_ERRORS.TOO_MANY_ALIVE],
+      [{ e: [" QUICK_MATCH_RATE_LIMITED ", crafted] }, QUICK_MATCH_ERRORS.RATE_LIMITED],
+    ];
+    for (const [search, code] of cases) {
+      vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+      expect((await islandProps(search)).initialError, JSON.stringify(search)).toBe(code);
+    }
+    // Every code the create route can send survives the trip: the map refuses nothing it should keep.
+    const codes = Object.values(QUICK_MATCH_ERRORS);
+    for (const c of codes) expect(refusalCode(c)).toBe(c);
+    expect(codes.length).toBeGreaterThanOrEqual(10);
   });
 });
 

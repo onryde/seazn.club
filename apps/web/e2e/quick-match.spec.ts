@@ -1,4 +1,4 @@
-import { test as base, expect, type Page } from "@playwright/test";
+import { test as base, expect, type Browser, type BrowserContextOptions, type Page, type TestInfo } from "@playwright/test";
 import { expectNoHorizontalScroll, TAG } from "./helpers";
 import { consentedAnonymousState } from "./scorepad-a11y-kit";
 
@@ -18,10 +18,19 @@ import { consentedAnonymousState } from "./scorepad-a11y-kit";
 // Sport: badminton, clicked explicitly (A11): the spec's own example, two kinds and a knockout it allows. The full offer is
 // swept in play-page.test.tsx against the real catalog.
 
+/** A guest's own browser: no session; consent already answered unless the case needs the banner. */
+async function guestContext(browser: Browser, info: TestInfo, options: BrowserContextOptions = {}) {
+  return browser.newContext({
+    storageState: await consentedAnonymousState(),
+    baseURL: info.project.use.baseURL,
+    ...options,
+  });
+}
+
 // Playwright's `use` callback is named `provide`: react-hooks lints any call named `use` (own-account.ts).
 const test = base.extend<{ guest: Page }>({
-  guest: async ({ browser }, provide) => {
-    const ctx = await browser.newContext({ storageState: await consentedAnonymousState() });
+  guest: async ({ browser }, provide, info) => {
+    const ctx = await guestContext(browser, info);
     try {
       await provide(await ctx.newPage());
     } finally {
@@ -39,6 +48,9 @@ const choice = (page: Page, words: string) => form(page).getByText(words, { exac
 async function openSetup(page: Page) {
   await page.goto("/en/play");
   await expect(form(page)).toBeVisible();
+  // The hydration signal: the server's Start is live (the no-script path); once the script runs, blank rows disable it.
+  // Typing before then would race React taking over the inputs.
+  await expect(start(page)).toBeDisabled();
   await choice(page, "Badminton").click();
 }
 
@@ -135,3 +147,97 @@ test("Start creates the quick match: the browser lands on its home, /q/qm_…, w
   const cookies = await page.context().cookies();
   expect(cookies.some((c) => c.name === "seazn_qm_visitor" && c.httpOnly)).toBe(true);
 });
+
+test("the real cap: five live quick matches on one visitor, and the sixth Start reads the cap's line and keeps the names (m10)", async ({ guest: page }) => {
+  // Five REAL creates through the form's own fields (the page's fetch, so the visitor cookie the first one sets is the
+  // one the next four carry), then a sixth through the Start button. QUICK_MATCH_MAX_ALIVE_PER_VISITOR is 5 (spec §7.9);
+  // the per-IP create limit (20 per 10 minutes) leaves room for this spec's eight creates.
+  await openSetup(page);
+  await side(page, 1).fill(`Cap A ${TAG}`);
+  await side(page, 2).fill(`Cap B ${TAG}`);
+  for (let k = 1; k <= 5; k++) {
+    const landed = await page.evaluate(async () => {
+      const form = document.querySelector<HTMLFormElement>('[data-testid="qm-setup-form"]')!;
+      const res = await fetch(form.action, { method: "POST", body: new URLSearchParams(new FormData(form) as never) });
+      return res.url;
+    });
+    expect(landed, `create ${k} lands on its home`).toMatch(/\/q\/qm_[^/?#]+$/);
+  }
+  const refusedPage = page.waitForResponse((r) => r.url().includes("/en/play?e=QUICK_MATCH_TOO_MANY_ALIVE"));
+  await start(page).click();
+  expect((await refusedPage).status()).toBe(200);
+  await expect(page.getByTestId("qm-setup-error")).toContainText("You have 5 quick matches on the go on this device.");
+  await expect(page).toHaveURL(/\/en\/play$/);
+  await expect(side(page, 1)).toHaveValue(`Cap A ${TAG}`);
+  await expect(side(page, 2)).toHaveValue(`Cap B ${TAG}`);
+});
+
+test("without the script the page still works: Start is live, only the chosen sport can be picked, and the plain post lands on the home (I1)", async ({ browser }, info) => {
+  const ctx = await guestContext(browser, info, { javaScriptEnabled: false });
+  try {
+    const page = await ctx.newPage();
+    await page.goto("/en/play");
+    await expect(form(page)).toBeVisible();
+    await expect(start(page)).toBeEnabled();
+    await expect(form(page).getByRole("radio", { name: "Badminton", exact: true })).toBeChecked();
+    await expect(form(page).getByRole("radio", { name: "Tennis", exact: true })).toBeDisabled();
+    await side(page, 1).fill("Ravi & Sam");
+    await side(page, 2).fill("Priya & Tom");
+    await start(page).click();
+    await expect(page).toHaveURL(/\/q\/qm_[^/?#]+$/);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("every control a thumb taps is at least 44px tall, the × at least 44px wide (m3)", async ({ guest: page }) => {
+  await openSetup(page);
+  await page.getByRole("button", { name: "+ Add a side" }).click();
+  const boxes: { what: string; h: number; w: number }[] = [];
+  const measure = async (what: string, locator: ReturnType<Page["locator"]>) => {
+    for (const el of await locator.all()) {
+      const box = await el.boundingBox();
+      expect(box, `${what} has a box`).not.toBeNull();
+      boxes.push({ what, h: box!.height, w: box!.width });
+    }
+  };
+  // The radios are sr-only; their visible faces are the labels' spans.
+  await measure("chip/segment", form(page).locator("label:has(input[type=radio]) > span"));
+  await measure("side", form(page).locator('input[name="sides"]'));
+  await measure("remove", form(page).getByRole("button", { name: "Remove side 3" }));
+  await measure("add", form(page).getByRole("button", { name: "+ Add a side" }));
+  await measure("rules", form(page).locator("select"));
+  await measure("email", form(page).locator("summary"));
+  for (const b of boxes) expect(b.h, `${b.what} height`).toBeGreaterThanOrEqual(44);
+  for (const b of boxes.filter((x) => x.what === "remove")) expect(b.w).toBeGreaterThanOrEqual(44);
+  expect(boxes.length, "controls measured").toBeGreaterThanOrEqual(15);
+});
+
+test("first visit on a phone: the cookie banner's buttons stay tappable and the Start bar un-docks under it, then docks again (m4, m5)", async ({ browser }, info) => {
+  const ctx = await guestContext(browser, info, { storageState: { cookies: [], origins: [] }, viewport: { width: 375, height: 667 } });
+  try {
+    const page = await ctx.newPage();
+    await page.goto("/en/play");
+    const banner = page.getByTestId("cookie-consent");
+    await expect(banner).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("data-consent-open", "");
+    const bar = page.getByTestId("qm-start-bar");
+    await expect(bar).toHaveCSS("position", "static");
+    // Hit-test the banner's Accept at its centre: nothing of the page sits on top of it.
+    const accept = page.getByTestId("cookie-accept");
+    const box = (await accept.boundingBox())!;
+    const onTop = await page.evaluate(
+      ({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-testid="cookie-accept"]') !== null,
+      { x: box.x + box.width / 2, y: box.y + box.height / 2 },
+    );
+    expect(onTop, "Accept is the element under its own centre").toBe(true);
+    await accept.click();
+    await expect(banner).toHaveCount(0);
+    await expect(page.locator("html")).not.toHaveAttribute("data-consent-open");
+    await expect(bar).toHaveCSS("position", "sticky");
+    await expectNoHorizontalScroll(page);
+  } finally {
+    await ctx.close();
+  }
+});
+

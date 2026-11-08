@@ -11,7 +11,7 @@
 //
 // Sport: the island sweeps four sports (badminton, chess, football, tennis): two kinds, one kind, team, and a sport whose
 // preferred variant is not its first. The full live offer is swept against the real DB in play-page.test.tsx.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import enMarketing from "@/dictionaries/en/marketing.json";
 import enUi from "@/dictionaries/en/ui.json";
@@ -24,6 +24,7 @@ import {
 import type { QuickMatchSport } from "@/server/usecases/quick-match-sports";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { setupCopy, setupSports } from "@/app/[lang]/(marketing)/play/setup-props";
+import { CONSENT_OPEN_ATTR } from "@/components/cookie-consent";
 import {
   QuickMatchSetupForm,
   drawPreview,
@@ -136,6 +137,22 @@ function fillSides(i: Island, names: string[]) {
 }
 const submit = (i: Island) => (propsOf(all(i).find((el) => el.type === "form")!).onSubmit as (e: { preventDefault(): void }) => Promise<void>)({ preventDefault: () => {} });
 
+/** The island's `window`: `location.assign` for a home, and the `pageshow` listener it adds on mount (m9). */
+let pageListeners: Map<string, Set<(e: unknown) => void>>;
+function stubWindow(assign: (path: string) => void = vi.fn()) {
+  pageListeners = new Map();
+  vi.stubGlobal("window", {
+    location: { assign },
+    addEventListener: (type: string, fn: (e: unknown) => void) => {
+      if (!pageListeners.has(type)) pageListeners.set(type, new Set());
+      pageListeners.get(type)!.add(fn);
+    },
+    removeEventListener: (type: string, fn: (e: unknown) => void) => pageListeners.get(type)?.delete(fn),
+  });
+}
+const firePageshow = (persisted: boolean) => [...(pageListeners.get("pageshow") ?? [])].forEach((fn) => fn({ persisted }));
+
+beforeEach(() => stubWindow());
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -447,8 +464,8 @@ describe("QuickMatchSetupForm: the screen as the mockup orders it", () => {
     expect(startText(i)).toBe("Start playing · 18 matches"); // 3 × 4·3/2
   });
 
-  it("Start is disabled while any row is blank or the name is cleared, enabled once every row is filled", () => {
-    const i = mount();
+  it("once the script runs, Start is disabled while any row is blank or the name is cleared, enabled once every row is filled", () => {
+    const i = mount({}, { hydrate: true });
     expect(propsOf(start(i)).disabled).toBe(true);
     fillSides(i, ["A", "B"]);
     expect(propsOf(start(i)).disabled).toBe(false);
@@ -586,7 +603,7 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
     });
     const assign = vi.fn();
     vi.stubGlobal("fetch", fetch);
-    vi.stubGlobal("window", { location: { assign } });
+    stubWindow(assign);
     return { fetch, calls, assign };
   }
   const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -620,8 +637,7 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
     let release!: (r: Res) => void;
     const fetch = vi.fn(() => new Promise<Res>((r) => (release = r)));
     vi.stubGlobal("fetch", fetch);
-    vi.stubGlobal("window", { location: { assign: vi.fn() } });
-    const i = mount();
+    const i = mount({}, { hydrate: true });
     fillSides(i, ["A", "B"]);
     // Both taps reach the SAME handler, as two events dispatched before React re-renders do: only the lock stops the
     // second (the disabled button and the stale `canStart` both still read "ready" in that closure).
@@ -708,11 +724,124 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
     expect(body.get("sport_key")).toBe("boardgame");
   });
 
-  it("the form is a real post to the create route, so it works before the script loads", () => {
-    const form = all(mount()).find((el) => el.type === "form")!;
+  it("the form is a real post to the create route with its locale; before the script runs Start is live and `required` guards the names", () => {
+    const i = mount();
+    const form = all(i).find((el) => el.type === "form")!;
     expect(propsOf(form).method).toBe("post");
     expect(propsOf(form).action).toBe("/api/quick-match");
     expect(propsOf(hidden(mount({ lang: "nl" }), "locale")!).value).toBe("nl");
+    // The server's render (no script yet): blank rows, and still Start is not disabled — the browser's own `required`
+    // check stops a post with a blank name, and nothing would ever re-enable a disabled Start without the script (I1).
+    expect(propsOf(start(i)).disabled).toBe(false);
+    expect(sideInputs(i).map((el) => propsOf(el).required)).toEqual([true, true]);
+    expect(propsOf(nameInput(i)).required).toBe(true);
+    // Positive pair: once the script runs, the same blank rows disable it.
+    expect(propsOf(start(mount({}, { hydrate: true }))).disabled).toBe(true);
+  });
+
+  it("before the script runs only the chosen sport's chip can be picked (its kinds and rules are the ones on screen), and no side can be added; after, every chip and Add can", () => {
+    const before = mount();
+    const chips = (i: Island) => inputs(i, "sport_key").map((el) => [propsOf(el).value, propsOf(el).disabled]);
+    expect(chips(before)).toEqual([
+      ["badminton", false],
+      ["boardgame", true],
+      ["football", true],
+      ["tennis", true],
+    ]);
+    expect(propsOf(buttonNamed(before, "+ Add a side")!).disabled).toBe(true);
+    const after = mount({}, { hydrate: true });
+    expect(chips(after).every(([, disabled]) => disabled === false)).toBe(true);
+    expect(chips(after)).toHaveLength(4);
+    expect(propsOf(buttonNamed(after, "+ Add a side")!).disabled).toBe(false);
+  });
+
+  it("back from the home (bfcache): a restored page unlocks; a fresh pageshow does not (m9)", async () => {
+    const { fetch } = stubFetch([{ url: "http://localhost:3000/q/qm_a", status: 200 }]);
+    const i = mount({}, { hydrate: true });
+    fillSides(i, ["A", "B"]);
+    await submit(i);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await submit(i);
+    expect(fetch, "locked: the page is leaving").toHaveBeenCalledTimes(1);
+    firePageshow(false);
+    await submit(i);
+    expect(fetch, "an ordinary load is not a restore").toHaveBeenCalledTimes(1);
+    expect(pageListeners.get("pageshow")?.size, "one pageshow listener").toBe(1);
+    firePageshow(true);
+    expect(propsOf(start(i)).disabled, "Start is live again").toBe(false);
+    await submit(i);
+    expect(fetch, "unlocked: a second create posts").toHaveBeenCalledTimes(2);
   });
 });
 
+
+describe("what a screen reader hears, what a thumb can hit, where the Start bar sits (review m2-m5, m7)", () => {
+  const classOf = (el: ReactElement | undefined) => String(propsOf(el!).className ?? "");
+
+  it("the match count is a polite live region that is always mounted, so a change is heard; the kind switch has a legend", () => {
+    const i = mount();
+    const live = byTestId(i, "qm-start-count");
+    expect(propsOf(live!)["aria-live"]).toBe("polite");
+    expect(textOf(live!).trim()).toBe("· 1 match");
+    fillSides(i, ["A", "B", "C"]);
+    expect(textOf(byTestId(i, "qm-start-count")!).trim()).toBe("· 3 matches");
+    // An out-of-table count empties the region; the region itself stays.
+    const partial = { ...TABLE, "league:2:1": undefined } as QuickMatchPreviewTable;
+    const empty = byTestId(mount({ table: partial }), "qm-start-count");
+    expect(empty, "still mounted").toBeDefined();
+    expect(textOf(empty!).trim()).toBe("");
+    const legend = all(i).find((el) => el.type === "legend" && classOf(el).includes("sr-only"));
+    expect(textOf(legend!)).toBe("Who plays");
+  });
+
+  it("every tap target has a 44px floor of its own, and no element carries two text sizes or two vertical paddings; 19 checked", () => {
+    const i = mount({}, { hydrate: true });
+    fillSides(i, ["A", "B", "C"]); // a × and the Format row
+    const faces = (name: string) =>
+      all(i)
+        .filter((el) => el.type === "label" && walk(propsOf(el).children as ReactElement).some((c) => propsOf(c).name === name))
+        .map((label) => walk(propsOf(label).children as ReactElement).find((c) => c.type === "span")!);
+    const targets: [string, ReactElement][] = [
+      ...faces("sport_key").map((el): [string, ReactElement] => ["chip", el]),
+      ...faces("kind").map((el): [string, ReactElement] => ["kind", el]),
+      ...faces("plays").map((el): [string, ReactElement] => ["plays", el]),
+      ...faces("format").map((el): [string, ReactElement] => ["format", el]),
+      ...sideInputs(i).map((el): [string, ReactElement] => ["side", el]),
+      ["remove", buttonNamed(i, "Remove side 3")!],
+      ["add", buttonNamed(i, "+ Add a side")!],
+      ["rules", all(i).find((el) => el.type === "select")!],
+      ["email", all(i).find((el) => el.type === "summary")!],
+    ];
+    for (const [what, el] of targets) {
+      const cls = classOf(el).split(/\s+/);
+      const floor = cls.includes("min-h-11") || (cls.includes("h-11") && cls.includes("w-11"));
+      expect(floor, `${what}: ${classOf(el)}`).toBe(true);
+      expect(cls.filter((c) => /^text-(xs|sm|base|lg|xl)$/.test(c)).length, `${what}: one text size`).toBeLessThanOrEqual(1);
+      expect(cls.filter((c) => /^py-/.test(c)).length, `${what}: one vertical padding`).toBeLessThanOrEqual(1);
+    }
+    // 4 chips, 2 kinds, 4 plays, 2 formats, 3 sides, ×, Add, rules, email.
+    expect(targets).toHaveLength(19);
+  });
+
+  it("the Start bar sticks inside the form below 640px, never as a fixed bar with a spacer, and un-docks while the cookie banner is open", () => {
+    const i = mount();
+    const bar = classOf(byTestId(i, "qm-start-bar")).split(/\s+/);
+    expect(bar).toEqual(expect.arrayContaining(["max-sm:sticky", "max-sm:bottom-0"]));
+    // The contract with cookie-consent.tsx: the attribute the banner sets on <html> is the one this variant names.
+    expect(CONSENT_OPEN_ATTR).toBe("data-consent-open");
+    expect(bar).toContain(`[html[${CONSENT_OPEN_ATTR}]_&]:static`);
+    expect(all(i).some((el) => /\bbottom-bar(-spacer)?\b/.test(classOf(el))), "no fixed bar, no spacer").toBe(false);
+    const form = all(i).find((el) => el.type === "form")!;
+    expect(walk(propsOf(form).children as ReactElement).includes(byTestId(i, "qm-start-bar")!), "inside the form").toBe(true);
+  });
+
+  it("the sits-out lines wrap, and two sides of the same name still make two lines (index keys)", () => {
+    const i = mount({}, { hydrate: true });
+    fillSides(i, ["Ana", "Ana", "Ana", "Ana", "Ana"]);
+    type(radio(i, "format", "knockout"), "knockout");
+    const lines = all(i).filter((el) => el.type === "li" && textOf(el).includes("sits out"));
+    expect(lines.map((el) => textOf(el))).toEqual(["Ana sits out the first round", "Ana sits out the first round", "Ana sits out the first round"]);
+    expect(new Set(lines.map((el) => el.key)).size, "three distinct keys").toBe(3);
+    for (const el of lines) expect(classOf(el).split(/\s+/)).toEqual(expect.arrayContaining(["min-w-0", "break-words"]));
+  });
+});

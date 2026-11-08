@@ -15,7 +15,7 @@ import { hasLocale, LOCALES } from "@/lib/i18n-constants";
 import { log } from "@/server/logger";
 import { quickMatchPreviewTable } from "@/server/usecases/quick-match-preview";
 import { listQuickMatchSports, type QuickMatchSport } from "@/server/usecases/quick-match-sports";
-import { setupCopy, setupSports } from "./setup-props";
+import { refusalCode, setupCopy, setupSports } from "./setup-props";
 
 export const dynamic = "force-dynamic";
 
@@ -62,17 +62,18 @@ export default async function PlayPage({
     readOffer(),
   ]);
   const [first, ...rest] = setupSports(offer, ui);
-  const refused = Array.isArray(e) ? e[0] : e;
+  const refused = refusalCode(e);
 
   return (
     <MarketingShell variant="night-scroll" lang={lang}>
-      <main className="relative -mt-16 min-h-[100svh] overflow-hidden bg-[linear-gradient(180deg,var(--mk-night-2),var(--mk-night))] pb-12 pt-24 text-[var(--mk-cream)]">
+      {/* No `overflow-hidden` here: it would make <main> the Start bar's scroll container and unstick it (m6). Only the
+          glow's own layer clips. */}
+      <main className="relative -mt-16 min-h-[100svh] bg-[linear-gradient(180deg,var(--mk-night-2),var(--mk-night))] pb-12 pt-24 text-[var(--mk-cream)]">
         {/* The nav stays night over the top of the page, as over the home's hero (nav-scroll.tsx). */}
         <div id="mk-hero-sentinel" aria-hidden className="absolute inset-x-0 top-0 h-48" />
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -top-1/4 left-1/2 h-[60%] w-[120%] max-w-4xl -translate-x-1/2 bg-[radial-gradient(ellipse_at_top,rgba(163,230,53,0.08),transparent_65%)]"
-        />
+        <div aria-hidden data-testid="qm-glow" className="pointer-events-none absolute inset-0 overflow-hidden">
+          <div className="absolute -top-1/4 left-1/2 h-[60%] w-[120%] max-w-4xl -translate-x-1/2 bg-[radial-gradient(ellipse_at_top,rgba(163,230,53,0.08),transparent_65%)]" />
+        </div>
         <div className="relative mx-auto w-full max-w-xl px-4">
           {first ? (
             <QuickMatchSetupForm
@@ -80,7 +81,7 @@ export default async function PlayPage({
               sports={[first, ...rest]}
               table={quickMatchPreviewTable()}
               copy={setupCopy(d, ui)}
-              initialError={refused ?? null}
+              initialError={refused}
             />
           ) : (
             <section className="py-10">

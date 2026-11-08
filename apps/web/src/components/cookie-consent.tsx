@@ -45,6 +45,14 @@ function isKioskBoard(pathname: string | null | undefined): boolean {
   return isPublicHubPath(pathname ?? "") && parts.at(-1) === KIOSK_SEGMENT && (parts.length === 4 || parts.length === 5);
 }
 
+/**
+ * Set on `<html>` while the banner is on screen, and removed when it goes. The one signal a page has that the banner
+ * covers the bottom of the viewport: a docked control there un-docks while it is set, so it neither hides under the
+ * banner nor covers its buttons (the quick match Start bar, components/quick-match/setup-form.tsx, which names this
+ * attribute in a Tailwind variant and pins it to this constant in its test).
+ */
+export const CONSENT_OPEN_ATTR = "data-consent-open";
+
 const noPromptOnServer = () => false;
 /** The page's locale is the path's (or the cookie's): read once per render on
  *  the client, `DEFAULT_LOCALE` on the server. The banner only ever renders on
@@ -75,6 +83,16 @@ export function CookieConsent() {
   const visible = override ?? prompt;
   const locale = useSyncExternalStore(localeNeverNotifies, readActiveLocale, defaultLocaleOnServer);
   const pathname = usePathname();
+  // Whether the banner is actually painted: the overlay and the kiosk board never show it.
+  const showing = visible && !pathname?.startsWith(OVERLAY_SEGMENT) && !isKioskBoard(pathname);
+
+  useEffect(() => {
+    // `document` is always there in a browser; the node test harnesses run effects without one.
+    if (!showing || typeof document === "undefined") return;
+    const root = document.documentElement;
+    root.setAttribute(CONSENT_OPEN_ATTR, "");
+    return () => root.removeAttribute(CONSENT_OPEN_ATTR);
+  }, [showing]);
 
   useEffect(() => {
     // Re-open on demand so users can withdraw/change consent at any time.
@@ -130,7 +148,7 @@ export function CookieConsent() {
   // so no nested layout can unmount it.
   if (isKioskBoard(pathname)) return null;
 
-  if (!visible) return null;
+  if (!showing) return null;
 
   return (
     <div

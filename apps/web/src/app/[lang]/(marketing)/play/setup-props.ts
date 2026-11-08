@@ -3,6 +3,7 @@
 // test builds its props with the same two functions, so a key this file forgets reads as a raw key in an English
 // assertion there.
 import type { Dict } from "@/lib/i18n-constants";
+import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
 import { t } from "@/lib/i18n-runtime";
 import { pickVariant } from "@/lib/preferred-variant";
 import type { QuickMatchSport } from "@/server/usecases/quick-match-sports";
@@ -21,6 +22,8 @@ const UI_PREFIXES = [
   "quickMatch.home.winnerOfMatch",
   "quickMatch.home.winnerOfThe",
   "bracket.round.",
+  // The kind switch's legend (screen readers only): "Who plays", the division builder's own word for the same choice.
+  "divBuilder.step.who",
 ];
 
 function pick(dict: Dict, prefixes: readonly string[]): Record<string, string> {
@@ -58,4 +61,17 @@ export function setupSports(sports: readonly QuickMatchSport[], ui: Dict): Setup
       },
     ];
   });
+}
+
+const KNOWN_CODES: ReadonlySet<string> = new Set(Object.values(QUICK_MATCH_ERRORS));
+
+/**
+ * `?e=` as the island may take it: a code the create route sends, or null. The raw value never reaches the page's
+ * payload (m1): a blank `?e=` is no refusal, and anything else that is not a known code is the generic failure. A
+ * repeated `?e=` reads its first.
+ */
+export function refusalCode(e: string | string[] | undefined): string | null {
+  const raw = (Array.isArray(e) ? e[0] : e)?.trim();
+  if (!raw) return null;
+  return KNOWN_CODES.has(raw) ? raw : QUICK_MATCH_ERRORS.CREATE_FAILED;
 }

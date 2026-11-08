@@ -12,7 +12,7 @@
 // 2026-11-08): a home (`/q/<token>`) is navigated to; a refusal (`/<lang>/play?e=<code>`) is shown here, with the typed
 // sides kept. The form locks on its first submit and unlocks only on a refusal (pre-flight B4f): the route has no
 // server-side dedupe (decision log 2026-11-08).
-import { useRef, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
 import { Pencil, X } from "lucide-react";
 import type { EntrantKind } from "@seazn/engine/sport";
 import type {
@@ -29,6 +29,7 @@ import {
   QUICK_MATCH_MAX_SIDES,
   QUICK_MATCH_MIN_SIDES,
 } from "@/lib/quick-match-constants";
+import { useHydrated } from "@/lib/use-client-snapshot";
 import { fixtureLabel, winnerOfLabel, type FixtureLabel } from "./fixture-label";
 
 /** The create route (app/api/quick-match/route.ts). It answers every post with a 303. */
@@ -215,8 +216,10 @@ function useGuestDate(lang: Locale): string | null {
 const LABEL = "mb-1.5 block text-xs font-semibold text-[#b7aede]";
 const HELP = "mt-1.5 text-xs text-[#8d7fc0]";
 const SEG = "flex overflow-hidden rounded-lg border border-[#3b2a6e] bg-[#241650]";
+/** A segment's face. Its 44px tap floor is `min-h-11`, never a padding that a later class could override; the text size
+ *  is the caller's (`text-sm` or `text-base`), so no two size utilities ever compete on one element. */
 const SEG_ITEM =
-  "block cursor-pointer px-2 py-2 text-center text-sm text-[#b7aede] transition peer-checked:bg-[rgb(163_230_53/0.14)] peer-checked:font-semibold peer-checked:text-[var(--mk-cream)] peer-checked:shadow-[inset_0_-2px_0_var(--mk-lime)] peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:-outline-offset-2 peer-focus-visible:outline-[var(--mk-lime)]";
+  "flex min-h-11 cursor-pointer items-center justify-center px-2 text-center text-[#b7aede] transition peer-checked:bg-[rgb(163_230_53/0.14)] peer-checked:font-semibold peer-checked:text-[var(--mk-cream)] peer-checked:shadow-[inset_0_-2px_0_var(--mk-lime)] peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:-outline-offset-2 peer-focus-visible:outline-[var(--mk-lime)]";
 
 interface SideRow {
   id: number;
@@ -248,6 +251,19 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
   const [error, setError] = useState<string | null>(initialError);
   const [submitting, setSubmitting] = useState(false);
   const locked = useRef(false);
+  /** False in the server's HTML and until the script runs: that page must work as a plain form post (I1). */
+  const hydrated = useHydrated();
+
+  // Back from the home (bfcache): the page comes back exactly as it was left, locked mid-submit. Unlock it (m9).
+  useEffect(() => {
+    const onShow = (e: PageTransitionEvent) => {
+      if (!e.persisted) return;
+      locked.current = false;
+      setSubmitting(false);
+    };
+    window.addEventListener("pageshow", onShow);
+    return () => window.removeEventListener("pageshow", onShow);
+  }, []);
 
   const date = useGuestDate(lang);
   const suggestion = date === null ? sport.name : msg("quickMatch.setup.suggestedName", { sport: sport.name, date });
@@ -350,7 +366,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
                 onChange={() => setPlays(p)}
                 className="peer sr-only"
               />
-              <span className={SEG_ITEM}>{msg(`quickMatch.setup.plays.${p}`)}</span>
+              <span className={`${SEG_ITEM} text-sm`}>{msg(`quickMatch.setup.plays.${p}`)}</span>
             </label>
           ))}
         </div>
@@ -404,10 +420,13 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
                 name="sport_key"
                 value={s.sport_key}
                 checked={s.sport_key === sport.sport_key}
+                // Before the script runs the kinds and the rules below are the chosen sport's, so a plain form post can
+                // only send that sport: another chip cannot be picked until the page is live (I1).
+                disabled={!hydrated && s.sport_key !== sport.sport_key}
                 onChange={() => chooseSport(s.sport_key)}
                 className="peer sr-only"
               />
-              <span className="block cursor-pointer rounded-full border border-[#3b2a6e] bg-[#241650] px-3.5 py-2 text-sm text-[var(--mk-cream)] transition hover:border-[#5b4a9e] peer-checked:border-[var(--mk-lime)] peer-checked:bg-[var(--mk-lime)] peer-checked:font-semibold peer-checked:text-[var(--mk-night)] peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[var(--mk-lime)]">
+              <span className="flex min-h-11 cursor-pointer items-center rounded-full border border-[#3b2a6e] bg-[#241650] px-3.5 text-sm text-[var(--mk-cream)] transition hover:border-[#5b4a9e] peer-checked:border-[var(--mk-lime)] peer-checked:bg-[var(--mk-lime)] peer-checked:font-semibold peer-checked:text-[var(--mk-night)] peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[var(--mk-lime)]">
                 {s.name}
               </span>
             </label>
@@ -417,6 +436,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
 
       {sport.kinds.length > 1 ? (
         <fieldset className="mt-3">
+          <legend className="sr-only">{msg("divBuilder.step.who")}</legend>
           <div className={SEG}>
             {sport.kinds.map((k) => (
               <label key={k.kind} className="min-w-0 flex-1">
@@ -428,7 +448,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
                   onChange={() => setKind(k.kind)}
                   className="peer sr-only"
                 />
-                <span className={SEG_ITEM}>{k.label}</span>
+                <span className={`${SEG_ITEM} text-sm`}>{k.label}</span>
               </label>
             ))}
           </div>
@@ -468,19 +488,19 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
                 autoComplete="off"
                 aria-label={msg("quickMatch.setup.sideLabel", { n: k + 1 })}
                 onChange={(e) => renameSide(row.id, e.target.value)}
-                className="min-w-0 flex-1 rounded-lg border border-[#3b2a6e] bg-[var(--mk-night)] px-2.5 py-2 text-sm text-[var(--mk-cream)] outline-none transition placeholder:text-[#8d7fc0] focus:border-[var(--mk-lime)]"
+                className="min-h-11 min-w-0 flex-1 rounded-lg border border-[#3b2a6e] bg-[var(--mk-night)] px-2.5 py-2 text-sm text-[var(--mk-cream)] outline-none transition placeholder:text-[#8d7fc0] focus:border-[var(--mk-lime)]"
               />
               {k >= QUICK_MATCH_MIN_SIDES ? (
                 <button
                   type="button"
                   aria-label={msg("quickMatch.setup.removeSide", { n: k + 1 })}
                   onClick={() => removeSide(row.id)}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[#b7aede] transition hover:bg-[rgb(245_240_232/0.08)] hover:text-[var(--mk-cream)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--mk-lime)]"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[#b7aede] transition hover:bg-[rgb(245_240_232/0.08)] hover:text-[var(--mk-cream)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--mk-lime)]"
                 >
                   <X aria-hidden className="h-4 w-4" />
                 </button>
               ) : rows.length > QUICK_MATCH_MIN_SIDES ? (
-                <span aria-hidden className="h-10 w-10 shrink-0" />
+                <span aria-hidden className="h-11 w-11 shrink-0" />
               ) : null}
             </div>
           ))}
@@ -488,7 +508,9 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
             <button
               type="button"
               onClick={addSide}
-              className="block w-full px-3 py-3 text-left text-sm font-semibold text-[var(--mk-lime)] transition hover:bg-[rgb(163_230_53/0.06)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--mk-lime)]"
+              // Adding a row needs the script; before it runs the button would do nothing, so it says so (I1).
+              disabled={!hydrated}
+              className="block min-h-11 w-full px-3 py-3 text-left text-sm font-semibold text-[var(--mk-lime)] transition hover:bg-[rgb(163_230_53/0.06)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--mk-lime)]"
             >
               {msg("quickMatch.setup.addSide")}
             </button>
@@ -513,7 +535,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
                     onChange={() => setFormat(f)}
                     className="peer sr-only"
                   />
-                  <span className={`${SEG_ITEM} py-2.5 text-base`}>{msg(`quickMatch.format.${f}`)}</span>
+                  <span className={`${SEG_ITEM} text-base`}>{msg(`quickMatch.format.${f}`)}</span>
                 </label>
               ))}
             </div>
@@ -549,8 +571,11 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
           </ol>
           {draw.sitsOut.length > 0 ? (
             <ul className="mt-2 space-y-0.5 text-xs text-[#8d7fc0]">
-              {draw.sitsOut.map((line) => (
-                <li key={line}>{line}</li>
+              {/* Index keys: two sides may share a name, so two lines can be the same words. */}
+              {draw.sitsOut.map((line, k) => (
+                <li key={k} className="min-w-0 break-words">
+                  {line}
+                </li>
               ))}
             </ul>
           ) : null}
@@ -564,7 +589,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
             name="variant_key"
             value={variant.key}
             onChange={(e) => chooseVariant(e.target.value)}
-            className="w-full appearance-none rounded-lg border border-[#3b2a6e] bg-[#241650] py-2.5 pl-3 pr-9 text-sm text-[var(--mk-cream)] outline-none transition focus:border-[var(--mk-lime)]"
+            className="min-h-11 w-full appearance-none rounded-lg border border-[#3b2a6e] bg-[#241650] py-2.5 pl-3 pr-9 text-sm text-[var(--mk-cream)] outline-none transition focus:border-[var(--mk-lime)]"
           >
             {sport.variants.map((v) => (
               <option key={v.key} value={v.key}>
@@ -579,7 +604,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
       </label>
 
       <details className="mt-5">
-        <summary className="cursor-pointer text-sm text-[#b7aede] underline underline-offset-2 hover:text-[var(--mk-cream)]">
+        <summary className="min-h-11 cursor-pointer py-3 text-sm text-[#b7aede] underline underline-offset-2 hover:text-[var(--mk-cream)]">
           {msg("quickMatch.setup.email")}
         </summary>
         <label className="mt-2 block">
@@ -596,9 +621,14 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
         </label>
       </details>
 
-      {/* The docked Start bar: `.bottom-bar` for its phone docking and safe-area padding, its light surface overridden
-          with the night tokens below 640px (plan 2 Global Constraints, Night stage); inline from 640px up. */}
-      <div className="bottom-bar max-sm:border-[#3b2a6e] max-sm:bg-[rgb(21_11_54/0.94)] sm:mt-8">
+      {/* The Start bar. Below 640px it sticks to the bottom of the screen INSIDE the form, so it never covers anything
+          after the form and needs no spacer; from 640px up it sits inline. While the cookie banner is open
+          (cookie-consent.tsx sets `data-consent-open` on <html>) it un-docks into the page, so it neither hides under
+          the banner nor covers its buttons; z-30 keeps the banner (z-40) on top either way. */}
+      <div
+        data-testid="qm-start-bar"
+        className="z-30 -mx-4 mt-8 border-t border-[#3b2a6e] bg-[rgb(21_11_54/0.94)] px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur max-sm:sticky max-sm:bottom-0 sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none [html[data-consent-open]_&]:static"
+      >
         {errorLine !== null ? (
           <p
             role="alert"
@@ -611,19 +641,17 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
         <button
           type="submit"
           data-testid="qm-start"
-          disabled={!canStart}
+          // The server's HTML leaves Start enabled: without the script, `required` on the names guards the post (I1).
+          disabled={hydrated && !canStart}
           className="block w-full rounded-xl bg-[var(--mk-lime)] px-4 py-3.5 text-center text-base font-semibold text-[var(--mk-night)] transition hover:brightness-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--mk-cream)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {msg("quickMatch.setup.start")}
-          {matches !== undefined ? (
-            <>
-              {" "}
-              <small className="text-sm font-medium opacity-75">{count("quickMatch.setup.startCount", matches)}</small>
-            </>
-          ) : null}
+          {/* Always mounted, so a screen reader hears the count change (m2). */}{" "}
+          <small aria-live="polite" data-testid="qm-start-count" className="text-sm font-medium opacity-75">
+            {matches !== undefined ? count("quickMatch.setup.startCount", matches) : null}
+          </small>
         </button>
       </div>
-      <div className="bottom-bar-spacer" aria-hidden />
     </form>
   );
 }
