@@ -56,11 +56,11 @@ const SHA256: Record<string, string> = {
   "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
   "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",
   // MD-1 Task 3 (capture S4 Match Day design §5, §9.3): a Match Day code's day read.
-  "capture-matchday-day.v1.json": "a926177fdeb2517337b1a4c6ac45ec3a83ef5466da10de3befc5712bb8fb772c",
+  "capture-matchday-day.v1.json": "8d26d7efee0615eba7c0acd19e56ea5c730e6ff0bf48c28c40f975595c8b743d",
   // MD-1 Task 4 (capture S4 Match Day design §6, §9.4): a Match Day code's open.
   "capture-matchday-open.v1.json": "639fdcde15f06961ab705b83cb7fb7fa7e39111c6c3a83543e1500657b2644aa",
   // MD-1 Task 6 (capture S4 Match Day design §7, §9.5): a Match Day code's approval review, its approve and its answers.
-  "capture-matchday-approval.v1.json": "f86ff8f5341c893a50cc0a1333397c5e5cfd6deffbf8e02c81de14f50835ea43",
+  "capture-matchday-approval.v1.json": "4f4fa483456285d09968a4d0f050a917d0498e34040ac8db610a3a050b2e2a92",
 };
 
 // ---------------------------------------------------------------------------------------------------------------

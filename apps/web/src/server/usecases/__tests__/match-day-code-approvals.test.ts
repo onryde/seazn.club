@@ -20,11 +20,12 @@ vi.mock("next/headers", () => ({
 }));
 
 import { sql } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
 import { appendEvent } from "@/server/engine-db";
 import { CaptureMatchdayApprovalOk, CaptureMatchdayApprovalReview, CaptureMatchdayRefusal } from "@/server/api-v1/capture-schemas";
 import { mintMatchDayCode, type MatchDayCodeRow, type MatchDayScope } from "../match-day-codes";
-import { approveForCode, reviewApprovalForCode } from "../match-day-code-approvals";
+import { approveForCode, mdRefusalOf, reviewApprovalForCode } from "../match-day-code-approvals";
 import { getMatchDayForCode } from "../match-day-code-view";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -331,22 +332,6 @@ describe.skipIf(!HAS_DB)("approvals through a Match Day code", () => {
       expect(await usesOf(code.id)).toEqual([]);
     });
 
-    it("a coded refusal with no md_ word is a 500 with no word (logged with ids only)", async () => {
-      // A draw asked of a stage with no seeding rules: 422 SEEDING_RULES_MISSING from the compute.
-      const s = await swissDivision(day);
-      const { code, token } = await codeFor(day, { kind: "competition" }, true);
-      const warn = vi.spyOn(log, "warn");
-      try {
-        expect(await refusalOf(reviewApprovalForCode(code, "draw", s.stageId))).toEqual({ status: 500, code: "INTERNAL" });
-        const line = warn.mock.calls.find((c) => String(c[1]).includes("no md_ word"));
-        expect(line, "premise: the refusal was logged").toBeDefined();
-        expect(line![0]).toEqual({ codeId: code.id, stageId: s.stageId, kind: "draw", upstream: "SEEDING_RULES_MISSING", status: 422 });
-        expect(JSON.stringify(warn.mock.calls)).not.toContain(token);
-      } finally {
-        warn.mockRestore();
-      }
-    });
-
     it("a draw with nobody left to seed: the review and the approve are MD_STALE (review M4)", async () => {
       const d = await drawDivision(day);
       const { code } = await codeFor(day, { kind: "competition" }, true);
@@ -376,6 +361,62 @@ describe.skipIf(!HAS_DB)("approvals through a Match Day code", () => {
       }
       const seats = await seatsOf(d.finalId);
       expect([seats.home_entrant_id, seats.away_entrant_id].sort(), "the approval committed").toEqual([...d.winners].sort());
+    });
+  });
+
+  describe("fix round 2: a locked schedule is the desk's, a coded 4xx keeps its status, a fault keeps its cause", () => {
+    const lotsOf = (stageId: string) => count(sql<{ n: number }[]>`select count(*)::int as n from stage_lots_draws where stage_id = ${stageId}`);
+    const lock = (stageId: string) =>
+      sql`update divisions set schedule_locked = true where id = (select division_id from stages where id = ${stageId})`;
+
+    it("a schedule-locked division lists no approval in the day read, and GET and POST are MD_NO_APPROVE for both kinds", async () => {
+      const d = await drawDivision(day);
+      const s = await swissDivision(day);
+      await decideRoundOne(day, s);
+      const { code } = await codeFor(day, { kind: "competition" }, true);
+      const listed = async () => (await getMatchDayForCode(code, NOW)).approvals.map((a) => a.stage_id).sort();
+      expect(await listed(), "premise: both approvals listed while unlocked").toEqual([d.koId, s.stageId].sort());
+      // The Swiss review before the lock: its hash and round for the POST, and its lots draw committed.
+      const swiss = await reviewApprovalForCode(code, "swiss", s.stageId);
+      const draft = (await draftOf(d.koId))!;
+      const proposals = await proposalsOf(d.koId);
+      const lots = await lotsOf(s.stageId);
+      await lock(d.koId);
+      await lock(s.stageId);
+
+      expect(await listed(), "the day read lists neither").toEqual([]);
+      const refused = { status: 403, code: "MD_NO_APPROVE" };
+      expect(await refusalOf(reviewApprovalForCode(code, "swiss", s.stageId)), "GET swiss").toEqual(refused);
+      expect(await refusalOf(approveForCode(code, "swiss", s.stageId, { hash: swiss.hash, round: swiss.round })), "POST swiss").toEqual(refused);
+      // No live draft: a review let through would compute one.
+      await sql`update stage_seed_proposals set status = 'stale' where id = ${draft}`;
+      expect(await refusalOf(reviewApprovalForCode(code, "draw", d.koId)), "GET draw").toEqual(refused);
+      expect(await refusalOf(approveForCode(code, "draw", d.koId, { hash: draft })), "POST draw").toEqual(refused);
+
+      expect(await seatedIn(s.stageId, 2), "no round paired").toBe(0);
+      expect(await lotsOf(s.stageId), "no lots drawn").toBe(lots);
+      expect(await seatsOf(d.finalId), "no draw seated").toEqual({ home_entrant_id: null, away_entrant_id: null });
+      expect((await proposalsOf(d.koId)).map((p) => p.id), "no draft computed").toEqual(proposals.map((p) => p.id));
+      expect(await usesOf(code.id)).toEqual([]);
+    });
+
+    it("a draw asked of a Swiss stage is 422 with no word, like a Swiss round asked of a knockout (N4); warned with ids only", async () => {
+      const s = await swissDivision(day);
+      const d = await drawDivision(day);
+      const { code, token } = await codeFor(day, { kind: "competition" }, true);
+      const warn = vi.spyOn(log, "warn");
+      try {
+        // The compute's 422 SEEDING_RULES_MISSING: a coded 4xx with no md_ word keeps its status and loses its word.
+        expect(await refusalOf(reviewApprovalForCode(code, "draw", s.stageId))).toEqual({ status: 422, code: undefined });
+        // The reverse: the Swiss usecase's own codeless 422.
+        expect(await refusalOf(reviewApprovalForCode(code, "swiss", d.koId))).toEqual({ status: 422, code: undefined });
+        const line = warn.mock.calls.find((c) => String(c[1]).includes("no md_ word"));
+        expect(line, "premise: the refusal was logged").toBeDefined();
+        expect(line![0]).toEqual({ codeId: code.id, stageId: s.stageId, kind: "draw", upstream: "SEEDING_RULES_MISSING", status: 422 });
+        expect(JSON.stringify(warn.mock.calls)).not.toContain(token);
+      } finally {
+        warn.mockRestore();
+      }
     });
   });
 
@@ -547,5 +588,23 @@ describe.skipIf(!HAS_DB)("approvals through a Match Day code", () => {
         expect(text).not.toContain("md_");
       }
     });
+  });
+});
+
+describe("mdRefusalOf: what leaves an md_ route (fix round 2)", () => {
+  const asked = { codeId: randomUUID(), stageId: randomUUID(), kind: "swiss" as const };
+  it("SCHEDULE_LOCKED is MD_NO_APPROVE, 403", () => {
+    const out = mdRefusalOf(asked, new HttpError(422, "locked", "SCHEDULE_LOCKED")) as HttpError;
+    expect({ status: out.status, code: out.code }).toEqual({ status: 403, code: "MD_NO_APPROVE" });
+  });
+  it("a coded 5xx is a fault: 500 INTERNAL with the upstream error as its cause (N2)", () => {
+    const upstream = new HttpError(503, "upstream down", "SOMETHING_UPSTREAM");
+    const out = mdRefusalOf(asked, upstream) as HttpError;
+    expect({ status: out.status, code: out.code }).toEqual({ status: 500, code: "INTERNAL" });
+    expect(out.cause).toBe(upstream);
+  });
+  it("a coded 4xx with no md_ word keeps its status and loses its word", () => {
+    const out = mdRefusalOf(asked, new HttpError(400, "bad", "SOMETHING_ELSE")) as HttpError;
+    expect({ status: out.status, code: out.code }).toEqual({ status: 400, code: undefined });
   });
 });

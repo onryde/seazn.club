@@ -12,12 +12,15 @@ import "server-only";
 // Only an md_ bearer resolved by `matchDayCodeOf` reaches these functions: they take the code's row, never an AuthCtx.
 //
 // Every refusal is one of the md_ words (capture-schemas.ts `CaptureMatchdayRefusalCode`): the stage usecases' own codes
-// are translated here (`inMdWords`), and no other word ever leaves — a coded refusal it has no md_ word for is a 500. The
-// only other answers are the v1 envelope's own, by status (a codeless 404 or 422).
+// are translated here (`mdRefusalOf`), and no other word ever leaves — a coded 4xx it has no md_ word for keeps its status
+// and loses its word, and only a real fault is a 500. The other answers are the v1 envelope's own, by status (a codeless
+// 404 or 422). A division whose schedule is locked is the desk's (the controller's ruling, Task 6 fix round 2): the day
+// read lists none of its approvals, and both doors answer it MD_NO_APPROVE.
 import { EngineError } from "@seazn/engine/core";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { DEFAULT_LOCALE, getDictionary } from "@/lib/i18n";
+import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
 import { assertUuid } from "@/server/api-v1/auth";
 import { CaptureMatchdayRefusalCode, type CaptureMatchdayApprovalOk, type CaptureMatchdayApprovalReview } from "@/server/api-v1/capture-schemas";
 import { ENGINE_HTTP } from "@/server/api-v1/http";
@@ -69,31 +72,50 @@ const MD_MESSAGE: Record<MdWord, string> = {
 const MD_WORDS: ReadonlySet<string> = new Set(CaptureMatchdayRefusalCode.options);
 
 /** Who asked, for a log line: ids only, never the token. */
-type Asked = { codeId: string; stageId: string; kind: ApprovalKind };
+export type Asked = { codeId: string; stageId: string; kind: ApprovalKind };
+
+/** A locked schedule: the desk's to unlock, so the phone's tick does not reach it. */
+const LOCKED = (): HttpError =>
+  new HttpError(403, "this division's schedule is locked: approve on the web desk", "MD_NO_APPROVE");
 
 /**
- * `run`, with every refusal it raises put in md_ words (review fix I1: no other word leaves an md_ route):
- *  - an md_ word already (the Swiss pair's MD_ALREADY, MD_STALE) stays as it is;
+ * The error an approval answers for `e`, a refusal raised by a stage usecase, in md_ words (review fix I1, and the
+ * controller's rulings of fix round 2):
+ *  - an md_ word already (the Swiss pair's MD_ALREADY, MD_STALE), a codeless HttpError (404 not found, 422 a round that
+ *    is not a whole number, 422 "only a Swiss stage …") and any error with no code are unchanged: the envelope answers
+ *    them by status;
+ *  - SCHEDULE_LOCKED is MD_NO_APPROVE, 403: a locked schedule is the desk's;
  *  - a word `MD_WORD_OF` names becomes that md_ word, 409;
  *  - any other 409 (an HttpError, or an engine code `ENGINE_HTTP` answers 409) is MD_STALE: the state moved under the
  *    review, so review again — SEEDING_FIXTURES_ALREADY_FILLED among them (a seat filled after the draft: a desk edit,
  *    or a stage already seeded when its source completed);
- *  - any other CODED refusal (a 422 SEEDING_RULES_MISSING, SCHEDULE_LOCKED, …) is a 500 with no word, logged with ids;
- *  - a codeless HttpError (404 not found, 422 a round that is not a whole number) and any other error are unchanged:
- *    the envelope answers them by status.
+ *  - any other coded 4xx (a 422 SEEDING_RULES_MISSING: a draw asked of a Swiss stage) keeps its status with no word,
+ *    logged at warn with ids only: a client's or an organiser's state, never a page;
+ *  - the rest (a coded 5xx, an engine code with no status) is a fault: 500, with the upstream error as its `cause` (N2).
  */
+export function mdRefusalOf(asked: Asked, e: unknown): unknown {
+  const code = e instanceof HttpError ? e.code : EngineError.is(e) ? e.code : undefined;
+  if (code === undefined || MD_WORDS.has(code)) return e;
+  if (code === SCHEDULE_LOCKED_CODE) return LOCKED();
+  const status = e instanceof HttpError ? e.status : ENGINE_HTTP[code as keyof typeof ENGINE_HTTP];
+  const word = MD_WORD_OF[code] ?? (status === 409 ? "MD_STALE" : undefined);
+  if (word !== undefined) return new HttpError(409, MD_MESSAGE[word], word);
+  if (status !== undefined && status >= 400 && status < 500) {
+    log.warn({ ...asked, upstream: code, status }, "match day approval: a refusal with no md_ word, answered by its status");
+    return new HttpError(status, "this approval cannot be made with a Match Day code");
+  }
+  log.warn({ ...asked, upstream: code, status }, "match day approval: a fault, answered 500");
+  const fault = new HttpError(500, "this approval could not be completed", "INTERNAL");
+  fault.cause = e;
+  return fault;
+}
+
+/** `run`, with every refusal it raises put in md_ words (`mdRefusalOf`). */
 async function inMdWords<T>(asked: Asked, run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (e) {
-    const engine = EngineError.is(e);
-    const code = e instanceof HttpError ? e.code : engine ? e.code : undefined;
-    if (code === undefined || MD_WORDS.has(code)) throw e;
-    const status = e instanceof HttpError ? e.status : ENGINE_HTTP[code as keyof typeof ENGINE_HTTP];
-    const word = MD_WORD_OF[code] ?? (status === 409 ? "MD_STALE" : undefined);
-    if (word !== undefined) throw new HttpError(409, MD_MESSAGE[word], word);
-    log.warn({ ...asked, upstream: code, status }, "match day approval: a refusal with no md_ word, answered 500");
-    throw new HttpError(500, "this approval could not be completed", "INTERNAL");
+    throw mdRefusalOf(asked, e);
   }
 }
 
@@ -108,13 +130,16 @@ type FixtureScope = Omit<ScopeFixture, "competition_id" | "stage_status" | "divi
 /**
  * The stage as the code's org sees it: 404 when it cannot, 403 MD_OUT_OF_SCOPE when the code does not cover it (another
  * competition, an archived division — the day read lists live divisions only — or, for a narrowed code, no match of the
- * stage on its courts on its day). Answers the division's name.
+ * stage on its courts on its day). Answers the division's name, and whether its schedule is locked.
  */
-async function stageForCode(code: MatchDayCodeRow, stageId: string): Promise<{ divisionName: string }> {
+async function stageForCode(code: MatchDayCodeRow, stageId: string): Promise<{ divisionName: string; locked: boolean }> {
   assertUuid(stageId, "stage");
   return withTenant(code.orgId, async (tx) => {
-    const [stage] = await tx<{ competition_id: string; division_name: string; status: string; division_live: boolean }[]>`
-      select d.competition_id, d.name as division_name, s.status, (d.archived_at is null) as division_live
+    const [stage] = await tx<
+      { competition_id: string; division_name: string; status: string; division_live: boolean; locked: boolean }[]
+    >`
+      select d.competition_id, d.name as division_name, s.status, (d.archived_at is null) as division_live,
+             d.schedule_locked as locked
         from stages s join divisions d on d.id = s.division_id
        where s.id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
@@ -131,7 +156,7 @@ async function stageForCode(code: MatchDayCodeRow, stageId: string): Promise<{ d
     if (!stage.division_live || !stageInScope(code, stage.competition_id, judged)) {
       throw new HttpError(403, "this stage is not in this Match Day code's scope", "MD_OUT_OF_SCOPE");
     }
-    return { divisionName: stage.division_name };
+    return { divisionName: stage.division_name, locked: stage.locked };
   });
 }
 
@@ -235,6 +260,12 @@ async function drawReview(code: MatchDayCodeRow, stageId: string, divisionName: 
 // The two doors.
 // ---------------------------------------------------------------------------------------------------------------
 
+/** A draw of a locked division is MD_NO_APPROVE, asked here: the seed proposal's usecases read no lock. A Swiss round's
+ *  lock is the Swiss usecases' own, checked inside their transaction (SCHEDULE_LOCKED, put in md_ words above). */
+function requireUnlockedDraw(kind: ApprovalKind, locked: boolean): void {
+  if (kind === "draw" && locked) throw LOCKED();
+}
+
 /**
  * Review an approval (§7 "Review opens the proposal read-only"): the rows exactly as the server computed them, the `hash`
  * the approve hands back (Swiss: the preview's input hash; draw: the proposal's id), `round` (Swiss: the round awaiting
@@ -243,15 +274,16 @@ async function drawReview(code: MatchDayCodeRow, stageId: string, divisionName: 
  */
 export async function reviewApprovalForCode(code: MatchDayCodeRow, kind: ApprovalKind, stageId: string): Promise<Review> {
   requireCanApprove(code);
-  const { divisionName } = await stageForCode(code, stageId);
+  const { divisionName, locked } = await stageForCode(code, stageId);
+  requireUnlockedDraw(kind, locked);
   return kind === "swiss" ? swissReview(code, stageId, divisionName) : drawReview(code, stageId, divisionName);
 }
 
 /**
  * Approve what the review showed (§7 "Approve"): Swiss — pair `round` if `hash` still describes its inputs; draw —
  * confirm the proposal `hash` with no edits and no tie picks. The first of two phones wins; the second is MD_ALREADY.
- * Refusals: MD_NO_APPROVE, MD_OUT_OF_SCOPE, MD_STALE, MD_ALREADY, MD_TIES; 404 for an unknown stage or proposal; 422 for
- * a Swiss approve without a whole `round`. Each approve writes one `match_day_code_uses` row once it has committed
+ * Refusals: MD_NO_APPROVE (no tick, or the division's schedule locked), MD_OUT_OF_SCOPE, MD_STALE, MD_ALREADY, MD_TIES;
+ * 404 for an unknown stage or proposal; 422 for a Swiss approve without a whole `round`, or a kind the stage has not. Each approve writes one `match_day_code_uses` row once it has committed
  * (a refusal writes none).
  */
 export async function approveForCode(
@@ -261,7 +293,7 @@ export async function approveForCode(
   input: { hash: string; round?: number | null },
 ): Promise<CaptureMatchdayApprovalOk> {
   requireCanApprove(code);
-  await stageForCode(code, stageId);
+  requireUnlockedDraw(kind, (await stageForCode(code, stageId)).locked);
   const actor = matchDayActor(code);
   const asked: Asked = { codeId: code.id, stageId, kind };
   if (kind === "swiss") {

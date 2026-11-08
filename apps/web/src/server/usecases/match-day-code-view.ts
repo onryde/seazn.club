@@ -186,13 +186,15 @@ function swissWaiting(fixtures: readonly StageFixtureRow[]): boolean {
 }
 
 /** The approvals waiting in the code's scope (§7), in the competition's division order then stage order. Listed whatever
- *  the code's "can approve draws" tick: without it the phone shows the banner with no button (§7, "my call"). */
+ *  the code's "can approve draws" tick: without it the phone shows the banner with no button (§7, "my call"). A division
+ *  whose schedule is locked lists none: a locked schedule is a desk matter (the controller's ruling, MD-1 Task 6 fix
+ *  round 2), and the approval routes answer it MD_NO_APPROVE. */
 async function readApprovals(tx: Tx, code: MatchDayCodeRow): Promise<MatchDayApproval[]> {
   const stages = await tx<StageRow[]>`
     select s.id, s.division_id, d.name as division_name, s.kind, s.name, s.seq, s.status,
            s.progression ->> 'timing' as timing, s.progression
       from stages s join divisions d on d.id = s.division_id
-     where d.competition_id = ${code.competitionId} and d.archived_at is null
+     where d.competition_id = ${code.competitionId} and d.archived_at is null and not d.schedule_locked
      order by d.created_at, d.id, s.seq, s.id`;
   const open = stages.filter((s) => s.status !== "complete" && (s.kind === "swiss" || s.timing === "setup"));
   if (open.length === 0) return [];

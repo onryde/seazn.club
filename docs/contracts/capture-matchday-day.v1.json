@@ -635,7 +635,7 @@
       }
     },
     "approvals": {
-      "description": "The approvals waiting in the code's scope, listed whether or not can_approve: a knockout whose draw (the seed proposal) is owed, or a Swiss stage whose previous round is complete and whose next round is unpaired. A narrowed code lists a stage only when one of its matches today is on its courts.",
+      "description": "The approvals waiting in the code's scope, listed whether or not can_approve: a knockout whose draw (the seed proposal) is owed, or a Swiss stage whose previous round is complete and whose next round is unpaired. A narrowed code lists a stage only when one of its matches today is on its courts. A division whose schedule is locked lists none: the web desk's.",
       "type": "array",
       "items": {
         "type": "object",
