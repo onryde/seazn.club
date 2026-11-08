@@ -432,12 +432,65 @@ describe("scrubSentryEvent — the origin stamp (x-seazn-origin-secret)", () => 
     expect(checked).toBe(12);
   });
 
-  it("the input event is never mutated, and an event without the stamp is returned exactly as it came", () => {
-    const event = stampedEvent("https://seazn.club/live/club", HEADER);
+  // Fix round 2, M-a: a rule whose header NAME is mistyped (no `secret` in it, so the SDK's deny list passes the value in
+  // clear) must still never reach Sentry. Every header whose name STARTS with `x-seazn-origin`, any case, is redacted, and
+  // so is its root-span attribute (`http.request.header.x_seazn_origin…`). The names are the brief's typos, typed here.
+  it("a mistyped stamp name (any header starting x-seazn-origin, any case) is redacted in the request, the trace data and every span, even where the SDK leaves it in clear; a name outside the prefix is kept (counts reported)", () => {
+    const typos = ["x-seazn-origin", "x-seazn-origin-secert", "X-Seazn-Origin-Stamp", "x-seazn-origin-secret-2", "X-SEAZN-ORIGINSECRET"];
+    let checked = 0;
+    let inClear = 0;
+    for (const name of typos) {
+      const attrs = requestHeaderSpanAttributes({ [name]: STAMP, "user-agent": "ua/1" }, false);
+      const [stampKey, ...more] = Object.keys(attrs).filter((k) => k.includes("seazn_origin"));
+      expect(more, `premise: one attribute for ${name}`).toEqual([]);
+      if (attrs[stampKey!] === STAMP) inClear++;
+      const event = transaction({
+        name: "GET /live/club",
+        traceData: { ...attrs },
+        spans: [{ description: "GET /live/club", data: { ...attrs } }],
+        request: { method: "GET", url: "https://seazn.club/live/club", headers: { [name]: STAMP, "user-agent": "ua/1" } },
+      }) as Event;
+      const out = scrubSentryEvent(event);
+      expect(JSON.stringify(out), name).not.toContain(STAMP);
+      expect(out.request?.headers?.[name], name).toBe("[redacted]");
+      expect(out.contexts?.trace?.data?.[stampKey!], name).toBe("[redacted]");
+      expect(out.spans?.[0]?.data?.[stampKey!], name).toBe("[redacted]");
+      checked++;
+    }
+    expect(checked).toBe(5);
+    // The SDK masks only the names carrying `secret`: the rest reach the scrub in clear, so this test witnesses the scrub.
+    expect(inClear, "typos the SDK passes in clear").toBeGreaterThan(0);
+
+    const outside = ["x-seazn-orig", "x-other-seazn-origin", "seazn-origin-secret"];
+    const kept: Record<string, string> = Object.fromEntries(outside.map((n) => [n, "keep-me"]));
+    const keptAttrs = requestHeaderSpanAttributes(kept, false);
+    const out = scrubSentryEvent(
+      transaction({ name: "GET /", traceData: { ...keptAttrs }, spans: [{ description: "x", data: { ...keptAttrs } }], request: { headers: kept } }) as Event,
+    );
+    expect(out.request?.headers).toEqual(kept);
+    expect(out.contexts?.trace?.data).toEqual(keptAttrs);
+    expect(out.spans?.[0]?.data).toEqual(keptAttrs);
+    expect(Object.keys(keptAttrs), "outside names counted").toHaveLength(3);
+  });
+
+  it("the input event is never mutated - its request headers, trace data and span data - and an event without the stamp is returned exactly as it came", () => {
+    const attrs = requestHeaderSpanAttributes({ [HEADER]: STAMP, "x-seazn-origin-secert": STAMP, "user-agent": "ua/1" }, false);
+    const event = transaction({
+      name: "GET /live/club",
+      traceData: { ...attrs },
+      spans: [{ description: "GET /live/club", data: { ...attrs } }, { description: "select", data: { "db.system": "postgresql" } }],
+      request: { method: "GET", url: "https://seazn.club/live/club", headers: { [HEADER]: STAMP, "x-seazn-origin-secert": STAMP } },
+    }) as Event;
     const before = JSON.stringify(event);
+    expect(before, "premise: the stamp is in all three places").toContain(STAMP);
     scrubSentryEvent(event);
     expect(JSON.stringify(event)).toBe(before);
-    const unstamped: Event = { event_id: "u1", request: { url: "https://seazn.club/live/club", headers: { "user-agent": "ua/1" } } };
+    const unstamped = transaction({
+      name: "GET /live/club",
+      traceData: { "http.request.header.user_agent": "ua/1" },
+      spans: [{ description: "select", data: { "db.system": "postgresql" } }],
+      request: { url: "https://seazn.club/live/club", headers: { "user-agent": "ua/1" } },
+    }) as Event;
     expect(scrubSentryEvent(unstamped)).toEqual(unstamped);
   });
 });

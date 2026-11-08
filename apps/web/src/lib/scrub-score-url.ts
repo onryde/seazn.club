@@ -531,36 +531,40 @@ function scrubJoinCodeKeys<E extends Event>(event: E): E {
   return hit.n ? { ...event, request: { ...event.request, query_string: scrubbed } } : event;
 }
 
-/** OUR Cloudflare zone's origin stamp: the header lib/client-ip.ts reads, spelled here because this module is bundled for the
- *  browser and that one imports `node:net`/`node:crypto` (both modules' tests pin the same literal). Its value is the
- *  CF_ORIGIN_SECRET. Every server event carries its request's headers, and @sentry/nextjs copies them onto the root span. */
-const ORIGIN_STAMP_HEADER = "x-seazn-origin-secret";
-/** The root span attribute the SDK writes the header into (`httpHeadersToSpanAttributes`: the name lower-cased, `-` → `_`). */
-const ORIGIN_STAMP_ATTRIBUTE = `http.request.header.${ORIGIN_STAMP_HEADER.replace(/-/g, "_")}`;
+/** OUR Cloudflare zone's origin stamp: lib/client-ip.ts reads `x-seazn-origin-secret`, and this module (bundled for the
+ *  browser, so it cannot import that node-only one) redacts every header whose name STARTS with this prefix, any case - so a
+ *  rule whose name is mistyped (and so escapes the SDK's `secret` deny list) still never reaches Sentry in clear.
+ *  client-ip.test.ts drives one header name through both modules. Its value is the CF_ORIGIN_SECRET; every server event
+ *  carries its request's headers, and @sentry/nextjs copies them onto the root span. */
+const ORIGIN_STAMP_PREFIX = "x-seazn-origin";
+/** The root span attributes the SDK writes such a header into (`httpHeadersToSpanAttributes`: lower-cased, `-` → `_`). */
+const ORIGIN_STAMP_ATTRIBUTE_PREFIX = `http.request.header.${ORIGIN_STAMP_PREFIX.replace(/-/g, "_")}`;
 const STAMP_REDACTED = "[redacted]";
 
-/** `record` with every key equal (any case) to `key` redacted - a copy - or `undefined` when there is none. */
-function redactKey<T extends Record<string, unknown>>(record: T, key: string): T | undefined {
+/** `record` with every key that starts (any case) with `prefix` redacted - a copy - or `undefined` when there is none. */
+function redactPrefixed<T extends Record<string, unknown>>(record: T, prefix: string): T | undefined {
   let copy: T | undefined;
-  for (const k of Object.keys(record)) if (k.toLowerCase() === key) (copy ??= { ...record })[k as keyof T] = STAMP_REDACTED as T[keyof T];
+  for (const k of Object.keys(record)) {
+    if (k.toLowerCase().startsWith(prefix)) (copy ??= { ...record })[k as keyof T] = STAMP_REDACTED as T[keyof T];
+  }
   return copy;
 }
 
 /**
  * Any event loses the origin stamp's VALUE wherever the SDK puts it: `request.headers`, and its `http.request.header.*`
- * attribute in the trace context's data and in every span's data (the SDK's deny list already masks the name; this does not
+ * attribute in the trace context's data and in every span's data (the SDK's deny list masks the right name; this does not
  * depend on it). The key stays, as "[redacted]". A copy: the input is never mutated.
  */
 function dropOriginStamp<E extends Event>(event: E): E {
   let next: E = event;
-  const headers = event.request?.headers ? redactKey(event.request.headers, ORIGIN_STAMP_HEADER) : undefined;
+  const headers = event.request?.headers ? redactPrefixed(event.request.headers, ORIGIN_STAMP_PREFIX) : undefined;
   if (headers) next = { ...next, request: { ...next.request, headers } };
   const trace = next.contexts?.trace;
-  const traceData = trace && isData(trace.data) ? redactKey(trace.data, ORIGIN_STAMP_ATTRIBUTE) : undefined;
+  const traceData = trace && isData(trace.data) ? redactPrefixed(trace.data, ORIGIN_STAMP_ATTRIBUTE_PREFIX) : undefined;
   if (trace && traceData) next = { ...next, contexts: { ...next.contexts, trace: { ...trace, data: traceData } } };
   let spans: typeof event.spans;
   next.spans?.forEach((span, i) => {
-    const data = isData(span.data) ? redactKey(span.data, ORIGIN_STAMP_ATTRIBUTE) : undefined;
+    const data = isData(span.data) ? redactPrefixed(span.data, ORIGIN_STAMP_ATTRIBUTE_PREFIX) : undefined;
     if (data) (spans ??= next.spans!.slice())[i] = { ...span, data };
   });
   if (spans) next = { ...next, spans };

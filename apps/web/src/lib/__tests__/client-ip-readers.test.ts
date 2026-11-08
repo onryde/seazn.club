@@ -114,28 +114,49 @@ describe("the client's IP has one reader: lib/client-ip.ts", () => {
   // The literal scan above has one way round it: a header NAME exported from the reader and read through elsewhere
   // (`h.get(XFF)`). So the reader exports no string constant at all (fix round 1, M5), and no file - tests included - imports
   // from it anything but its non-string exports.
-  it("client-ip.ts exports no string constant, and no file imports one from it (import sites counted; zero is a failure)", () => {
+  it("client-ip.ts exports no string constant - declared, listed (`export { X }`) or default - and no file imports one from it, by name, namespace, default, re-export or import() (import sites counted; zero is a failure)", () => {
     const reader = code("src/lib/client-ip.ts", readFileSync(join(WEB, "src/lib/client-ip.ts"), "utf8"));
+    const localStrings = new Set([...reader.matchAll(/(?:const|let|var)\s+(\w+)\s*(?::[^=]+)?=\s*["'`]/g)].map((m) => m[1]!));
     const exported = [...reader.matchAll(/export\s+(?:async\s+)?(?:function\*?|const|let|var|class)\s+(\w+)/g)].map((m) => m[1]!);
     const strings = [...reader.matchAll(/export\s+(?:const|let|var)\s+(\w+)\s*(?::[^=]+)?=\s*["'`]/g)].map((m) => m[1]!);
+    // `export { local, local as name }` (no `from`): each listed name is an export, a string one when its local is.
+    for (const m of reader.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}(?!\s*from)/g)) {
+      for (const spec of m[1]!.split(",")) {
+        const [local, alias] = spec.trim().replace(/^type\s+/, "").split(/\s+as\s+/) as [string, string | undefined];
+        if (!local) continue;
+        exported.push(alias ?? local);
+        if (localStrings.has(local)) strings.push(alias ?? local);
+      }
+    }
+    if (/export\s+default\s+["'`]/.test(reader)) strings.push("default");
     expect(exported, "the reader's own exports are read (positive control)").toContain("clientIp");
+    expect(localStrings.size, "the reader's own string constants are read (positive control)").toBeGreaterThan(0);
     expect(strings, "string constants exported from lib/client-ip.ts").toEqual([]);
     const importable = new Set(exported.filter((name) => !strings.includes(name)));
+    const FROM = String.raw`\s+from\s+["'][^"']*\/client-ip["']`;
+    const named = new RegExp(String.raw`(?:import|export)\s+(?:type\s+)?\{([^}]*)\}` + FROM, "g");
+    const whole = [
+      [new RegExp(String.raw`import\s+(?:type\s+)?\*\s+as\s+\w+` + FROM, "g"), "a namespace import"],
+      [new RegExp(String.raw`export\s+\*(?:\s+as\s+\w+)?` + FROM, "g"), "a namespace re-export"],
+      [new RegExp(String.raw`import\s+(?:type\s+)?\w+\s*(?:,\s*\{[^}]*\})?` + FROM, "g"), "a default import"],
+      [/import\(\s*["'][^"']*\/client-ip["']\s*\)/g, "a dynamic import()"],
+    ] as const;
     const sites: string[] = [];
     const bad: string[] = [];
     for (const file of everyFile(SRC)) {
       const text = readFileSync(join(WEB, file), "utf8");
       if (!text.includes("client-ip")) continue;
-      for (const m of text.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+["'][^"']*\/client-ip["']/g)) {
+      for (const m of text.matchAll(named)) {
         sites.push(file);
         for (const spec of m[1]!.split(",")) {
           const name = spec.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]!;
           if (name && !importable.has(name)) bad.push(`${file}: ${name}`);
         }
       }
+      for (const [re, what] of whole) bad.push(...Array.from(text.matchAll(re), () => `${file}: ${what} (every name it reaches is unchecked)`));
     }
     console.info(`client-ip sweep: ${sites.length} named imports of lib/client-ip; importable: ${[...importable].join(", ")}`);
     expect(sites.length, "import sites found").toBeGreaterThan(0);
-    expect(bad, `names imported from lib/client-ip that it does not export as a function or a list:\n  ${bad.join("\n  ")}\n`).toEqual([]);
+    expect(bad, `imports of lib/client-ip outside its function and list exports:\n  ${bad.join("\n  ")}\n`).toEqual([]);
   });
 });
