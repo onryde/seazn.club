@@ -15,7 +15,7 @@ export default function PrivacyPage() {
       <MarketingNav />
       <main className="mx-auto max-w-3xl px-4 py-16">
         <h1 className="mb-2 text-3xl font-bold text-purple-900">Privacy Policy</h1>
-        <p className="mb-8 text-sm text-slate-400">Last updated: 29 October 2026</p>
+        <p className="mb-8 text-sm text-slate-400">Last updated: 8 November 2026</p>
         <div className="prose prose-slate max-w-none space-y-6 text-sm text-slate-700">
 
           <section>
@@ -33,6 +33,8 @@ export default function PrivacyPage() {
               <li><strong>Usage data:</strong> product analytics events (e.g. "first tournament created", page views) collected via PostHog, only with your consent. Withdraw anytime by clearing cookies or rejecting the cookie banner.</li>
               <li><strong>Communication preferences:</strong> email suppression list (bounces / complaints).</li>
               <li><strong>Consent records:</strong> when you create an account or submit a competition registration we record the time and policy version of your acceptance, so we can demonstrate it later.</li>
+              <li><strong>Sponsor proof-of-play stills:</strong> when an organisation streams a match with the score overlay and one of its sponsors&apos; cards appears on air, we capture one still picture of the stream a moment later. The still can show players. It is kept in private storage with the record of that showing, and is shown to that sponsor only through a private report link that the organisation creates and can revoke; each view uses a web address that expires within an hour. Deleting the sponsor ends its report links, so its stills are no longer shown to anyone, but they stay with the organisation&apos;s records of its showings. They are deleted when the organisation&apos;s account is deleted, and a still whose showing was never recorded is deleted one day after the stream ends.</li>
+              <li><strong>Sponsor short links:</strong> when someone follows a sponsor&apos;s short link (seazn.club/s/&hellip;), we count the click. To count repeat taps from the same visitor once, we keep a one-way SHA-256 hash of the visitor&apos;s IP address for 30 seconds; for a link that does not exist, we keep the hash for one minute, to limit guessing. The IP address itself is never stored.</li>
             </ul>
           </section>
 
