@@ -46,11 +46,13 @@ async function createThroughSetup(page: Page, sides: string[], format: "League" 
   await expect(page).toHaveURL(/\/q\/[^/?#]+$/);
 }
 
-async function atEachWidth(page: Page, check: (width: number) => Promise<void>) {
+/** Each width in turn: reloaded by default (the page as it first paints there); `{ reload: false }` keeps the page on
+ *  screen as it is and only resizes it, for a state a reload would not bring back (a flash whose `?e=` is spent). */
+async function atEachWidth(page: Page, check: (width: number) => Promise<void>, { reload = true } = {}) {
   let checked = 0;
   for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
-    await page.reload();
+    if (reload) await page.reload();
     await check(width);
     await expectNoHorizontalScroll(page);
     checked++;
@@ -144,7 +146,10 @@ test("Score (Task 6): a post for the waiting final lands back on the home with t
   await expect(waiting.getByTestId("qm-score"), "the home offers no Score on a waiting match (C18)").toHaveCount(0);
   const finalId = await waiting.getAttribute("data-fixture-id");
   expect(finalId).toMatch(/^[0-9a-f-]{36}$/);
-  // A stale page or a crafted post: the same form the home draws, submitted for the final.
+  // A stale page or a crafted post: the same form the home draws, submitted for the final. Its 303 is caught as the
+  // redirected GET: the URL holds `?e=` only until the home's ClearFlashParam takes the spent parameter out (T6 m2).
+  const refusal = `${home}?e=QUICK_MATCH_SIDES_UNKNOWN`;
+  const landed = page.waitForRequest((r) => r.method() === "GET" && r.url().endsWith(refusal));
   await page.evaluate((action) => {
     const form = document.createElement("form");
     form.method = "post";
@@ -152,14 +157,26 @@ test("Score (Task 6): a post for the waiting final lands back on the home with t
     document.body.append(form);
     form.submit();
   }, `${home}/score/${finalId}`);
-  await expect(page).toHaveURL(new RegExp(`${home}\\?e=QUICK_MATCH_SIDES_UNKNOWN$`));
-  await atEachWidth(page, async (width) => {
-    const flash = page.getByTestId("qm-flash");
-    await expect(flash, `${width}`).toHaveText("That match can't be scored yet: it waits for earlier results.");
-    await expect(flash, `${width}`).toHaveAttribute("role", "alert");
-    await expect(flash, `${width}: in view at the top`).toBeInViewport();
-    await expect(page.getByTestId("qm-hero"), `${width}`).toContainText("Up next · Semi-final");
-  });
+  expect((await landed).redirectedFrom()?.method(), "the post's 303 landed on the refusal").toBe("POST");
+  // The spent ?e= leaves the URL, and the flash stays on screen: a plain replaceState, which Next's router mirrors from
+  // its own history state without asking the server again. So the widths are checked by resizing, never by a reload.
+  await expect(page).toHaveURL(new RegExp(`${home}$`));
+  await atEachWidth(
+    page,
+    async (width) => {
+      const flash = page.getByTestId("qm-flash");
+      await expect(flash, `${width}`).toHaveText("That match can't be scored yet: it waits for earlier results.");
+      await expect(flash, `${width}`).toHaveAttribute("role", "alert");
+      await expect(flash, `${width}: in view at the top`).toBeInViewport();
+      await expect(page.getByTestId("qm-hero"), `${width}`).toContainText("Up next · Semi-final");
+      await expect(page, `${width}: the URL stays clean`).toHaveURL(new RegExp(`${home}$`));
+    },
+    { reload: false },
+  );
+  // What m2 is for: a reload of the page (or a shared or bookmarked copy of its URL) prints no stale refusal.
+  await page.reload();
+  await expect(page.getByTestId("qm-hero"), "the home itself is there").toContainText("Up next · Semi-final");
+  await expect(page.getByTestId("qm-flash")).toHaveCount(0);
 });
 
 test("home (Task 5): an unknown link is the dead screen at 320, 768 and 1280, and it offers a new quick match", async ({ guest: page }) => {
