@@ -87,8 +87,16 @@ interface Rig {
  * A live football match open on the console (A) and on its device link (B).
  * `skewMs` sets B's own clock that far from true: `page.clock` moves `Date`
  * in B's page only, never the server's `Date` header, which is the point.
+ * `beforeDevice` runs on the console after it mounts and before B opens, so a
+ * test can have the match's clock already running when B first loads.
  */
-async function rig(page: Page, browser: Browser, label: string, skewMs = 0): Promise<Rig> {
+async function rig(
+  page: Page,
+  browser: Browser,
+  label: string,
+  skewMs = 0,
+  beforeDevice?: (fx: RosteredFixture) => Promise<void>,
+): Promise<Rig> {
   const fx = await seedRosteredFixture(page.request, {
     label: `Shared Clock ${label} ${TAG}`,
     sportKey: "football",
@@ -103,6 +111,7 @@ async function rig(page: Page, browser: Browser, label: string, skewMs = 0): Pro
     label: `Shared Clock ${label} ${TAG}`,
   });
   expect(minted.status, `mint device link: ${JSON.stringify(minted.error)}`).toBe(201);
+  if (beforeDevice) await beforeDevice(fx);
 
   // No cookie (a bare context inherits the organiser's), and a seeded consent
   // choice so the banner cannot sit over the clock bar.
@@ -276,6 +285,47 @@ test("S2-5 107: a device clock five minutes fast still shows the shared time", a
     await expect
       .poll(() => gap(a, b), { timeout: FOLLOW_MS, message: "the fast device reads the shared time, within 2 s" })
       .toBeLessThanOrEqual(2);
+  } finally {
+    await deviceCtx.close();
+  }
+});
+
+test("S2-5 107: a pad opened mid-match on a fast device reads the console's match time (review I1)", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(BUDGET_MS);
+  // The console's Start is in the ledger BEFORE the device loads, so the
+  // device mounts with a running foreign anchor in its server-rendered events
+  // and no server offset yet: the case a pad opened mid-match is. Read with
+  // no offset it would sit five minutes ahead until the next clock event;
+  // read through the LIVE offset it must match the console once the first
+  // /events answer has been sampled.
+  const { console: a, device, deviceCtx } = await rig(page, browser, "Late", 300_000, async (fx) => {
+    const consolePad = pad(page);
+    await clockToggle(consolePad).click();
+    await expect(clockToggle(consolePad)).toHaveText("Pause");
+    await expect
+      .poll(async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "football.clock").length, {
+        timeout: 20_000,
+        message: "the console's Start must be in the ledger before the device opens",
+      })
+      .toBeGreaterThan(0);
+  });
+  try {
+    const b = devicePad(device);
+    const skew = (await device.evaluate(() => Date.now())) - Date.now();
+    expect(skew, "page.clock moved the device's Date").toBeGreaterThan(290_000);
+    // Running on arrival: the anchor came with the page, not from a later event.
+    await expect(clockToggle(b), "the device mounts with the console's clock running").toHaveText("Pause");
+    await expect
+      .poll(() => gap(a, b), { timeout: FOLLOW_MS, message: "the late fast device reads the console's time, within 1 s" })
+      .toBeLessThanOrEqual(1);
+    // ...and it is the shared time, not a coincidence of the first read.
+    await page.waitForTimeout(3_000);
+    await expect
+      .poll(() => gap(a, b), { timeout: 5_000, message: "still within 1 s three seconds later" })
+      .toBeLessThanOrEqual(1);
   } finally {
     await deviceCtx.close();
   }

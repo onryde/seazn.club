@@ -1168,10 +1168,11 @@ export function stampFor(
  * offering to nudge a period the scorer has left) or the clock goes; it stays
  * open when a SHARED clock follows a new anchor in the same period, since a
  * Correct from this pad is itself such an anchor, and a row that shut on every
- * one would shut under the scorer's finger.
+ * one would shut under the scorer's finger. An UNSHARED clock (every skin but
+ * football) closes it on any re-seat, as it did before ruling 107 (review I2).
  */
-export function correctionSurvives(prev: PadClock | null, next: PadClock | null): boolean {
-  return prev !== null && next !== null && prev.period === next.period;
+export function correctionSurvives(prev: PadClock | null, next: PadClock | null, shared: boolean): boolean {
+  return shared && prev !== null && next !== null && prev.period === next.period;
 }
 
 /**
@@ -2231,14 +2232,15 @@ export function PadHostV3(props: PadHostV3Props) {
     () => (sharedClock ? latestClockAnchor(pipeline.events, `${props.module.key}.clock`, pipeline.ownEventIds) : null),
     [sharedClock, pipeline.events, pipeline.ownEventIds, props.module.key],
   );
-  const nextClock = reconcileClock(clock, clockSpec, anchor, props.transport.serverOffsetMs?.() ?? 0);
+  const nextClock = reconcileClock(clock, clockSpec, anchor, props.transport.serverOffsetMs?.() ?? null);
   if (nextClock !== clock) {
     setClock(nextClock);
     // A whistle re-seats the clock, and a correction row left open across it
     // would be offering to nudge a period the scorer has already left. Closing
     // here rather than in an effect keeps it in the same render as the re-seat.
-    // A followed anchor in the SAME period leaves it open (`correctionSurvives`).
-    if (adjusting && !correctionSurvives(clock, nextClock)) setAdjusting(false);
+    // A followed anchor in the SAME period leaves it open, for a SHARED clock
+    // only (`correctionSurvives`); every other skin closes it as before.
+    if (adjusting && !correctionSurvives(clock, nextClock, sharedClock)) setAdjusting(false);
   }
   // S2-5 ruling 107 — the lowest `at` a SHARED clock may stamp or publish in
   // its own period: the fold's `asOf`, which is `clockSpec.seed` (the same

@@ -83,9 +83,12 @@
 //     and its row's `recordedAt`: running, `at.elapsed + (serverNow −
 //     recordedAt)`; paused, `at.elapsed`. The held clock re-seats whenever that
 //     anchor changes, in the current period only (`followAnchor`), and on
-//     nothing else. An anchor this pad wrote itself carries this pad's OWN
+//     one other thing: the measured offset forming, or moving by a second or
+//     more, under a foreign running anchor the held clock still reads as
+//     seated (review I1 — a pad mounted mid-match has the anchor before it has
+//     an offset). An anchor this pad wrote itself carries this pad's OWN
 //     `createdAt`, so it is read in local time (offset 0); every other one is
-//     the server's time, read through the transport's measured offset.
+//     the server's time, read through the transport's LIVE measured offset.
 //
 //     This does not reopen property 3's "a clock that only ever shows the
 //     past". That failure was re-seating from `spec.seed` — the fold's last
@@ -201,6 +204,14 @@ export interface PadClock {
    * `pauseClock` and `adjustClock` spread, so it survives them.
    */
   readonly anchorKey?: string;
+  /**
+   * PROPERTY 7 — the server offset a FOREIGN, RUNNING anchor was read with:
+   * a number, or `null` when none had been sampled yet (read as 0). Absent for
+   * an own or a paused anchor, whose reading no offset moves. `followAnchor`
+   * re-seats the same anchor when the offset forms or moves by
+   * `OFFSET_RESEAT_MS` (review I1).
+   */
+  readonly anchorOffsetMs?: number | null;
 }
 
 /** A paused clock at `seed` seconds into `period`. Non-integer, negative and
@@ -522,21 +533,52 @@ function gameTimeOf(at: unknown): GameTimeStamp | null {
  * ledger — is not undone on the next render. A void that moves the anchor
  * BACK to an older event is a new key, and re-seats to it.
  *
- * `offsetMs` is serverNow − localNow (the transport's `serverOffsetMs`). A
- * foreign anchor's `recordedAtMs` is the server's time, so the run began at
- * `recordedAtMs − offsetMs` on this pad's clock; this pad's own anchor is
- * already in local time and is read with no offset.
+ * `offsetMs` is serverNow − localNow (the transport's `serverOffsetMs`), or
+ * `null` before one is sampled. A foreign anchor's `recordedAtMs` is the
+ * server's time, so the run began at `recordedAtMs − offsetMs` on this pad's
+ * clock; this pad's own anchor is already in local time and is read with no
+ * offset. A pad mounted mid-match holds the running anchor before any offset
+ * exists (SSR events), so it reads it at 0 and then reads it AGAIN when the
+ * offset forms or moves (`offsetMoved`, review I1) — the reading is always
+ * through the live offset, as the phone's is.
  */
-export function followAnchor(prev: PadClock | null, anchor: ClockAnchor | null, offsetMs: number): PadClock | null {
+export function followAnchor(
+  prev: PadClock | null,
+  anchor: ClockAnchor | null,
+  offsetMs: number | null,
+): PadClock | null {
   if (prev === null || anchor === null) return prev;
-  if (anchor.period !== prev.period || anchor.key === prev.anchorKey) return prev;
+  if (anchor.period !== prev.period) return prev;
+  if (anchor.key === prev.anchorKey && !offsetMoved(prev, anchor, offsetMs)) return prev;
+  const foreignRun = anchor.running && !anchor.own;
   return {
     period: prev.period,
     base: sanitiseSeconds(anchor.elapsed),
-    runningSince: anchor.running ? anchor.recordedAtMs - (anchor.own ? 0 : offsetMs) : null,
+    runningSince: anchor.running ? anchor.recordedAtMs - (anchor.own ? 0 : (offsetMs ?? 0)) : null,
     known: true,
     anchorKey: anchor.key,
+    ...(foreignRun ? { anchorOffsetMs: offsetMs } : {}),
   };
+}
+
+/** How far the measured offset must move before a followed anchor is read
+ *  again: under a second is sampling noise, and re-seating on it would make
+ *  the readout twitch. */
+export const OFFSET_RESEAT_MS = 1_000;
+
+/**
+ * Review I1 — the SAME foreign running anchor, read again because the offset
+ * it was read with is now known (it was `null`) or has moved by
+ * `OFFSET_RESEAT_MS` or more. Only while the held clock still reads exactly as
+ * that anchor seated it: a local Pause, Start or Correct made since is this
+ * pad's own decision, and wins until its own clock event is the anchor.
+ */
+function offsetMoved(prev: PadClock, anchor: ClockAnchor, offsetMs: number | null): boolean {
+  if (offsetMs === null || prev.anchorOffsetMs === undefined) return false;
+  const untouched =
+    prev.base === sanitiseSeconds(anchor.elapsed) && prev.runningSince === anchor.recordedAtMs - (prev.anchorOffsetMs ?? 0);
+  if (!untouched) return false;
+  return prev.anchorOffsetMs === null || Math.abs(offsetMs - prev.anchorOffsetMs) >= OFFSET_RESEAT_MS;
 }
 
 /**
@@ -548,7 +590,7 @@ export function reconcileClock(
   prev: PadClock | null,
   spec: PadClockSpec | null,
   anchor: ClockAnchor | null,
-  offsetMs: number,
+  offsetMs: number | null,
 ): PadClock | null {
   const seated = reseatClock(prev, spec);
   return spec?.shared ? followAnchor(seated, anchor, offsetMs) : seated;
