@@ -321,7 +321,7 @@ test.describe("K1 Undo refuses across a confirmed draw", () => {
       `/api/v1/stages/${plate.data!.id}/seed-proposal`,
       "POST",
     );
-    expect(proposal.status, JSON.stringify(proposal.error)).toBe(200);
+    expect(proposal.status, JSON.stringify(proposal.error)).toBe(201);
     const ties = proposal.data!.computed.ties;
     const confirmed = await apiJson(request, `/api/v1/stages/${plate.data!.id}/seed-proposal/confirm`, "POST", {
       proposalId: proposal.data!.id,
