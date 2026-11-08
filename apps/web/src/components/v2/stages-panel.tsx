@@ -111,7 +111,7 @@ import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { zonedTimeInput } from "@/lib/zoned-datetime";
 // W3 item 6 — one definition of "this swiss stage is between rounds, not
 // drifted", shared with the page's tests rather than restated in each.
-import { swissAwaitingPairing } from "@/lib/roster-drift-eligibility";
+import { rosterDriftShown, swissAwaitingPairing } from "@/lib/roster-drift-eligibility";
 import {
   latestSwissRoundWithAnySeat,
   nextUnseatedSwissRound,
@@ -295,11 +295,22 @@ interface RosterDriftEntrant {
 interface RosterDrift {
   ghosts: RosterDriftEntrant[];
   unplaced: RosterDriftEntrant[];
+  /** A root knockout's first-round lines with an empty place (an entrant deleted) — StageRosterDrift.vacantLines. Optional:
+   *  hand-built props in this panel's own __tests__ predate the field (read as none, `rosterDriftShown`). */
+  vacantLines?: number;
   /** Organiser setup that a rebuild clears along with the fixtures — see
    *  StageRosterDrift.attachments (usecases/stages.ts) for why these do not
    *  BLOCK the rebuild the way a recorded result does. Optional: hand-built
    *  props in this panel's own __tests__ predate the field. */
-  attachments?: { officials: number; lineups: number; deviceLinks: number };
+  attachments?: {
+    officials: number;
+    lineups: number;
+    deviceLinks: number;
+    streams: number;
+    youtubeBroadcasts: number;
+    availability: number;
+    calls: number;
+  };
 }
 
 interface Props {
@@ -1537,7 +1548,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // other stage's entry is absent or both arrays empty, so this is a
         // no-op read for the common case.
         const drift = rosterDrift[stage.id];
-        const hasDrift = Boolean(drift && (drift.ghosts.length > 0 || drift.unplaced.length > 0));
+        // W4 B2 fix round 2 (item 1): an empty first-round place (a deleted entrant) is drift too — `rosterDriftShown` is the
+        // one test, read by the banner below and by Update draw's offer.
+        const hasDrift = rosterDriftShown(drift);
         // W4 B2 fix round 1 (item 6): a root knockout drawn before its roster moved is `active` before Start, so Generate comes
         // back as "Update draw" (place a newcomer / vacate a withdrawal in place) until the division starts.
         const updateDraw = knockoutUpdateDrawOffered({
@@ -1820,7 +1833,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                         ? "ghosts"
                         : swissAwaitingPairing(stage.kind, drift)
                           ? "swiss-awaiting-pairing"
-                          : "unplaced"
+                          : drift.unplaced.length > 0
+                            ? "unplaced"
+                            : "vacant"
                     }
                   >
                     <p
@@ -1856,6 +1871,11 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                             : "progression.rosterDrift.unplacedLabel",
                         )}{" "}
                         {drift.unplaced.map((e) => e.display_name).join(", ")}
+                      </p>
+                    )}
+                    {(drift.vacantLines ?? 0) > 0 && (
+                      <p className="mt-1 text-xs text-amber-800" data-testid="roster-drift-vacant">
+                        {msg("progression.rosterDrift.vacantLabel", { count: drift.vacantLines ?? 0 })}
                       </p>
                     )}
                     {swissAwaitingPairing(stage.kind, drift) && (
@@ -2315,6 +2335,11 @@ export function attachmentWarning(drift: RosterDrift | undefined, msg: Msg, loca
     a.officials > 0 ? msg("progression.rosterDrift.alsoOfficials", { count: a.officials }) : null,
     a.lineups > 0 ? msg("progression.rosterDrift.alsoLineups", { count: a.lineups }) : null,
     a.deviceLinks > 0 ? msg("progression.rosterDrift.alsoDevices", { count: a.deviceLinks }) : null,
+    // W4 B2 fix round 2 (item 5): the rest of the setup a match can carry before Start, each a cascade of the delete.
+    a.streams > 0 ? msg("progression.rosterDrift.alsoStreams", { count: a.streams }) : null,
+    a.youtubeBroadcasts > 0 ? msg("progression.rosterDrift.alsoBroadcasts", { count: a.youtubeBroadcasts }) : null,
+    a.availability > 0 ? msg("progression.rosterDrift.alsoAvailability", { count: a.availability }) : null,
+    a.calls > 0 ? msg("progression.rosterDrift.alsoCalls", { count: a.calls }) : null,
   ].filter((p): p is string => p !== null);
   if (parts.length === 0) return "";
   const items = new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(parts);

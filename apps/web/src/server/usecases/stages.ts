@@ -3041,6 +3041,14 @@ export interface GenerateOptions {
    *  `fixtures_generated` ledger row records it. Refused (422) on any other
    *  stage kind, round, or press. */
   pairing?: SwissPairingMode;
+  /** W4 B2 fix round 2 (item 2): Start's own reconcile of a root knockout drawn before its roster moved — seats change in
+   *  place, and a redraw is refused (KO_START_NEEDS_UPDATE_DRAW) instead of run. Never sent by a client: `startDivision`
+   *  sets it. */
+  inPlaceOnly?: boolean;
+  /** W4 B2 fix round 2 (item 5): the stage's setup in SEALED tables (streams, YouTube broadcasts), read on a privileged
+   *  connection by `generateStageFixturesWrite`'s prelude — a knockout redraw refuses over it as over the rest. Never sent
+   *  by a client. */
+  sealedSetup?: SealedSetupCounts;
 }
 
 /** R10e (review-r10d m1): generate a stage's fixtures and publish the write.
@@ -3075,8 +3083,12 @@ export async function generateStageFixtures(
 
 /** `generateStageFixtures` without its publish, for a caller that publishes
  *  the whole write itself (see above). */
-export async function generateStageFixturesUnpublished(auth: AuthCtx, stageId: string): Promise<GenerateOutcome> {
-  return (await generateStageFixturesWrite(auth, stageId, {})).outcome;
+export async function generateStageFixturesUnpublished(
+  auth: AuthCtx,
+  stageId: string,
+  opts: GenerateOptions = {},
+): Promise<GenerateOutcome> {
+  return (await generateStageFixturesWrite(auth, stageId, opts)).outcome;
 }
 
 // `fixtureEvidenceSql` / `fixtureHasResultSql`: ./fixture-results-sql.ts.
@@ -3482,7 +3494,15 @@ async function generateStageFixturesWrite(
       await seedNextStage(auth, pre.prev.id);
     }
   }
-  const write = await withTenant(auth.orgId, (tx) => generateStageFixturesTx(tx, auth, stageId, opts));
+  // W4 B2 fix round 2 (item 5): a knockout's redraw refuses over organiser setup, and two kinds of it live in sealed tables
+  // the tenant role cannot read. The prelude reads them on this transaction's own connection, before the role drops —
+  // never a pooled read inside the transaction (lib/db.ts's nesting deadlock).
+  let sealedSetup: SealedSetupCounts | undefined;
+  const write = await withTenant(
+    auth.orgId,
+    (tx) => generateStageFixturesTx(tx, auth, stageId, { ...opts, sealedSetup }),
+    { privilegedPrelude: async (tx) => { sealedSetup = await sealedStageSetupCounts(tx, auth.orgId, stageId); } },
+  );
   await afterGenerateCommit(auth, stageId, write);
   return write;
 }
@@ -3547,6 +3567,8 @@ async function reconcileKnockoutGenerate(
   stage: StageRow,
   entrants: ActiveEntrant[],
   poolIds: Map<string, string>,
+  inPlaceOnly: boolean,
+  sealedSetup: SealedSetupCounts | undefined,
 ): Promise<GenerateWrite> {
   const started = (await divisionHasStarted(tx, stage.division_id)) || (await stageHasStarted(tx, stage.id));
   const fresh = generate(stage.kind, stage.config, entrants, poolIds).map((g) => ({
@@ -3557,11 +3579,19 @@ async function reconcileKnockoutGenerate(
   }));
   const decision = await reconcileRootBracket(tx, { stageId: stage.id, started, active: entrants, fresh });
   if (decision.kind === "regenerate") {
-    // B2 fix round 1 (I1): a redraw deletes every line, and the delete cascades into the organiser's appointments, team
-    // sheets and paired scoring devices. Generate has no confirm, so it never takes them silently: refused by name,
+    // B2 fix round 2 (item 2): Start reconciles in place only. A redraw deletes every line — the slots move, printed
+    // sheets stop, public pages hold the old lines — and Start has no notice to say so; Update draw (this same Generate,
+    // pressed) does. So Start refuses it by name, before any write, and names the button.
+    if (inPlaceOnly) throw knockoutRefusal("KO_START_NEEDS_UPDATE_DRAW");
+    // B2 fix round 1 (I1): a redraw deletes every line, and the delete cascades into the organiser's setup on them (every
+    // kind `stageAttachmentCounts` counts). Generate has no confirm, so it never takes them silently: refused by name,
     // pointing to Rebuild, whose confirm lists what it clears. Read before the delete (the counts Rebuild's dialog reads).
-    const attachments = await stageAttachmentCounts(tx, stage.id);
-    if (attachments.officials + attachments.lineups + attachments.deviceLinks > 0) {
+    // The sealed kinds were read by `generateStageFixturesWrite`'s privileged prelude, on this transaction's connection.
+    if (sealedSetup === undefined) {
+      throw new Error("reconcileKnockoutGenerate: a redraw's sealed setup counts were not read (generateStageFixturesWrite's privilegedPrelude)");
+    }
+    const attachments = await stageAttachmentCounts(tx, stage.id, sealedSetup);
+    if (Object.values(attachments).some((n) => n > 0)) {
       throw knockoutRefusal("KO_REDRAW_WOULD_CLEAR_SETUP", { attachments });
     }
     const regen = await regenerateStageInTx(tx, auth, stage.id, stage);
@@ -3728,7 +3758,7 @@ export async function generateStageFixturesTx(
   // by `ext_key` (6 → 7 inserted nothing and said "up to date"; 8 → 9 seated the field twice beside a second final; a
   // line that became a bye 500'd on the bye-award bulk update below). Fed stages (`config.qualified`) keep their path.
   if (stage.kind === "knockout" && qualified === null && stage.progression === null && existing.length > 0) {
-    return reconcileKnockoutGenerate(tx, auth, stage, entrants, poolIds);
+    return reconcileKnockoutGenerate(tx, auth, stage, entrants, poolIds, opts.inPlaceOnly === true, opts.sealedSetup);
   }
 
   let swissSeatedCount = 0;
@@ -4155,7 +4185,9 @@ export async function generateStageFixturesTx(
 // function rather than restating it in a mock of this server-only file.
 export { ROSTER_DRIFT_INELIGIBLE_KINDS, isRosterDriftEligible };
 
-const NO_ATTACHMENTS = { officials: 0, lineups: 0, deviceLinks: 0 } as const;
+const NO_ATTACHMENTS = {
+  officials: 0, lineups: 0, deviceLinks: 0, streams: 0, youtubeBroadcasts: 0, availability: 0, calls: 0,
+} as const;
 
 /** The two `fixtures.status` values that still expect their entrants to turn
  *  up. The full vocabulary is eight (`FIXTURE_STATUSES`, lib/fixture-status.ts):
@@ -4183,6 +4215,12 @@ export interface StageRosterDrift {
    *  fixture in this stage — registered after the last Generate, or Generate
    *  has never run since. */
   unplaced: StageRosterDriftEntrant[];
+  /** W4 B2 fix round 2 (item 1): a ROOT knockout's first-round lines with an EMPTY place — a match with a seat nobody is
+   *  on, or a bye with nobody on it. `deleteEntrant` leaves exactly this (the FK nulls the seat), and it is neither a ghost
+   *  (nobody is named) nor an unplaced entrant (nobody is missing), so without it the banner, its Rebuild and Update draw
+   *  all stayed hidden while Start and Generate refused. Zero on every other stage, and on a later round's seats (those
+   *  wait on winners). */
+  vacantLines: number;
   /** Organiser WORK attached to this stage's fixtures that a rebuild would
    *  take with them (F3 ultrareview finding 5). `delete from fixtures`
    *  CASCADEs into all three, and unlike a result none of them BLOCKS the
@@ -4199,6 +4237,19 @@ export interface StageRosterDrift {
     lineups: number;
     /** `device_links` — paired scoring devices (device-links.ts). */
     deviceLinks: number;
+    /** W4 B2 fix round 2 (item 5) — the rest of the setup a match can carry BEFORE Start, each a CASCADE of the fixture
+     *  delete and each written with no gate on the division's status:
+     *  matches with stream setup — a live stream code (`fixture_stream_codes`, minted when the stream panel opens; its
+     *  phone pairings cascade with it) or per-match stream settings (`fixture_stream_settings`, the destination pre-pick).
+     *  One match with both counts once: what the organiser redoes is that match's stream. An ENDED code is history, not
+     *  setup, and is not counted. */
+    streams: number;
+    /** `youtube_broadcasts` — broadcasts Go live created on YouTube (youtube/prepare.ts); the replay link goes with them. */
+    youtubeBroadcasts: number;
+    /** `fixture_availability` — players' availability answers and check-ins (me.ts). */
+    availability: number;
+    /** `fixture_calls` — Match Day court calls (match-day-call.ts). */
+    calls: number;
   };
 }
 
@@ -4207,13 +4258,17 @@ export interface StageRosterDrift {
  *  `created_at` only (no `updated_at`) because "since when" is not needed to
  *  answer "does the board match the roster" (plan, 5a). */
 export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promise<StageRosterDrift> {
-  return withTenant(auth.orgId, async (tx) => {
+  // W4 B2 fix round 2 (item 5): the sealed kinds of setup (streams, YouTube broadcasts) are read on the pooled privileged
+  // client AFTER the tenant transaction closes — never inside it (42501 under app_user, and a second pooled connection
+  // inside `withTenant` is lib/db.ts's self-deadlock). A read for a banner and a confirm: the window between the two reads
+  // is one READ COMMITTED step, the same staleness the page already has.
+  const { drift, boarded } = await withTenant(auth.orgId, async (tx): Promise<{ drift: StageRosterDrift; boarded: boolean }> => {
     const [stage] = await tx<
-      { division_id: string; kind: string; progression: Record<string, unknown> | null }[]
-    >`select division_id, kind, progression from stages where id = ${stageId}`;
+      { division_id: string; kind: string; progression: Record<string, unknown> | null; config: unknown }[]
+    >`select division_id, kind, progression, config from stages where id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
     if (stage.progression !== null || ROSTER_DRIFT_INELIGIBLE_KINDS.has(stage.kind)) {
-      return { ghosts: [], unplaced: [], attachments: NO_ATTACHMENTS };
+      return { drift: { ghosts: [], unplaced: [], vacantLines: 0, attachments: NO_ATTACHMENTS }, boarded: false };
     }
 
     // A stage with NO fixtures has no BOARD, and drift is defined against a
@@ -4226,7 +4281,7 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
     // action there, and stages-panel already renders it prominently.
     const [{ count: fixtureCount }] = await tx<{ count: number }[]>`
       select count(*)::int as count from fixtures where stage_id = ${stageId}`;
-    if (fixtureCount === 0) return { ghosts: [], unplaced: [], attachments: NO_ATTACHMENTS };
+    if (fixtureCount === 0) return { drift: { ghosts: [], unplaced: [], vacantLines: 0, attachments: NO_ATTACHMENTS }, boarded: false };
 
     // Odd-Swiss sit-out (W3 item 6) — CLOSED by the bye-row follow-up.
     // Two suppression heuristics were tried and reviewed out (2026-09-06):
@@ -4280,30 +4335,96 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
     const activeIds = new Set(active.map((e) => e.id));
     const referencedIds = new Set(referenced.map((e) => e.id));
     return {
-      ghosts: expectedToPlay.filter((e) => !activeIds.has(e.id)),
-      unplaced: active.filter((e) => !referencedIds.has(e.id)),
-      attachments: await stageAttachmentCounts(tx, stageId),
+      drift: {
+        ghosts: expectedToPlay.filter((e) => !activeIds.has(e.id)),
+        unplaced: active.filter((e) => !referencedIds.has(e.id)),
+        vacantLines: isRootKnockout(stage) ? await vacantFirstRoundLines(tx, stageId) : 0,
+        attachments: await stageAttachmentCounts(tx, stageId, { streams: 0, youtubeBroadcasts: 0 }),
+      },
+      boarded: true,
     };
   });
+  if (!boarded) return drift;
+  const sealed = await sealedStageSetupCounts(sql, auth.orgId, stageId);
+  return { ...drift, attachments: { ...drift.attachments, ...sealed } };
+}
+
+/** A ROOT knockout — no progression and no fed `config.qualified` list: the bracket drawn straight from the roster, the
+ *  one `reconcileRootBracket` reconciles and Start's `roster_drift` read covers (schedule.ts). */
+function isRootKnockout(stage: { kind: string; progression: unknown; config: unknown }): boolean {
+  if (stage.kind !== "knockout" || stage.progression !== null) return false;
+  const config = stage.config;
+  return !(typeof config === "object" && config !== null && Array.isArray((config as { qualified?: unknown }).qualified));
+}
+
+/** W4 B2 fix round 2 (item 1): `StageRosterDrift.vacantLines` — the first-round lines with an empty place: a match still to
+ *  be played with a seat nobody is on, or a bye with nobody on it. The same two shapes Start's `roster_drift` read names
+ *  (schedule.ts), which is what makes Start refuse; this is what lets the desk show the remedy. */
+async function vacantFirstRoundLines(tx: Tx, stageId: string): Promise<number> {
+  const [row] = await tx<{ n: number }[]>`
+    select count(*)::int as n from fixtures f
+     where f.stage_id = ${stageId} and f.round_no = 1
+       and ((f.status = 'scheduled' and (f.home_entrant_id is null or f.away_entrant_id is null))
+            or (f.home_entrant_id is null and f.away_entrant_id is null))`;
+  return row?.n ?? 0;
+}
+
+/** The two kinds of `StageRosterDrift.attachments` kept in SEALED tables (V430, V479: RLS forced, no policy, no app_user
+ *  grant — "every read goes through the app's non-tenant client"), so a `withTenant` transaction cannot count them (42501):
+ *  matches with stream setup, and YouTube broadcasts. W4 B2 fix round 2, item 5. */
+export type SealedSetupCounts = Pick<StageRosterDrift["attachments"], "streams" | "youtubeBroadcasts">;
+
+/** `SealedSetupCounts` for a stage, on a PRIVILEGED client only — the pooled `sql` outside any transaction, or a
+ *  `withTenant` `privilegedPrelude`'s own connection. Org-scoped in SQL (each sealed table carries its `org_id`), as V430
+ *  requires of every read on that client. A match with a live stream code (minted when the stream panel opens; its phone
+ *  pairings cascade with it) or per-match stream settings (the destination pre-pick) counts once; an ENDED code is
+ *  history, not setup. */
+export async function sealedStageSetupCounts(db: Tx | typeof sql, orgId: string, stageId: string): Promise<SealedSetupCounts> {
+  const [counts] = await db<{ streams: number; youtube_broadcasts: number }[]>`
+    select
+      (select count(*) from fixtures f
+        where f.stage_id = ${stageId} and f.org_id = ${orgId}
+          and (exists (select 1 from fixture_stream_codes c
+                        where c.fixture_id = f.id and c.org_id = ${orgId} and c.ended_at is null)
+               or exists (select 1 from fixture_stream_settings st
+                           where st.fixture_id = f.id and st.org_id = ${orgId})))::int as streams,
+      (select count(*) from youtube_broadcasts yb
+         join fixtures f on f.id = yb.fixture_id
+        where f.stage_id = ${stageId} and yb.org_id = ${orgId})::int as youtube_broadcasts`;
+  return { streams: counts?.streams ?? 0, youtubeBroadcasts: counts?.youtube_broadcasts ?? 0 };
 }
 
 /** The organiser work attached to a stage's fixtures that a delete of them CASCADEs into (`StageRosterDrift.attachments`):
- *  what Rebuild's confirm lists, and what a knockout's Generate refuses to redraw over (W4 B2 fix round 1, I1). One
- *  round trip for all three — each is a plain count over the stage's own fixture ids, and none of them is large enough
- *  to want three. */
-export async function stageAttachmentCounts(tx: Tx, stageId: string): Promise<StageRosterDrift["attachments"]> {
-  const [counts] = await tx<{ officials: number; lineups: number; device_links: number }[]>`
+ *  what Rebuild's confirm lists, and what a knockout's Generate refuses to redraw over (W4 B2 fix round 1, I1; every kind
+ *  that can exist before Start since fix round 2, item 5). The tenant-readable kinds in one round trip on `tx` — each a
+ *  plain count over the stage's own fixture ids — joined with the sealed kinds the caller read on a privileged client. */
+export async function stageAttachmentCounts(
+  tx: Tx,
+  stageId: string,
+  sealed: SealedSetupCounts,
+): Promise<StageRosterDrift["attachments"]> {
+  const [counts] = await tx<
+    { officials: number; lineups: number; device_links: number; availability: number; calls: number }[]
+  >`
     select
       (select count(*) from fixture_officials fo
          join fixtures f on f.id = fo.fixture_id where f.stage_id = ${stageId})::int as officials,
       (select count(*) from lineups l
          join fixtures f on f.id = l.fixture_id where f.stage_id = ${stageId})::int as lineups,
       (select count(*) from device_links dl
-         join fixtures f on f.id = dl.fixture_id where f.stage_id = ${stageId})::int as device_links`;
+         join fixtures f on f.id = dl.fixture_id where f.stage_id = ${stageId})::int as device_links,
+      (select count(*) from fixture_availability fa
+         join fixtures f on f.id = fa.fixture_id where f.stage_id = ${stageId})::int as availability,
+      (select count(*) from fixture_calls fc
+         join fixtures f on f.id = fc.fixture_id where f.stage_id = ${stageId})::int as calls`;
   return {
     officials: counts?.officials ?? 0,
     lineups: counts?.lineups ?? 0,
     deviceLinks: counts?.device_links ?? 0,
+    streams: sealed.streams,
+    youtubeBroadcasts: sealed.youtubeBroadcasts,
+    availability: counts?.availability ?? 0,
+    calls: counts?.calls ?? 0,
   };
 }
 

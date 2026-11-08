@@ -121,18 +121,19 @@ describe.each(["en", "fr"] as const)("LaunchActions — Start refused above a Sw
   });
 });
 
-// W4 B2 fix round 1 (G1): Start reconciles a root knockout drawn before its roster moved, and refuses by name when that would
-// redraw over organiser setup (KO_REDRAW_WOULD_CLEAR_SETUP). Same door, same rule as the Swiss refusal above: the reader's
-// language, never the server's English sentence.
-describe.each(["en", "fr"] as const)("LaunchActions — Start refused: a knockout redraw would clear organiser setup [%s]", (locale) => {
+// W4 B2 fix round 1 (G1) and round 2 (item 2): Start reconciles a root knockout drawn before its roster moved IN PLACE only,
+// and refuses by name when the bracket would have to be drawn again (KO_START_NEEDS_UPDATE_DRAW — Update draw is the door that
+// redraws, with its notice). Same door, same rule as the Swiss refusal above: the reader's language, never the server's
+// English sentence.
+describe.each(["en", "fr"] as const)("LaunchActions — Start refused: the knockout draw needs updating first [%s]", (locale) => {
   const D = DICTS[locale];
   beforeEach(() => {
     active.locale = locale;
   });
 
   it("says the knockout table's refusal in the reader's language", async () => {
-    const row = KNOCKOUT_REFUSALS.KO_REDRAW_WOULD_CLEAR_SETUP;
-    net.answer = { status: row.status, code: "KO_REDRAW_WOULD_CLEAR_SETUP", message: row.en, extra: { attachments: { officials: 0, lineups: 1, deviceLinks: 0 } } };
+    const row = KNOCKOUT_REFUSALS.KO_START_NEEDS_UPDATE_DRAW;
+    net.answer = { status: row.status, code: "KO_START_NEEDS_UPDATE_DRAW", message: row.en, extra: {} };
     const island = await pressStart();
     expect(redLines(island.tree())).toEqual([D[row.key]]);
     if (locale !== "en") expect(redLines(island.tree())[0], "never the server's English").not.toBe(row.en);

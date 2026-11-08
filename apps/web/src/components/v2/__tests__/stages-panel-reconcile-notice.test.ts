@@ -64,13 +64,32 @@ describe("the Generate notice after a knockout reconcile (FX-G2)", () => {
     const redraw = (slots: { kept: number; freed: number; unscheduled: number }) =>
       text("en", { created: 15, existing: 0, reconcile: { kind: "regenerated", placed: ["p9"], vacated: [], vacated_seats: 0, slots } });
     expect(redraw({ kept: 7, freed: 0, unscheduled: 1 })).toBe(
-      "The bracket changed size, so it was drawn again. 7 slot(s) kept, 0 freed, 1 unscheduled. Printed scorer sheets for this stage will stop working.",
+      "The bracket was drawn again to match the current entrants. 7 slot(s) kept, 0 freed, 1 unscheduled. Printed scorer sheets for this stage will stop working.",
     );
     // A bracket nobody laid out has no slot to report (Rebuild's own rule): the slot clause is dropped, the sheets one is not.
     expect(redraw({ kept: 0, freed: 0, unscheduled: 0 })).toBe(
-      "The bracket changed size, so it was drawn again. Printed scorer sheets for this stage will stop working.",
+      "The bracket was drawn again to match the current entrants. Printed scorer sheets for this stage will stop working.",
     );
     expect(redraw({ kept: 7, freed: 0, unscheduled: 1 })).not.toMatch(/keeps the time and court/);
+  });
+
+  // Fix round 2 (item 3): a redraw has four causes — the field crossed a power of two, a bye holder left, both players of
+  // one match left, a bye nobody holds — and three of them change no size. The sentence names none of them, in any locale.
+  it("a redraw's sentence claims no cause: the same words whatever moved, and no locale says the bracket changed size", () => {
+    const SIZE_WORDS: Record<Locale, RegExp> = { en: /\bsize\b/i, es: /tamaño/i, fr: /taille/i, nl: /grootte/i };
+    const causes: GenerateNoticeWire["reconcile"][] = [
+      { kind: "regenerated", placed: ["p9"], vacated: [], vacated_seats: 0 },
+      { kind: "regenerated", placed: [], vacated: ["a", "b"], vacated_seats: 2 },
+      { kind: "regenerated", placed: [], vacated: [], vacated_seats: 0 },
+    ];
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const said = causes.map((reconcile) => text(locale, { created: 15, existing: 0, reconcile }));
+      expect(new Set(said).size, `${locale}: one sentence for every cause`).toBe(1);
+      expect(said[0], locale).not.toMatch(SIZE_WORDS[locale]);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("every locale renders every reconcile line, translated, with no raw key and no unfilled placeholder", () => {

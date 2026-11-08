@@ -27,6 +27,8 @@ const PLAN_CODES = [
   "KO_GENERATE_AFTER_START",
   // B2 fix round 1 (I1): a redraw over organiser setup is refused, pointing to Rebuild.
   "KO_REDRAW_WOULD_CLEAR_SETUP",
+  // B2 fix round 2 (item 2): Start reconciles in place only; a redraw is Update draw's, refused at Start by name.
+  "KO_START_NEEDS_UPDATE_DRAW",
 ] as const;
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;

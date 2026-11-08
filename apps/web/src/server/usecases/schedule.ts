@@ -4151,11 +4151,13 @@ export async function startDivision(
   } else if (pre.firstStage.roster_drift && !pre.scheduleFrozen) {
     // W4 B2 fix round 1 (G1): a pre-Start withdrawal is a status flip only (withdrawal.ts) and an arrival seats nobody,
     // so a root knockout drawn before them still names a withdrawn player on a match, or leaves a newcomer out. Start is
-    // the last moment before Start: when the first round no longer matches the field (`roster_drift`, read above) it runs
-    // the same reconcile Generate does (stages.ts `reconcileKnockoutGenerate` — place, vacate, or redraw; a redraw over
-    // organiser setup is refused by name, KO_REDRAW_WOULD_CLEAR_SETUP, and the start with it). A frozen board is left as
-    // the organiser froze it.
-    const outcome = await generateStageFixturesUnpublished(auth, pre.firstStage.id);
+    // the last moment before play: when the first round no longer matches the field (`roster_drift`, read above) it runs
+    // the reconcile Generate does (stages.ts `reconcileKnockoutGenerate`) — IN PLACE ONLY (fix round 2, item 2): a
+    // newcomer into a bye, a departed entrant's match to a bye. A change that needs the bracket drawn again is refused by
+    // name, KO_START_NEEDS_UPDATE_DRAW, and the start with it, before any write: the redraw is Update draw's, whose notice
+    // says what moved. So Start deletes no fixture, and its one publish below names every fixture there is. A frozen
+    // board is left as the organiser froze it.
+    const outcome = await generateStageFixturesUnpublished(auth, pre.firstStage.id, { inPlaceOnly: true });
     generated = outcome.created;
   }
 

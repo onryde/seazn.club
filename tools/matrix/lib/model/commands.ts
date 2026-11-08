@@ -260,9 +260,34 @@ function winStream(m: ModelState, f: FixtureModel, winner: "home" | "away"): Str
   return generateStream({ sportKey: m.sport, cfg: stageCfg(m.sport, m.cfg, m.stageKind as StageKind, m.variant, m.stageRules), stageKind: m.stageKind as never, home, away, outcome: { kind: "win", winner } });
 }
 
+/** W4 B2 fix round 2 (item 2): would a knockout's Start have to draw its bracket again? Start reconciles a root knockout
+ *  IN PLACE only (schedule.ts startDivision): newcomers take the first round's byes (a bye: a first-round line with one
+ *  seat, stored `forfeited`), and more newcomers than byes is a redraw, refused by name. The model's roster changes
+ *  before Start only by AddEntrant (Withdraw waits for Start), so the newcomers are the entrants on no first-round seat. */
+function knockoutStartNeedsRedraw(m: ModelState): boolean {
+  const firstRound = [...m.fixtures.values()].filter((f) => f.round === 1);
+  const seated = new Set(firstRound.flatMap((f) => [f.home, f.away]).filter((id): id is string => id !== null));
+  const byes = firstRound.filter((f) => f.status === "forfeited" && (f.home === null) !== (f.away === null)).length;
+  const newcomers = m.entrants.filter((id) => !seated.has(id) && !m.withdrawn.has(id)).length;
+  return newcomers > byes;
+}
 class Start extends Cmd {
   readonly kind = "Start" as const;
   protected ready(m: ModelState) { return !m.started; }
+  /** W4 B2 fix round 2 (item 2): a knockout whose lines were drawn before an entrant was added, where seating the late
+   *  entries needs the bracket drawn again — Start refuses (KO_START_NEEDS_UPDATE_DRAW) and the late entry waits for
+   *  Generate (Update draw) or Rebuild. The model's knockout rows are single-stage, so their stage is the root. */
+  protected override expectsRefusal(m: ModelState) {
+    return !m.started && m.stageKind === "knockout" && m.fixtures.size > 0 && m.lateEntry && knockoutStartNeedsRedraw(m);
+  }
+  /** The code the product refused with, when it refused (read by afterExpectedRefusal; one command per step). */
+  #refusedCode: string | null = null;
+  /** Where the model expects the refusal it expects THAT one — the knockout table's KO_START_NEEDS_UPDATE_DRAW
+   *  (apps/web lib/knockout-refusals.ts) — not any named refusal. */
+  protected override afterExpectedRefusal(): Promise<void> {
+    if (this.#refusedCode === "KO_START_NEEDS_UPDATE_DRAW") return Promise.resolve();
+    return Promise.reject(new ModelViolation(this.expectedCheck(), [`${this.toString()}: a knockout Start that would redraw its bracket was refused with ${this.#refusedCode ?? "no code"}, not KO_START_NEEDS_UPDATE_DRAW`]));
+  }
   protected async act(m: ModelState, d: OrganiserDriver) {
     // The field is laid out here, once (Withdraw waits for Start; a later entrant meets the roster lock).
     const read = lastRoundReadDiverges(m.stageKind, m.stageConfig, m.entrants.length);
@@ -270,12 +295,15 @@ class Start extends Cmd {
       throw new Error(`model: a ${m.stageKind} of ${m.entrants.length} (${JSON.stringify(m.stageConfig)}) lays out ${read.diverges.join(", ")}, where the model's last-round read of X-DW-3 is not the product's next-match rule (loop F I-5: both lines into one fixture) — the model holds no feed edges, so it cannot judge this shape`);
     }
     const hadLines = m.fixtures.size > 0;
-    await d.start(m.divisionId);
+    await d.start(m.divisionId).catch((e: unknown) => {
+      if (e instanceof RefusedCall) this.#refusedCode = e.code;
+      throw e;
+    });
     m.started = true;
     // W4 B2 fix round 1 (G1): Start reconciles a root knockout that already has its lines (schedule.ts startDivision —
-    // the model's knockout rows are single-stage, so their stage is the root): an entrant added over them is placed here,
-    // so the late entry is spent and a Generate after Start is the named no-op. A league's Start draws nothing over its
-    // existing lines (#879's fence still reads the late entry).
+    // the model's knockout rows are single-stage, so their stage is the root): an entrant added over them is placed here
+    // in place (a Start that would redraw is refused above), so the late entry is spent and a Generate after Start is the
+    // named no-op. A league's Start draws nothing over its existing lines (#879's fence still reads the late entry).
     if (m.stageKind === "knockout" && hadLines) m.lateEntry = false;
     absorbFixtures(m, await d.listFixtures(m.divisionId));
   }

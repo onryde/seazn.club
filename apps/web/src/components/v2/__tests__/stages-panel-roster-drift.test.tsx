@@ -130,6 +130,23 @@ describe("StagesPanel — roster-drift banner (F3 Task 5)", () => {
     expect(html, "the real warning copy is missing").toContain("match the roster");
   });
 
+  // W4 B2 fix round 2 (item 1): a deleted entrant leaves an EMPTY first-round place on a knockout — nobody to name as a
+  // ghost, nobody missing as unplaced. It is drift all the same: the banner says so and keeps its Rebuild.
+  const KO_STAGE = { ...STAGE, kind: "knockout", name: "Knockout" };
+  it("a knockout with an empty first-round place and nobody named: the banner, its own line, and Rebuild", () => {
+    const html = renderToStaticMarkup(
+      <StagesPanel {...baseProps} stages={[KO_STAGE]} rosterDrift={{ s1: { ghosts: [], unplaced: [], vacantLines: 2 } }} />,
+    );
+    expect(html).toMatch(banner);
+    expect(html).toMatch(/data-roster-drift-state="vacant"/);
+    expect(html).toContain(en["progression.rosterDrift.vacantLabel"].replace("{count}", "2"));
+    expect(html, "the remedy").toMatch(rebuild);
+    const none = renderToStaticMarkup(
+      <StagesPanel {...baseProps} stages={[KO_STAGE]} rosterDrift={{ s1: { ghosts: [], unplaced: [], vacantLines: 0 } }} />,
+    );
+    expect(none, "no empty place, no banner").not.toMatch(banner);
+  });
+
   it("hides the banner from viewers (canEdit=false), even with real drift", () => {
     const html = renderToStaticMarkup(
       <StagesPanel {...baseProps} canEdit={false} rosterDrift={GHOST_DRIFT} />,
@@ -177,10 +194,11 @@ describe("rebuildBlockedMessage — StagesPanel rebuild-click classifier", () =>
 // said only "every fixture is deleted and regenerated" while silently taking
 // a whole day's referee appointments with it.
 describe("attachmentWarning — what the rebuild clears besides fixtures", () => {
-  const drift = (attachments: { officials: number; lineups: number; deviceLinks: number }) => ({
+  const NONE = { officials: 0, lineups: 0, deviceLinks: 0, streams: 0, youtubeBroadcasts: 0, availability: 0, calls: 0 };
+  const drift = (attachments: Partial<typeof NONE>) => ({
     ghosts: [],
     unplaced: [],
-    attachments,
+    attachments: { ...NONE, ...attachments },
   });
 
   it("names every non-zero kind, joined for the locale", () => {
@@ -198,8 +216,31 @@ describe("attachmentWarning — what the rebuild clears besides fixtures", () =>
     expect(out).not.toContain("scoring device");
   });
 
+  // W4 B2 fix round 2 (item 5): the setup a match can carry before Start beyond those three — each named when present,
+  // in every locale, and absent when not.
+  it("names stream setups, YouTube broadcasts, availability answers and court calls — each alone, in all four locales", () => {
+    const KINDS = [
+      ["streams", "progression.rosterDrift.alsoStreams"],
+      ["youtubeBroadcasts", "progression.rosterDrift.alsoBroadcasts"],
+      ["availability", "progression.rosterDrift.alsoAvailability"],
+      ["calls", "progression.rosterDrift.alsoCalls"],
+    ] as const;
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const lmsg: typeof msg = (key, vars) => msgFor(locale, key, vars);
+      for (const [field, key] of KINDS) {
+        const out = attachmentWarning(drift({ [field]: 3 }), lmsg, locale);
+        expect(out, `${locale} ${field}`).toContain(lmsg(key, { count: 3 }));
+        if (locale !== "en") expect(lmsg(key, { count: 3 }), `${locale} ${field}: translated`).not.toBe(msg(key, { count: 3 }));
+        for (const [other, otherKey] of KINDS) if (other !== field) expect(out, `${locale} ${field} names ${other}`).not.toContain(lmsg(otherKey, { count: 3 }));
+        checked++;
+      }
+    }
+    expect(checked).toBe(16);
+  });
+
   it("adds nothing to click through when nothing is attached", () => {
-    expect(attachmentWarning(drift({ officials: 0, lineups: 0, deviceLinks: 0 }), msg, "en")).toBe("");
+    expect(attachmentWarning(drift({}), msg, "en")).toBe("");
   });
 
   it("is inert for a drift payload that predates the field, and for no drift at all", () => {

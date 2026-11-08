@@ -653,9 +653,66 @@ describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk 
     }
     expect(checked).toBe(3);
   });
+  // B2 fix round 2 (item 2): Start reconciles IN PLACE only (schedule.ts startDivision). It seats newcomers in the bracket's
+  // first-round byes; when they outnumber the byes the bracket would have to be drawn again, and Start refuses by name
+  // (KO_START_NEEDS_UPDATE_DRAW) — the late entry then waits for a Generate (Update draw) or a Rebuild. Expected values from
+  // the product's rule as the rulings state it: newcomers > byes, a bye being a first-round line with one seat, forfeited.
+  it("fix round 2: the model expects a knockout's Start refused exactly when the newcomers outnumber the first-round byes — never otherwise, never on another kind", async () => {
+    const s = await ko();
+    const [e1, e2, e3, e4] = s.entrants;
+    if (e1 === undefined || e2 === undefined || e3 === undefined || e4 === undefined) throw new Error("test: four entrants");
+    const fx = (id: string, round: number, home: string | null, away: string | null, status: string): [string, FixtureModel] => [id, { id, round, home, away, status, ledger: null }];
+    // A bracket of three, drawn: e1 holds the bye, e2 v e3, the final waits on both.
+    const ofThree = new Map([fx("b1", 1, e1, null, "forfeited"), fx("b2", 1, e2, e3, "scheduled"), fx("b3", 2, e1, null, "scheduled")]);
+    const setup: ModelState = { ...s, started: false, lateEntry: true, fixtures: ofThree, entrants: [e1, e2, e3, e4] };
+    const expects = (m: ModelState): boolean =>
+      (commandOf("Start", 0, 0, true) as unknown as { expectsRefusal(m: ModelState): boolean }).expectsRefusal(m);
+    const TABLE: [string, ModelState, boolean][] = [
+      ["3 drawn, 1 newcomer, 1 bye: placed in place", setup, false],
+      ["3 drawn, 2 newcomers, 1 bye: a redraw", { ...setup, entrants: [e1, e2, e3, e4, "x5"] }, true],
+      ["4 drawn (no bye), 1 newcomer: a redraw", { ...s, started: false, lateEntry: true, entrants: [e1, e2, e3, e4, "x5"] }, true],
+      ["no late entry", { ...setup, entrants: [e1, e2, e3, e4, "x5"], lateEntry: false }, false],
+      ["no lines yet (Start draws the bracket)", { ...setup, entrants: [e1, e2, e3, e4, "x5"], fixtures: new Map() }, false],
+      ["a league", { ...setup, entrants: [e1, e2, e3, e4, "x5"], stageKind: "league" }, false],
+      ["double elim", { ...setup, entrants: [e1, e2, e3, e4, "x5"], stageKind: "double_elim" }, false],
+    ];
+    let checked = 0;
+    for (const [label, m, want] of TABLE) {
+      expect(expects(m), label).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(TABLE.length);
+  });
+  it("fix round 2: an expected knockout Start refusal must carry KO_START_NEEDS_UPDATE_DRAW — another named code is a violation, that code is not", async () => {
+    let checked = 0;
+    for (const code of ["KO_REDRAW_WOULD_CLEAR_SETUP", "KO_GENERATE_AFTER_START", "KO_START_NEEDS_UPDATE_DRAW"]) {
+      const s = await ko();
+      const [e1, e2, e3, e4] = s.entrants;
+      if (e1 === undefined || e2 === undefined || e3 === undefined || e4 === undefined) throw new Error("test: four entrants");
+      // Two drawn (e1 v e2, no bye), two added: Start would have to draw the bracket again.
+      const m: ModelState = {
+        ...s, started: false, lateEntry: true, entrants: [e1, e2, e3, e4],
+        fixtures: new Map([["k1", { id: "k1", round: 1, home: e1, away: e2, status: "scheduled", ledger: null }]]),
+      };
+      expect(KNOCKOUT_REFUSALS[code as keyof typeof KNOCKOUT_REFUSALS], `premise: ${code} is the knockout table's`).toBeDefined();
+      const d = { start: () => Promise.reject(new RefusedCall("POST", "/api/v1/divisions/d1/start", 409, code, "refused")) } as unknown as OrganiserDriver;
+      const out = await commandOf("Start", 0, 0, true).run(m, d as never).then(() => null, (x: unknown) => x);
+      if (code === "KO_START_NEEDS_UPDATE_DRAW") {
+        expect(out instanceof ModelViolation ? out.check : null, code).not.toBe("model-expected-refusal");
+        expect(m.counts.Start.expected, code).toBe(1);
+        expect([m.started, m.lateEntry], "refused: not started, the late entry still waits").toEqual([false, true]);
+      } else {
+        expect(out, code).toBeInstanceOf(ModelViolation);
+        expect((out as ModelViolation).check, code).toBe("model-expected-refusal");
+        expect((out as ModelViolation).message, code).toContain(code);
+      }
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
   // B2 fix round 1 (G1): Start reconciles a root knockout that already has lines (schedule.ts startDivision), so an entrant
-  // added before Start is placed by it — the late entry is spent, and a Generate after Start is the named no-op, not refused.
-  // A league's Start draws nothing over existing lines (#879's fence still reads its late entry).
+  // added before Start and seated by it in place spends the late entry, and a Generate after Start is the named no-op, not
+  // refused. A league's Start draws nothing over existing lines (#879's fence still reads its late entry).
   it("G1: Start spends a knockout's late entry when the stage already has lines — never a league's", async () => {
     let checked = 0;
     for (const [kind, spent] of [["knockout", true], ["league", false]] as const) {

@@ -44,3 +44,17 @@ export function swissAwaitingPairing(
 ): boolean {
   return kind === "swiss" && drift.ghosts.length === 0 && drift.unplaced.length > 0;
 }
+
+/**
+ * Whether a stage's board no longer matches its roster — the ONE test the drift banner (with its Rebuild) and Update draw's
+ * offer both read (stages-panel.tsx), so the two cannot disagree. Any direction is drift: a ghost (named on a match still
+ * to be played, no longer active), an unplaced entrant (active, on no match), or — W4 B2 fix round 2, item 1 — an empty
+ * first-round place on a root knockout (`vacantLines`: an entrant DELETED, so nobody is named and nobody is missing).
+ * Optional `vacantLines`: a payload that predates the field is read as none.
+ */
+export function rosterDriftShown(
+  drift: { ghosts: readonly unknown[]; unplaced: readonly unknown[]; vacantLines?: number } | undefined,
+): boolean {
+  if (drift === undefined) return false;
+  return drift.ghosts.length > 0 || drift.unplaced.length > 0 || (drift.vacantLines ?? 0) > 0;
+}

@@ -26,7 +26,10 @@ export type KnockoutRefusalCode =
   | "KO_GENERATE_AFTER_START"
   // B2 fix round 1 (I1): a knockout's Generate (or Start) would have to redraw the bracket — delete every line — and the
   // lines carry organiser setup the delete cascades into. Generate has no confirm; Rebuild's lists what it clears.
-  | "KO_REDRAW_WOULD_CLEAR_SETUP";
+  | "KO_REDRAW_WOULD_CLEAR_SETUP"
+  // B2 fix round 2 (item 2): Start reconciles a root knockout in place only; a change that needs the bracket drawn again is
+  // Update draw's (its notice says what moved), so Start refuses it by name and names the button.
+  | "KO_START_NEEDS_UPDATE_DRAW";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -68,8 +71,13 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
   },
   KO_REDRAW_WOULD_CLEAR_SETUP: {
     status: 409,
-    en: "The bracket would have to be drawn again, which clears its official assignments, team sheets or linked scoring devices. Use Rebuild fixtures — it lists what it clears first.",
+    en: "The bracket would have to be drawn again, which clears match setup already on its lines (officials, team sheets, scoring devices, streams, player availability or court calls). Use Rebuild fixtures — it lists what it clears first.",
     key: "knockout.refusal.KO_REDRAW_WOULD_CLEAR_SETUP",
+  },
+  KO_START_NEEDS_UPDATE_DRAW: {
+    status: 409,
+    en: "The draw needs updating — press Update draw first.",
+    key: "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW",
   },
 };
 

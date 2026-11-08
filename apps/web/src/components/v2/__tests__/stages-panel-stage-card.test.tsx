@@ -971,8 +971,11 @@ describe("Update draw: a knockout whose roster moved before Start offers Generat
   // counts read it as played — the e2e on next dev found the first version of this offer hidden by exactly that.
   const BYE = { ...fixture(A, 1, { status: "forfeited", outcome: { kind: "award", winner: "e1", loser: null, reason: "bye" } }), away_entrant_id: null };
   const KO_FIXTURES = [BYE, fixture(A, 2), fixture(A, 3)];
-  const drifted = { [A]: { ghosts: [{ id: "e9", display_name: "Gone" }], unplaced: [], attachments: { officials: 0, lineups: 0, deviceLinks: 0 } } };
-  const quiet = { [A]: { ghosts: [], unplaced: [], attachments: { officials: 0, lineups: 0, deviceLinks: 0 } } };
+  const NONE = { officials: 0, lineups: 0, deviceLinks: 0, streams: 0, youtubeBroadcasts: 0, availability: 0, calls: 0 };
+  const drifted = { [A]: { ghosts: [{ id: "e9", display_name: "Gone" }], unplaced: [], vacantLines: 0, attachments: NONE } };
+  const quiet = { [A]: { ghosts: [], unplaced: [], vacantLines: 0, attachments: NONE } };
+  // Fix round 2 (item 1): a deleted entrant's empty first-round place — nobody named, nobody unplaced.
+  const vacant = { [A]: { ghosts: [], unplaced: [], vacantLines: 1, attachments: NONE } };
   const ko = (over: Record<string, unknown>) =>
     panel({ stages: [stageRow({ kind: "knockout", name: "Knockout" })], fixtures: KO_FIXTURES, stageTableRules: {}, ...over });
 
@@ -981,6 +984,14 @@ describe("Update draw: a knockout whose roster moved before Start offers Generat
     expect(tag(html, "stage-generate"), "the control is drawn").not.toBeNull();
     expect(tag(html, "stage-generate")).toMatch(/\bbtn-primary\b/);
     expect(text(html)).toContain(UI["schedule.updateDraw"]!);
+  });
+
+  it("an empty first-round place alone (an entrant DELETED, nobody named): Update draw leads, and the banner keeps its Rebuild (fix round 2, item 1)", () => {
+    const html = ko({ rosterDrift: vacant, divisionStatus: "setup" });
+    expect(tag(html, "stage-generate"), "Update draw").not.toBeNull();
+    expect(text(html)).toContain(UI["schedule.updateDraw"]!);
+    expect(html).toContain('data-testid="roster-drift-banner"');
+    expect(html).toContain('data-testid="roster-drift-rebuild"');
   });
 
   it("each of: no drift, a started division, a finished division, another kind - hides it", () => {
