@@ -166,6 +166,12 @@ test.beforeAll(async ({ browser }) => {
   expect(A.name.length, "premise: a 43-character name").toBe(43);
   org = await seedStandInOrg(browser, "spj");
   const o = owner();
+  // The owner has seen the product tour, as auth.setup's shared owner has: with a competition in the org (the fixtures below) the
+  // tour auto-opens on the org home as a modal that takes every pointer event (CI e2e 42438561906: J10's hover on Settings timed
+  // out under it). Right for a new owner, and not this journey's subject, so it is marked done the way auth.setup and the
+  // match-day walkthroughs do (POST /api/tour); J10 asserts the dialog absent before it taps the bar.
+  const tour = await o.page.request.post("/api/tour", { data: {} });
+  expect(tour.status(), "setup: the tour is marked seen").toBeLessThan(300);
   volley = await seedStandInFixture(o, { label: `Harbour Volley ${o.orgSlug}`, sportKey: "volleyball", variantKey: "indoor", home: "Harbour Town VC", away: "Kingsway Spikers" });
   hockey = await seedStandInFixture(o, { label: `Harbour Hockey ${o.orgSlug}`, sportKey: "hockey", variantKey: "fih-outdoor", home: "Harbour Town HC", away: "Kingsway Sticks" });
   for (const s of [B, C]) {
@@ -189,6 +195,7 @@ test("J10 the top bar: Sponsors is a labelled link to the hub; Settings and Sign
   const settingsWord = say(EN_CONSOLE, "nav.settings");
   const signOutWord = say(EN_CONSOLE, "nav.signOut");
   const sponsorsWord = say(EN_CONSOLE, "nav.sponsors");
+  const tourWord = say(EN_CONSOLE, "tour.dialogLabel");
   const bar = page.locator("header.app-gantry");
   const checkIcons = async (width: number) => {
     const settings = bar.getByTestId("nav-settings");
@@ -203,6 +210,7 @@ test("J10 the top bar: Sponsors is a labelled link to the hub; Settings and Sign
     // The tooltip is the browser's own (`title`): hovering is what a mouse user does; its paint is not in the DOM.
     await settings.hover();
     await expect(settings).toHaveAttribute("title", settingsWord);
+    await expect(page.getByRole("dialog", { name: tourWord }), `@${width}: no product tour over the bar (marked seen in setup)`).toHaveCount(0);
     await expectNoHorizontalScroll(page);
   };
 
