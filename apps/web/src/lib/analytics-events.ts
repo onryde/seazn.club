@@ -91,6 +91,10 @@ export const EVENTS = {
    *  `captureServer` drops every organizer event for that org. Carries { quick_match_id, sport_key, variant_key, kind,
    *  format, sides, plays }; never the match's name, the guest's email or the home token. */
   QUICK_MATCH_CREATED: "quick_match_created",
+  /** Quick match (plan 3 pre-flight D10): a signed-in person kept a quick match, one event per match saved. Sent for the
+   *  system org beside `QUICK_MATCH_CREATED`, so the two make the funnel. Carries { quick_match_id, via: "button" |
+   *  "email" }; never the match's name, an address or the home token. */
+  QUICK_MATCH_SAVED: "quick_match_saved",
 } as const;
 
 export type AnalyticsEvent = (typeof EVENTS)[keyof typeof EVENTS];
