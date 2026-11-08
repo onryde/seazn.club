@@ -81,17 +81,35 @@ interface Action {
   stageId?: string;
   targetRound?: number | null;
   proposalId?: string | null;
+  dueAt?: Date | null;
+  blockedCode?: string | null;
+  attempts?: number;
 }
 
-/** One row, inserted on the privileged pool (as the cross-org sweep writes). A round kind defaults to round 1. */
+/**
+ * One row, inserted on the privileged pool (as the cross-org sweep writes). Defaults make a VALID row so each case
+ * varies only the field it is about: a round kind targets round 1; a pending or paused row is due in 60 s; a blocked
+ * row carries a code. Pass `null` explicitly to leave a field out.
+ */
 async function insertAction(s: Seeded, a: Action): Promise<string> {
   const round = a.targetRound !== undefined ? a.targetRound : a.kind === "confirm_handoff" ? null : 1;
   const proposal = a.proposalId ?? null;
+  const timed = a.state === "pending" || a.state === "paused";
+  const dueAt = a.dueAt !== undefined ? a.dueAt : timed ? new Date(Date.now() + 60_000) : null;
+  const blockedCode = a.blockedCode !== undefined ? a.blockedCode : a.state === "blocked" ? "STAGE_NOT_READY" : null;
   const [row] = await sql<{ id: string }[]>`
-    insert into stage_auto_actions (org_id, division_id, stage_id, kind, target_round, target_proposal_id, state)
-    values (${s.orgId}, ${s.divisionId}, ${a.stageId ?? s.stageId}, ${a.kind}, ${round}, ${proposal}, ${a.state})
+    insert into stage_auto_actions
+      (org_id, division_id, stage_id, kind, target_round, target_proposal_id, state, due_at, blocked_code, attempts)
+    values (${s.orgId}, ${s.divisionId}, ${a.stageId ?? s.stageId}, ${a.kind}, ${round}, ${proposal}, ${a.state},
+            ${dueAt}, ${blockedCode}, ${a.attempts ?? 0})
     returning id`;
   return row!.id;
+}
+
+async function statesFor(stageId: string): Promise<Record<string, number>> {
+  const rows = await sql<{ state: string; n: number }[]>`
+    select state, count(*)::int as n from stage_auto_actions where stage_id = ${stageId} group by state`;
+  return Object.fromEntries(rows.map((r) => [r.state, r.n]));
 }
 
 async function countFor(stageId: string): Promise<number> {
@@ -104,16 +122,14 @@ describe.skipIf(!HAS_DB)("stage_auto_actions: one live row per (stage, kind)", (
     const s = await seedSwiss();
     await insertAction(s, { kind: "pair_round", state: first, targetRound: 1 });
     // A second row in EVERY live state, at a different round: the key is (stage, kind), whatever the target.
-    let refused = 0;
     for (const second of LIVE) {
       await expect(
         insertAction(s, { kind: "pair_round", state: second, targetRound: 2 }),
         `${first} then ${second}`,
       ).rejects.toMatchObject({ code: "23505", constraint_name: "stage_auto_actions_one_live" });
-      refused++;
     }
-    expect(refused).toBe(LIVE.length);
-    expect(await countFor(s.stageId)).toBe(1);
+    // Read back: only the first row exists, in the state it was written.
+    expect(await statesFor(s.stageId)).toEqual({ [first]: 1 });
   });
 
   it("a second live confirm on the same target stage is refused even for a different proposal", async () => {
@@ -138,15 +154,13 @@ describe.skipIf(!HAS_DB)("stage_auto_actions: one live row per (stage, kind)", (
   it("a done or cancelled row does not block a new live row", async () => {
     const s = await seedSwiss();
     // History accumulates: finished rows never collide with each other either.
-    let finished = 0;
     for (const state of FINISHED) {
       await insertAction(s, { kind: "pair_round", state, targetRound: 1 });
       await insertAction(s, { kind: "pair_round", state, targetRound: 2 });
-      finished += 2;
     }
-    expect(finished).toBe(2 * FINISHED.length);
+    expect(await statesFor(s.stageId)).toEqual({ done: 2, cancelled: 2 });
     await insertAction(s, { kind: "pair_round", state: "pending", targetRound: 3 });
-    expect(await countFor(s.stageId)).toBe(finished + 1);
+    expect(await statesFor(s.stageId)).toEqual({ done: 2, cancelled: 2, pending: 1 });
     // …and the index is still live behind them: the next live row is refused.
     await expect(insertAction(s, { kind: "pair_round", state: "waiting", targetRound: 3 })).rejects.toMatchObject({
       code: "23505",
@@ -158,17 +172,88 @@ describe.skipIf(!HAS_DB)("stage_auto_actions: one live row per (stage, kind)", (
 describe.skipIf(!HAS_DB)("stage_auto_actions: closed sets and the target shape", () => {
   it("every declared state is accepted and an unknown one is refused", async () => {
     const s = await seedSwiss();
-    let accepted = 0;
-    for (const state of [...LIVE, ...FINISHED]) {
-      const id = await insertAction(s, { kind: "pair_round", state });
-      await sql`delete from stage_auto_actions where id = ${id}`;
-      accepted++;
-    }
-    expect(accepted).toBe(6);
+    // One row per state, each on its own round kind/stage slot so no two live rows share (stage, kind): the live
+    // states go one per (stage, kind) across the two stages, the finished ones beside them.
+    const slots: Array<{ kind: Kind; stageId: string }> = [
+      { kind: "pair_round", stageId: s.stageId },
+      { kind: "complete_stage", stageId: s.stageId },
+      { kind: "pair_round", stageId: s.nextStageId },
+      { kind: "complete_stage", stageId: s.nextStageId },
+    ];
+    for (const [i, state] of LIVE.entries()) await insertAction(s, { ...slots[i]!, state });
+    for (const state of FINISHED) await insertAction(s, { kind: "pair_round", state });
+    const stored = await sql<{ state: string }[]>`
+      select state from stage_auto_actions where stage_id in (${s.stageId}, ${s.nextStageId}) order by state`;
+    expect(stored.map((r) => r.state)).toEqual([...LIVE, ...FINISHED].sort());
     await expect(insertAction(s, { kind: "pair_round", state: "running" })).rejects.toMatchObject({
       code: "23514",
       constraint_name: "stage_auto_actions_state_valid",
     });
+  });
+
+  it.each(["pending", "paused"] as const)("a %s row without a due_at is refused; with one it is stored", async (state) => {
+    const s = await seedSwiss();
+    await expect(insertAction(s, { kind: "pair_round", state, dueAt: null })).rejects.toMatchObject({
+      code: "23514",
+      constraint_name: "stage_auto_actions_due_at_when_timed",
+    });
+    expect(await statesFor(s.stageId)).toEqual({});
+    // The positive pair.
+    const due = new Date(Date.now() + 60_000);
+    const id = await insertAction(s, { kind: "pair_round", state, dueAt: due });
+    const [row] = await sql<{ state: string; due_at: Date }[]>`
+      select state, due_at from stage_auto_actions where id = ${id}`;
+    expect(row!.state).toBe(state);
+    expect(row!.due_at.getTime()).toBe(due.getTime());
+  });
+
+  it("an untimed row needs no due_at", async () => {
+    const s = await seedSwiss();
+    await insertAction(s, { kind: "pair_round", state: "waiting", dueAt: null });
+    await insertAction(s, { kind: "complete_stage", state: "blocked", dueAt: null });
+    await insertAction(s, { kind: "pair_round", state: "done", dueAt: null });
+    await insertAction(s, { kind: "pair_round", state: "cancelled", dueAt: null });
+    expect(await statesFor(s.stageId)).toEqual({ waiting: 1, blocked: 1, done: 1, cancelled: 1 });
+  });
+
+  it("a blocked row without a code is refused; with one it is stored, and an unblocked row needs none", async () => {
+    const s = await seedSwiss();
+    await expect(insertAction(s, { kind: "pair_round", state: "blocked", blockedCode: null })).rejects.toMatchObject({
+      code: "23514",
+      constraint_name: "stage_auto_actions_blocked_code_when_blocked",
+    });
+    expect(await statesFor(s.stageId)).toEqual({});
+    // The positive pair.
+    const id = await insertAction(s, { kind: "pair_round", state: "blocked", blockedCode: "SWISS_NO_LEGAL_PAIRING" });
+    const [row] = await sql<{ blocked_code: string | null }[]>`
+      select blocked_code from stage_auto_actions where id = ${id}`;
+    expect(row!.blocked_code).toBe("SWISS_NO_LEGAL_PAIRING");
+    await insertAction(s, { kind: "complete_stage", state: "waiting", targetRound: 3, blockedCode: null });
+    expect(await statesFor(s.stageId)).toEqual({ blocked: 1, waiting: 1 });
+    // The CHECK holds on UPDATE too: a row cannot be moved into blocked without its code.
+    const waiting = await sql<{ id: string }[]>`
+      select id from stage_auto_actions where stage_id = ${s.stageId} and state = 'waiting'`;
+    await expect(
+      sql`update stage_auto_actions set state = 'blocked' where id = ${waiting[0]!.id}`,
+    ).rejects.toMatchObject({ code: "23514", constraint_name: "stage_auto_actions_blocked_code_when_blocked" });
+  });
+
+  it("attempts defaults to 0, counts up, and refuses a negative count", async () => {
+    const s = await seedSwiss();
+    await expect(insertAction(s, { kind: "pair_round", state: "pending", attempts: -1 })).rejects.toMatchObject({
+      code: "23514",
+      constraint_name: "stage_auto_actions_attempts_nonneg",
+    });
+    expect(await statesFor(s.stageId)).toEqual({});
+    // The positive pair: a row that names no attempts reads back 0, and a retry's increment is stored.
+    const [row] = await sql<{ id: string; attempts: number }[]>`
+      insert into stage_auto_actions (org_id, division_id, stage_id, kind, target_round, state)
+      values (${s.orgId}, ${s.divisionId}, ${s.stageId}, 'pair_round', 1, 'waiting')
+      returning id, attempts`;
+    expect(row!.attempts).toBe(0);
+    const [bumped] = await sql<{ attempts: number }[]>`
+      update stage_auto_actions set attempts = attempts + 1 where id = ${row!.id} returning attempts`;
+    expect(bumped!.attempts).toBe(1);
   });
 
   it("an unknown kind is refused", async () => {
@@ -263,8 +348,8 @@ describe.skipIf(!HAS_DB)("stage_auto_actions: tenant isolation (app_user)", () =
     const insertAs = (orgId: string) =>
       withTenant(orgId, (tx) =>
         tx<{ id: string }[]>`
-          insert into stage_auto_actions (org_id, division_id, stage_id, kind, target_round, state)
-          values (${s.orgId}, ${s.divisionId}, ${s.stageId}, 'pair_round', 1, 'pending')
+          insert into stage_auto_actions (org_id, division_id, stage_id, kind, target_round, state, due_at)
+          values (${s.orgId}, ${s.divisionId}, ${s.stageId}, 'pair_round', 1, 'pending', now() + interval '60 seconds')
           returning id`,
       );
 

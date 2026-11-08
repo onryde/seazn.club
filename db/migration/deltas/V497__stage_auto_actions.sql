@@ -60,7 +60,13 @@ create table if not exists stage_auto_actions (
       then target_proposal_id is not null and target_round is null
       else target_proposal_id is null and target_round is not null
     end
-  )
+  ),
+  -- A counting row (pending) and a held row (paused, due = hold + 30 min) are both found by the sweep's due scan;
+  -- one with no due_at would never fire and never release, so the stage would stall with a live row in the way.
+  constraint stage_auto_actions_due_at_when_timed check (state not in ('pending', 'paused') or due_at is not null),
+  -- A blocked row is shown to a person as "what needs you"; without its code the banner has nothing to say.
+  constraint stage_auto_actions_blocked_code_when_blocked check (state <> 'blocked' or blocked_code is not null),
+  constraint stage_auto_actions_attempts_nonneg check (attempts >= 0)
 );
 
 -- At most one live row per (stage, kind) — the arming upsert's real constraint, not a fast path.
@@ -76,8 +82,14 @@ create index if not exists stage_auto_actions_division_recent
   on stage_auto_actions (division_id, updated_at desc);
 
 -- Skip is sticky for its target: rearm looks up a cancelled (stage, kind, round) before it arms that round again.
-create index if not exists stage_auto_actions_cancelled_target
-  on stage_auto_actions (stage_id, kind, target_round) where state = 'cancelled';
+-- Deliberately NOT partial: it is also the stage_id-leading index the stages FK cascade needs (the partial
+-- one_live index covers only live rows, so without this a stage delete would scan the table).
+create index if not exists stage_auto_actions_stage_target
+  on stage_auto_actions (stage_id, kind, target_round);
+
+-- The stage_seed_proposals FK cascade: deleting a proposal finds its confirm row(s). Only confirm rows carry one.
+create index if not exists stage_auto_actions_proposal
+  on stage_auto_actions (target_proposal_id) where target_proposal_id is not null;
 
 alter table stage_auto_actions enable row level security;
 alter table stage_auto_actions force row level security;
