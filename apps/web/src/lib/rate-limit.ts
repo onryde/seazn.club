@@ -153,8 +153,8 @@ export const SPONSOR_LINK_MISS_LIMIT: RateLimitConfig = { max: 30, windowSeconds
  *  - MD_OPEN_LIMIT: a match opened, per code — every row tap is an open (§6), an arbiter enters a round board by board;
  *  - MD_FAIL_LIMIT: FAILED lookups (an unknown, withdrawn or ended token) per client IP; a failure past it answers 429
  *    instead of its refusal. A valid code is never refused for its neighbours' traffic, nor for this budget.
- * A new link minted by an open spends the console's mint budget on top (`DEVICE_LINK_MINT_LIMIT`, `dlmint:` per client
- * IP), and only when it mints: a re-shown link writes nothing.
+ * A new link minted by an open spends the console's mint number on top (`DEVICE_LINK_MINT_LIMIT`), keyed on the code
+ * (`dlmint:md:{code}`, never the IP), and only when it mints: a re-shown link writes nothing.
  */
 export const MD_DAY_LIMIT: RateLimitConfig = { max: 600, windowSeconds: 60 };
 export const MD_REVIEW_LIMIT: RateLimitConfig = { max: 1, windowSeconds: 1 };

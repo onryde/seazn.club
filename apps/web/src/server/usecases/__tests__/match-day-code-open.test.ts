@@ -375,9 +375,9 @@ describe.skipIf(!HAS_DB)("open a match through a Match Day code", () => {
       expect((await dayRead(a.token)).status).toBe(200);
       expect((await dayRead(b.token)).status).toBe(200);
       // No bucket an IP keys but the one mint (f0 had no link): the codes' own, per route.
-      expect(redis.spent.filter((k) => k.includes(IP))).toEqual([`rl:dlmint:${IP}`]);
+      expect(redis.spent.filter((k) => k.includes(IP)), "no bucket keyed on the IP").toEqual([]);
       expect(new Set(redis.spent)).toEqual(
-        new Set([`rl:mdopen:${a.code.id}`, `rl:mdopen:${b.code.id}`, `rl:dlmint:${IP}`, `rl:mdday:${a.code.id}`, `rl:mdday:${b.code.id}`]),
+        new Set([`rl:mdopen:${a.code.id}`, `rl:mdopen:${b.code.id}`, `rl:dlmint:md:${a.code.id}`, `rl:mdday:${a.code.id}`, `rl:mdday:${b.code.id}`]),
       );
     });
 
@@ -398,11 +398,11 @@ describe.skipIf(!HAS_DB)("open a match through a Match Day code", () => {
       vi.useFakeTimers({ toFake: ["Date"], now: NOW });
       const redis = windowedRedis();
       expect((await open(token, f[0]!)).status, "f0 minted").toBe(200);
-      const mints = () => redis.spent.filter((k) => k === `rl:dlmint:${IP}`).length;
+      const mints = () => redis.spent.filter((k) => k === `rl:dlmint:md:${code.id}`).length;
       expect(mints()).toBe(1);
-      // Nine more mints from this IP (the console's own, say): the bucket is at its 10.
+      // Nine more of this code's mints: its bucket is at its 10.
       const { rateLimit, DEVICE_LINK_MINT_LIMIT } = await import("@/lib/rate-limit");
-      for (let i = 0; i < 9; i++) await rateLimit(`dlmint:${IP}`, DEVICE_LINK_MINT_LIMIT);
+      for (let i = 0; i < 9; i++) await rateLimit(`dlmint:md:${code.id}`, DEVICE_LINK_MINT_LIMIT);
       const refused = await open(token, f[5]!);
       expect(refused.status).toBe(429);
       expect(await linksOf(f[5]!), "the mint was rolled back").toEqual([]);
@@ -411,6 +411,23 @@ describe.skipIf(!HAS_DB)("open a match through a Match Day code", () => {
       const before = mints();
       expect((await open(token, f[0]!)).status).toBe(200);
       expect(mints()).toBe(before);
+    });
+
+    it("the mint cap is per code: two codes behind one IP each mint their cap, and only the code past its own is 429", async () => {
+      const a = await codeFor(day, { kind: "competition" });
+      const b = await codeFor(day, { kind: "competition" });
+      vi.useFakeTimers({ toFake: ["Date"], now: NOW });
+      windowedRedis();
+      const { rateLimit, DEVICE_LINK_MINT_LIMIT } = await import("@/lib/rate-limit");
+      // Each code has minted 9 in this minute, all from the venue's one IP.
+      for (const c of [a, b]) for (let i = 0; i < 9; i++) await rateLimit(`dlmint:md:${c.code.id}`, DEVICE_LINK_MINT_LIMIT);
+      expect((await open(a.token, f[0]!)).status, "code A's 10th mint").toBe(200);
+      expect((await open(b.token, f[5]!)).status, "code B's 10th mint, same IP").toBe(200);
+      expect(await linksOf(f[0]!)).toHaveLength(1);
+      expect(await linksOf(f[5]!)).toHaveLength(1);
+      // Code A's 11th: past its own cap.
+      expect((await open(a.token, f[1]!)).status).toBe(429);
+      expect(await linksOf(f[1]!), "rolled back").toEqual([]);
     });
 
     it("the review budget is the code's, one a second (final review m4); the day read's is its own", async () => {
