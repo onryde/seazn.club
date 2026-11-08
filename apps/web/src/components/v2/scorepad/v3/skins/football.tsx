@@ -68,7 +68,8 @@ import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import type { SportTone } from "../sport-theme";
 import type { PadClockSpec } from "../clock";
-import { matchClock, matchTimeCfgOf } from "./football-match-time";
+import { matchClock } from "./football-match-time";
+import { matchTimeCfgOf } from "./football-match-time-cfg";
 import { retirementSlotsOf, retirementTilesOf } from "../retirement-slot";
 import {
   MORE_SHEET_KEY,

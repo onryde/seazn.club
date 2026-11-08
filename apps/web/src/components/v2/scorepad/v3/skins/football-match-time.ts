@@ -20,7 +20,14 @@
 // says nothing the scalar does not, and the engine ignores it. The vectors in
 // `__tests__/football-match-time.test.ts` pin every arm, and the phone mirrors
 // the same vectors.
-import { FootballCfg } from "@seazn/engine/sports/football";
+//
+// THIS FILE IMPORTS NO ENGINE MODULE (S2-5 final review I1). The OBS overlay's
+// clock (`components/overlay/use-overlay-clock.ts`) imports `matchClock` from
+// here, so anything imported here ships in every sport's overlay bundle. The
+// cfg parse, which needs the engine's `FootballCfg`, lives in
+// `football-match-time-cfg.ts`, read by the pad's skin and the server's
+// projection only; the overlay gets the parsed numbers on the wire.
+// `components/overlay/__tests__/overlay-client-engine-imports.test.ts` holds it.
 import { formatClock, type GameTimeStamp } from "../clock";
 
 /** The cfg fields match time reads — a structural subset of `FootballCfg`. */
@@ -29,13 +36,6 @@ export interface MatchTimeCfg {
   readonly halfMinutes: number;
   readonly extraTime: { readonly enabled: boolean; readonly halfMinutes: number };
   readonly periodSeconds?: Readonly<Record<string, number>>;
-}
-
-/** A view's `cfg`, parsed as the engine parses it. A cfg the engine refuses
- *  reads as the engine's defaults (2 × 45), so the clock still shows a time. */
-export function matchTimeCfgOf(cfg: unknown): MatchTimeCfg {
-  const parsed = FootballCfg.safeParse(cfg);
-  return parsed.success ? parsed.data : FootballCfg.parse({});
 }
 
 interface PeriodSpan {

@@ -9,11 +9,8 @@ import type { RecentEvent } from "@/lib/overlay-recent-types";
 import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss, OverlayHighlights } from "@/lib/overlay-cricket";
 import { carromTossOf } from "@/lib/overlay-toss";
 import { latestClockAnchor } from "@/components/v2/scorepad/v3/clock";
-import {
-  clockPeriodsOf,
-  matchTimeCfgOf,
-  type MatchTimeCfg,
-} from "@/components/v2/scorepad/v3/skins/football-match-time";
+import { clockPeriodsOf, type MatchTimeCfg } from "@/components/v2/scorepad/v3/skins/football-match-time";
+import { matchTimeCfgOf } from "@/components/v2/scorepad/v3/skins/football-match-time-cfg";
 
 interface RowSnapshot {
   status: string;

@@ -7,7 +7,8 @@
 // 92:30 (ruling 109, owner, 2026-11-08: "A"). The phone plan mirrors these
 // vectors, so a row changed here is a row changed there.
 import { describe, expect, it } from "vitest";
-import { clockPeriodsOf, matchClock, matchTimeCfgOf } from "../football-match-time";
+import { clockPeriodsOf, matchClock } from "../football-match-time";
+import { matchTimeCfgOf } from "../football-match-time-cfg";
 import { buildFootballClock, readClock } from "../football";
 import { buildClock } from "../period-shared";
 import type { PadHostView } from "../../types";
