@@ -167,8 +167,11 @@
 //   - quick_match_link (quick match plan 3 Task 1; spec 2026-11-03 §7.6): the route POST of app/api/quick-match/route.ts, the guest's
 //     setup form, by a French guest who typed an address: the real create, whose last transaction queues the link mail on the system
 //     org's tenant, and the real `dispatchNow` after it. A guest has no account, so the setup form's own language.
-//   - quick_match_reminder: plan 3 Task 2 (the expiry sweep's reminder). Until it lands the sweep fails by name, `no scenario for
-//     outbox kind quick_match_reminder`: Task 2's red, recorded (plan 3 pre-flight A2, G5).
+//   - quick_match_reminder (quick match plan 3 Task 2; spec 2026-11-03 C2): the cron POST of app/api/cron/quick-match-expiry/route.ts
+//     (the cron secret is the stubbed `CRON_SECRET`, carried by the `next/headers` stand-in) over a quick match a Spanish guest created
+//     with an address, put 23 hours from its expiry by the clock: the real sweep claims the match's reminder and queues it on the pool,
+//     on the system org, in the setup form's own language, and the worker makes the first attempt. The route sweeps every quick match
+//     on the database (it has no scope, by design), so only this scenario's own row is judged, by its recipient.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -250,6 +253,9 @@ import { createFunnelDraft } from "@/lib/funnel";
 import { NextRequest } from "next/server";
 import { POST as quickMatchPost } from "@/app/api/quick-match/route";
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
+import { POST as quickMatchExpiryPost } from "@/app/api/cron/quick-match-expiry/route";
+import { createQuickMatch } from "@/server/usecases/quick-match-create";
+import { hashVisitorKey, mintVisitorKey } from "@/server/usecases/quick-match-tokens";
 import { POST as changeEmailPost } from "@/app/api/auth/change-email/route";
 import { DELETE as deleteAccount } from "@/app/api/users/me/route";
 import { POST as orgInvitePost } from "@/app/api/orgs/[id]/invites/route";
@@ -1548,6 +1554,51 @@ async function quickMatchLinkScenario(): Promise<KindScenario> {
   };
 }
 
+/** The real hourly sweep of the quick matches (POST /api/cron/quick-match-expiry; plan 3 Task 2) over a match a Spanish guest created with
+ *  an address (the real create), put 23 hours from its expiry by the clock (C2: the reminder goes once a day or less is left): a guest has
+ *  no account and the match is the system org's, so the setup form's own language; the worker makes the first attempt. The address is
+ *  the plan's smoke shape (plan 3 Amend T1 [A8]), with RUN in it. */
+async function quickMatchReminderScenario(): Promise<KindScenario> {
+  const recipient = `delivered+qm_${RUN}-${randomUUID().slice(0, 8)}@resend.dev`;
+  const name = QUICK_MATCH_SWEEP_NAME;
+  // Read from the catalog, never typed (as the quick match suites do).
+  const [variant] = await sql<{ key: string }[]>`
+    select key from sport_variants where sport_key = 'badminton' and is_system and org_id is null order by key limit 1`;
+  if (!variant) throw new Error("no system badminton variant: run `npm run sync:sports` against this database");
+  return {
+    locale: "es",
+    subjectKey: "quickMatchReminder.subject",
+    subjectVars: { name },
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("DEVICE_LINK_KEK", KEK); // the create seals the home token before anything else
+      const created = await createQuickMatch(
+        {
+          name,
+          sport_key: "badminton",
+          variant_key: variant.key,
+          kind: "pair",
+          format: "league",
+          sides: ["Ravi & Sam", "Priya & Tom"],
+          plays: 1,
+          email: recipient,
+          locale: "es",
+        },
+        { visitorHash: hashVisitorKey(mintVisitorKey()), baseUrl: "https://sweep.test" },
+      );
+      // The clock: 23 hours to expiry, the last activity the 7 days (C1) before it.
+      await sql`update quick_matches set expires_at = now() + interval '23 hours',
+                  last_activity_at = now() + interval '23 hours' - interval '7 days' where id = ${created.id}`;
+      const res = await quickMatchExpiryPost(new Request("https://sweep.test/api/cron/quick-match-expiry", { method: "POST" }));
+      expect(res.status, "premise: the real cron route answered 200").toBe(200);
+      const body = (await res.json()) as { data: { reminded: number; failed: number } };
+      expect(body.data.reminded, "premise: the sweep queued at least this match's reminder").toBeGreaterThanOrEqual(1);
+      expect(typeof body.data.failed, "the counter the cron Worker reads").toBe("number");
+    },
+  };
+}
+
 /** The real staff alert for a failed registration refund, to this run's STAFF_ALERT_EMAIL (stubbed for the run; the worker reads the
  *  address off the row): no org, no account, and the worker makes the first attempt. The subject is the sender's inline English with
  *  `money(1234, "gbp")` in en-GB, typed from its source. */
@@ -2491,6 +2542,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", quickMatchLink.subjectKey, quickMatchLink.subjectVars),
     );
 
+    const quickMatchReminder = await quickMatchReminderScenario();
+    expect(dictionarySubject("es", quickMatchReminder.subjectKey, quickMatchReminder.subjectVars)).not.toBe(
+      dictionarySubject("en", quickMatchReminder.subjectKey, quickMatchReminder.subjectVars),
+    );
+
     // The staff alert's language is the platform's, never the org's: the French subject is a different sentence, so a producer that
     // took the org's locale would fail the English one below.
     const dealPaid = await sponsorDealPaidScenario();
@@ -2600,7 +2656,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         registration_rejected: registrationRejected,
         registration_promotion_lapsed: registrationLapsed,
         quick_match_link: quickMatchLink,
-        // quick_match_reminder: plan 3 Task 2 adds its scenario (the expiry sweep's reminder).
+        quick_match_reminder: quickMatchReminder,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
