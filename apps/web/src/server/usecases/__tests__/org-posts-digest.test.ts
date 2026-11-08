@@ -63,11 +63,17 @@ interface DivCtx {
   entrantB: string;
 }
 
-async function seedDivision(ctx: Ctx): Promise<DivCtx> {
+/** `made` receives the competition id straight after its insert, so a caller's cleanup still finds it when a later
+ *  insert throws. */
+async function seedDivision(
+  ctx: Ctx,
+  opts: { visibility?: "public" | "private"; made?: string[] } = {},
+): Promise<DivCtx> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: compId }] = await sql<{ id: string }[]>`
     insert into competitions (org_id, name, slug, visibility, created_by)
-    values (${ctx.orgId}, 'Cup', ${"cup-" + suffix}, 'public', ${ctx.userId}) returning id`;
+    values (${ctx.orgId}, 'Cup', ${"cup-" + suffix}, ${opts.visibility ?? "public"}, ${ctx.userId}) returning id`;
+  opts.made?.push(compId);
   const [{ id: divisionId }] = await sql<{ id: string }[]>`
     insert into divisions (competition_id, org_id, name, slug, sport_key, variant_key, config, module_version)
     values (${compId}, ${ctx.orgId}, 'Singles', ${"singles-" + suffix}, 'badminton', 'default',
@@ -203,17 +209,17 @@ async function moveDecidedActivityTo(orgId: string, atMs: number): Promise<void>
  * `decided` is a match scored through the real scoring path whose fold is re-dated a day before the anchor (the
  * first arm reads `match_states.updated_at`); `upcoming` is a fixture scheduled two days after it (the second arm
  * reads `fixtures.scheduled_at`). Re-dated by FIXTURE id, never by org: the quick-match system org is shared with
- * every other suite's quick matches. The competition is pushed onto `made` as soon as it exists, so a caller in the
- * shared system org can delete it even when a later step throws.
+ * every other suite's quick matches. The competition is pushed onto `made` as soon as it is inserted, so a caller in
+ * the shared system org can delete it even when a later step throws. `visibility` is the competition's: real quick
+ * matches are private (C7).
  */
 async function seedSweepActivity(
   ctx: Ctx,
   anchor: number,
   arms: { decided: boolean; upcoming: boolean },
-  made: string[] = [],
+  opts: { visibility?: "public" | "private"; made?: string[] } = {},
 ): Promise<void> {
-  const div = await seedDivision(ctx);
-  made.push(div.compId);
+  const div = await seedDivision(ctx, opts);
   if (arms.decided) {
     const fx = await decideWithRally(ctx, div, div.entrantA, div.entrantB);
     const moved = await sql`
@@ -568,7 +574,12 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     try {
       // The system org gets the activity of BOTH arms, scored through the same path its quick matches are, so each
       // arm's exclusion is witnessed on its own: drop either one and the system org is back through that arm.
-      await seedSweepActivity(system, anchor, { decided: true, upcoming: true }, systemCompIds);
+      await seedSweepActivity(
+        system,
+        anchor,
+        { decided: true, upcoming: true },
+        { visibility: "private", made: systemCompIds },
+      );
       await sql`
         insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
         values (${QUICK_MATCH_SYSTEM_ORG_ID}, 'news.auto', true, 'org-posts-digest.test: the system org with the feature ON')`;
