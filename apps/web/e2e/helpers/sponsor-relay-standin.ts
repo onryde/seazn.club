@@ -18,9 +18,9 @@
 //     send would race the server's stale rule. A background beat cannot fail the test where it runs: each problem is
 //     recorded, and `endStandInSessions` throws them once the sessions are ended. A keep-alive beat answered 410 records
 //     the session's state, end_reason and fail_reason, read from the database, so a red names what ended it.
-//     It repeats the LAST programme phase reported - a test's own beat (`postBeat`, `beatOk`) or a compositor page's
-//     `serve` - as the real compositor repeats its last phase, so a test's `live` beat and the keep-alive never flip the
-//     phase back and forth.
+//     It repeats the LAST programme phase reported - a test's own beat the server took (`postBeat`, `beatOk`: a 2xx) or a
+//     compositor page's `serve` - as the real compositor repeats its last phase, so a test's `live` beat and the
+//     keep-alive never flip the phase back and forth, and a refused beat's phase never leaks into it.
 //   * a session that never reports `live` (its log `waiting` only) ARMS phone-lost's no-camera rule (`composedNeverLive`,
 //     server/relay/domain/phone-lost.ts:124-132): its camera never appeared. CI runs e2e with `PHONE_LOST_LIVE_MINUTES=1`
 //     (e2e.yml), so such a session would be ended (`camera_never_live`) 60 s after it went live if anything checked it -
@@ -207,7 +207,7 @@ export interface StandInSession extends StandInSessionRef {
   jobToken: string;
   /** The URL the session's facts carry, exactly as served. */
   overlayUrl: URL;
-  /** The programme phase the keep-alive repeats: the LAST one reported - by a beat the test sent (`postBeat`, `beatOk`)
+  /** The programme phase the keep-alive repeats: the LAST one reported - by a beat the server took (`postBeat`, `beatOk`)
    *  or a compositor page's `serve` - and `waiting` until then (see the header). */
   programmePhase: ProgrammePhase;
 }
@@ -354,16 +354,18 @@ function startKeepAlive(s: StandInSession, intervalMs: number): void {
 }
 
 /** One heartbeat, validated against the contract BEFORE it is sent. `token: null` sends no Authorization at all. A body
- *  that reports a programme phase makes it the session's: the keep-alive repeats it from the next tick (see the header). */
+ *  that reports a programme phase makes it the session's ONLY when the server takes it (a 2xx): the keep-alive repeats it
+ *  from the next tick (see the header). A refused beat (E1's bad credentials) reported nothing, so it never leaks. */
 export async function postBeat(s: StandInSession, body: Record<string, unknown>, opts: { token?: string | null } = {}): Promise<APIResponse> {
   expectContract("heartbeat", body, "the stand-in's heartbeat body");
-  // The contract just admitted the body, so a present `programmePhase` is one of its phases.
-  if (typeof body.programmePhase === "string") s.programmePhase = body.programmePhase as ProgrammePhase;
   const token = opts.token === undefined ? s.jobToken : opts.token;
-  return s.request.post(`/api/internal/relay/sessions/${s.sid}/heartbeat`, {
+  const res = await s.request.post(`/api/internal/relay/sessions/${s.sid}/heartbeat`, {
     headers: token === null ? {} : { Authorization: `Bearer ${token}` },
     data: body,
   });
+  // The contract admitted the body above, so a present `programmePhase` is one of its phases.
+  if (res.ok() && typeof body.programmePhase === "string") s.programmePhase = body.programmePhase as ProgrammePhase;
+  return res;
 }
 
 /** A beat the server must take: 200, and a reply the contract admits. Returns the reply's `data`. Through `postBeat`, so
