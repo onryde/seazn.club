@@ -7,8 +7,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 //     shown only through the sponsor report link (S13/S14: created and revoked by the org) as a signed url
 //     (REPORT_FRAME_TTL_SEC). Deleting the sponsor cascades its LINKS (V492) but sets the airing's sponsor null and leaves
 //     the airing and its frame: nothing shows it again, and it is not deleted then. It goes with the organisation (V492:
-//     org cascade, the tombstone drain removes the object), and a frame no airing row names is purged
-//     ORPHAN_FRAME_GRACE_MS after its session ended (purgeOrphanFrames).
+//     org cascade, the tombstone drain removes the object), and a frame no airing row names is purged by the first daily
+//     relay sweep that finds its session ended more than ORPHAN_FRAME_GRACE_MS ago (purgeOrphanFrames, step 7d): so
+//     WITHIN the grace plus one sweep period (fix batch 3, B2 - the page used to say "one day after", the grace alone).
 //   - Short links (S10): `/s/` keeps sha256(ip) in a window - CLICK_DEDUPE_WINDOW_SECONDS to count a repeat tap once, and
 //     SPONSOR_LINK_MISS_LIMIT's window for a miss (the 429 budget). The raw IP is in no row and no key.
 // The page is static English like the rest of /legal (the sibling tests pin its sentences the same way): no dictionary.
@@ -23,11 +24,23 @@ import { ORPHAN_FRAME_GRACE_MS } from "@/server/sponsors/airings";
 import { REPORT_FRAME_TTL_SEC } from "@/server/sponsors/report";
 import { SPONSOR_LINK_MISS_LIMIT } from "@/lib/rate-limit";
 
+// The relay sweep's cadence is declared in apps/cron-worker, outside the Fly image's build context, so it is imported with
+// a computed specifier tsc never resolves (the email-outbox route test's pattern); vitest loads the REAL schedule.
+const cronSrc = (file: string) => new URL(`../../../../../cron-worker/src/${file}`, import.meta.url).href;
+const { JOBS } = (await import(/* @vite-ignore */ cronSrc("schedule.ts"))) as { JOBS: readonly { id: string; due: { kind: string } }[] };
+const SWEEP = JOBS.find((j) => j.id === "relay-sweep");
+/** The sweep's period, in seconds, from its `due` (a kind not listed here is a red that names it). */
+const SWEEP_PERIOD_SECONDS: number = (() => {
+  const period = ({ daily: 86_400, weekly: 7 * 86_400 } as Record<string, number>)[SWEEP?.due.kind ?? "missing"];
+  if (period === undefined) throw new Error(`relay-sweep's due is ${JSON.stringify(SWEEP?.due)}: the page and this test owe its period`);
+  return period;
+})();
+
 const text = (html: string) => html.replace(/<[^>]+>/g, "").replace(/&#x27;|&apos;/g, "'").replace(/&hellip;|&#8230;/g, "…").replace(/\s+/g, " ");
 const page = text(renderToStaticMarkup(<PrivacyPage />));
 
 /** How the page speaks a duration, in seconds. A constant moved to a value not listed here is a red that names it. */
-const SPOKEN: Record<number, string> = { 60: "one minute", 3600: "an hour", 86_400: "one day" };
+const SPOKEN: Record<number, string> = { 60: "one minute", 3600: "an hour", 86_400: "one day", 172_800: "two days" };
 const spoken = (seconds: number): string => {
   const words = SPOKEN[seconds];
   if (words === undefined) throw new Error(`no words for ${seconds} s: the page and this table both owe the new value`);
@@ -53,7 +66,8 @@ describe("privacy - the sponsor features (final review 2, m10)", () => {
       `each view uses a web address that expires within ${spoken(REPORT_FRAME_TTL_SEC)}`,
       "Deleting the sponsor ends its report links, so its stills are no longer shown to anyone, but they stay with the organisation's records of its showings.",
       "They are deleted when the organisation's account is deleted",
-      `a still whose showing was never recorded is deleted ${spoken(ORPHAN_FRAME_GRACE_MS / 1000)} after the stream ends`,
+      // The upper bound: the grace, then up to one sweep period until the sweep that finds it past the grace.
+      `a still whose showing was never recorded is deleted within ${spoken(ORPHAN_FRAME_GRACE_MS / 1000 + SWEEP_PERIOD_SECONDS)} after the stream ends`,
     ]) {
       expect(stills, sentence).toContain(sentence);
     }
