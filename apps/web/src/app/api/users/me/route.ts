@@ -13,6 +13,7 @@ import { cancelBillingGroup } from "@/lib/billing";
 import { groupIdsOwnedBy } from "@/lib/billing-group";
 import { deferred } from "@/lib/deferred";
 import { unlinkLichess } from "@/server/usecases/external-accounts";
+import { releaseQuickMatchesOfDeletedAccount } from "@/server/usecases/quick-match-save";
 import { afterEndedBadly, dispatchNow, enqueueEmailOnce, expiryWithin, onceKey, recipientLocale } from "@/server/email-outbox";
 import { anonymiseAccountEmails, deletedAccountPlaceholder } from "@/server/email-outbox/account-deletion";
 
@@ -177,6 +178,11 @@ export async function DELETE(req: Request) {
       // header (D5). `tx` is the pooled PRIVILEGED client (this route has no tenant context; `app_user` holds INSERT only on
       // email_outbox, V470). The rows it ended are returned for the kind hooks, which run after the commit.
       const endedByDeletion = await anonymiseAccountEmails(tx, { userId: user.id, email: user.email, placeholder: anonEmail });
+
+      // Quick matches (spec §7.7 amended, pre-flight D8): the matches this account saved expire again 7 days after their last
+      // activity (friends with the link keep scoring until then), and its address leaves every match it was typed on. Here,
+      // while the real address is still known, and in this transaction, so a deletion that rolls back releases nothing.
+      await releaseQuickMatchesOfDeletedAccount(tx, { userId: user.id, email: user.email });
 
       // Soft-delete: anonymize PII, mark deleted, schedule purge
       await tx`
