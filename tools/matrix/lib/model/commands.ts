@@ -370,6 +370,15 @@ class Generate extends Cmd {
   // (stages.ts generateStageFixturesWrite), and it is how fixtures come to
   // exist before Start — the first half of #879's sequence.
   protected ready(m: ModelState) { return !m.completed; }
+  /** W4 app-A T8 (FX-G2; spec 2026-11-04 §6.5): after Start a root knockout is never reshaped — a Generate over its
+   *  lines with an entrant added since they were drawn (before Start: the roster lock refuses AddEntrant after it) is
+   *  refused by name, 409 KO_GENERATE_AFTER_START. A withdrawal is NOT (MB-004's sequence): its cascade already walked
+   *  the line over, so Generate is the named no-op and answers the bracket. The model's knockout rows are single-stage,
+   *  so their stage is the root. Before Start the product reconciles (places, vacates or regenerates), which the model
+   *  accepts. */
+  protected override expectsRefusal(m: ModelState) {
+    return m.started && m.stageKind === "knockout" && m.fixtures.size > 0 && m.lateEntry;
+  }
   protected async act(m: ModelState, d: OrganiserDriver) {
     const g = await d.generate(m.stageId);
     // I8 judges what is recorded here: `total` is the stage's full list, so a

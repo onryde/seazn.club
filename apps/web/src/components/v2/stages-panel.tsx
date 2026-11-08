@@ -2321,6 +2321,8 @@ export type GenerateNoticeWire = {
    *  `nextRoundNoticeOf`, which drops a verdict it cannot name a round for. */
   swiss_next_round?: "unpairable" | "unknown";
   swiss_paired_round?: number;
+  /** W4 T8 (FX-G2): a root knockout's Generate over existing lines — what it reconciled (`GenerateResult.reconcile`). */
+  reconcile?: { kind: "noop" | "in_place" | "regenerated"; placed: string[]; vacated: string[] };
 };
 
 /**
@@ -2330,9 +2332,10 @@ export type GenerateNoticeWire = {
  */
 export function generateNoticeText(out: GenerateNoticeWire, msg: Msg, msgPlural: MsgPlural, locale: string): string {
   return [
-    out.created > 0
-      ? msg("schedule.notice.generated", { created: out.created, existing: out.existing })
-      : msg("schedule.notice.nothingNew"),
+    reconcileNotice(out.reconcile, msg, msgPlural) ??
+      (out.created > 0
+        ? msg("schedule.notice.generated", { created: out.created, existing: out.existing })
+        : msg("schedule.notice.nothingNew")),
     // Swiss pre-Start: this press may also have resized rounds nobody
     // paired, deleting boards along with the times and courts pinned on
     // them. Silent before this; `reshapeNotice` returns null when
@@ -2341,6 +2344,22 @@ export function generateNoticeText(out: GenerateNoticeWire, msg: Msg, msgPlural:
   ]
     .filter((line): line is string => line !== null)
     .join(" ");
+}
+
+/**
+ * W4 T8 (FX-G2): what a knockout's Generate over existing lines did, in the organiser's words — or null, so the ordinary
+ * line stands: a first Generate (no `reconcile`), and the named no-op, which IS "up to date". A redraw says so (the old
+ * line counted only what it created, as if nothing had been taken away); a change in place counts the newcomers placed
+ * and the departed taken out, each clause dropped at zero.
+ */
+export function reconcileNotice(reconcile: GenerateNoticeWire["reconcile"], msg: Msg, msgPlural: MsgPlural): string | null {
+  if (reconcile === undefined || reconcile.kind === "noop") return null;
+  if (reconcile.kind === "regenerated") return msg("schedule.notice.reconcileRedrawn");
+  const clauses = [
+    reconcile.placed.length > 0 ? msgPlural("schedule.notice.reconcilePlaced", reconcile.placed.length) : null,
+    reconcile.vacated.length > 0 ? msgPlural("schedule.notice.reconcileVacated", reconcile.vacated.length) : null,
+  ].filter((c): c is string => c !== null);
+  return clauses.length > 0 ? clauses.join(" ") : null;
 }
 
 /**

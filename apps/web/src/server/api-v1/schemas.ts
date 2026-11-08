@@ -3057,6 +3057,19 @@ export const GenerateResult = z.object({
   swiss_next_round: z.enum(["unpairable", "unknown"]).optional(),
   /** The round this Pair seated, sent with `swiss_next_round` so a client names both rounds from one number. */
   swiss_paired_round: z.number().int().optional(),
+  /** W4 T8 (FX-G2; spec 2026-11-04 §6.5): a root knockout's Generate over a bracket that already has its lines — ABSENT
+   *  on a first Generate and on every other kind. `noop`: nothing changed. `in_place`: each entrant id in `placed` took a
+   *  bye, each in `vacated` left and their opponent now holds a bye; no line was inserted or deleted. `regenerated`: the
+   *  field crossed a power of two, so the bracket was drawn again, its times and courts carried by bracket role (`slots`,
+   *  as Rebuild reports them). After Start a changed roster is refused 409 KO_GENERATE_AFTER_START instead. */
+  reconcile: z
+    .object({
+      kind: z.enum(["noop", "in_place", "regenerated"]),
+      placed: z.array(z.string()),
+      vacated: z.array(z.string()),
+      slots: z.object({ kept: z.number().int(), freed: z.number().int(), unscheduled: z.number().int() }).optional(),
+    })
+    .optional(),
 });
 
 /** POST /stages/{id}/generate body. `pairing` = a ROUND-1-ONLY Swiss override

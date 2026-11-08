@@ -523,3 +523,71 @@ test.describe("X-SD-7 the draw replays", () => {
     }
   });
 });
+
+// FX-G2 (W4 T8; MB-005): Generate over a bracket that already has its lines reconciles it. Main inserted by `ext_key`
+// alone: an eighth player added after the draw of seven inserted nothing and the desk said "fixtures are up to date"
+// while the player sat in no line. Now the desk's own Generate places them in the bye, in place, and says so.
+test.describe("FX-G2 Generate places the eighth player in the bye", () => {
+  test("seven unseeded players drawn, an eighth registered, Generate pressed on the desk: the bye becomes their match, nothing inserted, and the notice counts the placement", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Reconcile cup ${TAG}`, visibility: "private" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "badminton",
+      variant_key: "bwf",
+      config: {},
+    });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const registered: { id: string; display_name: string }[] = [];
+    for (const n of ["Ana", "Ben", "Cas", "Dee", "Eli", "Fay", "Gus"]) {
+      const added = await apiJson<{ id: string; display_name: string }[]>(request, `/api/v1/divisions/${divisionId}/entrants`, "POST", [
+        { kind: "individual", display_name: `Recon ${n} ${TAG}` },
+      ]);
+      expect(added.status, JSON.stringify(added.error)).toBe(201);
+      registered.push(added.data![0]!);
+    }
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "knockout", name: "Cup", config: {} });
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    const stageId = stage.data!.id;
+    expect((await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST")).status).toBe(200);
+    const rows = async () => (await stageFixtures(request, divisionId, stageId)) as Seated[];
+    const first = await rows();
+    // Seven of eight slots: one bye, held by the draw's first (RB4-D2/D3 over lib/swiss-draw.ts).
+    const drawn = swissRoundOneOrder(swissDrawSeed(stageId), registered.map((e) => ({ id: e.id, seed: null })));
+    const byes = first.filter((f) => f.round_no === 1 && (f.home_entrant_id === null) !== (f.away_entrant_id === null));
+    expect([first.length, byes.length], "premise: seven lines, one bye").toEqual([7, 1]);
+    expect(byes[0]!.home_entrant_id ?? byes[0]!.away_entrant_id, "premise: the bye is the draw's first").toBe(drawn[0]);
+
+    const late = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${divisionId}/entrants`, "POST", [
+      { kind: "individual", display_name: `Recon Hal ${TAG}` },
+    ]);
+    expect(late.status, JSON.stringify(late.error)).toBe(201);
+    const lateId = late.data![0]!.id;
+
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+    const generate = page.getByTestId("stage-generate");
+    await expect(generate).toBeEnabled({ timeout: 20_000 });
+    const answered = page.waitForResponse((r) => r.url().endsWith(`/api/v1/stages/${stageId}/generate`) && r.request().method() === "POST");
+    await generate.click();
+    expect((await answered).status(), "Generate answers 200 (main: 'up to date', the player in no line)").toBe(200);
+    await expect(page.getByText("1 new entrant placed in a bye.", { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText("Nothing new to generate — fixtures are up to date.", { exact: true })).toHaveCount(0);
+
+    const after = await rows();
+    expect(after.map((f) => f.id).sort(), "nothing inserted or deleted: the same seven lines").toEqual(first.map((f) => f.id).sort());
+    const line = after.find((f) => f.id === byes[0]!.id)!;
+    expect([line.home_entrant_id, line.away_entrant_id].sort(), "the bye became the eighth player's match against its holder").toEqual(
+      [drawn[0], lateId].sort(),
+    );
+    expect(
+      after.filter((f) => f.round_no === 1 && (f.home_entrant_id === null || f.away_entrant_id === null)).length,
+      "round one is full: no bye is left",
+    ).toBe(0);
+  });
+});

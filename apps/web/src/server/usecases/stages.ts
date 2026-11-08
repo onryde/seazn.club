@@ -158,7 +158,9 @@ import {
   type SlotLabel,
 } from "./stage-seeding";
 import { fixtureEvidenceSql, fixtureHasResultSql, fixtureHoldsStandingResultSql } from "./fixture-results-sql";
-import { fixtureCalledSql } from "./fixture-started-sql";
+import { fixtureCalledSql, stageHasStarted } from "./fixture-started-sql";
+// W4 T8 (FX-G2): a root knockout's Generate over existing lines reconciles them (bracket-reconcile.ts).
+import { reconcileRootBracket } from "./bracket-reconcile";
 import { carriedSlotCounts, carrySlots, chooseDoomedBoards } from "@/lib/rebuild-slots";
 import { firstOwnFormat, matchName, ownFormatLoss, refuseOwnFormatLoss } from "./fixture-override-guards";
 import { FORMAT_CHANGE_REFUSALS, type FormatChangePreview } from "@/lib/format-change";
@@ -2964,6 +2966,19 @@ export interface GenerateOutcome {
   /** W3 app-B T7: the round the Pair just seated, sent beside `swiss_next_round` so the desk names the round it follows
    *  ({round}) and the one it warns about ({round} + 1) from ONE number, the server's - never a second count of its own. */
   swiss_paired_round?: number;
+  /** W4 T8 (FX-G2): a root knockout's Generate over a bracket that already has lines — ABSENT on a first Generate and on
+   *  every other kind. `noop`: nothing changed (the desk's "up to date"); `in_place`: newcomers `placed` in byes and the
+   *  departed `vacated` (their opponents now hold byes), no line inserted or deleted; `regenerated`: the bracket crossed a
+   *  power of two, so it was drawn again in this transaction with its slots carried by role (`slots`, as Rebuild says). */
+  reconcile?: ReconcileOutcome;
+}
+
+/** W4 T8: what a root knockout's reconcile did (`GenerateOutcome.reconcile`). `placed`/`vacated` are entrant ids. */
+export interface ReconcileOutcome {
+  kind: "noop" | "in_place" | "regenerated";
+  placed: string[];
+  vacated: string[];
+  slots?: { kept: number; freed: number; unscheduled: number };
 }
 
 /**
@@ -3012,6 +3027,9 @@ export interface GenerateWrite {
   /** Only with `ledger: "step"`: the `fixtures_generated` payload this pass did NOT append (`fixture_ids` and, for a
    *  Swiss seating, its seat audit), for the history step that ran it to record on its own row. */
   ledgerPayload?: Record<string, unknown>;
+  /** W4 T8 (FX-G2): the fixtures a knockout reconcile changed in place, or deleted to regenerate — the publish names
+   *  them so their match centres refetch. Absent on every other write (a plain Generate changes no existing fixture). */
+  changedFixtureIds?: string[];
 }
 
 /** What a Generate press may ask for beyond "generate". */
@@ -3044,8 +3062,11 @@ export async function generateStageFixtures(
   opts: GenerateOptions = {},
 ): Promise<GenerateOutcome> {
   const write = await generateStageFixturesWrite(auth, stageId, opts);
-  if (write.outcome.created > 0) {
-    afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
+  // W4 T8: a knockout reconcile in place creates nothing yet changes seats, and a regenerate deletes the old lines — both
+  // publish, naming the fixtures they changed or deleted.
+  const changed = write.changedFixtureIds ?? [];
+  if (write.outcome.created > 0 || changed.length > 0) {
+    afterScheduleWrite(write.divisionId, write.competitionId, "schedule", changed);
   }
   return write.outcome;
 }
@@ -3512,6 +3533,56 @@ async function readStageFixtureRows(tx: Tx, stageId: string): Promise<FixtureRow
 }
 
 /**
+ * W4 T8 (FX-G2): Generate over a root knockout that already has its lines, in the caller's transaction and lock. The
+ * driver (`reconcileRootBracket`) refuses after Start when the roster changed (KO_GENERATE_AFTER_START), answers a named
+ * no-op when nothing did, or changes lines in place (a newcomer into a bye, a departed entrant's line to a bye); when the
+ * bracket crossed a power of two it asks for a regenerate, which is Rebuild's own body (`regenerateStageInTx`): one
+ * delete and one fresh draw in this transaction, slots carried by role. `entrants` is the field in draw order.
+ */
+async function reconcileKnockoutGenerate(
+  tx: Tx,
+  auth: AuthCtx,
+  stage: StageRow,
+  entrants: ActiveEntrant[],
+  poolIds: Map<string, string>,
+): Promise<GenerateWrite> {
+  const started = (await divisionHasStarted(tx, stage.division_id)) || (await stageHasStarted(tx, stage.id));
+  const fresh = generate(stage.kind, stage.config, entrants, poolIds).map((g) => ({
+    pool_id: g.poolId ?? null,
+    round_no: g.roundNo,
+    seq_in_round: g.seqInRound,
+    ext_key: g.extKey,
+  }));
+  const decision = await reconcileRootBracket(tx, { stageId: stage.id, started, active: entrants, fresh });
+  if (decision.kind === "regenerate") {
+    const regen = await regenerateStageInTx(tx, auth, stage.id, stage);
+    return {
+      ...regen.generated,
+      outcome: {
+        ...regen.generated.outcome,
+        reconcile: { kind: "regenerated", placed: decision.placed, vacated: decision.vacated, slots: regen.slots },
+      },
+      changedFixtureIds: regen.removedIds,
+    };
+  }
+  const fixtures = await readStageFixtureRows(tx, stage.id);
+  const [division] = await tx<{ competition_id: string }[]>`
+    select competition_id from divisions where id = ${stage.division_id}`;
+  return {
+    outcome: {
+      created: 0,
+      existing: fixtures.length,
+      fixtures,
+      reconcile: { kind: decision.kind, placed: decision.placed, vacated: decision.vacated },
+    },
+    divisionId: stage.division_id,
+    competitionId: division.competition_id,
+    kind: stage.kind,
+    changedFixtureIds: decision.touched,
+  };
+}
+
+/**
  * The main write of a Generate (doc 08 §3), in the CALLER's transaction: everything `generateStageFixtures` does
  * between its pre-flight and its post-commit work, unchanged in behaviour. Extracted (W3 T1, X-RB-1) so
  * `rebuildStageFixtures` can delete and regenerate in ONE transaction — a regenerate that throws then rolls the
@@ -3631,6 +3702,13 @@ export async function generateStageFixturesTx(
            scheduled_at, court_id, venue_id, schedule_locked
     from fixtures where stage_id = ${stageId}
     order by round_no, seq_in_round`;
+
+  // W4 T8 (FX-G2, MB-004/005; spec §6.5): a ROOT knockout that already has its lines is reconciled, never inserted into
+  // by `ext_key` (6 → 7 inserted nothing and said "up to date"; 8 → 9 seated the field twice beside a second final; a
+  // line that became a bye 500'd on the bye-award bulk update below). Fed stages (`config.qualified`) keep their path.
+  if (stage.kind === "knockout" && qualified === null && stage.progression === null && existing.length > 0) {
+    return reconcileKnockoutGenerate(tx, auth, stage, entrants, poolIds);
+  }
 
   let swissSeatedCount = 0;
   let swissReshaped: SwissReshape | undefined;
@@ -4271,217 +4349,7 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
         "STAGE_NOT_ROOT",
       );
     }
-    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
-    // A frozen division refuses the rebuild — the same predicate as generate's
-    // pre-flight, read here under the lock. Strictly wider than the
-    // `clearScheduleScoped` the freeze already refuses: this HARD-DELETES
-    // every fixture on the stage, cascading into score_events, match_states,
-    // match_reports, lineups, official_marks, fixture_officials and
-    // device_links (see the guard's own comment below). Refused before the
-    // delete, so `stages-schedule-lock.test.ts`'s `fixtureCount` assertion
-    // reads an untouched board.
-    const lockState = await divisionLockState(tx, stage.division_id);
-    if (lockState.frozen) {
-      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
-    }
-
-    // Never destroy a real result (hard constraint 1). Mirrors deleteStage's
-    // guard above (same three statuses), with one refinement for 'forfeited'.
-    // The status alone covers three different rows: a generation-time BYE
-    // (one side null by construction), the generator's own F14 walkover for a
-    // qualifier who departed before the draw (both seats filled, nothing
-    // played), and a WALKOVER RECORDED IN PLAY (withdrawal.ts's core.forfeit
-    // — append-event.ts maps it to this same status). Only the last holds a
-    // result, and it is the only one with evidence: its core.forfeit is a
-    // score event. So a 'forfeited' fixture blocks through its evidence
-    // alone (review 3 of #857, N2, owner ruling), never through its status.
-    // Status alone is NOT a sufficient test, because `delete from fixtures`
-    // CASCADEs into score_events, match_states, match_reports, lineups,
-    // official_marks, fixture_officials and device_links, and SET NULLs
-    // suspensions.fixture_id. Two holes a status-only guard leaves:
-    //   - 'abandoned' is a match that was PLAYED and stopped. match-reports.ts
-    //     (:40 REPORTABLE) accepts a report on exactly this status, so a
-    //     status-only guard deletes the report along with the fixture.
-    //   - any fixture carrying evidence rows under a status this list does not
-    //     name — the scoring pad writes score_events/match_states, and nothing
-    //     here should depend on WHEN a status flips relative to the first
-    //     event landing.
-    // So block on the evidence itself as well as on status: if a fixture has
-    // anything recorded against it, it is not ours to delete.
-    //
-    // What this deliberately does NOT block on (F3 ultrareview finding 5):
-    // `lineups`, `fixture_officials` and `device_links` also CASCADE away
-    // with the fixtures, but they are organiser SETUP, not a result. An
-    // organiser who has already appointed referees is the one most likely to
-    // need a rebuild before match day, so blocking would disable the feature
-    // exactly when it earns its keep. Destroying them silently is equally
-    // wrong, so `getStageRosterDrift` counts all three and the confirm
-    // dialog names them before the click (progression.rosterDrift.confirm*).
-    // If a future table holds real RESULT data, it belongs in the guard
-    // below, not in that count.
-    //
-    // One latent trapdoor, checked and currently INERT (2026-08-19): fixtures
-    // .parent_fixture_id is a self-FK declared ON DELETE CASCADE (V214:18), so
-    // a fixture that is someone's parent takes its children with it. Nothing
-    // in apps/web writes that column today (zero rows), and its only intended
-    // use — table-tennis rubbers under a tie (sports/setbased/tabletennis.ts)
-    // — is same-stage, where taking the children with the parent is correct.
-    // If a writer ever creates CROSS-STAGE parent links, this delete would
-    // silently remove another stage's board and the guard below would not see
-    // it. Note the cascade RECURSES on a self-FK: a chain deeper than one
-    // level takes the whole subtree, not just direct children, so the blast
-    // radius is not bounded at one hop. Verify with
-    //   select count(*) from fixtures c join fixtures p
-    //     on c.parent_fixture_id = p.id where c.stage_id <> p.stage_id;
-    // (fixtures.court_id is RESTRICT but points OUT at courts, so it
-    // constrains deleting a COURT, never this delete.)
-    // NARROWED 2026-09-21 (the cascade). `abandoned` used to block on its own.
-    // That was written for a match that was PLAYED and stopped, and it is now
-    // ALSO the value the generator's own void writes (walkoverDepartedQualifiers,
-    // re-review C2) — so from the instant a departed pairing was voided at
-    // generation the stage became permanently un-rebuildable, and the organiser
-    // pressing "Rebuild fixtures" on a board nobody had played was told
-    // "this stage already has recorded results". Driven in a browser; the
-    // sentence on screen was false, which is worse than a control that does
-    // nothing.
-    //
-    // A generation-time void has no outcome, no score events, no match report
-    // and no config snapshot — it is a line the regenerate would draw again
-    // identically. A real abandonment has at least the `core.abandon` event
-    // that produced the status, and a cricket-style no-result carries an
-    // outcome; both still block, the first through `fixtureEvidenceSql` below
-    // and the second through the `outcome is not null` clause. That split is
-    // what `dead-feeder-cascade.test.ts`'s two CONTROL cases pin, one per
-    // side.
-    //
-    // The evidence-table list itself lives in `fixtureEvidenceSql` — ONE
-    // literal, shared with `unpairSwissRound`'s guard, because the
-    // 2026-09-20 review found Unpair shipping a SUBSET of this list and
-    // destroying real results through the gap. Only the status clause is
-    // per-caller. (`config_snapshot is not null` joins the list there; it is
-    // implied by `exists(score_events)` for this guard — nothing in apps/web
-    // ever deletes a score event — so it adds no refusal here, only
-    // monotonicity where status is unreliable.)
-    //
-    // This guard's status clause and evidence are `fixtureHasResultSql`,
-    // which history reads as its played set (review 2 of #857, I3), so what
-    // rebuild refuses for a RESULT history never deletes. Since W4 T2 the
-    // guard's whole set is wider — results ∪ a live Match Day call (below) —
-    // while history's `unplayed` is still results only. That gap is
-    // unreachable today, not closed: a call appends a `schedule_edited` ledger
-    // row (match-day-call.ts), so Undo inverts the call (moving the match off
-    // the called slot) before it can reach a Generate's `fixtures_cleared`
-    // (B1a review #3). A call that wrote no ledger row would open it. A walkover
-    // blocks only through its evidence (review 3 of #857, N2): the one a
-    // scorer records posts `core.forfeit`; the generator's F14 walkover has
-    // nothing played behind it, so a stage holding one rebuilds.
-    //
-    // W4 T2 (K4, X-LE-9; owner ruling 257): a live Match Day call refuses too. A call writes a court and a time and no
-    // status or event, so nothing above sees it, and the delete cascades into `fixture_calls` (V484) — the players
-    // standing at the court would lose their match and its call. Only the call arm of the one "started" predicate
-    // (`fixtureCalledSql`, fixture-started-sql.ts): its online-game arm is refused below by name (ONLINE_GAME_EXISTS, and
-    // a bridge row with no game rebuilds, M-10), and its decided arm would refuse the F14 walkover N2 keeps rebuildable.
-    const [blocked] = await tx<{ id: string }[]>`
-      select f.id from fixtures f
-      where f.stage_id = ${stageId} and (${fixtureHasResultSql(tx)} or ${fixtureCalledSql(tx)})
-      limit 1`;
-    if (blocked) {
-      throw new HttpError(
-        409,
-        "this stage has fixtures with a recorded result — rebuild refuses to touch a stage that has already been played, even partly; complete it as it stands, or use Generate to add missing entrants without disturbing what's already been decided",
-        "STAGE_HAS_RESULTS",
-      );
-    }
-
-    // The delete CASCADEs into fixture_external_play, and no result guard
-    // above can see an online game in progress (online chess appends nothing
-    // until the result). A board a game stands behind refuses the rebuild,
-    // under the same lock order as the Swiss seat clear (review M8).
-    const stageFixtureIds = (
-      await tx<{ id: string }[]>`select id from fixtures where stage_id = ${stageId}`
-    ).map((r) => r.id);
-    await lockBoardsRefusingOnlineGames(tx, stageFixtureIds);
-    // W2c Task 14: a match's own format would be regenerated away with its row — refused by name instead.
-    await refuseOwnFormatLoss(tx, tx`stage_id = ${stageId}`);
-    // Phase 3 wave 1 (G-1): the boards go, and their queued invites with them - after every refusal above, before the delete. The
-    // rebuilt boards are new fixtures with new ids, so an invite left queued would mail a board that no longer exists.
-    await cancelBoardInvites(tx, stageFixtureIds, FIXTURE_DELETED_REASON);
-    // X-RB-1: the slots the delete is about to take, read before it — with what `isByeLine` reads (W4 T4).
-    const before = await tx<
-      ({
-        pool_id: string | null;
-        round_no: number;
-        seq_in_round: number;
-        scheduled_at: Date | null;
-        court_id: string | null;
-        venue_id: string | null;
-        schedule_locked: boolean;
-      } & ByeLineRow)[]
-    >`
-      select pool_id, round_no, seq_in_round, ext_key, scheduled_at, court_id, venue_id, schedule_locked,
-             status, outcome, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label
-      from fixtures where stage_id = ${stageId}
-      order by pool_id nulls first, round_no, seq_in_round, created_at, id`;
-    const deleted = await tx<{ id: string }[]>`
-      delete from fixtures where stage_id = ${stageId} returning id`;
-
-    const generated = await generateStageFixturesTx(tx, auth, stageId, {});
-
-    // W4 T4 (K3, X-RB-1): a bye line neither gives nor takes a slot (`isByeLine`, every kind), and a knockout carries by
-    // bracket ROLE — its `round_no` counts from the first round, so by position an 8 → 9 Rebuild handed the final's
-    // slot to a semi-final. Each side is keyed against its own final. Every other kind keeps the position.
-    const oldRows = before.map((r) => ({
-      pool_id: r.pool_id,
-      round_no: r.round_no,
-      seq_in_round: r.seq_in_round,
-      ext_key: r.ext_key,
-      scheduled_at: r.scheduled_at === null ? null : r.scheduled_at.toISOString(),
-      court_id: r.court_id,
-      venue_id: r.venue_id,
-      schedule_locked: r.schedule_locked,
-      bye: isByeLine(r),
-    }));
-    const newRows = generated.outcome.fixtures.map((f) => ({
-      id: f.id,
-      pool_id: f.pool_id,
-      round_no: f.round_no,
-      seq_in_round: f.seq_in_round,
-      ext_key: f.ext_key ?? null,
-      bye: isByeLine({ ...f, ext_key: f.ext_key ?? null }),
-    }));
-    const carry = carrySlots(
-      oldRows,
-      newRows,
-      stage.kind === "knockout" ? { before: roleKeyOf(oldRows), after: roleKeyOf(newRows) } : undefined,
-    );
-    const carried = [...carry.assign];
-    if (carried.length > 0) {
-      // ONE update for every carried slot, batched the way this file batches
-      // its feed writes: a row of parallel arrays per column. The pins travel as
-      // `text[]` and are cast per element: postgres.js sends a JS boolean
-      // array typed as a scalar `bool` (refused as `boolean[]`), and a string
-      // array cast to `boolean[]` is serialised with the bool serializer,
-      // which reads every "true" as false.
-      await tx`
-        update fixtures f set
-          scheduled_at = v.scheduled_at,
-          court_id = v.court_id,
-          venue_id = v.venue_id,
-          schedule_locked = v.schedule_locked
-        from (select unnest(${carried.map(([id]) => id)}::uuid[])                        as id,
-                     unnest(${carried.map(([, s]) => s.scheduled_at)}::timestamptz[])    as scheduled_at,
-                     unnest(${carried.map(([, s]) => s.court_id)}::uuid[])               as court_id,
-                     unnest(${carried.map(([, s]) => s.venue_id)}::uuid[])               as venue_id,
-                     unnest(${carried.map(([, s]) => String(s.schedule_locked))}::text[])::boolean as schedule_locked) v
-        where f.id = v.id and f.stage_id = ${stageId}`;
-    }
-    const fixtures = carried.length > 0 ? await readStageFixtureRows(tx, stageId) : generated.outcome.fixtures;
-
-    return {
-      generated: { ...generated, outcome: { ...generated.outcome, fixtures } },
-      removedIds: deleted.map((row) => row.id),
-      slots: carriedSlotCounts(carry),
-    };
+    return regenerateStageInTx(tx, auth, stageId, stage);
   });
 
   // After the commit, and only after it. A refusal anywhere above rolled the
@@ -4504,6 +4372,233 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     }
   }
   return { ...outcome, removed: write.removedIds.length, slots: write.slots };
+}
+
+/**
+ * Rebuild's delete-and-regenerate, in the CALLER's transaction (W4 T8: extracted unchanged so a knockout's Generate can
+ * regenerate when the bracket crosses a power of two — `reconcileKnockoutGenerate`). Takes the division lock, refuses a
+ * frozen division, a played or called line, an online game and a match's own format, cancels the boards' invites,
+ * deletes the stage's fixtures, generates afresh (`generateStageFixturesTx`, its ledger row included), and carries each
+ * old slot to the line that inherits it (a knockout by bracket ROLE, every other kind by position). `stage` is the row
+ * the caller read. Returns the write, the deleted ids and the slot counts; the caller publishes after its commit.
+ */
+export async function regenerateStageInTx(
+  tx: Tx,
+  auth: AuthCtx,
+  stageId: string,
+  stage: { division_id: string; kind: string },
+): Promise<{ generated: GenerateWrite; removedIds: string[]; slots: { kept: number; freed: number; unscheduled: number } }> {
+  await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+  // A frozen division refuses the rebuild — the same predicate as generate's
+  // pre-flight, read here under the lock. Strictly wider than the
+  // `clearScheduleScoped` the freeze already refuses: this HARD-DELETES
+  // every fixture on the stage, cascading into score_events, match_states,
+  // match_reports, lineups, official_marks, fixture_officials and
+  // device_links (see the guard's own comment below). Refused before the
+  // delete, so `stages-schedule-lock.test.ts`'s `fixtureCount` assertion
+  // reads an untouched board.
+  const lockState = await divisionLockState(tx, stage.division_id);
+  if (lockState.frozen) {
+    throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+  }
+
+  // Never destroy a real result (hard constraint 1). Mirrors deleteStage's
+  // guard above (same three statuses), with one refinement for 'forfeited'.
+  // The status alone covers three different rows: a generation-time BYE
+  // (one side null by construction), the generator's own F14 walkover for a
+  // qualifier who departed before the draw (both seats filled, nothing
+  // played), and a WALKOVER RECORDED IN PLAY (withdrawal.ts's core.forfeit
+  // — append-event.ts maps it to this same status). Only the last holds a
+  // result, and it is the only one with evidence: its core.forfeit is a
+  // score event. So a 'forfeited' fixture blocks through its evidence
+  // alone (review 3 of #857, N2, owner ruling), never through its status.
+  // Status alone is NOT a sufficient test, because `delete from fixtures`
+  // CASCADEs into score_events, match_states, match_reports, lineups,
+  // official_marks, fixture_officials and device_links, and SET NULLs
+  // suspensions.fixture_id. Two holes a status-only guard leaves:
+  //   - 'abandoned' is a match that was PLAYED and stopped. match-reports.ts
+  //     (:40 REPORTABLE) accepts a report on exactly this status, so a
+  //     status-only guard deletes the report along with the fixture.
+  //   - any fixture carrying evidence rows under a status this list does not
+  //     name — the scoring pad writes score_events/match_states, and nothing
+  //     here should depend on WHEN a status flips relative to the first
+  //     event landing.
+  // So block on the evidence itself as well as on status: if a fixture has
+  // anything recorded against it, it is not ours to delete.
+  //
+  // What this deliberately does NOT block on (F3 ultrareview finding 5):
+  // `lineups`, `fixture_officials` and `device_links` also CASCADE away
+  // with the fixtures, but they are organiser SETUP, not a result. An
+  // organiser who has already appointed referees is the one most likely to
+  // need a rebuild before match day, so blocking would disable the feature
+  // exactly when it earns its keep. Destroying them silently is equally
+  // wrong, so `getStageRosterDrift` counts all three and the confirm
+  // dialog names them before the click (progression.rosterDrift.confirm*).
+  // If a future table holds real RESULT data, it belongs in the guard
+  // below, not in that count.
+  //
+  // One latent trapdoor, checked and currently INERT (2026-08-19): fixtures
+  // .parent_fixture_id is a self-FK declared ON DELETE CASCADE (V214:18), so
+  // a fixture that is someone's parent takes its children with it. Nothing
+  // in apps/web writes that column today (zero rows), and its only intended
+  // use — table-tennis rubbers under a tie (sports/setbased/tabletennis.ts)
+  // — is same-stage, where taking the children with the parent is correct.
+  // If a writer ever creates CROSS-STAGE parent links, this delete would
+  // silently remove another stage's board and the guard below would not see
+  // it. Note the cascade RECURSES on a self-FK: a chain deeper than one
+  // level takes the whole subtree, not just direct children, so the blast
+  // radius is not bounded at one hop. Verify with
+  //   select count(*) from fixtures c join fixtures p
+  //     on c.parent_fixture_id = p.id where c.stage_id <> p.stage_id;
+  // (fixtures.court_id is RESTRICT but points OUT at courts, so it
+  // constrains deleting a COURT, never this delete.)
+  // NARROWED 2026-09-21 (the cascade). `abandoned` used to block on its own.
+  // That was written for a match that was PLAYED and stopped, and it is now
+  // ALSO the value the generator's own void writes (walkoverDepartedQualifiers,
+  // re-review C2) — so from the instant a departed pairing was voided at
+  // generation the stage became permanently un-rebuildable, and the organiser
+  // pressing "Rebuild fixtures" on a board nobody had played was told
+  // "this stage already has recorded results". Driven in a browser; the
+  // sentence on screen was false, which is worse than a control that does
+  // nothing.
+  //
+  // A generation-time void has no outcome, no score events, no match report
+  // and no config snapshot — it is a line the regenerate would draw again
+  // identically. A real abandonment has at least the `core.abandon` event
+  // that produced the status, and a cricket-style no-result carries an
+  // outcome; both still block, the first through `fixtureEvidenceSql` below
+  // and the second through the `outcome is not null` clause. That split is
+  // what `dead-feeder-cascade.test.ts`'s two CONTROL cases pin, one per
+  // side.
+  //
+  // The evidence-table list itself lives in `fixtureEvidenceSql` — ONE
+  // literal, shared with `unpairSwissRound`'s guard, because the
+  // 2026-09-20 review found Unpair shipping a SUBSET of this list and
+  // destroying real results through the gap. Only the status clause is
+  // per-caller. (`config_snapshot is not null` joins the list there; it is
+  // implied by `exists(score_events)` for this guard — nothing in apps/web
+  // ever deletes a score event — so it adds no refusal here, only
+  // monotonicity where status is unreliable.)
+  //
+  // This guard's status clause and evidence are `fixtureHasResultSql`,
+  // which history reads as its played set (review 2 of #857, I3), so what
+  // rebuild refuses for a RESULT history never deletes. Since W4 T2 the
+  // guard's whole set is wider — results ∪ a live Match Day call (below) —
+  // while history's `unplayed` is still results only. That gap is
+  // unreachable today, not closed: a call appends a `schedule_edited` ledger
+  // row (match-day-call.ts), so Undo inverts the call (moving the match off
+  // the called slot) before it can reach a Generate's `fixtures_cleared`
+  // (B1a review #3). A call that wrote no ledger row would open it. A walkover
+  // blocks only through its evidence (review 3 of #857, N2): the one a
+  // scorer records posts `core.forfeit`; the generator's F14 walkover has
+  // nothing played behind it, so a stage holding one rebuilds.
+  //
+  // W4 T2 (K4, X-LE-9; owner ruling 257): a live Match Day call refuses too. A call writes a court and a time and no
+  // status or event, so nothing above sees it, and the delete cascades into `fixture_calls` (V484) — the players
+  // standing at the court would lose their match and its call. Only the call arm of the one "started" predicate
+  // (`fixtureCalledSql`, fixture-started-sql.ts): its online-game arm is refused below by name (ONLINE_GAME_EXISTS, and
+  // a bridge row with no game rebuilds, M-10), and its decided arm would refuse the F14 walkover N2 keeps rebuildable.
+  const [blocked] = await tx<{ id: string }[]>`
+    select f.id from fixtures f
+    where f.stage_id = ${stageId} and (${fixtureHasResultSql(tx)} or ${fixtureCalledSql(tx)})
+    limit 1`;
+  if (blocked) {
+    throw new HttpError(
+      409,
+      "this stage has fixtures with a recorded result — rebuild refuses to touch a stage that has already been played, even partly; complete it as it stands, or use Generate to add missing entrants without disturbing what's already been decided",
+      "STAGE_HAS_RESULTS",
+    );
+  }
+
+  // The delete CASCADEs into fixture_external_play, and no result guard
+  // above can see an online game in progress (online chess appends nothing
+  // until the result). A board a game stands behind refuses the rebuild,
+  // under the same lock order as the Swiss seat clear (review M8).
+  const stageFixtureIds = (
+    await tx<{ id: string }[]>`select id from fixtures where stage_id = ${stageId}`
+  ).map((r) => r.id);
+  await lockBoardsRefusingOnlineGames(tx, stageFixtureIds);
+  // W2c Task 14: a match's own format would be regenerated away with its row — refused by name instead.
+  await refuseOwnFormatLoss(tx, tx`stage_id = ${stageId}`);
+  // Phase 3 wave 1 (G-1): the boards go, and their queued invites with them - after every refusal above, before the delete. The
+  // rebuilt boards are new fixtures with new ids, so an invite left queued would mail a board that no longer exists.
+  await cancelBoardInvites(tx, stageFixtureIds, FIXTURE_DELETED_REASON);
+  // X-RB-1: the slots the delete is about to take, read before it — with what `isByeLine` reads (W4 T4).
+  const before = await tx<
+    ({
+      pool_id: string | null;
+      round_no: number;
+      seq_in_round: number;
+      scheduled_at: Date | null;
+      court_id: string | null;
+      venue_id: string | null;
+      schedule_locked: boolean;
+    } & ByeLineRow)[]
+  >`
+    select pool_id, round_no, seq_in_round, ext_key, scheduled_at, court_id, venue_id, schedule_locked,
+           status, outcome, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label
+    from fixtures where stage_id = ${stageId}
+    order by pool_id nulls first, round_no, seq_in_round, created_at, id`;
+  const deleted = await tx<{ id: string }[]>`
+    delete from fixtures where stage_id = ${stageId} returning id`;
+
+  const generated = await generateStageFixturesTx(tx, auth, stageId, {});
+
+  // W4 T4 (K3, X-RB-1): a bye line neither gives nor takes a slot (`isByeLine`, every kind), and a knockout carries by
+  // bracket ROLE — its `round_no` counts from the first round, so by position an 8 → 9 Rebuild handed the final's
+  // slot to a semi-final. Each side is keyed against its own final. Every other kind keeps the position.
+  const oldRows = before.map((r) => ({
+    pool_id: r.pool_id,
+    round_no: r.round_no,
+    seq_in_round: r.seq_in_round,
+    ext_key: r.ext_key,
+    scheduled_at: r.scheduled_at === null ? null : r.scheduled_at.toISOString(),
+    court_id: r.court_id,
+    venue_id: r.venue_id,
+    schedule_locked: r.schedule_locked,
+    bye: isByeLine(r),
+  }));
+  const newRows = generated.outcome.fixtures.map((f) => ({
+    id: f.id,
+    pool_id: f.pool_id,
+    round_no: f.round_no,
+    seq_in_round: f.seq_in_round,
+    ext_key: f.ext_key ?? null,
+    bye: isByeLine({ ...f, ext_key: f.ext_key ?? null }),
+  }));
+  const carry = carrySlots(
+    oldRows,
+    newRows,
+    stage.kind === "knockout" ? { before: roleKeyOf(oldRows), after: roleKeyOf(newRows) } : undefined,
+  );
+  const carried = [...carry.assign];
+  if (carried.length > 0) {
+    // ONE update for every carried slot, batched the way this file batches
+    // its feed writes: a row of parallel arrays per column. The pins travel as
+    // `text[]` and are cast per element: postgres.js sends a JS boolean
+    // array typed as a scalar `bool` (refused as `boolean[]`), and a string
+    // array cast to `boolean[]` is serialised with the bool serializer,
+    // which reads every "true" as false.
+    await tx`
+      update fixtures f set
+        scheduled_at = v.scheduled_at,
+        court_id = v.court_id,
+        venue_id = v.venue_id,
+        schedule_locked = v.schedule_locked
+      from (select unnest(${carried.map(([id]) => id)}::uuid[])                        as id,
+                   unnest(${carried.map(([, s]) => s.scheduled_at)}::timestamptz[])    as scheduled_at,
+                   unnest(${carried.map(([, s]) => s.court_id)}::uuid[])               as court_id,
+                   unnest(${carried.map(([, s]) => s.venue_id)}::uuid[])               as venue_id,
+                   unnest(${carried.map(([, s]) => String(s.schedule_locked))}::text[])::boolean as schedule_locked) v
+      where f.id = v.id and f.stage_id = ${stageId}`;
+  }
+  const fixtures = carried.length > 0 ? await readStageFixtureRows(tx, stageId) : generated.outcome.fixtures;
+
+  return {
+    generated: { ...generated, outcome: { ...generated.outcome, fixtures } },
+    removedIds: deleted.map((row) => row.id),
+    slots: carriedSlotCounts(carry),
+  };
 }
 
 interface CrossFeed {

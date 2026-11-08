@@ -23,6 +23,8 @@ const PLAN_CODES = [
   "STAGE_HAS_UNDECIDED_FIXTURES",
   // T7 (RB4-D9, X-SD-10): country separation is not offered — refused by name at the body door.
   "COUNTRY_SEPARATION_NOT_OFFERED",
+  // T8 (FX-G2): after Start, Generate never reshapes a root knockout whose roster changed.
+  "KO_GENERATE_AFTER_START",
 ] as const;
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;

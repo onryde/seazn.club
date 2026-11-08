@@ -20,7 +20,10 @@ export type KnockoutRefusalCode =
   // T6 (AN-2): Complete on a bracket the engine would complete while a line is still owed a result (`fixture_ids`).
   | "STAGE_HAS_UNDECIDED_FIXTURES"
   // T7 (RB4-D9, X-SD-10): a stage config naming `countrySeparation` — refused by name at the BODY door (400).
-  | "COUNTRY_SEPARATION_NOT_OFFERED";
+  | "COUNTRY_SEPARATION_NOT_OFFERED"
+  // T8 (FX-G2, spec §6.5): Generate on a started root knockout whose roster changed since the draw — after Start the
+  // bracket is never reshaped; a late player comes in through the late-entry door.
+  | "KO_GENERATE_AFTER_START";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -54,6 +57,11 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 400,
     en: COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE,
     key: "knockout.refusal.COUNTRY_SEPARATION_NOT_OFFERED",
+  },
+  KO_GENERATE_AFTER_START: {
+    status: 409,
+    en: "Play has started, so Generate won't change the bracket. Use Add late player.",
+    key: "knockout.refusal.KO_GENERATE_AFTER_START",
   },
 };
 

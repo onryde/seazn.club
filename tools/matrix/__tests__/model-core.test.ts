@@ -394,7 +394,7 @@ describe("#879 — roster growth while fixtures exist, BEFORE Start (issue #879;
   });
 });
 
-describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk off MB-002..005 and MB-007..010's triggers, and nothing else", () => {
+describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk off MB-002/003 and MB-007..010's triggers (MB-004/005 fixed by W4 T8), and nothing else", () => {
   const KO_TBD = "ko-withdraw-waiting-on-tbd";
   const KO_GEN = "ko-generate-after-roster-change";
   const TRUTH_RUNS = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs");
@@ -489,7 +489,7 @@ describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk 
     expect(checked).toBe(2 * PENDING_STATUSES.length);
     expect(PENDING_STATUSES.length).toBeGreaterThan(0);
   });
-  it("G-1 (T15-R8, T16-R3): each bracket fence applies on exactly the stage kinds × trigger branches its committed cases' finding commands show — withdraw while waiting on a TBD seat: knockout (MB-002/003), stepladder (MB-008), double elim (MB-009); generate after an added entrant: knockout (MB-005), double elim (MB-007); generate after a withdrawal: knockout (MB-004), double elim (MB-010) — each kind one the product's bracket withdrawal and generation share (stages.ts BRACKET_WALKOVER_KINDS)", async () => {
+  it("G-1 (T15-R8, T16-R3): each bracket fence applies on exactly the stage kinds × trigger branches its committed cases' finding commands show — withdraw while waiting on a TBD seat: knockout (MB-002/003), stepladder (MB-008), double elim (MB-009); generate after an added entrant: double elim (MB-007); generate after a withdrawal: double elim (MB-010) — knockout's MB-004/005 are fixed (W4 T8), so no open case witnesses it there — each kind one the product's bracket withdrawal and generation share (stages.ts BRACKET_WALKOVER_KINDS)", async () => {
     const walkover = bracketWalkoverKindsText();
     expect(walkover.length, "BRACKET_WALKOVER_KINDS read empty").toBeGreaterThan(0);
     // A started knockout where e1 waits on a TBD seat in the final. Each
@@ -573,32 +573,62 @@ describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk 
     expect(checked).toBeGreaterThan(TERMINAL_STATUSES.length + 2);
     expect(s.fenced.get(KO_TBD) ?? 0).toBe(0);
   });
-  it("MB-004/005: Generate is withheld on a knockout with fixtures once the roster changed — an entrant added (MB-005) or one withdrawn (MB-004)", async () => {
+  it("MB-004/005 FIXED (W4 T8, FX-G2): Generate is offered on a knockout with fixtures once the roster changed — an entrant added (MB-005) or one withdrawn (MB-004) — and double elim keeps the fence (MB-007/010 open)", async () => {
     const s = await ko();
-    expect(commandOf("Generate", 0, 0, true).check(s), "no roster change").toBe(true);
-    const added: ModelState = { ...s, lateEntry: true, fenced: new Map() };
-    expect(commandOf("Generate", 0, 0, true).check(added)).toBe(false);
-    expect(added.fenced.get(KO_GEN)).toBe(1);
     const e2 = s.entrants[1];
     if (e2 === undefined) throw new Error("test: four entrants");
-    const withdrawn: ModelState = { ...s, withdrawn: new Set([e2]), fenced: new Map() };
-    expect(commandOf("Generate", 0, 0, true).check(withdrawn)).toBe(false);
-    expect(withdrawn.fenced.get(KO_GEN)).toBe(1);
-    expect(fenceBlocking(withdrawn, "Generate", false)).toBeNull();
+    // The premise, read from the committed file: both cases are fixed, their double-elim twins open.
+    const status = new Map(loadRegressions().map((r) => [r.id, r.status]));
+    expect(["MB-004", "MB-005", "MB-007", "MB-010"].map((id) => status.get(id))).toEqual(["fixed", "fixed", "open", "open"]);
+    let checked = 0;
+    for (const [label, over] of [["added", { lateEntry: true }], ["withdrawn", { withdrawn: new Set([e2]) }]] as const) {
+      const ko2: ModelState = { ...s, ...over, fenced: new Map() };
+      expect(commandOf("Generate", 0, 0, true).check(ko2), `knockout ${label}`).toBe(true);
+      expect(ko2.fenced.get(KO_GEN) ?? 0, `knockout ${label}: not fenced`).toBe(0);
+      const de: ModelState = { ...s, ...over, stageKind: "double_elim", fenced: new Map() };
+      expect(commandOf("Generate", 0, 0, true).check(de), `double elim ${label}`).toBe(false);
+      expect(de.fenced.get(KO_GEN), `double elim ${label}: still fenced`).toBe(1);
+      checked += 2;
+    }
+    expect(checked).toBe(4);
   });
-  it("MB-004/005: …and offered with no fixtures yet; after an added entrant, on the other kinds a committed case witnesses (MB-007) it is this fence, on the round robins #879's own, and on every other kind none", async () => {
+  it("MB-004/005: on every other kind the Generate fences are what their committed cases witness — the round robins #879's, the open double-elim cases this fence, knockout and the rest none", async () => {
     const s: ModelState = { ...(await ko()), lateEntry: true };
     expect(commandOf("Generate", 0, 0, true).check({ ...s, fixtures: new Map(), fenced: new Map() }), "no fixtures").toBe(true);
     const rr = roundRobinKindsText();
     const fencedOn = witnessed(KO_GEN).get("added") ?? [];
     expect(fencedOn.length, "no committed case shows the added-entrant branch").toBeGreaterThan(0);
+    expect(fencedOn, "knockout's case is fixed: nothing open witnesses the fence there").not.toContain("knockout");
     let checked = 0;
-    for (const stageKind of [...[...BRACKET_STAGE_KINDS].filter((k) => k !== "knockout"), "swiss", ...rr]) {
+    for (const stageKind of [...BRACKET_STAGE_KINDS, "swiss", ...rr]) {
       const want = rr.includes(stageKind) ? "late-entry-then-generate" : fencedOn.includes(stageKind) ? KO_GEN : null;
       expect(fenceBlocking({ ...s, stageKind }, "Generate", true)?.id ?? null, stageKind).toBe(want);
       checked++;
     }
-    expect(checked).toBeGreaterThan(rr.length);
+    expect(checked).toBe(BRACKET_STAGE_KINDS.size + 1 + rr.length);
+  });
+  it("W4 T8: after Start the model expects a knockout's Generate refused (KO_GENERATE_AFTER_START) exactly when an entrant was added since the lines were drawn — never after a withdrawal (the named no-op), before Start, with no lines, or on another kind", async () => {
+    const s = await ko();
+    const e2 = s.entrants[1];
+    if (e2 === undefined) throw new Error("test: four entrants");
+    const expects = (m: ModelState): boolean =>
+      (commandOf("Generate", 0, 0, true) as unknown as { expectsRefusal(m: ModelState): boolean }).expectsRefusal(m);
+    const TABLE: [string, ModelState, boolean][] = [
+      ["started, added", { ...s, lateEntry: true }, true],
+      ["started, withdrawn (MB-004's sequence)", { ...s, withdrawn: new Set([e2]) }, false],
+      ["started, added and withdrawn", { ...s, lateEntry: true, withdrawn: new Set([e2]) }, true],
+      ["started, unchanged", s, false],
+      ["not started, added", { ...s, started: false, lateEntry: true }, false],
+      ["started, added, no lines", { ...s, lateEntry: true, fixtures: new Map() }, false],
+      ["double elim, started, added", { ...s, stageKind: "double_elim", lateEntry: true }, false],
+      ["league, started, added", { ...s, stageKind: "league", lateEntry: true }, false],
+    ];
+    let checked = 0;
+    for (const [label, m, want] of TABLE) {
+      expect(expects(m), label).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(TABLE.length);
   });
 });
 

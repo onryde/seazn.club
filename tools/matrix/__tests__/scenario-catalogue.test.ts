@@ -459,6 +459,9 @@ describe("regression cases (R29)", () => {
    *  shrinks and harness fixes, committed as history and never as cases
    *  (MB-001..005 were committed from W1b fix round 1's later runs). */
   const PRE_FIX_HISTORY_RUNS: readonly string[] = ["w1b-model-0928a", "w1b-model-0928b"];
+  /** Cases a product fix closed: still committed (their evidence still holds the failure), status `fixed` — and only
+   *  these. W4 app-A Task 8 (FX-G2): a knockout's Generate after a roster change reconciles (MB-004, MB-005). */
+  const FIXED_CASES: ReadonlyMap<string, string> = new Map([["MB-004", "W4 app-A T8"], ["MB-005", "W4 app-A T8"]]);
   it("T15-R5: every new failure in a committed model report is a committed open case — its cell, check, seed, path, replayPath, bound and fences — save the named pre-fix W1b history (T16-R4 m-7)", () => {
     type Cell = { cell: string; verdict: string; maxCommands: number; fences: boolean; failure: { check: string; seed: number; path: string; replayPath: string | null } | null };
     const found: { runId: string; cell: Cell; failure: NonNullable<Cell["failure"]> }[] = [];
@@ -484,10 +487,12 @@ describe("regression cases (R29)", () => {
       const r = cases.find((c) => c.cell === cell.cell && c.check === failure.check && c.seed === failure.seed && c.path === failure.path);
       expect(r, `${runId} ${cell.cell}: NEW ${failure.check} (seed ${failure.seed}, path ${failure.path}) is not a committed case`).toBeDefined();
       expect({ replayPath: r?.replayPath, maxCommands: r?.maxCommands, fencesOn: r?.fencesOn, runId: r?.runId, status: r?.status }, r?.id)
-        .toEqual({ replayPath: failure.replayPath, maxCommands: cell.maxCommands, fencesOn: cell.fences, runId, status: "open" });
+        .toEqual({ replayPath: failure.replayPath, maxCommands: cell.maxCommands, fencesOn: cell.fences, runId, status: r !== undefined && FIXED_CASES.has(r.id) ? "fixed" : "open" });
       checked++;
     }
     expect(checked).toBe(found.length);
+    // Every fixed case is one a fix names, and every named fix is a committed fixed case.
+    expect(cases.filter((c) => c.status === "fixed").map((c) => c.id).sort()).toEqual([...FIXED_CASES.keys()].sort());
     console.info(`T15-R5: ${checked} NEW failure(s), each a committed case; exempt ${JSON.stringify(Object.fromEntries(exempted))}`);
   });
   // Controller ruling Q1 (W1c Task 2): a fence named for a case post-dates its

@@ -27,14 +27,20 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * byes go to the draw's top two (RB4-D2 over `lib/swiss-draw.ts`), never the first two to register by rule, and an Undo then a
  * fresh Generate seats the same bracket.
  *
+ * T8 (FX-G2; MB-004/005): Generate over a bracket that already has its lines reconciles it. A seventh player before Start
+ * takes a bye in place (RB4-L4: the lowest-seeded holder's — here, all unseeded, the LATER draw position's), nothing is
+ * inserted and a second Generate is the no-op; a ninth crosses a power of two, so the bracket is drawn again once — sixteen
+ * slots, fifteen lines, one final, every player seated once (main seated the field twice beside a second final).
+ *
  * Own fresh owner; keyless; every read and write is a v1 route. Every check is counted, and a run that checked nothing fails.
  * SMOKE_ONLY=w4KnockoutA runs it alone (SELECTABLE_SUITES).
  */
 export async function w4KnockoutASuite(): Promise<void> {
   // T2: 1 (a called final survives a void of its feeder). T3: 1 (an awarded bye holds no court). T4: 1 (the final keeps
   // its slot across an 8 → 9 Rebuild). T5: 1 (Undo refuses across a confirmed draw). T6: 1 (Complete refuses a bracket
-  // with its third-place match unplayed). T7: 1 (an unseeded draw replays).
-  const EXPECTED_CHECKS = 6;
+  // with its third-place match unplayed). T7: 1 (an unseeded draw replays). T8: 2 (6 → 7 places in a bye; 8 → 9 redraws
+  // once).
+  const EXPECTED_CHECKS = 8;
   let checked = 0;
   const w4Check = (label: string, cond: boolean) => {
     checked++;
@@ -397,6 +403,70 @@ export async function w4KnockoutASuite(): Promise<void> {
     w4Check(
       "w4a X-SD-7: six unseeded players are drawn with the stage's seed — the byes to the draw's top two — and Undo + Generate seats the same bracket" +
         (ok ? "" : ` — players ${ko.registered.length}, generate ${gen1.status}, lines ${first.length}, byes ${byeHoldersOf(first).join(",")} vs ${wantByes}, pairs ${realPairs} vs ${wantPairs}, undo ${undo.status} ${JSON.stringify(undo.json).slice(0, 160)}, left ${emptied}, generate ${gen2.status}, same ${seatsOf(second) === seatsOf(first)}`),
+      ok,
+    );
+  }
+
+  type Reconcile = { kind?: string; placed?: string[]; vacated?: string[] } | undefined;
+  type GenerateAnswer = { created?: number; reconcile?: Reconcile } | undefined;
+  /** One more player, registered after the draw and before Start. */
+  const addPlayer = async (divId: string | undefined, name: string) =>
+    v1data<{ id: string }[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST", [{ kind: "individual", display_name: `${name} ${tag}` }]))?.[0]?.id;
+
+  // Check 7 (T8, FX-G2; MB-005's sequence): six unseeded players drawn, a seventh before Start, Generate again. Expected
+  // (RB4-L4, rulebook-W4-knockout.md): the byes are the draw's top two, at draw positions 1 and 2; both unseeded, so the
+  // tie goes to the LATER position — the seventh plays drawn[1]. Nothing inserted, seven lines still, and a second
+  // Generate is the no-op.
+  {
+    const ko = await drawKnockout("Reconcile 7", 6);
+    const gen1 = await v1(owner, `/api/v1/stages/${ko.stageId}/generate`, "POST");
+    const before = await ko.fixtures();
+    const drawn = ko.stageId ? swissRoundOneOrder(swissDrawSeed(ko.stageId), ko.registered.map((id) => ({ id, seed: null }))) : [];
+    const late = await addPlayer(ko.divId, "Reconcile 7 P7");
+    const gen2 = await v1(owner, `/api/v1/stages/${ko.stageId}/generate`, "POST");
+    const answer = v1data<GenerateAnswer>(gen2);
+    const after = await ko.fixtures();
+    const lateLine = after.find((f) => f.round_no === 1 && (f.home_entrant_id === late || f.away_entrant_id === late));
+    const opponent = lateLine ? (lateLine.home_entrant_id === late ? lateLine.away_entrant_id : lateLine.home_entrant_id) : null;
+    const gen3 = await v1(owner, `/api/v1/stages/${ko.stageId}/generate`, "POST");
+    const again = v1data<GenerateAnswer>(gen3);
+    const ok =
+      gen1.status === 200 && before.length === 7 && drawn.length === 6 && late !== undefined &&
+      gen2.status === 200 && answer?.created === 0 && answer?.reconcile?.kind === "in_place" &&
+      JSON.stringify(answer.reconcile.placed) === JSON.stringify([late]) &&
+      after.length === 7 && after.every((f) => before.some((b) => b.id === f.id)) &&
+      opponent === drawn[1] &&
+      gen3.status === 200 && again?.reconcile?.kind === "noop" && again.created === 0;
+    w4Check(
+      "w4a FX-G2: a seventh player before Start takes the later-drawn bye in place — nothing inserted, then a second Generate is the no-op" +
+        (ok ? "" : ` — generate ${gen1.status}, lines ${before.length}, late ${late ?? "none"}, generate ${gen2.status} ${JSON.stringify(gen2.json).slice(0, 200)}, lines ${after.length}, opponent ${opponent ?? "none"} vs ${drawn[1] ?? "-"}, again ${gen3.status} ${JSON.stringify(again?.reconcile)}`),
+      ok,
+    );
+  }
+
+  // Check 8 (T8, FX-G2): eight players drawn, a ninth before Start, Generate again. Expected: the bracket crosses a power of
+  // two, so it is drawn again ONCE at sixteen slots — fifteen lines (8 + 4 + 2 + 1), one final, round one holding every
+  // one of the nine exactly once (one match, seven byes). Main kept the old final beside a new one.
+  {
+    const ko = await drawKnockout("Reconcile 9", 8);
+    const gen1 = await v1(owner, `/api/v1/stages/${ko.stageId}/generate`, "POST");
+    const before = await ko.fixtures();
+    const late = await addPlayer(ko.divId, "Reconcile 9 P9");
+    const gen2 = await v1(owner, `/api/v1/stages/${ko.stageId}/generate`, "POST");
+    const answer = v1data<GenerateAnswer>(gen2);
+    const after = await ko.fixtures();
+    const lastRound = Math.max(...after.map((f) => f.round_no));
+    const roundOne = after.filter((f) => f.round_no === 1).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((id): id is string => id !== null);
+    const everyone = [...ko.registered, late].sort().join(",");
+    const ok =
+      gen1.status === 200 && before.length === 7 && late !== undefined &&
+      gen2.status === 200 && answer?.reconcile?.kind === "regenerated" &&
+      JSON.stringify(answer.reconcile.placed) === JSON.stringify([late]) &&
+      after.length === 15 && after.filter((f) => f.round_no === lastRound).length === 1 &&
+      [...roundOne].sort().join(",") === everyone && new Set(roundOne).size === 9;
+    w4Check(
+      "w4a FX-G2: a ninth player before Start redraws the bracket once — fifteen lines, one final, every player seated once" +
+        (ok ? "" : ` — generate ${gen1.status}, lines ${before.length}, late ${late ?? "none"}, generate ${gen2.status} ${JSON.stringify(gen2.json).slice(0, 200)}, lines ${after.length}, finals ${after.filter((f) => f.round_no === lastRound).length}, round one ${roundOne.length} (${new Set(roundOne).size} distinct)`),
       ok,
     );
   }
