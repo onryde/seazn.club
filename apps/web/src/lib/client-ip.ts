@@ -20,6 +20,8 @@
 // never an authorisation.
 import { timingSafeEqual } from "node:crypto";
 import { BlockList, isIP } from "node:net";
+import * as Sentry from "@sentry/nextjs";
+import { log } from "@/server/logger";
 
 /** Cloudflare's published edge ranges: https://www.cloudflare.com/ips-v4 and https://www.cloudflare.com/ips-v6, fetched
  *  2026-11-01. Cloudflare changes them rarely and announces it; refresh both lists together from those two URLs. */
@@ -68,14 +70,50 @@ function throughOurZone(headers: Headers): boolean {
   return sent.length === want.length && timingSafeEqual(sent, want);
 }
 
+/** The reason code a stamp mismatch is reported under - the only thing it carries. */
+const STAMP_MISMATCH = "origin_stamp_mismatch";
+/** At most one `log.warn` this often per process; Sentry hears of it once per process. */
+const STAMP_MISMATCH_WARN_EVERY_MS = 60_000;
+let stampMismatchWarnedAt: number | undefined;
+let stampMismatchSent = false;
+
+/**
+ * A Cloudflare peer named a visitor but did not carry our stamp while the secret is set: the request keys on the EDGE, so a
+ * misconfigured rule (another host, a typo, a rotation half done) puts every visitor of that colo in one bucket - sign-in
+ * first. Never silent: a throttled warn, and one Sentry warning per process. Neither carries a header value or the secret.
+ */
+function reportStampMismatch(): void {
+  const now = Date.now();
+  if (stampMismatchWarnedAt === undefined || now - stampMismatchWarnedAt >= STAMP_MISMATCH_WARN_EVERY_MS) {
+    stampMismatchWarnedAt = now;
+    log.warn(
+      { reason: STAMP_MISMATCH },
+      "CF-Connecting-IP not believed: a Cloudflare peer without our zone's origin stamp while CF_ORIGIN_SECRET is set - " +
+        "keyed on the Cloudflare edge (README: Deploy step - client IP behind Cloudflare)",
+    );
+  }
+  if (!stampMismatchSent) {
+    stampMismatchSent = true;
+    Sentry.captureMessage(STAMP_MISMATCH, "warning");
+  }
+}
+
+/** Tests only: a fresh process's report state. */
+export function __resetOriginStampReportForTests(): void {
+  stampMismatchWarnedAt = undefined;
+  stampMismatchSent = false;
+}
+
 /** The client IP a per-IP limiter keys on (see the header for the order and why). */
 export function clientIp(headers: Headers): string {
   const fly = first(headers.get("fly-client-ip"));
   if (fly !== undefined) {
     const cf = first(headers.get("cf-connecting-ip"));
-    const believed =
-      cf !== undefined && isIP(cf) !== 0 && !headers.has("cf-worker") && isCloudflarePeer(fly) && throughOurZone(headers);
-    return believed ? cf : fly;
+    const fromCloudflare = cf !== undefined && isIP(cf) !== 0 && !headers.has("cf-worker") && isCloudflarePeer(fly);
+    if (!fromCloudflare) return fly;
+    if (throughOurZone(headers)) return cf;
+    reportStampMismatch();
+    return fly;
   }
   return first(headers.get("x-forwarded-for")?.split(",")[0]) ?? first(headers.get("x-real-ip")) ?? "unknown";
 }
