@@ -209,9 +209,46 @@ describe.skipIf(!HAS_DB)("sponsors usecase", () => {
     // Reactivated: the row again, still no blob.
     await patchSponsor(auth, row.id, { status: "active" });
     expect((await resolveSponsors(auth.orgId)).map((s) => s.name)).toEqual(["Backfilled"]);
-    // Deleted — the org has no rows at all again, so the blob is all it has.
+    // Deleted (final review 2, m9: flipped by design) — the org has no rows left, but it HAD one, so the blob stays unread:
+    // a deleted sponsor never comes back from it.
     await deleteSponsor(auth, row.id);
-    expect((await resolveSponsors(auth.orgId)).map((s) => s.name)).toEqual(["Old Faithful"]);
+    expect(await resolveSponsors(auth.orgId)).toEqual([]);
+  });
+
+  // Final review 2, m9 (a customer bug: deleted sponsors came back). V283 copied the blobs into rows ONCE and never cleared
+  // them, and the blob stays writable (the legacy org PATCH's `sponsors`, a competition's free-form branding), so an org
+  // that has never had a row still reads its blob. Once an org has had one (V492 stamps organizations.first_sponsor_row_at),
+  // the blob is never read again - deleting every row leaves the board EMPTY, not the old blob.
+  it("m9: an org deletes its last sponsor and the public board shows none - neither the org's blob nor the competition's; an org that never had a row still reads its blobs", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: `Board Cup ${randomUUID().slice(0, 6)}`, visibility: "public", branding: {} });
+    await sql`
+      update organizations set branding = ${sql.json({ sponsors: [{ name: "Old Faithful", url: "https://of.example" }] } as never)}
+       where id = ${auth.orgId}`;
+    await sql`update competitions set branding = ${sql.json({ sponsors: [{ name: "Cup Relic" }] } as never)} where id = ${comp.id}`;
+    const board = async () => [
+      (await resolveSponsors(auth.orgId)).map((s) => s.name),
+      (await resolveSponsors(auth.orgId, comp.id)).map((s) => s.name),
+    ];
+    const stamp = async () => (await sql<{ at: Date | null }[]>`select first_sponsor_row_at as at from organizations where id = ${auth.orgId}`)[0]!.at;
+    // The positive pair first: never had a row, so both blobs read (the competition's first) - and nothing is stamped.
+    expect(await board()).toEqual([["Old Faithful"], ["Cup Relic", "Old Faithful"]]);
+    expect(await stamp(), "no row yet, no stamp").toBeNull();
+
+    const first = await createSponsor(auth, { name: "Harbour Bank", tier: "gold", status: "active" });
+    const stamped = await stamp();
+    expect(stamped, "the first row stamps the org").not.toBeNull();
+    const second = await createSponsor(auth, { name: "Quay Cafe", tier: "partner", status: "active", competition_id: comp.id });
+    expect(await stamp(), "a second row does not move the stamp").toEqual(stamped);
+    expect(await board()).toEqual([["Harbour Bank"], ["Quay Cafe", "Harbour Bank"]]);
+
+    // The org deletes every sponsor: the board is empty on both scopes, a second read the same, and the stamp stays.
+    await deleteSponsor(auth, second.id);
+    await deleteSponsor(auth, first.id);
+    expect((await sql<{ n: number }[]>`select count(*)::int as n from sponsors where org_id = ${auth.orgId}`)[0]!.n, "premise: no rows left").toBe(0);
+    expect(await board(), "after the last delete").toEqual([[], []]);
+    expect(await board(), "a second read").toEqual([[], []]);
+    expect(await stamp(), "the stamp outlives the rows").toEqual(stamped);
   });
 
   it("m6: an org whose rows all belong to ANOTHER competition shows nothing on this one — not the blob", async () => {

@@ -4,6 +4,16 @@
 -- Greenfield: no backfill. Every existing sponsor starts OFF the stream (on_stream = false); the first tick (S12) turns
 -- the org's settings row on itself (ruling R12).
 --
+-- DATA CHANGE (final review 2, m9 - loud, by the house rule): `organizations.first_sponsor_row_at` is new, and this file
+-- STAMPS it (now()) on every organisation that holds a `sponsors` row when it runs. No other existing row is written.
+-- Why: an org that deleted every sponsor row fell back to V283's never-cleared `branding.sponsors` blob, so deleted
+-- sponsors came back on the public board, the match page, slideshows, the embed and exports. V283 copied the blobs into
+-- rows ONCE, but the blob is still writable (the legacy org PATCH's `sponsors`, a competition's free-form branding), so a
+-- blob is not provably a copy and is NOT stripped: the read shim keeps it for an org that has NEVER had a row
+-- (usecases/sponsors.ts resolveSponsors), and the stamp is how "never" is known after the rows are gone. An org that had
+-- rows and deleted them all BEFORE this runs is not stamped (nothing records it); there are no prod sponsor customers
+-- (owner, 2026-11-01).
+--
 -- Tests find this file by its SUFFIX (`__sponsor_rotation.sql`), never its number: a renumber before merge is a pure
 -- `git mv`.
 --
@@ -35,6 +45,23 @@
 -- table once.
 
 alter table sponsors add column on_stream boolean not null default false;
+
+-- m9 (see the header's DATA CHANGE): when the org first held a sponsor row. Stamped by every writer's insert, through one
+-- trigger (a sponsor is created under withTenant as app_user, a paid package activates one on the privileged client):
+-- SECURITY DEFINER, like the tombstone trigger below, so the stamp never depends on the inserting role's grant on
+-- organizations. Set once (`is null`), never cleared: deleting rows does not move it.
+alter table organizations add column first_sponsor_row_at timestamptz null;
+create function sponsors_stamp_first_row() returns trigger
+  language plpgsql security definer
+  set search_path = ${flyway:defaultSchema}, pg_temp as $$
+begin
+  update organizations set first_sponsor_row_at = now() where id = new.org_id and first_sponsor_row_at is null;
+  return null;
+end $$;
+create trigger sponsors_stamp_first_row after insert on sponsors
+  for each row execute function sponsors_stamp_first_row();
+update organizations o set first_sponsor_row_at = now()
+ where o.first_sponsor_row_at is null and exists (select 1 from sponsors s where s.org_id = o.id);
 
 -- One row per scope: the org row (competition_id null) and any competition rows; a competition row overrides the org
 -- row (S12). NULLS NOT DISTINCT makes the org row unique too, and is the arbiter for S12's upsert.

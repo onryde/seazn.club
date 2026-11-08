@@ -316,8 +316,8 @@ export interface ResolvedSponsor {
 /**
  * Sponsors for a public surface: competition-scoped rows first, then
  * org-wide, deduped by name, ordered tier rank → display_order. Falls back
- * to the branding blobs ONLY when the org has no table rows at all
- * (belt-and-braces during rollout — the backfill normally seeds them).
+ * to the branding blobs ONLY when the org has NEVER had a table row (final
+ * review 2, m9: an org that deleted every row reads none, not its old blob).
  * Runs on the privileged connection: public pages have no tenant context.
  * Orgs without `sponsors.tiers` get the un-tiered free strip — every row
  * collapses to `partner` so tier grouping stays a Pro-visible feature.
@@ -356,18 +356,21 @@ export async function resolveSponsors(
   } else if (onStream) {
     resolved = [];
   } else {
-    // Blob shim: competition blob first then org blob, like the old render — ONLY for an org with no sponsor rows at
-    // all (R4 S10 fix round 1, m6). Rows that exist but none active here (withdrawn, pending, another competition's)
-    // mean the org has moved to the table: V283 backfilled the blobs but never cleared them, so reading them now would
-    // resurrect every withdrawn sponsor, untracked. Asked in the same read as the org's blob.
-    const [org] = await sql<{ branding: unknown; has_rows: boolean }[]>`
-      select o.branding, exists (select 1 from sponsors s where s.org_id = o.id) as has_rows
+    // Blob shim: competition blob first then org blob, like the old render — ONLY for an org that has NEVER had a
+    // sponsor row (R4 S10 fix round 1, m6; final review 2, m9). Rows that exist but none active here (withdrawn, pending,
+    // another competition's) mean the org has moved to the table, and so do rows it has since DELETED: V283 backfilled
+    // the blobs but never cleared them, so reading them now would resurrect every withdrawn or deleted sponsor,
+    // untracked. "Never" is V492's `first_sponsor_row_at` stamp (set by the org's first row, kept when the rows go); the
+    // live `exists` beside it is the guard for a row the stamp somehow missed. Asked in the same read as the org's blob.
+    const [org] = await sql<{ branding: unknown; had_rows: boolean }[]>`
+      select o.branding,
+             (o.first_sponsor_row_at is not null or exists (select 1 from sponsors s where s.org_id = o.id)) as had_rows
         from organizations o where o.id = ${orgId}`;
-    const comp = competitionId && org?.has_rows === false
+    const comp = competitionId && org?.had_rows === false
       ? await sql<{ branding: unknown }[]>`
           select branding from competitions where id = ${competitionId}`
       : [];
-    const blob = org?.has_rows === false ? org.branding : undefined;
+    const blob = org?.had_rows === false ? org.branding : undefined;
     resolved = [...brandingSponsors(comp[0]?.branding), ...brandingSponsors(blob)].map(
       (s) => ({
         id: null,
