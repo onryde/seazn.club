@@ -89,7 +89,7 @@ import {
   unionRequiredCourtTags,
 } from "./court-candidates";
 import { buildEngineConstraints } from "./engine-constraints";
-import { autoBuildSchedule, greedyAroundRealSlots } from "./schedule-solver-rest";
+import { autoBuildSchedule, fallbackBoard } from "./schedule-solver-rest";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { generateStageFixturesUnpublished, refuseSwissRoundsAboveMaxAtStart } from "./stages";
 import { schedulingAiModel, toRuleFixture } from "./schedule-ai";
@@ -2626,9 +2626,10 @@ export function lockedFixtureIds(
  * or the budget does not prove an improvement), so every frozen id's slot in
  * the board this function returns is read from `known` directly below,
  * never trusted off `buildSchedule`'s own `assignments`. And restoring the
- * frozen cards alone is not enough: the seed chose the FREE cards' slots
- * around the wrong positions, so when it moved a frozen card the free ones
- * are placed again around the real slots (`greedyAroundRealSlots`, #1143).
+ * frozen cards alone is not always enough: the seed chose the FREE cards'
+ * slots around the wrong positions, so when it moved a frozen card the board
+ * placed around the real slots is built too and the better of the two kept
+ * (`fallbackBoard`, #1143, ruling D30).
  */
 /** A `BuildResult` plus the one fact only the REFLOW path is in a position to
  *  know: how many of `moved` were cards it placed for the first time rather than
@@ -2727,15 +2728,17 @@ async function reflowExisting(args: {
   }).length;
   // An engine FALLBACK whose plain seed moved a known card chose every free
   // card's slot around the wrong positions: putting the known card back
-  // (below) would leave a free card beside it with a rest breach or a court
-  // clash, under a strip that says the board is valid (#1143). So the free
-  // cards are placed again, by the same greedy, around the REAL slots — the
-  // one helper the rest guard's own fallback uses. The engine's verdict
-  // (`engine`, `status`, tiers) is still reported as it came: only where the
-  // free cards sit changes. Never on the success exit, whose board already
-  // agrees with `known` — `correctedCount` is 0 there by construction.
+  // (below) can leave a free card beside it with a rest breach or a court
+  // clash, under a strip that says the board is valid (#1143). Placing the
+  // free cards again around the REAL slots fixes that but can break round
+  // order instead, so `fallbackBoard` — the one helper the rest guard's own
+  // fallback uses — builds both and keeps the better (ruling D30). The
+  // engine's verdict (`engine`, `status`, tiers) is still reported as it
+  // came: only where the free cards sit can change. Never on the success
+  // exit, whose board already agrees with `known` — `correctedCount` is 0
+  // there by construction.
   const placedBy =
-    correctedCount > 0 && out.engine !== "optimized" ? await greedyAroundRealSlots(input) : out;
+    correctedCount > 0 && out.engine !== "optimized" ? await fallbackBoard(input, out) : out;
   if (correctedCount > 0) {
     log.warn(
       { engine: out.engine, status: out.status, frozenCount: known.size, correctedCount, replaced: placedBy !== out },

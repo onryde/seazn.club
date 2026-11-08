@@ -284,6 +284,9 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+/** What a fallback board must never ship: a rest breach, a court clash, or a round-order breach. */
+const SHIPPED_FORBIDDEN = new Set<string>([REASON_CODE.rest, REASON_CODE.court, REASON_CODE.order]);
+
 const MODES = [
   ["BUILD", { only_unlocked: false, mode: "build" }],
   ["REFLOW", { only_unlocked: true, mode: "reflow" }],
@@ -424,9 +427,47 @@ describe.skipIf(!HAS_DB)("layer 2: the AUTO pass refuses a solver board that bre
     expect(Date.parse(dragged!.scheduled_at)).toBe(draggedAt);
     expect(dragged!.court_id).toBe(rig.courts[1]);
     expect(out.assignments, "every card is on the shipped board").toHaveLength(6);
-    const forbidden = new Set([REASON_CODE.rest, REASON_CODE.court]);
-    expect(out.conflicts.filter((c) => forbidden.has(c.code))).toEqual([]);
+    expect(out.conflicts.filter((c) => SHIPPED_FORBIDDEN.has(c.code))).toEqual([]);
     expect(minGapMinutes(out.assignments, rig.strict)).toBeGreaterThanOrEqual(STRICT_EXPECTED);
+  });
+
+  it("REFLOW over a pool's placed later rounds: the board built around them would break round order, so the plain greedy board ships", async () => {
+    const rig = await seedPools(true);
+    // Rounds 2 and 3 of both pools already on the board (placed, not locked) at lawful rests; round 1 not yet placed.
+    const T = Date.parse(START_AT);
+    const placed = [
+      [rig.strict[1]!, T + 120 * MIN, rig.courts[0]!],
+      [rig.strict[2]!, T + 240 * MIN, rig.courts[0]!],
+      [rig.lax[1]!, T + 120 * MIN, rig.courts[1]!],
+      [rig.lax[2]!, T + 180 * MIN, rig.courts[1]!],
+    ] as const;
+    for (const [id, at, court] of placed) await placeCard(id, at, court);
+    // No verdict from the solver: the engine falls back to its plain seed on its own, which re-places the placed cards.
+    await solverReplies(() => ({ assignments: [], status: "UNKNOWN", tiersCompleted: 0, objectiveValues: [], elapsedMs: 0, wallExhausted: false }));
+    const build = vi.spyOn(engine, "buildSchedule");
+
+    const out = await autoSchedule(rig.auth, rig.stageId, { only_unlocked: true, mode: "reflow" });
+
+    // Premise: the board built AROUND the real slots was asked for, and in it round 1 lands after round 2 — the greedy
+    // placer starts a card only after its entrants' latest match.
+    const lockedCall = build.mock.calls.findIndex(([input]) =>
+      input.fixtures.some((f) => f.id === rig.strict[1] && f.locked !== undefined),
+    );
+    expect(lockedCall, "premise: the locked rebuild was built").toBeGreaterThanOrEqual(0);
+    const lockedBoard = (await build.mock.results[lockedCall]!.value) as BuildResult;
+    const lockedR1 = lockedBoard.assignments.find((a) => a.fixtureId === rig.strict[0]);
+    expect(lockedR1!.startAt, "premise: the locked rebuild puts round 1 after round 2").toBeGreaterThan(T + 120 * MIN);
+    // So the plain board ships: round 1 first, the placed cards where they were, and no order, rest or court row.
+    for (const [id, at, court] of placed) {
+      const card = out.assignments.find((a) => a.fixture_id === id);
+      expect(Date.parse(card!.scheduled_at), `placed card ${id}`).toBe(at);
+      expect(card!.court_id).toBe(court);
+    }
+    for (const r1 of [rig.strict[0]!, rig.lax[0]!]) {
+      expect(Date.parse(out.assignments.find((a) => a.fixture_id === r1)!.scheduled_at), `round 1 ${r1}`).toBeLessThan(T + 120 * MIN);
+    }
+    expect(out.assignments).toHaveLength(6);
+    expect(out.conflicts.filter((c) => SHIPPED_FORBIDDEN.has(c.code))).toEqual([]);
   });
 
   it("REFLOW over a card the organiser dragged when the REST GUARD refuses the solver's board: it stays where it was put", async () => {
@@ -449,14 +490,14 @@ describe.skipIf(!HAS_DB)("layer 2: the AUTO pass refuses a solver board that bre
     const out = await autoSchedule(rig.auth, rig.stageId, { only_unlocked: true, mode: "reflow" });
 
     expect(out.solver.status, "premise: the solver's board was refused").toBe("verifier_rejected");
-    expect(build, "premise: refused HERE, by the rest guard's rebuild — not by the engine's own verifier").toHaveBeenCalledTimes(2);
+    const enginesOwn = (await build.mock.results[0]!.value) as BuildResult;
+    expect(enginesOwn.engine, "premise: refused HERE, by the rest guard — the engine itself shipped the solver's board").toBe("optimized");
     const dragged = out.assignments.find((a) => a.fixture_id === rig.strict[0]);
     expect(Date.parse(dragged!.scheduled_at)).toBe(draggedAt);
     expect(dragged!.court_id).toBe(rig.courts[1]);
     expect(out.assignments, "every card is on the shipped board").toHaveLength(6);
-    // The board shipped as the cure for a rest breach must not carry one, nor a court clash, anywhere.
-    const forbidden = new Set([REASON_CODE.rest, REASON_CODE.court]);
-    expect(out.conflicts.filter((c) => forbidden.has(c.code))).toEqual([]);
+    // The board shipped as the cure for a rest breach must not carry one, nor a court clash or an order breach.
+    expect(out.conflicts.filter((c) => SHIPPED_FORBIDDEN.has(c.code))).toEqual([]);
     expect(minGapMinutes(out.assignments, rig.strict)).toBeGreaterThanOrEqual(STRICT_EXPECTED);
   });
 

@@ -35,6 +35,7 @@ import {
   buildSchedule,
   deltaConflicts,
   effectiveRestMinutes,
+  isBlockingConflict,
   validateAssignments,
   type Assignment,
   type BuildInput,
@@ -156,32 +157,71 @@ function solverRestBreaches(
 }
 
 /**
- * The greedy board placed AROUND THE REAL SLOTS: the engine asked again with `NO_VERDICT`, every frozen card that is
- * anchored only by `current` (placed or dragged, not locked) first LOCKED to that slot. The ONE place both greedy
- * fallbacks of the auto pass come from — the rest guard's below, and `reflowExisting`'s when the engine falls back on
- * its own — so the two cannot drift.
- *
- * Why the lock: every engine fallback exit reports the PLAIN seed, which knows nothing of a `current`-only anchor and
- * re-places such a card (see `reflowExisting`'s doc comment). REFLOW then puts the card back on its real slot and keeps
- * greedy's slots for everything else, so the shipped board could carry a rest breach, or a court clash, beside a card
- * the organiser dragged — under a strip that says the board is valid. Locked, the seed places around the real slot.
- *
- * The seed itself is the engine's, never assembled here: its construction (pins, legalisation) belongs to the engine,
- * and a second copy of it is the placer/verifier fork this module exists to close.
+ * The engine's greedy seed over `fixtures`: `buildSchedule` asked again with `NO_VERDICT`. Never assembled here — the
+ * seed's construction (pins, legalisation) belongs to the engine, and a second copy of it is the placer/verifier fork
+ * this module exists to close.
  */
-export async function greedyAroundRealSlots(input: BuildInput): Promise<BuildResult> {
-  const frozen = new Set(input.frozen ?? []);
-  const at = new Map((input.current ?? []).map((a) => [a.fixtureId, a] as const));
-  const fixtures = input.fixtures.map((f) => {
-    const slot = f.locked === undefined && frozen.has(f.id) ? at.get(f.id) : undefined;
-    return slot === undefined ? f : { ...f, locked: { court: slot.court, startAt: slot.startAt } };
-  });
+async function greedySeed(input: BuildInput, fixtures: readonly SchedulableFixture[]): Promise<BuildResult> {
   const out = await buildSchedule({ ...input, fixtures, solve: NO_VERDICT });
   if (out.engine !== "greedy") {
     // A solver that placed nothing cannot have produced a solver board: the engine changed under this code.
-    throw new Error(`greedyAroundRealSlots: the no-verdict rebuild returned engine "${out.engine}", not the greedy seed`);
+    throw new Error(`greedySeed: the no-verdict rebuild returned engine "${out.engine}", not the greedy seed`);
   }
   return out;
+}
+
+/** Every frozen card anchored only by `current` — placed or dragged, not locked — at that real slot, by id. */
+function realSlots(input: BuildInput): Map<string, Assignment> {
+  const frozen = new Set(input.frozen ?? []);
+  const at = new Map((input.current ?? []).map((a) => [a.fixtureId, a] as const));
+  const slots = new Map<string, Assignment>();
+  for (const f of input.fixtures) {
+    const slot = f.locked === undefined && frozen.has(f.id) ? at.get(f.id) : undefined;
+    if (slot !== undefined) slots.set(f.id, slot);
+  }
+  return slots;
+}
+
+/** How bad a board is, for {@link fallbackBoard}: its blocking conflicts (court, person overlap, window, direct and
+ *  round order — `isBlockingConflict`), its rest rows, and every card it left off. Lower is better. */
+function badness(board: readonly Assignment[], input: BuildInput): number {
+  const placed = new Set(board.map((a) => a.fixtureId));
+  const left = input.fixtures.filter((f) => !placed.has(f.id)).length;
+  const rows = validateAssignments(board, input.config, input.existing ?? [], input.dependencies ?? []);
+  return left + rows.filter((c) => isBlockingConflict(c) || isRest(c)).length;
+}
+
+/**
+ * The greedy board an auto-pass fallback ships, given the engine's PLAIN greedy board for `input`. The ONE place both
+ * fallbacks come from — the rest guard's below, and `reflowExisting`'s when the engine falls back on its own — so the
+ * two cannot drift.
+ *
+ * Two candidates, because neither is right every time (orchestrator ruling D30, #1143 re-review):
+ *   - PLAIN — the engine's seed. It knows nothing of a `current`-only anchor and re-places a placed or dragged card;
+ *     REFLOW puts that card back on its real slot and keeps the seed's slots for the rest, so a new card can land
+ *     beside it with a rest breach or a court clash.
+ *   - LOCKED — the seed asked again with every such card LOCKED to its real slot, so new cards go around it. But the
+ *     greedy placer starts a card only after its entrants' latest existing match, so with a pool's later rounds placed
+ *     its round 1 lands after them: a round-order breach (measured: r1 at 15:00, after rounds 2-3).
+ * Each is judged as REFLOW would ship it — its real-slot cards put back — by {@link badness}; fewer wins, and a tie goes
+ * to LOCKED, because it respects the organiser's drags. With no such card the two are the same board and only PLAIN is
+ * built.
+ *
+ * Returns the winner's own result, NOT the reconciled board: REFLOW reconciles it itself, and the engine's verdict
+ * (`engine`, `status`, tiers) is the caller's to keep.
+ */
+export async function fallbackBoard(input: BuildInput, plain: BuildResult): Promise<BuildResult> {
+  const slots = realSlots(input);
+  if (slots.size === 0) return plain;
+  const locked = await greedySeed(
+    input,
+    input.fixtures.map((f) => {
+      const slot = slots.get(f.id);
+      return slot === undefined ? f : { ...f, locked: { court: slot.court, startAt: slot.startAt } };
+    }),
+  );
+  const asShipped = (r: BuildResult) => [...r.assignments.filter((a) => !slots.has(a.fixtureId)), ...slots.values()];
+  return badness(asShipped(locked), input) <= badness(asShipped(plain), input) ? locked : plain;
 }
 
 /**
@@ -193,7 +233,7 @@ export async function greedyAroundRealSlots(input: BuildInput): Promise<BuildRes
  * "A card the solver placed" is read off the solver's own reply, and "a row it was handed" off its own request, never
  * re-derived from `frozen`/`locked`.
  *
- * The greedy board is {@link greedyAroundRealSlots}' — only paid on the rejection path.
+ * The greedy board is {@link fallbackBoard}'s pick — only paid on the rejection path.
  */
 export async function buildScheduleHonouringRest(input: BuildInput): Promise<BuildResult> {
   const placedBySolver = new Set<string>();
@@ -214,7 +254,7 @@ export async function buildScheduleHonouringRest(input: BuildInput): Promise<Bui
   if (!out.conflicts.some(isRest)) return out;
   const breaches = solverRestBreaches(out.assignments, input, placedBySolver, handedRows);
   if (breaches.length === 0) return out;
-  const fallback = await greedyAroundRealSlots(input);
+  const fallback = await fallbackBoard(input, await greedySeed(input, input.fixtures));
   input.log.error(
     { rejected: breaches.map((c) => `${c.fixtureId}:${c.reason}`) },
     "autoSchedule: the placement solver's board breaks a declared rest — falling back to the greedy seed",
