@@ -163,6 +163,34 @@ describe.skipIf(!HAS_DB)("PUT /stages/{id}/auto-advance", () => {
     expect(await stored(r.swissId)).toBe(true);
     expect((await switchEvents(r.divisionId)).map((e) => e.actor_id)).toEqual([null]);
   });
+
+  it("another organisation's organiser and its manage key are refused 401 and write nothing (this org's owner is let through)", async () => {
+    const r = await rig();
+    const other = await rig();
+    const otherKey = await keyOf(other, "manage");
+    const callers: [string, () => Promise<Response>][] = [
+      ["another org's organiser", async () => {
+        authState.userId = other.owner.userId!;
+        return PUT(put(r.swissId, JSON.stringify({ autoPair: true })), ctx(r.swissId));
+      }],
+      ["another org's manage key", async () => {
+        authState.userId = "";
+        return PUT(put(r.swissId, JSON.stringify({ autoPair: true }), { authorization: `Bearer ${otherKey}` }), ctx(r.swissId));
+      }],
+    ];
+    let checked = 0;
+    for (const [who, call] of callers) {
+      expect((await call()).status, who).toBe(401);
+      expect(await stored(r.swissId), who).toBeUndefined();
+      expect(await switchEvents(r.divisionId), who).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(callers.length);
+    // The positive pair: the same body from this org's own owner goes through.
+    authState.userId = r.owner.userId!;
+    expect((await PUT(put(r.swissId, JSON.stringify({ autoPair: true })), ctx(r.swissId))).status).toBe(200);
+    expect(await stored(r.swissId)).toBe(true);
+  });
 });
 
 describe.skipIf(!HAS_DB)("GET /divisions/{id}/auto-advance", () => {
@@ -193,5 +221,37 @@ describe.skipIf(!HAS_DB)("GET /divisions/{id}/auto-advance", () => {
     const res = await read(await GET(get(r.divisionId, { authorization: `Bearer ${readKey}` }), ctx(r.divisionId)));
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ok: true, data: { actions: [] } });
+  });
+
+  it("another organisation's organiser and its manage key are refused 401: they never see this division's rows", async () => {
+    const r = await rig();
+    const other = await rig();
+    const otherKey = await keyOf(other, "manage");
+    // A row to hide: served to this org's owner (the positive pair below), refused to the other org.
+    await sql`
+      insert into stage_auto_actions (org_id, division_id, stage_id, kind, target_round, state, detail)
+      values (${r.orgId}, ${r.divisionId}, ${r.swissId}, 'pair_round', 2, 'waiting', ${sql.json({ openBoards: [] })})`;
+    const callers: [string, () => Promise<Response>][] = [
+      ["another org's organiser", async () => {
+        authState.userId = other.owner.userId!;
+        return GET(get(r.divisionId), ctx(r.divisionId));
+      }],
+      ["another org's manage key", async () => {
+        authState.userId = "";
+        return GET(get(r.divisionId, { authorization: `Bearer ${otherKey}` }), ctx(r.divisionId));
+      }],
+    ];
+    let checked = 0;
+    for (const [who, call] of callers) {
+      const res = await read(await call());
+      expect(res.status, who).toBe(401);
+      expect(res.body.data, who).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(callers.length);
+    authState.userId = r.owner.userId!;
+    const own = await read(await GET(get(r.divisionId), ctx(r.divisionId)));
+    expect(own.status).toBe(200);
+    expect((own.body.data as { actions: unknown[] }).actions).toHaveLength(1);
   });
 });
