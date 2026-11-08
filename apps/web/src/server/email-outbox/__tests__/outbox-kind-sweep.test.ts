@@ -170,8 +170,9 @@
 //   - quick_match_reminder (quick match plan 3 Task 2; spec 2026-11-03 C2): the cron POST of app/api/cron/quick-match-expiry/route.ts
 //     (the cron secret is the stubbed `CRON_SECRET`, carried by the `next/headers` stand-in) over a quick match a Spanish guest created
 //     with an address, put 23 hours from its expiry by the clock: the real sweep claims the match's reminder and queues it on the pool,
-//     on the system org, in the setup form's own language, and the worker makes the first attempt. The route sweeps every quick match
-//     on the database (it has no scope, by design), so only this scenario's own row is judged, by its recipient.
+//     on the system org, in the setup form's own language, and the worker makes the first attempt. The route has no scope by design,
+//     so the sweep module is wrapped to scope the real sweep to this scenario's match (`qmSweep`): a shared database's other quick
+//     matches are never swept from here.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -226,6 +227,21 @@ vi.mock("@/lib/auth", async (importOriginal) => {
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
   return { ...actual, earnGrantVolumeAlertEmail: vi.fn(actual.earnGrantVolumeAlertEmail) };
+});
+// The quick match reminder's scenario drives the REAL cron route, whose sweep has no scope by design: on a shared database it would
+// sweep every quick match there (Task 2 review m2). The real sweep, scoped to the scenario's own match, and refused unscoped; the
+// route's own call is recorded so the scenario can see it passed nothing but its base URL (route.test.ts pins `{ baseUrl }`).
+const qmSweep = vi.hoisted(() => ({ ids: null as string[] | null, calls: [] as object[] }));
+vi.mock("@/server/usecases/quick-match-sweep", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/usecases/quick-match-sweep")>();
+  return {
+    ...actual,
+    sweepQuickMatches: (opts: Parameters<typeof actual.sweepQuickMatches>[0]) => {
+      qmSweep.calls.push(opts);
+      if (qmSweep.ids === null) throw new Error("kind sweep: the quick match sweep runs scoped to its scenario's own match, never unscoped");
+      return actual.sweepQuickMatches({ ...opts, onlyIds: qmSweep.ids });
+    },
+  };
 });
 // The one network seam. The harness reads this same mock back (it imports `deliver` from the same module).
 const deliverMock = vi.hoisted(() => vi.fn());
@@ -1590,11 +1606,18 @@ async function quickMatchReminderScenario(): Promise<KindScenario> {
       // The clock: 23 hours to expiry, the last activity the 7 days (C1) before it.
       await sql`update quick_matches set expires_at = now() + interval '23 hours',
                   last_activity_at = now() + interval '23 hours' - interval '7 days' where id = ${created.id}`;
-      const res = await quickMatchExpiryPost(new Request("https://sweep.test/api/cron/quick-match-expiry", { method: "POST" }));
-      expect(res.status, "premise: the real cron route answered 200").toBe(200);
-      const body = (await res.json()) as { data: { reminded: number; failed: number } };
-      expect(body.data.reminded, "premise: the sweep queued at least this match's reminder").toBeGreaterThanOrEqual(1);
-      expect(typeof body.data.failed, "the counter the cron Worker reads").toBe("number");
+      qmSweep.ids = [created.id];
+      qmSweep.calls.length = 0;
+      try {
+        const res = await quickMatchExpiryPost(new Request("https://sweep.test/api/cron/quick-match-expiry", { method: "POST" }));
+        expect(res.status, "premise: the real cron route answered 200").toBe(200);
+        expect(qmSweep.calls, "the route ran the sweep once").toHaveLength(1);
+        expect(Object.keys(qmSweep.calls[0]!), "and passed it its base URL alone (no scope of its own)").toEqual(["baseUrl"]);
+        const body = (await res.json()) as { data: { checked: number; reminded: number; failed: number } };
+        expect(body.data, "the scoped sweep saw this match alone and queued its reminder").toMatchObject({ checked: 1, reminded: 1, failed: 0 });
+      } finally {
+        qmSweep.ids = null;
+      }
     },
   };
 }
