@@ -53,6 +53,8 @@ import {
   isCarriedForward,
 } from "./carried-forward";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
+import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
+import { touchQuickMatchActivityForFixture } from "./quick-match-activity";
 
 export interface ScoreOutcome {
   seq: number;
@@ -371,6 +373,15 @@ export async function scoreEvent(
     if (cacheKey) await cacheSet(cacheKey, out, IDEM_TTL_SECONDS);
   } finally {
     await invalidateAndPush(auth, fixtureId, input, result, advanced);
+    // Quick match (spec C1, pre-flight D5): a score is activity, so a guest's match lives 7 days from its LAST score,
+    // not from its last visit home. Here, after the append committed: a refused write (409, 422, 403) threw before the
+    // `try` and touches nothing. Only the system org's writes ask (every other org pays one comparison), and the touch
+    // is best-effort: its failure is logged and never fails, or undoes, a score that already stands.
+    if (auth.orgId === QUICK_MATCH_SYSTEM_ORG_ID) {
+      await touchQuickMatchActivityForFixture(fixtureId).catch((err: unknown) => {
+        log.error({ err, fixture: fixtureId }, "scoring: quick match activity touch failed (the score stands)");
+      });
+    }
   }
   return out;
 }
