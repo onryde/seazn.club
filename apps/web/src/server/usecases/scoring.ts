@@ -563,7 +563,7 @@ async function assertEntitledToScore(
   if (divisionScoringClosed(ctx.division_status)) {
     throw new EngineError("WRONG_PHASE", "division has not started — scoring is closed", {
       divisionStatus: ctx.division_status,
-      // S2-4 Task 2: the wire forwards it (api-v1/http.ts), so the pad can say the competition hasn't started.
+      // S2-4 Task 2: the wire forwards it (api-v1/http.ts), so the pad can say the division hasn't started.
       reason: DIVISION_GATE_REASON.notStarted,
     });
   }

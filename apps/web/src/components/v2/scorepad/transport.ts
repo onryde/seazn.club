@@ -462,7 +462,7 @@ function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTranspor
         return { kind: "throttled", message, retryAfterMs: retryAfterMsOf(res) };
       }
       if (isPermanentRefusal(res.status)) {
-        // S2-4 Task 2: a WRONG_PHASE from the division gate (422) names why, so the pad can say the competition hasn't started.
+        // S2-4 Task 2: a WRONG_PHASE from the division gate (422) names why, so the pad can say the division hasn't started.
         const reason = envelope.error?.reason;
         const named = envelope.error?.code === "WRONG_PHASE" && isDivisionGateReason(reason) ? { reason } : {};
         return { kind: "rejected", code: envelope.error?.code ?? "UNKNOWN", message, ...named };

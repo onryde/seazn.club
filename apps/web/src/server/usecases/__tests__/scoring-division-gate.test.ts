@@ -2,7 +2,7 @@
 // division that has not started (Doc 12 §1, `divisionScoringClosed`), and the refusal now says WHY, as
 // `EngineError.data.reason = "division_not_started"` (`DIVISION_GATE_REASON`, lib/division-phase.ts). The wire forwards it
 // (api-v1/http.ts) and the pad's copy branches on it (lib/scoring-vocab.ts), so a scorer recording the toss in a Draft
-// division reads "The competition hasn't started yet…" instead of "That action doesn't apply at this point in the match".
+// division reads "This division hasn't started yet…" instead of "That action doesn't apply at this point in the match".
 //
 // Real DB, real usecase, real cricket module: the toss is the first write a cricket scorer makes, before `core.start`.
 //

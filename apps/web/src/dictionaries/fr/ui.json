@@ -4669,7 +4669,7 @@
   "engineError.LEVEL_RESULT_IN_BRACKET": "Saisissez le vainqueur — un match à élimination directe ne peut pas finir à égalité.",
   "engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled": "Tranchez le match ou saisissez son départage avant de le finaliser — un match à élimination directe ne peut pas finir à égalité.",
   "engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn": "Ce participant ne fait plus partie de la compétition — choisissez l'autre.",
-  "engineErrorReason.WRONG_PHASE.division_not_started": "La compétition n'a pas encore commencé. L'organisateur la démarre sur la page de la division ; vous pourrez ensuite enregistrer le tirage au sort.",
+  "engineErrorReason.WRONG_PHASE.division_not_started": "Cette division n'a pas encore commencé. C'est l'organisateur qui la démarre.",
   "engineError.LEVEL_RESULT_SEATED": "Un problème est survenu en plaçant ce résultat. Nous avons été prévenus.",
   "engineError.FORFEIT_REASON_WRONG_PHASE": "Ce motif ne peut pas être enregistré à ce moment du match.",
   "engineError.ABANDONED_SETTLE_OR_VOID": "Ce match a été abandonné. Pour le décider, tranchez le match. S'il doit être rejoué, annulez d'abord l'abandon.",

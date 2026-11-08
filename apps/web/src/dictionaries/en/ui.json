@@ -4669,7 +4669,7 @@
   "engineError.LEVEL_RESULT_IN_BRACKET": "Enter the winner — a knockout match can't end level.",
   "engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled": "Settle the match or record its decider before finalizing — a knockout match can't end level.",
   "engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn": "That side is no longer in the competition — choose the other side.",
-  "engineErrorReason.WRONG_PHASE.division_not_started": "The competition hasn't started yet. The organiser starts it on the division page, then you can record the toss.",
+  "engineErrorReason.WRONG_PHASE.division_not_started": "This division hasn't started yet. The organiser starts it.",
   "engineError.LEVEL_RESULT_SEATED": "Something went wrong placing this result. We've been notified.",
   "engineError.FORFEIT_REASON_WRONG_PHASE": "That reason can't be recorded at this point of the match.",
   "engineError.ABANDONED_SETTLE_OR_VOID": "This match was abandoned. To decide it, settle the match. If it is being replayed, void the abandon first.",

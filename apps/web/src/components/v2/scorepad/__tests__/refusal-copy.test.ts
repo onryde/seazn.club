@@ -65,9 +65,10 @@ describe("refusalText", () => {
     expect(refusalText({ code: "INVALID_EVENT", message: "raw", reason: "division_not_started" }, identityMsg)).toBe(
       "engineError.INVALID_EVENT",
     );
-    // The sentence itself, in the shipped dictionary: it says the competition hasn't started and where it is started.
+    // The sentence itself, in the shipped dictionary: ruling (a)'s words, the same for every sport (the gate is
+    // sport-agnostic, so it names no toss).
     expect(dict["engineErrorReason.WRONG_PHASE.division_not_started"]).toBe(
-      "The competition hasn't started yet. The organiser starts it on the division page, then you can record the toss.",
+      "This division hasn't started yet. The organiser starts it.",
     );
     expect(dict["engineErrorReason.WRONG_PHASE.division_not_started"]).not.toBe(dict["engineError.WRONG_PHASE"]);
   });

@@ -1540,6 +1540,20 @@ describe("R8 — buildContext states the innings' locked scoring mode", () => {
     expect(fine.message).not.toBe(coarse.message);
   });
 
+  it("an over-by-over innings asks for no picks: its chips are read-only, so neither pick sentence shows (S2-4 review I3)", () => {
+    const { cfg, st } = coarseFold();
+    expect(currentInnings(st)?.fine ?? null, "fixture guard: the innings is over-by-over").toBeNull();
+    const spec = buildContext(view({ cfg, state: st }), t)!;
+    const slotOf = (id: string) => spec.slots.find((s) => s.id === id)!;
+    // Premise: nobody is named, so a fine innings in this state WOULD ask for the openers and the bowler.
+    expect(slotOf("striker").personId, "fixture guard: no striker is named").toBeUndefined();
+    expect(slotOf("bowler").personId, "fixture guard: no bowler is named").toBeUndefined();
+    expect(slotOf("bowler").readOnly, "fixture guard: the coarse bowler chip cannot be changed").toBe(true);
+    const messages = spec.slots.map((s) => s.message ?? "");
+    expect(messages.filter((m) => m.startsWith("pad.cricket.context.openers.unpicked"))).toEqual([]);
+    expect(messages.filter((m) => m.startsWith("pad.cricket.context.bowler.unpicked"))).toEqual([]);
+  });
+
   it("no innings yet: the slot is ABSENT even where the strip itself renders — nothing has locked in, so there is no mode to state", () => {
     // The super-over gap window (before the first super-over ball) is the one
     // state where `currentInnings` is null and `buildContext` still returns a

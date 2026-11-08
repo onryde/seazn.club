@@ -21,7 +21,7 @@ export function divisionScoringClosed(status: string): boolean {
 
 /** S2-4 Task 2: the scoring door's refusal on `divisionScoringClosed` names WHY, as `EngineError.data.reason`
  *  (usecases/scoring.ts). `server/api-v1/http.ts` forwards it for WRONG_PHASE only, the pad's transport carries it, and the
- *  copy branches on it (`lib/scoring-vocab.ts` `ENGINE_ERROR_REASON_KEY`), so a scorer reads "the competition hasn't
+ *  copy branches on it (`lib/scoring-vocab.ts` `ENGINE_ERROR_REASON_KEY`), so a scorer reads "this division hasn't
  *  started" rather than the engine's generic phase sentence. No `server-only`: the pad reads it too. */
 export const DIVISION_GATE_REASON = { notStarted: "division_not_started" } as const;
 export function isDivisionGateReason(x: unknown): x is "division_not_started" {

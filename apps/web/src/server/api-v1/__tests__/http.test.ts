@@ -479,7 +479,7 @@ describe("v1 envelope", () => {
   });
 
   // S2-4 Task 2: the scoring door's division gate (usecases/scoring.ts) refuses WRONG_PHASE with reason
-  // division_not_started, and that reason reaches the wire so the pad can say the competition hasn't started. Every other
+  // division_not_started, and that reason reaches the wire so the pad can say the division hasn't started. Every other
   // WRONG_PHASE (the engine's own phase guards, the unassigned-entrant refusal) keeps forwarding code + message only.
   it("http forwards WRONG_PHASE's division reason and no other", async () => {
     const res = await v1(async () => {

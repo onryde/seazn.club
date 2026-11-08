@@ -2079,7 +2079,12 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
   const bowlerReadOnly = bowlerIsReadOnly(innings);
   const inningsClosed = innings.closed === true;
   const closedMessage = inningsClosed ? t("pad.cricket.context.innings.closed") : undefined;
-  const blockReason = inningsClosed ? null : bowlerBlockReason(state, people, cfg);
+  // S2-4 fix round 1 (review I3): an over-by-over innings (`fine == null`) is scored by summary, its chips are
+  // read-only and it has no ball tiles, so it asks for no picks: "Pick the two openers" and "Pick the bowler for
+  // over N" would tell the scorer to do what the lane neither needs nor allows.
+  const asksForPicks = innings.fine != null;
+  const reason = inningsClosed ? null : bowlerBlockReason(state, people, cfg);
+  const blockReason = reason === "unpicked" && !asksForPicks ? null : reason;
   const mode = modeSlot(innings, t);
   const strikerLocked = inningsClosed || creaseEndLocked(innings, "striker");
   const nonStrikerLocked = inningsClosed || creaseEndLocked(innings, "nonStriker");
@@ -2098,7 +2103,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         readOnly: strikerLocked ? true : undefined,
         candidates: strikerLocked ? undefined : unlockedIncoming(people.nonStriker),
         blocked: strikerLocked ? undefined : otherEndBlock(people.nonStriker),
-        message: closedMessage ?? openersMessage,
+        message: closedMessage ?? (asksForPicks ? openersMessage : undefined),
       },
       {
         id: "nonStriker",

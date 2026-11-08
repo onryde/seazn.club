@@ -4,8 +4,8 @@ import { type Session, check, tag, ledger, v1, v1data } from "../harness.ts";
 /**
  * S2-4 Task 2 (cricket web pad fixes): the toss is a cricket scorer's first write, and it comes BEFORE `core.start`. In a
  * division the organiser has not started (Draft), the scoring door refuses it 422 WRONG_PHASE (Doc 12 §1,
- * `divisionScoringClosed`). The refusal now names why, `error.reason = "division_not_started"`, so the pad can say "The
- * competition hasn't started yet…" instead of the engine's generic phase sentence. Over real HTTP:
+ * `divisionScoringClosed`). The refusal now names why, `error.reason = "division_not_started"`, so the pad can say "This
+ * division hasn't started yet…" instead of the engine's generic phase sentence. Over real HTTP:
  *
  *   1. a toss in a Draft division: 422, WRONG_PHASE, reason division_not_started, and the ledger stays empty;
  *   2. the organiser starts the division, and the SAME toss is accepted (201): the gate was the whole refusal;

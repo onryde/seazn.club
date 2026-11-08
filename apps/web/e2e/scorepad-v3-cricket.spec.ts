@@ -2004,7 +2004,7 @@ test("cricket v3: the soft-commit dock is revealed on screen when it opens", asy
 // it 422 WRONG_PHASE with reason division_not_started; the pad says so in its own words instead of the engine's generic
 // "doesn't apply at this point". Then the organiser starts the division and the same toss is recorded, so the refusal was
 // the gate's alone. Strings come from the shipped dictionary, never typed here.
-test("S2-4 T2: the toss names the teams, and a Draft division's refusal says the competition hasn't started", async ({ page }) => {
+test("S2-4 T2: the toss names the teams, and a Draft division's refusal says the division hasn't started", async ({ page }) => {
   test.setTimeout(120_000);
   const EN = JSON.parse(
     readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
@@ -2035,7 +2035,7 @@ test("S2-4 T2: the toss names the teams, and a Draft division's refusal says the
   // 1. Draft: the tap is refused, in the scorer's words, and writes nothing.
   await tossOnce();
   const banner = pad(page).locator('[data-role="v3-rejection"]');
-  await expect(banner, "the refusal says the competition hasn't started").toHaveText(
+  await expect(banner, "the refusal says the division hasn't started").toHaveText(
     EN["engineErrorReason.WRONG_PHASE.division_not_started"]!,
     { timeout: 20_000 },
   );
