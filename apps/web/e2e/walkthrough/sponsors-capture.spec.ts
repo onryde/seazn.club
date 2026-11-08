@@ -22,7 +22,8 @@
 //   nav-settings-tooltip-1280 Settings hovered. The browser's own `title` tooltip is NOT in the DOM and headless Chromium
 //                             paints none into a screenshot: the shot shows the hover state, the witness asserts the title.
 // Before each: Sponsors (folded to the home's entry below 350 — nav.tsx `hidden min-[350px]:flex`, so it is asserted HIDDEN
-// at 320 and visible above), Settings and Sign out visible, the bar's content inside its box, and no page scroll.
+// at 320, and above it the link AND its label span visible), Settings and Sign out visible, the bar's content inside its
+// box, and no page scroll.
 //
 // ANTI-VACUITY (AGENTS.md class 10): the last test asserts every file exists, is a PNG, and that no two are
 // byte-identical — a capture that errored before a shot, or two states that never opened, cannot pass it.
@@ -272,7 +273,12 @@ test.describe("the org top bar (nav sign-off)", () => {
     await expect(header).toBeVisible();
     const sponsors = header.getByTestId("nav-sponsors");
     if (width === 320) await expect(sponsors, "320: Sponsors folds to the home's entry").toBeHidden();
-    else await expect(sponsors, `${width}: Sponsors is on the bar`).toHaveText(word("nav.sponsors"));
+    else {
+      // The word is its own span (nav.tsx `navLabelClass`, `hidden md:inline`): `toHaveText` on the link reads a HIDDEN
+      // span's text too, so the label's paint is asserted on the span itself.
+      await expect(sponsors, `${width}: Sponsors is on the bar`).toBeVisible();
+      await expect(sponsors.getByText(word("nav.sponsors"), { exact: true }), `${width}: its label is painted`).toBeVisible();
+    }
     await expect(header.getByTestId("nav-settings"), `${width}: the Settings icon`).toBeVisible();
     await expect(header.getByRole("button", { name: word("nav.signOut"), exact: true }), `${width}: the Sign out icon`).toBeVisible();
     const fit = await header.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
