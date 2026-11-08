@@ -15,6 +15,7 @@ import {
   apiJson,
   expectNoHorizontalScroll,
   fixturePath,
+  pickCricketPeople,
   screenshotAtWidths,
   seedRosteredFixture,
   TAG,
@@ -122,11 +123,21 @@ test("cricket ICC picks: opening pair and bowler, required incoming, then rename
   expect(openingCopy).not.toContain(HOCKEY_NOBODY);
   await shot(page, testInfo, "01-opening");
 
+  // S2-4 Task 3: nobody is picked for the scorer, so before the picks every
+  // ball tile waits and the strip says so.
+  await expect(pad(page).locator('[data-tile-id="run0"]')).toHaveAttribute("data-tile-disabled", "true");
+  await expect(strip(page).locator('[data-role="context-slot-message"][data-slot-id="striker"]')).toHaveText(
+    "Pick the two openers",
+  );
   await setContextPerson(page, "Striker", `WT Three ${TAG}`);
   await expect(
-    strip(page).getByRole("button", { name: /^Non-striker(:|$)/ }),
-    "overriding only striker must keep the default other end",
-  ).toContainText(`WT Two ${TAG}`);
+    strip(page).getByRole("button", { name: "Non-striker", exact: true }),
+    "picking only the striker leaves the other end asked, never filled from the order (S2-4 Task 3)",
+  ).toBeVisible();
+  await expect(pad(page).locator('[data-tile-id="run0"]'), "one opener is not two").toHaveAttribute(
+    "data-tile-disabled",
+    "true",
+  );
   await strip(page).getByRole("button", { name: /^Non-striker(:|$)/ }).click();
   const blocked = strip(page).locator('[data-blocked="true"]');
   await expect(blocked).toContainText(`WT Three ${TAG}`);
@@ -206,6 +217,12 @@ test("cricket ICC picks: retiring a batter also asks who walks in, and that name
   const three = fx.personIds[`WT RT Three ${TAG}`]!;
 
   await startMatch(page, fx.fixtureId);
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+  await pickCricketPeople(page, {
+    striker: `WT RT One ${TAG}`,
+    nonStriker: `WT RT Two ${TAG}`,
+    bowler: `WT RT Bowl ${TAG}`,
+  });
   await pad(page).getByRole("button", { name: "0", exact: true }).click();
   await sendHeldNow(page);
   await expect.poll(async () => (await ballsOf(page.request, fx.fixtureId)).length, { timeout: 20_000 }).toBe(1);

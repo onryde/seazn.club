@@ -19,6 +19,7 @@ import { test, expect, type Page, type APIRequestContext } from "@playwright/tes
 import {
   apiJson,
   fixturePath,
+  pickCricketPeople,
   seedRosteredFixture,
   setDivisionConfigSql,
   TAG,
@@ -231,6 +232,9 @@ test("R3.5 — cricket: tap a one-over match to a tie, then score the super over
   await shot(page, "cricket", "innings-1-first-ball");
 
   // Six deliveries: 1,1,0,1,1,0 = 4 runs.
+  // S2-4 Task 3: nobody is picked for the scorer — each innings' openers and bowler (the super over's too) are picked
+  // before its first ball.
+  await pickCricketPeople(page, { striker: `Demo CR Home1 ${TAG}`, nonStriker: `Demo CR Home2 ${TAG}`, bowler: `Demo CR Away1 ${TAG}` });
   const overOne = ["run1", "run1", "run0", "run1", "run1", "run0"];
   for (const [i, t] of overOne.entries()) {
     await tapTile(page, fx, t);
@@ -246,6 +250,7 @@ test("R3.5 — cricket: tap a one-over match to a tie, then score the super over
   }
   await shot(page, "cricket", "innings-1-closed-4-runs");
 
+  await pickCricketPeople(page, { striker: `Demo CR Away1 ${TAG}`, nonStriker: `Demo CR Away2 ${TAG}`, bowler: `Demo CR Home1 ${TAG}` });
   for (const [i, t] of overOne.entries()) {
     await tapTile(page, fx, t);
     if (i === 2) await shot(page, "cricket", "innings-2-chasing");
@@ -269,6 +274,8 @@ test("R3.5 — cricket: tap a one-over match to a tie, then score the super over
   await shot(page, "cricket", "tie-super-over-opens");
   await shot(page, "cricket", "super-over-opens", 320);
 
+  // Away batted second, so it opens the super over; home fields.
+  await pickCricketPeople(page, { striker: `Demo CR Away1 ${TAG}`, nonStriker: `Demo CR Away2 ${TAG}`, bowler: `Demo CR Home2 ${TAG}` });
   const first = await tapTile(page, fx, "run1");
   expect(first.type).toBe("cricket.superover.ball");
   await shot(page, "cricket", "super-over-ball-1");
@@ -318,13 +325,18 @@ test("R3.5 — cricket: undo a super-over ball, then undo the result the super o
   await startMatch(page, fx);
 
   // Tie the match by hand, exactly as the demo above does.
+  // S2-4 Task 3: each innings' openers and bowler (the super over's too) are picked before its first ball.
+  const soPicks = { striker: `Demo CRU Away1 ${TAG}`, nonStriker: `Demo CRU Away2 ${TAG}`, bowler: `Demo CRU Home2 ${TAG}` };
   const over = ["run1", "run1", "run0", "run1", "run1", "run0"];
+  await pickCricketPeople(page, { striker: `Demo CRU Home1 ${TAG}`, nonStriker: `Demo CRU Home2 ${TAG}`, bowler: `Demo CRU Away1 ${TAG}` });
   for (const t of over) await tapTile(page, fx, t);
+  await pickCricketPeople(page, { striker: `Demo CRU Away1 ${TAG}`, nonStriker: `Demo CRU Away2 ${TAG}`, bowler: `Demo CRU Home1 ${TAG}` });
   for (const t of over) await tapTile(page, fx, t);
   const tied = await fixtureState(page.request, fx.fixtureId);
   expect((tied.state as { phase?: string }).phase).toBe("super_over");
 
   // ---- (1) UNDO A SUPER-OVER DELIVERY --------------------------------------
+  await pickCricketPeople(page, soPicks);
   const scored = await tapTile(page, fx, "run1");
   expect(scored.type).toBe("cricket.superover.ball");
   const before = await fixtureState(page.request, fx.fixtureId);
@@ -349,6 +361,11 @@ test("R3.5 — cricket: undo a super-over ball, then undo the result the super o
   // The board must still be scoreable — an undo that leaves every tile dead is
   // the same dead end this wave opened with.
   await expect(pad(page)).toBeVisible();
+  // The take-back emptied the super over's innings, so its openers and bowler are asked again (S2-4 Task 3): the
+  // tiles wait for them, nothing is closed, and the picks open them.
+  await expect(tile(page, "run1")).toHaveAttribute("data-tile-disabled", "true");
+  await expect(pad(page).getByText("This innings is closed.")).toHaveCount(0);
+  await pickCricketPeople(page, soPicks);
   await expect(tile(page, "run1")).toHaveAttribute("data-tile-disabled", "false");
   // The void is ADDITIVE: the ledger grows, it does not shrink.
   const led = await ledger(page.request, fx.fixtureId);
@@ -360,6 +377,8 @@ test("R3.5 — cricket: undo a super-over ball, then undo the result the super o
   // off six, then home passes it.
   await tapTile(page, fx, "run1");
   for (let i = 0; i < 5; i += 1) await tapTile(page, fx, "run0");
+  // The super over's second innings: home bats, away fields.
+  await pickCricketPeople(page, { striker: `Demo CRU Home1 ${TAG}`, nonStriker: `Demo CRU Home2 ${TAG}`, bowler: `Demo CRU Away1 ${TAG}` });
   for (let i = 0; i < 6; i += 1) {
     const st = await fixtureState(page.request, fx.fixtureId);
     if (st.outcome !== null) break;

@@ -2427,6 +2427,43 @@ export async function seedRosteredFixture(
   return { competitionId, divisionId, fixtureId, homeEntrantId, awayEntrantId, personIds };
 }
 
+/**
+ * S2-4 Task 3 (gaps 1, 2): the cricket pad picks nobody for the scorer. Before ball 1 of an innings the two openers and
+ * the bowler are asked, and at every over boundary the next bowler is; until they are picked every ball tile is disabled
+ * and the strip says what it is waiting for. This makes those picks as a scorer does: it opens each named chip's picker
+ * (the context strip, `context-strip.tsx`) and taps the person by NAME, the name the picker renders, then waits for the
+ * chip to read it back (`chipLabel`: `` `${label}: ${name}` ``).
+ *
+ * Picks are pending until the next ball (`PadHostView.contextOverrides`, cleared whenever the fold moves), so call it
+ * right before the tap, after the last event has landed, and again after a reload. The chip labels are the English
+ * dictionary's ("Striker", "Non-striker", "Bowler"); the anchored `^label(:|$)` match keeps "Striker" from matching
+ * "Non-striker: …". A chip that is not a button (a batter who has faced, the bowler mid-over) cannot be picked, and the
+ * click then fails loudly rather than skip.
+ */
+export async function pickCricketPeople(
+  page: Page,
+  picks: { striker?: string; nonStriker?: string; bowler?: string },
+): Promise<void> {
+  const strip = page.locator('[data-testid="score-pad"] [data-role="context-strip"]');
+  const order: Array<[label: string, name: string | undefined]> = [
+    ["Striker", picks.striker],
+    ["Non-striker", picks.nonStriker],
+    ["Bowler", picks.bowler],
+  ];
+  for (const [label, name] of order) {
+    if (name === undefined) continue;
+    const chip = strip.getByRole("button", { name: new RegExp(`^${label}(:|$)`) });
+    await chip.click();
+    const candidate = strip.getByRole("button", { name, exact: true });
+    await expect(candidate, `pickCricketPeople: the ${label} picker offers "${name}"`).toBeEnabled({ timeout: 10_000 });
+    await candidate.click();
+    await expect(
+      strip.getByRole("button", { name: `${label}: ${name}`, exact: true }),
+      `pickCricketPeople: the ${label} chip reads the pick`,
+    ).toBeVisible({ timeout: 10_000 });
+  }
+}
+
 /** Record a generic.result for one fixture (reads last_seq for optimistic concurrency). */
 export async function scoreFixture(
   request: APIRequestContext,

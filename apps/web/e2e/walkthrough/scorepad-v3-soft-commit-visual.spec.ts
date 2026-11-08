@@ -1,6 +1,6 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
-import { apiJson, expectNoHorizontalScroll, fixturePath, seedRosteredFixture, TAG } from "../helpers";
+import { apiJson, expectNoHorizontalScroll, fixturePath, pickCricketPeople, seedRosteredFixture, TAG } from "../helpers";
 
 /**
  * Walkthrough — soft-commit vs immediate, visual tour.
@@ -172,6 +172,8 @@ test("walkthrough — soft-commit vs immediate, visual", async ({ page }) => {
   await openAndStart(page, cricket.fixtureId);
   await shot(page, "cricket-open");
 
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+  await pickCricketPeople(page, { striker: `WT SC Striker ${TAG}`, nonStriker: `WT SC Non ${TAG}`, bowler: `WT SC Bowl ${TAG}` });
   await beat(page);
   await tile(page, "run1").click();
   await expect(dock(page), "plain run: no enrichment dock").toHaveCount(0, { timeout: 3_000 });

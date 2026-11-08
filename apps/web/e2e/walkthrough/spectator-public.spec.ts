@@ -23,7 +23,7 @@
 // `mustPost`.
 import { test, expect } from "@playwright/test";
 import { mkdirSync } from "node:fs";
-import { activeOrg, apiJson, createStageAndGenerate, fixturePath, TAG } from "../helpers";
+import { activeOrg, apiJson, createStageAndGenerate, fixturePath, pickCricketPeople, TAG } from "../helpers";
 import { spectatorSetupBudgetMs } from "../spectator-public-budget";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
 import {
@@ -361,6 +361,9 @@ test("cricket match A: the anonymous match centre updates live as the real pad a
   await pollBallCount(page.request, matchA, ++ballsBefore, pollTimeout);
   await tapBallTile(page, "run0");
   await pollBallCount(page.request, matchA, ++ballsBefore, pollTimeout);
+  // 27 legal balls were posted, so run0 above is the 30th: over 5 ends, and over 6's bowler is asked, never defaulted
+  // (S2-4 Task 3). Blazer 1 has not bowled (setup bowls the order's last four in turn), so the engine allows him.
+  await pickCricketPeople(page, { bowler: `Blazer 1 ${TAG}` });
   await tapWicketBowled(page);
   await pollBallCount(page.request, matchA, ++ballsBefore, pollTimeout);
   await tapBallTile(page, "run2");

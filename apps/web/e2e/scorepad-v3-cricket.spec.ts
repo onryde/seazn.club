@@ -6,6 +6,7 @@ import {
   activeOrg,
   apiJson,
   fixturePath,
+  pickCricketPeople,
   seedRosteredFixture,
   setDivisionConfigSql,
   TAG,
@@ -198,10 +199,14 @@ test(
 
     await openLiveConsole(page, fx);
 
-    // buildContext now renders the opening strip BEFORE ball 1 so a scorer
-    // can change the opening pair and opening bowler. This test still scores
-    // over 1 on lineup defaults; the opening-pick proof is a dedicated test
-    // below. The strip's presence here is not under test.
+    // S2-4 Task 3: the pad picks nobody — the openers and the opening bowler
+    // are the scorer's picks before ball 1. The opening-pick proof (tiles
+    // disabled until then, and the strip saying why) is a dedicated test below.
+    await pickCricketPeople(page, {
+      striker: `V3 Striker ${TAG}`,
+      nonStriker: `V3 NonStriker ${TAG}`,
+      bowler: `V3 Bowler ${TAG}`,
+    });
     let delivered = 0;
     for (const runs of ["1", "0", "2", "0", "4"]) {
       await pad(page).getByRole("button", { name: runs, exact: true }).click();
@@ -244,17 +249,19 @@ test(
     // (cricket.ts's own per-over reset — the SAME `currentBowler === null`
     // branch that let ball 1's bowler be a free pick, re-armed) — over 2's
     // bowler is open again, gated only by "not `fine.prevOverBowler`" and
-    // "a real fielding-lineup member", never a lineup-order rule. The
-    // context strip's own DEFAULT for this slot (resolvePeople's
-    // `fine?.currentBowler ?? bowlingOrder[0]`) reads `bowlingOrder[0]` —
-    // "V3 Bowler" again, the SAME person who just bowled over 1 — which the
-    // fold would REJECT outright ("bowler cannot bowl consecutive overs").
-    // So this change is not merely SAFE, it is the one genuinely NECESSARY
-    // context-strip pick in this whole flow: without it, over 2's first
-    // ball 422s on the chassis's own naive default. G5's own regression was
-    // exactly this shape one level up — before the host held pending picks,
-    // a tap here would revert on the next render and every ball would
-    // silently keep carrying the (here, invalid) default forever.
+    // "a real fielding-lineup member", never a lineup-order rule. S2-4 Task 3:
+    // the strip proposes nobody here (an old default once proposed "V3
+    // Bowler" again, the SAME person who just bowled over 1, which the fold
+    // refuses: "bowler cannot bowl consecutive overs"), so every ball tile
+    // waits for this pick and the strip asks for over 2's bowler. G5's own
+    // regression was this shape one level up — before the host held pending
+    // picks, a tap here would revert on the next render and every ball would
+    // silently keep carrying the default forever.
+    await expect(
+      pad(page).locator('[data-role="context-slot-message"][data-slot-id="bowler"]'),
+      "at the over's end the strip asks for the next bowler",
+    ).toHaveText("Pick the bowler for over 2");
+    await expect(pad(page).locator('[data-tile-id="wicket"]')).toHaveAttribute("data-tile-disabled", "true");
     await setContextPerson(page, "Bowler", `V3 Fielder ${TAG}`);
 
     // A caught dismissal via the guided sheet (G2's conditional steps):
@@ -341,10 +348,34 @@ test(
     await expect(strip.getByRole("button", { name: /^Non-striker(:|$)/ })).toBeVisible();
     await expect(strip.getByRole("button", { name: /^Bowler(:|$)/ })).toBeVisible();
 
-    // Defaults are lineup[0]/[1] and first eligible bowler. Override all three.
+    // S2-4 Task 3 (gaps 1, 2): nobody is picked for the scorer. Every chip is
+    // unset ("Striker", no name), every ball tile is disabled, and the strip
+    // says what it is waiting for, with the over the bowler is for.
+    await expect(strip.getByRole("button", { name: "Striker", exact: true })).toBeVisible();
+    await expect(strip.getByRole("button", { name: "Non-striker", exact: true })).toBeVisible();
+    await expect(strip.getByRole("button", { name: "Bowler", exact: true })).toBeVisible();
+    for (const tileId of ["run0", "run1", "wide", "wicket", "extra-noball"]) {
+      await expect(pad(page).locator(`[data-tile-id="${tileId}"]`), `${tileId} waits for the picks`).toHaveAttribute(
+        "data-tile-disabled",
+        "true",
+      );
+    }
+    await expect(strip.locator('[data-role="context-slot-message"][data-slot-id="striker"]')).toHaveText(
+      "Pick the two openers",
+    );
+    await expect(strip.locator('[data-role="context-slot-message"][data-slot-id="bowler"]')).toHaveText(
+      "Pick the bowler for over 1",
+    );
+
+    // Not the lineup's first two, nor its first bowler: the picks are the scorer's.
     await setContextPerson(page, "Striker", `V3 OP Three ${TAG}`);
     await setContextPerson(page, "Non-striker", `V3 OP Four ${TAG}`);
     await setContextPerson(page, "Bowler", `V3 OP BowlB ${TAG}`);
+    await expect(pad(page).locator('[data-tile-id="run0"]'), "the three picked: the tiles open").toHaveAttribute(
+      "data-tile-disabled",
+      "false",
+    );
+    await expect(strip.locator('[data-role="context-slot-message"]')).toHaveCount(0);
 
     // Dot ball — an odd run would rotate strike, and Bowled then dismisses
     // the NEW striker rather than the named opener this test is pinning.
@@ -421,6 +452,12 @@ test("cricket v3: undo INSIDE the soft-commit hold window drops silently, no cor
     away: [{ fullName: `V3 UH Bowler ${TAG}` }],
   });
   await openLiveConsole(page, fx);
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+  await pickCricketPeople(page, {
+    striker: `V3 UH Striker ${TAG}`,
+    nonStriker: `V3 UH NonStriker ${TAG}`,
+    bowler: `V3 UH Bowler ${TAG}`,
+  });
 
   // Plain runs submit immediately (no enrichment chips). Use a no-ball so the
   // dock opens and the tap stays HELD — that is the only path where Take back
@@ -469,6 +506,12 @@ test("cricket v3: undo AFTER send voids through core.void", async ({ page }) => 
     away: [{ fullName: `V3 US Bowler ${TAG}` }],
   });
   await openLiveConsole(page, fx);
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+  await pickCricketPeople(page, {
+    striker: `V3 US Striker ${TAG}`,
+    nonStriker: `V3 US NonStriker ${TAG}`,
+    bowler: `V3 US Bowler ${TAG}`,
+  });
 
   await pad(page).getByRole("button", { name: "1", exact: true }).click();
   // Plain runs have no enrichment dock — they submit immediately. Once the
@@ -577,6 +620,12 @@ test("cricket v3: the activity panel lists every recorded ball, NOT just the lat
     away: [{ fullName: `V3 AC Bowler ${TAG}` }],
   });
   await openLiveConsole(page, fx);
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+  await pickCricketPeople(page, {
+    striker: `V3 AC Striker ${TAG}`,
+    nonStriker: `V3 AC NonStriker ${TAG}`,
+    bowler: `V3 AC Bowler ${TAG}`,
+  });
 
   // Three balls, so "shows only the latest" (the v3 ribbon's behaviour, and
   // the regression) is distinguishable from "shows the history".
@@ -627,6 +676,12 @@ test("cricket v3: voiding an OLDER event from the activity panel writes core.voi
     away: [{ fullName: `V3 OV Bowler ${TAG}` }],
   });
   await openLiveConsole(page, fx);
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+  await pickCricketPeople(page, {
+    striker: `V3 OV Striker ${TAG}`,
+    nonStriker: `V3 OV NonStriker ${TAG}`,
+    bowler: `V3 OV Bowler ${TAG}`,
+  });
 
   for (const runs of ["1", "2"]) {
     await pad(page).getByRole("button", { name: runs, exact: true }).click();
@@ -713,6 +768,12 @@ test("cricket v3: after a RELOAD, a per-row void addressed by the panel's own da
     away: [{ fullName: `V3 RV Bowler ${TAG}` }],
   });
   await openLiveConsole(page, fx);
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+  await pickCricketPeople(page, {
+    striker: `V3 RV Striker ${TAG}`,
+    nonStriker: `V3 RV NonStriker ${TAG}`,
+    bowler: `V3 RV Bowler ${TAG}`,
+  });
 
   // Two balls, so the target is unambiguously ONE of them and a void that
   // silently hit "the last thing" would name the wrong id.
@@ -991,6 +1052,12 @@ test(
       away: [{ fullName: `V3 OGF Bowler ${TAG}` }],
     });
     await openLiveConsole(page, fx);
+    // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+    await pickCricketPeople(page, {
+      striker: `V3 OGF Striker ${TAG}`,
+      nonStriker: `V3 OGF NonStriker ${TAG}`,
+      bowler: `V3 OGF Bowler ${TAG}`,
+    });
 
     // Both lanes are legal before any ball — the mirror starting point of
     // the coarse-lane test above.
@@ -1033,6 +1100,12 @@ test(
       away: [{ fullName: `V3 DC Bowler ${TAG}` }],
     });
     await openLiveConsole(page, fx);
+    // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+    await pickCricketPeople(page, {
+      striker: `V3 DC Striker ${TAG}`,
+      nonStriker: `V3 DC NonStriker ${TAG}`,
+      bowler: `V3 DC Bowler ${TAG}`,
+    });
 
     // buildDock (skins/cricket.tsx): a no-ball's dock offers BAT_RUN_VALUES
     // chips (a no-ball is batted normally) — tap "extra-noball", then the
@@ -1090,6 +1163,12 @@ test(
       away: [{ fullName: `V3 FH Bowler ${TAG}` }],
     });
     await openLiveConsole(page, fx);
+    // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+    await pickCricketPeople(page, {
+      striker: `V3 FH Striker ${TAG}`,
+      nonStriker: `V3 FH NonStriker ${TAG}`,
+      bowler: `V3 FH Bowler ${TAG}`,
+    });
 
     const freeHit = pad(page).locator('[data-strip-item-id="freeHit"]');
     const dock = pad(page).locator('[data-role="v3-dock"]');
@@ -1232,6 +1311,16 @@ test(
     // is R2b's "visible, blocked, and REASONED — not removed" ruling applied
     // to a candidate list. Before C1 he was an ordinary tappable button and
     // the block was only caught after the tap, on the tiles.
+    // S2-4 Task 3: at the over's end nobody is proposed. Every ball tile waits and the strip asks for over 2's bowler.
+    for (const tileId of ["run0", "run1", "wicket"]) {
+      await expect(pad(page).locator(`[data-tile-id="${tileId}"]`), `${tileId} waits for the bowler`).toHaveAttribute(
+        "data-tile-disabled",
+        "true",
+      );
+    }
+    await expect(
+      pad(page).locator('[data-role="context-strip"] [data-role="context-slot-message"][data-slot-id="bowler"]'),
+    ).toHaveText("Pick the bowler for over 2");
     const strip = await openContextPicker(page, "Bowler");
 
     const blockedCandidate = strip.locator(`[data-candidate-id="${bowlerA}"]`);
@@ -1617,6 +1706,18 @@ test(
     await expect(strip.getByRole("button", { name: /^Striker(:|$)/ })).toBeVisible();
     await expect(strip.getByRole("button", { name: /^Bowler(:|$)/ })).toBeVisible();
     const run1 = pad(page).locator('[data-tile-id="run1"]');
+    // S2-4 Task 3: innings 2's openers and bowler are asked, not defaulted. The pickers offer the right sides: the
+    // batting side's names at the crease ends, never the side that just batted.
+    await expect(run1, "innings 2 waits for its openers and bowler").toHaveAttribute("data-tile-disabled", "true");
+    await strip.getByRole("button", { name: /^Striker(:|$)/ }).click();
+    await expect(strip.locator(`[data-candidate-id="${away1}"]`)).toBeVisible({ timeout: 10_000 });
+    await expect(strip.locator(`[data-candidate-id="${home1}"]`), "the side that just batted is not offered").toHaveCount(0);
+    await strip.getByRole("button", { name: /^Striker(:|$)/ }).click();
+    await pickCricketPeople(page, {
+      striker: `V3 IT Away1 ${TAG}`,
+      nonStriker: `V3 IT Away2 ${TAG}`,
+      bowler: `V3 IT Home1 ${TAG}`,
+    });
     await expect(run1).toBeEnabled();
     await run1.click();
     // Plain run — immediate submit, no enrichment dock.
@@ -1858,6 +1959,12 @@ test("cricket v3: the soft-commit dock is revealed on screen when it opens", asy
     away: [{ fullName: `V3 DR Bowler ${TAG}` }],
   });
   await openLiveConsole(page, fx);
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+  await pickCricketPeople(page, {
+    striker: `V3 DR Striker ${TAG}`,
+    nonStriker: `V3 DR NonStriker ${TAG}`,
+    bowler: `V3 DR Bowler ${TAG}`,
+  });
 
   // Short viewport: the cricket tile grid is taller than this on its own, so
   // whatever follows it starts below the fold.

@@ -23,6 +23,7 @@ import {
   apiJson,
   expectNoHorizontalScroll,
   fixturePath,
+  pickCricketPeople,
   seedRosteredFixture,
   setDivisionConfigSql,
   TAG,
@@ -287,6 +288,18 @@ test(
     // closed." over a live decider and disabled every delivery tile, because
     // `currentInnings` read the two CLOSED main innings.
     await expect(pad(page).getByText("This innings is closed.")).toHaveCount(0);
+    // S2-4 Task 3: the super over's openers and bowler are asked, never defaulted — the tiles wait for them (the
+    // openers, not the closure: no closure message above), then open once the scorer picks. Away opens the super over
+    // (it batted second in the match); home fields.
+    await expect(tile(page, "run0"), "the super over waits for its openers").toHaveAttribute("data-tile-disabled", "true");
+    await expect(
+      pad(page).locator('[data-role="context-slot-message"][data-slot-id="striker"]'),
+    ).toHaveText("Pick the two openers");
+    await pickCricketPeople(page, {
+      striker: `V3 TLCR Away1 ${TAG}`,
+      nonStriker: `V3 TLCR Away2 ${TAG}`,
+      bowler: `V3 TLCR Home1 ${TAG}`,
+    });
     for (const tileId of ["run0", "run1", "wicket"]) {
       await expect(tile(page, tileId), `${tileId} is disabled in a LIVE super over`).toHaveAttribute(
         "data-tile-disabled",

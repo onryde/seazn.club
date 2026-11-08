@@ -215,10 +215,14 @@ describe("resolvePeople", () => {
     const p = resolvePeople(state());
     expect(p).toEqual({ battingSide: "home", bowlingSide: "away", striker: "h1", nonStriker: "h2", bowler: "a1" });
   });
-  it("defaults to the batting/bowling order's first entrants before any fold value exists — v2's own default, stateless here", () => {
+  it("S2-4 Task 3: picks nobody before any fold value exists — every end and the bowler are unpicked (\"\"), never the order's first entrants", () => {
     const s = state({ innings: [innings({ fine: { striker: null, nonStriker: null, currentBowler: null } })] });
     const p = resolvePeople(s);
-    expect(p).toEqual({ battingSide: "home", bowlingSide: "away", striker: "h1", nonStriker: "h2", bowler: "a1" });
+    expect(p).toEqual({ battingSide: "home", bowlingSide: "away", striker: "", nonStriker: "", bowler: "" });
+    // The scorer's picks are what fill them, each on its own.
+    expect(resolvePeople(s, { striker: "h3", nonStriker: "h1", bowler: "a2" })).toEqual({
+      battingSide: "home", bowlingSide: "away", striker: "h3", nonStriker: "h1", bowler: "a2",
+    });
   });
   it("empty string, never a crash, when even the order is unset", () => {
     const p = resolvePeople({ innings: [innings({ fine: null })], orders: {} });
@@ -1748,18 +1752,30 @@ describe("G5 — context overrides supersede the fold", () => {
     expect(spec.slots.find((s) => s.id === "striker")!.personId).toBe("h3");
   });
 
+  // The bowler pick is the over's: at an over boundary (`currentBowler` null). Mid-over the fold's bowler wins (S2-4
+  // Task 3, Review Focus 1; "mid-over the fold's bowler wins over a stale pending pick", pad-rules-cricket.test.ts).
+  const overBoundary = () => state({ innings: [innings({ legalBalls: 6, fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", freeHitPending: false } })] });
+
   it("the next ball's payload carries the override too — the strip and the tap can never disagree", () => {
-    const v = view({ contextOverrides: { striker: "h3", bowler: "a2" } });
+    const v = view({ state: overBoundary(), contextOverrides: { striker: "h3", bowler: "a2" } });
     const tiles = buildTiles(v);
     const run1 = tiles.find((tl) => tl.id === "run1")!;
     expect(run1.action).toMatchObject({ event: { payload: { striker: "h3", bowler: "a2", nonStriker: "h2" } } });
+    expect(buildContext(v)!.slots.find((s) => s.id === "bowler")!.personId).toBe("a2");
   });
 
   it("an unset slot's override leaves that slot on the fold's own value — overrides are per-slot, not all-or-nothing", () => {
-    const v = view({ contextOverrides: { bowler: "a3" } });
+    const v = view({ state: overBoundary(), contextOverrides: { bowler: "a3" } });
     const spec = buildContext(v)!;
     expect(spec.slots.find((s) => s.id === "striker")!.personId).toBe("h1"); // fold, unchanged
     expect(spec.slots.find((s) => s.id === "bowler")!.personId).toBe("a3"); // overridden
+  });
+
+  it("S2-4 Task 3: mid-over a bowler pick does not move the fold's bowler (Review Focus 1)", () => {
+    const v = view({ contextOverrides: { bowler: "a3" } });
+    expect((v.state as { innings: { fine: { currentBowler: string } }[] }).innings[0]!.fine.currentBowler, "premise: mid-over").toBe("a1");
+    expect(buildContext(v)!.slots.find((s) => s.id === "bowler")!.personId).toBe("a1");
+    expect(buildTiles(v).find((tl) => tl.id === "run1")!.action).toMatchObject({ event: { payload: { bowler: "a1" } } });
   });
 
   it("mutation proof: a resolvePeople that ignored contextOverrides entirely would disagree with the real one here", () => {
@@ -1769,19 +1785,21 @@ describe("G5 — context overrides supersede the fold", () => {
     expect(withOverride.striker).toBe("h3");
   });
 
-  it("overriding only the opening striker keeps the default non-striker — it must not fall back to leftover order[0]", () => {
+  // S2-4 Task 3 supersedes the two "default non-striker" cases here: there is no default pair any more, so picking one
+  // opener leaves the other end asked, never filled from the order (the leftover order[0] those cases guarded against
+  // cannot arise: nothing is drawn from the order at all).
+  it("S2-4 Task 3: picking only the opening striker leaves the non-striker unpicked — never order[0] or order[1]", () => {
     const s = state({ innings: [] });
     const p = resolvePeople(s, { striker: "h3" });
     expect(p.striker).toBe("h3");
-    expect(p.nonStriker, "Two stays at the other end; One is not silently promoted").toBe("h2");
-    expect(p.nonStriker).not.toBe("h1");
+    expect(p.nonStriker, "the other end is asked, not filled").toBe("");
   });
 
-  it("overriding the opening striker to the default non-striker swaps the pair", () => {
+  it("S2-4 Task 3: one person picked at both ends leaves the non-striker unpicked, never a guessed swap", () => {
     const s = state({ innings: [] });
-    const p = resolvePeople(s, { striker: "h2" });
+    const p = resolvePeople(s, { striker: "h2", nonStriker: "h2" });
     expect(p.striker).toBe("h2");
-    expect(p.nonStriker).toBe("h1");
+    expect(p.nonStriker).toBe("");
   });
 });
 
@@ -1950,34 +1968,47 @@ describe("buildContext — bowler read-only tracks the fold's own over boundary 
 // `resolvePeople` is the single source every consumer reads.
 // ---------------------------------------------------------------------------
 
-describe("resolvePeople / buildTiles / buildContext — bowler default is ELIGIBLE at an over boundary (R2b live bug fix)", () => {
-  it("skips bowlingOrder[0] when he bowled the PREVIOUS over — proposes the first eligible name instead", () => {
+// S2-4 Task 3 (gaps 1, 2) supersedes the DEFAULT this block was written for: there is no proposed bowler at an over
+// boundary any more, eligible or not. The live bug it fixed (an illegal default the engine refused) cannot recur because
+// nothing is defaulted: the bowler is asked ("unpicked"), the picker greys the ineligible names (`bowlerBlocked`), and a
+// pick of one is blocked with its reason. The eligibility facts each case pinned (previous over, quota, quota at the
+// real over length) are kept, now asserted on the pick.
+describe("resolvePeople / buildTiles / buildContext — at an over boundary the bowler is asked, and an ineligible pick is blocked (R2b live bug, S2-4 Task 3)", () => {
+  it("previous over's bowler: nobody is proposed; picking him is blocked prevOver, picking the next name is not", () => {
     const s = state({
       innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })],
     });
-    expect(resolvePeople(s).bowler).toBe("a2");
+    const p = resolvePeople(s);
+    expect(p.bowler).toBe("");
+    expect(bowlerBlockReason(s, p, cfg())).toBe("unpicked");
+    expect(bowlerBlockReason(s, resolvePeople(s, { bowler: "a1" }), cfg())).toBe("prevOver");
+    expect(bowlerBlockReason(s, resolvePeople(s, { bowler: "a2" }), cfg())).toBeNull();
   });
 
-  it("skips bowlingOrder[0] when he has already bowled cfg.maxOversPerBowler overs — proposes the first eligible name instead", () => {
+  it("a bowler at cfg.maxOversPerBowler: nobody is proposed; picking him is blocked quota", () => {
     // t20: maxOversPerBowler 4, ballsPerOver 6 (cfg()'s own default) -> 24
-    // balls is exactly 4 overs bowled, at quota (cricket.ts:1167-1169's own
-    // floor(bowlerBalls/bpo) >= max arithmetic, mirrored here).
+    // balls is exactly 4 overs bowled, at quota (the engine's own
+    // floor(bowlerBalls/bpo) >= max arithmetic).
     const s = state({
       innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: null, bowlerBalls: { a1: 24 } } })],
     });
-    const p = resolvePeople(s, {}, cfg({ maxOversPerBowler: 4 }));
-    expect(p.bowler).toBe("a2");
+    const c = cfg({ maxOversPerBowler: 4 });
+    expect(resolvePeople(s, {}, c).bowler).toBe("");
+    expect(bowlerBlockReason(s, resolvePeople(s, { bowler: "a1" }, c), c)).toBe("quota");
+    expect(bowlerBlockReason(s, resolvePeople(s, { bowler: "a2" }, c), c)).toBeNull();
   });
 
   it("computes overs bowled against the REAL cfg.ballsPerOver, not a hardcoded 6 — the Hundred's 5-ball over changes who is at quota", () => {
     // 20 balls / 5-ball over = exactly 4 overs bowled -> exhausted at a
     // 4-over quota. A hardcoded 6 would compute floor(20/6)=3 < 4 and
-    // wrongly call bowlingOrder[0] still eligible.
+    // wrongly call a1 still eligible.
     const s = state({
       innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: null, bowlerBalls: { a1: 20 } } })],
     });
-    const p = resolvePeople(s, {}, cfg({ ballsPerOver: 5, maxOversPerBowler: 4 }));
-    expect(p.bowler).toBe("a2");
+    const hundred = cfg({ ballsPerOver: 5, maxOversPerBowler: 4 });
+    expect(resolvePeople(s, {}, hundred).bowler).toBe("");
+    expect(bowlerBlockReason(s, resolvePeople(s, { bowler: "a1" }, hundred), hundred)).toBe("quota");
+    expect(bowlerBlockReason(s, resolvePeople(s, { bowler: "a1" }, cfg({ maxOversPerBowler: 4 })), cfg({ maxOversPerBowler: 4 })), "at 6 balls an over he has 3 overs: eligible").toBeNull();
   });
 
   it("mid-over (currentBowler already set) is UNCHANGED by this fix — the fold refuses a mid-over swap regardless of eligibility data", () => {
@@ -1998,6 +2029,7 @@ describe("resolvePeople / buildTiles / buildContext — bowler default is ELIGIB
     });
     const p = resolvePeople(s, {}, cfg({ maxOversPerBowler: 4 }));
     expect(p.bowler).toBe("");
+    expect(bowlerBlockReason(s, p, cfg({ maxOversPerBowler: 4 })), "nobody can bowl it: not a pick the scorer can make").toBe("noEligible");
   });
 
   it("a manual context-strip override still wins outright — this fix does not second-guess the scorer's own explicit pick", () => {
@@ -2008,20 +2040,20 @@ describe("resolvePeople / buildTiles / buildContext — bowler default is ELIGIB
     expect(p.bowler).toBe("a1");
   });
 
-  it("the SUBMITTED ball payload (buildTiles) carries the eligible default too — the strip and the tap can never disagree", () => {
-    const v = view({
-      state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })] }),
-    });
-    const run1 = buildTiles(v).find((tl) => tl.id === "run1")!;
+  it("the SUBMITTED ball payload (buildTiles) waits for the pick, then carries it — the strip and the tap can never disagree", () => {
+    const st = state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })] });
+    expect(buildTiles(view({ state: st })).find((tl) => tl.id === "run1")!.disabled, "no bowler picked: the tap waits").toBe(true);
+    const run1 = buildTiles(view({ state: st, contextOverrides: { bowler: "a2" } })).find((tl) => tl.id === "run1")!;
+    expect(run1.disabled).toBeUndefined();
     expect(run1.action).toMatchObject({ event: { payload: { bowler: "a2" } } });
   });
 
-  it("the context chip's shown personId is the eligible default too, never the illegal bowlingOrder[0]", () => {
-    const v = view({
-      state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })] }),
-    });
-    const spec = buildContext(v)!;
-    expect(spec.slots.find((s) => s.id === "bowler")!.personId).toBe("a2");
+  it("the context chip shows nobody until the pick, and asks for the next over's bowler, never the illegal bowlingOrder[0]", () => {
+    const st = state({ innings: [innings({ legalBalls: 6, fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })] });
+    const slot = buildContext(view({ state: st }), t)!.slots.find((s) => s.id === "bowler")!;
+    expect(slot.personId).toBeUndefined();
+    expect(slot.message).toBe('pad.cricket.context.bowler.unpicked({"over":2})');
+    expect(buildContext(view({ state: st, contextOverrides: { bowler: "a2" } }))!.slots.find((s) => s.id === "bowler")!.personId).toBe("a2");
   });
 
   // R2b-cricket-over follow-up (test-naming pass, 2026-08-17): a test
@@ -2062,12 +2094,12 @@ describe("bowlerBlockReason", () => {
     expect(bowlerBlockReason(s, people, cfgWithQuota)).toBeNull();
   });
 
-  it("the auto-picked eligible default at an over boundary: never blocked", () => {
+  it("at an over boundary: unpicked until the scorer picks, and an eligible pick is never blocked (S2-4 Task 3)", () => {
     const s = state({
       innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })],
     });
-    const people = resolvePeople(s); // auto-picks a2, already filtered eligible
-    expect(bowlerBlockReason(s, people, cfg())).toBeNull();
+    expect(bowlerBlockReason(s, resolvePeople(s), cfg())).toBe("unpicked");
+    expect(bowlerBlockReason(s, resolvePeople(s, { bowler: "a2" }), cfg())).toBeNull();
   });
 
   it("a manual override naming the PREVIOUS over's bowler: blocked, reason prevOver", () => {
@@ -2144,9 +2176,15 @@ describe("buildTiles — bowler-block disables every ball-emitting tile (R2b liv
     }
   });
 
-  it("an eligible bowler (no override, the auto-picked default): no tile is disabled", () => {
-    const tiles = buildTiles(view({ state: boundaryWithPrevOverA1() }));
+  it("an eligible bowler (picked; S2-4 Task 3 removed the auto-picked default): no tile is disabled", () => {
+    const tiles = buildTiles(view({ state: boundaryWithPrevOverA1(), contextOverrides: { bowler: "a2" } }));
     expect(tiles.some((tl) => tl.disabled)).toBe(false);
+  });
+
+  it("S2-4 Task 3: no bowler picked at the over boundary disables every ball tile, and only those", () => {
+    const tiles = buildTiles(view({ state: boundaryWithPrevOverA1() }));
+    for (const id of BALL_TILE_IDS) expect(tiles.find((tl) => tl.id === id)!.disabled, id).toBe(true);
+    for (const id of ["review", "inningsClose", "more"]) expect(tiles.find((tl) => tl.id === id)!.disabled, id).toBeUndefined();
   });
 
   it("mid-over (currentBowler already set) is unaffected, even against an ineligible-on-paper currentBowler", () => {
@@ -2222,9 +2260,10 @@ describe("buildContext — bowler-block message, distinguishable per engine cond
     expect(buildContext(v, t)!.slots.find((s) => s.id === "bowler")!.message).toBeUndefined();
   });
 
-  it("an eligible bowler: no message", () => {
+  it("an eligible bowler (picked): no message", () => {
     const v = view({
       state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })] }),
+      contextOverrides: { bowler: "a2" },
     });
     expect(buildContext(v, t)!.slots.find((s) => s.id === "bowler")!.message).toBeUndefined();
   });
@@ -2473,9 +2512,12 @@ describe("buildTiles / buildContext / basePayload — closed innings, ANOTHER du
       ...over,
     });
   }
+  // S2-4 Task 3: the next innings' openers and bowler are asked, not defaulted. These are the scorer's picks for it (the
+  // away side bats, home fields); the side each is drawn from is asserted on the strip's candidates below.
+  const NEXT_PICKS = { striker: "a1", nonStriker: "a2", bowler: "h1" };
 
-  it("re-enables every ball-emitting tile and the over-summary tile — the fold can open the next innings on either", () => {
-    const tiles = buildTiles(view({ state: closedFirstInningsDue() }));
+  it("re-enables every ball-emitting tile and the over-summary tile once the next innings' people are picked — the fold can open it on either", () => {
+    const tiles = buildTiles(view({ state: closedFirstInningsDue(), contextOverrides: NEXT_PICKS }));
     const ballIds = [
       "run0", "run1", "run2", "run3", "run4", "run6",
       "wide", "wicket", "extra-noball", "extra-bye", "extra-legbye", "extra-penalty",
@@ -2483,6 +2525,11 @@ describe("buildTiles / buildContext / basePayload — closed innings, ANOTHER du
     for (const id of [...ballIds, "overSummary"]) {
       expect(tiles.find((tl) => tl.id === id)!.disabled).toBeUndefined();
     }
+    // Before the picks the ball tiles wait for them, not for the closure: the over-summary tile names nobody and stays open.
+    const unpicked = buildTiles(view({ state: closedFirstInningsDue() }));
+    for (const id of ballIds) expect(unpicked.find((tl) => tl.id === id)!.disabled, id).toBe(true);
+    expect(unpicked.find((tl) => tl.id === "overSummary")!.disabled).toBeUndefined();
+    expect(buildContext(view({ state: closedFirstInningsDue() }), t)!.slots.find((s) => s.id === "striker")!.message).toBe("pad.cricket.context.openers.unpicked");
   });
 
   it("review, inningsClose and declare stay disabled — nothing is open yet to review/close/declare", () => {
@@ -2493,15 +2540,15 @@ describe("buildTiles / buildContext / basePayload — closed innings, ANOTHER du
   });
 
   it("basePayload targets the NEXT innings: first-delivery over/ball numbers, the OTHER side's openers, the OTHER side's bowler", () => {
-    const tiles = buildTiles(view({ state: closedFirstInningsDue() }));
+    const tiles = buildTiles(view({ state: closedFirstInningsDue(), contextOverrides: NEXT_PICKS }));
     const run1 = tiles.find((tl) => tl.id === "run1")!;
     expect(run1.action).toEqual({
       event: {
         type: "cricket.ball",
         payload: {
           over: 0, ballInOver: 1, // matches createInnings/applyDelivery's own first-delivery numbering
-          striker: "a1", nonStriker: "a2", // away's order[0]/[1] — away is the OTHER side
-          bowler: "h1", // home's order[0] — a fresh innings has no prevOverBowler/quota to exclude anyone
+          striker: "a1", nonStriker: "a2", // the scorer's picks from away — the OTHER side
+          bowler: "h1", // picked from home; a fresh innings has no prevOverBowler/quota to exclude anyone
           runs: { bat: 1 },
         },
       },
@@ -2518,10 +2565,15 @@ describe("buildTiles / buildContext / basePayload — closed innings, ANOTHER du
     const spec = buildContext(view({ state: closedFirstInningsDue() }), t)!;
     expect(spec).not.toBeNull();
     expect(spec.slots.find((s) => s.id === "striker")!.readOnly).toBeUndefined();
-    expect(spec.slots.find((s) => s.id === "striker")!.personId).toBe("a1");
-    expect(spec.slots.find((s) => s.id === "nonStriker")!.personId).toBe("a2");
-    expect(spec.slots.find((s) => s.id === "bowler")!.personId).toBe("h1");
+    // S2-4 Task 3: nobody is picked for the next innings; the pickers offer the right sides.
+    for (const id of ["striker", "nonStriker", "bowler"]) expect(spec.slots.find((s) => s.id === id)!.personId, id).toBeUndefined();
     expect(spec.slots.find((s) => s.id === "striker")!.candidates).toEqual(["a1", "a2", "a3"]);
+    expect(spec.slots.find((s) => s.id === "bowler")!.candidates).toEqual(["h1", "h2", "h3"]);
+    expect(spec.slots.find((s) => s.id === "bowler")!.message).toBe('pad.cricket.context.bowler.unpicked({"over":1})');
+    const picked = buildContext(view({ state: closedFirstInningsDue(), contextOverrides: NEXT_PICKS }), t)!;
+    expect(picked.slots.find((s) => s.id === "striker")!.personId).toBe("a1");
+    expect(picked.slots.find((s) => s.id === "nonStriker")!.personId).toBe("a2");
+    expect(picked.slots.find((s) => s.id === "bowler")!.personId).toBe("h1");
   });
 
   it("the follow-on order is honoured, not plain alternation: 2 innings recorded + followOnEnforced -> the SAME side bats again", () => {
@@ -2530,10 +2582,16 @@ describe("buildTiles / buildContext / basePayload — closed innings, ANOTHER du
       followOnEnforced: true,
       innings: [innings({ closed: true, battingSide: "home" }), innings({ closed: true, battingSide: "away" })],
     });
-    const tiles = buildTiles(view({ state: s, cfg: cfg({ inningsPerSide: 2 }) }));
-    const run1 = tiles.find((tl) => tl.id === "run1")!;
+    const v = view({ state: s, cfg: cfg({ inningsPerSide: 2 }), contextOverrides: { striker: "a1", nonStriker: "a2", bowler: "h1" } });
+    const run1 = buildTiles(v).find((tl) => tl.id === "run1")!;
     // Plain alternation would put "home" back in — follow-on keeps "away"
-    // batting (striker/nonStriker still a1/a2, bowler still h1).
+    // batting: the batter pickers offer away, the bowler picker home (S2-4
+    // Task 3: the people are the scorer's picks, the sides are the fold's).
+    const slots = buildContext(v)!.slots;
+    expect(slots.find((sl) => sl.id === "striker")!.candidates).toEqual(["a1", "a2", "a3"]);
+    expect(slots.find((sl) => sl.id === "bowler")!.candidates).toEqual(["h1", "h2", "h3"]);
+    expect(resolvePeople(s, {}, cfg({ inningsPerSide: 2 })).battingSide).toBe("away");
+    expect(run1.disabled).toBeUndefined();
     expect(run1.action).toMatchObject({ event: { payload: { striker: "a1", nonStriker: "a2", bowler: "h1" } } });
   });
 
@@ -3394,6 +3452,11 @@ function tieToSuperOver(
   return { cfg, events: [["core.start"], ...inn1, ...inn2] };
 }
 
+/** S2-4 Task 3: nobody is picked for the scorer, so a super-over innings' openers and bowler are picks. These are the
+ *  first names in each order, the people the pad used to fill in itself; the side each comes from is the case's own. */
+const SO_AWAY_PICKS = { striker: "A-1", nonStriker: "A-2", bowler: "H-1" };
+const SO_HOME_PICKS = { striker: "H-1", nonStriker: "H-2", bowler: "A-1" };
+
 describe("R3.5 Task C — cricket super over, scored against REAL folds", () => {
   it("C1: a tie WITHOUT a super over is genuinely terminal — post phase hides the ball tiles by phase filtering, not by a disabled flag", () => {
     const cfg = cricket.configSchema.parse({ ballsPerInnings: 6, ballsPerOver: 6, minOversForResult: 1 });
@@ -3424,7 +3487,8 @@ describe("R3.5 Task C — cricket super over, scored against REAL folds", () => 
     expect(st.superOver).toMatchObject({ innings: [] });
     expect(currentInnings(st)).toBeNull();
     expect(inningsFidelity(currentInnings(st))).toBe("unopened");
-    const v = view({ cfg, state: st });
+    // S2-4 Task 3: the super over's openers and bowler are the scorer's picks (away opens it, home fields).
+    const v = view({ cfg, state: st, contextOverrides: SO_AWAY_PICKS });
     const tiles = buildTiles(v);
     expect(tiles.some((tl) => tl.id === "run0")).toBe(true); // fine lane offered
     for (const id of ["run0", "run1", "wide", "wicket"]) {
@@ -3456,7 +3520,7 @@ describe("R3.5 Task C — cricket super over, scored against REAL folds", () => 
       ["cricket.innings.summary", { runs: 150, wickets: 7, legalBalls: 120, boundaries: 12 }],
     ]);
     expect(st.phase).toBe("super_over");
-    const tiles = buildTiles(view({ cfg, state: st }));
+    const tiles = buildTiles(view({ cfg, state: st, contextOverrides: SO_AWAY_PICKS }));
     // The DELIVERY row (ball-emitting tiles) is what this case names — not
     // review/retire/inningsClose, which R3.5 Task R now correctly disables
     // for the SEPARATE reason that the fold refuses all three outright
@@ -3524,7 +3588,7 @@ describe("R3.5 Task C — cricket super over, scored against REAL folds", () => 
     expect(soInnings).toHaveLength(1);
     expect(soInnings[0]!.closed).toBe(true);
     expect(dueBattingSide(st, cfg)).toBe("home"); // opponent of away, who just batted SO1
-    const v = view({ cfg, state: st });
+    const v = view({ cfg, state: st, contextOverrides: SO_HOME_PICKS });
     // The BALL-EMITTING tiles — the ones the pre-fix `blockedByClosure`
     // wrongly disabled — are enabled again. `review`/`retire`/`inningsClose`
     // staying disabled here is correct and orthogonal (`closedTile`, gated
@@ -3551,7 +3615,7 @@ describe("R3.5 Task C — cricket super over, scored against REAL folds", () => 
     expect(soInnings).toHaveLength(1);
     expect(soInnings[0]).toMatchObject({ closed: true, wickets: 2 });
     expect(dueBattingSide(st, cfg)).toBe("home");
-    const tiles = buildTiles(view({ cfg, state: st }));
+    const tiles = buildTiles(view({ cfg, state: st, contextOverrides: SO_HOME_PICKS }));
     for (const id of ["run0", "run1", "run4", "wide", "wicket"]) {
       expect(tiles.find((tl) => tl.id === id)?.disabled, `${id} must not be disabled`).not.toBe(true);
     }
@@ -3778,7 +3842,7 @@ describe("R3.5 Task R — super-over tile/target defects Task C left behind", ()
     // ball further along.
     expect(dueBattingSide(st, cfg)).toBe("home");
     expect(chaseTarget(cfg, st)).toBeNull(); // pair 2 hasn't started — nothing to chase yet, not pair 1's stale 7
-    const tiles = buildTiles(view({ cfg, state: st }));
+    const tiles = buildTiles(view({ cfg, state: st, contextOverrides: SO_HOME_PICKS }));
     for (const id of ["run0", "run1", "run4", "wide", "wicket"]) {
       expect(tiles.find((tl) => tl.id === id)?.disabled, `${id} must not be disabled`).not.toBe(true);
     }
@@ -3878,12 +3942,15 @@ describe("R3.5 Task S — resolvePeople before the first super-over ball (C2's o
     // "correct" by construction while the person id underneath it still
     // isn't (e.g. an empty orders map or a stale default) — this is exactly
     // the shape of assertion a bare `.battingSide` check would miss.
-    expect(st.orders.away).toContain(people.striker);
-    expect(st.orders.away).toContain(people.nonStriker);
-    expect(st.orders.home).toContain(people.bowler);
-    // The two batters must be distinct — a real opening pair, not the same
-    // person double-booked because the order came back empty.
-    expect(people.striker).not.toBe(people.nonStriker);
+    // S2-4 Task 3: nobody is proposed any more, so membership is asserted on
+    // what the strip OFFERS: the batter pickers draw from away, the bowler
+    // picker from home.
+    expect([people.striker, people.nonStriker, people.bowler]).toEqual(["", "", ""]);
+    const slots = buildContext(view({ cfg, state: st }))!.slots;
+    const striker = slots.find((sl) => sl.id === "striker")!.candidates ?? [];
+    expect(striker.length).toBeGreaterThan(0);
+    for (const id of striker) expect(st.orders.away).toContain(id);
+    expect(slots.find((sl) => sl.id === "bowler")!.candidates).toEqual(st.orders.home);
   });
 });
 
@@ -3910,8 +3977,11 @@ describe("R3.5 Task S follow-up — the side batting first is read, not assumed"
     // The assertion that actually reproduces the 422: membership, not the
     // side label. A bowler drawn from the batting order is what the fold
     // rejects, and a side-string-only assertion would not have seen it.
-    expect(st.orders.home, "the proposed bowler must be in the FIELDING lineup").toContain(people.bowler);
-    expect(st.orders.away).toContain(people.striker);
+    // S2-4 Task 3: nobody is proposed, so it is asserted on what the bowler
+    // picker OFFERS, the fielding lineup, and on the batter pickers.
+    const slots = buildContext(view({ cfg, state: st }))!.slots;
+    expect(slots.find((sl) => sl.id === "bowler")!.candidates, "the bowler picker offers the FIELDING lineup").toEqual(st.orders.home);
+    expect(slots.find((sl) => sl.id === "striker")!.candidates).toEqual(st.orders.away);
   });
 
   it("no toss recorded: the home default survives", () => {
@@ -3919,7 +3989,7 @@ describe("R3.5 Task S follow-up — the side batting first is read, not assumed"
     const st = foldCricket(cfg, [["core.start"]]);
     const people = resolvePeople(st, {}, cfg);
     expect(people.battingSide).toBe("home");
-    expect(st.orders.away).toContain(people.bowler);
+    expect(buildContext(view({ cfg, state: st }))!.slots.find((sl) => sl.id === "bowler")!.candidates).toEqual(st.orders.away);
   });
 });
 
@@ -4024,9 +4094,15 @@ describe("R3.5 F1 — resolvePeople after a super-over wicket proposes an ELIGIB
     // away` (carried, never reset between pairs) can.
     const soDismissedAway = (st.superOver as { dismissed: { away: string[] } }).dismissed.away;
     expect(soDismissedAway).toEqual(["A-1", "A-3"]);
+    // S2-4 Task 3: a fresh super-over innings (both ends vacant) proposes
+    // nobody; the carried dismissals are asserted on what the pickers OFFER.
     const people = resolvePeople(st, {}, cfg);
-    expect(people.striker).toBe("A-2"); // first ELIGIBLE away batter — A-1 excluded
-    expect(people.nonStriker).toBe("A-4"); // second eligible — A-3 excluded too, never re-offered
+    expect([people.striker, people.nonStriker]).toEqual(["", ""]);
+    const offered = buildContext(view({ cfg, state: st }))!.slots.find((sl) => sl.id === "striker")!.candidates ?? [];
+    expect(offered[0]).toBe("A-2"); // first ELIGIBLE away batter — A-1 excluded
+    expect(offered).not.toContain("A-1");
+    expect(offered).not.toContain("A-3"); // never re-offered
+    expect(offered).toContain("A-4");
   });
 });
 

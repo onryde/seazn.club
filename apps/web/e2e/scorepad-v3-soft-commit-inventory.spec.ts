@@ -1,6 +1,6 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
-import { apiJson, expectNoHorizontalScroll, fixturePath, seedRosteredFixture, TAG } from "./helpers";
+import { apiJson, expectNoHorizontalScroll, fixturePath, pickCricketPeople, seedRosteredFixture, TAG } from "./helpers";
 
 /**
  * Soft-commit inventory — browser proof of `usesSoftCommit` (HOLD iff dock
@@ -176,6 +176,8 @@ test("inventory: cricket plain immediate; noball holds; wide immediate", async (
     away: [{ fullName: `SCI C Bowl ${TAG}` }],
   });
   await openLive(page, fx.fixtureId);
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+  await pickCricketPeople(page, { striker: `SCI C Striker ${TAG}`, nonStriker: `SCI C Non ${TAG}`, bowler: `SCI C Bowl ${TAG}` });
 
   let before = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length;
   await tile(page, "run1").click();

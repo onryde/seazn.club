@@ -13,13 +13,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { foldMatch, initSquads, type EventEnvelope } from "@seazn/engine/core";
 import { cricketPadRules } from "@seazn/engine/pad";
-import { cricket, type CricketCfg, type CricketState } from "@seazn/engine/sports/cricket";
+import { cricket, eligibleBowlers, soEligibleBatters, type CricketCfg, type CricketState } from "@seazn/engine/sports/cricket";
 import { ballSeq, cricketEnvelopes, cricketLineups, tiedWithSuperOver, type CricketEventSpec } from "../../__tests__/_cricket-fold";
 import uiEn from "@/dictionaries/en/ui.json";
 import { GuidedSheet, answerStep, currentStep, initialSheetState } from "../../guided-sheet";
 import { dedicatedEventTypes, moreActions } from "../../pad-host";
 import type { GuidedSheetSpec, GuidedSheetStep, PadHostView, TileSpec } from "../../types";
-import { buildDock, buildScorebug, buildSheets, buildTiles, refusedEventTypes, type TFn } from "../cricket";
+import { bowlerBlocked, bowlerBlockReason, buildContext, buildDock, buildScorebug, buildSheets, buildTiles, refusedEventTypes, resolvePeople, type TFn } from "../cricket";
 
 const t: TFn = (key) => key;
 const T20 = cricket.configSchema.parse(cricket.variants.t20);
@@ -104,6 +104,16 @@ const ball = (over: number, ballInOver: number, extra: Record<string, unknown> =
   { over, ballInOver, striker: STRIKER, nonStriker: NON_STRIKER, bowler: OPENING_BOWLER, runs: { bat: 0 }, ...extra },
 ];
 const START: readonly CricketEventSpec[] = [["core.start"]];
+/** S2-4 Task 3: nobody is picked for the scorer, so a test that taps a ball tile before the fold names the people picks
+ *  them, as the scorer must. These are the people `ball` names, so a fold of the tile's payload continues that innings. */
+const OPENERS: Readonly<Record<string, string>> = { striker: STRIKER, nonStriker: NON_STRIKER, bowler: OPENING_BOWLER };
+/** `viewOf` with the scorer's pending picks. */
+function pickedOf(cfg: CricketCfg, specs: readonly CricketEventSpec[], picks: Readonly<Record<string, string>> = OPENERS): PadHostView {
+  return { ...viewOf(cfg, specs), contextOverrides: picks };
+}
+/** The super over's first batters and bowler in the tied fixtures below: away bats first (the side that batted second),
+ *  and the first eligible names in each order — the people the pad used to fill in itself. */
+const SUPER_OVER_PICKS: Readonly<Record<string, string>> = { striker: "A-1", nonStriker: "A-2", bowler: "H-1" };
 const FREE_HIT_PENDING: readonly CricketEventSpec[] = [...START, ball(0, 1, { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } })];
 
 const tilePayload = (tile: TileSpec | undefined): Record<string, unknown> => {
@@ -133,7 +143,7 @@ describe("the wicket sheet offers the engine's modes", () => {
       const optional = cricketPadRules.fielderOptionalKinds.includes(kind);
       // Pass 1 names the fielder; pass 2 (only where the step is optional) declines it with the sheet's own "" answer.
       for (const fielderAnswer of optional ? [FIELDER, ""] : [FIELDER]) {
-        const spec = buildSheets(viewOf(T20, START), t).wicket;
+        const spec = buildSheets(pickedOf(T20, START), t).wicket;
         const { asked: steps, event } = walk(spec, (step) => {
           if (step.id === "kind") return kind;
           if (step.id === "out") return NON_STRIKER; // the other batter: only a mode either batter can be out in asks
@@ -249,7 +259,7 @@ describe("the free hit is the fold's (review I2)", () => {
           ["cricket.ball", { over: 0, ballInOver: 1, striker: "A-1", nonStriker: "A-2", bowler: "H-11", runs: { bat: 1 } }], ["cricket.innings.close", { reason: "other" }]]
         : [["core.start"], ...[1, 2, 3, 4, 5, 6].map((n): CricketEventSpec => ["cricket.ball", { over: 0, ballInOver: n, striker: "H-1", nonStriker: "H-2", bowler: "A-11", runs: { bat: 0 } }]),
           ...[1, 2, 3, 4, 5, 6].map((n): CricketEventSpec => ["cricket.ball", { over: 0, ballInOver: n, striker: "A-1", nonStriker: "A-2", bowler: "H-11", runs: { bat: 0 } }])];
-      const tied = viewOf(cfg, main);
+      const tied = pickedOf(cfg, main, SUPER_OVER_PICKS);
       expect((tied.state as CricketState).phase, `${name}: premise, a super over`).toBe("super_over");
       const noBall = tilePayload(buildTiles(tied, t).find((tile) => tile.id === "extra-noball"));
       const specs: CricketEventSpec[] = [...main, ["cricket.superover.ball", noBall]];
@@ -271,7 +281,7 @@ describe("CK-SO-3 in a super over the pad offers only what the fold accepts (rev
     const side = (striker: string, nonStriker: string, bowler: string): CricketEventSpec[] =>
       [1, 2, 3, 4, 5, 6].map((n) => ["cricket.ball", { over: 0, ballInOver: n, striker, nonStriker, bowler, runs: { bat: 0 } }]);
     const main: CricketEventSpec[] = [["core.start"], ...side("H-1", "H-2", "A-11"), ...side("A-1", "A-2", "H-11")];
-    const view = viewOf(cfg, main);
+    const view = pickedOf(cfg, main, SUPER_OVER_PICKS);
     expect((view.state as CricketState).phase, "premise: a super over").toBe("super_over");
     const tiles = buildTiles(view, t);
     const sheets = buildSheets(view, t);
@@ -318,7 +328,7 @@ describe("CK-SO-3 in a super over the pad offers only what the fold accepts (rev
 
 describe("the tiles, dock and option sheets offer the engine's sets", () => {
   it("CK-EX-1 CK-EX-2 CK-PR-2 one extra tile per engine extra kind; the wide records wideDefaultRuns and the penalty penaltyRuns, both as the fold scores them", () => {
-    const tiles = buildTiles(viewOf(T20, START), t);
+    const tiles = buildTiles(pickedOf(T20, START), t);
     const extraTiles = tiles.filter((tile) => {
       const action = tile.action;
       return action !== undefined && "event" in action && (action.event.payload as { runs?: { extras?: unknown } }).runs?.extras !== undefined;
@@ -371,7 +381,9 @@ describe("CK-BO-2 balls per over is the cfg's, at two cfgs", () => {
     for (const [name, cfg] of [["t20", T20], ["hundred", HUNDRED]] as const) {
       same(cricketPadRules.ballsPerOver(cfg), cfg.ballsPerOver, `${name}: ballsPerOver`);
       const specs: CricketEventSpec[] = [...START, ...[1, 2, 3, 4, 5].map((n) => ball(0, n))];
-      const dot = tilePayload(buildTiles(viewOf(cfg, specs), t).find((tile) => tile.id === "run0"));
+      // A-1 is picked for the next over: the hundred's sixth ball opens over 2, and its bowler is asked, not defaulted. At
+      // T20 the over is still open, so the fold's own bowler (A-11) wins over the pick.
+      const dot = tilePayload(buildTiles(pickedOf(cfg, specs, { bowler: "A-1" }), t).find((tile) => tile.id === "run0"));
       numbering.set(name, [dot.over as number, dot.ballInOver as number]);
       // The fold checks over/ballInOver (and a new over's bowler) against ITS cfg on the write path: a skin that assumed six
       // balls would be refused at the hundred.
@@ -434,6 +446,154 @@ describe("S2-4 T2: the toss names the teams", () => {
       folded++;
     }
     expect(folded).toBe(2);
+  });
+});
+
+describe("S2-4 gaps 1-2: nothing is picked for the scorer", () => {
+  /** Every tile that emits a ball (runs, the wide, the minor extras) or opens the wicket sheet: the tiles a missing
+   *  person would make the fold refuse. */
+  const BALL_TILE = /^(run\d+|wide|wicket|extra-.+)$/;
+  const ballTiles = (view: PadHostView) => buildTiles(view, t).filter((tile) => BALL_TILE.test(tile.id));
+  /** A translator that keeps the vars, so a message's over number is asserted, not just its key. */
+  const tv: TFn = (key, vars) => (vars === undefined ? key : `${key} ${JSON.stringify(vars)}`);
+  const slot = (view: PadHostView, id: string) => buildContext(view, tv)?.slots.find((s) => s.id === id);
+  const withPicks = (view: PadHostView, picks: Record<string, string>): PadHostView => ({ ...view, contextOverrides: picks });
+  /** `overs.length` complete overs of dots at `cfg`'s over length, bowled by `overs[i]`, ends swapping each over as the
+   *  Laws have them (Law 17.2: the ends change, so the other batter faces the next over). */
+  function oversBy(cfg: CricketCfg, overs: readonly string[], extraBalls = 0): CricketEventSpec[] {
+    const next = ballSeq(cfg.ballsPerOver);
+    const out: CricketEventSpec[] = [...START];
+    overs.forEach((bowler, i) => {
+      const [striker, nonStriker] = i % 2 === 0 ? [STRIKER, NON_STRIKER] : [NON_STRIKER, STRIKER];
+      for (let b = 0; b < cfg.ballsPerOver; b++) out.push(next("cricket.ball", { striker, nonStriker, bowler }));
+    });
+    const [striker, nonStriker] = overs.length % 2 === 0 ? [STRIKER, NON_STRIKER] : [NON_STRIKER, STRIKER];
+    for (let b = 0; b < extraBalls; b++) out.push(next("cricket.ball", { striker, nonStriker, bowler: OPENING_BOWLER }));
+    return out;
+  }
+
+  it("before the first ball the openers and the bowler are unpicked and every ball tile is disabled, with the reason on the strip", () => {
+    const view = viewOf(T20, START);
+    same(resolvePeople(view.state as CricketState, {}, T20), { battingSide: "home", bowlingSide: "away", striker: "", nonStriker: "", bowler: "" }, "nobody is picked");
+    const tiles = ballTiles(view);
+    expect(tiles.length, "the pad offers ball tiles to block").toBeGreaterThan(0);
+    for (const tile of tiles) same(tile.disabled, true, `${tile.id} waits for the picks`);
+    same(slot(view, "striker")?.message, "pad.cricket.context.openers.unpicked", "the striker slot asks for the openers");
+    same(slot(view, "bowler")?.message, 'pad.cricket.context.bowler.unpicked {"over":1}', "the bowler slot asks for over 1's bowler");
+    // Two of the three picked is still not enough: each person is asked.
+    for (const missing of ["striker", "nonStriker", "bowler"] as const) {
+      const picks: Record<string, string> = { striker: "H-3", nonStriker: "H-1", bowler: "A-9" };
+      delete picks[missing];
+      same(ballTiles(withPicks(view, picks)).every((tile) => tile.disabled === true), true, `without the ${missing}, every ball tile waits`);
+    }
+  });
+
+  it("with the three picked, the first ball names them and folds", () => {
+    // Not the order's first two, nor its first bowler: a default would name H-1/H-2/A-1 and fail here.
+    const view = withPicks(viewOf(T20, START), { striker: "H-3", nonStriker: "H-1", bowler: "A-9" });
+    const tiles = ballTiles(view);
+    for (const tile of tiles) same(tile.disabled, undefined, `${tile.id} is open once the three are picked`);
+    same(slot(view, "striker")?.message, undefined, "no openers message once picked");
+    same(slot(view, "bowler")?.message, undefined, "no bowler message once picked");
+    const run1 = tilePayload(tiles.find((tile) => tile.id === "run1"));
+    same([run1.striker, run1.nonStriker, run1.bowler], ["H-3", "H-1", "A-9"], "the payload names the picks");
+    const innings = openInnings(foldEmitted(T20, START, { type: "cricket.ball", payload: run1 }));
+    same(innings.fine.dismissed, [], "the fold dismissed nobody");
+    same([innings.fine.bowlerBalls["A-9"], innings.fine.batterRuns["H-3"], innings.fine.currentBowler], [1, 1, "A-9"], "the fold credited A-9 and H-3");
+  });
+
+  it("at an over's end the bowler is unpicked; the picker greys the last over's bowler (prevOver) and a bowler at quota (quota)", () => {
+    const quota = T20.maxOversPerBowler;
+    if (quota === undefined) throw new Error("premise: T20 sets a bowler's quota");
+    // The opening bowler bowls every other over to his quota; A-10 the overs between; A-9 the last one.
+    const overs: string[] = [];
+    for (let i = 0; i < quota; i++) overs.push(OPENING_BOWLER, "A-10");
+    overs.splice(overs.length - 1, 1, "A-9");
+    const view = viewOf(T20, oversBy(T20, overs));
+    const state = view.state as CricketState;
+    const fine = openInnings(state).fine;
+    expect(fine.currentBowler, "premise: the over has ended").toBeNull();
+    const people = resolvePeople(state, {}, T20);
+    same(people.bowler, "", "nobody is picked for the next over");
+    same(bowlerBlockReason(state, people, T20), "unpicked", "the reason is the pick, not a block");
+    same(slot(view, "bowler")?.message, `pad.cricket.context.bowler.unpicked {"over":${overs.length + 1}}`, "the slot asks for the next over's bowler");
+    for (const tile of ballTiles(view)) same(tile.disabled, true, `${tile.id} waits for the bowler`);
+    const order = state.orders?.away ?? [];
+    const eligible = new Set(eligibleBowlers(order, fine, quota, T20.ballsPerOver));
+    const ineligible = order.filter((id) => !eligible.has(id)).sort();
+    same(ineligible, ["A-11", "A-9"], "the engine rules out the last over's bowler and the one at quota");
+    const blocked = bowlerBlocked(t, state, people, T20);
+    same(Object.keys(blocked).sort(), ineligible, "the picker greys exactly those");
+    same(blocked["A-9"], "pad.cricket.context.bowler.blocked.prevOver.short", "A-9 bowled the last over");
+    same(blocked[OPENING_BOWLER], "pad.cricket.context.bowler.blocked.quota.short", "the opening bowler is at quota");
+    // Picking an eligible bowler opens the tiles, and the ball folds.
+    const picked = withPicks(view, { bowler: "A-10" });
+    const dot = tilePayload(ballTiles(picked).find((tile) => tile.id === "run0"));
+    same(openInnings(foldEmitted(T20, oversBy(T20, overs), { type: "cricket.ball", payload: dot })).fine.currentBowler, "A-10", "the picked bowler opens the over");
+  });
+
+  it("a hundred over ends at five balls", () => {
+    expect(HUNDRED.ballsPerOver, "premise: the hundred's over is five balls").toBe(5);
+    const four = viewOf(HUNDRED, oversBy(HUNDRED, [], 4));
+    same(resolvePeople(four.state as CricketState, {}, HUNDRED).bowler, OPENING_BOWLER, "after 4 balls the over's bowler bowls on");
+    for (const tile of ballTiles(four)) same(tile.disabled, undefined, `after 4: ${tile.id} is open`);
+    const fiveSpecs = oversBy(HUNDRED, [OPENING_BOWLER]);
+    const five = viewOf(HUNDRED, fiveSpecs);
+    same(resolvePeople(five.state as CricketState, {}, HUNDRED).bowler, "", "after 5 balls the next bowler is asked");
+    const blockedTiles = ballTiles(five);
+    expect(blockedTiles.length).toBeGreaterThan(0);
+    for (const tile of blockedTiles) same(tile.disabled, true, `after 5: ${tile.id} waits for the bowler`);
+    same(slot(five, "bowler")?.message, 'pad.cricket.context.bowler.unpicked {"over":2}', "over 2 waits for its bowler");
+    const dot = tilePayload(ballTiles(withPicks(five, { bowler: "A-10" })).find((tile) => tile.id === "run0"));
+    same([dot.over, dot.ballInOver, dot.bowler], [1, 1, "A-10"], "the sixth ball opens over 2");
+    same(openInnings(foldEmitted(HUNDRED, fiveSpecs, { type: "cricket.ball", payload: dot })).legalBalls, 6, "and folds");
+  });
+
+  it("mid-over the fold's bowler wins over a stale pending pick", () => {
+    const overEnd = oversBy(T20, [OPENING_BOWLER]);
+    // Take back the over's last ball: `makeEnvelope` ids are e-<index>, and the sixth ball is index 6.
+    const specs: CricketEventSpec[] = [...overEnd, ["core.void", {}, `e-${overEnd.length - 1}`]];
+    const view = withPicks(viewOf(T20, specs), { bowler: "A-9" });
+    const fine = openInnings(view.state as CricketState).fine;
+    expect([openInnings(view.state as CricketState).legalBalls, fine.currentBowler], "premise: the over is open again").toEqual([5, OPENING_BOWLER]);
+    same(resolvePeople(view.state as CricketState, view.contextOverrides, T20).bowler, OPENING_BOWLER, "the fold's bowler, not the pick");
+    const dot = tilePayload(ballTiles(view).find((tile) => tile.id === "run0"));
+    same(dot.bowler, OPENING_BOWLER, "the next ball names the over's bowler");
+    same(openInnings(foldEmitted(T20, specs, { type: "cricket.ball", payload: dot })).legalBalls, 6, "and the fold takes it");
+  });
+
+  it("a fresh super-over innings asks for both batters and the bowler; a single vacant end after a wicket still defaults to the one eligible batter", () => {
+    const cfg = tiedWithSuperOver();
+    const side = (striker: string, nonStriker: string, bowler: string): CricketEventSpec[] =>
+      [1, 2, 3, 4, 5, 6].map((n) => ["cricket.ball", { over: 0, ballInOver: n, striker, nonStriker, bowler, runs: { bat: 0 } }]);
+    const main: CricketEventSpec[] = [["core.start"], ...side("H-1", "H-2", "A-11"), ...side("A-1", "A-2", "H-11")];
+    const fresh = viewOf(cfg, main);
+    expect((fresh.state as CricketState).phase, "premise: a super over").toBe("super_over");
+    const people = resolvePeople(fresh.state as CricketState, {}, cfg);
+    same([people.striker, people.nonStriker, people.bowler], ["", "", ""], "a fresh super-over innings asks for all three");
+    for (const tile of ballTiles(fresh)) same(tile.disabled, true, `super over: ${tile.id} waits for the picks`);
+    same(slot(fresh, "striker")?.message, "pad.cricket.context.openers.unpicked", "the strip asks for both batters");
+    // One end picked is not both: the other end is still asked, never drawn from the order.
+    same(resolvePeople(fresh.state as CricketState, { striker: `${people.battingSide === "home" ? "H" : "A"}-1` }, cfg).nonStriker, "", "the other end stays unpicked");
+
+    const bat = people.battingSide === "home" ? "H" : "A";
+    const bowl = people.battingSide === "home" ? "A" : "H";
+    const wicket: CricketEventSpec = [
+      "cricket.superover.ball",
+      { over: 0, ballInOver: 1, striker: `${bat}-1`, nonStriker: `${bat}-2`, bowler: `${bowl}-11`, runs: { bat: 0 }, wicket: { kind: "bowled", out: `${bat}-1`, bowlerCredited: true } },
+    ];
+    const afterWicket = viewOf(cfg, [...main, wicket]);
+    const state = afterWicket.state as CricketState;
+    const fine = state.superOver?.innings.at(-1)?.fine;
+    if (fine == null) throw new Error("premise: a ball-by-ball super-over innings is open");
+    expect([fine.striker, fine.nonStriker], "premise: the fold left the striker's end vacant").toEqual([null, `${bat}-2`]);
+    const order = state.orders?.[people.battingSide] ?? [];
+    const eligible = soEligibleBatters(order, fine.dismissed, state.superOver?.dismissed?.[people.battingSide] ?? [], [`${bat}-2`]);
+    expect(eligible.length, "premise: someone may walk in").toBeGreaterThan(0);
+    const resolved = resolvePeople(state, {}, cfg);
+    same([resolved.striker, resolved.nonStriker, resolved.bowler], [eligible[0], `${bat}-2`, `${bowl}-11`], "the vacant end defaults to the first eligible batter");
+    const dot = tilePayload(ballTiles(afterWicket).find((tile) => tile.id === "run0"));
+    expect(() => foldEmitted(cfg, [...main, wicket], { type: "cricket.superover.ball", payload: dot }), "the replacement's ball folds").not.toThrow();
   });
 });
 

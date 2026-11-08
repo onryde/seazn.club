@@ -513,43 +513,19 @@ export interface ResolvedPeople {
   bowler: string;
 }
 
-/** Striker/non-striker/bowler, fold-authoritative (`fine.*`) with the SAME
- *  default v2's `ThisOverGroup` used before any manual pick existed:
- *  `battingOrder[0]`/`[1]` for striker/non-striker — stateless here (no
- *  local component state available to a pure skin builder), so this default
- *  is recomputed fresh each call rather than remembered across renders.
- *  Empty string when even the order itself isn't populated yet (pre-lineup).
+/** Striker/non-striker/bowler: the fold's (`fine.*`), else the scorer's pending pick, else `""` (unpicked).
  *
- *  `overrides` (G5 — controller ruling 2026-08-16): `view.contextOverrides`,
- *  a slot id -> person id map of PENDING context-strip picks the HOST holds
- *  (types.ts's own doc on `PadHostView.contextOverrides`). Checked FIRST,
- *  ahead of `fine.*` and the order-derived default — an override represents
- *  a scorer's own just-tapped choice, which must win over both the last
- *  KNOWN fold value and the fallback default. Defaults to `{}` so every
- *  pre-G5 call site (none passed a second argument) keeps behaving
- *  identically.
+ *  `overrides` (G5 — controller ruling 2026-08-16): `view.contextOverrides`, a slot id -> person id map of PENDING
+ *  context-strip picks the HOST holds (types.ts's own doc on `PadHostView.contextOverrides`). A batter pick is checked
+ *  ahead of the fold's end (the incoming batter's chip is editable until they face). The bowler is the other way round:
+ *  mid-over (`fine.currentBowler` set) the fold's bowler wins, so a pick left over from an over end that a take-back
+ *  reopened is never sent (Review Focus 1); at an over boundary the pick is the bowler.
  *
- *  Bug fix (owner-reported, live data, 2026-08-17): the bowler default used
- *  to read `bowlingOrder[0]` unconditionally — at an over boundary
- *  (`fine.currentBowler === null`) with bowlingOrder[0] having just bowled
- *  the previous over or exhausted his quota, this proposed a bowler the
- *  engine would refuse outright, and the scorer could not start the next
- *  over at all (see this file's own test suite for the exact live
- *  reproduction). Now the first ELIGIBLE name in `bowlingOrder`
- *  (the engine's own `eligibleBowlers`) — `""` (never an illegal name) when
- *  nobody qualifies, forcing the scorer to choose via the context strip
- *  rather than silently shipping a payload the engine will reject. `cfg`
- *  (new 3rd param, defaulted to `{}`) is what this needs: every pre-fix call
- *  site either already had a `CricketCfgShape` in scope (updated below) or
- *  — for direct 2-arg test calls — gets `maxOversPerBowler: undefined` (no
- *  quota check) and `ballsPerOverOf({}) === 6`, which reproduces the OLD
- *  bowlingOrder[0]-always behaviour exactly whenever `fine.prevOverBowler`/
- *  `.bowlerBalls` are absent too (every pre-fix fixture), so no existing
- *  caller's behaviour silently changes underneath it. This does NOT touch
- *  the mid-over branch (`fine?.currentBowler`, checked first) or the
- *  `overrides.bowler` branch (checked first of all) — a manual pick is never
- *  second-guessed, and the fold's own strict mid-over refusal
- *  (cricket.ts:1173-1178) is untouched. */
+ *  S2-4 Task 3 (gaps 1, 2): there is no default from the order any more. The openers and every bowler at an over
+ *  boundary are asked (`""` here; `bowlerBlockReason` "unpicked" and `buildContext`'s messages say so), because a
+ *  default the scorer never saw recorded the wrong people silently. The super over keeps ONE default, the replacement
+ *  for the single end a wicket left vacant (below). `cfg` defaults to `{}` (no quota, 6-ball overs) for the 2-argument
+ *  test calls. */
 export function resolvePeople(
   state: CricketStateShape,
   overrides: Readonly<Record<string, string>> = {},
@@ -575,9 +551,7 @@ export function resolvePeople(
   const battingSide = due ?? innings?.battingSide ?? state.battingFirst ?? "home";
   const bowlingSide = opponentSide(battingSide);
   const battingOrder = state.orders?.[battingSide] ?? [];
-  const bowlingOrder = state.orders?.[bowlingSide] ?? [];
   const fine = innings?.fine ?? null;
-  const bpo = ballsPerOverOf(cfg);
   // R3.5 F1 (review finding, BLOCKER) — `fine.striker`/`.nonStriker` land as
   // an explicit `null` ("awaiting replacement") the instant a super-over
   // wicket falls: unlike the main innings (`strictOrder: true`, the fold
@@ -605,16 +579,6 @@ export function resolvePeople(
   // `so.dismissed`, never reset); `fine.dismissed` is read too, matching
   // the fold's own OR verbatim rather than trusting one is always a
   // superset of the other.
-  //
-  // A sequential `nextEligible()` cursor, not two independent lookups: the
-  // only OTHER reachable null-both case (a fresh super-over innings, before
-  // its first ball) must not hand the SAME eligible name to both ends —
-  // advancing past whichever name the striker's own resolution just
-  // consumed is what stops that. For every case this fix does not touch
-  // (fine null/coarse; both ends already real) `dismissed`/`soIneligible`/
-  // `crease` are all empty and `eligible` equals `battingOrder` outright, so
-  // `nextEligible()` reproduces the OLD `battingOrder[0]`/`[1]` reads
-  // exactly — this is additive, not a rewrite of the ordinary path.
   const soCrease = [fine?.striker, fine?.nonStriker].filter((p): p is string => typeof p === "string");
   const soEligible = soEligibleBatters(
     battingOrder,
@@ -622,45 +586,40 @@ export function resolvePeople(
     state.superOver?.dismissed?.[battingSide] ?? [],
     soCrease,
   );
-  let soNextIdx = 0;
-  const nextEligible = (): string => soEligible[soNextIdx++] ?? "";
-  // Super-over null ends still walk a sequential eligible cursor so both
-  // vacant crease slots cannot be handed the same name. Ordinary unopened
-  // innings must NOT share that cursor: an override of only striker used
-  // to skip the first nextEligible() call, so non-striker fell to
-  // battingOrder[0] and silently replaced the default other-end batter.
-  // Stable defaults are order[0]/order[1]; a single-end override keeps
-  // the other default unless that would put the same person at both ends
-  // (striker tapped onto the default non-striker → the pair swaps).
-  const defStriker = battingOrder[0] ?? "";
-  const defNonStriker = battingOrder[1] ?? "";
+  // S2-4 Task 3 (gaps 1, 2; owner, "no silent picks"): nobody is picked FOR the scorer. An end the fold has not filled
+  // and the scorer has not picked is `""` (unpicked), and so is a bowler at an over boundary: the openers, the opening
+  // bowler and every next bowler are asked (`bowlerBlockReason` "unpicked", `buildContext`'s messages), never taken from
+  // the order. The one default left is the super over's single vacant end: after a wicket the fold leaves that end
+  // null and the next ball must name the replacement, and the first eligible name in the order is offered there, as
+  // before (only one end is vacant, so one name is ever drawn). A FRESH super-over innings (both ends vacant) asks for
+  // both, like any other innings.
   const soMode = state.phase === "super_over";
-  const striker = soMode
-    ? (overrides.striker ?? fine?.striker ?? nextEligible())
-    : (overrides.striker ?? (typeof fine?.striker === "string" ? fine.striker : defStriker));
-  let nonStriker = soMode
-    ? (overrides.nonStriker ?? fine?.nonStriker ?? nextEligible())
-    : (overrides.nonStriker ?? (typeof fine?.nonStriker === "string" ? fine.nonStriker : defNonStriker));
-  if (!soMode && striker !== "" && nonStriker === striker) {
-    nonStriker = striker === defStriker ? defNonStriker : defStriker;
-    if (nonStriker === striker) {
-      nonStriker = battingOrder.find((id) => id !== striker) ?? "";
-    }
-  }
+  const foldStriker = typeof fine?.striker === "string" ? fine.striker : null;
+  const foldNonStriker = typeof fine?.nonStriker === "string" ? fine.nonStriker : null;
+  const vacantEnd =
+    soMode && fine !== null && (foldStriker === null) !== (foldNonStriker === null)
+      ? foldStriker === null
+        ? "striker"
+        : "nonStriker"
+      : null;
+  const replacement = soEligible[0] ?? "";
+  const striker = overrides.striker ?? foldStriker ?? (vacantEnd === "striker" ? replacement : "");
+  let nonStriker = overrides.nonStriker ?? foldNonStriker ?? (vacantEnd === "nonStriker" ? replacement : "");
+  // One person never stands at both ends: the picker greys the other end's batter, so this is defence only, and it asks
+  // again rather than guessing which end the scorer meant.
+  if (striker !== "" && nonStriker === striker) nonStriker = "";
   return {
     battingSide,
     bowlingSide,
     striker,
     nonStriker,
-    bowler:
-      overrides.bowler ??
-      fine?.currentBowler ??
-      eligibleBowlers(bowlingOrder, fine, cfg.maxOversPerBowler, bpo)[0] ??
-      "",
+    // Review Focus 1: mid-over the fold's bowler wins over a pending pick. After a take-back reopens an over, a pick made
+    // at its end is stale, and a ball naming it would be a second bowler mid-over, which the fold refuses.
+    bowler: fine?.currentBowler ?? overrides.bowler ?? "",
   };
 }
 
-export type BowlerBlockReason = "prevOver" | "notInLineup" | "quota" | "noEligible";
+export type BowlerBlockReason = "prevOver" | "notInLineup" | "quota" | "noEligible" | "unpicked";
 
 /**
  * R2b live bug PART 2 (owner-reported, reproduced against real data,
@@ -724,11 +683,15 @@ export function bowlerBlockReason(
   const innings = scoringInnings(state, cfg);
   const fine = innings?.fine ?? null;
   if ((fine?.currentBowler ?? null) !== null) return null;
-  if (people.bowler === "") return "noEligible";
-  if (people.bowler === (fine?.prevOverBowler ?? null)) return "prevOver";
   const bowlingOrder = state.orders?.[people.bowlingSide] ?? [];
-  if (!bowlingOrder.includes(people.bowler)) return "notInLineup";
   const bpo = ballsPerOverOf(cfg);
+  // S2-4 Task 3: nobody is picked for the scorer, so an empty bowler is "pick one" while anyone may bowl the over, and
+  // "nobody can" only when the engine's own filter leaves nobody.
+  if (people.bowler === "") {
+    return eligibleBowlers(bowlingOrder, fine, cfg.maxOversPerBowler, bpo).length > 0 ? "unpicked" : "noEligible";
+  }
+  if (people.bowler === (fine?.prevOverBowler ?? null)) return "prevOver";
+  if (!bowlingOrder.includes(people.bowler)) return "notInLineup";
   // Consecutive-over and lineup membership are both already ruled out above,
   // so the engine filter rejecting this name can only mean the quota.
   return eligibleBowlers([people.bowler], fine, cfg.maxOversPerBowler, bpo).length > 0 ? null : "quota";
@@ -1437,7 +1400,10 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
     // gets set in this function; non-ball tiles (review/retire/
     // inningsClose/declare/overSummary/more, pushed further down, outside
     // this branch) are untouched.
-    const ballTile = (spec: TileSpec): TileSpec => (bowlerBlocked || blockedByClosure ? { ...spec, disabled: true } : spec);
+    // S2-4 Task 3: also while either batter is unpicked (the openers, before the first ball).
+    const battersUnpicked = people.striker === "" || people.nonStriker === "";
+    const ballTile = (spec: TileSpec): TileSpec =>
+      bowlerBlocked || blockedByClosure || battersUnpicked ? { ...spec, disabled: true } : spec;
 
     for (const r of RUN_VALUES) {
       tiles.push(ballTile({
@@ -1727,7 +1693,7 @@ export function buildDock(eventType: string, t: TFn, heldPayload?: Record<string
   return { title: t("pad.cricket.dock.title"), chips };
 }
 
-const BOWLER_BLOCK_MESSAGE_KEY: Record<Exclude<BowlerBlockReason, "noEligible">, MessageKey> = {
+const BOWLER_BLOCK_MESSAGE_KEY: Record<Exclude<BowlerBlockReason, "noEligible" | "unpicked">, MessageKey> = {
   prevOver: "pad.cricket.context.bowler.blocked.prevOver",
   notInLineup: "pad.cricket.context.bowler.blocked.notInLineup",
   quota: "pad.cricket.context.bowler.blocked.quota",
@@ -1765,8 +1731,11 @@ function bowlerBlockMessage(
   bowlerId: string,
   personNames: Readonly<Record<string, string>>,
   cfg: CricketCfgShape,
+  over: number,
 ): string {
   if (reason === "noEligible") return t("pad.cricket.context.bowler.blocked.noEligible");
+  // S2-4 Task 3: nobody is at fault — the over (1-indexed, `nextOverNumber`) is waiting for its bowler.
+  if (reason === "unpicked") return t("pad.cricket.context.bowler.unpicked", { over });
   const name = personNames[bowlerId] ?? t("eventCopy.unknownPerson");
   if (reason === "quota") {
     const quota = cfg.maxOversPerBowler;
@@ -2059,6 +2028,10 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
       : battingOrder;
   const otherEndBlock = (otherId: string): Blocked =>
     otherId === "" ? {} : { [otherId]: t("pad.cricket.context.batter.blocked.otherEnd") };
+  // S2-4 Task 3: why the ball tiles wait (`buildTiles`' `battersUnpicked`): the openers are asked, never defaulted.
+  const openersMessage =
+    people.striker === "" || people.nonStriker === "" ? t("pad.cricket.context.openers.unpicked") : undefined;
+  const nextOver = nextOverNumber(scoring, ballsPerOverOf(cfg));
 
   // Unopened innings (before ball 1 of innings 1 or 2, or a super-over gap):
   // the strip used to be absent, so opening pair/bowler could never be
@@ -2076,6 +2049,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
           required: true,
           candidates: batterCandidates,
           blocked: otherEndBlock(people.nonStriker),
+          message: openersMessage,
         },
         {
           id: "nonStriker",
@@ -2095,7 +2069,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
           candidates: state.orders?.[people.bowlingSide] ?? [],
           blocked: bowlerBlocked(t, state, people, cfg),
           readOnly: bowlerIsReadOnly(null) ? true : undefined,
-          message: blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg) : undefined,
+          message: blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg, nextOver) : undefined,
         },
       ],
     };
@@ -2124,7 +2098,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         readOnly: strikerLocked ? true : undefined,
         candidates: strikerLocked ? undefined : unlockedIncoming(people.nonStriker),
         blocked: strikerLocked ? undefined : otherEndBlock(people.nonStriker),
-        message: closedMessage,
+        message: closedMessage ?? openersMessage,
       },
       {
         id: "nonStriker",
@@ -2146,7 +2120,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         candidates: state.orders?.[people.bowlingSide] ?? [],
         blocked: inningsClosed ? {} : bowlerBlocked(t, state, people, cfg),
         readOnly: inningsClosed || bowlerReadOnly ? true : undefined,
-        message: closedMessage ?? (blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg) : undefined),
+        message: closedMessage ?? (blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg, nextOver) : undefined),
       },
       ...(mode ? [mode] : []),
     ],

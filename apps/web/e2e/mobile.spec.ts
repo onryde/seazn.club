@@ -14,6 +14,7 @@ import {
   competitionPath,
   divisionPath,
   fixturePath,
+  pickCricketPeople,
   seedRosteredFixture,
   loginUi,
   claimProfileBySql,
@@ -2355,6 +2356,12 @@ test("cricket v3 pad: tiles + over-summary sheet + context strip hold the 44px f
   await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(sheet, "cancel must close the sheet without dispatching").not.toBeVisible({ timeout: 10_000 });
 
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1 (the tiles wait for them).
+  await pickCricketPeople(page, {
+    striker: `Mobile V3 Striker ${TAG}`,
+    nonStriker: `Mobile V3 NonStriker ${TAG}`,
+    bowler: `Mobile V3 Bowler ${TAG}`,
+  });
   await pad.getByRole("button", { name: "1", exact: true }).click();
   await expect
     .poll(
