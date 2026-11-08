@@ -395,8 +395,17 @@ test(
     expect(first.payload.nonStriker).not.toBe(two);
     expect(first.payload.bowler).not.toBe(bowlA);
 
-    // Mid-over the crease is locked — tapping Striker must not find a button.
-    await expect(strip.getByRole("button", { name: /^Striker(:|$)/ })).toHaveCount(0);
+    // Mid-over only the striker's chip is a control (S2-4 T7, CK-SS-1: the hand strike swap), and its picker offers
+    // exactly the non-striker, tagged Swap ends. The non-striker and the bowler stay read-only.
+    await expect(strip.locator('button[data-role="context-chip"]'), "one live chip mid-over").toHaveCount(1);
+    const strikerChip = strip.getByRole("button", { name: /^Striker:/ });
+    await expect(strikerChip, "the live chip is the striker's").toHaveCount(1);
+    await strikerChip.click();
+    await expect(strip.locator("[data-candidate-id]"), "the swap is the only pick").toHaveCount(1);
+    const swapTo = strip.locator(`[data-candidate-id="${four}"]`);
+    await expect(swapTo, "the non-striker, tagged as the swap").toContainText("Swap ends");
+    await strikerChip.click();
+    await expect(strip.locator("[data-candidate-id]"), "the picker closed untouched").toHaveCount(0);
 
     await pad(page).getByRole("button", { name: "Wicket", exact: true }).click();
     const sheet = pad(page).locator('[data-role="v3-sheet"]');
@@ -589,6 +598,12 @@ test("cricket v3: the device link (/score/[token]) renders the v3 pad, not the l
     await expect(v3Root).toBeVisible({ timeout: 20_000 });
     await expect(v3Root.locator('[data-role="v3-scorebug"]')).toBeVisible();
     await expect(v3Root.locator('[data-role="v3-tiles"]')).toBeVisible();
+    // S2-4 Task 3: nobody is picked for the scorer, so the device link needs the openers and the bowler too.
+    await pickCricketPeople(
+      dlPage,
+      { striker: `V3 DL Striker ${TAG}`, nonStriker: `V3 DL NonStriker ${TAG}`, bowler: `V3 DL Bowler ${TAG}` },
+      v3Root,
+    );
 
     const before = await ledger(page.request, fx.fixtureId);
     await v3Root.getByRole("button", { name: "1", exact: true }).click();

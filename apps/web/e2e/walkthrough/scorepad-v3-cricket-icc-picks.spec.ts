@@ -156,7 +156,18 @@ test("cricket ICC picks: opening pair and bowler, required incoming, then rename
   expect(first.payload.nonStriker).toBe(four);
   expect(first.payload.bowler).toBe(bowlB);
 
-  await expect(strip(page).getByRole("button", { name: /^Striker(:|$)/ })).toHaveCount(0);
+  // Mid-over only the striker's chip is a control (S2-4 T7, CK-SS-1: the hand strike swap), and its picker offers
+  // exactly the non-striker, tagged Swap ends. The non-striker and the bowler stay read-only.
+  await expect(strip(page).locator('button[data-role="context-chip"]'), "one live chip mid-over").toHaveCount(1);
+  const strikerChip = strip(page).getByRole("button", { name: /^Striker:/ });
+  await expect(strikerChip, "the live chip is the striker's").toHaveCount(1);
+  await strikerChip.click();
+  await expect(strip(page).locator("[data-candidate-id]"), "the swap is the only pick").toHaveCount(1);
+  await expect(strip(page).locator(`[data-candidate-id="${four}"]`), "the non-striker, tagged as the swap").toContainText(
+    "Swap ends",
+  );
+  await strikerChip.click();
+  await expect(strip(page).locator("[data-candidate-id]"), "the picker closed untouched").toHaveCount(0);
 
   await pad(page).getByRole("button", { name: "Wicket", exact: true }).click();
   await expect(sheet(page).getByText("What happened?")).toBeVisible();

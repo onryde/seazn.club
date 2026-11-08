@@ -2439,12 +2439,16 @@ export async function seedRosteredFixture(
  * dictionary's ("Striker", "Non-striker", "Bowler"); the anchored `^label(:|$)` match keeps "Striker" from matching
  * "Non-striker: …". A chip that is not a button (a batter who has faced, the bowler mid-over) cannot be picked, and the
  * click then fails loudly rather than skip.
+ *
+ * `root` is the pad to pick on, the console's `[data-testid="score-pad"]` by default. The device link route
+ * (`/score/[token]`) has no such testid and mounts the pad's own `[data-role="pad-v3"]` root, so a spec there passes it.
  */
 export async function pickCricketPeople(
   page: Page,
   picks: { striker?: string; nonStriker?: string; bowler?: string },
+  root: Locator = page.locator('[data-testid="score-pad"]'),
 ): Promise<void> {
-  const strip = page.locator('[data-testid="score-pad"] [data-role="context-strip"]');
+  const strip = root.locator('[data-role="context-strip"]');
   const order: Array<[label: string, name: string | undefined]> = [
     ["Striker", picks.striker],
     ["Non-striker", picks.nonStriker],
