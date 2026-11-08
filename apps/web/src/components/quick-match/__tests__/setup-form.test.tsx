@@ -254,6 +254,7 @@ describe("drawPreview: the knockout draw as the generator makes it, under the ty
     const d = drawPreview(cellOf(4), NAMES.slice(0, 4), msg);
     expect(d.sitsOut).toEqual([]);
     expect(d.cards).toHaveLength(3); // n − 1 matches
+    expect(d.cards.map((c) => c.label)).toEqual(["Semi-final 1", "Semi-final 2", "Final"]);
     const semis = d.cards.filter((c) => c.label.startsWith("Semi-final"));
     expect(semis.map((c) => pairOf(c.line)).sort()).toEqual([sorted(NAMES[0]!, NAMES[3]!), sorted(NAMES[1]!, NAMES[2]!)].sort());
     expect(d.cards.at(-1)).toEqual({ label: "Final", line: "Winners meet" });
@@ -263,20 +264,21 @@ describe("drawPreview: the knockout draw as the generator makes it, under the ty
     const d = drawPreview(cellOf(3), NAMES.slice(0, 3), msg);
     expect(d.sitsOut).toEqual([`${NAMES[0]} sits out the first round`]);
     expect(d.cards).toHaveLength(2);
-    expect(d.cards[0]!.label).toBe("Semi-final 1");
+    // The round has one fixture, so neither it nor its winner is numbered (ruling 2026-11-08, fixture-label.ts).
+    expect(d.cards[0]!.label).toBe("Semi-final");
     expect(pairOf(d.cards[0]!.line)).toEqual(sorted(NAMES[1]!, NAMES[2]!));
     expect(d.cards[1]!.label).toBe("Final");
-    expect(pairOf(d.cards[1]!.line)).toEqual(sorted(NAMES[0]!, "Winner of semi-final 1"));
+    expect(pairOf(d.cards[1]!.line)).toEqual(sorted(NAMES[0]!, "Winner of the semi-final"));
   });
 
-  it("5 sides: seeds 1-3 sit out (in seed order), 4v5 is match 1, its winner meets seed 1", () => {
+  it("5 sides: seeds 1-3 sit out (in seed order), 4v5 is the lone quarter-final, its winner meets seed 1", () => {
     const d = drawPreview(cellOf(5), NAMES.slice(0, 5), msg);
     expect(d.sitsOut).toEqual([0, 1, 2].map((k) => `${NAMES[k]} sits out the first round`));
     expect(d.cards).toHaveLength(4);
-    expect(d.cards[0]!.label).toBe("Quarter-final 1");
+    expect(d.cards.map((c) => c.label)).toEqual(["Quarter-final", "Semi-final 1", "Semi-final 2", "Final"]);
     expect(pairOf(d.cards[0]!.line)).toEqual(sorted(NAMES[3]!, NAMES[4]!));
     const semis = d.cards.filter((c) => c.label.startsWith("Semi-final")).map((c) => pairOf(c.line));
-    expect(semis.sort()).toEqual([sorted(NAMES[0]!, "Winner of match 1"), sorted(NAMES[1]!, NAMES[2]!)].sort());
+    expect(semis.sort()).toEqual([sorted(NAMES[0]!, "Winner of the quarter-final"), sorted(NAMES[1]!, NAMES[2]!)].sort());
     expect(d.cards.at(-1)).toEqual({ label: "Final", line: "Winners meet" });
   });
 
@@ -284,6 +286,7 @@ describe("drawPreview: the knockout draw as the generator makes it, under the ty
     const d = drawPreview(cellOf(6), NAMES, msg);
     expect(d.sitsOut).toEqual([0, 1].map((k) => `${NAMES[k]} sits out the first round`));
     expect(d.cards).toHaveLength(5);
+    expect(d.cards.map((c) => c.label)).toEqual(["Quarter-final 1", "Quarter-final 2", "Semi-final 1", "Semi-final 2", "Final"]);
     const qf = d.cards.filter((c) => c.label.startsWith("Quarter-final"));
     expect(qf.map((c) => pairOf(c.line)).sort()).toEqual([sorted(NAMES[2]!, NAMES[5]!), sorted(NAMES[3]!, NAMES[4]!)].sort());
     // Round one is played first, so quarter-final k is match k (D12's numbering: the 1-based index in play order).

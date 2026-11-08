@@ -14,7 +14,6 @@
 // server-side dedupe (decision log 2026-11-08).
 import { useRef, useState, useSyncExternalStore, type FormEvent } from "react";
 import { Pencil, X } from "lucide-react";
-import type { RoundRole } from "@seazn/engine/competition";
 import type { EntrantKind } from "@seazn/engine/sport";
 import type {
   QuickMatchDrawSeat,
@@ -30,7 +29,7 @@ import {
   QUICK_MATCH_MAX_SIDES,
   QUICK_MATCH_MIN_SIDES,
 } from "@/lib/quick-match-constants";
-import { roundRoleLabel } from "@/lib/round-role-label";
+import { fixtureLabel, winnerOfLabel, type FixtureLabel } from "./fixture-label";
 
 /** The create route (app/api/quick-match/route.ts). It answers every post with a 303. */
 const CREATE_PATH = "/api/quick-match";
@@ -155,15 +154,17 @@ export interface DrawCard {
 
 /**
  * The knockout preview (C22) under the typed names. The table already resolved every bye feeder to its holder (T2), so a
- * seat is a seed (the i-th typed name) or the winner of an earlier pair: a semi-final by its number, anything earlier by
- * its match number (D12: the 1-based index in play order, so quarter-final k is match k). A pair whose seats are both
- * winners is the final's "Winners meet". A blank row is named by its place ("Side 3"), never blank.
+ * round's pairs are its non-bye fixtures and a seat is a seed (the i-th typed name) or the winner of an earlier pair.
+ * Card and feeder names are fixture-label.ts's (numbered among the round's fixtures, unnumbered when it has one), the
+ * rule the home's draw shares. A pair whose seats are both winners is the final's "Winners meet". A blank row is named
+ * by its place ("Side 3"), never blank.
  */
 export function drawPreview(
   cell: QuickMatchKnockoutCell,
   names: readonly string[],
   msg: Msg,
 ): { sitsOut: string[]; cards: DrawCard[] } {
+  const say = (l: FixtureLabel) => msg(l.key, l.params);
   const nameOf = (seed: number) => names[seed - 1]?.trim() || msg("quickMatch.setup.sideLabel", { n: seed });
   const matchNo = new Map<string, number>();
   let n = 0;
@@ -173,17 +174,12 @@ export function drawPreview(
     if ("seed" in seat) return nameOf(seat.seed);
     const { round, pair } = seat.winnerOf;
     const no = matchNo.get(`${round}:${pair}`);
+    const from = cell.rounds[round - 1];
     // T2 refuses a dangling feeder, but this is the screen: never print "Winner of match undefined".
-    if (no === undefined) throw new Error(`drawPreview cannot name the winner of round ${round} pair ${pair}: not in the draw`);
-    return cell.rounds[round - 1]?.role?.kind === "semi_final"
-      ? msg("quickMatch.home.winnerOfSemi", { n: pair })
-      : msg("quickMatch.home.winnerOfMatch", { n: no });
-  };
-  const labelOf = (role: RoundRole | null, roundNo: number, pairNo: number): string => {
-    if (role === null) return msg("bracket.round.plain", { n: roundNo });
-    if (role.kind === "semi_final") return msg("quickMatch.home.semiFinal", { n: pairNo });
-    if (role.kind === "quarter_final") return msg("quickMatch.home.quarterFinal", { n: pairNo });
-    return roundRoleLabel(msg, role);
+    if (no === undefined || !from) {
+      throw new Error(`drawPreview cannot name the winner of round ${round} pair ${pair}: not in the draw`);
+    }
+    return say(winnerOfLabel(from.role, from.pairs.length, pair - 1, no));
   };
 
   const cards = cell.rounds.flatMap((r, ri) =>
@@ -194,7 +190,7 @@ export function drawPreview(
         "winnerOf" in home && "winnerOf" in away
           ? msg("quickMatch.setup.winnersMeet")
           : `${homeName} ${msg("quickMatch.home.versus")} ${awayName}`;
-      return { label: labelOf(r.role, ri + 1, pi + 1), line };
+      return { label: say(fixtureLabel(r.role, ri + 1, r.pairs.length, pi)), line };
     }),
   );
   const sitsOut = [...cell.byes].sort((a, b) => a - b).map((seed) => msg("quickMatch.setup.sitsOut", { name: nameOf(seed) }));

@@ -19,6 +19,7 @@ const UI_PREFIXES = [
   "quickMatch.home.quarterFinal",
   "quickMatch.home.winnerOfSemi",
   "quickMatch.home.winnerOfMatch",
+  "quickMatch.home.winnerOfThe",
   "bracket.round.",
 ];
 
