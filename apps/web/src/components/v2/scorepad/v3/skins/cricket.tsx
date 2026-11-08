@@ -369,6 +369,44 @@ export function currentInnings(state: CricketStateShape): CricketInningsShape | 
   return list.find((i) => !i.closed) ?? list[list.length - 1] ?? null;
 }
 
+/**
+ * S2-4 final fix wave I3 (controller ruling) — `SkinDefV3.contextOverridesSurvive` for cricket: the pending picks (the
+ * openers, the next bowler, a hand strike swap) survive a fold change that is not a ball, and are cleared when a ball
+ * folds. "A ball folded" is keyed to the innings' deliveries, legal and illegal, as the phone keys its swap
+ * (`swapKey`, the capture app's cricketPicks.ts): the fold carries no delivery count, but every delivery moves
+ * `legalBalls` (a legal ball) or `runs` (a wide or a no-ball: the engine's `CricketExtras.runs` is a positive integer,
+ * and the innings total counts it). Each of the two is the only witness of its kind of delivery; a wicket needs no field
+ * of its own (on a legal ball `legalBalls` moves, on a wide `runs` does, and a retirement moves the crease, below). So a
+ * bowler change, a review, a late ack or a realtime batch that repeats the same fold keeps the picks, and the next ball
+ * drops them.
+ *
+ * The crease is in the key too: a pick is read against the pair it was made for (`resolvePeople` applies the swap only
+ * while it names the fold's other end, and otherwise takes `overrides.striker` as it stands), so a change that moves
+ * either end (a retirement, a substitute at the crease) drops the picks rather than keep one naming a batter who is no
+ * longer there. A new innings, a super over or a change of phase drops them as well.
+ */
+export function cricketPicksSurvive(prev: unknown, next: unknown): boolean {
+  return picksKey(prev) === picksKey(next);
+}
+
+function picksKey(raw: unknown): string {
+  if (raw === null || typeof raw !== "object") return "none";
+  const state = raw as CricketStateShape;
+  const { list, inSuperOver } = activeSuperOver(state);
+  const innings = currentInnings(state);
+  const fine = innings?.fine ?? null;
+  return JSON.stringify([
+    state.phase ?? null,
+    inSuperOver,
+    list.length,
+    innings?.closed ?? null,
+    innings?.legalBalls ?? null,
+    innings?.runs ?? null,
+    fine?.striker ?? null,
+    fine?.nonStriker ?? null,
+  ]);
+}
+
 export type InningsFidelity = "unopened" | "coarse" | "fine";
 
 /**
@@ -2969,6 +3007,7 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     key: "cricket",
     tapModel: "T",
     phase: resolvePhase,
+    contextOverridesSurvive: cricketPicksSurvive,
     /** R7/D follow-up, extended by the R7 follow-ups doc item 1 — cricket
      *  KEEPS the result bar, with one exception: the whole FIRST innings,
      *  including the screen a scorer opens before a ball is bowled.

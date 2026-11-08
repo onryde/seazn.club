@@ -1532,6 +1532,15 @@ export interface SkinDefV3<View = unknown> {
    * same one every render costs nothing and is the normal case.
    */
   clock?(view: View): PadClockSpec | null;
+  /**
+   * S2-4 final fix wave I3 (controller ruling): whether the pending context-strip picks (`PadHostView.contextOverrides`)
+   * SURVIVE a change of the fold from `prev` to `next` (two `pipeline.state` objects). Absent, or `false`, is the chassis
+   * rule as it always was: any new fold object drops every pick (`contextOverridesStale`, pad-host.tsx). A skin answers
+   * `true` only for a change that leaves its picks meaning what they meant (cricket: no delivery folded and the crease is
+   * unchanged, so a hand strike swap survives a bowler change, a review or a late ack and is cleared by the next ball).
+   * It reads two raw states the way every other method reads `view.state`, and is called only when they differ.
+   */
+  contextOverridesSurvive?(prev: unknown, next: unknown): boolean;
 }
 
 /**

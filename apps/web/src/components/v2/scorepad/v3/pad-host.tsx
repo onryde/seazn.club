@@ -1036,6 +1036,20 @@ export function contextOverridesStale(overridesFor: unknown, currentState: unkno
 }
 
 /**
+ * S2-4 final fix wave I3 (controller ruling): whether the pending picks are DROPPED when the fold moves from
+ * `overridesFor` to `currentState`. The chassis rule above, unless the skin's `contextOverridesSurvive` says this change
+ * keeps them (a skin without the hook keeps today's behaviour exactly). Pure, so it is tested without a render.
+ */
+export function contextOverridesDropped(
+  overridesFor: unknown,
+  currentState: unknown,
+  survive: ((prev: unknown, next: unknown) => boolean) | undefined,
+): boolean {
+  if (!contextOverridesStale(overridesFor, currentState)) return false;
+  return !(survive?.(overridesFor, currentState) ?? false);
+}
+
+/**
  * R3 chassis sub-wave (owner ruling 2026-08-24, `_INDEX.md`, defects 1+2): the
  * slot a `{swap: id}` tile addresses, or `null`.
  *
@@ -2025,8 +2039,9 @@ export function PadHostV3(props: PadHostV3Props) {
   const [contextOverrides, setContextOverrides] = useState<Record<string, string>>({});
   const [overridesFor, setOverridesFor] = useState<unknown>(pipeline.state);
   if (contextOverridesStale(overridesFor, pipeline.state)) {
+    // S2-4 final fix wave I3: the skin may keep the picks across a change that is not a ball (contextOverridesDropped).
+    if (contextOverridesDropped(overridesFor, pipeline.state, props.skin.contextOverridesSurvive)) setContextOverrides({});
     setOverridesFor(pipeline.state);
-    setContextOverrides({});
   }
 
   // R6/task A — the pad-local clock (owner ruling R6-4). `clock` is the whole

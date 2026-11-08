@@ -25,6 +25,7 @@ import {
   buildTiles,
   chaseTarget,
   cricketBallDetail,
+  cricketPicksSurvive,
   cricketSkinV3,
   currentInnings,
   dueBattingSide,
@@ -41,7 +42,7 @@ import {
   bowlerIsReadOnly,
 } from "../cricket";
 import type { InningsFidelity, TFn } from "../cricket";
-import { filterTilesByBand, tileEventType } from "../../pad-host";
+import { contextOverridesDropped, filterTilesByBand, tileEventType } from "../../pad-host";
 import type { Dict } from "@/lib/i18n-constants";
 import { t as realT } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
@@ -4369,5 +4370,85 @@ describe("S2-4 Task 10 (gap 8): the strip holds the room of what a ball can brin
       const held = spec.slots.filter((s) => s.messageReserve !== undefined).map((s) => s.id);
       expect(held).toEqual(["bowler"]);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S2-4 final fix wave I3 (controller ruling; final review I3): a pending pick survives a fold change that is not a ball
+// (a bowler change, a review, a late ack) and is cleared when a ball folds, keyed to the innings' deliveries, legal
+// and illegal. The danger it closes: a hand strike swap wiped by a bowler change, the tiles still live, and the next
+// ball crediting the fold's own (unswapped) pair, which the engine accepts. Every fold here is the real engine's.
+// ---------------------------------------------------------------------------
+
+describe("S2-4 final fix wave I3: a pending swap survives a fold change that is not a ball, and a ball clears it", () => {
+  const cfgT20 = cricket.configSchema.parse({});
+  const SWAP = { striker: "H-2" } as const;
+  /** Two dots by A-11 to H-1 (the pair never moves), then whatever follows; one ball counter per fold. */
+  function fold(after: (b: ReturnType<typeof ballSeq>) => CricketEventSpec[]) {
+    const b = ballSeq();
+    const pair = { striker: "H-1", nonStriker: "H-2", bowler: "A-11" };
+    return foldCricket(cfgT20, [["core.start"], b("cricket.ball", pair), b("cricket.ball", pair), ...after(b)]);
+  }
+  const before = () => fold(() => []);
+  const change: CricketEventSpec = ["cricket.bowler.change", { bowler: "A-10", reason: "incapacitated" }];
+  /** The ball the dot tile would record now, with the pending picks the host still holds. */
+  function nextBall(st: CricketState, picks: Readonly<Record<string, string>>) {
+    const tile = buildTiles(view({ cfg: cfgT20, state: st, contextOverrides: picks })).find((tl) => tl.id === "run0")!;
+    expect(tile.disabled, "premise: the dot tile is live").toBeFalsy();
+    expect("event" in tile.action, "premise: the dot tile records a ball").toBe(true);
+    const event = (tile.action as { event: { payload: unknown } }).event;
+    return event.payload as { striker: string; nonStriker: string; bowler: string };
+  }
+
+  it("swap, then a mid-over bowler change: the picks survive, and the next ball carries the reversed pair and the new bowler", () => {
+    const prev = before();
+    const next = fold(() => [change]);
+    expect(currentInnings(next)?.fine?.currentBowler, "premise: the change folded").toBe("A-10");
+    expect(contextOverridesDropped(prev, next, cricketPicksSurvive)).toBe(false);
+    const ball = nextBall(next, SWAP);
+    expect([ball.striker, ball.nonStriker, ball.bowler]).toEqual(["H-2", "H-1", "A-10"]);
+    // The chassis default (no hook) is today's rule: the same change drops the swap, and the ball credits the fold's pair.
+    expect(contextOverridesDropped(prev, next, undefined)).toBe(true);
+    const lost = nextBall(next, {});
+    expect([lost.striker, lost.nonStriker]).toEqual(["H-1", "H-2"]);
+  });
+
+  it("swap, then a late ack (the same fold again, a new object): the picks survive, and the next ball carries the reversed pair", () => {
+    const prev = before();
+    const acked = before();
+    expect(acked, "premise: a new object").not.toBe(prev);
+    expect(contextOverridesDropped(prev, acked, cricketPicksSurvive)).toBe(false);
+    const ball = nextBall(acked, SWAP);
+    expect([ball.striker, ball.nonStriker, ball.bowler]).toEqual(["H-2", "H-1", "A-11"]);
+  });
+
+  it("a ball still clears the picks: a dot, and an illegal delivery (a wide moves no legal ball)", () => {
+    // The fold's own pair, so neither ball moves the crease: each is caught by the delivery key alone.
+    const prev = before();
+    const pair = { striker: "H-1", nonStriker: "H-2", bowler: "A-11" };
+    const dot = fold((b) => [b("cricket.ball", pair)]);
+    const wide = fold((b) => [b("cricket.ball", { ...pair, extras: { kind: "wide", runs: 1 } })]);
+    const crease = (st: CricketState) => [currentInnings(st)?.fine?.striker, currentInnings(st)?.fine?.nonStriker];
+    expect(crease(dot), "premise: the dot left the crease as it was").toEqual(crease(prev));
+    expect(crease(wide), "premise: the wide left the crease as it was").toEqual(crease(prev));
+    expect(currentInnings(dot)?.runs, "premise: the dot scored nothing").toBe(currentInnings(prev)?.runs);
+    expect(currentInnings(wide)?.legalBalls, "premise: the wide moved no legal ball").toBe(currentInnings(prev)?.legalBalls);
+    expect(contextOverridesDropped(prev, dot, cricketPicksSurvive)).toBe(true);
+    expect(contextOverridesDropped(prev, wide, cricketPicksSurvive)).toBe(true);
+  });
+
+  it("a change of the crease drops the picks (a swap names the pair it was made for), and so does a new innings", () => {
+    const prev = state();
+    const moved = state({ innings: [innings({ fine: { striker: "h3", nonStriker: "h2", currentBowler: "a1" } })] });
+    expect(contextOverridesDropped(prev, moved, cricketPicksSurvive)).toBe(true);
+    const second = state({ innings: [innings({ closed: true }), innings({ battingSide: "away" })] });
+    expect(contextOverridesDropped(prev, second, cricketPicksSurvive)).toBe(true);
+    // The same fold is never a drop, hook or not (the chassis compares objects first).
+    expect(contextOverridesDropped(prev, prev, cricketPicksSurvive)).toBe(false);
+    expect(contextOverridesDropped(prev, prev, undefined)).toBe(false);
+  });
+
+  it("the skin hands the hook to the chassis", () => {
+    expect(cricketSkinV3(t).contextOverridesSurvive).toBe(cricketPicksSurvive);
   });
 });
