@@ -13,11 +13,13 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
-import { createStages, generateStageFixtures } from "@/server/usecases/stages";
+import { generateStageFixtures } from "@/server/usecases/stages";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { createStagesWithLegacy } from "@/server/usecases/__tests__/_legacy-standalone-stage";
+
 const HAS_DB = !!process.env.DATABASE_URL;
 
 async function seed(visibility: string, plan: AnyPlanKey) {
@@ -213,7 +215,7 @@ describe.skipIf(!HAS_DB)("embedDivisionData — a page playoff's fixtures carry 
       division.id,
       ["P1", "P2", "P3", "P4"].map((name, i) => ({ kind: "individual" as const, display_name: name, seed: i + 1, members: [] })),
     );
-    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "page_playoff", name: "Playoffs", config: {} });
+    const [stage] = await createStagesWithLegacy(auth, division.id, { seq: 1, kind: "page_playoff", name: "Playoffs", config: {} });
     await generateStageFixtures(auth, stage!.id);
     const stored = await sql<{ id: string; ext_key: string | null }[]>`
       select id, ext_key from fixtures where stage_id = ${stage!.id}`;

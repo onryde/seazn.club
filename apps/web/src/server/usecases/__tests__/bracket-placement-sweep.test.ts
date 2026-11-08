@@ -19,6 +19,11 @@
 // recorded case or a counted refusal, so a case cannot drop out silently. Each KNOWN refusal is tied to the cases it covers (label pattern
 // and exact count), so one new refusing size or template fails here instead of hiding behind a pattern that happens to match.
 //
+// W4 T16 (X-SP-6): the stage create refuses a standalone stepladder or page playoff since ruling 269, but such stages STAND (stg held 11)
+// and keep drawing a bracket, so the standalone sweep seeds those two kinds as the legacy row they now only can be
+// (`_legacy-standalone-stage.ts`, pre-flight C5) and goes on asking the real generator about every size. The refusal itself is proven in
+// standalone-stage-refusal.test.ts.
+//
 // Real Postgres required; skipped without DATABASE_URL (the house convention of the sibling usecase suites).
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -32,8 +37,9 @@ import { STAGE_TEMPLATES, buildTemplateStages, type StageDraft, type TemplateKno
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { completeStage, computeSeedProposal, confirmSeedProposal, createStages, generateStageFixtures } from "../stages";
+import { completeStage, computeSeedProposal, confirmSeedProposal, generateStageFixtures } from "../stages";
 import { startDivision } from "../schedule";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 import { scoreEvent } from "../scoring";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -123,7 +129,7 @@ const KNOWN_REFUSALS: Array<{ re: RegExp; expected: number; why: string }> = [
   {
     re: /^page_playoff n=\d+: generate page_playoff refused \(page playoffs need exactly 4 entrants, got \d+\)$/,
     expected: STANDALONE_SIZES.filter((n) => n !== 4).length,
-    why: "a standalone page playoff is the fixed four-team tree: every size but 4",
+    why: "a standalone page playoff (since X-SP-6 a legacy row only, seeded as one) is the fixed four-team tree: every size but 4",
   },
   {
     re: /^swiss_(playoff|knockout) n=2 q=\d+ pools=\d+ third=(true|false): generate swiss refused \(That is more rounds than this field can pair\.\)$/,
@@ -173,7 +179,7 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
     const { division, seedOf } = await seedDivision(auth, n);
     let stages;
     try {
-      stages = await createStages(auth, division.id, drafts.map((d, i) => ({ seq: i + 1, kind: d.kind, name: d.name, config: d.config, ...(d.progression ? { progression: d.progression } : {}) })) as never);
+      stages = await createStagesWithLegacy(auth, division.id, drafts.map((d, i) => ({ seq: i + 1, kind: d.kind, name: d.name, config: d.config, ...(d.progression ? { progression: d.progression } : {}) })) as never);
     } catch (e) {
       refused.push(`${label}: createStages refused (${(e as Error).message})`);
       return null;

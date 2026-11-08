@@ -2413,6 +2413,8 @@
   "knockout.refusal.KO_GENERATE_AFTER_START": "Het spel is begonnen, dus Genereren verandert het schema niet. Gebruik Late speler toevoegen.",
   "knockout.refusal.KO_REDRAW_WOULD_CLEAR_SETUP": "Het schema zou opnieuw geloot moeten worden, en dat wist wat al bij de wedstrijden is ingesteld (officials, teamopstellingen, scoreapparaten, streams, beschikbaarheid van spelers of baanoproepen). Gebruik Wedstrijden herbouwen — dat laat eerst zien wat het wist.",
   "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW": "Het schema moet worden bijgewerkt — druk eerst op Schema bijwerken.",
+  "knockout.refusal.STEPLADDER_NEEDS_TABLE_SOURCE": "Stepladder-finales hebben een stand nodig om uit te plaatsen. Voeg eerst een competitie of groepen toe.",
+  "knockout.refusal.PAGE_PLAYOFF_NEEDS_TABLE_SOURCE": "Play-offs (IPL-stijl) hebben een stand nodig om uit te plaatsen. Voeg eerst een competitie, groepen of een Zwitserse fase toe.",
   "stage.err.swissRoundsRequired": "Een Zwitserse fase heeft een aantal rondes nodig voordat die kan worden opgeslagen. Zet Rondes op 1 of meer en pas het opnieuw toe.",
   "swiss.refusal.SWISS_ADHOC_REFUSED": "Zwitserse rondes worden door het systeem gekoppeld. Voeg vriendschappelijke wedstrijden toe in een andere fase.",
   "swiss.refusal.SWISS_BYE_NOT_PLACEABLE": "Een bye wordt niet gespeeld, dus neemt geen veld of tijd in.",

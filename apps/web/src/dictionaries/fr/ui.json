@@ -2413,6 +2413,8 @@
   "knockout.refusal.KO_GENERATE_AFTER_START": "Le jeu a commencé : Générer ne modifiera pas le tableau. Utilisez Ajouter un joueur en retard.",
   "knockout.refusal.KO_REDRAW_WOULD_CLEAR_SETUP": "Le tableau devrait être tiré à nouveau, ce qui efface la configuration déjà en place sur ses matchs (officiels, feuilles d'équipe, appareils de score, diffusions, disponibilités des joueurs ou appels sur un terrain). Utilisez Reconstruire les matchs : il indique d'abord ce qu'il efface.",
   "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW": "Le tableau doit être mis à jour — appuyez d'abord sur Mettre à jour le tableau.",
+  "knockout.refusal.STEPLADDER_NEEDS_TABLE_SOURCE": "Les finales en escalier ont besoin d'un classement pour placer les participants. Ajoutez d'abord une ligue ou des groupes.",
+  "knockout.refusal.PAGE_PLAYOFF_NEEDS_TABLE_SOURCE": "Les playoffs (style IPL) ont besoin d'un classement pour placer les participants. Ajoutez d'abord une ligue, des groupes ou une phase en système suisse.",
   "stage.err.swissRoundsRequired": "Une phase suisse a besoin d'un nombre de tours avant de pouvoir être enregistrée. Mettez Tours à 1 ou plus, puis appliquez à nouveau.",
   "swiss.refusal.SWISS_ADHOC_REFUSED": "Les tours suisses sont appariés automatiquement. Ajoutez les matchs amicaux dans une autre phase.",
   "swiss.refusal.SWISS_BYE_NOT_PLACEABLE": "Une exemption ne se joue pas : elle n'occupe ni terrain ni horaire.",

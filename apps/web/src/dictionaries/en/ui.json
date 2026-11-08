@@ -2413,6 +2413,8 @@
   "knockout.refusal.KO_GENERATE_AFTER_START": "Play has started, so Generate won't change the bracket. Use Add late player.",
   "knockout.refusal.KO_REDRAW_WOULD_CLEAR_SETUP": "The bracket would have to be drawn again, which clears match setup already on its lines (officials, team sheets, scoring devices, streams, player availability or court calls). Use Rebuild fixtures — it lists what it clears first.",
   "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW": "The draw needs updating — press Update draw first.",
+  "knockout.refusal.STEPLADDER_NEEDS_TABLE_SOURCE": "A stepladder needs a table to seed from. Add a league or groups first.",
+  "knockout.refusal.PAGE_PLAYOFF_NEEDS_TABLE_SOURCE": "A page playoff needs a table to seed from. Add a league, groups or a Swiss stage first.",
   "stage.err.swissRoundsRequired": "A Swiss stage needs a number of rounds before it can be saved. Set Rounds to 1 or more and apply again.",
   "swiss.refusal.SWISS_ADHOC_REFUSED": "Swiss rounds are paired by the system. Add friendlies in another stage.",
   "swiss.refusal.SWISS_BYE_NOT_PLACEABLE": "A bye is not played, so it takes no court or time.",

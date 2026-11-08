@@ -9,7 +9,8 @@ import { requireFixtureActor } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { createStages, generateStageFixtures } from "../stages";
+import { generateStageFixtures } from "../stages";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { createDeviceLink } from "../device-links";
@@ -76,7 +77,8 @@ export async function seedStage(
       }),
     })),
   );
-  const [stage] = await createStages(auth, division.id, { seq: 1, kind, name: kind, config });
+  // W4 T16 (C5): a standalone page playoff is refused since X-SP-6; it is seeded as the legacy row it now only can be.
+  const [stage] = await createStagesWithLegacy(auth, division.id, { seq: 1, kind, name: kind, config });
   await generateStageFixtures(auth, stage!.id);
   await startDivision(auth, division.id);
   // Swiss (shell fixtures, 2026-09-18): the FIRST Generate only mints empty

@@ -62,6 +62,7 @@ import { resnapshotFixtureConfig } from "../admin-fixture-config";
 import { callFixtureToCourt, LIVE_CALL_ALIASES, liveCallSql, undoCall } from "../match-day-call";
 import { createCourt, createVenue } from "../venues";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -1207,7 +1208,7 @@ async function pagePlayoff() {
     division.id,
     ["A", "B", "C", "D"].map((name, i) => ({ kind: "individual" as const, display_name: name, seed: i + 1, members: [] })),
   );
-  const [stage] = await createStages(auth, division.id, [{ seq: 1, kind: "page_playoff", name: "Playoffs", config: {} }]);
+  const [stage] = await createStagesWithLegacy(auth, division.id, [{ seq: 1, kind: "page_playoff", name: "Playoffs", config: {} }]);
   await generateStageFixtures(auth, stage!.id);
   await sql`update divisions set status = 'active' where id = ${division.id}`;
   const byKey = async (key: string) => {

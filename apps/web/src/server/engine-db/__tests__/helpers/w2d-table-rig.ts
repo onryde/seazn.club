@@ -10,9 +10,9 @@ import type { CreateStages } from "@/server/api-v1/schemas";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
-import { createStages } from "@/server/usecases/stages";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { post } from "./w2b-rig";
+import { createStagesWithLegacy } from "@/server/usecases/__tests__/_legacy-standalone-stage";
 
 export interface TableScene {
   auth: AuthCtx;
@@ -46,7 +46,7 @@ export async function tableScene(opts: {
     division.id,
     Array.from({ length: opts.entrants ?? 4 }, (_, i) => ({ kind, display_name: `E${i + 1}`, seed: i + 1, members: [] })),
   );
-  const stages = await createStages(auth, division.id, opts.stages ?? { seq: 1, kind: "league", name: "League", config: {} });
+  const stages = await createStagesWithLegacy(auth, division.id, opts.stages ?? { seq: 1, kind: "league", name: "League", config: {} });
   return {
     auth,
     divisionId: division.id,

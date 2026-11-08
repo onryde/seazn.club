@@ -43,6 +43,7 @@ import { formatLockedStageIds } from "../stage-rules";
 import { makeUser } from "./_seed";
 import { RULEBOOK_SPLITS } from "@/components/v2/stage-rules/__tests__/_points-split-rulebook";
 import { movingFragment } from "./_stage-probe";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -113,7 +114,7 @@ async function seedDivision(
 async function seedStage(auth: AuthCtx, divisionId: string, seq: number, kind: StageKind = "league", config: Record<string, unknown> = {}): Promise<string> {
   // A swiss stage must declare its round count (assertSwissRoundsDeclared).
   const own = kind === "swiss" ? { rounds: 2, ...config } : config;
-  const [stage] = await createStages(auth, divisionId, { seq, kind, name: "S" + seq, config: own, progression: null });
+  const [stage] = await createStagesWithLegacy(auth, divisionId, { seq, kind, name: "S" + seq, config: own, progression: null });
   return stage!.id;
 }
 

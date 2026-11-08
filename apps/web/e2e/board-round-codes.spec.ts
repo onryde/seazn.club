@@ -10,6 +10,7 @@ import {
   expectNoHorizontalScroll,
   seedVenueWithCourts,
 } from "./helpers";
+import { insertLegacyStandaloneStage } from "./legacy-standalone-stage";
 
 // Schedule-board knockout round codes (2026-09-23): a knockout card's chip
 // reads its round ROLE ("QF", "SF", "F", "3rd") instead of the generic
@@ -72,7 +73,14 @@ async function addDivision(
   const divisionId = div.data!.id;
   const added = await addEntrantsViaApi(request, divisionId, names);
   expect(added.ids.length).toBe(names.length);
-  await createStageAndGenerate(request, divisionId, stage);
+  if (stage.kind === "page_playoff" || stage.kind === "stepladder") {
+    // W4 T16 (C5): the API refuses a standalone one since X-SP-6; the board still draws the legacy rows that stand.
+    const stageId = await insertLegacyStandaloneStage(divisionId, { seq: 1, ...stage });
+    const gen = await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST");
+    expect(gen.status, `generate ${stage.kind}`).toBeLessThan(300);
+  } else {
+    await createStageAndGenerate(request, divisionId, stage);
+  }
   const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
     tz: "UTC",
     config: {

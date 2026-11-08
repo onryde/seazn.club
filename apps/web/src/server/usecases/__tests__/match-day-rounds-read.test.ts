@@ -24,6 +24,7 @@ import { putScheduleSettings } from "../schedule";
 import { createStages, generateStageFixtures, listStages } from "../stages";
 import { GENERIC_CONFIG } from "./_seed";
 import { between, place, seedDay, setStatus, type Day } from "./_match-day-seed";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -103,7 +104,7 @@ async function seedStageDivision(day: Day, o: { slug: string; kind: "swiss" | "p
       sessionWindows: [],
     },
   });
-  const [stage] = await createStages(day.auth, division.id, { seq: 1, kind: o.kind, name: o.slug, config: o.config, progression: null });
+  const [stage] = await createStagesWithLegacy(day.auth, division.id, { seq: 1, kind: o.kind, name: o.slug, config: o.config, progression: null });
   await generateStageFixtures(day.auth, stage!.id);
   if (o.kind === "swiss") await generateStageFixtures(day.auth, stage!.id);
   const rows = await sql<{ id: string; round_no: number; seq_in_round: number; ext_key: string | null; is_final: boolean; home_entrant_id: string | null; away_entrant_id: string | null }[]>`

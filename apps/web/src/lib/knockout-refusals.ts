@@ -29,7 +29,12 @@ export type KnockoutRefusalCode =
   | "KO_REDRAW_WOULD_CLEAR_SETUP"
   // B2 fix round 2 (item 2): Start reconciles a root knockout in place only; a change that needs the bracket drawn again is
   // Update draw's (its notice says what moved), so Start refuses it by name and names the button.
-  | "KO_START_NEEDS_UPDATE_DRAW";
+  | "KO_START_NEEDS_UPDATE_DRAW"
+  // T16 (SP-UI; RB4-S6 / X-SP-6, ruling 269): a stepladder or a page playoff with no progression has no table to seed
+  // from, so the stage writers refuse it (`lib/stage-standalone.ts` names the kind -> code). One code per kind (pre-flight
+  // D13): each locale names the format in its own words, never a raw kind token.
+  | "STEPLADDER_NEEDS_TABLE_SOURCE"
+  | "PAGE_PLAYOFF_NEEDS_TABLE_SOURCE";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -78,6 +83,16 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 409,
     en: "The draw needs updating — press Update draw first.",
     key: "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW",
+  },
+  STEPLADDER_NEEDS_TABLE_SOURCE: {
+    status: 422,
+    en: "A stepladder needs a table to seed from. Add a league or groups first.",
+    key: "knockout.refusal.STEPLADDER_NEEDS_TABLE_SOURCE",
+  },
+  PAGE_PLAYOFF_NEEDS_TABLE_SOURCE: {
+    status: 422,
+    en: "A page playoff needs a table to seed from. Add a league, groups or a Swiss stage first.",
+    key: "knockout.refusal.PAGE_PLAYOFF_NEEDS_TABLE_SOURCE",
   },
 };
 

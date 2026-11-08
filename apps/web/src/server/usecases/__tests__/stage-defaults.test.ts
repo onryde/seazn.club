@@ -28,6 +28,7 @@ import { validatedStageConfig } from "../stage-defaults";
 import { putStageRules } from "../stage-rules";
 import { decidersOffRules } from "../../../../e2e/stage-deciders";
 import { CHESS_INDIVIDUAL_ONLY, sportRefusesStageKind } from "@/lib/chess-individual-only";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -148,7 +149,7 @@ describe.skipIf(!HAS_DB)("X-SR-6 P7 a new stage stores its sport's preset", () =
             continue;
           }
           // One stage at a time (the stages-per-division cap), each removed once read: every kind meets a clean division.
-          const [st] = await createStages(auth, divisionId, { seq: 1, kind, name: kind, config: configFor(kind), progression: null });
+          const [st] = await createStagesWithLegacy(auth, divisionId, { seq: 1, kind, name: kind, config: configFor(kind), progression: null });
           const expected = stageDefaultsFor(m, kind, variant);
           const cfg = await stageConfig(st!.id);
           if (DRAW_KINDS.has(kind)) {

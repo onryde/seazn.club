@@ -29,6 +29,9 @@ const PLAN_CODES = [
   "KO_REDRAW_WOULD_CLEAR_SETUP",
   // B2 fix round 2 (item 2): Start reconciles in place only; a redraw is Update draw's, refused at Start by name.
   "KO_START_NEEDS_UPDATE_DRAW",
+  // T16 (SP-UI, X-SP-6, ruling 269): a stepladder or page playoff with no table to seed from — one code per kind (D13).
+  "STEPLADDER_NEEDS_TABLE_SOURCE",
+  "PAGE_PLAYOFF_NEEDS_TABLE_SOURCE",
 ] as const;
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
@@ -96,6 +99,36 @@ describe("KNOCKOUT_REFUSALS (W4 app-A)", () => {
       en: "This bracket still has matches without a result. Finish or settle them first.",
       key: "knockout.refusal.STAGE_HAS_UNDECIDED_FIXTURES",
     });
+  });
+
+  it("X-SP-6 the standalone refusals: 422 (re-sending the same stage changes nothing), the rulebook's sentence per kind, and each locale names the format by its own title (D13: no raw kind token)", () => {
+    // RB4-S6: "needs a table to seed from; add a league or groups first". The page playoff's names Swiss too (RB4-S7:
+    // league or Swiss then page playoff).
+    expect(KNOCKOUT_REFUSALS.STEPLADDER_NEEDS_TABLE_SOURCE).toEqual({
+      status: 422,
+      en: "A stepladder needs a table to seed from. Add a league or groups first.",
+      key: "knockout.refusal.STEPLADDER_NEEDS_TABLE_SOURCE",
+    });
+    expect(KNOCKOUT_REFUSALS.PAGE_PLAYOFF_NEEDS_TABLE_SOURCE).toEqual({
+      status: 422,
+      en: "A page playoff needs a table to seed from. Add a league, groups or a Swiss stage first.",
+      key: "knockout.refusal.PAGE_PLAYOFF_NEEDS_TABLE_SOURCE",
+    });
+    // Each translation names the format the way that locale's format gallery titles it (`format.<kind>.title`, the
+    // product's own copy, not a list typed here), and never carries the wire's kind token.
+    let checked = 0;
+    for (const [code, kind] of [["STEPLADDER_NEEDS_TABLE_SOURCE", "stepladder"], ["PAGE_PLAYOFF_NEEDS_TABLE_SOURCE", "page_playoff"]] as const) {
+      for (const [locale, dict] of Object.entries(LOCALES)) {
+        if (locale === "en") continue;
+        const text = dict[KNOCKOUT_REFUSALS[code].key]!.toLowerCase();
+        const title = dict[`format.${kind}.title`]!;
+        expect(typeof title === "string" && title !== "", `${locale}: format.${kind}.title`).toBe(true);
+        expect(text, `${code} ${locale}: names the format by its title "${title}"`).toContain(title.toLowerCase());
+        expect(text, `${code} ${locale}: no raw kind token`).not.toContain(kind === "page_playoff" ? "page_playoff" : "stepladder_");
+        checked++;
+      }
+    }
+    expect(checked, "(code, translated locale) pairs checked").toBe(6);
   });
 
   it("knockoutRefusal builds the HttpError from the row: status, code, English and details", () => {
