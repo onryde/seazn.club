@@ -3574,6 +3574,10 @@ async function readStageFixtureRows(tx: Tx, stageId: string): Promise<FixtureRow
  * bracket crossed a power of two it asks for a regenerate, which is Rebuild's own body (`regenerateStageInTx`): one
  * delete and one fresh draw in this transaction, slots carried by role. `entrants` is the field in draw order.
  */
+/** The labels a root knockout's own lines carry: the bye (`lib/bye-line.ts`) and the feeder (`fed-seats.ts`). Any other key is a
+ *  progression's, for a seat a proposal's confirm fills. */
+const ROOT_BRACKET_LABEL_KEYS: readonly string[] = [BYE_SLOT_LABEL.key, "slot.winner_match", "slot.loser_match"];
+
 async function reconcileKnockoutGenerate(
   tx: Tx,
   auth: AuthCtx,
@@ -3775,6 +3779,18 @@ export async function generateStageFixturesTx(
   // by `ext_key` (6 → 7 inserted nothing and said "up to date"; 8 → 9 seated the field twice beside a second final; a
   // line that became a bye 500'd on the bye-award bulk update below). Fed stages (`config.qualified`) keep their path.
   if (stage.kind === "knockout" && qualified === null && stage.progression === null && existing.length > 0) {
+    // A reconcile never asks a seat what it is waiting for, so a progression's label on a stage that no longer has a
+    // progression would sit beside an empty seat for good. A root bracket's own are the bye's and the feeder's; anything else
+    // is refused before a write, as the bulk updates below refuse theirs.
+    const stranded = await tx<{ id: string }[]>`
+      select id from fixtures
+      where stage_id = ${stage.id}
+        and (home_slot_label ->> 'key' not in ${tx(ROOT_BRACKET_LABEL_KEYS)} or away_slot_label ->> 'key' not in ${tx(ROOT_BRACKET_LABEL_KEYS)})`;
+    if (stranded.length > 0) {
+      throw new Error(
+        `generateStageFixtures: a reconciled Generate would strand a home_slot_label or away_slot_label on fixture(s) ${stranded.map((f) => f.id).join(",")}: a root bracket's lines carry only a bye's or a feeder's label`,
+      );
+    }
     return reconcileKnockoutGenerate(tx, auth, stage, entrants, poolIds, opts.inPlaceOnly === true, opts.sealedSetup);
   }
 
