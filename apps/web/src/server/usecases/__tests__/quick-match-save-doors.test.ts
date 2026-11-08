@@ -156,6 +156,25 @@ function scan(path: string, text: string): Scanned {
   return out;
 }
 
+/** What is wrong with one door: every `createSession` owes an awaited save for the same argument AFTER it (a door with
+ *  two branches that each sign someone in owes two), and every save follows a `createSession` for its own argument. */
+function doorFaults(d: Scanned): string[] {
+  if (d.saves.length === 0) return [`${d.file}: starts a session and never calls ${SAVE_FN}`];
+  const faults: string[] = [];
+  for (const s of d.saves) {
+    if (!s.awaited) faults.push(`${d.file}: ${SAVE_FN}(${s.arg}) is not awaited`);
+    if (!d.mints.some((m) => m.at < s.at && m.arg === s.arg)) {
+      faults.push(`${d.file}: ${SAVE_FN}(${s.arg}) follows no createSession(${s.arg})`);
+    }
+  }
+  for (const m of d.mints) {
+    if (!d.saves.some((s) => s.at > m.at && s.awaited && s.arg === m.arg)) {
+      faults.push(`${d.file}: createSession(${m.arg}) at offset ${m.at} has no awaited ${SAVE_FN}(${m.arg}) after it`);
+    }
+  }
+  return faults;
+}
+
 /** Every source file that names `createSession` at all, scanned. The text filter only narrows what is parsed: a file
  *  that imports or calls it must spell it. */
 const scanned: Scanned[] = walk(SRC, [])
@@ -176,22 +195,14 @@ describe("every sign-in door saves the quick matches typed with the account's ad
     expect(doors.map((d) => d.file)).toEqual(expect.arrayContaining(NAMED_DOORS));
   });
 
-  it("each door awaits the save, for the same user, after createSession", () => {
-    const faults: string[] = [];
-    for (const d of doors) {
-      if (d.saves.length === 0) {
-        faults.push(`${d.file}: starts a session and never calls ${SAVE_FN}`);
-        continue;
-      }
-      const mint = d.mints[0];
-      for (const s of d.saves) {
-        if (!s.awaited) faults.push(`${d.file}: ${SAVE_FN} is not awaited`);
-        if (mint && s.at < mint.at) faults.push(`${d.file}: ${SAVE_FN} runs BEFORE createSession`);
-        if (mint && s.arg !== mint.arg) faults.push(`${d.file}: saves for ${s.arg} but signs in ${mint.arg}`);
-      }
-    }
+  it("each door pairs EVERY createSession with a later awaited save for the same user", () => {
+    const faults = doors.flatMap(doorFaults);
     expect(faults).toEqual([]);
     expect(doors.length, "anti-vacuity: the loop judged doors").toBeGreaterThan(0);
+    expect(
+      doors.reduce((n, d) => n + d.mints.length, 0),
+      "anti-vacuity: the pairing judged mints",
+    ).toBeGreaterThanOrEqual(NAMED_DOORS.length);
   });
 
   it("no dynamic import of @/lib/auth hides a createSession from the scan", () => {
@@ -219,5 +230,66 @@ describe("every sign-in door saves the quick matches typed with the account's ad
     expect(seen).toHaveLength(2);
     // The impersonation page is a real door in every other respect: it signs the target in through @/lib/auth.
     expect(scanned.find((x) => x.file === "app/admin/impersonate/page.tsx")!.mints.length).toBeGreaterThan(0);
+  });
+});
+
+describe("the pairing judges every createSession, not the first (fixture doors through the same scan)", () => {
+  const HEAD = [
+    `import { createSession } from "@/lib/auth";`,
+    `import { ${SAVE_FN} } from "${SAVE_MODULE}";`,
+  ].join("\n");
+  const fixture = (body: string) => scan(join(SRC, "app/api/__fixture__/route.ts"), `${HEAD}\n${body}\n`);
+
+  it("two createSessions and one save: the second branch is a fault", () => {
+    const d = fixture(`export async function GET(byGoogle: boolean, a: { id: string }, b: { id: string }) {
+  if (byGoogle) {
+    await createSession(a.id);
+    await ${SAVE_FN}(a.id);
+    return;
+  }
+  await createSession(b.id);
+}`);
+    expect([d.mints.length, d.saves.length], "premise: the scan reads two mints and one save").toEqual([2, 1]);
+    expect(doorFaults(d)).toEqual([
+      expect.stringMatching(/createSession\(b\.id\) at offset \d+ has no awaited .* after it$/),
+    ]);
+  });
+
+  it("the same two branches, each with its save, are clean (the positive pair)", () => {
+    const d = fixture(`export async function GET(byGoogle: boolean, a: { id: string }, b: { id: string }) {
+  if (byGoogle) {
+    await createSession(a.id);
+    await ${SAVE_FN}(a.id);
+    return;
+  }
+  await createSession(b.id);
+  await ${SAVE_FN}(b.id);
+}`);
+    expect([d.mints.length, d.saves.length]).toEqual([2, 2]);
+    expect(doorFaults(d)).toEqual([]);
+  });
+
+  it("a save before its createSession, or un-awaited, or for someone else, is a fault", () => {
+    const before = fixture(`export async function GET(a: { id: string }) {
+  await ${SAVE_FN}(a.id);
+  await createSession(a.id);
+}`);
+    expect(doorFaults(before).length).toBe(2);
+    const floating = fixture(`export async function GET(a: { id: string }) {
+  await createSession(a.id);
+  void ${SAVE_FN}(a.id);
+}`);
+    expect(doorFaults(floating)).toEqual([
+      expect.stringMatching(/is not awaited$/),
+      expect.stringMatching(/has no awaited .* after it$/),
+    ]);
+    const other = fixture(`export async function GET(a: { id: string }, b: { id: string }) {
+  await createSession(a.id);
+  await ${SAVE_FN}(b.id);
+}`);
+    expect(doorFaults(other)).toEqual([
+      expect.stringMatching(/\(b\.id\) follows no createSession\(b\.id\)$/),
+      expect.stringMatching(/createSession\(a\.id\) .* has no awaited/),
+    ]);
   });
 });

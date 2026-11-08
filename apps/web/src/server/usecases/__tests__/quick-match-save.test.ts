@@ -29,6 +29,9 @@ vi.mock("@/lib/posthog-server", async (orig) => ({
   ...(await orig<typeof import("@/lib/posthog-server")>()),
   captureServer: ph.capture,
 }));
+// The after-response window: every `deferred(fn)` is captured, not run, until the test runs it (`savedEvents`).
+const after = vi.hoisted(() => ({ tasks: [] as Array<() => unknown> }));
+vi.mock("@/lib/deferred", () => ({ deferred: (fn: () => unknown) => void after.tasks.push(fn) }));
 const logs = vi.hoisted(() => ({ error: vi.fn() }));
 vi.mock("@/server/logger", () => ({
   log: { error: logs.error, warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
@@ -93,13 +96,20 @@ const someone = () => account(addressFor("someone"));
 /** The clock's state: past its expiry, not yet reached by the sweep (D13). */
 const expire = (id: string) => sql`update quick_matches set expires_at = now() - interval '1 minute' where id = ${id}`;
 
-const savedEvents = () =>
+/** The `quick_match_saved` events sent so far, the after-response window not run. */
+const sentSoFar = () =>
   ph.capture.mock.calls
     .map((c) => c[0] as { event: string; properties?: { quick_match_id?: string } })
     .filter((e) => e.event === SAVED_EVENT);
+/** The `quick_match_saved` events sent once the after-response window has run. */
+const savedEvents = async () => {
+  for (const task of after.tasks.splice(0)) await task();
+  return sentSoFar();
+};
 
 beforeEach(() => {
   ph.capture.mockClear();
+  after.tasks = [];
   logs.error.mockClear();
   cancel.calls = [];
   cancel.fail = false;
@@ -160,7 +170,7 @@ describe.skipIf(!HAS_DB)(
       });
       expect((await saveStateOf(elsewhere.id)).saved_by_user_id).toBeNull();
       expect(logs.error).not.toHaveBeenCalled();
-      expect(savedEvents()).toEqual([]);
+      expect(await savedEvents()).toEqual([]);
     });
 
     it("B19: an UNVERIFIED account saves nothing; the same account, once verified, saves it", async () => {
@@ -234,13 +244,14 @@ describe.skipIf(!HAS_DB)(
         savedByEmail: 1,
       });
       const first = await saveStateOf(typed.id);
+      expect(await savedEvents(), "the first sign-in's one event").toHaveLength(1);
       ph.capture.mockClear();
 
       expect(await saveQuickMatchesForVerifiedUser(user)).toEqual({
         savedByEmail: 0,
       });
       expect(await saveStateOf(typed.id)).toEqual(first);
-      expect(savedEvents(), "no second event").toEqual([]);
+      expect(await savedEvents(), "no second event").toEqual([]);
     });
 
     it("a failing save never throws past the sign-in: logged, answered 0, nothing half-saved; the next sign-in saves it", async () => {
@@ -254,7 +265,7 @@ describe.skipIf(!HAS_DB)(
       });
       expect(logs.error).toHaveBeenCalledTimes(1);
       expect((await saveStateOf(typed.id)).saved_by_user_id, "the save and its cancel are one transaction").toBeNull();
-      expect(savedEvents()).toEqual([]);
+      expect(await savedEvents()).toEqual([]);
 
       cancel.fail = false;
       expect(await saveQuickMatchesForVerifiedUser(user)).toEqual({
@@ -389,9 +400,12 @@ describe.skipIf(!HAS_DB)(
       const a = await createTypedMatch(email);
       const b = await createTypedMatch(email);
       const user = await account(email);
+      expect(await savedEvents(), "premise: the creates' own tail work ran, no save event in it").toEqual([]);
       await saveQuickMatchesForVerifiedUser(user);
+      expect(sentSoFar(), "the sign-in returns before any event is sent").toEqual([]);
+      expect(after.tasks, "one deferral carries both events").toHaveLength(1);
 
-      const byEmail = savedEvents();
+      const byEmail = await savedEvents();
       expect(byEmail.map((e) => e.properties?.quick_match_id).sort()).toEqual([a.id, b.id].sort());
       for (const e of byEmail) {
         expect(e).toEqual({
@@ -404,8 +418,10 @@ describe.skipIf(!HAS_DB)(
 
       ph.capture.mockClear();
       const pressed = await createTypedMatch(null);
+      expect(await savedEvents(), "premise: the create's own tail work ran").toEqual([]);
       expect(await saveQuickMatchForUser(user, pressed.id)).toBe("saved");
-      expect(savedEvents()).toEqual([
+      expect([sentSoFar(), after.tasks.length], "the button answers before its event is sent").toEqual([[], 1]);
+      expect(await savedEvents()).toEqual([
         {
           event: SAVED_EVENT,
           distinctId: user,
@@ -416,7 +432,7 @@ describe.skipIf(!HAS_DB)(
 
       ph.capture.mockClear();
       expect(await saveQuickMatchForUser(await someone(), pressed.id)).toBe("taken");
-      expect(savedEvents()).toEqual([]);
+      expect(await savedEvents()).toEqual([]);
     });
   },
 );

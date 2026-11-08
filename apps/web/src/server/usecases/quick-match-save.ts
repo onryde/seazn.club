@@ -16,6 +16,7 @@ import "server-only";
 //
 // And letting go (D8): `releaseQuickMatchesOfDeletedAccount`, inside the account deletion's own transaction.
 import { withTenant, type Tx } from "@/lib/db";
+import { deferred } from "@/lib/deferred";
 import { EVENTS } from "@/lib/analytics-events";
 import { captureServer } from "@/lib/posthog-server";
 import { QUICK_MATCH_EXPIRY_DAYS, QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
@@ -64,16 +65,20 @@ async function saveInTx(tx: Tx, userId: string, which: Which): Promise<string[]>
 }
 
 /** One `quick_match_saved` per saved match, after the commit (D10): the system org's own event, as the create's is.
- *  The match's id and the way in only: never its name, its address or its token. */
-async function announce(userId: string, ids: readonly string[], via: "button" | "email"): Promise<void> {
-  for (const id of ids) {
-    await captureServer({
-      event: EVENTS.QUICK_MATCH_SAVED,
-      distinctId: userId,
-      orgId: QUICK_MATCH_SYSTEM_ORG_ID,
-      properties: { quick_match_id: id, via },
-    });
-  }
+ *  The match's id and the way in only: never its name, its address or its token. Tail work: one deferral for them all,
+ *  so a sign-in never waits on a PostHog flush. */
+function announce(userId: string, ids: readonly string[], via: "button" | "email"): void {
+  if (ids.length === 0) return;
+  deferred(async () => {
+    for (const id of ids) {
+      await captureServer({
+        event: EVENTS.QUICK_MATCH_SAVED,
+        distinctId: userId,
+        orgId: QUICK_MATCH_SYSTEM_ORG_ID,
+        properties: { quick_match_id: id, via },
+      });
+    }
+  });
 }
 
 /**
@@ -88,7 +93,7 @@ export async function saveQuickMatchesForVerifiedUser(userId: string): Promise<{
         select email from users where id = ${userId} and email_verified and deleted_at is null`;
       return account ? saveInTx(tx, userId, { email: account.email }) : [];
     });
-    await announce(userId, ids, "email");
+    announce(userId, ids, "email");
     return { savedByEmail: ids.length };
   } catch (err) {
     log.error({ err, userId }, "quick match: the save on sign-in failed; the sign-in goes on");
@@ -108,19 +113,22 @@ export async function saveQuickMatchForUser(userId: string, quickMatchId: string
     // Unsaved and locked: the save's own expiry predicate is the one alive check, so an expired row saves nothing.
     return (await saveInTx(tx, userId, { ids: [quickMatchId] })).length === 1 ? "saved" : "gone";
   });
-  if (answer === "saved") await announce(userId, [quickMatchId], "button");
+  if (answer === "saved") announce(userId, [quickMatchId], "button");
   return answer;
 }
 
 /**
  * A deleted account lets go of its quick matches (D8), on the deletion's own transaction (the pooled client, before the
  * account's address is anonymised): the matches it saved expire again `QUICK_MATCH_EXPIRY_DAYS` after their last
- * activity, so friends with the link keep scoring until then, and its address leaves every match it was typed on.
+ * activity, so friends with the link keep scoring until then, and the reminder is owed again (the save had marked it
+ * sent); its address leaves every match it was typed on.
  */
 export async function releaseQuickMatchesOfDeletedAccount(tx: Tx, a: { userId: string; email: string }): Promise<void> {
   await tx`
     update quick_matches
-       set saved_by_user_id = null, expires_at = last_activity_at + make_interval(days => ${QUICK_MATCH_EXPIRY_DAYS})
+       set saved_by_user_id = null,
+           expires_at = last_activity_at + make_interval(days => ${QUICK_MATCH_EXPIRY_DAYS}),
+           reminder_sent_at = null
      where saved_by_user_id = ${a.userId} and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
   await tx`
     update quick_matches set email = null

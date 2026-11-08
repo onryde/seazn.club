@@ -109,6 +109,7 @@ describe.skipIf(!HAS_DB)("DELETE /api/users/me lets go of the account's quick ma
     const othersMatch = await createTypedMatch(addressFor("others-address"));
     expect(await saveQuickMatchForUser(other, othersMatch.id)).toBe("saved");
     const othersBefore = await saveStateOf(othersMatch.id);
+    expect((await saveStateOf(kept.id)).reminder_sent_at, "premise: the save marked its reminder sent").not.toBeNull();
 
     expect(await deleteAccount(leaver)).toBe(200);
 
@@ -117,12 +118,14 @@ describe.skipIf(!HAS_DB)("DELETE /api/users/me lets go of the account's quick ma
     expect(k.expires_at?.getTime(), "7 days after its last activity (C1)").toBe(
       k.last_activity_at.getTime() + SPEC_EXPIRY_DAYS * DAY_MS,
     );
+    expect(k.reminder_sent_at, "released, it can get its reminder again").toBeNull();
     expect(await resolveQuickMatchToken(kept.token), "friends with the link can still open it").not.toBeNull();
 
     const t = await saveStateOf(typedOnly.id);
     expect([t.email, t.saved_by_user_id], "the address is gone; nothing else changed").toEqual([null, null]);
     const s = await saveStateOf(typedSavedByStranger.id);
     expect([s.email, s.saved_by_user_id], "the address is gone, the stranger keeps it").toEqual([null, stranger]);
+    expect(s.reminder_sent_at, "the stranger's save still holds its reminder off").not.toBeNull();
     expect(await saveStateOf(othersMatch.id), "another account's match is untouched").toEqual(othersBefore);
 
     // In sequence: the released match is anybody's to save again.
