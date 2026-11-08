@@ -12,6 +12,9 @@ import { type Session, check, tag, ledger, v1, v1data } from "../harness.ts";
  *   3. the engine's own phase guard (a second toss after `core.start`) is WRONG_PHASE with NO reason: the reason is the
  *      division gate's alone, never forwarded for another refusal.
  */
+/** A write refusal as this suite reads it: the code, and the gate's reason when it gives one. */
+type RefusalBody = { code?: string; reason?: unknown };
+
 export async function cricketTossDraftDivisionSuite(admin: Session, proOrgId: string): Promise<void> {
   admin.cookies["seazn_org"] = proOrgId;
   const comp = v1data<{ id: string }>(
@@ -34,13 +37,14 @@ export async function cricketTossDraftDivisionSuite(admin: Session, proOrgId: st
     await v1(admin, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" }),
   );
   const gen = v1data<{ fixtures: { id: string }[] }>(await v1(admin, `/api/v1/stages/${stage.id}/generate`, "POST"));
-  const fixtureId = gen.fixtures[0]!.id;
-  const toss = { wonBy: ents[0]!.id, elected: "bat" };
+  const fixtureId = gen.fixtures[0].id;
+  const toss = { wonBy: ents[0].id, elected: "bat" };
 
   // 1. Draft: refused, and it says why.
   const draft = ledger(admin, fixtureId);
   const refused = await draft.send("cricket.toss", toss);
-  const refusal = refused.json.error as { code?: string; reason?: unknown } | undefined;
+  // The refusal's `reason` (S2-4 Task 2) is not on the smoke client's error type; annotated, not asserted (lint:scripts).
+  const refusal: RefusalBody | undefined = refused.json.error;
   check(
     `cricket draft toss: refused 422 WRONG_PHASE with reason division_not_started (got ${refused.status} ${JSON.stringify(refusal)})`,
     refused.status === 422 && refusal?.code === "WRONG_PHASE" && refusal.reason === "division_not_started",
@@ -58,7 +62,7 @@ export async function cricketTossDraftDivisionSuite(admin: Session, proOrgId: st
   const kickoff = await draft.send("core.start", {});
   check(`cricket draft toss: core.start accepted (${kickoff.status})`, kickoff.status === 201);
   const late = await draft.send("cricket.toss", toss);
-  const lateError = late.json.error as { code?: string; reason?: unknown } | undefined;
+  const lateError: RefusalBody | undefined = late.json.error;
   check(
     `cricket draft toss: a toss after the start is the engine's WRONG_PHASE, with no reason (got ${late.status} ${JSON.stringify(lateError)})`,
     late.status === 422 && lateError?.code === "WRONG_PHASE" && lateError.reason === undefined,
