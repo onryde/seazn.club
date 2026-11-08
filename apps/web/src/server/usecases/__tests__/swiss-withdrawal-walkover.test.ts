@@ -172,6 +172,7 @@ describe.runIf(HAS_DB)("swiss withdrawal — never expunge, walk the paired boar
       skipped_finalized: 0,
       walked_over_held: 0,
       left_to_organiser: [],
+      lucky_loser: null,
     });
 
     const after = await fixturesOf(rig.stageId);

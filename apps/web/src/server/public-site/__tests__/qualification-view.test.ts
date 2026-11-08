@@ -799,38 +799,48 @@ describe("statuses equal the engine's on the derived input", () => {
     expect(d.status).toBe("needs_help");
     expect(d.ifYouLose).toBe("If you lose your next match, you're out.");
   });
-  it("M7: a withdrawn row gets no status, and its points AND its unplayed fixture decide a rival's verdict", () => {
-    // rr4 after two rounds, cut 1: A (6, withdrawn, award mode) and B (6) meet
-    // in round 3, still scheduled — a status-only departure moves no fixture.
-    // A is not frozen (final review I1): that fixture can still pay A, up to a
-    // win, so A's best is 9 and B's one win only draws level: Needs help.
+  it("M7 (W4 RB4-V6, X-LL-5): a withdrawn row gets no status and, in a league or a group, is no rival for the cut — the race is run over the entrants still in the field", () => {
+    // rr4 after two rounds, cut 1: A (6, withdrawn) and B (6) meet in round 3, still scheduled. Until W4 a league kept a
+    // departed qualifier's place (M3), so A stayed a rival whose unplayed fixture could still pay her (final review I1)
+    // and B only needed help. RB4-V6 (as W3 ruled for Swiss): a departed entrant LEAVES a league's or a group's cut and the
+    // next eligible entrant backfills (usecases/stage-seeding.ts `cutEligiblePools`), so the public line is the same race
+    // over B, C and D — the engine's own verdict over those three is the expected value.
     const s = rr4(2);
-    const v = must(view({ ...s, statuses: { A: "withdrawn" } }));
-    expect(v.rows.A).toBeUndefined();
-    expect(v.rows.B!.status).toBe("needs_help");
-    // The engine on the same table: A's one unplayed fixture is what moves B —
-    // the old frozen reading (A: nothing left) said Win and in.
-    const bWith = (aLeft: number) =>
-      qualificationStatus({
-        rows: s.rows.map((r) => ({ entrantId: r.entrantId, points: r.points, active: r.entrantId !== "A" })),
-        remaining: new Map([["A", aLeft], ["B", 1], ["C", 1], ["D", 1]]),
-        perMatch: BOUNDS,
-        cut: 1,
-        anyPlayed: true,
-        complete: false,
-      })!.get("B")!.status.kind;
-    expect(bWith(1)).toBe("needs_help");
-    expect(bWith(0)).toBe("win_k");
-    // …whereas the same table without A puts B through — so A is what decides.
-    const withoutA = qualificationStatus({
+    const field = ["B", "C", "D"];
+    const race = qualificationStatus({
       rows: s.rows.filter((r) => r.entrantId !== "A").map((r) => ({ entrantId: r.entrantId, points: r.points, active: true })),
-      remaining: new Map([["B", 1], ["C", 1], ["D", 1]]),
+      remaining: new Map(field.map((id) => [id, 1])),
       perMatch: BOUNDS,
       cut: 1,
       anyPlayed: true,
       complete: false,
     })!;
-    expect(withoutA.get("B")!.status.kind).toBe("through");
+    // The differential: the old reading (A a rival with one fixture left) said Needs help for B; the field says Through.
+    const withA = qualificationStatus({
+      rows: s.rows.map((r) => ({ entrantId: r.entrantId, points: r.points, active: r.entrantId !== "A" })),
+      remaining: new Map([["A", 1], ["B", 1], ["C", 1], ["D", 1]]),
+      perMatch: BOUNDS,
+      cut: 1,
+      anyPlayed: true,
+      complete: false,
+    })!;
+    expect(withA.get("B")!.status.kind, "premise: with A a rival, B needs help").toBe("needs_help");
+    expect(race.get("B")!.status.kind, "premise: over the field, B is through").toBe("through");
+    const asGroup = (sc: Scene): Scene => ({
+      ...sc,
+      kind: "group",
+      poolId: "P1",
+      meta: { qualifyCount: 1, qualifyPerGroup: true },
+      fixtures: sc.fixtures.map((f) => ({ ...f, pool_id: "P1" })),
+    });
+    let checked = 0;
+    for (const [name, sc] of [["league", s], ["group", asGroup(s)]] as const) {
+      const v = must(view({ ...sc, statuses: { A: "withdrawn" } }));
+      expect(v.rows.A, `${name}: her row has no status`).toBeUndefined();
+      expect(field.map((id) => v.rows[id]!.status), name).toEqual(field.map((id) => race.get(id)!.status.kind));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both table kinds").toBe(2);
   });
   it("Review Focus 2: a stage points rule overrides the sport's bounds", () => {
     // A +W win bonus lifts every rival's best case, so A's one win no longer settles it.
@@ -969,6 +979,11 @@ describe("a Swiss latecomer's missed rounds are not rounds left (W3 R17)", () =>
   });
 });
 
+// W4 T13 (RB4-V6, X-LL-5) supersedes the rival half of this block for every table kind: a departed entrant LEAVES a
+// league's, a group's or a Swiss table's cut (`CUT_SKIPS_DEPARTED_KINDS`, as W3 T15 Carry A ruled for Swiss), so her
+// unplayed fixtures no longer move a rival's verdict — each scene below now pins that her row has no status and the
+// verdict is the engine's over the entrants still in the field, beside the pair where she has nothing left.
+//
 // Final review I1 (controller ruling): a departed row is NOT frozen. A
 // status-only departure — a `withdrawn` status PATCH (usecases/entrants.ts; a DQ by PATCH cascades since W3 T15),
 // a registrant's self-cancel — leaves its fixtures scheduled, and when the
@@ -999,11 +1014,20 @@ describe("a departed row's unplayed fixtures (final review I1)", () => {
   const PAYS_CFG = { ...CFG, points: { w: 3, d: 1, l: 1 } };
   const PAYS = divisionPointsBounds(GENERIC, PAYS_CFG)!;
 
-  it("a loss that PAYS: B finished on 10, D DQ'd on 9 with one unplayed → B is NOT Through", () => {
-    expect(PAYS.lossCeil).toBe(1); // precondition: D's forfeit loss alone lifts it level with B
+  it("a loss that PAYS: B finished on 10, D DQ'd on 9 with one unplayed — no rival since RB4-V6 → B Through, the engine's verdict over B, C and A", () => {
+    expect(PAYS.lossCeil).toBe(1); // precondition: D's forfeit loss alone would lift it level with B (the I1 reading)
     const v = must(view(dqScene(open(2, "A", "D"), 2, 1), { bounds: PAYS }));
     expect(v.rows.D).toBeUndefined();
-    expect(v.rows.B).toMatchObject({ status: "needs_help", label: "Needs help" });
+    const field = qualificationStatus({
+      rows: [["B", 10], ["C", 2], ["A", 1]].map(([id, points]) => ({ entrantId: id as string, points: points as number, active: true })),
+      remaining: new Map([["B", 0], ["C", 1], ["A", 1]]),
+      perMatch: PAYS,
+      cut: 1,
+      anyPlayed: true,
+      complete: false,
+    })!;
+    expect(field.get("B")!.status.kind, "premise: the engine over the field").toBe("through");
+    expect(v.rows.B).toMatchObject({ status: "through", label: "Through" });
   });
   it("…its pair: D with nothing unplayed (A–D already played, D's 9 final) → B Through", () => {
     const v = must(view(dqScene(won(2, "A", "D"), 3, 4), { bounds: PAYS }));
@@ -1020,12 +1044,12 @@ describe("a departed row's unplayed fixtures (final review I1)", () => {
       expect(v.rows.B!.status, ad.status).toBe("through");
     }
   });
-  it("a loss that COSTS (a stage rule's forfeit.loserPoints −1): D DQ'd on 10 with two unplayed, B's best 9 → B is NOT Out", () => {
-    // League of five: r1 D>A, C>B; r2 D>C, B>A; r3 B>E; D–B, D–E, A–C, A–E,
-    // C–E to play. D (10, 2 of 4 played: award mode) can still be forfeited
-    // twice, to 8 — below B's best (6 + 3 = 9).
+  it("a loss that COSTS (a stage rule's forfeit.loserPoints −1): D DQ'd on 10 with two unplayed — no rival since RB4-V6, so B's verdict is the engine's over B, C, A and E", () => {
+    // League of five: r1 D>A, C>B; r2 D>C, B>A; r3 B>E; D–B, D–E, A–C, A–E, C–E to play. Under I1 D (10, 2 of 4
+    // played) could still be forfeited twice, to 8, so B (best 9) was not Out; now D is out of the race altogether.
     const rule = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", forfeit: { winnerPoints: 3, loserPoints: -1 } };
-    expect(pointsRuleBounds(PointsRule.parse(rule), EVERY_OUTCOME).min).toBe(-1); // precondition, off the rule
+    const bounds = pointsRuleBounds(PointsRule.parse(rule), EVERY_OUTCOME);
+    expect(bounds.min).toBe(-1); // precondition, off the rule
     const scene = (db: QualFixture, de: QualFixture, bPts: number, bPlayed: number): Scene => ({
       kind: "league",
       meta: { qualifyCount: 1, pointsRule: rule },
@@ -1042,13 +1066,23 @@ describe("a departed row's unplayed fixtures (final review I1)", () => {
       ],
       statuses: { D: "disqualified" },
     });
+    /** The engine over the field (D gone): B on `bPts` with `bLeft` to play; C, A and E as the scene leaves them. */
+    const field = (bPts: number, bLeft: number, eLeft: number) =>
+      qualificationStatus({
+        rows: [["B", bPts], ["C", 3], ["A", 0], ["E", 0]].map(([id, points]) => ({ entrantId: id as string, points: points as number, active: true })),
+        remaining: new Map([["B", bLeft], ["C", 2], ["A", 2], ["E", eLeft]]),
+        perMatch: bounds,
+        cut: 1,
+        anyPlayed: true,
+        complete: false,
+      })!.get("B")!.status.kind;
     const open2 = must(view(scene(open(3, "D", "B"), open(4, "D", "E"), 6, 3)));
     expect(open2.rows.D).toBeUndefined();
-    expect(open2.rows.B).toMatchObject({ status: "needs_help", label: "Needs help" });
-    // Pair: D's two matches already played (B beat D, D beat E) — D final on
-    // 10, B final on 9: B is Out.
+    expect(open2.rows.B!.status, "D's two unplayed fixtures: the field's verdict").toBe(field(6, 1, 3));
+    // Pair: D's two matches already played (B beat D, D beat E) — B final on 9, ahead of every rival's reach.
     const done = must(view(scene(won(3, "B", "D"), won(4, "D", "E"), 9, 4)));
-    expect(done.rows.B).toMatchObject({ status: "out", label: "Out" });
+    expect(done.rows.D).toBeUndefined();
+    expect(done.rows.B!.status, "D's matches played: the field's verdict").toBe(field(9, 0, 2));
   });
   it("Swiss (W3 T15 Carry A): a departed entrant is no rival for the cut — seated on a board or not — and the line falls under the cut-th entrant still in the field", () => {
     // swiss4 with B withdrawn after two rounds. A departed entrant LEAVES a Swiss cut and the next eligible entrant
@@ -1096,10 +1130,11 @@ describe("a departed row's unplayed fixtures (final review I1)", () => {
     }
     expect(checked).toBe(scenes.length);
     expect(named, "anti-vacuity: a what-if was read").toBeGreaterThan(0);
-    // The positive pairs: with nobody departed the line is under the cut's own row; and a LEAGUE keeps a departed
-    // qualifier's place (M3, W4/W5 to rule on) — open4 is A 6, B 3, C 3, D 0 too.
+    // The positive pairs: with nobody departed the line is under the cut's own row; and since W4 RB4-V6 a LEAGUE drops
+    // a departed qualifier from the race too — open4 is A 6, B 3, C 3, D 0, so its line also falls under C.
     expect(must(view(s)).table.cutIndex).toBe(2);
-    expect(must(view({ ...open4(), statuses: { B: "withdrawn" } })).table.cutIndex, "a league's line stays under rank 2").toBe(2);
+    expect(must(view(open4())).table.cutIndex, "a league with nobody departed: under rank 2").toBe(2);
+    expect(must(view({ ...open4(), statuses: { B: "withdrawn" } })).table.cutIndex, "a league's line falls under C (RB4-V6)").toBe(3);
   });
 });
 
@@ -1347,18 +1382,32 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     expect(one.C!.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 1 or more to finish ahead.`);
     expect(one.C!.whatIfAssumption).toBe("Assumes Bo's figures stay the same and your next match is an average one.");
   });
-  it("prefers a rival still playing: a departed row across the line is skipped, and no active rival means no what-if", () => {
-    // open4 with B withdrawn after 2 of 3 (award mode, so F1 passes), on 3
-    // with A–B still scheduled. C's nearest across the line is B; the active
-    // A (6, one left) is still reachable, so C is told about A. D can reach
-    // only B.
+  it("a departed row is never the what-if's rival: in a league (RB4-V6) the rival is the engine's across the line among the entrants still in the field", () => {
+    // open4 with B withdrawn after 2 of 3, on 3 with A–B still scheduled. Since RB4-V6 B is out of the race, so each
+    // what-if names `tieRival` over A, C and D — never Bo.
     const s = open4();
     const v = must(view({ ...s, statuses: { B: "withdrawn" } }));
     expect(v.rows.B).toBeUndefined();
-    expect(v.rows.C!.whatIf).toContain("level on points with Ada,");
-    expect(v.rows.D!.whatIf).toBeNull();
-    expect(v.rows.D!.whatIfAssumption).toBeNull();
-    // With B in the field both are told about B.
+    const field = ["A", "C", "D"];
+    const raceInput = {
+      rows: field.map((id) => ({ entrantId: id, points: s.rows.find((r) => r.entrantId === id)!.points, active: true })),
+      remaining: new Map(field.map((id) => [id, 1])),
+      perMatch: BOUNDS,
+      cut: 2,
+      anyPlayed: true,
+      complete: false,
+    };
+    let named = 0;
+    for (const id of field) {
+      const whatIf = v.rows[id]!.whatIf;
+      expect(whatIf ?? "", `${id}: never the departed Bo`).not.toContain("Bo");
+      const rivalId = tieRival(raceInput, field, id);
+      if (rivalId === null || whatIf === null) continue;
+      expect(whatIf, `${id}: the rival across the line`).toContain(`level on points with ${NAMES[rivalId]!},`);
+      named++;
+    }
+    expect(named, "anti-vacuity: a what-if was read").toBeGreaterThan(0);
+    // With B in the field both C and D are told about B.
     const inField = must(view(s));
     expect(inField.rows.C!.whatIf).toContain("level on points with Bo,");
     expect(inField.rows.D!.whatIf).toContain("level on points with Bo,");

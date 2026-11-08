@@ -6417,9 +6417,10 @@ async function tablesForCompletedStage(
     }));
   }
   // W3 T15 Carry A (controller ruling 2026-11-02): a Swiss source's departed entrants leave its cut and the next eligible
-  // entrant backfills — the same tables the `setup` path's proposal reads (stage-seeding.ts `sourcesToTables`). Every
-  // other kind is returned as it was: `config.qualified` keeps a departed group/league qualifier, and generation's
-  // `walkoverDepartedQualifiers` walks her opponent over.
+  // entrant backfills — the same tables the `setup` path's proposal reads (stage-seeding.ts `sourcesToTables`); since W4
+  // T13 (RB4-V6) a league's or a group's too (`CUT_SKIPS_DEPARTED_KINDS`). Every other kind is returned as it was:
+  // `config.qualified` keeps a departed qualifier and generation's `walkoverDepartedQualifiers` walks her opponent over —
+  // a KNOCKOUT source's lucky loser (RB4-V2) is the `setup` path's (every shipped template's timing), not this one's.
   pools = cutEligiblePools(stage.kind, pools, await departedEntrantIds(tx, divisionId));
   // roundLosers (a bracket-kind source's take rule) reads the completed
   // bracket's OWN fixtures, never the standings_snapshot (final ranks only,
@@ -6871,9 +6872,11 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // (see departedEntrantIds) — so without this an organiser is shown, and
     // pre-ticked into, a bracket seat for someone who has withdrawn.
     //
-    // Except from a SWISS source (W3 T15 Carry A, controller ruling 2026-11-02): `sourcesToTables` has already taken her
-    // out of its tables, so the cut above was read without her and the next eligible entrant holds her place — a tie
-    // at the new boundary is flagged like any other. From any other source:
+    // Except from a SWISS source (W3 T15 Carry A, controller ruling 2026-11-02), a LEAGUE or GROUP source (W4 T13,
+    // RB4-V6) or a KNOCKOUT source (W4 T13, RB4-V2: the lucky loser in her rank): `sourcesToTables` has already taken
+    // her out of its tables, so the cut above was read without her and the next eligible entrant holds her place — a tie
+    // at the new boundary is flagged like any other. Only a shortfall (nobody eligible left) still reaches her here. From
+    // any other source:
     // her SEAT is left empty rather than closed up: nobody is promoted into
     // the vacancy (owner decision pending for a group or league cut — W4/W5), so every surviving qualifier
     // keeps the seed and destination slot the engine gave her and the

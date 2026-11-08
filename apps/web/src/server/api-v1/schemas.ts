@@ -785,6 +785,9 @@ export const WithdrawCascadeReport = z.object({
   /** Fixtures the cascade wrote nothing to, each still the organiser's to void or settle (an abandoned Swiss board
    *  holds the next round until it is settled, X-AB-5). */
   left_to_organiser: z.array(Uuid),
+  /** W4 T13 (RB4-V2): the lucky loser who took the departed qualifier's main-draw round-1 seat, and that line; null when
+   *  none did (the line walked over). */
+  lucky_loser: z.object({ entrant_id: Uuid, fixture_id: Uuid }).nullable(),
 });
 /** `PATCH /entrants/{id}`'s reply: the entrant, plus `cascade` when the patch disqualified an entrant still in the field
  *  (the withdrawal's fixture surgery ran, W3 T15). */

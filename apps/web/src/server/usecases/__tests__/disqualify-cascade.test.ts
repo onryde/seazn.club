@@ -305,6 +305,7 @@ describe.runIf(HAS_DB)("X-SW-23 a disqualification cascades like a withdrawal (R
       skipped_finalized: 0,
       walked_over_held: 0,
       left_to_organiser: [],
+      lucky_loser: null,
     });
     expect((await rowsOf(r.stageId)).find((f) => f.id === owed.id)).toMatchObject({ outcome: { winner: opponent, loser: dq } });
     // The documented reply shape (`PatchedEntrant.cascade`) is the real report, key for key.
@@ -355,6 +356,7 @@ describe.runIf(HAS_DB)("X-SW-23 a disqualification cascades like a withdrawal (R
       skipped_finalized: 0,
       walked_over_held: 0,
       left_to_organiser: [],
+      lucky_loser: null,
     });
     expect((await getEntrant(r.auth, dq)).status).toBe("disqualified");
     expect((await rowsOf(r.stageId)).find((f) => f.id === owed.id)).toMatchObject({ outcome: { winner: opponent, loser: dq } });

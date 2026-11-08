@@ -12242,6 +12242,33 @@
                                 "format": "uuid",
                                 "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                               }
+                            },
+                            "lucky_loser": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "entrant_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "fixture_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    }
+                                  },
+                                  "required": [
+                                    "entrant_id",
+                                    "fixture_id"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -12252,7 +12279,8 @@
                             "voided",
                             "skipped_finalized",
                             "walked_over_held",
-                            "left_to_organiser"
+                            "left_to_organiser",
+                            "lucky_loser"
                           ],
                           "additionalProperties": false
                         }
@@ -12763,7 +12791,7 @@
     },
     "/api/v1/entrants/{id}/withdraw": {
       "post": {
-        "summary": "Withdraw with fixture surgery (spec 05 §5): tables expunge (<50% played) or walk over remaining; brackets walk over; open formats void remaining",
+        "summary": "Withdraw with fixture surgery (spec 05 §5): tables expunge (<50% played) or walk over remaining; brackets walk over; open formats void remaining. A qualifier holding a round-1 seat of a knockout fed by a knockout source's rank cut, whose line has not started (a score, live play, a result or a Match Day call), is replaced by a LUCKY LOSER instead (W4, RB4-V2): the source's best loser below the cut — latest knock-out round first, then seed, then a lot drawn with the destination's own seed; a walkover, withdrawal or disqualification loser is never eligible — and the reply's `lucky_loser` names them and the line; with nobody eligible, or the line started, the opponent walks over and `lucky_loser` is null",
         "tags": [
           "entrants"
         ],
@@ -33310,7 +33338,7 @@
     },
     "/api/v1/stages/{id}/seed-proposal/confirm": {
       "post": {
-        "summary": "Confirm a draft proposal: fills the stage's TBD fixtures via the same slot-fill pathway as intra-bracket advancement, never regenerates. 409 SEEDING_PROPOSAL_STALE/SEEDING_ALREADY_CONFIRMED/SEEDING_FIXTURES_ALREADY_FILLED, 422 SEEDING_EDIT_UNKNOWN_SLOT/SEEDING_SLOT_DOUBLE_ASSIGNED/SEEDING_SLOT_FOREIGN_FIXTURE/SEEDING_ENTRANT_FOREIGN/SEEDING_ENTRANT_WITHDRAWN (an entrant about to be filled has withdrawn or been disqualified — recompute the proposal; her seat is left empty, nobody is promoted into it)/SEEDING_TIE_UNRESOLVED. A confirm appends a `seed_confirmed` ledger row (W4 T5, K1): an undo barrier — Undo, Redo and Restore across it are 409 SEED_CONFIRM_NOT_UNDOABLE, and Recompute is 409 SEEDING_ALREADY_CONFIRMED from then on, so a confirmed draw is final",
+        "summary": "Confirm a draft proposal: fills the stage's TBD fixtures via the same slot-fill pathway as intra-bracket advancement, never regenerates. 409 SEEDING_PROPOSAL_STALE/SEEDING_ALREADY_CONFIRMED/SEEDING_FIXTURES_ALREADY_FILLED, 422 SEEDING_EDIT_UNKNOWN_SLOT/SEEDING_SLOT_DOUBLE_ASSIGNED/SEEDING_SLOT_FOREIGN_FIXTURE/SEEDING_ENTRANT_FOREIGN/SEEDING_ENTRANT_WITHDRAWN (an entrant about to be filled has withdrawn or been disqualified — recompute the proposal: from a Swiss, league or group source the next-ranked entrant takes her place, from a knockout source the lucky loser does (W4, RB4-V2/V6); only when nobody is left below the cut is her seat left empty)/SEEDING_TIE_UNRESOLVED. A confirm appends a `seed_confirmed` ledger row (W4 T5, K1): an undo barrier — Undo, Redo and Restore across it are 409 SEED_CONFIRM_NOT_UNDOABLE, and Recompute is 409 SEEDING_ALREADY_CONFIRMED from then on, so a confirmed draw is final",
         "tags": [
           "stages"
         ],

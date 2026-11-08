@@ -42,6 +42,11 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * (`POST /stages/{id}/late-entrants/{entrantId}/place`) gives them their own seat back, and a second tap is refused 409
  * KO_LATE_ENTRY_NOT_WAITING.
  *
+ * T13 (X-LL-1, K9; RB4-V2): a departed qualifier takes a LUCKY LOSER. A qualifying knockout of eight feeding a main draw of
+ * four (rankRange 1..4, setup timing), every qualifying line won by its home side, the main draw confirmed: a qualifier
+ * withdraws before their first main-draw match, and the best-seeded quarter-final loser takes the seat — the reply names
+ * them and the line, nobody is walked over (main walked the opponent over).
+ *
  * Own fresh owner; keyless; every read and write is a v1 route. Every check is counted, and a run that checked nothing fails.
  * SMOKE_ONLY=w4KnockoutA runs it alone (SELECTABLE_SUITES).
  */
@@ -50,8 +55,9 @@ export async function w4KnockoutASuite(): Promise<void> {
   // its slot across an 8 → 9 Rebuild). T5: 1 (Undo refuses across a confirmed draw). T6: 1 (Complete refuses a bracket
   // with its third-place match unplayed). T7: 1 (an unseeded draw replays). T8: 2 (6 → 7 places in a bye; 8 → 9 redraws
   // once). T10: 2 (a late player takes the lowest-seeded holder's bye and Undo refuses; no slot is refused, then a
-  // withdrawn seat is taken). T11: 1 (a reinstated player waits, and one tap gives their seat back).
-  const EXPECTED_CHECKS = 11;
+  // withdrawn seat is taken). T11: 1 (a reinstated player waits, and one tap gives their seat back). T13: 1 (a departed
+  // qualifier's seat takes the best loser below the cut).
+  const EXPECTED_CHECKS = 12;
   let checked = 0;
   const w4Check = (label: string, cond: boolean) => {
     checked++;
@@ -572,6 +578,79 @@ export async function w4KnockoutASuite(): Promise<void> {
     w4Check(
       "w4a X-LE-10: a reinstated player waits (nothing placed), one tap gives their own seat back, a second tap is KO_LATE_ENTRY_NOT_WAITING" +
         (ok ? "" : ` — start ${ko.started}, withdraw ${withdrawn?.status ?? "-"}, walked ${walked?.status ?? "-"}, reinstate ${back?.status ?? "-"}, still ${JSON.stringify(still).slice(0, 120)}, tap ${tap.status} ${JSON.stringify(tap.json).slice(0, 200)}, line ${JSON.stringify(line).slice(0, 160)}, again ${again.status} ${againErr?.code ?? "-"}`),
+      ok,
+    );
+  }
+
+  // Check 12 (T13, X-LL-1/K9; RB4-V2): a qualifying knockout of eight feeding a main draw of four, every qualifying line
+  // won by its home side, the main draw confirmed. Expected: a qualifier who withdraws before their first main-draw match
+  // is replaced by the best-seeded quarter-final loser (read off the qualifying rows: one round, so seed decides — C2),
+  // the reply names them and the line, and nobody is walked over. The expected entrant comes from the rows and the seeds.
+  {
+    const divId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Lucky loser", sport_key: "badminton", variant_key: "bwf", config: {} }),
+    )?.id;
+    const added =
+      v1data<{ id: string }[] | undefined>(
+        await v1(
+          owner,
+          `/api/v1/divisions/${divId}/entrants`,
+          "POST",
+          Array.from({ length: 8 }, (_, i) => ({ kind: "individual", display_name: `Lucky P${i + 1} ${tag}`, seed: i + 1 })),
+        ),
+      ) ?? [];
+    const seedOf = new Map(added.map((e, i) => [e.id, i + 1]));
+    const qualId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "knockout", name: "Qualifying", config: {} }),
+    )?.id;
+    const mainId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", {
+        seq: 2,
+        kind: "knockout",
+        name: "Main draw",
+        config: {},
+        progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }], placement: "rank_order", timing: "setup" },
+      }),
+    )?.id;
+    const qualGen = await v1(owner, `/api/v1/stages/${qualId}/generate`, "POST");
+    const mainGen = await v1(owner, `/api/v1/stages/${mainId}/generate`, "POST");
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    const stageRows = async (stageId: string | undefined) =>
+      (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    let played = 0;
+    for (let guard = 0; guard < 6; guard++) {
+      const open = (await stageRows(qualId)).filter(
+        (f) => f.home_entrant_id !== null && f.away_entrant_id !== null && !["decided", "finalized", "forfeited", "void"].includes(f.status ?? ""),
+      );
+      if (open.length === 0) break;
+      for (const f of open) if (await homeWins(owner, f.id)) played++;
+    }
+    const quarterLosers = (await stageRows(qualId)).filter((f) => f.round_no === 1).map((f) => f.away_entrant_id ?? "");
+    const expected = [...quarterLosers].sort((a, b) => (seedOf.get(a) ?? 99) - (seedOf.get(b) ?? 99))[0];
+    const done = await v1(owner, `/api/v1/stages/${qualId}/complete`, "POST");
+    const proposal = v1data<{ id: string; computed: { ties: { slots: string[]; entrantIds: string[] }[] } } | undefined>(
+      await v1(owner, `/api/v1/stages/${mainId}/seed-proposal`, "POST"),
+    );
+    const confirmed = proposal
+      ? await v1(owner, `/api/v1/stages/${mainId}/seed-proposal/confirm`, "POST", {
+          proposalId: proposal.id,
+          ...(proposal.computed.ties.length > 0 ? { tiePicks: proposal.computed.ties.map((t) => ({ slots: t.slots, order: t.entrantIds })) } : {}),
+        })
+      : undefined;
+    const line = (await stageRows(mainId)).find((f) => f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null);
+    const leaving = line?.away_entrant_id ?? undefined;
+    const withdrawn = leaving ? await v1(owner, `/api/v1/entrants/${leaving}/withdraw`, "POST") : undefined;
+    const report = withdrawn ? v1data<{ walkovers: number; lucky_loser: { entrant_id: string; fixture_id: string } | null } | undefined>(withdrawn) : undefined;
+    const after = (await stageRows(mainId)).find((f) => f.id === line?.id);
+    const ok =
+      qualGen.status === 200 && mainGen.status === 200 && started.status === 200 && played === 7 && done.status === 200 &&
+      confirmed?.status === 200 && line !== undefined && quarterLosers.length === 4 && expected !== undefined &&
+      withdrawn?.status === 200 && report?.walkovers === 0 &&
+      report?.lucky_loser?.entrant_id === expected && report?.lucky_loser?.fixture_id === line.id &&
+      after?.home_entrant_id === line.home_entrant_id && after?.away_entrant_id === expected && after?.status === "scheduled";
+    w4Check(
+      "w4a X-LL-1: a qualifier who withdraws before their first main-draw match is replaced by the best quarter-final loser, nobody walked over" +
+        (ok ? "" : ` — gen ${qualGen.status}/${mainGen.status}, start ${started.status}, played ${played}, complete ${done.status}, confirm ${confirmed?.status ?? "-"} ${JSON.stringify(confirmed?.json).slice(0, 160)}, losers ${quarterLosers.length}, withdraw ${withdrawn?.status ?? "-"} ${JSON.stringify(withdrawn?.json).slice(0, 200)}, line ${JSON.stringify(after).slice(0, 160)}`),
       ok,
     );
   }

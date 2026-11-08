@@ -135,6 +135,7 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
       skipped_finalized: 0,
       walked_over_held: 0,
       left_to_organiser: [],
+      lucky_loser: null,
     });
     expect(await stageEventCount(s.stageId), "nothing was written").toBe(before);
     // The second call: already withdrawn, refused, and still nothing written.

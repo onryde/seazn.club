@@ -695,3 +695,99 @@ test.describe("X-LE-10 a reinstated player waits, then one tap places them", () 
     expect([again.status, again.error?.code, again.error?.message]).toEqual([409, "KO_LATE_ENTRY_NOT_WAITING", "This player isn't waiting to join this bracket."]);
   });
 });
+
+// X-LL-1 (W4 T13, K9; RB4-V2): a qualifier who withdraws before their first main-draw match is replaced by a LUCKY
+// LOSER — the best loser below the cut — and the opponent is not walked over. Driven through the v1 routes the desk calls
+// (Generate, Start, the scorer, Complete, the proposal and its confirm, Withdraw) and read back on the division's run
+// sheet. Expected: every qualifying line is won by its home side, so the quarter-final losers are the four away seats of
+// round 1 and the lucky loser is the best-seeded of them (one round, so seed decides: C2); never the code under test.
+test.describe("X-LL-1 a lucky loser fills the main draw", () => {
+  test("eight qualify for a main draw of four; a qualifier withdraws before their match — the best quarter-final loser takes the seat, and the run sheet names them", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(240_000);
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Lucky loser ${TAG}`, visibility: "private" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "badminton",
+      variant_key: "bwf",
+      config: {},
+    });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const added = await apiJson<{ id: string; display_name: string; seed: number }[]>(
+      request,
+      `/api/v1/divisions/${divisionId}/entrants`,
+      "POST",
+      Array.from({ length: 8 }, (_, i) => ({ kind: "individual", display_name: `LL${i + 1} ${TAG}`, seed: i + 1 })),
+    );
+    expect(added.status, JSON.stringify(added.error)).toBe(201);
+    const nameOf = new Map(added.data!.map((e) => [e.id, e.display_name]));
+    const seedOf = new Map(added.data!.map((e, i) => [e.id, i + 1]));
+    const qual = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "knockout", name: "Qualifying", config: {} });
+    expect(qual.status, JSON.stringify(qual.error)).toBe(201);
+    const main = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq: 2,
+      kind: "knockout",
+      name: "Main draw",
+      config: {},
+      progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }], placement: "rank_order", timing: "setup" },
+    });
+    expect(main.status, JSON.stringify(main.error)).toBe(201);
+    expect((await apiJson(request, `/api/v1/stages/${qual.data!.id}/generate`, "POST")).status).toBe(200);
+    expect((await apiJson(request, `/api/v1/stages/${main.data!.id}/generate`, "POST")).status, "the main draw's day-one lines").toBe(200);
+    expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
+
+    const qualRows = async () => (await stageFixtures(request, divisionId, qual.data!.id)) as (Seated & { round_no: number })[];
+    for (let guard = 0; guard < 6; guard++) {
+      const open = (await qualRows()).filter(
+        (f) => f.home_entrant_id !== null && f.away_entrant_id !== null && !["decided", "finalized", "forfeited", "void"].includes(f.status),
+      );
+      if (open.length === 0) break;
+      for (const f of open) await homeWins(request, f.id);
+    }
+    const quarterLosers = (await qualRows()).filter((f) => f.round_no === 1).map((f) => f.away_entrant_id!);
+    expect(quarterLosers.length, "premise: four quarter-final losers, below the cut").toBe(4);
+    const expected = [...quarterLosers].sort((a, b) => seedOf.get(a)! - seedOf.get(b)!)[0]!;
+    const done = await apiJson<{ completed: boolean }>(request, `/api/v1/stages/${qual.data!.id}/complete`, "POST");
+    expect([done.status, done.data?.completed], JSON.stringify(done.error)).toEqual([200, true]);
+    const proposal = await apiJson<{ id: string; computed: { ties: { slots: string[]; entrantIds: string[] }[] } }>(
+      request,
+      `/api/v1/stages/${main.data!.id}/seed-proposal`,
+      "POST",
+    );
+    expect(proposal.status, JSON.stringify(proposal.error)).toBe(201);
+    const ties = proposal.data!.computed.ties;
+    const confirmed = await apiJson(request, `/api/v1/stages/${main.data!.id}/seed-proposal/confirm`, "POST", {
+      proposalId: proposal.data!.id,
+      ...(ties.length > 0 ? { tiePicks: ties.map((t) => ({ slots: t.slots, order: t.entrantIds })) } : {}),
+    });
+    expect(confirmed.status, JSON.stringify(confirmed.error)).toBe(200);
+    const mainRows = async () => (await stageFixtures(request, divisionId, main.data!.id)) as (Seated & { round_no: number })[];
+    const line = (await mainRows()).find((f) => f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null)!;
+    expect(line, "premise: the confirm seated a first-round line").toBeTruthy();
+    const leaving = line.away_entrant_id!;
+    const staying = line.home_entrant_id!;
+
+    const out = await apiJson<{ walkovers: number; lucky_loser: { entrant_id: string; fixture_id: string } | null }>(
+      request,
+      `/api/v1/entrants/${leaving}/withdraw`,
+      "POST",
+    );
+    expect(out.status, JSON.stringify(out.error)).toBe(200);
+    expect(out.data!.lucky_loser, "the best quarter-final loser takes the seat").toEqual({ entrant_id: expected, fixture_id: line.id });
+    expect(out.data!.walkovers, "nobody was walked over").toBe(0);
+    const after = (await mainRows()).find((f) => f.id === line.id)!;
+    expect([after.home_entrant_id, after.away_entrant_id, after.status]).toEqual([staying, expected, "scheduled"]);
+
+    // The run sheet: the line names the lucky loser beside the player who stayed, and no longer the one who left.
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await showAllFixtures(page);
+    const row = page.locator(`li[data-fixture-no="${line.fixture_no}"]`);
+    await expect(row, `the run sheet seats ${nameOf.get(expected)}`).toContainText(nameOf.get(expected)!, { timeout: 20_000 });
+    await expect(row).toContainText(nameOf.get(staying)!);
+    await expect(row).not.toContainText(nameOf.get(leaving)!);
+  });
+});

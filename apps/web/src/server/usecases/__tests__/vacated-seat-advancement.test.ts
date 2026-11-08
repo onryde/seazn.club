@@ -12,6 +12,9 @@
 // I1: a second Generate used to overwrite the BYE stamp with the descriptor's
 // own `slot.winner_group` label, un-settling the line.
 //
+// W4 T13 (RB4-V6): a group's next-ranked entrant now backfills a departed winner, so a seat vacates only on a SHORTFALL;
+// each departure below takes her whole pool below the cut first (`departIntoShortfall`), so the seat still vacates.
+//
 // Oracles are derived, never typed: the survivor comes from the proposal's own
 // destinationSlot map and the row's `winner_to_fixture`/`winner_to_slot` feed,
 // so a change to the seeding source of truth moves the test with it.
@@ -35,6 +38,7 @@ import {
   getSeedProposal,
 } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { departIntoShortfall } from "./_table-shortfall";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -150,7 +154,7 @@ async function confirmAfterDepartures(rig: Rig, departures: number): Promise<Row
   const full = await computeSeedProposal(rig.auth, rig.koStageId);
   const ranked = [...full.computed.qualifiers].sort((a, b) => b.rank - a.rank);
   for (let i = 0; i < departures; i++) {
-    await withdrawEntrantCascade(rig.auth, ranked[i]!.entrantId);
+    await departIntoShortfall(rig.auth, rig.koStageId, ranked[i]!.entrantId);
   }
   const proposal = departures === 0 ? full : (await getSeedProposal(rig.auth, rig.koStageId))!;
   await confirmSeedProposal(rig.auth, rig.koStageId, { proposalId: proposal.id });

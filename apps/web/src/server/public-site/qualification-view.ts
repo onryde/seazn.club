@@ -561,10 +561,11 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // M3). That rests on a product rule decided elsewhere: a departed qualifier
   // still takes her place above the line — her seat is left empty and nobody
   // below is promoted into it (usecases/stages.ts computeSeedProposal, the
-  // departed filter). In a league or group that is still the rule.
+  // departed filter). For a kind outside the set below that is still the rule.
   //
   // In a SWISS table it is not (W3 T15 Carry A, controller ruling 2026-11-02:
-  // `CUT_SKIPS_DEPARTED_KINDS`): a departed entrant leaves the cut and the
+  // `CUT_SKIPS_DEPARTED_KINDS`), nor since W4 T13 in a LEAGUE or GROUP table
+  // (RB4-V6): a departed entrant leaves the cut and the
   // next eligible entrant backfills her place (usecases/stage-seeding.ts
   // `cutEligiblePools`). So, as M3 foresaw, Out stops counting her: she is no
   // rival for the cut, the race is run over the entrants still in the field,

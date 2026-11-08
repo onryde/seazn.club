@@ -34,9 +34,12 @@ import {
 } from "@seazn/engine/competition";
 import { EngineError } from "@seazn/engine/core";
 import { HttpError } from "@/lib/errors";
+import { luckyLoserOrder } from "@/lib/lucky-loser";
+import { swissDrawSeed } from "@/lib/swiss-draw";
 import { CUT_SKIPS_DEPARTED_KINDS } from "@/lib/table-withdrawal";
 import { loadCrossGroupRules } from "@/server/engine-db/competition";
 import { persistLotsDraws } from "@/server/engine-db/table-rules";
+import { LUCKY_LOSER_SOURCE_KINDS, luckyLoserPool, qualifiersOfCut, rankCutOf } from "./lucky-loser";
 import { poolCount, POOL_KEYS, BRACKET_KINDS, REAL_TABLE_KINDS, loadBracketFixtures, americanoPlacementTables, departedEntrantIds } from "./stages";
 
 type Tx = postgres.TransactionSql;
@@ -72,7 +75,8 @@ export interface PoolTableRows {
 }
 
 /** The tables a progression's CUT reads from one source (W3 T15 Carry A, controller rulings 2026-11-02, fix round 1 I3):
- *  for a source kind in `CUT_SKIPS_DEPARTED_KINDS` (lib/table-withdrawal.ts — Swiss alone; the scope guard), every
+ *  for a source kind in `CUT_SKIPS_DEPARTED_KINDS` (lib/table-withdrawal.ts — Swiss, and since W4 T13 league and group,
+ *  RB4-V6; the scope guard), every
  *  departed row moves to the BOTTOM of its table: the eligible rows first, renumbered 1..m in their table order, then
  *  the departed ones, renumbered m+1..n in theirs. So the cut takes every eligible entrant before any departed one —
  *  the next eligible entrant backfills a departed qualifier's place — and only a true shortfall (fewer eligible
@@ -111,6 +115,52 @@ export function cutEligiblePools<P extends PoolTableRows>(
       return row;
     });
     return { ...p, rows: [...eligibleRows, ...departedRows] };
+  });
+}
+
+/** W4 T13 (K9; RB4-V2, RB4-E7; X-LL-1): a KNOCKOUT source's cut, `cut` wide, with every departed qualifier's place taken
+ *  by the next lucky loser — `lucky` is the source's eligible losers in lucky-loser order (lib/lucky-loser.ts,
+ *  `luckyLoserOrder`). The lucky loser takes her RANK, so every other qualifier keeps the seed the table gave them (the
+ *  seat she would have had, RB4-V2 "takes the slot"); a table source instead closes the gap (`cutEligiblePools`,
+ *  RB4-V6). Below the cut: the rest of the table in its order, then the departed, renumbered. A departed qualifier
+ *  with nobody left to replace her keeps her place (RB4-E7: her seat resolves as a departed qualifier's does — the
+ *  proposal leaves it empty and the confirm walks the opponent over). Tie flags on a moved row go; nothing else of a
+ *  row changes. A table with no departed qualifier is returned as it was. */
+export function luckyLoserCut<P extends PoolTableRows>(
+  pools: readonly P[],
+  cut: number,
+  departed: ReadonlySet<string>,
+  lucky: readonly string[],
+): P[] {
+  const byRank = (a: StandingsRow, b: StandingsRow) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER);
+  const untied = (r: StandingsRow): StandingsRow => {
+    const row = { ...r };
+    delete row.tieBreak;
+    delete row.tieUnbroken;
+    return row;
+  };
+  return pools.map((p) => {
+    const ordered = [...p.rows].sort(byRank);
+    const top = ordered.slice(0, cut);
+    if (!top.some((r) => departed.has(r.entrantId))) return p;
+    const qualifiers = new Set(top.map((r) => r.entrantId));
+    const rowOf = new Map(p.rows.map((r) => [r.entrantId, r] as const));
+    const queue = lucky.filter((id) => !departed.has(id) && !qualifiers.has(id) && rowOf.has(id));
+    const promoted = new Set<string>();
+    const sunk: StandingsRow[] = [];
+    const head = top.map((r) => {
+      if (!departed.has(r.entrantId)) return r;
+      const id = queue.shift();
+      if (id === undefined) return r;
+      promoted.add(id);
+      sunk.push(r);
+      return { ...untied(rowOf.get(id)!), rank: r.rank };
+    });
+    const below = ordered.slice(cut).filter((r) => !promoted.has(r.entrantId));
+    const rest = [...below.filter((r) => !departed.has(r.entrantId)), ...sunk, ...below.filter((r) => departed.has(r.entrantId))].map(
+      (r, i): StandingsRow => (promoted.size === 0 ? r : { ...untied(r), rank: cut + i + 1 }),
+    );
+    return { ...p, rows: [...head, ...rest] };
   });
 }
 
@@ -295,7 +345,7 @@ export async function sourceStandingsTables(tx: Tx, source: { id: string }): Pro
  *  exactly — same condition, same helper, now shared rather than forked. */
 export async function sourcesToTables(
   tx: Tx,
-  target: { division_id: string; seq: number },
+  target: { id: string; division_id: string; seq: number },
   sources: readonly ProgressionSource[],
 ): Promise<{
   shapes: SourceShape[];
@@ -323,15 +373,34 @@ export async function sourcesToTables(
       source.kind === "americano"
         ? await americanoPlacementTables(tx, source.id, target.division_id)
         : await sourceStandingsTables(tx, source);
-    // W3 T15 Carry A: a Swiss source's departed entrants leave its cut (the next eligible entrant backfills). The hash
-    // the proposal stores is over these tables, so a departure or a return after a draft stales it.
-    const pools = cutEligiblePools(source.kind, read, await departedEntrantIds(tx, target.division_id));
+    // W3 T15 Carry A: a Swiss source's departed entrants leave its cut (the next eligible entrant backfills) — and since
+    // W4 T13 a league's or a group's (RB4-V6). A knockout source's departed qualifier takes a lucky loser in her place
+    // (RB4-V2, `luckyLoserCut`). The hash the proposal stores is over these tables, so a departure or a return after a
+    // draft stales it.
+    const departed = await departedEntrantIds(tx, target.division_id);
+    const cut = LUCKY_LOSER_SOURCE_KINDS.has(source.kind) ? rankCutOf(s.take) : null;
+    const pools =
+      cut === null
+        ? cutEligiblePools(source.kind, read, departed)
+        : luckyLoserCut(read, cut, departed, await luckyLoserOrderFor(tx, source.id, target.id, read, cut));
     const bracket = BRACKET_KINDS.has(source.kind) ? await loadBracketFixtures(tx, source.id) : undefined;
     // W2d T12 (spec §5.9, X-TB-7): the source's pinned cross-group order and stored draws — as tablesForCompletedStage.
     const crossGroup = REAL_TABLE_KINDS.has(source.kind) ? await loadCrossGroupRules(tx, source.id) : undefined;
     tables.push({ pools, ...(bracket ? { bracket } : {}), ...(crossGroup ? { crossGroup } : {}) });
   }
   return { shapes, tables, resolved };
+}
+
+/** The source's losers below its cut, in lucky-loser order with the destination's draw seed (RB4-V5); `luckyLoserCut`
+ *  skips the departed. */
+async function luckyLoserOrderFor(
+  tx: Tx,
+  sourceId: string,
+  destinationId: string,
+  pools: readonly PoolTableRows[],
+  cut: number,
+): Promise<string[]> {
+  return luckyLoserOrder(await luckyLoserPool(tx, sourceId, qualifiersOfCut(pools, cut)), swissDrawSeed(destinationId));
 }
 
 /** W2d T12 (spec §5.9, X-TB-7): store the cross-group draws best-Nth made, each under its source stage's pool null

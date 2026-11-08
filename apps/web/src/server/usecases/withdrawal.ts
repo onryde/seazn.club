@@ -52,6 +52,8 @@ import { getDivision } from "./divisions";
 import { BRACKET_WALKOVER_KINDS, divisionHasStarted, listStages, writeDepartedSeat } from "./stages";
 import { listDivisionFixtures, listEvents, getFixtureState, type EventOut } from "./fixtures";
 import { invalidatePublicCache, scoreEvent } from "./scoring";
+import { replaceDepartedQualifier } from "./lucky-loser";
+import { afterScheduleWrite } from "./schedule";
 
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 /** W2b X-WD-2 (plan premise 19): the kinds a withdrawal walks over. `BRACKET_WALKOVER_KINDS` also gates F14's
@@ -161,6 +163,9 @@ export interface WithdrawCascadeOut {
    *  stage's board of theirs that was ABANDONED with no result (a Swiss board holds the next round) - left as it stands,
    *  still owed the organiser's settle (the opponent can be chosen; the departed entrant cannot, C17). */
   left_to_organiser: string[];
+  /** W4 T13 (RB4-V2, X-LL-1): the lucky loser who took her main-draw round-1 seat, and that line; null when none did
+   *  (no such seat, the line had started, or nobody was eligible — the line walked over as before). */
+  lucky_loser: { entrant_id: string; fixture_id: string } | null;
 }
 
 interface FixtureRowLite {
@@ -310,12 +315,21 @@ export async function withdrawEntrantCascade(
     skipped_finalized: 0,
     walked_over_held: 0,
     left_to_organiser: [],
+    lucky_loser: null,
   };
 
   // Before the tournament starts there is nothing to settle: fixtures (if
   // generated) are regenerated from the field anyway — plain status flip.
   // W3 T15: "started" is T9's one predicate (`divisionHasStarted`, controller ruling C17), read here rather than restated.
   if (await withTenant(auth.orgId, (tx) => divisionHasStarted(tx, division.id))) {
+    // W4 T13 (RB4-V2, X-LL-1): a qualifier whose main-draw round-1 line has not started takes a lucky loser in her seat
+    // FIRST, so the line below is no longer hers and walks nobody over. Its own transaction, committed before the
+    // settles (ruling 101), and published like any seat write.
+    const lucky = await withTenant(auth.orgId, (tx) => replaceDepartedQualifier(tx, auth, entrantId));
+    if (lucky !== null) {
+      out.lucky_loser = { entrant_id: lucky.replacedBy, fixture_id: lucky.fixtureId };
+      afterScheduleWrite(division.id, division.competition_id, "schedule", [lucky.fixtureId]);
+    }
     const [stages, fixtures] = await Promise.all([
       listStages(auth, division.id),
       listDivisionFixtures(auth, division.id),

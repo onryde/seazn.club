@@ -1,13 +1,14 @@
 // W3 T15 Carry A (controller rulings 2026-11-02; fix round 1 I3) — the tables a progression's CUT reads, pure: a
-// withdrawn or disqualified entrant moves to the BOTTOM of a SWISS source's table, so the next eligible entrant
-// backfills her place and only a shortfall (fewer eligible entrants than the cut) reaches her; every other source kind is
-// read as it was (a group or league cut is W4/W5's to rule on). The DB proof — Finish, a plain Complete, the on_complete
+// withdrawn or disqualified entrant moves to the BOTTOM of a SWISS source's table — and since W4 T13 (RB4-V6, X-LL-5) a
+// LEAGUE's or a GROUP's — so the next eligible entrant backfills her place and only a shortfall (fewer eligible entrants
+// than the cut) reaches her; every other source kind is read as it was. A KNOCKOUT source's cut is `luckyLoserCut`'s
+// (W4 T13, RB4-V2: the lucky loser in her rank), below. The DB proof — Finish, a plain Complete, the on_complete
 // knockout, a tie at the boundary after the backfill, a shortfall on both timings — is swiss-finish-now.test.ts's
 // "T15 Carry A" describe.
 import { describe, expect, it } from "vitest";
 import { resolveProgression, type StandingsRow } from "@seazn/engine/competition";
 import { StageKind } from "@/server/api-v1/schemas";
-import { cutEligiblePools } from "../stage-seeding";
+import { cutEligiblePools, luckyLoserCut } from "../stage-seeding";
 
 const row = (entrantId: string, rank: number, tie?: string[]): StandingsRow => ({
   entrantId,
@@ -25,9 +26,10 @@ const row = (entrantId: string, rank: number, tie?: string[]): StandingsRow => (
 const table = () => [{ pool: "", rows: [row("A", 1), row("B", 2, ["C", "D"]), row("C", 3, ["B", "D"]), row("D", 4, ["B", "C"]), row("E", 5)] }];
 
 describe("cutEligiblePools (T15 Carry A)", () => {
-  it("every stage kind: only a Swiss source moves its departed rows to the bottom; any other kind's tables are read as they were", () => {
-    // The ruling, typed here — never read off CUT_SKIPS_DEPARTED_KINDS, the set under test.
-    const ruledSkips = (kind: string) => kind === "swiss";
+  it("X-LL-5 every stage kind: a Swiss, league or group source moves its departed rows to the bottom; any other kind's tables are read as they were", () => {
+    // The rulings, typed here — never read off CUT_SKIPS_DEPARTED_KINDS, the set under test: W3 T15 Carry A (Swiss),
+    // W4 RB4-V6 (league, group).
+    const ruledSkips = (kind: string) => kind === "swiss" || kind === "league" || kind === "group";
     let checked = 0;
     const answers = new Set<boolean>();
     for (const kind of StageKind.options) {
@@ -105,5 +107,34 @@ describe("cutEligiblePools (T15 Carry A)", () => {
     // The defect this replaces: the same cut over a table with the departed rows dropped refuses (STAGE_NOT_READY).
     const dropped = [{ pool: "", rows: five[0]!.rows.filter((r) => !departed.has(r.entrantId)).map((r, i) => ({ ...r, rank: i + 1 })) }];
     expect(() => cut(dropped)).toThrow(expect.objectContaining({ code: "STAGE_NOT_READY" }));
+  });
+});
+
+// W4 T13 (K9; RB4-V2, RB4-E7; X-LL-1): a knockout source's cut puts the next lucky loser in a departed qualifier's RANK.
+// `lucky` is handed in already ordered (lib/lucky-loser.ts orders it; its own tests); expected tables are typed per row.
+describe("X-LL-1 luckyLoserCut (W4 T13)", () => {
+  /** A knockout's final ranks: Q1..Q4 qualify at a cut of 4, L5..L8 below. */
+  const ko = () => [{ pool: "", rows: ["Q1", "Q2", "Q3", "Q4", "L5", "L6", "L7", "L8"].map((id, i) => row(id, i + 1)) }];
+  const ranks = (p: { rows: StandingsRow[] }) => p.rows.map((r) => [r.entrantId, r.rank]);
+
+  it("X-LL-1 the empty cases: nobody departed, a departure below the cut, and no tables at all", () => {
+    expect(luckyLoserCut(ko(), 4, new Set(), ["L5"])).toEqual(ko());
+    expect(luckyLoserCut(ko(), 4, new Set(["L6"]), ["L5"]), "a departed loser below the cut moves nothing").toEqual(ko());
+    expect(luckyLoserCut([], 4, new Set(["Q1"]), ["L5"])).toEqual([]);
+  });
+
+  it("X-LL-1 a departed qualifier's rank goes to the first lucky loser; every other qualifier keeps theirs", () => {
+    const [p] = luckyLoserCut(ko(), 4, new Set(["Q2"]), ["L7", "L5", "L6", "L8"]);
+    expect(ranks(p!)).toEqual([["Q1", 1], ["L7", 2], ["Q3", 3], ["Q4", 4], ["L5", 5], ["L6", 6], ["L8", 7], ["Q2", 8]]);
+  });
+
+  it("X-LL-1 two departed qualifiers: the first two lucky losers, in rank order; a departed lucky loser is skipped", () => {
+    const [p] = luckyLoserCut(ko(), 4, new Set(["Q1", "Q4", "L5"]), ["L5", "L6", "L7", "L8"]);
+    expect(ranks(p!).slice(0, 4)).toEqual([["L6", 1], ["Q2", 2], ["Q3", 3], ["L7", 4]]);
+  });
+
+  it("X-LL-1 RB4-E7 a shortfall: with nobody left to take her rank, the departed qualifier keeps it (her seat walks over)", () => {
+    const [p] = luckyLoserCut(ko(), 4, new Set(["Q3"]), []);
+    expect(p).toEqual(ko()[0]);
   });
 });
