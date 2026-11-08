@@ -4,6 +4,10 @@ import "server-only";
 // score" (C1); every activity moves `last_activity_at` and re-arms `expires_at` from it. A saved row carries no expiry
 // (§7.7, plan 3) and keeps none: its activity still moves, its `expires_at` stays null.
 //
+// A re-armed expiry re-arms the reminder too (plan-1 T8 review, controller ruling; plan 3 Task 2): an unsaved row's touch
+// clears `reminder_sent_at`, so a match revived after its "save it before it expires" mail gets that mail again before its
+// NEW expiry (C2: one reminder per approach to expiry). A saved row keeps the stamp the save gave it.
+//
 // Two doors, one rule:
 //   - `touchQuickMatchActivity(id)`: the home's own actions (plan 2's Score tap);
 //   - `touchQuickMatchActivityForFixture(fixtureId)`: the scoring path, after an append commits (Task 8, D5). It finds the
@@ -20,13 +24,15 @@ const DAY_MS = 24 * 3600 * 1000;
 
 const expiryFrom = (now: Date): Date => new Date(now.getTime() + QUICK_MATCH_EXPIRY_DAYS * DAY_MS);
 
-/** Mark activity on one quick match: `last_activity_at = now`, and `expires_at` re-armed QUICK_MATCH_EXPIRY_DAYS out
- *  while unsaved (a saved row's stays null). An unknown id touches nothing. */
+/** Mark activity on one quick match: `last_activity_at = now`, and while unsaved `expires_at` re-armed
+ *  QUICK_MATCH_EXPIRY_DAYS out and the reminder re-armed (a saved row's expiry stays null and its stamp stays). An unknown
+ *  id touches nothing. */
 export async function touchQuickMatchActivity(id: string, now: Date = new Date()): Promise<void> {
   await sql`
     update quick_matches
     set last_activity_at = ${now},
-        expires_at = case when saved_by_user_id is null then ${expiryFrom(now)}::timestamptz else expires_at end
+        expires_at = case when saved_by_user_id is null then ${expiryFrom(now)}::timestamptz else expires_at end,
+        reminder_sent_at = case when saved_by_user_id is null then null else reminder_sent_at end
     where id = ${id}`;
 }
 
@@ -36,7 +42,8 @@ export async function touchQuickMatchActivityForFixture(fixtureId: string, now: 
   await sql`
     update quick_matches q
     set last_activity_at = ${now},
-        expires_at = case when q.saved_by_user_id is null then ${expiryFrom(now)}::timestamptz else q.expires_at end
+        expires_at = case when q.saved_by_user_id is null then ${expiryFrom(now)}::timestamptz else q.expires_at end,
+        reminder_sent_at = case when q.saved_by_user_id is null then null else q.reminder_sent_at end
     from fixtures f
     join divisions d on d.id = f.division_id
     where f.id = ${fixtureId} and q.competition_id = d.competition_id`;
