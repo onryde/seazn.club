@@ -274,6 +274,26 @@ describe("NeedsYou", () => {
     expect(html).toContain("Open scoring");
     expect(html).not.toContain("Assign scorer");
   });
+  // W4 T11 (X-LE-10; R24 pick 1A): late players waiting to join a started knockout — the brief's sentence, the division
+  // and stage named, "Open bracket" onto the division's Fixtures tab (where the stage card offers Add to bracket).
+  it("late_players_waiting: one amber row per division, the brief's sentence, opening the Fixtures tab", () => {
+    let checked = 0;
+    for (const [count, title] of [
+      [1, "1 late player waiting — add to bracket"],
+      [3, "3 late players waiting — add to bracket"],
+    ] as const) {
+      const d = div({ phase: "scheduled", attention: [{ kind: "late_players_waiting", count, stageName: "Cup" }] });
+      const [item, ...rest] = needsYouItems(en, desk(d, 1), names, "org", "comp", "en");
+      expect(rest, "one row").toEqual([]);
+      expect(item).toMatchObject({ kind: "late_players_waiting", severity: "amber", title });
+      expect(item!.sub).toBe(t(en, "knockout.lateWaiting.sub", { division: "Premier Division", stage: "Cup" }));
+      expect(item!.sub).toContain("Premier Division");
+      expect(item!.sub).toContain("Cup");
+      expect(item!.action).toEqual({ label: "Open bracket", href: "/o/org/c/comp/d/premier-division?tab=fixtures" });
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
   it("loop R M7(e): every Needs-you action is a 44px tap target below lg (768 and 834 are touch widths), compact only at lg", () => {
     // The desktop row (md and up) carried `py-1.5 text-xs` — 28px at 768, a touch width. Each row's two actions (the
     // phone stack and the md row) are read; every item, red and amber.
@@ -494,6 +514,7 @@ describe("DivisionLedger", () => {
       tz: "Europe/London",
       awaitingRegistrations: 0,
       bansToReview: 0,
+      lateWaiting: [],
     };
     const phase = resolvePhase(phaseInput);
     const attention = resolveAttention(phaseInput);

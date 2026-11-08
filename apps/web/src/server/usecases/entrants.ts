@@ -1055,7 +1055,11 @@ export async function writeEntrantPatch(
     // An automatic arrival (case (c) only, never a refusal): the rounds they were away for are missed and score 0
     // (ruling 251), and they rejoin at the next round's Pair. Null before Start or with no running Swiss.
     if (reinstating && !DEPARTED_STATUSES.has(row.status)) {
-      const late = await admitSwissLateEntrant(tx, auth, row.division_id, id, "reinstate");
+      // W4 T11 (K13): into a started root knockout the reinstated entrant WAITS — their walked-over seat is not given back
+      // by the flip; the organiser's tap reverses their own walkover (`placeWaitingKnockoutEntrant`).
+      const late =
+        (await admitSwissLateEntrant(tx, auth, row.division_id, id, "reinstate")) ??
+        (await admitKnockoutLateEntrant(tx, auth, row.division_id, id, "reinstate"));
       if (late) [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
     }
     if (members) {

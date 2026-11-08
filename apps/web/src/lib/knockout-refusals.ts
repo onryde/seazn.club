@@ -37,7 +37,8 @@ export type KnockoutRefusalCode =
   // stage has started, so Rebuild fixtures would draw the field again with them in it).
   | "KO_LATE_ENTRY_NO_SLOT"
   // T10 (X-LE-13): an Undo, Redo or Restore that would step across a knockout late entry (history.ts `UNDO_BARRIER_TYPES`).
-  | "KO_LATE_ENTRY_NOT_UNDOABLE";
+  | "KO_LATE_ENTRY_NOT_UNDOABLE"
+  | "KO_LATE_ENTRY_NOT_WAITING";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -101,6 +102,13 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 409,
     en: "Adding a late player can't be undone. Withdraw the player instead.",
     key: "knockout.refusal.KO_LATE_ENTRY_NOT_UNDOABLE",
+  },
+  // T11 (X-LE-10): the one-tap place route on an entrant that does not wait on this stage — never marked, already placed,
+  // placed by a Rebuild, or withdrawn since.
+  KO_LATE_ENTRY_NOT_WAITING: {
+    status: 409,
+    en: "This player isn't waiting to join this bracket.",
+    key: "knockout.refusal.KO_LATE_ENTRY_NOT_WAITING",
   },
 };
 

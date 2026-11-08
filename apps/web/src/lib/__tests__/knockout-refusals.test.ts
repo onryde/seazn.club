@@ -35,6 +35,8 @@ const PLAN_CODES = [
   "KO_LATE_ENTRY_NO_SLOT",
   // T10 (X-LE-13): Add late player has no Undo; the refusal points to Withdraw.
   "KO_LATE_ENTRY_NOT_UNDOABLE",
+  // T11 (X-LE-10): the one-tap place route, on an entrant that does not wait on this stage.
+  "KO_LATE_ENTRY_NOT_WAITING",
 ] as const;
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
@@ -129,6 +131,14 @@ describe("KNOCKOUT_REFUSALS (W4 app-A)", () => {
       status: 409,
       en: "Adding a late player can't be undone. Withdraw the player instead.",
       key: "knockout.refusal.KO_LATE_ENTRY_NOT_UNDOABLE",
+    });
+  });
+
+  it("KO_LATE_ENTRY_NOT_WAITING: 409 (the entrant's state, not the request, is wrong), with its sentence", () => {
+    expect(KNOCKOUT_REFUSALS.KO_LATE_ENTRY_NOT_WAITING).toEqual({
+      status: 409,
+      en: "This player isn't waiting to join this bracket.",
+      key: "knockout.refusal.KO_LATE_ENTRY_NOT_WAITING",
     });
   });
 

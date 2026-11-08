@@ -40,6 +40,9 @@ export interface LateLine {
    *  names no loser), and a reopened bye does not revive it, so such a bye is never case (1). Reachable only as a bracket
    *  of four with third place that lost a player before Start. */
   loserFed: boolean;
+  /** The entrant a withdrawal's walkover on this line was written AGAINST (`outcome.loser`), else null. Read by the tap on
+   *  a REINSTATED entrant (`decideWaitingEntrant`): only their own walkover is theirs to reverse. */
+  walkoverLoser: string | null;
 }
 
 export type KnockoutLateDecision =
@@ -96,5 +99,22 @@ export function decideKnockoutLateEntry(input: KnockoutLateInput): KnockoutLateD
   }
   const slot = withdrawnSlot(input.lines);
   if (slot !== null) return { case: "withdrawn_slot", lineId: slot.line.id, seat: slot.seat, reverse: slot.reverse };
+  return { case: "refused", canRebuild: !input.stageStarted };
+}
+
+/**
+ * W4 T11 (X-LE-10, K13): the organiser's tap on an entrant WAITING to join the bracket (an automatic arrival, ruling 271).
+ * A newcomer — no seat anywhere in the stage — runs `decideKnockoutLateEntry`, the cases "Add late player" runs. A
+ * REINSTATED entrant still holds the seat their withdrawal walked over (the cascade leaves the departed entrant seated),
+ * so their tap only ever gives that seat back: their own round-1 walkover, nothing played on it, its winner not started
+ * round 2, is reversed (case (2) on their own seat). Any other seat they hold — a bye carried past round 1, a played
+ * line, a walkover they WON — leaves them where they are: refused, never a second seat beside the first (X-LE-7).
+ */
+export function decideWaitingEntrant(input: KnockoutLateInput & { entrantId: string; holdsSeat: boolean }): KnockoutLateDecision {
+  if (!input.holdsSeat) return decideKnockoutLateEntry(input);
+  const own = input.lines.find((l) => l.home === input.entrantId || l.away === input.entrantId);
+  if (own !== undefined && own.reason === "withdrew" && own.walkoverLoser === input.entrantId && !own.played && !own.nextStarted) {
+    return { case: "withdrawn_slot", lineId: own.id, seat: own.home === input.entrantId ? "home" : "away", reverse: true };
+  }
   return { case: "refused", canRebuild: !input.stageStarted };
 }

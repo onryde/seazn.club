@@ -49,7 +49,7 @@ const drawable = (o: Partial<PhaseStage> = {}): PhaseStage =>
 const seedSlotFx = (stageId: string, o: Partial<PhaseFixture> = {}): PhaseFixture =>
   fx({ id: `${stageId}-slot`, stageId, awaitsSeedDraw: true, status: "scheduled", scheduledAt: null, ...o });
 const input = (o: Partial<PhaseInput> = {}): PhaseInput => ({
-  divisionStatus: "active", stages: [stage()], fixtures: [fx()], now: NOW, tz: TZ, awaitingRegistrations: 0, bansToReview: 0, ...o,
+  divisionStatus: "active", stages: [stage()], fixtures: [fx()], now: NOW, tz: TZ, awaitingRegistrations: 0, bansToReview: 0, lateWaiting: [], ...o,
 });
 
 describe("localDateKey", () => {
@@ -789,6 +789,69 @@ describe("resolveAttention", () => {
         .toBeGreaterThan(ledgerRank({ phase: "match_day", attention: [] }));
     });
   });
+  // W4 T11 (X-LE-10, K7, ruling 271): late players waiting to join a started root knockout — automatic arrivals the app
+  // never places. One row per stage the desk counted; copy "{count} late player(s) waiting — add to bracket".
+  describe("late_players_waiting (W4 T11)", () => {
+    it("the empty case first: no waiting list, or a stage counted at zero, raises nothing", () => {
+      expect(resolveAttention(input({ lateWaiting: [] })).some((a) => a.kind === "late_players_waiting")).toBe(false);
+      expect(resolveAttention(input({ lateWaiting: [{ stageName: "Cup", count: 0 }] })).some((a) => a.kind === "late_players_waiting")).toBe(false);
+    });
+    it("is raised from each counted stage, with its count and name", () => {
+      expect(resolveAttention(input({ lateWaiting: [{ stageName: "Cup", count: 2 }] }))).toContainEqual({
+        kind: "late_players_waiting",
+        count: 2,
+        stageName: "Cup",
+      });
+      expect(resolveAttention(input({ lateWaiting: [{ stageName: "Main", count: 1 }] }))).toContainEqual({
+        kind: "late_players_waiting",
+        count: 1,
+        stageName: "Main",
+      });
+    });
+    it("is AMBER — the player is owed a place, but every match already drawn can be played", () => {
+      expect(ATTENTION_SEVERITY.late_players_waiting).toBe("amber");
+    });
+    it("is never raised before Start: a waiting marker is written only after it (and a setup division reads setting_up)", () => {
+      expect(resolveAttention(input({ divisionStatus: "setup", lateWaiting: [{ stageName: "Cup", count: 1 }] })).some((a) => a.kind === "late_players_waiting")).toBe(false);
+      let checked = 0;
+      for (const divisionStatus of ["scheduled", "active", "completed"] as const) {
+        expect(resolveAttention(input({ divisionStatus, lateWaiting: [{ stageName: "Cup", count: 1 }] })), divisionStatus).toContainEqual({
+          kind: "late_players_waiting",
+          count: 1,
+          stageName: "Cup",
+        });
+        checked++;
+      }
+      expect(checked).toBe(3);
+    });
+    it("never outranks a red: a stage owing its fixtures leads, and the ledger rank is the red one", () => {
+      const o = { stages: [stage({ hasFixtures: false })], fixtures: [], lateWaiting: [{ stageName: "Cup", count: 3 }] };
+      const kinds = resolveAttention(input(o)).map((a) => a.kind);
+      expect(kinds[0]).toBe("needs_fixtures");
+      expect(kinds).toContain("late_players_waiting");
+      const late = { kind: "late_players_waiting", count: 3, stageName: "Cup" } as const;
+      expect(ledgerRank({ phase: "scheduled", attention: [late] })).toBe(ledgerRank({ phase: "scheduled", attention: [] }));
+    });
+    it("sits after the match ambers and before bans and registrations (KIND_ORDER)", () => {
+      const fixtures = [fx({ id: "u", status: "scheduled", scheduledAt: null })];
+      const kinds = resolveAttention(input({ fixtures, lateWaiting: [{ stageName: "Cup", count: 1 }], bansToReview: 1, awaitingRegistrations: 1 })).map((a) => a.kind);
+      expect(kinds).toEqual(["unscheduled", "late_players_waiting", "bans_waiting", "registrations_waiting"]);
+    });
+    it("never moves the phase", () => {
+      const shapes: Partial<PhaseInput>[] = [
+        {},
+        { fixtures: [fx({ id: "a", status: "in_play", hasScorer: true })] },
+        { divisionStatus: "completed", stages: [stage({ status: "complete" })], fixtures: [fx({ id: "a", status: "decided" })] },
+      ];
+      const phases = new Set<string>();
+      for (const o of shapes) {
+        const without = resolvePhase(input({ ...o, lateWaiting: [] }));
+        expect(resolvePhase(input({ ...o, lateWaiting: [{ stageName: "Cup", count: 2 }] }))).toBe(without);
+        phases.add(without);
+      }
+      expect(phases.size).toBeGreaterThanOrEqual(3);
+    });
+  });
   it("orders red before amber before slate", () => {
     const stages = [drawable()];
     const fixtures = [seedSlotFx("fin"), fx({ id: "u", scheduledAt: null })];
@@ -1038,7 +1101,7 @@ describe("isUnscheduledFixture", () => {
     ];
     const row = resolveAttention({
       divisionStatus: "active", stages: [], fixtures,
-      now: "2026-09-05T18:00:00Z", tz: "UTC", awaitingRegistrations: 0, bansToReview: 0,
+      now: "2026-09-05T18:00:00Z", tz: "UTC", awaitingRegistrations: 0, bansToReview: 0, lateWaiting: [],
     }).find((a) => a.kind === "unscheduled");
     expect(row?.kind === "unscheduled" ? row.count : 0).toBe(fixtures.filter(isUnscheduledFixture).length);
   });
@@ -1081,7 +1144,7 @@ describe("isResultMissing", () => {
     const nowIso = "2026-09-05T18:00:00Z";
     const row = resolveAttention({
       divisionStatus: "active", stages: [], fixtures,
-      now: nowIso, tz: "UTC", awaitingRegistrations: 0, bansToReview: 0,
+      now: nowIso, tz: "UTC", awaitingRegistrations: 0, bansToReview: 0, lateWaiting: [],
     }).find((a) => a.kind === "result_missing");
     expect(row?.kind === "result_missing" ? row.fixtureIds : []).toEqual(
       fixtures.filter((f) => isResultMissing(f, Date.parse(nowIso))).map((f) => f.id),

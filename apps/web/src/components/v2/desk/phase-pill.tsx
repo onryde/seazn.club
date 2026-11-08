@@ -37,6 +37,8 @@ export const RED_PILL_KEY: Record<Attention["kind"], DictionaryKey | null> = {
   result_missing: null,
   // Amber: its own pill BESIDE the phase (`BansToReviewPill` below), never in place of it.
   bans_waiting: null,
+  // Amber (W4 T11): the Needs-you row says it; the pill keeps the phase.
+  late_players_waiting: null,
   registrations_waiting: null,
 };
 

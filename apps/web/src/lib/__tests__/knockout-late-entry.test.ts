@@ -6,7 +6,7 @@
 //
 // Sport-free by nature: the decision reads seats, seeds, statuses and three booleans, no sport field.
 import { describe, expect, it } from "vitest";
-import { decideKnockoutLateEntry, type KnockoutLateDecision, type LateLine } from "@/lib/knockout-late-entry";
+import { decideKnockoutLateEntry, decideWaitingEntrant, type KnockoutLateDecision, type LateLine } from "@/lib/knockout-late-entry";
 import { engineLineDrawPosition, rb4L4ExpectedLine } from "@/lib/__tests__/rb4-l4-oracle";
 
 /** A round-1 line of a bracket of `size`: an open match between two players unless the row says otherwise. */
@@ -24,6 +24,7 @@ function line(size: number, seq: number, o: Partial<LateLine> = {}): LateLine {
     withdrawnSeat: null,
     played: false,
     loserFed: false,
+    walkoverLoser: null,
     ...o,
   };
 }
@@ -32,7 +33,7 @@ const bye = (size: number, seq: number, holder: string, seed: number | null, o: 
   line(size, seq, { home: holder, away: null, status: "forfeited", reason: "bye", holderSeed: seed, ...o });
 /** A withdrawal's walkover on line `seq`: the home seat withdrew, the away seat walked over. */
 const walkover = (size: number, seq: number, o: Partial<LateLine> = {}) =>
-  line(size, seq, { status: "forfeited", reason: "withdrew", withdrawnSeat: "home", ...o });
+  line(size, seq, { status: "forfeited", reason: "withdrew", withdrawnSeat: "home", walkoverLoser: `h${seq}`, ...o });
 
 /** The oracle's line for `lines`' byes (their holders' seeds), or null. */
 function oracle(lines: readonly LateLine[], round1Lines: number): string | null {
@@ -231,5 +232,87 @@ describe("decideKnockoutLateEntry (X-LE-3…X-LE-8)", () => {
       }
     }
     expect(checked).toBeGreaterThan(0);
+  });
+});
+
+// W4 app-A Task 11 (X-LE-10, K13): the tap on a WAITING entrant. A newcomer (no seat in the stage) runs the same cases as
+// "Add late player"; a REINSTATED entrant still holds their old seat, so their tap may only give them that seat back — the
+// walkover their own withdrawal wrote, reversed — never a second seat beside it. Expected values are the rulebook's cases.
+describe("decideWaitingEntrant (X-LE-10, K13)", () => {
+  /** A reinstated `me` on line 2's home seat, walked over by their own withdrawal (no longer departed: reinstated). */
+  const mine = (o: Partial<LateLine> = {}) => walkover(4, 2, { home: "me", withdrawnSeat: null, walkoverLoser: "me", ...o });
+  const ROWS: { name: string; lines: LateLine[]; holdsSeat: boolean; stageStarted?: boolean; expected: KnockoutLateDecision }[] = [
+    // The empty case first: no lines and no seat is the newcomer's answer to an empty round 1.
+    { name: "no round-1 lines, no seat: refused, Rebuild offered", lines: [], holdsSeat: false, expected: { case: "refused", canRebuild: true } },
+    {
+      name: "a newcomer (no seat) takes the bye, as Add late player does",
+      lines: [bye(4, 1, "S1", 1), line(4, 2)],
+      holdsSeat: false,
+      expected: { case: "bye", lineId: "L1" },
+    },
+    {
+      name: "K13 a reinstated player's own walkover is reversed: their seat, not the open bye",
+      lines: [bye(4, 1, "S1", 1), mine()],
+      holdsSeat: true,
+      stageStarted: true,
+      expected: { case: "withdrawn_slot", lineId: "L2", seat: "home", reverse: true },
+    },
+    {
+      name: "K13 … the away seat",
+      lines: [line(4, 1), mine({ home: "h2", away: "me", walkoverLoser: "me" })],
+      holdsSeat: true,
+      stageStarted: true,
+      expected: { case: "withdrawn_slot", lineId: "L2", seat: "away", reverse: true },
+    },
+    {
+      name: "K13 the walkover winner started round 2: refused, never a second seat in the open bye",
+      lines: [bye(4, 1, "S1", 1), mine({ nextStarted: true })],
+      holdsSeat: true,
+      stageStarted: true,
+      expected: { case: "refused", canRebuild: false },
+    },
+    {
+      name: "K13 their line was played before they left: refused",
+      lines: [line(4, 1), mine({ played: true })],
+      holdsSeat: true,
+      stageStarted: true,
+      expected: { case: "refused", canRebuild: false },
+    },
+    {
+      name: "K13 the walkover went the OTHER way (they won it, then left later): not theirs to reverse",
+      lines: [line(4, 1), mine({ walkoverLoser: "h9" })],
+      holdsSeat: true,
+      stageStarted: true,
+      expected: { case: "refused", canRebuild: false },
+    },
+    {
+      name: "K13 they held a bye (now carried past round 1): refused",
+      lines: [bye(4, 1, "me", 1), line(4, 2)],
+      holdsSeat: true,
+      stageStarted: true,
+      expected: { case: "refused", canRebuild: false },
+    },
+    {
+      name: "K13 a seat only beyond round 1 (no round-1 line names them): refused, Rebuild when nothing started",
+      lines: [line(4, 1), line(4, 2)],
+      holdsSeat: true,
+      expected: { case: "refused", canRebuild: true },
+    },
+  ];
+
+  it("answers every row its case", () => {
+    let checked = 0;
+    for (const r of ROWS) {
+      const got = decideWaitingEntrant({
+        lines: r.lines,
+        stageStarted: r.stageStarted ?? false,
+        caseTwoOnly: false,
+        entrantId: "me",
+        holdsSeat: r.holdsSeat,
+      });
+      expect(got, r.name).toEqual(r.expected);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
   });
 });

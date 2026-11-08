@@ -32,6 +32,7 @@ import { awaitsWalkoverSql } from "@/server/engine-db/system-bye-sql";
 import { kickoffsOf } from "@/server/engine-db/kickoff";
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { cardStatsCountsPlayed, listDivisionCardStats, type NextFixture } from "./card-stats";
+import { DEPARTED_STATUSES } from "./entrants";
 import { countsAsMatch } from "@/lib/run-sheet-groups";
 import { listDivisions } from "./divisions";
 
@@ -340,7 +341,7 @@ export async function getCompetitionDesk(
   // A dynamic import, not a static one: match-day.ts reads this desk (`getMatchDay` → `getCompetitionDesk`), so a static import
   // here would close a module cycle — and a test mocking this module through `importOriginal` would wait on itself.
   const { countFixturesToday } = await import("./match-day");
-  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday } = await withTenant(auth.orgId, async (tx) => {
+  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting } = await withTenant(auth.orgId, async (tx) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const stages = ids.length
       ? await tx<StageRaw[]>`
@@ -496,7 +497,20 @@ export async function getCompetitionDesk(
              and (dl.expires_at is null or dl.expires_at > ${now})`
       : [];
     const fixturesToday = await countFixturesToday(tx, competitionId, now);
-    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday };
+    // W4 T11 (X-LE-10, K7): late players waiting to join a started root knockout — entrants still in the field whose
+    // marker names a stage not yet complete (a complete stage has no round 1 left to join), counted per stage.
+    const lateWaiting = ids.length
+      ? await tx<{ division_id: string; stage_name: string; count: number }[]>`
+          select e.division_id, s.name as stage_name, count(*)::int as count
+            from entrants e
+            join stages s on s.id = e.knockout_waiting_stage_id
+           where e.division_id = any(${ids})
+             and s.status <> 'complete'
+             and e.status not in ${tx([...DEPARTED_STATUSES])}
+           group by e.division_id, s.id, s.name, s.seq
+           order by s.seq`
+      : [];
+    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting };
   });
   const fixturesWithScorer = new Set([...fixturesWithOfficial, ...fixturesWithLink].map((a) => a.fixture_id));
   // T16 fix round 1, R4 (D12): which online rounds are open. stage_round_opens is SEALED (no app_user grant), so it is
@@ -619,6 +633,7 @@ export async function getCompetitionDesk(
       // any sport, and without a model there is no Discipline tab for "Review" to open. The module is resolved only for
       // a division with something to show.
       bansToReview: disciplineEntitled && (s?.bans_to_review ?? 0) > 0 && hasDisciplineTab(d) ? s!.bans_to_review : 0,
+      lateWaiting: lateWaiting.filter((w) => w.division_id === d.id).map((w) => ({ stageName: w.stage_name, count: w.count })),
     };
     const attention = resolveAttention(input);
     const needsDraw = attention.find((a) => a.kind === "needs_draw");

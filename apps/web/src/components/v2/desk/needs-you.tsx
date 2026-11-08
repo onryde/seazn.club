@@ -203,6 +203,16 @@ export function needsYouItems(
           });
           break;
         }
+        // W4 T11 (X-LE-10; R24 pick 1A): late players waiting to join a started knockout — one row per division, its
+        // stage named; "Open bracket" lands on the Fixtures tab, where the stage card offers Add to bracket per player.
+        case "late_players_waiting":
+          items.push({
+            key: needsYouKey(d.id, "late_players_waiting"), severity: sev, kind: a.kind,
+            title: plural(dict, "knockout.lateWaiting", a.count, locale),
+            sub: t(dict, "knockout.lateWaiting.sub", { division: d.name, stage: a.stageName }),
+            action: { label: t(dict, "knockout.lateWaiting.action"), href: routes.division(org, comp, d.slug, "fixtures") },
+          });
+          break;
         case "registrations_waiting":
           waiting += a.count; // one competition-level row, not one per division
           break;

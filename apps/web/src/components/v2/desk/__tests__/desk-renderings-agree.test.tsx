@@ -52,6 +52,10 @@ type Leading = (typeof LEADING)[number];
 
 /** Pairs the model makes impossible, each with the rule that forbids it. */
 const UNREACHABLE: Record<string, string> = {
+  // W4 T11: a waiting marker is written only after Start, and the row is never raised in a `setup` division. A started
+  // division reads `setting_up` only by rule 4 — an open stage owing work, whose red row leads — or by rule 6, nothing
+  // dated and nothing played, where every match still to play is undated and `unscheduled` (ordered first) leads.
+  "setting_up/late_players_waiting": "raised only after Start, where setting_up means a red row or unscheduled leads",
   // Rule 2 refuses `finished` while any open stage owes work, and both of
   // these rows ARE an open stage owing work.
   "finished/needs_draw": "an open stage owing its draw blocks rule 2",
@@ -98,6 +102,8 @@ type Shape = {
   awaitingRegistrations?: number;
   /** Pending bans in a division whose discipline rules are on (owner-approved 3A). */
   bansToReview?: number;
+  /** W4 T11: late players waiting to join a started root knockout, per stage. */
+  lateWaiting?: PhaseInput["lateWaiting"];
   entrants?: number;
 };
 
@@ -278,6 +284,25 @@ const SHAPES: Shape[] = [
     fixtures: [fxt({ id: "a" })],
     divisionStatus: "completed", bansToReview: 1,
   },
+  // W4 T11 (X-LE-10): a paid player waiting to join a started knockout's bracket, in each phase the row can lead.
+  {
+    why: "scheduled/late_players_waiting — a knockout under way, the next round dated, a paid player not yet in the bracket",
+    stages: [st({ id: "ko", name: "Cup" })],
+    fixtures: [fxt({ id: "a", stageId: "ko" }), fxt({ id: "b", stageId: "ko", status: "scheduled", scheduledAt: FUTURE })],
+    lateWaiting: [{ stageName: "Cup", count: 1 }],
+  },
+  {
+    why: "match_day/late_players_waiting — round 1 being played today, two late arrivals waiting",
+    stages: [st({ id: "ko", name: "Cup" })],
+    fixtures: [fxt({ id: "a", stageId: "ko", status: "in_play", hasScorer: true })],
+    lateWaiting: [{ stageName: "Cup", count: 2 }],
+  },
+  {
+    why: "finished/late_players_waiting — every bracket match played, the stage not completed, a reinstated player still waiting",
+    stages: [st({ id: "ko", name: "Cup" })],
+    fixtures: [fxt({ id: "a", stageId: "ko" })],
+    lateWaiting: [{ stageName: "Cup", count: 1 }],
+  },
   {
     why: "finished/none — a completed season",
     stages: [st({ status: "complete" })],
@@ -295,6 +320,7 @@ function resolve(shape: Shape) {
     stages: shape.stages, fixtures: shape.fixtures, now: NOW, tz: TZ,
     awaitingRegistrations: shape.awaitingRegistrations ?? 0,
     bansToReview: shape.bansToReview ?? 0,
+    lateWaiting: shape.lateWaiting ?? [],
   };
   const phase = resolvePhase(input);
   const attention = resolveAttention(input);

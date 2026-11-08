@@ -201,7 +201,9 @@ export async function reverseWithdrawnWalkover(
   if (isByeLine(row)) throw refuse("the line is a bye");
   const withdrawnId = seat === "home" ? row.home_entrant_id : row.away_entrant_id;
   const opponentId = seat === "home" ? row.away_entrant_id : row.home_entrant_id;
-  if (withdrawnId === null || !row.departed) throw refuse(`the ${seat} seat holds no departed entrant`);
+  // T11 (K13): the seat may also be the newcomer's OWN — a reinstated entrant whose own walkover is reversed, the seat
+  // they never left (no longer departed: they were reinstated).
+  if (withdrawnId === null || (!row.departed && withdrawnId !== newcomerId)) throw refuse(`the ${seat} seat holds no departed entrant`);
   if (opponentId === null) throw refuse("nobody holds the other seat");
   // The line's live events: a void and the event it voids are both gone.
   const live = await tx<{ id: string; type: string; payload: { reason?: unknown; by?: unknown } }[]>`

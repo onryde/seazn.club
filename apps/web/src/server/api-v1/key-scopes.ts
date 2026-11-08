@@ -274,6 +274,8 @@ const RULES: RouteRule[] = [
   { method: "GET", path: "/stages/:id/swiss-cut", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/officials/source", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/rebuild", scope: "manage", pin: "stage" },
+  // W4 T11 (X-LE-10): the organiser's one tap that places a waiting late player — a bracket write, as Rebuild.
+  { method: "POST", path: "/stages/:id/late-entrants/:entrantId/place", scope: "manage", pin: "stage" },
   // Per-stage match-format override (design 2026-09-17 §T3). Same scope and
   // pin as its closest sibling `PUT /stages/:id/court-tags`, and it grants a
   // key nothing it did not already have: `POST /divisions/:id/stages` is

@@ -37,6 +37,11 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * KO_LATE_ENTRY_NOT_UNDOABLE. Eight seeded: no bye, so the add is refused 409 KO_LATE_ENTRY_NO_SLOT (can_rebuild, nothing
  * written); once a round-1 player withdraws, the next add takes that seat and the withdrawal's walkover is reversed.
  *
+ * T11 (X-LE-10, K13; ruling 271): an AUTOMATIC arrival waits for the organiser's tap. Eight seeded Started, one withdrawn
+ * (the walkover) then reinstated through PATCH: the line is unchanged and nothing is placed; the one-tap route
+ * (`POST /stages/{id}/late-entrants/{entrantId}/place`) gives them their own seat back, and a second tap is refused 409
+ * KO_LATE_ENTRY_NOT_WAITING.
+ *
  * Own fresh owner; keyless; every read and write is a v1 route. Every check is counted, and a run that checked nothing fails.
  * SMOKE_ONLY=w4KnockoutA runs it alone (SELECTABLE_SUITES).
  */
@@ -45,8 +50,8 @@ export async function w4KnockoutASuite(): Promise<void> {
   // its slot across an 8 → 9 Rebuild). T5: 1 (Undo refuses across a confirmed draw). T6: 1 (Complete refuses a bracket
   // with its third-place match unplayed). T7: 1 (an unseeded draw replays). T8: 2 (6 → 7 places in a bye; 8 → 9 redraws
   // once). T10: 2 (a late player takes the lowest-seeded holder's bye and Undo refuses; no slot is refused, then a
-  // withdrawn seat is taken).
-  const EXPECTED_CHECKS = 10;
+  // withdrawn seat is taken). T11: 1 (a reinstated player waits, and one tap gives their seat back).
+  const EXPECTED_CHECKS = 11;
   let checked = 0;
   const w4Check = (label: string, cond: boolean) => {
     checked++;
@@ -537,6 +542,36 @@ export async function w4KnockoutASuite(): Promise<void> {
     w4Check(
       "w4a X-LE-5: a full round 1 refuses a late player (KO_LATE_ENTRY_NO_SLOT, Rebuild offered, nothing written); after a withdrawal the next takes the seat" +
         (ok ? "" : ` — start ${ko.started}, refused ${refused.status} ${JSON.stringify(refusedErr)}, entrants ${count}, withdraw ${withdrawn?.status ?? "-"}, walked ${walked?.status ?? "-"}, add ${added.status} ${JSON.stringify(added.json).slice(0, 200)}, line ${JSON.stringify(line).slice(0, 160)}`),
+      ok,
+    );
+  }
+
+  // Check 11 (T11, X-LE-10/K13): eight seeded Started; round 1's first line loses its home player (the cascade walks it
+  // over), who is then reinstated through PATCH — an automatic arrival. Expected (ruling 271): the walked-over line is
+  // unchanged (nobody placed by the app); one tap on the place route reverses their own walkover — the line is theirs
+  // against the same opponent, unplayed again — and a second tap is refused 409 KO_LATE_ENTRY_NOT_WAITING.
+  {
+    const ko = await startedKnockout(owner, "Late wait", 8);
+    const line0 = (await ko.fixtures()).find((f) => f.round_no === 1 && f.seq_in_round === 1);
+    const gone = line0?.home_entrant_id ?? undefined;
+    const withdrawn = gone ? await v1(owner, `/api/v1/entrants/${gone}/withdraw`, "POST") : undefined;
+    const walked = (await ko.fixtures()).find((f) => f.id === line0?.id);
+    const back = gone ? await v1(owner, `/api/v1/entrants/${gone}`, "PATCH", { status: "registered" }) : undefined;
+    const still = (await ko.fixtures()).find((f) => f.id === line0?.id);
+    const tap = await v1(owner, `/api/v1/stages/${ko.stageId}/late-entrants/${gone}/place`, "POST");
+    const placed = v1data<LateEntry>(tap);
+    const line = (await ko.fixtures()).find((f) => f.id === line0?.id);
+    const again = await v1(owner, `/api/v1/stages/${ko.stageId}/late-entrants/${gone}/place`, "POST");
+    const againErr: LateError = again.json?.error;
+    const ok =
+      ko.started === 200 && line0 !== undefined && gone !== undefined && withdrawn?.status === 200 && walked?.status === "forfeited" &&
+      back?.status === 200 && JSON.stringify(still) === JSON.stringify(walked) &&
+      tap.status === 200 && placed?.case === "withdrawn_slot" && placed.fixture_id === line0.id && placed.opponent_id === line0.away_entrant_id &&
+      line?.home_entrant_id === gone && line?.away_entrant_id === line0.away_entrant_id && line?.status === "scheduled" &&
+      again.status === 409 && againErr?.code === "KO_LATE_ENTRY_NOT_WAITING";
+    w4Check(
+      "w4a X-LE-10: a reinstated player waits (nothing placed), one tap gives their own seat back, a second tap is KO_LATE_ENTRY_NOT_WAITING" +
+        (ok ? "" : ` — start ${ko.started}, withdraw ${withdrawn?.status ?? "-"}, walked ${walked?.status ?? "-"}, reinstate ${back?.status ?? "-"}, still ${JSON.stringify(still).slice(0, 120)}, tap ${tap.status} ${JSON.stringify(tap.json).slice(0, 200)}, line ${JSON.stringify(line).slice(0, 160)}, again ${again.status} ${againErr?.code ?? "-"}`),
       ok,
     );
   }

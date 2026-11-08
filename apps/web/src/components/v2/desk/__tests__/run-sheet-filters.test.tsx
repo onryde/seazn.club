@@ -167,6 +167,7 @@ function authority(): { resultMissing: number[]; unscheduled: number } {
     tz: TZ,
     awaitingRegistrations: 0,
     bansToReview: 0,
+    lateWaiting: [],
   };
   const out = resolveAttention(input);
   const missing = out.find((a) => a.kind === "result_missing");

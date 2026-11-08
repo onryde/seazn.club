@@ -15,9 +15,10 @@ import type postgres from "postgres";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { KnockoutLateEntryResult } from "@/server/api-v1/schemas";
 import { isByeLine, type ByeLineRow } from "@/lib/bye-line";
-import { decideKnockoutLateEntry, type KnockoutLateDecision, type LateLine } from "@/lib/knockout-late-entry";
+import { decideKnockoutLateEntry, decideWaitingEntrant, type KnockoutLateDecision, type LateLine } from "@/lib/knockout-late-entry";
 import { isRootKnockoutStage } from "@/lib/open-entry-stages";
 import { withTenant } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
 import { knockoutLineDrawPosition, reopenByeLine, reverseWithdrawnWalkover } from "./bracket-lines";
 import { DEPARTED_STATUSES } from "./entrants";
 import { fixtureStartedSql, stageHasStarted } from "./fixture-started-sql";
@@ -74,6 +75,12 @@ interface RoundOneRow extends ByeLineRow {
   played: boolean;
 }
 
+/** A withdrawal's walkover's loser, off a line's outcome (`withdrew` award), else null. */
+function walkoverLoserOf(outcome: unknown): string | null {
+  const o = outcome as { kind?: unknown; reason?: unknown; loser?: unknown } | null;
+  return o?.kind === "award" && o.reason === "withdrew" && typeof o.loser === "string" ? o.loser : null;
+}
+
 /** The stage's round-1 lines as the decision reads them (`LateLine`). */
 async function roundOneLines(tx: Tx, stage: KnockoutEntryStage): Promise<LateLine[]> {
   const departed = [...DEPARTED_STATUSES];
@@ -118,6 +125,7 @@ async function roundOneLines(tx: Tx, stage: KnockoutEntryStage): Promise<LateLin
       withdrawnSeat,
       played: r.played,
       loserFed: r.loser_to_fixture !== null,
+      walkoverLoser: walkoverLoserOf(r.outcome),
     };
   });
 }
@@ -210,10 +218,30 @@ export async function applyKnockoutLateDecision(
 }
 
 /**
- * Admit `entrantId` (already inserted) into the division's drawn root knockout. Null when there is nothing to do: the
- * division has not started (before Start, Generate's reconcile places a newcomer — Task 8), or it has no root knockout.
- * An organiser's add is placed now, or refused by name (KO_LATE_ENTRY_NO_SLOT, rolling the caller's write back). Every
- * other source is an automatic arrival (Task 11).
+ * T11 (X-LE-10, ruling 271): an AUTOMATIC arrival — a confirmed or paid registration, a waitlist promotion, an import, a
+ * Reinstate — is never placed by the app and never refused (a payment that has moved cannot be un-taken by a 409). It
+ * WAITS: `knockout_waiting_stage_id` names the stage, the desk counts it (`late_players_waiting`), and the organiser's
+ * one tap (`placeWaitingKnockoutEntrant`) runs the cases. Null — nothing marked — when the stage is complete (no round 1
+ * left to join), or the entrant still sits on an undecided line of the stage (a reinstated bye holder whose round-2
+ * opponent is not known yet: the withdrawal walked nothing over, so they never left the bracket). The write is
+ * idempotent: a webhook retry sets the same stage again — one flag.
+ */
+async function markWaiting(tx: Tx, stage: KnockoutEntryStage, entrantId: string): Promise<KnockoutLateEntryResult | null> {
+  if (stage.status === "complete") return null;
+  const [{ in_bracket: inBracket }] = await tx<{ in_bracket: boolean }[]>`
+    select exists (select 1 from fixtures f
+                    where f.stage_id = ${stage.id} and f.outcome is null
+                      and ${entrantId} in (f.home_entrant_id, f.away_entrant_id)) as in_bracket`;
+  if (inBracket) return null;
+  await tx`update entrants set knockout_waiting_stage_id = ${stage.id} where id = ${entrantId}`;
+  return { format: "knockout", entrant_id: entrantId, stage_id: stage.id, case: "waiting" };
+}
+
+/**
+ * Admit `entrantId` (already inserted, or just reinstated) into the division's drawn root knockout. Null when there is
+ * nothing to do: the division has not started (before Start, Generate's reconcile places a newcomer — Task 8), or it has
+ * no root knockout. An organiser's add is placed now, or refused by name (KO_LATE_ENTRY_NO_SLOT, rolling the caller's
+ * write back). Every other source is an automatic arrival, which waits (`markWaiting`, T11).
  */
 export async function admitKnockoutLateEntrant(
   tx: Tx,
@@ -228,7 +256,7 @@ export async function admitKnockoutLateEntrant(
   await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
   const stage = await rootKnockoutStage(tx, divisionId);
   if (stage === null) return null;
-  if (source !== "organiser") return null;
+  if (source !== "organiser") return markWaiting(tx, stage, entrantId);
   const [{ org_id: orgId }] = await tx<{ org_id: string }[]>`select org_id from divisions where id = ${divisionId}`;
   const decision = await decideForStage(tx, stage);
   return applyKnockoutLateDecision(tx, { orgId, divisionId, actorId: auth?.userId ?? null, source }, stage, entrantId, decision);
@@ -250,4 +278,66 @@ export async function afterKnockoutLateEntry(
     return [...new Set(rows.flatMap((r) => (r.next === null ? [r.id] : [r.id, r.next])))];
   });
   afterScheduleWrite(divisionId, competitionId, "schedule", touched);
+}
+
+/**
+ * T11 (X-LE-10, K7, K13): the organiser's one tap on an entrant WAITING to join `stageId` — `POST
+ * /stages/{id}/late-entrants/{entrantId}/place`. Under the `division:` lock (two taps on one bye: the second decides after
+ * the first has applied, never onto the same line), it runs `decideWaitingEntrant` — a newcomer gets the cases "Add late
+ * player" runs; a reinstated entrant only their own walkover back — and applies a placing decision as Add late player does
+ * (`applyKnockoutLateDecision`: the line, its slot, a `knockout_late_entry` barrier row with `source: "organiser"`), then
+ * clears the marker. A refusal is an ANSWER, not an error (200): `refused`, or `rebuild_offered` when nothing in the stage
+ * has started, with `reason: KO_LATE_ENTRY_NO_SLOT` — and the entrant keeps waiting.
+ *
+ * Refused by name: KO_LATE_ENTRY_FED_STAGE when `stageId` is a knockout the root fills and the entrant waits on that root
+ * (the sentence names it); KO_LATE_ENTRY_NOT_WAITING when the entrant does not wait on this stage (never marked, placed
+ * already, swept up by a Rebuild, withdrawn since, or another division's).
+ */
+export async function placeWaitingKnockoutEntrant(auth: AuthCtx, stageId: string, entrantId: string): Promise<KnockoutLateEntryResult> {
+  const { result, divisionId, competitionId } = await withTenant(auth.orgId, async (tx) => {
+    const [st] = await tx<{ division_id: string; competition_id: string }[]>`
+      select s.division_id, d.competition_id from stages s join divisions d on d.id = s.division_id where s.id = ${stageId}`;
+    if (st === undefined) throw new HttpError(404, "stage not found");
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + st.division_id}))`;
+    const root = await rootKnockoutStage(tx, st.division_id);
+    const [e] = await tx<{ status: string; waiting: string | null }[]>`
+      select status, knockout_waiting_stage_id as waiting from entrants where id = ${entrantId} and division_id = ${st.division_id}`;
+    if (root !== null && root.id !== stageId && e !== undefined && e.waiting === root.id) {
+      throw knockoutRefusal("KO_LATE_ENTRY_FED_STAGE", { stage: root.name });
+    }
+    if (root === null || root.id !== stageId || e === undefined || e.waiting !== stageId || DEPARTED_STATUSES.has(e.status)) {
+      throw knockoutRefusal("KO_LATE_ENTRY_NOT_WAITING");
+    }
+    const [seat] = await tx`
+      select 1 from fixtures where stage_id = ${stageId} and ${entrantId} in (home_entrant_id, away_entrant_id) limit 1`;
+    const decision = decideWaitingEntrant({
+      lines: await roundOneLines(tx, root),
+      stageStarted: await stageHasStarted(tx, root.id),
+      caseTwoOnly: CASE_TWO_ONLY_KINDS.includes(root.kind),
+      entrantId,
+      holdsSeat: seat !== undefined,
+    });
+    const base = { divisionId: st.division_id, competitionId: st.competition_id };
+    if (decision.case === "refused") {
+      const refused: KnockoutLateEntryResult = {
+        format: "knockout",
+        entrant_id: entrantId,
+        stage_id: stageId,
+        case: decision.canRebuild ? "rebuild_offered" : "refused",
+        reason: "KO_LATE_ENTRY_NO_SLOT",
+      };
+      return { result: refused, ...base };
+    }
+    const placed = await applyKnockoutLateDecision(
+      tx,
+      { orgId: auth.orgId, divisionId: st.division_id, actorId: auth.userId, source: "organiser" },
+      root,
+      entrantId,
+      decision,
+    );
+    await tx`update entrants set knockout_waiting_stage_id = null where id = ${entrantId}`;
+    return { result: placed, ...base };
+  });
+  await afterKnockoutLateEntry(auth.orgId, divisionId, competitionId, [result]);
+  return result;
 }

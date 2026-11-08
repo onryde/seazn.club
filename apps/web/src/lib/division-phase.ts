@@ -202,6 +202,11 @@ export interface PhaseInput {
    *  with a discipline model (a Discipline tab to review them on). The caller resolves both conditions and passes 0
    *  otherwise; nothing here is ever enabled or confirmed. */
   bansToReview: number;
+  /** W4 T11 (X-LE-10, K7, ruling 271): late players WAITING to join a started root knockout — automatic arrivals (a paid
+   *  registration, a waitlist promotion, an import, a Reinstate) the app never places — one entry per stage with any,
+   *  its count of waiting entrants still in the field. The caller counts `entrants.knockout_waiting_stage_id` on stages
+   *  not complete; empty for every other division. */
+  lateWaiting: readonly { stageName: string; count: number }[];
 }
 
 /** WHICH control the seed-proposal panel is showing for a stage that owes
@@ -270,7 +275,10 @@ export type Attention =
   // Discipline (owner-approved 3A): pending bans the organiser has not reviewed. Raised in every division status — a
   // manual ban can be recorded before Start, a card's after the season ends — and only ever as a prompt: a pending ban
   // blocks nobody until the organiser confirms it.
-  | { kind: "bans_waiting"; count: number };
+  | { kind: "bans_waiting"; count: number }
+  // W4 T11 (X-LE-10, ruling 271): late players waiting to join a started knockout's bracket — the organiser's one tap
+  // places each (the bye, a withdrawn slot). Raised per stage, only after Start (the marker is written only then).
+  | { kind: "late_players_waiting"; count: number; stageName: string };
 
 export type Severity = "red" | "amber" | "slate";
 
@@ -298,6 +306,9 @@ export const ATTENTION_SEVERITY: Record<Attention["kind"], Severity> = {
   // AMBER: time-bound (an unreviewed ban lets the player take the next match) but it never stops a match being played,
   // so it must never outrank the phase the way the stage-blocking reds do.
   bans_waiting: "amber",
+  // AMBER: the player is owed a place before round 1 runs out of slots, but every match already drawn can be played —
+  // it never blocks the bracket the way the stage-blocking reds do.
+  late_players_waiting: "amber",
   registrations_waiting: "slate",
 };
 
@@ -384,6 +395,9 @@ const KIND_ORDER: Attention["kind"][] = [
   "not_recording",
   "unscheduled",
   "result_missing",
+  // W4 T11: after the match ambers — it is about people, not a match — and before bans: a late player's bye or slot
+  // closes as round 1 is played, so this one runs on the bracket's clock.
+  "late_players_waiting",
   // Last of the ambers: the three above are about MATCHES (a live one unrecorded, one undated, one without a result);
   // this one is about a person and is reviewed from a different tab.
   "bans_waiting",
@@ -983,6 +997,13 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   // Not gated by divisionStatus, like the registrations row above: a pending ban is owed its review in every status.
   if (input.bansToReview > 0) {
     out.push({ kind: "bans_waiting", count: input.bansToReview });
+  }
+  // W4 T11: gated on Start — a waiting marker is written only after it (`admitKnockoutLateEntrant`), so a setup division
+  // that somehow carried one would be asking the organiser to place a player into a bracket that has not been drawn.
+  if (input.divisionStatus !== "setup") {
+    for (const w of input.lateWaiting) {
+      if (w.count > 0) out.push({ kind: "late_players_waiting", count: w.count, stageName: w.stageName });
+    }
   }
   return out.sort(
     (a, b) =>

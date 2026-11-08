@@ -226,3 +226,84 @@ describe.runIf(HAS_DB)("W4 delta: bracket bye lines come off the court", () => {
     expect(verdict.filter((v) => !v.expected).length, "non-bye shapes").toBeGreaterThan(0);
   }, 120_000);
 });
+
+// W4 app-A Task 11 (K7, K13; ruling 271) — the delta that lets an automatic arrival WAIT on a started root knockout
+// (`knockout_waiting_stage_id`). A schema change only: stg's pre-flight count 2 is 0, so there is nothing to backfill.
+// Read by glob like the delta above; its statements re-run inside a rolled-back transaction.
+// single-sport: badminton — the delta is a column on entrants and reads no sport field.
+const WAITING_NAME = /^V\d+__w4_entrants_knockout_waiting\.sql$/;
+const waitingFiles = readdirSync(DELTAS).filter((f) => WAITING_NAME.test(f));
+const waitingText = waitingFiles.length === 1 ? readFileSync(resolve(DELTAS, waitingFiles[0]!), "utf8") : "";
+const waitingCode = waitingText.replace(/--.*$/gm, "").trim();
+
+describe("W4 delta: knockout_waiting_stage_id, the file", () => {
+  it("exactly one delta carries the name: an idempotent ADD COLUMN on entrants referencing stages, and its index — no data move", () => {
+    expect(waitingFiles, "one delta named *__w4_entrants_knockout_waiting.sql").toHaveLength(1);
+    expect(waitingCode.split(";").filter((s) => s.trim() !== "").length, "two statements").toBe(2);
+    expect(waitingCode).toMatch(
+      /^alter table entrants add column if not exists knockout_waiting_stage_id uuid\s+references stages\(id\) on delete set null;\s*create index if not exists entrants_knockout_waiting_stage_idx on entrants \(knockout_waiting_stage_id\)\s+where knockout_waiting_stage_id is not null;$/,
+    );
+    expect(waitingCode, "no update statement").not.toMatch(/\bupdate\b/i);
+    expect(waitingText, "the header quotes the pre-flight count").toMatch(/count 2[\s\S]*stg 0 rows/);
+  });
+});
+
+describe.runIf(HAS_DB)("W4 delta: knockout_waiting_stage_id on entrants", () => {
+  it("the column exists, nullable; deleting the stage clears the marker; a second run is a no-op", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "W4 waiting " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open-" + randomUUID().slice(0, 6),
+      sport_key: "badminton",
+      variant_key: "bwf",
+      config: {},
+    });
+    const [entrant] = await createEntrants(auth, division.id, [{ kind: "individual" as const, display_name: "P1", seed: 1, members: [] }]);
+    const [stage] = await createStages(auth, division.id, [{ seq: 1, kind: "knockout", name: "Cup", config: {} }]);
+    const id = entrant!.id;
+
+    const verdict = await rolledBack(async (tx) => {
+      const column = () =>
+        tx<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+          select data_type, is_nullable, column_default from information_schema.columns
+          where table_schema = current_schema() and table_name = 'entrants' and column_name = 'knockout_waiting_stage_id'`;
+      const fks = () =>
+        tx<{ def: string }[]>`
+          select pg_get_constraintdef(c.oid) as def from pg_constraint c
+          where c.conrelid = 'entrants'::regclass and c.contype = 'f' and pg_get_constraintdef(c.oid) like '%knockout_waiting_stage_id%'`;
+      const stored = async () =>
+        (await tx<{ s: string | null }[]>`select knockout_waiting_stage_id as s from entrants where id = ${id}`)[0]!.s;
+      const indexes = () =>
+        tx<{ def: string }[]>`
+          select indexdef as def from pg_indexes
+          where schemaname = current_schema() and tablename = 'entrants' and indexdef like '%knockout_waiting_stage_id%'`;
+      const columnBefore = await column();
+      const fksBefore = await fks();
+      const indexesBefore = await indexes();
+      const fresh = await stored();
+      await tx`update entrants set knockout_waiting_stage_id = ${stage!.id} where id = ${id}`;
+      await tx.unsafe(waitingCode);
+      const kept = await stored();
+      const indexesAfter = await indexes();
+      await tx`delete from stages where id = ${stage!.id}`;
+      return { columnBefore, fksBefore, indexesBefore, indexesAfter, fresh, kept, columnAfter: await column(), fksAfter: await fks(), orphaned: await stored() };
+    });
+
+    expect(verdict.columnBefore, "the applied schema has the column: a uuid, nullable, no default").toEqual([
+      { data_type: "uuid", is_nullable: "YES", column_default: null },
+    ]);
+    expect(verdict.fksBefore.map((c) => c.def), "one foreign key, to stages, set null on delete").toEqual([
+      "FOREIGN KEY (knockout_waiting_stage_id) REFERENCES stages(id) ON DELETE SET NULL",
+    ]);
+    expect(verdict.indexesBefore.map((i) => i.def.replace(/\b\w+\.entrants\b/, "entrants")), "one partial index on the marker").toEqual([
+      "CREATE INDEX entrants_knockout_waiting_stage_idx ON entrants USING btree (knockout_waiting_stage_id) WHERE (knockout_waiting_stage_id IS NOT NULL)",
+    ]);
+    expect(verdict.indexesAfter, "a second run adds no second index").toEqual(verdict.indexesBefore);
+    expect(verdict.fresh, "an entrant enrolled the ordinary way waits on nothing").toBeNull();
+    expect(verdict.columnAfter, "a second run leaves the column as it was").toEqual(verdict.columnBefore);
+    expect(verdict.fksAfter, "… adds no second key").toEqual(verdict.fksBefore);
+    expect(verdict.kept, "… and moves no stored value").toBe(stage!.id);
+    expect(verdict.orphaned, "the stage deleted: the marker is null").toBeNull();
+  }, 120_000);
+});

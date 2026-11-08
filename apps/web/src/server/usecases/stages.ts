@@ -3416,6 +3416,11 @@ async function generateStageFixturesWrite(
   // time with placeholder slots"), so it short-circuits before this gate
   // rather than going through it. `timing: "on_complete"` reproduces the OLD
   // `.qualification` behaviour exactly.
+  // W4 B2 fr2 carry: whether this Generate can REDRAW a root knockout that already has its lines — the one path that reads
+  // the sealed setup counts (`reconcileKnockoutGenerate`). Set in the pre-flight below, from the same shape test that
+  // routes to that path (`generateStageFixturesTx`); every other Generate — a Swiss, a league, a first draw — never
+  // opens the privileged read, so a failure there cannot stop it.
+  let readsSealedSetup = false;
   {
     const pre = await withTenant(auth.orgId, async (tx) => {
       const [stage] = await tx<StageRow[]>`
@@ -3454,6 +3459,11 @@ async function generateStageFixturesWrite(
       if (lockState.frozen) {
         throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
       }
+      readsSealedSetup =
+        stage.kind === "knockout" &&
+        !Array.isArray(stage.config.qualified) &&
+        stage.progression === null &&
+        (await tx`select 1 from fixtures where stage_id = ${stageId} limit 1`).length > 0;
       if (!stage.progression) return null;
       const progression = stage.progression as unknown as ProgressionSpec & { timing: "setup" | "on_complete" };
       if (progression.timing === "setup") return { seeded: true as const };
@@ -3501,7 +3511,9 @@ async function generateStageFixturesWrite(
   const write = await withTenant(
     auth.orgId,
     (tx) => generateStageFixturesTx(tx, auth, stageId, { ...opts, sealedSetup }),
-    { privilegedPrelude: async (tx) => { sealedSetup = await sealedStageSetupCounts(tx, auth.orgId, stageId); } },
+    readsSealedSetup
+      ? { privilegedPrelude: async (tx) => { sealedSetup = await sealedStageSetupCounts(tx, auth.orgId, stageId); } }
+      : {},
   );
   await afterGenerateCommit(auth, stageId, write);
   return write;
@@ -4497,7 +4509,11 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
         "STAGE_NOT_ROOT",
       );
     }
-    return regenerateStageInTx(tx, auth, stageId, stage);
+    const regen = await regenerateStageInTx(tx, auth, stageId, stage);
+    // W4 T11 (X-LE-10): Rebuild draws every active entrant, so nobody waits on this stage any more — the late players the
+    // desk flagged are in the new bracket, and the flag goes with them.
+    await tx`update entrants set knockout_waiting_stage_id = null where knockout_waiting_stage_id = ${stageId}`;
+    return regen;
   });
 
   // After the commit, and only after it. A refusal anywhere above rolled the

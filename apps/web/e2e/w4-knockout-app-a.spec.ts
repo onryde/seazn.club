@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { TAG, activeOrgIdFromRequest, apiJson, divisionPath, seedVenueWithCourts } from "./helpers";
+import { TAG, activeOrgIdFromRequest, apiJson, competitionPath, divisionPath, seedVenueWithCourts } from "./helpers";
 import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { swissDrawSeed, swissRoundOneOrder } from "../src/lib/swiss-draw";
@@ -645,5 +645,53 @@ test.describe("X-LE-3 a late player takes the bye", () => {
     expect([third.status, third.error?.code, third.error?.message]).toEqual([409, "KO_LATE_ENTRY_NO_SLOT", "Round 1 complete; no slot left."]);
     const list = await apiJson<{ display_name: string }[]>(request, `/api/v1/divisions/${ko.divisionId}/entrants`);
     expect(list.data!.some((e) => e.display_name === `Late Ivy ${TAG}`), "the refused add wrote nothing").toBe(false);
+  });
+});
+
+// X-LE-10 (W4 T11, K7/K13; ruling 271): an AUTOMATIC arrival is never placed by the app. Here the arrival is a Reinstate
+// (the public PATCH door): eight Started, one withdrawn — the withdrawal walks their line over — then reinstated. They
+// WAIT: the walked-over line is unchanged, the competition desk says "1 late player waiting — add to bracket" (the
+// brief's sentence, typed here), and the organiser's one tap (`POST /stages/{id}/late-entrants/{entrantId}/place`) gives
+// them their own seat back, the walkover reversed; the desk row goes and a second tap is refused by name.
+test.describe("X-LE-10 a reinstated player waits, then one tap places them", () => {
+  test("withdraw, reinstate: the desk flags one late player; the tap reverses their walkover; a second tap is KO_LATE_ENTRY_NOT_WAITING", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const names = ["Ana", "Ben", "Cas", "Dee", "Eli", "Fay", "Gus", "Hal"].map((n) => `Wait ${n} ${TAG}`);
+    const ko = await startedKnockout(request, "Late wait cup", names);
+    const line = (await ko.rows()).find((f) => f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null)!;
+    const gone = line.home_entrant_id!;
+    const opp = line.away_entrant_id!;
+    const out = await apiJson(request, `/api/v1/entrants/${gone}/withdraw`, "POST");
+    expect(out.status, JSON.stringify(out.error)).toBe(200);
+    const walked = (await ko.rows()).find((f) => f.id === line.id)!;
+    expect(walked.status, "premise: the withdrawal walked the line over").not.toBe("scheduled");
+
+    const back = await apiJson(request, `/api/v1/entrants/${gone}`, "PATCH", { status: "registered" });
+    expect(back.status, JSON.stringify(back.error)).toBe(200);
+    expect((await ko.rows()).find((f) => f.id === line.id), "the reinstatement re-seats nobody").toEqual(walked);
+
+    const div = await apiJson<{ competition_id: string }>(request, `/api/v1/divisions/${ko.divisionId}`);
+    await page.goto(await competitionPath(request, div.data!.competition_id));
+    await dismissCookieBanner(page);
+    const flag = page.locator('[data-attention="late_players_waiting"]').first();
+    await expect(flag, "the desk flags the waiting player").toContainText("1 late player waiting — add to bracket", { timeout: 20_000 });
+
+    const tap = await apiJson<{ case: string; fixture_id?: string; opponent_id?: string }>(
+      request,
+      `/api/v1/stages/${ko.stageId}/late-entrants/${gone}/place`,
+      "POST",
+    );
+    expect(tap.status, JSON.stringify(tap.error)).toBe(200);
+    expect(tap.data).toMatchObject({ case: "withdrawn_slot", fixture_id: line.id, opponent_id: opp });
+    const placed = (await ko.rows()).find((f) => f.id === line.id)!;
+    expect([placed.home_entrant_id, placed.away_entrant_id, placed.status]).toEqual([gone, opp, "scheduled"]);
+
+    await page.reload();
+    await expect(page.locator('[data-attention="late_players_waiting"]'), "the desk row goes").toHaveCount(0, { timeout: 20_000 });
+    const again = await apiJson(request, `/api/v1/stages/${ko.stageId}/late-entrants/${gone}/place`, "POST");
+    expect([again.status, again.error?.code, again.error?.message]).toEqual([409, "KO_LATE_ENTRY_NOT_WAITING", "This player isn't waiting to join this bracket."]);
   });
 });
