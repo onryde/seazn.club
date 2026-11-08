@@ -1430,8 +1430,10 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
     // this branch) are untouched.
     // S2-4 Task 3: also while either batter is unpicked (the openers, before the first ball).
     const battersUnpicked = people.striker === "" || people.nonStriker === "";
+    // S2-4 Batch B review I2 (controller ruling): and while a sheet is open (an extra's, the wicket's, "+ Out"), so a
+    // stray tap on the grid cannot record a ball beside the one the sheet is asking about.
     const ballTile = (spec: TileSpec): TileSpec =>
-      bowlerBlocked || blockedByClosure || battersUnpicked ? { ...spec, disabled: true } : spec;
+      bowlerBlocked || blockedByClosure || battersUnpicked || view.sheetOpen === true ? { ...spec, disabled: true } : spec;
 
     for (const r of RUN_VALUES) {
       tiles.push(ballTile({

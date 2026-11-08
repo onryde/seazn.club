@@ -1591,6 +1591,13 @@ export interface PadHostView {
    * between events.
    */
   readonly clockAt?: GameTimeStamp;
+  /**
+   * S2-4 Batch B fix round 1 (controller ruling, review I2): true while a guided sheet is open over the tiles. A guided
+   * sheet is not modal, so a skin whose sheets record a ball (cricket's extras and wicket) disables the tiles that would
+   * record a second, unmeant one; the sheet on screen is the explanation. Optional and additive: a skin that never reads
+   * it is unchanged.
+   */
+  readonly sheetOpen?: boolean;
 }
 
 export function assertScorebugSpec(spec: ScorebugSpec): string[] {

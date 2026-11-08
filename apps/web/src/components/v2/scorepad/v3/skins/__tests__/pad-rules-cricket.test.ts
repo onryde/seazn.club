@@ -18,6 +18,8 @@ import { ballSeq, cricketEnvelopes, cricketLineups, tiedWithSuperOver, type Cric
 import uiEn from "@/dictionaries/en/ui.json";
 import { GuidedSheet, answerStep, currentStep, initialSheetState } from "../../guided-sheet";
 import { dedicatedEventTypes, moreActions, softCommitPlan } from "../../pad-host";
+import { TileGrid } from "../../tile-grid";
+import { renderIsland } from "@/components/__tests__/_hook-harness";
 import type { GuidedSheetSpec, GuidedSheetStep, PadHostView, TileSpec } from "../../types";
 import { bowlerBlocked, bowlerBlockReason, buildContext, buildDock, buildScorebug, buildSheets, buildTiles, KEEPER_POSITION, KEEPER_ROLE, refusedEventTypes, resolvePeople, type TFn } from "../cricket";
 
@@ -900,6 +902,47 @@ describe("S2-4 T4: extras open sheets, with no timer", () => {
     for (const { type, payload, what } of payloads) same(softCommitPlan(buildDock(type, t, payload), payload), "send", `${what} is sent at once`);
     console.info(`[pad-rules-cricket] cricket payloads checked for no hold: ${payloads.length}`);
     expect(payloads.length).toBeGreaterThanOrEqual(25);
+  });
+});
+
+describe("S2-4 review I2: while a sheet is open, a tap on a run or extra tile records nothing (controller ruling)", () => {
+  /** Taps every tile through the real TileGrid and Tile: each rendered Tile is called and its button's onClick fired, as
+   *  a scorer's tap does (the harness has no DOM, and Tile's own early return is what a direct call meets). Returns what
+   *  the grid reported: events sent and sheets opened, by tile id. */
+  function tapAll(view: PadHostView) {
+    const recorded: string[] = [];
+    const opened: string[] = [];
+    const island = renderIsland(TileGrid as never, {
+      tiles: buildTiles(view, t),
+      phase: "live",
+      t,
+      onAction: (_action: unknown, tile: TileSpec) => recorded.push(tile.id),
+      onOpenSheet: (sheet: string) => opened.push(sheet),
+    } as never);
+    let tapped = 0;
+    for (const el of island.tree()) {
+      const tile = (el.props as { tile?: TileSpec }).tile;
+      if (tile === undefined || !BALL_TILE.test(tile.id)) continue;
+      const button = (el.type as (props: unknown) => { props: { onClick: () => void; disabled: boolean } })(el.props);
+      button.props.onClick();
+      tapped++;
+    }
+    return { recorded, opened, tapped };
+  }
+  /** The tiles that record a ball or open a ball's sheet: the runs, the wide, the extras and the wicket. */
+  const BALL_TILE = /^(run\d|wide|extra-|wicket$)/;
+
+  it("with a sheet open, a tap on a run tile records nothing; with none open the same taps do (anti-vacuity)", () => {
+    const view = pickedOf(T20, START);
+    const shut = tapAll(view);
+    expect(shut.tapped, "premise: the runs, wide, four extras and wicket were tapped").toBeGreaterThanOrEqual(12);
+    same(shut.recorded.includes("run1"), true, "no sheet open: run 1 records its ball");
+    same(shut.opened.includes("wide"), true, "no sheet open: Wide opens its sheet");
+
+    const open = tapAll({ ...view, sheetOpen: true });
+    same(open.tapped, shut.tapped, "the same tiles are on screen with a sheet open");
+    same(open.recorded, [], "a sheet open: no tap records a ball");
+    same(open.opened, [], "a sheet open: no tap opens a second sheet");
   });
 });
 

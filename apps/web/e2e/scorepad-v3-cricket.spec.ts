@@ -2168,3 +2168,44 @@ test("S2-4 T6: + Out off a wide, a stumping, records one ball with the wide and 
   expect(rows[1]!.payload.wicket).toMatchObject({ kind: "stumped", out: id("Striker"), fielder: id("Keeper"), incoming: id("Three") });
   await expect(pad(page).locator('[data-role="v3-scorebug"]'), "one wide, one wicket").toContainText("1/1");
 });
+
+// S2-4 Task 4's "second call", the brief's literal case (Batch B review I2; controller ruling: while a cricket sheet is
+// open the run and extra tiles are disabled). The scorer opens Wide, then double-taps the grid's "1" instead of the
+// sheet's "1 run": nothing is recorded by the grid, the sheet's answer records the one ball, and the tiles come back.
+test("S2-4 T4: a double tap on a run tile while the extras sheet is open records one ball only, from the sheet", async ({ page }) => {
+  test.setTimeout(90_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket SheetLock ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 SL Striker ${TAG}` }, { fullName: `V3 SL NonStriker ${TAG}` }],
+    away: [{ fullName: `V3 SL Bowler ${TAG}` }],
+  });
+  await openLiveConsole(page, fx);
+  await pickCricketPeople(page, {
+    striker: `V3 SL Striker ${TAG}`,
+    nonStriker: `V3 SL NonStriker ${TAG}`,
+    bowler: `V3 SL Bowler ${TAG}`,
+  });
+  const balls = async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball");
+  const run1 = pad(page).locator('[data-tile-id="run1"]');
+
+  await pad(page).locator('[data-tile-id="wide"]').click();
+  const sheet = sheetRoot(page);
+  await expect(sheet).toBeVisible({ timeout: 10_000 });
+  await expect(run1, "the grid's run tiles are disabled while the sheet is open").toBeDisabled();
+  await expect(pad(page).locator('[data-tile-id="extra-noball"]')).toBeDisabled();
+  // `force` dispatches the double tap at the tile anyway, as a scorer's thumb would; a disabled <button> fires nothing.
+  await run1.dblclick({ force: true });
+  await page.waitForTimeout(2_000); // every cricket ball is sent on the tap, so a recorded one would be on the wire by now
+  expect(await balls(), "the double tap recorded nothing").toHaveLength(0);
+  await expect(sheet, "the sheet is still asking").toBeVisible();
+
+  await sheet.locator('[data-choice-option-id="1"]').click();
+  await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(1);
+  await page.waitForTimeout(2_000);
+  const rows = await balls();
+  expect(rows, "one ball, the sheet's").toHaveLength(1);
+  expect(rows[0]!.payload.runs, "a wide and 1 run").toEqual({ bat: 0, extras: { kind: "wide", runs: 2 } });
+  await expect(run1, "the tiles are back once the sheet is answered").toBeEnabled();
+});
