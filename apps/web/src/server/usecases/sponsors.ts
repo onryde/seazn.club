@@ -14,6 +14,7 @@ import { HttpError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
 import { brandingSponsors } from "@/lib/org-branding";
 import { isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "@/lib/sponsor-clicks";
+import { patchOf } from "@/lib/zod-patch";
 import { getStripe } from "@/lib/stripe";
 import {
   sponsorInvoiceEmail,
@@ -79,30 +80,25 @@ const COLS = [
   "tier", "display_order", "status", "click_count", "created_at", "on_stream",
 ] as const;
 
-/** The fields a sponsor write may carry, WITHOUT defaults. A patch is built from this shape: zod 4's `.partial()` on a field
- *  that `.default()`s still FILLS it when omitted, so a patch derived from the create schema rewrote `tier` to "partner" and
- *  `status` to "active" on every PATCH that did not name them (R4 S12 found it on the first tick: a Title sponsor ticked onto
- *  the stream came back a Partner, and a parked one came back active). */
-const SponsorWriteFields = z.object({
+export const CreateSponsorInput = z.object({
   name: z.string().min(1).max(80),
   // http(s) only (R4 S10 fix round 1, m1): zod's `.url()` alone accepts `javascript:` and `data:`, and this url is a
   // redirect target (`/s/[key]`) and a board's href.
   url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   logo_path: z.string().max(500).nullish(),
-  tier: z.enum(SPONSOR_TIERS),
-  competition_id: z.string().uuid().nullish(),
-  status: z.enum(["active", "pending", "inactive"]),
-});
-
-export const CreateSponsorInput = SponsorWriteFields.extend({
   tier: z.enum(SPONSOR_TIERS).default("partner"),
+  competition_id: z.string().uuid().nullish(),
   status: z.enum(["active", "pending", "inactive"]).default("active"),
 });
 export type CreateSponsorInput = z.infer<typeof CreateSponsorInput>;
 
-/** `on_stream` (R4 S12, controller row 30) is PATCH-ONLY and snake_case: `patchSponsor` writes the body's keys as columns.
- *  A created sponsor starts off the stream (V492's default), so `CreateSponsorInput` does not carry it. */
-export const PatchSponsorInput = SponsorWriteFields.partial().extend({ on_stream: z.boolean().optional() });
+/** The create's `patchOf` twin (final review 2, m5): zod 4's `.partial()` on a field that `.default()`s still FILLS it when
+ *  omitted, so a patch derived that way rewrote `tier` to "partner" and `status` to "active" on every PATCH that did not
+ *  name them (R4 S12 found it on the first tick: a Title sponsor ticked onto the stream came back a Partner, and a parked
+ *  one came back active). `on_stream` (R4 S12, controller row 30) is PATCH-ONLY and snake_case: `patchSponsor` writes the
+ *  body's keys as columns. A created sponsor starts off the stream (V492's default), so `CreateSponsorInput` does not
+ *  carry it. */
+export const PatchSponsorInput = patchOf(CreateSponsorInput).extend({ on_stream: z.boolean().optional() });
 export type PatchSponsorInput = z.infer<typeof PatchSponsorInput>;
 
 export const ReorderSponsorsInput = z.object({

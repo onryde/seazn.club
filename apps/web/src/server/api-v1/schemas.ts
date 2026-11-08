@@ -5162,26 +5162,21 @@ export const Sponsor = z.object({
   dispute_lost: z.boolean().optional(),
 });
 
-// The fields a sponsor write may carry, WITHOUT defaults: a patch built from a field that `.default()`s is filled by it
-// (zod 4), rewriting `tier` and `status` on a PATCH that never named them (R4 S12; see usecases/sponsors.ts).
-const SponsorWriteFields = z.object({
+export const CreateSponsor = z.object({
   name: z.string().min(1).max(80),
   // http(s) only (R4 S10 fix round 1, m1): zod's `.url()` alone accepts `javascript:` and `data:`.
   url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   logo_path: z.string().max(500).nullish(),
-  tier: SponsorTier,
-  competition_id: Uuid.nullish(),
-  status: SponsorStatus,
-});
-
-export const CreateSponsor = SponsorWriteFields.extend({
   tier: SponsorTier.default("partner"),
+  competition_id: Uuid.nullish(),
   status: SponsorStatus.default("active"),
 });
 
-// `on_stream` is PATCH-ONLY (R4 S12, row 30): a created sponsor starts off the stream, and the first tick is what turns the
-// org's rotation on (ruling R12). It is declared HERE, beside the patch, and never on `CreateSponsor`.
-export const PatchSponsor = SponsorWriteFields.partial().extend({ on_stream: z.boolean().optional() });
+// `patchOf`, not `.partial()`: a partial still fills `tier` and `status` from their defaults, rewriting both on a PATCH that
+// never named them (R4 S12; final review 2, m5). `on_stream` is PATCH-ONLY (R4 S12, row 30): a created sponsor starts off the
+// stream, and the first tick is what turns the org's rotation on (ruling R12). It is declared HERE, beside the patch, and
+// never on `CreateSponsor`.
+export const PatchSponsor = patchOf(CreateSponsor).extend({ on_stream: z.boolean().optional() });
 
 /** R4 sponsors on stream, S12: one scope's dial (spec §3.2, §5.1). `competitionId: null` is the org row. */
 export const SponsorStreamFrequency = z.enum(SPONSOR_FREQUENCIES);
