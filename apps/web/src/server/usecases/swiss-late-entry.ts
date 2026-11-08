@@ -28,6 +28,7 @@ import { ScheduleConfig, type LateEntryResult, type SwissLateEntryResult } from 
 import { decideSwissLateEntry, type LateEntryBoard } from "@/lib/swiss-late-entry";
 import { isRootSwissStage } from "@/lib/open-entry-stages";
 import { isSwissByeShellExtKey, mintSwissBoardExtKeys } from "@/lib/swiss-shell";
+import { isByeLine, type ByeLineRow } from "@/lib/bye-line";
 import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
 import { resolveModule } from "@/server/engine-db";
 import { forfeitPlayedFacts } from "@/server/engine-db/forfeit-played";
@@ -162,23 +163,45 @@ async function roundOnePairingOverride(tx: Tx, divisionId: string, stageId: stri
 
 const iso = (v: Date | string): string => (v instanceof Date ? v : new Date(v)).toISOString();
 
+/** A round's row as `nextFreeRoundSlot` reads it: a Swiss board carries no slot labels (its bye is a shell, named by
+ *  `ext_key`), a knockout line does (a bye line's phantom side). */
+type RoundSlotRow = Pick<SwissExistingFixture, "round_no" | "scheduled_at" | "ext_key"> &
+  Partial<Pick<ByeLineRow, "status" | "outcome" | "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label">>;
+
 /**
  * The first `(time, court)` a board added to `round` can take: the round's own distinct kick-off times (earliest first)
  * × the division's schedule-settings courts (in their configured order), the first pair no occupying fixture of ANY
  * division holds. Null when the round has no time, the division names no court, every pair is taken, or the division's
  * timetable is frozen — the new board is then left unscheduled for the organiser to place.
+ *
+ * W4 T10 (X-LE-12): shared with a knockout late entry. A bye is not played and has no time to share (`isByeLine`, which
+ * also covers a Swiss bye shell), and `from` drops a time already gone — a knockout's round 1 is under way when a late
+ * player joins it, and a slot in the past is no slot.
  */
 export async function nextFreeRoundSlot(
   tx: Tx,
   divisionId: string,
   round: number,
-  boardRows: readonly Pick<SwissExistingFixture, "round_no" | "scheduled_at" | "ext_key">[],
+  boardRows: readonly RoundSlotRow[],
+  opts: { from?: Date } = {},
 ): Promise<{ scheduled_at: string; court_id: string } | null> {
+  const isBye = (f: RoundSlotRow) =>
+    isByeLine({
+      ext_key: f.ext_key,
+      status: f.status ?? "",
+      outcome: f.outcome ?? null,
+      home_entrant_id: f.home_entrant_id ?? null,
+      away_entrant_id: f.away_entrant_id ?? null,
+      home_slot_label: f.home_slot_label ?? null,
+      away_slot_label: f.away_slot_label ?? null,
+    });
+  const from = opts.from === undefined ? null : opts.from.toISOString();
   const times = [
     ...new Set(
       boardRows
-        .filter((f) => f.round_no === round && !isSwissByeShellExtKey(f.ext_key) && f.scheduled_at !== null)
-        .map((f) => iso(f.scheduled_at!)),
+        .filter((f) => f.round_no === round && !isBye(f) && f.scheduled_at !== null)
+        .map((f) => iso(f.scheduled_at!))
+        .filter((t) => from === null || t >= from),
     ),
   ].sort();
   if (times.length === 0) return null;
@@ -474,7 +497,7 @@ async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<SwissLateEntryResult>
 
 /** A slot the system chose is an `auto` placement (T9 review m9; V214 `schedule_source`), as Start's sweep writes it —
  *  never `manual`, which is the organiser's hand. */
-async function placeBoard(tx: Tx, fixtureId: string, slot: { scheduled_at: string; court_id: string }): Promise<void> {
+export async function placeBoard(tx: Tx, fixtureId: string, slot: { scheduled_at: string; court_id: string }): Promise<void> {
   const venues = await courtVenueIds(tx);
   await tx`
     update fixtures set scheduled_at = ${slot.scheduled_at}, court_id = ${slot.court_id},

@@ -596,3 +596,54 @@ test.describe("FX-G2 Generate places the eighth player in the bye", () => {
     ).toBe(0);
   });
 });
+
+// X-LE-3/X-LE-4 (W4 T10; ruling 263): "Add late player" on a Started knockout. Six seeded in a bracket of eight, so seeds 1
+// and 2 hold byes; the newcomer plays the LOWEST-seeded holder (seed 2, RB4-L4 — read off the seeds given here, not the
+// code), that bye's line is a match again on the run sheet, and a full round 1 refuses the next add by name.
+test.describe("X-LE-3 a late player takes the bye", () => {
+  test("six seeded Started, a seventh added: they meet seed 2 on the run sheet; an eighth fills the other bye; a ninth is refused KO_LATE_ENTRY_NO_SLOT", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const names = ["Ana", "Ben", "Cas", "Dee", "Eli", "Fay"].map((n) => `Late ${n} ${TAG}`);
+    const ko = await startedKnockout(request, "Late bye cup", names);
+    const seedOf = new Map([...ko.nameOf].map(([id, name]) => [id, names.indexOf(name) + 1]));
+    const seed2 = [...seedOf].find(([, s]) => s === 2)![0];
+    const before = await ko.rows();
+    const byes = before.filter((f) => f.round_no === 1 && (f.home_entrant_id === null) !== (f.away_entrant_id === null));
+    expect(byes.length, "premise: two byes").toBe(2);
+    const seed2Line = byes.find((f) => (f.home_entrant_id ?? f.away_entrant_id) === seed2)!;
+    expect(seed2Line, "premise: seed 2 holds a bye").toBeTruthy();
+
+    const lateName = `Late Gus ${TAG}`;
+    const late = await apiJson<{ id: string; late_entry?: { format: string; case: string; fixture_id?: string; opponent_id?: string } }>(
+      request,
+      `/api/v1/divisions/${ko.divisionId}/entrants`,
+      "POST",
+      { kind: "individual", display_name: lateName },
+    );
+    expect(late.status, JSON.stringify(late.error)).toBe(201);
+    expect(late.data!.late_entry).toMatchObject({ format: "knockout", case: "bye", fixture_id: seed2Line.id, opponent_id: seed2 });
+
+    await page.goto(await divisionPath(request, ko.divisionId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+    await showAllFixtures(page);
+    const row = page.locator(`li[data-fixture-no="${seed2Line.fixture_no}"]`);
+    await expect(row, "the late player is on seed 2's line").toContainText(lateName, { timeout: 20_000 });
+    await expect(row).toContainText(ko.nameOf.get(seed2)!);
+
+    // The second call takes the remaining bye (seed 1's); the third finds round 1 full — nothing has started, so Rebuild
+    // is offered — and writes nothing.
+    const second = await apiJson<{ late_entry?: { case: string; opponent_id?: string } }>(request, `/api/v1/divisions/${ko.divisionId}/entrants`, "POST", {
+      kind: "individual",
+      display_name: `Late Hal ${TAG}`,
+    });
+    expect(second.status, JSON.stringify(second.error)).toBe(201);
+    expect(second.data!.late_entry).toMatchObject({ case: "bye", opponent_id: [...seedOf].find(([, s]) => s === 1)![0] });
+    const third = await apiJson(request, `/api/v1/divisions/${ko.divisionId}/entrants`, "POST", { kind: "individual", display_name: `Late Ivy ${TAG}` });
+    expect([third.status, third.error?.code, third.error?.message]).toEqual([409, "KO_LATE_ENTRY_NO_SLOT", "Round 1 complete; no slot left."]);
+    const list = await apiJson<{ display_name: string }[]>(request, `/api/v1/divisions/${ko.divisionId}/entrants`);
+    expect(list.data!.some((e) => e.display_name === `Late Ivy ${TAG}`), "the refused add wrote nothing").toBe(false);
+  });
+});

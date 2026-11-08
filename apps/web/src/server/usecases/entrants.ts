@@ -40,7 +40,7 @@ import type { LateEntryResult } from "@/server/api-v1/schemas";
 // W3 T9: an entrant added (or reinstated) while the division's Swiss is running is a late player.
 import { admitSwissLateEntrant, afterSwissLateEntry, hasRootSwissStage } from "./swiss-late-entry";
 // W4 T9: and while its root knockout is drawn (X-LE-1).
-import { hasRootKnockoutStage } from "./knockout-late-entry";
+import { admitKnockoutLateEntrant, afterKnockoutLateEntry, hasRootKnockoutStage } from "./knockout-late-entry";
 // Type-only: withdrawal.ts imports this module, so its value is reached by a dynamic import (`patchEntrant`).
 import type { WithdrawCascadeOut } from "./withdrawal";
 
@@ -544,7 +544,11 @@ export async function createEntrants(
       // W3 T9 (ruling 250): an organiser's "Add late player", one entrant at a time in creation order and each before
       // the next is inserted — a re-pair (case (a)) reads the active field, and a batch-mate not yet admitted must not
       // be seated in it as if from round 1. Null before Start or with no running Swiss; a refusal rolls the batch back.
-      const late = await admitSwissLateEntrant(tx, auth, divisionId, row.id, "organiser");
+      // W4 T10: or its drawn root knockout — the bye, a withdrawn slot, or KO_LATE_ENTRY_NO_SLOT (X-LE-3…X-LE-6). A division's
+      // entry stage is one or the other, so at most one of the two answers.
+      const late =
+        (await admitSwissLateEntrant(tx, auth, divisionId, row.id, "organiser")) ??
+        (await admitKnockoutLateEntrant(tx, auth, divisionId, row.id, "organiser"));
       // The row as stored after admission: the first round it wrote is part of the entrant (ruling C4).
       if (late) [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${row.id}`;
       rows.push({
@@ -563,6 +567,8 @@ export async function createEntrants(
   );
   // A late player who re-paired a round or took its bye moved seats: the push and the table refold run after commit.
   await afterSwissLateEntry(auth.orgId, divisionId, competitionId, rows.map((r) => r.late_entry));
+  // W4 T10: a late player seated in the knockout moved a line (and the next line's seat): told as a schedule write.
+  await afterKnockoutLateEntry(auth.orgId, divisionId, competitionId, rows.map((r) => r.late_entry));
   return rows;
 }
 

@@ -78,6 +78,8 @@ const TYPE_LABEL_KEYS: Record<string, MessageKey> = {
   swiss_rounds_changed: "history.event.swissRoundsChanged",
   // W4 T5 (K1; D2): a seed confirm is an undo barrier, listed (not undoable) in Recent edits.
   seed_confirmed: "history.event.seedConfirmed",
+  // W4 T10 (X-LE-13; D2): "Add late player" into a drawn knockout is an undo barrier, listed (not undoable).
+  knockout_late_entry: "history.event.knockoutLateEntry",
 };
 
 export function HistoryPanel({

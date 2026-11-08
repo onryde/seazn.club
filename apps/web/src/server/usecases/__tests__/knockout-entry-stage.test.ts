@@ -152,10 +152,10 @@ describe.skipIf(!HAS_DB)("W4 T9: the entry stage a late player can join (X-LE-1,
       const before = await entrantCount(rig.divisionId);
       const late = await addLate(rig);
       expect(await entrantCount(rig.divisionId), `${key}: the late player is on the list`).toBe(before + 1);
-      // X-LE-2: ko_plate's plate and qualifying_main's main draw are fed — the late player is never seated there.
-      for (const fed of rig.stageIds.slice(1)) {
-        expect(await seatedIn(late.id), `${key}: never in a fed stage`).not.toContain(fed);
-      }
+      // X-LE-2: ko_plate's plate and qualifying_main's main draw are fed — the admission picks the root stage only, so
+      // the late player's only seat is in the first stage (Task 10 places them: six in a bracket of eight hold byes).
+      expect(late.late_entry, key).toMatchObject({ format: "knockout", stage_id: rig.stageIds[0] });
+      expect(await seatedIn(late.id), `${key}: seated in the first stage only`).toEqual([rig.stageIds[0]]);
       checked++;
     }
     expect(checked).toBe(3);

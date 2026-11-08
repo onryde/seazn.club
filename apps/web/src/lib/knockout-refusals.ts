@@ -32,7 +32,12 @@ export type KnockoutRefusalCode =
   | "KO_START_NEEDS_UPDATE_DRAW"
   // T9 (X-LE-2): a late player asked into a knockout an earlier stage fills (`{stage}`: that stage's name) — a fed
   // bracket never takes one; its field is the source's.
-  | "KO_LATE_ENTRY_FED_STAGE";
+  | "KO_LATE_ENTRY_FED_STAGE"
+  // T10 (X-LE-6): round 1 holds no bye and no withdrawn seat a late player could take (`details.can_rebuild`: nothing in the
+  // stage has started, so Rebuild fixtures would draw the field again with them in it).
+  | "KO_LATE_ENTRY_NO_SLOT"
+  // T10 (X-LE-13): an Undo, Redo or Restore that would step across a knockout late entry (history.ts `UNDO_BARRIER_TYPES`).
+  | "KO_LATE_ENTRY_NOT_UNDOABLE";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -86,6 +91,16 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 422,
     en: "This knockout is filled from {stage}. Add the player there.",
     key: "knockout.refusal.KO_LATE_ENTRY_FED_STAGE",
+  },
+  KO_LATE_ENTRY_NO_SLOT: {
+    status: 409,
+    en: "Round 1 complete; no slot left.",
+    key: "knockout.refusal.KO_LATE_ENTRY_NO_SLOT",
+  },
+  KO_LATE_ENTRY_NOT_UNDOABLE: {
+    status: 409,
+    en: "Adding a late player can't be undone. Withdraw the player instead.",
+    key: "knockout.refusal.KO_LATE_ENTRY_NOT_UNDOABLE",
   },
 };
 

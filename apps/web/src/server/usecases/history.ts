@@ -112,6 +112,10 @@ export const UNDO_BARRIER_TYPES = {
   swiss_late_entry: "SWISS_LATE_ENTRY_NOT_UNDOABLE",
   swiss_rounds_changed: "SWISS_ROUNDS_CHANGE_NOT_UNDOABLE",
   seed_confirmed: "SEED_CONFIRM_NOT_UNDOABLE",
+  // W4 T10 (X-LE-13): a late player placed into a drawn knockout — a bye reopened or a walkover reversed, writes no step
+  // records. Every writer of the row is an organiser's action (Add late player; Task 11's one-tap place), so every row
+  // is a barrier.
+  knockout_late_entry: "KO_LATE_ENTRY_NOT_UNDOABLE",
 } as const satisfies Record<string, UndoRefusalCode>;
 
 export type UndoBarrierType = keyof typeof UNDO_BARRIER_TYPES;

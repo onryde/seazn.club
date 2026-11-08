@@ -14,13 +14,17 @@ import { BYE_SLOT_LABEL, byePhantomSide, isByeLine, type ByeLineRow } from "@/li
 import { byeAward } from "@/lib/fixture-bye";
 import { chooseByeLine, type ByeLineCandidate, type Seat } from "@/lib/bracket-reconcile";
 import { fixtureEvidenceSql } from "./fixture-results-sql";
+import { appendEventInTx } from "@/server/engine-db/append-event";
+// A value read at call time only (the withdrawal module's own source of "departed"): entrants.ts reaches this file
+// through the late-entry admission, and nothing here runs at import.
+import { DEPARTED_STATUSES } from "./entrants";
 
 export { chooseByeLine };
 
 /** A surgery refused: the line is missing or not the shape the surgery changes. */
 export class ByeLineSurgeryError extends Error {
   constructor(
-    readonly surgery: "reopenByeLine" | "vacateLineToBye" | "byeLineCandidates",
+    readonly surgery: "reopenByeLine" | "vacateLineToBye" | "byeLineCandidates" | "reverseWithdrawnWalkover",
     readonly lineId: string,
     why: string,
   ) {
@@ -162,4 +166,70 @@ export async function byeLineCandidates(tx: Tx, stageId: string): Promise<ByeLin
     out.push({ lineId: r.id, holderId, drawPosition: knockoutLineDrawPosition(rows.length, r.seq_in_round) });
   }
   return out;
+}
+
+/**
+ * W4 T10 (X-LE-5, case (2)): a late player takes a WITHDRAWN entrant's round-1 seat. When the withdrawal already walked
+ * the line over (`core.forfeit{reason: "withdrew"}`, the cascade's), that walkover is reversed first through the scoring
+ * ledger — a `core.void` appended in the caller's transaction (`appendEventInTx`), so the take-back of the seat it
+ * advanced into the next line (and any loser edge) is `releaseFedSeats`' own, refused 409 NEXT_MATCH_STARTED when that
+ * line has begun. Then `newcomerId` takes the departed entrant's seat, and the line is an unplayed match again.
+ *
+ * Refused by name unless the line is a round-1 match (never a bye: a withdrawn bye holder's seat would seat the
+ * newcomer in round 2, X-LE-7), `seat` holds a departed entrant, the other seat holds someone, and nothing was played on
+ * the line besides that walkover. The lock order is the append's (stage, then fixture), so the line row is locked only
+ * after the void.
+ */
+export async function reverseWithdrawnWalkover(
+  tx: Tx,
+  orgId: string,
+  lineId: string,
+  newcomerId: string,
+  seat: Seat,
+  actorId: string | null,
+): Promise<{ fixtureId: string; opponentId: string; nextId: string | null; reversed: boolean }> {
+  const refuse = (why: string) => new ByeLineSurgeryError("reverseWithdrawnWalkover", lineId, why);
+  const [row] = await tx<(LineRow & { departed: boolean })[]>`
+    select f.id, f.stage_id, f.round_no, f.seq_in_round, f.ext_key, f.status, f.outcome,
+           f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+           f.winner_to_fixture, f.winner_to_slot, false as evidence,
+           coalesce((select e.status in ${tx([...DEPARTED_STATUSES])} from entrants e
+                      where e.id = case when ${seat} = 'home' then f.home_entrant_id else f.away_entrant_id end), false) as departed
+      from fixtures f where f.id = ${lineId}`;
+  if (row === undefined) throw refuse("no such line");
+  if (row.round_no !== 1) throw refuse(`the line is in round ${row.round_no}, and a late player joins round 1 only`);
+  if (isByeLine(row)) throw refuse("the line is a bye");
+  const withdrawnId = seat === "home" ? row.home_entrant_id : row.away_entrant_id;
+  const opponentId = seat === "home" ? row.away_entrant_id : row.home_entrant_id;
+  if (withdrawnId === null || !row.departed) throw refuse(`the ${seat} seat holds no departed entrant`);
+  if (opponentId === null) throw refuse("nobody holds the other seat");
+  // The line's live events: a void and the event it voids are both gone.
+  const live = await tx<{ id: string; type: string; payload: { reason?: unknown; by?: unknown } }[]>`
+    select e.id, e.type, e.payload from score_events e
+     where e.fixture_id = ${lineId} and e.type <> 'core.void'
+       and not exists (select 1 from score_events v where v.voids_event_id = e.id)`;
+  const walkover = live.find((e) => e.type === "core.forfeit" && e.payload.reason === "withdrew" && e.payload.by === withdrawnId);
+  if (live.length > (walkover ? 1 : 0)) throw refuse("the line was played");
+  if (walkover) {
+    const [{ seq }] = await tx<{ seq: number }[]>`
+      select coalesce(max(seq), 0)::int as seq from score_events where fixture_id = ${lineId}`;
+    await appendEventInTx(tx, orgId, lineId, seq, {
+      type: "core.void",
+      payload: { event_id: walkover.id },
+      voids: walkover.id,
+      recordedBy: actorId,
+    });
+  }
+  const after = await lockLine(tx, lineId);
+  if (after === undefined || after.status !== "scheduled" || after.outcome != null) {
+    throw refuse(`the line is ${after?.status ?? "gone"} after the walkover's reversal, not an unplayed match`);
+  }
+  const swapped = await tx`
+    update fixtures set
+      home_entrant_id = case when ${seat} = 'home' then ${newcomerId}::uuid else home_entrant_id end,
+      away_entrant_id = case when ${seat} = 'away' then ${newcomerId}::uuid else away_entrant_id end
+    where id = ${lineId} and (case when ${seat} = 'home' then home_entrant_id else away_entrant_id end) = ${withdrawnId}::uuid
+    returning id`;
+  if (swapped.length !== 1) throw refuse(`the ${seat} seat no longer holds ${withdrawnId}`);
+  return { fixtureId: lineId, opponentId, nextId: row.winner_to_fixture, reversed: walkover !== undefined };
 }

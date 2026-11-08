@@ -32,6 +32,11 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * inserted and a second Generate is the no-op; a ninth crosses a power of two, so the bracket is drawn again once — sixteen
  * slots, fifteen lines, one final, every player seated once (main seated the field twice beside a second final).
  *
+ * T10 (X-LE-3…X-LE-6, X-LE-13; ruling 263): "Add late player" on a Started knockout. Six seeded in a bracket of eight: the
+ * newcomer plays the bye of the LOWEST-seeded holder (seed 2, RB4-L4), and the division's Undo is then refused 409
+ * KO_LATE_ENTRY_NOT_UNDOABLE. Eight seeded: no bye, so the add is refused 409 KO_LATE_ENTRY_NO_SLOT (can_rebuild, nothing
+ * written); once a round-1 player withdraws, the next add takes that seat and the withdrawal's walkover is reversed.
+ *
  * Own fresh owner; keyless; every read and write is a v1 route. Every check is counted, and a run that checked nothing fails.
  * SMOKE_ONLY=w4KnockoutA runs it alone (SELECTABLE_SUITES).
  */
@@ -39,8 +44,9 @@ export async function w4KnockoutASuite(): Promise<void> {
   // T2: 1 (a called final survives a void of its feeder). T3: 1 (an awarded bye holds no court). T4: 1 (the final keeps
   // its slot across an 8 → 9 Rebuild). T5: 1 (Undo refuses across a confirmed draw). T6: 1 (Complete refuses a bracket
   // with its third-place match unplayed). T7: 1 (an unseeded draw replays). T8: 2 (6 → 7 places in a bye; 8 → 9 redraws
-  // once).
-  const EXPECTED_CHECKS = 8;
+  // once). T10: 2 (a late player takes the lowest-seeded holder's bye and Undo refuses; no slot is refused, then a
+  // withdrawn seat is taken).
+  const EXPECTED_CHECKS = 10;
   let checked = 0;
   const w4Check = (label: string, cond: boolean) => {
     checked++;
@@ -467,6 +473,70 @@ export async function w4KnockoutASuite(): Promise<void> {
     w4Check(
       "w4a FX-G2: a ninth player before Start redraws the bracket once — fifteen lines, one final, every player seated once" +
         (ok ? "" : ` — generate ${gen1.status}, lines ${before.length}, late ${late ?? "none"}, generate ${gen2.status} ${JSON.stringify(gen2.json).slice(0, 200)}, lines ${after.length}, finals ${after.filter((f) => f.round_no === lastRound).length}, round one ${roundOne.length} (${new Set(roundOne).size} distinct)`),
+      ok,
+    );
+  }
+
+  type Entrant = { id: string; seed: number | null; status?: string };
+  type LateEntry = { format?: string; case?: string; fixture_id?: string; opponent_id?: string; stage_id?: string } | undefined;
+  type LateError = { code?: string; can_rebuild?: boolean } | undefined;
+  const entrantsOf = async (divId: string | undefined) =>
+    v1data<Entrant[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/entrants`)) ?? [];
+  const addLate = async (divId: string | undefined, name: string) =>
+    v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST", { kind: "individual", display_name: `${name} ${tag}` });
+
+  // Check 9 (T10, X-LE-3/X-LE-4 then X-LE-13): six seeded players Started in a bracket of eight, so seeds 1 and 2 hold the
+  // byes. Expected (RB4-L4, rulebook-W4-knockout.md): the newcomer plays the LOWEST-seeded holder — seed 2, read off the
+  // entrant list — on that bye's line, which is a match again; the division's Undo is then refused by name.
+  {
+    const ko = await startedKnockout(owner, "Late bye", 6);
+    const seed2 = (await entrantsOf(ko.divId)).find((e) => e.seed === 2)?.id;
+    const byeLine = (await ko.fixtures()).find(
+      (f) => f.round_no === 1 && (f.home_entrant_id === null) !== (f.away_entrant_id === null) && (f.home_entrant_id ?? f.away_entrant_id) === seed2,
+    );
+    const added = await addLate(ko.divId, "Late bye P7");
+    const late = v1data<{ id?: string; late_entry?: LateEntry } | undefined>(added);
+    const line = (await ko.fixtures()).find((f) => f.id === byeLine?.id);
+    const undo = await v1(owner, `/api/v1/divisions/${ko.divId}/undo`, "POST", {});
+    const undoErr: LateError = undo.json?.error;
+    const ok =
+      ko.started === 200 && seed2 !== undefined && byeLine !== undefined &&
+      added.status === 201 && late?.late_entry?.format === "knockout" && late.late_entry.case === "bye" &&
+      late.late_entry.fixture_id === byeLine.id && late.late_entry.opponent_id === seed2 &&
+      line !== undefined && new Set([line.home_entrant_id, line.away_entrant_id]).size === 2 &&
+      [line.home_entrant_id, line.away_entrant_id].includes(late.id ?? "-") && line.status === "scheduled" &&
+      undo.status === 409 && undoErr?.code === "KO_LATE_ENTRY_NOT_UNDOABLE";
+    w4Check(
+      "w4a X-LE-3: a late player in a Started knockout plays the lowest-seeded holder's bye, and Undo refuses KO_LATE_ENTRY_NOT_UNDOABLE" +
+        (ok ? "" : ` — start ${ko.started}, seed2 ${seed2 ?? "none"}, bye line ${byeLine?.id ?? "none"}, add ${added.status} ${JSON.stringify(added.json).slice(0, 200)}, line ${JSON.stringify(line).slice(0, 160)}, undo ${undo.status} ${undoErr?.code ?? "-"}`),
+      ok,
+    );
+  }
+
+  // Check 10 (T10, X-LE-6 then X-LE-5): eight seeded players Started — round 1 full. Expected: the add is refused 409
+  // KO_LATE_ENTRY_NO_SLOT with Rebuild offered (nothing has started) and nothing written (eight entrants still). Then
+  // round 1's second line loses its away player (the cascade walks it over): the next add takes that seat against the
+  // line's home player, and the line is an unplayed match again.
+  {
+    const ko = await startedKnockout(owner, "Late slot", 8);
+    const refused = await addLate(ko.divId, "Late slot P9");
+    const refusedErr: LateError = refused.json?.error;
+    const count = (await entrantsOf(ko.divId)).length;
+    const line0 = (await ko.fixtures()).find((f) => f.round_no === 1 && f.seq_in_round === 2);
+    const withdrawn = line0?.away_entrant_id ? await v1(owner, `/api/v1/entrants/${line0.away_entrant_id}/withdraw`, "POST") : undefined;
+    const walked = (await ko.fixtures()).find((f) => f.id === line0?.id);
+    const added = await addLate(ko.divId, "Late slot P10");
+    const late = v1data<{ id?: string; late_entry?: LateEntry } | undefined>(added);
+    const line = (await ko.fixtures()).find((f) => f.id === line0?.id);
+    const ok =
+      ko.started === 200 && refused.status === 409 && refusedErr?.code === "KO_LATE_ENTRY_NO_SLOT" && refusedErr.can_rebuild === true &&
+      count === 8 && line0 !== undefined && withdrawn?.status === 200 && walked?.status === "forfeited" &&
+      added.status === 201 && late?.late_entry?.case === "withdrawn_slot" && late.late_entry.fixture_id === line0.id &&
+      late.late_entry.opponent_id === line0.home_entrant_id &&
+      line?.home_entrant_id === line0.home_entrant_id && line?.away_entrant_id === late.id && line?.status === "scheduled";
+    w4Check(
+      "w4a X-LE-5: a full round 1 refuses a late player (KO_LATE_ENTRY_NO_SLOT, Rebuild offered, nothing written); after a withdrawal the next takes the seat" +
+        (ok ? "" : ` — start ${ko.started}, refused ${refused.status} ${JSON.stringify(refusedErr)}, entrants ${count}, withdraw ${withdrawn?.status ?? "-"}, walked ${walked?.status ?? "-"}, add ${added.status} ${JSON.stringify(added.json).slice(0, 200)}, line ${JSON.stringify(line).slice(0, 160)}`),
       ok,
     );
   }

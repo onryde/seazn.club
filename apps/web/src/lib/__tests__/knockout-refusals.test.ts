@@ -31,6 +31,10 @@ const PLAN_CODES = [
   "KO_START_NEEDS_UPDATE_DRAW",
   // T9 (X-LE-2): a fed knockout never takes a late player; the refusal names the stage that fills it.
   "KO_LATE_ENTRY_FED_STAGE",
+  // T10 (X-LE-6): round 1 has no slot left; Rebuild is offered (details.can_rebuild) only when nothing has started.
+  "KO_LATE_ENTRY_NO_SLOT",
+  // T10 (X-LE-13): Add late player has no Undo; the refusal points to Withdraw.
+  "KO_LATE_ENTRY_NOT_UNDOABLE",
 ] as const;
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
@@ -113,6 +117,19 @@ describe("KNOCKOUT_REFUSALS (W4 app-A)", () => {
     // A placeholder with no value is a sentence with a hole in it: refused by name, never sent as "{stage}".
     expect(() => knockoutRefusal("KO_LATE_ENTRY_FED_STAGE")).toThrow(/KO_LATE_ENTRY_FED_STAGE.*stage/);
     expect(() => knockoutRefusal("KO_LATE_ENTRY_FED_STAGE", { other: 1 })).toThrow(/stage/);
+  });
+
+  it("KO_LATE_ENTRY_NO_SLOT and KO_LATE_ENTRY_NOT_UNDOABLE: 409, with the plan's sentences", () => {
+    expect(KNOCKOUT_REFUSALS.KO_LATE_ENTRY_NO_SLOT).toEqual({
+      status: 409,
+      en: "Round 1 complete; no slot left.",
+      key: "knockout.refusal.KO_LATE_ENTRY_NO_SLOT",
+    });
+    expect(KNOCKOUT_REFUSALS.KO_LATE_ENTRY_NOT_UNDOABLE).toEqual({
+      status: 409,
+      en: "Adding a late player can't be undone. Withdraw the player instead.",
+      key: "knockout.refusal.KO_LATE_ENTRY_NOT_UNDOABLE",
+    });
   });
 
   it("knockoutRefusal builds the HttpError from the row: status, code, English and details", () => {
