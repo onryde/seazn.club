@@ -305,9 +305,9 @@ export async function reorderSponsors(
 // ---------------------------------------------------------------------------
 
 export interface ResolvedSponsor {
-  // Never null from resolveSponsors since the blob shim went (R4 fix batch 3); the board's `sponsorHref` still takes a
-  // null (no tracked redirect) and is not narrowed here.
-  id: string | null;
+  /** The sponsors row: every resolved sponsor has one since the blob shim went (R4 fix batch 3), so every board link is
+   *  the tracked `/s/` redirect. */
+  id: string;
   name: string;
   url: string | null;
   logo: string | null;

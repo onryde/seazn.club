@@ -1,7 +1,9 @@
 // R4 S10 fix round 1, m1: a sponsor url is only ever stored as an absolute http(s) url, at every write — the v1 API's
-// runtime parse (usecases/sponsors.ts `CreateSponsorInput` / `PatchSponsorInput`), its OpenAPI declaration
-// (api-v1/schemas.ts `CreateSponsor` / `PatchSponsor`), and the legacy branding-blob PATCH (app/api/orgs/[id], pinned
-// through the real handler in that route's own test). zod 4's `.url()` alone accepts `javascript:` and `data:`.
+// runtime parse (usecases/sponsors.ts `CreateSponsorInput` / `PatchSponsorInput`) and its OpenAPI declaration
+// (api-v1/schemas.ts `CreateSponsor` / `PatchSponsor`). The legacy branding-blob PATCH that also took a url went in R4 fix
+// batch 3, and the board now links every sponsor through the tracked `/s/` redirect (`sponsorHref`), so these schemas,
+// with the route's own refusal behind them, keep a non-http(s) url off every public page. zod 4's `.url()` alone accepts
+// `javascript:` and `data:`.
 //
 // Expected values come from the rule (http and https only), never from `redirectTarget`, the predicate under test.
 import { describe, expect, it } from "vitest";

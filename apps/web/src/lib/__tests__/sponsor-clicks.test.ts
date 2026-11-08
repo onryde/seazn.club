@@ -246,8 +246,8 @@ describe("sponsorShortLinkText (R7)", () => {
   });
 });
 
-// m1 (fix round 1): the one rule for a sponsor url that may be LINKED or REDIRECTED to — the redirect route, the boards'
-// blob-shim hrefs and the three write schemas all read it.
+// m1 (fix round 1): the one rule for a sponsor url that may be REDIRECTED to — the redirect route and the three write
+// schemas read it (the boards' straight-out blob-shim hrefs went in R4 fix batch 3).
 describe("redirectTarget — an absolute http(s) url, or null", () => {
   it("http and https pass, normalised by the URL parser", () => {
     expect(redirectTarget("https://halston.example")).toBe("https://halston.example/");
