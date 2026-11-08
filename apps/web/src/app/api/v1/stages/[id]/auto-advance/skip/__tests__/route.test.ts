@@ -1,8 +1,9 @@
-// Swiss auto-advance, plan Task 6 — the Skip door over HTTP: `POST /api/v1/stages/{id}/auto-advance/skip` `{ kind }`. The
-// rules are auto-advance-manual.test.ts's (armed by real results there); this file is the DOOR: who may call it (the real
-// `requireResourceAuth`, a session faked only at the cookie, real API keys through the real key-scope map), the body
-// (strict, one known kind), the refusals' names through the envelope, and the answer's shape. The live row each case skips
-// is written as V497 shapes it (SQL), since what armed it is not this door's business.
+// Swiss auto-advance, plan Task 6 — the Skip door over HTTP: `POST /api/v1/stages/{id}/auto-advance/skip`
+// `{ kind, round }` (D33: the skip names its target). The rules are auto-advance-manual.test.ts's (armed by real results
+// there); this file is the DOOR: who may call it (the real `requireResourceAuth`, a session faked only at the cookie, real
+// API keys through the real key-scope map), the body (strict, one known kind, the round pair_round skips), the refusals'
+// names through the envelope, and the answer's shape. The live row each case skips is written as V497 shapes it (SQL), since
+// what armed it is not this door's business; so is the lease, which stands in for Task 8's claim.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
@@ -47,7 +48,8 @@ const skip = (stageId: string, body: string, headers: Record<string, string> = {
     headers: { "content-type": "application/json", ...headers },
     body,
   });
-const PAIR = JSON.stringify({ kind: "pair_round" });
+/** The banner's Skip on the row it shows: pair_round 2 (`armed`). */
+const PAIR = JSON.stringify({ kind: "pair_round", round: 2 });
 async function read(res: Response) {
   return { status: res.status, body: (await res.json()) as Envelope };
 }
@@ -134,19 +136,46 @@ describe.skipIf(!HAS_DB)("POST /stages/{id}/auto-advance/skip", () => {
     expect(await stateOf(id)).toEqual(SKIPPED_BY_PERSON);
   });
 
-  it("400 on {}, on an unknown kind, on an extra key and on a body that is not JSON; nothing written", async () => {
+  it("400 on {}, on an unknown kind, on a pair_round with no round or a round that is no round, on an extra key and on a body that is not JSON; nothing written", async () => {
     const r = await rig();
     const id = await armed(r);
     authState.userId = r.owner.userId!;
+    const bodies = [
+      "{}",
+      JSON.stringify({ kind: "pair" }),
+      JSON.stringify({ kind: "pair_round" }),
+      JSON.stringify({ kind: "pair_round", round: 0 }),
+      JSON.stringify({ kind: "pair_round", round: 2.5 }),
+      JSON.stringify({ kind: "pair_round", round: 2, stage: "x" }),
+      "not json",
+    ];
     let checked = 0;
-    for (const body of ["{}", JSON.stringify({ kind: "pair" }), JSON.stringify({ kind: "pair_round", round: 2 }), "not json"]) {
+    for (const body of bodies) {
       const res = await read(await POST(skip(r.swissId, body), ctx(r.swissId)));
       expect(res.status, body).toBe(400);
       expect(res.body.error?.code, body).toBe("VALIDATION");
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(bodies.length);
+    expect(checked).toBe(7);
     expect(await stateOf(id)).toEqual(PENDING);
+  });
+
+  it("a stale target is 409 AUTO_ADVANCE_TARGET_MOVED and a row being fired is 409 AUTO_ADVANCE_FIRING, through the envelope; the right round on a free row skips", async () => {
+    const r = await rig();
+    const id = await armed(r);
+    authState.userId = r.owner.userId!;
+    const moved = await read(await POST(skip(r.swissId, JSON.stringify({ kind: "pair_round", round: 1 })), ctx(r.swissId)));
+    expect([moved.status, moved.body.error?.code], "a Skip of round 1 when round 2 counts down").toEqual([409, "AUTO_ADVANCE_TARGET_MOVED"]);
+    expect(await stateOf(id)).toEqual(PENDING);
+    await sql`update stage_auto_actions set lease_until = now() + interval '2 minutes' where id = ${id}`;
+    const firing = await read(await POST(skip(r.swissId, PAIR), ctx(r.swissId)));
+    expect([firing.status, firing.body.error?.code], "the clock holds the row").toEqual([409, "AUTO_ADVANCE_FIRING"]);
+    expect(await stateOf(id)).toEqual(PENDING);
+    // The positive pair: the lease lapsed, the same body skips.
+    await sql`update stage_auto_actions set lease_until = now() - interval '1 second' where id = ${id}`;
+    expect((await POST(skip(r.swissId, PAIR), ctx(r.swissId))).status).toBe(200);
+    expect(await stateOf(id)).toEqual(SKIPPED_BY_PERSON);
   });
 
   it("refusals keep their names through the envelope: confirm 422 AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE; nothing live 409 AUTO_ADVANCE_NOTHING_TO_SKIP", async () => {

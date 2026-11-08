@@ -27542,7 +27542,7 @@
     },
     "/api/v1/stages/{id}/auto-advance/skip": {
       "post": {
-        "summary": "Swiss auto-advance: \"Skip this time\". The stage's live `pair_round` or `complete_stage` action (`kind`) is cancelled for its target only, and stays so: no correction re-arms that round, while the next one arms as usual (turning the switch off is the way to stop it for good). Answers the action as it now stands (`state: cancelled`, `result: {reason: skip, by: person}`). An Unpair of a round, or an Undo of its Pair, records the same skip when auto-pair is on. 422 AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE for `confirm_handoff` (confirm is stopped by reviewing the proposal or by its switch); 409 AUTO_ADVANCE_NOTHING_TO_SKIP when no action of that kind is live (nothing armed, the switch off, or skipped already). Organisers only (a `manage` key); 404 for a stage that is unknown, 401 for another organisation's",
+        "summary": "Swiss auto-advance: \"Skip this time\". The stage's live `pair_round` or `complete_stage` action (`kind`) is cancelled for its target only, and stays so: no correction re-arms that round, while the next one arms as usual (turning the switch off is the way to stop it for good). The body names the target the caller saw: `round` is required for `pair_round` (the round it pairs) and optional for `complete_stage` (its target is the stage's last round; when sent it must be that round). Answers the action as it now stands (`state: cancelled`, `result: {reason: skip, by: person}`). An Unpair of a round, or an Undo (or a Redo of an Undo) of its Pair, records the same skip when auto-pair is on. 422 AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE for `confirm_handoff` (confirm is stopped by reviewing the proposal or by its switch); 409 AUTO_ADVANCE_NOTHING_TO_SKIP when no action of that kind is live (nothing armed, the switch off, or skipped already); 409 AUTO_ADVANCE_TARGET_MOVED when the live action is for another round than the one named (it was paired, by the clock or another organiser, and the next round armed); 409 AUTO_ADVANCE_FIRING when the clock is carrying the action out right now. Organisers only (a `manage` key); 404 for a stage that is unknown, 401 for another organisation's",
         "tags": [
           "stages"
         ],
@@ -27572,6 +27572,11 @@
                       "complete_stage",
                       "confirm_handoff"
                     ]
+                  },
+                  "round": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
                   }
                 },
                 "required": [
@@ -27580,7 +27585,8 @@
                 "additionalProperties": false
               },
               "example": {
-                "kind": "pair_round"
+                "kind": "pair_round",
+                "round": 1
               }
             }
           }

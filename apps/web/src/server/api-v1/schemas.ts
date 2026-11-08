@@ -3179,9 +3179,21 @@ export const StageAutoAdvanceOut = z.object({
 export type StageAutoAdvanceOut = z.infer<typeof StageAutoAdvanceOut>;
 
 /** POST /stages/{id}/auto-advance/skip (Swiss auto-advance spec §4.2, §4.6: "Skip this time") — which of the stage's live
- *  auto actions to skip. Every kind is accepted here so that `confirm_handoff` is refused BY NAME
- *  (AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE, D22: confirm is stopped by pausing or the switch), not as a shapeless 400. */
-export const AutoAdvanceSkip = z.strictObject({ kind: z.enum(AUTO_ACTION_KINDS) });
+ *  auto actions to skip, and its TARGET (D33): the round the caller saw. A Skip is a person's word on one target, and the
+ *  banner it is clicked on polls every 10 s, so a Skip that named only the kind would land on whatever row of that kind is
+ *  live by then (the round after one the clock or another organiser just paired) and stick there.
+ *  - `pair_round`: `round` is required — the round the countdown pairs.
+ *  - `complete_stage`: `round` is optional — its target is the stage's last round (V497's target_shape), so the kind alone
+ *    names it; when sent it must be that round.
+ *  - `confirm_handoff`: accepted only so that it is refused BY NAME (AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE, D22: confirm is
+ *    stopped by pausing or the switch), not as a shapeless 400; a `round` is ignored. */
+export const AutoAdvanceSkip = z
+  .strictObject({ kind: z.enum(AUTO_ACTION_KINDS), round: z.number().int().positive().optional() })
+  .superRefine((b, ctx) => {
+    if (b.kind === "pair_round" && b.round === undefined) {
+      ctx.addIssue({ code: "custom", path: ["round"], message: "A pair_round skip names the round it skips." });
+    }
+  });
 export type AutoAdvanceSkip = z.infer<typeof AutoAdvanceSkip>;
 
 /** GET /divisions/{id}/auto-advance — every live row of the division's stages (waiting, pending, paused, blocked), and each

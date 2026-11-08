@@ -4,9 +4,12 @@
 //   - a manual Pair, Complete or Confirm retires the live row whose target it reached, as `done {by: "person"}`, IN ITS OWN
 //     TRANSACTION, and then asks for the after-commit arming (`rearmAfterCommit`) so the NEXT target arms;
 //   - Skip (`skipAutoAction`) closes a live pair_round / complete_stage row as `cancelled {reason: "skip"}`, and only a skip
-//     is sticky; confirm is never skippable (stopped by pausing or the switch);
-//   - an Unpair of a round, or an Undo of its Pair from History, records the same sticky skip (`by: "unpair"` / `"undo"`), so
-//     the clock never re-pairs a round the organiser deliberately pulled back.
+//     is sticky; confirm is never skippable (stopped by pausing or the switch). The skip names its target (D33): a stale
+//     round is refused AUTO_ADVANCE_TARGET_MOVED and a row the clock is firing AUTO_ADVANCE_FIRING, both 409;
+//   - an Unpair of a round, or an Undo (or a Redo) of its Pair from History, records the same sticky skip (`by: "unpair"` /
+//     `"undo"` / `"redo"`), so the clock never re-pairs a round the organiser deliberately pulled back;
+//   - each of those writers takes the stage's `auto-advance:` lock, so a concurrent rearm that has read the row cannot write
+//     its stale state over them (`handAgainstRearm`, the `pg_blocking_pids` witness).
 //
 // Every rig is seeded through the usecases, every board decided through `scoreEvent`, every manual action through its own
 // usecase (the one its route calls). To see the in-transaction retire apart from the after-commit arming, this file wraps
@@ -38,7 +41,7 @@ vi.mock("../auto-advance", async (importOriginal) => {
 
 import { LIVE_AUTO_ACTION_STATES } from "@/lib/auto-advance";
 import { HttpError } from "@/lib/errors";
-import { sql, withTenant } from "@/lib/db";
+import { sql, withTenant, type Tx } from "@/lib/db";
 import { systemAuth, type AuthCtx } from "@/server/api-v1/auth";
 import { resolveSettleMs } from "@/server/auto-advance/settle";
 import { createCompetition } from "../competitions";
@@ -386,18 +389,18 @@ describe.skipIf(!HAS_DB)("Skip (§4.2: sticky for its target; §4.6; D22; plan T
   it("nothing live is nothing to skip (the empty case first); skip twice: the second is 409 by name", async () => {
     const r = await swissRig();
     // The empty case: the switch is on and nothing is generated, so no row exists.
-    await refusedBy(skipAutoAction(r.auth, r.swissId, "pair_round"), 409, "AUTO_ADVANCE_NOTHING_TO_SKIP");
+    await refusedBy(skipAutoAction(r.auth, r.swissId, { kind: "pair_round", round: 2 }), 409, "AUTO_ADVANCE_NOTHING_TO_SKIP");
     expect(await rowsOf(r.swissId), "the refusal wrote nothing").toEqual([]);
     await start(r);
     await pair(r);
     await decideRound(r, 1);
     const two = await expectArmed(await liveOf(r.swissId, "pair_round"), "round 1 decided");
     // Another kind than the live one is nothing to skip either.
-    await refusedBy(skipAutoAction(r.auth, r.swissId, "complete_stage"), 409, "AUTO_ADVANCE_NOTHING_TO_SKIP");
-    const view = await skipAutoAction(r.auth, r.swissId, "pair_round");
+    await refusedBy(skipAutoAction(r.auth, r.swissId, { kind: "complete_stage" }), 409, "AUTO_ADVANCE_NOTHING_TO_SKIP");
+    const view = await skipAutoAction(r.auth, r.swissId, { kind: "pair_round", round: 2 });
     expect(view).toMatchObject({ id: two.id, kind: "pair_round", state: "cancelled", targetRound: 2, result: { reason: "skip", by: "person" } });
     const before = await rowsOf(r.swissId);
-    await refusedBy(skipAutoAction(r.auth, r.swissId, "pair_round"), 409, "AUTO_ADVANCE_NOTHING_TO_SKIP");
+    await refusedBy(skipAutoAction(r.auth, r.swissId, { kind: "pair_round", round: 2 }), 409, "AUTO_ADVANCE_NOTHING_TO_SKIP");
     expect(await rowsOf(r.swissId), "the second skip wrote nothing").toEqual(before);
     expect(before.filter((a) => a.state === "cancelled"), "one skip row").toHaveLength(1);
   });
@@ -405,7 +408,7 @@ describe.skipIf(!HAS_DB)("Skip (§4.2: sticky for its target; §4.6; D22; plan T
   it("skip is sticky for its round only (§5.13): a correction never re-arms it; the next round arms normally", async () => {
     const { r, r2 } = await roundTwoDecided();
     const three = await expectArmed(await liveOf(r.swissId, "pair_round"), "round 2 decided");
-    await skipAutoAction(r.auth, r.swissId, "pair_round");
+    await skipAutoAction(r.auth, r.swissId, { kind: "pair_round", round: 3 });
     expect(await liveOf(r.swissId, "pair_round"), "skipped").toBeUndefined();
     // A round-2 correction: round 3 stays unarmed.
     const [f] = await boards(r.swissId, 2);
@@ -424,7 +427,8 @@ describe.skipIf(!HAS_DB)("Skip (§4.2: sticky for its target; §4.6; D22; plan T
   it("skip complete_stage is sticky too: a last-round correction never re-arms it, and Complete by hand still completes", async () => {
     const { r, r2 } = await roundTwoDecided({ rounds: 2 });
     const complete = await expectArmed(await liveOf(r.swissId, "complete_stage"), "the last round decided");
-    const view = await skipAutoAction(r.auth, r.swissId, "complete_stage");
+    // No round: complete_stage's target is the stage's last round, so the round is optional (checked when sent; below).
+    const view = await skipAutoAction(r.auth, r.swissId, { kind: "complete_stage" });
     expect(view).toMatchObject({ id: complete.id, kind: "complete_stage", state: "cancelled", result: { reason: "skip", by: "person" } });
     const [f] = await boards(r.swissId, 2);
     await correct(r, f!, r2.get(f!.id)!);
@@ -445,15 +449,75 @@ describe.skipIf(!HAS_DB)("Skip (§4.2: sticky for its target; §4.6; D22; plan T
     await setStageAutoAdvance(r.auth, r.swissId, { autoPair: true });
     const again = await expectArmed(await liveOf(r.swissId, "pair_round"), "a switch-off is not sticky");
     expect(again.target_round).toBe(3);
-    await skipAutoAction(r.auth, r.swissId, "pair_round");
+    await skipAutoAction(r.auth, r.swissId, { kind: "pair_round", round: 3 });
     await setStageAutoAdvance(r.auth, r.swissId, { autoPair: false });
     await setStageAutoAdvance(r.auth, r.swissId, { autoPair: true });
     expect(await liveOf(r.swissId, "pair_round"), "a skip is").toBeUndefined();
   });
 
+  it("a skip names its target (D33): a stale round is 409 AUTO_ADVANCE_TARGET_MOVED and the live row stands; the round it shows skips", async () => {
+    const { r } = await roundTwoDecided();
+    const three = await expectArmed(await liveOf(r.swissId, "pair_round"), "round 2 decided");
+    const before = await rowsOf(r.swissId);
+    let checked = 0;
+    for (const round of [2, 4]) {
+      await refusedBy(skipAutoAction(r.auth, r.swissId, { kind: "pair_round", round }), 409, "AUTO_ADVANCE_TARGET_MOVED");
+      expect(await rowsOf(r.swissId), `round ${round}: the refusal wrote nothing`).toEqual(before);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The assumption is a guard: a pair_round skip with no round (a caller past the door's schema) is refused by name.
+    await refusedBy(skipAutoAction(r.auth, r.swissId, { kind: "pair_round" }), 400, "AUTO_ADVANCE_ROUND_REQUIRED");
+    expect(await rowsOf(r.swissId), "nor did that").toEqual(before);
+    // The positive pair: the round the banner shows.
+    const view = await skipAutoAction(r.auth, r.swissId, { kind: "pair_round", round: 3 });
+    expect([view.id, view.state, view.targetRound, view.result]).toEqual([three.id, "cancelled", 3, { reason: "skip", by: "person" }]);
+  });
+
+  it("the banner race: another hand paired the round a Skip names, so the next round's fresh row is refused, not skipped", async () => {
+    const { r } = await roundTwoDecided();
+    const three = await expectArmed(await liveOf(r.swissId, "pair_round"), "round 2 decided: the banner shows round 3");
+    // Another organiser (or the clock) pairs round 3 between the banner's poll and the click.
+    await pair(r);
+    const four = await liveOf(r.swissId, "pair_round");
+    expect([four?.state, four?.target_round], "premise: round 3 paired, round 4's row is fresh").toEqual(["waiting", 4]);
+    const before = await rowsOf(r.swissId);
+    await refusedBy(skipAutoAction(r.auth, r.swissId, { kind: "pair_round", round: 3 }), 409, "AUTO_ADVANCE_TARGET_MOVED");
+    expect(await rowsOf(r.swissId), "round 4's row stands; round 3's stays done").toEqual(before);
+    expect((await rowById(r.swissId, three.id)).state).toBe("done");
+    // The positive pair: a Skip that names round 4 skips it.
+    const view = await skipAutoAction(r.auth, r.swissId, { kind: "pair_round", round: 4 });
+    expect([view.id, view.state, view.result]).toEqual([four!.id, "cancelled", { reason: "skip", by: "person" }]);
+  });
+
+  it("complete_stage: a round, when sent, must be the stage's last (409 AUTO_ADVANCE_TARGET_MOVED); the last round skips", async () => {
+    const { r } = await roundTwoDecided({ rounds: 2 });
+    const complete = await expectArmed(await liveOf(r.swissId, "complete_stage"), "the last round decided");
+    expect(complete.target_round, "premise: complete_stage targets the last round").toBe(2);
+    const before = await rowsOf(r.swissId);
+    await refusedBy(skipAutoAction(r.auth, r.swissId, { kind: "complete_stage", round: 1 }), 409, "AUTO_ADVANCE_TARGET_MOVED");
+    expect(await rowsOf(r.swissId)).toEqual(before);
+    const view = await skipAutoAction(r.auth, r.swissId, { kind: "complete_stage", round: 2 });
+    expect([view.id, view.state, view.result]).toEqual([complete.id, "cancelled", { reason: "skip", by: "person" }]);
+  });
+
+  it("a row being fired is 409 AUTO_ADVANCE_FIRING: Skip never answers cancelled while the clock pairs (the lapsed lease skips)", async () => {
+    const { r } = await roundTwoDecided();
+    const three = await expectArmed(await liveOf(r.swissId, "pair_round"), "round 2 decided");
+    // The clock holds the row (Task 8's claim; SQL stands in).
+    await sql`update stage_auto_actions set lease_until = now() + interval '2 minutes' where id = ${three.id}`;
+    const before = await rowsOf(r.swissId);
+    await refusedBy(skipAutoAction(r.auth, r.swissId, { kind: "pair_round", round: 3 }), 409, "AUTO_ADVANCE_FIRING");
+    expect(await rowsOf(r.swissId), "the fired row is untouched, lease and all").toEqual(before);
+    // The positive pair: the lease lapsed (a fire that died), the same Skip skips.
+    await sql`update stage_auto_actions set lease_until = now() - interval '1 second' where id = ${three.id}`;
+    const view = await skipAutoAction(r.auth, r.swissId, { kind: "pair_round", round: 3 });
+    expect([view.id, view.state, view.result]).toEqual([three.id, "cancelled", { reason: "skip", by: "person" }]);
+  });
+
   it("skip confirm is refused by name (D22): the confirm row keeps counting down", async () => {
     const c = await confirmRig();
-    await refusedBy(skipAutoAction(c.auth, c.koId, "confirm_handoff"), 422, "AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE");
+    await refusedBy(skipAutoAction(c.auth, c.koId, { kind: "confirm_handoff" }), 422, "AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE");
     const kept = await rowById(c.koId, c.armed.id);
     expect([kept.state, kept.due_at?.getTime()], "untouched").toEqual(["pending", c.armed.due_at?.getTime()]);
   });
@@ -476,7 +540,7 @@ describe.skipIf(!HAS_DB)("Skip (§4.2: sticky for its target; §4.6; D22; plan T
       await pair(r);
       const r1 = await decideRound(r, 1);
       const two = await expectArmed(await liveOf(r.swissId, "pair_round"), sport.sport);
-      const view = await skipAutoAction(r.auth, r.swissId, "pair_round");
+      const view = await skipAutoAction(r.auth, r.swissId, { kind: "pair_round", round: 2 });
       expect([view.id, view.state, view.result], sport.sport).toEqual([two.id, "cancelled", { reason: "skip", by: "person" }]);
       const [f] = await boards(r.swissId, 1);
       await correct(r, f!, r1.get(f!.id)!);
@@ -549,6 +613,29 @@ describe.skipIf(!HAS_DB)("an Unpair, or an Undo of the Pair, is a sticky skip (R
     expect(await liveOf(r.swissId, "pair_round"), "round 4's row went with round 3's boards; round 3 does not arm").toBeUndefined();
   });
 
+  it("a Redo that clears a round's seats records its skip as by: redo (the step's own direction)", async () => {
+    // The Redo that clears seats re-does an Undo of a Pair: Pair, Undo, Pair again, Undo twice (the second walks back
+    // through the first Undo, bringing the first Pair back), then Redo (re-does that Undo: the seats go again). Auto-pair is
+    // OFF through the Undos (no skip is recorded where the clock cannot act) and ON for the Redo, so the Redo's skip is the
+    // first for round 3. The flag is flipped by SQL (the create door's StageConfig) so no switch event joins the ledger.
+    const { r } = await roundTwoDecided();
+    const autoPair = (on: boolean) => sql`update stages set config = config || ${sql.json({ autoPair: on })} where id = ${r.swissId}`;
+    await autoPair(false);
+    await pair(r);
+    await undoDivision(r.auth, r.divisionId);
+    await pair(r);
+    await undoDivision(r.auth, r.divisionId);
+    await undoDivision(r.auth, r.divisionId);
+    expect(await seatedIn(r.swissId, 3), "premise: the first Pair is back").toBeGreaterThan(0);
+    expect((await rowsOf(r.swissId)).filter((a) => a.result?.reason === "skip"), "premise: no skip while the switch was off").toEqual([]);
+    await autoPair(true);
+    await redoDivision(r.auth, r.divisionId);
+    expect(await seatedIn(r.swissId, 3), "premise: the Redo cleared round 3's seats").toBe(0);
+    const skips = (await rowsOf(r.swissId)).filter((a) => a.result?.reason === "skip");
+    expect(skips.map((a) => [a.state, a.target_round, a.result])).toEqual([["cancelled", 3, { reason: "skip", by: "redo" }]]);
+    expect(await liveOf(r.swissId, "pair_round"), "round 3 does not arm").toBeUndefined();
+  });
+
   it("undo of an auto pair records a sticky skip (through history.ts's Undo)", async () => {
     const { r, r2 } = await roundTwoDecided();
     const three = await expectArmed(await liveOf(r.swissId, "pair_round"), "round 2 decided");
@@ -572,5 +659,106 @@ describe.skipIf(!HAS_DB)("an Unpair, or an Undo of the Pair, is a sticky skip (R
     expect((await rowById(r.swissId, three.id)).result).toEqual({ reason: "skip", by: "undo" });
     const four = await liveOf(r.swissId, "pair_round");
     expect([four?.state, four?.target_round]).toEqual(["waiting", 4]);
+  });
+});
+
+/** How many backends wait on a lock `pid` holds; polls until one does, or answers 0 after `ms`. */
+async function blockedBehind(pid: number, ms = 5_000): Promise<number> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_stat_activity where ${pid}::int = any(pg_blocking_pids(pid))`;
+    if (n > 0 || Date.now() > deadline) return n;
+    await new Promise((res) => setTimeout(res, 25));
+  }
+}
+
+/** `tx`, except that its first write to stage_auto_actions waits on `onPause()` first: a rearm that has READ the row and
+ *  not yet written it, which is the window a writer without the stage's lock would slip through. */
+function pausedBeforeFirstWrite(tx: Tx, onPause: () => Promise<void>): Tx {
+  let paused = false;
+  return new Proxy(tx, {
+    apply(target, thisArg, args: unknown[]) {
+      const strings = args[0];
+      if (!paused && Array.isArray(strings) && "raw" in strings && /update\s+stage_auto_actions/.test(strings.join("?"))) {
+        paused = true;
+        return onPause().then(() => Reflect.apply(target, thisArg, args) as unknown);
+      }
+      return Reflect.apply(target, thisArg, args) as unknown;
+    },
+  });
+}
+
+/**
+ * The clock's re-derive (a decided board's `rearmAfterCommit`, the real `rearmAutoActions`) holding the stage's lock, the
+ * row read and its write not yet made, while `hand` runs. Answers how many backends waited behind it before it was let go
+ * (1: the hand waited on the lock; 0: it slipped through and the rearm's write lands on top of it).
+ */
+async function handAgainstRearm(r: Rig, hand: () => Promise<unknown>): Promise<number> {
+  let release!: () => void;
+  const gate = new Promise<void>((res) => (release = res));
+  let pausedAt!: (pid: number | null) => void;
+  const paused = new Promise<number | null>((res) => (pausedAt = res));
+  const rearm = withTenant(r.auth.orgId, async (tx) => {
+    const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+    return rearmAutoActions(
+      pausedBeforeFirstWrite(tx, () => {
+        pausedAt(pid);
+        return gate;
+      }),
+      r.swissId,
+    );
+  });
+  void rearm.then(
+    () => pausedAt(null),
+    () => pausedAt(null),
+  );
+  const pid = await paused;
+  expect(pid, "premise: the rearm read the row and paused before writing it").not.toBeNull();
+  let handErr: unknown = null;
+  const handDone = hand().catch((e: unknown) => {
+    handErr = e;
+  });
+  let blocked = 0;
+  try {
+    blocked = await blockedBehind(pid!);
+  } finally {
+    release();
+    await rearm;
+    await handDone;
+  }
+  if (handErr) throw handErr;
+  return blocked;
+}
+
+describe.skipIf(!HAS_DB)("the hand and the clock serialise on the stage's lock (fix round 1, IMPORTANT 2)", () => {
+  it("skip vs a concurrent rearm: the skip waits for the rearm and lands after it, never under it", async () => {
+    const { r } = await roundTwoDecided();
+    const three = await expectArmed(await liveOf(r.swissId, "pair_round"), "round 2 decided");
+    const blocked = await handAgainstRearm(r, () => skipAutoAction(r.auth, r.swissId, { kind: "pair_round", round: 3 }));
+    const row = await rowById(r.swissId, three.id);
+    expect([row.state, row.result], "the skip stands: the rearm's restart did not write over it").toEqual(["cancelled", { reason: "skip", by: "person" }]);
+    expect(await liveOf(r.swissId, "pair_round")).toBeUndefined();
+    expect(blocked, "the skip waited on the stage's lock").toBe(1);
+  });
+
+  it("manual retire vs a concurrent rearm: the Pair's retire waits for the rearm and lands after it", async () => {
+    const { r } = await roundTwoDecided();
+    const three = await expectArmed(await liveOf(r.swissId, "pair_round"), "round 2 decided");
+    // The after-commit arming is off for the Pair, so the row's state is what the Pair's own transaction left.
+    const blocked = await handAgainstRearm(r, () => withoutAfterCommit(() => pair(r)));
+    expect(await seatedIn(r.swissId, 3), "premise: the Pair seated round 3").toBeGreaterThan(0);
+    const row = await rowById(r.swissId, three.id);
+    expect([row.state, row.result], "the retire stands: the rearm's restart did not write over it").toEqual(["done", BY_PERSON]);
+    expect(blocked, "the retire waited on the stage's lock").toBe(1);
+  });
+
+  it("an unpair's or undo's skip vs a concurrent rearm: recordAutoSkip waits for the rearm and lands after it", async () => {
+    const { r } = await roundTwoDecided();
+    const three = await expectArmed(await liveOf(r.swissId, "pair_round"), "round 2 decided");
+    const blocked = await handAgainstRearm(r, () => withTenant(r.auth.orgId, (tx) => recordAutoSkip(tx, r.swissId, "pair_round", 3, "unpair")));
+    const row = await rowById(r.swissId, three.id);
+    expect([row.state, row.result], "the skip stands").toEqual(["cancelled", { reason: "skip", by: "unpair" }]);
+    expect(blocked, "the skip waited on the stage's lock").toBe(1);
   });
 });

@@ -21,8 +21,9 @@ import { resolveSettleMs } from "../../../apps/web/src/server/auto-advance/settl
  *
  * T6 (§4.2, §4.6, §5.4, §5.13, D22): a person's hand on the clock. Pair next pressed inside round 2's countdown pairs once,
  * and the row retires as done by a person while round 3 waits on round 2; a second press pairs nothing more. Then, round 2
- * decided, Skip this time cancels round 3's countdown as a skip; a second Skip is refused 409 AUTO_ADVANCE_NOTHING_TO_SKIP
- * and a Skip of the confirm 422 AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE, both by name.
+ * decided, a Skip naming round 2 (a stale banner) is refused 409 AUTO_ADVANCE_TARGET_MOVED and touches nothing; Skip this
+ * time naming round 3 cancels its countdown as a skip; a second Skip is refused 409 AUTO_ADVANCE_NOTHING_TO_SKIP and a Skip
+ * of the confirm 422 AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE, all by name (D33: a Skip names its target).
  *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=swissAutoAdvance runs it alone
  * (SELECTABLE_SUITES). Own fresh owner (Community plan: one competition, one division); keyless; no SQL.
@@ -258,22 +259,25 @@ export async function swissAutoAdvanceSuite(): Promise<void> {
     const results: number[] = [];
     for (const b of await roundBoards(2)) results.push(...(await win(b.id)));
     const three = (await live()).find((a) => a.state === "pending");
-    const skip = (kind: string) => v1(owner, `/api/v1/stages/${swissId}/auto-advance/skip`, "POST", { kind });
-    const skipped = await skip("pair_round");
+    const skip = (body: { kind: string; round?: number }) => v1(owner, `/api/v1/stages/${swissId}/auto-advance/skip`, "POST", body);
+    const stale = await skip({ kind: "pair_round", round: 2 });
+    const stillPending = (await live()).find((a) => a.id === three?.id)?.state;
+    const skipped = await skip({ kind: "pair_round", round: 3 });
     const row = v1data<Action | undefined>(skipped);
     const left = (await live()).filter((a) => a.state !== "done");
-    const twice = await skip("pair_round");
-    const confirm = await skip("confirm_handoff");
+    const twice = await skip({ kind: "pair_round", round: 3 });
+    const confirm = await skip({ kind: "confirm_handoff" });
     const ok =
       results.every((s) => s === 201) && three?.kind === "pair_round" && three.targetRound === 3 &&
+      stale.status === 409 && errorCode(stale) === "AUTO_ADVANCE_TARGET_MOVED" && stillPending === "pending" &&
       skipped.status === 200 && row?.id === three.id && row.state === "cancelled" &&
       (row.result as { reason?: string; by?: string } | null)?.reason === "skip" && (row.result as { by?: string }).by === "person" &&
       left.length === 0 &&
       twice.status === 409 && errorCode(twice) === "AUTO_ADVANCE_NOTHING_TO_SKIP" &&
       confirm.status === 422 && errorCode(confirm) === "AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE";
     aaCheck(
-      "saa T6: Skip this time cancels round 3's countdown as a skip and nothing stays live; a second Skip is refused 409 AUTO_ADVANCE_NOTHING_TO_SKIP and a Skip of the confirm 422 AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE" +
-        (ok ? "" : ` - events ${JSON.stringify(results)}, pending ${JSON.stringify(three)}, skip ${skipped.status} ${JSON.stringify(skipped.json).slice(0, 200)}, left ${JSON.stringify(left).slice(0, 200)}, twice ${twice.status} ${errorCode(twice) ?? "-"}, confirm ${confirm.status} ${errorCode(confirm) ?? "-"}`),
+      "saa T6: a Skip naming round 2 is refused 409 AUTO_ADVANCE_TARGET_MOVED and round 3 still counts down; Skip this time naming round 3 cancels its countdown as a skip and nothing stays live; a second Skip is refused 409 AUTO_ADVANCE_NOTHING_TO_SKIP and a Skip of the confirm 422 AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE" +
+        (ok ? "" : ` - events ${JSON.stringify(results)}, pending ${JSON.stringify(three)}, stale ${stale.status} ${errorCode(stale) ?? "-"} then ${stillPending ?? "-"}, skip ${skipped.status} ${JSON.stringify(skipped.json).slice(0, 200)}, left ${JSON.stringify(left).slice(0, 200)}, twice ${twice.status} ${errorCode(twice) ?? "-"}, confirm ${confirm.status} ${errorCode(confirm) ?? "-"}`),
       ok,
     );
   }

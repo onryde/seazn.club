@@ -29,9 +29,11 @@ import "server-only";
 //                              reached, in its own transaction; each then calls `rearmAfterCommit` for the NEXT target (a
 //                              Pair through `afterGenerateCommit`; Add a round too, swiss-rounds-admin.ts).
 //   `recordAutoSkip`           the sticky skip of one target, `cancelled {reason: "skip", by}`.
-//   `recordPullBackSkip`       an Unpair (stages.ts `unpairSwissRound`) or an Undo of a Pair (history.ts `stepWrite`) of an
-//                              auto-pair stage records that skip, so the clock never re-pairs a round pulled back on purpose.
-//   `skipAutoAction`           `POST /stages/{id}/auto-advance/skip` `{ kind }`; confirm is never skippable.
+//   `recordPullBackSkip`       an Unpair (stages.ts `unpairSwissRound`) or a History step that clears a Pair's seats (an
+//                              Undo, or a Redo of such an Undo: history.ts `stepWrite`, `by` its direction) of an auto-pair
+//                              stage records that skip, so the clock never re-pairs a round pulled back on purpose.
+//   `skipAutoAction`           `POST /stages/{id}/auto-advance/skip` `{ kind, round }` (D33: names its target); confirm
+//                              is never skippable.
 import type postgres from "postgres";
 import {
   AUTO_ADVANCE_DONE_VISIBLE_MS,
@@ -499,6 +501,7 @@ export async function rearmAfterCommit(orgId: string, stageId: string, opts: { r
  * Lock order: the caller's `division:` lock, then `auto-advance:<stageId>` (as `rearmAutoActions`).
  */
 export async function retireReachedAutoActions(tx: Tx, stageId: string): Promise<number> {
+  // Without it, a rearm that read the row before this commits writes its stale state (`where id = …`) over the retire.
   await tx`select pg_advisory_xact_lock(hashtext(${"auto-advance:" + stageId}))`;
   const live = await tx<(LiveRow & { stage_status: string; at: Date })[]>`
     select a.id, a.kind, a.state, a.target_round, a.target_proposal_id, a.blocked_code, a.detail, false as leased,
@@ -519,8 +522,9 @@ export async function retireReachedAutoActions(tx: Tx, stageId: string): Promise
   return retired;
 }
 
-/** Who skipped a round: a person's Skip, an Unpair of the round, or an Undo of its Pair from History. */
-export type AutoSkipBy = "person" | "unpair" | "undo";
+/** Who skipped a round: a person's Skip, an Unpair of the round, or a History step that took its Pair away — an Undo of
+ *  the Pair, or a Redo that re-does such an Undo (`history.ts` passes the step's own direction). */
+export type AutoSkipBy = "person" | "unpair" | "undo" | "redo";
 
 /**
  * Records a sticky skip of one target (§4.2: "a `cancelled` row keeps its target; rearm never re-arms it"): the live row of
@@ -534,7 +538,13 @@ export type AutoSkipBy = "person" | "unpair" | "undo";
  * Lock order: the caller's `division:` lock (if any), then `auto-advance:<stageId>`.
  */
 export async function recordAutoSkip(tx: Tx, stageId: string, kind: SourceActionKind, round: number, by: AutoSkipBy): Promise<void> {
+  // Without it, a rearm that read this row before the skip commits writes its stale state (`where id = …`) over the skip.
   await tx`select pg_advisory_xact_lock(hashtext(${"auto-advance:" + stageId}))`;
+  await writeSkip(tx, stageId, kind, round, by);
+}
+
+/** `recordAutoSkip`'s write, for a caller that already holds the stage's `auto-advance:` lock. */
+async function writeSkip(tx: Tx, stageId: string, kind: SourceActionKind, round: number, by: AutoSkipBy): Promise<void> {
   const result = tx.json({ reason: SKIP_REASON, by });
   const closed = await tx`
     update stage_auto_actions set state = 'cancelled', result = ${result}, lease_until = null, updated_at = clock_timestamp()
@@ -556,8 +566,9 @@ export async function recordAutoSkip(tx: Tx, stageId: string, kind: SourceAction
 }
 
 /**
- * An Unpair of round N, or an Undo of its Pair from History (Review Focus 1): the organiser pulled the round back on
- * purpose, so the clock must not pair it again 60 s later — a sticky skip of `pair_round` N, `by` the path that did it.
+ * An Unpair of round N, or a History step that takes its Pair away — an Undo, or a Redo of such an Undo — (Review Focus 1):
+ * the organiser pulled the round back on purpose, so the clock must not pair it again 60 s later — a sticky skip of
+ * `pair_round` N, `by` the path that did it (a History step's own direction).
  * Only where auto-pair is ON and can act (the arming's own gate): a stage that never used the clock gets no rows, and a
  * switch turned on later arms what is ready then (§5.8). Answers whether it recorded one. The caller rearms after its
  * commit.
@@ -570,16 +581,35 @@ export async function recordPullBackSkip(tx: Tx, stageId: string, round: number,
   return true;
 }
 
+/** What a Skip names (`AutoAdvanceSkip`, D33): the kind, and the round it saw — required for `pair_round`, optional for
+ *  `complete_stage` (its target is the stage's last round), ignored for `confirm_handoff` (never skippable). */
+export type AutoSkipTarget = { kind: AutoActionKind; round?: number };
+
 /**
- * `POST /stages/{id}/auto-advance/skip` `{ kind }` (§4.6 "Skip this time"): the stage's live `pair_round` or
+ * `POST /stages/{id}/auto-advance/skip` `{ kind, round }` (§4.6 "Skip this time"): the stage's live `pair_round` or
  * `complete_stage` row is cancelled as a skip for its target only — the next target arms normally, and no correction ever
  * re-arms this one (§5.13). Answers the row as it now stands.
  *
- * Refused, nothing written: 404 for an unknown stage; 422 AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE for `confirm_handoff` (D22:
- * confirm is stopped by pausing or the switch, never skipped); 409 AUTO_ADVANCE_NOTHING_TO_SKIP when no row of that kind
- * is live (the switch is off, nothing is armed, or it was skipped already).
+ * The Skip names its target (D33), because the banner it is clicked on polls: the round the person saw may have been paired
+ * (by the clock or another organiser) and the next round's row armed in between, and a Skip of "whatever is live" would
+ * cancel THAT round for good behind a 200.
+ *
+ * Refused, nothing written:
+ * - 404 for an unknown stage;
+ * - 422 AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE for `confirm_handoff` (D22: confirm is stopped by pausing or the switch);
+ * - 400 AUTO_ADVANCE_ROUND_REQUIRED for a `pair_round` with no round (the door's schema refuses it first; this is the guard
+ *   for any other caller);
+ * - 409 AUTO_ADVANCE_NOTHING_TO_SKIP when no row of that kind is live (the switch is off, nothing is armed, or it was
+ *   skipped already);
+ * - 409 AUTO_ADVANCE_TARGET_MOVED when the live row is for another round than the one named;
+ * - 409 AUTO_ADVANCE_FIRING when the clock holds the row (its lease, D2): it is pairing or completing right now, and a
+ *   Skip must never answer "cancelled" while that happens.
+ *
+ * The read and the write are under the stage's `auto-advance:` lock (taken once, here): without it, a rearm that read the
+ * row first writes its state back over the skip.
  */
-export async function skipAutoAction(auth: AuthCtx, stageId: string, kind: AutoActionKind): Promise<AutoActionView> {
+export async function skipAutoAction(auth: AuthCtx, stageId: string, target: AutoSkipTarget): Promise<AutoActionView> {
+  const { kind, round } = target;
   return withTenant(auth.orgId, async (tx) => {
     const [stage] = await tx<{ id: string }[]>`select id from stages where id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
@@ -590,12 +620,25 @@ export async function skipAutoAction(auth: AuthCtx, stageId: string, kind: AutoA
         "AUTO_ADVANCE_CONFIRM_NOT_SKIPPABLE",
       );
     }
+    if (kind === "pair_round" && round === undefined) {
+      throw new HttpError(400, "Say which round's pairing to skip.", "AUTO_ADVANCE_ROUND_REQUIRED");
+    }
     await tx`select pg_advisory_xact_lock(hashtext(${"auto-advance:" + stageId}))`;
-    const [live] = await tx<{ id: string; target_round: number }[]>`
-      select id, target_round from stage_auto_actions
+    const [live] = await tx<{ id: string; target_round: number; leased: boolean }[]>`
+      select id, target_round, coalesce(lease_until > clock_timestamp(), false) as leased from stage_auto_actions
        where stage_id = ${stageId} and kind = ${kind} and state in ${tx([...LIVE_AUTO_ACTION_STATES])}`;
     if (!live) throw new HttpError(409, "There is nothing of that kind waiting to happen on this stage.", "AUTO_ADVANCE_NOTHING_TO_SKIP");
-    await recordAutoSkip(tx, stageId, kind, live.target_round, "person");
+    if (round !== undefined && live.target_round !== round) {
+      throw new HttpError(
+        409,
+        `That has moved on: what is waiting now is for round ${live.target_round}, not round ${round}. Look again before skipping.`,
+        "AUTO_ADVANCE_TARGET_MOVED",
+      );
+    }
+    if (live.leased) {
+      throw new HttpError(409, "It is happening right now, so it can no longer be skipped. Look again in a moment.", "AUTO_ADVANCE_FIRING");
+    }
+    await writeSkip(tx, stageId, kind, live.target_round, "person");
     const [row] = await tx<AutoActionRow[]>`
       select id, stage_id, kind, state, target_round, target_proposal_id, due_at, done_at, blocked_code, detail, result, updated_at
         from stage_auto_actions where id = ${live.id}`;

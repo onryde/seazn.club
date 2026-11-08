@@ -781,11 +781,12 @@ async function stepWrite(
       await clearSwissFixtureSeats(tx, ids);
       unseated.push(...ids);
       unpairedStageIds.push(...new Set(live.map((f) => f.stage_id)));
-      // Swiss auto-advance (Review Focus 1): an Undo of a Pair — the clock's or a person's — pulls the round back on
-      // purpose, so the clock must not pair it again 60 s later: a sticky skip of each round it cleared, where auto-pair
-      // is on, in this transaction. Re-armed after the commit (below).
+      // Swiss auto-advance (Review Focus 1): a step that takes a Pair away — the clock's or a person's; an Undo, or a Redo
+      // of such an Undo — pulls the round back on purpose, so the clock must not pair it again 60 s later: a sticky skip
+      // of each round it cleared, `by` this step's direction, where auto-pair is on, in this transaction. Re-armed after
+      // the commit (below).
       const rounds = new Map(live.map((f) => [`${f.stage_id}:${f.round_no}`, f] as const));
-      for (const f of rounds.values()) await recordPullBackSkip(tx, f.stage_id, f.round_no, "undo");
+      for (const f of rounds.values()) await recordPullBackSkip(tx, f.stage_id, f.round_no, direction);
     }
     // A delete-side event records the rows it deletes AS THEY STAND NOW —
     // before the delete, so the appended event is self-contained. (A plain
