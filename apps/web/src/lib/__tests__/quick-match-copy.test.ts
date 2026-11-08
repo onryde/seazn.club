@@ -97,8 +97,8 @@ const UI_KEYS = [
   "quickMatch.home.anyoneCanScore",
   "quickMatch.home.winner",
   "quickMatch.home.level",
-  "quickMatch.home.beat",
-  "quickMatch.home.drew",
+  "quickMatch.home.result",
+  "quickMatch.home.drawn",
   "quickMatch.home.versus",
   "quickMatch.home.winnerOf",
   "quickMatch.home.winnerOfSemi",
@@ -225,6 +225,58 @@ describe("quick match guest copy: plurals", () => {
     expect(checked).toBe(LOCALES.length * FAMILIES.length);
   });
 
+  // The word for "match" in each locale, singular and plural: the translation's own grammar, typed here as the rule,
+  // never read back from the dictionary. A `.one`/`.other` pair written the wrong way round still has both keys and
+  // still differs, so only the noun that comes back for 1 and for 2 can witness it.
+  const MATCH_NOUN: Record<Locale, readonly [one: string, other: string]> = {
+    en: ["match", "matches"],
+    fr: ["match", "matchs"],
+    es: ["partido", "partidos"],
+    nl: ["wedstrijd", "wedstrijden"],
+  };
+  const word = (w: string) => new RegExp(`(^|[^\\p{L}])${w}([^\\p{L}]|$)`, "u");
+
+  it("every locale reads its .one for 1 and its .other for 2 through plural(), with the right noun (counted)", () => {
+    const NOUN_FAMILIES = FAMILIES.filter(([, key]) => key !== "quickMatch.setup.sidesCount");
+    const vars = { max: 6, played: 0, days: 7 };
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const [singular, pluralNoun] = MATCH_NOUN[locale];
+      for (const [file, key] of NOUN_FAMILIES) {
+        const dict = DICTS[locale][file];
+        const atOne = plural(dict, key, 1, locale, vars);
+        const atTwo = plural(dict, key, 2, locale, vars);
+        // plural() picks the locale's own category: .one at 1, .other at 2 (fr, es and nl as en).
+        expect(atOne, `${locale} ${key} at 1 is .one`).toBe(interpolate(dict[`${key}.one`]!, { count: 1, ...vars }));
+        expect(atTwo, `${locale} ${key} at 2 is .other`).toBe(interpolate(dict[`${key}.other`]!, { count: 2, ...vars }));
+        // ...and .one really is the singular: a swapped pair reds here.
+        expect(atOne, `${locale} ${key} at 1 says "${singular}"`).toMatch(word(singular));
+        expect(atOne, `${locale} ${key} at 1 never says "${pluralNoun}"`).not.toMatch(word(pluralNoun));
+        expect(atTwo, `${locale} ${key} at 2 says "${pluralNoun}"`).toMatch(word(pluralNoun));
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(LOCALES.length * NOUN_FAMILIES.length);
+  });
+
+  it("a result reads as one sentence with both sides named, in every locale (no verb to agree with a pair)", () => {
+    // home.html: "Ravi & Sam beat Priya & Tom". fr, es and nl use a noun phrase ("Victoire de ...", "Empate entre ..."),
+    // so a doubles pair as subject never needs a plural verb.
+    const ui = DICTS.en.ui;
+    expect(interpolate(ui["quickMatch.home.result"]!, { winner: "Ravi & Sam", loser: "Priya & Tom" })).toBe(
+      "Ravi & Sam beat Priya & Tom",
+    );
+    expect(interpolate(ui["quickMatch.home.drawn"]!, { a: "Ravi & Sam", b: "Jo & Max" })).toBe("Ravi & Sam drew with Jo & Max");
+    for (const locale of LOCALES) {
+      const r = interpolate(DICTS[locale].ui["quickMatch.home.result"] ?? "", { winner: "W", loser: "L" });
+      const d = interpolate(DICTS[locale].ui["quickMatch.home.drawn"] ?? "", { a: "A", b: "B" });
+      expect(r, locale).toMatch(word("W"));
+      expect(r, locale).toMatch(word("L"));
+      expect(d, locale).toMatch(word("A"));
+      expect(d, locale).toMatch(word("B"));
+    }
+  });
+
   it("en reads the mockups' copy at 1 and at many, through the real plural()", () => {
     const m = DICTS.en.marketing;
     const ui = DICTS.en.ui;
@@ -240,6 +292,11 @@ describe("quick match guest copy: plurals", () => {
     expect(plural(ui, "quickMatch.home.played", 1, "en", { played: 0, days: 7 })).toBe(
       "0 of 1 match played · kept 7 days after the last score",
     );
+    // Task 1 review I2 and m1 (controller, 2026-11-08): the league line names no tie-break the standings do not use
+    // (draws score points, so "most wins" was false), and the two offer refusals name nothing the guest did not choose.
+    expect(m["quickMatch.setup.leagueHelp"]).toBe("Everyone plays everyone. Top of the table wins.");
+    expect(m["quickMatch.errors.formatNotOffered"]).toBe("That format isn't available for this match.");
+    expect(m["quickMatch.errors.sportNotOffered"]).toBe("Those match rules aren't available for quick matches.");
     // home.html hero lines.
     expect(interpolate(ui["quickMatch.home.upNext"]!, { n: 3, total: 6 })).toBe("Up next · match 3 of 6");
     expect(interpolate(ui["quickMatch.home.liveRound"]!, { round: interpolate(ui["quickMatch.home.semiFinal"]!, { n: 2 }) }))
