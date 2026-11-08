@@ -116,6 +116,8 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "carrom.toss": "event.carrom.toss",
 
   "cricket.ball": "event.cricket.ball",
+  // S2-4 (engine ruling 278, CK-BC-1): the mid-over bowler change, MCC Law 17.8.
+  "cricket.bowler.change": "event.cricket.bowler.change",
   "cricket.followon": "event.cricket.followon",
   "cricket.innings.close": "event.cricket.innings.close",
   "cricket.innings.declare": "event.cricket.innings.declare",
@@ -456,6 +458,8 @@ const REASON_KEY: Record<string, MessageKey> = {
   target_reached: "reason.target_reached", forfeited: "reason.forfeited",
   hurt: "reason.hurt", out: "reason.out", time: "reason.time",
   weather: "reason.weather", other: "reason.other",
+  // S2-4 (engine ruling 278): `CricketBowlerChange.reason` (its `other` is above).
+  incapacitated: "reason.incapacitated", suspended: "reason.suspended",
   // R7/A3 — carrom's own umpire-adjustment reasons (padSpec's ADJUST_REASONS,
   // carrom.ts:582 — a pad-only enum; `CarromGameAdjust.reason` itself stays
   // free text, so `declaredEnumMembers()`'s zod-schema walk never reaches
@@ -868,6 +872,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.carrom.ribbon.toss",
 
   "pad.cricket.action.ball",
+  "pad.cricket.action.bowlerChange", // S2-4 (engine ruling 278)
   "pad.cricket.action.declare",
   "pad.cricket.action.extra",
   "pad.cricket.action.followOn",
@@ -952,6 +957,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.cricket.ribbon.newball", // R8/WS-R
   "pad.cricket.ribbon.player.line", // R8/WS-R
   "pad.cricket.ribbon.powerplay", // R8/WS-R
+  "pad.cricket.ribbon.bowler.change", // S2-4 (engine ruling 278)
   "pad.cricket.ribbon.retire",
   "pad.cricket.ribbon.review",
   "pad.cricket.ribbon.revise", // R8/WS-R

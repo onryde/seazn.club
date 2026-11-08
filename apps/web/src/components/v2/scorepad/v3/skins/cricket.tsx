@@ -1614,9 +1614,13 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
  * gate is added anyway ... it must not silently start passing a live tap
  * through if that cfg exclusivity ever changes").
  */
+/** S2-4 Task 1: the engine's mid-over bowler change (ruling 278, CK-BC-1) has no pad surface yet. Task 8 gives it one and
+ *  narrows this to "refused exactly when the change is not open". */
+const NOT_YET_SURFACED = ["cricket.bowler.change"];
+
 export function refusedEventTypes(view: PadHostView): string[] {
   const state = asState(view.state);
-  if (state.phase !== "super_over") return [];
+  if (state.phase !== "super_over") return [...NOT_YET_SURFACED];
   // Pad wave P2 (review, trace c): every cricket.* type the fold refuses in a
   // super over, read off the engine (`superOverEventTypes`: its own balls and
   // a player line pass; every other type's handler refuses it on phase). The

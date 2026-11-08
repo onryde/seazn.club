@@ -60,3 +60,7 @@ overrides:
   "baseline-browser-mapping@<2.11.0": "^2.11.26"
   "fflate@>=0.4.5 <0.4.9": "^0.4.9"
   "@ai-sdk/provider-utils@>=4.0.0-beta.10 <4.0.33": "^4.0.54"
+  # The cricket S2-4 engine snapshot (engine PR onryde/seazn.club.engine#28, cricket fold epoch 2 → 3), installed so this
+  # branch is proven green before the engine is released. Snapshot mode of scripts/__tests__/registry-install.test.ts; the
+  # six manifests stay on their caret. The release removes this entry and bumps every manifest.
+  "@seazn/engine": "npm:@onryde/seazn-engine@0.0.0-pr28.44699f16400a367a87747b8390c40fe16e1ff8f2"

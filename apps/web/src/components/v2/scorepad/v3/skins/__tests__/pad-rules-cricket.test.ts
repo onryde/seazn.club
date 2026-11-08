@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 import { foldMatch, initSquads, type EventEnvelope } from "@seazn/engine/core";
 import { cricketPadRules } from "@seazn/engine/pad";
 import { cricket, type CricketCfg, type CricketState } from "@seazn/engine/sports/cricket";
-import { cricketEnvelopes, cricketLineups, tiedWithSuperOver, type CricketEventSpec } from "../../__tests__/_cricket-fold";
+import { ballSeq, cricketEnvelopes, cricketLineups, tiedWithSuperOver, type CricketEventSpec } from "../../__tests__/_cricket-fold";
 import uiEn from "@/dictionaries/en/ui.json";
 import { GuidedSheet, answerStep, currentStep, initialSheetState } from "../../guided-sheet";
 import { dedicatedEventTypes, moreActions } from "../../pad-host";
@@ -379,6 +379,33 @@ describe("CK-BO-2 balls per over is the cfg's, at two cfgs", () => {
     }
     same(numbering.get("t20"), [0, 6], "t20: the sixth ball of over 0");
     same(numbering.get("hundred"), [1, 1], "hundred: the first ball of over 1");
+  });
+});
+
+/** Five dot balls of the first over (the over in progress), and six (the over just ended, the next bowler not yet named). */
+function firstOver(balls: number): CricketEventSpec[] {
+  const next = ballSeq(T20.ballsPerOver);
+  return [...START, ...Array.from({ length: balls }, () => next("cricket.ball", { striker: STRIKER, nonStriker: NON_STRIKER, bowler: OPENING_BOWLER }))];
+}
+const MID_OVER: readonly CricketEventSpec[] = firstOver(5);
+const OVER_END: readonly CricketEventSpec[] = firstOver(6);
+const ctxOf = (view: PadHostView) => ({ state: view.state, summary: {}, phase: "live" as const, band: 3 as const });
+
+describe("S2-4 T1: the bowler change has no surface yet", () => {
+  it("S2-4 T1: More never lists cricket.bowler.change", () => {
+    let checked = 0;
+    for (const specs of [START, MID_OVER, OVER_END]) {
+      const view = viewOf(T20, specs);
+      const more = moreActions(
+        cricket.padSpec!(T20),
+        ctxOf(view),
+        dedicatedEventTypes(buildTiles(view, t), buildSheets(view, t), [], buildScorebug(view, t)),
+        new Set(refusedEventTypes(view)),
+      );
+      expect(more.map((a) => a.type)).not.toContain("cricket.bowler.change");
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 });
 

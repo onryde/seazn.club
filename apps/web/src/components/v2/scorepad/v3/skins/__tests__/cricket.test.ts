@@ -4125,21 +4125,22 @@ describe("refusedEventTypes (F2) — every type the fold refuses in a super over
   it("during a super over: every cricket.* type except the engine's superOverEventTypes, which include the four the hand list missed (pad wave P2, trace c)", () => {
     const v = view({ state: state({ phase: "super_over" }) });
     const types = Object.keys(cricket.eventSchemas ?? {}).filter((type) => type.startsWith("cricket."));
-    expect(types).toHaveLength(15);
+    expect(types).toHaveLength(16); // S2-4 added cricket.bowler.change (engine ruling 278)
     const expected = types.filter((type) => !cricketPadRules.superOverEventTypes.includes(type)).sort();
     expect([...refusedEventTypes(v)].sort()).toEqual(expected);
     // The five superOverTile disables, and New ball / Powerplay / Interruption / Revise, are all refused (engine guards:
     // requireOpenInnings, the interruption's and the revise's "pre"/"live").
-    for (const type of ["cricket.review", "cricket.retire", "cricket.innings.close", "cricket.innings.declare", "cricket.innings.summary", "cricket.newball", "cricket.powerplay", "cricket.interruption", "cricket.revise"]) {
+    for (const type of ["cricket.review", "cricket.retire", "cricket.innings.close", "cricket.innings.declare", "cricket.innings.summary", "cricket.newball", "cricket.powerplay", "cricket.interruption", "cricket.revise", "cricket.bowler.change"]) {
       expect(refusedEventTypes(v), type).toContain(type);
     }
     expect(refusedEventTypes(v)).not.toContain("cricket.superover.ball");
   });
 
-  it("lists nothing outside a super over — live, pre, and done phases are all unrefused", () => {
-    expect(refusedEventTypes(view())).toEqual([]); // live (view()'s default)
-    expect(refusedEventTypes(view({ state: state({ phase: "pre" }) }))).toEqual([]);
-    expect(refusedEventTypes(view({ state: state({ phase: "done" }) }))).toEqual([]);
+  // S2-4 Task 1: the bowler change has no surface until Task 8, so it is the one type refused in every phase.
+  it("lists only cricket.bowler.change outside a super over — live, pre, and done phases refuse nothing else", () => {
+    expect(refusedEventTypes(view())).toEqual(["cricket.bowler.change"]); // live (view()'s default)
+    expect(refusedEventTypes(view({ state: state({ phase: "pre" }) }))).toEqual(["cricket.bowler.change"]);
+    expect(refusedEventTypes(view({ state: state({ phase: "done" }) }))).toEqual(["cricket.bowler.change"]);
   });
 
   it("proved against a REAL super-over fold too, not just a hand-built phase flag", () => {
