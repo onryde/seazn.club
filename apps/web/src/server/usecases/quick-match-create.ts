@@ -25,6 +25,7 @@ import { sql, withTenant, type Tx } from "@/lib/db";
 import { EVENTS } from "@/lib/analytics-events";
 import { HttpError } from "@/lib/errors";
 import { captureServer } from "@/lib/posthog-server";
+import { systemAuth } from "@/lib/quick-match-auth";
 import {
   QUICK_MATCH_ENDS_ON_DAYS,
   QUICK_MATCH_EXPIRY_DAYS,
@@ -32,7 +33,6 @@ import {
   QUICK_MATCH_SYSTEM_ORG_ID,
   QUICK_MATCH_SYSTEM_USER_ID,
 } from "@/lib/quick-match-constants";
-import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import type { EntrantKind } from "@seazn/engine/sport";
@@ -75,11 +75,9 @@ const VISITOR_HASH_SHAPE = /^[0-9a-f]{64}$/;
 
 const DAY_MS = 24 * 3600 * 1000;
 
-/** The system user acting in the system org: the actor of every guest-created row (§7.1). Session-shaped, as the pad
- *  page builds its context from a link's issuer and `createFromDraft` builds a draft's. */
-export function systemAuth(): AuthCtx {
-  return { orgId: QUICK_MATCH_SYSTEM_ORG_ID, via: "session", userId: QUICK_MATCH_SYSTEM_USER_ID, role: "owner", keyId: null };
-}
+/** The system user acting in the system org (§7.1). Defined in the import-light lib/quick-match-auth.ts, so device links
+ *  can import it without this file's graph; re-exported here, the path its earlier callers use. */
+export { systemAuth };
 
 export interface SealedHomeToken {
   token: string;

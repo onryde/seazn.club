@@ -8,9 +8,10 @@ import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { systemAuth } from "@/lib/quick-match-auth";
 import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { hasValidKek, openWith, sealWith } from "@/server/relay/crypto";
-import type { AuthCtx } from "@/server/api-v1/auth";
+import { assertUuid, type AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
 import type { QuickMatchRow } from "./quick-match-home";
 import type { ResolvedCode } from "./stream-codes";
@@ -276,6 +277,7 @@ export async function ensureDeviceLink(
  * has no session, so `requireSessionEditor` is not asked; the caller has resolved `qm` from its home token, which IS the
  * credential (§7.4). In order:
  *   - the mint limit, per quick match (`qm-mint:<id>`, DEVICE_LINK_MINT_LIMIT), before anything is read;
+ *   - a fixture id that is not a uuid → 404, before any query (Postgres would refuse the cast with a 22P02, a 500);
  *   - an expired row (one `findQuickMatchByCompetition` can still return) → 404 QUICK_MATCH_EXPIRED, as its home answers
  *     an expired token; a saved row has no expiry;
  *   - under the fixture's link lock, in the system org: a fixture outside THIS quick match's competition → 404 (the
@@ -286,12 +288,10 @@ export async function ensureDeviceLink(
  */
 export async function ensureGuestDeviceLink(qm: QuickMatchRow, fixtureId: string): Promise<EnsuredDeviceLink> {
   await rateLimit(`qm-mint:${qm.id}`, DEVICE_LINK_MINT_LIMIT);
+  assertUuid(fixtureId, "fixture");
   if (qm.expiresAt !== null && qm.expiresAt.getTime() <= Date.now()) {
     throw new HttpError(404, "quick match not found or expired", "QUICK_MATCH_EXPIRED");
   }
-  // Loaded on the tap, as api-v1/auth.ts loads this module: every importer of device links (the scoring door, the pad
-  // page, the public realtime-token route) would otherwise carry the quick match create's whole graph.
-  const { systemAuth } = await import("./quick-match-create");
   const auth = systemAuth();
   return withTenant(auth.orgId, async (tx) => {
     await lockFixtureLinks(tx, fixtureId);

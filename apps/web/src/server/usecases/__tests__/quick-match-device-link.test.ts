@@ -33,7 +33,8 @@ import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpe
 import { log } from "@/server/logger";
 import { ensureGuestDeviceLink, resolveDeviceLinkToken } from "../device-links";
 import { touchQuickMatchActivityForFixture } from "../quick-match-activity";
-import { createQuickMatch, systemAuth, type CreatedQuickMatch } from "../quick-match-create";
+import { systemAuth } from "@/lib/quick-match-auth";
+import { createQuickMatch, type CreatedQuickMatch } from "../quick-match-create";
 import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
 import { findQuickMatchByCompetition, resolveQuickMatchToken, type QuickMatchRow } from "../quick-match-home";
 import { listQuickMatchSports } from "../quick-match-sports";
@@ -193,6 +194,18 @@ describe.skipIf(!HAS_DB)("ensureGuestDeviceLink (§7.4, C4, C18)", () => {
     expect(other.minted).toBe(true);
     expect(other.secret).not.toBe(first.secret);
     expect((await resolveDeviceLinkToken(other.secret)).fixture_id).toBe(f1!.id);
+  });
+
+  it("a fixture id that is not a uuid, empty or junk, is a 404 before any query (never Postgres's 22P02, a 500)", async () => {
+    const { row } = await create();
+    const malformed = ["", "not-a-fixture", "00000000-0000-4000-8000-00000000a00", `${randomUUID()}'`];
+    let checked = 0;
+    for (const id of malformed) {
+      await expect(ensureGuestDeviceLink(row, id), JSON.stringify(id)).rejects.toMatchObject({ status: 404 });
+      checked++;
+    }
+    expect(checked).toBe(malformed.length);
+    expect(checked).toBeGreaterThan(0);
   });
 
   it("refuses a fixture of another quick match, or of an ordinary org (404), and writes no link (negative pair)", async () => {
@@ -473,6 +486,9 @@ describe.skipIf(!HAS_DB)("a score through the guest link (real producer and cons
         // Chess has no rally (pre-flight carry): every move event decides a game, so the engine's `onePlayEvent` finds
         // none that leaves the match open. Any OTHER sport landing here is a failure, never a skip.
         expect(isChessSport(key), `${key}: ${rally.message}`).toBe(true);
+        // And only for THAT reason: the probe's own "no play event" refusal, naming this sport. A crash of any other
+        // kind (a fold that throws, a fixture the probe cannot read) is not "chess has no rally" and fails here.
+        expect(rally.message).toMatch(new RegExp(`^firstRallyFor: ${key} draws no play event after core\\.start on fixture ${f0!.id}$`));
         const played = await playToDecided(await linkAuth(link.secret, f0!.id), f0!.id);
         expect(played, key).toMatchObject({ kind: "decided" });
         chessGames++;
