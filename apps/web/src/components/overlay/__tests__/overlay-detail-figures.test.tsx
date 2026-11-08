@@ -185,6 +185,38 @@ describe("the bar draws each person as a NAME that may ellipse beside FIGURES th
     expect(batters).toEqual([`${msg("overlay.cricket.strikerMark")}Iyer 40 (24)`, "Pant 12 (8)"]);
   });
 
+  it("S2-4: the end-of-over card draws one bowler line per bowler of a split over, in order", () => {
+    const bowler = { name: "Bumrah", overs: "0.3", maidens: 0, runs: 8, wickets: 0 };
+    const closed = {
+      inningsIndex: 0,
+      over: 1,
+      runs: 12,
+      wickets: 0,
+      score: "12/0",
+      glyphs: [{ kind: "runs", runs: 1 }],
+      bowler,
+      bowlers: [bowler, { name: "Siraj", overs: "0.3", maidens: 0, runs: 4, wickets: 0 }],
+      batters: [{ name: "Iyer", runs: 12, balls: 6, onStrike: true }],
+    };
+    const card = walk(
+      OverlayEndOfOverCard({
+        moment: { seq: 1, kind: "endOfOver", graphic: "endOfOver", holdMs: 1, tone: "led", headline: "End of over 1", endOfOver: closed } as never,
+        phase: "in" as never,
+        msg,
+      }),
+    );
+    expect(ofClass(card, "ovl-end-of-over-bowler").map(rawText)).toEqual(["Bumrah 0.3-0-8-0", "Siraj 0.3-0-4-0"]);
+    // Regression pin: a whole over draws its one bowler.
+    const whole = walk(
+      OverlayEndOfOverCard({
+        moment: { seq: 1, kind: "endOfOver", graphic: "endOfOver", holdMs: 1, tone: "led", headline: "End of over 1", endOfOver: { ...closed, bowlers: undefined } } as never,
+        phase: "in" as never,
+        msg,
+      }),
+    );
+    expect(ofClass(whole, "ovl-end-of-over-bowler").map(rawText)).toEqual(["Bumrah 0.3-0-8-0"]);
+  });
+
   it("no crease text rides in an ellipsis LABEL any more, and each entry reads exactly its line's text", () => {
     const entries = ofClass(tree, "ovl-detail-entry");
     expect(entries.length).toBe(lines.length);

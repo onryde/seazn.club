@@ -125,7 +125,11 @@ export type OverlayClosedOver = {
   /** Team total after the over, e.g. `142/6`. */
   score: string;
   glyphs: BallGlyph[];
+  /** The over's first bowler. A split over (S2-4; CK-BC-1, MCC Law 17.8) also lists every bowler in `bowlers`. */
   bowler?: OverlayCricketBowler;
+  /** Every bowler of an over a mid-over change split, in the order they bowled, each with his own figures; a bowler
+   *  `nameOf` cannot name is dropped alone. Present only for a split over (the engine's `OverLog.bowlers`). */
+  bowlers?: OverlayCricketBowler[];
   batters: OverlayCricketBatter[];
 };
 
@@ -184,11 +188,10 @@ export function lastClosedOverFromScorecard(
   const over = completeOvers > 0 ? innings.overs[completeOvers - 1] : undefined;
   if (!over) return null;
 
-  const bowlLine =
-    over.bowler === null ? undefined : innings.bowling.find((b) => b.person === over.bowler);
-  const bowlerName = over.bowler === null ? undefined : nameOf(over.bowler);
-  const bowler: OverlayCricketBowler | undefined =
-    bowlLine === undefined || bowlerName === undefined
+  const figuresOf = (person: string | null): OverlayCricketBowler | undefined => {
+    const bowlLine = person === null ? undefined : innings.bowling.find((b) => b.person === person);
+    const bowlerName = person === null ? undefined : nameOf(person);
+    return bowlLine === undefined || bowlerName === undefined
       ? undefined
       : {
           name: bowlerName,
@@ -197,6 +200,10 @@ export function lastClosedOverFromScorecard(
           runs: bowlLine.runs,
           wickets: bowlLine.wickets,
         };
+  };
+  const bowler = figuresOf(over.bowler);
+  // S2-4 (CK-BC-1): a split over credits every bowler who bowled it, never the first alone.
+  const bowlers = (over.bowlers ?? []).flatMap((person) => figuresOf(person) ?? []);
 
   // Crease figures at projection time (best available for the full card).
   const liveBlock = liveFromScorecard(scorecard, nameOf);
@@ -209,6 +216,7 @@ export function lastClosedOverFromScorecard(
     score: `${over.scoreAfter.runs}/${over.scoreAfter.wickets}`,
     glyphs: over.balls,
     ...(bowler === undefined ? {} : { bowler }),
+    ...(bowlers.length === 0 ? {} : { bowlers }),
     batters: liveBlock?.batters ?? [],
   };
 }

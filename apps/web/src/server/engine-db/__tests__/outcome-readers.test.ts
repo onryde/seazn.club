@@ -187,6 +187,7 @@ describe("review I-1: every module.apply replay loop skips what the kernel owns"
   const APPLY = /\.apply\(/g;
   const NOT_A_LEDGER_REPLAY: readonly { file: string; call?: string; reason: string }[] = [
     { file: "apps/web/src/server/overlay/recent.ts", call: "next = module.apply(", reason: "the point-state PROBE: one synthetic module event applied to a stored state, never a ledger event" },
+    { file: "apps/web/src/components/v2/scorepad/v3/skins/cricket.tsx", call: "const after = cricketModule.apply(", reason: "the pad's TRIAL apply (S2-4 Task 5, `wicketEndsInnings`): one synthetic cricket ball, built by the pad and never stored, applied to the fold's own state to ask whether it would end the innings — never a ledger event, and a cricket ball is never kernel-owned" },
     { file: "apps/web/src/server/overlay/gallery-snapshots.ts", call: "state = sportModule.apply(", reason: "the staff gallery's sample WALK (R2007): a module's own generated events, never a stored ledger — it records a sport event or the start and redraws every other core type, which is every type kernelOwnsEvent can claim (gallery-snapshots.test.ts sweeps CORE_EVENT_SCHEMAS)" },
   ];
   it("each module.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason", () => {

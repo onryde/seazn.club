@@ -290,11 +290,11 @@ function opponentSide(side: "home" | "away"): "home" | "away" {
  * ball creates the innings). `undefined !== null` used to make that
  * no-innings window read-only, so the opening bowler could never be
  * changed. Mid-over (`currentBowler` a person id) and coarse fidelity
- * (`fine` absent) stay read-only: the fold refuses a mid-over swap, and a
- * summary innings cannot accept a ball.
+ * (`fine` absent) stay read-only: a ball naming another bowler mid-over is
+ * refused, and a summary innings cannot accept a ball. A mid-over change of
+ * bowler (S2-4 Task 8, MCC Law 17.8) is its own event, `cricket.bowler.change`,
+ * offered in More (`bowlerChangeOpen`, ruling 84), never a pick on this chip.
  */
-// S2-4 Task 8: mid-over the chip stays read-only. A mid-over change of bowler (Law 17.8) is its own event, offered
-// in More (`bowlerChangeOpen`, ruling 84), never a pick on this chip: a ball naming another bowler mid-over is refused.
 export function bowlerIsReadOnly(innings: CricketInningsShape | null): boolean {
   if (innings == null) return false;
   if (innings.closed === true) return true;

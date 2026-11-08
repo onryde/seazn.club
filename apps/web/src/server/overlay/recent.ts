@@ -707,10 +707,15 @@ function nameClosedOver(
     { batters: closed.batters, bowler: closed.bowler, thisOver: closed.glyphs },
     personOf,
   );
+  // A split over's bowlers (S2-4, CK-BC-1): each through the same consent lookup, an unnamed one dropped alone.
+  const bowlers = (closed.bowlers ?? []).flatMap(
+    (bowler) => nameLiveBlock({ batters: [], bowler, thisOver: [] }, personOf).bowler ?? [],
+  );
   return {
-    ...omit(closed, "bowler"),
+    ...omit(closed, "bowler", "bowlers"),
     batters: liveNamed.batters,
     ...(liveNamed.bowler === undefined ? {} : { bowler: liveNamed.bowler }),
+    ...(bowlers.length === 0 ? {} : { bowlers }),
   };
 }
 
@@ -772,6 +777,7 @@ export function cricketBundlePersonIdsIn(bundle: OverlayCricketBundleIds): strin
     })) {
       ids.add(id);
     }
+    for (const b of bundle.lastClosedOver.bowlers ?? []) if (b.name !== undefined) ids.add(b.name);
   }
   if (bundle.highlights?.batter?.name) ids.add(bundle.highlights.batter.name);
   if (bundle.highlights?.bowler?.name) ids.add(bundle.highlights.bowler.name);

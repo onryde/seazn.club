@@ -231,6 +231,34 @@ describe("liveFromScorecard after a mid-over bowler change (S2-4 Task 9)", () =>
     // The over itself is still one over: all five balls, both bowlers'.
     expect(live?.thisOver).toHaveLength(5);
   });
+
+  // Fix round 1 (controller ruling): the closed-over card names every bowler of a split over, in order, each with
+  // his own figures (A-p11 2+6+0 off 3, A-p10 4+0+0 off 3), never the first alone.
+  const CLOSED = [...SPLIT, ball(9, 6, "A-p10", 0)];
+  it("a closed split over lists both bowlers in order, each with his own figures", () => {
+    const closed = lastClosedOverFromScorecard(scorecardOf(CLOSED), names);
+    expect(closed?.over, "premise: over 1 has closed").toBe(1);
+    expect(closed?.bowlers).toEqual([
+      { name: "Bumrah", overs: "0.3", maidens: 0, runs: 8, wickets: 0 },
+      { name: "Siraj", overs: "0.3", maidens: 0, runs: 4, wickets: 0 },
+    ]);
+    expect(closed?.bowler?.name, "`bowler` stays the first, for older readers").toBe("Bumrah");
+  });
+
+  it("a bowler the resolver cannot name is dropped alone; the other stays", () => {
+    const closed = lastClosedOverFromScorecard(scorecardOf(CLOSED), nameOf); // NAMES has no A-p10
+    expect(closed?.bowlers?.map((b) => b.name)).toEqual(["Bumrah"]);
+  });
+
+  it("regression pin: a whole over carries no `bowlers`, only its one bowler", () => {
+    const whole = [
+      ...SPLIT.slice(0, 2),
+      ...[1, 2, 3, 4, 5, 6].map((n) => ball(2 + n, n, "A-p11", 0)),
+    ];
+    const closed = lastClosedOverFromScorecard(scorecardOf(whole), names);
+    expect(closed?.bowlers).toBeUndefined();
+    expect(closed?.bowler).toEqual({ name: "Bumrah", overs: "1.0", maidens: 1, runs: 0, wickets: 0 });
+  });
 });
 
 describe("tossFromScorecard / lastClosedOverFromScorecard / scoringStartedFromScorecard", () => {
