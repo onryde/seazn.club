@@ -129,6 +129,7 @@ import { touchQuickMatchActivity } from "../quick-match-activity";
 import { createQuickMatch, type CreatedQuickMatch } from "../quick-match-create";
 import { hardDeleteQuickMatchCompetition, type QuickMatchDeleteGuard } from "../quick-match-delete";
 import { resolveQuickMatchToken } from "../quick-match-home";
+import { saveQuickMatchForUser } from "../quick-match-save";
 import { listQuickMatchSports } from "../quick-match-sports";
 import { QUICK_MATCH_SWEEP_LIMIT, sweepQuickMatches, type QuickMatchSweepReport } from "../quick-match-sweep";
 import { hashVisitorKey, mintVisitorKey } from "../quick-match-tokens";
@@ -403,15 +404,80 @@ describe.skipIf(!HAS_DB)("the expiry sweep (DB)", () => {
     expect(await sql`select 1 from score_events where fixture_id = ${fixtureId}`).toHaveLength(scored.length);
 
     // A lost touch keeps a match only for the 7 days C1 gives its last score: the same score 8 days old, and the match goes.
+    // (The keep above moved the clock to the score, m1; the clock is put back as the idle match would hold it.)
     await sql`update score_events set recorded_at = now() - interval '8 days' where fixture_id = ${fixtureId}`;
+    await sql`update quick_matches set last_activity_at = now() - interval '8 days', expires_at = now() - interval '1 day' where id = ${m.id}`;
     expect(await sweepQuickMatches({ baseUrl: BASE, onlyIds: [m.id] })).toEqual({ ...ZERO, checked: 1, expired: 1 });
     expect(await competitionExists(m.competitionId)).toBe(false);
+  });
+
+  it("m1: a match kept for a score its touch never recorded gets that touch: its clock moves to the score, and the home, Save and the reminder read it alive", async () => {
+    const m = await create({ email: address("m1-kept") });
+    const { secret, fixtureId } = await scoreLink(m);
+    const [start] = await firstRallyFor(fixtureId);
+    touchSwitch.skipFixture = true; // the append commits; its touch is lost
+    const res = await post(secret, fixtureId, start!);
+    expect(res.status, await res.clone().text()).toBe(201);
+    // The clock as the last RECORDED activity tells it: 8 days idle, a day past the expiry, reminded before that expiry. The score
+    // itself is 2 days old, so an expiry built on "now" (the wrong base) cannot pass for one built on the score.
+    await sql`update quick_matches set last_activity_at = now() - interval '8 days', expires_at = now() - interval '1 day',
+                reminder_sent_at = now() - interval '2 days' where id = ${m.id}`;
+    await sql`update score_events set recorded_at = now() - interval '2 days' where fixture_id = ${fixtureId}`;
+    const [{ latest }] = await sql<{ latest: Date }[]>`select max(recorded_at) as latest from score_events where fixture_id = ${fixtureId}`;
+    expect(await resolveQuickMatchToken(m.token), "premise: before the sweep the home reads it as dead").toBeNull();
+
+    expect(await sweepQuickMatches({ baseUrl: BASE, onlyIds: [m.id] })).toEqual({ ...ZERO, checked: 1, deferred: 1 });
+
+    const s = await stateOf(m.id);
+    expect(s!.last_activity_at.getTime(), "the lost touch, done: the last activity is the score").toBe(latest.getTime());
+    expect(s!.expires_at!.getTime(), "C1: 7 days after that score").toBe(latest.getTime() + SPEC_EXPIRY_DAYS * DAY_MS);
+    expect(s!.reminder_sent_at, "C2: the new expiry owes its own reminder").toBeNull();
+    expect(await resolveQuickMatchToken(m.token), "the home reads it alive").not.toBeNull();
+    // The sweep agrees too: the next run neither deletes it nor defers it again.
+    expect(await sweepQuickMatches({ baseUrl: BASE, onlyIds: [m.id] })).toEqual({ ...ZERO, checked: 1 });
+    // The reminder: once the NEW expiry is within 24 hours, it is reminded.
+    const nearExpiry = new Date(s!.expires_at!.getTime() - (SPEC_REMINDER_HOURS - 1) * HOUR_MS);
+    expect(await sweepQuickMatches({ baseUrl: BASE, now: nearExpiry, onlyIds: [m.id] })).toEqual({ ...ZERO, checked: 1, reminded: 1 });
+    // And the Save button keeps it (an expired row answers gone, D13).
+    expect(await saveQuickMatchForUser(await saver("m1-kept"), m.id)).toBe("saved");
+  });
+
+  it("m1: a match kept for a held fixture moves its clock only FORWARD, to its latest committed score", async () => {
+    const m = await create();
+    const { secret, fixtureId } = await scoreLink(m);
+    const [start] = await firstRallyFor(fixtureId);
+    touchSwitch.skipFixture = true;
+    const res = await post(secret, fixtureId, start!);
+    expect(res.status, await res.clone().text()).toBe(201);
+    // The score is 9 days old; a later home tap recorded activity 8 days ago, so the expiry (a day past) is LATER than the score's.
+    await sql`update score_events set recorded_at = now() - interval '9 days' where fixture_id = ${fixtureId}`;
+    await sql`update quick_matches set last_activity_at = now() - interval '8 days', expires_at = now() - interval '1 day',
+                reminder_sent_at = now() - interval '2 days' where id = ${m.id}`;
+    // An append in flight holds the fixture (see "a score still in flight" above); the delete runs on another connection.
+    const whileHeld = () =>
+      sql.begin(async (tx) => {
+        await tx`select 1 from fixtures where id = ${fixtureId} for key share`;
+        return hardDeleteQuickMatchCompetition(m.competitionId, { expiredBefore: new Date() });
+      });
+    const before = await stateOf(m.id);
+    expect(await whileHeld()).toEqual({ deleted: false, kept: true });
+    expect(await stateOf(m.id), "an older score never moves the expiry back (nor re-arms the reminder)").toEqual(before);
+
+    // The positive pair: the committed score an hour old, the fixture held again. Kept, and the clock moves to that score.
+    await sql`update score_events set recorded_at = now() - interval '1 hour' where fixture_id = ${fixtureId}`;
+    const [{ latest }] = await sql<{ latest: Date }[]>`select max(recorded_at) as latest from score_events where fixture_id = ${fixtureId}`;
+    expect(await whileHeld()).toEqual({ deleted: false, kept: true });
+    const s = await stateOf(m.id);
+    expect(s!.last_activity_at.getTime()).toBe(latest.getTime());
+    expect(s!.expires_at!.getTime()).toBe(latest.getTime() + SPEC_EXPIRY_DAYS * DAY_MS);
+    expect(s!.reminder_sent_at).toBeNull();
   });
 
   it("a score still in flight (its fixture held by an uncommitted append) keeps the match: never waited on; released, it goes", async () => {
     const m = await create();
     await idleFor(m.id, 8);
     const [f0] = await fixturesOf(m.competitionId);
+    const clock = await stateOf(m.id);
     // An append that has written its event holds the event's fixture (its foreign key) until it commits. A delete that went ahead
     // would wait for that commit and then cascade the score away with the fixture.
     const whileHeld = await sql.begin(async (tx) => {
@@ -423,6 +489,8 @@ describe.skipIf(!HAS_DB)("the expiry sweep (DB)", () => {
     });
     expect(whileHeld, "kept at once, not waiting on the append").toEqual({ deleted: false, kept: true });
     expect(await competitionExists(m.competitionId)).toBe(true);
+    // m1's empty case: no committed score to move the clock to (the append's own touch follows its commit), so it is left as it was.
+    expect(await stateOf(m.id)).toEqual(clock);
     expect(await hardDeleteQuickMatchCompetition(m.competitionId, { expiredBefore: new Date() })).toEqual({ deleted: true, kept: false });
   });
 

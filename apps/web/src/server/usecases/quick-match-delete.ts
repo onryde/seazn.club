@@ -24,6 +24,13 @@ import "server-only";
 //   - a score committed but not yet touched: read after those locks, so every append that could still commit is held or
 //     blocked. A score inside the expiry window C1 gives (the last QUICK_MATCH_EXPIRY_DAYS) keeps the match, which bounds a
 //     LOST touch (best-effort, logged) to the same 7 days a recorded one would have bought.
+//
+// A match kept for either reason gets the touch it lost, in the same transaction under the same lock (branch review B m1,
+// controller PO rec 2026-11-08): its clock moves to its latest committed score, so its expiry is that score plus
+// QUICK_MATCH_EXPIRY_DAYS and its reminder is owed again, exactly as the touch would have left it. Without that, the row was
+// kept yet dead to every other reader for up to 7 days: the home's resolver, the Save button and the reminder all read the
+// expiry, which still said "past". Forward only: a score older than the clock (a home tap recorded later) moves nothing, and
+// a match with no committed score (kept for an append still in flight, whose own touch follows its commit) is left alone.
 import { sql, type Tx } from "@/lib/db";
 import { QUICK_MATCH_EXPIRY_DAYS, QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 
@@ -37,7 +44,8 @@ export const QUICK_MATCH_OUTBOX_REF_TYPE = "quick_match";
 export type QuickMatchDeleteGuard = { expiredBefore: Date } | { orphanedBefore: Date };
 
 /** `deleted`: the competition's delete removed its row. `kept`: a guard was given and no longer holds (the match was
- *  revived or saved, or another transaction holds its row), so nothing was deleted and the caller may judge it again later.
+ *  revived or saved, another transaction holds its row, or a guest's score stands, whose touch it then gets: see the
+ *  header), so nothing was deleted and the caller may judge it again later.
  *  Both false: there was nothing of the system org's to delete (gone already, or another org's). */
 export interface QuickMatchDeleteResult {
   deleted: boolean;
@@ -58,7 +66,9 @@ async function judge(tx: Tx, competitionId: string, guard: QuickMatchDeleteGuard
       return held ? "kept" : "gone";
     }
     if (row.due !== true) return "kept";
-    return (await scoreStands(tx, competitionId, guard.expiredBefore)) ? "kept" : "due";
+    if (!(await scoreStands(tx, competitionId, guard.expiredBefore))) return "due";
+    await touchFromLatestScore(tx, competitionId);
+    return "kept";
   }
   const [row] = await tx<{ due: boolean | null }[]>`
     select (c.created_at < ${guard.orphanedBefore}
@@ -87,6 +97,23 @@ async function scoreStands(tx: Tx, competitionId: string, before: Date): Promise
        and se.recorded_at > ${before}::timestamptz - make_interval(days => ${QUICK_MATCH_EXPIRY_DAYS}::int)
      limit 1`;
   return recent !== undefined;
+}
+
+/** The lost touch, for a match `scoreStands` kept (see the header): last activity, expiry and reminder moved to the latest
+ *  committed score, forward only. The caller holds the row's lock. */
+async function touchFromLatestScore(tx: Tx, competitionId: string): Promise<void> {
+  await tx`
+    update quick_matches q
+       set last_activity_at = greatest(q.last_activity_at, s.latest),
+           expires_at = s.latest + make_interval(days => ${QUICK_MATCH_EXPIRY_DAYS}::int),
+           reminder_sent_at = null
+      from (select max(se.recorded_at) as latest
+              from score_events se
+              join fixtures f on f.id = se.fixture_id
+              join divisions d on d.id = f.division_id
+             where d.competition_id = ${competitionId}) s
+     where q.competition_id = ${competitionId} and q.org_id = ${QUICK_MATCH_SYSTEM_ORG_ID} and q.saved_by_user_id is null
+       and s.latest + make_interval(days => ${QUICK_MATCH_EXPIRY_DAYS}::int) > q.expires_at`;
 }
 
 /** Delete one quick match's competition and everything hanging off it, in one transaction: its outbox mails (by their
