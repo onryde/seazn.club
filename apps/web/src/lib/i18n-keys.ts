@@ -4868,6 +4868,7 @@ export type DictionaryKey =
   | "pad.cricket.sheet.extra.bat.3"
   | "pad.cricket.sheet.extra.bat.4"
   | "pad.cricket.sheet.extra.bat.6"
+  | "pad.cricket.sheet.extra.out"
   | "pad.cricket.sheet.extra.ran.0"
   | "pad.cricket.sheet.extra.ran.1"
   | "pad.cricket.sheet.extra.ran.2"

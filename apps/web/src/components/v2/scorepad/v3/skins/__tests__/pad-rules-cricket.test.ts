@@ -126,8 +126,16 @@ const tilePayload = (tile: TileSpec | undefined): Record<string, unknown> => {
 
 /** S2-4 Task 4: the four extras whose tile opens a sheet asking the runs (the penalty is recorded on the tap). */
 const EXTRA_SHEETS: readonly string[] = ["wide", "noball", "bye", "legbye"];
+/** Answers an extras sheet: `option` at its runs step, then (after the wide's or no-ball's "+ Out", S2-4 Task 6) each
+ *  step's first choice or candidate, a fielder with no candidates being the fielding side's seventh name. */
+const extrasWalker = (option: string) => (step: GuidedSheetStep): string => {
+  if (step.id === "runs") return option;
+  if (step.kind === "choice") return step.options[0]!.id;
+  if (step.kind === "person") return step.candidates?.[0] ?? `${step.side === "home" ? "H" : "A"}-7`;
+  throw new Error(`unexpected step "${step.id}"`);
+};
 /** The payload one answer of an extras sheet records. */
-const extraAnswer = (view: PadHostView, sheet: string, answer: string) => walk(buildSheets(view, t)[sheet]!, () => answer).event;
+const extraAnswer = (view: PadHostView, sheet: string, answer: string) => walk(buildSheets(view, t)[sheet]!, extrasWalker(answer)).event;
 
 describe("the wicket sheet offers the engine's modes", () => {
   it("every mode, in the engine's order; with a free hit pending, the engine's free-hit set (folded, not hand-built)", () => {
@@ -454,9 +462,9 @@ describe("CK-SO-3 in a super over the pad offers only what the fold accepts (rev
         expect(() => foldEmitted(cfg, main, action.event), `tile ${tile.id}`).not.toThrow();
         offered++;
       } else if ("sheet" in action && EXTRA_SHEETS.includes(action.sheet)) {
-        // S2-4 Task 4: every runs answer of an extras sheet folds in a super over.
+        // S2-4 Task 4: every runs answer of an extras sheet folds in a super over (Task 6: "+ Out" too, with its first kind).
         for (const option of choiceIds(sheets[action.sheet]!, "runs")) {
-          const { event } = walk(sheets[action.sheet]!, () => option);
+          const { event } = walk(sheets[action.sheet]!, extrasWalker(option));
           expect(() => foldEmitted(cfg, main, event), `${action.sheet} sheet: ${option}`).not.toThrow();
           offered++;
         }
@@ -782,7 +790,8 @@ const LAWS_BOUNDARIES = [4, 6];
 
 describe("S2-4 T4: extras open sheets, with no timer", () => {
   const view = () => pickedOf(T20, START);
-  const answers = (sheet: string) => choiceIds(buildSheets(view(), t)[sheet]!, "runs");
+  /** The runs answers; the wide's and no-ball's "+ Out" is Task 6's, below. */
+  const answers = (sheet: string) => choiceIds(buildSheets(view(), t)[sheet]!, "runs").filter((id) => id !== "out");
 
   it("a wide asks the runs run, 0-4, and the innings takes wideDefaultRuns + n", () => {
     const options = answers("wide");
@@ -863,6 +872,83 @@ describe("S2-4 T4: extras open sheets, with no timer", () => {
     for (const { type, payload, what } of payloads) same(softCommitPlan(buildDock(type, t, payload), payload), "send", `${what} is sent at once`);
     console.info(`[pad-rules-cricket] cricket payloads checked for no hold: ${payloads.length}`);
     expect(payloads.length).toBeGreaterThanOrEqual(25);
+  });
+});
+
+describe("S2-4 T6: + Out off a wide or a no-ball offers only the engine's kinds", () => {
+  /** Walks an extras sheet's "+ Out" with `kind`: the striker is the batter out where the mode lets either be, the
+   *  fielder is FIELDER, the keeper and the next batter the first offered, and the runs completed `completed`. */
+  const outWalker = (kind: string, completed = "0") => (step: GuidedSheetStep): string => {
+    if (step.id === "runs") return "out";
+    if (step.id === "kind") return kind;
+    if (step.id === "out") return STRIKER;
+    if (step.id === "fielder" || step.id === "fielderOptional") return FIELDER;
+    if (step.id === "completed") return completed;
+    return firstCandidate(step);
+  };
+  const DEFAULT_RUNS = { wide: cricketPadRules.wideDefaultRuns, noball: cricketPadRules.noBallDefaultRuns } as const;
+
+  it.each([
+    ["CK-WD-1", "wide", cricketPadRules.wideDismissalKinds],
+    ["CK-NB-1", "noball", cricketPadRules.noBallDismissalKinds],
+  ] as const)("%s on the web: Out off a %s offers exactly the engine's set, and each folds", (_id, sheet, engineSet) => {
+    const spec = buildSheets(pickedOf(T20, START), t)[sheet]!;
+    same(choiceIds(spec, "runs").includes("out"), true, `${sheet}: the sheet offers + Out`);
+    const offered = choiceIds(spec, "kind");
+    same([...offered].sort(), [...engineSet].sort(), `${sheet}: the kinds offered are the engine's`);
+    same(offered, cricketPadRules.wicketKinds.filter((k) => offered.includes(k)), `${sheet}: in the engine's order`);
+    let folded = 0;
+    for (const kind of offered) {
+      const { event } = walk(spec, outWalker(kind));
+      const payload = event.payload as { runs: unknown; wicket: { kind: string; out: string } };
+      same(payload.runs, { bat: 0, extras: { kind: sheet, runs: DEFAULT_RUNS[sheet] } }, `${sheet} ${kind}: the extra's own run`);
+      const innings = openInnings(foldEmitted(T20, START, event));
+      same(innings.fine.dismissed, [STRIKER], `${sheet} ${kind}: the fold dismissed the batter`);
+      same(innings.legalBalls, 0, `${sheet} ${kind}: not a legal ball`);
+      folded++;
+    }
+    expect(folded).toBe(engineSet.length);
+  });
+
+  it("with a free hit pending, Out off a wide or a no-ball narrows further to the free-hit set", () => {
+    let checked = 0;
+    for (const sheet of ["wide", "noball"] as const) {
+      const set = sheet === "wide" ? cricketPadRules.wideDismissalKinds : cricketPadRules.noBallDismissalKinds;
+      const offered = choiceIds(buildSheets(viewOf(T20, FREE_HIT_PENDING), t)[sheet]!, "kind");
+      same([...offered].sort(), set.filter((k) => cricketPadRules.freeHitDismissalKinds.includes(k)).sort(), `${sheet} on a free hit`);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a run out off a wide or a no-ball puts the runs completed into that extra's runs", () => {
+    let folded = 0;
+    for (const sheet of ["wide", "noball"] as const) {
+      const { event } = walk(buildSheets(pickedOf(T20, START), t)[sheet]!, outWalker("runout", "2"));
+      const runs = (event.payload as { runs: unknown }).runs;
+      same(runs, { bat: 0, extras: { kind: sheet, runs: DEFAULT_RUNS[sheet] + 2 } }, `${sheet}: runs completed in the extra`);
+      const innings = openInnings(foldEmitted(T20, START, event));
+      same(innings.runs, DEFAULT_RUNS[sheet] + 2, `${sheet}: the fold's runs`);
+      same(innings.fine.dismissed, [STRIKER], `${sheet}: run out`);
+      folded++;
+    }
+    expect(folded).toBe(2);
+  });
+
+  it("a stumping off a wide on the last legal ball still asks who walks in (Review Focus 2)", () => {
+    const SIX = tiedWithSuperOver();
+    const fiveBalls: CricketEventSpec[] = [...START, ...[1, 2, 3, 4, 5].map((n) => ball(0, n))];
+    const { asked, event } = walk(buildSheets(viewOf(SIX, fiveBalls), t).wide, outWalker("stumped"));
+    same(asked.includes("incoming"), true, "a wide is not the last legal ball: the innings goes on");
+    const innings = openInnings(foldEmitted(SIX, fiveBalls, event));
+    same([innings.closed, innings.legalBalls, innings.wickets], [false, 5, 1], "the fold: still open, five legal balls, one down");
+  });
+
+  it("the bye and leg-bye sheets have no + Out (owner 2026-11-07)", () => {
+    const sheets = buildSheets(pickedOf(T20, START), t);
+    same(choiceIds(sheets.bye!, "runs").includes("out"), false, "bye");
+    same(choiceIds(sheets.legbye!, "runs").includes("out"), false, "leg bye");
+    same(sheets.bye!.steps.length + sheets.legbye!.steps.length, 2, "one step each");
   });
 });
 

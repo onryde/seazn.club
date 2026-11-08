@@ -2124,3 +2124,47 @@ test("S2-4 T5: a stumping offers the keeper only, and a run out with 1 completed
   expect(runOut.payload.wicket).toMatchObject({ kind: "runout", out: id("NonStriker"), fielder: id("Fielder") });
   await expect(pad(page).locator('[data-role="v3-scorebug"]'), "one run, two wickets").toContainText("1/2");
 });
+
+// S2-4 Task 6 (preflight W4): "+ Out" off a wide asks the wicket with only the kinds the engine allows off a wide
+// (Stumped, Run out, Hit wicket, Obstructing the field: never Bowled or Caught), and records ONE ball carrying both the
+// wide's run and the wicket.
+test("S2-4 T6: + Out off a wide, a stumping, records one ball with the wide and the wicket", async ({ page }) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket WideOut ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 WO Striker ${TAG}` }, { fullName: `V3 WO NonStriker ${TAG}` }, { fullName: `V3 WO Three ${TAG}` }],
+    away: [{ fullName: `V3 WO Bowler ${TAG}` }, { fullName: `V3 WO Keeper ${TAG}`, roles: ["wicketkeeper"] }],
+    emitCoreStart: true,
+  });
+  const id = (name: string) => fx.personIds[`V3 WO ${name} ${TAG}`]!;
+  await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+    over: 0,
+    ballInOver: 1,
+    striker: id("Striker"),
+    nonStriker: id("NonStriker"),
+    bowler: id("Bowler"),
+    runs: { bat: 0 },
+  });
+  await openConsoleAlreadyLive(page, fx);
+  const balls = async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball");
+
+  await tapCricketExtra(page, "wide", "out");
+  const sheet = sheetRoot(page);
+  await expect(sheet.getByRole("button", { name: "Stumped", exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(sheet.getByRole("button", { name: "Bowled", exact: true }), "a wide cannot be bowled").toHaveCount(0);
+  await expect(sheet.getByRole("button", { name: "Caught", exact: true }), "nor caught").toHaveCount(0);
+  await sheet.getByRole("button", { name: "Stumped", exact: true }).click();
+  await sheet.locator(`[data-candidate-id="${id("Keeper")}"]`).click();
+  await expect(sheet.getByText("Who walks in?")).toBeVisible({ timeout: 10_000 });
+  await sheet.locator(`[data-candidate-id="${id("Three")}"]`).click();
+
+  await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(2);
+  await page.waitForTimeout(2_000); // a second ball would be on the wire already: every cricket ball is sent at once
+  const rows = await balls();
+  expect(rows, "one ball for the wide and the wicket").toHaveLength(2);
+  expect(rows[1]!.payload.runs, "the wide's own run").toEqual({ bat: 0, extras: { kind: "wide", runs: 1 } });
+  expect(rows[1]!.payload.wicket).toMatchObject({ kind: "stumped", out: id("Striker"), fielder: id("Keeper"), incoming: id("Three") });
+  await expect(pad(page).locator('[data-role="v3-scorebug"]'), "one wide, one wicket").toContainText("1/1");
+});

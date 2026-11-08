@@ -2299,11 +2299,14 @@ export function wicketSteps(view: PadHostView, delivery: WicketDelivery, gate: S
   return steps;
 }
 
-/** The modes a wicket off `delivery` may be (the engine's `wicketKinds`, in its order), narrowed while a free hit is
- *  pending to `freeHitDismissalKinds` (R2b-over: the pad never offers what the engine will refuse). */
-function wicketKindsFor(_delivery: WicketDelivery, freeHit: boolean): readonly string[] {
-  const { wicketKinds, freeHitDismissalKinds } = cricketPadRules;
-  return freeHit ? wicketKinds.filter((k) => freeHitDismissalKinds.includes(k)) : wicketKinds;
+/** The modes a wicket off `delivery` may be (the engine's `wicketKinds`, in its order): off a wide or a no-ball only the
+ *  engine's `wideDismissalKinds` or `noBallDismissalKinds`, and while a free hit is pending only `freeHitDismissalKinds`
+ *  as well (R2b-over: the pad never offers what the engine will refuse). */
+function wicketKindsFor(delivery: WicketDelivery, freeHit: boolean): readonly string[] {
+  const { wicketKinds, wideDismissalKinds, noBallDismissalKinds, freeHitDismissalKinds } = cricketPadRules;
+  // S2-4 Task 6: off a wide or a no-ball the engine allows only its own sets (CK-WD-1, CK-NB-1).
+  const allowed = delivery === "wide" ? wideDismissalKinds : delivery === "noball" ? noBallDismissalKinds : wicketKinds;
+  return wicketKinds.filter((k) => allowed.includes(k) && (!freeHit || freeHitDismissalKinds.includes(k)));
 }
 
 const STUMPED = "stumped";
@@ -2321,8 +2324,9 @@ function fielderOptional(kind: string): boolean {
 }
 
 /**
- * The ball a wicket sheet's answers record. A stumping credits the keeper as its fielder; a run out's runs completed go
- * to the batter on a fair ball.
+ * The ball a wicket sheet's answers record. A stumping credits the keeper as its fielder. A run out's runs completed go
+ * to the batter on a fair ball, and off a wide or a no-ball into that extra's own runs, after its own run (spec §4.3
+ * item 4, §11; S2-4 Task 6).
  */
 export function wicketPayload(
   view: PadHostView,
@@ -2340,9 +2344,10 @@ export function wicketPayload(
     : fielderOptional(kind) ? answers.fielderOptional
     : undefined;
   const completed = kind === RUN_OUT ? Number(answers.completed ?? 0) : 0;
+  const ownRun = delivery === "wide" ? cricketPadRules.wideDefaultRuns : cricketPadRules.noBallDefaultRuns;
   return {
     ...base,
-    runs: { bat: delivery === "fair" ? completed : 0 },
+    runs: delivery === "fair" ? { bat: completed } : { bat: 0, extras: { kind: delivery, runs: ownRun + completed } },
     wicket: {
       kind,
       out,
@@ -2706,13 +2711,20 @@ const ranOption = (n: number, id: string = String(n)) => ({ id, label: `pad.cric
 /** The `runs` step's options (spec §4.2; ids in `extraRunsPayload`'s doc). The no-ball's runs off the bat are the run
  *  tiles' own values (`RUN_VALUES`, 0, 1, 2, 3, 4, 6). */
 function extraRunOptions(kind: SheetExtra): { id: string; label: string }[] {
-  if (kind === "wide") return WIDE_RAN.map((n) => ranOption(n));
+  if (kind === "wide") return [...WIDE_RAN.map((n) => ranOption(n)), OUT_OPTION];
   if (kind !== "noball") return EXTRA_RAN.map((n) => ranOption(n));
   return [
     ...RUN_VALUES.map((n) => ({ id: `bat:${n}`, label: `pad.cricket.sheet.extra.bat.${n}` })),
     ...EXTRA_RAN.map((n) => ranOption(n, `ran:${n}`)),
+    OUT_OPTION,
   ];
 }
+
+/** S2-4 Task 6: the wide's and the no-ball's "+ Out", which goes on to the wicket's steps (the Bye and Leg-bye sheets
+ *  have none: owner 2026-11-07, "Keep them"; preflight W6). */
+const OUT = "out";
+const OUT_OPTION = { id: OUT, label: "pad.cricket.sheet.extra.out" };
+const isOut: StepPredicate = (answers) => answers.runs === OUT;
 
 /**
  * S2-4 Task 4 (gaps 3, 4; spec §4.2): Wide, No-ball, Bye and Leg-bye each open a sheet that stays until a choice is
@@ -2722,10 +2734,15 @@ function extraRunOptions(kind: SheetExtra): { id: string; label: string }[] {
 function extraSheet(view: PadHostView, kind: SheetExtra): GuidedSheetSpec {
   const state = asState(view.state);
   const base = basePayload(state, asCfg(view.cfg), view.contextOverrides);
+  const runs: GuidedSheetStep = { id: "runs", kind: "choice", title: EXTRA_SHEET_TITLE[kind], options: extraRunOptions(kind) };
+  if (kind !== "wide" && kind !== "noball") {
+    return { event: ballEventType(state), steps: [runs], buildPayload: (answers) => extraRunsPayload(base, kind, answers.runs ?? "") };
+  }
+  // S2-4 Task 6: "+ Out" asks the wicket's steps, with the kinds the engine allows off this delivery.
   return {
     event: ballEventType(state),
-    steps: [{ id: "runs", kind: "choice", title: EXTRA_SHEET_TITLE[kind], options: extraRunOptions(kind) }],
-    buildPayload: (answers) => extraRunsPayload(base, kind, answers.runs ?? ""),
+    steps: [runs, ...wicketSteps(view, kind, isOut)],
+    buildPayload: (answers) => (isOut(answers) ? wicketPayload(view, kind, answers, base) : extraRunsPayload(base, kind, answers.runs ?? "")),
   };
 }
 
