@@ -150,7 +150,7 @@ const byRoundThenNumber = (a: QuickMatchFixture, b: QuickMatchFixture): number =
 
 const isLive = (f: QuickMatchFixture): boolean => f.status === "in_play";
 /** Scheduled with both sides known (C18: a match whose sides are not yet known cannot be scored). A held level result
- *  (`needs_decision`) is never playable: it waits for an organiser's settle, which C23 keeps unreachable for guests. */
+ *  (`needs_decision`) is never playable: it waits for an organizer's settle, which C23 keeps unreachable for guests. */
 const isReady = (f: QuickMatchFixture): boolean => f.status === "scheduled" && f.home !== null && f.away !== null;
 
 /** The hero's next match (C11): the first by (round, fixture number) in play, else the first scheduled with both sides

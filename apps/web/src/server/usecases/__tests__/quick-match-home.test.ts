@@ -174,16 +174,20 @@ describe("nextPlayable (C11: the hero's next match)", () => {
       fx({ id: "home-unknown", roundNo: 1, fixtureNo: 1, home: null }),
       fx({ id: "away-unknown", roundNo: 1, fixtureNo: 2, away: null }),
     ];
-    // Every status but the two playable ones, swept from the domain (lib/fixture-status.ts), as the lowest-numbered row.
+    // The rulebook's non-playable statuses (V214 + V432; C11/C18: only a match in play, or scheduled with both sides, is
+    // next), typed here; the domain minus the two playable ones must be exactly this list, so a new status reds here
+    // until someone decides whether it can be next.
+    const NOT_PLAYABLE = ["decided", "finalized", "abandoned", "forfeited", "cancelled", "needs_decision"];
     const others = FIXTURE_STATUSES.filter((s) => s !== "scheduled" && s !== "in_play");
+    expect([...others].sort()).toEqual([...NOT_PLAYABLE].sort());
     let checked = 0;
-    for (const status of others) {
+    for (const status of NOT_PLAYABLE) {
       const list = [...waiting, fx({ id: `s-${status}`, roundNo: 0, fixtureNo: 0, status }), fx({ id: "ready", roundNo: 3, fixtureNo: 9 })];
       expect(nextPlayable(list)!.id, status).toBe("ready");
       expect(nextPlayable(list.filter((f) => f.id !== "ready")), status).toBeNull();
       checked++;
     }
-    expect(checked).toBe(FIXTURE_STATUSES.length - 2);
+    expect(checked).toBe(NOT_PLAYABLE.length);
     expect(checked).toBeGreaterThan(0);
   });
 });
@@ -353,43 +357,59 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
   it("refuses to name a seat outside the quick match's own sides (a tampered fixture)", async () => {
     const a = await create();
     const b = await create();
-    const [fa] = await listDivisionFixtures(systemAuth(), a.divisionId);
-    const hb = await homeOf(b);
-    await sql`update fixtures set home_entrant_id = ${hb.sides[0]!.entrantId} where id = ${fa!.id}`;
-    await expect(readQuickMatchHome(await rowOf(a))).rejects.toThrow(/outside its own sides/);
+    try {
+      const [fa] = await listDivisionFixtures(systemAuth(), a.divisionId);
+      const hb = await homeOf(b);
+      await sql`update fixtures set home_entrant_id = ${hb.sides[0]!.entrantId} where id = ${fa!.id}`;
+      await expect(readQuickMatchHome(await rowOf(a))).rejects.toThrow(/outside its own sides/);
+    } finally {
+      await hardDeleteQuickMatchCompetition(a.competitionId);   // the corrupt match never outlives its case
+    }
   });
 
   it("a quick match with no fixture left reads nothing played, nothing next, and NOT all played (the empty case)", async () => {
     const a = await create();
-    await sql`delete from fixtures where division_id = ${a.divisionId}`;   // a state no producer makes: the guard's own case
-    const h = await homeOf(a);
-    expect(h.fixtures).toEqual([]);
-    expect(h.total).toBe(0);
-    expect(h.played).toBe(0);
-    expect(h.allPlayed).toBe(false);   // zero of zero is not a finished match: no winner card
-    expect(h.next).toBeNull();
-    expect(h.live).toBeNull();
-    expect(h.sides).toHaveLength(SIDES.length);
+    try {
+      await sql`delete from fixtures where division_id = ${a.divisionId}`;   // a state no producer makes: the guard's own case
+      const h = await homeOf(a);
+      expect(h.fixtures).toEqual([]);
+      expect(h.total).toBe(0);
+      expect(h.played).toBe(0);
+      expect(h.allPlayed).toBe(false);   // zero of zero is not a finished match: no winner card
+      expect(h.next).toBeNull();
+      expect(h.live).toBeNull();
+      expect(h.sides).toHaveLength(SIDES.length);
+    } finally {
+      await hardDeleteQuickMatchCompetition(a.competitionId);
+    }
   });
 
   it("refuses a competition holding two divisions, a division holding two stages, or sides of two kinds (one each, §7.1, D2)", async () => {
-    const twoDivisions = await create();
-    await sql`
-      insert into divisions (competition_id, org_id, name, slug, sport_key, variant_key, config, module_version)
-      select competition_id, org_id, name, slug || '-twin', sport_key, variant_key, config, module_version
-      from divisions where id = ${twoDivisions.divisionId}`;
-    await expect(readQuickMatchHome(await rowOf(twoDivisions))).rejects.toThrow(/2 divisions/);
+    const corrupt: CreatedQuickMatch[] = [];
+    try {
+      const twoDivisions = await create();
+      corrupt.push(twoDivisions);
+      await sql`
+        insert into divisions (competition_id, org_id, name, slug, sport_key, variant_key, config, module_version)
+        select competition_id, org_id, name, slug || '-twin', sport_key, variant_key, config, module_version
+        from divisions where id = ${twoDivisions.divisionId}`;
+      await expect(readQuickMatchHome(await rowOf(twoDivisions))).rejects.toThrow(/2 divisions/);
 
-    const twoStages = await create();
-    await sql`
-      insert into stages (division_id, org_id, seq, kind, name)
-      select division_id, org_id, seq + 1, kind, name from stages where id = ${twoStages.stageId}`;
-    await expect(readQuickMatchHome(await rowOf(twoStages))).rejects.toThrow(/2 stages/);
+      const twoStages = await create();
+      corrupt.push(twoStages);
+      await sql`
+        insert into stages (division_id, org_id, seq, kind, name)
+        select division_id, org_id, seq + 1, kind, name from stages where id = ${twoStages.stageId}`;
+      await expect(readQuickMatchHome(await rowOf(twoStages))).rejects.toThrow(/2 stages/);
 
-    const twoKinds = await create();
-    const [first] = (await homeOf(twoKinds)).sides;
-    await sql`update entrants set kind = 'team' where id = ${first!.entrantId}`;
-    await expect(readQuickMatchHome(await rowOf(twoKinds))).rejects.toThrow(/2 entrant kinds/);
+      const twoKinds = await create();
+      corrupt.push(twoKinds);
+      const [first] = (await homeOf(twoKinds)).sides;
+      await sql`update entrants set kind = 'team' where id = ${first!.entrantId}`;
+      await expect(readQuickMatchHome(await rowOf(twoKinds))).rejects.toThrow(/2 entrant kinds/);
+    } finally {
+      for (const m of corrupt) await hardDeleteQuickMatchCompetition(m.competitionId);   // no corrupt match outlives its case
+    }
   });
 
   it("a match in play is live and next, even past a lower-numbered one; only its own summary is read", async () => {
