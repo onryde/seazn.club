@@ -145,4 +145,7 @@ export const routes = {
   /** Token surfaces (PROMPT-53): the token IS the address, no org in the URL. */
   claim: (token: string) => `/claim/${token}`,
   checkin: (token: string) => `/checkin/${token}`,
+  /** A guest's quick match home (plan 2 A6): the home token IS the address, in the path and never a query string. Its
+   *  `/q/` root is a scrubbed secret path (lib/scrub-score-url.ts SECRET_PATH_ROUTES). */
+  quickMatch: (token: string) => `/q/${token}`,
 } as const;

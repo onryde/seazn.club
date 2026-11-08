@@ -442,7 +442,8 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
   it("the scan found the vocabulary and the painters (anti-vacuity)", () => {
     expect(all.length).toBeGreaterThan(500);
     // The builders and segments come from the app, not from this test.
-    expect(secretBuilderNames().sort()).toEqual(["checkin", "claim"]);
+    // quickMatch: the guest's home, `/q/<token>` (quick match plan 2, A6).
+    expect(secretBuilderNames().sort()).toEqual(["checkin", "claim", "quickMatch"]);
     expect(oneTimeLinkPaths().length).toBeGreaterThanOrEqual(5);
     expect(secretSegments().sort()).toEqual(expect.arrayContaining(["checkin", "claim", "join", "score"]));
     // The names the producers really use.

@@ -129,6 +129,7 @@ const BODY_VERDICTS: Record<string, true | string> = {
   "api/v1/public/orgs/[orgSlug]/competitions/[slug]/register": "`ref_code` is the registration reference, a lookup as /r/[ref] is, not auth; the access token is in the response",
   "api/auth/magic-link": "the body is an email and a `next`; the token is minted and emailed, never received; a `next` secret path is scrubbed in place",
   "api/funnel/start": "the body is an email and the draft; the claim token is minted and emailed, never received",
+  "api/quick-match": "the body is the guest's setup form (a name, the sport, the sides, an optional email); the home token is minted and answered in the 303's Location, never received",
   "api/orgs/[id]/invites": "the body is the invite's role, email and limits; the token is only in the response",
   "api/v1/orgs/[id]/sponsors/[sponsorId]/report-links": "the body is the report link's competition and dates; its token is minted and returned once (R4 S13), never received",
   "api/users/me": "the body is a profile patch or the delete confirmation; `token` is a comment about a sealed Lichess token held server-side",
