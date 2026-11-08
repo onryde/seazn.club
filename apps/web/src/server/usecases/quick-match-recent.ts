@@ -19,7 +19,8 @@ import { hashVisitorKey, isVisitorKeyShaped, QUICK_MATCH_VISITOR_COOKIE } from "
  *    malformed value is never hashed into a query (pre-flight B2a), and none is ever minted here;
  *  - `cookies()` throwing outside a request (a page rendered directly, as this repo's page tests do): none. Next's own
  *    render signals (a static render that met `cookies()`) are rethrown first, so the framework still sees them;
- *  - a read that throws (the database): none, logged once;
+ *  - a read that throws (the database): none, one warning (not an error: an outage would otherwise log an error per
+ *    visitor with a cookie, on the busiest page);
  *  - a row whose home token does not open: skipped by `listRecentQuickMatches`, which warns once for the read.
  */
 export async function readRecentQuickMatches(): Promise<RecentQuickMatch[]> {
@@ -34,7 +35,7 @@ export async function readRecentQuickMatches(): Promise<RecentQuickMatch[]> {
   try {
     return await listRecentQuickMatches(hashVisitorKey(held));
   } catch (err) {
-    log.error({ err }, "quick match recent strip: the visitor's recent matches could not be read; the strip is hidden");
+    log.warn({ err }, "quick match recent strip: the visitor's recent matches could not be read; the strip is hidden");
     return [];
   }
 }

@@ -212,15 +212,17 @@ describe("the recent strip's cookie: read only, trusted only when it is a visito
 });
 
 describe("the recent strip fails soft (A9): the busiest page never 500s on a guest feature", () => {
-  it("a read that throws: the CTA renders, no strip, one error logged", async () => {
+  it("a read that throws: the CTA renders, no strip, one warning logged (a warning: an outage hits every visitor)", async () => {
     const error = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     jar.visitor = mintVisitorKey();
     vi.mocked(listRecentQuickMatches).mockRejectedValueOnce(new Error("connection terminated"));
     const html = await render();
     expect(listRecentQuickMatches).toHaveBeenCalledTimes(1);
     expect(stripOf(html)).toBeNull();
     expect(ctaAnchor(html, enMarketing["quickMatch.cta"])).toBeDefined();
-    expect(error).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(error).not.toHaveBeenCalled();
   });
 });
 
@@ -312,6 +314,26 @@ describe.skipIf(!HAS_DB)("the recent strip's rows (real createQuickMatch, real r
     expect(stripOf(html)).toContain(`>${await nameOf(out.id)}<`);
     jar.visitor = undefined;
     expect(stripOf(await render("en", "play")), "no cookie, no strip").toBeNull();
+  });
+
+  it("a damaged NEWEST row does not cost a place: six live rows, the newest skipped, the other five shown (m1)", async () => {
+    const key = mintVisitorKey();
+    const hash = hashVisitorKey(key);
+    const rows: CreatedQuickMatch[] = [];
+    // Past the create's cap of 5 alive unsaved rows: the first is saved (no expiry) before the sixth is made.
+    rows.push(await make(hash));
+    await sql`update quick_matches set saved_by_user_id = ${QUICK_MATCH_SYSTEM_USER_ID}, expires_at = null where id = ${rows[0]!.id}`;
+    for (let i = 0; i < 5; i++) rows.push(await make(hash));
+    const dated: [CreatedQuickMatch, string][] = rows.map((out, i) => [out, `2026-11-0${i + 1}T09:00:00.000Z`]);
+    for (const [out, at] of dated) await dateRow(out.id, at);
+    const newest = rows[5]!;
+    await sql`update quick_matches set token_enc = '\\x0102'::bytea where id = ${newest.id}`;
+    jar.visitor = key;
+    const hrefs = stripHrefs(await render());
+    const expected = [...dated].sort((a, b) => b[1].localeCompare(a[1])).filter(([out]) => out !== newest).map(([out]) => `/q/${out.token}`);
+    expect(expected).toHaveLength(STRIP_CAP);
+    expect(hrefs).toEqual(expected);
+    expect(hrefs).not.toContain(`/q/${newest.token}`);
   });
 
   it("an expired match is not listed; the alive one beside it is", async () => {

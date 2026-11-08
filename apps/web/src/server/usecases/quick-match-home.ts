@@ -112,8 +112,10 @@ export interface RecentQuickMatch {
  *
  * Each row's home token is opened with the NON-throwing `tryOpenHomeToken` (controller ruling 2026-11-08): a row that does
  * not open (no usable DEVICE_LINK_KEK, a damaged envelope, a key rotated without re-sealing) is skipped and the rest are
- * listed, with ONE warning for the read naming each skipped row's id and reason, never a token or an envelope. A failure
- * of the read itself (the database) still throws: the page's caller decides what an unreadable strip is.
+ * listed, with ONE warning for the read naming each skipped row's id and reason, never a token or an envelope. A skipped
+ * row does not cost the guest a place: the read fetches twice `limit` and stops at `limit` rows that open, so a damaged
+ * newest row lets the next older live one in. A failure of the read itself (the database) still throws: the page's
+ * caller decides what an unreadable strip is.
  */
 export async function listRecentQuickMatches(visitorHash: string, limit = 5): Promise<RecentQuickMatch[]> {
   const rows = await withTenant(SYSTEM_ORG, (tx) => tx<{ id: string; name: string; created_at: Date; token_enc: Uint8Array }[]>`
@@ -121,10 +123,11 @@ export async function listRecentQuickMatches(visitorHash: string, limit = 5): Pr
     from quick_matches
     where visitor_hash = ${visitorHash} and (expires_at is null or expires_at > now())
     order by created_at desc, id desc
-    limit ${limit}`);
+    limit ${limit * 2}`);
   const out: RecentQuickMatch[] = [];
   const skipped: { id: string; reason: HomeTokenOpenRefusal }[] = [];
   for (const r of rows) {
+    if (out.length === limit) break;
     const opened = tryOpenHomeToken(r.token_enc);
     if (opened.ok) out.push({ token: opened.token, name: r.name, createdAt: r.created_at.toISOString() });
     else skipped.push({ id: r.id, reason: opened.reason });
