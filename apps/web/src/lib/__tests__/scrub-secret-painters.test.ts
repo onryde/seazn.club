@@ -464,11 +464,17 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string }> = {
     verdict: "builds the quick match's home URL and hands it to QuickMatchBackLink as its href; the page paints it nowhere itself",
     handoff: "components/v2/quick-match-back-link.tsx",
   },
+  // The recent strip: each row links to its home, `/q/<home token>` (quick match plan 2 Task 9).
+  "components/quick-match/recent-strip.tsx": { verdict: true },
 };
 
 /** The files that paint a quick match's home URL, `/q/<token>`: every one must be FOUND by the scan, not just listed, or a
  *  painter that loses its class goes unseen. Plan 2 Tasks 6, 7 and 9 add theirs (the Score form, the share link, the strip). */
-const QUICK_MATCH_PAINTERS = ["app/score/[token]/page.tsx", "components/v2/quick-match-back-link.tsx"];
+const QUICK_MATCH_PAINTERS = [
+  "app/score/[token]/page.tsx",
+  "components/v2/quick-match-back-link.tsx",
+  "components/quick-match/recent-strip.tsx",
+];
 
 describe("every element that paints a scrubbed secret carries ph-no-capture, or its file says why not", () => {
   const all = sources();
@@ -525,6 +531,9 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     );
     const link = painters.get("components/v2/quick-match-back-link.tsx") ?? [];
     expect(link.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true]);
+    // The recent strip's one row link (plan 2 Task 9): a host <a>, so its class is checked here and not handed off.
+    const strip = painters.get("components/quick-match/recent-strip.tsx") ?? [];
+    expect(strip.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true]);
   });
 
   it("the painter files and the verdict table are the same set", () => {

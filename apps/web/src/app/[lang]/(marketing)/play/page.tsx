@@ -14,6 +14,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale, LOCALES } from "@/lib/i18n-constants";
 import { log } from "@/server/logger";
 import { quickMatchPreviewTable } from "@/server/usecases/quick-match-preview";
+import { readRecentQuickMatches } from "@/server/usecases/quick-match-recent";
 import { listQuickMatchSports, type QuickMatchSport } from "@/server/usecases/quick-match-sports";
 import { refusalCode, setupCopy, setupSports } from "./setup-props";
 
@@ -55,11 +56,14 @@ export default async function PlayPage({
 }) {
   const { lang } = await params;
   if (!hasLocale(lang)) notFound();
-  const [{ e }, d, ui, offer] = await Promise.all([
+  // The recent strip's rows (Task 9): fail-soft inside `readRecentQuickMatches` (pre-flight A9), read from the visitor
+  // cookie only (never minted here: the create route mints it).
+  const [{ e }, d, ui, offer, recent] = await Promise.all([
     searchParams,
     getDictionary(lang, "marketing"),
     getDictionary(lang, "ui"),
     readOffer(),
+    readRecentQuickMatches(),
   ]);
   const [first, ...rest] = setupSports(offer, ui);
   const refused = refusalCode(e);
@@ -93,7 +97,7 @@ export default async function PlayPage({
               </p>
             </section>
           )}
-          <RecentStrip title={t(d, "quickMatch.recent.title")} items={[]} />
+          <RecentStrip lang={lang} title={t(d, "quickMatch.recent.title")} items={recent} className="mt-10" />
         </div>
       </main>
     </MarketingShell>

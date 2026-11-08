@@ -26,7 +26,8 @@ import { tableLayoutFor } from "@/server/public-site/standings-view";
 import { listDivisionFixtures } from "./fixtures";
 import type { QuickMatchFormat } from "./quick-match-preview";
 import { offerFor } from "./quick-match-sports";
-import { hashHomeToken, isHomeTokenShaped } from "./quick-match-tokens";
+import { log } from "@/server/logger";
+import { hashHomeToken, isHomeTokenShaped, tryOpenHomeToken, type HomeTokenOpenRefusal } from "./quick-match-tokens";
 import { getStandings, type FixtureRow, type StandingsOut } from "./stages";
 
 const SYSTEM_ORG = QUICK_MATCH_SYSTEM_ORG_ID;
@@ -89,6 +90,49 @@ export async function resolveQuickMatchToken(token: string): Promise<QuickMatchR
     from quick_matches
     where token_hash = ${hash} and (expires_at is null or expires_at > now())`);
   return row ? toRow(row) : null;
+}
+
+/** One row of the "recent quick matches" strip (plan 2 Task 9, D11): the home it links to, its name and when it was made.
+ *  Client-safe on purpose: no email, no envelope (the strip is a server component, but its props are the page's). */
+export interface RecentQuickMatch {
+  /** The home token in the clear, opened from the row's envelope: the strip's link is `routes.quickMatch(token)`. */
+  token: string;
+  name: string;
+  /** ISO 8601 (UTC). */
+  createdAt: string;
+}
+
+/**
+ * The visitor's recent quick matches for the strip (spec §5 step 5; plan 2 pre-flight A9, A10, D11): the ALIVE rows this
+ * visitor hash made, newest first, at most `limit`.
+ *
+ * Alive is `resolveQuickMatchToken`'s predicate above, word for word: no expiry (a saved row, §7.7) or a future one; a link
+ * the strip shows must open a home, not the dead screen. The visitor hash is the caller's: a hash of a cookie that is a
+ * visitor key's shape (`isVisitorKeyShaped`), never of whatever arrived.
+ *
+ * Each row's home token is opened with the NON-throwing `tryOpenHomeToken` (controller ruling 2026-11-08): a row that does
+ * not open (no usable DEVICE_LINK_KEK, a damaged envelope, a key rotated without re-sealing) is skipped and the rest are
+ * listed, with ONE warning for the read naming each skipped row's id and reason, never a token or an envelope. A failure
+ * of the read itself (the database) still throws: the page's caller decides what an unreadable strip is.
+ */
+export async function listRecentQuickMatches(visitorHash: string, limit = 5): Promise<RecentQuickMatch[]> {
+  const rows = await withTenant(SYSTEM_ORG, (tx) => tx<{ id: string; name: string; created_at: Date; token_enc: Uint8Array }[]>`
+    select id, name, created_at, token_enc
+    from quick_matches
+    where visitor_hash = ${visitorHash} and (expires_at is null or expires_at > now())
+    order by created_at desc, id desc
+    limit ${limit}`);
+  const out: RecentQuickMatch[] = [];
+  const skipped: { id: string; reason: HomeTokenOpenRefusal }[] = [];
+  for (const r of rows) {
+    const opened = tryOpenHomeToken(r.token_enc);
+    if (opened.ok) out.push({ token: opened.token, name: r.name, createdAt: r.created_at.toISOString() });
+    else skipped.push({ id: r.id, reason: opened.reason });
+  }
+  if (skipped.length > 0) {
+    log.warn({ skipped }, "quick match recent strip: rows skipped, their home token could not be opened");
+  }
+  return out;
 }
 
 /**
