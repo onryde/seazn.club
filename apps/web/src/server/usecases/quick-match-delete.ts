@@ -13,8 +13,19 @@ import "server-only";
 // a score can land between that read and the delete and revive the match. The condition is therefore read again inside
 // the delete's own transaction, under the row's lock (`for update skip locked`): a match revived, saved or still locked by
 // another transaction (a touch in flight, an overlapping sweep) is KEPT, and the sweep's next run judges it again.
+//
+// A guest's committed score is never deleted (Task 2 review m1). The scoring path touches the match only AFTER its append
+// commits (scoring.ts), so a score can stand while `last_activity_at` still says idle. Two more checks close that gap:
+//   - a score still in flight: an append that has written its event holds the event's fixture (its foreign key) until it
+//     commits, and a delete that went ahead would wait for that commit and then cascade the score away. So the delete takes
+//     every fixture of the competition `for update skip locked` first, and keeps the match when any is held. An append that
+//     has not reached its fixture yet meets this lock, and finds the fixture gone once the delete commits (it fails, nothing
+//     committed is lost).
+//   - a score committed but not yet touched: read after those locks, so every append that could still commit is held or
+//     blocked. A score inside the expiry window C1 gives (the last QUICK_MATCH_EXPIRY_DAYS) keeps the match, which bounds a
+//     LOST touch (best-effort, logged) to the same 7 days a recorded one would have bought.
 import { sql, type Tx } from "@/lib/db";
-import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
+import { QUICK_MATCH_EXPIRY_DAYS, QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 
 /** The email outbox's free-text reference for a quick match's mails (V470: `ref_type`/`ref_id`, no foreign key). */
 export const QUICK_MATCH_OUTBOX_REF_TYPE = "quick_match";
@@ -41,10 +52,13 @@ async function judge(tx: Tx, competitionId: string, guard: QuickMatchDeleteGuard
         from quick_matches
        where competition_id = ${competitionId} and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}
          for update skip locked`;
-    if (row) return row.due === true ? "due" : "kept";
-    const [held] = await tx`
-      select 1 from quick_matches where competition_id = ${competitionId} and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
-    return held ? "kept" : "gone";
+    if (!row) {
+      const [held] = await tx`
+        select 1 from quick_matches where competition_id = ${competitionId} and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
+      return held ? "kept" : "gone";
+    }
+    if (row.due !== true) return "kept";
+    return (await scoreStands(tx, competitionId, guard.expiredBefore)) ? "kept" : "due";
   }
   const [row] = await tx<{ due: boolean | null }[]>`
     select (c.created_at < ${guard.orphanedBefore}
@@ -55,6 +69,24 @@ async function judge(tx: Tx, competitionId: string, guard: QuickMatchDeleteGuard
   if (row) return row.due === true ? "due" : "kept";
   const [held] = await tx`select 1 from competitions where id = ${competitionId} and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
   return held ? "kept" : "gone";
+}
+
+/** Is a guest's score in flight, or committed inside the expiry window, on this competition? (See the header.) */
+async function scoreStands(tx: Tx, competitionId: string, before: Date): Promise<boolean> {
+  const [all] = await tx<{ n: number }[]>`
+    select count(*)::int as n from fixtures f join divisions d on d.id = f.division_id where d.competition_id = ${competitionId}`;
+  const locked = await tx`
+    select f.id from fixtures f join divisions d on d.id = f.division_id where d.competition_id = ${competitionId}
+       for update of f skip locked`;
+  if (locked.length < (all?.n ?? 0)) return true;
+  const [recent] = await tx`
+    select 1 from score_events se
+      join fixtures f on f.id = se.fixture_id
+      join divisions d on d.id = f.division_id
+     where d.competition_id = ${competitionId}
+       and se.recorded_at > ${before}::timestamptz - make_interval(days => ${QUICK_MATCH_EXPIRY_DAYS}::int)
+     limit 1`;
+  return recent !== undefined;
 }
 
 /** Delete one quick match's competition and everything hanging off it, in one transaction: its outbox mails (by their

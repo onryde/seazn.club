@@ -81,6 +81,19 @@ vi.mock("@/server/email-outbox", async (orig) => {
     },
   };
 });
+// The scoring path's touch, behind a switch: off, a score commits and the touch that records it in last_activity_at has not run yet
+// (it runs after the append commits, best-effort: scoring.ts).
+const touchSwitch = vi.hoisted(() => ({ skipFixture: false }));
+vi.mock("../quick-match-activity", async (orig) => {
+  const real = await orig<typeof import("../quick-match-activity")>();
+  return {
+    ...real,
+    touchQuickMatchActivityForFixture: async (...args: Parameters<typeof real.touchQuickMatchActivityForFixture>) => {
+      if (touchSwitch.skipFixture) return;
+      return real.touchQuickMatchActivityForFixture(...args);
+    },
+  };
+});
 // The reminder's read of the row (the one place the sweep opens a home token), the same way: every read recorded (the sweep opens
 // only the tokens of matches it reminds), and an armed competition's callback run after the read, BEFORE the claim (a save, an
 // overlapping run's claim or a release landing in between).
@@ -168,11 +181,17 @@ async function create(over: Partial<CreateQuickMatch> = {}): Promise<CreatedQuic
 
 const address = (tag: string): string => `delivered+qm_sweep-${tag}-${randomUUID().slice(0, 8)}@resend.dev`;
 
-/** The clock: the last activity `daysAgo` days back, and the expiry C1 gives it (7 days on), as an unsaved row carries. */
+/** The clock: the last activity `daysAgo` days back, and the expiry C1 gives it (7 days on), as an unsaved row carries. Everything
+ *  the match recorded happened by then, so its score events move back with it: a score in the last 7 days is one the touch has not
+ *  recorded yet, and keeps the match (quick-match-delete.ts). */
 async function idleFor(id: string, daysAgo: number): Promise<{ last: Date; expires: Date }> {
   const last = new Date(Date.now() - daysAgo * DAY_MS);
   const expires = new Date(last.getTime() + SPEC_EXPIRY_DAYS * DAY_MS);
   await sql`update quick_matches set last_activity_at = ${last}, expires_at = ${expires} where id = ${id}`;
+  await sql`
+    update score_events se set recorded_at = ${last}
+      from fixtures f join divisions d on d.id = f.division_id join quick_matches q on q.competition_id = d.competition_id
+     where se.fixture_id = f.id and q.id = ${id} and se.recorded_at > ${last}`;
   return { last, expires };
 }
 /** The clock: the expiry `hours` hours from now (negative: past), the last activity 7 days before it. */
@@ -285,6 +304,7 @@ beforeEach(() => {
   claim.before.clear();
   claim.reads.length = 0;
   enqueueFault.armed.clear();
+  touchSwitch.skipFixture = false;
 });
 
 afterAll(async () => {
@@ -364,6 +384,46 @@ describe.skipIf(!HAS_DB)("the expiry sweep (DB)", () => {
     // And the delete itself, called on a just-revived row: nothing goes.
     expect(await hardDeleteQuickMatchCompetition(m.competitionId, { expiredBefore: new Date() })).toEqual({ deleted: false, kept: true });
     expect(await competitionExists(m.competitionId)).toBe(true);
+  });
+
+  it("a score that stands before its touch keeps the match past its expiry; the same score older than C1's 7 days does not", async () => {
+    const m = await create();
+    const { secret, fixtureId } = await scoreLink(m);
+    const [start] = await firstRallyFor(fixtureId);
+    touchSwitch.skipFixture = true; // the append commits; the touch that would record it has not run
+    const res = await post(secret, fixtureId, start!);
+    expect(res.status, await res.clone().text()).toBe(201);
+    // The clock as the last RECORDED activity tells it: 8 days idle, a day past the expiry. The score itself is from just now.
+    await sql`update quick_matches set last_activity_at = now() - interval '8 days', expires_at = now() - interval '1 day' where id = ${m.id}`;
+    const scored = await sql`select 1 from score_events where fixture_id = ${fixtureId}`;
+    expect(scored.length, "premise: the guest's score committed").toBeGreaterThan(0);
+
+    expect(await sweepQuickMatches({ baseUrl: BASE, onlyIds: [m.id] })).toEqual({ ...ZERO, checked: 1, deferred: 1 });
+    expect(await competitionExists(m.competitionId), "a committed score is never deleted").toBe(true);
+    expect(await sql`select 1 from score_events where fixture_id = ${fixtureId}`).toHaveLength(scored.length);
+
+    // A lost touch keeps a match only for the 7 days C1 gives its last score: the same score 8 days old, and the match goes.
+    await sql`update score_events set recorded_at = now() - interval '8 days' where fixture_id = ${fixtureId}`;
+    expect(await sweepQuickMatches({ baseUrl: BASE, onlyIds: [m.id] })).toEqual({ ...ZERO, checked: 1, expired: 1 });
+    expect(await competitionExists(m.competitionId)).toBe(false);
+  });
+
+  it("a score still in flight (its fixture held by an uncommitted append) keeps the match: never waited on; released, it goes", async () => {
+    const m = await create();
+    await idleFor(m.id, 8);
+    const [f0] = await fixturesOf(m.competitionId);
+    // An append that has written its event holds the event's fixture (its foreign key) until it commits. A delete that went ahead
+    // would wait for that commit and then cascade the score away with the fixture.
+    const whileHeld = await sql.begin(async (tx) => {
+      await tx`select 1 from fixtures where id = ${f0!.id} for key share`;
+      const pending = hardDeleteQuickMatchCompetition(m.competitionId, { expiredBefore: new Date() });
+      const answer = await Promise.race([pending, new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 3000))]);
+      if (answer === "blocked") void pending.catch(() => undefined); // it goes on once this transaction lets go
+      return answer;
+    });
+    expect(whileHeld, "kept at once, not waiting on the append").toEqual({ deleted: false, kept: true });
+    expect(await competitionExists(m.competitionId)).toBe(true);
+    expect(await hardDeleteQuickMatchCompetition(m.competitionId, { expiredBefore: new Date() })).toEqual({ deleted: true, kept: false });
   });
 
   it("a saved match is never reminded or expired, whatever its expiry column holds", async () => {
