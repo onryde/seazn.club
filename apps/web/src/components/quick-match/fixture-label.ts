@@ -4,8 +4,9 @@
 // - a round's fixtures are numbered among its NON-BYE fixtures (a bye is not a match anyone plays);
 // - a round with exactly one non-bye fixture is not numbered ("Semi-final", "Quarter-final");
 // - the final is never numbered, nor is any role but the semi- and quarter-final (`roundRoleLabel`'s shared names);
-// - "winner of" follows the same rule: the lone semi or quarter is "the semi-final"/"the quarter-final", a numbered semi is
-//   "semi-final n", and anything else is "match n" (D12: the 1-based index in play order).
+// - "winner of" names the feeding card by its own label (ruling m8): the lone semi or quarter is "the semi-final"/"the
+//   quarter-final", a numbered one "semi-final n"/"quarter-final n"; a round with no such name is "match n" (D12: the
+//   1-based index in play order).
 //
 // Pure: no "use client", no server module, no copy. It answers a key and its params; the caller says them.
 import type { RoundRole } from "@seazn/engine/competition";
@@ -77,6 +78,10 @@ export function winnerOfLabel(
   if (role?.kind === "semi_final") {
     return alone ? { key: "quickMatch.home.winnerOfTheSemi" } : { key: "quickMatch.home.winnerOfSemi", params: { n: nonByeIndex + 1 } };
   }
-  if (role?.kind === "quarter_final" && alone) return { key: "quickMatch.home.winnerOfTheQuarter" };
+  if (role?.kind === "quarter_final") {
+    return alone
+      ? { key: "quickMatch.home.winnerOfTheQuarter" }
+      : { key: "quickMatch.home.winnerOfQuarter", params: { n: nonByeIndex + 1 } };
+  }
   return { key: "quickMatch.home.winnerOfMatch", params: { n: matchNo } };
 }

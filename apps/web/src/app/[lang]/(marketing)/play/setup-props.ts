@@ -21,6 +21,7 @@ const UI_PREFIXES = [
   "quickMatch.home.winnerOfSemi",
   "quickMatch.home.winnerOfMatch",
   "quickMatch.home.winnerOfThe",
+  "quickMatch.home.winnerOfQuarter",
   "bracket.round.",
   // The kind switch's legend (screen readers only): "Who plays", the division builder's own word for the same choice.
   "divBuilder.step.who",

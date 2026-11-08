@@ -299,24 +299,24 @@ describe("drawPreview: the knockout draw as the generator makes it, under the ty
     expect(d.cards.at(-1)).toEqual({ label: "Final", line: "Winners meet" });
   });
 
-  it("6 sides: seeds 1-2 sit out; each meets the winner of the quarter-final the 8-draw sends them, named by match number", () => {
+  it("6 sides: seeds 1-2 sit out; each meets the winner of the quarter-final the 8-draw sends them, named as its card is", () => {
     const d = drawPreview(cellOf(6), NAMES, msg);
     expect(d.sitsOut).toEqual([0, 1].map((k) => `${NAMES[k]} sits out the first round`));
     expect(d.cards).toHaveLength(5);
     expect(d.cards.map((c) => c.label)).toEqual(["Quarter-final 1", "Quarter-final 2", "Semi-final 1", "Semi-final 2", "Final"]);
     const qf = d.cards.filter((c) => c.label.startsWith("Quarter-final"));
     expect(qf.map((c) => pairOf(c.line)).sort()).toEqual([sorted(NAMES[2]!, NAMES[5]!), sorted(NAMES[3]!, NAMES[4]!)].sort());
-    // Round one is played first, so quarter-final k is match k (D12's numbering: the 1-based index in play order).
-    const matchOf = (a: string, b: string) => {
+    // A "winner of" seat names its feeding card by the card's own label (ruling m8): "Quarter-final 2" → "quarter-final 2".
+    const feederOf = (a: string, b: string) => {
       const card = qf.find((c) => pairOf(c.line).join() === sorted(a, b).join());
-      return Number(card!.label.replace("Quarter-final ", ""));
+      return `Winner of ${card!.label.replace(/^Quarter/, "quarter")}`;
     };
     const semis = d.cards.filter((c) => c.label.startsWith("Semi-final")).map((c) => pairOf(c.line));
     // Seed 1 meets the winner of 4v5 and seed 2 the winner of 3v6 (seed i v N+1−i in the 8-draw: 1v8→4v5, 2v7→3v6).
     expect(semis.sort()).toEqual(
       [
-        sorted(NAMES[0]!, `Winner of match ${matchOf(NAMES[3]!, NAMES[4]!)}`),
-        sorted(NAMES[1]!, `Winner of match ${matchOf(NAMES[2]!, NAMES[5]!)}`),
+        sorted(NAMES[0]!, feederOf(NAMES[3]!, NAMES[4]!)),
+        sorted(NAMES[1]!, feederOf(NAMES[2]!, NAMES[5]!)),
       ].sort(),
     );
     expect(d.cards.at(-1)).toEqual({ label: "Final", line: "Winners meet" });

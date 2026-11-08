@@ -58,7 +58,7 @@ const EXPECTED: Record<number, { cards: string[]; feeders: string[] }> = {
   },
   6: {
     cards: ["Quarter-final 1", "Quarter-final 2", "Semi-final 1", "Semi-final 2", "Final"],
-    feeders: ["Winner of match 1", "Winner of match 2", "Winner of semi-final 1", "Winner of semi-final 2"],
+    feeders: ["Winner of quarter-final 1", "Winner of quarter-final 2", "Winner of semi-final 1", "Winner of semi-final 2"],
   },
 };
 
@@ -85,6 +85,8 @@ describe("fixtureLabel / winnerOfLabel: numbered among the round's non-bye fixtu
     expect(say(fixtureLabel(null, 2, 3, 1))).toBe("Round 2");
     expect(say(fixtureLabel({ kind: "round_of", entrants: 16 }, 1, 8, 4))).toBe("Round of 16");
     expect(say(winnerOfLabel(null, 3, 2, 7))).toBe("Winner of match 7");
+    // A numbered quarter-final is named as its card is, never by its match number (m8).
+    expect(say(winnerOfLabel({ kind: "quarter_final" }, 4, 2, 3))).toBe("Winner of quarter-final 3");
   });
 
   it("another locale reads its own unnumbered words (fr)", () => {
