@@ -8,7 +8,8 @@
 //     The locale is the form's own (the page that posted), else the visitor's explicit pick, else English.
 //
 // In this order, each step answering before the next runs:
-//   1. the per-IP limit (QUICK_MATCH_CREATE_LIMIT, D2), before any read or write (B3);
+//   1. the per-IP limit (QUICK_MATCH_CREATE_LIMIT, D2), before any database work (B3); only the form body is read first,
+//      for the locale a refusal returns to;
 //   2. the form, through plan 1's `CreateQuickMatch` schema (strict: a stray field is refused, not dropped);
 //   3. the visitor, from the REQUEST's cookie (B3a), minted when absent or malformed (`isVisitorKeyShaped`, B3b);
 //   4. plan 1's `createQuickMatch`: the seal, the per-visitor alive cap, the offer, the tree, or nothing.
@@ -21,7 +22,6 @@
 // alive cap and the per-IP limit.
 import * as Sentry from "@sentry/nextjs";
 import type { NextRequest } from "next/server";
-import { ZodError } from "zod";
 import { explicitLocale } from "@/lib/explicit-locale";
 import { handler, HttpError, redirectLocal } from "@/lib/http";
 import { DEFAULT_LOCALE, hasLocale, type Locale } from "@/lib/i18n-constants";
@@ -37,8 +37,9 @@ import { readOrMintVisitor, visitorCookieOptions } from "@/server/usecases/quick
 /** The codes a refusal may name. Anything else is shown as CREATE_FAILED, so `?e=` is a closed set the setup page maps. */
 const CODES: ReadonlySet<string> = new Set(Object.values(QUICK_MATCH_ERRORS));
 
-/** A body that is not a form (another content type, a broken body): the guest's refusal, not a server fault. */
-class NotAForm extends Error {}
+/** The form itself is refused: the body is not a form (another content type, a broken body), or the schema refuses it. The
+ *  guest's refusal, not a server fault. A ZodError thrown from deeper in the create is NOT this: it is a fault. */
+class FormRefused extends Error {}
 
 /**
  * The form's fields as the schema's input. `sides` is a list (one field per side, in entry order); every other field is one
@@ -63,27 +64,44 @@ function formInput(form: FormData): Record<string, unknown> {
 
 /** What `?e=` names for a refusal: the thrower's own code when it is a quick match code; the limiter's code-less 429 as
  *  RATE_LIMITED; anything else as CREATE_FAILED. */
+const isQuickMatchCode = (err: unknown): err is HttpError =>
+  err instanceof HttpError && err.code !== undefined && CODES.has(err.code);
+/** The per-IP limiter's 429 (lib/rate-limit.ts): it carries no code, only Retry-After. */
+const isLimiter = (err: unknown): err is HttpError => err instanceof HttpError && err.status === 429 && err.code === undefined;
+
 function refusalCode(err: unknown): string {
-  if (err instanceof HttpError && err.code !== undefined && CODES.has(err.code)) return err.code;
-  if (err instanceof HttpError && err.status === 429) return QUICK_MATCH_ERRORS.RATE_LIMITED;
+  if (isQuickMatchCode(err)) return err.code!;
+  if (isLimiter(err)) return QUICK_MATCH_ERRORS.RATE_LIMITED;
   return QUICK_MATCH_ERRORS.CREATE_FAILED;
 }
 
-/** A fault the guest cannot fix (a 5xx, an unexpected throw) is reported as `handler` reports one; a refusal is not. */
-const isServerFault = (err: unknown) =>
-  !(err instanceof ZodError || err instanceof NotAForm || (err instanceof HttpError && err.status < 500));
+/** Everything that is not one of the guest's refusals (the form, a quick match code, the limiter) is a fault, a 402 from a
+ *  plan cap included: logged and reported as `handler` reports one, then shown as CREATE_FAILED. */
+const isServerFault = (err: unknown) => !(err instanceof FormRefused || isQuickMatchCode(err) || isLimiter(err));
+
+/** The visitor's explicit pick, else English. A forged cookie that does not decode (`seazn_locale=%E0`) makes
+ *  `explicitLocale`'s decodeURIComponent throw: English then, never a 500. */
+function cookieLocale(req: Request): Locale {
+  try {
+    return explicitLocale(req) ?? DEFAULT_LOCALE;
+  } catch {
+    return DEFAULT_LOCALE;
+  }
+}
 
 export async function POST(req: NextRequest) {
   return handler(async () => {
     const form = await req.formData().catch(() => null);
     const posted = form?.get("locale");
-    const locale: Locale = typeof posted === "string" && hasLocale(posted) ? posted : (explicitLocale(req) ?? DEFAULT_LOCALE);
+    const locale: Locale = typeof posted === "string" && hasLocale(posted) ? posted : cookieLocale(req);
     try {
       // The first X-Forwarded-For hop, the funnel's idiom (api/funnel/start/route.ts).
       const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
       await rateLimit(`quick-match-create:${ip}`, QUICK_MATCH_CREATE_LIMIT);
-      if (!form) throw new NotAForm("the quick match create takes a form");
-      const input = CreateQuickMatch.parse(formInput(form));
+      if (!form) throw new FormRefused("the quick match create takes a form");
+      const parsed = CreateQuickMatch.safeParse(formInput(form));
+      if (!parsed.success) throw new FormRefused("the setup form failed the schema", { cause: parsed.error });
+      const input = parsed.data;
       const visitor = readOrMintVisitor(req.cookies);
       const created = await createQuickMatch(input, { visitorHash: visitor.hash });
       const res = redirectLocal(routes.quickMatch(created.token), 303);

@@ -18,9 +18,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
+import * as Sentry from "@sentry/nextjs";
 
 import { sql } from "@/lib/db";
+import { PaymentRequiredError } from "@/lib/errors";
 import { __setRateLimitCounterForTests, QUICK_MATCH_CREATE_LIMIT } from "@/lib/rate-limit";
+import { createCompetition } from "@/server/usecases/competitions";
 import { listDivisionFixtures } from "@/server/usecases/fixtures";
 import { systemAuth } from "@/server/usecases/quick-match-create";
 import { offerFor } from "@/server/usecases/quick-match-sports";
@@ -34,6 +37,18 @@ vi.mock("@/lib/posthog-server", async (orig) => ({
   ...(await orig<typeof import("@/lib/posthog-server")>()),
   captureServer: vi.fn(),
 }));
+// The route's fault report, read by the cases that tell a fault from a refusal. Never sent anywhere.
+vi.mock("@sentry/nextjs", async (orig) => ({
+  ...(await orig<typeof import("@sentry/nextjs")>()),
+  captureException: vi.fn(),
+}));
+// The real competition create, through a spy: the plan-cap case answers one call with the 402 a capped org gets.
+vi.mock("@/server/usecases/competitions", async (orig) => {
+  const real = await orig<typeof import("@/server/usecases/competitions")>();
+  return { ...real, createCompetition: vi.fn(real.createCompetition) };
+});
+/** The route's Sentry reports since the last clear. */
+const reported = () => vi.mocked(Sentry.captureException).mock.calls.map(([err]) => err);
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const COOKIE = "seazn_qm_visitor";   // plan 1's QUICK_MATCH_VISITOR_COOKIE, typed: the name a browser holds is the contract
@@ -197,8 +212,10 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: every refusal is a 303 back to 
     const key = mintVisitorKey();
     for (let i = 0; i < 5; i++) landedToken(await post(form(), { cookie: key }));
     const sixth = form({ locale: "nl" });
+    vi.mocked(Sentry.captureException).mockClear();
     const res = await post(sixth, { cookie: key });
     refusedTo(res, "nl", "QUICK_MATCH_TOO_MANY_ALIVE");
+    expect(reported(), "a guest's refusal is not a fault: never reported").toEqual([]);
     expect(visitorCookies(res)).toEqual([]);
     expect(await rowsFor(hashVisitorKey(key))).toHaveLength(5);
     expect(await rowsNamed(sixth.name as string)).toHaveLength(0);
@@ -234,10 +251,26 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: every refusal is a 303 back to 
     expect(await rowsNamed(f.name as string)).toHaveLength(0);
   });
 
-  it("a server without DEVICE_LINK_KEK (503): QUICK_MATCH_CREATE_FAILED, touching nothing", async () => {
+  it("a server without DEVICE_LINK_KEK (503): QUICK_MATCH_CREATE_FAILED, touching nothing, and reported once as a fault", async () => {
     vi.stubEnv("DEVICE_LINK_KEK", "");
     const f = form();
+    vi.mocked(Sentry.captureException).mockClear();
     refusedTo(await post(f), "en", "QUICK_MATCH_CREATE_FAILED");
+    expect(reported()).toHaveLength(1);
+    expect(reported()[0]).toMatchObject({ status: 503, code: "DEVICE_LINK_KEK_MISSING" });
+    expect(await rowsNamed(f.name as string)).toHaveLength(0);
+  });
+
+  it("a plan cap's 402 (no quick match code) is a fault, not a refusal: reported once, still a 303 to CREATE_FAILED", async () => {
+    // The system org's caps are unlimited (plan 1 Task 1), so no real create reaches a 402 today; the competition create
+    // answers one call with the 402 a capped org gets, and every step before and after it is real.
+    const cap = new PaymentRequiredError("competitions.max_active");
+    vi.mocked(createCompetition).mockRejectedValueOnce(cap);
+    const f = form();
+    vi.mocked(Sentry.captureException).mockClear();
+    refusedTo(await post(f), "en", "QUICK_MATCH_CREATE_FAILED");
+    expect(vi.mocked(createCompetition)).toHaveBeenCalled();   // the stub was reached through the real createQuickMatch
+    expect(reported()).toEqual([cap]);
     expect(await rowsNamed(f.name as string)).toHaveLength(0);
   });
 
@@ -252,7 +285,9 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: every refusal is a 303 back to 
     ["a bad email", { email: "not-an-email" }],
   ])("a form the schema refuses (%s): QUICK_MATCH_CREATE_FAILED, in the form's own language", async (_why, over) => {
     const f = form({ ...over, locale: "fr" });
+    vi.mocked(Sentry.captureException).mockClear();
     refusedTo(await post(f), "fr", "QUICK_MATCH_CREATE_FAILED");
+    expect(reported(), "the form's own refusal is not a fault").toEqual([]);
     if (typeof f.name === "string") expect(await rowsNamed(f.name)).toHaveLength(0);
   });
 
@@ -267,6 +302,13 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: every refusal is a 303 back to 
 
   it("a locale field that names no shipped locale falls back to the visitor's cookie, and is refused", async () => {
     refusedTo(await post(form({ locale: "xx" }), { headers: { cookie: "seazn_locale=nl" } }), "nl", "QUICK_MATCH_CREATE_FAILED");
+  });
+
+  it("a forged locale cookie that does not decode (seazn_locale=%E0) falls back to English: a 303, never a JSON 500", async () => {
+    const forged = { headers: { cookie: "seazn_locale=%E0" } };
+    refusedTo(await post(form({ locale: "xx" }), forged), "en", "QUICK_MATCH_CREATE_FAILED");
+    // The same cookie beside a good form: the form's locale wins and the create still lands on its home.
+    landedToken(await post(form(), forged));
   });
 });
 
@@ -286,9 +328,11 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: the per-IP limit (D2)", () => {
     const key = mintVisitorKey();
     const seen = countFor(theirs, 21);
     const f = form({ locale: "es" });
+    vi.mocked(Sentry.captureException).mockClear();
     const res = await post(f, { ip: theirs, cookie: key });
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/es/play?e=QUICK_MATCH_RATE_LIMITED");
+    expect(reported(), "the limiter's refusal is not a fault").toEqual([]);
     expect(await rowsFor(hashVisitorKey(key))).toHaveLength(0);
     expect(await rowsNamed(f.name as string)).toHaveLength(0);
     // Keyed on the first X-Forwarded-For hop (the funnel's idiom), over the declared window.
