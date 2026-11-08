@@ -39,6 +39,9 @@ const KNOWN: Record<string, unknown> = {
   placements: { f: [1, 2] },
   // W2c Task 12: a stage's deciders are its match rules (D3) — `shootout` / `extraTime` moved under `rules`.
   rules: { shootout: false, extraTime: { enabled: true, halfMinutes: 10 } },
+  // Swiss auto-advance (spec 2026-11-08 §4.1): the two switches, read by the auto-advance arming and the Format tool.
+  autoPair: true,
+  autoConfirmHandoff: true,
 };
 
 const stage = (config: unknown) => ({ seq: 1, kind: "knockout", name: "Cup", config });
@@ -87,6 +90,12 @@ describe("StageConfig closes the key set", () => {
     expect(StageConfig.safeParse({ mode: "conquian" }).success).toBe(false);
     expect(StageConfig.safeParse({ pools: { count: 4, extra: 1 } }).success).toBe(false);
     expect(StageConfig.safeParse({ h2h_scope: "group" }).success).toBe(false);
+    // The auto-advance switches are booleans, nothing else (a "true" string is not an on).
+    for (const key of ["autoPair", "autoConfirmHandoff"]) {
+      expect(StageConfig.safeParse({ [key]: false }).success, `${key}: false`).toBe(true);
+      expect(StageConfig.safeParse({ [key]: "true" }).success, `${key}: "true"`).toBe(false);
+      expect(StageConfig.safeParse({ [key]: 1 }).success, `${key}: 1`).toBe(false);
+    }
   });
 
   // Swiss Playoff's one new knob. The engine union is

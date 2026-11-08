@@ -38,6 +38,7 @@ import { w2dTablesSuite } from "./suites/w2dTables.ts";
 import { w2eRefusalsSuite } from "./suites/w2eRefusals.ts";
 import { w3SwissASuite } from "./suites/w3SwissA.ts";
 import { w3SwissBSuite } from "./suites/w3SwissB.ts";
+import { swissAutoAdvanceSuite } from "./suites/swissAutoAdvance.ts";
 import { w4aTimeModelSuite } from "./suites/w4aTimeModel.ts";
 import { cricketDlsSuite } from "./suites/cricketDls.ts";
 import { configSnapshotSuite } from "./suites/configSnapshot.ts";
@@ -1256,6 +1257,11 @@ export async function main() {
   // own header lists each. After w3SwissA, as the plan places it. Own fresh owner; keyless; SQL seeds (the S6 history, the
   // 1.x byeScore) and the delta's own block through DATABASE_URL.
   await suite("w3SwissB", () => w3SwissBSuite());
+
+  // Swiss auto-advance (plan 2026-11-08): counted checks for the tasks that owe one (T4: the stage switches on and off
+  // through their own door, refused by name where they cannot act, recorded once per move, and the division's read).
+  // After w3SwissB, as the plan places it. Own fresh owner; keyless; no SQL.
+  await suite("swissAutoAdvance", () => swissAutoAdvanceSuite());
 }
 
 async function smokePlanMatrix(): Promise<void> {

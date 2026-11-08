@@ -33,10 +33,14 @@ export const AUTO_ADVANCE_LEASE_MS = 120_000;
 // Vocabulary
 // ---------------------------------------------------------------------------------------------------------------------
 
-export type AutoActionKind = "pair_round" | "complete_stage" | "confirm_handoff";
+/** V497's kind CHECK, as a tuple so the API schema's enum (api-v1/schemas.ts) is this list and not a second copy. */
+export const AUTO_ACTION_KINDS = ["pair_round", "complete_stage", "confirm_handoff"] as const;
+export type AutoActionKind = (typeof AUTO_ACTION_KINDS)[number];
 /** The two kinds a Swiss stage arms on itself; `confirm_handoff` lives on the TARGET stage. */
 export type SourceActionKind = Exclude<AutoActionKind, "confirm_handoff">;
-export type AutoActionState = "waiting" | "pending" | "paused" | "blocked" | "done" | "cancelled";
+/** V497's state CHECK, as a tuple for the same reason. */
+export const AUTO_ACTION_STATES = ["waiting", "pending", "paused", "blocked", "done", "cancelled"] as const;
+export type AutoActionState = (typeof AUTO_ACTION_STATES)[number];
 
 /** The live states: at most one row in any of them per (stage, kind). The partial unique index of V497 is built on
  *  exactly this set, and the schema test reads this tuple, so the DB predicate and the code cannot drift. */
@@ -197,4 +201,17 @@ export function autoActionRetryDelayMs(attemptsMade: number): number {
     );
   }
   return delay;
+}
+
+/**
+ * Where each switch can act (spec §4.1): "Pair the next round automatically" on a Swiss stage only; "Confirm who moves
+ * on automatically" on a stage whose `progression.timing` is "setup", the stage that gets a seed proposal. The PUT door
+ * refuses an ON anywhere else (AUTO_PAIR_NOT_SWISS / AUTO_CONFIRM_NO_HANDOFF), the Format tool shows a switch only where
+ * this says it can act, and the arming reads it so a flag stored elsewhere (the create door takes StageConfig whole)
+ * never acts. Turning a switch OFF is never refused.
+ */
+export function autoAdvanceSwitchesFor(stage: { kind: string; progression: unknown }): { autoPair: boolean; autoConfirmHandoff: boolean } {
+  const timing =
+    typeof stage.progression === "object" && stage.progression !== null ? (stage.progression as { timing?: unknown }).timing : undefined;
+  return { autoPair: stage.kind === "swiss", autoConfirmHandoff: timing === "setup" };
 }

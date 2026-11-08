@@ -163,6 +163,8 @@ const RULES: RouteRule[] = [
   { method: "GET", path: "/divisions/:id/stages", scope: "read", pin: "division" },
   { method: "POST", path: "/divisions/:id/stages", scope: "manage", pin: "division" },
   { method: "PUT", path: "/divisions/:id/stages", scope: "manage", pin: "division" },
+  // Swiss auto-advance (spec 2026-11-08 §4.6): what the clock will do next, read like the division's history.
+  { method: "GET", path: "/divisions/:id/auto-advance", scope: "read", pin: "division" },
   { method: "POST", path: "/divisions/:id/start", scope: "score", pin: "division" },
   // Fix round 1 (Task 5 review): moved off NEVER_KEY_ROUTES. This file's own
   // never-list is scoped to STRUCTURAL bans (key management, Stripe,
@@ -284,6 +286,8 @@ const RULES: RouteRule[] = [
   { method: "GET", path: "/stages/:id/schedule/health", scope: "read", pin: "stage" },
   { method: "POST", path: "/stages/:id/seed-proposal", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/seed-proposal/confirm", scope: "manage", pin: "stage" },
+  // Swiss auto-advance (spec 2026-11-08 §4.1): the stage's two switches, an organiser's setting like its rules.
+  { method: "PUT", path: "/stages/:id/auto-advance", scope: "manage", pin: "stage" },
   { method: "GET", path: "/stages/:id/standings", scope: "read", pin: "stage" },
   { method: "POST", path: "/stages/:id/standings/override", scope: "manage", pin: "stage" },
 

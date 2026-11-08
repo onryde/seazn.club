@@ -24,6 +24,7 @@ import { refuseNewStageTable } from "./table-rule-guards";
 import { swissRefusal } from "./swiss-refusal";
 import { judgeSwissRounds, swissRoundsGuidance, swissRoundsNoticeOf, type SwissRoundsJudgement, type SwissRoundsNotice, type SwissRoundsShrunk } from "@/lib/swiss-rounds";
 import { isRootSwissStage } from "@/lib/open-entry-stages";
+import { autoAdvanceSwitchesFor } from "@/lib/auto-advance";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
   generateRoundRobin,
@@ -458,6 +459,9 @@ export interface StageCarry {
   /** W3 T12 (T8 review m6): a Swiss slot's chess colours switch (`PATCH /stages/{id}`, BG-SW-1) — the organiser's
    *  choice, so a re-Apply of the template (which names no `chess`) keeps it instead of re-seeding the boardgame default. */
   chess?: boolean;
+  /** Swiss auto-advance T4: the slot's switches (`PUT /stages/{id}/auto-advance`), kept across a Save like `chess`. */
+  autoPair?: boolean;
+  autoConfirmHandoff?: boolean;
 }
 
 /** W2c Task 12 — the config each stage of a batch is inserted with: its rules validated on the stage PUT's terms and
@@ -481,8 +485,14 @@ function stageConfigsAtCreate(
     const sent = (s.config ?? {}) as Record<string, unknown>;
     // Each own table value the body does not send is the slot's carry (a body's own replaces it whole; null drops it).
     const config: Record<string, unknown> = { ...sent };
-    for (const key of ["points", "tiebreakers", "crossGroupTiebreakers", "chess"] as const) {
+    for (const key of ["points", "tiebreakers", "crossGroupTiebreakers", "chess", "autoPair", "autoConfirmHandoff"] as const) {
       if (carry?.[key] !== undefined && sent[key] === undefined) config[key] = carry[key];
+    }
+    // Swiss auto-advance T4: a carried auto-confirm ON stays only where the new slot can act on it (its progression is
+    // still "setup", spec §4.1) — the PUT door would refuse it anywhere else. Auto-pair needs no ask: the slot's kind
+    // is the carry's key, so a carried one lands on a Swiss.
+    if (sent.autoConfirmHandoff === undefined && config.autoConfirmHandoff === true && !autoAdvanceSwitchesFor({ kind: s.kind, progression: s.progression }).autoConfirmHandoff) {
+      delete config.autoConfirmHandoff;
     }
     // UI5 fix round 1 (ruling Q2): the old desk switch's off is not carried onto a chess Swiss. The door below refuses
     // an off (SWISS_CHESS_ALWAYS_ON), and a replaced slot is unpaired, so it would pair in colour anyway (ruling I1):
@@ -938,12 +948,18 @@ async function runReplaceStages(
         // W3 T12 (T8 review m6): a Swiss slot's chess switch, the organiser's (the default is re-seeded only for a slot
         // that stores none — `withSwissChessDefault`).
         const chess = r.config?.chess;
+        // Swiss auto-advance T4: the slot's two switches (`PUT /stages/{id}/auto-advance`), the organiser's, so a Save
+        // never silently turns the clock off. Where the new slot can take them is asked in `stageConfigsAtCreate`.
+        const autoPair = r.config?.autoPair;
+        const autoConfirmHandoff = r.config?.autoConfirmHandoff;
         keep.set(`${r.seq}:${r.kind}`, {
           rules: cleared ? {} : (rules as Record<string, unknown>),
           ...(points !== undefined && points !== null ? { points } : {}),
           ...(tiebreakers !== undefined && tiebreakers !== null ? { tiebreakers } : {}),
           ...(crossGroupTiebreakers !== undefined && crossGroupTiebreakers !== null ? { crossGroupTiebreakers } : {}),
           ...(typeof chess === "boolean" ? { chess } : {}),
+          ...(typeof autoPair === "boolean" ? { autoPair } : {}),
+          ...(typeof autoConfirmHandoff === "boolean" ? { autoConfirmHandoff } : {}),
         });
       }
       await tx`delete from stages where division_id = ${divisionId}`;

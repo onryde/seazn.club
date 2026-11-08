@@ -16,6 +16,8 @@ import { readFileSync } from "node:fs";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
+  AUTO_ACTION_KINDS,
+  AUTO_ACTION_STATES,
   AUTO_ADVANCE_DONE_VISIBLE_MS,
   AUTO_ADVANCE_HOLD_MAX_MS,
   AUTO_ADVANCE_LEASE_MS,
@@ -24,6 +26,7 @@ import {
   AUTO_ADVANCE_SETTLE_MS,
   LIVE_AUTO_ACTION_STATES,
   autoActionRetryDelayMs,
+  autoAdvanceSwitchesFor,
   deriveConfirmAction,
   deriveSourceAction,
   skipKey,
@@ -35,6 +38,7 @@ import {
 } from "@/lib/auto-advance";
 import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { isSwissBoardSeated, planSwissShells } from "@/lib/swiss-shell";
+import { StageKind } from "@/server/api-v1/schemas";
 
 // ---------------------------------------------------------------------------------------------------------------------
 // The server's decided set, read from its one declaration.
@@ -400,6 +404,44 @@ describe("deriveConfirmAction", () => {
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
+// autoAdvanceSwitchesFor: where each switch can act (the PUT door refuses an ON elsewhere; the Format tool shows it).
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("autoAdvanceSwitchesFor", () => {
+  it("empty case first: a stage with no progression, of a kind that is not Swiss, takes neither switch", () => {
+    expect(autoAdvanceSwitchesFor({ kind: "league", progression: null })).toEqual({ autoPair: false, autoConfirmHandoff: false });
+  });
+
+  it("every stage kind x every progression shape: auto-pair on a Swiss only, auto-confirm on a setup target only (counted)", () => {
+    // Spec §4.1's table, typed here: "Pair the next round automatically" lives on and is shown for "Swiss stages only";
+    // "Confirm who moves on automatically" for "any stage whose progression.timing = setup (i.e. it gets a seed
+    // proposal)". The kinds are the API's own list (schemas.ts StageKind), the timings ProgressionSchema's enum.
+    const progressions: { label: string; progression: unknown; setup: boolean }[] = [
+      { label: "none", progression: null, setup: false },
+      { label: "absent", progression: undefined, setup: false },
+      { label: "setup", progression: { sources: [{ stage: "previous" }], placement: "rank_order", timing: "setup" }, setup: true },
+      { label: "on_complete", progression: { sources: [{ stage: "previous" }], placement: "rank_order", timing: "on_complete" }, setup: false },
+      { label: "no timing", progression: { sources: [] }, setup: false },
+    ];
+    let checked = 0;
+    const reached = { pair: 0, noPair: 0, confirm: 0, noConfirm: 0 };
+    for (const kind of StageKind.options) {
+      for (const p of progressions) {
+        const got = autoAdvanceSwitchesFor({ kind, progression: p.progression });
+        expect(got, `${kind} / ${p.label}`).toEqual({ autoPair: kind === "swiss", autoConfirmHandoff: p.setup });
+        reached[got.autoPair ? "pair" : "noPair"]++;
+        reached[got.autoConfirmHandoff ? "confirm" : "noConfirm"]++;
+        checked++;
+      }
+    }
+    expect(checked).toBe(StageKind.options.length * progressions.length);
+    expect(StageKind.options.length, "the kind list is the API's, and it holds a Swiss").toBeGreaterThan(1);
+    // Both answers of both switches were reached: a constant answer would leave one at zero.
+    for (const [k, n] of Object.entries(reached)) expect(n, k).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
 // Retry backoff and the declared constants.
 // ---------------------------------------------------------------------------------------------------------------------
 
@@ -427,6 +469,9 @@ describe("constants and backoff", () => {
     expect(AUTO_ADVANCE_LEASE_MS).toBe(2 * 60 * 1000); // plan Task 3 (spec §7 leaves the claim shape to the builder)
     // §4.2's live set, widened by plan P4 to hold `paused`: the schema test reads this same tuple.
     expect([...LIVE_AUTO_ACTION_STATES]).toEqual(["waiting", "pending", "paused", "blocked"]);
+    // §4.2's kind and state columns (the API schema's enums read these tuples).
+    expect([...AUTO_ACTION_KINDS]).toEqual(["pair_round", "complete_stage", "confirm_handoff"]);
+    expect([...AUTO_ACTION_STATES]).toEqual(["waiting", "pending", "paused", "blocked", "done", "cancelled"]);
   });
 
   it("stays client-safe: its only import is lib/swiss-shell", () => {
