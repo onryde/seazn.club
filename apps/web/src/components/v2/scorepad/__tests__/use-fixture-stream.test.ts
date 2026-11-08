@@ -10,6 +10,7 @@ import { renderIsland } from "@/components/__tests__/_hook-harness";
 import type { LedgerSlotEvent } from "../types";
 import type { RealtimeConnector, RealtimeSubscription, UseFixtureStreamParams, UseFixtureStreamResult } from "../use-fixture-stream";
 import { useFixtureStream } from "../use-fixture-stream";
+import { sessionTransport } from "../transport";
 
 function fakeResponse(status: number, body: unknown): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
@@ -353,6 +354,49 @@ describe("useFixtureStream — polling fallback", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(listEventsSince).toHaveBeenCalledTimes(2);
     expect(onEvents).toHaveBeenCalledWith(rows);
+  });
+});
+
+// Batch C ruling 4, through the REAL transport: a tick is skipped while a read is out, so a ledger read that never
+// answered used to silence every tick behind it, freezing a console's scores and clock for the match. The transport's
+// read now gives up at 10 000 ms (the ruling's number), the poll counts that as a failed read, and the next tick reads
+// afresh. The ledger fetch here never answers on its own; like the platform's fetch it rejects only when aborted.
+describe("useFixtureStream — a hung ledger read (Batch C ruling 4)", () => {
+  it("a read that never answers is given up at 10 s, and the next 15 s tick issues a fresh read", async () => {
+    const { fn: tokenFetch } = fakeFetch(() => fakeResponse(403, { ok: false, error: { code: "FORBIDDEN", message: "no" } }));
+    const ledgerSignals: (AbortSignal | undefined)[] = [];
+    const ledgerFetch = ((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal ?? undefined;
+        ledgerSignals.push(signal);
+        signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")));
+      })) as typeof fetch;
+    const transport = sessionTransport({ fetchFn: ledgerFetch });
+    const { connector } = fakeConnector();
+    const stream = mountStream({
+      fixtureId: "fx-1",
+      auth: { kind: "session" },
+      sinceSeq: 0,
+      onEvents: () => {},
+      fetchFn: tokenFetch,
+      connector,
+      listEventsSince: (fixtureId, sinceSeq) => transport.listEventsSince(fixtureId, sinceSeq),
+      pollMs: 15_000,
+    });
+    await vi.advanceTimersByTimeAsync(0); // the token door refuses: polling, and the catch-up read goes out and hangs
+    expect(stream.current.mode).toBe("polling");
+    expect(ledgerSignals, "the catch-up read").toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(ledgerSignals[0]!.aborted, "still waiting at 9 999 ms").toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ledgerSignals[0]!.aborted, "given up at 10 000 ms").toBe(true);
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(ledgerSignals, "no read before the tick").toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1); // the 15 s tick: no read is out any more, so it reads
+    expect(ledgerSignals, "the tick's fresh read").toHaveLength(2);
+    expect(ledgerSignals[1]!.aborted, "a fresh read, with a signal of its own").toBe(false);
   });
 });
 

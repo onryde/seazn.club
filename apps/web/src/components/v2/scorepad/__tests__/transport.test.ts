@@ -2,7 +2,7 @@
 // Every case injects its own fetch double — no server is ever contacted.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppendEventBody } from "../pipeline";
 import {
   authHeadersFor,
@@ -346,6 +346,52 @@ describe("listEventsSince / getLastSeq / fetchState", () => {
   it("fetchState rejects on failure", async () => {
     const { fn } = fakeFetch(() => fakeResponse(500, { ok: false, error: { code: "INTERNAL", message: "boom" } }));
     await expect(sessionTransport({ fetchFn: fn }).fetchState("fx-1")).rejects.toThrow("boom");
+  });
+});
+
+// Batch C ruling 4: a ledger read that hangs must not freeze the pad's scores and clock for the match. The poll skips a
+// tick while a read is out (use-fixture-stream.ts), so one read that never answers silenced every tick behind it. A read
+// now gives up after 10 000 ms, and the abort is an ordinary failed read. 10 000 is the ruling's number, typed here.
+describe("listEventsSince — a read that hangs gives up after 10 s (Batch C ruling 4)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A fetch that never answers on its own: like the platform's, it rejects only when its signal aborts. */
+  function hangingFetch() {
+    const signals: (AbortSignal | undefined)[] = [];
+    const fn = ((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal ?? undefined;
+        signals.push(signal);
+        signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")));
+      })) as typeof fetch;
+    return { fn, signals };
+  }
+
+  it("a read that never answers is aborted at 10 000 ms, not before, and rejects", async () => {
+    vi.useFakeTimers();
+    const { fn, signals } = hangingFetch();
+    const read = sessionTransport({ fetchFn: fn }).listEventsSince("fx-1", 0);
+    const outcome = read.then(
+      () => "resolved",
+      (err: unknown) => (err instanceof Error ? err.name : String(err)),
+    );
+    expect(signals).toHaveLength(1);
+    expect(signals[0], "the read carries a signal").toBeInstanceOf(AbortSignal);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(signals[0]!.aborted, "still waiting at 9 999 ms").toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signals[0]!.aborted, "given up at 10 000 ms").toBe(true);
+    expect(await outcome).toBe("AbortError");
+  });
+
+  it("a read that answers in time is never aborted afterwards", async () => {
+    vi.useFakeTimers();
+    const { fn, calls } = fakeFetch(() => fakeResponse(200, { ok: true, data: [] }));
+    await expect(sessionTransport({ fetchFn: fn }).listEventsSince("fx-1", 0)).resolves.toEqual([]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(calls[0]!.init?.signal?.aborted).toBe(false);
   });
 });
 

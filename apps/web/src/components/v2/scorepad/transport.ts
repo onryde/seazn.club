@@ -404,6 +404,10 @@ function dateHeaderOf(res: Response): string | null {
   }
 }
 
+/** How long a ledger read (`listEventsSince`) may take before it gives up (Batch C ruling 4). Under the 15 s poll, so a
+ *  hung read never costs more than the one tick it began on. */
+const READ_TIMEOUT_MS = 10_000;
+
 function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTransport {
   const doFetch = init.fetchFn ?? fetch;
   const now = init.now ?? Date.now;
@@ -503,9 +507,22 @@ function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTranspor
     },
 
     async listEventsSince(fixtureId: string, sinceSeq: number): Promise<LedgerSlotEvent[]> {
-      const res = await sampledFetch(`/api/v1/fixtures/${fixtureId}/events?since_seq=${sinceSeq}`, { headers });
-      const data = await readV1Envelope<unknown>(res);
-      return ledgerSlotEventsSchema.parse(data);
+      // Batch C ruling 4: the poll skips a tick while a read is out (use-fixture-stream.ts), so one read that never
+      // answered silenced every tick behind it and froze the pad's scores and clock for the match. The read now gives up
+      // after READ_TIMEOUT_MS; the abort rejects like any failed read, and the next tick reads afresh. The signal covers
+      // the body as well as the headers.
+      const abort = new AbortController();
+      const timer = setTimeout(() => abort.abort(), READ_TIMEOUT_MS);
+      try {
+        const res = await sampledFetch(`/api/v1/fixtures/${fixtureId}/events?since_seq=${sinceSeq}`, {
+          headers,
+          signal: abort.signal,
+        });
+        const data = await readV1Envelope<unknown>(res);
+        return ledgerSlotEventsSchema.parse(data);
+      } finally {
+        clearTimeout(timer);
+      }
     },
 
     async getLastSeq(fixtureId: string): Promise<number> {
