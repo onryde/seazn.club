@@ -18,11 +18,24 @@
 // the parallel workers are part of what is being exercised.
 //
 // THE NUMBERS. Every reading is parsed off `[data-role="v3-clock-value"]` as a
-// person reads it ("12:41", "45+2:00"), into seconds from kick-off. Two
-// screens are "on one clock" when the two readings, taken together, are within
-// 2 s: one second for the display's whole-second floor on each side, nothing
-// for drift.
-import { test, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
+// person reads it ("12:41", "45+2:00"), into seconds from kick-off, and two
+// readings are taken together. Each screen floors to the whole second, so two
+// clocks less than a second apart read 0 or 1 s apart, and 2 s apart only when
+// the true gap is a second or more. The mid-match test (review I1) holds the
+// two screens to 1 s, the design's "within a second" (§7.2): the late device
+// must re-read the console's anchor through the live server offset, and a
+// re-read that missed by a second would show. The follow tests hold them to
+// 2 s: their claim is that the other screen follows and runs the same clock,
+// and a second's slack there keeps a slow CI worker from reading as a defect.
+//
+// THE WAITS. After each action on one screen, the test first waits for its
+// `football.clock` row in the ledger (an API read, `clockRowLanded`), and only
+// then starts the other screen's FOLLOW_MS. A write that is slow to land and a
+// read that is slow to arrive are then two different failures, and the follow
+// is measured from the write. On a failure the device's `/events` traffic
+// (requests, answers, failures, with times) is attached to the report, so a
+// recurrence names which of the two it was.
+import { test, expect, type APIRequestContext, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { apiJson, expectNoHorizontalScroll, seedRosteredFixture, TAG, type RosteredFixture } from "../helpers";
 import { consentedAnonymousState } from "../scorepad-a11y-kit";
 import { ledger, openLiveConsole, pad, postEvent } from "../scorepad-v3-football-kit";
@@ -43,6 +56,68 @@ const FOLLOW_MS = 2 * padPollMs() + 5_000;
  *  and boot two pads, before anything is measured. */
 const RIG_MS = 90_000;
 const BUDGET_MS = RIG_MS + 6 * FOLLOW_MS + 30_000;
+
+/** How long the acting screen's clock write may take to reach the ledger. */
+const LAND_MS = 20_000;
+
+/** The device's `/events` traffic for the test now running: one line per
+ *  request, answer and failure, with the time. Attached on a failure. */
+let deviceReads: string[] = [];
+
+test.beforeEach(() => {
+  deviceReads = [];
+});
+
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status === testInfo.expectedStatus) return;
+  await testInfo.attach("device-events-traffic", {
+    body: deviceReads.length > 0 ? deviceReads.join("\n") : "(the device made no /events request)",
+    contentType: "text/plain",
+  });
+});
+
+/** Record the device's ledger reads, so a follow that never comes can be told
+ *  apart: no read, a failed read, a read still hanging, or a read without the row. */
+function recordEventsTraffic(device: Page): void {
+  const isEvents = (url: string) => new URL(url).pathname.endsWith("/events");
+  const stamp = () => new Date().toISOString();
+  device.on("request", (r) => {
+    if (isEvents(r.url())) deviceReads.push(`${stamp()} request  ${r.method()} ${r.url()}`);
+  });
+  device.on("response", (r) => {
+    if (isEvents(r.url())) deviceReads.push(`${stamp()} response ${r.status()} ${r.url()} date=${r.headers()["date"] ?? "-"}`);
+  });
+  device.on("requestfailed", (r) => {
+    if (isEvents(r.url())) deviceReads.push(`${stamp()} failed   ${r.url()} ${r.failure()?.errorText ?? ""}`);
+  });
+}
+
+type ClockRow = { seq: number; payload: Record<string, unknown> };
+
+/** The ledger's newest seq, before an action, so `clockRowLanded` waits for a
+ *  row the action wrote and not one already there. */
+async function topSeq(request: APIRequestContext, fixtureId: string): Promise<number> {
+  return Math.max(0, ...(await ledger(request, fixtureId)).map((e) => e.seq));
+}
+
+/** Wait until a `football.clock` row newer than `afterSeq` (and matching
+ *  `matches`, when given) is in the ledger: the acting screen's write landed. */
+async function clockRowLanded(
+  request: APIRequestContext,
+  fixtureId: string,
+  afterSeq: number,
+  what: string,
+  matches: (row: ClockRow) => boolean = () => true,
+): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        (await ledger(request, fixtureId)).filter((e) => e.type === "football.clock" && e.seq > afterSeq && matches(e))
+          .length,
+      { timeout: LAND_MS, message: `${what} must reach the ledger` },
+    )
+    .toBeGreaterThan(0);
+}
 
 /** The handed device's pad. `/score/[token]` renders no `score-pad` wrapper,
  *  so the chassis root is the scope (console-device-live-sync.spec.ts). */
@@ -117,6 +192,7 @@ async function rig(
   // choice so the banner cannot sit over the clock bar.
   const deviceCtx = await browser.newContext({ storageState: await consentedAnonymousState() });
   const device = await deviceCtx.newPage();
+  recordEventsTraffic(device);
   if (skewMs !== 0) {
     await device.clock.install({ time: Date.now() + skewMs });
     await device.clock.resume();
@@ -129,22 +205,29 @@ async function rig(
   return { fx, console: pad(page), device, deviceCtx };
 }
 
-/** Start on one screen, and wait until the other one is running too. */
-async function startOn(from: Screen, other: Screen): Promise<void> {
-  await expect(clockToggle(from)).toHaveText("Start");
+/** Tap the clock toggle on one screen, from `was` to its other word, wait for
+ *  the write to land in the ledger, then wait until the other screen follows. */
+async function toggleOn(page: Page, fx: RosteredFixture, from: Screen, other: Screen, was: "Start" | "Pause"): Promise<void> {
+  const now = was === "Start" ? "Pause" : "Start";
+  await expect(clockToggle(from)).toHaveText(was);
+  const afterSeq = await topSeq(page.request, fx.fixtureId);
   await clockToggle(from).click();
-  await expect(clockToggle(from)).toHaveText("Pause");
-  await expect(clockToggle(other), "the other screen's clock must start too").toHaveText("Pause", {
-    timeout: FOLLOW_MS,
-  });
+  await expect(clockToggle(from)).toHaveText(now);
+  await clockRowLanded(page.request, fx.fixtureId, afterSeq, `the ${was}`, (r) => r.payload.running === (was === "Start"));
+  await expect(clockToggle(other), `the other screen must follow the ${was}`).toHaveText(now, { timeout: FOLLOW_MS });
+}
+
+/** Start on one screen, and wait until the other one is running too. */
+async function startOn(page: Page, fx: RosteredFixture, from: Screen, other: Screen): Promise<void> {
+  await toggleOn(page, fx, from, other, "Start");
 }
 
 test("S2-5 107: Start on the console runs the device pad's clock", async ({ page, browser }) => {
   test.setTimeout(BUDGET_MS);
-  const { console: a, device, deviceCtx } = await rig(page, browser, "Start");
+  const { fx, console: a, device, deviceCtx } = await rig(page, browser, "Start");
   try {
     const b = devicePad(device);
-    await startOn(a, b);
+    await startOn(page, fx, a, b);
     await expect
       .poll(() => gap(a, b), { timeout: FOLLOW_MS, message: "the two screens read one clock, within 2 s" })
       .toBeLessThanOrEqual(2);
@@ -159,15 +242,13 @@ test("S2-5 107: Start on the console runs the device pad's clock", async ({ page
 
 test("S2-5 107: Pause on the device pad stops the console", async ({ page, browser }) => {
   test.setTimeout(BUDGET_MS);
-  const { console: a, device, deviceCtx } = await rig(page, browser, "Pause");
+  const { fx, console: a, device, deviceCtx } = await rig(page, browser, "Pause");
   try {
     const b = devicePad(device);
-    await startOn(a, b);
+    await startOn(page, fx, a, b);
     await page.waitForTimeout(2_000); // let it run, so a stopped clock and a fresh one differ
-    await clockToggle(b).click();
-    await expect(clockToggle(a), "the console must offer Start once the device pauses").toHaveText("Start", {
-      timeout: FOLLOW_MS,
-    });
+    // The console must offer Start once the device pauses.
+    await toggleOn(page, fx, b, a, "Pause");
     const first = await readingOf(a);
     await page.waitForTimeout(1_500);
     const second = await readingOf(a);
@@ -182,13 +263,18 @@ test("S2-5 107: Pause on the device pad stops the console", async ({ page, brows
 
 test("S2-5 107: a Correct on one moves the other", async ({ page, browser }) => {
   test.setTimeout(BUDGET_MS);
-  const { console: a, device, deviceCtx } = await rig(page, browser, "Correct");
+  const { fx, console: a, device, deviceCtx } = await rig(page, browser, "Correct");
   try {
     const b = devicePad(device);
     const before = secondsOf(await readingOf(b));
     expect(before, "the device starts from a reading").toBe(0);
+    const afterSeq = await topSeq(page.request, fx.fixtureId);
     await clockValue(a).click();
     await a.locator('[data-role="v3-clock-plus"]').click();
+    await clockRowLanded(page.request, fx.fixtureId, afterSeq, "the console's +1 min", (r) => {
+      const at = r.payload.at as { elapsed?: unknown } | undefined;
+      return typeof at?.elapsed === "number" && at.elapsed >= 60;
+    });
     await expect
       .poll(async () => secondsOf(await readingOf(b)), {
         timeout: FOLLOW_MS,
@@ -207,7 +293,7 @@ test("S2-5 108: the second half starts at 45:00 on both", async ({ page, browser
   const { fx, console: a, device, deviceCtx } = await rig(page, browser, "Second half");
   try {
     const b = devicePad(device);
-    await startOn(a, b);
+    await startOn(page, fx, a, b);
     // Half-time, through the console's own period sheet.
     await a.locator('[data-tile-id="period"]').click();
     const sheet = a.locator('[data-role="v3-sheet"]');
@@ -225,8 +311,10 @@ test("S2-5 108: the second half starts at 45:00 on both", async ({ page, browser
     // learns of it on its poll (FOLLOW_MS), by which time the half may be
     // half a minute old, so it is held to the SAME clock, in match time
     // (45:SS, never the period's own 0:SS), rather than to a fixed second.
+    const afterSeq = await topSeq(page.request, fx.fixtureId);
     await clockToggle(a).click();
     await expect(clockValue(a)).toHaveText(/^45:0\d$/);
+    await clockRowLanded(page.request, fx.fixtureId, afterSeq, "the second half's Start", (r) => r.payload.running === true);
     await expect(clockToggle(b), "the device's second half must start too").toHaveText("Pause", { timeout: FOLLOW_MS });
     await expect(clockValue(b)).toHaveText(/^45:\d{2}$/);
     await expect
@@ -268,20 +356,18 @@ test("S2-5 108: added time reads 45+2:00", async ({ page, browser }) => {
 
 test("S2-5 107: a device clock five minutes fast still shows the shared time", async ({ page, browser }) => {
   test.setTimeout(BUDGET_MS);
-  const { console: a, device, deviceCtx } = await rig(page, browser, "Skew", 300_000);
+  const { fx, console: a, device, deviceCtx } = await rig(page, browser, "Skew", 300_000);
   try {
     const b = devicePad(device);
     // The device's own clock really is five minutes ahead of the console's.
     const skew = (await device.evaluate(() => Date.now())) - Date.now();
     expect(skew, "page.clock moved the device's Date").toBeGreaterThan(290_000);
-    await startOn(a, b);
+    await startOn(page, fx, a, b);
     await page.waitForTimeout(2_000);
-    await clockToggle(b).click();
-    await expect(clockToggle(a)).toHaveText("Start", { timeout: FOLLOW_MS });
+    await toggleOn(page, fx, b, a, "Pause");
     // The console's Start is a FOREIGN anchor on the device, recorded in
     // server time: read with no offset it would be five minutes ahead.
-    await clockToggle(a).click();
-    await expect(clockToggle(b)).toHaveText("Pause", { timeout: FOLLOW_MS });
+    await startOn(page, fx, a, b);
     await expect
       .poll(() => gap(a, b), { timeout: FOLLOW_MS, message: "the fast device reads the shared time, within 2 s" })
       .toBeLessThanOrEqual(2);
@@ -303,14 +389,10 @@ test("S2-5 107: a pad opened mid-match on a fast device reads the console's matc
   // /events answer has been sampled.
   const { console: a, device, deviceCtx } = await rig(page, browser, "Late", 300_000, async (fx) => {
     const consolePad = pad(page);
+    const afterSeq = await topSeq(page.request, fx.fixtureId);
     await clockToggle(consolePad).click();
     await expect(clockToggle(consolePad)).toHaveText("Pause");
-    await expect
-      .poll(async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "football.clock").length, {
-        timeout: 20_000,
-        message: "the console's Start must be in the ledger before the device opens",
-      })
-      .toBeGreaterThan(0);
+    await clockRowLanded(page.request, fx.fixtureId, afterSeq, "the console's Start, before the device opens");
   });
   try {
     const b = devicePad(device);
