@@ -42,7 +42,7 @@ export interface QuickMatchRow {
   tokenEnc: Uint8Array;
 }
 
-interface QuickMatchDbRow {
+export interface QuickMatchDbRow {
   id: string;
   competition_id: string;
   name: string;
@@ -55,13 +55,15 @@ interface QuickMatchDbRow {
   token_enc: Uint8Array;
 }
 
-const toRow = (r: QuickMatchDbRow): QuickMatchRow => ({
+/** A `quick_matches` row as the app reads it. Exported for its pure test (the locale fallback below). */
+export const toRow = (r: QuickMatchDbRow): QuickMatchRow => ({
   id: r.id,
   competitionId: r.competition_id,
   name: r.name,
   format: r.format,
   email: r.email,
-  // The column is free text (default 'en'); a locale the app no longer speaks reads as the default, never as a broken page.
+  // A locale the app does not speak reads as the default, never as a broken page. V493's check constraint keeps such a
+  // value out of the column; this stays as defence in depth (a locale dropped later would leave old rows behind it).
   locale: toLocale(r.locale),
   lastActivityAt: r.last_activity_at,
   expiresAt: r.expires_at,
@@ -106,6 +108,9 @@ export interface QuickMatchFixture {
   id: string;
   roundNo: number;
   fixtureNo: number;
+  /** fixtures.seq_in_round, 1-based within its round (plan 2 D12): a waiting seat's slot label names its feeder as
+   *  `{round, seq}`, and this is the `seq` half, so the home names the feeder in words instead of the label's own code. */
+  seqInRound: number;
   /** null while the seat is unknown (a bracket seat its feeder has not filled yet, or a bye's empty seat). */
   home: QuickMatchSide | null;
   away: QuickMatchSide | null;
@@ -119,7 +124,14 @@ export interface QuickMatchFixture {
   isFinal: boolean;
   /** The outcome's winner when it names one (an entrant id, lib/outcome-text.ts); null otherwise. */
   winnerEntrantId: string | null;
+  /** Where the match stands for a guest (plan 2 Task 5), decided by the SAME predicates `nextPlayable` reads, so a list
+   *  row's Score and the hero's next can never disagree: `settled` (SETTLED_FIXTURE_STATUSES; a bye's walkover too),
+   *  `live` (in play), `ready` (scheduled, both sides known: C11) or `waiting` (anything else: a side still unknown, C18,
+   *  or a held result no guest can settle, C23). */
+  phase: QuickMatchPhase;
 }
+
+export type QuickMatchPhase = "settled" | "live" | "ready" | "waiting";
 
 export interface QuickMatchHome {
   row: QuickMatchRow;
@@ -148,10 +160,16 @@ export interface QuickMatchHome {
 const byRoundThenNumber = (a: QuickMatchFixture, b: QuickMatchFixture): number =>
   a.roundNo - b.roundNo || a.fixtureNo - b.fixtureNo;
 
-const isLive = (f: QuickMatchFixture): boolean => f.status === "in_play";
+type Seated = Pick<QuickMatchFixture, "status" | "home" | "away">;
+
+const isLive = (f: Seated): boolean => f.status === "in_play";
 /** Scheduled with both sides known (C18: a match whose sides are not yet known cannot be scored). A held level result
  *  (`needs_decision`) is never playable: it waits for an organizer's settle, which C23 keeps unreachable for guests. */
-const isReady = (f: QuickMatchFixture): boolean => f.status === "scheduled" && f.home !== null && f.away !== null;
+const isReady = (f: Seated): boolean => f.status === "scheduled" && f.home !== null && f.away !== null;
+
+/** `QuickMatchFixture.phase`: settled first (a bye's walkover is settled whatever its seats), then live, then ready. */
+const phaseOf = (f: Seated): QuickMatchPhase =>
+  SETTLED_FIXTURE_STATUSES.has(f.status) ? "settled" : isLive(f) ? "live" : isReady(f) ? "ready" : "waiting";
 
 /** The hero's next match (C11): the first by (round, fixture number) in play, else the first scheduled with both sides
  *  known; null when there is none (an empty list included). */
@@ -231,20 +249,26 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
   );
 
   const fixtures = rows
-    .map((r): QuickMatchFixture => ({
-      id: r.id,
-      roundNo: r.round_no,
-      fixtureNo: r.fixture_no,
-      home: sideOf(r.id, r.home_entrant_id),
-      away: sideOf(r.id, r.away_entrant_id),
-      homeSlotLabel: r.home_slot_label,
-      awaySlotLabel: r.away_slot_label,
-      status: r.status,
-      summary: summaries.get(r.id) ?? null,
-      isBye: isBye(r),
-      isFinal: r.is_final === true,
-      winnerEntrantId: winnerOf(r.outcome),
-    }))
+    .map((r): QuickMatchFixture => {
+      const home = sideOf(r.id, r.home_entrant_id);
+      const away = sideOf(r.id, r.away_entrant_id);
+      return {
+        id: r.id,
+        roundNo: r.round_no,
+        fixtureNo: r.fixture_no,
+        seqInRound: r.seq_in_round,
+        home,
+        away,
+        homeSlotLabel: r.home_slot_label,
+        awaySlotLabel: r.away_slot_label,
+        status: r.status,
+        summary: summaries.get(r.id) ?? null,
+        isBye: isBye(r),
+        isFinal: r.is_final === true,
+        winnerEntrantId: winnerOf(r.outcome),
+        phase: phaseOf({ status: r.status, home, away }),
+      };
+    })
     .sort(byRoundThenNumber);
 
   const matches = fixtures.filter((f) => !f.isBye);
