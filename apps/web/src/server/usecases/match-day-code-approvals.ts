@@ -283,8 +283,8 @@ export async function reviewApprovalForCode(code: MatchDayCodeRow, kind: Approva
  * Approve what the review showed (§7 "Approve"): Swiss — pair `round` if `hash` still describes its inputs; draw —
  * confirm the proposal `hash` with no edits and no tie picks. The first of two phones wins; the second is MD_ALREADY.
  * Refusals: MD_NO_APPROVE (no tick, or the division's schedule locked), MD_OUT_OF_SCOPE, MD_STALE, MD_ALREADY, MD_TIES;
- * 404 for an unknown stage or proposal; 422 for a Swiss approve without a whole `round`, or a kind the stage has not. Each approve writes one `match_day_code_uses` row once it has committed
- * (a refusal writes none).
+ * 404 for an unknown stage or proposal; 422 for a Swiss approve without a whole `round`, or a kind the stage has not.
+ * Each approve writes one `match_day_code_uses` row once it has committed (a refusal writes none).
  */
 export async function approveForCode(
   code: MatchDayCodeRow,
@@ -309,7 +309,7 @@ export async function approveForCode(
 /**
  * The approval's use row (spec §3), after the approval committed, on the pooled client (the use log is sealed): the stage
  * usecases own their transactions, so the row cannot be in the approval's own one (the controller's ruling, Task 6 fix
- * round 1: keep it after the commit, never widen the privilegedEpilogue allow-list). A pino line first (review M1), so a
+ * round 1: keep it after the commit, never widen the privileged epilogue's allow-list). A pino line first (review M1), so a
  * crash before the insert still leaves a trace on the server; an insert that fails is a warning, never the approval's
  * answer — the approval has committed, and a 500 would send the phone to MD_ALREADY on its retry.
  */

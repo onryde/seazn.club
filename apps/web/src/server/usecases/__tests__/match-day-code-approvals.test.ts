@@ -19,6 +19,7 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers(),
 }));
 
+import { EngineError } from "@seazn/engine/core";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
@@ -606,5 +607,31 @@ describe("mdRefusalOf: what leaves an md_ route (fix round 2)", () => {
   it("a coded 4xx with no md_ word keeps its status and loses its word", () => {
     const out = mdRefusalOf(asked, new HttpError(400, "bad", "SOMETHING_ELSE")) as HttpError;
     expect({ status: out.status, code: out.code }).toEqual({ status: 400, code: undefined });
+  });
+  it("the 4xx/5xx boundary: a coded 499 keeps its status with no word, a coded 500 is a fault with its cause (review M-b)", () => {
+    const at499 = mdRefusalOf(asked, new HttpError(499, "edge", "EDGE_4XX")) as HttpError;
+    expect({ status: at499.status, code: at499.code, cause: at499.cause }).toEqual({ status: 499, code: undefined, cause: undefined });
+    const upstream = new HttpError(500, "broke", "EDGE_5XX");
+    const at500 = mdRefusalOf(asked, upstream) as HttpError;
+    expect({ status: at500.status, code: at500.code }).toEqual({ status: 500, code: "INTERNAL" });
+    expect(at500.cause).toBe(upstream);
+  });
+  it("an engine error is put in md_ words by its ENGINE_HTTP status: STAGE_NOT_READY is MD_STALE (review M-b)", () => {
+    const out = mdRefusalOf(asked, new EngineError("STAGE_NOT_READY", "round in play")) as HttpError;
+    expect(out).toBeInstanceOf(HttpError);
+    expect({ status: out.status, code: out.code }).toEqual({ status: 409, code: "MD_STALE" });
+  });
+  it("SCHEDULE_LOCKED raised at 409 (the plan gates') is still MD_NO_APPROVE, 403, not MD_STALE (review M-b)", () => {
+    const out = mdRefusalOf(asked, new HttpError(409, "locked", "SCHEDULE_LOCKED")) as HttpError;
+    expect({ status: out.status, code: out.code }).toEqual({ status: 403, code: "MD_NO_APPROVE" });
+  });
+  it("a fault's warning carries ids only", () => {
+    const warn = vi.spyOn(log, "warn");
+    try {
+      mdRefusalOf(asked, new HttpError(503, "upstream down", "SOMETHING_UPSTREAM"));
+      expect(warn.mock.calls.at(-1)![0]).toEqual({ ...asked, upstream: "SOMETHING_UPSTREAM", status: 503 });
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
