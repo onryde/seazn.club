@@ -167,6 +167,7 @@ describe("knockoutUpdateDrawOffered", () => {
     stage: { kind: "knockout", progression: null, config: { thirdPlace: false } },
     divisionStatus: "setup",
     fixtureCount: 7,
+    matchesBegun: 0,
     rosterDrifted: true,
   };
   it("a root knockout with lines, before Start, whose roster moved: offered", () => {
@@ -183,12 +184,13 @@ describe("knockoutUpdateDrawOffered", () => {
       ["a division status the panel does not know", { ...offering, divisionStatus: undefined as never }],
       ["no lines yet (a first Generate is the ordinary one)", { ...offering, fixtureCount: 0 }],
       ["the roster unchanged", { ...offering, rosterDrifted: false }],
+      ["a real match (byes out) already begun", { ...offering, matchesBegun: 1 }],
     ];
     let checked = 0;
     for (const [why, input] of flips) {
       expect(knockoutUpdateDrawOffered(input), why).toBe(false);
       checked++;
     }
-    expect(checked).toBe(9);
+    expect(checked).toBe(10);
   });
 });

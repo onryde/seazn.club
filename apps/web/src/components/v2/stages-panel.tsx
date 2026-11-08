@@ -1544,6 +1544,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           stage,
           divisionStatus,
           fixtureCount: stageFixtures.length,
+          // Byes out: a bye line is stored `forfeited`, so `counts.played` reads every bracket with a bye as begun.
+          matchesBegun: stageFixtures.filter((f) => !isBye(toRunSheetFixture(f)) && f.status !== "scheduled").length,
           rosterDrifted: hasDrift,
         });
         // The stage's required court tags: built ONCE and drawn once, at the card's foot, for an editor and a viewer alike (Match Day E1

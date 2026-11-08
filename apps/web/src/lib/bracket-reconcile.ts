@@ -135,12 +135,16 @@ const DIVISION_STARTED: readonly string[] = ["active", "completed"];
  * panel's `getStageRosterDrift` answer has a ghost or an unplaced entrant). Its first Generate made the stage `active`, so the
  * not-started rule alone hid Generate and the in-place reconcile could not be reached from the desk. Once the division has
  * started it is hidden: a departure is then the withdrawal cascade's, an arrival is refused (D8-1). An unknown division status
- * hides it too — the panel never offers a write on a guess.
+ * hides it too — the panel never offers a write on a guess. So does a real match (a bye is not one) that is no longer
+ * waiting to be played (`matchesBegun`): a draw is never redone under a result. Byes are left out because a bye line is
+ * stored `forfeited` with its award, so a stage's counts read every bracket with a bye as played.
  */
 export function knockoutUpdateDrawOffered(args: {
   stage: { kind: string; progression: unknown; config: unknown };
   divisionStatus: string | undefined;
   fixtureCount: number;
+  /** The stage's real matches (byes out, `isBye`) whose status is no longer `scheduled`. */
+  matchesBegun: number;
   rosterDrifted: boolean;
 }): boolean {
   const { stage } = args;
@@ -148,5 +152,5 @@ export function knockoutUpdateDrawOffered(args: {
   const config = stage.config;
   if (typeof config === "object" && config !== null && Array.isArray((config as { qualified?: unknown }).qualified)) return false;
   if (args.divisionStatus === undefined || DIVISION_STARTED.includes(args.divisionStatus)) return false;
-  return args.fixtureCount > 0 && args.rosterDrifted;
+  return args.fixtureCount > 0 && args.matchesBegun === 0 && args.rosterDrifted;
 }

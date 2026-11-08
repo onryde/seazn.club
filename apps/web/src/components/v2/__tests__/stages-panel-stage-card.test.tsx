@@ -967,7 +967,10 @@ describe("the stage's fixtures are in the card (item 9)", () => {
 // its own `rosterDrift` and `divisionStatus` props decide (lib/bracket-reconcile.ts `knockoutUpdateDrawOffered`), and the rail draws
 // the same `stage-generate` control, worded "Update draw".
 describe("Update draw: a knockout whose roster moved before Start offers Generate again - through the real panel", () => {
-  const KO_FIXTURES = [1, 2, 3].map((no) => fixture(A, no));
+  // As the product stores a bracket of seven: a bye line is `forfeited` with its award (the holder walks on), so a stage's
+  // counts read it as played — the e2e on next dev found the first version of this offer hidden by exactly that.
+  const BYE = { ...fixture(A, 1, { status: "forfeited", outcome: { kind: "award", winner: "e1", loser: null, reason: "bye" } }), away_entrant_id: null };
+  const KO_FIXTURES = [BYE, fixture(A, 2), fixture(A, 3)];
   const drifted = { [A]: { ghosts: [{ id: "e9", display_name: "Gone" }], unplaced: [], attachments: { officials: 0, lineups: 0, deviceLinks: 0 } } };
   const quiet = { [A]: { ghosts: [], unplaced: [], attachments: { officials: 0, lineups: 0, deviceLinks: 0 } } };
   const ko = (over: Record<string, unknown>) =>
@@ -986,13 +989,15 @@ describe("Update draw: a knockout whose roster moved before Start offers Generat
       ["division started", { rosterDrift: drifted, divisionStatus: "active" }],
       ["division finished", { rosterDrift: drifted, divisionStatus: "completed" }],
       ["a league", { rosterDrift: drifted, divisionStatus: "setup", stages: [stageRow({ name: "League" })], stageTableRules: { [A]: tableRulesOf(sport("badminton"), "league") } }],
+      ["a real match already decided", { rosterDrift: drifted, divisionStatus: "setup", fixtures: [BYE, fixture(A, 2, { status: "decided", outcome: DECIDED }), fixture(A, 3)] }],
+      ["a real match being scored", { rosterDrift: drifted, divisionStatus: "setup", fixtures: [BYE, fixture(A, 2, { status: "in_play" }), fixture(A, 3)] }],
     ];
     let checked = 0;
     for (const [why, over] of cases) {
       expect(tag(ko(over), "stage-generate"), why).toBeNull();
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(6);
   });
 });
 

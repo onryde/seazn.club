@@ -258,8 +258,10 @@ const isCount = (n: unknown): n is number => typeof n === "number" && Number.isI
  * - **Generate** leads a stage that has not started and has no round to pair, and is offered on no other: once the stage has
  *   started - it left `pending`, or a match is already played or being scored (contradictory input counts as started, so
  *   Generate, which builds fixtures, is never offered over a result) - it is gone. One exception (W4 B2 fix round 1, item 6):
- *   `updateDraw` brings it back, as the lead, on a stage with fixtures and no match played or being scored - a root knockout's
- *   first Generate made it `active`, and its roster moved before the division started ("Update draw").
+ *   `updateDraw` brings it back, as the lead, on a stage with fixtures and no match being scored - a root knockout's first
+ *   Generate made it `active`, and its roster moved before the division started ("Update draw"). `played` is not asked: a
+ *   bye line is stored `forfeited`, so every bracket with a bye counts one played; the panel's `knockoutUpdateDrawOffered`
+ *   already rules out a REAL match begun, byes out.
  * - **Complete** is offered once the stage has started and has fixtures, always in the menu or as the lead, and ENABLED only
  *   when no match is open (`inPlay + unplayed === 0`): "Complete stage unlocks when all N matches are played". It leads only
  *   then, and only when no round waits to be paired. While any match is open it is present but disabled, so the card shows
@@ -285,7 +287,7 @@ export function stageActions(s: StageActionInput): { primary: StageButton | null
 
   let primary: StageButton | null = null;
   if (pairing) primary = on("pair_next");
-  else if (!started || (s.updateDraw && s.hasFixtures && s.played + s.inPlay === 0)) primary = on("generate");
+  else if (!started || (s.updateDraw && s.hasFixtures && s.inPlay === 0)) primary = on("generate");
   else if (s.hasFixtures && nothingOpen) primary = on("complete");
 
   const secondary: StageButton[] = [];

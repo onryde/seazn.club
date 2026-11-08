@@ -629,7 +629,9 @@ describe("stageActions", () => {
                     // Generate: before the start, and not in place of a round to pair. W4 B2 fix round 1 (item 6): also on a stage
                     // the panel says owes an Update draw (a root knockout whose roster moved before the DIVISION started), so
                     // long as no match on it is played or being scored — a draw is never redone under a result.
-                    const updateOwed = updateDraw && hasFixtures && played + inPlay === 0;
+                    // A bye is stored `forfeited` and counts as played, so `played` cannot say "a result exists" for a bracket:
+                    // the panel's own answer (`knockoutUpdateDrawOffered`, byes out) does; stageActions keeps only the in-play bar.
+                    const updateOwed = updateDraw && hasFixtures && inPlay === 0;
                     expect(actions.includes("generate"), at).toBe(live && (!started || updateOwed) && !pairing);
                     if (live && updateOwed && !pairing) expect(got.primary?.action, `${at}: Update draw leads`).toBe("generate");
                     // Pair next: whenever a round waits and the stage has fixtures; it leads.
@@ -681,9 +683,11 @@ describe("stageActions", () => {
     it("no drift: the active stage offers no Generate (the old answer)", () => {
       expect(of({ ...ko, updateDraw: false })).toEqual({ primary: null, secondary: [off("complete")] });
     });
-    it("a match on the stage played or being scored: no Generate, drift or not", () => {
-      expect(named(of({ ...ko, unplayed: 6, played: 1, updateDraw: true }))).not.toContain("generate");
+    it("a match being scored: no Generate, drift or not", () => {
       expect(named(of({ ...ko, unplayed: 6, inPlay: 1, updateDraw: true }))).not.toContain("generate");
+    });
+    it("a bracket with a bye (stored forfeited, counted as played): Update draw still leads — the panel already ruled out a real result", () => {
+      expect(of({ ...ko, unplayed: 6, played: 1, updateDraw: true })).toEqual({ primary: on("generate"), secondary: [off("complete")] });
     });
     it("a complete stage offers nothing, drift or not", () => {
       expect(of({ ...ko, status: "complete", unplayed: 0, played: 7, updateDraw: true })).toEqual({ primary: null, secondary: [] });
