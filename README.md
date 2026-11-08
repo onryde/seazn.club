@@ -185,9 +185,17 @@ deploy missing one starts and serves until then. The relay block of the root
 **Deploy step — sponsors on stream (R4).** Sponsor airings and proof frames stay off until
 web's `RELAY_AIRINGS=1`, which web copies into every composed Machine's env
 (`server/relay/runner-fly.ts`). Set it as a Fly secret on the **web** app only after, in this
-order: R4 PR A (web) is deployed; the **private** Supabase Storage bucket `sponsor-frames`
-exists; and the compositor carrying R4 PR C is deployed and named by `RELAY_IMAGE`. Before
-that, leave it unset — a Machine without it sends no airings and grabs no frames, so the
+order:
+
+1. R4 PR A (web) is deployed.
+2. The **private** Supabase Storage bucket `sponsor-frames` exists.
+3. The compositor carrying R4 PR C is deployed and named by `RELAY_IMAGE`.
+4. **Prod only:** the frame grab's CPU cost has been measured on stg, where `RELAY_AIRINGS=1`
+   is already set: the composed Machine's CPU p95 on a stream with a ticked sponsor, against
+   the same stream without one. Any measurable p95 rise goes to the owner before prod is set
+   (spec §3.6.3).
+
+Before that, leave it unset — a Machine without it sends no airings and grabs no frames, so the
 report's "Times shown" stays 0. Streams already running keep the env they booted with.
 
 **Rollback step.** Before rolling web back past R4 PR A, unset `RELAY_AIRINGS` on web and let the composed streams

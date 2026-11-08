@@ -204,8 +204,9 @@ Counted from **composed streams only** in the MVP (D10):
    2026-11-01, S8 m2)*. The final beat flushes.
 3. **Frame grab (compositor):** 1.5 s after a `start` line, grab one programme frame, JPEG 640×360 q≈75, off the
    streaming thread, ≤ 1 per 20 s; `POST /api/internal/relay/sessions/[sid]/airings/[momentId]/frame` with the session
-   token. A failure logs once and is dropped; it never blocks the pipeline. CPU cost measured on stg before merge; a
-   measurable p95 rise goes to the owner.
+   token. A failure logs once and is dropped; it never blocks the pipeline. CPU cost measured on stg before
+   `RELAY_AIRINGS=1` on prod (not before merge: a Machine without it grabs no frame, so there is nothing to measure until
+   stg sets it); a measurable p95 rise goes to the owner *(amended 2026-11-08, final review 2 m4)*.
 4. **Web:** `heartbeat` upserts `sponsor_airings` on `(session_id, moment_id)`. Times > 10 min from server time are
    refused. An airing with no `end` by session end closes at the last beat and is flagged `ended_estimated`.
 5. **Viewers:** on `start`, if the broadcast came from YouTube Connect (r2-youtube's table), read
