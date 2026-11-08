@@ -124,6 +124,7 @@ import {
 import { swissLegendRound, swissStageLegend, swissLegendText } from "@/lib/swiss-legend";
 import { lateEntryNoticeText, swissLatecomerCounts, swissLatecomerLines } from "@/lib/swiss-late-entry-notice";
 import { swissCutDriftOf, swissCutDriftText, type SwissCutDrift } from "@/lib/swiss-cut-drift";
+import { knockoutCutDriftOf, knockoutCutDriftText, type KnockoutCutDrift } from "@/lib/knockout-cut-drift";
 // Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI") — the
 // split button's menu. Client-safe leaves only: never the
 // `@seazn/engine/scheduling` barrel (the whole solver; `@seazn/scheduler` is the grpc side).
@@ -482,6 +483,9 @@ interface Props {
    *  (`getSwissCutDrift`, read by the division page for an organiser on this tab; a stage with no drift is absent). Drives
    *  the amber "the bracket stands" notice in that stage's card. Optional: absent ⇒ none (a viewer; the older panel tests). */
   swissCutDrift?: Readonly<Record<string, SwissCutDrift>>;
+  /** W4 T14 (RB4-Q5, X-QM-4): who a correction inside a completed knockout moved across its cut, by stage id, once the stage
+   *  it feeds has started (`getKnockoutCutDrift`). Absent, or no entry: no notice. */
+  knockoutCutDrift?: Readonly<Record<string, KnockoutCutDrift>>;
   /** Match Day B2 (spec 2026-10-31 §9): Match Day's address, handed down ONLY on a match day to an organiser who can edit (the
    *  division page asks the one `needsYouHome` rule the competition page's Open Match Day asks). The run sheet's unscheduled
    *  rows then carry "Find a court" (the word follows `sportKey`: pitch, table, board, rink). null/absent ⇒ not a match day: no link. */
@@ -606,7 +610,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1543,6 +1547,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // W3 T17 (RB3-19): the cut-drift warning this card carries, if any - the ONE predicate (`swissCutDriftOf`) the page's
         // `attentionStageIds` is built from too, so the card that has the notice is the card that starts open.
         const cutDrift = swissCutDriftOf(stage, canEdit, swissCutDrift);
+        const knockoutDrift = knockoutCutDriftOf(stage, canEdit, knockoutCutDrift);
         // F3 Task 5 (5a) — only ever non-empty for the one stage
         // getStageRosterDrift finds eligible (usecases/stages.ts); every
         // other stage's entry is absent or both arrays empty, so this is a
@@ -1807,6 +1812,19 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   >
                     <p className="min-w-0 break-words text-xs font-medium leading-relaxed text-amber-900">
                       {swissCutDriftText(cutDrift, entrantNames, locale, msgPlural)}
+                    </p>
+                  </div>
+                )}
+                {/* W4 T14 (RB4-Q5, X-QM-4): the same notice for a corrected knockout, whose bracket stands once the stage it feeds has
+                    started (before that, the correction re-proposes it). Same treatment, same place, same fold rule. */}
+                {knockoutDrift && (
+                  <div
+                    role="status"
+                    data-testid="knockout-cut-drift-warning"
+                    className="border-b border-dashed border-amber-200 bg-amber-50 px-4 py-3"
+                  >
+                    <p className="min-w-0 break-words text-xs font-medium leading-relaxed text-amber-900">
+                      {knockoutCutDriftText(knockoutDrift, entrantNames, locale, msgPlural)}
                     </p>
                   </div>
                 )}

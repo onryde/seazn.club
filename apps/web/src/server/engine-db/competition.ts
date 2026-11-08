@@ -889,6 +889,89 @@ export interface CompleteResult {
   events: DivisionEvent[];
 }
 
+/** A bracket stage's engine shape, read for Complete and for a correction after it (`refreshCompletedBracketPlacement`).
+ *
+ *  Seeds matter here: bracketRanks's rankRest tiebreak cascade is elimination-round first, seed SECOND (and only then a
+ *  stable id fallback) — the exact path a thirdPlace playoff that hasn't been played yet falls back to for ranks 3/4 (see
+ *  the "never masquerades" regression test below). Omitting seeds — the same optional-field pattern toTableStage already
+ *  uses — would silently degrade that tiebreak to raw entrant-id comparison. */
+async function readBracketStage(
+  tx: Tx,
+  inputs: StageInputs,
+  stageId: string,
+): Promise<{ bracketStage: BracketStage; bracketFixtures: BracketFixture[] }> {
+  const bracketStage: BracketStage = {
+    id: stageId,
+    kind: inputs.kind as BracketStage["kind"],
+    ...(inputs.seeds.size > 0 ? { seeds: inputs.seeds } : {}),
+  };
+  const seats = new Map(inputs.fixtures.map((f) => [f.id, [f.home_entrant_id, f.away_entrant_id] as const]));
+  const bracketFixtures: BracketFixture[] = inputs.fixtures.map((f) => toBracketFixture(f, inputs.kind, (id) => seats.get(id) ?? null));
+  // Refine: only fixtures with no onward winner feed are finals (a
+  // fixture whose winner feeds nowhere is the bracket's deciding game).
+  const feeders = await tx<{ id: string }[]>`
+    select id from fixtures where stage_id = ${stageId} and winner_to_fixture is not null
+  `;
+  const feederIds = new Set(feeders.map((r) => r.id));
+  for (const bf of bracketFixtures) if (feederIds.has(bf.id)) bf.isFinal = false;
+  return { bracketStage, bracketFixtures };
+}
+
+/** D-G1: entrants still in the field who neither lost a settled line nor won a final. `bracketRanks` would rank them LAST:
+ *  an unbeaten field entrant who won no final means the deciding game decided nobody. */
+function unbeatenWithNoTitle(inputs: StageInputs, bracketFixtures: readonly BracketFixture[]): string[] {
+  const lost = new Set<string>();
+  const finalWinners = new Set<string>();
+  for (const bf of bracketFixtures) {
+    if (!SETTLED_FIXTURE_STATUSES.has(bf.status)) continue;
+    if (bf.loser !== undefined) lost.add(bf.loser);
+    // PF-5 (X-DW-2): both entrants of a double walkover are out, beaten by absence.
+    if (bf.walkedOver === "both") for (const id of [bf.home, bf.away]) if (id !== undefined) lost.add(id);
+    if (bf.isFinal === true && bf.winner !== undefined) finalWinners.add(bf.winner);
+  }
+  return inputs.entrants.filter((id) => inputs.field.has(id) && !lost.has(id) && !finalWinners.has(id));
+}
+
+/** W4 T14 (X-QM-4): is this bracket decided right now? A stage's `status` never goes back from `complete` (nothing reopens
+ *  one), so a completed knockout whose final an organiser has voided still READS complete while it holds no result. Its
+ *  stored ranks are then the OLD ones, and a proposal read from them would seat a cut nobody can vouch for: the seeding path
+ *  asks this as well as the status (stage-seeding.ts `sourcesToTables`). */
+export async function bracketStageIsDecided(tx: Tx, stageId: string): Promise<boolean> {
+  const inputs = await loadStageInputs(tx, stageId);
+  if (!isBracketKind(inputs.kind)) throw new Error(`bracketStageIsDecided: stage ${stageId} is a ${inputs.kind}, not a bracket`);
+  const { bracketStage, bracketFixtures } = await readBracketStage(tx, inputs, stageId);
+  return isBracketStageComplete(bracketStage, bracketFixtures);
+}
+
+/**
+ * W4 T14 (FX-G16, X-QM-4): a correction inside a COMPLETED knockout rewrites its stored ranks. A table stage re-folds on
+ * every decision (`recomputeStandings`, usecases/scoring.ts); a bracket wrote its placement snapshot once, at completion,
+ * and `completeStageIfReady` is a no-op from then on — so a corrected result moved the bracket and never the ranks every
+ * reader of the stage takes (the seed proposal, the lucky-loser cut, the public final placings).
+ *
+ * Writes only when the bracket is decided again (mid-correction its old ranks stand until the replay ends, and the seeding
+ * path refuses to read them, `bracketStageIsDecided`) and only when the ranks moved. The same computation as Complete's, and
+ * the same D-G1 refusal: never a snapshot with a champion last. Knockout only — the kinds W4 owns; `stage_completed` in the
+ * division's events stays what it was, the fact of that completion. Returns whether the stored ranks moved.
+ */
+export async function refreshCompletedBracketPlacement(orgId: string, stageId: string): Promise<boolean> {
+  return withTenant(orgId, async (tx) => {
+    const inputs = await loadStageInputs(tx, stageId);
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + inputs.stage.division_id}))`;
+    if (inputs.stage.status !== "complete" || inputs.kind !== "knockout") return false;
+    const { bracketStage, bracketFixtures } = await readBracketStage(tx, inputs, stageId);
+    if (!isBracketStageComplete(bracketStage, bracketFixtures)) return false;
+    if (unbeatenWithNoTitle(inputs, bracketFixtures).length > 0) return false;
+    const rows = placementTable(completeBracketStage(bracketStage, bracketFixtures).finalRanks).rows;
+    const [stored] = await tx<{ rows: readonly StandingsRow[] }[]>`
+      select rows from standings_snapshots where stage_id = ${stageId} and pool_id is null`;
+    const ranksOf = (list: readonly StandingsRow[]) => JSON.stringify(list.map((r) => [r.entrantId, r.rank]));
+    if (stored !== undefined && ranksOf(stored.rows) === ranksOf(rows)) return false;
+    await writeSnapshot(tx, stageId, null, rows, inputs.division.seq);
+    return true;
+  });
+}
+
 /**
  * If a stage's completion predicate holds (spec 05 §1), mark it complete, cache
  * its final placement snapshot(s), and record the structural division_events
@@ -986,27 +1069,7 @@ export async function completeStageIfReady(
       events = [{ type: "stage_completed", stageId, finalRanks }];
       await writeSnapshot(tx, stageId, null, placementTable(finalRanks).rows, inputs.division.seq);
     } else if (isBracketKind(inputs.kind)) {
-      // Seeds matter here: bracketRanks's rankRest tiebreak cascade is
-      // elimination-round first, seed SECOND (and only then a stable id
-      // fallback) — the exact path a thirdPlace playoff that hasn't been
-      // played yet falls back to for ranks 3/4 (see the "never masquerades"
-      // regression test below). Omitting seeds — the same optional-field
-      // pattern toTableStage already uses — would silently degrade that
-      // tiebreak to raw entrant-id comparison.
-      const bracketStage: BracketStage = {
-        id: stageId,
-        kind: inputs.kind,
-        ...(inputs.seeds.size > 0 ? { seeds: inputs.seeds } : {}),
-      };
-      const seats = new Map(inputs.fixtures.map((f) => [f.id, [f.home_entrant_id, f.away_entrant_id] as const]));
-      const bracketFixtures: BracketFixture[] = inputs.fixtures.map((f) => toBracketFixture(f, inputs.kind, (id) => seats.get(id) ?? null));
-      // Refine: only fixtures with no onward winner feed are finals (a
-      // fixture whose winner feeds nowhere is the bracket's deciding game).
-      const feeders = await tx<{ id: string }[]>`
-        select id from fixtures where stage_id = ${stageId} and winner_to_fixture is not null
-      `;
-      const feederIds = new Set(feeders.map((r) => r.id));
-      for (const bf of bracketFixtures) if (feederIds.has(bf.id)) bf.isFinal = false;
+      const { bracketStage, bracketFixtures } = await readBracketStage(tx, inputs, stageId);
 
       if (!isBracketStageComplete(bracketStage, bracketFixtures)) {
         return { completed: false, events: [] };
@@ -1021,16 +1084,7 @@ export async function completeStageIfReady(
       // a stepladder qualifier departed before the draw, her final voided with her seated in it and the climber
       // seated into the void row — is gone too: W2b's generator stamps her seat dead instead (spec §5.4 corner 3,
       // X-WD-3), and the climber walks over it. Refuse, never snapshot a champion last.
-      const lost = new Set<string>();
-      const finalWinners = new Set<string>();
-      for (const bf of bracketFixtures) {
-        if (!SETTLED_FIXTURE_STATUSES.has(bf.status)) continue;
-        if (bf.loser !== undefined) lost.add(bf.loser);
-        // PF-5 (X-DW-2): both entrants of a double walkover are out, beaten by absence.
-        if (bf.walkedOver === "both") for (const id of [bf.home, bf.away]) if (id !== undefined) lost.add(id);
-        if (bf.isFinal === true && bf.winner !== undefined) finalWinners.add(bf.winner);
-      }
-      const unranked = inputs.entrants.filter((id) => inputs.field.has(id) && !lost.has(id) && !finalWinners.has(id));
+      const unranked = unbeatenWithNoTitle(inputs, bracketFixtures);
       if (unranked.length > 0) {
         // W2b PF-9 / D11 (spec §5.4 corner 3): where the line that decided nobody still SEATS a departed entrant, the
         // refusal is named — which entrant, which match — so the organiser knows the one match to record. (A row

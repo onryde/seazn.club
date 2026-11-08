@@ -3638,6 +3638,8 @@ export type DictionaryKey =
   | "knockout.champion"
   | "knockout.championLine"
   | "knockout.championLineWalkover"
+  | "knockout.cutDrift.warning.one"
+  | "knockout.cutDrift.warning.other"
   | "knockout.drawLabel"
   | "knockout.feederLoser"
   | "knockout.feederLoserOnly"

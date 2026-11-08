@@ -17,6 +17,7 @@ import { epochFloorOverrideOrOff, judgeEngineEpoch } from "./engine-epoch-overri
 import { appendEvent, replayOutcomeFor, resolveModule, rulesVersionNow } from "@/server/engine-db";
 import type { CascadeWriter } from "@/server/engine-db/append-event";
 import { recomputeStandings } from "@/server/engine-db";
+import { refreshCompletedBracketPlacement } from "@/server/engine-db/competition";
 import { advancingSides, lockStageSeats } from "@/server/engine-db/fed-seats";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { log } from "@/server/logger";
@@ -1001,12 +1002,13 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
         ext_key: string | null;
         stage_config: Record<string, unknown>;
         division_id: string;
+        stage_status: string;
       }[]
     >`
       select f.outcome, f.status, f.stage_id, f.pool_id, f.home_entrant_id, f.away_entrant_id,
              f.winner_to_fixture, f.winner_to_slot,
              f.loser_to_fixture, f.loser_to_slot, s.kind, f.ext_key,
-             s.config as stage_config, s.division_id
+             s.config as stage_config, s.division_id, s.status as stage_status
       from fixtures f join stages s on s.id = f.stage_id
       where f.id = ${fixtureId}`;
     if (!fixture) return null;
@@ -1142,6 +1144,18 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     // overrideStandings call site: never blocks a score write that already
     // committed.
     await markDependentSeedProposalsStale(auth, context.stage_id);
+  }
+  // W4 T14 (FX-G16, FX-G18, X-QM-4, RB4-Q5): the same correction inside a COMPLETED knockout, which stored its ranks once at
+  // completion. They are rewritten once it is decided again, and the proposals it seeds answer for it, a confirmed one too:
+  // the seats go back before the destination starts, and the lines they empty ride this score's DEL and push. Best-effort
+  // like the table path above: the score already committed, and a failure here must not read as its failure.
+  if (context?.kind === "knockout" && context.stage_status === "complete") {
+    try {
+      await refreshCompletedBracketPlacement(auth.orgId, context.stage_id);
+      advanced.push(...(await markDependentSeedProposalsStale(auth, context.stage_id, { includeConfirmed: true })));
+    } catch (err) {
+      log.error({ err, stageId: context.stage_id }, "scoring: a corrected knockout's proposals did not update (score write unaffected)");
+    }
   }
   // Auto-advance (Jul3/08 §5, 16 Sep): when the flag is on and the stage just
   // finished, progression fires without a button.

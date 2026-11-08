@@ -37,7 +37,7 @@ import { HttpError } from "@/lib/errors";
 import { luckyLoserOrder } from "@/lib/lucky-loser";
 import { swissDrawSeed } from "@/lib/swiss-draw";
 import { CUT_SKIPS_DEPARTED_KINDS } from "@/lib/table-withdrawal";
-import { loadCrossGroupRules } from "@/server/engine-db/competition";
+import { bracketStageIsDecided, loadCrossGroupRules } from "@/server/engine-db/competition";
 import { persistLotsDraws } from "@/server/engine-db/table-rules";
 import { LUCKY_LOSER_SOURCE_KINDS, luckyLoserPool, qualifiersOfCut, rankCutOf } from "./lucky-loser";
 import { poolCount, POOL_KEYS, BRACKET_KINDS, REAL_TABLE_KINDS, loadBracketFixtures, americanoPlacementTables, departedEntrantIds } from "./stages";
@@ -357,7 +357,9 @@ export async function sourcesToTables(
   const resolved: { id: string; kind: string; status: string }[] = [];
   for (const s of sources) {
     const source = await resolveProgressionSource(tx, target, s.stage);
-    if (source.status !== "complete") {
+    // W4 T14 (X-QM-4): a completed knockout with a decision taken back still reads `complete` (nothing reopens a stage), and
+    // its stored ranks are the ones the correction is about to change: nothing is seeded from them until it is decided again.
+    if (source.status !== "complete" || (source.kind === "knockout" && !(await bracketStageIsDecided(tx, source.id)))) {
       throw new HttpError(409, "the source stage isn't complete yet", "SEEDING_SOURCE_INCOMPLETE", {
         sourceStageId: source.id,
       });

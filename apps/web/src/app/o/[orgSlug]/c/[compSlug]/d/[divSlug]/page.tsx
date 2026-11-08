@@ -29,6 +29,8 @@ import { formatLockedStageIds } from "@/server/usecases/stage-rules";
 import { listSwissRoundControls } from "@/server/usecases/swiss-rounds-admin";
 import { getSwissCutDrift } from "@/server/usecases/swiss-cut-drift";
 import { swissCutDriftStageIds } from "@/lib/swiss-cut-drift";
+import { getKnockoutCutDrift } from "@/server/usecases/knockout-cut-drift";
+import { knockoutCutDriftStageIds } from "@/lib/knockout-cut-drift";
 import { divisionLockedFields } from "@/server/usecases/rule-locks";
 // From the DB-free module, not through the server-only usecase above: this
 // page's tests mock `@/server/usecases/stages` wholesale, and a mocked
@@ -391,6 +393,19 @@ export default async function DivisionPage({
             stages
               .filter((s) => s.kind === "swiss" && s.status === "complete")
               .map(async (s) => [s.id, await getSwissCutDrift(auth, s.id)] as const),
+          )
+        ).flatMap(([stageId, drift]) => (drift === null ? [] : [[stageId, drift] as const]))
+      : [],
+  );
+  // W4 T14 (RB4-Q5, X-QM-4): the same warning on a COMPLETED knockout whose correction moved its cut after the stage it
+  // feeds started. Absent from the map until then, and read on the same tab, for the same reader.
+  const knockoutCutDrift = Object.fromEntries(
+    tab === "fixtures" && editable
+      ? (
+          await Promise.all(
+            stages
+              .filter((s) => s.kind === "knockout" && s.status === "complete")
+              .map(async (s) => [s.id, await getKnockoutCutDrift(auth, s.id)] as const),
           )
         ).flatMap(([stageId, drift]) => (drift === null ? [] : [[stageId, drift] as const]))
       : [],
@@ -1043,10 +1058,11 @@ export default async function DivisionPage({
               divisionStatus={division.status}
               swissRoundControls={swissRoundControls}
               swissCutDrift={swissCutDrift}
+              knockoutCutDrift={knockoutCutDrift}
               // Match Day PB1 x W3 T17: a COMPLETED stage's card starts as one line, and the cut-drift warning lives on a completed
-              // Swiss - so the cards that carry it are listed here and start open. `swissCutDriftStageIds` reads the SAME predicate
-              // the card draws the notice from (`swissCutDriftOf`), so the two cannot disagree.
-              attentionStageIds={swissCutDriftStageIds(stages, editable, swissCutDrift)}
+              // Swiss (W4 T14: or knockout) - so the cards that carry it are listed here and start open. Each list reads the SAME
+              // predicate the card draws its notice from, so the two cannot disagree.
+              attentionStageIds={[...swissCutDriftStageIds(stages, editable, swissCutDrift), ...knockoutCutDriftStageIds(stages, editable, knockoutCutDrift)]}
               matchDayHref={matchDayHref}
               rulesStrip={{
                 divisionId: id,

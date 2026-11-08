@@ -2483,6 +2483,8 @@
   "swiss.lateEntry.joinedAfterLast.other": "{count} late entrants joined after the last round",
   "swiss.cutDrift.warning.one": "A result was corrected after the knockout began. The bracket stands. On today's table {in} would qualify instead of {out}.",
   "swiss.cutDrift.warning.other": "A result was corrected after the knockout began. The bracket stands. On today's table {in} would qualify instead of {out}.",
+  "knockout.cutDrift.warning.one": "A result was corrected after the next stage began. The bracket stands. On today's results {in} would go through instead of {out}.",
+  "knockout.cutDrift.warning.other": "A result was corrected after the next stage began. The bracket stands. On today's results {in} would go through instead of {out}.",
   "stage.more.addLatePlayer": "Add late player",
   "stage.more.addLatePlayer.hint": "Seats someone who arrived after the draw.",
   "stage.more.addRound": "Add a round",

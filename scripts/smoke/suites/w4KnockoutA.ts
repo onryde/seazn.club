@@ -47,6 +47,11 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * withdraws before their first main-draw match, and the best-seeded quarter-final loser takes the seat — the reply names
  * them and the line, nobody is walked over (main walked the opponent over).
  *
+ * T14 (X-QM-4, FX-G16, FX-G18): a correction inside a completed qualifying knockout. The same eight into four, confirmed; the
+ * final, a semi-final and the quarter-final behind it are taken back: the main draw's seats go back to TBD at that last void
+ * and Compute answers SEEDING_SOURCE_INCOMPLETE, no longer ALREADY_CONFIRMED. Re-recorded the other way and replayed, a
+ * re-proposal offers the new qualifier and not the old.
+ *
  * Own fresh owner; keyless; every read and write is a v1 route. Every check is counted, and a run that checked nothing fails.
  * SMOKE_ONLY=w4KnockoutA runs it alone (SELECTABLE_SUITES).
  */
@@ -56,8 +61,8 @@ export async function w4KnockoutASuite(): Promise<void> {
   // with its third-place match unplayed). T7: 1 (an unseeded draw replays). T8: 2 (6 → 7 places in a bye; 8 → 9 redraws
   // once). T10: 2 (a late player takes the lowest-seeded holder's bye and Undo refuses; no slot is refused, then a
   // withdrawn seat is taken). T11: 1 (a reinstated player waits, and one tap gives their seat back). T13: 1 (a departed
-  // qualifier's seat takes the best loser below the cut).
-  const EXPECTED_CHECKS = 12;
+  // qualifier's seat takes the best loser below the cut). T14: 1 (a correction empties a confirmed draw's seats and re-proposes).
+  const EXPECTED_CHECKS = 13;
   let checked = 0;
   const w4Check = (label: string, cond: boolean) => {
     checked++;
@@ -651,6 +656,97 @@ export async function w4KnockoutASuite(): Promise<void> {
     w4Check(
       "w4a X-LL-1: a qualifier who withdraws before their first main-draw match is replaced by the best quarter-final loser, nobody walked over" +
         (ok ? "" : ` — gen ${qualGen.status}/${mainGen.status}, start ${started.status}, played ${played}, complete ${done.status}, confirm ${confirmed?.status ?? "-"} ${JSON.stringify(confirmed?.json).slice(0, 160)}, losers ${quarterLosers.length}, withdraw ${withdrawn?.status ?? "-"} ${JSON.stringify(withdrawn?.json).slice(0, 200)}, line ${JSON.stringify(after).slice(0, 160)}`),
+      ok,
+    );
+  }
+
+  // Check 13 (T14, X-QM-4, FX-G16, FX-G18; RB4-Q5): eight into a main draw of four, every line won by its home side, the main
+  // draw confirmed. The semi-final's away seat qualified and lost it; the quarter-final that put them through is corrected.
+  // The final, the semi-final and the quarter-final are taken back (latest first: a played next match refuses a void), and
+  // at the last void the main draw's seats are empty and Compute refuses for the source, no longer for a confirmed draw. Re-recorded the other way and replayed, a
+  // re-proposal offers the quarter-final's new winner and not the old. Expected from the rows, never the code under test.
+  {
+    const divId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Corrected qualifier", sport_key: "badminton", variant_key: "bwf", config: {} }),
+    )?.id;
+    await v1(
+      owner,
+      `/api/v1/divisions/${divId}/entrants`,
+      "POST",
+      Array.from({ length: 8 }, (_, i) => ({ kind: "individual", display_name: `Corrected P${i + 1} ${tag}`, seed: i + 1 })),
+    );
+    const qualId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "knockout", name: "Qualifying", config: {} }),
+    )?.id;
+    const mainId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", {
+        seq: 2,
+        kind: "knockout",
+        name: "Main draw",
+        config: {},
+        progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }], placement: "rank_order", timing: "setup" },
+      }),
+    )?.id;
+    await v1(owner, `/api/v1/stages/${qualId}/generate`, "POST");
+    await v1(owner, `/api/v1/stages/${mainId}/generate`, "POST");
+    await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    const stageRows = async (stageId: string | undefined) =>
+      (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    for (let guard = 0; guard < 6; guard++) {
+      const open = (await stageRows(qualId)).filter(
+        (f) => f.home_entrant_id !== null && f.away_entrant_id !== null && !["decided", "finalized", "forfeited", "void"].includes(f.status ?? ""),
+      );
+      if (open.length === 0) break;
+      for (const f of open) await homeWins(owner, f.id);
+    }
+    await v1(owner, `/api/v1/stages/${qualId}/complete`, "POST");
+    const proposal = v1data<{ id: string; computed: { ties: { slots: string[]; entrantIds: string[] }[] } } | undefined>(
+      await v1(owner, `/api/v1/stages/${mainId}/seed-proposal`, "POST"),
+    );
+    const confirmed = proposal
+      ? await v1(owner, `/api/v1/stages/${mainId}/seed-proposal/confirm`, "POST", {
+          proposalId: proposal.id,
+          ...(proposal.computed.ties.length > 0 ? { tiePicks: proposal.computed.ties.map((t) => ({ slots: t.slots, order: t.entrantIds })) } : {}),
+        })
+      : undefined;
+
+    const rows = await stageRows(qualId);
+    const semi = rows.find((f) => f.round_no === 2 && f.seq_in_round === 1);
+    const out = semi?.away_entrant_id ?? undefined;
+    const quarter = rows.find((f) => f.round_no === 1 && f.home_entrant_id === out);
+    const incoming = quarter?.away_entrant_id ?? undefined;
+    const final = rows.reduce<Fx | undefined>((a, f) => (a === undefined || f.round_no > a.round_no ? f : a), undefined);
+    /** Every live event of the line, newest first, as a scorer's Undo does. */
+    const takeBack = async (fixtureId: string | undefined): Promise<void> => {
+      const ledger = v1data<{ id: string; seq: number; type: string; voids_event_id: string | null }[] | undefined>(await v1(owner, `/api/v1/fixtures/${fixtureId}/events?since_seq=0`)) ?? [];
+      const voided = new Set(ledger.map((e) => e.voids_event_id));
+      for (const e of ledger.filter((x) => x.type !== "core.void" && !voided.has(x.id)).sort((a, b) => b.seq - a.seq)) {
+        await appendScoreEvent(owner, fixtureId!, "core.void", { event_id: e.id });
+      }
+    };
+    await takeBack(final?.id);
+    await takeBack(semi?.id);
+    await takeBack(quarter?.id);
+    const emptied = (await stageRows(mainId)).filter((f) => f.round_no === 1);
+    // A proposal has no GET: Compute's own answer tells a stale one (nothing to propose from yet) from a confirmed one.
+    const undecided = await v1(owner, `/api/v1/stages/${mainId}/seed-proposal`, "POST");
+    const undecidedCode = (undecided.json as { error?: { code?: string } } | undefined)?.error?.code;
+
+    await appendScoreEvent(owner, quarter!.id, "core.start", {});
+    await appendScoreEvent(owner, quarter!.id, "badminton.game.summary", { home: 10, away: 21 });
+    await appendScoreEvent(owner, quarter!.id, "badminton.game.summary", { home: 12, away: 21 });
+    await homeWins(owner, semi!.id);
+    await homeWins(owner, final!.id);
+    const recomputed = await v1(owner, `/api/v1/stages/${mainId}/seed-proposal`, "POST");
+    const offered = v1data<{ computed: { qualifiers: { entrantId: string }[] } } | undefined>(recomputed)?.computed.qualifiers.map((q) => q.entrantId) ?? [];
+    const ok =
+      confirmed?.status === 200 && out !== undefined && incoming !== undefined &&
+      emptied.length === 2 && emptied.every((f) => f.home_entrant_id === null && f.away_entrant_id === null) &&
+      undecided.status === 409 && undecidedCode === "SEEDING_SOURCE_INCOMPLETE" &&
+      recomputed.status === 201 && offered.includes(incoming) && !offered.includes(out);
+    w4Check(
+      "w4a X-QM-4: a corrected quarter-final empties the confirmed main draw's seats, and a re-proposal offers the new qualifier" +
+        (ok ? "" : ` — confirm ${confirmed?.status ?? "-"}, emptied ${JSON.stringify(emptied.map((f) => [f.home_entrant_id, f.away_entrant_id]))}, undecided ${undecided.status} ${undecidedCode ?? "-"}, recomputed ${recomputed.status}, offered ${JSON.stringify(offered)}, out ${out}, in ${incoming}`),
       ok,
     );
   }

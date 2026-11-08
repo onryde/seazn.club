@@ -2,6 +2,7 @@ import { test, expect, type APIRequestContext } from "@playwright/test";
 import { TAG, activeOrgIdFromRequest, apiJson, competitionPath, divisionPath, seedVenueWithCourts } from "./helpers";
 import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { uiEn } from "./match-room-kit";
 import { swissDrawSeed, swissRoundOneOrder } from "../src/lib/swiss-draw";
 
 // W4 knockout app-A (spec 2026-11-04-format-matrix-w4-knockout-design.md). One describe per rule, each driven through the
@@ -789,5 +790,181 @@ test.describe("X-LL-1 a lucky loser fills the main draw", () => {
     await expect(row, `the run sheet seats ${nameOf.get(expected)}`).toContainText(nameOf.get(expected)!, { timeout: 20_000 });
     await expect(row).toContainText(nameOf.get(staying)!);
     await expect(row).not.toContainText(nameOf.get(leaving)!);
+  });
+});
+
+// X-QM-4 (W4 T14, FX-G16; RB4-Q5): a correction inside a completed qualifying stage. An organiser cannot void a quarter-final
+// whose semi-final was played (409 NEXT_MATCH_STARTED), so what they really do is unwind: the final, the semi-final, then the
+// quarter-final, re-recorded the other way and played forward. Before the main draw starts the confirmed proposal goes
+// stale and its seats go back to TBD; a re-proposal seats the new qualifier. After it starts, the bracket stands and the desk
+// names who moved. Expected: every line is won by its home side, so the semi-final's away seat is a qualifier who lost the
+// semi, and the quarter-final that put them through is the one corrected, its away seat the new qualifier.
+test.describe("X-QM-4 a corrected qualifier is re-proposed", () => {
+  type Line = Seated & { round_no: number };
+
+  /** Eight qualify for a main draw of four: everything played, completed and confirmed. */
+  async function confirmedMainDraw(request: APIRequestContext, label: string) {
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `${label} ${TAG}`, visibility: "private" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Open", sport_key: "badminton", variant_key: "bwf", config: {} });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const added = await apiJson<{ id: string; display_name: string }[]>(
+      request,
+      `/api/v1/divisions/${divisionId}/entrants`,
+      "POST",
+      Array.from({ length: 8 }, (_, i) => ({ kind: "individual", display_name: `QM${i + 1} ${TAG}`, seed: i + 1 })),
+    );
+    expect(added.status, JSON.stringify(added.error)).toBe(201);
+    const nameOf = new Map(added.data!.map((e) => [e.id, e.display_name]));
+    const qual = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "knockout", name: "Qualifying", config: {} });
+    expect(qual.status, JSON.stringify(qual.error)).toBe(201);
+    const main = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq: 2,
+      kind: "knockout",
+      name: "Main draw",
+      config: {},
+      progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }], placement: "rank_order", timing: "setup" },
+    });
+    expect(main.status, JSON.stringify(main.error)).toBe(201);
+    expect((await apiJson(request, `/api/v1/stages/${qual.data!.id}/generate`, "POST")).status).toBe(200);
+    expect((await apiJson(request, `/api/v1/stages/${main.data!.id}/generate`, "POST")).status).toBe(200);
+    expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
+    const qualRows = async () => (await stageFixtures(request, divisionId, qual.data!.id)) as Line[];
+    const mainRows = async () => (await stageFixtures(request, divisionId, main.data!.id)) as Line[];
+    for (let guard = 0; guard < 6; guard++) {
+      const open = (await qualRows()).filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null && !["decided", "finalized", "forfeited", "void"].includes(f.status));
+      if (open.length === 0) break;
+      for (const f of open) await homeWins(request, f.id);
+    }
+    const done = await apiJson<{ completed: boolean }>(request, `/api/v1/stages/${qual.data!.id}/complete`, "POST");
+    expect([done.status, done.data?.completed], JSON.stringify(done.error)).toEqual([200, true]);
+    await proposeAndConfirm(request, main.data!.id);
+    return { divisionId, qualId: qual.data!.id, mainId: main.data!.id, nameOf, qualRows, mainRows };
+  }
+
+  type ProposalOut = { id: string; computed: { qualifiers: { entrantId: string }[]; ties: { slots: string[]; entrantIds: string[] }[] } };
+  /** A proposal has no GET (no route reads stage_seed_proposals), so its state reads off what the desk's Compute answers. */
+  const propose = (request: APIRequestContext, stageId: string) => apiJson<ProposalOut>(request, `/api/v1/stages/${stageId}/seed-proposal`, "POST");
+  async function proposeAndConfirm(request: APIRequestContext, stageId: string): Promise<void> {
+    const made = await propose(request, stageId);
+    expect(made.status, JSON.stringify(made.error)).toBe(201);
+    const ties = made.data!.computed.ties;
+    const confirmed = await apiJson(request, `/api/v1/stages/${stageId}/seed-proposal/confirm`, "POST", {
+      proposalId: made.data!.id,
+      ...(ties.length > 0 ? { tiePicks: ties.map((t) => ({ slots: t.slots, order: t.entrantIds })) } : {}),
+    });
+    expect(confirmed.status, JSON.stringify(confirmed.error)).toBe(200);
+  }
+
+  /** Take a line's decision back: every live event, newest first, as a scorer's Undo does. */
+  async function takeBack(request: APIRequestContext, fixtureId: string): Promise<void> {
+    const ledger = await apiJson<{ id: string; seq: number; type: string; voids_event_id: string | null }[]>(request, `/api/v1/fixtures/${fixtureId}/events?since_seq=0`);
+    expect(ledger.status, JSON.stringify(ledger.error)).toBe(200);
+    const voided = new Set(ledger.data!.map((e) => e.voids_event_id));
+    const live = ledger.data!.filter((e) => e.type !== "core.void" && !voided.has(e.id)).sort((a, b) => b.seq - a.seq);
+    expect(live.length, "premise: the line holds live events").toBeGreaterThan(0);
+    for (const e of live) {
+      const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
+      const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", { expected_seq: state.data!.last_seq, type: "core.void", payload: { event_id: e.id } });
+      expect(res.status, JSON.stringify(res.error)).toBeLessThan(300);
+    }
+  }
+
+  async function awayWins(request: APIRequestContext, fixtureId: string): Promise<void> {
+    for (const [type, payload] of [
+      ["core.start", {}],
+      ["badminton.game.summary", { home: 10, away: 21 }],
+      ["badminton.game.summary", { home: 12, away: 21 }],
+    ] as const) {
+      const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
+      const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", { expected_seq: state.data!.last_seq, type, payload });
+      expect(res.status, `${type}: ${JSON.stringify(res.error)}`).toBeLessThan(300);
+    }
+  }
+
+  /** The qualifier who lost a semi-final, the quarter-final that put them through, and who should have won it. */
+  async function correctionOf(rows: () => Promise<Line[]>) {
+    const all = await rows();
+    const final = all.reduce((a, b) => (b.round_no > a.round_no ? b : a));
+    const semi = all.find((f) => f.round_no === 2 && f.seq_in_round === 1)!;
+    const out = semi.away_entrant_id!;
+    const quarter = all.find((f) => f.round_no === 1 && f.home_entrant_id === out)!;
+    expect(quarter, "premise: every line was won by its home side").toBeTruthy();
+    return { final, semi, quarter, out, in: quarter.away_entrant_id! };
+  }
+
+  /** Replay forward: the corrected quarter-final, then the semi-final and the final, both to the home seat. */
+  async function replay(request: APIRequestContext, c: { final: Line; semi: Line; quarter: Line }): Promise<void> {
+    await awayWins(request, c.quarter.id);
+    await homeWins(request, c.semi.id);
+    await homeWins(request, c.final.id);
+  }
+
+  test("before the main draw starts: the seats go back to TBD, and a re-proposal seats the new qualifier on the run sheet", async ({ page, request }) => {
+    test.setTimeout(300_000);
+    const q = await confirmedMainDraw(request, "Corrected qualifier");
+    const seated = (rows: Line[]) => rows.filter((f) => f.round_no === 1).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]);
+    const c = await correctionOf(q.qualRows);
+    expect(seated(await q.mainRows()), "premise: the confirmed main draw seats the semi-final loser").toContain(c.out);
+
+    await takeBack(request, c.final.id);
+    expect(seated(await q.mainRows()), "the final's void moves nobody across the cut").toContain(c.out);
+    expect((await propose(request, q.mainId)).error?.code, "still confirmed").toBe("SEEDING_ALREADY_CONFIRMED");
+    await takeBack(request, c.semi.id);
+    await takeBack(request, c.quarter.id);
+
+    expect(seated(await q.mainRows()).every((id) => id === null), "the quarter-final's void empties the seats it fed").toBe(true);
+    const undecided = await propose(request, q.mainId);
+    expect([undecided.status, undecided.error?.code], "no longer confirmed, and nothing to propose from until the source is decided").toEqual([409, "SEEDING_SOURCE_INCOMPLETE"]);
+    await page.goto(await divisionPath(request, q.divisionId, "?tab=fixtures"));
+    await expect(page.locator('[data-progression-state="stale"]'), "the desk says the proposal went stale").toBeVisible({ timeout: 20_000 });
+
+    await replay(request, c);
+    await page.goto(await divisionPath(request, q.divisionId, "?tab=fixtures"));
+    await expect(page.locator('[data-progression-state="draft"]'), "re-decided, a fresh draft waits on the desk with nobody asking").toBeVisible({ timeout: 20_000 });
+    const fresh = await propose(request, q.mainId);
+    expect(fresh.status, JSON.stringify(fresh.error)).toBe(201);
+    const offered = fresh.data!.computed.qualifiers.map((x) => x.entrantId);
+    expect(offered).toContain(c.in);
+    expect(offered).not.toContain(c.out);
+    await proposeAndConfirm(request, q.mainId);
+
+    const line = (await q.mainRows()).find((f) => f.round_no === 1 && (f.home_entrant_id === c.in || f.away_entrant_id === c.in));
+    expect(line, "the new qualifier holds a seat").toBeTruthy();
+    await page.goto(await divisionPath(request, q.divisionId, "?tab=fixtures"));
+    await showAllFixtures(page);
+    const row = page.locator(`li[data-fixture-no="${line!.fixture_no}"]`);
+    await expect(row, "the run sheet seats the new qualifier").toContainText(q.nameOf.get(c.in)!, { timeout: 20_000 });
+    await expect(row).not.toContainText(q.nameOf.get(c.out)!);
+  });
+
+  test("after the main draw starts: the bracket stands and the organiser's desk names who moved, at every width", async ({ page, request }) => {
+    test.setTimeout(300_000);
+    const q = await confirmedMainDraw(request, "Bracket stands");
+    const c = await correctionOf(q.qualRows);
+    const line = (await q.mainRows()).find((f) => f.round_no === 1 && f.home_entrant_id !== c.out && f.away_entrant_id !== c.out)!;
+    await homeWins(request, line.id);
+    const before = await q.mainRows();
+
+    await takeBack(request, c.final.id);
+    await takeBack(request, c.semi.id);
+    await takeBack(request, c.quarter.id);
+    await replay(request, c);
+
+    expect(await q.mainRows(), "no seat moved").toEqual(before);
+    expect((await propose(request, q.mainId)).error?.code, "the proposal stays confirmed").toBe("SEEDING_ALREADY_CONFIRMED");
+
+    const warning = page.getByTestId("knockout-cut-drift-warning");
+    const words = uiEn["knockout.cutDrift.warning.one"]!;
+    expect(words, "premise: the dictionary has the sentence").toBeTruthy();
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(await divisionPath(request, q.divisionId, "?tab=fixtures"));
+      await expect(warning, `visible at ${width}`).toBeVisible({ timeout: 20_000 });
+      await expect(warning, "the dictionary's sentence, each name on its own side").toHaveText(words.replace("{in}", q.nameOf.get(c.in)!).replace("{out}", q.nameOf.get(c.out)!));
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      expect(overflow, `no horizontal page scroll at ${width}`).toBeLessThanOrEqual(0);
+    }
   });
 });

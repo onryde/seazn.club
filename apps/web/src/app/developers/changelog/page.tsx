@@ -7,6 +7,14 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
     date: "2026-11-08",
+    title: "A correction inside a completed knockout reaches the stage it feeds",
+    lines: [
+      "When a voided or re-recorded result moves the qualifiers of a completed knockout, the next stage's seed proposal goes stale, a confirmed one included, and the knockout's placement is recomputed. If the next stage has not started (a result, live play or a Match Day call), its seats go back to TBD and its schedule stays, and a fresh draft is proposed once the source is decided again. If it has started, the bracket stands.",
+      "POST /stages/{id}/seed-proposal and its confirm now answer 409 SEEDING_SOURCE_INCOMPLETE while a knockout source has an undecided match, even if that stage reads complete.",
+    ],
+  },
+  {
+    date: "2026-11-08",
     title: "A departed qualifier's knockout seat takes a lucky loser; table cuts close up",
     lines: [
       "POST /entrants/{id}/withdraw on a qualifier who holds a round-1 seat of a knockout fed by a knockout's rank cut, before that match has started (a score, live play, a result or a Match Day call), now seats a lucky loser in her place instead of walking the opponent over: the source's best loser below the cut — the latest knock-out round first, then seed, then a lot drawn with the destination stage's own seed. A loser by walkover, withdrawal or disqualification is never eligible. The report gains lucky_loser ({entrant_id, fixture_id}, or null when nobody was seated: no such seat, the match had started, or nobody was eligible — then the opponent walks over as before).",
