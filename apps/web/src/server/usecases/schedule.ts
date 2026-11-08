@@ -2072,8 +2072,11 @@ export async function autoSchedule(
    */
   const currentBoard = [...plan.placedNow, ...plan.pinnedNow];
   /**
-   * The solvers are called DIRECTLY. Nothing wraps them here, and the absence is
-   * deliberate (R17).
+   * No SERIALISING or ADMISSION wrapper sits around the solve, and the absence
+   * is deliberate (R17): nothing here may make the call wait. The one wrapper
+   * that does sit here, `autoBuildSchedule` (#452, described at the end of this
+   * comment), rewrites the request and judges the reply; it awaits nothing
+   * ahead of the call.
    *
    * HOW THIS WAS LEARNT (history — z3 and its lock were deleted in C8, so
    * none of the machinery named here still exists). A `withZ3Teardown` helper

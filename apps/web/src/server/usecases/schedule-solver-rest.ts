@@ -27,12 +27,16 @@
  * organiser's own manual move, drag or apply and stays so — but it means a solver board that ignores a rest ships as
  * `ok`, which is exactly how CI's failing run read. In the AUTO pass only, such a board is treated as rejected and the
  * greedy fallback ships, under the engine's own `verifier_rejected` status (its meaning: the solver's board failed
- * the verifier, the greedy seed was returned instead). Only a breach on a card the solver placed counts: one between
- * two cards the organiser pinned is not the solver's doing and refuses nothing.
+ * the verifier, the greedy seed was returned instead). Only a breach the solver could see in its request, and that a
+ * card it placed takes part in, counts: one between two cards the organiser pinned is not the solver's doing, and a
+ * person rest against a sibling division's card was never on its wire. Both stay warnings and refuse nothing.
  */
 import {
   buildSchedule,
+  deltaConflicts,
   effectiveRestMinutes,
+  validateAssignments,
+  type Assignment,
   type BuildInput,
   type BuildResult,
   type Conflict,
@@ -73,14 +77,18 @@ export function poolRestRules(fixtures: readonly SchedulableFixture[], config: R
   return rules;
 }
 
-/** `input` with one rule group appended per pool rule that has a fixture to place, and every pinned row of such a pool
- *  counted against it. Returns `input` itself when nothing is added. */
+/** `input` with one rule group appended per pool rule that names a card in the request, and every pinned row of such a
+ *  pool counted against it. Returns `input` itself when nothing is added. */
 export function withPoolRestGroups(input: SolveBuildInput, rules: readonly PoolRest[]): SolveBuildInput {
   const base = input.ruleGroups ?? [];
   const added = rules.flatMap((rule) => {
     const fixtureIds = input.fixtures.filter((f) => rule.members.has(f.fixtureId)).map((f) => f.fixtureId);
-    // A pool with nothing left to place gives the solver nothing to decide; its pinned cards are the organiser's.
-    return fixtureIds.length === 0 ? [] : [{ rule, group: { fixtureIds, minRestMinutes: rule.minutes } }];
+    // A pool with nothing left to place still ships its group, EMPTY, when one of its cards is a pinned row: the pin's
+    // rest is the MAX over the groups it counts against, and it binds every free card that shares an entrant with it
+    // (a later stage's fixture, say). The wire allows an empty group (`SolveBuildInput.ruleGroups`' own comment). A pool
+    // with no card in the request at all binds nothing and is left off.
+    const pinned = input.existing.some((row) => rule.members.has(row.fixtureId));
+    return fixtureIds.length === 0 && !pinned ? [] : [{ rule, group: { fixtureIds, minRestMinutes: rule.minutes } }];
   });
   if (added.length === 0) return input;
   return {
@@ -115,16 +123,62 @@ const NO_VERDICT: PlacementSolver = async () => ({
 });
 
 /**
- * Layer 2 over `buildSchedule`. Returns its result unchanged unless it shipped the SOLVER's board (`engine:
- * "optimized"`, the engine's only exit that does) carrying a rest row on a card THE SOLVER PLACED. Then the greedy
- * board ships instead, as `verifier_rejected`, with the solver's own `tiersCompleted` and `budgetExpired` — the shape
- * the engine's own verifier-rejected exit has.
+ * The rest breaches the SOLVER is answerable for on `board`: those it could see in the request it was sent, and that
+ * a card it placed takes part in.
  *
- * "A card the solver placed" is read off the solver's own reply, not re-derived from `frozen`/`locked`: a rest row
- * between two cards the organiser pinned is on the board whatever the solver does, so it is not the solver's breach
- * and refuses nothing. It is NOT judged as a delta against the greedy board: on REFLOW and POLISH that board is the
- * plain seed, which re-places a `current`-only frozen card (see `reflowExisting`'s doc comment), so it answers a
- * different question — measured, it reported an organiser's own pinned breach as one the solver introduced.
+ * WHAT IT COULD SEE (orchestrator ruling under the owner's product-owner delegation, #1143 review): the cards in its
+ * request, as the wire carries them. Its own fixtures carry entrants AND people; the pinned and existing rows it is
+ * handed carry entrants only (`PinnedRow` has no people field — `scheduler.proto`, `build.ts`'s `existing` map). So a
+ * person-rest breach against a sibling division's card is one it was never told about: that stays the non-blocking
+ * warning it always was, or every multi-division event with shared players would be downgraded to greedy.
+ *
+ * THE PAIR, NOT THE ROW. The verifier files a rest row under ONE card of the pair — `pairRestMinutesWith(a, other)`
+ * starts from `a`'s own rest, so a pinned card in a 90-minute pool and a solver card with 30 minutes, 60 apart, is a
+ * row on the PIN only. So this asks which rows the solver's cards ADD: the verifier's rest rows over the solver's view
+ * (its cards plus the rows it was handed), less those over the handed rows alone. A breach between two of the
+ * organiser's own pinned cards is on both sides and cancels; a breach the solver's card is half of is not.
+ */
+function solverRestBreaches(
+  board: readonly Assignment[],
+  input: BuildInput,
+  placedBySolver: ReadonlySet<string>,
+  handedRows: ReadonlySet<string>,
+): Conflict[] {
+  const cards = new Map<string, Assignment>();
+  for (const a of [...(input.existing ?? []), ...board]) cards.set(a.fixtureId, a);
+  const solverCards = [...cards.values()].filter((a) => placedBySolver.has(a.fixtureId));
+  const handed = [...cards.values()]
+    .filter((a) => !placedBySolver.has(a.fixtureId) && handedRows.has(a.fixtureId))
+    .map((a) => ({ ...a, people: [] }));
+  const restRows = (cardsSeen: readonly Assignment[]) =>
+    validateAssignments(cardsSeen, input.config, [], input.dependencies ?? []).filter(isRest);
+  return deltaConflicts(restRows(handed), restRows([...handed, ...solverCards]));
+}
+
+/**
+ * The greedy fallback's input: `input` with every frozen card that is anchored only by `current` LOCKED to that slot.
+ * The engine's fallback is the plain seed, which knows nothing of a `current`-only anchor and re-places such a card
+ * (see `reflowExisting`'s doc comment); REFLOW then puts the card back on its real slot and keeps greedy's slots for
+ * everything else, so the shipped board could carry the very rest breach, or a court clash, it was rejected for —
+ * beside a card the organiser dragged. Locked, the seed places around the real slot instead.
+ */
+function anchoredForFallback(input: BuildInput): readonly SchedulableFixture[] {
+  const frozen = new Set(input.frozen ?? []);
+  const at = new Map((input.current ?? []).map((a) => [a.fixtureId, a] as const));
+  return input.fixtures.map((f) => {
+    const slot = f.locked === undefined && frozen.has(f.id) ? at.get(f.id) : undefined;
+    return slot === undefined ? f : { ...f, locked: { court: slot.court, startAt: slot.startAt } };
+  });
+}
+
+/**
+ * Layer 2 over `buildSchedule`. Returns its result unchanged unless it shipped the SOLVER's board (`engine:
+ * "optimized"`, the engine's only exit that does) carrying a rest breach the solver could see and took part in
+ * ({@link solverRestBreaches}). Then the greedy board ships instead, as `verifier_rejected`, with the solver's own
+ * `tiersCompleted` and `budgetExpired` — the shape the engine's own verifier-rejected exit has.
+ *
+ * "A card the solver placed" is read off the solver's own reply, and "a row it was handed" off its own request, never
+ * re-derived from `frozen`/`locked`.
  *
  * The greedy board is rebuilt by asking the engine again with `NO_VERDICT`, never assembled here: the seed's
  * construction (pins, `current` anchoring, legalisation) belongs to the engine, and a second copy of it is the
@@ -132,8 +186,11 @@ const NO_VERDICT: PlacementSolver = async () => ({
  */
 export async function buildScheduleHonouringRest(input: BuildInput): Promise<BuildResult> {
   const placedBySolver = new Set<string>();
-  // Records what the solver placed. The call itself is made at once, unchanged — nothing is awaited ahead of it.
+  const handedRows = new Set<string>();
+  // Records what the solver was handed and what it placed. The call itself is made at once, unchanged — nothing is
+  // awaited ahead of it.
   const solve: PlacementSolver = async (request, ctx) => {
+    for (const row of request.existing) handedRows.add(row.fixtureId);
     const outcome = await input.solve(request, ctx);
     if (outcome.status === "OPTIMAL" || outcome.status === "FEASIBLE") {
       for (const a of outcome.assignments) placedBySolver.add(a.fixtureId);
@@ -142,9 +199,11 @@ export async function buildScheduleHonouringRest(input: BuildInput): Promise<Bui
   };
   const out = await buildSchedule({ ...input, solve });
   if (out.engine !== "optimized") return out;
-  const breaches = out.conflicts.filter((c) => isRest(c) && placedBySolver.has(c.fixtureId));
+  // Cheap gate first: a board the full verifier finds no rest row on has none the solver could see either.
+  if (!out.conflicts.some(isRest)) return out;
+  const breaches = solverRestBreaches(out.assignments, input, placedBySolver, handedRows);
   if (breaches.length === 0) return out;
-  const fallback = await buildSchedule({ ...input, solve: NO_VERDICT });
+  const fallback = await buildSchedule({ ...input, fixtures: anchoredForFallback(input), solve: NO_VERDICT });
   if (fallback.engine !== "greedy") {
     // A solver that placed nothing cannot have produced a solver board: the engine changed under this code.
     throw new Error(`buildScheduleHonouringRest: the no-verdict rebuild returned engine "${fallback.engine}", not the greedy seed`);

@@ -62,12 +62,14 @@
 // queue wait, so nothing is mis-reported. It does mean the run-level budget
 // bookkeeping (`solverBudgetLeft`, `SOLVER_MIN_BUDGET_MS`) is a target, not a
 // hard ceiling this module itself enforces — same as it already is for
-// BUILD/POLISH/REFLOW. BUILD/POLISH/REFLOW already call `buildSchedule`
-// directly with no wrapper of their own for exactly this reason
-// (`schedule.ts`'s R17 ruling: a redundant wrapper here is not neutral, it is
-// the same mistake `withZ3Teardown` was — see that ruling's own comment for
-// the measured latency cost of layering a second serialisation on top of one
-// that already exists).
+// BUILD/POLISH/REFLOW. BUILD/POLISH/REFLOW add no serialising or admission
+// wrapper of their own for exactly this reason (`schedule.ts`'s R17 ruling: a
+// redundant wrapper here is not neutral, it is the same mistake
+// `withZ3Teardown` was — see that ruling's own comment for the measured
+// latency cost of layering a second serialisation on top of one that already
+// exists). They do call `buildSchedule` through `autoBuildSchedule` (#452,
+// `schedule-solver-rest.ts`), which only rewrites the request and judges the
+// reply, awaiting nothing ahead of the call — this module does not.
 import {
   repairDecomposedCpsat,
   type Assignment,
