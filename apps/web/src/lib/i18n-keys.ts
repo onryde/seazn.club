@@ -728,6 +728,7 @@ export type DictionaryKey =
   | "board.ai.joint.undoGoneTitle"
   | "board.ai.joint.undoRetry"
   | "board.ai.joint.undonePartial"
+  | "board.ai.joint.undonePartialFinal"
   | "board.ai.joint.undonePartialTitle"
   | "board.ai.joint.undoneReason"
   | "board.ai.joint.undoneWhy"

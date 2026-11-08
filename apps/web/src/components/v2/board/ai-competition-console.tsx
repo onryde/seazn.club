@@ -643,6 +643,12 @@ export function JointReviewStep({
       // same reason stay ONE line even if the server worded their two messages
       // differently — the sentence they are given is identical either way.
       const groupKey = (f: JointUndoFailure): string => f.code || f.reason;
+      // W4 B1b N2: an undo barrier (a confirmed draw, a Swiss late entry or rounds change, a started paired round) refuses
+      // the same way on every retry and every Restore, so its divisions get no "try again, or restore them" advice and
+      // no retry button - only the sentence that they stay, and the refusal's own sentence below. Every other failure
+      // (a freeze that can lift, a lost call, a rewind a newer apply overtook) keeps the advice and the button.
+      const final = undoFailed.filter((f) => isUndoRefusalCode(f.code));
+      const retryable = undoFailed.filter((f) => !isUndoRefusalCode(f.code));
       const grouped: { key: string; reason: string; divisions: string[] }[] = [];
       for (const f of undoFailed) {
         const reason = localReason(f);
@@ -658,11 +664,20 @@ export function JointReviewStep({
             <span aria-hidden>⚠</span>
             {msg("board.ai.joint.undonePartialTitle")}
           </p>
-          <p className="text-[11px] text-amber-900">
-            {msg("board.ai.joint.undonePartial", {
-              divisions: undoFailed.map((f) => named(f.divisionId)).join(", "),
-            })}
-          </p>
+          {retryable.length > 0 && (
+            <p className="text-[11px] text-amber-900">
+              {msg("board.ai.joint.undonePartial", {
+                divisions: retryable.map((f) => named(f.divisionId)).join(", "),
+              })}
+            </p>
+          )}
+          {final.length > 0 && (
+            <p className="text-[11px] text-amber-900">
+              {msg("board.ai.joint.undonePartialFinal", {
+                divisions: final.map((f) => named(f.divisionId)).join(", "),
+              })}
+            </p>
+          )}
           {grouped.length > 0 && (
             <div className="text-[11px] text-amber-900">
               <p className="font-semibold">{msg("board.ai.joint.undoneWhy")}</p>
@@ -678,14 +693,16 @@ export function JointReviewStep({
               </ul>
             </div>
           )}
-          <button
-            type="button"
-            disabled={undoing}
-            onClick={onUndo}
-            className="btn btn-ghost px-3 py-1.5 text-xs font-semibold text-violet-700 disabled:opacity-50"
-          >
-            {undoing ? msg("board.ai.apply.undoing") : msg("board.ai.joint.undoRetry")}
-          </button>
+          {retryable.length > 0 && (
+            <button
+              type="button"
+              disabled={undoing}
+              onClick={onUndo}
+              className="btn btn-ghost px-3 py-1.5 text-xs font-semibold text-violet-700 disabled:opacity-50"
+            >
+              {undoing ? msg("board.ai.apply.undoing") : msg("board.ai.joint.undoRetry")}
+            </button>
+          )}
         </div>
       );
     }

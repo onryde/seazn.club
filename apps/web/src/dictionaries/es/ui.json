@@ -4298,6 +4298,7 @@
   "board.ai.joint.applied.other": "Aplicado a {count} divisiones.",
   "board.ai.joint.savepoint": "Se ha guardado un punto de restauración por división: deshaz con un solo toque.",
   "board.ai.joint.undonePartial": "Estas divisiones siguen con el horario de la IA: {divisions}. Reinténtalas o restáuralas desde sus propias páginas de horario.",
+  "board.ai.joint.undonePartialFinal": "Estas divisiones se quedan con el horario de la IA y no se pueden revertir: {divisions}.",
   "board.ai.joint.conflict.one": "No se ha escrito el tablero: {count} partido ocuparía una pista ya reservada.",
   "board.ai.joint.conflict.other": "No se ha escrito el tablero: {count} partidos ocuparían una pista ya reservada.",
   "board.ai.joint.conflictAside": "Los partidos que apartaste mantienen su hora actual, así que siguen ocupando esas pistas. Vuelve a incluirlos o muévelos a mano primero.",
