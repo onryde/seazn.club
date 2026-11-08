@@ -142,6 +142,27 @@ export const CAPTURE_RECORD_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 3
 export const SPONSOR_LINK_MISS_LIMIT: RateLimitConfig = { max: 30, windowSeconds: 60 };
 
 /**
+ * The Match Day code routes (`/api/v1/match-day-code/…`; capture S4 Match Day design §3, §9; the controller's ruling on
+ * the MD-1 final review's I1, amending the plan's Global Constraint). md_ traffic is budgeted per CODE, never per client
+ * IP: umpires share venue Wi-Fi and carrier NAT, and one code is held by every phone at its venue. All fail OPEN, as the
+ * capture budgets do: the token (256 bits) is the real defence against guessing.
+ *  - MD_DAY_LIMIT: the day read, per code — a phone polls every 15 s, so 600 a minute carries 150 phones on one code;
+ *  - MD_REVIEW_LIMIT: an approval's review, per code — the costliest md_ call (it commits a Swiss round's lots draw and
+ *    runs a rolled-back Pair under the division lock: final review m4), and nobody reviews twice a second;
+ *  - MD_APPROVE_LIMIT: an approval, per code — the first phone wins, a second is MD_ALREADY;
+ *  - MD_OPEN_LIMIT: a match opened, per code — every row tap is an open (§6), an arbiter enters a round board by board;
+ *  - MD_FAIL_LIMIT: FAILED lookups (an unknown, withdrawn or ended token) per client IP; a failure past it answers 429
+ *    instead of its refusal. A valid code is never refused for its neighbours' traffic, nor for this budget.
+ * A new link minted by an open spends the console's mint budget on top (`DEVICE_LINK_MINT_LIMIT`, `dlmint:` per client
+ * IP), and only when it mints: a re-shown link writes nothing.
+ */
+export const MD_DAY_LIMIT: RateLimitConfig = { max: 600, windowSeconds: 60 };
+export const MD_REVIEW_LIMIT: RateLimitConfig = { max: 1, windowSeconds: 1 };
+export const MD_APPROVE_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 1 };
+export const MD_OPEN_LIMIT: RateLimitConfig = { max: 120, windowSeconds: 60 };
+export const MD_FAIL_LIMIT: RateLimitConfig = { max: 30, windowSeconds: 60 };
+
+/**
  * The match room's camera-fault stamp (T14 fix round 6, M-2): the lobby PING a
  * changed stamp sends the opponent, per fixture and seat. Past it the stamp is
  * still written and the ping skipped — the opponent's next read catches up.

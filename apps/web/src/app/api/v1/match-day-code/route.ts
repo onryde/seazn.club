@@ -12,7 +12,7 @@ import { getMatchDayForCode } from "@/server/usecases/match-day-code-view";
 export async function GET(req: Request) {
   return v1(async () => {
     const now = new Date();
-    const code = await matchDayCodeOf(req, now);
+    const code = await matchDayCodeOf(req, now, "day");
     return reply(200, await getMatchDayForCode(code, now), { "cache-control": "no-store" });
   });
 }

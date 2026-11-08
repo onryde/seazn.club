@@ -58,9 +58,9 @@ const SHA256: Record<string, string> = {
   // MD-1 Task 3 (capture S4 Match Day design §5, §9.3): a Match Day code's day read.
   "capture-matchday-day.v1.json": "8d26d7efee0615eba7c0acd19e56ea5c730e6ff0bf48c28c40f975595c8b743d",
   // MD-1 Task 4 (capture S4 Match Day design §6, §9.4): a Match Day code's open.
-  "capture-matchday-open.v1.json": "639fdcde15f06961ab705b83cb7fb7fa7e39111c6c3a83543e1500657b2644aa",
+  "capture-matchday-open.v1.json": "760028bf99e5cf74ee033f5613fa43477677cef318ecdf739c0b62e2fc21c0c0",
   // MD-1 Task 6 (capture S4 Match Day design §7, §9.5): a Match Day code's approval review, its approve and its answers.
-  "capture-matchday-approval.v1.json": "4f4fa483456285d09968a4d0f050a917d0498e34040ac8db610a3a050b2e2a92",
+  "capture-matchday-approval.v1.json": "279ff1488a1108b3667f9e2f11f559579382f83b238d91da65440c810189f69c",
 };
 
 // ---------------------------------------------------------------------------------------------------------------

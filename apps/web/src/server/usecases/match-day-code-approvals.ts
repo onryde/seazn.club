@@ -20,6 +20,7 @@ import { EngineError } from "@seazn/engine/core";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { DEFAULT_LOCALE, getDictionary } from "@/lib/i18n";
+import { nextUnseatedSwissRound } from "@/lib/swiss-shell";
 import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
 import { assertUuid } from "@/server/api-v1/auth";
 import { CaptureMatchdayRefusalCode, type CaptureMatchdayApprovalOk, type CaptureMatchdayApprovalReview } from "@/server/api-v1/capture-schemas";
@@ -124,27 +125,41 @@ function requireCanApprove(code: MatchDayCodeRow): void {
   if (!code.canApprove) throw new HttpError(403, "this Match Day code cannot approve draws", "MD_NO_APPROVE");
 }
 
-/** A stage fixture as `inScope` judges it, before the stage's own facts are added. */
-type FixtureScope = Omit<ScopeFixture, "competition_id" | "stage_status" | "division_live">;
+/** A stage fixture as `inScope` judges it, before the stage's own facts are added, and as a Swiss round reads it. */
+type FixtureScope = Omit<ScopeFixture, "competition_id" | "stage_status" | "division_live"> & {
+  round_no: number;
+  outcome: unknown;
+  ext_key: string | null;
+};
+
+/** The stage, as the two doors judge an approval of it. */
+type StageFacts = {
+  divisionName: string;
+  locked: boolean;
+  /** A Swiss stage's next round to pair (`nextUnseatedSwissRound`, the day read's and the desk's); null otherwise. */
+  swissNext: number | null;
+};
 
 /**
  * The stage as the code's org sees it: 404 when it cannot, 403 MD_OUT_OF_SCOPE when the code does not cover it (another
  * competition, an archived division — the day read lists live divisions only — or, for a narrowed code, no match of the
- * stage on its courts on its day). Answers the division's name, and whether its schedule is locked.
+ * stage on its courts on its day). Answers the division's name, whether its schedule is locked, and a Swiss stage's next
+ * round to pair.
  */
-async function stageForCode(code: MatchDayCodeRow, stageId: string): Promise<{ divisionName: string; locked: boolean }> {
+async function stageForCode(code: MatchDayCodeRow, stageId: string): Promise<StageFacts> {
   assertUuid(stageId, "stage");
   return withTenant(code.orgId, async (tx) => {
     const [stage] = await tx<
-      { competition_id: string; division_name: string; status: string; division_live: boolean; locked: boolean }[]
+      { competition_id: string; division_name: string; kind: string; status: string; division_live: boolean; locked: boolean }[]
     >`
-      select d.competition_id, d.name as division_name, s.status, (d.archived_at is null) as division_live,
+      select d.competition_id, d.name as division_name, s.kind, s.status, (d.archived_at is null) as division_live,
              d.schedule_locked as locked
         from stages s join divisions d on d.id = s.division_id
        where s.id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
     const fixtures = await tx<FixtureScope[]>`
-      select f.court_id, c.venue_id, f.status, f.scheduled_at, f.finished_at, f.home_entrant_id, f.away_entrant_id
+      select f.court_id, c.venue_id, f.status, f.scheduled_at, f.finished_at, f.home_entrant_id, f.away_entrant_id,
+             f.round_no, f.outcome, f.ext_key
         from fixtures f left join courts c on c.id = f.court_id
        where f.stage_id = ${stageId}`;
     const judged = fixtures.map((f) => ({
@@ -156,7 +171,8 @@ async function stageForCode(code: MatchDayCodeRow, stageId: string): Promise<{ d
     if (!stage.division_live || !stageInScope(code, stage.competition_id, judged)) {
       throw new HttpError(403, "this stage is not in this Match Day code's scope", "MD_OUT_OF_SCOPE");
     }
-    return { divisionName: stage.division_name, locked: stage.locked };
+    const swissNext = stage.kind === "swiss" ? nextUnseatedSwissRound([...fixtures]) : null;
+    return { divisionName: stage.division_name, locked: stage.locked, swissNext };
   });
 }
 
@@ -266,6 +282,13 @@ function requireUnlockedDraw(kind: ApprovalKind, locked: boolean): void {
   if (kind === "draw" && locked) throw LOCKED();
 }
 
+/** A Swiss round 1 is the desk's (the controller's ruling on the MD-1 final review's m1): pairing it starts the event, so
+ *  the day read never lists it (`swissWaiting`), and asked of the doors anyway — after a desk Unpair of round 1 — it is
+ *  MD_STALE, before the review commits a lots draw or the approve seats anything. */
+function requirePastSwissRoundOne(kind: ApprovalKind, stage: StageFacts): void {
+  if (kind === "swiss" && stage.swissNext === 1) throw new HttpError(409, MD_MESSAGE.MD_STALE, "MD_STALE");
+}
+
 /**
  * Review an approval (§7 "Review opens the proposal read-only"): the rows exactly as the server computed them, the `hash`
  * the approve hands back (Swiss: the preview's input hash; draw: the proposal's id), `round` (Swiss: the round awaiting
@@ -274,8 +297,10 @@ function requireUnlockedDraw(kind: ApprovalKind, locked: boolean): void {
  */
 export async function reviewApprovalForCode(code: MatchDayCodeRow, kind: ApprovalKind, stageId: string): Promise<Review> {
   requireCanApprove(code);
-  const { divisionName, locked } = await stageForCode(code, stageId);
-  requireUnlockedDraw(kind, locked);
+  const stage = await stageForCode(code, stageId);
+  const { divisionName } = stage;
+  requireUnlockedDraw(kind, stage.locked);
+  requirePastSwissRoundOne(kind, stage);
   return kind === "swiss" ? swissReview(code, stageId, divisionName) : drawReview(code, stageId, divisionName);
 }
 
@@ -293,7 +318,9 @@ export async function approveForCode(
   input: { hash: string; round?: number | null },
 ): Promise<CaptureMatchdayApprovalOk> {
   requireCanApprove(code);
-  requireUnlockedDraw(kind, (await stageForCode(code, stageId)).locked);
+  const stage = await stageForCode(code, stageId);
+  requireUnlockedDraw(kind, stage.locked);
+  requirePastSwissRoundOne(kind, stage);
   const actor = matchDayActor(code);
   const asked: Asked = { codeId: code.id, stageId, kind };
   if (kind === "swiss") {

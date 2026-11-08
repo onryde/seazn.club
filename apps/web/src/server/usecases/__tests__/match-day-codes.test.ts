@@ -205,8 +205,10 @@ describe.skipIf(!HAS_DB)("match day codes", () => {
 
   // MD-1 review I2: the list re-shows a credential, so it shows only an envelope that opens to THIS row's token. A
   // swapped or restored token_enc (the envelope has no AAD) would otherwise show the desk a working QR of another code
-  // under this row's scope and day; one envelope that will not open would otherwise 500 the whole list.
-  it("list skips a row whose envelope opens to another code's token, and logs it without the token", async () => {
+  // under this row's scope and day; one envelope that will not open would otherwise 500 the whole list. Final review I3
+  // (the controller's ruling): such a row is still LISTED, with no QR (url null), so the desk can withdraw it — its
+  // printed QR keeps opening matches until it is.
+  it("list shows a row whose envelope opens to another code's token without its QR, and logs it without the token", async () => {
     vi.useFakeTimers({ toFake: ["Date"], now: new Date(T0) });
     const narrow = await mintMatchDayCode(day.auth, day.comp.id, { scope: { kind: "competition" }, canApprove: false });
     const wide = await mintMatchDayCode(day.auth, day.comp.id, { scope: { kind: "competition" }, canApprove: true });
@@ -215,8 +217,10 @@ describe.skipIf(!HAS_DB)("match day codes", () => {
     const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     try {
       const listed = await listMatchDayCodes(day.auth, day.comp.id);
-      expect(listed.map((c) => c.id)).toEqual([wide.row.id]);
-      expect(listed.filter((c) => c.url === wide.url)).toHaveLength(1);
+      expect(listed.map((c) => [c.id, c.url])).toEqual([
+        [narrow.row.id, null],
+        [wide.row.id, wide.url],
+      ]);
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn.mock.calls[0]![0]).toMatchObject({ codeId: narrow.row.id, competitionId: day.comp.id });
       const logged = JSON.stringify(warn.mock.calls);
@@ -227,7 +231,7 @@ describe.skipIf(!HAS_DB)("match day codes", () => {
     }
   });
 
-  it("list skips a row whose envelope will not open, and still lists the rest", async () => {
+  it("list shows a row whose envelope will not open with url null, keeps it withdrawable, and lists the rest (final I3)", async () => {
     vi.useFakeTimers({ toFake: ["Date"], now: new Date(T0) });
     const broken = await mintMatchDayCode(day.auth, day.comp.id, { scope: { kind: "competition" }, canApprove: false });
     const good = await mintMatchDayCode(day.auth, day.comp.id, { scope: { kind: "competition" }, canApprove: false });
@@ -238,13 +242,21 @@ describe.skipIf(!HAS_DB)("match day codes", () => {
     const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     try {
       const listed = await listMatchDayCodes(day.auth, day.comp.id);
-      expect(listed.map((c) => [c.id, c.url])).toEqual([[good.row.id, good.url]]);
+      expect(listed.map((c) => [c.id, c.url])).toEqual([
+        [broken.row.id, null],
+        [good.row.id, good.url],
+      ]);
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn.mock.calls[0]![0]).toMatchObject({ codeId: broken.row.id, competitionId: day.comp.id });
       expect(JSON.stringify(warn.mock.calls)).not.toContain(tokenOf(broken.url));
     } finally {
       warn.mockRestore();
     }
+    // Why it must stay listed: its printed QR still opens (the door resolves by tok_hash) until the desk withdraws it.
+    expect((await resolveMatchDayCode(tokenOf(broken.url), new Date(T0))).ok, "premise: the printed code still works").toBe(true);
+    await revokeMatchDayCode(day.auth, broken.row.id);
+    expect(await resolveMatchDayCode(tokenOf(broken.url), new Date(T0))).toEqual({ ok: false, refusal: "MD_WITHDRAWN" });
+    expect((await listMatchDayCodes(day.auth, day.comp.id)).map((c) => c.id)).toEqual([good.row.id]);
   });
 
   it("list without DEVICE_LINK_KEK is still 503, not an empty list", async () => {

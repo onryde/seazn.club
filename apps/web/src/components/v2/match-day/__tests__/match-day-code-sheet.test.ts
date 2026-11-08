@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import en from "@/dictionaries/en/ui.json";
 import type { MatchDayCourt } from "@/lib/match-day/types";
-import { codeVenues, scopeBody, scopeWords } from "../match-day-code-sheet";
+import { codeVenues, hasQr, scopeBody, scopeWords } from "../match-day-code-sheet";
 
 const court = (court_id: string, court_name: string, venue_id: string, venue_name: string) =>
   ({ court_id, court_name, venue_id, venue_name }) as MatchDayCourt;
@@ -43,5 +43,12 @@ describe("scopeWords", () => {
   it("falls back to the kind's words for a venue or courts no longer on the board", () => {
     expect(scopeWords(en, { kind: "venue", venue_id: "gone" }, COURTS)).toBe(en["matchDay.code.scope.venue"]);
     expect(scopeWords(en, { kind: "courts", court_ids: ["gone"] }, COURTS)).toBe(en["matchDay.code.scope.courts"]);
+  });
+});
+
+describe("hasQr (MD-1 final review I3)", () => {
+  it("offers Show QR only for a code listed with its url, never for one listed with url null", () => {
+    expect(hasQr({ url: "https://seazn.club/day/md_x" })).toBe(true);
+    expect(hasQr({ url: null })).toBe(false);
   });
 });

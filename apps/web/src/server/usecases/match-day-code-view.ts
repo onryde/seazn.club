@@ -93,17 +93,17 @@ const within = (d: Date | null, from: Date, to: Date): boolean =>
 /**
  * Whether a code covers a match (capture S4 design §3; owner 2026-11-07), judged at the moment of asking. It admits
  * exactly what the day read can list, so the open never mints a link for a match the list never offered (MD-1 fix I1):
- *  - the code's competition only;
+ *  - the code's competition only, in a live (not archived) division: the day read lists live divisions only, on a court
+ *    or none (final review I2);
  *  - WHERE: a whole-competition code covers every match, a court or none; a venue code its venue's courts; a courts code
  *    exactly its courts. A match with no court is covered by a whole-competition code only;
  *  - a match on a court, WHEN: in play (today's whatever its plan, match-day.ts ruling m5), or planned or finished within
  *    the code's day, `[opens_at, expires_at)`;
- *  - a match with no court: the desk's two no-court lists (match-day.ts `readBoard`), in a live (not archived) division —
- *    in play, or ready (`scheduled`, an active stage, both seats filled) and planned no later than the day's end or not
+ *  - a match with no court: the desk's two no-court lists (match-day.ts `readBoard`) — in play, or ready (`scheduled`, an active stage, both seats filled) and planned no later than the day's end or not
  *    at all.
  */
 export function inScope(code: MatchDayCodeRow, f: ScopeFixture): boolean {
-  if (f.competition_id !== code.competitionId) return false;
+  if (f.competition_id !== code.competitionId || !f.division_live) return false;
   const scope = code.scope;
   if (scope.kind === "venue" && (f.court_id === null || f.venue_id !== scope.venueId)) return false;
   if (scope.kind === "courts" && (f.court_id === null || !scope.courtIds.includes(f.court_id))) return false;
@@ -114,7 +114,6 @@ export function inScope(code: MatchDayCodeRow, f: ScopeFixture): boolean {
 
 /** A no-court match as `readBoard` lists it: `playingNoCourt` or `noCourt` (match-day.ts), the day bounded by the code. */
 function noCourtListed(code: MatchDayCodeRow, f: ScopeFixture): boolean {
-  if (!f.division_live) return false;
   if (f.status === IN_PLAY) return true;
   return (
     f.status === SCHEDULED &&

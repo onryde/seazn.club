@@ -20,12 +20,13 @@ function kindOf(kind: string): ApprovalKind {
  * (`matchDayCodeOf`; NEVER_KEY_ROUTES), and only for a code that can approve. Not a pure read: a draw with no live draft
  * computes one, and a Swiss preview commits its round's lots draw. Refusals: 401 MD_UNKNOWN, 410 MD_WITHDRAWN,
  * 410 MD_ENDED, 403 MD_NOT_OPEN (with `opens_at`), 403 MD_NO_APPROVE, 403 MD_OUT_OF_SCOPE, 409 MD_STALE (not ready),
- * 409 MD_ALREADY, 404 NOT_FOUND, 429 RATE_LIMITED. Never cached.
+ * 409 MD_ALREADY, 404 NOT_FOUND, 429 RATE_LIMITED (the code's review budget, one a second: the costliest md_ call).
+ * Never cached.
  */
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { kind, stageId } = await params;
-    const code = await matchDayCodeOf(req, new Date());
+    const code = await matchDayCodeOf(req, new Date(), "review");
     return reply(200, await reviewApprovalForCode(code, kindOf(kind), stageId), { "cache-control": "no-store" });
   });
 }
@@ -38,7 +39,7 @@ export async function GET(req: Request, { params }: Ctx) {
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { kind, stageId } = await params;
-    const code = await matchDayCodeOf(req, new Date());
+    const code = await matchDayCodeOf(req, new Date(), "approve");
     const approval = kindOf(kind);
     const input = await parseBody(req, CaptureMatchdayApprovalRequest);
     return reply(200, await approveForCode(code, approval, stageId, input), { "cache-control": "no-store" });

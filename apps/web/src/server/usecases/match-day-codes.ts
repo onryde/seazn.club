@@ -189,8 +189,13 @@ export async function mintMatchDayCode(
 }
 
 /** The competition's codes that can still open — live and not yet open — each with its URL re-opened from the
- *  envelope, so the desk can show the same QR again. Soonest day first, then oldest mint. */
-export async function listMatchDayCodes(auth: AuthCtx, competitionId: string): Promise<Array<MatchDayCodeRow & { url: string }>> {
+ *  envelope, so the desk can show the same QR again. Soonest day first, then oldest mint. A code whose envelope will not
+ *  open (or opens to another token) is still listed, with `url: null`: its printed QR keeps working (the door resolves
+ *  by `tok_hash`), so the desk must keep its Withdraw (the controller's ruling on the MD-1 final review's I3). */
+export async function listMatchDayCodes(
+  auth: AuthCtx,
+  competitionId: string,
+): Promise<Array<MatchDayCodeRow & { url: string | null }>> {
   requireSessionEditor(auth);
   await competitionZone(auth, competitionId);
   const rows = await sql<(DbRow & { token_enc: Uint8Array; tok_hash: string })[]>`
@@ -198,20 +203,18 @@ export async function listMatchDayCodes(auth: AuthCtx, competitionId: string): P
      where competition_id = ${competitionId} and org_id = ${auth.orgId}
        and revoked_at is null and expires_at > ${new Date()}
      order by opens_at, created_at, id`;
-  const listed: Array<MatchDayCodeRow & { url: string }> = [];
-  for (const { token_enc, tok_hash, ...r } of rows) {
+  return rows.map(({ token_enc, tok_hash, ...r }) => {
     const token = verifiedToken(token_enc, tok_hash, { codeId: r.id, competitionId });
-    if (token !== null) listed.push({ ...toRow(r), url: urlOf(token) });
-  }
-  return listed;
+    return { ...toRow(r), url: token === null ? null : urlOf(token) };
+  });
 }
 
 /**
  * The token a row's envelope opens to, only when it hashes to the row's own `tok_hash` (MD-1 review I2; the
  * device-links.ts re-show precedent). The envelope has no AAD, so a swapped or restored `token_enc` would otherwise
  * show the desk another code's working QR under this row's scope and day. A row that will not open, or opens to
- * another token, is passed over and logged without the token, so one bad row never fails the whole list. A missing
- * KEK is not a bad row: it stays the 503 `openToken` throws.
+ * another token, has no QR to show (null) and is logged without the token, so one bad row never fails the whole list.
+ * A missing KEK is not a bad row: it stays the 503 `openToken` throws.
  */
 function verifiedToken(enc: Uint8Array, tokHash: string, ids: { codeId: string; competitionId: string }): string | null {
   let token: string;
@@ -219,11 +222,11 @@ function verifiedToken(enc: Uint8Array, tokHash: string, ids: { codeId: string; 
     token = openToken(enc);
   } catch (e) {
     if (e instanceof HttpError) throw e;
-    log.warn(ids, "match day code: sealed token will not open; left out of the list");
+    log.warn(ids, "match day code: sealed token will not open; listed without its QR");
     return null;
   }
   if (hashToken(token) === tokHash) return token;
-  log.warn(ids, "match day code: sealed token does not match the row's token hash; left out of the list");
+  log.warn(ids, "match day code: sealed token does not match the row's token hash; listed without its QR");
   return null;
 }
 

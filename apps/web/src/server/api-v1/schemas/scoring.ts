@@ -366,10 +366,11 @@ export const CreateMatchDayCode = z.object({
 export type CreateMatchDayCode = z.infer<typeof CreateMatchDayCode>;
 
 /** A Match Day code on the desk. `url` is the QR's payload, `{origin}/day/md_…`: a credential, shown to the editor who
- *  manages it and to nobody else. `opens_at` / `expires_at` are 00:00 and 24:00 of `day` in the competition's zone. */
+ *  manages it and to nobody else; null in the list for a code whose sealed copy will not open (no QR to show again, and
+ *  still withdrawable: its printed QR keeps working until it is withdrawn). `opens_at` / `expires_at` are 00:00 and 24:00 of `day` in the competition's zone. */
 export const MatchDayCode = z.object({
   id: Uuid,
-  url: z.string(),
+  url: z.string().nullable(),
   scope: MatchDayCodeScope,
   day: z.iso.date(),
   opens_at: z.string(),

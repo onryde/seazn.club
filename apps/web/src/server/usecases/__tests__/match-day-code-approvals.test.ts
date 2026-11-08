@@ -37,6 +37,8 @@ import { withdrawEntrantCascade } from "../withdrawal";
 import { GENERIC_CONFIG } from "./_seed";
 import { at, place, seedCompetition, seedDay, T0, type Day } from "./_match-day-seed";
 import { GET, POST } from "@/app/api/v1/match-day-code/approvals/[kind]/[stageId]/route";
+import { POST as eventsRoute } from "@/app/api/v1/fixtures/[id]/events/route";
+import { openMatchForCode } from "../match-day-code-open";
 
 vi.stubEnv("DEVICE_LINK_KEK", randomBytes(32).toString("hex"));
 vi.stubEnv("OAUTH_BASE_URL", "https://md.test.seazn.club");
@@ -418,6 +420,47 @@ describe.skipIf(!HAS_DB)("approvals through a Match Day code", () => {
       } finally {
         warn.mockRestore();
       }
+    });
+  });
+
+  describe("final review: Swiss round 1 is the desk's (m1); an online board scores through its link (m3)", () => {
+    const lotsOf = (stageId: string) => count(sql<{ n: number }[]>`select count(*)::int as n from stage_lots_draws where stage_id = ${stageId}`);
+
+    it("a Swiss round 1 to pair (after a desk Unpair) is not listed, and GET and POST are MD_STALE, seating nothing", async () => {
+      const s = await swissDivision(day);
+      // The desk's Unpair of round 1: its boards have no seats again.
+      await sql`update fixtures set home_entrant_id = null, away_entrant_id = null where stage_id = ${s.stageId} and round_no = 1`;
+      expect(await seatedIn(s.stageId, 1), "premise: round 1 is unpaired").toBe(0);
+      const { code } = await codeFor(day, { kind: "competition" }, true);
+      expect((await getMatchDayForCode(code, NOW)).approvals.map((a) => a.stage_id), "not listed").not.toContain(s.stageId);
+      const lots = await lotsOf(s.stageId);
+      const stale = { status: 409, code: "MD_STALE" };
+      expect(await refusalOf(reviewApprovalForCode(code, "swiss", s.stageId)), "GET").toEqual(stale);
+      expect(await refusalOf(approveForCode(code, "swiss", s.stageId, { hash: "0".repeat(64), round: 1 })), "POST").toEqual(stale);
+      expect(await seatedIn(s.stageId, 1), "nothing seated").toBe(0);
+      expect(await lotsOf(s.stageId), "no lots drawn").toBe(lots);
+      expect(await usesOf(code.id)).toEqual([]);
+    });
+
+    it("m3 evidence: a device-link result on an ONLINE (Lichess) board is accepted by the events route, so online boards stay", async () => {
+      const s = await swissDivision(day);
+      await sql`update divisions set config = config || '{"onlinePlay":"lichess"}'::jsonb
+                 where id = (select division_id from stages where id = ${s.stageId})`;
+      const [board] = (await boardsOf(s.stageId, 1)).filter((b) => b.home_entrant_id !== null && b.away_entrant_id !== null);
+      const { code } = await codeFor(day, { kind: "competition" }, false);
+      const opened = await openMatchForCode(code, board!.id, NOW);
+      expect(opened.kind, "premise: the code opens the online board").toBe("link");
+      if (opened.kind !== "link") return;
+      const bearer = { authorization: `Bearer ${opened.url.slice(opened.url.lastIndexOf("/") + 1)}`, "content-type": "application/json" };
+      const send = (body: Record<string, unknown>) =>
+        eventsRoute(new Request(`http://test.local/api/v1/fixtures/${board!.id}/events`, { method: "POST", headers: bearer, body: JSON.stringify(body) }), {
+          params: Promise.resolve({ id: board!.id }),
+        });
+      expect((await send({ expected_seq: 0, type: "core.start", payload: {} })).status).toBe(201);
+      const result = await send({ expected_seq: 1, type: "boardgame.result", payload: { winner: board!.home_entrant_id, method: "resign" } });
+      expect(result.status, "the link's result is recorded").toBe(201);
+      const [{ status }] = await sql<{ status: string }[]>`select status from fixtures where id = ${board!.id}`;
+      expect(status).not.toBe("scheduled");
     });
   });
 

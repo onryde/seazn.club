@@ -4727,7 +4727,14 @@
                           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                         },
                         "url": {
-                          "type": "string"
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "scope": {
                           "oneOf": [
@@ -5114,7 +5121,7 @@
         ]
       },
       "get": {
-        "summary": "The competition's Match Day codes that can still open — live and not yet open, soonest day first — each with its `url`, so the desk can show the same QR again (editor session only). Withdrawn codes and codes whose day is over are left out.",
+        "summary": "The competition's Match Day codes that can still open — live and not yet open, soonest day first — each with its `url`, so the desk can show the same QR again (editor session only); `url` is null for a code whose sealed copy will not open — still listed, so it can be withdrawn. Withdrawn codes and codes whose day is over are left out.",
         "tags": [
           "competitions"
         ],
@@ -5157,7 +5164,14 @@
                             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           },
                           "url": {
-                            "type": "string"
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           },
                           "scope": {
                             "oneOf": [
@@ -51910,7 +51924,7 @@
     },
     "/api/v1/match-day-code/fixtures/{id}/scoring-link": {
       "post": {
-        "summary": "Open a match through a Match Day code (capture S4 Match Day design §6, §9.4; contract capture-matchday-open.v1): `{kind: \"link\", url, sport_key}` — the match's own sealed `/score/dl_…` scoring link, the printed QR's when it has one, never a second one beside a live one and nothing revoked — or `{kind: \"finished\"}` for a finalized or cancelled match. Scope (the code's competition, venue or courts, and its day) is judged at the moment of asking: 403 MD_OUT_OF_SCOPE otherwise. Authenticated by `Authorization: Bearer md_…` ONLY; never a session or an API key. Spends the console's device-link mint budget per client IP. 401 MD_UNKNOWN, 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with `opens_at`), 404 NOT_FOUND, 429 RATE_LIMITED. The url is a credential: never cached.",
+        "summary": "Open a match through a Match Day code (capture S4 Match Day design §6, §9.4; contract capture-matchday-open.v1): `{kind: \"link\", url, sport_key}` — the match's own sealed `/score/dl_…` scoring link, the printed QR's when it has one, never a second one beside a live one and nothing revoked — or `{kind: \"finished\"}` for a finalized or cancelled match. Scope (the code's competition, venue or courts, and its day) is judged at the moment of asking: 403 MD_OUT_OF_SCOPE otherwise. Authenticated by `Authorization: Bearer md_…` ONLY; never a session or an API key. Spends the code's open budget (per code, never per client IP: umpires share venue Wi-Fi); a NEW link minted spends the console's device-link mint budget per client IP on top, and a re-shown link spends nothing more. 401 MD_UNKNOWN, 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with `opens_at`), 404 NOT_FOUND, 429 RATE_LIMITED. The url is a credential: never cached.",
         "tags": [
           "scoring"
         ],

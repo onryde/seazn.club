@@ -25,6 +25,9 @@ import { getFixture } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { at, place, seedCompetition, seedDay, setStatus, T0, type Day } from "./_match-day-seed";
 import { POST } from "@/app/api/v1/match-day-code/fixtures/[id]/scoring-link/route";
+import { GET as DAY } from "@/app/api/v1/match-day-code/route";
+import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
+import { matchDayCodeOf } from "@/server/api-v1/match-day-code-door";
 
 vi.stubEnv("DEVICE_LINK_KEK", randomBytes(32).toString("hex"));
 vi.stubEnv("OAUTH_BASE_URL", "https://md.test.seazn.club");
@@ -162,6 +165,24 @@ describe.skipIf(!HAS_DB)("open a match through a Match Day code", () => {
     expect(await openMatchForCode(code, f[1]!, NOW)).toEqual(refused);
     expect(await linksOf(f[2]!)).toEqual([]);
     expect(await linksOf(f[5]!)).toHaveLength(before);
+  });
+
+  it("an on-court match of an archived division is MD_OUT_OF_SCOPE, planned or in play, and mints nothing (final review I2)", async () => {
+    const { code } = await codeFor(day, { kind: "competition" });
+    const refused = { kind: "refused", code: "MD_OUT_OF_SCOPE" };
+    expect(await linksOf(f[0]!), "premise: no link yet").toEqual([]);
+    await sql`update divisions set archived_at = now() where id = ${day.comp.divisionId}`;
+    // f0: planned on Court 1 within the day.
+    expect(await openMatchForCode(code, f[0]!, NOW)).toEqual(refused);
+    // f5: on Court 1, in play.
+    await setStatus(f[5]!, "in_play");
+    expect(await openMatchForCode(code, f[5]!, NOW)).toEqual(refused);
+    expect(await linksOf(f[0]!), "no link minted").toEqual([]);
+    expect(await linksOf(f[5]!), "no link minted").toEqual([]);
+    expect(await usesOf(code.id)).toEqual([]);
+    // The premise: the archive was the only bar.
+    await sql`update divisions set archived_at = null where id = ${day.comp.divisionId}`;
+    expect((await openMatchForCode(code, f[0]!, NOW)).kind).toBe("link");
   });
 
   it("the use row is written in the link's own transaction: a use that cannot be logged hands out no link (fix M4)", async () => {
@@ -302,6 +323,106 @@ describe.skipIf(!HAS_DB)("open a match through a Match Day code", () => {
       expect((await gone.json()).error.code).toBe("MD_WITHDRAWN");
       // The token never comes back on the wire, in any answer.
       expect(JSON.stringify([link, finished, refusal])).not.toContain(token);
+    });
+  });
+
+  describe("budgets per code, never per client IP (final review I1; the controller's ruling)", () => {
+    const IP = "203.0.113.7";
+    /** A fixed-window counter with the Lua's semantics (limits-route.test.ts's), recording every key spent. */
+    function windowedRedis() {
+      let now = 0;
+      const keys = new Map<string, { count: number; expiresAt: number }>();
+      const spent: string[] = [];
+      __setRateLimitCounterForTests(async (key, windowSeconds) => {
+        spent.push(key);
+        let k = keys.get(key);
+        if (k && k.expiresAt <= now) {
+          keys.delete(key);
+          k = undefined;
+        }
+        if (!k) {
+          k = { count: 0, expiresAt: now + windowSeconds * 1000 };
+          keys.set(key, k);
+        }
+        k.count++;
+        return { count: k.count, ttlMs: k.expiresAt - now };
+      });
+      return { advance: (ms: number) => (now += ms), spent };
+    }
+    const headers = (bearer: string, ip = IP) => ({ authorization: `Bearer ${bearer}`, "cf-connecting-ip": ip });
+    const open = (bearer: string, fixtureId: string, ip = IP): Promise<Response> =>
+      POST(new Request(`https://test.local/api/v1/match-day-code/fixtures/${fixtureId}/scoring-link`, { method: "POST", headers: headers(bearer, ip) }), {
+        params: Promise.resolve({ id: fixtureId }),
+      });
+    const dayRead = (bearer: string, ip = IP): Promise<Response> =>
+      DAY(new Request("https://test.local/api/v1/match-day-code", { headers: headers(bearer, ip) }));
+    const guess = (): string => "md_" + randomBytes(32).toString("base64url");
+
+    afterEach(() => __setRateLimitCounterForTests(null));
+
+    it("valid codes behind one IP spend their codes' buckets only: twelve opens and the day reads are never 429", async () => {
+      const a = await codeFor(day, { kind: "competition" });
+      const b = await codeFor(day, { kind: "venue", venueId: day.venues.hallA });
+      vi.useFakeTimers({ toFake: ["Date"], now: NOW });
+      const redis = windowedRedis();
+      // Twelve opens from one venue IP, two umpires: past the old `dlmint:{ip}` 10 a minute on every open.
+      const statuses: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        statuses.push((await open(a.token, f[0]!)).status);
+        statuses.push((await open(b.token, f[0]!)).status);
+      }
+      expect(statuses).toEqual(Array(12).fill(200));
+      expect((await dayRead(a.token)).status).toBe(200);
+      expect((await dayRead(b.token)).status).toBe(200);
+      // No bucket an IP keys but the one mint (f0 had no link): the codes' own, per route.
+      expect(redis.spent.filter((k) => k.includes(IP))).toEqual([`rl:dlmint:${IP}`]);
+      expect(new Set(redis.spent)).toEqual(
+        new Set([`rl:mdopen:${a.code.id}`, `rl:mdopen:${b.code.id}`, `rl:dlmint:${IP}`, `rl:mdday:${a.code.id}`, `rl:mdday:${b.code.id}`]),
+      );
+    });
+
+    it("a guessing client is 429 past its failed-lookup budget, and a valid code from the same IP is still admitted", async () => {
+      const { token } = await codeFor(day, { kind: "competition" });
+      vi.useFakeTimers({ toFake: ["Date"], now: NOW });
+      windowedRedis();
+      const guesses: number[] = [];
+      for (let i = 0; i < 31; i++) guesses.push((await dayRead(guess())).status);
+      expect(guesses.slice(0, 30)).toEqual(Array(30).fill(401));
+      expect(guesses[30], "the 31st failed lookup in the minute").toBe(429);
+      expect((await dayRead(token)).status, "a valid code is never refused for the IP's failures").toBe(200);
+      expect((await dayRead(guess(), "198.51.100.9")).status, "another IP's budget is its own").toBe(401);
+    });
+
+    it("a new link past the console's mint budget is 429 and rolled back; a re-show spends no mint", async () => {
+      const { code, token } = await codeFor(day, { kind: "competition" });
+      vi.useFakeTimers({ toFake: ["Date"], now: NOW });
+      const redis = windowedRedis();
+      expect((await open(token, f[0]!)).status, "f0 minted").toBe(200);
+      const mints = () => redis.spent.filter((k) => k === `rl:dlmint:${IP}`).length;
+      expect(mints()).toBe(1);
+      // Nine more mints from this IP (the console's own, say): the bucket is at its 10.
+      const { rateLimit, DEVICE_LINK_MINT_LIMIT } = await import("@/lib/rate-limit");
+      for (let i = 0; i < 9; i++) await rateLimit(`dlmint:${IP}`, DEVICE_LINK_MINT_LIMIT);
+      const refused = await open(token, f[5]!);
+      expect(refused.status).toBe(429);
+      expect(await linksOf(f[5]!), "the mint was rolled back").toEqual([]);
+      expect((await usesOf(code.id)).map((u) => u.fixture_id), "and logged nothing").toEqual([f[0]]);
+      // A re-show writes nothing, so it spends no mint.
+      const before = mints();
+      expect((await open(token, f[0]!)).status).toBe(200);
+      expect(mints()).toBe(before);
+    });
+
+    it("the review budget is the code's, one a second (final review m4); the day read's is its own", async () => {
+      const { code, token } = await codeFor(day, { kind: "competition" });
+      vi.useFakeTimers({ toFake: ["Date"], now: NOW });
+      const redis = windowedRedis();
+      const req = () => new Request("https://test.local/x", { headers: headers(token) });
+      expect((await matchDayCodeOf(req(), NOW, "review")).id).toBe(code.id);
+      expect(await matchDayCodeOf(req(), NOW, "review").then(() => 200, (e: HttpError) => e.status)).toBe(429);
+      expect((await matchDayCodeOf(req(), NOW, "day")).id, "the day read is not spent by reviews").toBe(code.id);
+      redis.advance(1000);
+      expect((await matchDayCodeOf(req(), NOW, "review")).id, "the next second").toBe(code.id);
     });
   });
 

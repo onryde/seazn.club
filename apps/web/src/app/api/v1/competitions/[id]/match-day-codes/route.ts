@@ -21,7 +21,7 @@ function scopeOut(s: MatchDayScope): MatchDayCodeScope {
   if (s.kind === "courts") return { kind: "courts", court_ids: s.courtIds };
   return { kind: "competition" };
 }
-function wire(row: MatchDayCodeRow, url: string): MatchDayCode {
+function wire(row: MatchDayCodeRow, url: string | null): MatchDayCode {
   return {
     id: row.id,
     url,
@@ -48,7 +48,8 @@ export async function POST(req: Request, { params }: Ctx) {
 }
 
 /** The competition's codes that can still open — live and not yet open — each with its URL, so the desk can show the
- *  same QR again. Editor session only. */
+ *  same QR again (null for a code whose sealed copy will not open: listed, so it can still be withdrawn). Editor session
+ *  only. */
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;

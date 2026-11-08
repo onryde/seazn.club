@@ -87,7 +87,9 @@ export function MatchDayCodeSheet({ competitionId, dict, locale, today, courts, 
     return () => ctl.abort();
   }, [competitionId]);
 
-  const show = async (code: MatchDayCode) => setShown({ id: code.id, qr: await renderSeaznQr(code.url) });
+  const show = async (code: MatchDayCode) => {
+    if (code.url !== null) setShown({ id: code.id, qr: await renderSeaznQr(code.url) });
+  };
   const body = scopeBody(kind, venueId, courtIds);
 
   const mint = async () => {
@@ -242,6 +244,12 @@ function ScopePicker(props: {
   );
 }
 
+/** A listed code with a QR to show again. A code whose sealed copy will not open comes with `url: null`: the row keeps
+ *  its Withdraw (its printed QR still works until withdrawn) and offers no Show QR (MD-1 final review I3). */
+export function hasQr(c: Pick<MatchDayCode, "url">): boolean {
+  return c.url !== null;
+}
+
 function CodeList(props: {
   dict: Dict;
   locale: Locale;
@@ -270,9 +278,11 @@ function CodeList(props: {
                 {scopeWords(dict, c.scope, props.courts)} · {when(c)}
                 {c.can_approve && ` · ${t(dict, "matchDay.code.approves")}`}
               </span>
-              <button type="button" className="btn btn-ghost min-h-11" onClick={() => props.onShow(c)}>
-                {t(dict, "matchDay.code.show")}
-              </button>
+              {hasQr(c) && (
+                <button type="button" className="btn btn-ghost min-h-11" onClick={() => props.onShow(c)}>
+                  {t(dict, "matchDay.code.show")}
+                </button>
+              )}
               <button
                 type="button"
                 data-testid="md-code-withdraw"

@@ -33,8 +33,15 @@ type OpenRow = ScopeFixture & { sport_key: string };
  *    `{kind: "finished"}` with nothing written; otherwise the live sealed link, or a new one beside it. NEVER a revoke.
  * One `match_day_code_uses` row per link answered, written in the same transaction (`privilegedEpilogue`: the use log is
  * sealed), so a link handed out always has its row.
+ * `onMint` runs inside the transaction when a NEW link was minted (never for a re-show): the route spends the console's
+ * mint budget there, and a throw (its 429) rolls the mint back.
  */
-export async function openMatchForCode(code: MatchDayCodeRow, fixtureId: string, now: Date): Promise<MatchDayOpen> {
+export async function openMatchForCode(
+  code: MatchDayCodeRow,
+  fixtureId: string,
+  now: Date,
+  opts: { onMint?: () => Promise<void> } = {},
+): Promise<MatchDayOpen> {
   assertUuid(fixtureId, "fixture");
   void now; // scope is the code's own day ([opensAt, expiresAt)); the door already judged `now` against it
   const origin = siteOrigin();
@@ -56,6 +63,7 @@ export async function openMatchForCode(code: MatchDayCodeRow, fixtureId: string,
       if (!inScope(code, row)) return { kind: "refused", code: "MD_OUT_OF_SCOPE" };
       const link = await provideSealedLink(tx, fixtureId, code.issuedBy);
       if (link.kind === "finished") return { kind: "finished" };
+      if (link.minted) await opts.onMint?.();
       return { kind: "secret", secret: link.secret, sport_key: row.sport_key };
     },
     {
