@@ -148,7 +148,14 @@ async function shareLink(o: StandInOrg, sponsorId: string): Promise<{ id: string
   expect(res.status(), `setup: report link: ${await res.text()}`).toBe(201);
   return ((await res.json()) as { data: { id: string; url: string } }).data;
 }
-const reportPath = (url: string) => new URL(url).pathname;
+/** The report-links route answers the link ROOT-RELATIVE (spec §5.2: `/r/sponsor/<token>`, `reportLinkPath` in lib/sponsor-report.ts;
+ *  the console shows it against the organiser's own origin), so `new URL(url)` threw "Invalid URL" on it. The shape is asserted here,
+ *  as the route's own unit test pins it (a 32-byte token, base64url: 43 characters), and the path is navigated as answered. */
+const REPORT_PATH = /^\/r\/sponsor\/[A-Za-z0-9_-]{43}$/;
+const reportPath = (url: string): string => {
+  expect(url, "the report-links route answers a root-relative /r/sponsor/<43-char base64url token> path").toMatch(REPORT_PATH);
+  return url;
+};
 const startItem = (momentId: string, cardId: string, atMs: number, over: Record<string, unknown> = {}) => ({
   kind: "start", momentId, cardId, style: CAROUSEL_STYLE, source: "scene", breakKind: null, at: new Date(atMs).toISOString(), ...over,
 });
