@@ -279,18 +279,30 @@ describe("projectOverlayLiveData", () => {
     });
   });
 
-  it("football: between periods the clock is ABSENT (the stage holds the last value), never a stale stamp", () => {
-    // H1's closing whistle carries an H1 stamp; `applyPeriod`'s "HT" arm then
-    // pushes `state.phase` to "H2" (football.ts:1548-1551) while `asOf` stays
-    // at the whistle's own H1 stamp (:2525) — so the stamp names a phase the
-    // match has left, which is exactly the guard `footballPosition` applies.
-    const f = folded("football", [
+  it("football: no clock event — a goal stamped in a period the match has left puts no clock on air", () => {
+    // Ruling 110: a football clock is anchored on a `football.clock` event and nothing else (`footballClockOf`, via
+    // `latestClockAnchor`). This stream has a goal and H1's closing whistle, both stamped H1, and the fold has moved on
+    // to H2 — but no clock event, so there is no anchor and no clock, whatever the stamps say. It is NOT a rule that
+    // the clock is absent between periods: with a clock event the same moment reads 45:00, paused (the test above).
+    const stream = [
       ["core.start", {}],
       ["football.goal", { by: "H", at: { period: "H1", elapsed: 761 } }],
       ["football.period", { phase: "HT", at: { period: "H1", elapsed: 2700 } }],
-    ]);
+    ] as const;
+    const f = folded("football", [...stream]);
     const out = projectOverlayLiveData({ row: ROW(3), folded: f, venueTz: "UTC" });
-    expect(out.clock, "a stale clock on air is worse than no clock").toBeUndefined();
+    expect(out.clock, "a goal's stamp is not a clock").toBeUndefined();
+    // The positive pair: the same stream with a Start at kick-off put in front of the goal is a clock, standing at
+    // the second half's own start — so the absence above is the missing clock event, not the period.
+    const withStart = folded("football", [
+      stream[0],
+      ["football.clock", { at: { period: "H1", elapsed: 0 }, running: true }],
+      stream[1],
+      stream[2],
+    ]);
+    const clock = projectOverlayLiveData({ row: ROW(4), folded: withStart, venueTz: "UTC" }).clock;
+    expect(clock).toMatchObject({ phase: "H2", anchorSeconds: 0, running: false });
+    expect(clockLabelAt(clock!, Date.parse(WALL) + 600_000, 0, 0)).toBe("45:00");
   });
 
   it("football: an UNSTAMPED event after the clock event does not drag the anchor forward", () => {

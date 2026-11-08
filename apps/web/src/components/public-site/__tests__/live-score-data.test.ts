@@ -10,7 +10,6 @@ import {
   OVERLAY_REALTIME_PURPOSE,
   sampleServerOffset,
 } from "../live-score-data";
-import { overlayServerOffsetMs } from "../overlay-server-offset";
 import { createServerOffset } from "@/components/v2/scorepad/server-offset";
 import { OVERLAY_KEY_PARAM, REALTIME_PURPOSE_PARAM } from "@/lib/realtime-purpose";
 
@@ -86,6 +85,11 @@ describe("the overlay poll measures the server's time (S2-5 ruling 110)", () => 
   });
 
   it("fetchOverlayFixture samples its answer's Date header into the page's offset", async () => {
+    // The page's window is module state that nothing in production ever clears, and other tests in this file poll
+    // through `fetchOverlayFixture` too. A fresh module registry gives this test its own window whatever ran before.
+    vi.resetModules();
+    const { fetchOverlayFixture } = await import("../live-score-data");
+    const { overlayServerOffsetMs } = await import("../overlay-server-offset");
     expect(overlayServerOffsetMs(), "nothing measured before the first poll").toBeNull();
     vi.stubGlobal("fetch", vi.fn(async () => answer({ date: DATE })));
     // A machine five minutes fast: sent at D + 300 000, answered 200 ms later. Midpoint D + 300 100; the server's
