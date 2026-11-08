@@ -53,9 +53,9 @@ const CLICK_SOURCES = ["match", "stream", "site", "unknown"];
 const WALKED_FKS = [
   "sponsor_stream_settings.competition_id",
   "sponsor_assignments.fixture_id", "sponsor_assignments.sponsor_id",
-  "sponsor_airings.sponsor_id", "sponsor_airings.fixture_id", "sponsor_airings.session_id",
+  "sponsor_airings.sponsor_id", "sponsor_airings.fixture_id", "sponsor_airings.competition_id", "sponsor_airings.session_id",
   "sponsor_airing_frames.session_id",
-  "sponsor_clicks.sponsor_id", "sponsor_clicks.fixture_id",
+  "sponsor_clicks.sponsor_id", "sponsor_clicks.fixture_id", "sponsor_clicks.competition_id",
   "sponsor_report_links.sponsor_id", "sponsor_report_links.competition_id",
   "sponsor_short_codes.sponsor_id", "sponsor_short_codes.fixture_id",
 ];
@@ -446,6 +446,60 @@ describe.skipIf(!HAS_DB)("V492 sponsors on stream — the constraints are real",
     expect(k).toEqual({ fixture_id: null });
     const left = await sql<{ fixture_id: string }[]>`select fixture_id from sponsor_assignments where org_id = ${w.orgId}`;
     expect(left).toEqual([{ fixture_id: f2 }]);
+  });
+
+  // Final review 2, item 4 (owner "4 Ok"): the competition a row's fixture was in is SNAPSHOTTED at insert, so a
+  // competition-scoped period or link still counts the row once the fixture is gone (a format change deletes fixtures).
+  it("item 4: an airing and a click snapshot their fixture's competition at insert - a supplied value is overwritten, no fixture is no competition, and the fixture's delete keeps it (MUTATE: drop the trigger)", async () => {
+    const w = await world();
+    const [f1, f2] = w.fixtureIds as [string, string];
+    const s = await w.session(f1);
+    const sp = await sponsor(w, "Snapshot Ltd");
+    const elsewhere = await emptyCompetition(w);
+    expect(elsewhere, "premise: a second competition of the org").not.toBe(w.competitionId);
+    const competitionOf = async (table: "sponsor_airings" | "sponsor_clicks", id: string) =>
+      (await sql<{ competition_id: string | null }[]>`select competition_id from ${sql(table)} where id = ${id}`)[0]!.competition_id;
+
+    const aired = await airing(w, { sponsor: sp, fixture: f1, session: s });
+    const clicked = await click(w, { sponsor: sp, fixture: f2 });
+    const noFixtureAiring = await airing(w, { sponsor: sp, fixture: null, session: null });
+    const noFixtureClick = await click(w, { sponsor: sp, fixture: null, source: "site" });
+    // A writer that names another competition is overwritten by the fixture's own: the fixture is the one authority.
+    const [supplied] = await sql<{ id: string }[]>`
+      insert into sponsor_clicks (org_id, sponsor_id, fixture_id, competition_id, source)
+      values (${w.orgId}, ${sp}, ${f1}, ${elsewhere}, 'stream') returning id`;
+    const [suppliedNoFixture] = await sql<{ id: string }[]>`
+      insert into sponsor_airings (org_id, sponsor_id, sponsor_name, fixture_id, competition_id, session_id, moment_id, source, break_kind, style, started_at)
+      values (${w.orgId}, ${sp}, 'Snapshot Ltd', null, ${elsewhere}, null, ${`m-${uniq()}`}, 'rotation', 'over_end', 'lower_third', now()) returning id`;
+    const read = async () => ({
+      aired: await competitionOf("sponsor_airings", aired),
+      clicked: await competitionOf("sponsor_clicks", clicked),
+      noFixtureAiring: await competitionOf("sponsor_airings", noFixtureAiring),
+      noFixtureClick: await competitionOf("sponsor_clicks", noFixtureClick),
+      supplied: await competitionOf("sponsor_clicks", supplied!.id),
+      suppliedNoFixture: await competitionOf("sponsor_airings", suppliedNoFixture!.id),
+    });
+    const atInsert = {
+      aired: w.competitionId, clicked: w.competitionId, noFixtureAiring: null, noFixtureClick: null,
+      supplied: w.competitionId, suppliedNoFixture: null,
+    };
+    expect(await read()).toEqual(atInsert);
+
+    // The fixture goes (R16's set null): the snapshot stays.
+    await sql`delete from fixtures where id in ${sql([f1, f2])}`;
+    const [gone] = await sql<{ n: number }[]>`
+      select count(*)::int as n from sponsor_airings where id = ${aired} and fixture_id is null`;
+    expect(gone!.n, "premise: the airing's fixture was set null").toBe(1);
+    expect(await read(), "after the fixtures' delete").toEqual(atInsert);
+
+    // Deleting the competition clears it (its scoped links cascade with it, so no reader is left to widen).
+    const actions = await sql<{ fk: string; action: string }[]>`
+      select c.conrelid::regclass::text as fk, c.confdeltype as action
+        from pg_constraint c
+       where c.contype = 'f' and c.confrelid = 'competitions'::regclass
+         and c.conrelid in ('sponsor_airings'::regclass, 'sponsor_clicks'::regclass)
+       order by 1`;
+    expect(actions.map((a) => [a.fk.replace(/^.*\./, ""), a.action])).toEqual([["sponsor_airings", "n"], ["sponsor_clicks", "n"]]);
   });
 
   it("R16 (revised): deleting a competition deletes the link scoped to it — a scoped bearer link never widens to org-wide — while the same sponsor's org-wide link survives; deleting the author nulls created_by (MUTATE: competition_id back to set null)", async () => {

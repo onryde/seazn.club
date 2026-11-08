@@ -100,6 +100,8 @@ create table sponsor_airings (
   sponsor_id      uuid null references sponsors(id) on delete set null,
   sponsor_name    text not null,
   fixture_id      uuid null references fixtures(id) on delete set null,
+  -- The fixture's competition, snapshotted at insert (sponsor_rows_snapshot_competition, below the clicks table).
+  competition_id  uuid null references competitions(id) on delete set null,
   session_id      uuid null references fixture_stream_sessions(id) on delete set null,
   moment_id       text not null,
   source          text not null,
@@ -118,6 +120,7 @@ create table sponsor_airings (
 create index sponsor_airings_org_sponsor_started_idx on sponsor_airings (org_id, sponsor_id, started_at);
 create index sponsor_airings_sponsor_idx on sponsor_airings (sponsor_id);
 create index sponsor_airings_fixture_idx on sponsor_airings (fixture_id);
+create index sponsor_airings_competition_idx on sponsor_airings (competition_id) where competition_id is not null;
 
 alter table sponsor_airings enable row level security;
 alter table sponsor_airings force  row level security;
@@ -182,12 +185,15 @@ create table sponsor_clicks (
   org_id     uuid not null references organizations(id) on delete cascade,
   sponsor_id uuid not null references sponsors(id) on delete cascade,
   fixture_id uuid null references fixtures(id) on delete set null,
+  -- The fixture's competition, snapshotted at insert (sponsor_rows_snapshot_competition, below).
+  competition_id uuid null references competitions(id) on delete set null,
   source     text not null,
   at         timestamptz not null default now(),
   constraint sponsor_clicks_source_check check (source in ('match', 'stream', 'site', 'unknown'))
 );
 create index sponsor_clicks_sponsor_at_idx on sponsor_clicks (sponsor_id, at);
 create index sponsor_clicks_fixture_idx on sponsor_clicks (fixture_id);
+create index sponsor_clicks_competition_idx on sponsor_clicks (competition_id) where competition_id is not null;
 -- The hub's Overview (S13) counts one org's clicks in a time window across all its sponsors: `org_id = $1 and at >= $2 and
 -- at < $3`. (sponsor_id, at) cannot serve that (Postgres 16 has no skip scan), so it gets its own.
 create index sponsor_clicks_org_at_idx on sponsor_clicks (org_id, at);
@@ -197,6 +203,24 @@ alter table sponsor_clicks force  row level security;
 create policy sponsor_clicks_tenant on sponsor_clicks for all to app_user
   using (org_id = current_org_id()) with check (org_id = current_org_id());
 grant select on sponsor_clicks to app_user;
+
+-- Final review 2, item 4 (owner "4 Ok"): the COMPETITION a row's fixture was in, snapshotted at INSERT on both history
+-- tables. A fixture can go while its showings and visits stay (R16: fixture_id set null) - a format change (FMT5) deletes
+-- every fixture of a division - and a competition-scoped Overview period or report link that asked "is the row's fixture
+-- in this competition?" then lost those rows for good. They read THIS column instead (server/sponsors/report.ts), which
+-- outlives the fixture. One trigger for both tables and every writer (V110's denormalisation pattern): the inserts do not
+-- change, and the value cannot drift from the fixture it was taken from. A value the insert supplies is overwritten - the
+-- fixture is the one authority, so no fixture is no competition. INSERT only: the set null that removes the fixture is an
+-- update, and leaves the snapshot. Deleting the competition clears it (set null): its links are gone with it anyway.
+create function sponsor_rows_snapshot_competition() returns trigger language plpgsql as $$
+begin
+  new.competition_id := (select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = new.fixture_id);
+  return new;
+end $$;
+create trigger sponsor_airings_snapshot_competition before insert on sponsor_airings
+  for each row execute function sponsor_rows_snapshot_competition();
+create trigger sponsor_clicks_snapshot_competition before insert on sponsor_clicks
+  for each row execute function sponsor_rows_snapshot_competition();
 
 -- A shareable report link (S13). The token (32 random bytes) is shown once as a URL; only its hash is stored. Revoke
 -- sets revoked_at. A link scoped to a competition dies with it (R16, revised): a bearer link must never widen from one
