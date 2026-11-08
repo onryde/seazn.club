@@ -141,7 +141,7 @@ async function sponsorCompetitionId(orgId: string, id: string): Promise<string |
   });
 }
 
-/** An ORGANISER's sponsor write (create, edit, reorder, delete): its author looks at the public page next, so the org tag
+/** An ORGANISER's sponsor write (create, edit, reorder, delete, console refund): its author looks at the public page next, so the org tag
  *  expires BEFORE the use-case resolves - `expireCompetitionShell` awaits the slug and fires `{ expire: 0 }` inside the
  *  request (Next applies a request's revalidations when its handler finishes) and never rejects, the write having
  *  committed. Never `bustPublicSponsors` here: its `deferred` is Next's `after()`, which runs once the response has gone
@@ -151,7 +151,9 @@ async function expirePublicSponsors(orgId: string, op: string): Promise<void> {
   await expireCompetitionShell(orgId, { op });
 }
 
-/** Sponsor changes nobody reads back at once (the paid-order and dispute webhooks): the same bust as tail work. */
+/** Sponsor changes nobody reads back at once: the same bust as tail work. Its only callers are `handleSponsorDispute`'s
+ *  four branches. The paid-order and charge.refunded webhooks defer `fireOrgRevalidate` inline instead, after their own
+ *  slug read. */
 function bustPublicSponsors(orgId: string): void {
   deferred(async () => {
     const [org] = await sql<{ slug: string }[]>`
@@ -786,6 +788,9 @@ export async function refundSponsorOrder(
     refunded: true,
   } as Stripe.Charge);
   if (notice) deferred(() => dispatchNow([notice]));
+  // The organiser refunded from the console and looks at the public page next: the placement leaves it NOW, not after the
+  // response (the webhook handler's own bust above is `after()` tail work - see expirePublicSponsors).
+  await expirePublicSponsors(auth.orgId, "sponsor.refund");
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<SponsorOrderRow[]>`
       select ${tx(ORDER_COLS)} from sponsor_orders where id = ${orderId}`;

@@ -438,8 +438,8 @@ describe.skipIf(!HAS_DB)("S15: the sponsor chain, plan → airing → click → 
     expect(printed, "the card prints its short link").not.toBeNull();
     const path = printed!.slice(sponsorLinkHost().length);
     expect(path).toBe(`/s/${card.shortCode}`);
-    // Other writers queue tail work too (the sponsor writes' cache busts, the ledger's): run it now, so the count below is
-    // the route's alone.
+    // Other writers may queue tail work too (the ledger's; the organiser's sponsor writes queue none, they expire the public
+    // pages inside the request): run it now, so the count below is the route's alone.
     await flush();
     const res = await sponsorLinkRoute(
       new Request(`https://${sponsorLinkHost()}${path}`, { headers: { "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)", "x-forwarded-for": "203.0.113.15" } }),
