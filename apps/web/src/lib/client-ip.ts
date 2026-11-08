@@ -15,9 +15,9 @@
 // their own can proxy to the fly.dev origin through Cloudflare's network, so the peer is a genuine edge with no `cf-worker`.
 // The close is the ORIGIN STAMP (owner OK 2026-11-07): OUR zone's Transform Rule sets `x-seazn-origin-secret` to a secret that
 // web holds as `CF_ORIGIN_SECRET`; with the secret set, `CF-Connecting-IP` is believed only on a request carrying that exact
-// stamp, and a missing or wrong one falls back to Fly's peer (never a refusal). Unset, nothing changes - the ops order (rule
-// first, then the secret) is in the README's "Deploy step - client IP behind Cloudflare". Even so, a per-IP limit is a brake,
-// never an authorisation.
+// stamp, and a missing or wrong one falls back to Fly's peer (never a refusal) and is reported. Unset, nothing changes. The
+// ops order - the web release carrying the Sentry scrub live FIRST, then the Cloudflare rule, then the secret - is in the
+// README's "Deploy step - client IP behind Cloudflare". Even so, a per-IP limit is a brake, never an authorisation.
 import { timingSafeEqual } from "node:crypto";
 import { BlockList, isIP } from "node:net";
 import * as Sentry from "@sentry/nextjs";
@@ -53,24 +53,34 @@ const first = (v: string | null | undefined): string | undefined => v?.trim() ||
 
 /** The header OUR Cloudflare zone's Transform Rule stamps on every request it forwards. Its value is a secret: never logged,
  *  echoed, or put into an error. The name carries `secret` so Sentry's own deny list masks it in the root span's
- *  `http.request.header.*` attributes, and `lib/scrub-score-url.ts` redacts it there and in `request.headers` as well.
- *  Not exported: the reader exports no header name (client-ip-readers.test.ts); scrub-score-url.ts spells it itself. */
+ *  `http.request.header.*` attributes, and `lib/scrub-score-url.ts` redacts every `x-seazn-origin*` header there and in
+ *  `request.headers` as well. Not exported: the reader exports no header name (client-ip-readers.test.ts); the scrub spells
+ *  its prefix itself, and client-ip.test.ts drives one name through both. */
 const ORIGIN_STAMP_HEADER = "x-seazn-origin-secret";
 
 /** Whether the request came through OUR zone. With `CF_ORIGIN_SECRET` set (read per request), its stamp must equal the secret,
- *  compared in constant time; a stamp of another length is a mismatch, never a throw. Unset or empty: not required. */
-function throughOurZone(headers: Headers): boolean {
+ *  compared in constant time; a stamp of another length is "wrong", never a throw. Unset or empty: not required ("ok"). */
+function originStamp(headers: Headers): "ok" | "absent" | "wrong" {
   const secret = process.env.CF_ORIGIN_SECRET;
-  if (!secret) return true;
+  if (!secret) return "ok";
   const stamp = headers.get(ORIGIN_STAMP_HEADER);
-  if (stamp === null) return false;
+  if (stamp === null) return "absent";
   const sent = Buffer.from(stamp, "utf8");
   const want = Buffer.from(secret, "utf8");
   // timingSafeEqual throws on unequal lengths; the length of a 32+ byte random secret is not worth hiding.
-  return sent.length === want.length && timingSafeEqual(sent, want);
+  return sent.length === want.length && timingSafeEqual(sent, want) ? "ok" : "wrong";
 }
 
-/** The reason code a stamp mismatch is reported under - the only thing it carries. */
+/** A host name (and port) as a report may carry it; anything else is not echoed. */
+const REPORTABLE_HOST = /^[a-z0-9.-]{1,253}(?::\d{1,5})?$/;
+/** The request's `Host`, for a report: lower-cased, "none" when missing, "invalid" when it is not a host name. */
+function reportedHost(headers: Headers): string {
+  const host = headers.get("host")?.trim().toLowerCase();
+  if (!host) return "none";
+  return REPORTABLE_HOST.test(host) ? host : "invalid";
+}
+
+/** The reason code a stamp mismatch is reported under, beside its two non-secret discriminators (the stamp's kind, the host). */
 const STAMP_MISMATCH = "origin_stamp_mismatch";
 /** At most one `log.warn` this often per process; Sentry hears of it once per process. */
 const STAMP_MISMATCH_WARN_EVERY_MS = 60_000;
@@ -82,19 +92,22 @@ let stampMismatchSent = false;
  * misconfigured rule (another host, a typo, a rotation half done) puts every visitor of that colo in one bucket - sign-in
  * first. Never silent: a throttled warn, and one Sentry warning per process. Neither carries a header value or the secret.
  */
-function reportStampMismatch(): void {
+function reportStampMismatch(stamp: "absent" | "wrong", headers: Headers): void {
   const now = Date.now();
-  if (stampMismatchWarnedAt === undefined || now - stampMismatchWarnedAt >= STAMP_MISMATCH_WARN_EVERY_MS) {
+  const warnDue = stampMismatchWarnedAt === undefined || now - stampMismatchWarnedAt >= STAMP_MISMATCH_WARN_EVERY_MS;
+  if (!warnDue && stampMismatchSent) return;
+  const host = reportedHost(headers);
+  if (warnDue) {
     stampMismatchWarnedAt = now;
     log.warn(
-      { reason: STAMP_MISMATCH },
+      { reason: STAMP_MISMATCH, stamp, host },
       "CF-Connecting-IP not believed: a Cloudflare peer without our zone's origin stamp while CF_ORIGIN_SECRET is set - " +
         "keyed on the Cloudflare edge (README: Deploy step - client IP behind Cloudflare)",
     );
   }
   if (!stampMismatchSent) {
     stampMismatchSent = true;
-    Sentry.captureMessage(STAMP_MISMATCH, "warning");
+    Sentry.captureMessage(STAMP_MISMATCH, { level: "warning", tags: { stamp, host } });
   }
 }
 
@@ -111,8 +124,9 @@ export function clientIp(headers: Headers): string {
     const cf = first(headers.get("cf-connecting-ip"));
     const fromCloudflare = cf !== undefined && isIP(cf) !== 0 && !headers.has("cf-worker") && isCloudflarePeer(fly);
     if (!fromCloudflare) return fly;
-    if (throughOurZone(headers)) return cf;
-    reportStampMismatch();
+    const stamp = originStamp(headers);
+    if (stamp === "ok") return cf;
+    reportStampMismatch(stamp, headers);
     return fly;
   }
   return first(headers.get("x-forwarded-for")?.split(",")[0]) ?? first(headers.get("x-real-ip")) ?? "unknown";

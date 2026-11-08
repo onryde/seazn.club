@@ -41,6 +41,7 @@ import {
 import { clientIpOf } from "@/server/api-v1/capture-http";
 import { publicPollRateLimit, publicRateLimit } from "@/server/usecases/public";
 import { GET as sponsorLink } from "@/app/s/[key]/route";
+import { scrubSentryEvent } from "../scrub-score-url";
 
 /** A Cloudflare edge, as Fly's proxy sees it (162.158.0.0/15). */
 const CF_EDGE = "162.158.12.34";
@@ -54,6 +55,9 @@ const DIRECT = "198.51.100.60";
 const XFF_FIRST = "192.0.2.7";
 const REAL = "192.0.2.99";
 const h = (o: Record<string, string>) => new Headers(o);
+/** The origin stamp's header: the brief's name (README "Deploy step - client IP behind Cloudflare"), typed ONCE here and
+ *  used by every test below, the reader/scrub cross-pin included - never read from either module. */
+const STAMP_HEADER = "x-seazn-origin-secret";
 
 // Every test outside the origin-stamp describe runs with the secret UNSET - today's deployment - whatever a developer's
 // .env.local (vitest.config.ts loads it) holds; that describe sets it per test. Unstubbed after each.
@@ -198,7 +202,7 @@ describe("the origin stamp: CF_ORIGIN_SECRET and x-seazn-origin-secret", () => {
   const SECRET = "0123456789abcdef".repeat(4);
   /** A visitor named by ANOTHER Cloudflare zone's request to our origin - any value its owner picked. */
   const FORGED = "192.0.2.200";
-  const stamped = (o: Record<string, string>, stamp = SECRET) => h({ ...o, "x-seazn-origin-secret": stamp });
+  const stamped = (o: Record<string, string>, stamp = SECRET) => h({ ...o, [STAMP_HEADER]: stamp });
   // A mismatch is reported (the next describe owns that): silenced here, with the per-process state reset per test.
   let warn: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
@@ -303,14 +307,31 @@ describe("the origin stamp: CF_ORIGIN_SECRET and x-seazn-origin-secret", () => {
     seen.push(clientIp(req));
     expect(seen).toEqual([VISITOR, VISITOR, CF_EDGE, VISITOR]);
   });
+
+  // Fix round 2, I-a: lib/client-ip.ts (node-only) and lib/scrub-score-url.ts (browser-bundled) each spell the header, so a
+  // rename of one alone would believe a header the scrub no longer redacts - the secret back in Sentry in clear. One name,
+  // STAMP_HEADER, through BOTH real functions: the reader must believe it, the scrub must redact it.
+  it("the reader and the Sentry scrub agree on the header: a request carrying STAMP_HEADER with the secret is believed, and an event carrying the same header loses its value", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    expect(clientIp(stamped({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR })), "the reader believes STAMP_HEADER").toBe(VISITOR);
+    const out = scrubSentryEvent({
+      event_id: "x1",
+      request: { method: "GET", url: "https://seazn.club/live/club", headers: { [STAMP_HEADER]: SECRET, "user-agent": "ua/1" } },
+    });
+    expect(JSON.stringify(out), "the scrub redacts STAMP_HEADER").not.toContain(SECRET);
+    expect(out.request?.headers?.[STAMP_HEADER]).toBe("[redacted]");
+    expect(out.request?.headers?.["user-agent"], "positive pair: another header is kept").toBe("ua/1");
+  });
 });
 
 // Fix round 1, I2: a mismatch must not be silent. With the secret set, a Cloudflare peer carrying CF-Connecting-IP and no
 // cf-worker but without our stamp keys on the EDGE, so a misconfigured rule (another host, a typo, a rotation half done) puts
 // every visitor of a colo in ONE bucket - sign-in first (magic-link, verify-email, claim-signin and the AUTH routes). It is
 // reported: one `log.warn` at most once a minute per process, and one Sentry warning per process, each carrying the reason
-// code `origin_stamp_mismatch` and no header value or secret. The interval and the code are the controller's ruling, typed
-// here. The fallback itself is unchanged (the previous describe).
+// code `origin_stamp_mismatch` and no secret or stamp value. Fix round 2 (M-b) adds two non-secret discriminators: `stamp`,
+// "absent" or "wrong", and the request's `host` (lower-cased; "none" when missing, "invalid" when it is not a host name), so
+// forgery through another zone (absent, a host not ours) reads apart from misconfiguration (wrong, or absent on our host).
+// The interval, the code and the discriminators are the controller's rulings, typed here. The fallback is unchanged.
 describe("a stamp mismatch is reported: a throttled log.warn and one Sentry warning per process", () => {
   const SECRET = "fedcba9876543210".repeat(4);
   const WRONG = "0000000000000000".repeat(4);
@@ -328,8 +349,13 @@ describe("a stamp mismatch is reported: a throttled log.warn and one Sentry warn
     vi.useRealTimers();
     warn.mockRestore();
   });
-  const mismatch = (stamp?: string) =>
-    h({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR, ...(stamp === undefined ? {} : { "x-seazn-origin-secret": stamp }) });
+  const mismatch = (stamp?: string, host: string | null = "seazn.club") =>
+    h({
+      "fly-client-ip": CF_EDGE,
+      "cf-connecting-ip": VISITOR,
+      ...(host === null ? {} : { host }),
+      ...(stamp === undefined ? {} : { [STAMP_HEADER]: stamp }),
+    });
 
   it("never fires where no stamp is owed or none is checked: the secret unset, a matching stamp, a non-Cloudflare peer, a Worker, no or a bad CF header, no Fly peer (count reported)", () => {
     const unset: Headers[] = [mismatch(), mismatch(WRONG), h({ "fly-client-ip": CF_EDGE6, "cf-connecting-ip": VISITOR6 })];
@@ -383,14 +409,16 @@ describe("a stamp mismatch is reported: a throttled log.warn and one Sentry warn
     expect(warn).toHaveBeenCalledTimes(2);
   });
 
-  it("carries the reason code and nothing else: no stamp, no secret, no address from any header, in the warn or the Sentry message", () => {
+  it("carries the reason code, the stamp's kind and the host, and nothing else: no stamp, no secret, no address from any header, in the warn or the Sentry message", () => {
     vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
     clientIp(mismatch(WRONG));
     expect(warn).toHaveBeenCalledTimes(1);
     const [fields, message] = warn.mock.calls[0]! as [unknown, unknown];
-    expect(fields).toEqual({ reason: "origin_stamp_mismatch" });
+    expect(fields).toEqual({ reason: "origin_stamp_mismatch", stamp: "wrong", host: "seazn.club" });
     expect(typeof message).toBe("string");
-    expect(capture.mock.calls).toEqual([["origin_stamp_mismatch", "warning"]]);
+    expect(capture.mock.calls).toEqual([
+      ["origin_stamp_mismatch", { level: "warning", tags: { stamp: "wrong", host: "seazn.club" } }],
+    ]);
     const said = JSON.stringify([warn.mock.calls, capture.mock.calls]);
     let checked = 0;
     for (const value of [SECRET, WRONG, VISITOR, CF_EDGE]) {
@@ -398,6 +426,32 @@ describe("a stamp mismatch is reported: a throttled log.warn and one Sentry warn
       checked++;
     }
     expect(checked).toBe(4);
+  });
+
+  it("names the stamp absent or wrong (an empty one is wrong), and the host as sent, lower-cased, or none / invalid - in the warn and the Sentry tags (count reported)", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    const cases: Array<[string | undefined, string | null, "absent" | "wrong", string]> = [
+      [undefined, "seazn.club", "absent", "seazn.club"],
+      [WRONG, "seazn.club", "wrong", "seazn.club"],
+      ["", "stg.seazn.club", "wrong", "stg.seazn.club"],
+      [SECRET.slice(1), "STG.Seazn.Club", "wrong", "stg.seazn.club"],
+      [undefined, "seazn-club-prod.fly.dev", "absent", "seazn-club-prod.fly.dev"],
+      [undefined, "seazn.club:443", "absent", "seazn.club:443"],
+      [undefined, null, "absent", "none"],
+      [undefined, "evil.example/<script>", "absent", "invalid"],
+      [WRONG, `${"a".repeat(250)}.example`, "wrong", "invalid"],
+    ];
+    let checked = 0;
+    for (const [stamp, host, kind, named] of cases) {
+      __resetOriginStampReportForTests();
+      warn.mockClear();
+      capture.mockClear();
+      expect(clientIp(mismatch(stamp, host))).toBe(CF_EDGE);
+      expect(warn.mock.calls[0]?.[0], `${kind} ${host}`).toEqual({ reason: "origin_stamp_mismatch", stamp: kind, host: named });
+      expect(capture.mock.calls, `${kind} ${host}`).toEqual([["origin_stamp_mismatch", { level: "warning", tags: { stamp: kind, host: named } }]]);
+      checked++;
+    }
+    expect(checked).toBe(9);
   });
 
   it("another process (the state reset) reports again: one more warn and one more Sentry message", () => {
