@@ -113,7 +113,6 @@ const UI_KEYS = [
   "quickMatch.flash.notReady",
   "quickMatch.flash.sameSide",
   "quickMatch.flash.notFound",
-  "quickMatch.flash.expired",
   "quickMatch.flash.generic",
   "quickMatch.dead.title",
   "quickMatch.dead.hint",

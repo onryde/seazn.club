@@ -8433,7 +8433,6 @@
   "quickMatch.flash.notReady": "Die wedstrijd kan nog niet gescoord worden: hij wacht op eerdere uitslagen.",
   "quickMatch.flash.sameSide": "Kies twee verschillende deelnemers.",
   "quickMatch.flash.notFound": "Die wedstrijd of deelnemer hoort niet bij deze snelle wedstrijd.",
-  "quickMatch.flash.expired": "Deze snelle wedstrijd is verlopen.",
   "quickMatch.flash.generic": "Er ging iets mis. Probeer het opnieuw.",
   "quickMatch.dead.title": "Deze link is verlopen of bestaat niet",
   "quickMatch.dead.hint": "Controleer of je de volledige link hebt. Snelle wedstrijden die niemand bewaart, worden {days} dagen na de laatste score verwijderd.",

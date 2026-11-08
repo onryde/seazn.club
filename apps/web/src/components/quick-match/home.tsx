@@ -66,7 +66,8 @@ const FORMAT_KEY = {
 /**
  * The home's flash (pre-flight D3): a home action's refusal lands back here as `?e=<code>` (QUICK_MATCH_ERRORS), and each
  * code reads as its own `quickMatch.flash.*` line in the viewer's language. The codes are the Score route's
- * (app/q/[token]/score/[fixtureId]/route.ts); Task 8 adds Add-a-match's. A repeated `?e=` reads its first, a blank one is
+ * (app/q/[token]/score/[fixtureId]/route.ts); Task 8 adds Add-a-match's. An expiry has none: the home is then the dead
+ * screen, which ignores `?e=` (D16; T6 review m1). A repeated `?e=` reads its first, a blank one is
  * no flash, and anything else (a crafted value, a code of another page) is the generic line: the raw value never reaches
  * the page.
  */
@@ -74,7 +75,6 @@ const FLASH_KEYS: Readonly<Record<string, MessageKey>> = {
   [QUICK_MATCH_ERRORS.LINK_LIMITED]: "quickMatch.flash.linkLimit",
   [QUICK_MATCH_ERRORS.NOT_FOUND]: "quickMatch.flash.notFound",
   [QUICK_MATCH_ERRORS.SIDES_UNKNOWN]: "quickMatch.flash.notReady",
-  [QUICK_MATCH_ERRORS.EXPIRED]: "quickMatch.flash.expired",
   [QUICK_MATCH_ERRORS.ACTION_FAILED]: "quickMatch.flash.generic",
 };
 export function homeFlashKey(e: string | string[] | undefined): MessageKey | null {

@@ -34,13 +34,17 @@ import { QUICK_MATCH_ERRORS, QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-matc
 import { systemAuth } from "@/lib/quick-match-auth";
 import { DEVICE_LINK_MINT_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { requireFixtureActor } from "@/server/api-v1/auth";
+import { log } from "@/server/logger";
 import type { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { ensureGuestDeviceLink, resolveDeviceLinkToken } from "@/server/usecases/device-links";
+import { touchQuickMatchActivity } from "@/server/usecases/quick-match-activity";
 import { createQuickMatch, type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
 import { hashVisitorKey, mintVisitorKey } from "@/server/usecases/quick-match-tokens";
 import { scoreEvent } from "@/server/usecases/scoring";
 import { firstRallyFor, playToDecided } from "@/server/usecases/__tests__/_quick-match-probe";
+import { walk } from "@/components/__tests__/_hook-harness";
+import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
 import QuickMatchHomePage from "../page";
 import { POST } from "../score/[fixtureId]/route";
 
@@ -60,11 +64,17 @@ vi.mock("@/server/usecases/device-links", async (orig) => {
   const real = await orig<typeof import("@/server/usecases/device-links")>();
   return { ...real, ensureGuestDeviceLink: vi.fn(real.ensureGuestDeviceLink) };
 });
+// The real activity touch behind a spy: one case makes it fail, as a database blip after the mint can.
+vi.mock("@/server/usecases/quick-match-activity", async (orig) => {
+  const real = await orig<typeof import("@/server/usecases/quick-match-activity")>();
+  return { ...real, touchQuickMatchActivity: vi.fn(real.touchQuickMatchActivity) };
+});
 // The home a refusal lands on reads the viewer's locale (D10); here, English.
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => "en") }));
 
 const reported = () => vi.mocked(Sentry.captureException).mock.calls.map(([err]) => err);
 const mintSpy = vi.mocked(ensureGuestDeviceLink);
+const touchSpy = vi.mocked(touchQuickMatchActivity);
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const DAY_MS = 24 * 3600 * 1000;
@@ -79,7 +89,6 @@ const FLASH = {
   linkLimit: en["quickMatch.flash.linkLimit"],
   notReady: en["quickMatch.flash.notReady"],
   notFound: en["quickMatch.flash.notFound"],
-  expired: en["quickMatch.flash.expired"],
   generic: en["quickMatch.flash.generic"],
 };
 
@@ -207,6 +216,7 @@ afterEach(() => {
   __setRateLimitCounterForTests(null);
   vi.mocked(Sentry.captureException).mockClear();
   mintSpy.mockClear();
+  touchSpy.mockClear();
 });
 
 afterAll(async () => {
@@ -228,6 +238,7 @@ describe.skipIf(!HAS_DB)("POST /q/<token>/score/<fixtureId>: a tap that works la
     const secret = await padSecret(await tap(out.token, f0!.id));
     expect(await resolveDeviceLinkToken(secret)).toMatchObject({ fixture_id: f0!.id, issued_by: QUICK_MATCH_SYSTEM_USER_ID });
     await scoresARally(secret, f0!.id);   // the real consumer takes it
+    expect(await padSecret(await tap(` ${out.token}\n`, f0!.id)), "a padded token is the same token (trimmed)").toBe(secret);
     expect(reported()).toEqual([]);
   });
 
@@ -274,6 +285,27 @@ describe.skipIf(!HAS_DB)("POST /q/<token>/score/<fixtureId>: a tap that works la
     expect(after.last.getTime()).toBeGreaterThan(before.last.getTime());
     expect(after.last.getTime()).toBeGreaterThanOrEqual(t0 - 1000);   // now, not merely later
     expect(after.expires!.getTime() - after.last.getTime()).toBe(SPEC_EXPIRY_DAYS * DAY_MS);
+  });
+
+  it("a touch that fails after the mint: the link stands, so the tap still lands in the pad; logged once, never reported", async () => {
+    const out = await create();
+    const [f0] = await fixturesOf(out.competitionId);
+    const errors = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    const blip = new Error("connection reset during the touch");
+    touchSpy.mockRejectedValueOnce(blip);
+    let secret: string;
+    let logged: unknown[][];
+    try {
+      secret = await padSecret(await tap(out.token, f0!.id));
+    } finally {
+      logged = [...errors.mock.calls];   // read before the restore, which clears them
+      errors.mockRestore();
+    }
+    expect(touchSpy, "premise: the touch was asked, for this quick match").toHaveBeenCalledWith(out.id);
+    expect(await resolveDeviceLinkToken(secret)).toMatchObject({ fixture_id: f0!.id });
+    expect(logged).toHaveLength(1);
+    expect(logged[0]![0]).toMatchObject({ err: blip, quickMatch: out.id });
+    expect(reported(), "a failed touch is no fault the guest sees").toEqual([]);
   });
 });
 
@@ -387,6 +419,7 @@ describe.skipIf(!HAS_DB)("a refused tap lands back on the home with ?e=, which p
       [{ e: "__proto__" }, FLASH.generic],
       [{ e: "quickMatch.flash.notFound" }, FLASH.generic],
       [{ e: QUICK_MATCH_ERRORS.TOO_MANY_ALIVE }, FLASH.generic],   // a setup page code: not the home's
+      [{ e: QUICK_MATCH_ERRORS.EXPIRED }, FLASH.generic],   // no flash of its own: an expiry lands on the dead screen (m1)
       [{ e: ` ${QUICK_MATCH_ERRORS.SIDES_UNKNOWN} ` }, FLASH.notReady],
       [{ e: [QUICK_MATCH_ERRORS.NOT_FOUND, QUICK_MATCH_ERRORS.LINK_LIMITED] }, FLASH.notFound],   // a repeated ?e= reads its first
     ];
@@ -406,17 +439,28 @@ describe.skipIf(!HAS_DB)("a refused tap lands back on the home with ?e=, which p
     expect(main).toBeGreaterThan(-1);
     expect(html.indexOf('data-testid="qm-flash"')).toBeGreaterThan(main);
     expect(html.indexOf('data-testid="qm-flash"')).toBeLessThan(html.indexOf('data-testid="qm-hero"'));
+    // Printed once: the page mounts the island that takes the spent ?e= out of the URL (T6 review m2).
+    const tree = await QuickMatchHomePage({
+      params: Promise.resolve({ token: out.token }),
+      searchParams: Promise.resolve({ e: QUICK_MATCH_ERRORS.NOT_FOUND }),
+    });
+    expect(walk(tree as ReactElement).filter((el) => el.type === ClearFlashParam)).toHaveLength(1);
   });
 
-  it("an expiry that lands between the home's read and the mint: ?e= EXPIRED, a refusal (the thrower's own code)", async () => {
+  it("an expiry that lands between the home's read and the mint: the bare home, no ?e= (the dead link), never reported", async () => {
     const out = await create();
     const [f0] = await fixturesOf(out.competitionId);
     mintSpy.mockRejectedValueOnce(new HttpError(404, "quick match not found or expired", QUICK_MATCH_ERRORS.EXPIRED));
     const res = await tap(out.token, f0!.id);
-    expect(await refusedWith(res, out.token)).toBe(QUICK_MATCH_ERRORS.EXPIRED);
-    // The home itself is alive here (only the mint saw the expiry), so it prints the expiry's own line.
-    expect(flashOf(await homeAt(res.headers.get("location")!))).toBe(FLASH.expired);
+    expect(await landed(res)).toBe(`/q/${out.token}`);
     expect(reported()).toEqual([]);
+    expect(await linksOn(f0!.id)).toBe(0);
+    // What the guest then sees: the row the mint saw expired is expired for the home too, so it is the dead screen (D16).
+    await sql`update quick_matches set last_activity_at = now() - interval '8 days', expires_at = now() - interval '1 day'
+              where id = ${out.id}`;
+    const html = await homeAt(res.headers.get("location")!);
+    expect(html).toContain('data-testid="qm-dead-link"');
+    expect(flashOf(html)).toBeNull();
   });
 });
 
@@ -624,14 +668,13 @@ describe.skipIf(!HAS_DB)("every answer", () => {
       const e = url.searchParams.get("e");
       if (e !== null) codes.add(e);
     }
-    // Every refusal the route sends is one T1's table gave copy (the five above), and each was seen at least once.
+    // Every refusal the route sends is one T1's table gave copy (these four; an expiry sends none), each seen at least once.
     expect([...codes].sort()).toEqual(
       [
         QUICK_MATCH_ERRORS.LINK_LIMITED,
         QUICK_MATCH_ERRORS.SIDES_UNKNOWN,
         QUICK_MATCH_ERRORS.ACTION_FAILED,
         QUICK_MATCH_ERRORS.NOT_FOUND,
-        QUICK_MATCH_ERRORS.EXPIRED,
       ].sort(),
     );
   });

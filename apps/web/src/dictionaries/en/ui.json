@@ -8433,7 +8433,6 @@
   "quickMatch.flash.notReady": "That match can't be scored yet: it waits for earlier results.",
   "quickMatch.flash.sameSide": "Pick two different sides.",
   "quickMatch.flash.notFound": "That match or side isn't part of this quick match.",
-  "quickMatch.flash.expired": "This quick match has expired.",
   "quickMatch.flash.generic": "Something went wrong. Try again.",
   "quickMatch.dead.title": "This link has ended or doesn't exist",
   "quickMatch.dead.hint": "Check that you have the whole link. Quick matches nobody saves are removed {days} days after the last score.",

@@ -40,6 +40,7 @@ import PlayPage, { dynamic, generateMetadata } from "../play/page";
 import { refusalCode, setupSports } from "../play/setup-props";
 import { QuickMatchSetupForm, type SetupFormProps } from "@/components/quick-match/setup-form";
 import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
+import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -183,6 +184,26 @@ describe("/<lang>/play: the form", () => {
 });
 
 describe("/<lang>/play?e=: a refusal read on the server (the no-JS path)", () => {
+  it("mounts ClearFlashParam once, with an offer and without one, so the spent ?e= leaves the URL (T6 review m2)", async () => {
+    let checked = 0;
+    for (const offer of [OFFER, []]) {
+      vi.mocked(listQuickMatchSports).mockResolvedValueOnce(offer);
+      const root = await PlayPage({ params: Promise.resolve({ lang: "en" }), searchParams: Promise.resolve({ e: "QUICK_MATCH_TOO_MANY_ALIVE" }) });
+      let mounted = 0;
+      const visit = (node: ReactNode) => {
+        if (Array.isArray(node)) return node.forEach(visit);
+        if (!isValidElement(node)) return;
+        const el = node as ReactElement<{ children?: ReactNode }>;
+        if (el.type === ClearFlashParam) mounted++;
+        visit(el.props.children);
+      };
+      visit(root);
+      expect(mounted, `offer of ${offer.length}`).toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("the per-visitor cap reads its line, with spec §7.9's 5", async () => {
     vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
     const html = await render("en", { e: "QUICK_MATCH_TOO_MANY_ALIVE" });

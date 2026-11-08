@@ -8,6 +8,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
+import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
 import { QuickMatchSetupForm } from "@/components/quick-match/setup-form";
 import { RecentStrip } from "@/components/quick-match/recent-strip";
 import { getDictionary, t } from "@/lib/i18n";
@@ -79,6 +80,8 @@ export default async function PlayPage({
           <div className="absolute -top-1/4 left-1/2 h-[60%] w-[120%] max-w-4xl -translate-x-1/2 bg-[radial-gradient(ellipse_at_top,rgba(163,230,53,0.08),transparent_65%)]" />
         </div>
         <div className="relative mx-auto w-full max-w-xl px-4">
+          {/* `?e=` is read into `initialError` above: spent, so a reload does not show the refusal again (T6 review m2). */}
+          <ClearFlashParam />
           {first ? (
             <QuickMatchSetupForm
               lang={lang}

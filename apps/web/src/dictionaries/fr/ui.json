@@ -8433,7 +8433,6 @@
   "quickMatch.flash.notReady": "Ce match ne peut pas encore être marqué : il attend des résultats précédents.",
   "quickMatch.flash.sameSide": "Choisissez deux participants différents.",
   "quickMatch.flash.notFound": "Ce match ou ce participant ne fait pas partie de ce match rapide.",
-  "quickMatch.flash.expired": "Ce match rapide a expiré.",
   "quickMatch.flash.generic": "Un problème est survenu. Réessayez.",
   "quickMatch.dead.title": "Ce lien a expiré ou n'existe pas",
   "quickMatch.dead.hint": "Vérifiez que vous avez le lien complet. Les matchs rapides que personne n'enregistre sont supprimés {days} jours après le dernier point marqué.",

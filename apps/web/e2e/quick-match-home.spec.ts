@@ -89,8 +89,8 @@ test("home (Task 5): a knockout of 3 at 320, 768 and 1280: the draw with a lone 
 //
 // The Score control is a plain form post (`POST /q/<token>/score/<fixture>`) answered with a 303 into the pad, or back to the
 // home with a flash (app/q/[token]/score/[fixtureId]/route.ts). Its unit and DB tests prove the route and the island; this is
-// what only a browser shows: the post followed to the pad, the Back button and a second tap (the island's back-forward-cache
-// unlock), a real refused post landing on the flash, and the buttons as real 44px targets at the three widths.
+// what only a browser shows: the post followed to the pad, the Back button and a second tap that reopens the same link, a
+// real refused post landing on the flash, and the buttons as real 44px targets at the three widths.
 
 /** A real tap target: at least 44px tall, and the element a tap at its centre actually hits (`boundingBox()` measures paint,
  *  not hit area). Scrolled into view first: `elementFromPoint` is viewport-relative and reads null below the fold. */
@@ -128,7 +128,9 @@ test("Score (Task 6): the hero's Score lands in the pad on its match; Back, then
   await expect(page.getByTestId("quick-match-back-link")).toBeVisible();
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`${home}$`));
-  // Back may restore the page from the back-forward cache, locked mid-post: the island unlocks it, so this tap posts.
+  // The home is no-store (force-dynamic), so Back RELOADS it rather than restoring it from the back-forward cache: this proves
+  // the second post and the reopened link, not the island's bfcache unlock. That unlock is proven by its unit test
+  // (components/quick-match/__tests__/score-form.test.tsx, "back from the pad (bfcache)").
   await page.getByTestId("qm-hero").getByTestId("qm-score").click();
   await expect(page).toHaveURL(/\/score\/dl_/);
   expect(new URL(page.url()).pathname, "the same link, reopened (not a second one)").toBe(pad);

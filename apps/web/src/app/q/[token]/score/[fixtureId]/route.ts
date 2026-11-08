@@ -10,7 +10,9 @@
 //   - a refusal lands back on the home, `routes.quickMatch(token)?e=<code>`, where the code (QUICK_MATCH_ERRORS) is printed as
 //     the viewer's own `quickMatch.flash.*` line (home.tsx `homeFlashKey`);
 //   - an unknown, changed or expired token lands on its own `/q/<token>` with nothing added: the home's one dead screen, which
-//     never says which (D16).
+//     never says which (D16). So does a row that expires between the token's read and the mint (the mint's own 404
+//     EXPIRED): the home it lands on reads the row expired too, and a flash there could only ever show on a live home,
+//     where it would be false (T6 review m1).
 //
 // In this order, each step answering before the next runs:
 //   1. the token, by plan 1's `resolveQuickMatchToken` (the shape before any lookup; an expired row is null);
@@ -47,13 +49,15 @@ const REFUSALS: readonly { status: number; code: string | undefined; e: string }
   { status: 429, code: undefined, e: QUICK_MATCH_ERRORS.LINK_LIMITED },
   // A fixture id that is no uuid (`assertUuid`), or a fixture outside this quick match (`linkableStatus`).
   { status: 404, code: undefined, e: QUICK_MATCH_ERRORS.NOT_FOUND },
-  // The row expired between the token's read and the mint (`ensureGuestDeviceLink`'s own expiry check).
-  { status: 404, code: QUICK_MATCH_ERRORS.EXPIRED, e: QUICK_MATCH_ERRORS.EXPIRED },
   // A side not known yet (C18): a waiting knockout seat, a bye.
   { status: 422, code: QUICK_MATCH_ERRORS.SIDES_UNKNOWN, e: QUICK_MATCH_ERRORS.SIDES_UNKNOWN },
   // Finalized or cancelled: nothing left to score.
   { status: 422, code: undefined, e: QUICK_MATCH_ERRORS.ACTION_FAILED },
 ];
+
+/** The row expired between the token's read and the mint (`ensureGuestDeviceLink`'s own expiry check): the dead link. */
+const expiredMeanwhile = (err: unknown): boolean =>
+  err instanceof HttpError && err.status === 404 && err.code === QUICK_MATCH_ERRORS.EXPIRED;
 
 /** The refusal an error is, or null for a fault. */
 function refusalOf(err: unknown): string | null {
@@ -80,6 +84,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ token:
       });
       return redirectLocal(`/score/${link.secret}`, 303);
     } catch (err) {
+      if (expiredMeanwhile(err)) return redirectLocal(home, 303);
       const refused = refusalOf(err);
       if (refused === null) {
         Sentry.captureException(err);

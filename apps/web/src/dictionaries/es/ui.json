@@ -8433,7 +8433,6 @@
   "quickMatch.flash.notReady": "Ese partido aún no se puede puntuar: faltan resultados anteriores.",
   "quickMatch.flash.sameSide": "Elige dos participantes distintos.",
   "quickMatch.flash.notFound": "Ese partido o participante no forma parte de este partido rápido.",
-  "quickMatch.flash.expired": "Este partido rápido ha caducado.",
   "quickMatch.flash.generic": "Algo ha fallado. Vuelve a intentarlo.",
   "quickMatch.dead.title": "Este enlace ha caducado o no existe",
   "quickMatch.dead.hint": "Comprueba que tienes el enlace completo. Los partidos rápidos que nadie guarda se eliminan {days} días después de la última puntuación.",

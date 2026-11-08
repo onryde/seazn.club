@@ -40,7 +40,8 @@ export const QUICK_MATCH_ERRORS = {
   SPORT_NOT_OFFERED: "QUICK_MATCH_SPORT_NOT_OFFERED",
   KIND_NOT_OFFERED: "QUICK_MATCH_KIND_NOT_OFFERED",
   VISITOR_INVALID: "QUICK_MATCH_VISITOR_INVALID",
-  /** A guest's Score tap on a quick match past its expiry (`ensureGuestDeviceLink`, device-links.ts). */
+  /** A guest's Score tap on a quick match past its expiry (`ensureGuestDeviceLink`, device-links.ts). Never a flash: the
+   *  Score route lands it on the bare home, the dead screen (plan 2 T6 review m1). */
   EXPIRED: "QUICK_MATCH_EXPIRED",
   /** The create's per-IP limit (QUICK_MATCH_CREATE_LIMIT): the limiter's own 429 carries no code, so the create route
    *  names it here for the setup page's `?e=` (plan 2 T3). */

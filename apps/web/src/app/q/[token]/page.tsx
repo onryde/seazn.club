@@ -23,6 +23,7 @@ import {
   type QuickMatchCopy,
   type QuickMatchSlots,
 } from "@/components/quick-match/home";
+import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
 import { matchSidesId } from "@/components/quick-match/match-list";
 import { QuickMatchScoreForm } from "@/components/quick-match/score-form";
 import { getDictionary } from "@/lib/i18n";
@@ -85,6 +86,8 @@ export default async function QuickMatchHomePage({
   return (
     <>
       <HtmlLang lang={locale} />
+      {/* The flash is printed: `?e=` is spent, so a reload or a shared link does not print it again (T6 review m2). */}
+      <ClearFlashParam />
       <QuickMatchHomeView home={home} copy={copy} slots={slots} flash={flashKey ? copy.t(flashKey) : null} />
     </>
   );
