@@ -10,11 +10,247 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-03-quick-match-design.md` §7.6, §7.7, §7.8, C1, C2, C3, C9, C13, C15, C21, §9.
 
-**Depends on:** plan 1 (all) and plan 2 Tasks 3 and 5 (the create route and the home page carry the Save button and the email).
+**Depends on:** plan 1 (all) and plan 2 Tasks 1, 3, 5 to 8 and 11 (the create route, the home page, the dictionaries and the smoke suite). The per-task order is in Pre-flight amendments → Ordering gates and Batches.
 
 **Repo root for every path below:** the seazn.club checkout (`/Users/ashokhein/github/seazn.club`); TypeScript paths are relative to `apps/web/` unless they start with `apps/cron-worker/`, `db/` or `scripts/`.
 
 **Re-pinned against origin/main 1b224951d4 on 2026-11-07 (drift accepted).** Every change is listed in the Re-pin log at the end.
+
+## Pre-flight amendments (2026-11-08)
+
+This section records the rulings on the 51 non-OK rows of the pre-flight scan (`.superpowers/sdd/2026-11-06-quick-match-3-lifecycle/preflight-scan.md`). The ledger beside the scan, under "Pre-flight rulings (2026-11-08)", has one line per row. Every ruling is **controller (PO rec, autonomous mandate)** (owner, 2026-11-07: "Apply rec if you have questions as a product owner"). **Where this section and a task body below differ, this section wins.** Each task heading carries a pointer back here. Row ids in brackets are the scan's. The spec was amended in the same commit: C19, §7.7, §7.1 point 4 and §11.
+
+### Ordering gates (plan 2 dependencies)
+
+Plan 2's amendments (commit 6c3c024a99) run in batches P2-B1 (T1 ∥ T2 ∥ T3), P2-B2 (T4 ∥ T5), P2-B3 ((T6 → T7 → T8) ∥ T9) and P2-B4 (T10 ∥ T11).
+
+- **G1.** P2-B1 is closed before plan 3 Task 1 starts. Plan 2 T1 owns `i18n-keys.ts`, `quick-match-create.ts` and `lib/quick-match-constants.ts` (where `QUICK_MATCH_ERRORS` now lives). T3 owns `app/api/quick-match/**` and `lib/rate-limit.ts`. Task 1 edits all of these, and its kind-sweep scenario drives T3's route [C11, A12]. Two rules hold while Task 1 is open:
+  - no controller key commit for plan 2 may land, because `i18n-keys.ts` is generated and shared;
+  - Task 1 may run beside P2-B2 or P2-B3, whose lanes write no dictionary.
+- **G2.** P2-B3 is closed before plan 3 Task 5 starts. P2-B2 T5 brings `"/q/"` in `SECRET_PATH_ROUTES`, the `q/[token]` verdict and `routes.quickMatch`, and without that scrub no surface may put the token in `next` [C12, D1]. P2-B3's T6, T7 and T8 all write `home.tsx`, which Task 5 also writes. Task 5's single `e2e/quick-match.spec.ts` line waits until P2-B4's T10 closes.
+- **G3.** Plan 2 T11 (the new create → score smoke suite, P2-B4) is closed before plan 3 Task 7, which EXTENDS that suite.
+- **G4.** Task 6 adds the saved-list finder to `server/usecases/quick-match-home.ts`, per the ledger carry "never a third token_enc owner". Plan 2 T5 and T9 also write that file, so Task 6 starts only after P2-B3 closes. Tasks 5 and 6 never run concurrently (`ui.json`, `i18n-keys.ts`). No plan 3 task edits a dictionary while a plan 2 lane is open.
+- **G5.** No push of `feat/quick-match` while Task 1 or Task 2 has landed and Task 3 has not. Between them, the DB kind sweep and `apps/cron-worker/test/drift.test.ts` are red by name [A2, A3].
+- **G6.** Plan 2's own "Pre-flight amendments" govern plan 2's files, and plan 3 adapts to them. Use `routes.quickMatch(token)` for every `/q/` URL, never concatenation. Follow plan 2's refusal pattern: a 303 to the home with `?e=<code>`, rendered as `quickMatch.flash.*`. Never edit plan 2's plan. If a plan 3 task reads fixture order, it uses plan 2 T5's `QuickMatchFixture.seqInRound` (none does today).
+- **CI e2e.** Use `gh workflow run e2e.yml --ref feat/quick-match` (no PR number is needed). It is the only e2e run; there is no local Playwright.
+- **UI screenshots.** Task 5 and Task 6 are UI dispatches. They invoke the `frontend-design` skill and list as owed the 320, 768 and 1280 screenshots of each changed screen, taken from the CI e2e run's artifacts and served for sign-off on local :8765. No PNG goes into the repo (plan 2 E6, D8).
+
+### Batches (plan 3)
+
+The rules are the same worktree, each implementer committing only its own paths (`git commit -- <paths>`, retrying on `index.lock`), one task review per task, the next batch starting only after the batch's reviews close, and the scoped gate re-run at each boundary. Any shared file puts the tasks in sequence.
+
+- **P3-B1: T4 ∥ T8.** It may start now, beside plan 2's lanes, because neither task touches a plan 2 file or a dictionary.
+  - T4 owns `server/usecases/quick-match-save.ts`, the six sign-in route files, `app/api/users/me/route.ts`, `server/email-outbox/cancel.ts`, `lib/analytics-events.ts`, `lib/posthog-server.ts` and its quick-match test, and its own new tests.
+  - T8 owns `server/usecases/org-posts.ts` and `org-posts-digest.test.ts`.
+  - Before dispatch, confirm that no open plan 2 lane lists any of these paths.
+- **P3-B2: T1.** Gated on G1. It owns:
+  - `server/email-outbox/{constants,hooks}.ts`, the five kind test files and `_kind-senders.ts`;
+  - `V493__quick_match_lifecycle.sql`;
+  - `lib/email-templates/{quick-match,index}.ts` and `lib/email.ts`;
+  - `emails.json` ×4 and `i18n-keys.ts`;
+  - `quick-match-create.ts` with its test, `lib/quick-match-constants.ts` and `app/api/quick-match/route.ts` (it reuses the existing `EMAIL_LIMIT`, so `lib/rate-limit.ts` is unchanged);
+  - `quick-match-email.test.ts`.
+
+  T1 is alone because `outbox-kind-sweep.test.ts` is shared with T2.
+- **P3-B3: T2 → T3**, one implementer or two in turn.
+  - T2 owns `quick-match-sweep.ts`, `app/api/cron/quick-match-expiry/route.ts`, `quick-match-delete.ts`, `outbox-kind-sweep.test.ts` (after T1), `quick-match-sweep.test.ts` and `_quick-match-orphans.ts`.
+  - T3 owns `apps/cron-worker/**`.
+  - Push only after T3 (G5). Then dispatch the CI e2e run.
+- **P3-B4: T5 → T6**, gated on G2 and G4, after P3-B1 (T5 consumes T4) and P3-B3 (T6 consumes T2's delete result and orphan helper). They run in sequence because both write `ui.json` ×4 and `i18n-keys.ts`.
+  - T5 owns `app/q/[token]/save/**`, `home.tsx`, `lib/__tests__/scrub-quick-match-next.test.ts` and (only if absent) the bare `qm_` rule in `scrub-score-url.ts`.
+  - T6 owns `app/me/page.tsx`, `components/quick-match/my-list.tsx`, `app/api/quick-match/[id]/route.ts` and `quick-match-home.ts`.
+- **P3-B5: T7 ∥ P3-B4.** Gated on G3 and P3-B3. T7 owns `scripts/smoke/suites/quickMatch.ts` only, which is disjoint from P3-B4.
+- **Close.** Push, run `gh workflow run e2e.yml --ref feat/quick-match`, open the plan-3 PR (smoke runs on PRs only, E3), and run the final review. Merging to main is OWED TO THE OWNER.
+
+### Amend T1 (link mail)
+
+- **Where the enqueue runs [B1, T1].** It goes inside `createQuickMatchTree`'s last `withTenant(QUICK_MATCH_SYSTEM_ORG_ID)` transaction (`quick-match-create.ts:158-179`), right after the `quick_matches` insert. It does NOT go in `createQuickMatch`, which opens no transaction. The tree's ctx gains `baseUrl?: string`. The email is already on the input and the token is `ctx.home`'s plaintext. `CreatedQuickMatch` (`:49-60`) gains `outboxRowId: string | null`, returned from the tree upward. The route calls `dispatchNow([outboxRowId])` after the call returns, and only when the id is non-null.
+- **`baseUrl` is optional [A12, B2].** `createQuickMatch`'s ctx gains `baseUrl?: string`, so 19 of the 20 call sites stay as they are. An email with no `baseUrl` is a programmer error and must never silently send no mail. It throws `HttpError(500, …, QUICK_MATCH_ERRORS.BASE_URL_MISSING)` at step 0, before any write, and a test reaches it. The new code `"QUICK_MATCH_BASE_URL_MISSING"` goes in `lib/quick-match-constants.ts`, where plan 2 T1 moved `QUICK_MATCH_ERRORS`. Plan 2's form maps an unmapped code to `errors.generic`. The one existing caller that passes an email, `quick-match-create.test.ts:373`, gains `baseUrl`.
+- **Send limit [B4].** The guest-typed name stays in the subject, bounded by the limits below. When `email` is non-null, the route also takes a second, separate bucket: `rateLimit("quick-match-email:" + ip, EMAIL_LIMIT)` (`lib/rate-limit.ts:60,96`; 5 per 300 s). It runs after plan 2's `QUICK_MATCH_CREATE_LIMIT` and before any DB touch. Plan 2's create limit (20 per 10 min, fail-open) is too loose for mail to addresses a stranger typed. `EMAIL_LIMIT` is fail-closed, as is the house rule for every mail-sending endpoint, so during a limiter outage only emailed creates refuse. Its 429 carries no code, and plan 2's form maps that to `errors.rateLimited`. Tests:
+  - a sixth emailed create inside the window is refused and writes no `quick_matches` row;
+  - an emailless create in the same window passes.
+- **Reminder arguments [D4, B12].** Defined here, so Task 2 never reopens Task 1's template files. `QuickMatchEmailArgs { name; link; expiresAt }` serves the link mail. `QuickMatchReminderArgs extends QuickMatchEmailArgs { saveLink: string }` serves the reminder. The reminder has two buttons: the home link, and "Save it" to `${baseUrl}/q/<token>/save`, which is a path and never a query. New `emails.json` keys go in all 4 locales (`quickMatchReminder.save` = "Save it", plus the subject and body keys). Then run `npm run i18n:gen-keys` and `npm run i18n:check`.
+- **The by-email index [B20].** The migration also creates `create index quick_matches_unsaved_email_idx on quick_matches (lower(email)) where saved_by_user_id is null and email is not null;`, because Task 4's by-email save runs on every verified sign-in, site-wide. This index does NOT go into V492, because the `qm` env and the parallel plan-2 databases have already applied V492, and editing it would break Flyway's checksum. The file is renamed `db/migration/deltas/V493__quick_match_lifecycle.sql`, still a working number (E4). The `constants.ts:5-7` header names that file.
+- **Ref type [C3].** Import `QUICK_MATCH_OUTBOX_REF_TYPE` (`quick-match-delete.ts:15`). Never write the literal.
+- **Expected red [A2].** Step 4's run of `outbox-kind-sweep.test.ts` is expected to fail, and only with `no scenario for outbox kind quick_match_reminder`. Record that red in the report. Tasks 1 and 2 share one green gate at the end of Task 2 (G5).
+- **Smoke address [A8].** The kind-sweep scenario and any smoke use `delivered+qm_${tag}@resend.dev`.
+
+### Amend T2 (reminder and sweep)
+
+- **Report shape [B11, D6, B9, B10].**
+  - `export interface QuickMatchSweepReport { checked; rearmed; reminded; expired; orphans; failed; deferred }`, all `number`.
+  - `sweepQuickMatches(opts: { baseUrl: string; now?: Date; onlyIds?: readonly string[]; _failDeleteForTests?: (competitionId: string) => boolean })`.
+  - `onlyIds` is test-only. It restricts every step to rows whose `quick_matches.id` or `competitions.id` is in the list, after the `grantMonthlyForAllWallets({ walletIds })` precedent (`lib/credits.ts:453-467`). The route never reads it from the request.
+  - Each step selects at most `QUICK_MATCH_SWEEP_LIMIT = 200` rows (exported). Rows past the limit add to `deferred`, which is not a failure: the next hourly firing reaches them.
+  - A per-row throw adds to `failed`, is logged with the id and the error code (never the token or the email), and never stops the other rows.
+  - The route answers the report. It imports the type from `@/server/usecases/quick-match-sweep` itself, because `drift.test.ts:53-72` reads only the route's direct `@/` imports for a `failed: number` (precedent `api/cron/external-play/route.ts:5-7`).
+- **Step 0: orphans [D5, B7, ledger D1].** Before re-arm, the sweep finds system-org competitions that have no `quick_matches` row and `created_at < now - interval '1 hour'`, and calls `hardDeleteQuickMatchCompetition` on each. Each one counts in `orphans` only when the call answers `deleted: true`. Tests:
+  - A quick match whose `quick_matches` row was deleted by SQL, with its competition's `created_at` set 2 h back, is gone after the sweep.
+  - The same shape aged 59 minutes survives.
+- **Delete result [C1, D7, A4].** `hardDeleteQuickMatchCompetition(competitionId): Promise<{ deleted: boolean }>`, where `deleted` means the competitions delete removed at least one row. The plan-1 void callers ignore it. `expired` and `orphans` count only `deleted: true`. A test deletes the same id twice and expects `{ deleted: false }` the second time.
+- **The org filters [C2].** The sweep test seeds a foreign-org competition by SQL, with a `quick_matches` row and an outbox row by ref. `hardDeleteQuickMatchCompetition` of that competition must leave all three. Mutate once each, one at a time: the `org_id` filter at `quick-match-delete.ts:25`, then the one at `:30`. Both mutations must red. If the schema refuses that shape, cite the constraint as the guard in the test instead.
+- **Per-id assertions [B8, D6, A16].** Every sweep test passes `onlyIds` with its own ids and asserts per id. A run-wide count is asserted only as `>=`. "A second sweep reminds 0" becomes: a second sweep over the same `onlyIds` answers `reminded: 0`, and exactly one `quick_match_reminder` row exists for that ref. The kind-sweep scenario POSTs the real route with no `onlyIds` and asserts only its own ref's row.
+- **The failing row.** With `_failDeleteForTests` set for one row, the sweep answers `failed: 1` and the other row is deleted. Then remove the `failed++` and confirm the test reds.
+- **The orphan helper [A5].** It lives in `src/server/usecases/__tests__/_quick-match-orphans.ts`, exporting `idsOf(qm)` and `expectNoOrphans(ids)`, which fails on zero and prints its table and row counts. Task 6 imports it.
+- **Two sports [E8].** The orphan test runs `it.each` over badminton and football (the team sport offered, with the widest fixture-side tables). Each prints its own count. Zero fails.
+- **The re-arm backstop [D8, B13].** The re-arm also sets `email = null`. Once a saver is soft-deleted, the address cannot be compared any more, so the row loses it and gets no reminder. Task 4's account-deletion step is the primary path.
+- **Mutations, one at a time,** on top of Step 5:
+  - change the orphan threshold to `< now()`: the 59-minute test must red;
+  - drop the `failed` count: the failing-row test must red.
+
+### Amend T3 (schedule)
+
+- **The row [B9, D6].** It gains `failureCounts: ["data.failed"]`, and `deferred` is not a failure.
+  - `apps/cron-worker/test/drift.test.ts:74` moves `toBe(12)` to `toBe(13)`, with "+ quick-match-expiry's data.failed" added to its comment.
+  - The `withCounts` map in `apps/cron-worker/test/schedule.test.ts:402-419` gains `"quick-match-expiry": ["data.failed"]`, commented as its siblings are.
+- **Pins.** Use the drift table at the end of this section.
+- **Order [A3].** This task runs right after Task 2, in the same batch. Push only after it lands (G5).
+
+### Amend T4 (save on sign-in)
+
+- **Six sign-in points [D3, B18].** `saveQuickMatchesForVerifiedUser(userId)` runs after `createSession` and before the route's landing or redirect, at all six:
+  - `api/auth/verify-email/route.ts:44`
+  - `api/auth/magic-link/consume/route.ts:32`
+  - `api/auth/google/callback/route.ts:117`
+  - `api/funnel/claim/route.ts:63`
+  - `api/invites/[token]/claim/route.ts:31`
+  - `api/claims/[token]/accept/route.ts:57`
+
+  It never runs in `app/admin/impersonate/page.tsx:32`. The helper never throws past the route (it logs and continues).
+- **The sign-in scan test [D3].** `src/server/usecases/__tests__/quick-match-save-doors.test.ts`, a source scan with no DB:
+  - Every non-test file under `src/app` that imports `createSession` from `"@/lib/auth"` must call `saveQuickMatchesForVerifiedUser`, except under `app/admin/`.
+  - It keys on the import source: `api/v1/fixtures/[id]/stream-sessions/route.ts` calls a different `createSession` (`@/server/usecases/stream-sessions`).
+  - Strip comments first (`drift.test.ts` `stripComments`).
+  - Assert at least 6 sign-in routes checked (anti-vacuity), and that the impersonation page does NOT call the helper.
+- **Verified only [B19].** The helper reads `users.email_verified` (and `deleted_at is null`) and does nothing when the email is unverified. A test with an unverified user who owns a matching row expects `savedByEmail: 0`.
+- **Alive only [C10, D13].** The by-email SQL adds `and (expires_at is null or expires_at > now())`. A test: an expired, unswept row with a matching email stays unsaved.
+- **One save SQL [D9, A7].**
+  - Both paths, `saveQuickMatchesForVerifiedUser` and `saveQuickMatchForUser`, go through one internal function. It sets `saved_by_user_id`, `expires_at = null` and `reminder_sent_at = coalesce(reminder_sent_at, now())`.
+  - The same function cancels any queued `quick_match_reminder` for the saved ids with `cancelQueuedEmails(tx, { kind: "quick_match_reminder", refType: QUICK_MATCH_OUTBOX_REF_TYPE, refIds, reason: QUICK_MATCH_SAVED_REASON })`.
+  - The new reason `QUICK_MATCH_SAVED_REASON = "quick_match_saved"` is added to `CANCELLED_REASONS` (`server/email-outbox/cancel.ts:34-39`).
+  - **The cancel must run on a `withTenant(QUICK_MATCH_SYSTEM_ORG_ID)` handle.** On the pooled client it ends only org-less rows (`cancel.ts:55-57`), so it would silently end nothing. Run the whole save in that one tenant transaction.
+  - Test: after either save path, a queued reminder for the match ends `cancelled` with that reason.
+- **The single save's answers.** `saveQuickMatchForUser(userId, quickMatchId)` returns `"saved" | "already_yours" | "taken" | "gone"`. `"gone"` means the row is missing, or expired and unswept (C9 alive rule).
+- **Account deletion [D8, B13].** `releaseQuickMatchesOfDeletedAccount(tx, { userId, email })` lives in `quick-match-save.ts`. `DELETE /api/users/me` calls it inside its own transaction, beside `anonymiseAccountEmails` (`app/api/users/me/route.ts:179`), before the users update, while the real address is still known. It:
+  - un-saves the account's rows (`saved_by_user_id = null`, `expires_at = last_activity_at + interval '7 days'`);
+  - nulls `email` on every row whose `lower(email)` equals the account's address.
+
+  The test goes in `src/app/api/users/me/__tests__/account-deletion-quick-match.test.ts`: a saved row is re-armed, a row typed with the address loses it, and another user's saved row is untouched.
+- **Analytics [D10].**
+  - `EVENTS.QUICK_MATCH_SAVED = "quick_match_saved"` goes in `lib/analytics-events.ts` beside `:93`.
+  - It fires once per saved row from the save function, with `{ quick_match_id, via: "button" | "email" }` and no email, token or name, on the system org as `QUICK_MATCH_CREATED` does (`quick-match-create.ts:261-267`).
+  - `lib/posthog-server.ts:46` lets through a set `{ QUICK_MATCH_CREATED, QUICK_MATCH_SAVED }`.
+  - `lib/__tests__/posthog-server-quick-match.test.ts` gains: saved passes, and an organizer event is still dropped.
+- **Mutations, one at a time [E7]:**
+  - remove `saved_by_user_id is null` (Review Focus 4 must red);
+  - remove the `email_verified` gate;
+  - remove the expiry predicate;
+  - delete one sign-in route's call (the scan test must red);
+  - run the cancel on the pool (the cancel test must red).
+
+### Amend T5 (Save button and its landing)
+
+- **Two paths [D2, B22].** Next forbids a `page.tsx` and a `route.ts` in one segment, so the save uses two paths.
+  - `src/app/q/[token]/save/page.tsx` (GET) **never writes**:
+    - an unknown or expired token shows plan 2's dead screen (`qm-dead-link`, `quickMatch.dead.*`);
+    - signed in and already yours redirects to `routes.quickMatch(token)`;
+    - saved by someone else shows `quickMatch.flash.taken` with `quickMatch.save.backHome`;
+    - anything else shows a one-button confirm page: the match name in `quickMatch.save.title`, then `quickMatch.save.hint`, then a `<form method="post" action={routes.quickMatch(token) + "/save/confirm"}>` button labelled `quickMatch.home.save`.
+
+    The page has `robots: { index: false }` and its locale comes from `resolveLocale()` with no `orgDefault` (plan 2 T5).
+  - `src/app/q/[token]/save/confirm/route.ts` exports POST only:
+    - an `Origin` that does not match the host gets 403, because `proxy.ts:145` checks only `/api/` paths;
+    - signed out gets 303 to `/login?next=/q/<token>/save`;
+    - signed in calls `saveQuickMatchForUser`. `saved` or `already_yours` gets 303 home. `taken` gets 303 home with `?e=taken`, rendered through plan 2's flash mapping as `quickMatch.flash.taken`. `gone` gets 303 home, which renders the dead screen. That is plan 2's refusal pattern (G6).
+  - The home's Save button is that same form. It goes in the actions row that plan 2 D13 left without Save. When `savedByUserId` is the current user, the home shows `quickMatch.home.saved` instead. When it is someone else, the home shows nothing. The reminder's "Save it" opens the GET page.
+- **The `next` scrub [D1, B23].** Token-in-`next` is the only exception to C19, amended.
+  - New test file `src/lib/__tests__/scrub-quick-match-next.test.ts` uses real tokens from plan 1's `mintHomeToken()`.
+  - Cases: `/login?next=` with `/q/<token>/save` encoded 1, 2 and 3 times, plus the magic-link consume URL that carries that `next`.
+  - Each scrubbed output contains no token substring. The test reports how many cases it checked, at least 4, and zero checked fails.
+  - Also assert that a signed-in visitor at `/login?next=/q/<token>/save` lands on the save page.
+- **A bare `qm_` rule [E9].** If plan 2 Task 5 did not add a bare `qm_` rule beside the `dl_` one in `scrub-score-url.ts`, this task adds it, with a test. Check the tree first, and never add it twice.
+- **Copy [B24, D11, A10].** These `ui.json` keys go in all 4 locales:
+  - `quickMatch.home.saved` = "Saved"
+  - `quickMatch.flash.taken` = "Someone else has already saved this match."
+  - `quickMatch.save.title` = "Keep {name} in your account?"
+  - `quickMatch.save.hint` = "It stays until you delete it. Anyone with the link can still score."
+  - `quickMatch.save.backHome` = "Back to the match"
+
+  Then run `npm run i18n:gen-keys` and `npm run i18n:check`.
+- **Painters [B25].** The save form, the confirm page and the home form carry `ph-no-capture`. Plan 2 T5's painter-file assertion gains `save/page.tsx`. Step 4 also runs `scrub-secret-painters.test.ts` and `scrub-path-secrets.test.ts`. The `q/[token]` verdict covers both new subroutes [C12].
+- **Tests.** `src/app/q/[token]/__tests__/save-route.test.ts` and `save-page.test.tsx` cover:
+  - GET never writes (signed in, unsaved row: the row is unchanged after the GET);
+  - POST signed out, signed in, taken, gone, and cross-origin.
+- **Mutations, one at a time [E7]:**
+  - the taken branch saves anyway;
+  - the Origin check is removed;
+  - the GET page calls the save.
+- **Widths.** The save page and the home's "Saved" state must show no horizontal scroll at 320, 768 and 1280.
+  - Add `expectNoHorizontalScroll` on `/q/<token>/save` to plan 2's `e2e/quick-match.spec.ts`. That file has been free since P2-B4 closed.
+  - The screenshots are owed from the CI run (see "UI screenshots" above).
+
+### Amend T6 (account list, rename, delete)
+
+- **Not found [B28].** "Not yours" and "no such id" both answer 404. A second DELETE answers 404, and so does a PATCH after a delete. Both cases are tested.
+- **Rename [D14, B27].** One transaction of plain UPDATEs renames:
+  - `quick_matches.name`;
+  - `competitions.name`;
+  - `divisions.name` (copied at `quick-match-create.ts:143-144`);
+  - the stage's name where `quickMatchStageInput` copied it (`:149`).
+
+  The slug never changes. The body is validated by `CreateQuickMatch.shape.name` (trimmed, 1 to 80; `server/api-v1/schemas.ts:6726`). A refusal is a 422 with the `quickMatch.me.renameInvalid` copy in all 4 locales. Tests: all four names change, no `slug_history` row appears, and 81 characters or whitespace only are refused.
+- **A row without a link [B29].** `listMyQuickMatches` lives in `quick-match-home.ts` (ledger carry, G4). It catches `openHomeToken`'s 503 per row and returns `url: null`, so the type becomes `url: string | null`, and that row renders with no link. A test runs with no KEK.
+- **The `/me` section [B26].**
+  - The empty case comes first: with no saved matches there is no section and no heading.
+  - The section goes into the second `Promise.all` (`app/me/page.tsx:66-89`).
+  - Screenshots at 320, 768 and 1280 are owed from the CI run.
+  - The `/me` e2e specs (`me-career.spec.ts`, `player-accounts.spec.ts`, `mobile.spec.ts`'s `/me` row) run in CI via `gh workflow run e2e.yml --ref feat/quick-match`, never a local run.
+- **Painters [B25].** The list's links come from `routes.quickMatch` and carry `ph-no-capture`. Plan 2 T5's painter-file assertion gains `my-list.tsx`. Step 4 runs `scrub-secret-painters.test.ts`.
+- **Orphans [A5].** The delete's orphan check imports `_quick-match-orphans.ts` (Task 2).
+- **Mutations, one at a time [E7]:**
+  - remove PATCH's saver check;
+  - remove DELETE's saver check;
+  - remove the rename bound.
+
+### Amend T7 (smoke)
+
+- **Extend, do not create (plan 2 amendment D9, new plan 2 T11).** Plan 2 T11 already creates `scripts/smoke/suites/quickMatch.ts` (`quickMatchSuite`), registers it in `scripts/smoke/index.ts` `SELECTABLE_SUITES` and in `main.ts` after `funnelReminder`, and runs create → home "0 of 1" → Score → one rally → home Live with cleanup in `finally`.
+  - Task 7 modifies only `scripts/smoke/suites/quickMatch.ts`. After the Live check it POSTs `/api/cron/quick-match-expiry` with `CRON_SECRET` (skipping with a passing line when that is absent, as `funnelReminder.ts:18-25` does), checks the answer carries a numeric `failed` and `deferred`, and checks that the suite's own row survives. Its `finally` keeps T11's cleanup, with the outbox rows by ref added if T11 sent no email.
+  - Task 7 does not touch `index.ts` or `main.ts`. The Files lines for them in the task body below are void.
+- **Proof.** The PR's smoke run is the proof. There is no local run against stg without the owner's go (plan 2 T11), so Step 2's stg run below is replaced by the PR run.
+- **One sport [E8].** The suite header states why it uses one sport: smoke proves the route is alive, while Task 2's orphan test proves the cascade closure over two sports.
+- **Address [A8].** Use no email, or `delivered+qm_${tag}@resend.dev`.
+- **Never prod [A9].** The sweep leg sweeps every quick match on its target. Never point it at prod.
+- **Gate.** G3.
+
+### Amend T8 (new): the weekly news digest excludes the system org [E1]
+
+- **Files:** `src/server/usecases/org-posts.ts` (`sweepWeeklyDigests`'s candidate query, the two `select f.org_id` arms at `:1770-1782`), plus its test in `src/server/usecases/__tests__/org-posts-digest.test.ts`.
+- **Change:** both arms add `and f.org_id <> ${QUICK_MATCH_SYSTEM_ORG_ID}`.
+- **Test.** The system org, with fresh fixture activity, is never a candidate, while a control org with the same activity is one.
+  - Assert at the candidate selection, not through `news.auto`. If the candidate list is not separately readable, extract it as an exported function in the same file.
+  - The test reports how many orgs it checked.
+  - Mutation: drop the predicate, and the test must red.
+- **Billing grant [D12].** No code. The system org's 5 AI credits a month are accepted (spec §7.1 point 4, corrected).
+
+### Re-pin drift (2026-11-08)
+
+Pins drifted since 2026-11-07. Use the right column.
+
+| Plan pin | Now |
+|---|---|
+| `lib/auth.ts:92` getCurrentUser | `:97` |
+| `lib/auth.ts:434` / `:434-450` safeNextPath | `:439` / `:439-455` |
+| `lib/auth.ts:458` / `:462-471` postAuthLanding | `:463` / `:467-476` |
+| `api/auth/magic-link/route.ts:76,84` | `:82` (`nextQuery`), `:90` (link) |
+| `lib/email.ts:9-62` template imports | `:9-70` |
+| `app/me/page.tsx:54-89` one `Promise.all` | two: `:50-53` and `:66-89` |
+| `google/callback/route.ts:163` "sets email_verified" | `:160-167`, link branch only; by-sub `:134-144` sets nothing (hence the B19 gate) |
+| `run.test.ts:76-91,133-138,140-153,170-178` | `:75-91,134-139,141-153,171-183` |
+| `index.test.ts:33-52` | `:34-41`, `:43-52` |
+| `schedule.test.ts:76-85` | `:76-86` |
+| `outbox-schema.test.ts:72`, `:246-261` | `:69-72`, `:260` |
+| `outbox-kind-sweep.test.ts:472`, `:2192` | `:469-473`, `:2191-2192` |
 
 ## Global Constraints
 
@@ -59,6 +295,8 @@ Read from `pg_constraint` of a database migrated to V491 (recursive over `on del
 ---
 
 ### Task 1: The link mail at creation
+
+> **Amended by "Pre-flight amendments (2026-11-08)" → Amend T1. Those lines override this task's text where they differ.**
 
 **Files:**
 - Modify: `src/server/email-outbox/constants.ts:9-65,80-132` (and its header's `V478` reference at `:5-7`, which now names V493), `src/server/email-outbox/hooks.ts:42-94`
@@ -111,6 +349,8 @@ alter table email_outbox drop constraint email_outbox_kind_valid,
 ---
 
 ### Task 2: The reminder and the expiry sweep route
+
+> **Amended by "Pre-flight amendments (2026-11-08)" → Amend T2. Those lines override this task's text where they differ.**
 
 **Files:**
 - Create: `src/app/api/cron/quick-match-expiry/route.ts`
@@ -170,6 +410,8 @@ it("the route refuses a bad secret", async () => { /* POST with wrong header →
 
 ### Task 3: Schedule the sweep
 
+> **Amended by "Pre-flight amendments (2026-11-08)" → Amend T3. Those lines override this task's text where they differ.**
+
 **Files:**
 - Modify: `apps/cron-worker/src/schedule.ts:75` (the new row right after `funnel-remind`, in `JOBS` `:64`)
 - `apps/cron-worker/wrangler.json`: no change. `TRIGGER_CRON` (`"17 * * * *"`) is already in both envs (`:24,29`), and `test/drift.test.ts:93-96` pins that each env registers exactly the table's triggers.
@@ -191,6 +433,8 @@ it("the route refuses a bad secret", async () => { /* POST with wrong header →
 ---
 
 ### Task 4: Saving on sign-in
+
+> **Amended by "Pre-flight amendments (2026-11-08)" → Amend T4. Those lines override this task's text where they differ.**
 
 **Files:**
 - Create: `src/server/usecases/quick-match-save.ts`
@@ -216,6 +460,8 @@ it("the route refuses a bad secret", async () => { /* POST with wrong header →
 
 ### Task 5: The Save button and its landing
 
+> **Amended by "Pre-flight amendments (2026-11-08)" → Amend T5. Those lines override this task's text where they differ.**
+
 **Files:**
 - Create: `src/app/q/[token]/save/route.ts` (GET; `src/app/q/` does not exist on main, plan 2 Task 5 creates it)
 - Modify: `src/components/quick-match/home.tsx` (plan 2 Task 5): the Save button links to `/login?next=/q/<token>/save`; when `row.savedByUserId` is set and equals the current user, show "Saved" instead; when set by someone else, show nothing
@@ -233,6 +479,8 @@ it("the route refuses a bad secret", async () => { /* POST with wrong header →
 ---
 
 ### Task 6: The account's "Quick matches" list, rename and delete
+
+> **Amended by "Pre-flight amendments (2026-11-08)" → Amend T6. Those lines override this task's text where they differ.**
 
 **Files:**
 - Modify: `src/app/me/page.tsx` (a section after the existing ones, same `<section className="mb-8">` pattern at `:225`; the page signs a visitor in at `:47-48` and reads its data in one `Promise.all` at `:54-89`)
@@ -262,6 +510,8 @@ it("the route refuses a bad secret", async () => { /* POST with wrong header →
 
 ### Task 7: Smoke suite
 
+> **Amended by "Pre-flight amendments (2026-11-08)" → Amend T7. Those lines override this task's text where they differ.**
+
 **Files:**
 - Create: `scripts/smoke/suites/quickMatch.ts` exporting `quickMatchSuite()` (suite files and keys are camelCase; a key is the function name without `Suite`, `scripts/smoke/index.ts:39-40`)
 - Modify: `scripts/smoke/index.ts:41` (`SELECTABLE_SUITES`, key `quickMatch`; import in the block at `:14-34`), `scripts/smoke/main.ts:879` (`await suite("quickMatch", …)` right after `funnelReminder`; import beside `:80`)
@@ -272,6 +522,12 @@ it("the route refuses a bad secret", async () => { /* POST with wrong header →
 
 - [ ] **Step 1: Write the suite with its checks.**
 - [ ] **Step 2: Run `SMOKE_ONLY=quickMatch npm run test:smoke`** (`package.json:47`; needs `CRON_SECRET` and `DATABASE_URL`, as the funnel reminder suite does) against a staging target and record the pass in the suite header.
+
+---
+
+### Task 8: The weekly news digest excludes the system org
+
+Added at pre-flight (E1). The whole task is in "Pre-flight amendments (2026-11-08)" → Amend T8.
 
 ---
 
