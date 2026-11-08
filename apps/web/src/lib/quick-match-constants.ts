@@ -38,4 +38,10 @@ export const QUICK_MATCH_ERRORS = {
   VISITOR_INVALID: "QUICK_MATCH_VISITOR_INVALID",
   /** A guest's Score tap on a quick match past its expiry (`ensureGuestDeviceLink`, device-links.ts). */
   EXPIRED: "QUICK_MATCH_EXPIRED",
+  /** The create's per-IP limit (QUICK_MATCH_CREATE_LIMIT): the limiter's own 429 carries no code, so the create route
+   *  names it here for the setup page's `?e=` (plan 2 T3). */
+  RATE_LIMITED: "QUICK_MATCH_RATE_LIMITED",
+  /** A create refused or failed with no code of its own to show: a form the schema refuses, a server without
+   *  DEVICE_LINK_KEK, an unexpected error. The setup page shows its generic line (plan 2 T3). */
+  CREATE_FAILED: "QUICK_MATCH_CREATE_FAILED",
 } as const;

@@ -105,6 +105,15 @@ export const MUTATION_LIMIT: RateLimitConfig = { max: 60, windowSeconds: 60 };
 export const DEVICE_LINK_MINT_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 60 };
 
 /**
+ * A guest's quick match create (POST /api/quick-match), per IP: quick match plan 2 pre-flight D2. A group on one club's
+ * wifi shares an IP, so the bound is loose; the real per-person bound is the visitor's alive cap
+ * (QUICK_MATCH_MAX_ALIVE_PER_VISITOR), and this one stops a cleared-cookie loop. Fail-open: a Redis blip must not lock a
+ * table of friends out of a game. Not EMAIL_LIMIT (5 per 300 s, fail-closed): plan 3 adds its own limit to a create that
+ * carries an email.
+ */
+export const QUICK_MATCH_CREATE_LIMIT: RateLimitConfig = { max: 20, windowSeconds: 600, failClosed: false };
+
+/**
  * Cookie-consent recording (POST /api/consent), per IP. A person clicks the
  * banner once; 20 a minute leaves room for a household or venue behind one
  * NAT while capping a bot writing rows into `cookie_consents`. Fail-open —
