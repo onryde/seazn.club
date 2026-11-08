@@ -7,7 +7,9 @@
 //
 // The ONLY stand-in is the compositor, at its HTTP boundary (helpers/sponsor-relay-standin.ts): a real composed session,
 // its real job token, its real overlay page loaded at the facts' URL, the page's own `seazn:sponsor:*` console lines turned
-// into heartbeat `airings` and every body validated against docs/contracts/relay-job.v1.json before it is sent.
+// into heartbeat `airings`, a keep-alive beat at the facts' cadence for the session's life, and every body validated
+// against docs/contracts/relay-job.v1.json before it is sent. No airing is ever built by hand: each one is a line the
+// page printed.
 //
 //   J10  the top bar: Sponsors (labelled) reaches the hub; Settings and Sign out are icons with names and tooltips; 1280, 320
 //   J1   a sponsor added through the form (name, link, tier) — on the public match page's board
@@ -16,7 +18,8 @@
 //        page draws the card with `seazn.club/s/<code>`
 //   J4   the page's own showings beaten in as airings: Times shown moves from 0 to what was posted, viewers read Coming soon,
 //        a frame is posted, and the same batch again counts nothing twice
-//   J9   a second sport's fixture (hockey, after volleyball): its airing folds into the same sponsor's totals
+//   J9   a second sport's fixture (hockey, after volleyball): the compositor page airs it there too, and its showings
+//        fold into the same sponsors' totals
 //   J5   the short link the stream showed, followed by a logged-out visitor: one click; the board's link: one more
 //   J6   Share report through the Overview; the link opened logged out shows the airings, the frame, the stream visits and
 //        Coming soon, noindex + no-referrer; revoked in the hub, the same URL is a 404, twice
@@ -41,7 +44,7 @@ import {
   composedSession,
   compositorPage,
   disposeStandInPhones,
-  endStandInSession,
+  endStandInSessions,
   jpegOf,
   planSponsorIds,
   previewPlan,
@@ -50,14 +53,18 @@ import {
   seedStandInFixture,
   seedStandInOrg,
   startsByCard,
+  type CompositorPage,
   type StandInFixture,
   type StandInOrg,
-  type StandInSession,
+  type StandInSessionRef,
 } from "../helpers/sponsor-relay-standin";
 import { routes } from "../../src/lib/routes";
 import { SCENE_CAROUSEL_MS } from "../../src/lib/sponsor-plan";
 import { SPONSOR_SHORT_CODE_PATTERN } from "../../src/lib/sponsor-short-code";
-import { CAROUSEL_STYLE, carouselMomentId } from "../../src/components/overlay/sponsor-card";
+
+/** Spec §3.2's two styles are a minor break's `lower_third` and a major's `banner`; a scene is a full-screen layer, so its
+ *  carousel airs the bigger card. Typed here from the spec, never read off the page's own constant (`CAROUSEL_STYLE`). */
+const SPEC_CAROUSEL_STYLE = "banner";
 
 // --- copy, read from the dictionaries the pages render from ------------------------------------------------------------
 const dictionary = (locale: string, book: "ui" | "console"): Record<string, string> =>
@@ -79,8 +86,19 @@ const ACT_MS = 5_000;
 /** The compositor page's Starting soon window: its first showing (the page's ready plus a loopback round, at most two
  *  holds), three showings (`SCENE_CAROUSEL_MS` each), then Live and the last showing's end (two holds and a poll). */
 const PAGE_MS = 2 * LOOPBACK_HOLD_MS + 3 * SCENE_CAROUSEL_MS + 2 * LOOPBACK_HOLD_MS + POLL_WAIT_MS;
-/** The longest this file holds the stream pool: one session's create and facts (a cycle), the page, two reads, its end. */
-const POOL_HOLD = { file: "sponsors-journey.spec.ts", holdMs: cycleMs(FAKE_CONNECT_MS) + PAGE_MS + 2 * NAV_MS + POLL_WAIT_MS } as const;
+/** J9's page on the hockey stream: its ready and a loopback round, up to two showings until A's turn comes, then Live
+ *  and the last showing's end (two holds and a poll). */
+const J9_PAGE_MS = 2 * LOOPBACK_HOLD_MS + 2 * SCENE_CAROUSEL_MS + 2 * LOOPBACK_HOLD_MS + POLL_WAIT_MS;
+/** The longest this file holds the stream pool: one session's create and facts (a cycle), the longer page, two reads,
+ *  its end. */
+const POOL_HOLD = {
+  file: "sponsors-journey.spec.ts",
+  holdMs: cycleMs(FAKE_CONNECT_MS) + Math.max(PAGE_MS, J9_PAGE_MS) + 2 * NAV_MS + POLL_WAIT_MS,
+} as const;
+/** The whole pool, taken before the phone pairs (a composed session reserves two matches of recording, R2004). */
+const reserve = async () => {
+  if (!holdsStreamSlot()) await takeWholePool(POOL_HOLD, { creditsKeyWaitMs: 1 });
+};
 
 test.describe.configure({ mode: "serial" });
 
@@ -95,7 +113,8 @@ const C = { name: "Quay Fisheries", url: "https://quay-fisheries.example/", tier
 let org: StandInOrg | undefined;
 let volley: StandInFixture;
 let hockey: StandInFixture;
-const sessions: StandInSession[] = [];
+/** Every composed session, registered by `composedSession` the moment its create answers. */
+const sessions: StandInSessionRef[] = [];
 /** What was posted, so every expected count below is the test's own: A's and B's showings, and whether the frame stored. */
 let shownA = 0;
 let shownB = 0;
@@ -127,11 +146,19 @@ async function endSessions(): Promise<void> {
     await disposeStandInPhones();
   } finally {
     try {
-      for (const s of sessions.splice(0)) await endStandInSession(s);
+      await endStandInSessions(sessions);
     } finally {
       await releaseStreamSlot();
     }
   }
+}
+
+/** The page has gone Live and every showing it started has its end line. */
+function everyShowingEnded(cef: CompositorPage): boolean {
+  const lines = cef.sponsorLines();
+  const ends = new Set(lines.filter((l) => l.kind === "end").map((l) => l.json.momentId));
+  const starts = lines.filter((l) => l.kind === "start");
+  return starts.length > 0 && starts.every((l) => ends.has(l.json.momentId));
 }
 
 test.beforeAll(async ({ browser }) => {
@@ -284,10 +311,7 @@ test("J3 + J4 the compositor's page reads the ticked sponsors with their short c
   // Before anything aired: Times shown is a real 0 (read before the pool is taken, so the hold stays the stream's).
   await expectOverview(o.page, A.id, "times", "0", "A's Times shown before the stream");
   await expect(overviewRow(o.page, B.id).getByTestId("sponsor-overview-times")).toHaveText("0");
-  const s = await composedSession(o, volley, async () => {
-    if (!holdsStreamSlot()) await takeWholePool(POOL_HOLD, { creditsKeyWaitMs: 1 });
-  });
-  sessions.push(s);
+  const s = await composedSession(o, volley, reserve, sessions);
 
   // J3 — the plan the page reads, off the relay door: the two ticked sponsors, never C, each with its short code (minted
   // on this read for a sponsor with a link), and the system's record of those codes.
@@ -315,15 +339,7 @@ test("J3 + J4 the compositor's page reads the ticked sponsors with their short c
       .toBeGreaterThanOrEqual(3);
     cef.serve("live");
     await expect
-      .poll(
-        () => {
-          const lines = cef.sponsorLines();
-          const ends = new Set(lines.filter((l) => l.kind === "end").map((l) => l.json.momentId));
-          const starts = lines.filter((l) => l.kind === "start");
-          return starts.length > 0 && starts.every((l) => ends.has(l.json.momentId));
-        },
-        { message: "Live: every showing has ended", timeout: 2 * LOOPBACK_HOLD_MS + POLL_WAIT_MS },
-      )
+      .poll(() => everyShowingEnded(cef), { message: "Live: every showing has ended", timeout: 2 * LOOPBACK_HOLD_MS + POLL_WAIT_MS })
       .toBe(true);
   } finally {
     await cef.context.close();
@@ -332,7 +348,7 @@ test("J3 + J4 the compositor's page reads the ticked sponsors with their short c
   const starts = lines.filter((l) => l.kind === "start");
   for (const l of starts) {
     expect(l.json.source, "a carousel showing").toBe("scene");
-    expect(l.json.style, "in the carousel's style").toBe(CAROUSEL_STYLE);
+    expect(l.json.style, "in the carousel's style (spec §3.2: the banner)").toBe(SPEC_CAROUSEL_STYLE);
     expect([A.id, B.id], "a ticked sponsor's card — never C").toContain(l.json.cardId);
   }
   const byCard = startsByCard(lines);
@@ -384,35 +400,56 @@ test("J3 + J4 the compositor's page reads the ticked sponsors with their short c
   for (const cell of await viewers.all()) await expect(cell).toHaveText(say(EN_UI, "sponsors.viewers.comingSoon"));
 });
 
-test("J9 a second sport's fixture: its showing folds into the same sponsor's totals", async () => {
+test("J9 a second sport's fixture: the compositor page airs the sponsors on the hockey stream too, and its showings fold into the same totals", async ({ browser }) => {
   test.setTimeout(POOL_SLOT_WAIT_MS + POOL_HOLD.holdMs + 4 * NAV_MS);
   const o = owner();
-  const s = await composedSession(o, hockey, async () => {
-    if (!holdsStreamSlot()) await takeWholePool(POOL_HOLD, { creditsKeyWaitMs: 1 });
-  });
-  sessions.push(s);
+  const s = await composedSession(o, hockey, reserve, sessions);
   expect(planSponsorIds(await relayPlan(s)), "the hockey fixture's stream carries the same ticked sponsors").toEqual([A.id, B.id].sort());
-  // One carousel showing of A, as the page writes it (its own id builder, `carouselMomentId`), on the hockey stream.
-  const startedAt = Date.now() - SCENE_CAROUSEL_MS - 1_000;
-  const momentId = carouselMomentId("starting", startedAt);
-  await beatOk(
-    s,
-    {
-      state: "playing",
-      programmePhase: "live",
-      airings: [
-        { kind: "start", momentId, cardId: A.id, style: CAROUSEL_STYLE, source: "scene", breakKind: null, at: new Date(startedAt).toISOString() },
-        { kind: "end", momentId, at: new Date(startedAt + SCENE_CAROUSEL_MS).toISOString(), cutShort: false },
-      ],
-    },
-    "the hockey stream's beat",
-  );
-  const rows = await withDb((sql) => sql<{ sponsor_id: string; fixture_id: string }[]>`
-    select sponsor_id, fixture_id from sponsor_airings where org_id = ${o.orgId} and sponsor_id = ${A.id} order by started_at`);
+
+  // The hockey stream's own page, until A has aired on it at least once, then Live: every showing it started has ended.
+  const cef = await compositorPage(browser, s, "waiting");
+  try {
+    await expect
+      .poll(() => startsByCard(cef.sponsorLines()).get(A.id) ?? 0, {
+        message: "the hockey stream's carousel airs A's card",
+        timeout: 2 * LOOPBACK_HOLD_MS + 2 * SCENE_CAROUSEL_MS,
+      })
+      .toBeGreaterThanOrEqual(1);
+    cef.serve("live");
+    await expect
+      .poll(() => everyShowingEnded(cef), { message: "Live: every hockey showing has ended", timeout: 2 * LOOPBACK_HOLD_MS + POLL_WAIT_MS })
+      .toBe(true);
+  } finally {
+    await cef.context.close();
+  }
+  const lines = cef.sponsorLines();
+  const starts = lines.filter((l) => l.kind === "start");
+  for (const l of starts) {
+    expect(l.json.source, "a carousel showing").toBe("scene");
+    expect(l.json.style, "in the carousel's style (spec §3.2: the banner)").toBe(SPEC_CAROUSEL_STYLE);
+    expect([A.id, B.id], "a ticked sponsor's card — never C").toContain(l.json.cardId);
+  }
+  const byCard = startsByCard(lines);
+  const hockeyA = byCard.get(A.id) ?? 0;
+  const hockeyB = byCard.get(B.id) ?? 0;
+  expect(hockeyA, "anti-vacuity: A aired on the hockey stream").toBeGreaterThan(0);
+  expect(lines.length, "within one beat's 64 items").toBeLessThanOrEqual(64);
+
+  // The compositor's beat: the hockey page's own lines, as airings.
+  await beatOk(s, { state: "playing", programmePhase: "live", airings: lines.map((l) => l.airing) }, "the hockey stream's beat carrying its page's showings");
+  const onHockey = await withDb((sql) => sql<{ closed: boolean }[]>`
+    select ended_at is not null as closed from sponsor_airings where session_id = ${s.sid}`);
+  expect(onHockey.length, "one airing per hockey showing posted").toBe(starts.length);
+  expect(onHockey.every((r) => r.closed), "each closed by its end line").toBe(true);
+  const rows = await withDb((sql) => sql<{ fixture_id: string }[]>`
+    select fixture_id from sponsor_airings where org_id = ${o.orgId} and sponsor_id = ${A.id} order by started_at`);
   expect(new Set(rows.map((r) => r.fixture_id)), "A aired on both sports' fixtures").toEqual(new Set([volley.fixtureId, hockey.fixtureId]));
   await endSessions();
-  shownA += 1;
+
+  shownA += hockeyA;
+  shownB += hockeyB;
   await expectOverview(o.page, A.id, "times", String(shownA), "A's Times shown, both sports together");
+  await expect(overviewRow(o.page, B.id).getByTestId("sponsor-overview-times"), "B's too").toHaveText(String(shownB));
 });
 
 test("J5 the short link the stream showed, followed logged out, redirects and counts one click; the board's link counts one more", async ({ browser }) => {
@@ -467,10 +504,16 @@ test("J6 + J7 Share report: the link opened logged out shows the airings, the fr
   const shown = panel.getByTestId("sponsor-share-url");
   await expect(shown, "the link, shown once").toHaveValue(/\/r\/sponsor\/[A-Za-z0-9_-]{43}$/);
   reportUrl = await shown.inputValue();
+  const token = new URL(reportUrl).pathname.split("/").pop()!;
+  expect(token, "premise: the url shown carries its token (43 characters)").toHaveLength(43);
   await panel.getByTestId("sponsor-share-done").click();
+  await expect(panel.getByTestId("sponsor-share-url"), "shown once: Done takes the url away").toHaveCount(0);
   const [link] = await withDb((sql) => sql<{ id: string }[]>`select id from sponsor_report_links where org_id = ${o.orgId} and sponsor_id = ${A.id} and revoked_at is null`);
   expect(link, "the link's row").toBeDefined();
-  await expect(panel.getByTestId(`sponsor-share-link-${link!.id}`), "listed (without its token)").toBeVisible();
+  const listedRow = panel.getByTestId(`sponsor-share-link-${link!.id}`);
+  await expect(listedRow, "listed").toBeVisible();
+  expect(await listedRow.innerHTML(), "listed WITHOUT its token").not.toContain(token);
+  expect(await page.content(), "and nowhere on the page once Done is tapped (only its hash is stored)").not.toContain(token);
 
   const reader = await browser.newContext({ storageState: EMPTY_JAR });
   const french = await browser.newContext({ storageState: EMPTY_JAR });

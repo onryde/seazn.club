@@ -237,14 +237,17 @@ the match page only.
 - `sponsor_airings (id, org_id, sponsor_id → set null, sponsor_name snapshot, fixture_id, session_id, moment_id,
   source ∈ rotation|scene|operator, break_kind null, style, started_at, ended_at null, cut_short, skipped (operator "Skip this card"), ended_estimated,
   frame_path null)`, unique `(session_id, moment_id)`, index
-  `(org_id, sponsor_id, started_at)`. The name snapshot keeps a report readable after a sponsor is deleted. *(Amended
+  `(org_id, sponsor_id, started_at)`. The name snapshot keeps the club's Overview listing a deleted sponsor's airings
+  under its name *(amended 2026-11-08, PO ruling: deleting a sponsor ENDS its share links, so a report link answers 404;
+  the Overview keeps the airings by name)*. *(Amended
   2026-11-01, preflight F6:)* no `viewers`, `video_id` or `youtube_refreshed_at` columns: YouTube API data lives in Y1's
   table keyed to `youtube_broadcasts` (`on delete cascade`), so Connect's own purge removes it (§6.3).
   `skipped` is set by the web from the operator log (console spec §3.4), not by the compositor. (`source` is text with a check, so a Later `deal`
   value is one check change.)
 - `sponsor_clicks (id, org_id, sponsor_id → cascade, fixture_id null, source, at)`, index `(sponsor_id, at)`.
-- `sponsor_report_links (id, org_id, sponsor_id, competition_id null, from_date, to_date, token_hash, created_by,
+- `sponsor_report_links (id, org_id, sponsor_id → cascade, competition_id null, from_date, to_date, token_hash, created_by,
   created_at, revoked_at null)`. Token: 32 random bytes, stored hashed, shown once as a URL. Revoke sets `revoked_at`.
+  Deleting the sponsor deletes its links, so a shared report ends with the sponsor *(amended 2026-11-08, PO ruling)*.
 - Migration: next free `V` at build time (V477 is latest on main today). Greenfield: no backfill; existing sponsors
   start with `on_stream = false`.
 

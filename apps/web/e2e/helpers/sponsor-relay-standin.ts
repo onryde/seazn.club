@@ -10,7 +10,13 @@
 //     `seazn:sponsor:start|end` lines (`SIGNAL_SPONSOR_*`) — what CEF hands the real compositor.
 //   * its heartbeat: every body is VALIDATED against the vendored contract (`$defs/heartbeat`) BEFORE it is sent, and every
 //     2xx reply against `$defs/heartbeatReply`, so a stand-in body the real compositor could not send fails here, not on
-//     the server. Airings ride the heartbeat (`airings`), never a POST of their own.
+//     the server. Airings ride the heartbeat (`airings`), never a POST of their own. That holds for EVERY beat: the
+//     test's own, the keep-alive's and the final `stopped` one.
+//   * its keep-alive: once it has read its session, a beat every `heartbeatIntervalMs` the facts serve, for the session's
+//     whole life, as the real compositor beats (compositor spec §5.3). A composed runner that has played is `lost` after
+//     three missed beats (`STALE_HEARTBEAT_SECONDS_COMPOSED`), so a stand-in that only beat when a test had airings to
+//     send would race the server's stale rule. A background beat cannot fail the test where it runs: each problem is
+//     recorded, and `endStandInSessions` throws them once the sessions are ended.
 //   * the sponsor plan: read from `GET /api/v1/public/fixtures/{id}/overlay?sid&st`, the relay door the page itself polls
 //     (`overlayPollPath`, components/public-site/live-score-data.ts:152 — built by hand here, because that module's graph
 //     reaches `@/lib/client` and an e2e import of it risks a collection failure: hub-knockout.spec.ts:120). The relay door
@@ -53,10 +59,15 @@ export function contractValidator(def: "heartbeat" | "heartbeatReply") {
   return validate;
 }
 
-export function expectContract(def: "heartbeat" | "heartbeatReply", body: unknown, what: string): void {
+/** Why `body` breaks the contract's `$defs/<def>`, or null when it keeps it. */
+function contractProblem(def: "heartbeat" | "heartbeatReply", body: unknown): string | null {
   const validate = contractValidator(def);
-  const ok = validate(body);
-  expect(ok, `${what} against relay-job.v1 $defs/${def}: ${JSON.stringify(validate.errors)}`).toBe(true);
+  return validate(body) ? null : `against relay-job.v1 $defs/${def}: ${JSON.stringify(validate.errors)}`;
+}
+
+export function expectContract(def: "heartbeat" | "heartbeatReply", body: unknown, what: string): void {
+  const problem = contractProblem(def, body);
+  expect(problem, `${what} ${problem ?? ""}`).toBeNull();
 }
 
 /** The compositor's job token (see the header). `secret` defaults to the server's own; a test passes another to forge one. */
@@ -176,14 +187,20 @@ export async function seedStandInFixture(
 // ---------------------------------------------------------------------------------------------------------------------
 // The composed session — through the organiser's real API — and the compositor's own reads and writes on it.
 // ---------------------------------------------------------------------------------------------------------------------
-export interface StandInSession {
+/** What a test's cleanup needs of a session: all of it known the moment the create answers. */
+export interface StandInSessionRef {
   fixtureId: string;
   sid: string;
+  /** The organiser's request context (its stop) — and the compositor's (no cookie is read on the relay routes). */
+  request: APIRequestContext;
+}
+
+export interface StandInSession extends StandInSessionRef {
   jobToken: string;
   /** The URL the session's facts carry, exactly as served. */
   overlayUrl: URL;
-  /** The organiser's request context (its stop) — and the compositor's (no cookie is read on the relay routes). */
-  request: APIRequestContext;
+  /** The programme phase the keep-alive reports: `waiting` until a compositor page serves another (`serve`). */
+  programmePhase: ProgrammePhase;
 }
 
 /**
@@ -191,8 +208,21 @@ export interface StandInSession {
  * target, a paired phone (W5), the create, then the facts read with the job token until they carry `overlayUrl`.
  * `reserve` takes the CALLER's stream-slot pool key (a composed session reserves two matches of recording, R2004, so the
  * callers take the whole pool) — before the phone pairs and the session starts.
+ *
+ * `cleanup` is the caller's list for `endStandInSessions`: the session is pushed onto it the moment the create answers,
+ * before any read or assert below can throw (overlay-compositor.spec.ts registers its sid at the same point). A red facts
+ * poll would otherwise leak a live composed session, whose two matches of reservation refuse the next composed start
+ * anywhere on the server, so the red would land on a sibling spec.
+ *
+ * Once the facts are read, the compositor's first beat is sent and awaited (a refused beat fails HERE, in the test), then
+ * the keep-alive beats every `heartbeatIntervalMs` until `endStandInSession`.
  */
-export async function composedSession(org: StandInOrg, fx: StandInFixture, reserve: () => Promise<void>): Promise<StandInSession> {
+export async function composedSession(
+  org: StandInOrg,
+  fx: StandInFixture,
+  reserve: () => Promise<void>,
+  cleanup: StandInSessionRef[],
+): Promise<StandInSession> {
   const request = org.page.request;
   await grantRigPackCredits(org.orgId, 5);
   const target = await apiJson<{ id: string }>(request, `/api/v1/orgs/${org.orgId}/stream-targets`, "POST", {
@@ -208,25 +238,97 @@ export async function composedSession(org: StandInOrg, fx: StandInFixture, reser
     targetId: target.data.id,
   });
   if (made.status >= 300 || !made.data?.sessionId) throw new Error(`composed create -> ${made.status} ${JSON.stringify(made.error)}`);
-  const sid = made.data.sessionId;
+  const ref: StandInSessionRef = { fixtureId: fx.fixtureId, sid: made.data.sessionId, request };
+  cleanup.push(ref);
+  const { sid } = ref;
   const jobToken = await jobTokenFor(sid);
-  let overlayUrl: string | undefined;
+  let facts: { overlayUrl?: string; heartbeatIntervalMs?: number } = {};
   await expect
     .poll(
       async () => {
         const res = await request.get(`/api/internal/relay/sessions/${sid}`, { headers: { Authorization: `Bearer ${jobToken}` } });
         if (res.status() !== 200) return `HTTP ${res.status()}`;
-        overlayUrl = ((await res.json()) as { data: { overlayUrl?: string } }).data.overlayUrl;
-        return overlayUrl ? "facts" : "facts without an overlayUrl";
+        facts = ((await res.json()) as { data: typeof facts }).data;
+        return facts.overlayUrl ? "facts" : "facts without an overlayUrl";
       },
       { message: "the composed session's facts never carried an overlayUrl", timeout: cycleMs(FAKE_CONNECT_MS), intervals: [1_000] },
     )
     .toBe("facts");
-  const url = new URL(overlayUrl!);
+  const url = new URL(facts.overlayUrl!);
+  // The producer's own contract (R2004 decision 5), as overlay-compositor.spec.ts states it.
   expect(url.pathname, "the facts' overlay URL names the session's fixture").toBe(`/overlay/fixtures/${fx.fixtureId}`);
   expect(url.searchParams.get("sid")).toBe(sid);
+  expect(url.searchParams.get("host"), "the page is told it runs in the compositor (spec §3.6.1: it logs airings only there)").toBe("compositor");
   expect(url.searchParams.get("st"), "a page token rides the URL").toBeTruthy();
-  return { fixtureId: fx.fixtureId, sid, jobToken, overlayUrl: url, request };
+  const intervalMs = facts.heartbeatIntervalMs;
+  expect(Number.isInteger(intervalMs) && intervalMs! > 0, `the composed facts serve the beat cadence (heartbeatIntervalMs ${intervalMs})`).toBe(true);
+  const s: StandInSession = { ...ref, jobToken, overlayUrl: url, programmePhase: "waiting" };
+  await beatOk(s, { state: "playing", programmePhase: s.programmePhase }, "the compositor's first beat, once it has read its session");
+  startKeepAlive(s, intervalMs!);
+  return s;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The keep-alive (see the header). One per session, keyed by sid; `endStandInSession` silences it before the final beat.
+// ---------------------------------------------------------------------------------------------------------------------
+interface KeepAlive {
+  timer: ReturnType<typeof setInterval>;
+  wire: {
+    /** The beat on the wire, if any: awaited before the final beat, so the final is the last one sent. */
+    inFlight: Promise<void> | null;
+    sent: number;
+  };
+}
+const keepAlives = new Map<string, KeepAlive>();
+/** Every background or final beat that broke the contract or was refused, for `endStandInSessions` to throw. */
+const beatProblems: string[] = [];
+
+/** The one harness artefact a background request may meet (overlay-compositor.spec.ts `disposePhones`): a keep-alive
+ *  socket the server reaped (read ECONNRESET). Logged and tolerated; every other failure is a problem. */
+function isReapedSocket(err: unknown): boolean {
+  return /apiRequestContext\.post: read ECONNRESET/.test(err instanceof Error ? err.message : String(err));
+}
+
+/**
+ * One beat sent where no test can see it fail: its body through the contract BEFORE it is sent, and the reply through it
+ * after. `accept410` is the final beat's: the organiser's stop may already have ended the session, and the contract's
+ * answer for that is 410 SESSION_ENDED. Never throws; a problem is recorded.
+ */
+async function backgroundBeat(s: StandInSessionRef, token: string, body: Record<string, unknown>, what: string, accept410 = false): Promise<void> {
+  const tag = `session ${s.sid.slice(0, 8)}, ${what}`;
+  const bodyProblem = contractProblem("heartbeat", body);
+  if (bodyProblem !== null) {
+    beatProblems.push(`${tag}: the body ${bodyProblem}`);
+    return;
+  }
+  try {
+    const res = await s.request.post(`/api/internal/relay/sessions/${s.sid}/heartbeat`, { headers: { Authorization: `Bearer ${token}` }, data: body });
+    const text = await res.text();
+    if (res.status() === 200) {
+      const replyProblem = contractProblem("heartbeatReply", (JSON.parse(text) as { data?: unknown }).data);
+      if (replyProblem !== null) beatProblems.push(`${tag}: the reply ${replyProblem}`);
+      return;
+    }
+    if (accept410 && res.status() === 410 && text.includes("SESSION_ENDED")) return;
+    beatProblems.push(`${tag}: HTTP ${res.status()} ${text}`);
+  } catch (err) {
+    if (isReapedSocket(err)) console.log(`${tag}: lost to a reaped keep-alive socket (read ECONNRESET), tolerated`);
+    else beatProblems.push(`${tag}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function startKeepAlive(s: StandInSession, intervalMs: number): void {
+  const wire: KeepAlive["wire"] = { inFlight: null, sent: 0 };
+  const timer = setInterval(() => {
+    if (wire.inFlight !== null) return; // a slow reply: the next tick beats instead, never two on the wire at once
+    wire.sent++;
+    wire.inFlight = backgroundBeat(s, s.jobToken, { state: "playing", programmePhase: s.programmePhase }, `keep-alive beat ${wire.sent}`).finally(() => {
+      wire.inFlight = null;
+    });
+  }, intervalMs);
+  // A worker torn down mid-test (a timeout past its afterEach) is never kept alive by this timer.
+  timer.unref();
+  keepAlives.set(s.sid, { timer, wire });
 }
 
 /** One heartbeat, validated against the contract BEFORE it is sent. `token: null` sends no Authorization at all. */
@@ -270,19 +372,26 @@ export async function previewPlan(request: APIRequestContext, fixtureId: string)
 export const planSponsorIds = (plan: SponsorPlan | null): string[] => (plan === null ? [] : plan.cards.map((c) => c.sponsorId).sort());
 
 /**
- * Stop a session as the organiser does, then the compositor's own last beat (`stopped`, C06's `ended` exit), then wait
- * for it to end. A session that will not end never keeps its reservation: it is forced terminal — and a forced `failed`
+ * Silence the session's keep-alive (and let a beat on the wire land), stop it as the organiser does, then the
+ * compositor's own last beat (`stopped`, C06's `ended` exit) — through the contract like every other beat — then wait for
+ * it to end. A session that will not end never keeps its reservation: it is forced terminal — and a forced `failed`
  * writes `end_reason = null` (V410's end_reason_state: a session with an end reason may only complete). Its camera's
  * recordings are then marked deleted, which is what frees the pool (overlay-compositor.spec.ts `endSession`).
+ * A beat's problem is recorded, not thrown: `endStandInSessions` throws once every session is ended.
  */
-export async function endStandInSession(s: StandInSession): Promise<void> {
+export async function endStandInSession(s: StandInSessionRef): Promise<void> {
+  const ka = keepAlives.get(s.sid);
+  if (ka !== undefined) {
+    clearInterval(ka.timer);
+    keepAlives.delete(s.sid);
+    await ka.wire.inFlight;
+  }
   await s.request.post(`/api/v1/fixtures/${s.fixtureId}/stream-sessions/${s.sid}/stop`).catch(() => null);
-  await s.request
-    .post(`/api/internal/relay/sessions/${s.sid}/heartbeat`, {
-      headers: { Authorization: `Bearer ${s.jobToken}` },
-      data: { state: "stopped", exitReason: "ended" },
-    })
-    .catch(() => null);
+  try {
+    await backgroundBeat(s, await jobTokenFor(s.sid), { state: "stopped", exitReason: "ended" }, "the final beat", true);
+  } catch (err) {
+    beatProblems.push(`session ${s.sid.slice(0, 8)}, the final beat: ${err instanceof Error ? err.message : String(err)}`);
+  }
   await expect
     .poll(
       async () => {
@@ -302,6 +411,21 @@ export async function endStandInSession(s: StandInSession): Promise<void> {
     );
   await withDb((sql) => sql`update fixture_stream_inputs set recordings_deleted_at = now()
                              where session_id = ${s.sid} and role = 'camera' and recordings_deleted_at is null`);
+}
+
+/** Every session on the caller's list ended (the list emptied), THEN anything that went wrong thrown: an end that failed,
+ *  and every beat problem the keep-alives and final beats recorded. One failure never leaves another session live. */
+export async function endStandInSessions(list: StandInSessionRef[]): Promise<void> {
+  const failures: string[] = [];
+  for (const s of list.splice(0)) {
+    try {
+      await endStandInSession(s);
+    } catch (err) {
+      failures.push(`ending session ${s.sid.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  failures.push(...beatProblems.splice(0));
+  if (failures.length > 0) throw new Error(`the compositor stand-in:\n${failures.join("\n")}`);
 }
 
 /** `disposeFakePhones()`, tolerating the one harness artefact overlay-compositor.spec.ts `disposePhones` documents: a
@@ -334,7 +458,7 @@ export interface SponsorLine {
 export interface CompositorPage {
   context: BrowserContext;
   page: Page;
-  /** Serve `phase` from now on (a new seq: the page's held long poll answers it). */
+  /** Serve `phase` from now on (a new seq: the page's held long poll answers it) — and the keep-alive reports it. */
   serve(phase: ProgrammePhase): void;
   /** How many console lines the page has printed so far (a mark for `sponsorLines(after)`). */
   mark(): number;
@@ -348,6 +472,7 @@ const VIEWPORT = { width: 1920, height: 1080 };
 export async function compositorPage(browser: Browser, s: StandInSession, first: ProgrammePhase): Promise<CompositorPage> {
   const context = await browser.newContext({ viewport: VIEWPORT, storageState: EMPTY_JAR });
   const state = { phase: first, seq: 1 };
+  s.programmePhase = first;
   const origin = s.overlayUrl.origin;
   await context.route("http://127.0.0.1:7419/phase**", async (route) => {
     const req = route.request();
@@ -377,6 +502,7 @@ export async function compositorPage(browser: Browser, s: StandInSession, first:
     serve(phase) {
       state.phase = phase;
       state.seq++;
+      s.programmePhase = phase;
     },
     mark: () => lines.length,
     sponsorLines(after = 0) {
