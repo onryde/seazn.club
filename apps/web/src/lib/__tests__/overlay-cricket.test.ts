@@ -245,9 +245,24 @@ describe("liveFromScorecard after a mid-over bowler change (S2-4 Task 9)", () =>
     expect(closed?.bowler?.name, "`bowler` stays the first, for older readers").toBe("Bumrah");
   });
 
-  it("a bowler the resolver cannot name is dropped alone; the other stays", () => {
+  // S2-4 Batch D: a bowler the resolver cannot name keeps his figures, nameless — dropping him made the over read as
+  // the other's alone.
+  it("a second bowler the resolver cannot name keeps his figures, with no name; the other stays", () => {
     const closed = lastClosedOverFromScorecard(scorecardOf(CLOSED), nameOf); // NAMES has no A-p10
-    expect(closed?.bowlers?.map((b) => b.name)).toEqual(["Bumrah"]);
+    expect(closed?.bowlers).toEqual([
+      { name: "Bumrah", overs: "0.3", maidens: 0, runs: 8, wickets: 0 },
+      { overs: "0.3", maidens: 0, runs: 4, wickets: 0 },
+    ]);
+    expect(Object.keys(closed!.bowlers![1]!), "no name key at all, not `name: undefined`").not.toContain("name");
+  });
+
+  it("a FIRST bowler the resolver cannot name keeps his place and figures; `bowler` (the first, named) is absent", () => {
+    const closed = lastClosedOverFromScorecard(scorecardOf(CLOSED), (id) => (id === "A-p10" ? "Siraj" : undefined));
+    expect(closed?.bowlers).toEqual([
+      { overs: "0.3", maidens: 0, runs: 8, wickets: 0 },
+      { name: "Siraj", overs: "0.3", maidens: 0, runs: 4, wickets: 0 },
+    ]);
+    expect(closed?.bowler).toBeUndefined();
   });
 
   it("regression pin: a whole over carries no `bowlers`, only its one bowler", () => {

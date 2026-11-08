@@ -765,15 +765,36 @@ describe("nameCricketBundle — a split over's bowlers (S2-4)", () => {
     expect(named?.bowler?.name).toBe("Away One");
   });
 
-  it("an unnamed bowler is dropped alone, and no id reaches the card", () => {
+  // S2-4 Batch D: an unnamed bowler keeps his place and figures and loses his id; dropping him credited his balls to
+  // the other bowler on the card.
+  it("an unnamed second bowler keeps his place and figures, with no name, and no id reaches the card", () => {
     const named = nameCricketBundle(SPLIT_CLOSED, personOf).lastClosedOver; // NAMED has no A-p2
-    expect(named?.bowlers?.map((b) => b.name)).toEqual(["Away One"]);
+    expect(named?.bowlers).toEqual([
+      { name: "Away One", overs: "0.3", maidens: 0, runs: 5, wickets: 0 },
+      { overs: "0.3", maidens: 0, runs: 2, wickets: 1 },
+    ]);
+    expect(Object.keys(named!.bowlers![1]!)).not.toContain("name");
     expect(JSON.stringify(named)).not.toContain("A-p");
   });
 
-  it("no bowler named: no list at all, and still no id", () => {
+  it("an unnamed FIRST bowler keeps his place, so the second is not read as the whole over's", () => {
+    const secondOnly = (id: unknown) => (id === "A-p2" ? { name: "Away Two", masked: false } : undefined);
+    const named = nameCricketBundle(SPLIT_CLOSED, secondOnly).lastClosedOver;
+    expect(named?.bowlers).toEqual([
+      { overs: "0.3", maidens: 0, runs: 5, wickets: 0 },
+      { name: "Away Two", overs: "0.3", maidens: 0, runs: 2, wickets: 1 },
+    ]);
+    expect(named?.bowler, "the first bowler's id never rides as `bowler`").toBeUndefined();
+    expect(JSON.stringify(named)).not.toContain("A-p");
+  });
+
+  it("no bowler named: both keep their figures, nameless, and still no id", () => {
     const named = nameCricketBundle(SPLIT_CLOSED, () => undefined).lastClosedOver;
-    expect(named?.bowlers).toBeUndefined();
+    expect(named?.bowlers).toEqual([
+      { overs: "0.3", maidens: 0, runs: 5, wickets: 0 },
+      { overs: "0.3", maidens: 0, runs: 2, wickets: 1 },
+    ]);
+    expect(named?.bowler).toBeUndefined();
     expect(JSON.stringify(named)).not.toContain("A-p");
   });
 });

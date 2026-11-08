@@ -707,9 +707,11 @@ function nameClosedOver(
     { batters: closed.batters, bowler: closed.bowler, thisOver: closed.glyphs },
     personOf,
   );
-  // A split over's bowlers (S2-4, CK-BC-1): each through the same consent lookup, an unnamed one dropped alone.
-  const bowlers = (closed.bowlers ?? []).flatMap(
-    (bowler) => nameLiveBlock({ batters: [], bowler, thisOver: [] }, personOf).bowler ?? [],
+  // A split over's bowlers (S2-4, CK-BC-1): each through the same consent lookup. One the line-up never named keeps
+  // his figures and loses the id that stood in for his name (S2-4 Batch D): dropping him would credit his balls to
+  // the others, and the id must never reach the wire.
+  const bowlers = (closed.bowlers ?? []).map(
+    (bowler) => nameLiveBlock({ batters: [], bowler, thisOver: [] }, personOf).bowler ?? omit(bowler, "name"),
   );
   return {
     ...omit(closed, "bowler", "bowlers"),
