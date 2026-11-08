@@ -8,7 +8,8 @@
 //   - "Last 30 days" is LAST_DAYS whole UTC days ending with `now`'s own day (from 00:00 UTC LAST_DAYS-1 days before today, to
 //     00:00 UTC tomorrow) - whole days, so a report link, whose bounds are DATES (V492 from_date / to_date), can carry exactly
 //     the period the organiser was looking at;
-//   - "One competition" has NO time window: it is every airing and click whose fixture is in that competition.
+//   - "One competition" has NO time window: it is every airing and click whose competition SNAPSHOT is that competition
+//     (V492's `competition_id`, taken from the row's fixture at insert, so it outlives the fixture's delete).
 // `now` is always an argument. Nothing here reads the clock.
 import { sponsorsHref } from "@/lib/sponsors-hub";
 
