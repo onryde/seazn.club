@@ -2978,6 +2978,8 @@ export interface ReconcileOutcome {
   kind: "noop" | "in_place" | "regenerated";
   placed: string[];
   vacated: string[];
+  /** B2 fix round 1 (I2): every seat emptied — a departed entrant's, and one whose entrant was deleted (in no list). */
+  vacated_seats: number;
   slots?: { kept: number; freed: number; unscheduled: number };
 }
 
@@ -3555,15 +3557,34 @@ async function reconcileKnockoutGenerate(
   }));
   const decision = await reconcileRootBracket(tx, { stageId: stage.id, started, active: entrants, fresh });
   if (decision.kind === "regenerate") {
+    // B2 fix round 1 (I1): a redraw deletes every line, and the delete cascades into the organiser's appointments, team
+    // sheets and paired scoring devices. Generate has no confirm, so it never takes them silently: refused by name,
+    // pointing to Rebuild, whose confirm lists what it clears. Read before the delete (the counts Rebuild's dialog reads).
+    const attachments = await stageAttachmentCounts(tx, stage.id);
+    if (attachments.officials + attachments.lineups + attachments.deviceLinks > 0) {
+      throw knockoutRefusal("KO_REDRAW_WOULD_CLEAR_SETUP", { attachments });
+    }
     const regen = await regenerateStageInTx(tx, auth, stage.id, stage);
     return {
       ...regen.generated,
       outcome: {
         ...regen.generated.outcome,
-        reconcile: { kind: "regenerated", placed: decision.placed, vacated: decision.vacated, slots: regen.slots },
+        reconcile: {
+          kind: "regenerated",
+          placed: decision.placed,
+          vacated: decision.vacated,
+          vacated_seats: decision.vacatedSeats,
+          slots: regen.slots,
+        },
       },
       changedFixtureIds: regen.removedIds,
     };
+  }
+  if (decision.kind === "in_place") {
+    // B2 fix round 1 (m6): a change in place moves seats under the division's history, so a Redo waiting on the old board
+    // would re-apply onto a line that is now a bye. Cleared as a Generate that creates clears it. No ledger row: a
+    // Generate writes one only when it creates fixtures (`fixture_ids` is Undo's delete list), and this creates none.
+    await tx`update divisions set edit_watermark = null where id = ${stage.division_id}`;
   }
   const fixtures = await readStageFixtureRows(tx, stage.id);
   const [division] = await tx<{ competition_id: string }[]>`
@@ -3573,7 +3594,7 @@ async function reconcileKnockoutGenerate(
       created: 0,
       existing: fixtures.length,
       fixtures,
-      reconcile: { kind: decision.kind, placed: decision.placed, vacated: decision.vacated },
+      reconcile: { kind: decision.kind, placed: decision.placed, vacated: decision.vacated, vacated_seats: decision.vacatedSeats },
     },
     divisionId: stage.division_id,
     competitionId: division.competition_id,
@@ -4258,26 +4279,32 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
     ]);
     const activeIds = new Set(active.map((e) => e.id));
     const referencedIds = new Set(referenced.map((e) => e.id));
-    // One round trip for all three — each is a plain count over the stage's
-    // own fixture ids, and none of them is large enough to want three.
-    const [counts] = await tx<{ officials: number; lineups: number; device_links: number }[]>`
-      select
-        (select count(*) from fixture_officials fo
-           join fixtures f on f.id = fo.fixture_id where f.stage_id = ${stageId})::int as officials,
-        (select count(*) from lineups l
-           join fixtures f on f.id = l.fixture_id where f.stage_id = ${stageId})::int as lineups,
-        (select count(*) from device_links dl
-           join fixtures f on f.id = dl.fixture_id where f.stage_id = ${stageId})::int as device_links`;
     return {
       ghosts: expectedToPlay.filter((e) => !activeIds.has(e.id)),
       unplaced: active.filter((e) => !referencedIds.has(e.id)),
-      attachments: {
-        officials: counts?.officials ?? 0,
-        lineups: counts?.lineups ?? 0,
-        deviceLinks: counts?.device_links ?? 0,
-      },
+      attachments: await stageAttachmentCounts(tx, stageId),
     };
   });
+}
+
+/** The organiser work attached to a stage's fixtures that a delete of them CASCADEs into (`StageRosterDrift.attachments`):
+ *  what Rebuild's confirm lists, and what a knockout's Generate refuses to redraw over (W4 B2 fix round 1, I1). One
+ *  round trip for all three — each is a plain count over the stage's own fixture ids, and none of them is large enough
+ *  to want three. */
+export async function stageAttachmentCounts(tx: Tx, stageId: string): Promise<StageRosterDrift["attachments"]> {
+  const [counts] = await tx<{ officials: number; lineups: number; device_links: number }[]>`
+    select
+      (select count(*) from fixture_officials fo
+         join fixtures f on f.id = fo.fixture_id where f.stage_id = ${stageId})::int as officials,
+      (select count(*) from lineups l
+         join fixtures f on f.id = l.fixture_id where f.stage_id = ${stageId})::int as lineups,
+      (select count(*) from device_links dl
+         join fixtures f on f.id = dl.fixture_id where f.stage_id = ${stageId})::int as device_links`;
+  return {
+    officials: counts?.officials ?? 0,
+    lineups: counts?.lineups ?? 0,
+    deviceLinks: counts?.device_links ?? 0,
+  };
 }
 
 /** W4 T4 (K3, X-RB-1): a knockout line's role key (`bracketRoleKey`), counted back from ITS bracket's final. The final

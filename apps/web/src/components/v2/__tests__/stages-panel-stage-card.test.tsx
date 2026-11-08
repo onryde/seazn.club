@@ -962,6 +962,40 @@ describe("the stage's fixtures are in the card (item 9)", () => {
   });
 });
 
+// W4 B2 fix round 1 (item 6, controller ruling): a root knockout drawn before its roster moved is `active` before the division
+// starts, and the not-started rule alone hid Generate — the in-place reconcile was unreachable from the desk. Through the real panel:
+// its own `rosterDrift` and `divisionStatus` props decide (lib/bracket-reconcile.ts `knockoutUpdateDrawOffered`), and the rail draws
+// the same `stage-generate` control, worded "Update draw".
+describe("Update draw: a knockout whose roster moved before Start offers Generate again - through the real panel", () => {
+  const KO_FIXTURES = [1, 2, 3].map((no) => fixture(A, no));
+  const drifted = { [A]: { ghosts: [{ id: "e9", display_name: "Gone" }], unplaced: [], attachments: { officials: 0, lineups: 0, deviceLinks: 0 } } };
+  const quiet = { [A]: { ghosts: [], unplaced: [], attachments: { officials: 0, lineups: 0, deviceLinks: 0 } } };
+  const ko = (over: Record<string, unknown>) =>
+    panel({ stages: [stageRow({ kind: "knockout", name: "Knockout" })], fixtures: KO_FIXTURES, stageTableRules: {}, ...over });
+
+  it("drifted, division in setup: stage-generate leads, worded Update draw", () => {
+    const html = ko({ rosterDrift: drifted, divisionStatus: "setup" });
+    expect(tag(html, "stage-generate"), "the control is drawn").not.toBeNull();
+    expect(tag(html, "stage-generate")).toMatch(/\bbtn-primary\b/);
+    expect(text(html)).toContain(UI["schedule.updateDraw"]!);
+  });
+
+  it("each of: no drift, a started division, a finished division, another kind - hides it", () => {
+    const cases: [string, Record<string, unknown>][] = [
+      ["no drift", { rosterDrift: quiet, divisionStatus: "setup" }],
+      ["division started", { rosterDrift: drifted, divisionStatus: "active" }],
+      ["division finished", { rosterDrift: drifted, divisionStatus: "completed" }],
+      ["a league", { rosterDrift: drifted, divisionStatus: "setup", stages: [stageRow({ name: "League" })], stageTableRules: { [A]: tableRulesOf(sport("badminton"), "league") } }],
+    ];
+    let checked = 0;
+    for (const [why, over] of cases) {
+      expect(tag(ko(over), "stage-generate"), why).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+});
+
 describe("the buttons follow the stage's state (item 8) - through the real panel", () => {
   it("the mock's case (1 in play, 2 to schedule): no Generate; Complete present but disabled with its reason; Add match is there", () => {
     const html = panel();

@@ -38,11 +38,13 @@ export interface ReconcileInput {
   fresh: readonly BracketRoleRow[];
 }
 
-/** What the driver did, or (`regenerate`) what the caller must do. `placed`/`vacated` are entrant ids; `touched` the
- *  lines a change in place wrote (for the publish). */
+/** What the driver did, or (`regenerate`) what the caller must do. `placed`/`vacated` are entrant ids; `vacatedSeats`
+ *  counts every seat emptied — a departed entrant's and a seat whose entrant was DELETED (its id is gone with it, so it is
+ *  in no list), so the desk never says "up to date" after writing a bye (B2 fix round 1, I2); `touched` the lines a
+ *  change in place wrote (for the publish). */
 export type ReconcileDecision =
-  | { kind: "noop" | "in_place"; placed: string[]; vacated: string[]; touched: string[] }
-  | { kind: "regenerate"; placed: string[]; vacated: string[] };
+  | { kind: "noop" | "in_place"; placed: string[]; vacated: string[]; vacatedSeats: number; touched: string[] }
+  | { kind: "regenerate"; placed: string[]; vacated: string[]; vacatedSeats: number };
 
 type Line = BracketRoleRow & ByeLineRow & { id: string };
 
@@ -76,14 +78,14 @@ export async function reconcileRootBracket(tx: Tx, input: ReconcileInput): Promi
   const active = new Set(input.active.map((e) => e.id));
   const newcomers = [...active].filter((id) => !seated.has(id));
   const departed = [...seated.keys()].filter((id) => !active.has(id));
-  const noop = { kind: "noop" as const, placed: [], vacated: [], touched: [] };
+  const noop = { kind: "noop" as const, placed: [], vacated: [], vacatedSeats: 0, touched: [] };
 
   if (input.started) {
     if (newcomers.length > 0 || orphans.length > 0 || unreadable) throw knockoutRefusal("KO_GENERATE_AFTER_START");
     return noop; // unchanged, or only departures the withdrawal cascade already walked over
   }
 
-  const regenerate = { kind: "regenerate" as const, placed: newcomers, vacated: departed };
+  const regenerate = { kind: "regenerate" as const, placed: newcomers, vacated: departed, vacatedSeats: departed.length + orphans.length };
   if (unreadable) return regenerate;
   const plan = planReconcile(
     knockoutLines(existing),
@@ -122,5 +124,5 @@ export async function reconcileRootBracket(tx: Tx, input: ReconcileInput): Promi
     const done = await reopenByeLine(tx, lineId, newcomer);
     touched.push(done.fixtureId, done.nextId);
   }
-  return { kind: "in_place", placed: place, vacated: departed, touched: [...new Set(touched)] };
+  return { kind: "in_place", placed: place, vacated: departed, vacatedSeats: vacates.length, touched: [...new Set(touched)] };
 }

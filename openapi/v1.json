@@ -25782,6 +25782,11 @@
                                 "type": "string"
                               }
                             },
+                            "vacated_seats": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
                             "slots": {
                               "type": "object",
                               "properties": {
@@ -25812,7 +25817,8 @@
                           "required": [
                             "kind",
                             "placed",
-                            "vacated"
+                            "vacated",
+                            "vacated_seats"
                           ],
                           "additionalProperties": false
                         }
@@ -28256,6 +28262,11 @@
                                 "type": "string"
                               }
                             },
+                            "vacated_seats": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
                             "slots": {
                               "type": "object",
                               "properties": {
@@ -28286,7 +28297,8 @@
                           "required": [
                             "kind",
                             "placed",
-                            "vacated"
+                            "vacated",
+                            "vacated_seats"
                           ],
                           "additionalProperties": false
                         },

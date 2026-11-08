@@ -32,42 +32,55 @@ const UP_TO_DATE = "Nothing new to generate — fixtures are up to date.";
 
 describe("the Generate notice after a knockout reconcile (FX-G2)", () => {
   it("says 'up to date' only for the named no-op (and a plain Generate that created nothing)", () => {
-    expect(text("en", { created: 0, existing: 7, reconcile: { kind: "noop", placed: [], vacated: [] } })).toBe(UP_TO_DATE);
+    expect(text("en", { created: 0, existing: 7, reconcile: { kind: "noop", placed: [], vacated: [], vacated_seats: 0 } })).toBe(UP_TO_DATE);
     expect(text("en", { created: 0, existing: 7 })).toBe(UP_TO_DATE);
   });
 
   it("a placement in place is counted, never 'up to date'", () => {
-    expect(text("en", { created: 0, existing: 7, reconcile: { kind: "in_place", placed: ["p7"], vacated: [] } })).toBe(
+    expect(text("en", { created: 0, existing: 7, reconcile: { kind: "in_place", placed: ["p7"], vacated: [], vacated_seats: 0 } })).toBe(
       "1 new entrant placed in a bye.",
     );
-    expect(text("en", { created: 0, existing: 7, reconcile: { kind: "in_place", placed: ["p7", "p8"], vacated: [] } })).toBe(
+    expect(text("en", { created: 0, existing: 7, reconcile: { kind: "in_place", placed: ["p7", "p8"], vacated: [], vacated_seats: 0 } })).toBe(
       "2 new entrants placed in byes.",
     );
   });
 
   it("a departure in place is counted with the bye it leaves; both clauses together", () => {
-    expect(text("en", { created: 0, existing: 7, reconcile: { kind: "in_place", placed: [], vacated: ["x"] } })).toBe(
+    expect(text("en", { created: 0, existing: 7, reconcile: { kind: "in_place", placed: [], vacated: ["x"], vacated_seats: 1 } })).toBe(
       "1 entrant who left was taken out; their opponent now has a bye.",
     );
-    expect(text("en", { created: 0, existing: 7, reconcile: { kind: "in_place", placed: ["a"], vacated: ["x", "y"] } })).toBe(
+    expect(text("en", { created: 0, existing: 7, reconcile: { kind: "in_place", placed: ["a"], vacated: ["x", "y"], vacated_seats: 2 } })).toBe(
       "1 new entrant placed in a bye. 2 entrants who left were taken out; their opponents now have byes.",
     );
   });
 
-  it("a redraw says the bracket was drawn again, not just a count of what it created", () => {
-    expect(text("en", { created: 15, existing: 0, reconcile: { kind: "regenerated", placed: ["p9"], vacated: [] } })).toBe(
-      "The bracket changed size, so it was drawn again. Each match keeps the time and court of its place in the bracket.",
+  it("a seat whose entrant was DELETED counts, though no id is listed — never 'up to date' after a write (fix round 1, I2)", () => {
+    expect(text("en", { created: 0, existing: 7, reconcile: { kind: "in_place", placed: [], vacated: [], vacated_seats: 1 } })).toBe(
+      "1 entrant who left was taken out; their opponent now has a bye.",
     );
+  });
+
+  it("a redraw says the bracket was drawn again, what became of its slots, and that printed sheets stop — never that every match kept its time (fix round 1, I1)", () => {
+    const redraw = (slots: { kept: number; freed: number; unscheduled: number }) =>
+      text("en", { created: 15, existing: 0, reconcile: { kind: "regenerated", placed: ["p9"], vacated: [], vacated_seats: 0, slots } });
+    expect(redraw({ kept: 7, freed: 0, unscheduled: 1 })).toBe(
+      "The bracket changed size, so it was drawn again. 7 slot(s) kept, 0 freed, 1 unscheduled. Printed scorer sheets for this stage will stop working.",
+    );
+    // A bracket nobody laid out has no slot to report (Rebuild's own rule): the slot clause is dropped, the sheets one is not.
+    expect(redraw({ kept: 0, freed: 0, unscheduled: 0 })).toBe(
+      "The bracket changed size, so it was drawn again. Printed scorer sheets for this stage will stop working.",
+    );
+    expect(redraw({ kept: 7, freed: 0, unscheduled: 1 })).not.toMatch(/keeps the time and court/);
   });
 
   it("every locale renders every reconcile line, translated, with no raw key and no unfilled placeholder", () => {
     let checked = 0;
     const cases: GenerateNoticeWire["reconcile"][] = [
-      { kind: "in_place", placed: ["a"], vacated: [] },
-      { kind: "in_place", placed: ["a", "b", "c"], vacated: [] },
-      { kind: "in_place", placed: [], vacated: ["x"] },
-      { kind: "in_place", placed: [], vacated: ["x", "y"] },
-      { kind: "regenerated", placed: [], vacated: [] },
+      { kind: "in_place", placed: ["a"], vacated: [], vacated_seats: 0 },
+      { kind: "in_place", placed: ["a", "b", "c"], vacated: [], vacated_seats: 0 },
+      { kind: "in_place", placed: [], vacated: ["x"], vacated_seats: 1 },
+      { kind: "in_place", placed: [], vacated: ["x", "y"], vacated_seats: 2 },
+      { kind: "regenerated", placed: [], vacated: [], vacated_seats: 0, slots: { kept: 3, freed: 1, unscheduled: 0 } },
     ];
     for (const r of cases) {
       const english = (() => {
@@ -90,6 +103,6 @@ describe("the Generate notice after a knockout reconcile (FX-G2)", () => {
   it("no reconcile line for a first Generate or the no-op (the ordinary line stands)", () => {
     const { msg, msgPlural } = bind("en");
     expect(reconcileNotice(undefined, msg as never, msgPlural)).toBeNull();
-    expect(reconcileNotice({ kind: "noop", placed: [], vacated: [] }, msg as never, msgPlural)).toBeNull();
+    expect(reconcileNotice({ kind: "noop", placed: [], vacated: [], vacated_seats: 0 }, msg as never, msgPlural)).toBeNull();
   });
 });

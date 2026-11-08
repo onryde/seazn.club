@@ -18,6 +18,7 @@ import { generateDoubleElim, generatePagePlayoff, generateRoundRobin, generateSi
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { engineFixtureStatus } from "../../../apps/web/src/lib/fixture-engine-status.ts";
+import { KNOCKOUT_REFUSALS } from "../../../apps/web/src/lib/knockout-refusals.ts";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import { BUILDER_DEFAULT_KNOBS, ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey, type StagePostBody } from "../lib/catalogue.ts";
 import { RefusedCall, RequestTimedOut, nextMatchFixtureId, type EntrantInput, type EntrantRow, type FixtureRow, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
@@ -629,6 +630,45 @@ describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk 
       checked++;
     }
     expect(checked).toBe(TABLE.length);
+  });
+  // B2 fix round 1 (m3): where the model expects the refusal, it expects THAT refusal — the knockout table's own code
+  // (apps/web lib/knockout-refusals.ts), never any named one. Another code there is the model's expected-refusal violation.
+  it("m3: an expected knockout Generate refusal must carry KO_GENERATE_AFTER_START — another named code is a violation, that code is not", async () => {
+    let checked = 0;
+    for (const code of ["STAGE_NOT_READY", "KO_REDRAW_WOULD_CLEAR_SETUP", "KO_GENERATE_AFTER_START"]) {
+      const m = { ...(await ko()), lateEntry: true };
+      if (code.startsWith("KO_")) expect(KNOCKOUT_REFUSALS[code as keyof typeof KNOCKOUT_REFUSALS], `premise: ${code} is the knockout table's`).toBeDefined();
+      const d = { generate: () => Promise.reject(new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, code, "refused")) } as unknown as OrganiserDriver;
+      const out = await commandOf("Generate", 0, 0, true).run(m, d as never).then(() => null, (x: unknown) => x);
+      if (code === "KO_GENERATE_AFTER_START") {
+        // The pin passed; the step then goes on to judge the (hand-built) state, which this stub driver cannot answer.
+        expect(out instanceof ModelViolation ? out.check : null, code).not.toBe("model-expected-refusal");
+        expect(m.counts.Generate.expected, code).toBe(1);
+      } else {
+        expect(out, code).toBeInstanceOf(ModelViolation);
+        expect((out as ModelViolation).check, code).toBe("model-expected-refusal");
+        expect((out as ModelViolation).message, code).toContain(code);
+      }
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+  // B2 fix round 1 (G1): Start reconciles a root knockout that already has lines (schedule.ts startDivision), so an entrant
+  // added before Start is placed by it — the late entry is spent, and a Generate after Start is the named no-op, not refused.
+  // A league's Start draws nothing over existing lines (#879's fence still reads its late entry).
+  it("G1: Start spends a knockout's late entry when the stage already has lines — never a league's", async () => {
+    let checked = 0;
+    for (const [kind, spent] of [["knockout", true], ["league", false]] as const) {
+      const { m, d } = await fresh();
+      await play(m, d, [["Generate", 0], ["AddEntrant", 0]], false);
+      expect(m.lateEntry, `premise (${kind}): an entrant added over the lines`).toBe(true);
+      const s: ModelState = { ...m, stageKind: kind };
+      await (commandOf("Start", 0, 0, false) as unknown as { act(m: ModelState, d: OrganiserDriver): Promise<void> }).act(s, d);
+      expect(s.started).toBe(true);
+      expect(s.lateEntry, kind).toBe(!spent);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 

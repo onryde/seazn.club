@@ -124,3 +124,29 @@ export function chooseByeLine(lines: readonly ByeLineCandidate[], seeds: Readonl
   }
   return best?.line.lineId ?? null;
 }
+
+/** The division statuses that mean it has started (`DIVISION_STARTED_STATUSES`, usecases/stages.ts; `ENTRANT_LIST_LOCKED_STATUSES`). */
+const DIVISION_STARTED: readonly string[] = ["active", "completed"];
+
+/**
+ * W4 B2 fix round 1 (item 6, controller ruling): is Generate — worded "Update draw" — offered on this stage? A ROOT knockout
+ * (no progression, no stored `qualified` field: the stage the reconcile serves, stages.ts `reconcileKnockoutGenerate`) that
+ * already has lines, in a division that has not started, whose active roster no longer matches its seats (`rosterDrifted`: the
+ * panel's `getStageRosterDrift` answer has a ghost or an unplaced entrant). Its first Generate made the stage `active`, so the
+ * not-started rule alone hid Generate and the in-place reconcile could not be reached from the desk. Once the division has
+ * started it is hidden: a departure is then the withdrawal cascade's, an arrival is refused (D8-1). An unknown division status
+ * hides it too — the panel never offers a write on a guess.
+ */
+export function knockoutUpdateDrawOffered(args: {
+  stage: { kind: string; progression: unknown; config: unknown };
+  divisionStatus: string | undefined;
+  fixtureCount: number;
+  rosterDrifted: boolean;
+}): boolean {
+  const { stage } = args;
+  if (stage.kind !== "knockout" || stage.progression != null) return false;
+  const config = stage.config;
+  if (typeof config === "object" && config !== null && Array.isArray((config as { qualified?: unknown }).qualified)) return false;
+  if (args.divisionStatus === undefined || DIVISION_STARTED.includes(args.divisionStatus)) return false;
+  return args.fixtureCount > 0 && args.rosterDrifted;
+}

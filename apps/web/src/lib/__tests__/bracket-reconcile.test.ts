@@ -10,6 +10,7 @@ import {
   KNOCKOUT_IDENTITY,
   chooseByeLine,
   knockoutLines,
+  knockoutUpdateDrawOffered,
   planReconcile,
   type LineIdentity,
   type SeatRef,
@@ -155,5 +156,39 @@ describe("chooseByeLine — RB4-L4 (the lowest-seeded holder's bye, ties by the 
   it("no bye line left: null; a holder with no seed given is refused by name (a caller's bug, never a guess)", () => {
     expect(chooseByeLine([], new Map())).toBeNull();
     expect(() => chooseByeLine([{ lineId: "L1", holderId: "ghost", drawPosition: 1 }], new Map())).toThrow(/ghost/);
+  });
+});
+
+// W4 B2 fix round 1 (item 6, controller ruling): before the DIVISION starts, a ROOT knockout with lines whose active roster
+// differs from its seats offers Generate ("Update draw"); once the division has started it is hidden (D8-1). Stated from the
+// ruling: each condition is flipped on its own from the one offering state, and each flip hides it.
+describe("knockoutUpdateDrawOffered", () => {
+  const offering: Parameters<typeof knockoutUpdateDrawOffered>[0] = {
+    stage: { kind: "knockout", progression: null, config: { thirdPlace: false } },
+    divisionStatus: "setup",
+    fixtureCount: 7,
+    rosterDrifted: true,
+  };
+  it("a root knockout with lines, before Start, whose roster moved: offered", () => {
+    expect(knockoutUpdateDrawOffered(offering)).toBe(true);
+  });
+  it("each condition flipped alone hides it (another kind, a fed stage, a fed field, a started division, no lines, no drift)", () => {
+    const flips: [string, typeof offering][] = [
+      ["a league", { ...offering, stage: { ...offering.stage, kind: "league" } }],
+      ["a double elimination", { ...offering, stage: { ...offering.stage, kind: "double_elim" } }],
+      ["a knockout fed by an earlier stage", { ...offering, stage: { ...offering.stage, progression: { from: "s0" } as never } }],
+      ["a knockout with a stored qualified field", { ...offering, stage: { ...offering.stage, config: { qualified: ["a", "b"] } } }],
+      ["a division in play", { ...offering, divisionStatus: "active" }],
+      ["a finished division", { ...offering, divisionStatus: "completed" }],
+      ["a division status the panel does not know", { ...offering, divisionStatus: undefined as never }],
+      ["no lines yet (a first Generate is the ordinary one)", { ...offering, fixtureCount: 0 }],
+      ["the roster unchanged", { ...offering, rosterDrifted: false }],
+    ];
+    let checked = 0;
+    for (const [why, input] of flips) {
+      expect(knockoutUpdateDrawOffered(input), why).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(9);
   });
 });

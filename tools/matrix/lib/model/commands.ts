@@ -269,8 +269,14 @@ class Start extends Cmd {
     if (read.diverges.length > 0) {
       throw new Error(`model: a ${m.stageKind} of ${m.entrants.length} (${JSON.stringify(m.stageConfig)}) lays out ${read.diverges.join(", ")}, where the model's last-round read of X-DW-3 is not the product's next-match rule (loop F I-5: both lines into one fixture) — the model holds no feed edges, so it cannot judge this shape`);
     }
+    const hadLines = m.fixtures.size > 0;
     await d.start(m.divisionId);
     m.started = true;
+    // W4 B2 fix round 1 (G1): Start reconciles a root knockout that already has its lines (schedule.ts startDivision —
+    // the model's knockout rows are single-stage, so their stage is the root): an entrant added over them is placed here,
+    // so the late entry is spent and a Generate after Start is the named no-op. A league's Start draws nothing over its
+    // existing lines (#879's fence still reads the late entry).
+    if (m.stageKind === "knockout" && hadLines) m.lateEntry = false;
     absorbFixtures(m, await d.listFixtures(m.divisionId));
   }
 }
@@ -379,8 +385,19 @@ class Generate extends Cmd {
   protected override expectsRefusal(m: ModelState) {
     return m.started && m.stageKind === "knockout" && m.fixtures.size > 0 && m.lateEntry;
   }
+  /** The code the product refused with, when it refused (read by afterExpectedRefusal; one command per step). */
+  #refusedCode: string | null = null;
+  /** B2 fix round 1 (m3): where the model expects the refusal it expects THAT one — the knockout table's
+   *  KO_GENERATE_AFTER_START (apps/web lib/knockout-refusals.ts) — not any named refusal. */
+  protected override afterExpectedRefusal(): Promise<void> {
+    if (this.#refusedCode === "KO_GENERATE_AFTER_START") return Promise.resolve();
+    return Promise.reject(new ModelViolation(this.expectedCheck(), [`${this.toString()}: a knockout Generate after Start over a late entry was refused with ${this.#refusedCode ?? "no code"}, not KO_GENERATE_AFTER_START`]));
+  }
   protected async act(m: ModelState, d: OrganiserDriver) {
-    const g = await d.generate(m.stageId);
+    const g = await d.generate(m.stageId).catch((e: unknown) => {
+      if (e instanceof RefusedCall) this.#refusedCode = e.code;
+      throw e;
+    });
     // I8 judges what is recorded here: `total` is the stage's full list, so a
     // 2xx answering zero fixtures is an empty generate (R13, carry b).
     m.generates.push({ status: 200, code: null, total: g.fixtures.length, created: g.created });

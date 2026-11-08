@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { SWISS_REFUSALS } from "@/lib/swiss-refusals";
+import { KNOCKOUT_REFUSALS } from "@/lib/knockout-refusals";
 import enUi from "@/dictionaries/en/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
@@ -117,5 +118,23 @@ describe.each(["en", "fr"] as const)("LaunchActions — Start refused above a Sw
     net.answer = { status: 422, code: "SOMETHING_ELSE", message: "division has no stages to start", extra: {} };
     const island = await pressStart();
     expect(redLines(island.tree())).toEqual(["division has no stages to start"]);
+  });
+});
+
+// W4 B2 fix round 1 (G1): Start reconciles a root knockout drawn before its roster moved, and refuses by name when that would
+// redraw over organiser setup (KO_REDRAW_WOULD_CLEAR_SETUP). Same door, same rule as the Swiss refusal above: the reader's
+// language, never the server's English sentence.
+describe.each(["en", "fr"] as const)("LaunchActions — Start refused: a knockout redraw would clear organiser setup [%s]", (locale) => {
+  const D = DICTS[locale];
+  beforeEach(() => {
+    active.locale = locale;
+  });
+
+  it("says the knockout table's refusal in the reader's language", async () => {
+    const row = KNOCKOUT_REFUSALS.KO_REDRAW_WOULD_CLEAR_SETUP;
+    net.answer = { status: row.status, code: "KO_REDRAW_WOULD_CLEAR_SETUP", message: row.en, extra: { attachments: { officials: 0, lineups: 1, deviceLinks: 0 } } };
+    const island = await pressStart();
+    expect(redLines(island.tree())).toEqual([D[row.key]]);
+    if (locale !== "en") expect(redLines(island.tree())[0], "never the server's English").not.toBe(row.en);
   });
 });

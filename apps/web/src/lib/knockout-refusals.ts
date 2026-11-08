@@ -23,7 +23,10 @@ export type KnockoutRefusalCode =
   | "COUNTRY_SEPARATION_NOT_OFFERED"
   // T8 (FX-G2, spec §6.5): Generate on a started root knockout whose roster changed since the draw — after Start the
   // bracket is never reshaped; a late player comes in through the late-entry door.
-  | "KO_GENERATE_AFTER_START";
+  | "KO_GENERATE_AFTER_START"
+  // B2 fix round 1 (I1): a knockout's Generate (or Start) would have to redraw the bracket — delete every line — and the
+  // lines carry organiser setup the delete cascades into. Generate has no confirm; Rebuild's lists what it clears.
+  | "KO_REDRAW_WOULD_CLEAR_SETUP";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -62,6 +65,11 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 409,
     en: "Play has started, so Generate won't change the bracket. Use Add late player.",
     key: "knockout.refusal.KO_GENERATE_AFTER_START",
+  },
+  KO_REDRAW_WOULD_CLEAR_SETUP: {
+    status: 409,
+    en: "The bracket would have to be drawn again, which clears its official assignments, team sheets or linked scoring devices. Use Rebuild fixtures — it lists what it clears first.",
+    key: "knockout.refusal.KO_REDRAW_WOULD_CLEAR_SETUP",
   },
 };
 

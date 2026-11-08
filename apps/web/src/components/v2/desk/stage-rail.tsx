@@ -187,6 +187,10 @@ export interface StageRailProps {
    *  panel is open) and mounted as the TOP rows of this sheet below `md` - the card's one phone trigger. The slot carries its own
    *  `md:hidden` (the header's buttons are the desktop twin). Absent: nothing, so the rail's other callers are unchanged. */
   toolsSlot?: React.ReactNode;
+  /** W4 B2 fix round 1 (item 6): a root knockout whose roster moved before the division started (the panel's
+   *  `knockoutUpdateDrawOffered`, lib/bracket-reconcile.ts). Generate is offered again, as the lead, worded "Update draw".
+   *  Absent ⇒ false. */
+  updateDraw?: boolean;
 }
 
 /**
@@ -210,6 +214,7 @@ export function stageRailActions(p: {
   canUnpairSwiss: boolean;
   deletable: boolean;
   swissRounds?: Pick<SwissRoundsRail, "control">;
+  updateDraw?: boolean;
 }) {
   const { primary, secondary } = stageActions({
     status: p.stage.status,
@@ -220,6 +225,7 @@ export function stageRailActions(p: {
     adhoc: p.adhoc,
     pairNext: p.stage.kind === "swiss" && p.swissHasUnseated,
     canUnpair: p.stage.kind === "swiss" && p.canUnpairSwiss,
+    updateDraw: p.updateDraw ?? false,
   });
   const showGenerate = primary?.action === "generate" || primary?.action === "pair_next";
   const completeButton = [primary, ...secondary].find((b) => b?.action === "complete");
@@ -252,6 +258,7 @@ export function StageRail({
   swissPairingMenu,
   lateEntry,
   swissRounds,
+  updateDraw = false,
 }: StageRailProps) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -334,6 +341,7 @@ export function StageRail({
     canUnpairSwiss,
     deletable,
     swissRounds,
+    updateDraw,
   });
   const completeHintId = `stage-complete-hint-${stage.id}`;
 
@@ -552,7 +560,9 @@ export function StageRail({
                         : swissHasUnseated
                           ? msg("schedule.pairNext")
                           : msg("schedule.generate")
-                      : msg("schedule.generate")}
+                      : updateDraw && fixtureCount > 0
+                        ? msg("schedule.updateDraw")
+                        : msg("schedule.generate")}
                 </button>
                 {swissPairingMenu && (
                   <button

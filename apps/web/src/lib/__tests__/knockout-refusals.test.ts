@@ -25,6 +25,8 @@ const PLAN_CODES = [
   "COUNTRY_SEPARATION_NOT_OFFERED",
   // T8 (FX-G2): after Start, Generate never reshapes a root knockout whose roster changed.
   "KO_GENERATE_AFTER_START",
+  // B2 fix round 1 (I1): a redraw over organiser setup is refused, pointing to Rebuild.
+  "KO_REDRAW_WOULD_CLEAR_SETUP",
 ] as const;
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;

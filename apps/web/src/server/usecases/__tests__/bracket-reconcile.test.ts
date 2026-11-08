@@ -22,8 +22,9 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { HttpError } from "@/lib/errors";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { createEntrants } from "../entrants";
-import { startDivision } from "../schedule";
+import { createEntrants, deleteEntrant } from "../entrants";
+import { redoDivision, undoDivision } from "../history";
+import { moveFixture, startDivision } from "../schedule";
 import { createStages, generateStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { BracketReconcileNoLinesError, reconcileRootBracket } from "../bracket-reconcile";
@@ -42,6 +43,9 @@ afterAll(async () => {
 
 /** The plan's sentence (task-8-brief.md), typed here: the refusal table is the code under test. */
 const AFTER_START = "Play has started, so Generate won't change the bracket. Use Add late player.";
+/** Fix round 1 (I1), typed here: a redraw over organiser setup is refused and points to Rebuild. */
+const REDRAW_OVER_SETUP =
+  "The bracket would have to be drawn again, which clears its official assignments, team sheets or linked scoring devices. Use Rebuild fixtures — it lists what it clears first.";
 /** Main's own copy (stages.ts, the `entrants.length < 2` refusal) — X-SD-1/X-SD-2 are pins: main already refuses both. */
 const NOT_READY = "need at least 2 active entrants to generate";
 
@@ -198,7 +202,7 @@ async function sixToSeven(r: Rig): Promise<{ wantLine: string; firstBye: string 
   const late = await r.add("P7");
 
   const out = await generateStageFixtures(r.auth, r.stageId);
-  expect(out.reconcile, "FX-G2: placed in place").toEqual({ kind: "in_place", placed: [late], vacated: [] });
+  expect(out.reconcile, "FX-G2: placed in place").toEqual({ kind: "in_place", placed: [late], vacated: [], vacated_seats: 0 });
   expect(out.created, "no row inserted").toBe(0);
   const after = await rowsOf(r.stageId);
   expect(after.map((x) => x.id).sort(), "the same lines: none inserted, none deleted").toEqual(before.map((x) => x.id).sort());
@@ -259,7 +263,7 @@ describe.skipIf(!HAS_DB)("FX-G2 Generate before Start reconciles the bracket", (
     expect(await generateLedgerRows(r.divisionId, r.stageId), "an in-place reconcile appends no generate row").toBe(ledger);
     // Sequence: a second Generate after the placement is a named no-op.
     const again = await generateStageFixtures(r.auth, r.stageId);
-    expect(again.reconcile).toEqual({ kind: "noop", placed: [], vacated: [] });
+    expect(again.reconcile).toEqual({ kind: "noop", placed: [], vacated: [], vacated_seats: 0 });
   });
 
   it("FX-G2 6→7 with seeds: the lowest-seeded holder's bye even where it is the EARLIER draw position", async () => {
@@ -285,7 +289,7 @@ describe.skipIf(!HAS_DB)("FX-G2 Generate before Start reconciles the bracket", (
     const [stayer, leaver] = [real.home_entrant_id!, real.away_entrant_id!];
     await withdrawEntrantCascade(r.auth, leaver);
     const out = await generateStageFixtures(r.auth, r.stageId);
-    expect(out.reconcile).toEqual({ kind: "in_place", placed: [], vacated: [leaver] });
+    expect(out.reconcile).toEqual({ kind: "in_place", placed: [], vacated: [leaver], vacated_seats: 1 });
     const after = await rowsOf(r.stageId);
     expect(after.map((x) => x.id).sort(), "the same lines").toEqual(before.map((x) => x.id).sort());
     const line = after.find((x) => x.id === real.id)!;
@@ -336,7 +340,7 @@ describe.skipIf(!HAS_DB)("FX-G2 Generate before Start reconciles the bracket", (
     const r = await rig({ n: 6, thirdPlace: true });
     const before = await rowsOf(r.stageId);
     const out = await generateStageFixtures(r.auth, r.stageId);
-    expect(out.reconcile).toEqual({ kind: "noop", placed: [], vacated: [] });
+    expect(out.reconcile).toEqual({ kind: "noop", placed: [], vacated: [], vacated_seats: 0 });
     expect(out.created).toBe(0);
     expect((await rowsOf(r.stageId)).map(shapeOf)).toEqual(before.map(shapeOf));
   });
@@ -397,7 +401,7 @@ describe.skipIf(!HAS_DB)("FX-G2 after Start Generate never reshapes", () => {
     expect(before.find((x) => x.id === real.id)!.status, "the cascade walked the line over").not.toBe("scheduled");
     for (const call of [1, 2]) {
       const out = await generateStageFixtures(r.auth, r.stageId);
-      expect(out.reconcile, `call ${call}`).toEqual({ kind: "noop", placed: [], vacated: [] });
+      expect(out.reconcile, `call ${call}`).toEqual({ kind: "noop", placed: [], vacated: [], vacated_seats: 0 });
       expect(out.created, `call ${call}`).toBe(0);
       expect((await rowsOf(r.stageId)).map(shapeOf), `call ${call}: fixtures unchanged`).toEqual(before.map(shapeOf));
     }
@@ -415,7 +419,7 @@ describe.skipIf(!HAS_DB)("FX-G2 after Start Generate never reshapes", () => {
   it("after Start with the roster unchanged, Generate is still the named no-op (the positive pair)", async () => {
     const r = await started(6);
     const out = await generateStageFixtures(r.auth, r.stageId);
-    expect(out.reconcile).toEqual({ kind: "noop", placed: [], vacated: [] });
+    expect(out.reconcile).toEqual({ kind: "noop", placed: [], vacated: [], vacated_seats: 0 });
   });
 });
 
@@ -476,5 +480,200 @@ describe.skipIf(!HAS_DB)("guards: the driver and the surgeries refuse by name", 
     const seatTaken = await rowsOf(r.stageId);
     await expect(sql.begin((tx) => vacateLineToBye(tx as never, real.id, "away"))).rejects.toThrow(/the seat the line feeds is already taken/);
     expect((await rowsOf(r.stageId)).map(shapeOf), "vacate: nothing written").toEqual(seatTaken.map(shapeOf));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// B2 fix round 1.
+
+/** Organiser setup on a line, of one of the three kinds a delete cascades (`fixture_officials`, `lineups`,
+ *  `device_links` — what Rebuild's confirm names). */
+type SetupKind = "official" | "lineup" | "device";
+async function attachSetup(r: Rig, kind: SetupKind, fixtureId: string): Promise<void> {
+  const [f] = await sql<{ home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+    select home_entrant_id, away_entrant_id from fixtures where id = ${fixtureId}`;
+  const entrant = f!.home_entrant_id ?? f!.away_entrant_id!;
+  if (kind === "official") {
+    const [o] = await sql<{ id: string }[]>`
+      insert into officials (org_id, display_name) values (${r.auth.orgId}, ${"Ref " + randomUUID().slice(0, 4)}) returning id`;
+    await sql`insert into fixture_officials (fixture_id, official_id, org_id, role_key) values (${fixtureId}, ${o!.id}, ${r.auth.orgId}, 'referee')`;
+  } else if (kind === "lineup") {
+    const [m] = await sql<{ person_id: string }[]>`select person_id from entrant_members where entrant_id = ${entrant} limit 1`;
+    await sql`insert into lineups (fixture_id, entrant_id, person_id, org_id) values (${fixtureId}, ${entrant}, ${m!.person_id}, ${r.auth.orgId})`;
+  } else {
+    await sql`
+      insert into device_links (org_id, fixture_id, token_hash, issued_by, expires_at)
+      values (${r.auth.orgId}, ${fixtureId}, ${randomUUID()}, ${r.auth.userId!}, now() + interval '1 day')`;
+  }
+}
+
+async function refusal(p: Promise<unknown>): Promise<HttpError> {
+  const err = await p.then(() => null, (e: unknown) => e);
+  expect(err).toBeInstanceOf(HttpError);
+  return err as HttpError;
+}
+
+/** No entrant that is not active sits on a line still to be played (`scheduled`/`in_play`). */
+async function ghostsOnPendingLines(r: Rig): Promise<string[]> {
+  const active = new Set(await activeIds(r.divisionId));
+  return (await rowsOf(r.stageId))
+    .filter((x) => x.status === "scheduled" || x.status === "in_play")
+    .flatMap((x) => [x.home_entrant_id, x.away_entrant_id])
+    .filter((id): id is string => id !== null && !active.has(id));
+}
+
+describe.skipIf(!HAS_DB)("fix round 1 I1: Generate never redraws over organiser setup", () => {
+  it("8→9 with an official, a team sheet or a scoring device on a line: refused 409 KO_REDRAW_WOULD_CLEAR_SETUP, nothing deleted (each kind)", async () => {
+    let checked = 0;
+    for (const kind of ["official", "lineup", "device"] as const) {
+      const r = await rig({ n: 8 });
+      const before = await rowsOf(r.stageId);
+      await attachSetup(r, kind, before.find((x) => x.round_no === 1)!.id);
+      await r.add("P9");
+      const err = await refusal(generateStageFixtures(r.auth, r.stageId));
+      expect([err.status, err.code, err.message], kind).toEqual([409, "KO_REDRAW_WOULD_CLEAR_SETUP", REDRAW_OVER_SETUP]);
+      expect((await rowsOf(r.stageId)).map((x) => x.id), `${kind}: the same lines`).toEqual(before.map((x) => x.id));
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("setup on a line does not block a change IN PLACE (6→7 places the newcomer; the setup stays)", async () => {
+    const r = await rig({ n: 6 });
+    const real = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && !isByeLine(x as never))!;
+    await attachSetup(r, "lineup", real.id);
+    const late = await r.add("P7");
+    const out = await generateStageFixtures(r.auth, r.stageId);
+    expect(out.reconcile).toMatchObject({ kind: "in_place", placed: [late] });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from lineups where fixture_id = ${real.id}`;
+    expect(n, "the team sheet survives").toBe(1);
+  });
+
+  it("a redraw with nothing attached proceeds and reports its slots (the positive pair)", async () => {
+    const r = await rig({ n: 8 });
+    await r.add("P9");
+    const out = await generateStageFixtures(r.auth, r.stageId);
+    expect(out.reconcile?.kind).toBe("regenerated");
+    expect(out.reconcile?.slots, "the slot counts ride the answer").toEqual({ kept: 0, freed: 0, unscheduled: 0 });
+  });
+});
+
+describe.skipIf(!HAS_DB)("fix round 1 I2: the departures in-place cannot express, and a deleted seat", () => {
+  it("(a) both players of one first-round match leave before Start (8→6): one redraw, nobody gone on a line, every player seated once", async () => {
+    const r = await rig({ n: 8 });
+    const line = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && x.home_entrant_id !== null && x.away_entrant_id !== null)!;
+    await withdrawEntrantCascade(r.auth, line.home_entrant_id!);
+    await withdrawEntrantCascade(r.auth, line.away_entrant_id!);
+    const out = await generateStageFixtures(r.auth, r.stageId);
+    expect(out.reconcile).toMatchObject({ kind: "regenerated", placed: [], vacated_seats: 2 });
+    expect([...out.reconcile!.vacated].sort()).toEqual([line.home_entrant_id, line.away_entrant_id].sort());
+    const after = await rowsOf(r.stageId);
+    expect(perRound(after), "the engine's bracket of six").toEqual(perRound(engineBracketRows(6, false)));
+    expect(roundOneSeats(after)).toEqual(await activeIds(r.divisionId));
+    expect(await ghostsOnPendingLines(r)).toEqual([]);
+  });
+
+  it("(b) an entrant DELETED from a real line before Start: the line becomes a bye for the stayer, and the answer counts the seat", async () => {
+    const r = await rig({ n: 8 });
+    const line = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && x.home_entrant_id !== null && x.away_entrant_id !== null)!;
+    await deleteEntrant(r.auth, line.away_entrant_id!);
+    const premise = (await rowsOf(r.stageId)).find((x) => x.id === line.id)!;
+    expect([premise.away_entrant_id, premise.status], "premise: the FK emptied the seat on a scheduled match").toEqual([null, "scheduled"]);
+    const out = await generateStageFixtures(r.auth, r.stageId);
+    expect(out.reconcile, "a seat was vacated, never 'up to date'").toEqual({ kind: "in_place", placed: [], vacated: [], vacated_seats: 1 });
+    const after = (await rowsOf(r.stageId)).find((x) => x.id === line.id)!;
+    expect(isByeLine(after as never), "the line is now a bye").toBe(true);
+    expect(after.outcome).toEqual(byeAward(line.home_entrant_id!));
+    expect(roundOneSeats(await rowsOf(r.stageId))).toEqual(await activeIds(r.divisionId));
+  });
+
+  it("(c) a bye HOLDER deleted before Start: nobody is left on that line, so the bracket is drawn again once", async () => {
+    const r = await rig({ n: 6 });
+    const bye = storedByeLines(await rowsOf(r.stageId))[0]!;
+    await deleteEntrant(r.auth, bye.holderId);
+    const out = await generateStageFixtures(r.auth, r.stageId);
+    expect(out.reconcile?.kind).toBe("regenerated");
+    const after = await rowsOf(r.stageId);
+    expect(perRound(after), "the engine's bracket of five").toEqual(perRound(engineBracketRows(5, false)));
+    expect(roundOneSeats(after)).toEqual(await activeIds(r.divisionId));
+    expect(after.filter((x) => x.round_no === 1 && x.status === "scheduled" && (x.home_entrant_id === null || x.away_entrant_id === null)).length, "no empty seat on a match").toBe(0);
+  });
+});
+
+describe.skipIf(!HAS_DB)("fix round 1 G1: Start reconciles a root knockout that already has its lines", () => {
+  it("withdraw before Start, then Start WITHOUT Generate: no withdrawn entrant sits on a line still to be played", async () => {
+    const r = await rig({ n: 8 });
+    const line = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && x.home_entrant_id !== null && x.away_entrant_id !== null)!;
+    await withdrawEntrantCascade(r.auth, line.away_entrant_id!);
+    expect(await ghostsOnPendingLines(r), "premise: before Start the withdrawn entrant still sits on the match").toEqual([line.away_entrant_id]);
+    const started = await startDivision(r.auth, r.divisionId);
+    expect(started.started).toBe(true);
+    expect(await ghostsOnPendingLines(r)).toEqual([]);
+    expect(isByeLine((await rowsOf(r.stageId)).find((x) => x.id === line.id)! as never), "the stayer has a bye").toBe(true);
+  });
+
+  it("an entrant DELETED from a real line before Start: Start makes the line a bye for the stayer — no match starts with an empty seat", async () => {
+    const r = await rig({ n: 8 });
+    const line = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && x.home_entrant_id !== null && x.away_entrant_id !== null)!;
+    await deleteEntrant(r.auth, line.away_entrant_id!);
+    await startDivision(r.auth, r.divisionId);
+    const after = await rowsOf(r.stageId);
+    expect(isByeLine(after.find((x) => x.id === line.id)! as never), "the stayer has a bye").toBe(true);
+    expect(after.filter((x) => x.round_no === 1 && x.status === "scheduled" && (x.home_entrant_id === null || x.away_entrant_id === null)).length).toBe(0);
+  });
+
+  it("a player added before Start is placed by Start (6→7 in place)", async () => {
+    const r = await rig({ n: 6 });
+    const late = await r.add("P7");
+    await startDivision(r.auth, r.divisionId);
+    expect(roundOneSeats(await rowsOf(r.stageId))).toEqual(await activeIds(r.divisionId));
+    expect(roundOneSeats(await rowsOf(r.stageId))).toContain(late);
+  });
+
+  it("Start that would redraw over organiser setup refuses by name, and the division stays in setup", async () => {
+    const r = await rig({ n: 8 });
+    const before = await rowsOf(r.stageId);
+    await attachSetup(r, "lineup", before.find((x) => x.round_no === 1)!.id);
+    await r.add("P9");
+    const err = await refusal(startDivision(r.auth, r.divisionId));
+    expect([err.status, err.code]).toEqual([409, "KO_REDRAW_WOULD_CLEAR_SETUP"]);
+    const [d] = await sql<{ status: string }[]>`select status from divisions where id = ${r.divisionId}`;
+    expect(d!.status).toBe("setup");
+    expect((await rowsOf(r.stageId)).map((x) => x.id)).toEqual(before.map((x) => x.id));
+  });
+
+  it("Start with the roster unchanged changes no line (the positive pair) — not even when the stage's config moved since the draw", async () => {
+    let checked = 0;
+    for (const configMoved of [false, true]) {
+      const r = await rig({ n: 6 });
+      const before = await rowsOf(r.stageId);
+      // A config change alone (a third-place match switched on) would make a fresh draw's lines differ: Start must not
+      // read that as a reason to redraw — only the roster is its business.
+      if (configMoved) await sql`update stages set config = config || '{"thirdPlace": true}'::jsonb where id = ${r.stageId}`;
+      await startDivision(r.auth, r.divisionId);
+      expect((await rowsOf(r.stageId)).map((x) => x.id), `config moved: ${configMoved}`).toEqual(before.map((x) => x.id));
+      expect((await rowsOf(r.stageId)).map(shapeOf), `config moved: ${configMoved}`).toEqual(before.map(shapeOf));
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
+describe.skipIf(!HAS_DB)("fix round 1 m6: a change in place clears the Redo it would make stale", () => {
+  it("move a match, Undo it, its player leaves, Generate makes it a bye — the old Redo is gone, and the bye takes no time", async () => {
+    const r = await rig({ n: 8 });
+    const line = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && x.home_entrant_id !== null && x.away_entrant_id !== null)!;
+    await moveFixture(r.auth, line.id, { scheduled_at: "2030-06-15T10:00:00.000Z" });
+    await undoDivision(r.auth, r.divisionId);
+    const [mid] = await sql<{ edit_watermark: number | null }[]>`select edit_watermark from divisions where id = ${r.divisionId}`;
+    expect(mid!.edit_watermark, "premise: a Redo is waiting").not.toBeNull();
+    await withdrawEntrantCascade(r.auth, line.away_entrant_id!);
+    const out = await generateStageFixtures(r.auth, r.stageId);
+    expect(out.reconcile?.kind).toBe("in_place");
+    const [after] = await sql<{ edit_watermark: number | null }[]>`select edit_watermark from divisions where id = ${r.divisionId}`;
+    expect(after!.edit_watermark, "the in-place Generate clears the watermark, as a Generate that creates does").toBeNull();
+    await expect(redoDivision(r.auth, r.divisionId), "nothing to redo").rejects.toMatchObject({ status: 422 });
+    const bye = (await rowsOf(r.stageId)).find((x) => x.id === line.id)!;
+    expect([isByeLine(bye as never), bye.scheduled_at], "the bye holds no time").toEqual([true, null]);
   });
 });

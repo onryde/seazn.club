@@ -483,7 +483,7 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
         expect(sum.total, `${kind}/${c.what}: total`).toBe(real.length);
         // What the bars leave open is exactly what the card's counts line leaves open - byes, which a card settles, never open anything.
         expect(sum.total - sum.done, `${kind}/${c.what}: open`).toBe(counts.inPlay + counts.unplayed);
-        const complete = [stageActions({ status: "active", ...counts, hasFixtures: true, adhoc: true, pairNext: false, canUnpair: false })]
+        const complete = [stageActions({ status: "active", ...counts, hasFixtures: true, adhoc: true, pairNext: false, canUnpair: false, updateDraw: false })]
           .flatMap((a) => [a.primary, ...a.secondary])
           .find((b) => b?.action === "complete");
         expect(complete?.enabled, `${kind}/${c.what}: Complete`).toBe(c.complete);

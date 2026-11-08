@@ -69,6 +69,25 @@ describe("StageRail", () => {
     expect(html).not.toContain('data-testid="stage-add-match"');
   });
 
+  // W4 B2 fix round 1 (item 6): a root knockout whose roster moved before Start is `active` (its first Generate made it so),
+  // and the panel passes `updateDraw`; the rail then offers the same Generate control, labelled "Update draw", as the lead.
+  it("a knockout owed an Update draw offers stage-generate as the lead, labelled Update draw; without it, no Generate", () => {
+    const ko = { id: "k1", name: "Knockout", kind: "knockout", seq: 1, status: "active", config: {}, progression: null } as never;
+    const render = (updateDraw: boolean | undefined) =>
+      renderToStaticMarkup(
+        <StageRail stage={ko} canEdit busy={null} fixtureCount={7} deletable
+          onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+          adhoc={false} {...NEUTRAL} counts={{ played: 0, inPlay: 0, unplayed: 7 }} matchCount={7} updateDraw={updateDraw} />,
+      );
+    const owed = render(true);
+    const button = /<button[^>]*data-testid="stage-generate"[^>]*>([^<]*)</.exec(owed);
+    expect(button, "the control is rendered").not.toBeNull();
+    expect(button![0]).toMatch(/\bbtn-primary\b/);
+    expect(button![1]).toBe(en["schedule.updateDraw"]);
+    expect(en["schedule.updateDraw"], "premise: its own words, not Generate's").not.toBe(en["schedule.generate"]);
+    for (const absent of [false, undefined]) expect(render(absent), `updateDraw ${String(absent)}`).not.toContain('data-testid="stage-generate"');
+  });
+
   it("the Complete hint counts the stage's matches in the locale's plural: one match reads singular", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={1} deletable={false}

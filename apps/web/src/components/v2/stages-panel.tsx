@@ -28,6 +28,7 @@ import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import { isUndoRefusalCode, undoRefusalKey } from "@/lib/undo-refusals";
 import { isKnockoutRefusalCode, knockoutRefusalKey } from "@/lib/knockout-refusals";
+import { knockoutUpdateDrawOffered } from "@/lib/bracket-reconcile";
 import { swissRoundsWarnNotice, type SwissRoundsNotice } from "@/lib/swiss-rounds";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
 import { nextRoundNoticeOf, nextRoundText, type NextRoundNotice } from "@/lib/swiss-next-round";
@@ -1537,6 +1538,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // no-op read for the common case.
         const drift = rosterDrift[stage.id];
         const hasDrift = Boolean(drift && (drift.ghosts.length > 0 || drift.unplaced.length > 0));
+        // W4 B2 fix round 1 (item 6): a root knockout drawn before its roster moved is `active` before Start, so Generate comes
+        // back as "Update draw" (place a newcomer / vacate a withdrawal in place) until the division starts.
+        const updateDraw = knockoutUpdateDrawOffered({
+          stage,
+          divisionStatus,
+          fixtureCount: stageFixtures.length,
+          rosterDrifted: hasDrift,
+        });
         // The stage's required court tags: built ONCE and drawn once, at the card's foot, for an editor and a viewer alike (Match Day E1
         // item 1 - it used to ride in the rail's sheet for an editor, which is now the header's actions group and has no room for it).
         const courtTagsEditor = (
@@ -1572,6 +1581,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
             canUnpairSwiss,
             deletable,
             swissRounds: swissRoundsRail,
+            updateDraw,
           }).hasActions;
         const railEl = canEdit ? (
           <div data-testid="stage-rail" className="min-w-0 max-md:w-full md:flex md:items-center">
@@ -1616,6 +1626,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   }
             }
             swissRounds={swissRoundsRail}
+            updateDraw={updateDraw}
             toolsSlot={
               settingsTools.length > 0 ? (
                 <div data-testid="stage-sheet-tools" className="flex flex-col gap-2 md:hidden">
@@ -2322,7 +2333,14 @@ export type GenerateNoticeWire = {
   swiss_next_round?: "unpairable" | "unknown";
   swiss_paired_round?: number;
   /** W4 T8 (FX-G2): a root knockout's Generate over existing lines — what it reconciled (`GenerateResult.reconcile`). */
-  reconcile?: { kind: "noop" | "in_place" | "regenerated"; placed: string[]; vacated: string[] };
+  reconcile?: {
+    kind: "noop" | "in_place" | "regenerated";
+    placed: string[];
+    vacated: string[];
+    /** Every seat emptied, a deleted entrant's included (no id to list) — fix round 1, I2. */
+    vacated_seats: number;
+    slots?: { kept: number; freed: number; unscheduled: number };
+  };
 };
 
 /**
@@ -2354,10 +2372,25 @@ export function generateNoticeText(out: GenerateNoticeWire, msg: Msg, msgPlural:
  */
 export function reconcileNotice(reconcile: GenerateNoticeWire["reconcile"], msg: Msg, msgPlural: MsgPlural): string | null {
   if (reconcile === undefined || reconcile.kind === "noop") return null;
-  if (reconcile.kind === "regenerated") return msg("schedule.notice.reconcileRedrawn");
+  if (reconcile.kind === "regenerated") {
+    // B2 fix round 1 (I1): a redraw deletes every line and draws new ones, so it says what became of the slots (Rebuild's
+    // own line, dropped for a bracket nobody laid out — the server then reports 0/0/0) and that printed sheets, which name
+    // the old lines, stop working. It never claims every match kept its time: a redraw's new lines have none to keep.
+    const slots = reconcile.slots;
+    return [
+      msg("schedule.notice.reconcileRedrawn"),
+      slots && slots.kept + slots.freed + slots.unscheduled > 0
+        ? msg("progression.rosterDrift.rebuiltSlots", { kept: slots.kept, freed: slots.freed, unscheduled: slots.unscheduled })
+        : null,
+      msg("progression.rosterDrift.sheetsStop"),
+    ]
+      .filter((c): c is string => c !== null)
+      .join(" ");
+  }
   const clauses = [
     reconcile.placed.length > 0 ? msgPlural("schedule.notice.reconcilePlaced", reconcile.placed.length) : null,
-    reconcile.vacated.length > 0 ? msgPlural("schedule.notice.reconcileVacated", reconcile.vacated.length) : null,
+    // The SEATS emptied, not the ids listed: a deleted entrant's seat has no id left (fix round 1, I2).
+    reconcile.vacated_seats > 0 ? msgPlural("schedule.notice.reconcileVacated", reconcile.vacated_seats) : null,
   ].filter((c): c is string => c !== null);
   return clauses.length > 0 ? clauses.join(" ") : null;
 }

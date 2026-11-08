@@ -4092,8 +4092,25 @@ export async function startDivision(
     if (!division) throw new HttpError(404, "division not found");
     assertNotFrozen(frozen, division.competition_id);
     if (division.status === "completed") throw new HttpError(422, "division is completed");
-    const [firstStage] = await tx<{ id: string; n: number }[]>`
-      select s.id, (select count(*)::int from fixtures f where f.stage_id = s.id) as n
+    // W4 B2 fix round 1 (G1): `roster_drift` — a ROOT knockout (no progression, no fed `qualified` list) whose first round no
+    // longer matches the field: an active entrant in no first-round seat, a seated one no longer active, a match with an
+    // empty seat (its entrant was deleted), or a bye with nobody on it (its holder was deleted). Only then does Start
+    // reconcile: a bracket whose roster is unchanged is never redrawn here, whatever else changed since it was drawn.
+    const [firstStage] = await tx<{ id: string; n: number; roster_drift: boolean }[]>`
+      select s.id, (select count(*)::int from fixtures f where f.stage_id = s.id) as n,
+             (s.kind = 'knockout' and s.progression is null
+               and jsonb_typeof(s.config->'qualified') is distinct from 'array'
+               and (exists (select 1 from entrants e
+                             where e.division_id = s.division_id and e.status in ('registered', 'confirmed')
+                               and not exists (select 1 from fixtures f
+                                                where f.stage_id = s.id and f.round_no = 1
+                                                  and e.id in (f.home_entrant_id, f.away_entrant_id)))
+                 or exists (select 1 from fixtures f join entrants e on e.id in (f.home_entrant_id, f.away_entrant_id)
+                             where f.stage_id = s.id and f.round_no = 1 and e.status not in ('registered', 'confirmed'))
+                 or exists (select 1 from fixtures f
+                             where f.stage_id = s.id and f.round_no = 1
+                               and ((f.status = 'scheduled' and (f.home_entrant_id is null or f.away_entrant_id is null))
+                                    or (f.home_entrant_id is null and f.away_entrant_id is null))))) as roster_drift
       from stages s where s.division_id = ${divisionId}
       order by s.seq limit 1`;
     if (!firstStage) throw new HttpError(422, "division has no stages to start");
@@ -4129,6 +4146,15 @@ export async function startDivision(
     }
     // R10e: unpublished — this start publishes ONE write below, naming every
     // fixture of the division, the generated ones included.
+    const outcome = await generateStageFixturesUnpublished(auth, pre.firstStage.id);
+    generated = outcome.created;
+  } else if (pre.firstStage.roster_drift && !pre.scheduleFrozen) {
+    // W4 B2 fix round 1 (G1): a pre-Start withdrawal is a status flip only (withdrawal.ts) and an arrival seats nobody,
+    // so a root knockout drawn before them still names a withdrawn player on a match, or leaves a newcomer out. Start is
+    // the last moment before Start: when the first round no longer matches the field (`roster_drift`, read above) it runs
+    // the same reconcile Generate does (stages.ts `reconcileKnockoutGenerate` — place, vacate, or redraw; a redraw over
+    // organiser setup is refused by name, KO_REDRAW_WOULD_CLEAR_SETUP, and the start with it). A frozen board is left as
+    // the organiser froze it.
     const outcome = await generateStageFixturesUnpublished(auth, pre.firstStage.id);
     generated = outcome.created;
   }

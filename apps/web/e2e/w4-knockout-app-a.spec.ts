@@ -571,13 +571,18 @@ test.describe("FX-G2 Generate places the eighth player in the bye", () => {
 
     await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
     await dismissCookieBanner(page);
+    // B2 fix round 1 (item 6): the first Generate made the stage `active` before Start, so the not-started rule alone hid
+    // Generate; the desk offers it again because the roster moved — the same control, worded "Update draw".
     const generate = page.getByTestId("stage-generate");
     await expect(generate).toBeEnabled({ timeout: 20_000 });
+    await expect(generate).toHaveText("Update draw");
     const answered = page.waitForResponse((r) => r.url().endsWith(`/api/v1/stages/${stageId}/generate`) && r.request().method() === "POST");
     await generate.click();
     expect((await answered).status(), "Generate answers 200 (main: 'up to date', the player in no line)").toBe(200);
     await expect(page.getByText("1 new entrant placed in a bye.", { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("Nothing new to generate — fixtures are up to date.", { exact: true })).toHaveCount(0);
+    // The roster matches the seats again, so the offer is gone (it comes back only when the roster moves).
+    await expect(page.getByTestId("stage-generate"), "no drift left: no Update draw").toHaveCount(0, { timeout: 20_000 });
 
     const after = await rows();
     expect(after.map((f) => f.id).sort(), "nothing inserted or deleted: the same seven lines").toEqual(first.map((f) => f.id).sort());
