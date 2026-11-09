@@ -260,7 +260,7 @@ describe.skipIf(!HAS_DB)("sponsor order delete protection (V299)", () => {
 // swept, and a paid one is still the older money guard's.
 describe.skipIf(!HAS_DB)("deleteCompetition and sponsor deals (D18)", () => {
   const ORIGIN = "https://delete-guards.test";
-  const HINT = "competition has sponsor deals — end them or archive it instead";
+  const HINT = "competition has sponsor deals — a deal is kept as history; archive it instead";
 
   async function sponsorIn(orgId: string, compId: string | null): Promise<string> {
     const [{ id }] = await sql<{ id: string }[]>`

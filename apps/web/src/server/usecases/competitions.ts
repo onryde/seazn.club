@@ -972,7 +972,7 @@ export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void
                   or exists (select 1 from sponsors s join sponsor_orders o on o.sponsor_id = s.id
                               where s.competition_id = ${id})`;
     if (hasDeals) {
-      throw new HttpError(409, "competition has sponsor deals — end them or archive it instead");
+      throw new HttpError(409, "competition has sponsor deals — a deal is kept as history; archive it instead");
     }
     // V299 made sponsor_orders.package_id RESTRICT, so the comp→package
     // cascade can no longer sweep abandoned checkouts implicitly. The
