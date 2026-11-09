@@ -43,9 +43,10 @@ import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import { placementNeedsTiers } from "@/lib/sponsor-deal-policy";
 import { assertPlacementAllowed } from "@/server/sponsors/deal-gates";
 import { ensureOrgStreamSettings } from "@/server/sponsors/stream-settings";
-import type { DealStatus } from "@/lib/sponsor-deals";
+import type { PaymentStatus } from "@/lib/sponsor-deals";
 import {
   assertSponsorPatchAllowed,
+  isLegacyDeal,
   lockSponsorAndDeals,
   readOrgDeals,
   sponsorDealSummary,
@@ -310,19 +311,20 @@ export async function patchSponsor(
   });
 }
 
-/** The deal states a sponsor can be deleted with: none of them ever showed the sponsor or took its money. */
-const DELETABLE_DEAL_STATES: ReadonlySet<DealStatus> = new Set<DealStatus>(["draft", "awaiting_payment", "awaiting_approval"]);
+/** Money a deal holds as history: once paid (and so once refundable or refunded), its record is the audit trail. */
+const MONEY_HISTORY: ReadonlySet<PaymentStatus> = new Set<PaymentStatus>(["paid", "refunded"]);
 
-/** A deal that is history, so its sponsor stays (sponsor deals D6, F16): money moved or was asked for (a money status past
- *  `pending`, a payment intent), a dispute, a state past waiting (live, scheduled or ended — a legacy order is ended), or a
- *  stored Checkout session, which is still a payable link (F3). The tenant's prune policy (V300) fences the same money
- *  columns and the RESTRICT key (V493) backs all of it, so the answer is this 409, never a 23503. */
+/** A deal that holds its sponsor (product ruling 2026-11-09, sponsor deals Task 5): it carries money or document history —
+ *  money paid or refunded, a stored Checkout session (still a payable link, F3), or a pre-deals legacy order (F16: the
+ *  RESTRICT key covers it). Every other deal (a draft, an unpaid or failed one, a complimentary one, live or ended) goes
+ *  with its sponsor. The tenant's prune policy (V300's fence, widened by the sponsor-deals delta) admits exactly those
+ *  others, so this 409 is the answer for the rest, never a 23503. */
 function dealHoldsHistory(d: ServerDeal): boolean {
+  // TODO(Task 20, F10): `|| d.invoice_number !== null` once deals are numbered (a numbered invoice is a document); the
+  // prune policy gains `and invoice_number is null` in the same task.
   return (
-    d.payment_status !== "pending" ||
-    d.payment_intent_id !== null ||
-    d.disputed_at !== null ||
-    !DELETABLE_DEAL_STATES.has(d.deal_status) ||
+    MONEY_HISTORY.has(d.payment_status) ||
+    isLegacyDeal(d) ||
     // TODO(Task 7, F3): expire the open session (outside any transaction), then delete; 409 only when it cannot be expired.
     d.checkout_session_id !== null
   );
@@ -336,11 +338,11 @@ export async function deleteSponsor(auth: AuthCtx, id: string): Promise<void> {
     if (locked.deals.some(dealHoldsHistory)) {
       throw new HttpError(
         409,
-        "this sponsor has deal history (a payment, a dispute, or a deal that went live or ended) — end its deals instead",
+        "this sponsor has deal history (money paid or refunded, an open payment link, or a pre-deals order) — end its deals instead",
         "sponsor_has_deal_history",
       );
     }
-    // Deals that never got past waiting go with their sponsor, in this transaction.
+    // Every other deal goes with its sponsor, in this transaction.
     if (locked.deals.length > 0) await tx`delete from sponsor_orders where sponsor_id = ${id}`;
     await tx`delete from sponsors where id = ${id}`;
   }).then(() => expirePublicSponsors(auth.orgId, "sponsor.delete"));

@@ -72644,7 +72644,7 @@
         ]
       },
       "delete": {
-        "summary": "Delete a sponsor, with any deals that never got past waiting. A sponsor whose deals hold history (a payment, a dispute, a deal that went live or ended, an open Checkout link) is 409 `sponsor_has_deal_history`",
+        "summary": "Delete a sponsor, with its deals. A sponsor holding a deal with money or document history (money paid or refunded, an open Checkout link, a pre-deals order) is 409 `sponsor_has_deal_history`",
         "tags": [
           "sponsors"
         ],

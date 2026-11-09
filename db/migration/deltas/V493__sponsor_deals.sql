@@ -26,6 +26,14 @@
 -- and the deal's competition_id is RESTRICT too. The deal columns carry NO default, so a writer that forgets one fails
 -- loudly (23502) instead of silently writing a draft.
 --
+-- The tenant's delete fence widens (product ruling 2026-11-09). V300's sponsor_orders_prune let app_user delete only a
+-- pending, intent-less, undisputed order: an abandoned checkout. A sponsor is now deleted WITH its deals unless one of them
+-- carries money or document history, so the policy admits every deal EXCEPT money paid or refunded, a stored Checkout
+-- session (still a payable link) and a legacy order (history, D6). A draft, an unpaid or failed deal, and a complimentary
+-- one (money `none`), live or ended, are deletable by their own org; paid and refunded rows stay undeletable for tenants,
+-- as V300 meant. The app answers 409 for the rest (deleteSponsor), so this fence is never what a user meets. The invoice
+-- numbering adds `and invoice_number is null` (a numbered invoice is a document).
+--
 -- sponsor_packages gains includes_on_stream (default false). sponsor_packages.competition_id IS NULL now means "any
 -- competition (the deal picks)", where it used to mean "org-wide". That is a superset of the old meaning: no package row
 -- moves, and an org-wide deal is still one the deal picks.
@@ -153,6 +161,15 @@ alter table sponsor_orders
     foreign key (marked_paid_by) references users(id) on delete set null,
   add constraint sponsor_orders_approved_by_fkey
     foreign key (approved_by) references users(id) on delete set null;
+
+-- The widened delete fence (header). `is distinct from`, not `<>`: an open or live deal's ended_reason is NULL, and a
+-- policy expression that is NULL refuses the row.
+drop policy sponsor_orders_prune on sponsor_orders;
+create policy sponsor_orders_prune on sponsor_orders for delete to app_user
+  using (org_id = current_org_id()
+         and status not in ('paid', 'refunded')
+         and checkout_session_id is null
+         and ended_reason is distinct from 'legacy');
 
 -- D3: at most one live deal per sponsor.
 create unique index sponsor_orders_one_live_per_sponsor on sponsor_orders (sponsor_id) where deal_status = 'live';

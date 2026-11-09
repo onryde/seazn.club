@@ -957,8 +957,9 @@ export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void
     }
     // V299 made sponsor_orders.package_id RESTRICT, so the comp→package
     // cascade can no longer sweep abandoned checkouts implicitly. The
-    // sponsor_orders_prune policy (V300) fences this delete to rows that
-    // never became money: pending, intent-less, undisputed.
+    // sponsor_orders_prune policy (V300, widened by the sponsor-deals delta)
+    // fences this delete: never money paid or refunded, a stored Checkout
+    // session or a legacy order.
     await tx`
       delete from sponsor_orders o
       using sponsor_packages p
