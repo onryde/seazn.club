@@ -37,7 +37,8 @@ import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { allowedActions, dealChip } from "@/lib/sponsor-deals";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { stubOutboxEnv } from "./_invite-mail";
-import { deleteSponsor, refundSponsorOrder, resolveSponsors } from "../sponsors";
+import type Stripe from "stripe";
+import { deleteSponsor, handleSponsorPaymentFailed, refundSponsorOrder, resolveSponsors } from "../sponsors";
 import {
   createDeal,
   endDealNow,
@@ -658,6 +659,30 @@ describe.skipIf(!HAS_DB)("Mark as paid, End now, refund and delete apply the ses
     const recorded = await refundDeal(byHand.o.auth, byHand.id);
     expect(recorded).toMatchObject({ payment_status: "refunded", deal_status: "ended", ended_reason: "refunded" });
     expect(stripe.refund, "no charge moved this money: no Stripe call (T2-I1)").not.toHaveBeenCalled();
+  });
+
+  it("T8 review I1: a declined card, then Mark as paid (the sponsor paid by transfer) — the deal keeps no intent, so its refund is recorded with NO Stripe call", async () => {
+    const d = await onlineDeal();
+    const declined = `pi_declined_${uniq()}`;
+    await handleSponsorPaymentFailed({
+      id: declined,
+      object: "payment_intent",
+      amount: 25_000,
+      currency: "gbp",
+      status: "requires_payment_method",
+      metadata: { kind: "sponsor", order_id: d.id, org_id: d.o.orgId },
+    } as unknown as Stripe.PaymentIntent);
+    expect(await sql`select status, payment_intent_id from sponsor_orders where id = ${d.id}`, "premise: the decline is recorded").toEqual([
+      { status: "failed", payment_intent_id: declined },
+    ]);
+
+    expect(await markDealPaid(d.o.auth, d.id)).toMatchObject({ payment_status: "paid" });
+    const [after] = await sql<{ payment_intent_id: string | null }[]>`select payment_intent_id from sponsor_orders where id = ${d.id}`;
+    expect(after!.payment_intent_id, "a payment marked by hand has no Stripe charge, so it names no intent").toBeNull();
+
+    stripe.refund.mockClear();
+    expect(await refundDeal(d.o.auth, d.id)).toMatchObject({ payment_status: "refunded", deal_status: "ended", ended_reason: "refunded" });
+    expect(stripe.refund, "nothing was charged at Stripe, so nothing is refunded there").not.toHaveBeenCalled();
   });
 
   it("m2: a Stripe refund failure is the documented 502 stripe_unavailable in our words (never a 500 with Stripe's text), nothing recorded; the twin refunds; a lost refund race is 409 deal_not_refundable", async () => {

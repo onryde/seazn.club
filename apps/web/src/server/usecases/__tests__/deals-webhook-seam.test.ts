@@ -442,6 +442,34 @@ describe.skipIf(!HAS_DB)("the go-live rule decides what a payment does (DB)", ()
       err.mockRestore();
     }
   });
+
+  it("T8 review m1: a payment on a deal that is not there (deleted after its session completed) is never quiet — logged as an error and the owner alerted once, no row and no sponsor made; a redelivery adds no alert", async () => {
+    const err = vi.spyOn(log, "error");
+    try {
+      const o = await org();
+      const count = await sponsorCount(o.orgId);
+      const gone = randomUUID();
+      expect(await sql`select 1 from sponsor_orders where id = ${gone}`, "premise: no such deal").toHaveLength(0);
+      const intent = newIntent();
+      const event = succeeded(o, gone, intent);
+
+      await expect(runEvent(event), "answered, never a throw").resolves.toBe(true);
+
+      expect(alerts("deal_missing"), "the owner is alerted").toHaveLength(1);
+      expect(alerts("deal_missing")[0]![1]).toMatchObject({ orgId: o.orgId, extra: { dealId: gone, intentId: intent, recordedOn: null } });
+      expect(
+        err.mock.calls.filter(([obj, msg]) => (obj as { dealId?: string }).dealId === gone && msg === "sponsors: payment on a deal that is not there"),
+        "logged as an error, not a warning",
+      ).toHaveLength(1);
+      expect(await sql`select 1 from sponsor_orders where payment_intent_id = ${intent}`, "recorded nowhere").toHaveLength(0);
+      expect(await sponsorCount(o.orgId), "and no sponsor made (anti-goal 1)").toBe(count);
+
+      await expect(runEvent(event), "a redelivery of the same event").resolves.toBe(false);
+      expect(alerts("deal_missing"), "no second alert").toHaveLength(1);
+    } finally {
+      err.mockRestore();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -789,7 +817,7 @@ describe.skipIf(!HAS_DB)("F2: a webhook locks the sponsor before any deal (DB)",
     expect(await sponsorRow(sp2)).toMatchObject({ url: "https://renamed.example/", status: "pending" });
   });
 
-  it("lock witness: while the sponsor is held, a waiting payment, refund and dispute each hold NO lock on their deal (3 handlers)", async () => {
+  it("lock witness: while the sponsor is held, a waiting payment, refund and every dispute phase (created, funds_withdrawn, closed won and lost) each hold NO lock on their deal (6 events)", async () => {
     const o = await org();
     const cases: [string, () => Promise<{ sponsorId: string; dealId: string; event: Stripe.Event }>][] = [
       ["payment_intent.succeeded", async () => {
@@ -808,6 +836,33 @@ describe.skipIf(!HAS_DB)("F2: a webhook locks the sponsor before any deal (DB)",
         const dealId = await onlineDeal(o, sponsorId, await pkg(o));
         const intent = await pay(o, dealId);
         return { sponsorId, dealId, event: disputed("created", newDispute(), intent, "needs_response") };
+      }],
+      // T8 review m5: the three later dispute phases, each from the state it moves (an inquiry for funds_withdrawn, a formal
+      // dispute for both closes). `lost` writes its money off and ends the deal in one transaction, so it locks too.
+      ["charge.dispute.funds_withdrawn", async () => {
+        const sponsorId = await sponsor(o);
+        const dealId = await onlineDeal(o, sponsorId, await pkg(o));
+        const intent = await pay(o, dealId);
+        const dispute = newDispute();
+        expect(await runEvent(disputed("created", dispute, intent, "warning_needs_response")), "premise: the inquiry ran").toBe(true);
+        return { sponsorId, dealId, event: disputed("funds_withdrawn", dispute, intent, "needs_response") };
+      }],
+      ["charge.dispute.closed (won)", async () => {
+        const sponsorId = await sponsor(o);
+        const dealId = await onlineDeal(o, sponsorId, await pkg(o));
+        const intent = await pay(o, dealId);
+        const dispute = newDispute();
+        expect(await runEvent(disputed("created", dispute, intent, "needs_response")), "premise: the dispute ran").toBe(true);
+        expect((await dealRow(dealId)).parked_at, "premise: the deal is parked").not.toBeNull();
+        return { sponsorId, dealId, event: disputed("closed", dispute, intent, "won") };
+      }],
+      ["charge.dispute.closed (lost)", async () => {
+        const sponsorId = await sponsor(o);
+        const dealId = await onlineDeal(o, sponsorId, await pkg(o));
+        const intent = await pay(o, dealId);
+        const dispute = newDispute();
+        expect(await runEvent(disputed("created", dispute, intent, "needs_response")), "premise: the dispute ran").toBe(true);
+        return { sponsorId, dealId, event: disputed("closed", dispute, intent, "lost") };
       }],
     ];
     let checked = 0;
@@ -836,7 +891,7 @@ describe.skipIf(!HAS_DB)("F2: a webhook locks the sponsor before any deal (DB)",
       await expect(running, `${what}: the handler then completes`).resolves.toBe(true);
       checked++;
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(6);
   });
 });
 

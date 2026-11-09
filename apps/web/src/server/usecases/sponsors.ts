@@ -818,7 +818,9 @@ type DealPaymentAlert =
   /** The deal's rule cannot take a payment (a draft, or awaiting approval; F12): recorded, refundable, the deal as it was. */
   | "deal_not_payable"
   /** A second, different payment on a deal already paid (F3): its own ended, refundable row. */
-  | "duplicate_payment";
+  | "duplicate_payment"
+  /** The deal the payment names is not there (T8 review m1): money taken with nothing to record it on. */
+  | "deal_missing";
 
 /**
  * The owner alert for a payment the club may owe back (Review Focus 1, F3, F12): a Sentry event carrying the reason, the deal
@@ -828,10 +830,10 @@ type DealPaymentAlert =
  */
 function alertDealPayment(
   reason: DealPaymentAlert,
-  a: { orgId: string; dealId: string; intentId: string; recordedOn: string | null },
+  a: { orgId: string | null; dealId: string; intentId: string; recordedOn: string | null },
 ): void {
   captureError(new Error(`sponsors: ${reason} (deal ${a.dealId})`), {
-    orgId: a.orgId,
+    orgId: a.orgId ?? undefined,
     route: "billing.sponsor_payment",
     extra: { reason, dealId: a.dealId, intentId: a.intentId, recordedOn: a.recordedOn },
   });
@@ -839,7 +841,8 @@ function alertDealPayment(
 
 /** What a payment did, decided under the lock and acted on after the commit. */
 type PaymentOutcome = {
-  orgId: string;
+  /** Null only when the deal is not there and the intent names no org. */
+  orgId: string | null;
   /** The deal applied to its sponsor: the public pages are busted. */
   applied: boolean;
   alert: { reason: DealPaymentAlert; dealId: string; recordedOn: string | null; err?: unknown } | null;
@@ -875,9 +878,9 @@ export async function handleSponsorPaymentSucceeded(
 
   const out = await sql.begin(async (tx): Promise<PaymentOutcome | null> => {
     const locked = await lockDealAndSponsor(tx, dealId);
+    // Money taken with no deal to record it on (deleted in a race after its session completed): never quiet (T8 review m1).
     if (!locked) {
-      log.warn({ dealId, intentId: intent.id }, "sponsors: payment on a deal that is not there");
-      return null;
+      return { orgId: intent.metadata.org_id ?? null, applied: false, alert: { reason: "deal_missing", dealId, recordedOn: null } };
     }
     const { deal, orgId } = locked;
     if (deal.payment_status !== "pending" && deal.payment_status !== "failed") {
@@ -931,10 +934,11 @@ export async function handleSponsorPaymentSucceeded(
     const at = { dealId: alerted, intentId: intent.id, recordedOn };
     if (reason === "deal_ended") log.warn({ dealId: alerted }, "sponsors: payment on an ended deal");
     else if (reason === "deal_not_payable") log.error({ err, ...at }, "sponsors: payment on a deal its rule cannot move");
+    else if (reason === "deal_missing") log.error(at, "sponsors: payment on a deal that is not there");
     else log.error(at, "sponsors: a second payment on a paid deal");
     alertDealPayment(reason, { orgId: out.orgId, ...at });
   }
-  if (out.applied) {
+  if (out.applied && out.orgId !== null) {
     const [org] = await sql<{ slug: string }[]>`
       select slug from organizations where id = ${out.orgId}`;
     if (org) deferred(() => fireOrgRevalidate(org.slug));
@@ -1558,8 +1562,13 @@ export async function buildSponsorDisputeEvidence(
   const order = await withTenant(auth.orgId, async (tx) => {
     // Any deal, not only one paid online: an offline or complimentary deal has no billing email and pays `none` (V493).
     const [row] = await tx<
-      (Omit<SponsorOrderRow, "sponsor_email" | "status"> & { sponsor_email: string | null; status: string; dispute_id: string | null })[]
-    >`select ${tx(ORDER_COLS)}, dispute_id from sponsor_orders where id = ${orderId}`;
+      (Omit<SponsorOrderRow, "sponsor_email" | "status"> & {
+        sponsor_email: string | null;
+        status: string;
+        dispute_id: string | null;
+        package_name: string | null;
+      })[]
+    >`select ${tx(ORDER_COLS)}, dispute_id, package_name from sponsor_orders where id = ${orderId}`;
     if (!row) throw new HttpError(404, "order not found");
     return row;
   });
@@ -1586,13 +1595,15 @@ export async function buildSponsorDisputeEvidence(
 
   // The receipt, reconstructed with the exact sender inputs, in the language
   // it was sent in: the org's (queueSponsorReceipt resolves it the same way).
+  // Its package name is the deal's snapshot, as the payment webhook sends it (D4, T8 review m3): a package renamed since must
+  // not make the evidence disagree with the mail the sponsor received.
   const publicUrl = org ? `${origin}${routes.publicHub(org.slug)}` : null;
   const locale = await recipientLocale(sql, { pick: null, userId: null, orgDefault: org?.default_locale ?? null });
   const emailText = (
     await sponsorReceiptEmail(
       {
         orgName: org?.name ?? "the organiser",
-        packageName: pkg?.name ?? "sponsorship",
+        packageName: order.package_name ?? "sponsorship",
         sponsorName: order.sponsor_name,
         amountCents: order.amount_cents,
         currency: order.currency,

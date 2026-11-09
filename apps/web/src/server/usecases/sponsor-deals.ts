@@ -369,7 +369,12 @@ export async function sendDealInvoice(
 }
 
 /** Mark as paid (offline). Only an unpaid deal (`pending`, or `failed`: F15) the deal offers it on; on a When-paid rule it
- *  goes live (or queues), on After-I-approve it waits for the club (anti-goal 2), and a live or scheduled one stays put. */
+ *  goes live (or queues), on After-I-approve it waits for the club (anti-goal 2), and a live or scheduled one stays put.
+ *
+ *  The rule (T8 review I1): `payment_intent_id` names the Stripe charge that PAID the deal — the payment webhook writes it with
+ *  `paid`, and a refund goes through Stripe exactly when it is set. A payment marked by hand has no charge, so it clears the
+ *  intent a declined card left (`payment_failed` records one): else the refund would ask Stripe to refund an intent that never
+ *  charged, 502 every time, and the deal could never be refunded. */
 export async function markDealPaid(auth: AuthCtx, dealId: string): Promise<SponsorDeal> {
   // An online deal's session rule first (F37): a completed session is the sponsor's own payment in flight — 409, nothing
   // changes; an open one is expired, so the sponsor cannot pay twice.
@@ -380,7 +385,7 @@ export async function markDealPaid(auth: AuthCtx, dealId: string): Promise<Spons
     const next = statusAfterPaid(deal, otherLive(deals, deal));
     await tx`
       update sponsor_orders
-         set status = 'paid', paid_at = ${now}, marked_paid_by = ${auth.userId}, deal_status = ${next},
+         set status = 'paid', paid_at = ${now}, marked_paid_by = ${auth.userId}, deal_status = ${next}, payment_intent_id = null,
              live_at = ${next === "live" && deal.deal_status !== "live" ? now : deal.live_at}
        where id = ${deal.id}`;
     return null;

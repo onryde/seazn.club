@@ -343,6 +343,25 @@ describe.skipIf(!HAS_DB)("a paid sponsor order queues its receipt on the outbox 
     expect(pack.html).not.toContain(en);
   });
 
+  it("T8 review m3: the evidence pack quotes the receipt the webhook SENT — the deal's package name — after the package is renamed", async () => {
+    const o = await sponsorOrder({ status: "pending" });
+    await processStripeEvent(succeeded(o.intent, o.orderId));
+    const [sent] = enqueueCalls(RECEIPT, o.orderId);
+    expect(sent, "premise: the webhook queued the receipt").toBeDefined();
+    const renamed = `Renamed package ${randomUUID().slice(0, 8)}`;
+    await sql`update sponsor_packages set name = ${renamed} where id = (select package_id from sponsor_orders where id = ${o.orderId})`;
+    await sql`update sponsor_orders set disputed_at = now(), dispute_id = ${`dp_ev_${randomUUID().slice(0, 8)}`} where id = ${o.orderId}`;
+
+    const pack = await buildSponsorDisputeEvidence(ownerAuth(o), o.orderId, "https://ev.test");
+
+    const asSent = dictionarySubject("en", "sponsorReceipt.textLine", { packageName: o.packageName, orgName: o.orgName });
+    const asRenamed = dictionarySubject("en", "sponsorReceipt.textLine", { packageName: renamed, orgName: o.orgName });
+    expect(asSent, "premise: the rename changes the line").not.toBe(asRenamed);
+    expect((sent![1] as { text: string }).text, "premise: the sent receipt carries the deal's name").toContain(asSent);
+    expect(pack.html, "the pack quotes the line the sponsor received").toContain(asSent);
+    expect(pack.html).not.toContain(asRenamed);
+  });
+
   it("the invoice row survives the receipt: one order's invoice and receipt are two rows", async () => {
     const s = await sponsorOrg("en");
     const to = address("both");
