@@ -52,6 +52,9 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * and Compute answers SEEDING_SOURCE_INCOMPLETE, no longer ALREADY_CONFIRMED. Re-recorded the other way and replayed, a
  * re-proposal offers the new qualifier and not the old.
  *
+ * T15 (X-PL-1, X-QM-2; FX-G14's gate, QM-2): Knockout + Plate on a field of 3 is refused by name at Generate and at Start, and a
+ * fourth entrant lets it through. A rank cut of 3 from a knockout is refused at the write and leaves no stage; the cut of 4 is taken.
+ *
  * Own fresh owner; keyless; every read and write is a v1 route. Every check is counted, and a run that checked nothing fails.
  * SMOKE_ONLY=w4KnockoutA runs it alone (SELECTABLE_SUITES).
  */
@@ -62,7 +65,8 @@ export async function w4KnockoutASuite(): Promise<void> {
   // once). T10: 2 (a late player takes the lowest-seeded holder's bye and Undo refuses; no slot is refused, then a
   // withdrawn seat is taken). T11: 1 (a reinstated player waits, and one tap gives their seat back). T13: 1 (a departed
   // qualifier's seat takes the best loser below the cut). T14: 1 (a correction empties a confirmed draw's seats and re-proposes).
-  const EXPECTED_CHECKS = 13;
+  // T15: 2 (a plate on 3 is refused, then starts on 4; a cut of 3 from a knockout leaves no stage).
+  const EXPECTED_CHECKS = 15;
   let checked = 0;
   const w4Check = (label: string, cond: boolean) => {
     checked++;
@@ -748,6 +752,68 @@ export async function w4KnockoutASuite(): Promise<void> {
       "w4a X-QM-4: a corrected quarter-final empties the confirmed main draw's seats, and a re-proposal offers the new qualifier" +
         (ok ? "" : ` — confirm ${confirmed?.status ?? "-"}, emptied ${JSON.stringify(emptied.map((f) => [f.home_entrant_id, f.away_entrant_id]))}, undecided ${undecided.status} ${undecidedCode ?? "-"}, recomputed ${recomputed.status}, offered ${JSON.stringify(offered)}, out ${out}, in ${incoming}`),
       ok,
+    );
+  }
+
+  // Checks 14 and 15 (T15, X-PL-1 and X-QM-2): the format gates, off the stage graph, on divisions built through the API.
+  {
+    const errorCode = (r: { json?: unknown }) => (r.json as { error?: { code?: string } } | undefined)?.error?.code;
+    const division = async (label: string) =>
+      v1data<{ id: string } | undefined>(
+        await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: label, sport_key: "badminton", variant_key: "bwf", config: {} }),
+      )?.id;
+    const entrants = (divId: string | undefined, label: string, from: number, to: number) =>
+      v1(
+        owner,
+        `/api/v1/divisions/${divId}/entrants`,
+        "POST",
+        Array.from({ length: to - from + 1 }, (_, i) => ({ kind: "individual", display_name: `${label} ${from + i} ${tag}`, seed: from + i })),
+      );
+
+    const plateDiv = await division(`T15 plate ${tag}`);
+    await entrants(plateDiv, "T15 Plate", 1, 3);
+    const plateMain = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${plateDiv}/stages`, "POST", { seq: 1, kind: "knockout", name: "Main", config: {} }),
+    )?.id;
+    await v1(owner, `/api/v1/divisions/${plateDiv}/stages`, "POST", {
+      seq: 2,
+      kind: "knockout",
+      name: "Plate",
+      config: {},
+      progression: { sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 2 }] }], placement: "rank_order", timing: "setup" },
+    });
+    const generateAt3 = await v1(owner, `/api/v1/stages/${plateMain}/generate`, "POST");
+    const startAt3 = await v1(owner, `/api/v1/divisions/${plateDiv}/start`, "POST");
+    await entrants(plateDiv, "T15 Plate", 4, 4);
+    const startAt4 = await v1(owner, `/api/v1/divisions/${plateDiv}/start`, "POST");
+    const plateOk =
+      generateAt3.status === 422 && errorCode(generateAt3) === "KO_PLATE_TOO_FEW" &&
+      startAt3.status === 422 && errorCode(startAt3) === "KO_PLATE_TOO_FEW" &&
+      startAt4.status === 200;
+    w4Check(
+      "w4a X-PL-1: Knockout + Plate on 3 is refused by name at Generate and at Start, and starts on 4" +
+        (plateOk ? "" : ` — generate ${generateAt3.status} ${errorCode(generateAt3)}, start ${startAt3.status} ${errorCode(startAt3)}, then ${startAt4.status} ${errorCode(startAt4)}`),
+      plateOk,
+    );
+
+    const cutDiv = await division(`T15 cut ${tag}`);
+    await entrants(cutDiv, "T15 Cut", 1, 8);
+    await v1(owner, `/api/v1/divisions/${cutDiv}/stages`, "POST", { seq: 1, kind: "knockout", name: "Qualifying", config: {} });
+    const mainOf = (to: number) => ({
+      seq: 2,
+      kind: "knockout",
+      name: "Main draw",
+      config: {},
+      progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to }] }], placement: "rank_order", timing: "setup" },
+    });
+    const cutOf3 = await v1(owner, `/api/v1/divisions/${cutDiv}/stages`, "POST", mainOf(3));
+    const stagesAfter3 = v1data<unknown[] | undefined>(await v1(owner, `/api/v1/divisions/${cutDiv}/stages`, "GET"))?.length;
+    const cutOf4 = await v1(owner, `/api/v1/divisions/${cutDiv}/stages`, "POST", mainOf(4));
+    const cutOk = cutOf3.status === 422 && errorCode(cutOf3) === "KO_CUT_NOT_WHOLE_ROUND" && stagesAfter3 === 1 && cutOf4.status === 201;
+    w4Check(
+      "w4a X-QM-2: a rank cut of 3 from a knockout is refused by name and leaves no stage; the whole round of 4 is taken" +
+        (cutOk ? "" : ` — 3: ${cutOf3.status} ${errorCode(cutOf3)}, stages ${stagesAfter3}; 4: ${cutOf4.status} ${errorCode(cutOf4)}`),
+      cutOk,
     );
   }
 

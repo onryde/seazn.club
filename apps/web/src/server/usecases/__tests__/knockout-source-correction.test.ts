@@ -128,7 +128,7 @@ async function undecide(r: Rig, fixtureId: string): Promise<void> {
   for (const e of live) await post(r.auth, fixtureId, "core.void", { event_id: e.id });
 }
 
-async function rig(opts: { template: "qualifying_main" | "ko_plate" | "league_ko"; n?: number; q?: number; sport?: SportPick }): Promise<Rig> {
+async function rig(opts: { template: "qualifying_main" | "ko_plate" | "league_ko"; n?: number; q?: number; sport?: SportPick; storedCut?: number }): Promise<Rig> {
   const s = opts.sport ?? SINGLES;
   const n = opts.n ?? 8;
   const { auth } = await seedOrg("pro");
@@ -155,6 +155,11 @@ async function rig(opts: { template: "qualifying_main" | "ko_plate" | "league_ko
       CreateStage.parse({ seq: i + 1, kind: d.kind, name: d.name, config: d.config, progression: d.progression }),
     );
     ids.push(stage!.id);
+  }
+  // A cut stored before X-QM-2 (T15): the save door refuses it now, the rows that hold one keep running.
+  if (opts.storedCut !== undefined) {
+    const stored = buildTemplateStages(opts.template, { swissRounds: 5, poolCount: 2, legs: 1, qualified: opts.storedCut })[1]!.progression!;
+    await sql`update stages set progression = ${sql.json(stored as never)} where id = ${ids[1]!}`;
   }
   await startDivision(auth, division.id);
   await generateStageFixtures(auth, ids[1]!);
@@ -664,7 +669,7 @@ describe.runIf(HAS_DB)("W4 T14 a correction inside a completed knockout source (
     }, 600_000);
 
     it("a cut that is no whole round: nothing moves mid-correction, and once decided the seed who fell off the end stales it", async () => {
-      const r = await rig({ template: "qualifying_main", q: 3 });
+      const r = await rig({ template: "qualifying_main", storedCut: 3 });
       await playSource(r);
       const confirmedId = await confirmLatest(r);
       expect(await offeredOnSlate(confirmedId, r), "premise: rank order").toEqual(["E1", "E2", "E3"]);

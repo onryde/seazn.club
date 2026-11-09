@@ -158,4 +158,18 @@ describe("useBoardActions — fail()'s knockout refusal", () => {
     expect(spanish, "premise: the Spanish copy differs from the English").not.toBe(row.en);
     expect(actions().error).toBe(spanish);
   });
+
+  it("W4 T15: a refusal with a bound in its sentence says the bound (QUALIFYING_MAIN_TOO_FEW: the board's Generate on a cut of 8)", async () => {
+    const { KNOCKOUT_REFUSALS } = await import("@/lib/knockout-refusals");
+    const row = KNOCKOUT_REFUSALS.QUALIFYING_MAIN_TOO_FEW;
+    net.reject = () => Promise.reject(new ApiV1Error(row.en.replace("{min}", "8"), row.status, "QUALIFYING_MAIN_TOO_FEW", { min: 8 }));
+
+    const actions = driveHook();
+    await actions().moveCard(TBD_ID, "2026-09-01T10:00:00.000Z", "Court 1");
+
+    const { msgFor } = await import("@/lib/messages-i18n");
+    const spanish = msgFor("es", row.key, { min: 8 });
+    expect(spanish, "premise: the sentence says the bound").toContain("8");
+    expect(actions().error).toBe(spanish);
+  });
 });

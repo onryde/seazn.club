@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { TAG, activeOrgIdFromRequest, apiJson, competitionPath, divisionPath, seedVenueWithCourts } from "./helpers";
+import { TAG, activeOrgIdFromRequest, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, pickBuilderSport, seedVenueWithCourts, showAllFormats } from "./helpers";
 import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { uiEn } from "./match-room-kit";
@@ -989,5 +989,78 @@ test.describe("X-QM-4 a corrected qualifier is re-proposed", () => {
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(overflow, `no horizontal page scroll at ${width}`).toBeLessThanOrEqual(0);
     }
+  });
+});
+
+test.describe("X-PL-1 the builder explains the plate at 3 entrants", () => {
+  test("at 3 Knockout + Plate is on show, greyed and untappable, saying why; at 4 it picks; a field shrunk under the pick stops Next with the server's sentence", async ({ page, request }) => {
+    test.setTimeout(120_000);
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `T15 plate ${TAG}`, visibility: "private" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    await page.goto(await competitionPath(request, comp.data!.id, "/d/new"));
+    await dismissCookieBanner(page);
+    await page.getByTestId("division-builder-name").fill(`Plate gate ${TAG}`);
+    await pickBuilderSport(page, "badminton");
+    await page.getByTestId("division-builder-next").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "format");
+
+    const card = page.locator('label[data-template="ko_plate"]');
+    const radio = card.locator('input[type="radio"]');
+    const reason = page.getByTestId("division-builder-size-reason-ko_plate");
+    const plan = page.getByTestId("division-builder-plan-entrants");
+    const picked = page.locator('label[data-template]:has(input[type="radio"]:checked)');
+    const needs = (n: number) => uiEn["divBuilder.card.needsEntrants"].replace("{min}", "4").replace("{count}", String(n));
+
+    // The empty case first: the opening plan of 16 gates nothing.
+    await expect(reason).toHaveCount(0);
+    await expect(page.locator("label[data-size-gated]")).toHaveCount(0);
+
+    // At 3: on show without Show more (owner pick 5A), saying the bound and the field.
+    await plan.fill("3");
+    await expect(reason).toHaveText(needs(3));
+    await expect(card).toBeVisible();
+    await expect(page.locator('label[data-template="qualifying_main"]')).toBeVisible();
+    await expect(page.getByTestId("division-builder-size-reason-qualifying_main")).toHaveText(needs(3));
+    await expect(card).toHaveAttribute("aria-disabled", "true");
+    await expect(radio).toBeDisabled();
+
+    // A real tap on it picks nothing. `force` because Playwright itself will not click an aria-disabled label; the mouse still lands.
+    const before = await picked.getAttribute("data-template");
+    expect(before, "premise: another format is picked").not.toBe("ko_plate");
+    await card.click({ force: true });
+    await expect(picked).toHaveAttribute("data-template", before!);
+    await expect(radio).not.toBeChecked();
+
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect(reason, `${width}: the reason is on screen`).toBeVisible();
+      await expectNoHorizontalScroll(page);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    // At 4: no reason, the estimate, and the tap takes. The card goes back to its ranked place, which at 4 can be behind Show more.
+    await plan.fill("4");
+    await expect(reason).toHaveCount(0);
+    await expect(page.getByTestId("division-builder-estimate-ko_plate")).toBeAttached();
+    await expect(card).not.toHaveAttribute("aria-disabled", "true");
+    if (!(await card.isVisible())) await showAllFormats(page);
+    await expect(page.getByTestId("division-builder-estimate-ko_plate")).toBeVisible();
+    await card.click();
+    await expect(radio).toBeChecked();
+    await page.getByTestId("division-builder-next").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "rules");
+
+    // Back, and the field shrunk under the pick: the pick stays, Next refuses in the server's words, and 4 lets it go on.
+    await page.getByTestId("division-builder-step-format").click();
+    await plan.fill("3");
+    await expect(reason).toHaveText(needs(3));
+    await expect(radio).toBeChecked();
+    await page.getByTestId("division-builder-next").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "format");
+    await expect(page.getByTestId("division-builder-error")).toHaveText(uiEn["knockout.refusal.KO_PLATE_TOO_FEW"]);
+    await plan.fill("4");
+    await expect(page.getByTestId("division-builder-error")).toHaveCount(0);
+    await page.getByTestId("division-builder-next").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "rules");
   });
 });

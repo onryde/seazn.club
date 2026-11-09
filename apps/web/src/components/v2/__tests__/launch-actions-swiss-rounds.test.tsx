@@ -138,4 +138,16 @@ describe.each(["en", "fr"] as const)("LaunchActions — Start refused: the knock
     expect(redLines(island.tree())).toEqual([D[row.key]]);
     if (locale !== "en") expect(redLines(island.tree())[0], "never the server's English").not.toBe(row.en);
   });
+
+  // W4 T15 (X-PL-1, X-QM-5): the first knockout refusal with a hole in its sentence at this door. The bound rides on the envelope.
+  it("says a size refusal with its bound filled, for Knockout + Plate and for a qualifying cut's depth", async () => {
+    const plate = KNOCKOUT_REFUSALS.KO_PLATE_TOO_FEW;
+    net.answer = { status: plate.status, code: "KO_PLATE_TOO_FEW", message: plate.en, extra: { min: 4 } };
+    expect(redLines((await pressStart()).tree())).toEqual([D[plate.key]]);
+    const main = KNOCKOUT_REFUSALS.QUALIFYING_MAIN_TOO_FEW;
+    net.answer = { status: main.status, code: "QUALIFYING_MAIN_TOO_FEW", message: fill(main.en, { min: 8 }), extra: { min: 8 } };
+    const lines = redLines((await pressStart()).tree());
+    expect(lines).toEqual([fill(D[main.key]!, { min: 8 })]);
+    expect(lines[0], "no hole left in the sentence").not.toContain("{min}");
+  });
 });

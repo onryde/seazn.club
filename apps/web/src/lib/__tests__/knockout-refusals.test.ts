@@ -9,7 +9,7 @@ import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { HttpError } from "@/lib/errors";
-import { KNOCKOUT_REFUSALS, isKnockoutRefusalCode, knockoutRefusalKey, type KnockoutRefusalCode } from "@/lib/knockout-refusals";
+import { KNOCKOUT_REFUSALS, isKnockoutRefusalCode, knockoutRefusalKey, knockoutRefusalText, type KnockoutRefusalCode } from "@/lib/knockout-refusals";
 import { knockoutRefusal } from "@/server/usecases/knockout-refusal";
 
 // The plan's list, typed here rather than read from the table under test: a code dropped from the table, or one added
@@ -37,6 +37,12 @@ const PLAN_CODES = [
   "KO_LATE_ENTRY_NOT_UNDOABLE",
   // T11 (X-LE-10): the one-tap place route, on an entrant that does not wait on this stage.
   "KO_LATE_ENTRY_NOT_WAITING",
+  // T15 (X-PL-1): Knockout + Plate below 4 entrants.
+  "KO_PLATE_TOO_FEW",
+  // T15 (X-QM-5): a qualifying draw on a field that cannot fill its cut.
+  "QUALIFYING_MAIN_TOO_FEW",
+  // T15 (X-QM-2): a rank cut from a knockout that is no whole round.
+  "KO_CUT_NOT_WHOLE_ROUND",
 ] as const;
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
@@ -140,6 +146,28 @@ describe("KNOCKOUT_REFUSALS (W4 app-A)", () => {
       en: "This player isn't waiting to join this bracket.",
       key: "knockout.refusal.KO_LATE_ENTRY_NOT_WAITING",
     });
+  });
+
+  it("T15's three: 422 (the field or the cut has to change, re-sending changes nothing), with the plan's sentences", () => {
+    expect(KNOCKOUT_REFUSALS.KO_PLATE_TOO_FEW).toEqual({ status: 422, en: "Knockout + Plate needs at least 4 entrants.", key: "knockout.refusal.KO_PLATE_TOO_FEW" });
+    expect(KNOCKOUT_REFUSALS.QUALIFYING_MAIN_TOO_FEW).toEqual({ status: 422, en: "Qualifying + Main draw needs at least {min} entrants.", key: "knockout.refusal.QUALIFYING_MAIN_TOO_FEW" });
+    expect(KNOCKOUT_REFUSALS.KO_CUT_NOT_WHOLE_ROUND).toEqual({ status: 422, en: "From a knockout, qualify a whole round: 1, 2, 4, 8 …", key: "knockout.refusal.KO_CUT_NOT_WHOLE_ROUND" });
+    const err = knockoutRefusal("QUALIFYING_MAIN_TOO_FEW", { min: 8 });
+    expect(err.message).toBe("Qualifying + Main draw needs at least 8 entrants.");
+    expect(err.extra).toMatchObject({ min: 8 });
+    expect(() => knockoutRefusal("QUALIFYING_MAIN_TOO_FEW"), "a hole in the sentence is refused by name").toThrow(/QUALIFYING_MAIN_TOO_FEW.*min/);
+  });
+
+  it("knockoutRefusalText fills a sentence from the envelope's fields, in the reader's language, and takes no non-scalar with it", () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const msg = (key: string, vars?: Record<string, string | number>) => dict[key]!.replace(/\{(\w+)\}/g, (_, name: string) => String(vars?.[name] ?? `{${name}}`));
+      const text = knockoutRefusalText("QUALIFYING_MAIN_TOO_FEW", { min: 8, other: { nested: true } }, msg);
+      expect(text, locale).toContain("8");
+      expect(text, `${locale}: no hole left`).not.toContain("{min}");
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("knockoutRefusal builds the HttpError from the row: status, code, English and details", () => {

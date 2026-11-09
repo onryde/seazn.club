@@ -135,6 +135,16 @@ const KNOWN_REFUSALS: Array<{ re: RegExp; expected: number; why: string }> = [
     expected: 2,
     why: "a Plate asked for the round-1 loser at position 2 of a bye-padded 5-entrant Main draw, which has one real round-1 match (q=3 and q=4)",
   },
+  {
+    re: /^ko_plate n=2 q=\d+ pools=\d+ third=(true|false): generate knockout refused \(Knockout \+ Plate needs at least 4 entrants\.\)$/,
+    expected: 2,
+    why: "X-PL-1: Knockout + Plate is refused below 4; the sweep's one field under the bound is 2, with and without third place",
+  },
+  {
+    re: /^qualifying_main n=\d+ q=[356]( pools=\d+)? third=(true|false): createStages refused \(From a knockout, qualify a whole round: 1, 2, 4, 8 …\)$/,
+    expected: 23,
+    why: "X-QM-2: a cut of 3, 5 or 6 from a knockout is no whole round. Day one 20 (n=4 at q=3; n=9, 17 and 33 at q=3, 5 and 6; each with and without third place) and seeded 3",
+  },
 ];
 
 /** Every problem with a list of refusals: a rule that covered the wrong number of cases, and a refusal no rule has read. Empty = clean. */
@@ -317,10 +327,28 @@ describe("the sweep's refusal audit (no database)", () => {
   const PP = (n: number) => `page_playoff n=${n}: generate page_playoff refused (page playoffs need exactly 4 entrants, got ${n})`;
   const SW = (name: string, q: number, third: boolean) => `${name} n=2 q=${q} pools=2 third=${third}: generate swiss refused (That is more rounds than this field can pair.)`;
   const PL = (q: number) => `ko_plate n=5 q=${q} third=false: seeding knockout from knockout refused (bracket round 1 has no loser at position 2 (found 1))`;
-  const today = (): string[] => [...STANDALONE_SIZES.filter((n) => n !== 4).map(PP), SW("swiss_playoff", 4, false), SW("swiss_knockout", 2, false), SW("swiss_knockout", 2, true), PL(3), PL(4)];
+  const SMALL_PLATE = (third: boolean) => `ko_plate n=2 q=2 pools=2 third=${third}: generate knockout refused (Knockout + Plate needs at least 4 entrants.)`;
+  const CUT = (n: number, q: number, third: boolean, pools = " pools=2") => `qualifying_main n=${n} q=${q}${pools} third=${third}: createStages refused (From a knockout, qualify a whole round: 1, 2, 4, 8 …)`;
+  const THIRDS = [false, true];
+  const CUTS = [
+    ...THIRDS.map((t) => CUT(4, 3, t)),
+    ...[9, 17, 33].flatMap((n) => [3, 5, 6].flatMap((q) => THIRDS.map((t) => CUT(n, q, t)))),
+    CUT(5, 3, false, ""),
+    ...THIRDS.map((t) => CUT(8, 3, t, "")),
+  ];
+  const today = (): string[] => [
+    ...STANDALONE_SIZES.filter((n) => n !== 4).map(PP),
+    SW("swiss_playoff", 4, false),
+    SW("swiss_knockout", 2, false),
+    SW("swiss_knockout", 2, true),
+    PL(3),
+    PL(4),
+    ...THIRDS.map(SMALL_PLATE),
+    ...CUTS,
+  ];
 
-  it("accepts exactly what the sweep meets today (36 refusals: 31 + 3 + 2)", () => {
-    expect(today().length).toBe(36);
+  it("accepts exactly what the sweep meets today (61 refusals: 31 + 3 + 2 + 2 + 23)", () => {
+    expect(today().length).toBe(61);
     expect(auditRefusals(today()).problems).toEqual([]);
   });
 
@@ -335,6 +363,10 @@ describe("the sweep's refusal audit (no database)", () => {
       ["a Swiss refusal MOVED to another template (same count)", [...today().filter((r) => r !== SW("swiss_playoff", 4, false)), SW("swiss_other", 4, false)]],
       ["the Plate refusal at another q", [...today().filter((r) => r !== PL(4)), PL(5)]],
       ["a refusal text nobody has read", [...today(), "ko_plate n=8 q=4 third=false: seeding knockout from knockout refused (something new)"]],
+      ["the plate refused at a field the bound allows", [...today(), SMALL_PLATE(false).replace("n=2", "n=4")]],
+      ["one small plate no longer refused", today().filter((r) => r !== SMALL_PLATE(true))],
+      ["a whole-round cut refused (q=4 is one)", [...today().filter((r) => r !== CUT(9, 3, false)), CUT(9, 4, false)]],
+      ["another template refused for its cut", [...today(), CUT(9, 3, false).replace("qualifying_main", "ko_plate")]],
     ];
     let rejected = 0;
     for (const [what, list] of cases) {

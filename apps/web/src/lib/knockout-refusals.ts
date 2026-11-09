@@ -38,7 +38,16 @@ export type KnockoutRefusalCode =
   | "KO_LATE_ENTRY_NO_SLOT"
   // T10 (X-LE-13): an Undo, Redo or Restore that would step across a knockout late entry (history.ts `UNDO_BARRIER_TYPES`).
   | "KO_LATE_ENTRY_NOT_UNDOABLE"
-  | "KO_LATE_ENTRY_NOT_WAITING";
+  | "KO_LATE_ENTRY_NOT_WAITING"
+  // T15 (X-PL-1, owner pick 5A): Start or a root Generate of a Knockout + Plate on a field below 4. Its plate needs two
+  // round-one losers; the builder shows the card disabled with the same reason.
+  | "KO_PLATE_TOO_FEW"
+  // T15 (X-QM-5, `details.min`): Start or a root Generate of a qualifying draw on a field that cannot fill the cut. Unrefused,
+  // the whole qualifying stage is played and Complete then fails (STAGE_COMPLETED_SEEDING_FAILED).
+  | "QUALIFYING_MAIN_TOO_FEW"
+  // T15 (X-QM-2): a rank cut from a knockout source that is no whole round: the ranks inside a round are not played off, so a
+  // cut through one is decided by seed. Refused at create and patch only: a stored one keeps running.
+  | "KO_CUT_NOT_WHOLE_ROUND";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -110,6 +119,21 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     en: "This player isn't waiting to join this bracket.",
     key: "knockout.refusal.KO_LATE_ENTRY_NOT_WAITING",
   },
+  KO_PLATE_TOO_FEW: {
+    status: 422,
+    en: "Knockout + Plate needs at least 4 entrants.",
+    key: "knockout.refusal.KO_PLATE_TOO_FEW",
+  },
+  QUALIFYING_MAIN_TOO_FEW: {
+    status: 422,
+    en: "Qualifying + Main draw needs at least {min} entrants.",
+    key: "knockout.refusal.QUALIFYING_MAIN_TOO_FEW",
+  },
+  KO_CUT_NOT_WHOLE_ROUND: {
+    status: 422,
+    en: "From a knockout, qualify a whole round: 1, 2, 4, 8 …",
+    key: "knockout.refusal.KO_CUT_NOT_WHOLE_ROUND",
+  },
 };
 
 /** Whether a wire code is one of this table's — a client's branch to say a knockout refusal in the reader's language.
@@ -121,4 +145,15 @@ export function isKnockoutRefusalCode(code: unknown): code is KnockoutRefusalCod
 /** The `ui.json` key a screen renders for `code` (`useMsg()(knockoutRefusalKey(code))`). */
 export function knockoutRefusalKey(code: KnockoutRefusalCode): MessageKey {
   return KNOCKOUT_REFUSALS[code].key;
+}
+
+/** The sentence a screen shows for `code`, in the reader's language. One that names something (`{stage}`, `{min}`) takes it from
+ *  the envelope's fields, which the server sends beside the code (`knockoutRefusal(code, details)` → `err.extra`). */
+export function knockoutRefusalText(
+  code: KnockoutRefusalCode,
+  extra: Readonly<Record<string, unknown>>,
+  msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): string {
+  const vars = Object.fromEntries(Object.entries(extra).filter((e): e is [string, string | number] => typeof e[1] === "string" || typeof e[1] === "number"));
+  return msg(knockoutRefusalKey(code), vars);
 }

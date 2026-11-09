@@ -60,6 +60,7 @@ import { divisionEndBounds, divisionStartBounds, endDateIsBackwards, type Compet
 // FMT5: the format picker (cards, Show more, plan locks, knobs) is shared with the Division rules card's Format dialog.
 import { formatPickerFields, TILE_ICON_LIVE, TILE_ICON_MOTION, TILE_ICON_PICKED, paywallReasonForStages, useFormatKnobs } from "@/components/v2/format-picker";
 import { formatBoundIssue, formatKnobsShown, formatPickerView, formatStagesFor } from "@/lib/division-builder/format-choice";
+import { knockoutRefusalText } from "@/lib/knockout-refusals";
 import { SportIcon } from "@/components/v2/division-builder/sport-icon";
 import {
   BUILDER_STEPS,
@@ -502,6 +503,13 @@ export function DivisionBuilder({
     return issue === null ? null : msg("wizard.err.formatBound", { field: msg(issue.label), min: issue.min, max: issue.max });
   }
 
+  /** W4 T15 (X-PL-1, X-QM-5): the plan's field cannot play the picked format (a pick the plan shrank under), as the server's own
+   *  sentence, or null. The card says so too; Next, Create and the example refuse on this. */
+  function formatSizeProblem(): string | null {
+    const gate = formatView.sizeGate(template);
+    return gate === null ? null : knockoutRefusalText(gate.code, { min: gate.min }, msg);
+  }
+
   /** The picked format's drafts (format-choice.ts `formatStagesFor`: B, round-4 review — one clampKnob over one set of
    *  bounds; the Top N read only where it is on screen). */
   function buildStages(): StageDraft[] {
@@ -579,6 +587,8 @@ export function DivisionBuilder({
     if (s === "format") {
       const bound = formatBoundProblem();
       if (bound !== null) return bound;
+      const size = formatSizeProblem();
+      if (size !== null) return size;
       // Said in the reader's language; the upgrade box below the cards gives the plan's own reason.
       if (templateLock !== undefined) return msg("divBuilder.err.formatLocked", { format: templateLabel(template) });
       // N1: a format the division's kinds cannot play (a stale pick that outlived a change of kind) never passes.
@@ -641,7 +651,7 @@ export function DivisionBuilder({
 
   // Match Day E1 item 8 (D1): the same render-phase clear for a format refusal, from the error slot and the example's,
   // and only if the slot still holds THAT sentence.
-  const boundKnobs = JSON.stringify([template, qualified, swissRounds, poolCount]);
+  const boundKnobs = JSON.stringify([template, qualified, swissRounds, poolCount, plan.entrants]);
   if (formatRefusal !== null && formatRefusal.knobs !== boundKnobs) {
     setFormatRefusal(null);
     if (error?.text === formatRefusal.text) setError(null);
@@ -651,7 +661,7 @@ export function DivisionBuilder({
   async function runPreview() {
     setPreviewError(null);
     // The example draws the stages Create would send, so a knob Create refuses draws nothing either.
-    const formatProblem = formatBoundProblem();
+    const formatProblem = formatBoundProblem() ?? formatSizeProblem();
     if (formatProblem !== null) {
       setPreviewError(formatProblem);
       setFormatRefusal({ text: formatProblem, knobs: boundKnobs });

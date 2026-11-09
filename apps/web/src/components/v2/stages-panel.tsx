@@ -27,7 +27,7 @@ import { rulesWriteErrorText } from "@/lib/config-issue-copy";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import { isUndoRefusalCode, undoRefusalKey } from "@/lib/undo-refusals";
-import { isKnockoutRefusalCode, knockoutRefusalKey } from "@/lib/knockout-refusals";
+import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
 import { knockoutUpdateDrawOffered } from "@/lib/bracket-reconcile";
 import { swissRoundsWarnNotice, type SwissRoundsNotice } from "@/lib/swiss-rounds";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
@@ -2260,7 +2260,7 @@ export function AddStageForm({
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         onPaywall(String(err.extra.feature_key ?? ""));
       } else {
-        onError(err instanceof Error ? err.message : msg("schedule.error.failed"));
+        onError(addStageErrorText(err, msg));
       }
     } finally {
       setBusy(false);
@@ -2601,10 +2601,7 @@ export function classifyActError(
   // B3 fix round 1 (review #6): a sentence that names something (KO_LATE_ENTRY_FED_STAGE's `{stage}`) takes it from the
   // envelope's fields, which the server sends beside the code (`knockoutRefusal(code, details)` → `err.extra`).
   if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) {
-    const vars = Object.fromEntries(
-      Object.entries(err.extra).filter((e): e is [string, string | number] => typeof e[1] === "string" || typeof e[1] === "number"),
-    );
-    return { tone: "warning", text: msg(knockoutRefusalKey(err.code), vars), refresh: false };
+    return { tone: "warning", text: knockoutRefusalText(err.code, err.extra, msg), refresh: false };
   }
   const precondition = generatePreconditionMessage(err, msg, stageName, matchName);
   if (precondition) return { tone: "warning", text: precondition, refresh: false };
@@ -2673,7 +2670,16 @@ function ruleRefusalOf(err: unknown, msg: Msg): string | null {
  *  do next — never the server's English sentence. */
 export function rebuildErrorText(err: unknown, msg: Msg, msgPlural: MsgPlural): string {
   if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) return swissRefusalText(err.code, err.extra, msg, msgPlural);
+  // W4 T15 (X-PL-1, X-QM-5): a Rebuild draws the root again, so it can be refused for the field's size.
+  if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) return knockoutRefusalText(err.code, err.extra, msg);
   return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.failed"));
+}
+
+/** Add stage's red line, exported pure for the reason `rebuildErrorText` is. A Top N from a knockout that is no whole round (W4 T15,
+ *  X-QM-2) is said in the reader's language; any other refusal keeps its own message. */
+export function addStageErrorText(err: unknown, msg: Msg): string {
+  if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) return knockoutRefusalText(err.code, err.extra, msg);
+  return err instanceof Error ? err.message : msg("schedule.error.failed");
 }
 
 /** Stage id → its name on this board, or undefined when the board does not

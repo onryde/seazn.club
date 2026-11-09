@@ -94,7 +94,7 @@ import {
 } from "./court-candidates";
 import { buildEngineConstraints } from "./engine-constraints";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
-import { generateStageFixturesUnpublished, refuseSwissRoundsAboveMaxAtStart } from "./stages";
+import { generateStageFixturesUnpublished, refuseFormatTooSmall, refuseSwissRoundsAboveMaxAtStart } from "./stages";
 import { schedulingAiModel, toRuleFixture } from "./schedule-ai";
 
 type Tx = postgres.TransactionSql;
@@ -4118,6 +4118,8 @@ export async function startDivision(
     // quick-start Generate below runs in its own transaction). A withdrawal racing past this read is caught by the Pair's
     // own judgement (`swissGen`), which every Generate runs. An active division's Start is a no-op, never refused.
     if (division.status !== "active") await refuseSwissRoundsAboveMaxAtStart(tx, divisionId);
+    // W4 T15 (X-PL-1, X-QM-5): a format this field cannot play is refused here, not after a whole qualifying stage is played.
+    if (division.status !== "active") await refuseFormatTooSmall(tx, divisionId);
     // Read here, ACTED ON below — see the two guards further down. The freeze
     // does not bind the start TRANSITION (that is deliberate: the design's own
     // customer story is freeze-then-publish, and `schedule-board.tsx` gates its

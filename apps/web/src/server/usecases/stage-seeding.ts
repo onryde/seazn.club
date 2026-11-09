@@ -34,11 +34,13 @@ import {
 } from "@seazn/engine/competition";
 import { EngineError } from "@seazn/engine/core";
 import { HttpError } from "@/lib/errors";
+import { isWholeRoundCut } from "@/lib/format-size-gates";
 import { luckyLoserOrder } from "@/lib/lucky-loser";
 import { swissDrawSeed } from "@/lib/swiss-draw";
 import { CUT_SKIPS_DEPARTED_KINDS } from "@/lib/table-withdrawal";
 import { bracketStageIsDecided, loadCrossGroupRules } from "@/server/engine-db/competition";
 import { persistLotsDraws } from "@/server/engine-db/table-rules";
+import { knockoutRefusal } from "./knockout-refusal";
 import { LUCKY_LOSER_SOURCE_KINDS, luckyLoserPool, qualifiersOfCut, rankCutOf } from "./lucky-loser";
 import { poolCount, POOL_KEYS, BRACKET_KINDS, REAL_TABLE_KINDS, loadBracketFixtures, americanoPlacementTables, departedEntrantIds } from "./stages";
 
@@ -294,10 +296,12 @@ export async function validateStageProgression(
   presetSources?: readonly ({ kind: string; config: Record<string, unknown> } | undefined)[],
 ): Promise<void> {
   const shapes: SourceShape[] = [];
+  const sourceKinds: string[] = [];
   for (let i = 0; i < progression.sources.length; i++) {
     const preset = presetSources?.[i];
     const source = preset ?? (await resolveProgressionSource(tx, target, progression.sources[i]!.stage));
     shapes.push(await sourceShapeOf(tx, source));
+    sourceKinds.push(source.kind);
   }
   try {
     validateProgressionAgainstShapes(shapes, progression, target.kind);
@@ -305,6 +309,13 @@ export async function validateStageProgression(
     if (EngineError.is(err)) throw new HttpError(422, err.message, err.code, err.data as never);
     throw err;
   }
+  // W4 T15 (X-QM-2): a rank cut from a knockout is a whole round. Asked here, at save time, and nowhere at run time: a stored cut
+  // that predates the rule keeps running. A source's rank rules together are its one cut (1-2 and 3-3 is three).
+  progression.sources.forEach((source, i) => {
+    if (sourceKinds[i] !== "knockout") return;
+    const width = source.take.reduce((sum, t) => (t.kind === "rankRange" ? sum + t.to - t.from + 1 : sum), 0);
+    if (width > 0 && !isWholeRoundCut(width)) throw knockoutRefusal("KO_CUT_NOT_WHOLE_ROUND", { width });
+  });
 }
 
 /** Standings fingerprint — changes iff any qualifying rank/entrant changes,

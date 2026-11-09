@@ -767,6 +767,7 @@ describe.skipIf(!HAS_DB)("FMT5 — every table that points at a fixture, a stage
     "fixture_external_play(fixture_id)->fixtures": { action: "c", handling: "refused while a game exists (ONLINE_GAME_EXISTS), else cascade" },
     "fixture_officials(fixture_id)->fixtures": { action: "c", handling: "cascade, counted (preview.officials)" },
     "fixture_play_flags(fixture_id)->fixtures": { action: "c", handling: "cascade" },
+    "entrants(knockout_waiting_stage_id)->stages": { action: "n", handling: "set null: the entrant stays and stops waiting on a knockout that is gone" },
     "fixture_seat_asks(fixture_id)->fixtures": { action: "c", handling: "cascade" },
     "fixture_seat_line(fixture_id)->fixtures": { action: "c", handling: "cascade" },
     "fixture_stream_codes(fixture_id)->fixtures": { action: "c", handling: "cascade" },

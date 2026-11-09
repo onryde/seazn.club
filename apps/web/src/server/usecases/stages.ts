@@ -22,6 +22,7 @@ import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./forma
 import { validatedStageConfig } from "./stage-defaults";
 import { refuseNewStageTable } from "./table-rule-guards";
 import { swissRefusal } from "./swiss-refusal";
+import { stageGraphSizeGate } from "@/lib/format-size-gates";
 import { knockoutRefusal } from "./knockout-refusal";
 import { judgeSwissRounds, swissRoundsGuidance, swissRoundsNoticeOf, type SwissRoundsJudgement, type SwissRoundsNotice, type SwissRoundsShrunk } from "@/lib/swiss-rounds";
 import { isRootSwissStage } from "@/lib/open-entry-stages";
@@ -1560,6 +1561,21 @@ export function judgeSwissPairAt(
   }
   const { recommended, safeMax, hardMax } = judgement;
   return { verdict: "shrunk", rounds, field: fieldSize, recommended, safeMax, hardMax, canFinish: finish.canFinish };
+}
+
+/**
+ * W4 T15 (FX-G14's gate half, QM-2; X-PL-1, X-QM-5): a format the division's field cannot play is refused up front and by name,
+ * off the stored stage graph, so an API-built division is gated too. Before this a qualifying draw of three played its whole
+ * qualifying stage and only then failed at Complete. Asked at the doors that draw the root: Start, Generate and Rebuild. The field
+ * is the division's active entrants, as the generator reads them (`swissActiveEntrants`).
+ */
+export async function refuseFormatTooSmall(tx: Tx, divisionId: string): Promise<void> {
+  const stages = await tx<{ id: string; kind: string; progression: unknown }[]>`
+    select id, kind, progression from stages where division_id = ${divisionId} order by seq`;
+  const [{ n }] = await tx<{ n: number }[]>`
+    select count(*)::int as n from entrants where division_id = ${divisionId} and status in ('registered', 'confirmed')`;
+  const gate = stageGraphSizeGate(stages, n);
+  if (gate !== null) throw knockoutRefusal(gate.code, { min: gate.min });
 }
 
 /**
@@ -3461,11 +3477,15 @@ async function generateStageFixturesWrite(
       if (lockState.frozen) {
         throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
       }
-      readsSealedSetup =
-        stage.kind === "knockout" &&
-        !Array.isArray(stage.config.qualified) &&
-        stage.progression === null &&
-        (await tx`select 1 from fixtures where stage_id = ${stageId} limit 1`).length > 0;
+      const rootKnockout = stage.kind === "knockout" && stage.progression === null;
+      const drawn = rootKnockout && (await tx`select 1 from fixtures where stage_id = ${stageId} limit 1`).length > 0;
+      readsSealedSetup = drawn && !Array.isArray(stage.config.qualified);
+      // W4 T15 (X-PL-1, X-QM-5): a root knockout about to be drawn, or redrawn before Start, on a field its format cannot play. A
+      // bracket drawn and started is left out: after Start a withdrawal is the bracket's to settle, and this Generate reshapes nothing.
+      if (rootKnockout) {
+        const [division] = await tx<{ status: string }[]>`select status from divisions where id = ${stage.division_id}`;
+        if (!drawn || division?.status !== "active") await refuseFormatTooSmall(tx, stage.division_id);
+      }
       if (!stage.progression) return null;
       const progression = stage.progression as unknown as ProgressionSpec & { timing: "setup" | "on_complete" };
       if (progression.timing === "setup") return { seeded: true as const };
@@ -4531,6 +4551,7 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
         "STAGE_NOT_ROOT",
       );
     }
+    await refuseFormatTooSmall(tx, stage.division_id);
     const regen = await regenerateStageInTx(tx, auth, stageId, stage);
     // W4 T11 (X-LE-10): Rebuild draws every active entrant, so nobody waits on this stage any more — the late players the
     // desk flagged are in the new bracket, and the flag goes with them.

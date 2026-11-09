@@ -5,6 +5,7 @@
 //
 // Pure: the picker's state lives in the screen (`useFormatKnobs`), the derivations here.
 import { FORMAT_BOUNDS, type FormatBoundKey, withinFormatBounds } from "@/lib/format-bounds";
+import { stageGraphSizeGate, type SizeRefusal } from "@/lib/format-size-gates";
 import {
   applyStandingsCarry,
   buildTemplateStages,
@@ -16,7 +17,7 @@ import {
 } from "@/lib/format-templates";
 import type { MessageKey } from "@/lib/messages";
 import { estimateMinutes, estimateStages, type FormatEstimate } from "./format-estimate";
-import { collapsedPicks, formatPickerOrder, openingKnobs, rankTemplates, SUGGESTED_COUNT, type PlanInput, type RankedTemplate } from "./model";
+import { collapsedPicks, formatPickerOrder, keepSizeGatedInView, openingKnobs, rankTemplates, SUGGESTED_COUNT, type PlanInput, type RankedTemplate } from "./model";
 
 /** The format knobs as the picker holds them: what the organiser typed, unclamped (a cleared box reads 0). */
 export interface FormatKnobValues {
@@ -102,6 +103,11 @@ export interface FormatPickerView {
   templateLock: string | undefined;
   /** A carry is picked that the plan does not include. */
   carryLocked: boolean;
+  /** W4 T15 (X-PL-1, X-QM-5; owner pick 5A): why the plan's field cannot play this offered card, or null. The card is shown
+   *  disabled with the reason, and the server refuses the same graph at the same field. */
+  sizeGate: (key: string) => SizeRefusal | null;
+  /** The field those reasons count (the plan's entrants). */
+  planEntrants: number;
 }
 
 export function formatPickerView(input: {
@@ -115,8 +121,10 @@ export function formatPickerView(input: {
   standingsCarry: StandingsCarry;
 }): FormatPickerView {
   const ranked = rankTemplates(input.offer, input.plan, openingKnobs(input.plan.entrants));
-  const pickerOrder = formatPickerOrder(ranked.map((r) => r.key));
-  const shownKeys = collapsedPicks(pickerOrder, input.template);
+  const sizeGates = new Map(input.offer.map((key) => [key, stageGraphSizeGate(buildTemplateStages(key, openingKnobs(input.plan.entrants)), input.plan.entrants)]));
+  const gated = new Set(input.offer.filter((key) => sizeGates.get(key) !== null));
+  const pickerOrder = keepSizeGatedInView(formatPickerOrder(ranked.map((r) => r.key)), gated);
+  const shownKeys = collapsedPicks(pickerOrder, input.template, gated);
   const folded = (key: string) => !input.showAll && !shownKeys.includes(key);
   const estimate = estimateStages(input.stages, input.plan.entrants);
   return {
@@ -129,6 +137,8 @@ export function formatPickerView(input: {
     estimateMins: estimateMinutes(estimate, input.plan.venues, input.plan.matchMinutes),
     templateLock: input.templateLocks[input.template],
     carryLocked: !input.carryAllowed && input.standingsCarry !== "none",
+    sizeGate: (key) => sizeGates.get(key) ?? null,
+    planEntrants: input.plan.entrants,
   };
 }
 
