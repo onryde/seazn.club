@@ -26,7 +26,7 @@ const STRIPE_ONLY_STATUSES = ["incomplete_expired", "unpaid", "paused"] as const
  * The two files that legitimately name them, and why:
  *
  *  - `lib/billing.ts` — STATUS_MAP itself, the translation boundary.
- *  - `server/usecases/billing-events.ts` — `isLiveStripeStatus` compares a
+ *  - `server/usecases/billing-events/group-resolution.ts` — `isLiveStripeStatus` compares a
  *    `Stripe.Subscription.Status` straight off the webhook, BEFORE translation.
  *
  * Anywhere else, the string is being compared against a value this codebase
@@ -34,7 +34,7 @@ const STRIPE_ONLY_STATUSES = ["incomplete_expired", "unpaid", "paused"] as const
  */
 const TRANSLATION_BOUNDARY = new Set([
   "lib/billing.ts",
-  "server/usecases/billing-events.ts",
+  "server/usecases/billing-events/group-resolution.ts",
   // `isTerminalStripeStatus` — the one predicate over STRIPE's vocabulary,
   // added when `sweepOrphanGroups` needed the same question the webhook guard
   // asks (#375). It lives in this leaf module because billing-events already
