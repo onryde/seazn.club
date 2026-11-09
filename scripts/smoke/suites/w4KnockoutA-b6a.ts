@@ -3,8 +3,8 @@ import { type Session, appendScoreEvent, check, newSession, signIn, tag, v1, v1d
 
 /**
  * Format matrix W4 knockout app-A, lane B6a (Tasks 19 + 20) — the lane's smoke proof, over real HTTP against a live server.
- * NOT wired into `smoke.ts` (the controller merges the lanes' suites into `SELECTABLE_SUITES` at the wave boundary); it
- * exports `w4KnockoutAB6aSuite` for that. Every read and write is a v1 route; every check is counted, and a run that checked
+ * Wired at the lane merge (merge 2, 2026-11-09): `w4KnockoutASuite` runs `w4KnockoutAB6aSuite` and counts the harness
+ * checks it made (`laneChecks`, 3: the two below plus this file's own count check), so SMOKE_ONLY=w4KnockoutA runs it. Every read and write is a v1 route; every check is counted, and a run that checked
  * nothing fails.
  *
  * T19 (X-LE-10, K13; ruling 271; R24 pick 2B): what the desk's late-entry controls read off the server.

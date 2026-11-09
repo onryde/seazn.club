@@ -2,6 +2,7 @@
 import { type Session, appendScoreEvent, check, counts, newSession, signIn, tag, v1, v1data } from "../harness.ts";
 import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swiss-draw.ts";
 import { w4KnockoutAB5PagePlayoffWalkover, w4KnockoutAB5StandaloneRefusal } from "./w4KnockoutA-b5.ts";
+import { w4KnockoutAB6aSuite } from "./w4KnockoutA-b6a.ts";
 import { w4aDeskK12Check, w4aDeskXch8Check } from "./w4KnockoutA-desk-checks.ts";
 import { w4KnockoutAPublicStandingsOrderSmoke } from "./w4KnockoutA-public-checks.ts";
 
@@ -62,8 +63,10 @@ import { w4KnockoutAPublicStandingsOrderSmoke } from "./w4KnockoutA-public-check
  * The lanes folded at the lane merge (merge-lanes-1, 2026-11-09) keep their checks in their own files and are counted
  * here by the harness checks each one made (`laneChecks`): B-desk's T18 (K12: a disqualification walkover says so, 6)
  * and T21 (X-CH-8: a decided final asks to complete its stage, completing the competition warns, 6), B6b's T23 (ST-G26:
- * /present reads a group's pools in order, 4), and B5's T16 (X-SP-6: a standalone stepladder or page playoff is refused
- * by name, 2) and T17 (X-SP-5: a page-playoff withdrawal walks over, never voids, 1).
+ * /present reads a group's pools in order, 4), B5's T16 (X-SP-6: a standalone stepladder or page playoff is refused
+ * by name, 2) and T17 (X-SP-5: a page-playoff withdrawal walks over, never voids, 1), and — folded at merge 2 — B6a's
+ * T19 (X-LE-10, K13: a Reinstate answers `waiting` and the tap names the player's own seat; a played-on Reinstate is
+ * `refused` and marks nobody; 2, plus that lane's own count check, 3).
  *
  * Own fresh owner; keyless; every read and write is a v1 route (B5's T17 reads the feed edges from the table, which no
  * route publishes; B-desk's and B6b's sign in their own organisers and read pages). Every check is counted, and a run
@@ -77,8 +80,8 @@ export async function w4KnockoutASuite(): Promise<void> {
   // withdrawn seat is taken). T11: 1 (a reinstated player waits, and one tap gives their seat back). T13: 1 (a departed
   // qualifier's seat takes the best loser below the cut). T14: 1 (a correction empties a confirmed draw's seats and re-proposes).
   // T15: 2 (a plate on 3 is refused, then starts on 4; a cut of 3 from a knockout leaves no stage). The lanes folded at
-  // merge-lanes-1, counted by `laneChecks`: T18 6, T21 6, T23 4, T16 2, T17 1 — 19.
-  const EXPECTED_CHECKS = 15 + 19;
+  // merge-lanes-1, counted by `laneChecks`: T18 6, T21 6, T23 4, T16 2, T17 1, and B6a's T19 3 (2 + its own count) — 22.
+  const EXPECTED_CHECKS = 15 + 22;
   let checked = 0;
   const w4Check = (label: string, cond: boolean) => {
     checked++;
@@ -845,6 +848,7 @@ export async function w4KnockoutASuite(): Promise<void> {
   await laneChecks(() => w4KnockoutAPublicStandingsOrderSmoke()); // T23 (ST-G26): 4
   await laneChecks(() => w4KnockoutAB5StandaloneRefusal(owner)); // T16 (X-SP-6): 2
   await laneChecks(() => w4KnockoutAB5PagePlayoffWalkover(owner)); // T17 (X-SP-5): 1
+  await laneChecks(() => w4KnockoutAB6aSuite()); // T19 (X-LE-10, K13): 2 + the lane's own count check
 
   check(`w4a: the W4 knockout app-A suite ran its ${EXPECTED_CHECKS} checks (ran ${checked})`, checked > 0 && checked === EXPECTED_CHECKS);
 }

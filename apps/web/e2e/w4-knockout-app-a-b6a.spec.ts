@@ -323,6 +323,37 @@ test.describe("X-LE-3 Add to bracket from the stage rail", () => {
     expect(((await (await answered).json()) as { data: { case: string } }).data.case).toBe("rebuild_offered");
     await expect(row.getByTestId("knockout-waiting-rebuild")).toHaveText("Rebuild fixtures");
   });
+
+  // The other half of RB4-L6 (merge 2 carry): once a match has started a Rebuild would clear played work, so the organiser's
+  // add is NOT kept — 409 KO_LATE_ENTRY_NO_SLOT, said in the form by name, and nothing is written (no entrant, no line moved).
+  test("four in a bracket of four, a match started: the add is refused by name (409 KO_LATE_ENTRY_NO_SLOT) and writes nothing", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(150_000);
+    const ko = await startedKnockout(request, "Full cup", ["Ana", "Ben", "Cas", "Dee"].map((n) => `Full ${n} ${TAG}`));
+    const first = (await ko.rows()).find((f) => f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null)!;
+    expect(first, "premise: a seated round-1 line").toBeTruthy();
+    const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${first.id}/state`);
+    const start = await apiJson(request, `/api/v1/fixtures/${first.id}/events`, "POST", { expected_seq: state.data!.last_seq, type: "core.start", payload: {} });
+    expect(start.status, JSON.stringify(start.error)).toBeLessThan(300);
+
+    const count = async () => (await apiJson<unknown[]>(request, `/api/v1/divisions/${ko.divisionId}/entrants`)).data!.length;
+    const n = await count();
+    expect(n, "premise: the four seeded").toBe(4);
+    const linesBefore = JSON.stringify(await ko.rows());
+
+    const refused = await addToBracketFromRail(page, request, ko.divisionId, `Full Late Ivy ${TAG}`);
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body.error?.code).toBe("KO_LATE_ENTRY_NO_SLOT");
+    await expect(page.getByTestId("entrants-error"), "refused by name in the form").toHaveText("Round 1 complete; no slot left.", { timeout: 20_000 });
+    await expect(page.getByTestId("entrants-late-entry-line"), "a refusal is no late-entry notice").toHaveCount(0);
+    expect(await count(), "the entrant count is unchanged: nothing kept").toBe(n);
+    expect(JSON.stringify(await ko.rows()), "no line moved").toBe(linesBefore);
+    await page.goto(await divisionPath(request, ko.divisionId, "?tab=fixtures"));
+    await expect(page.getByTestId("stage-more"), "premise: the card has rendered").toBeVisible({ timeout: 20_000 });
+    await expect(strip(page), "nobody waits: the refused add left no one on the card").toHaveCount(0);
+  });
 });
 
 /** The scorer's events for a home win, two games to love. */
