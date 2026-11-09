@@ -799,12 +799,15 @@ const RULES_OF: Record<CaseKey, string> = {
   refused: "X-LE-6 X-LE-10 X-LE-11",
   rebuild_offered: "X-LE-6 X-LE-10 X-LE-11",
   automatic_waiting: "X-LE-10 X-LE-11",
-  automatic_tapped: "X-LE-3 X-LE-4 X-LE-10 X-LE-11 X-LE-13",
+  automatic_tapped: "X-LE-3 X-LE-4 X-LE-7 X-LE-10 X-LE-11 X-LE-12 X-LE-13",
 };
 
 // ─── The matrix ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
-describe.runIf(HAS_DB)("X-LE-11 matrix: every entry template × every entrant kind × case (bye/withdrawn/refused/rebuild/automatic)", () => {
+// The ids sit in this STRING-LITERAL title because scripts/lib/rules-reference.ts `testTitles` reads only literal titles: the
+// cell titles below interpolate (`${template} × ${kind} … ${RULES_OF[c]}`), so the proof checker sees none of the ids they
+// carry. RULES_OF names which CASE answers which id; this title is the union of it. Add an id to RULES_OF → add it here.
+describe.runIf(HAS_DB)("X-LE-3 X-LE-4 X-LE-5 X-LE-6 X-LE-7 X-LE-10 X-LE-11 X-LE-12 X-LE-13 matrix: every entry template × every entrant kind × case (bye/withdrawn/refused/rebuild/automatic)", () => {
   it("what is enumerated: the three entry templates, every entrant kind on a sport that declares it, six cases", () => {
     expect([...ENTRY_TEMPLATES].sort(), "re-pinned from format-templates.ts").toEqual(["knockout", "ko_plate", "qualifying_main"]);
     expect([...KINDS].sort(), "V212's entrant kinds").toEqual(["individual", "pair", "team"]);
@@ -831,7 +834,7 @@ describe.runIf(HAS_DB)("X-LE-11 matrix: every entry template × every entrant ki
           expect(rig.tailId === null, `premise: ${template}'s stage graph decides whether a stage is fed from the root`).toBe(template === "knockout");
           await CELL[c](rig);
           checked.add(`${template}|${kind}|${c}`);
-        }, 180_000);
+        });
       }
     }
   }
@@ -902,7 +905,7 @@ describe.runIf(HAS_DB)("X-LE-2 fed tails: league_ko, groups_ko, swiss_knockout n
         expect(await tailRowsOf(rig), "the knockout still stands").toEqual(tailBefore);
         expect(await seatedIn(arrival), "never seated in the knockout").not.toContain(knockoutId);
         checked.add(`${template}|${kind}`);
-      }, 180_000);
+      });
     }
   }
 
@@ -943,7 +946,7 @@ describe.runIf(HAS_DB)("X-LE-3 X-LE-5 the placement is sport-blind: every regist
       expect(late2.late_entry, `${m.key}: the withdrawn seat`).toMatchObject({ case: "withdrawn_slot", fixture_id: line0.id, opponent_id: line0.away_entrant_id });
       expect(await rowById(line0.id), "the newcomer sits the departed seat").toMatchObject({ home_entrant_id: late2.id, away_entrant_id: line0.away_entrant_id });
       checked.add(m.key);
-    }, 180_000);
+    });
   }
 
   it("anti-vacuity: every sport of the registry was checked", () => {

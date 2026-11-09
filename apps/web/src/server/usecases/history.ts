@@ -144,13 +144,16 @@ export function undoBarrierRefusal(ledger: readonly LedgerEvent[], targetSeq: nu
 
 /** The barrier the step the engine REFUSED (a result in its footprint) would have crossed: the same step read with no
  *  fixture counted as played, so its target is known. Null when the step crosses none, or the engine has no step to take
- *  (the caller then answers with the engine's own refusal). */
-function barrierOfRefusedStep(direction: "undo" | "redo", ledger: readonly LedgerEvent[], watermark: number | null): UndoRefusalCode | null {
+ *  (the caller then answers with the engine's own refusal). Only the engine's own HistoryError is that "no step"; any
+ *  other throw — `invertedStepSeq`'s contract guard (HttpError 500), a payload the engine cannot read — is a defect and
+ *  goes out, because answering "no barrier" for it would skip the very check the guard exists to force. */
+export function barrierOfRefusedStep(direction: "undo" | "redo", ledger: readonly LedgerEvent[], watermark: number | null): UndoRefusalCode | null {
   try {
     const probe = direction === "undo" ? engineUndo(ledger, watermark, new Set()) : engineRedo(ledger, watermark, new Set());
     return undoBarrierRefusal(ledger, invertedStepSeq(direction, probe.event.payload));
-  } catch {
-    return null;
+  } catch (err) {
+    if (err instanceof HistoryError) return null;
+    throw err;
   }
 }
 
