@@ -621,10 +621,13 @@ async function cellWithdrawnSlot(rig: Rig): Promise<void> {
   await expectUnscheduled(late.late_entry, line0.id);
   await expectNotUndoable(rig);
 
-  // The second call: the seat is taken and no bye is left — refused by name, nothing written.
+  // The second call: the seat is taken and no bye is left — refused by name, nothing written. Still a 409 after RB4-L6's
+  // "kept, Rebuild offered" (B6a fix round 1): the withdrawal's walkover left its evidence on the line (voided, it still
+  // counts: `fixtureEvidenceSql` reads monotonically), so the stage has started (`fixtureStartedSql`) and Rebuild is not offered.
   const snap = await snapshot(rig);
   const err = await refusal(addLate(rig, "Late 2"));
   expect(err).toMatchObject({ status: 409, code: "KO_LATE_ENTRY_NO_SLOT", message: NO_SLOT });
+  expect(err.extra, "the stage has started: no Rebuild, so the add is refused rather than kept").toMatchObject({ can_rebuild: false });
   await expectNothingWritten(rig, snap, "a second add after the slot is taken");
 
   await winAndAdvance(rig, line0.id, late.id);
@@ -642,14 +645,37 @@ async function playRoundOne(rig: Rig): Promise<void> {
   expect(r2.map((f) => f.status), "rig: nothing of round 2 has started").toEqual(r2.map(() => "scheduled"));
 }
 
-/** After the organiser's add is refused (`NO_SLOT`, `can_rebuild`), the same field gets an AUTOMATIC arrival: it waits, and the
- *  tap answers (a 200, not an error) the same refusal as a case, the player still waiting. Answers the waiting entrant. */
-async function refusedThenArrival(rig: Rig, canRebuild: boolean): Promise<string> {
+/** The organiser's add finds no slot. Once a match has started (`canRebuild` false) it is refused by name (409
+ *  `NO_SLOT`, `can_rebuild: false`) and writes nothing; with nothing started (RB4-L6, B6a fix round 1, owner ruling) it is
+ *  KEPT and waits, answering 201 `rebuild_offered`. Then the same field gets an AUTOMATIC arrival: it waits, and the tap
+ *  answers (a 200, not an error) the same refusal as a case, the player still waiting. Answers every waiting entrant, the
+ *  arrival last. */
+async function refusedThenArrival(rig: Rig, canRebuild: boolean): Promise<string[]> {
   const snap = await snapshot(rig);
-  const err = await refusal(addLate(rig, "Late"));
-  expect(err, "RB4-L6: refused by name").toMatchObject({ status: 409, code: "KO_LATE_ENTRY_NO_SLOT", message: NO_SLOT });
-  expect(err.extra, "Rebuild is offered only while nothing in the stage has started").toMatchObject({ can_rebuild: canRebuild, stage_id: rig.rootId });
-  await expectNothingWritten(rig, snap, "a refused add");
+  const waiting: string[] = [];
+  if (canRebuild) {
+    const late = await addLate(rig, "Late");
+    expect(late.late_entry, "RB4-L6: no slot, nothing started — the add is kept and offers Rebuild").toMatchObject({
+      format: "knockout",
+      case: ANSWER_OF.rebuild_offered,
+      entrant_id: late.id,
+      stage_id: rig.rootId,
+      reason: "KO_LATE_ENTRY_NO_SLOT",
+    });
+    expect(late.late_entry?.fixture_id, "nothing was placed").toBeUndefined();
+    await expectLateIsTheEntrant(rig, snap.ids, late.id);
+    expect(await waitingOn(late.id), "the kept player waits on the root").toBe(rig.rootId);
+    expect(await seatedIn(late.id), "seated nowhere").toEqual([]);
+    expect(await ledgerCount(rig.divisionId), "a kept add: no ledger row").toBe(snap.ledger);
+    expect(await rowsOf(rig.rootId), "a kept add: the root stands").toEqual(snap.root);
+    expect(await tailRowsOf(rig), "a kept add: the tail stands").toEqual(snap.tail);
+    waiting.push(late.id);
+  } else {
+    const err = await refusal(addLate(rig, "Late"));
+    expect(err, "RB4-L6: refused by name").toMatchObject({ status: 409, code: "KO_LATE_ENTRY_NO_SLOT", message: NO_SLOT });
+    expect(err.extra, "Rebuild is offered only while nothing in the stage has started").toMatchObject({ can_rebuild: false, stage_id: rig.rootId });
+    await expectNothingWritten(rig, snap, "a refused add");
+  }
 
   const idsBefore = await entrantIds(rig.divisionId);
   const arrival = await registerAndConfirm(rig, "Arrival");
@@ -672,8 +698,11 @@ async function refusedThenArrival(rig: Rig, canRebuild: boolean): Promise<string
   expect(await seatedIn(arrival), "seated nowhere").toEqual([]);
   expect(await rowsOf(rig.rootId), "the root stands").toEqual(snap.root);
   expect(await ledgerCount(rig.divisionId), "no ledger row").toBe(ledgerAfterArrival);
-  expect(await deskLate(rig), "the desk still says one player waits").toEqual([{ kind: "late_players_waiting", count: 1, stageName: rig.rootName }]);
-  return arrival;
+  waiting.push(arrival);
+  expect(await deskLate(rig), "the desk still counts every waiting player").toEqual([
+    { kind: "late_players_waiting", count: canRebuild ? 2 : 1, stageName: rig.rootName },
+  ]);
+  return waiting;
 }
 
 /** (refused) RB4-L6: round 1 is played out — no bye, no withdrawn seat. Refused by name, no Rebuild (the stage has started). */
@@ -683,22 +712,26 @@ async function cellRefused(rig: Rig): Promise<void> {
   await refusedThenArrival(rig, false);
 }
 
-/** (rebuild_offered) RB4-L6: drawn, nothing started, no slot — refused with Rebuild offered. Following the offer: Rebuild draws
- *  every active entrant, the waiting one among them, and the flag goes with it. */
+/** (rebuild_offered) RB4-L6: drawn, nothing started, no slot — the organiser's add is kept with Rebuild offered, and an
+ *  automatic arrival waits beside it. Following the offer: Rebuild draws every active entrant, both waiting ones among them,
+ *  and the flags go with it. */
 async function cellRebuildOffered(rig: Rig): Promise<void> {
   expect(storedByeLines(await rowsOf(rig.rootId)).length, "premise: no bye line").toBe(0);
-  const arrival = await refusedThenArrival(rig, true);
+  const waiting = await refusedThenArrival(rig, true);
+  expect(waiting.length, "premise: the kept add and the arrival both wait").toBe(2);
 
   await rebuildStageFixtures(rig.auth, rig.rootId);
   const field = await entrantIds(rig.divisionId);
-  expect(field.size, "premise: the field is the roster plus the arrival").toBe(rig.n + 1);
+  expect(field.size, "premise: the field is the roster plus the kept add and the arrival").toBe(rig.n + 2);
   const seated = roundOf(await rowsOf(rig.rootId), 1).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((x): x is string => x !== null);
   expect(seated.length, "Rebuild seats every active entrant once (a bye line seats one)").toBe(field.size);
   expect(new Set(seated), "the field is the seated set").toEqual(field);
-  expect(seated, "the arrival is seated by the Rebuild").toContain(arrival);
-  expect(await waitingOn(arrival), "the flag goes with it").toBeNull();
+  for (const w of waiting) {
+    expect(seated, "every waiting player is seated by the Rebuild").toContain(w);
+    expect(await waitingOn(w), "the flag goes with it").toBeNull();
+  }
   expect(await deskLate(rig), "the desk row goes").toEqual([]);
-  expect(roundOf(await rowsOf(rig.rootId), 1).length, "round 1 of the bracket of the new field").toBe(bracketSize(rig.n + 1) / 2);
+  expect(roundOf(await rowsOf(rig.rootId), 1).length, "round 1 of the bracket of the new field").toBe(bracketSize(rig.n + 2) / 2);
 }
 
 /** (automatic_waiting) RB4-L10: an automatic arrival (a registration confirm) never reshapes a drawn bracket: the entrant waits

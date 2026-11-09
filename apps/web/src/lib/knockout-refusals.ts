@@ -33,8 +33,9 @@ export type KnockoutRefusalCode =
   // T9 (X-LE-2): a late player asked into a knockout an earlier stage fills (`{stage}`: that stage's name) — a fed
   // bracket never takes one; its field is the source's.
   | "KO_LATE_ENTRY_FED_STAGE"
-  // T10 (X-LE-6): round 1 holds no bye and no withdrawn seat a late player could take (`details.can_rebuild`: nothing in the
-  // stage has started, so Rebuild fixtures would draw the field again with them in it).
+  // T10 (X-LE-6): round 1 holds no bye and no withdrawn seat a late player could take. With nothing in the stage started an
+  // organiser's add no longer meets this (B6a fix round 1, RB4-L6: it keeps the player and answers 201 `rebuild_offered`);
+  // the 409 is the add once a match has started (`details.can_rebuild: false`: Rebuild would clear played work).
   | "KO_LATE_ENTRY_NO_SLOT"
   // T10 (X-LE-13): an Undo, Redo or Restore that would step across a knockout late entry (history.ts `UNDO_BARRIER_TYPES`).
   | "KO_LATE_ENTRY_NOT_UNDOABLE"
@@ -89,7 +90,7 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
   },
   KO_GENERATE_AFTER_START: {
     status: 409,
-    en: "Play has started, so Generate won't change the bracket. Use Add late player.",
+    en: "Play has started, so Generate won't change the bracket. Use Add to bracket.",
     key: "knockout.refusal.KO_GENERATE_AFTER_START",
   },
   KO_REDRAW_WOULD_CLEAR_SETUP: {
@@ -162,13 +163,34 @@ export function knockoutRefusalKey(code: KnockoutRefusalCode): MessageKey {
   return KNOCKOUT_REFUSALS[code].key;
 }
 
-/** The sentence a screen shows for `code`, in the reader's language. One that names something (`{stage}`, `{min}`) takes it from
- *  the envelope's fields, which the server sends beside the code (`knockoutRefusal(code, details)` → `err.extra`). */
+/**
+ * The sentence a screen shows for a knockout refusal, in the reader's language — its placeholders (`{stage}`, `{min}`)
+ * filled from the envelope's string and number fields (`err.extra`, the `details` `knockoutRefusal(code, details)` sent
+ * beside the code); any other field fills nothing. The ONE place the desk's panels turn a knockout refusal into words (the
+ * stage card's actions, the Entrants tab's add, the waiting strip's tap, Undo, the builder's gate).
+ *
+ * Two call shapes, one body (merge-lanes-1: T12/T15 and B6a each wrote one): a caller that has narrowed the code
+ * (`isKnockoutRefusalCode`) gets a string; one that hands over any wire code gets null for a code that is not this
+ * table's, and falls through to its own mapping (W4 T19, B3 review #3, #6).
+ */
 export function knockoutRefusalText(
   code: KnockoutRefusalCode,
   extra: Readonly<Record<string, unknown>>,
   msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
-): string {
-  const vars = Object.fromEntries(Object.entries(extra).filter((e): e is [string, string | number] => typeof e[1] === "string" || typeof e[1] === "number"));
+): string;
+export function knockoutRefusalText(
+  code: unknown,
+  extra: Readonly<Record<string, unknown>>,
+  msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): string | null;
+export function knockoutRefusalText(
+  code: unknown,
+  extra: Readonly<Record<string, unknown>>,
+  msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): string | null {
+  if (!isKnockoutRefusalCode(code)) return null;
+  const vars = Object.fromEntries(
+    Object.entries(extra).filter((e): e is [string, string | number] => typeof e[1] === "string" || typeof e[1] === "number"),
+  );
   return msg(knockoutRefusalKey(code), vars);
 }

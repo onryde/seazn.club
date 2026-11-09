@@ -101,7 +101,7 @@ import {
 // CSS, so the behaviour comes from the same place the look did.
 import { FOCUSABLE_SELECTOR, nextTrapFocus } from "@/components/modal";
 import Link from "@/components/ui/console-link";
-import { swissLateEntryOffered } from "@/lib/open-entry-stages";
+import { knockoutLateEntryOffered, swissLateEntryOffered, type EntryStage } from "@/lib/open-entry-stages";
 // W3 T12 Phase 2: the rounds chip (with its edit dialog) and the More menu's "Add a round" — their own file, so this
 // rail only mounts them.
 import { SwissAddRoundMenuItem, SwissRoundsChip, type SwissRoundsRail } from "./swiss-rounds-dialog";
@@ -177,8 +177,16 @@ export interface StageRailProps {
    *  (`swissLateEntryOffered`, lib/open-entry-stages.ts), held by the panel:
    *  the division's status, whether a round of this stage has a seat, and
    *  where the item goes (the Entrants tab's own add form — reused, never a
-   *  second form). Absent ⇒ no More menu. */
-  lateEntry?: { divisionStatus: string; roundSeated: boolean; href: string };
+   *  second form). Absent ⇒ no More menu.
+   *  W4 T19 (X-LE-3): `division` — the division's stages, the stage among them — lets a started ROOT knockout offer the
+   *  same item as "Add to bracket" (`knockoutLateEntryOffered`; the control's one name, b6a carry B3 #3). Absent ⇒ no
+   *  knockout item. */
+  lateEntry?: {
+    divisionStatus: string;
+    roundSeated: boolean;
+    href: string;
+    division?: readonly (EntryStage & { status: string })[];
+  };
   /** W3 T12 Phase 2 (X-SW-17; owner pick B) — a Swiss stage's round count as the desk reads it
    *  (`listSwissRoundControls`), its rows and the two writes, held by the panel: the "Rounds: N · Edit" chip and the
    *  More menu's "Add a round" (swiss-rounds-dialog.tsx). Absent ⇒ neither (any other kind of stage). */
@@ -266,9 +274,18 @@ export function StageRail({
   // and per-stage, like the split button's below. T12's "Add a round" and
   // T13's "Finish now" join this same panel.
   const [moreOpen, setMoreOpen] = useState(false);
+  const knockoutLateOffered =
+    lateEntry?.division !== undefined &&
+    knockoutLateEntryOffered({
+      stage,
+      division: lateEntry.division,
+      divisionStatus: lateEntry.divisionStatus,
+      generated: fixtureCount > 0,
+    });
   const lateEntryOffered =
     lateEntry !== undefined &&
-    swissLateEntryOffered({ stage, divisionStatus: lateEntry.divisionStatus, roundSeated: lateEntry.roundSeated });
+    (knockoutLateOffered ||
+      swissLateEntryOffered({ stage, divisionStatus: lateEntry.divisionStatus, roundSeated: lateEntry.roundSeated }));
   // Derived, not `useId()`: `stage.id` is already unique and already a prop
   // — see this file's own header for why this component gains no hook
   // beyond `useMsg`.
@@ -715,7 +732,9 @@ export function StageRail({
                     data-testid="stage-add-late-player"
                     className="flex min-h-11 flex-col justify-center border-b border-purple-100 px-4 py-2 last:border-b-0 hover:bg-purple-50"
                   >
-                    <span className="text-sm font-medium text-purple-700">{msg("stage.more.addLatePlayer")}</span>
+                    <span className="text-sm font-medium text-purple-700">
+                      {msg(knockoutLateOffered ? "knockout.addToBracket" : "stage.more.addLatePlayer")}
+                    </span>
                     <span className="text-xs text-slate-500">{msg("stage.more.addLatePlayer.hint")}</span>
                   </Link>
                   {swissRounds && <SwissAddRoundMenuItem stageId={stage.id} busy={busy} rail={swissRounds} />}

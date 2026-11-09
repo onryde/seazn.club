@@ -37,8 +37,9 @@ import { w4KnockoutAPublicStandingsOrderSmoke } from "./w4KnockoutA-public-check
  *
  * T10 (X-LE-3…X-LE-6, X-LE-13; ruling 263): "Add late player" on a Started knockout. Six seeded in a bracket of eight: the
  * newcomer plays the bye of the LOWEST-seeded holder (seed 2, RB4-L4), and the division's Undo is then refused 409
- * KO_LATE_ENTRY_NOT_UNDOABLE. Eight seeded: no bye, so the add is refused 409 KO_LATE_ENTRY_NO_SLOT (can_rebuild, nothing
- * written); once a round-1 player withdraws, the next add takes that seat and the withdrawal's walkover is reversed.
+ * KO_LATE_ENTRY_NOT_UNDOABLE. Eight seeded: no bye and nothing started, so the add is KEPT and answers 201 rebuild_offered
+ * (RB4-L6: the player waits, no line moves); once a round-1 player withdraws, the next add takes that seat and the
+ * withdrawal's walkover is reversed.
  *
  * T11 (X-LE-10, K13; ruling 271): an AUTOMATIC arrival waits for the organiser's tap. Eight seeded Started, one withdrawn
  * (the walkover) then reinstated through PATCH: the line is unchanged and nothing is placed; the one-tap route
@@ -72,7 +73,7 @@ export async function w4KnockoutASuite(): Promise<void> {
   // T2: 1 (a called final survives a void of its feeder). T3: 1 (an awarded bye holds no court). T4: 1 (the final keeps
   // its slot across an 8 → 9 Rebuild). T5: 1 (Undo refuses across a confirmed draw). T6: 1 (Complete refuses a bracket
   // with its third-place match unplayed). T7: 1 (an unseeded draw replays). T8: 2 (6 → 7 places in a bye; 8 → 9 redraws
-  // once). T10: 2 (a late player takes the lowest-seeded holder's bye and Undo refuses; no slot is refused, then a
+  // once). T10: 2 (a late player takes the lowest-seeded holder's bye and Undo refuses; no slot keeps the player and offers Rebuild, then a
   // withdrawn seat is taken). T11: 1 (a reinstated player waits, and one tap gives their seat back). T13: 1 (a departed
   // qualifier's seat takes the best loser below the cut). T14: 1 (a correction empties a confirmed draw's seats and re-proposes).
   // T15: 2 (a plate on 3 is refused, then starts on 4; a cut of 3 from a knockout leaves no stage). The lanes folded at
@@ -552,15 +553,17 @@ export async function w4KnockoutASuite(): Promise<void> {
     );
   }
 
-  // Check 10 (T10, X-LE-6 then X-LE-5): eight seeded players Started — round 1 full. Expected: the add is refused 409
-  // KO_LATE_ENTRY_NO_SLOT with Rebuild offered (nothing has started) and nothing written (eight entrants still). Then
-  // round 1's second line loses its away player (the cascade walks it over): the next add takes that seat against the
-  // line's home player, and the line is an unplayed match again.
+  // Check 10 (T10, X-LE-6 then X-LE-5): eight seeded players Started — round 1 full. Expected (RB4-L6, B6a fix round 1): with
+  // nothing started the add is KEPT and answers 201 late_entry rebuild_offered (KO_LATE_ENTRY_NO_SLOT) - the player waits, so
+  // nine entrants and no line moved. Then round 1's second line loses its away player (the cascade walks it over): the next
+  // add takes that seat against the line's home player, and the line is an unplayed match again.
   {
     const ko = await startedKnockout(owner, "Late slot", 8);
-    const refused = await addLate(ko.divId, "Late slot P9");
-    const refusedErr: LateError = refused.json?.error;
+    const linesBefore = JSON.stringify(await ko.fixtures());
+    const offered = await addLate(ko.divId, "Late slot P9");
+    const offer = v1data<{ id?: string; late_entry?: LateEntry & { reason?: string } } | undefined>(offered);
     const count = (await entrantsOf(ko.divId)).length;
+    const unmoved = JSON.stringify(await ko.fixtures()) === linesBefore;
     const line0 = (await ko.fixtures()).find((f) => f.round_no === 1 && f.seq_in_round === 2);
     const withdrawn = line0?.away_entrant_id ? await v1(owner, `/api/v1/entrants/${line0.away_entrant_id}/withdraw`, "POST") : undefined;
     const walked = (await ko.fixtures()).find((f) => f.id === line0?.id);
@@ -568,14 +571,14 @@ export async function w4KnockoutASuite(): Promise<void> {
     const late = v1data<{ id?: string; late_entry?: LateEntry } | undefined>(added);
     const line = (await ko.fixtures()).find((f) => f.id === line0?.id);
     const ok =
-      ko.started === 200 && refused.status === 409 && refusedErr?.code === "KO_LATE_ENTRY_NO_SLOT" && refusedErr.can_rebuild === true &&
-      count === 8 && line0 !== undefined && withdrawn?.status === 200 && walked?.status === "forfeited" &&
+      ko.started === 200 && offered.status === 201 && offer?.late_entry?.format === "knockout" && offer.late_entry.case === "rebuild_offered" &&
+      offer.late_entry.reason === "KO_LATE_ENTRY_NO_SLOT" && count === 9 && unmoved && line0 !== undefined && withdrawn?.status === 200 && walked?.status === "forfeited" &&
       added.status === 201 && late?.late_entry?.case === "withdrawn_slot" && late.late_entry.fixture_id === line0.id &&
       late.late_entry.opponent_id === line0.home_entrant_id &&
       line?.home_entrant_id === line0.home_entrant_id && line?.away_entrant_id === late.id && line?.status === "scheduled";
     w4Check(
-      "w4a X-LE-5: a full round 1 refuses a late player (KO_LATE_ENTRY_NO_SLOT, Rebuild offered, nothing written); after a withdrawal the next takes the seat" +
-        (ok ? "" : ` — start ${ko.started}, refused ${refused.status} ${JSON.stringify(refusedErr)}, entrants ${count}, withdraw ${withdrawn?.status ?? "-"}, walked ${walked?.status ?? "-"}, add ${added.status} ${JSON.stringify(added.json).slice(0, 200)}, line ${JSON.stringify(line).slice(0, 160)}`),
+      "w4a X-LE-5: a full round 1 keeps a late player and offers Rebuild (201 rebuild_offered, no line moved); after a withdrawal the next takes the seat" +
+        (ok ? "" : ` — start ${ko.started}, offered ${offered.status} ${JSON.stringify(offer?.late_entry)}, entrants ${count}, unmoved ${unmoved}, withdraw ${withdrawn?.status ?? "-"}, walked ${walked?.status ?? "-"}, add ${added.status} ${JSON.stringify(added.json).slice(0, 200)}, line ${JSON.stringify(line).slice(0, 160)}`),
       ok,
     );
   }

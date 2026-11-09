@@ -31,6 +31,8 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, patchEntrant } from "../entrants";
 import { commitImport, createImport } from "../imports";
+import { KO_LATE_ENTRY_PLAYED_ON } from "@/lib/knockout-late-entry";
+import { listKnockoutWaiting } from "../knockout-desk";
 import { placeWaitingKnockoutEntrant } from "../knockout-late-entry";
 import {
   confirmRegistration,
@@ -303,7 +305,11 @@ describe.skipIf(!HAS_DB)("W4 T11: automatic arrivals into a drawn knockout wait 
     expect(await deskLate(r)).toEqual([]);
   });
 
-  it("K13 a player flagged while their seat was reversible, whose walkover winner then starts round 2, is refused by the tap and keeps waiting", async () => {
+  // B6a fix round 1 (review #3): the race order. Reinstated while the walkover is reversible (flagged, correctly), then the
+  // walkover winner's round-2 match starts before the organiser taps. Main answered "Round 1 complete; no slot left." and kept
+  // the flag - a desk row whose only outcome is a refusal, and a Withdraw dialog saying they are "not in the bracket yet" for
+  // a player who holds a seat. A seat holder is never a newcomer: the tap says their place was played on and CLEARS the flag.
+  it("K13 race: reinstated (flagged), then the walkover winner starts round 2, then the tap - 'played on', the flag cleared, nothing moves", async () => {
     const r = await rig({ n: 8 });
     const rows = await rowsOf(r.stageId);
     const l1 = rows.find((x) => x.round_no === 1 && x.seq_in_round === 1)!;
@@ -312,11 +318,48 @@ describe.skipIf(!HAS_DB)("W4 T11: automatic arrivals into a drawn knockout wait 
     await walkoverWinnerStartsRoundTwo(r, gone, l1, l2, async () => {
       await patchEntrant(r.auth, gone, { status: "registered" });
       expect(await waitingOn(gone), "flagged while the walkover was reversible").toBe(r.stageId);
+      expect(await deskLate(r), "premise: the desk row stands").toEqual([{ kind: "late_players_waiting", count: 1, stageName: r.stageName }]);
     });
+    const shapeBefore = await rowsOf(r.stageId);
     const answer = await placeWaitingKnockoutEntrant(r.auth, r.stageId, gone);
-    expect(answer).toMatchObject({ case: "refused", reason: "KO_LATE_ENTRY_NO_SLOT" });
-    expect(await waitingOn(gone), "a refused tap keeps them waiting").toBe(r.stageId);
-    expect(await lateRows(r.divisionId)).toEqual([]);
+    expect(answer).toEqual({ format: "knockout", entrant_id: gone, stage_id: r.stageId, case: "refused", reason: KO_LATE_ENTRY_PLAYED_ON });
+    expect(await waitingOn(gone), "no flag the tap can only refuse").toBeNull();
+    expect(await deskLate(r), "the desk row goes").toEqual([]);
+    expect((await listKnockoutWaiting(r.auth, r.divisionId)).map((w) => w.entrantId), "the card's strip goes").toEqual([]);
+    expect(await rowsOf(r.stageId), "a refusal moves no line").toEqual(shapeBefore);
+    expect(await lateRows(r.divisionId), "and writes no undo barrier").toEqual([]);
+    // The second call: they wait no more, so a second tap is refused by name (never a second PLAYED_ON answer).
+    expect(await refusal(placeWaitingKnockoutEntrant(r.auth, r.stageId, gone))).toMatchObject({ status: 409, code: "KO_LATE_ENTRY_NOT_WAITING" });
+  });
+
+  it("K13 plain order: reinstated while the walkover is reversible, then the tap - their seat back, the flag cleared (the other side of the race)", async () => {
+    const r = await rig({ n: 8 });
+    const rows = await rowsOf(r.stageId);
+    const l1 = rows.find((x) => x.round_no === 1 && x.seq_in_round === 1)!;
+    const gone = l1.home_entrant_id!;
+    await withdrawEntrantCascade(r.auth, gone);
+    await patchEntrant(r.auth, gone, { status: "registered" });
+    expect(await waitingOn(gone), "premise: flagged").toBe(r.stageId);
+    const answer = await placeWaitingKnockoutEntrant(r.auth, r.stageId, gone);
+    expect(answer).toMatchObject({ case: "withdrawn_slot", fixture_id: l1.id, withdrawn_id: gone });
+    expect(await waitingOn(gone)).toBeNull();
+    const line = await rowById(l1.id);
+    expect([line.home_entrant_id, line.away_entrant_id]).toContain(gone);
+    expect(line.outcome, "the walkover is reversed").toBeNull();
+  });
+
+  // The other side of the same guard: only a SEAT HOLDER's refusal is "played on" and clears. A newcomer (no seat) whose tap
+  // is refused because a match has started still waits - a seat can open, and the exits stay on the card.
+  it("a NEWCOMER's refused tap (a match has started, no seat free) keeps them waiting with the no-slot answer - never 'played on'", async () => {
+    const r = await rig({ n: 8 });
+    const first = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && x.seq_in_round === 1)!;
+    await post(r.auth, first.id, "core.start");
+    const { entrantId } = await confirmArrival(r, "Newcomer");
+    expect(await waitingOn(entrantId), "premise: flagged").toBe(r.stageId);
+    const answer = await placeWaitingKnockoutEntrant(r.auth, r.stageId, entrantId);
+    expect(answer).toEqual({ format: "knockout", entrant_id: entrantId, stage_id: r.stageId, case: "refused", reason: "KO_LATE_ENTRY_NO_SLOT" });
+    expect(await waitingOn(entrantId), "a seat can still open: they keep waiting").toBe(r.stageId);
+    expect(await deskLate(r)).toEqual([{ kind: "late_players_waiting", count: 1, stageName: r.stageName }]);
   });
 
   it("a reinstatement after a bare status flip never left the bracket (its line still open): no marker, no desk row", async () => {

@@ -175,6 +175,37 @@ export function swissLateEntryOffered(args: {
 }
 
 /**
+ * W4 T19 (X-LE-3): is "Add to bracket" offered on this stage's rail? On a ROOT knockout (`isRootKnockoutStage`: the
+ * division's entry stage, drawing from the live roster) of a started division, once its bracket exists (`generated`),
+ * until the bracket is finished (`isRunningRootKnockout`). A fed knockout never takes a late player (X-LE-2); before
+ * Start the ordinary add applies. `stage` must be an element of `division`.
+ */
+export function knockoutLateEntryOffered(args: {
+  stage: EntryStage & { status: string };
+  division: readonly (EntryStage & { status: string })[];
+  divisionStatus: string;
+  /** The stage has fixtures (its bracket was drawn). */
+  generated: boolean;
+}): boolean {
+  return (
+    ENTRANT_LIST_LOCKED_STATUSES.includes(args.divisionStatus) &&
+    isRunningRootKnockout(args.stage, args.division) &&
+    args.generated
+  );
+}
+
+/**
+ * W4 T19: is an add on the Entrants tab a knockout LATE add right now? A started division whose entry stage is a root
+ * knockout still running: the admission (T9) seats the newcomer on a bye or a withdrawn player's place, or refuses by name.
+ */
+export function divisionTakesKnockoutLateEntry(
+  divisionStatus: string,
+  stages: readonly (EntryStage & { status: string })[],
+): boolean {
+  return ENTRANT_LIST_LOCKED_STATUSES.includes(divisionStatus) && stages.some((s) => isRunningRootKnockout(s, stages));
+}
+
+/**
  * W3 T10: is an add on the Entrants tab a LATE add right now? A started division holding a root Swiss that is still
  * running (not `complete`): the admission (T9) then decides how the entrant joins it. Before Start the ordinary add
  * applies; once every root Swiss is finished the add is refused (SWISS_OVER), and the form says nothing extra.

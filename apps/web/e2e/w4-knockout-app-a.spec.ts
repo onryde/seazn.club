@@ -600,9 +600,10 @@ test.describe("FX-G2 Generate places the eighth player in the bye", () => {
 
 // X-LE-3/X-LE-4 (W4 T10; ruling 263): "Add late player" on a Started knockout. Six seeded in a bracket of eight, so seeds 1
 // and 2 hold byes; the newcomer plays the LOWEST-seeded holder (seed 2, RB4-L4 — read off the seeds given here, not the
-// code), that bye's line is a match again on the run sheet, and a full round 1 refuses the next add by name.
+// code), that bye's line is a match again on the run sheet, and a full round 1 with nothing started KEEPS the next add and
+// offers Rebuild (RB4-L6, B6a fix round 1: 201 rebuild_offered, the player waits).
 test.describe("X-LE-3 a late player takes the bye", () => {
-  test("six seeded Started, a seventh added: they meet seed 2 on the run sheet; an eighth fills the other bye; a ninth is refused KO_LATE_ENTRY_NO_SLOT", async ({
+  test("six seeded Started, a seventh added: they meet seed 2 on the run sheet; an eighth fills the other bye; a ninth is kept and offered Rebuild", async ({
     page,
     request,
   }) => {
@@ -635,17 +636,29 @@ test.describe("X-LE-3 a late player takes the bye", () => {
     await expect(row).toContainText(ko.nameOf.get(seed2)!);
 
     // The second call takes the remaining bye (seed 1's); the third finds round 1 full — nothing has started, so Rebuild
-    // is offered — and writes nothing.
+    // is offered: the player is KEPT (waiting, as an automatic arrival is) and no line moves.
     const second = await apiJson<{ late_entry?: { case: string; opponent_id?: string } }>(request, `/api/v1/divisions/${ko.divisionId}/entrants`, "POST", {
       kind: "individual",
       display_name: `Late Hal ${TAG}`,
     });
     expect(second.status, JSON.stringify(second.error)).toBe(201);
     expect(second.data!.late_entry).toMatchObject({ case: "bye", opponent_id: [...seedOf].find(([, s]) => s === 1)![0] });
-    const third = await apiJson(request, `/api/v1/divisions/${ko.divisionId}/entrants`, "POST", { kind: "individual", display_name: `Late Ivy ${TAG}` });
-    expect([third.status, third.error?.code, third.error?.message]).toEqual([409, "KO_LATE_ENTRY_NO_SLOT", "Round 1 complete; no slot left."]);
+    const linesBefore = JSON.stringify(await ko.rows());
+    const third = await apiJson<{ id: string; late_entry?: { format: string; case: string; reason?: string } }>(
+      request,
+      `/api/v1/divisions/${ko.divisionId}/entrants`,
+      "POST",
+      { kind: "individual", display_name: `Late Ivy ${TAG}` },
+    );
+    expect([third.status, third.data?.late_entry?.format, third.data?.late_entry?.case, third.data?.late_entry?.reason]).toEqual([
+      201,
+      "knockout",
+      "rebuild_offered",
+      "KO_LATE_ENTRY_NO_SLOT",
+    ]);
     const list = await apiJson<{ display_name: string }[]>(request, `/api/v1/divisions/${ko.divisionId}/entrants`);
-    expect(list.data!.some((e) => e.display_name === `Late Ivy ${TAG}`), "the refused add wrote nothing").toBe(false);
+    expect(list.data!.some((e) => e.display_name === `Late Ivy ${TAG}`), "the offered player is kept").toBe(true);
+    expect(JSON.stringify(await ko.rows()), "no line moved").toBe(linesBefore);
   });
 });
 
