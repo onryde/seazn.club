@@ -1,5 +1,17 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
-import { type Session, call, check, html, newSession, signIn, tag, v1, v1data } from "../harness.ts";
+import {
+  type Session,
+  call,
+  check,
+  html,
+  newSession,
+  postSignedStripeWebhook,
+  signIn,
+  smokeDb,
+  tag,
+  v1,
+  v1data,
+} from "../harness.ts";
 
 type Deal = { id: string; deal_status: string; payment_status: string; sponsor_id: string };
 
@@ -63,6 +75,50 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
     marked?.status === 200 && v1data<Deal>(marked).deal_status === "awaiting_approval" && stillHidden &&
       approved?.status === 200 && (await publicPage()).includes(approveName),
   );
+
+  // --- Task 8 (anti-goal 1): a signed payment_intent.succeeded moves its deal and puts the deal's OWN sponsor live — the webhook
+  // never inserts a sponsor. Community cannot sell online, so the online deal is SQL-seeded the way Send invoice leaves one
+  // (awaiting payment, its sponsor hidden), on its own sponsor (F33). Signing needs the server's STRIPE_WEBHOOK_SECRET.
+  if (!process.env.STRIPE_WEBHOOK_SECRET || !process.env.DATABASE_URL) {
+    check(
+      "sd paid webhook: skipped (no STRIPE_WEBHOOK_SECRET or DATABASE_URL — cannot sign a webhook or seed the deal); deals-webhook-seam.test.ts covers it",
+      true,
+    );
+  } else {
+    const webhookSponsor = await addSponsor(`Deal Webhook ${tag}`);
+    const db = smokeDb();
+    let dealId = "";
+    try {
+      const [row] = await db<{ id: string }[]>`
+        insert into sponsor_orders (org_id, package_id, sponsor_id, sponsor_name, sponsor_email, amount_cents, currency, status,
+                                    deal_status, payment_method, go_live, tier, includes_on_stream, package_name, competition_id)
+        values (${org.id}, ${pkg.id}, ${webhookSponsor}, ${`Deal Webhook ${tag}`}, ${`delivered+deal_webhook_${tag}@resend.dev`},
+                25000, 'gbp', 'pending', 'awaiting_payment', 'online', 'on_payment', 'partner', false, 'Partner board', ${null})
+        returning id`;
+      await db`update sponsors set status = 'inactive' where id = ${webhookSponsor}`;
+      dealId = row!.id;
+    } finally {
+      await db.end();
+    }
+    const countBefore = await sponsorCount();
+    const status = await postSignedStripeWebhook("payment_intent.succeeded", {
+      id: `pi_smoke_${tag}_sd_webhook`,
+      object: "payment_intent",
+      amount: 25_000,
+      amount_received: 25_000,
+      currency: "gbp",
+      status: "succeeded",
+      metadata: { kind: "sponsor", order_id: dealId, org_id: org.id },
+    });
+    const deal = await v1(free, `/api/v1/orgs/${org.id}/sponsor-deals/${dealId}`);
+    const after = v1data<{ id: string; status: string }[]>(await v1(free, `/api/v1/orgs/${org.id}/sponsors`));
+    check(
+      "sd paid webhook never adds a sponsor row",
+      status === 200 && deal.status === 200 && v1data<Deal>(deal).deal_status === "live" &&
+        v1data<Deal>(deal).payment_status === "paid" && after.length === countBefore &&
+        after.find((x) => x.id === webhookSponsor)?.status === "active",
+    );
+  }
 
   // --- Online selling is `sponsors.monetize`: refused on community before any row.
   const onlineSponsor = await addSponsor(`Deal Online ${tag}`);

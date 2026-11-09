@@ -1,9 +1,9 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import Stripe from "stripe";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { TAG, apiJson, activeOrg, loginUi } from "./helpers";
+import { postSignedEvent, stripeEvent, stripeUid } from "./_stripe-events";
 import type { PassKey } from "../src/lib/currency";
 
 // Payments-hardening wave — user-visible contract (owner ask 2026-07-18, Task 17).
@@ -25,11 +25,8 @@ import type { PassKey } from "../src/lib/currency";
 // own owner via the magic-link mint. No REDIS in e2e → SQL entitlement flips
 // resolve fresh (invalidateOrgEntitlements is an in-process no-op round-trip).
 
-const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET ?? "whsec_e2e_payments";
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? "sk_test_e2e_dummy");
-
 /** Run-unique id with a Stripe-style prefix (pi_/ch_/dp_/evt_/cus_/…). */
-const uid = (prefix: string) => `${prefix}_${TAG}_${randomBytes(5).toString("hex")}`;
+const uid = stripeUid;
 
 const GENERIC_CONFIG = {
   resultMode: "score",
@@ -55,33 +52,7 @@ const COMMUNITY_ENTRANT_CAP = 64;
 // Signed-webhook harness (Step 1)
 // ---------------------------------------------------------------------------
 
-/** A minimal-but-well-formed Stripe.Event around one object. */
-function stripeEvent(type: string, object: Record<string, unknown>): Record<string, unknown> {
-  return {
-    id: uid("evt"),
-    object: "event",
-    api_version: "2024-06-20",
-    created: Math.floor(Date.now() / 1000),
-    livemode: false,
-    pending_webhooks: 0,
-    request: { id: null, idempotency_key: null },
-    type,
-    data: { object },
-  };
-}
-
-/** POST a SIGNED event to the real webhook route; returns the raw response. */
-async function postSignedEvent(
-  request: APIRequestContext,
-  event: Record<string, unknown>,
-): Promise<import("@playwright/test").APIResponse> {
-  const payload = JSON.stringify(event);
-  const signature = stripe.webhooks.generateTestHeaderString({ payload, secret: WEBHOOK_SECRET });
-  return request.post("/api/webhooks/stripe", {
-    headers: { "stripe-signature": signature, "content-type": "application/json" },
-    data: payload,
-  });
-}
+// stripeEvent / postSignedEvent live in ./_stripe-events (shared with sponsor-deals-api.spec.ts).
 
 // ---------------------------------------------------------------------------
 // One-shot SQL against the app's schema (helpers.ts keeps withDb private).
