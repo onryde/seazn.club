@@ -350,17 +350,28 @@ const holdsOpenCheckout = () =>
 export async function deleteSponsor(auth: AuthCtx, id: string): Promise<void> {
   const before = await withTenant(auth.orgId, (tx) => readDeals(tx, { sponsorId: id }));
   if (before.some(dealHoldsHistory)) throw holdsHistory();
-  const retired = new Set<string>();
-  for (const d of before) {
-    if (d.checkout_session_id === null) continue;
-    let outcome: Awaited<ReturnType<typeof retireDealSession>>;
+  // Every refusal before the first expire (review I1): Stripe is asked about EVERY stored session first, so a completed one
+  // (money in flight) or one nobody can read refuses the delete with no link closed. Then each open one is expired and
+  // forgotten in its own statement: a later failure leaves no dead link stored on a deal that stays.
+  const held = before.flatMap((d): WithSession[] =>
+    d.checkout_session_id === null ? [] : [{ id: d.id, checkout_session_id: d.checkout_session_id }]);
+  const asStripeRefusal = async <T>(fn: () => Promise<T>): Promise<T> => {
     try {
-      outcome = await retireDealSession(d);
+      return await fn();
     } catch (err) {
       if (err instanceof HttpError && err.status === 502) throw holdsOpenCheckout();
       throw err;
     }
-    if (outcome === "complete") throw holdsOpenCheckout();
+  };
+  const statuses: SessionStatus[] = [];
+  for (const d of held) {
+    const status = await asStripeRefusal(() => storedSessionStatus(d));
+    if (status === "complete") throw holdsOpenCheckout();
+    statuses.push(status);
+  }
+  const retired = new Set<string>();
+  for (const [i, d] of held.entries()) {
+    await asStripeRefusal(() => (statuses[i] === "open" ? expireOpenSession(auth.orgId, d) : forgetDeadSession(auth.orgId, d)));
     retired.add(d.checkout_session_id);
   }
   return withTenant(auth.orgId, async (tx) => {
@@ -657,31 +668,71 @@ export async function mintDealCheckout(
   return { id: session.id, url: session.url, expires_at: session.expires_at };
 }
 
+/** What Stripe says of a session; the session rule decides on `retrieve` alone. */
+type SessionStatus = "open" | "complete" | "expired";
+
+/** A deal holding a stored session. */
+type WithSession = { id: string; checkout_session_id: string };
+
+/** Ask Stripe what a stored session is (`retrieve`). A read error, or any status but open / complete / expired, is a 502
+ *  (`stripe_unavailable`): nothing is decided on a session nobody could read. */
+async function storedSessionStatus(deal: WithSession): Promise<SessionStatus> {
+  let status: Stripe.Checkout.Session["status"];
+  try {
+    status = (await getStripe().checkout.sessions.retrieve(deal.checkout_session_id)).status;
+  } catch (err) {
+    throw stripeUnavailable("read this deal's payment link", err, deal);
+  }
+  if (status === "open" || status === "complete" || status === "expired") return status;
+  throw stripeUnavailable(`read this deal's payment link (status ${String(status)})`, null, deal);
+}
+
+/**
+ * Forget a dead session at once, in its OWN committed statement (review I1): a later refusal in the caller's transaction must
+ * not roll the dead id, url and expiry back onto the deal, where the next Send invoice would offer it. Compare-and-clear: only
+ * while it is still the stored session (a session stored since is left alone, and the caller's lock re-check sees it).
+ */
+async function forgetDeadSession(orgId: string, deal: WithSession): Promise<void> {
+  await withTenant(orgId, (tx) => tx`
+    update sponsor_orders set checkout_session_id = null, checkout_url = null, checkout_expires_at = null
+     where id = ${deal.id} and checkout_session_id = ${deal.checkout_session_id}`);
+}
+
+/** Expire an open session at Stripe, then forget it. Keyed per SESSION (never per deal: a later session of the same deal
+ *  would replay the first one's answer and stay open). An `expire` error is a 502 and is never parsed; nothing is forgotten. */
+async function expireOpenSession(orgId: string, deal: WithSession): Promise<void> {
+  try {
+    await getStripe().checkout.sessions.expire(
+      deal.checkout_session_id,
+      {},
+      { idempotencyKey: `sponsor-session-expire-${deal.checkout_session_id}` },
+    );
+  } catch (err) {
+    throw stripeUnavailable("close this deal's open payment link", err, deal);
+  }
+  await forgetDeadSession(orgId, deal);
+}
+
 /**
  * The session rule (D14, F3, F37): two payable sessions for one deal must never coexist, so every path that replaces, abandons
  * or deletes a stored session retires it first. Outside any transaction. Decided ONLY on the status `retrieve` reports (an
  * `expire` error is never parsed): `open` is expired, then `retired`; `expired` is `retired` with no call; `complete` is money
  * in flight, answered as `complete` for the caller to refuse or carry on. No stored session is `none`. A session that cannot be
  * read, or that is open and cannot be expired, is a 502 (`stripe_unavailable`) and nothing else happens: carrying on would leave
- * two payable sessions. (registrations.ts expires a stale session the same way, but best-effort; here a failed expire stops.)
+ * two payable sessions. A retired session is forgotten at once, committed (review I1), so callers refuse BEFORE retiring and
+ * compare the stored session against null after. (registrations.ts expires a stale session best-effort; here a failed expire
+ * stops.)
  */
-export async function retireDealSession(deal: { id: string; checkout_session_id: string | null }): Promise<"none" | "retired" | "complete"> {
-  const sessionId = deal.checkout_session_id;
-  if (sessionId === null) return "none";
-  let status: Stripe.Checkout.Session["status"];
-  try {
-    status = (await getStripe().checkout.sessions.retrieve(sessionId)).status;
-  } catch (err) {
-    throw stripeUnavailable("read this deal's payment link", err, deal);
-  }
+export async function retireDealSession(
+  orgId: string,
+  deal: { id: string; checkout_session_id: string | null },
+): Promise<"none" | "retired" | "complete"> {
+  if (deal.checkout_session_id === null) return "none";
+  const held: WithSession = { id: deal.id, checkout_session_id: deal.checkout_session_id };
+  const status = await storedSessionStatus(held);
   if (status === "complete") return "complete";
-  if (status === "expired") return "retired";
-  if (status !== "open") throw stripeUnavailable(`read this deal's payment link (status ${String(status)})`, null, deal);
-  try {
-    await getStripe().checkout.sessions.expire(sessionId);
-  } catch (err) {
-    throw stripeUnavailable("close this deal's open payment link", err, deal);
-  }
+  if (status === "open") await expireOpenSession(orgId, held);
+  else await forgetDeadSession(orgId, held);
   return "retired";
 }
 
@@ -696,8 +747,10 @@ export function paidOnline(): HttpError {
 
 /**
  * The ONE reuse-or-retire-and-mint rule (F32; Task 22's `payInvoice` calls it too): the stored session while more than 10
- * minutes are left of it, else the stored one retired by the session rule and a new one minted with attempt
+ * minutes are left of it AND Stripe still calls it open (review I1: the stored expiry alone is no proof — an expired one is
+ * forgotten and replaced), else the stored one retired by the session rule and a new one minted with attempt
  * `invoice_send_count + 1`. A completed stored session is 409 `deal_paid_online`: no re-mint. Outside any transaction.
+ * `minted: false` means the stored session is reused; after a mint the deal holds no session until the caller stores it.
  */
 export async function ensureDealCheckout(
   deal: ServerDeal,
@@ -705,10 +758,14 @@ export async function ensureDealCheckout(
   origin: string,
 ): Promise<DealSession & { minted: boolean }> {
   const expiresMs = deal.checkout_expires_at === null ? null : Date.parse(deal.checkout_expires_at);
-  if (deal.checkout_session_id && deal.checkout_url && expiresMs !== null && expiresMs > Date.now() + SESSION_REUSE_MARGIN_MS) {
-    return { id: deal.checkout_session_id, url: deal.checkout_url, expires_at: Math.floor(expiresMs / 1000), minted: false };
-  }
-  if ((await retireDealSession(deal)) === "complete") throw paidOnline();
+  const sessionId = deal.checkout_session_id;
+  if (sessionId && deal.checkout_url && expiresMs !== null && expiresMs > Date.now() + SESSION_REUSE_MARGIN_MS) {
+    const held: WithSession = { id: deal.id, checkout_session_id: sessionId };
+    const status = await storedSessionStatus(held);
+    if (status === "open") return { id: sessionId, url: deal.checkout_url, expires_at: Math.floor(expiresMs / 1000), minted: false };
+    if (status === "complete") throw paidOnline();
+    await forgetDeadSession(org.id, held);
+  } else if ((await retireDealSession(org.id, deal)) === "complete") throw paidOnline();
   return { ...(await mintDealCheckout(deal, org, origin, deal.invoice_send_count + 1)), minted: true };
 }
 
@@ -902,8 +959,9 @@ export async function refundSponsorOrder(
     if (!row) throw new HttpError(404, "order not found");
     return row;
   });
+  // A refund that lost the race to another (or to Stripe's own charge.refunded) is the deal's refusal, coded (review m2).
   if (order.status !== "paid" || !order.payment_intent_id) {
-    throw new HttpError(422, "Only a paid order can be refunded");
+    throw new HttpError(409, "Only a paid deal can be refunded, and only once", "deal_not_refundable");
   }
   // Stripe refuses refunds on charged-back charges; surface the state in our
   // own words before ever calling out (raw Stripe text leaked to the console).
@@ -911,17 +969,23 @@ export async function refundSponsorOrder(
     throw new HttpError(
       409,
       "This payment has been charged back — a disputed payment can't be refunded. Respond to the dispute instead.",
+      "deal_disputed",
     );
   }
-  // Stripe OUTSIDE any sql transaction (house rule).
-  await getStripe().refunds.create(
-    {
-      payment_intent: order.payment_intent_id,
-      reverse_transfer: true,
-      refund_application_fee: true,
-    },
-    { idempotencyKey: `sponsor-refund-${orderId}` },
-  );
+  // Stripe OUTSIDE any sql transaction (house rule). A Stripe failure is the documented 502 `stripe_unavailable`, never a
+  // 500 carrying Stripe's own text (review m2); nothing was recorded, and the key makes the retry safe.
+  try {
+    await getStripe().refunds.create(
+      {
+        payment_intent: order.payment_intent_id,
+        reverse_transfer: true,
+        refund_application_fee: true,
+      },
+      { idempotencyKey: `sponsor-refund-${orderId}` },
+    );
+  } catch (err) {
+    throw stripeUnavailable("refund this payment", err, { id: orderId });
+  }
   const notice = await handleSponsorChargeRefunded({
     payment_intent: order.payment_intent_id,
     refunded: true,

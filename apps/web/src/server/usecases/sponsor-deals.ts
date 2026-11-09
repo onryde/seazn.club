@@ -128,25 +128,18 @@ const dealChanged = () => new HttpError(409, "this deal changed while it was bei
 /**
  * The session rule before a write that abandons a deal's stored session (F3, F37), outside any transaction: an open session is
  * expired, an expired one passes, and a completed one (money in flight) is refused (`refuse`: Mark as paid) or left as it is
- * (`carry_on`: End now, Review Focus 1 — the late payment lands on an ended deal and is refundable). Answers the session id it
- * retired, which the write then clears, or null.
+ * (`carry_on`: End now, Review Focus 1 — the late payment lands on an ended deal and is refundable). A retired session is
+ * already forgotten, committed (review I1), so every refusal the caller can make up front comes BEFORE this. Answers the
+ * session the deal should still hold under the lock: the completed one carried on over, else null — anything else is a
+ * session stored since, which this rule never saw (409 `deal_changed`).
  */
-async function retireBefore(deal: ServerDeal, onComplete: "refuse" | "carry_on"): Promise<string | null> {
-  const outcome = await retireDealSession(deal);
+async function retireBefore(orgId: string, deal: ServerDeal, onComplete: "refuse" | "carry_on"): Promise<string | null> {
+  const outcome = await retireDealSession(orgId, deal);
   if (outcome === "complete") {
     if (onComplete === "refuse") throw paidOnline();
-    return null;
+    return deal.checkout_session_id;
   }
-  return outcome === "retired" ? deal.checkout_session_id : null;
-}
-
-/** Clear a retired session off its deal (only while it is still the stored one): the dead link is never offered again, and
- *  the prune policy refuses a row that holds one. */
-async function clearSession(tx: Tx, dealId: string, retired: string | null): Promise<void> {
-  if (retired === null) return;
-  await tx`
-    update sponsor_orders set checkout_session_id = null, checkout_url = null, checkout_expires_at = null
-     where id = ${dealId} and checkout_session_id = ${retired}`;
+  return null;
 }
 
 /** The org a deal's Checkout session is minted on: Connect must take charges (409 `connect_required`). */
@@ -271,6 +264,9 @@ export async function createDeal(
       // P-W2-1: refuse now, before the deal and its Checkout session, if this box cannot queue the invoice.
       assertOutboxCanQueue();
     }
+    // The rule combination (422 `on_payment_needs_payment`) is refused HERE, before end_current's session rule closes the live
+    // deal's pay link at Stripe (review I1): a refusal after that expire would leave the live deal with a dead link.
+    initialStatus(method, rule, false);
     // ends_on: a day in the org's timezone (V305; NULL is UTC), today or later there, stored as the start of the NEXT day.
     let endsAt: Date | null = null;
     if (input.ends_on) {
@@ -283,11 +279,11 @@ export async function createDeal(
     }
 
     // end_current abandons the live deal's stored session: the session rule first (F3), outside any transaction.
-    let seen: { dealId: string; session: string | null; retired: string | null } | null = null;
+    let seen: { dealId: string; session: string | null } | null = null;
     if (input.end_current) {
       const current = await withTenant(auth.orgId, (tx) => readDeals(tx, { sponsorId }));
       const live = current.find((d) => !isLegacyDeal(d) && d.deal_status === "live");
-      if (live) seen = { dealId: live.id, session: live.checkout_session_id, retired: await retireBefore(live, "carry_on") };
+      if (live) seen = { dealId: live.id, session: await retireBefore(auth.orgId, live, "carry_on") };
     }
 
     const deal = await withTenant(auth.orgId, async (tx) => {
@@ -297,13 +293,12 @@ export async function createDeal(
       let endedDealId: string | null = null;
       const live = locked.deals.find((d) => !isLegacyDeal(d) && d.deal_status === "live") ?? null;
       if (input.end_current && live) {
-        // A session on the live deal is the one the rule above saw (and retired, or found completed): a session minted since
-        // was never retired, so the create is refused rather than leave it payable on an ended deal.
+        // A session on the live deal is the completed one the rule above carried on over (a retired one is already gone): a
+        // session minted since was never retired, so the create is refused rather than leave it payable on an ended deal.
         if (live.checkout_session_id !== null && (seen?.dealId !== live.id || live.checkout_session_id !== seen.session)) {
           throw dealChanged();
         }
         await tx`update sponsor_orders set deal_status = 'ended', ended_at = ${now}, ended_reason = 'ended_now' where id = ${live.id}`;
-        await clearSession(tx, live.id, seen?.dealId === live.id ? seen.retired : null);
         endedDealId = live.id;
       }
       const status: DealStatus = initialStatus(method, rule, live !== null && endedDealId === null);
@@ -353,6 +348,8 @@ export async function sendDealInvoice(
     const org = await checkoutOrg(auth.orgId);
     assertOutboxCanQueue();
     const session = await ensureDealCheckout(pre, org, origin);
+    // What the deal holds now: the reused session, or none (a retired or dead one is forgotten; the new one is stored below).
+    const expected = session.minted ? null : pre.checkout_session_id;
 
     let queued: string | null = null;
     const deal = await withTenant(auth.orgId, async (tx) => {
@@ -361,7 +358,7 @@ export async function sendDealInvoice(
       if (!locked || !current) throw new HttpError(404, "deal not found");
       const offered = allowedActions(current);
       if (!offered.includes("send_invoice") && !offered.includes("resend_invoice")) throw notOffered(current, "send_invoice");
-      if (current.checkout_session_id !== pre.checkout_session_id || current.invoice_send_count !== pre.invoice_send_count) {
+      if (current.checkout_session_id !== expected || current.invoice_send_count !== pre.invoice_send_count) {
         throw dealChanged();
       }
       const sendNo = current.invoice_send_count + 1;
@@ -389,10 +386,9 @@ export async function markDealPaid(auth: AuthCtx, dealId: string): Promise<Spons
   // An online deal's session rule first (F37): a completed session is the sponsor's own payment in flight — 409, nothing
   // changes; an open one is expired, so the sponsor cannot pay twice.
   const pre = await atBoundary(() => preflight(auth, dealId, ["mark_paid"]));
-  const retired = await retireBefore(pre, "refuse");
+  const expected = await retireBefore(auth.orgId, pre, "refuse");
   return runAction(auth, dealId, "mark_paid", "sponsor.deal.mark_paid", async (tx, { deal, deals }, now) => {
-    if (deal.checkout_session_id !== pre.checkout_session_id) throw dealChanged();
-    await clearSession(tx, deal.id, retired);
+    if (deal.checkout_session_id !== expected) throw dealChanged();
     const next = statusAfterPaid(deal, otherLive(deals, deal));
     await tx`
       update sponsor_orders
@@ -420,10 +416,9 @@ export async function approveDeal(auth: AuthCtx, dealId: string): Promise<Sponso
 export async function endDealNow(auth: AuthCtx, dealId: string): Promise<SponsorDeal> {
   // The session rule first (F3): an ended deal leaves no payable session behind. A completed one ends anyway (Review Focus 1).
   const pre = await atBoundary(() => preflight(auth, dealId, ["end_now"]));
-  const retired = await retireBefore(pre, "carry_on");
+  const expected = await retireBefore(auth.orgId, pre, "carry_on");
   return runAction(auth, dealId, "end_now", "sponsor.deal.end", async (tx, { deal }, now) => {
-    if (deal.checkout_session_id !== pre.checkout_session_id) throw dealChanged();
-    await clearSession(tx, deal.id, retired);
+    if (deal.checkout_session_id !== expected) throw dealChanged();
     await tx`update sponsor_orders set deal_status = 'ended', ended_at = ${now}, ended_reason = 'ended_now' where id = ${deal.id}`;
     return deal.id;
   });

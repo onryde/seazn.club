@@ -195,6 +195,8 @@ describe.skipIf(!HAS_DB)("a console deal action expires the public pages before 
   it("send invoice (Task 7) - on a Pro org, a resend has fired the org tag by the time it resolves, and left nothing to after()", async () => {
     stubOutboxEnv();
     stripeMock.checkoutCreate.mockReset().mockResolvedValue({ id: "cs_send", url: "https://stripe.test/send", expires_at: Math.floor(Date.now() / 1000) + 86_400 });
+    // The resend reuses the stored link once Stripe says it is still open (review I1).
+    stripeMock.retrieve.mockReset().mockImplementation(async (id: string) => ({ id, status: "open" }));
     const s = `spi-${randomUUID().slice(0, 8)}`;
     const [{ id: orgId }] = await sql<{ id: string }[]>`
       insert into organizations (name, slug, stripe_account_id, stripe_charges_enabled) values (${`Spi ${s}`}, ${s}, ${`acct_${s}`}, true) returning id`;

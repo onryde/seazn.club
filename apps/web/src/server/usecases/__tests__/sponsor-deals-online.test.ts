@@ -37,7 +37,7 @@ import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { allowedActions, dealChip } from "@/lib/sponsor-deals";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { stubOutboxEnv } from "./_invite-mail";
-import { deleteSponsor, resolveSponsors } from "../sponsors";
+import { deleteSponsor, refundSponsorOrder, resolveSponsors } from "../sponsors";
 import {
   createDeal,
   endDealNow,
@@ -61,10 +61,19 @@ const session = (secondsLeft = DAY) => ({
   expires_at: Math.floor(Date.now() / 1000) + secondsLeft,
 });
 
+/** Stripe's idempotency (sandbox-verified, task-6-7-report.md fix round): the same key answers the same session. */
+const mintedByKey = new Map<string, ReturnType<typeof session>>();
+const mintFor = (opts: { idempotencyKey: string }) => {
+  let s = mintedByKey.get(opts.idempotencyKey);
+  if (!s) mintedByKey.set(opts.idempotencyKey, (s = session()));
+  return s;
+};
+
 beforeEach(() => {
   stubOutboxEnv();
   deliverMock.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_${uniq()}` }));
-  stripe.create.mockReset().mockImplementation(async () => session());
+  mintedByKey.clear();
+  stripe.create.mockReset().mockImplementation(async (_params: unknown, opts: { idempotencyKey: string }) => mintFor(opts));
   stripe.retrieve.mockReset().mockImplementation(async (id: string) => ({ id, status: "open" }));
   stripe.expire.mockReset().mockImplementation(async (id: string) => ({ id, status: "expired" }));
   stripe.refund.mockReset().mockImplementation(async () => ({ id: `re_${uniq()}` }));
@@ -202,24 +211,25 @@ describe.skipIf(!HAS_DB)("an online deal's invoice is one reusable Checkout sess
     const again = await sendDealInvoice(o.auth, id, ORIGIN);
     expect(again.checkout_url, "the same link while the session lives").toBe(minted.url);
     expect(stripe.create, "no second mint").toHaveBeenCalledTimes(1);
-    expect(stripe.retrieve).not.toHaveBeenCalled();
+    expect(stripe.retrieve.mock.calls.map((c) => c[0]), "Stripe is asked once that the link is still open (review I1)").toEqual([minted.id]);
     expect(stripe.expire).not.toHaveBeenCalled();
     expect(await stored(id)).toMatchObject({ checkout_session_id: minted.id, invoice_send_count: 2, deal_status: "awaiting_payment" });
     expect(await invoiceKeys(id), "two sends are two invoices, one per count").toEqual([`${id}:1`, `${id}:2`]);
   });
 
-  it("re-mint (F3): under 10 minutes left, the old session is retrieved (open) and expired ONCE, then …-2 is minted; 15 minutes left is reused", async () => {
+  it("re-mint (F3): 15 minutes left is reused (Stripe says open); under 10 minutes the old session is retrieved (open) and expired ONCE, keyed per session, then …-3 is minted (the reuse moved the count)", async () => {
     const { o, id } = await onlineDeal();
     const old = (await stored(id)).checkout_session_id!;
     await expiresIn(id, 15);
     await sendDealInvoice(o.auth, id, ORIGIN);
     expect(stripe.create, "15 minutes left: reused").toHaveBeenCalledTimes(1);
-    expect(stripe.retrieve).not.toHaveBeenCalled();
+    expect(stripe.retrieve.mock.calls.map((c) => c[0]), "asked once, open").toEqual([old]);
 
     await expiresIn(id, 5);
     const out = await sendDealInvoice(o.auth, id, ORIGIN);
-    expect(stripe.retrieve.mock.calls.map((c) => c[0])).toEqual([old]);
+    expect(stripe.retrieve.mock.calls.map((c) => c[0])).toEqual([old, old]);
     expect(stripe.expire.mock.calls.map((c) => c[0]), "the open session is expired before the new one").toEqual([old]);
+    expect(stripe.expire.mock.calls[0]![2], "m3: the expire is keyed per session").toEqual({ idempotencyKey: `sponsor-session-expire-${old}` });
     expect(stripe.expire.mock.invocationCallOrder[0]!).toBeLessThan(stripe.create.mock.invocationCallOrder[1]!);
     expect(mintKeys()).toEqual([`sponsor-deal-${id}-1`, `sponsor-deal-${id}-3`]);
     const now = await stored(id);
@@ -266,6 +276,53 @@ describe.skipIf(!HAS_DB)("an online deal's invoice is one reusable Checkout sess
     expect(stripe.expire).not.toHaveBeenCalled();
     expect(stripe.create).toHaveBeenCalledTimes(1);
     expect(await dealBytes(id)).toBe(before);
+  });
+
+  it("review I1 (c): a stored session Stripe calls expired is never reused, however long its stored expiry: the send mints a fresh link; one Stripe calls complete is 409 deal_paid_online", async () => {
+    const { o, id } = await onlineDeal();
+    const dead = await stored(id);
+    expect(dead.checkout_expires_at!.getTime(), "premise: a day left in the DB").toBeGreaterThan(Date.now() + 60 * 60_000);
+    stripe.retrieve.mockImplementation(async (sid: string) => ({ id: sid, status: "expired" }));
+    const out = await sendDealInvoice(o.auth, id, ORIGIN);
+    expect(stripe.retrieve.mock.calls.map((c) => c[0])).toEqual([dead.checkout_session_id]);
+    expect(stripe.expire, "already expired: no call").not.toHaveBeenCalled();
+    expect(mintKeys()).toEqual([`sponsor-deal-${id}-1`, `sponsor-deal-${id}-2`]);
+    expect(out.checkout_url, "never the dead link").not.toBe(dead.checkout_url);
+    expect((await stored(id)).checkout_session_id).not.toBe(dead.checkout_session_id);
+
+    const paid = await onlineDeal();
+    const before = await dealBytes(paid.id);
+    stripe.create.mockClear();
+    stripe.retrieve.mockImplementation(async (sid: string) => ({ id: sid, status: "complete" }));
+    expect(await refusal(() => sendDealInvoice(paid.o.auth, paid.id, ORIGIN))).toEqual({ http: true, status: 409, code: "deal_paid_online" });
+    expect(stripe.create).not.toHaveBeenCalled();
+    expect(await dealBytes(paid.id)).toBe(before);
+  });
+
+  it("m5: a send refused after its mint leaves no dead link stored, and the retry gets the SAME session (its Stripe key is the count)", async () => {
+    const { o, id } = await onlineDeal();
+    const old = (await stored(id)).checkout_session_id!;
+    await expiresIn(id, 5); // a re-mint: the old session is expired, then …-2 minted
+    stripe.create.mockImplementationOnce(async (_params: unknown, opts: { idempotencyKey: string }) => {
+      // The deal ends while the link is minted: the locked re-check refuses the send.
+      await sql`update sponsor_orders set deal_status = 'ended', ended_at = now(), ended_reason = 'ended_now' where id = ${id}`;
+      return mintFor(opts);
+    });
+    expect(await refusal(() => sendDealInvoice(o.auth, id, ORIGIN))).toEqual({ http: true, status: 409, code: "deal_not_invoiceable" });
+    expect(stripe.expire.mock.calls.map((c) => c[0])).toEqual([old]);
+    expect(await stored(id), "the expired link is forgotten, not rolled back onto the deal").toMatchObject({
+      checkout_session_id: null,
+      checkout_url: null,
+      checkout_expires_at: null,
+      invoice_send_count: 1,
+    });
+    const refusedMint = (await stripe.create.mock.results[1]!.value) as { id: string; url: string };
+
+    await sql`update sponsor_orders set deal_status = 'awaiting_payment', ended_at = null, ended_reason = null where id = ${id}`;
+    const retry = await sendDealInvoice(o.auth, id, ORIGIN);
+    expect(mintKeys()).toEqual([`sponsor-deal-${id}-1`, `sponsor-deal-${id}-2`, `sponsor-deal-${id}-2`]);
+    expect(retry.checkout_url, "the retry gets the session the refused send minted").toBe(refusedMint.url);
+    expect((await stored(id)).checkout_session_id).toBe(refusedMint.id);
   });
 
   it("a retried send at the same count queues ONE invoice (its once-key is the count); the next count queues the next", async () => {
@@ -512,6 +569,19 @@ describe.skipIf(!HAS_DB)("Mark as paid, End now, refund and delete apply the ses
     }
   });
 
+  it("review I1 (a): a create refused for its rules (complimentary on payment) with end_current touches no link: no retrieve, no expire, the live deal byte-equal", async () => {
+    const d = await onlineDeal({ go_live: "immediate" });
+    expect((await stored(d.id)).deal_status, "premise: live with an open link").toBe("live");
+    const before = await dealBytes(d.id);
+    stripe.retrieve.mockClear();
+    stripe.expire.mockClear();
+    const comp = { ...online(d.p), payment_method: "complimentary" as const, go_live: "on_payment" as const, sponsor_email: null, end_current: true };
+    expect(await refusal(() => createDeal(d.o.auth, d.sponsorId, comp, ORIGIN))).toEqual({ http: true, status: 422, code: "on_payment_needs_payment" });
+    expect(stripe.retrieve).not.toHaveBeenCalled();
+    expect(stripe.expire).not.toHaveBeenCalled();
+    expect(await dealBytes(d.id)).toBe(before);
+  });
+
   it("a new deal that ends the current one (end_current) retires the live deal's open session first (F3); one it cannot expire stops the create (502), nothing written", async () => {
     // Straight away: the online deal is live from create, its payment pending, its session open.
     const d = await onlineDeal({ go_live: "immediate" });
@@ -556,6 +626,27 @@ describe.skipIf(!HAS_DB)("Mark as paid, End now, refund and delete apply the ses
     expect(stripe.refund, "no charge moved this money: no Stripe call (T2-I1)").not.toHaveBeenCalled();
   });
 
+  it("m2: a Stripe refund failure is the documented 502 stripe_unavailable in our words (never a 500 with Stripe's text), nothing recorded; the twin refunds; a lost refund race is 409 deal_not_refundable", async () => {
+    const d = await onlineDeal();
+    await sql`update sponsor_orders set status = 'paid', paid_at = now(), payment_intent_id = ${`pi_${uniq()}`} where id = ${d.id}`;
+    stripe.refund.mockImplementationOnce(async () => {
+      throw new Error("Stripe: charge ch_3Secret is in a state that cannot be refunded");
+    });
+    let caught: unknown;
+    try {
+      await refundDeal(d.o.auth, d.id);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HttpError);
+    expect(caught).toMatchObject({ status: 502, code: "stripe_unavailable" });
+    expect((caught as Error).message, "our words, not Stripe's").not.toContain("ch_");
+    expect((await stored(d.id)).status, "nothing recorded").toBe("paid");
+    await expect(refundDeal(d.o.auth, d.id), "the twin: Stripe answers, the refund lands").resolves.toMatchObject({ payment_status: "refunded" });
+    // The race a second refund loses (its preflight passed before the first landed) answers coded, never an uncoded 422.
+    expect(await refusal(() => refundSponsorOrder(d.o.auth, d.id))).toEqual({ http: true, status: 409, code: "deal_not_refundable" });
+  });
+
   it("delete (F3): the open session is expired, then the sponsor and its deal go; an unexpirable or completed session is 409 sponsor_has_open_checkout, nothing deleted", async () => {
     const gone = await onlineDeal();
     const sid = (await stored(gone.id)).checkout_session_id!;
@@ -580,6 +671,72 @@ describe.skipIf(!HAS_DB)("Mark as paid, End now, refund and delete apply the ses
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  it("review I1 (a): a delete refused on a session paid at Stripe expires NOTHING — whichever of the sponsor's two links Stripe calls complete (counted)", async () => {
+    let checked = 0;
+    for (const completeIsFirstMade of [true, false]) {
+      const o = await org();
+      const p = await pkg(o);
+      const sp = await sponsor(o);
+      const a = (await createDeal(o.auth, sp, online(p), ORIGIN)).deal.id;
+      const b = (await createDeal(o.auth, sp, online(p), ORIGIN)).deal.id;
+      const sa = (await stored(a)).checkout_session_id!;
+      const sb = (await stored(b)).checkout_session_id!;
+      const paidAtStripe = completeIsFirstMade ? sa : sb;
+      stripe.retrieve.mockImplementation(async (sid: string) => ({ id: sid, status: sid === paidAtStripe ? "complete" : "open" }));
+      stripe.expire.mockClear();
+      const label = completeIsFirstMade ? "the first deal paid at Stripe" : "the second deal paid at Stripe";
+      expect(await refusal(() => deleteSponsor(o.auth, sp)), label).toEqual({ http: true, status: 409, code: "sponsor_has_open_checkout" });
+      expect(stripe.expire, `${label}: no link closed`).not.toHaveBeenCalled();
+      expect((await stored(a)).checkout_session_id, label).toBe(sa);
+      expect((await stored(b)).checkout_session_id, label).toBe(sb);
+      checked++;
+    }
+    expect(checked, "orders checked").toBe(2);
+  });
+
+  it("review I1 (b): a delete that closed one link and then failed to close the next forgets the closed one (committed), so Resend mints afresh; the other stays stored", async () => {
+    const o = await org();
+    const p = await pkg(o);
+    const sp = await sponsor(o);
+    const a = (await createDeal(o.auth, sp, online(p), ORIGIN)).deal.id;
+    const b = (await createDeal(o.auth, sp, online(p), ORIGIN)).deal.id;
+    const byId = { [(await stored(a)).checkout_session_id!]: a, [(await stored(b)).checkout_session_id!]: b };
+    stripe.expire.mockImplementation(async (sid: string) => {
+      if (stripe.expire.mock.calls.length > 1) throw new Error("stripe: try again later");
+      return { id: sid, status: "expired" };
+    });
+    expect(await refusal(() => deleteSponsor(o.auth, sp))).toEqual({ http: true, status: 409, code: "sponsor_has_open_checkout" });
+    expect(stripe.expire).toHaveBeenCalledTimes(2);
+    const closed = stripe.expire.mock.calls[0]![0] as string;
+    const open = stripe.expire.mock.calls[1]![0] as string;
+    expect(await stored(byId[closed]!), "the closed link is forgotten, though the delete refused").toMatchObject({
+      checkout_session_id: null,
+      checkout_url: null,
+      checkout_expires_at: null,
+    });
+    expect((await stored(byId[open]!)).checkout_session_id, "the link it could not close stays stored").toBe(open);
+    expect(await sql`select 1 from sponsors where id = ${sp}`).toHaveLength(1);
+
+    stripe.create.mockClear();
+    stripe.retrieve.mockClear();
+    const resent = await sendDealInvoice(o.auth, byId[closed]!, ORIGIN);
+    expect(stripe.create, "Resend mints: no dead link to reuse").toHaveBeenCalledTimes(1);
+    expect(stripe.retrieve, "nothing stored to ask about").not.toHaveBeenCalled();
+    expect((await stored(byId[closed]!)).checkout_url).toBe(resent.checkout_url);
+  });
+
+  it("review I1 (b): Mark as paid closed the link, then the locked re-check refused (paid meanwhile): the closed link is forgotten, not rolled back", async () => {
+    const d = await onlineDeal();
+    const sid = (await stored(d.id)).checkout_session_id!;
+    stripe.expire.mockImplementationOnce(async (s: string) => {
+      await sql`update sponsor_orders set status = 'paid', paid_at = now(), payment_intent_id = ${`pi_${uniq()}`} where id = ${d.id}`;
+      return { id: s, status: "expired" };
+    });
+    expect(await refusal(() => markDealPaid(d.o.auth, d.id))).toEqual({ http: true, status: 409, code: "deal_already_paid" });
+    expect(stripe.expire.mock.calls.map((c) => c[0])).toEqual([sid]);
+    expect(await stored(d.id)).toMatchObject({ checkout_session_id: null, checkout_url: null, checkout_expires_at: null });
   });
 
   it("delete: a sponsor with money history is refused BEFORE any open session of its other deals is touched", async () => {
