@@ -548,7 +548,14 @@ describe("joint RuleFixture producers stay in the fixture-id namespace (#443)", 
     // fourth literal — which is why the count below stays at one.
     const read = (rel: string): string =>
       readFileSync(new URL(rel, import.meta.url), "utf8");
-    const single = read("../schedule-ai.ts");
+    // `schedule-ai` is a folder (index.ts + sibling modules): the single-division
+    // producer set is EVERY file in it, so a second `winnerTo:` literal added to
+    // any sibling is counted, not just one in the file that happens to hold the builder.
+    const singleFiles = readdirSync(new URL("../schedule-ai/", import.meta.url)).filter((n) =>
+      n.endsWith(".ts"),
+    );
+    expect(singleFiles.length).toBeGreaterThan(1); // anti-vacuity: the folder was found and holds the split modules
+    const single = singleFiles.map((n) => read(`../schedule-ai/${n}`)).join("\n");
     // competition-schedule-ai/ is a folder (barrel + modules): the joint producers are ALL of its modules, so the scan
     // covers every one. The anti-vacuity below fails a scan that found no modules.
     const jointModules = readdirSync(new URL("../competition-schedule-ai/", import.meta.url)).filter((f) => f.endsWith(".ts"));
