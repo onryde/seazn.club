@@ -128,6 +128,8 @@
   "timeline.generic.result": "Resultaat — {side}",
   "matchCentre.innings": "Innings {number}",
   "matchCentre.superOver": "Super over",
+  "matchCentre.superOverLine": "Super over: {scores}",
+  "matchCentre.superOverLineN": "Super over {n}: {scores}",
   "matchCentre.didNotBat": "Niet geslagen",
   "matchCentre.extras": "Extra's",
   "matchCentre.total": "Totaal",

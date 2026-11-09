@@ -193,6 +193,9 @@ const REST = [
   // W4 knockout App A (T23, ST-G26): a division's standings read in stage order, then pool order. Begins with "s", so it
   // belongs here rather than in C_GLOBBED; the final whole-branch review caught this gate red on it.
   "src/server/public-site/__tests__/standings-order.test.ts",
+  // Cricket's deciding super over under the match-centre scores (#1151). Begins with "m", so it belongs here
+  // rather than in C_GLOBBED; this gate reddened on it in the PR's own CI.
+  "src/server/public-site/__tests__/match-centre-super-over.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 

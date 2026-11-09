@@ -30,6 +30,9 @@ export const MatchCentreHeader = z.object({
   battingIndex: z.union([z.literal(0), z.literal(1)]).nullable(),
   statusLine: Msg.nullable(),        // "Queens need 34 from 21" / "Blue Blazers won by 12 runs" / "Starts Sat 14:00"
   rateLine: z.string().nullable(),   // "CRR 8.44 · RRR 9.71" — numbers, no copy
+  /** "Super over 3: HOM 36/0 · AWA 32/0" — the LAST super over's scores, never a sum of them. Null/absent when the
+   *  match has no super over (or the sport has none). `scores` is numerals and short names, not copy. */
+  superOverLine: Msg.nullable().optional(),
   // The period kernel's live pair, restored after the W1 read found both had
   // been dropped. `summary-tab.tsx` passes `suppressScorebug` for every
   // non-cricket sport (R11/C7 — the court slab must not paint twice), and the
