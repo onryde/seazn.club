@@ -15,7 +15,13 @@ import type postgres from "postgres";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { KnockoutLateEntryResult } from "@/server/api-v1/schemas";
 import { isByeLine, type ByeLineRow } from "@/lib/bye-line";
-import { decideKnockoutLateEntry, decideWaitingEntrant, type KnockoutLateDecision, type LateLine } from "@/lib/knockout-late-entry";
+import {
+  KO_LATE_ENTRY_PLAYED_ON,
+  decideKnockoutLateEntry,
+  decideWaitingEntrant,
+  type KnockoutLateDecision,
+  type LateLine,
+} from "@/lib/knockout-late-entry";
 import { isRootKnockoutStage } from "@/lib/open-entry-stages";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -219,11 +225,17 @@ export async function applyKnockoutLateDecision(
   }
   let fixtureId: string;
   let opponentId: string;
+  let withdrawnId: string | undefined;
   if (decision.case === "bye") {
     const r = await reopenByeLine(tx, decision.lineId, entrantId);
     fixtureId = r.fixtureId;
     opponentId = r.holderId;
   } else {
+    // T19: whose seat this is, read before the surgery swaps it (the notice names them; a reinstated player's own seat
+    // names themself). The surgery re-checks the same seat under its own guard.
+    const [seat] = await tx<{ home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+      select home_entrant_id, away_entrant_id from fixtures where id = ${decision.lineId}`;
+    withdrawnId = (decision.seat === "home" ? seat?.home_entrant_id : seat?.away_entrant_id) ?? undefined;
     const r = await reverseWithdrawnWalkover(tx, ctx.orgId, decision.lineId, entrantId, decision.seat, ctx.actorId);
     fixtureId = r.fixtureId;
     opponentId = r.opponentId;
@@ -243,6 +255,7 @@ export async function applyKnockoutLateDecision(
     case: decision.case,
     fixture_id: fixtureId,
     opponent_id: opponentId,
+    ...(withdrawnId !== undefined ? { withdrawn_id: withdrawnId } : {}),
     scheduled,
   };
 }
@@ -259,8 +272,19 @@ export async function applyKnockoutLateDecision(
  * flag the tap can only refuse would sit on the desk for good. The write is idempotent: a webhook retry is one flag.
  */
 async function markWaiting(tx: Tx, stage: KnockoutEntryStage, entrantId: string): Promise<KnockoutLateEntryResult | null> {
-  if (stage.status === "complete") return null;
-  if (await holdsSeatIn(tx, stage.id, entrantId)) {
+  const seated = await holdsSeatIn(tx, stage.id, entrantId);
+  // T19 (K13; B3 re-review): a seat holder the tap cannot give the seat back to — their place has been played on — is
+  // never marked, and the answer SAYS so (`refused`, KO_LATE_ENTRY_PLAYED_ON), so a Reinstate does not read as a
+  // return to the bracket. A newcomer arriving into a finished bracket stays null: nothing of theirs was played on.
+  const playedOn: KnockoutLateEntryResult = {
+    format: "knockout",
+    entrant_id: entrantId,
+    stage_id: stage.id,
+    case: "refused",
+    reason: KO_LATE_ENTRY_PLAYED_ON,
+  };
+  if (stage.status === "complete") return seated ? playedOn : null;
+  if (seated) {
     const decision = decideWaitingEntrant({
       lines: await roundOneLines(tx, stage),
       stageStarted: true, // read by a refusal's Rebuild offer only, and a refusal marks nothing
@@ -268,7 +292,7 @@ async function markWaiting(tx: Tx, stage: KnockoutEntryStage, entrantId: string)
       entrantId,
       holdsSeat: true,
     });
-    if (decision.case !== "withdrawn_slot") return null;
+    if (decision.case !== "withdrawn_slot") return playedOn;
   }
   await tx`update entrants set knockout_waiting_stage_id = ${stage.id} where id = ${entrantId}`;
   return { format: "knockout", entrant_id: entrantId, stage_id: stage.id, case: "waiting" };

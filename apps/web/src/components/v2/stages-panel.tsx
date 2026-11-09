@@ -27,7 +27,7 @@ import { rulesWriteErrorText } from "@/lib/config-issue-copy";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import { isUndoRefusalCode, undoRefusalKey } from "@/lib/undo-refusals";
-import { isKnockoutRefusalCode, knockoutRefusalKey } from "@/lib/knockout-refusals";
+import { knockoutRefusalText } from "@/lib/knockout-refusals";
 import { knockoutUpdateDrawOffered } from "@/lib/bracket-reconcile";
 import { swissRoundsWarnNotice, type SwissRoundsNotice } from "@/lib/swiss-rounds";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
@@ -2600,12 +2600,8 @@ export function classifyActError(
   // the server's English sentence.
   // B3 fix round 1 (review #6): a sentence that names something (KO_LATE_ENTRY_FED_STAGE's `{stage}`) takes it from the
   // envelope's fields, which the server sends beside the code (`knockoutRefusal(code, details)` → `err.extra`).
-  if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) {
-    const vars = Object.fromEntries(
-      Object.entries(err.extra).filter((e): e is [string, string | number] => typeof e[1] === "string" || typeof e[1] === "number"),
-    );
-    return { tone: "warning", text: msg(knockoutRefusalKey(err.code), vars), refresh: false };
-  }
+  const knockout = err instanceof ApiV1Error ? knockoutRefusalText(err.code, err.extra, msg) : null;
+  if (knockout !== null) return { tone: "warning", text: knockout, refresh: false };
   const precondition = generatePreconditionMessage(err, msg, stageName, matchName);
   if (precondition) return { tone: "warning", text: precondition, refresh: false };
   // F3 ultrareview finding 10 — was `err.message` verbatim, i.e. raw English

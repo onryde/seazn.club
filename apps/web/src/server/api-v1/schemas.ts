@@ -789,10 +789,6 @@ export const WithdrawCascadeReport = z.object({
    *  none did (the line walked over). */
   lucky_loser: z.object({ entrant_id: Uuid, fixture_id: Uuid }).nullable(),
 });
-/** `PATCH /entrants/{id}`'s reply: the entrant, plus `cascade` when the patch disqualified an entrant still in the field
- *  (the withdrawal's fixture surgery ran, W3 T15). */
-export const PatchedEntrant = Entrant.extend({ cascade: WithdrawCascadeReport.optional() });
-
 /** W3 T9 (ruling 250, X-SW-12/13/14): what "Add late player" did with an entrant added to a division whose Swiss is
  *  running. (a) re-paired the unstarted round with the newcomer (`repaired`: the players whose opponent changed; a
  *  board the odd→even field needed is `new_board`); (b) seated the newcomer against the round's bye holder
@@ -823,7 +819,12 @@ export const KnockoutLateEntryResult = z.object({
   case: z.enum(["bye", "withdrawn_slot", "waiting", "refused", "rebuild_offered"]),
   fixture_id: Uuid.optional(),
   opponent_id: Uuid.optional(),
+  /** `withdrawn_slot` only (W4 T19): whose departed seat the late player took — themself, for a reinstated player whose
+   *  own walkover was reversed. The desk's notice names them ("… takes {withdrawn}'s place against {opponent}"). */
+  withdrawn_id: Uuid.optional(),
   scheduled: z.boolean().optional(),
+  /** `refused` / `rebuild_offered`: why — KO_LATE_ENTRY_NO_SLOT (round 1 has no slot left), or KO_LATE_ENTRY_PLAYED_ON (a
+   *  reinstated player whose place in the bracket has been played on: back on the list, never back in the bracket). */
   reason: z.string().optional(),
 });
 export type KnockoutLateEntryResult = z.infer<typeof KnockoutLateEntryResult>;
@@ -832,6 +833,16 @@ export type KnockoutLateEntryResult = z.infer<typeof KnockoutLateEntryResult>;
  *  reader narrows on `format` before it reads a case. */
 export const LateEntryResult = z.discriminatedUnion("format", [SwissLateEntryResult, KnockoutLateEntryResult]);
 export type LateEntryResult = z.infer<typeof LateEntryResult>;
+
+/** `PATCH /entrants/{id}`'s reply: the entrant, plus `cascade` when the patch disqualified an entrant still in the field
+ *  (the withdrawal's fixture surgery ran, W3 T15). */
+export const PatchedEntrant = Entrant.extend({
+  cascade: WithdrawCascadeReport.optional(),
+  /** W4 T19 (K13): a REINSTATEMENT into a division whose entry stage is a running Swiss or a started root knockout — how
+   *  the player rejoins it (a knockout: `waiting` for the organiser's Add to bracket, or `refused` with
+   *  KO_LATE_ENTRY_PLAYED_ON when their place has been played on). Absent on every other patch. */
+  late_entry: LateEntryResult.optional(),
+});
 
 /** POST /divisions/{id}/entrants response row: the entrant, plus `late_entry` when it joined a running Swiss or a
  *  drawn root knockout. */

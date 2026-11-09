@@ -75,7 +75,7 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
   },
   KO_GENERATE_AFTER_START: {
     status: 409,
-    en: "Play has started, so Generate won't change the bracket. Use Add late player.",
+    en: "Play has started, so Generate won't change the bracket. Use Add to bracket.",
     key: "knockout.refusal.KO_GENERATE_AFTER_START",
   },
   KO_REDRAW_WOULD_CLEAR_SETUP: {
@@ -121,4 +121,23 @@ export function isKnockoutRefusalCode(code: unknown): code is KnockoutRefusalCod
 /** The `ui.json` key a screen renders for `code` (`useMsg()(knockoutRefusalKey(code))`). */
 export function knockoutRefusalKey(code: KnockoutRefusalCode): MessageKey {
   return KNOCKOUT_REFUSALS[code].key;
+}
+
+/**
+ * W4 T19 (B3 review #3, #6): a knockout refusal said in the reader's language — its sentence's placeholders (`{stage}`)
+ * filled from the envelope's string and number fields (`err.extra`, the `details` `knockoutRefusal` sent beside the code);
+ * any other field fills nothing. Null for a code that is not this table's, so a caller falls through to its own mapping.
+ * The ONE place the desk's panels turn a knockout refusal into words (the stage card's actions, the Entrants tab's add,
+ * the waiting strip's tap).
+ */
+export function knockoutRefusalText(
+  code: unknown,
+  extra: Readonly<Record<string, unknown>>,
+  msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): string | null {
+  if (!isKnockoutRefusalCode(code)) return null;
+  const vars = Object.fromEntries(
+    Object.entries(extra).filter((e): e is [string, string | number] => typeof e[1] === "string" || typeof e[1] === "number"),
+  );
+  return msg(knockoutRefusalKey(code), vars);
 }

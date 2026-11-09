@@ -15,6 +15,12 @@
 // Pure and client-safe.
 import { chooseByeLine, type ByeLineCandidate } from "@/lib/bracket-reconcile";
 
+/** W4 T19 (K13; B3 re-review): the reason a REINSTATED player's arrival answers `refused` — their place in the bracket has
+ *  been played on (a round-1 loser by play, a winner walked over later, a bye carried past round 1, a finished bracket),
+ *  so they are back on the entrant list and never back in the bracket. Not a refusal of the request (the reinstatement
+ *  lands): the reply says it, and the desk's notice says it in the organiser's language. */
+export const KO_LATE_ENTRY_PLAYED_ON = "KO_LATE_ENTRY_PLAYED_ON";
+
 /** One round-1 line, as the decision reads it. */
 export interface LateLine {
   id: string;

@@ -45,7 +45,8 @@ afterAll(async () => {
 });
 
 /** The plan's sentence (task-8-brief.md), typed here: the refusal table is the code under test. */
-const AFTER_START = "Play has started, so Generate won't change the bracket. Use Add late player.";
+// B6a carry (B3 #3 merge gate): the control's ONE name is "Add to bracket" — the rail item, the waiting strip's tap and this sentence.
+const AFTER_START = "Play has started, so Generate won't change the bracket. Use Add to bracket.";
 /** Fix round 1 (I1), typed here: a redraw over organiser setup is refused and points to Rebuild. Fix round 2 (item 5):
  *  it names every kind of match setup the redraw would clear, not three of them. */
 const REDRAW_OVER_SETUP =
