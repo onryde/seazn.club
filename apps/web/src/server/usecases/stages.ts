@@ -4500,6 +4500,11 @@ function roleKeyOf(rows: readonly BracketRoleRow[]): (row: BracketRoleRow) => st
   return (row) => bracketRoleKey(row, (finalRound ??= finalRoundOf(rows)));
 }
 
+/** The kinds a Rebuild carries by bracket role (`roleKeyOf`): a knockout (W4 T4, K3), and a stepladder and a page playoff
+ *  (T26c), whose `round_no` also counts from the first round, so a stepladder that gains a rung moves its final to a new
+ *  round. A double elimination still carries by position: its lanes need their own role keys (owed to W6, W6-double-elim.md). */
+const ROLE_CARRY_KINDS: ReadonlySet<string> = new Set(["knockout", "stepladder", "page_playoff"]);
+
 export interface RebuildOutcome extends GenerateOutcome {
   /** Fixtures deleted before regenerating (0 only when the stage had none). */
   removed: number;
@@ -4596,7 +4601,8 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
  * regenerate when the bracket crosses a power of two — `reconcileKnockoutGenerate`). Takes the division lock, refuses a
  * frozen division, a played or called line, an online game and a match's own format, cancels the boards' invites,
  * deletes the stage's fixtures, generates afresh (`generateStageFixturesTx`, its ledger row included), and carries each
- * old slot to the line that inherits it (a knockout by bracket ROLE, every other kind by position). `stage` is the row
+ * old slot to the line that inherits it (a knockout, a stepladder and a page playoff by bracket ROLE — `ROLE_CARRY_KINDS`
+ * — every other kind by position). `stage` is the row
  * the caller read. Returns the write, the deleted ids and the slot counts; the caller publishes after its commit.
  */
 export async function regenerateStageInTx(
@@ -4786,7 +4792,7 @@ export async function regenerateStageInTx(
   const carry = carrySlots(
     oldRows,
     newRows,
-    stage.kind === "knockout" ? { before: roleKeyOf(oldRows), after: roleKeyOf(newRows) } : undefined,
+    ROLE_CARRY_KINDS.has(stage.kind) ? { before: roleKeyOf(oldRows), after: roleKeyOf(newRows) } : undefined,
   );
   const carried = [...carry.assign];
   if (carried.length > 0) {

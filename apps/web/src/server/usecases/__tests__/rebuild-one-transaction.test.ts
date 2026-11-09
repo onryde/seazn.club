@@ -18,7 +18,9 @@ import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
+import { roundRoleKey } from "@seazn/engine/competition";
 import { isByeLine } from "@/lib/bye-line";
+import { roundRoleFor } from "@/lib/round-role-label";
 import { holdsSlot } from "@/lib/rebuild-slots";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
@@ -30,6 +32,7 @@ import { startDivision } from "../schedule";
 import { createStages, generateStageFixtures, rebuildStageFixtures } from "../stages";
 import { callFixtureToCourt, undoCall } from "../match-day-call";
 import { createCourt, createVenue } from "../venues";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -567,5 +570,89 @@ describe.skipIf(!HAS_DB)("X-RB-1 knockout Rebuild carries by bracket role (W4 T4
     const oldGf = rig.before.filter((r) => r.is_final).map(position);
     const newGf = after.filter((r) => r.is_final).map(position);
     expect(newGf, "premise: the grand final moved position").not.toEqual(oldGf);
+  });
+});
+
+// T26c item B (controller ruling 2026-11-09, re-review): a stepladder and a page playoff carry by bracket ROLE too. A
+// stepladder's `round_no` counts from its bottom rung (the engine's `generateStepladder`: game j in round j + 1), so a
+// 4 -> 5 Rebuild that carried by position handed the final's time and court to a rung. Expected values come from the
+// engine, never from `carrySlots`: each line's role is the engine's own name for it (`roundRole`, through
+// `roundRoleFor`, the namer every surface reads), and a stepladder game's home seat is the seed waiting on it
+// (`generateStepladder`), so "the game seed 2 waits on" is the same game at 4 and at 5. Both are legacy standalone
+// stages, the only kind of root stepladder or page playoff a Rebuild reaches since X-SP-6. single-sport: badminton (the
+// K3 rig above); the carry reads no sport field.
+/** The engine's role key for each line of a stage, by fixture id. */
+async function engineRolesOf(stageId: string, kind: string): Promise<Map<string, string>> {
+  const rows = await sql<
+    { id: string; round_no: number; lane: "WB" | "LB" | "GF" | null; is_final: boolean; third_place: boolean; conditional: boolean; ext_key: string | null }[]
+  >`select id, round_no, lane, is_final, third_place, conditional, ext_key from fixtures where stage_id = ${stageId}`;
+  return new Map(rows.map((r) => [r.id, roundRoleKey(roundRoleFor(rows, r, kind, r.ext_key))]));
+}
+
+/** A legacy root stepladder or page playoff of `n`, generated and laid out (a distinct time and court on every line). */
+async function laidOutLegacy(kind: "stepladder" | "page_playoff", n: number) {
+  const { auth } = await seedOrg();
+  const { divisionId, entrants } = await seedDivision(auth, BADMINTON, n);
+  const [stage] = await createStagesWithLegacy(auth, divisionId, { seq: 1, kind, name: "Playoff", config: {}, progression: null });
+  await generateStageFixtures(auth, stage!.id);
+  const before = await fullRowsOf(stage!.id);
+  const { venueId, courts } = await twoCourts(auth);
+  const written = await layOut(before, venueId, courts);
+  return { auth, divisionId, entrants, stageId: stage!.id, before, written, roles: await engineRolesOf(stage!.id, kind) };
+}
+
+describe.skipIf(!HAS_DB)("X-RB-1 stepladder and page playoff Rebuild carry by bracket role (T26c)", () => {
+  it("X-RB-1 stepladder 4→5 Rebuild: the final keeps the final's slot, each waiting seed's game keeps its slot, the new bottom rung is unscheduled", async () => {
+    const rig = await laidOutLegacy("stepladder", 4);
+    const oldFinal = rig.before.filter((r) => rig.roles.get(r.id) === "final");
+    expect([rig.before.length, oldFinal.length], "rig: four climb in three games, one of them the final").toEqual([3, 1]);
+    await createEntrants(rig.auth, rig.divisionId, [{ kind: "individual", display_name: "E5", seed: 5, members: [] }]);
+
+    const out = await rebuildStageFixtures(rig.auth, rig.stageId);
+
+    const after = await fullRowsOf(rig.stageId);
+    const roles = await engineRolesOf(rig.stageId, "stepladder");
+    const newFinal = after.filter((r) => roles.get(r.id) === "final");
+    expect([after.length, newFinal.length], "premise: five climb in four games, one of them the final").toEqual([4, 1]);
+    // Position and role really disagree on this rig, or the case could not tell them apart.
+    const atOldFinalsPlace = after.find((r) => position(r) === position(oldFinal[0]!))!;
+    expect(roles.get(atOldFinalsPlace.id), "premise: the old final's place holds a rung after the Rebuild").toMatch(/^rung_\d+$/);
+    expect(slotOf(newFinal[0]!), "the new final holds the old final's slot").toEqual(rig.written.get(position(oldFinal[0]!)));
+
+    let checked = 0;
+    for (const r of after) {
+      expect(r.home_entrant_id, `premise: ${roles.get(r.id)} seats its waiting seed`).not.toBeNull();
+      const was = rig.before.find((b) => b.home_entrant_id === r.home_entrant_id);
+      expect(slotOf(r), `${roles.get(r.id)}: the slot of the game its seed waited on`).toEqual(was ? rig.written.get(position(was)) : NO_SLOT);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every rebuilt game").toBe(4);
+    const fresh = after.filter((r) => !rig.before.some((b) => b.home_entrant_id === r.home_entrant_id));
+    expect(fresh.map((r) => roles.get(r.id)), "the one game nobody waited on before is the new bottom rung").toEqual(["rung_1"]);
+    expect(out.slots, "kept three, freed none, the new bottom rung unscheduled").toEqual({ kept: 3, freed: 0, unscheduled: 1 });
+  });
+
+  it("X-RB-1 page playoff Rebuild after a roster swap: Q1, the Eliminator, Q2 and the final each keep their slot", async () => {
+    // A page playoff is always four (the engine refuses any other count), so its lines never change place and role and
+    // position agree here: this pins the role carry for the kind; the stepladder case above is the differential.
+    const rig = await laidOutLegacy("page_playoff", 4);
+    expect([...rig.roles.values()].sort(), "rig: the four roles").toEqual(["eliminator", "final", "qualifier1", "qualifier2"]);
+    const slotByRole = new Map(rig.before.map((r) => [rig.roles.get(r.id)!, rig.written.get(position(r))!]));
+    const gone = rig.entrants[3]!;
+    await patchEntrant(rig.auth, gone, { status: "withdrawn" });
+    await createEntrants(rig.auth, rig.divisionId, [{ kind: "individual", display_name: "E5", seed: 5, members: [] }]);
+
+    const out = await rebuildStageFixtures(rig.auth, rig.stageId);
+
+    const after = await fullRowsOf(rig.stageId);
+    const roles = await engineRolesOf(rig.stageId, "page_playoff");
+    expect(after.some((r) => r.home_entrant_id === gone || r.away_entrant_id === gone), "premise: the withdrawn seed is out of the new draw").toBe(false);
+    let checked = 0;
+    for (const r of after) {
+      expect(slotOf(r), roles.get(r.id)).toEqual(slotByRole.get(roles.get(r.id)!));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every rebuilt line").toBe(4);
+    expect(out.slots).toEqual({ kept: 4, freed: 0, unscheduled: 0 });
   });
 });

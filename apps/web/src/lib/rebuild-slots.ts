@@ -112,9 +112,9 @@ type CarryRow = SlotKey & { ext_key: string | null; bye?: boolean };
 export type CarryBeforeRow = CarryRow & CarriedSlot;
 export type CarryAfterRow = CarryRow & { id: string };
 
-/** W4 T4 (K3): how each side's rows are matched. Default: the position, `(pool, round, seq)`. A knockout passes its
- *  bracket ROLE (`bracketRoleKey`, lib/bracket-role.ts), each side against its own final, because a knockout's round
- *  numbers count from the first round and move when the bracket changes size. */
+/** W4 T4 (K3): how each side's rows are matched. Default: the position, `(pool, round, seq)`. A knockout, a stepladder
+ *  and a page playoff (T26c) pass their bracket ROLE (`bracketRoleKey`, lib/bracket-role.ts), each side against its own
+ *  final, because their round numbers count from the first round and move when the bracket changes size. */
 export interface CarryKeys<B, A> {
   before: (row: B) => string;
   after: (row: A) => string;
@@ -145,8 +145,10 @@ const roundOf = (k: Pick<SlotKey, "pool_id" | "round_no">) => `${k.pool_id ?? ""
  * W4 T3 clear and forbid them). A bye is never in `unscheduled` either — it
  * needs no slot. A line that BECOMES a bye frees the slot its position held.
  *
- * A knockout matches by bracket role instead of position (`keys`, W4 T4, K3):
- * the final keeps the final's slot whatever size the bracket is rebuilt to.
+ * A knockout, a stepladder and a page playoff match by bracket role instead of
+ * position (`keys`, W4 T4 K3, T26c): the final keeps the final's slot whatever
+ * size the bracket is rebuilt to. A double elimination still matches by
+ * position (owed to W6).
  *
  * Positions are unique per pool by construction (every generator numbers
  * `seq_in_round` per pool and round; `addFixture` takes the round's next seq).

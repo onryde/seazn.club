@@ -1,11 +1,15 @@
 // Owner-approved 2026-11-09 (W4 app PR A fix round): Rebuild's confirm says where times and courts go. Rebuild carries
 // every slot an organiser laid out by the match's place (lib/rebuild-slots.ts `carrySlots`: (pool, round, seq) for every
-// kind, a knockout by bracket role since W4 T4), so the dialog says so before the organiser presses it. Drives the real
-// island (the hook harness): the roster-drift banner's Rebuild button, the confirm it opens, captured.
+// kind; a knockout by bracket role since W4 T4, a stepladder and a page playoff since T26c), so the dialog says so before
+// the organiser presses it. Drives the real island (the hook harness): the roster-drift banner's Rebuild button, the
+// confirm it opens, captured.
 //
-// Expected: the owner's sentence, typed out here (never read off the panel). Swept over the stage kinds whose card shows
-// the banner's Rebuild — a knockout (carry by role) and a league and a Swiss (carry by position) — one sentence for all,
-// because the carry runs for every kind (stages.ts `regenerateStageInTx`). Sport-free: the dialog reads no sport field.
+// Expected: the owner's sentence, typed out here (never read off the panel). Swept over the five kinds the sentence is
+// TRUE for — a knockout, a stepladder and a page playoff (carry by role) and a league and a Swiss (carry by position) —
+// one sentence for all, because the carry runs for every kind (stages.ts `regenerateStageInTx`). NOT swept: a double
+// elimination, whose Rebuild still carries by position, so a rebuilt grand final does not keep the grand final's slot
+// and the sentence is false for it (owed to W6, W6-double-elim.md "Carried from W4"). Sport-free: the dialog reads no
+// sport field.
 import { describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { StagesPanel } from "@/components/v2/stages-panel";
@@ -57,10 +61,12 @@ describe("Rebuild's confirm says times and courts stay with each match's place",
     expect(confirmCalls).toHaveLength(0);
   });
 
-  it("every stage kind whose card offers Rebuild: the dialog carries the owner's sentence, before the can't-undo line", async () => {
+  it("a knockout, a stepladder, a page playoff, a league and a Swiss: the dialog carries the owner's sentence, before the can't-undo line", async () => {
     let checked = 0;
     for (const [kind, config] of [
       ["knockout", {}],
+      ["stepladder", {}],
+      ["page_playoff", {}],
       ["league", { legs: 1 }],
       ["swiss", { rounds: 3 }],
     ] as const) {
@@ -77,6 +83,6 @@ describe("Rebuild's confirm says times and courts stay with each match's place",
       expect(body.indexOf(OWNER_SENTENCE), `${kind}: said before "This can't be undone."`).toBeLessThan(body.indexOf("This can't be undone."));
       checked++;
     }
-    expect(checked, "anti-vacuity: three kinds").toBe(3);
+    expect(checked, "anti-vacuity: five kinds").toBe(5);
   });
 });
