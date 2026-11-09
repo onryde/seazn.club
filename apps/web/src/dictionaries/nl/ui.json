@@ -2559,6 +2559,7 @@
   "knockout.refusal.KO_LATE_ENTRY_NOT_UNDOABLE": "Een late speler toevoegen kan niet ongedaan worden gemaakt. Trek de speler in plaats daarvan terug.",
   "knockout.refusal.KO_LATE_ENTRY_NOT_WAITING": "Deze speler wacht niet op een plek in dit schema.",
   "knockout.refusal.KO_PLATE_TOO_FEW": "Knock-out + Plate heeft minstens 4 deelnemers nodig.",
+  "knockout.refusal.PAGE_PLAYOFF_TOO_FEW": "Play-offs (IPL-stijl) hebben minstens 4 deelnemers nodig.",
   "knockout.refusal.QUALIFYING_MAIN_TOO_FEW": "Kwalificatie + Hoofdschema heeft minstens {min} deelnemers nodig.",
   "knockout.refusal.KO_CUT_NOT_WHOLE_ROUND": "Laat vanuit een knock-out een hele ronde doorgaan: 1, 2, 4, 8…",
   "knockout.lateWaiting.one": "{count} late speler wacht — toevoegen aan schema",

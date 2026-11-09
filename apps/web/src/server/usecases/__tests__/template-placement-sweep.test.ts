@@ -18,7 +18,9 @@
 // Scope (owner 2026-11-09, T26c brief's SCOPE RULING): double_elim belongs to W6 and americano / mexicano / ladder to W7;
 // each is excluded BY KEY with its wave named, and the exclusion's size is pinned so a new template cannot slip into it.
 // A `retired` template is left out by the product's own flag. Combos the builder's size gate refuses (`stageGraphSizeGate`)
-// are not placed - the server's own refusal is asserted to be the gate's named code instead.
+// are not placed - the server's own refusal is asserted to be the gate's named code instead: a root knockout a field of 3
+// cannot fill (ko_plate, qualifying_main) and a page playoff fed by fewer entrants than its size (group_playoffs,
+// swiss_playoff - T26c fix round 1, I1: its "Rank 4" seat could never be filled, yet it got a court and a time).
 //
 // Owed (by name): a knockout drawn at 3 WITH a third-place match - the root knockout at n=3, and a fed knockout taking a
 // Top 3 (league_ko, groups_ko, swiss_knockout at n=3) - puts its third-place line on the timetable although one of its
@@ -29,14 +31,18 @@
 // scoring, different entrant model), each the registry's first that is offered every in-scope template. The placement
 // reads no sport field (schedule.ts never reads the module); two sports prove that rather than assume it.
 //
-// The placement CP-SAT service is not needed: without it BUILD falls back to greedy (day-one-fixtures-survive-build.test.ts
-// explains the logged solveBuild failure). Measured 2026-11-09 with the shared service up, it refuses a request holding a
-// seatless shell (INVALID_REQUEST "neither entrant_indices nor person_indices") and BUILD falls back to greedy all the same.
+// BUILD runs as the product runs it, solver or not. Locally, without PLACEMENT_SERVICE_HOST, it falls back to greedy
+// (day-one-fixtures-survive-build.test.ts explains the logged solveBuild failure). On CI this file runs in
+// smoke-db-usecases, which starts the real CP-SAT placement service (ci.yml "Start the placement service"), so there the
+// solver places what it accepts; measured 2026-11-09 with the service up, it refuses a request holding a seatless shell
+// (INVALID_REQUEST "neither entrant_indices nor person_indices") and BUILD falls back to greedy for that stage. The
+// verdicts read what was placed, never which placer placed it, so they hold under both.
 //
 // The rest between a player's matches is the settings' own default (`perEntrantMinRest` 0, ScheduleConfig in schemas.ts).
-// NOT swept here, and routed to the controller as a finding (task-26c-report.md): with a rest of 30, BUILD leaves every
-// line fed by an undecided line unplaced (blocking `warn.order` H6 "starts inside feeder's rest") - 4 of a bracket of 8's
-// 7 lines placed - which also hides G1, since the owed third-place lines are fed lines.
+// A rest above 0 is OUT OF SCOPE here, pending engine 6.0.1 (the finding routed in task-26c-report.md: with a rest of 30,
+// BUILD leaves every line fed by an undecided line unplaced - blocking `warn.order` H6 "starts inside feeder's rest" -
+// 4 of a bracket of 8's 7 lines placed, which also hides G1, since the owed third-place lines are fed lines). Add those
+// cases when that release lands, not before.
 //
 // Real Postgres required; skipped without DATABASE_URL (the house convention of the sibling usecase suites).
 import { afterAll, describe, expect, it } from "vitest";
@@ -90,7 +96,6 @@ const EXCLUDED: Readonly<Record<string, string>> = {
 /** How many keys the exclusion holds. A fifth key is a ruling, not an edit: this pin is what makes it one. */
 const EXCLUDED_COUNT = 4;
 
-const RETIRED = STAGE_TEMPLATES.filter((t) => t.retired === true).map((t) => t.key);
 const IN_SCOPE = STAGE_TEMPLATES.filter((t) => t.retired !== true && !(t.key in EXCLUDED)).map((t) => t.key);
 
 /** The fields: a bye semi (3), byes in round 1 (5), no byes (8). */
@@ -119,6 +124,29 @@ function draftsFor(template: string, n: number, third: boolean): StageDraft[] {
 
 /** Whether a template draws any knockout stage (so third place is a variant of it). */
 const drawsKnockout = (template: string): boolean => draftsFor(template, 8, false).some((d) => d.kind === "knockout");
+
+/** The in-scope templates that end in a page playoff, read from the drafts the builder posts. */
+const PAGE_PLAYOFF_TEMPLATES = IN_SCOPE.filter((t) => draftsFor(t, 8, false).some((d) => d.kind === "page_playoff")).sort();
+
+/** The page playoff's size as the ENGINE declares it: the one field `generatePagePlayoff` draws, seating every entrant.
+ *  It exports no constant, so the generator is asked; "exactly one size" is a guard, not an assumption. */
+function enginePagePlayoffSize(): number {
+  const accepted: number[] = [];
+  for (let k = 0; k <= 16; k++) {
+    const entrants = Array.from({ length: k }, (_, i) => `e${i + 1}`);
+    let bracket: GeneratedBracket;
+    try {
+      bracket = generatePagePlayoff({ entrants, seeds: new Map(entrants.map((e, i) => [e, i + 1])) });
+    } catch {
+      continue;
+    }
+    const seated = new Set(bracket.fixtures.flatMap((f) => [f.home, f.away]).filter((e) => e !== undefined));
+    if (seated.size !== k) throw new Error(`generatePagePlayoff(${k}) seats ${seated.size} of ${k}`);
+    accepted.push(k);
+  }
+  if (accepted.length !== 1) throw new Error(`generatePagePlayoff draws ${accepted.length} sizes in 0..16 (${accepted.join(", ")}), not one`);
+  return accepted[0]!;
+}
 
 interface SportPick {
   key: string;
@@ -226,7 +254,8 @@ interface Checked {
   placed: number;
   /** Lines that hold neither (byes, fated byes, dead lines). */
   off: number;
-  /** Of `off`, the engine's fated byes and dead lines (not its plain byes). */
+  /** Of `off`, the engine's fated byes and dead lines (not its plain byes) - kept off the timetable. A fated line that IS
+   *  placed is not counted here: it is a problem (today exactly the owed third-place lines, see the verdict). */
   fated: number;
 }
 
@@ -395,17 +424,33 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
       const placed = checked.filter((c) => c.template === t).reduce((s, c) => s + c.placed, 0);
       expect(placed, `${t}: lines placed with a time and a court`).toBeGreaterThan(0);
     }
-    // Both halves of the placement verdict were reached: byes kept off (root byes, Swiss bye shells, fed byes) and fated
-    // lines judged (the owed third-place lines are the fated ones today, so `fated` is counted from the problems too).
+    // Byes were kept off (root byes, Swiss bye shells, fed byes).
     expect(checked.reduce((s, c) => s + c.off, 0), "lines kept off the timetable").toBeGreaterThan(0);
+    // Fated lines kept OFF, per template: none today. The only fated lines the sweep draws are the owed third-place lines
+    // (G1, below), and those are placed, so they are problems, not `fated`. PR B's fix keeps them off: that moves them here
+    // and turns this pin red for exactly the owed templates, beside the owed list - both are updated together, by design.
+    const fatedBy = (t: string) => checked.filter((c) => c.template === t).reduce((s, c) => s + c.fated, 0);
+    expect(Object.fromEntries(IN_SCOPE.map((t) => [t, fatedBy(t)])), "fated lines kept off the timetable, per template").toEqual(
+      Object.fromEntries(IN_SCOPE.map((t) => [t, 0])),
+    );
 
-    // The size gate: exactly the templates whose root knockout a field of 3 cannot fill (X-PL-1, X-QM-5), each refused by
-    // the server's Generate under the gate's own code.
+    // The size gate, each combo refused by the server's Generate under the gate's own code: the templates whose root
+    // knockout a field of 3 cannot fill (X-PL-1, X-QM-5), and the templates ending in a page playoff at every field below
+    // the page playoff's size as the engine draws it (T26c I1).
+    const pageSize = enginePagePlayoffSize();
+    const belowPage = FIELDS.filter((n) => n < pageSize);
+    expect(PAGE_PLAYOFF_TEMPLATES, "the in-scope templates ending in a page playoff").toEqual(["group_playoffs", "swiss_playoff"]);
+    expect(belowPage.length, "anti-vacuity: a swept field lies below the page playoff's size").toBeGreaterThan(0);
     expect(gated.map((g) => g.label).sort(), "the combos the builder's size gate refuses").toEqual(
-      SPORTS.flatMap((s) => ["ko_plate", "qualifying_main"].flatMap((t) => [false, true].map((third) => `${t} ${s.key} n=3 q=4 third=${third}`))).sort(),
+      SPORTS.flatMap((s) => [
+        ...["ko_plate", "qualifying_main"].flatMap((t) => [false, true].map((third) => `${t} ${s.key} n=3 q=4 third=${third}`)),
+        ...PAGE_PLAYOFF_TEMPLATES.flatMap((t) => belowPage.map((n) => `${t} ${s.key} n=${n} q=${topNFor(t, n)} third=false`)),
+      ]).sort(),
     );
     for (const g of gated) expect(g.server, `${g.label}: the server refuses as the builder's gate does`).toBe(g.gate);
-    expect(new Set(gated.map((g) => g.gate)), "both named gates reached").toEqual(new Set(["KO_PLATE_TOO_FEW", "QUALIFYING_MAIN_TOO_FEW"]));
+    expect(new Set(gated.map((g) => g.gate)), "every named gate reached").toEqual(
+      new Set(["KO_PLATE_TOO_FEW", "QUALIFYING_MAIN_TOO_FEW", "PAGE_PLAYOFF_TOO_FEW"]),
+    );
 
     // G1 knockout half, owed to PR B BY NAME: exactly the third-place line of each named template at n=3 with third place,
     // in every sport - one more, one fewer or one moved is red here.
@@ -460,14 +505,16 @@ describe("the sweep's line-fate oracle (no database)", () => {
     expect(Object.fromEntries(fates)).toEqual({ a: "bye", b: "bye", c: "dead", d: "fated_bye", e: "fated_bye" });
   });
 
-  it("the scope: every excluded key is a live template, the exclusion holds exactly its pinned count, and nothing falls between", () => {
+  it("the scope: every excluded key is a live template, the exclusion holds exactly its pinned count, the catalogue its pinned size", () => {
     for (const key of Object.keys(EXCLUDED)) {
       const t = STAGE_TEMPLATES.find((x) => x.key === key);
       expect(t, `${key} is a STAGE_TEMPLATES entry`).toBeDefined();
       expect(t!.retired, `${key} is offered (not retired), so its exclusion is a ruling`).toBeUndefined();
     }
     expect(Object.keys(EXCLUDED), "the excluded keys").toHaveLength(EXCLUDED_COUNT);
-    expect(IN_SCOPE.length + Object.keys(EXCLUDED).length + RETIRED.length, "in scope + excluded + retired = the catalogue").toBe(STAGE_TEMPLATES.length);
+    // The catalogue's size, as a literal (16, retired included): a template added or removed is a scope decision this
+    // sweep must take, not one it absorbs into IN_SCOPE unseen.
+    expect(STAGE_TEMPLATES.map((t) => t.key), "the STAGE_TEMPLATES catalogue, retired included").toHaveLength(16);
     expect(IN_SCOPE.length, "anti-vacuity: templates in scope").toBeGreaterThan(0);
     expect(SPORTS.length, "two or more sports (one per declared default entrant kind)").toBeGreaterThanOrEqual(2);
     expect(new Set(SPORTS.map((s) => s.kind)).size, "the sports differ in entrant model").toBe(SPORTS.length);

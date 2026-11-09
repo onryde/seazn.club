@@ -3,12 +3,13 @@
 // §5.1), qualifying_main at the builder's q = 4 completes from 4 (the driving sweep, qualifying-main-sizes.test.ts), a knockout's
 // cut is a whole round. Never the gate's own arithmetic.
 import { describe, expect, it } from "vitest";
+import { generatePagePlayoff } from "@seazn/engine/scheduling";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { formatPickerView, formatStagesFor } from "@/lib/division-builder/format-choice";
 import { estimateMinutes, estimateTemplate } from "@/lib/division-builder/format-estimate";
 import { collapsedPicks, isPairRotationTemplate, keepSizeGatedInView, SUGGESTED_COUNT, type PlanInput } from "@/lib/division-builder/model";
-import { PLATE_MIN, QUALIFYING_MAIN_MIN, isWholeRoundCut, stageGraphSizeGate, stageGraphSizeRefusal } from "@/lib/format-size-gates";
+import { PAGE_PLAYOFF_SIZE, PLATE_MIN, QUALIFYING_MAIN_MIN, isWholeRoundCut, stageGraphSizeGate, stageGraphSizeRefusal } from "@/lib/format-size-gates";
 import { buildTemplateStages, templatesForSport, type TemplateKnobs } from "@/lib/format-templates";
 
 const KNOBS: TemplateKnobs = { qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 };
@@ -27,12 +28,38 @@ const viewAt = (entrants: number, template = "league", offer: readonly string[] 
   });
 
 const root = { kind: "knockout", progression: null };
+
+/** The page playoff's size, read off the ENGINE's generator (T26c fix round 1, I1): the field sizes `generatePagePlayoff` draws
+ *  without refusing, and the entrants it seats there. Never the gate's constant. */
+function enginePagePlayoffSize(): number {
+  const accepted: number[] = [];
+  let seated = 0;
+  for (let n = 0; n <= 16; n++) {
+    const entrants = Array.from({ length: n }, (_, i) => `e${i + 1}`);
+    try {
+      const drawn = generatePagePlayoff({ entrants });
+      accepted.push(n);
+      seated = new Set(drawn.fixtures.flatMap((f) => [f.home, f.away]).filter((x): x is string => typeof x === "string")).size;
+    } catch {
+      // any other count is the engine's refusal
+    }
+  }
+  if (accepted.length !== 1) throw new Error(`enginePagePlayoffSize: the engine drew ${accepted.length} sizes (${accepted.join(", ")}), not one`);
+  if (seated !== accepted[0]) throw new Error(`enginePagePlayoffSize: drew ${accepted[0]} but seated ${seated}`);
+  return accepted[0]!;
+}
+const PAGE_SIZE = enginePagePlayoffSize();
+const PAGE_PLAYOFF_TEMPLATES = ["group_playoffs", "swiss_playoff"] as const;
 const take = (rule: Record<string, unknown>, stage: unknown = "previous") => ({ sources: [{ stage, take: [rule] }], placement: "rank_order", timing: "setup" });
 
 describe("the constants, as the rulebook and the driving sweep name them", () => {
   it("a plate needs 4 (spec §5.1), and qualifying_main at the builder's q completes from 4 (the sweep)", () => {
     expect(PLATE_MIN).toBe(4);
     expect(QUALIFYING_MAIN_MIN).toBe(4);
+  });
+
+  it("a page playoff's size is the engine's: the one field generatePagePlayoff draws, every seat filled", () => {
+    expect(PAGE_PLAYOFF_SIZE).toBe(PAGE_SIZE);
   });
 });
 
@@ -95,6 +122,36 @@ describe("stageGraphSizeRefusal", () => {
 
   it("a rank cut into a table stage is not this refusal's: the sentence names a main draw", () => {
     expect(stageGraphSizeRefusal([root, { kind: "league", progression: take({ kind: "rankRange", from: 1, to: 4 }) }], 3)).toBeNull();
+  });
+
+  // T26c fix round 1 (I1, controller ruling 2026-11-09): a fed page playoff seats the engine's four, so a smaller field leaves a
+  // seat no stage can fill — and its lines took a time and a court (the T26c sweep). Refused by name below that size.
+  it("I1 a fed page playoff (group_playoffs, swiss_playoff) is refused below the page playoff's size, open from it", () => {
+    let checked = 0;
+    for (const key of PAGE_PLAYOFF_TEMPLATES) {
+      const drafts = buildTemplateStages(key, KNOBS);
+      expect(drafts.map((d) => d.kind)[1], `premise: ${key} ends in a page playoff`).toBe("page_playoff");
+      for (let n = 0; n <= 12; n++) {
+        expect(stageGraphSizeGate(drafts, n), `${key} n=${n}`).toEqual(n < PAGE_SIZE ? { code: "PAGE_PLAYOFF_TOO_FEW", min: PAGE_SIZE } : null);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: two templates, 13 fields each").toBe(26);
+  });
+
+  it("I1 reads the graph: a page playoff fed by a named source is gated; a standalone (legacy) one is not this rule's", () => {
+    const named = [{ id: "s1", kind: "swiss", progression: null }, { id: "s2", kind: "page_playoff", progression: take({ kind: "rankRange", from: 1, to: 4 }, { stageId: "s1" }) }];
+    expect(stageGraphSizeRefusal(named, PAGE_SIZE - 1)).toBe("PAGE_PLAYOFF_TOO_FEW");
+    expect(stageGraphSizeRefusal(named, PAGE_SIZE)).toBeNull();
+    expect(stageGraphSizeRefusal([{ kind: "page_playoff", progression: null }], PAGE_SIZE - 1), "the engine's own refusal says that one").toBeNull();
+  });
+
+  it("I1 beside a qualifying cut the larger bound is said: a cut of 8 outranks the page playoff's four", () => {
+    const r = { id: "r", ...root };
+    const main = { id: "m", kind: "knockout", progression: take({ kind: "rankRange", from: 1, to: 8 }, { stageId: "r" }) };
+    const pp = { id: "p", kind: "page_playoff", progression: take({ kind: "rankRange", from: 1, to: 4 }, { stageId: "r" }) };
+    expect(stageGraphSizeGate([r, main, pp], 3)).toEqual({ code: "QUALIFYING_MAIN_TOO_FEW", min: 8 });
+    expect(stageGraphSizeGate([r, pp], 3)).toEqual({ code: "PAGE_PLAYOFF_TOO_FEW", min: PAGE_SIZE });
   });
 });
 
@@ -198,7 +255,7 @@ describe("X-PL-1 the builder shows Knockout + Plate disabled below 4 with the re
     expect(view.sizeGate("ko_plate")).toBeNull();
   });
 
-  for (const [key, min] of [["ko_plate", 4], ["qualifying_main", 4]] as const) {
+  for (const [key, min] of [["ko_plate", 4], ["qualifying_main", 4], ...PAGE_PLAYOFF_TEMPLATES.map((k) => [k, PAGE_SIZE] as const)] as const) {
     it(`${key}: the estimate and the gate give the same verdict at every field from 0 to 40 (41 checked)`, () => {
       let checked = 0;
       const drafts = buildTemplateStages(key, KNOBS);
@@ -222,10 +279,24 @@ describe("X-QM-5 qualifying_main below its bound (builder)", () => {
     expect(viewAt(4).sizeGate("qualifying_main")).toBeNull();
   });
 
-  it("below both bounds both cards stay in view; the order keeps the ranking's among the rest", () => {
+  it("below every bound each gated card stays in view; the order keeps the ranking's among the rest", () => {
     const view = viewAt(2);
-    expect(view.suggested.slice(-2).sort()).toEqual(["ko_plate", "qualifying_main"]);
+    const gated = ["ko_plate", "qualifying_main", ...PAGE_PLAYOFF_TEMPLATES].filter((k) => ALL_OFFER.includes(k)).sort();
+    expect(gated, "premise: badminton is offered all four size-gated formats").toEqual(["group_playoffs", "ko_plate", "qualifying_main", "swiss_playoff"]);
+    expect(view.suggested.slice(-gated.length).sort()).toEqual(gated);
     expect(view.foldedCount).toBe(ALL_OFFER.length - SUGGESTED_COUNT);
+  });
+});
+
+describe("I1 group_playoffs and swiss_playoff below the page playoff's size (builder)", () => {
+  it("disabled below the engine's page playoff size with that bound, open from it", () => {
+    let checked = 0;
+    for (const key of PAGE_PLAYOFF_TEMPLATES) {
+      expect(viewAt(PAGE_SIZE - 1).sizeGate(key), key).toEqual({ code: "PAGE_PLAYOFF_TOO_FEW", min: PAGE_SIZE });
+      expect(viewAt(PAGE_SIZE).sizeGate(key), key).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 

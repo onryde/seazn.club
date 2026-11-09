@@ -161,9 +161,14 @@ const KNOWN_REFUSALS: Array<{ re: RegExp; expected: number; why: string }> = [
     why: "a standalone page playoff (since X-SP-6 a legacy row only, seeded as one) is the fixed four-team tree: every size but 4",
   },
   {
-    re: /^swiss_(playoff|knockout) n=2 q=\d+ pools=\d+ third=(true|false): generate swiss refused \(That is more rounds than this field can pair\.\)$/,
-    expected: 3,
-    why: "a Swiss feeder asked for more rounds than two entrants can play (swiss_playoff q=4; swiss_knockout q=2 with and without third place)",
+    re: /^swiss_knockout n=2 q=\d+ pools=\d+ third=(true|false): generate swiss refused \(That is more rounds than this field can pair\.\)$/,
+    expected: 2,
+    why: "a Swiss feeder asked for more rounds than two entrants can play (swiss_knockout q=2 with and without third place)",
+  },
+  {
+    re: /^(group_playoffs n=2 q=4 pools=\d+ third=false: generate league|swiss_playoff n=2 q=4 pools=\d+ third=false: generate swiss) refused \(A page playoff needs at least 4 entrants\.\)$/,
+    expected: 2,
+    why: "T26c I1 (PAGE_PLAYOFF_TOO_FEW): a format ending in a page playoff is refused at its root's Generate below the page playoff's four seats (swiss_playoff before its Swiss rounds are read) - both templates at the sweep's one field under it (2)",
   },
   {
     re: new RegExp(`^ko_plate n=(${PLATE_UNFILLED_FIELDS.join("|")}) q=[34] third=false: seeding knockout from knockout refused \\(bracket round 1 has no loser at position \\d+ \\(found \\d+\\)\\)$`),
@@ -392,6 +397,7 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
 describe("the sweep's refusal audit (no database)", () => {
   const PP = (n: number) => `page_playoff n=${n}: generate page_playoff refused (page playoffs need exactly 4 entrants, got ${n})`;
   const SW = (name: string, q: number, third: boolean) => `${name} n=2 q=${q} pools=2 third=${third}: generate swiss refused (That is more rounds than this field can pair.)`;
+  const PAGE = (name: "swiss_playoff" | "group_playoffs" | "swiss_knockout" = "swiss_playoff", kind = name === "group_playoffs" ? "league" : "swiss") => `${name} n=2 q=4 pools=2 third=false: generate ${kind} refused (A page playoff needs at least 4 entrants.)`;
   // The Plate asks for the loser at the position after the last real round-1 line, and finds as many as the Main draw plays.
   const PL = (n: number, q: number) => `ko_plate n=${n} q=${q} third=false: seeding knockout from knockout refused (bracket round 1 has no loser at position ${round1Matches(n) + 1} (found ${round1Matches(n)}))`;
   const SMALL_PLATE = (third: boolean) => `ko_plate n=2 q=2 pools=2 third=${third}: generate knockout refused (Knockout + Plate needs at least 4 entrants.)`;
@@ -405,7 +411,8 @@ describe("the sweep's refusal audit (no database)", () => {
   ];
   const today = (): string[] => [
     ...STANDALONE_SIZES.filter((n) => n !== 4).map(PP),
-    SW("swiss_playoff", 4, false),
+    PAGE(),
+    PAGE("group_playoffs"),
     SW("swiss_knockout", 2, false),
     SW("swiss_knockout", 2, true),
     ...PLATE_UNFILLED.map(({ n, q }) => PL(n, q)),
@@ -413,12 +420,12 @@ describe("the sweep's refusal audit (no database)", () => {
     ...CUTS,
   ];
 
-  it("accepts exactly what the sweep meets today (93 refusals: 31 + 3 + 22 + 2 + 35)", () => {
+  it("accepts exactly what the sweep meets today (94 refusals: 31 + 2 + 2 + 22 + 2 + 35)", () => {
     // 22 Plate refusals: 13 fields at q=4 (4-7, 9-11, 17-19, 33-35) and 9 at q=3 (4-6, 9-10, 17-18, 33-34); 35 cuts: 16 day one + 19 seeded.
     expect(PLATE_UNFILLED.length).toBe(22);
     expect(PLATE_UNFILLED_FIELDS).toEqual([4, 5, 6, 7, 9, 10, 11, 17, 18, 19, 33, 34, 35]);
     expect(CUTS.length).toBe(35);
-    expect(today().length).toBe(93);
+    expect(today().length).toBe(94);
     expect(auditRefusals(today()).problems).toEqual([]);
   });
 
@@ -427,11 +434,16 @@ describe("the sweep's refusal audit (no database)", () => {
       ["page_playoff n=4 refused too (the valid size)", [...today(), PP(4)]],
       ["one page_playoff size no longer refuses", today().filter((r) => r !== PP(7))],
       ["a Swiss refusal at a size the rule does not name", [...today(), SW("swiss_knockout", 2, true).replace("n=2", "n=3")]],
-      ["a fourth Swiss refusal", [...today(), SW("swiss_playoff", 2, true)]],
+      ["a third Swiss refusal", [...today(), SW("swiss_knockout", 4, true)]],
+      ["swiss_playoff refused for its rounds again (its page playoff gate refuses first)", [...today().filter((r) => r !== PAGE()), SW("swiss_playoff", 4, false)]],
+      ["one page playoff refusal no longer refused", today().filter((r) => r !== PAGE("group_playoffs"))],
+      ["the league root's page refusal said by a group stage", [...today().filter((r) => r !== PAGE("group_playoffs")), PAGE("group_playoffs", "group")]],
+      ["the page playoff refusal at a field the bound allows", [...today(), PAGE().replace("n=2", "n=4")]],
+      ["the page playoff refusal on a template that ends in no page playoff", [...today().filter((r) => r !== PAGE()), PAGE("swiss_knockout")]],
       ["a Plate refusal at a field whose Main draw plays enough round-1 matches (8 plays 4)", [...today(), PL(8, 4)]],
       ["one Plate field no longer refuses (7 plays 3 round-1 matches, under the builder's 4)", today().filter((r) => r !== PL(7, 4))],
       ["the Plate refusal MOVED to another size (same count, so only the label pattern can see it)", [...today().filter((r) => r !== PL(5, 3)), PL(8, 3)]],
-      ["a Swiss refusal MOVED to another template (same count)", [...today().filter((r) => r !== SW("swiss_playoff", 4, false)), SW("swiss_other", 4, false)]],
+      ["a Swiss refusal MOVED to another template (same count)", [...today().filter((r) => r !== SW("swiss_knockout", 2, false)), SW("swiss_other", 2, false)]],
       ["the Plate refusal at another q", [...today().filter((r) => r !== PL(5, 4)), PL(5, 5)]],
       ["a refusal text nobody has read", [...today(), "ko_plate n=8 q=4 third=false: seeding knockout from knockout refused (something new)"]],
       ["the plate refused at a field the bound allows", [...today(), SMALL_PLATE(false).replace("n=2", "n=4")]],

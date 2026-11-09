@@ -41,8 +41,9 @@ const UI = uiEn as Record<string, string>;
 const needs = (min: number, count: number) => UI["divBuilder.card.needsEntrants"]!.replace("{min}", String(min)).replace("{count}", String(count));
 const PLATE_SAYS = UI["knockout.refusal.KO_PLATE_TOO_FEW"]!;
 const MAIN_SAYS = UI["knockout.refusal.QUALIFYING_MAIN_TOO_FEW"]!.replace("{min}", "4");
-/** The formats the rulebook sizes (X-PL-1, X-QM-5), each from 4. */
-const GATED = ["ko_plate", "qualifying_main"] as const;
+/** The formats the rulebook sizes (X-PL-1, X-QM-5), each from 4, and the two that end in a page playoff (T26c fix round 1, I1),
+ *  from the page playoff's four (the engine's `generatePagePlayoff` size, pinned in lib/__tests__/format-size-gates.test.ts). */
+const GATED = ["ko_plate", "qualifying_main", "group_playoffs", "swiss_playoff"] as const;
 
 const modelOf = (key: string) => {
   const m = builtinModules.find((x) => x.key === key);
@@ -137,7 +138,7 @@ describe("X-PL-1 the builder shows Knockout + Plate disabled below 4 with the re
       const h = mountBuilder(option.key);
       for (const n of [3, 2]) {
         setEntrants(h, n);
-        // Only the rulebook's two formats are sized at these fields: every other card reads as before.
+        // Only the sized formats are gated at these fields: every other card reads as before.
         expect(gatedCards(h).map((c) => propsOf(c)["data-template"]).sort(), `${option.key} n=${n}`).toEqual([...expected].sort());
         for (const key of expected) {
           const card = cardOf(h, key);
@@ -158,6 +159,8 @@ describe("X-PL-1 the builder shows Knockout + Plate disabled below 4 with the re
     setEntrants(h, 3);
     expect(propsOf(cardOf(h, "ko_plate"))["data-size-gated"]).toBe("KO_PLATE_TOO_FEW");
     expect(propsOf(cardOf(h, "qualifying_main"))["data-size-gated"]).toBe("QUALIFYING_MAIN_TOO_FEW");
+    expect(propsOf(cardOf(h, "group_playoffs"))["data-size-gated"]).toBe("PAGE_PLAYOFF_TOO_FEW");
+    expect(propsOf(cardOf(h, "swiss_playoff"))["data-size-gated"]).toBe("PAGE_PLAYOFF_TOO_FEW");
   });
 
   it("at 4: no reason, the estimate, a live radio, and the tap picks it; back at 3 it closes again", () => {

@@ -17,6 +17,12 @@ export const PLATE_MIN = 4;
  *  the builder's q (4) and is pinned against it: that pin is what keeps the two from drifting apart unseen. */
 export const QUALIFYING_MAIN_MIN = 4;
 
+/** T26c fix round 1 (I1, controller ruling 2026-11-09): a page playoff's own size. It seats exactly four (Q1 1 v 2, the
+ *  Eliminator 3 v 4, then Q2 and the final; the engine's `generatePagePlayoff` refuses any other count), so a page playoff fed
+ *  from a smaller field has a seat no stage can fill — and that seat's lines took a time and a court. Pinned against the engine's
+ *  generator in lib/__tests__/format-size-gates.test.ts (the one place it is read from, client bundles kept off the engine). */
+export const PAGE_PLAYOFF_SIZE = 4;
+
 export interface StageGraphStage {
   /** Absent on a template's drafts: they only name their source as `previous`. */
   id?: string;
@@ -47,7 +53,8 @@ function sourceOf(stages: readonly StageGraphStage[], at: number, stage: unknown
 }
 
 /** What `stages` (in seq order) refuses a field of `n` for, or null. EMPTY CASE FIRST: no stages, nothing to refuse. Only a ROOT
- *  knockout's feed is sized here: a fed knockout's losers depend on the feed, and a table ranks everyone it has. Where both rules
+ *  knockout's feed is sized here: a fed knockout's losers depend on the feed, and a table ranks everyone it has. The one
+ *  exception is a fed page playoff, whose size is its own (`PAGE_PLAYOFF_SIZE`), wherever it is fed from. Where several rules
  *  apply the larger bound is the one that says what would fix it. */
 export function stageGraphSizeGate(stages: readonly StageGraphStage[], n: number): SizeRefusal | null {
   let gate: SizeRefusal | null = null;
@@ -55,6 +62,10 @@ export function stageGraphSizeGate(stages: readonly StageGraphStage[], n: number
     if (gate === null || min > gate.min) gate = { code, min };
   };
   stages.forEach((stage, at) => {
+    // A FED page playoff (group_playoffs, swiss_playoff, an API-built one) seats PAGE_PLAYOFF_SIZE from what it is fed, and no
+    // stage ranks more entrants than the field holds. A standalone (legacy) one is not this rule's: its own Generate draws the
+    // field it has, and the engine refuses any count but four by name.
+    if (stage.kind === "page_playoff" && (stage.progression ?? null) !== null) needs("PAGE_PLAYOFF_TOO_FEW", PAGE_PLAYOFF_SIZE);
     const sources = (stage.progression as { sources?: readonly SourceShape[] } | null | undefined)?.sources ?? [];
     for (const source of sources) {
       const from = sourceOf(stages, at, source.stage);

@@ -46,6 +46,9 @@ export type KnockoutRefusalCode =
   // T15 (X-QM-5, `details.min`): Start or a root Generate of a qualifying draw on a field that cannot fill the cut. Unrefused,
   // the whole qualifying stage is played and Complete then fails (STAGE_COMPLETED_SEEDING_FAILED).
   | "QUALIFYING_MAIN_TOO_FEW"
+  // T26c fix round 1 (I1): Start, a root Generate or Rebuild of a format with a fed page playoff (group_playoffs,
+  // swiss_playoff) on a field below the page playoff's four: its fourth seat could never fill, and its lines took a court.
+  | "PAGE_PLAYOFF_TOO_FEW"
   // T15 (X-QM-2): a rank cut from a knockout source that is no whole round: the ranks inside a round are not played off, so a
   // cut through one is decided by seed. Refused at create and patch only: a stored one keeps running.
   | "KO_CUT_NOT_WHOLE_ROUND"
@@ -134,6 +137,11 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 422,
     en: "Qualifying + Main draw needs at least {min} entrants.",
     key: "knockout.refusal.QUALIFYING_MAIN_TOO_FEW",
+  },
+  PAGE_PLAYOFF_TOO_FEW: {
+    status: 422,
+    en: "A page playoff needs at least 4 entrants.",
+    key: "knockout.refusal.PAGE_PLAYOFF_TOO_FEW",
   },
   KO_CUT_NOT_WHOLE_ROUND: {
     status: 422,

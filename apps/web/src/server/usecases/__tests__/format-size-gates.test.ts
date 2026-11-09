@@ -7,12 +7,13 @@
 // (a graph read has no sport in it, which is what the sweep proves); the rest run on badminton singles, whose fields they never read.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { generateSingleElim } from "@seazn/engine/scheduling";
+import { generatePagePlayoff, generateSingleElim } from "@seazn/engine/scheduling";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { buildTemplateStages } from "@/lib/format-templates";
+import uiEn from "@/dictionaries/en/ui.json";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CreateStage } from "@/server/api-v1/schemas";
 import { createCompetition } from "../competitions";
@@ -236,6 +237,81 @@ describe.runIf(HAS_DB)("W4 T15 format gates (FX-G14 gate half, QM-2)", () => {
       }
       expect(swept, "anti-vacuity: the registry was read").toBeGreaterThanOrEqual(builtinModules.length - 1);
     }, 300_000);
+  });
+
+  // T26c fix round 1 (I1, controller ruling 2026-11-09): group_playoffs and swiss_playoff end in a page playoff, which seats the
+  // engine's four. Below that the fourth seat can never fill, and the T26c sweep found its lines laid out on a court anyway. Refused
+  // by name at Start, at the ROOT's Generate (the league or Swiss the playoff is fed from) and at Rebuild. The bound is read off
+  // the engine's generator (the one field it draws), never typed; the sentence off the en dictionary.
+  describe("I1 a format ending in a page playoff, below the page playoff's size", () => {
+    const PAGE_SIZE = [...Array(17).keys()].filter((n) => {
+      try {
+        generatePagePlayoff({ entrants: Array.from({ length: n }, (_, i) => `e${i}`) });
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    const TOO_FEW = (uiEn as Record<string, string>)["knockout.refusal.PAGE_PLAYOFF_TOO_FEW"]!;
+    // One Swiss round: every field here can pair it, so the page playoff's size is the only bound in play.
+    const pageRig = async (template: "group_playoffs" | "swiss_playoff", n: number): Promise<Rig> => {
+      const { auth, divisionId, made } = await division(n);
+      const stageIds = await addStages(auth, divisionId, buildTemplateStages(template, { ...KNOBS, swissRounds: 1, qualified: 4 }));
+      return { auth, divisionId, stageIds, idOf: new Map(made.map((e) => [e.display_name, e.id])), nameOf: new Map(made.map((e) => [e.id, e.display_name])) };
+    };
+
+    it("premise: the engine draws a page playoff of exactly one size, and the sentence is translated in every locale", () => {
+      expect(PAGE_SIZE, "the one field the engine draws").toHaveLength(1);
+      expect(TOO_FEW).toContain(String(PAGE_SIZE[0]));
+    });
+
+    for (const template of ["group_playoffs", "swiss_playoff"] as const) {
+      for (const n of [2, 3]) {
+        it(`I1 ${template} at n=${n} is refused by name: Start, the root's Generate and Rebuild, nothing drawn`, async () => {
+          expect(n, "premise: below the engine's size").toBeLessThan(PAGE_SIZE[0]!);
+          const r = await pageRig(template, n);
+          await expectRefusedAtStart(r, "PAGE_PLAYOFF_TOO_FEW", TOO_FEW);
+          const atGenerate = await refusal(generateStageFixtures(r.auth, r.stageIds[0]!));
+          expect([atGenerate.code, atGenerate.status, atGenerate.message]).toEqual(["PAGE_PLAYOFF_TOO_FEW", 422, TOO_FEW]);
+          expect(atGenerate.extra, "the bound rides on the envelope").toMatchObject({ min: PAGE_SIZE[0] });
+          expect(await lineCount(r.stageIds[0]!), "Generate drew nothing").toBe(0);
+          expect((await refusal(rebuildStageFixtures(r.auth, r.stageIds[0]!))).code).toBe("PAGE_PLAYOFF_TOO_FEW");
+          expect(await lineCount(r.stageIds[1]!), "and the playoff has no line to lay out").toBe(0);
+          // The second press answers the same.
+          expect((await refusal(startDivision(r.auth, r.divisionId))).code).toBe("PAGE_PLAYOFF_TOO_FEW");
+        }, 120_000);
+      }
+
+      it(`I1 ${template} at the engine's size starts and draws`, async () => {
+        const r = await pageRig(template, PAGE_SIZE[0]!);
+        expect((await startDivision(r.auth, r.divisionId)).started).toBe(true);
+        expect(await statusOf(r.divisionId)).toBe("active");
+        expect(await lineCount(r.stageIds[0]!), "the root is drawn").toBeGreaterThan(0);
+      }, 120_000);
+    }
+
+    it("I1 a field that fell below four before Start is refused; back at four the same division starts (sequence)", async () => {
+      const r = await pageRig("group_playoffs", PAGE_SIZE[0]!);
+      await generateStageFixtures(r.auth, r.stageIds[0]!);
+      await withdrawEntrantCascade(r.auth, r.idOf.get("E4")!);
+      expect((await refusal(startDivision(r.auth, r.divisionId))).code, "the departed one does not count").toBe("PAGE_PLAYOFF_TOO_FEW");
+      expect((await refusal(generateStageFixtures(r.auth, r.stageIds[0]!))).code, "nor does the root's Generate").toBe("PAGE_PLAYOFF_TOO_FEW");
+      await createEntrants(r.auth, r.divisionId, [{ kind: "individual", display_name: "E5", seed: 5, members: [] }] as never);
+      expect((await startDivision(r.auth, r.divisionId)).started).toBe(true);
+    }, 120_000);
+
+    it("I1 the playoff's own day-one Generate is not gated (its source is what is sized), and after Start the root's Generate is not either", async () => {
+      const small = await pageRig("group_playoffs", 3);
+      await expect(generateStageFixtures(small.auth, small.stageIds[1]!)).resolves.toBeTruthy();
+      const r = await pageRig("group_playoffs", PAGE_SIZE[0]!);
+      await startDivision(r.auth, r.divisionId);
+      await withdrawEntrantCascade(r.auth, r.idOf.get("E4")!);
+      const after = await generateStageFixtures(r.auth, r.stageIds[0]!).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect((after as HttpError | null)?.code, "an active division's root is never refused for size").not.toBe("PAGE_PLAYOFF_TOO_FEW");
+    }, 120_000);
   });
 
   describe("X-QM-5 qualifying_main", () => {

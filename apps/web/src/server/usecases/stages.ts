@@ -3495,6 +3495,12 @@ async function generateStageFixturesWrite(
       if (rootKnockout) {
         const [division] = await tx<{ status: string }[]>`select status from divisions where id = ${stage.division_id}`;
         if (!drawn || division?.status !== "active") await refuseFormatTooSmall(tx, stage.division_id);
+      } else if (stage.progression === null) {
+        // T26c fix round 1 (I1): any other ROOT before Start. A league or a Swiss that feeds a page playoff is that format's
+        // source, as a root knockout is a plate's, so a group_playoffs or swiss_playoff of three is refused by name here too,
+        // never drawn and laid out with a fourth seat no stage can fill. After Start the field is the bracket's to settle.
+        const [division] = await tx<{ status: string }[]>`select status from divisions where id = ${stage.division_id}`;
+        if (division?.status !== "active") await refuseFormatTooSmall(tx, stage.division_id);
       }
       if (!stage.progression) return null;
       const progression = stage.progression as unknown as ProgressionSpec & { timing: "setup" | "on_complete" };
@@ -4502,7 +4508,9 @@ function roleKeyOf(rows: readonly BracketRoleRow[]): (row: BracketRoleRow) => st
 
 /** The kinds a Rebuild carries by bracket role (`roleKeyOf`): a knockout (W4 T4, K3), and a stepladder and a page playoff
  *  (T26c), whose `round_no` also counts from the first round, so a stepladder that gains a rung moves its final to a new
- *  round. A double elimination still carries by position: its lanes need their own role keys (owed to W6, W6-double-elim.md). */
+ *  round. A page playoff is always the same four lines, so for it role and position are the SAME key (an equivalent member,
+ *  kept as defence in depth: removing it changes no Rebuild today, and the T26c review measured that mutant surviving). A
+ *  double elimination still carries by position: its lanes need their own role keys (owed to W6, W6-double-elim.md). */
 const ROLE_CARRY_KINDS: ReadonlySet<string> = new Set(["knockout", "stepladder", "page_playoff"]);
 
 export interface RebuildOutcome extends GenerateOutcome {

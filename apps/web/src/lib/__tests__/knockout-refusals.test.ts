@@ -41,6 +41,8 @@ const PLAN_CODES = [
   "KO_PLATE_TOO_FEW",
   // T15 (X-QM-5): a qualifying draw on a field that cannot fill its cut.
   "QUALIFYING_MAIN_TOO_FEW",
+  // T26c fix round 1 (I1): a fed page playoff on a field below its four.
+  "PAGE_PLAYOFF_TOO_FEW",
   // T15 (X-QM-2): a rank cut from a knockout that is no whole round.
   "KO_CUT_NOT_WHOLE_ROUND",
   // T16 (SP-UI, X-SP-6, ruling 269): a stepladder or page playoff with no table to seed from — one code per kind (D13).
@@ -149,6 +151,12 @@ describe("KNOCKOUT_REFUSALS (W4 app-A)", () => {
       en: "This player isn't waiting to join this bracket.",
       key: "knockout.refusal.KO_LATE_ENTRY_NOT_WAITING",
     });
+  });
+
+  it("T26c I1: a fed page playoff below four is 422 (the field has to change), and the sentence names the page playoff's size", () => {
+    expect(KNOCKOUT_REFUSALS.PAGE_PLAYOFF_TOO_FEW).toEqual({ status: 422, en: "A page playoff needs at least 4 entrants.", key: "knockout.refusal.PAGE_PLAYOFF_TOO_FEW" });
+    const err = knockoutRefusal("PAGE_PLAYOFF_TOO_FEW", { min: 4 });
+    expect([err.status, err.code, err.message]).toEqual([422, "PAGE_PLAYOFF_TOO_FEW", "A page playoff needs at least 4 entrants."]);
   });
 
   it("T15's three: 422 (the field or the cut has to change, re-sending changes nothing), with the plan's sentences", () => {
