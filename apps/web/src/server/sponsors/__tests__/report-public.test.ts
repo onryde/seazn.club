@@ -27,6 +27,7 @@
 //   create -> open -> revoke -> null -> second call ... "the seam"
 //   both window bounds, both tables .................. "the window"
 //   a link with a competition vs without .............. "the competition filter"
+//   a scoped link after the row's fixture is deleted .. "item 4"
 //   stream-only visits ................................ "streamVisits"
 //   a showing with a frame vs without; a failed sign ... "frames"
 //   an open airing .................................... "an open airing"
@@ -42,6 +43,7 @@
 //   R2 lower bound     `>= ${w.from}` -> `> ${w.from}`                   -> "the window: a row exactly at 00:00 of from_date counts"
 //   R3 upper bound     `< ${w.to}` -> `<= ${w.to}`                       -> "the window: a row at 00:00 the day after to_date does not"
 //   R4 competition     drop the competition predicate                    -> "the competition filter"
+//   R4b snapshot       the competition read through the fixture again    -> "item 4: ...after its fixture is deleted"
 //   R5 stream only     drop `and c.source = 'stream'`                    -> "streamVisits counts src=stream clicks only"
 //   R6 signed url      frameUrl = the row's path                         -> "frames: ...never the storage path"
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -359,6 +361,38 @@ describe.skipIf(!HAS_DB)("S14: the competition filter - a link with a competitio
     // The other competition, the other way round.
     const onB = await link(r, { from: "2026-06-01", to: "2026-06-30", competitionId: r.b.competitionId });
     expect(numbersOf(must(await sponsorReport(onB.token, NOW)))).toEqual({ timesShown: 1, onScreenMs: 30 * SEC });
+  });
+});
+
+describe.skipIf(!HAS_DB)("S14: item 4 - a scoped link keeps a row whose fixture a format change deleted", () => {
+  // Final review 2, item 4 (owner "4 Ok"): FMT5 deletes a division's fixtures and V492 sets the rows' fixture_id null (R16).
+  // The link reads the row's competition SNAPSHOT, so the sponsor's report on that competition does not lose them.
+  it("a link on competition A still counts A's airing and stream click after its fixture is deleted; the org-wide link reads the same", async () => {
+    const r = await rig();
+    const seeded: SeededAiring[] = [
+      { sponsorId: r.sponsorId, fixtureId: r.a.fixtureId, start: at("2026-06-02T10:00:00.000Z"), end: at("2026-06-02T10:00:09.000Z") },
+      { sponsorId: r.sponsorId, fixtureId: r.b.fixtureId, start: at("2026-06-03T10:00:00.000Z"), end: at("2026-06-03T10:00:30.000Z") },
+    ];
+    for (const a of seeded) await airing(r.auth.orgId, a);
+    await click(r.auth.orgId, { sponsorId: r.sponsorId, fixtureId: r.a.fixtureId, source: "stream", at: at("2026-06-02T10:01:00.000Z") });
+    await click(r.auth.orgId, { sponsorId: r.sponsorId, fixtureId: r.b.fixtureId, source: "stream", at: at("2026-06-03T10:01:00.000Z") });
+    const scoped = await link(r, { from: "2026-06-01", to: "2026-06-30", competitionId: r.a.competitionId });
+    const whole = await link(r, { from: "2026-06-01", to: "2026-06-30" });
+    const want = expectedFor(seeded, (a) => a.fixtureId === r.a.fixtureId);
+    expect(want, "premise: A holds one 9 s showing").toEqual({ timesShown: 1, onScreenMs: 9 * SEC });
+    const readA = async () => { const got = must(await sponsorReport(scoped.token, NOW)); return { ...numbersOf(got), visits: got.streamVisits, listed: got.showings.length }; };
+    expect(await readA(), "before").toEqual({ ...want, visits: 1, listed: 1 });
+    const orgBefore = numbersOf(must(await sponsorReport(whole.token, NOW)));
+
+    await sql`delete from fixtures where id = ${r.a.fixtureId}`;
+    const [nulled] = await sql<{ n: number }[]>`
+      select count(*)::int as n from sponsor_airings where org_id = ${r.auth.orgId} and sponsor_id = ${r.sponsorId} and fixture_id is null`;
+    expect(nulled!.n, "premise: A's showing lost its fixture").toBe(1);
+
+    const after = must(await sponsorReport(scoped.token, NOW));
+    expect({ ...numbersOf(after), visits: after.streamVisits, listed: after.showings.length }, "after: still counted, still listed").toEqual({ ...want, visits: 1, listed: 1 });
+    expect(after.showings[0]!.match, "its match reads as removed").toBeNull();
+    expect(numbersOf(must(await sponsorReport(whole.token, NOW))), "the org-wide link reads the same").toEqual(orgBefore);
   });
 });
 

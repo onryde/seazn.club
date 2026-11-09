@@ -27,7 +27,6 @@ import { log } from "@/server/logger";
 import { EngineError } from "@seazn/engine/core";
 import {
   boardMetrics,
-  buildSchedule,
   calendarDaysCovering,
   dayKeyInTz,
   deltaConflicts,
@@ -90,6 +89,7 @@ import {
   unionRequiredCourtTags,
 } from "./court-candidates";
 import { buildEngineConstraints } from "./engine-constraints";
+import { autoBuildSchedule, fallbackBoard } from "./schedule-solver-rest";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { generateStageFixturesUnpublished, refuseSwissRoundsAboveMaxAtStart } from "./stages";
 import { schedulingAiModel, toRuleFixture } from "./schedule-ai";
@@ -2072,8 +2072,11 @@ export async function autoSchedule(
    */
   const currentBoard = [...plan.placedNow, ...plan.pinnedNow];
   /**
-   * The solvers are called DIRECTLY. Nothing wraps them here, and the absence is
-   * deliberate (R17).
+   * No SERIALISING or ADMISSION wrapper sits around the solve, and the absence
+   * is deliberate (R17): nothing here may make the call wait. The one wrapper
+   * that does sit here, `autoBuildSchedule` (#452, described at the end of this
+   * comment), rewrites the request and judges the reply; it awaits nothing
+   * ahead of the call.
    *
    * HOW THIS WAS LEARNT (history — z3 and its lock were deleted in C8, so
    * none of the machinery named here still exists). A `withZ3Teardown` helper
@@ -2100,6 +2103,14 @@ export async function autoSchedule(
    * which stages the contention by holding the placement client open (it used
    * to hold the z3 lock; C8 deleted that and the test with it, and this
    * restores the fact at the seam that replaced it).
+   *
+   * `autoBuildSchedule` (#452) is `buildSchedule` plus two things that keep
+   * that promise: it adds each pool's rest to the request on the way IN (a
+   * synchronous rewrite of the input, nothing awaited ahead of the call), and
+   * refuses a solver board that breaks a declared rest on the way OUT — a
+   * second, solver-free greedy rebuild that runs only when the first call has
+   * already returned a solver board. A `solver_busy` answer is greedy, so it
+   * comes straight back. See `schedule-solver-rest.ts`.
    */
   const out: BuildResult | ReflowResult = await (body.mode === "reflow"
     ? // Pinned cards are handed separately from the rest: the solver may not
@@ -2112,7 +2123,7 @@ export async function autoSchedule(
         placed: plan.placedNow,
         pinned: plan.pinnedNow,
       })
-    : buildSchedule({
+    : autoBuildSchedule({
         fixtures: schedulable,
         config,
         existing: board,
@@ -2614,7 +2625,11 @@ export function lockedFixtureIds(
  * shape of a reflow over a mostly-already-placed board (nothing to improve,
  * or the budget does not prove an improvement), so every frozen id's slot in
  * the board this function returns is read from `known` directly below,
- * never trusted off `buildSchedule`'s own `assignments`.
+ * never trusted off `buildSchedule`'s own `assignments`. And restoring the
+ * frozen cards alone is not always enough: the seed chose the FREE cards'
+ * slots around the wrong positions, so when it moved a frozen card the board
+ * placed around the real slots is built too and the better of the two kept
+ * (`fallbackBoard`, #1143, ruling D30).
  */
 /** A `BuildResult` plus the one fact only the REFLOW path is in a position to
  *  know: how many of `moved` were cards it placed for the first time rather than
@@ -2680,7 +2695,7 @@ async function reflowExisting(args: {
     };
   }
 
-  const out = await buildSchedule({
+  const input: Parameters<typeof autoBuildSchedule>[0] = {
     fixtures: args.schedulable,
     config: args.config,
     existing: args.board,
@@ -2694,15 +2709,12 @@ async function reflowExisting(args: {
     // `currentBoard`, and matters here for the same reason: REFLOW's
     // ordinary case is a stage with nothing on it yet at all.
     ...(known.size > 0 ? { current: [...known.values()] } : {}),
-  });
+  };
+  // `autoBuildSchedule`, not bare `buildSchedule`: this is the auto pass too, so
+  // the pool rest goes out on the request and a solver board that breaks a
+  // declared rest is refused (#452, `schedule-solver-rest.ts`).
+  const out = await autoBuildSchedule(input);
 
-  // THE RECONCILIATION (see the doc comment above): every frozen id's slot
-  // comes from `known`, never from `out.assignments`, regardless of which
-  // exit produced them.
-  const assignments = [
-    ...out.assignments.filter((a) => !known.has(a.fixtureId)),
-    ...known.values(),
-  ];
   // Structured telemetry for the branch this session's finding is about: how
   // often the fallback actually NEEDED reconciling (not merely took the
   // fallback exit — the success path's own `pinnedAssignments` already
@@ -2714,12 +2726,33 @@ async function reflowExisting(args: {
     const reported = outById.get(id);
     return reported === undefined || reported.court !== a.court || reported.startAt !== a.startAt;
   }).length;
+  // An engine FALLBACK whose plain seed moved a known card chose every free
+  // card's slot around the wrong positions: putting the known card back
+  // (below) can leave a free card beside it with a rest breach or a court
+  // clash, under a strip that says the board is valid (#1143). Placing the
+  // free cards again around the REAL slots fixes that but can break round
+  // order instead, so `fallbackBoard` — the one helper the rest guard's own
+  // fallback uses — builds both and keeps the better (ruling D30). The
+  // engine's verdict (`engine`, `status`, tiers) is still reported as it
+  // came: only where the free cards sit can change. Never on the success
+  // exit, whose board already agrees with `known` — `correctedCount` is 0
+  // there by construction.
+  const placedBy =
+    correctedCount > 0 && out.engine !== "optimized" ? await fallbackBoard(input, out) : out;
   if (correctedCount > 0) {
     log.warn(
-      { engine: out.engine, status: out.status, frozenCount: known.size, correctedCount },
+      { engine: out.engine, status: out.status, frozenCount: known.size, correctedCount, replaced: placedBy !== out },
       "schedule: reflow reconciled frozen cards back onto their known slots — buildSchedule's own board would have moved at least one",
     );
   }
+
+  // THE RECONCILIATION (see the doc comment above): every frozen id's slot
+  // comes from `known`, never from the engine's board, regardless of which
+  // exit produced it.
+  const assignments = [
+    ...placedBy.assignments.filter((a) => !known.has(a.fixtureId)),
+    ...known.values(),
+  ];
   const presentIds = new Set(assignments.map((a) => a.fixtureId));
   const conflicts: Conflict[] = [
     ...validateAssignments(assignments, args.config, args.board, args.dependencies),
@@ -2734,7 +2767,7 @@ async function reflowExisting(args: {
     // blocking conflict it would not have had at its real, reconciled slot)
     // without being absent here, and a stale row about it must not survive
     // reconciliation.
-    ...out.conflicts.filter((c) => !presentIds.has(c.fixtureId)),
+    ...placedBy.conflicts.filter((c) => !presentIds.has(c.fixtureId)),
   ];
 
   // Every free (non-`known`) fixture that made it onto the board is a

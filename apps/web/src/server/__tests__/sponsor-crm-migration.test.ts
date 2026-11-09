@@ -74,7 +74,7 @@ describe.skipIf(!HAS_DB)("V283 sponsor CRM", () => {
     expect(rows[1]).toMatchObject({ name: "Beta", competition_id: null, display_order: 1 });
     expect(rows[2]).toMatchObject({ name: "Gamma", competition_id: comp.id, display_order: 0 });
 
-    // The blob itself is untouched (read-shim source, never rewritten).
+    // V283 copied the blob and left it untouched (V492 strips it later, and nothing reads it now).
     const [after] = await sql<{ branding: { sponsors?: unknown[]; colors?: unknown } }[]>`
       select branding from organizations where id = ${org.id}`;
     expect(after.branding.sponsors).toHaveLength(2);

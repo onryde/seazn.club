@@ -15,6 +15,8 @@
 // (the 38-character club name at 768 and 1280) and `mobile.spec.ts` (the seven width projects).
 //
 // prerender, not renderToStaticMarkup: Nav is an async server component.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prerender } from "react-dom/static";
 
@@ -469,10 +471,10 @@ describe("Nav > Player home folds first (OWNER RULING 6.1), and only where the b
   });
 
   // An org logo sits in the row too: a 28px square (`h-7 w-7`) and the wordmark link's 10px gap. Measured in a browser (nav-E report,
-  // en, Streaming org): with the logo, five icon links fit from exactly 382px (= 28 x 5 + 204 + 38) and six from 410. The links that
-  // never fold (Dashboard, Directory, Streaming, Settings) already overrun 320-353 with a logo - main did too (34px at 320, the same
-  // four links) - so the rule a folding link must keep is relational: it only ever appears where the bar FITS with it, and a logo org
-  // never shows more links than an org without one at the same width.
+  // en, Streaming org): with the logo, five icon links fit from exactly 382px (= 28 x 5 + 204 + 38) and six from 410. The rule a
+  // folding link must keep is relational: it only ever appears where the bar FITS with it, and a logo org never shows more links than
+  // an org without one at the same width. The links that never fold (Dashboard, Directory, Streaming, Settings) overran 320-353 with a
+  // logo too - main did (34px at 320, the same four links) - until the wordmark fold the last two tests below pin.
   const LOGO_PX = 38;
   const PHONE_WIDTHS = [320, 335, 349, 350, 353, 354, 360, 375, 381, 382, 389, 390, 409, 410, 412, 429, 430, 500, 639];
   const isFolding = (l: NavLink): boolean => tokens(l.cls).includes("hidden");
@@ -503,5 +505,79 @@ describe("Nav > Player home folds first (OWNER RULING 6.1), and only where the b
     expect(links.length).toBe(6);
     const shown = Object.fromEntries([320, 350, 389, 390, 429, 430].map((vw) => [vw, shownAt(links, vw).length]));
     expect(shown).toEqual({ 320: 4, 350: 4, 389: 4, 390: 5, 429: 5, 430: 6 });
+  });
+
+  // The Seazn wordmark is the row's other fixed width: its PNG drawn 28px tall (`h-7 w-auto`), so as wide as the asset's own aspect
+  // ratio makes it - read here off the file's IHDR, never off nav.tsx. CI e2e 42438561906 (sponsors-capture, the top bar @320 for an
+  // org with a logo and Streaming) measured the gantry's content 354px wide in a 320px box - 28 x 4 + 204 + 38, to the pixel - so Sign
+  // out sat wholly past the viewport, where html's `overflow-x: clip` cut it off: no scroll, no way to sign out. Below 360 a logo
+  // org's wordmark therefore gives its place to the club's crest (`max-[360px]:sr-only`: out of the row, still in the home link's
+  // name), handing back its own width and the crest's 10px gap beside it.
+  const CREST_PX = 28;
+  const WORDMARK_SRC = "/logo-wide-night.png";
+  const wordmarkPx = (): number => {
+    const png = readFileSync(fileURLToPath(new URL(`../../../public${WORDMARK_SRC}`, import.meta.url)));
+    expect(png.subarray(12, 16).toString("latin1"), "premise: the wordmark is a PNG whose first chunk is IHDR").toBe("IHDR");
+    return (28 * png.readUInt32BE(16)) / png.readUInt32BE(20);
+  };
+  const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  /** The class of the gantry's <img> with this src, or undefined when the bar has none. */
+  const imgClass = (html: string, src: string): string | undefined =>
+    html.match(new RegExp(`<img\\b[^>]*\\bsrc="${escapeRe(src)}"[^>]*>`))?.[0].match(/\bclass="([^"]*)"/)?.[1];
+  /** The width the wordmark is out of the row BELOW (its max-width `sr-only` breakpoint), or null where it never folds. */
+  const wordmarkFoldBelow = (cls: string | undefined): number | null => {
+    const at = tokens(cls).map((t) => t.match(/^max-\[(\d+)px\]:sr-only$/)?.[1]).find((x) => x !== undefined);
+    return at === undefined ? null : Number(at);
+  };
+
+  it("with a logo, the WHOLE bar fits every phone width - Sign out never past the viewport: the wordmark yields its place where the four links that never fold overrun (every org shape x 19 widths)", async () => {
+    const wordmark = wordmarkPx();
+    let checked = 0;
+    let rescued = 0;
+    for (const shape of SHAPES) {
+      const html = await renderShape({ ...shape, logo: true });
+      const below = wordmarkFoldBelow(imgClass(html, WORDMARK_SRC));
+      const links = navLinks(html);
+      for (const vw of PHONE_WIDTHS) {
+        const n = shownAt(links, vw).length;
+        const whole = LINK_PX * n + FIXED_PX + LOGO_PX;
+        const folded = below !== null && vw < below;
+        const need = folded ? whole - wordmark - (LOGO_PX - CREST_PX) : whole;
+        expect(need, `${JSON.stringify(shape)} + logo at ${vw}px: ${n} links${folded ? ", the wordmark folded" : ""} - Sign out's right edge at ${need}px`).toBeLessThanOrEqual(vw);
+        if (folded && whole > vw) rescued++;
+        checked++;
+      }
+    }
+    expect(checked).toBe(SHAPES.length * PHONE_WIDTHS.length);
+    expect(rescued, "anti-vacuity: some width overruns WITH the wordmark and fits only because it folded").toBeGreaterThan(0);
+  });
+
+  it("the wordmark folds out of the ROW, never out of the home link's name (no display:none); the crest never folds; an org without a logo keeps main's wordmark at every width - its only mark; and no fold reaches sm (8 bars)", async () => {
+    let checked = 0;
+    for (const logo of [false, true]) {
+      for (const shape of SHAPES) {
+        const where = JSON.stringify({ ...shape, logo });
+        const html = await renderShape({ ...shape, logo });
+        const cls = imgClass(html, WORDMARK_SRC);
+        expect(cls, `${where}: the wordmark is in the bar`).toBeDefined();
+        expect(html, `${where}: named "Seazn Club"`).toMatch(new RegExp(`<img\\b[^>]*\\bsrc="${escapeRe(WORDMARK_SRC)}"[^>]*\\balt="Seazn Club"`));
+        const toks = tokens(cls);
+        expect(toks.filter((t) => /(?:^|:)hidden$/.test(t)), `${where}: never display:none - the screen reader still hears "Seazn Club"`).toEqual([]);
+        if (logo) {
+          expect(toks.filter((t) => /^max-\[\d+px\]:sr-only$/.test(t)), `${where}: exactly one fold`).toHaveLength(1);
+          expect(toks, `${where}: still drawn 28px tall at its own ratio where it shows`).toEqual(expect.arrayContaining(["h-7", "w-auto"]));
+          // Folds only where it must: the bar fits WITH the wordmark from 354 (28 x 4 + 204 + 38), so the fold stops by the 360
+          // matrix width - a fold reaching further up (say `max-[639px]`) would take the mark from phones that have room for it.
+          expect(wordmarkFoldBelow(cls), `${where}: the fold stops by 360 - from there the wordmark fits beside the crest`).toBeLessThanOrEqual(360);
+          const crest = tokens(imgClass(html, LOGO_URL));
+          expect(crest.length, `${where}: the crest is in the bar`).toBeGreaterThan(0);
+          expect(crest.filter((t) => /(?:hidden|sr-only)$/.test(t)), `${where}: the crest never folds - it is the club's mark`).toEqual([]);
+        } else {
+          expect(toks, `${where}: main's class, untouched`).toEqual(["h-7", "w-auto"]);
+        }
+        checked++;
+      }
+    }
+    expect(checked).toBe(2 * SHAPES.length);
   });
 });

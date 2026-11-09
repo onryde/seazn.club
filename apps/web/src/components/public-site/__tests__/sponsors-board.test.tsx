@@ -26,9 +26,11 @@ import { SponsorsBoard, SponsorsHeroTitle, sponsorHref } from "../sponsors-board
 const DICTS: Record<string, Dict> = { en: en as Dict, es: es as Dict, fr: fr as Dict, nl: nl as Dict };
 
 /** Pairwise-distinct in every field a test reads: a fixture whose two rows
- *  share a name cannot witness a renderer that draws one of them twice. */
+ *  share a name cannot witness a renderer that draws one of them twice. Every
+ *  sponsor is a table row (R4 fix batch 3), so each has an id — one per name,
+ *  unless the case names its own — and a linked one draws the tracked shape. */
 const s = (over: Partial<ResolvedSponsor> & Pick<ResolvedSponsor, "name" | "tier">): ResolvedSponsor => ({
-  id: null,
+  id: `sp-${over.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
   url: null,
   logo: null,
   ...over,
@@ -75,35 +77,9 @@ describe("sponsorHref", () => {
     expect(sponsorHref({ id: "sp-gold", url: "https://halston.example" }, MATCH)).toBe("/s/sp-gold?f=fx-42&src=match");
   });
 
-  // The rung that silently stops counting clicks. Blob-shim entries (an org's
-  // un-backfilled `branding` jsonb) have no row and therefore no id.
-  it("links a blob-shim entry straight out, untagged on either page (normalised by the URL parser)", () => {
-    expect(sponsorHref({ id: null, url: "https://halston.example" }, SITE)).toBe("https://halston.example/");
-    expect(sponsorHref({ id: null, url: "http://halston.example/deal?x=1" }, MATCH)).toBe("http://halston.example/deal?x=1");
-  });
-
-  // Fix round 1, m1: a blob entry is linked STRAIGHT out (no redirect to refuse it), so its href is the one place a
-  // stored `javascript:` or `data:` url would go live. React 19 blocks a `javascript:` href but passes `data:` through.
-  it("a blob-shim entry whose url is not http(s) gets no link at all (count reported)", () => {
-    const refused = ["javascript:alert(document.cookie)", "data:text/html,<script>alert(1)</script>", "ftp://files.example/x", "//evil.example", "halston.example"];
-    for (const url of refused) {
-      expect(sponsorHref({ id: null, url }, SITE), url).toBeNull();
-      expect(sponsorHref({ id: null, url }, MATCH), url).toBeNull();
-    }
-    expect(refused.length).toBe(5);
-    // A table row's link is the tracked redirect either way: the route refuses a bad stored url itself (404).
-    expect(sponsorHref({ id: "sp-gold", url: "https://halston.example" }, SITE)).toBe("/s/sp-gold?src=site");
-  });
-
-  it("a blob entry with a refused url still renders its NAME, unlinked, on the board", () => {
-    const html = render({ sponsors: [s({ name: "Old Faithful", tier: "partner", url: "data:text/html,<script>alert(1)</script>" })], tiered: false });
-    expect(html).toContain("Old Faithful");
-    expect(html).not.toContain("href=");
-  });
-
-  it("is null when the sponsor gave no url at all — with or without an id", () => {
+  it("is null when the sponsor gave no url at all, on either page", () => {
     expect(sponsorHref({ id: "sp-gold", url: null }, SITE)).toBeNull();
-    expect(sponsorHref({ id: null, url: null }, MATCH)).toBeNull();
+    expect(sponsorHref({ id: "sp-gold", url: null }, MATCH)).toBeNull();
   });
 });
 
@@ -114,7 +90,7 @@ describe("sponsorHref", () => {
 // rather than one sample, and each href is parsed back through the route's
 // own reader (`parseClickTag`), never compared to a string built the same way.
 describe("click tags — every tracked link says which page it sits on", () => {
-  const LINKED = [TITLE, GOLD, PARTNER]; // the rows with an id AND a url (SILVER has neither)
+  const LINKED = [TITLE, GOLD, PARTNER]; // the rows with a url (SILVER has none)
   const hrefsIn = (html: string) => [...html.matchAll(/<a href="([^"]*)"/g)].map((m) => m[1]!.replace(/&amp;/g, "&"));
 
   for (const [page, tag, html] of [

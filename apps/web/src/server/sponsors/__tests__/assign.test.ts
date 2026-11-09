@@ -633,11 +633,16 @@ describe.skipIf(!HAS_DB)("S5 fix round 1", () => {
     expect((await resolveSponsors(r.orgId, r.competitionId)).map((s) => s.id)).not.toContain(orgRow);
   });
 
-  it("I2 the stream asks the TABLE only: an org whose sponsors live in the branding blob has none on stream; the board still reads the blob", async () => {
+  // Fix batch 3 (m9): the board no longer reads the blob either (flipped by design) - sponsors come from the table only.
+  it("I2 the stream and the board ask the TABLE only: a sponsor left in the branding blob is on neither", async () => {
     const r = await rig();
     await sql`update organizations set branding = ${sql.json({ sponsors: [{ name: "Blob Co", url: "https://blob.example" }] })} where id = ${r.orgId}`;
     expect(await resolveSponsors(r.orgId, r.competitionId, { onStream: true })).toEqual([]);
-    expect((await resolveSponsors(r.orgId, r.competitionId)).map((s) => [s.id, s.name])).toEqual([[null, "Blob Co"]]);
+    expect(await resolveSponsors(r.orgId, r.competitionId)).toEqual([]);
+    // The positive pair: a row is on both.
+    const row = await sponsor(r.orgId, "Row Co");
+    expect((await resolveSponsors(r.orgId, r.competitionId, { onStream: true })).map((s) => s.id)).toEqual([row]);
+    expect((await resolveSponsors(r.orgId, r.competitionId)).map((s) => s.id)).toEqual([row]);
   });
 
   it("m2 rotation off: ONE statement and no plan — an undone row survives while it is off; settings handed in by the caller cost none", async () => {

@@ -1,8 +1,8 @@
 import "server-only";
 // Sponsor CRM (v10 PROMPT-56): first-class sponsor rows with tiers +
-// per-competition scoping. The branding blob (lib/org-branding) stays a
-// read shim — resolveSponsors falls back to it only when the table has no
-// rows for the org. Tiers and competition scoping are the Pro line
+// per-competition scoping. The rows are the ONLY source (R4 fix batch 3: the
+// legacy `branding.sponsors` blob is neither written nor read, and V492
+// strips it). Tiers and competition scoping are the Pro line
 // (`sponsors.tiers`); the un-tiered partner strip is free on every plan.
 // Monetization (`sponsors.monetize`) sells priced packages over the entry-fee
 // Connect rail: destination charge, platform application fee, billing-events
@@ -12,8 +12,8 @@ import { z } from "zod";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
-import { brandingSponsors } from "@/lib/org-branding";
 import { isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "@/lib/sponsor-clicks";
+import { patchOf } from "@/lib/zod-patch";
 import { getStripe } from "@/lib/stripe";
 import {
   sponsorInvoiceEmail,
@@ -33,7 +33,7 @@ import {
   recipientLocale,
 } from "@/server/email-outbox";
 import { log } from "@/server/logger";
-import { fireOrgRevalidate } from "@/server/public-site/revalidate";
+import { expireCompetitionShell, fireOrgRevalidate } from "@/server/public-site/revalidate";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { applicationFeeCents, feePercentFor } from "./registrations";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./dispute-recovery";
@@ -79,30 +79,25 @@ const COLS = [
   "tier", "display_order", "status", "click_count", "created_at", "on_stream",
 ] as const;
 
-/** The fields a sponsor write may carry, WITHOUT defaults. A patch is built from this shape: zod 4's `.partial()` on a field
- *  that `.default()`s still FILLS it when omitted, so a patch derived from the create schema rewrote `tier` to "partner" and
- *  `status` to "active" on every PATCH that did not name them (R4 S12 found it on the first tick: a Title sponsor ticked onto
- *  the stream came back a Partner, and a parked one came back active). */
-const SponsorWriteFields = z.object({
+export const CreateSponsorInput = z.object({
   name: z.string().min(1).max(80),
   // http(s) only (R4 S10 fix round 1, m1): zod's `.url()` alone accepts `javascript:` and `data:`, and this url is a
   // redirect target (`/s/[key]`) and a board's href.
   url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   logo_path: z.string().max(500).nullish(),
-  tier: z.enum(SPONSOR_TIERS),
-  competition_id: z.string().uuid().nullish(),
-  status: z.enum(["active", "pending", "inactive"]),
-});
-
-export const CreateSponsorInput = SponsorWriteFields.extend({
   tier: z.enum(SPONSOR_TIERS).default("partner"),
+  competition_id: z.string().uuid().nullish(),
   status: z.enum(["active", "pending", "inactive"]).default("active"),
 });
 export type CreateSponsorInput = z.infer<typeof CreateSponsorInput>;
 
-/** `on_stream` (R4 S12, controller row 30) is PATCH-ONLY and snake_case: `patchSponsor` writes the body's keys as columns.
- *  A created sponsor starts off the stream (V492's default), so `CreateSponsorInput` does not carry it. */
-export const PatchSponsorInput = SponsorWriteFields.partial().extend({ on_stream: z.boolean().optional() });
+/** The create's `patchOf` twin (final review 2, m5): zod 4's `.partial()` on a field that `.default()`s still FILLS it when
+ *  omitted, so a patch derived that way rewrote `tier` to "partner" and `status` to "active" on every PATCH that did not
+ *  name them (R4 S12 found it on the first tick: a Title sponsor ticked onto the stream came back a Partner, and a parked
+ *  one came back active). `on_stream` (R4 S12, controller row 30) is PATCH-ONLY and snake_case: `patchSponsor` writes the
+ *  body's keys as columns. A created sponsor starts off the stream (V492's default), so `CreateSponsorInput` does not
+ *  carry it. */
+export const PatchSponsorInput = patchOf(CreateSponsorInput).extend({ on_stream: z.boolean().optional() });
 export type PatchSponsorInput = z.infer<typeof PatchSponsorInput>;
 
 export const ReorderSponsorsInput = z.object({
@@ -146,8 +141,19 @@ async function sponsorCompetitionId(orgId: string, id: string): Promise<string |
   });
 }
 
-/** Sponsor edits must show on the public tree promptly — same cache bust the
- *  org-branding PATCH fires (tail work; slug lookup included). */
+/** An ORGANISER's sponsor write (create, edit, reorder, delete, console refund): its author looks at the public page next, so the org tag
+ *  expires BEFORE the use-case resolves - `expireCompetitionShell` awaits the slug and fires `{ expire: 0 }` inside the
+ *  request (Next applies a request's revalidations when its handler finishes) and never rejects, the write having
+ *  committed. Never `bustPublicSponsors` here: its `deferred` is Next's `after()`, which runs once the response has gone
+ *  and fires its tags only when every tail task is done - smoke job 128625643038 read a free org's public page 3 ms after
+ *  the 201 and was served the cached page without the new partner sponsor. */
+async function expirePublicSponsors(orgId: string, op: string): Promise<void> {
+  await expireCompetitionShell(orgId, { op });
+}
+
+/** Sponsor changes nobody reads back at once: the same bust as tail work. Its only callers are `handleSponsorDispute`'s
+ *  four branches. The paid-order and charge.refunded webhooks defer `fireOrgRevalidate` inline instead, after their own
+ *  slug read. */
 function bustPublicSponsors(orgId: string): void {
   deferred(async () => {
     const [org] = await sql<{ slug: string }[]>`
@@ -202,8 +208,8 @@ export async function createSponsor(
               ${input.status})
       returning ${tx(COLS)}`;
     return row!;
-  }).then((row) => {
-    bustPublicSponsors(auth.orgId);
+  }).then(async (row) => {
+    await expirePublicSponsors(auth.orgId, "sponsor.create");
     return row;
   });
 }
@@ -268,8 +274,8 @@ export async function patchSponsor(
     // R12: the first tick turns the org's rotation on. After the update (a refused tick leaves no row), in its transaction.
     if (patch.on_stream === true) await ensureOrgStreamSettings(tx, auth.orgId, auth.userId);
     return row;
-  }).then((row) => {
-    bustPublicSponsors(auth.orgId);
+  }).then(async (row) => {
+    await expirePublicSponsors(auth.orgId, "sponsor.patch");
     return row;
   });
 }
@@ -279,7 +285,7 @@ export async function deleteSponsor(auth: AuthCtx, id: string): Promise<void> {
     const [row] = await tx<{ id: string }[]>`
       delete from sponsors where id = ${id} returning id`;
     if (!row) throw new HttpError(404, "sponsor not found");
-  }).then(() => bustPublicSponsors(auth.orgId));
+  }).then(() => expirePublicSponsors(auth.orgId, "sponsor.delete"));
 }
 
 /** Persist a new display order: `ids` in the order they should render.
@@ -299,18 +305,20 @@ export async function reorderSponsors(
       reordered++;
     }
     return { reordered };
-  }).then((res) => {
-    bustPublicSponsors(auth.orgId);
+  }).then(async (res) => {
+    await expirePublicSponsors(auth.orgId, "sponsor.reorder");
     return res;
   });
 }
 
 // ---------------------------------------------------------------------------
-// Public resolver (placement) — DB rows first, blob shim as fallback
+// Public resolver (placement) — the sponsors table only
 // ---------------------------------------------------------------------------
 
 export interface ResolvedSponsor {
-  id: string | null; // null = blob-shim entry (no tracked redirect)
+  /** The sponsors row: every resolved sponsor has one since the blob shim went (R4 fix batch 3), so every board link is
+   *  the tracked `/s/` redirect. */
+  id: string;
   name: string;
   url: string | null;
   logo: string | null;
@@ -319,9 +327,9 @@ export interface ResolvedSponsor {
 
 /**
  * Sponsors for a public surface: competition-scoped rows first, then
- * org-wide, deduped by name, ordered tier rank → display_order. Falls back
- * to the branding blobs ONLY when the org has no table rows at all
- * (belt-and-braces during rollout — the backfill normally seeds them).
+ * org-wide, deduped by name, ordered tier rank → display_order. The
+ * `sponsors` table is the only source: no rows means no sponsors (R4 fix
+ * batch 3, m9 — the branding-blob shim brought deleted sponsors back).
  * Runs on the privileged connection: public pages have no tenant context.
  * Orgs without `sponsors.tiers` get the un-tiered free strip — every row
  * collapses to `partner` so tier grouping stays a Pro-visible feature.
@@ -329,7 +337,7 @@ export interface ResolvedSponsor {
  * `onStream` (R4 S5, the stream's card source): only rows ticked onto the
  * stream, filtered BEFORE the name dedupe — a ticked row must never be hidden
  * behind an unticked one of the same name (a paid renewal inserts a new row
- * under the old name). And no blob shim: a blob entry has no row to tick.
+ * under the old name).
  */
 export async function resolveSponsors(
   orgId: string,
@@ -348,40 +356,13 @@ export async function resolveSponsors(
              array_position(${[...SPONSOR_TIERS]}::text[], tier),
              display_order, created_at, id`;
 
-  let resolved: ResolvedSponsor[];
-  if (rows.length > 0) {
-    resolved = rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      url: r.url,
-      logo: r.logo_path,
-      tier: r.tier,
-    }));
-  } else if (onStream) {
-    resolved = [];
-  } else {
-    // Blob shim: competition blob first then org blob, like the old render — ONLY for an org with no sponsor rows at
-    // all (R4 S10 fix round 1, m6). Rows that exist but none active here (withdrawn, pending, another competition's)
-    // mean the org has moved to the table: V283 backfilled the blobs but never cleared them, so reading them now would
-    // resurrect every withdrawn sponsor, untracked. Asked in the same read as the org's blob.
-    const [org] = await sql<{ branding: unknown; has_rows: boolean }[]>`
-      select o.branding, exists (select 1 from sponsors s where s.org_id = o.id) as has_rows
-        from organizations o where o.id = ${orgId}`;
-    const comp = competitionId && org?.has_rows === false
-      ? await sql<{ branding: unknown }[]>`
-          select branding from competitions where id = ${competitionId}`
-      : [];
-    const blob = org?.has_rows === false ? org.branding : undefined;
-    resolved = [...brandingSponsors(comp[0]?.branding), ...brandingSponsors(blob)].map(
-      (s) => ({
-        id: null,
-        name: s.name,
-        url: s.url ?? null,
-        logo: s.logo ?? null,
-        tier: "partner" as const,
-      }),
-    );
-  }
+  const resolved: ResolvedSponsor[] = rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    url: r.url,
+    logo: r.logo_path,
+    tier: r.tier,
+  }));
 
   const seen = new Set<string>();
   const deduped = resolved.filter((s) => !seen.has(s.name) && seen.add(s.name));
@@ -807,6 +788,9 @@ export async function refundSponsorOrder(
     refunded: true,
   } as Stripe.Charge);
   if (notice) deferred(() => dispatchNow([notice]));
+  // The organiser refunded from the console and looks at the public page next: the placement leaves it NOW, not after the
+  // response (the webhook handler's own bust above is `after()` tail work - see expirePublicSponsors).
+  await expirePublicSponsors(auth.orgId, "sponsor.refund");
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<SponsorOrderRow[]>`
       select ${tx(ORDER_COLS)} from sponsor_orders where id = ${orderId}`;

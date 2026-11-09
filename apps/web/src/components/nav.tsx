@@ -139,9 +139,14 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
   // links, so Player home folds first: for a streaming org it is `hidden min-[390px]:flex` (five of six links shown 350-389, all
   // six from 390), and it keeps the 350 precedent for an org without Streaming, whose five links already fit. 320 shows four
   // whatever the org. An org LOGO puts 38px more in the row (the 28px logo and its 10px gap; measured, five links then fit from
-  // 382 and six from 410): with it the four links that never fold already overrun 320-353, exactly as on main, so each fold moves
-  // up one step - Sponsors from 390, Player home from 430 with Streaming and 390 without - and no folding link is ever shown where
-  // the bar does not fit it. That is the whole fold order: nothing else moves.
+  // 382 and six from 410), so each fold moves up one step - Sponsors from 390, Player home from 430 with Streaming and 390 without -
+  // and no folding link is ever shown where the bar does not fit it. With a logo the four links that never fold overran 320-353 as
+  // well, as on main: CI e2e 42438561906 measured the bar's content 354px wide at 320 (28 x 4 + 204 + 38), Sign out wholly past the
+  // viewport and cut off by html's `overflow-x: clip` - no scroll, no way to sign out. So below 360 (the 354 it needs, with the 360
+  // matrix width's 6px to spare) a logo org's wordmark gives its place to the club's crest: `max-[360px]:sr-only`, out of the row
+  // but still the home link's name, which hands back its 80px and the crest's 10px gap (Sign out at 264px at worst). The crest
+  // stays - on a phone it is the only sign of which club this is, the chip being hidden below sm - and an org without a logo keeps
+  // its wordmark, its only mark, at every width. That is the whole fold order: nothing else moves, and nothing from 360 up.
   const navLabelClass = isPlayer ? "hidden lg:inline" : "hidden md:inline";
   // The look every gantry link shares - `min-h-8`, one 32px box whether the words are painted or not, so an icon-only link sits
   // level with its labelled neighbours in this `items-center` row (CI e2e 41298006103 read the 2px drop as a wrap) - then each
@@ -152,7 +157,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
   const navLinkBase = "min-h-8 items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3";
   const navLinkLook = `${navLinkBase}${isPlayer ? "" : hasOrg ? " md:gap-1 md:px-1 lg:gap-1.5 lg:px-3" : " md:px-1 lg:px-3"}`;
   const navLinkClass = `flex ${navLinkLook}`;
-  // The phone folds (the paragraph above). `hidden` + `min-[Npx]:flex` and never a bare `flex` beside them: two display utilities
+  // The phone folds (the paragraph above). `hidden` + a min-width `flex` breakpoint and never a bare `flex` beside them: two display utilities
   // fight by CSS order. Literal strings, every one: Tailwind only builds the classes it can read in the source.
   const hasLogo = !!logoUrl;
   const sponsorsLinkClass = `${hasLogo ? "hidden min-[390px]:flex" : "hidden min-[350px]:flex"} ${navLinkLook}`;
@@ -200,8 +205,10 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
             // eslint-disable-next-line @next/next/no-img-element
             <img src={logoUrl} alt={t(dict, "nav.orgLogoAlt")} className="h-7 w-7 rounded-md object-cover ring-1 ring-cream/20" />
           )}
+          {/* Below 360 an org with a logo shows its crest alone: the wordmark leaves the row (`sr-only`, never `hidden`, so the
+              home link is still named "Seazn Club") - the fold paragraph above `navLabelClass`. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo-wide-night.png" alt="Seazn Club" className="h-7 w-auto" />
+          <img src="/logo-wide-night.png" alt="Seazn Club" className={hasLogo ? "h-7 w-auto max-[360px]:sr-only" : "h-7 w-auto"} />
         </Link>
         {user && activeOrg && (
           // `min-w-0 shrink` rather than `shrink-0`: this chip's width WAS the

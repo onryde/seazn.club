@@ -155,7 +155,7 @@ export function CompetitionWizard({
           discoverable: showcaseOn,
           starts_on: startsOn || null,
           ends_on: endsOn,
-          // Branding (accent, logo, sponsors) lives in Settings post-create (F7).
+          // Branding (accent, logo) lives in Settings post-create (F7); sponsors in the Sponsors hub (R4 S11).
           branding: {},
         },
       });

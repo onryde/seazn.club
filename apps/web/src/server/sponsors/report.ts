@@ -15,7 +15,9 @@ import "server-only";
 //   - Viewer impressions / peak viewers = null: viewer counts (PR B) are deferred (owner ruling 2026-11-01), and the pages
 //     show "Coming soon" for them.
 //   - The PERIOD (lib/sponsor-report.ts): half-open UTC windows from `now` for "This year" / "Last 30 days"; "One competition"
-//     is every airing and click whose FIXTURE is in it, with no time bound, so a click with no fixture is not counted there.
+//     is every airing and click whose `competition_id` SNAPSHOT is it, with no time bound. The snapshot is the row's fixture's
+//     competition, taken at insert (V492's trigger), so a row keeps it after its fixture goes (a format change sets the
+//     fixture null: final review 2, item 4), and a click that never had a fixture is not counted there.
 //   - A DELETED sponsor (R16, Review Focus 4): its airings survive with sponsor_id null and their `sponsor_name` snapshot, so it
 //     keeps a row under that name with no sponsor id (no link can be made for it). Its clicks went with it (V492: sponsor_clicks
 //     cascade), so its link clicks are UNKNOWN — null, shown as a dash — never a false zero.
@@ -89,12 +91,12 @@ export async function sponsorOverview(auth: AuthCtx, orgId: string, p: SponsorPe
   const competitionId = p.kind === "competition" ? p.competitionId : null;
   return withTenant(orgId, async (tx) => {
     if (competitionId !== null) await assertCompetition(tx, orgId, competitionId);
-    // THE period predicate, once, for both tables: half-open [from, to) on the row's time, or the row's fixture in the
-    // competition (a null fixture is never `in` it).
-    const inPeriod = (time: postgres.Fragment, fixture: postgres.Fragment) =>
+    // THE period predicate, once, for both tables: half-open [from, to) on the row's time, or the row's competition SNAPSHOT
+    // (never a join through fixtures: a fixture a format change deleted would take its rows out of the period for good).
+    const inPeriod = (time: postgres.Fragment, competition: postgres.Fragment) =>
       window !== null
         ? tx`${time} >= ${window.from} and ${time} < ${window.to}`
-        : tx`${fixture} in (select f.id from fixtures f join divisions d on d.id = f.division_id where d.competition_id = ${competitionId})`;
+        : tx`${competition} = ${competitionId}`;
     const listed = competitionId === null ? tx`true` : tx`(s.competition_id is null or s.competition_id = ${competitionId})`;
     const rows = await tx<{ sponsor_id: string | null; name: string; shown: number; on_ms: number; clicks: number | null }[]>`
       with air as (
@@ -103,12 +105,12 @@ export async function sponsorOverview(auth: AuthCtx, orgId: string, p: SponsorPe
                count(*)::int as shown,
                (coalesce(sum(greatest(extract(epoch from (a.ended_at - a.started_at)), 0)), 0) * 1000)::float8 as on_ms
           from sponsor_airings a
-         where a.org_id = ${orgId} and ${inPeriod(tx`a.started_at`, tx`a.fixture_id`)}
+         where a.org_id = ${orgId} and ${inPeriod(tx`a.started_at`, tx`a.competition_id`)}
          group by 1, 2
       ), clk as (
         select c.sponsor_id, count(*)::int as clicks
           from sponsor_clicks c
-         where c.org_id = ${orgId} and ${inPeriod(tx`c.at`, tx`c.fixture_id`)}
+         where c.org_id = ${orgId} and ${inPeriod(tx`c.at`, tx`c.competition_id`)}
          group by 1
       )
       select sponsor_id, name, shown, on_ms, clicks from (
@@ -277,7 +279,7 @@ interface ShowingRow {
  *
  * The figures are S13's rules (see the top of this file) over the link's own scope: its inclusive dates as the half-open UTC
  * window `[from_date, to_date + 1 day)` (`linkWindow`), AND, when the link names a competition, S13's competition filter (the
- * row's fixture is in it; a row with no fixture is not). "Visits from the stream" are the `stream` clicks only, never S13's
+ * row's competition snapshot is it - kept after the row's fixture goes; a row that never had a fixture has none). "Visits from the stream" are the `stream` clicks only, never S13's
  * all-sources link clicks. Each listed showing's frame is the LEFT JOIN on (session_id, moment_id) and is handed out only as a
  * signed url (TTL REPORT_FRAME_TTL_SEC); a frame that cannot be signed is the placeholder, logged once per read.
  */
@@ -299,20 +301,19 @@ export async function sponsorReport(token: string, now: Date): Promise<SponsorRe
   const w = linkWindow(link.from_date, link.to_date);
   const read = await withTenant(orgId, async (tx) => {
     // THE scope, once, for both tables: the link's window on the row's time, and its competition (when set) on the row's
-    // fixture (a null fixture is never `in` it).
-    const inScope = (time: postgres.Fragment, fixture: postgres.Fragment) =>
+    // competition SNAPSHOT (never a join through fixtures, which loses a row whose fixture a format change deleted).
+    const inScope = (time: postgres.Fragment, competition: postgres.Fragment) =>
       link.competition_id === null
         ? tx`${time} >= ${w.from} and ${time} < ${w.to}`
-        : tx`${time} >= ${w.from} and ${time} < ${w.to}
-             and ${fixture} in (select f.id from fixtures f join divisions d on d.id = f.division_id where d.competition_id = ${link.competition_id})`;
+        : tx`${time} >= ${w.from} and ${time} < ${w.to} and ${competition} = ${link.competition_id}`;
     const [totals] = await tx<{ shown: number; on_ms: number; visits: number }[]>`
       select (select count(*)::int from sponsor_airings a
-               where a.org_id = ${orgId} and a.sponsor_id = ${link.sponsor_id} and ${inScope(tx`a.started_at`, tx`a.fixture_id`)}) as shown,
+               where a.org_id = ${orgId} and a.sponsor_id = ${link.sponsor_id} and ${inScope(tx`a.started_at`, tx`a.competition_id`)}) as shown,
              (select (coalesce(sum(greatest(extract(epoch from (a.ended_at - a.started_at)), 0)), 0) * 1000)::float8 from sponsor_airings a
-               where a.org_id = ${orgId} and a.sponsor_id = ${link.sponsor_id} and ${inScope(tx`a.started_at`, tx`a.fixture_id`)}) as on_ms,
+               where a.org_id = ${orgId} and a.sponsor_id = ${link.sponsor_id} and ${inScope(tx`a.started_at`, tx`a.competition_id`)}) as on_ms,
              (select count(*)::int from sponsor_clicks c
                where c.org_id = ${orgId} and c.sponsor_id = ${link.sponsor_id} and c.source = 'stream'
-                 and ${inScope(tx`c.at`, tx`c.fixture_id`)}) as visits`;
+                 and ${inScope(tx`c.at`, tx`c.competition_id`)}) as visits`;
     const showings = await tx<ShowingRow[]>`
       select a.id, a.started_at, a.ended_at,
              (greatest(extract(epoch from (a.ended_at - a.started_at)), 0) * 1000)::float8 as on_ms,
@@ -322,7 +323,7 @@ export async function sponsorReport(token: string, now: Date): Promise<SponsorRe
         left join sponsor_airing_frames fr on fr.session_id = a.session_id and fr.moment_id = a.moment_id and fr.org_id = a.org_id
         left join fixtures f on f.id = a.fixture_id
         left join divisions d on d.id = f.division_id
-       where a.org_id = ${orgId} and a.sponsor_id = ${link.sponsor_id} and ${inScope(tx`a.started_at`, tx`a.fixture_id`)}
+       where a.org_id = ${orgId} and a.sponsor_id = ${link.sponsor_id} and ${inScope(tx`a.started_at`, tx`a.competition_id`)}
        order by a.started_at desc, a.id desc
        limit ${REPORT_SHOWINGS_MAX}`;
     const entrantIds = [...new Set(showings.flatMap((r) => [r.home_entrant_id, r.away_entrant_id]).filter((id): id is string => id !== null))];

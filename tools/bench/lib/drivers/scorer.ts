@@ -189,6 +189,16 @@ export const FORFEIT_CONFIRM_TESTID = "forfeit-confirm";
  *  (tools/matrix/lib/browser/pages/fixture-console.ts) taps these. */
 export const PROMPT_REASON_TESTID = "score-prompt-reason";
 export const PROMPT_SUBMIT_TESTID = "score-prompt-submit";
+/** PR #1133 — the console keeps Forfeit and Abandon in a "Match actions" panel (fixture-console.tsx
+ *  `data-role="match-actions"`) that starts CLOSED at ≥768 behind this toggle, whose `aria-expanded` says which. On a
+ *  phone the panel is open and the toggle is `max-md:hidden`. Finalize is NOT in it: since 2026-11-05 Finalize is the
+ *  banner at the top of the console (`data-role="finalize-banner"`), on screen without opening anything. */
+export const MATCH_ACTIONS_TOGGLE_TESTID = "match-actions-toggle";
+/** The toggle while it is ON SCREEN and NOT open. `:visible` is Playwright's own pseudo-class, so a phone's hidden
+ *  toggle counts 0, and so does the toggle of a panel already open. */
+export const MATCH_ACTIONS_CLOSED_SELECTOR = `[data-testid="${MATCH_ACTIONS_TOGGLE_TESTID}"]:not([aria-expanded="true"]):visible`;
+/** The toggle once its panel is open — what a tap that landed on the closed one turns it into. */
+export const MATCH_ACTIONS_OPEN_SELECTOR = `[data-testid="${MATCH_ACTIONS_TOGGLE_TESTID}"][aria-expanded="true"]`;
 
 /**
  * The pacing floor — R39. Mirrors `HUMAN_FASTEST_REPEAT_MS`
@@ -241,7 +251,9 @@ export interface PadPage {
 /** R50(h): finalize is tapped on the ORGANISER page at a viewport ≥768.
  *  `score-finalize` itself is NOT `max-md:hidden` (`fixture-console.tsx:
  *  1103-1106`; only the device hand-over is, `:849-853`) — the width is the
- *  ruling's requirement, not a fold workaround (m1). */
+ *  ruling's requirement, not a fold workaround (m1). At this width the
+ *  Forfeit sits in the CLOSED Match actions panel (PR #1133), which
+ *  `openMatchActions` opens first (tap-play.ts `reloadConsoleBeforeAction`). */
 export const ORGANISER_VIEWPORT = { width: 1280, height: 900 } as const;
 
 async function executeStep(page: PadPage, step: TapStep): Promise<void> {
@@ -280,6 +292,22 @@ async function executeStep(page: PadPage, step: TapStep): Promise<void> {
 
 async function executeSteps(page: PadPage, steps: readonly TapStep[]): Promise<void> {
   for (const step of steps) await executeStep(page, step);
+}
+
+/**
+ * Opens the console's Match actions panel (PR #1133) when it is closed behind a toggle that is on screen (≥768), and
+ * does nothing where there is no such toggle: a phone, whose panel is open with its toggle hidden; a panel already
+ * open; or a console that offers no match action, where the control the caller waits on next is absent anyway. A tap
+ * that landed turns the toggle `aria-expanded="true"`, and that is waited for, so a dropped tap is a timeout HERE and
+ * not a hidden Forfeit later. Answers whether it tapped. Call it after the console's last load: a load closes the
+ * panel again (it is React state).
+ */
+export async function openMatchActions(page: Pick<PadPage, "locator">, waitMs: number = TAP_WAIT_TIMEOUT_MS): Promise<boolean> {
+  const closed = page.locator(MATCH_ACTIONS_CLOSED_SELECTOR);
+  if ((await closed.count()) === 0) return false;
+  await closed.click();
+  await page.locator(MATCH_ACTIONS_OPEN_SELECTOR).waitFor({ state: "attached", timeout: waitMs });
+  return true;
 }
 
 // ---------------------------------------------------------------------------

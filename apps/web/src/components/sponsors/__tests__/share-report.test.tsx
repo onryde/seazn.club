@@ -264,3 +264,33 @@ it("Close calls onClose", () => {
   m.click("sponsor-share-close");
   expect(onClose).toHaveBeenCalledTimes(1);
 });
+
+// Final review 2, m6: Close, Revoke, Confirm and Cancel are the panel's small buttons (`py-1 text-xs`, about 26px tall at
+// 320). Below `md` each takes the house 44px phone floor (`max-md:min-h-11`, the hub's rule: hub-chrome.tsx, on-stream-tab.tsx);
+// from `md` they keep their compact size. The class is read ANCHORED on whitespace (AGENTS.md's md:hidden trap): a bare
+// `min-h-11` probe would also match inside `max-md:min-h-11`, so the desktop half below could not tell the two apart.
+describe("m6: the small buttons take the 44px phone floor and keep their desktop size", () => {
+  const hasClass = (el: ReactElement, cls: string) => new RegExp(`(^|\\s)${cls.replace(/[:.]/g, "\\$&")}(\\s|$)`).test(String(propsOf(el).className ?? ""));
+  const smallButtons = (m: ReturnType<typeof mount>) =>
+    m.island.tree().filter((e) => e.type === "button" && hasClass(e, "py-1"));
+
+  it("Close, every Revoke, and a confirming row's Confirm and Cancel: max-md:min-h-11, never a bare min-h-11, still py-1 text-xs (count reported)", () => {
+    const m = mount();
+    const seen = new Set<string>();
+    const check = (els: ReactElement[]) => {
+      for (const el of els) {
+        const id = String(propsOf(el)["data-testid"]);
+        expect({ id, phone: hasClass(el, "max-md:min-h-11"), everywhere: hasClass(el, "min-h-11") }).toEqual({ id, phone: true, everywhere: false });
+        expect({ id, desktop: hasClass(el, "py-1") && hasClass(el, "text-xs") }).toEqual({ id, desktop: true });
+        seen.add(id);
+      }
+      return els.map((e) => String(propsOf(e)["data-testid"]));
+    };
+    expect(check(smallButtons(m)), "at rest: Close and one Revoke per live link").toEqual(["sponsor-share-close", "sponsor-share-revoke-l1", "sponsor-share-revoke-l2"]);
+    m.click("sponsor-share-revoke-l2");
+    expect(check(smallButtons(m)), "confirming l2: its Confirm and Cancel replace its Revoke").toEqual([
+      "sponsor-share-close", "sponsor-share-revoke-l1", "sponsor-share-revoke-yes-l2", "sponsor-share-revoke-cancel-l2",
+    ]);
+    expect(seen.size, "anti-vacuity: Close, two Revokes, Confirm, Cancel").toBe(5);
+  });
+});

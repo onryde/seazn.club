@@ -86,17 +86,17 @@ export function classifySponsorLink(
 
 const REDIRECTABLE: ReadonlySet<string> = new Set(["http:", "https:"]);
 
-/** A sponsor url as something a visitor may be SENT to — the redirect's target, a board's direct link: an absolute
- *  http(s) url, normalised by the URL parser, or null. Refused: every other scheme (`javascript:`, `data:` — zod's
- *  `.url()` accepts both), and relative or protocol-relative urls (the target must name its own host). The write
- *  schemas refuse the same set (fix round 1, m1), so a stored url should never need refusing here — this is the guard
- *  for rows written before them. */
 /** The write schemas' refusal for a url `redirectTarget` would refuse (m1): API copy, English like its neighbours. */
 export const SPONSOR_URL_HTTP_ONLY = "url must be an http:// or https:// address";
 
 /** For a write schema's `.refine`: a url a visitor may be sent to. */
 export const isRedirectableUrl = (url: string): boolean => redirectTarget(url) !== null;
 
+/** A sponsor url as something a visitor may be SENT to — the redirect's target, a board's direct link: an absolute
+ *  http(s) url, normalised by the URL parser, or null. Refused: every other scheme (`javascript:`, `data:` — zod's
+ *  `.url()` accepts both), and relative or protocol-relative urls (the target must name its own host). The write
+ *  schemas refuse the same set (fix round 1, m1), so a stored url should never need refusing here — this is the guard
+ *  for rows written before them. */
 export function redirectTarget(stored: string | null | undefined): string | null {
   if (stored === null || stored === undefined) return null;
   let parsed: URL;

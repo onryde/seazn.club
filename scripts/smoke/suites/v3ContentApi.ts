@@ -158,12 +158,13 @@ export async function v3ContentApiSuite(
   // Embeds (PROMPT-39 #4): pro renders, and sponsors (#5) reach the dashboard.
   const embed = await html(newSession(), `/embed/divisions/${divData.id}/standings`);
   check("v3: embed renders on pro", embed.status === 200 && embed.body.includes("seazn.club"));
-  const sponsorPatch = (await call(admin, `/api/orgs/${proOrgId}`, "PATCH", {
+  // R4 fix batch 3 (m9): sponsors live in the `sponsors` table only. The org PATCH's legacy `sponsors` arm (the
+  // branding-blob writer) is gone, so the route refuses it like any unknown key: a 400. That the blob is never read is
+  // the m9 unit test's (usecases/__tests__/sponsors.test.ts), so no page check follows.
+  const legacyPatch = await v1(admin, `/api/orgs/${proOrgId}`, "PATCH", {
     sponsors: [{ name: `Acme ${tag}`, url: "https://acme.example" }],
-  })) as { id?: string };
-  check("v3: sponsors saved", !!sponsorPatch.id);
-  // v10: the blob is a read shim only — once the org has sponsors table rows
-  // (sponsorsSuite created them), public pages render rows, not the blob.
+  });
+  check("v3: the removed branding-blob sponsors write is refused (400)", legacyPatch.status === 400);
   const stripRow = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsors`, "POST", {
     name: `Strip ${tag}`,
     url: "https://strip.example",
@@ -171,10 +172,6 @@ export async function v3ContentApiSuite(
   check("v3: sponsor row created for strip", stripRow.status === 201);
   const compPage2 = await html(newSession(), `/live/${proOrgSlug}/${compData.slug}`);
   check("v3: sponsor strip on pro dashboard", compPage2.body.includes(`Strip ${tag}`));
-  check(
-    "v3: blob sponsor stays shim-only once rows exist",
-    !compPage2.body.includes(`Acme ${tag}`),
-  );
 
   // ---- FREE PATH ------------------------------------------------------
   const free = newSession();
@@ -222,12 +219,12 @@ export async function v3ContentApiSuite(
   const freeEmbed = await html(newSession(), `/embed/divisions/${freeDivId}/standings`);
   check("v3: embed 404 on free", freeEmbed.status === 404);
 
-  await call(free, `/api/orgs/${freeOrgId}`, "PATCH", {
-    sponsors: [{ name: `Acme Free ${tag}` }],
-  });
   // v10 policy change: the un-tiered partner strip is free — a community
-  // org's sponsors (here via the blob shim: no table rows yet) render
-  // publicly, flat, with no tier labels.
+  // org's sponsor row (partner, org-wide: the free tier's whole surface)
+  // renders publicly, flat, with no tier labels. A row, not the branding
+  // blob: R4 fix batch 3 removed the blob's writer and its read shim.
+  const freeRow = await v1(free, `/api/v1/orgs/${freeOrgId}/sponsors`, "POST", { name: `Acme Free ${tag}` });
+  check("v3: free org creates a partner sponsor row", freeRow.status === 201);
   const freePage2 = await html(newSession(), `/live/${freeSlug}/${freeCompData.slug}`);
   check(
     "v3→v10: free sponsor strip renders publicly, un-tiered",

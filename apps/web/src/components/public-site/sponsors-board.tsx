@@ -58,7 +58,7 @@ import Image from "next/image";
 import type { ResolvedSponsor, SponsorTier } from "@/server/usecases/sponsors";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
-import { redirectTarget, sponsorClickPath, type BoardClickTag } from "@/lib/sponsor-clicks";
+import { sponsorClickPath, type BoardClickTag } from "@/lib/sponsor-clicks";
 
 /** Panel sizing per tier — the physical encoding of rank on the board. `title`
  *  is absent because the title tier is not drawn here any more; see the header. */
@@ -76,20 +76,14 @@ const PANEL: Record<
 };
 
 /**
- * The tracked redirect, tagged with the page the link sits on, or — for a
- * blob-shim entry — its url itself, only when it is http(s) (S10 fix round 1,
- * m1: nothing refuses a blob url on its way out, so this does; a `data:` href
- * would otherwise go live, since React blocks only `javascript:`).
- *
- * Table rows go through `/s/{id}?…` so a click is counted, and counted for its
- * page (and its match); the shim entries that still live in an org's
- * `branding` jsonb have no row and therefore no id, and link straight out.
- * Exported for its own test: both rungs are reachable from real data and the
- * fallback is the one that silently stops counting clicks.
+ * The tracked redirect, `/s/{id}?…`, tagged with the page the link sits on, so a click is counted, and counted for its
+ * page (and its match); null when the sponsor gave no url. Every sponsor is a table row (R4 fix batch 3: the blob shim,
+ * whose id-less entries linked straight out, is gone), so there is no other rung. A bad STORED url never goes live here:
+ * the write schemas refuse anything but http(s) (`CreateSponsorInput`), and the `/s/` route refuses it again (404).
+ * Exported for its own test.
  */
 export function sponsorHref(sponsor: Pick<ResolvedSponsor, "id" | "url">, tag: BoardClickTag): string | null {
-  if (!sponsor.url) return null;
-  return sponsor.id ? sponsorClickPath(sponsor.id, tag) : redirectTarget(sponsor.url);
+  return sponsor.url ? sponsorClickPath(sponsor.id, tag) : null;
 }
 
 /** One shared logo site (public-image-contract pins this pair). Logos sit on a

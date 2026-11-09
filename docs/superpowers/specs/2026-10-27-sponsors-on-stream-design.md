@@ -181,6 +181,8 @@ MVP implementation reads `sponsors` (active, `on_stream = true`, `resolveSponsor
 - Scene layers (compositor Starting soon / Reconnecting, and the console's Break and Full time) carry a **sponsor
   carousel**: ticked sponsors, title and gold first, 10 s each, logged `source = "scene"`. This is how the three
   break-less sports reach sponsors.
+- **Every carousel showing is a `banner`** (§3.2's bigger card, logged `style = "banner"`): a scene is a full-screen
+  layer, so it never takes the lower third.
 
 ### 3.5 Slots
 
@@ -204,8 +206,9 @@ Counted from **composed streams only** in the MVP (D10):
    2026-11-01, S8 m2)*. The final beat flushes.
 3. **Frame grab (compositor):** 1.5 s after a `start` line, grab one programme frame, JPEG 640×360 q≈75, off the
    streaming thread, ≤ 1 per 20 s; `POST /api/internal/relay/sessions/[sid]/airings/[momentId]/frame` with the session
-   token. A failure logs once and is dropped; it never blocks the pipeline. CPU cost measured on stg before merge; a
-   measurable p95 rise goes to the owner.
+   token. A failure logs once and is dropped; it never blocks the pipeline. CPU cost measured on stg before
+   `RELAY_AIRINGS=1` on prod (not before merge: a Machine without it grabs no frame, so there is nothing to measure until
+   stg sets it); a measurable p95 rise goes to the owner *(amended 2026-11-08, final review 2 m4)*.
 4. **Web:** `heartbeat` upserts `sponsor_airings` on `(session_id, moment_id)`. Times > 10 min from server time are
    refused. An airing with no `end` by session end closes at the last beat and is flagged `ended_estimated`.
 5. **Viewers:** on `start`, if the broadcast came from YouTube Connect (r2-youtube's table), read
@@ -236,14 +239,17 @@ the match page only.
 - `sponsor_airings (id, org_id, sponsor_id → set null, sponsor_name snapshot, fixture_id, session_id, moment_id,
   source ∈ rotation|scene|operator, break_kind null, style, started_at, ended_at null, cut_short, skipped (operator "Skip this card"), ended_estimated,
   frame_path null)`, unique `(session_id, moment_id)`, index
-  `(org_id, sponsor_id, started_at)`. The name snapshot keeps a report readable after a sponsor is deleted. *(Amended
+  `(org_id, sponsor_id, started_at)`. The name snapshot keeps the club's Overview listing a deleted sponsor's airings
+  under its name *(amended 2026-11-08, PO ruling: deleting a sponsor ENDS its share links, so a report link answers 404;
+  the Overview keeps the airings by name)*. *(Amended
   2026-11-01, preflight F6:)* no `viewers`, `video_id` or `youtube_refreshed_at` columns: YouTube API data lives in Y1's
   table keyed to `youtube_broadcasts` (`on delete cascade`), so Connect's own purge removes it (§6.3).
   `skipped` is set by the web from the operator log (console spec §3.4), not by the compositor. (`source` is text with a check, so a Later `deal`
   value is one check change.)
 - `sponsor_clicks (id, org_id, sponsor_id → cascade, fixture_id null, source, at)`, index `(sponsor_id, at)`.
-- `sponsor_report_links (id, org_id, sponsor_id, competition_id null, from_date, to_date, token_hash, created_by,
+- `sponsor_report_links (id, org_id, sponsor_id → cascade, competition_id null, from_date, to_date, token_hash, created_by,
   created_at, revoked_at null)`. Token: 32 random bytes, stored hashed, shown once as a URL. Revoke sets `revoked_at`.
+  Deleting the sponsor deletes its links, so a shared report ends with the sponsor *(amended 2026-11-08, PO ruling)*.
 - Migration: next free `V` at build time (V477 is latest on main today). Greenfield: no backfill; existing sponsors
   start with `on_stream = false`.
 

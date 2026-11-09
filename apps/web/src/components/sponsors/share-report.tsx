@@ -126,7 +126,7 @@ export function ShareReport(props: ShareReportProps) {
         <h3 id={titleId} className="min-w-0 break-words text-sm font-semibold text-slate-800">
           {msg("sponsors.share.title", { name: sponsor.name })}
         </h3>
-        <button type="button" className="btn btn-ghost shrink-0 px-2.5 py-1 text-xs" data-testid="sponsor-share-close" onClick={onClose}>
+        <button type="button" className="btn btn-ghost shrink-0 px-2.5 py-1 text-xs max-md:min-h-11" data-testid="sponsor-share-close" onClick={onClose}>
           {msg("sponsors.share.close")}
         </button>
       </div>
@@ -249,7 +249,7 @@ export function ShareReport(props: ShareReportProps) {
                     <span className="text-slate-700">{msg("sponsors.share.revokeConfirm")}</span>
                     <button
                       type="button"
-                      className="btn btn-danger px-2.5 py-1 text-xs"
+                      className="btn btn-danger px-2.5 py-1 text-xs max-md:min-h-11"
                       data-testid={`sponsor-share-revoke-yes-${l.id}`}
                       disabled={busy}
                       onClick={() => void revoke(l.id)}
@@ -258,7 +258,7 @@ export function ShareReport(props: ShareReportProps) {
                     </button>
                     <button
                       type="button"
-                      className="btn btn-ghost px-2.5 py-1 text-xs"
+                      className="btn btn-ghost px-2.5 py-1 text-xs max-md:min-h-11"
                       data-testid={`sponsor-share-revoke-cancel-${l.id}`}
                       onClick={() => setConfirming(null)}
                     >
@@ -268,7 +268,7 @@ export function ShareReport(props: ShareReportProps) {
                 ) : (
                   <button
                     type="button"
-                    className="btn btn-ghost px-2.5 py-1 text-xs"
+                    className="btn btn-ghost px-2.5 py-1 text-xs max-md:min-h-11"
                     data-testid={`sponsor-share-revoke-${l.id}`}
                     onClick={() => setConfirming(l.id)}
                   >

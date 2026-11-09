@@ -54,8 +54,7 @@ export default async function DivisionSlideshowPage({
         chrome.branding,
       )}
       logo={chrome.logo}
-      // v10: resolver rows scoped to this division's competition, blob shim
-      // fallback for un-backfilled orgs.
+      // v10: the resolver's table rows, scoped to this division's competition.
       sponsors={await resolveSponsors(auth.orgId, division.competition_id)}
       // R10e u1 moved the board's strings into `labels`; the organiser board
       // keeps the English it always showed (which locale it should speak is

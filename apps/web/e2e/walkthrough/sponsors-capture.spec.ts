@@ -16,7 +16,15 @@
 //   hub-packages      Sponsors hub › Packages (S11)
 //   share-open        Overview › Share report, opened, a link created and its url shown (S13)
 //   report            the public report /r/sponsor/<token> (S14), anonymous, the 43-character name
-// Each shot is the state's own region, never the page's top bar (the nav is an open owner decision, not a sign-off item).
+// Each shot is the state's own region. The org TOP BAR has its own shots (the nav sign-off, coordinator 2026-11-08):
+//   nav-logo-<w>              `header.app-gantry` of an org with a logo, at 320/768/1280
+//   nav-name43-<w>            the same bar for an org with a 43-character name
+//   nav-settings-tooltip-1280 Settings hovered. The browser's own `title` tooltip is NOT in the DOM and headless Chromium
+//                             paints none into a screenshot: the shot shows the hover state, the witness asserts the title.
+// Before each: Sponsors (folded to the home's entry below 350 — nav.tsx `hidden min-[350px]:flex`, so it is asserted HIDDEN
+// at 320, and above it the link AND its label span visible), Settings and Sign out visible AND tappable inside the viewport
+// (elementFromPoint), the bar's content inside its box, and no page scroll. At 320 the logo org's crest stands alone (nav.tsx
+// folds its wordmark there: CI e2e 42438561906 measured that bar 354px wide, Sign out past the edge).
 //
 // ANTI-VACUITY (AGENTS.md class 10): the last test asserts every file exists, is a PNG, and that no two are
 // byte-identical — a capture that errored before a shot, or two states that never opened, cannot pass it.
@@ -30,6 +38,7 @@ import { releaseSettingsOrg, seedCompetition, seedSettingsOrg, sponsorsUrl, type
 import { reportLinkPath } from "../../src/lib/sponsor-report";
 import { routes } from "../../src/lib/routes";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
+import { releaseStandInOrg, seedStandInOrg, type StandInOrg } from "../helpers/sponsor-relay-standin";
 
 const DIR = process.env.SPONSOR_CAPTURE_DIR;
 const WIDTHS = [320, 768, 1280] as const;
@@ -42,6 +51,12 @@ const GONE_SPONSOR = "Old Mill Bakery";
 const EMPTY_JAR = { cookies: [], origins: [] };
 
 const UI: Record<string, string> = JSON.parse(readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/ui.json", import.meta.url)), "utf8"));
+const CONSOLE: Record<string, string> = JSON.parse(readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/console.json", import.meta.url)), "utf8"));
+/** The top bar's shots, by name: both orgs at every width, and Settings hovered at 1280. */
+const NAV_SHOTS = [...WIDTHS.flatMap((w) => [`nav-logo-${w}`, `nav-name43-${w}`]), "nav-settings-tooltip-1280"];
+const LONG_ORG = "Harbourside Northern Athletic Club U21 Team";
+const NAV_LOGO_URL = "https://crest.nav-capture.example/crest.png";
+const navShotPath = (name: string) => join(DIR!, `${name}.png`);
 const ui = (key: string): string => {
   const v = UI[key];
   if (v === undefined) throw new Error(`en/ui.json has no ${key}`);
@@ -224,8 +239,112 @@ for (const width of WIDTHS) {
   });
 }
 
+test.describe("the org top bar (nav sign-off)", () => {
+  let logoOrg: StandInOrg | undefined;
+  let longOrg: StandInOrg | undefined;
+  const word = (key: string) => {
+    const v = CONSOLE[key];
+    if (v === undefined) throw new Error(`en/console.json has no ${key}`);
+    return v;
+  };
+
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(90_000);
+    expect(LONG_ORG.length, "premise: a 43-character org name").toBe(43);
+    logoOrg = await seedStandInOrg(browser, "spnav", { logoUrl: NAV_LOGO_URL });
+    const crest = readFileSync(fileURLToPath(new URL("../../public/apple-touch-icon.png", import.meta.url)));
+    await logoOrg.ctx.route(`${new URL(NAV_LOGO_URL).origin}/**`, (r) => r.fulfill({ status: 200, contentType: "image/png", body: crest }));
+    longOrg = await seedStandInOrg(browser, "spnav43", { orgName: LONG_ORG });
+  });
+  test.afterAll(async () => {
+    try {
+      await releaseStandInOrg(logoOrg);
+    } finally {
+      await releaseStandInOrg(longOrg);
+    }
+  });
+
+  /** A control a person can tap: its box wholly inside the viewport, and a tap at its centre lands on IT (elementFromPoint, AGENTS.md
+   *  class 2 - `toBeVisible` passes for a button past the viewport's edge, and html's `overflow-x: clip` hides it without a scroll). */
+  async function expectTappable(control: Locator, width: number, what: string): Promise<void> {
+    const at = await control.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return { left: r.left, right: r.right, hit: hit !== null && (hit === el || el.contains(hit)) };
+    });
+    expect(at.left, `${width}: ${what} starts inside the viewport`).toBeGreaterThanOrEqual(0);
+    expect(at.right, `${width}: ${what} ends inside the viewport`).toBeLessThanOrEqual(width);
+    expect(at.hit, `${width}: a tap at ${what}'s centre reaches it`).toBe(true);
+  }
+
+  /** The bar at this width, witnessed: Sponsors (hidden at 320, where the home's entry stands in), Settings, Sign out, the
+   *  bar's content inside its own box, Settings and Sign out tappable inside the viewport, no page scroll. CI e2e 42438561906
+   *  measured the logo org's bar 354px wide at 320, Sign out wholly past the edge: nav.tsx now folds a logo org's wordmark there. */
+  async function witnessBar(o: StandInOrg, width: number): Promise<Locator> {
+    const { page } = o;
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(routes.orgHome(o.orgSlug));
+    const header = page.locator("header.app-gantry");
+    await expect(header).toBeVisible();
+    const sponsors = header.getByTestId("nav-sponsors");
+    if (width === 320) await expect(sponsors, "320: Sponsors folds to the home's entry").toBeHidden();
+    else {
+      // The word is its own span (nav.tsx `navLabelClass`, `hidden md:inline`): `toHaveText` on the link reads a HIDDEN
+      // span's text too, so the label's paint is asserted on the span itself.
+      await expect(sponsors, `${width}: Sponsors is on the bar`).toBeVisible();
+      await expect(sponsors.getByText(word("nav.sponsors"), { exact: true }), `${width}: its label is painted`).toBeVisible();
+    }
+    const settings = header.getByTestId("nav-settings");
+    const signOut = header.getByRole("button", { name: word("nav.signOut"), exact: true });
+    await expect(settings, `${width}: the Settings icon`).toBeVisible();
+    await expect(signOut, `${width}: the Sign out icon`).toBeVisible();
+    const fit = await header.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+    expect(fit.scroll, `${width}: the bar's content fits its box`).toBeLessThanOrEqual(fit.client);
+    await expectTappable(settings, width, "Settings");
+    await expectTappable(signOut, width, "Sign out");
+    // Whatever the wordmark does at this width, the home link keeps its name (nav.tsx folds it with `sr-only`, never `hidden`).
+    await expect(header.getByRole("link", { name: "Seazn Club" }), `${width}: the home link is still named Seazn Club`).toHaveAttribute("href", "/");
+    await expectNoHorizontalScroll(page);
+    return header;
+  }
+
+  for (const width of WIDTHS) {
+    test(`the top bar @${width}: an org with a logo, an org with a 43-character name`, async () => {
+      const header = await witnessBar(logoOrg!, width);
+      const crest = header.locator(`img[src="${NAV_LOGO_URL}"]`);
+      await expect(crest, "witness: the org's logo").toBeVisible();
+      await expect.poll(() => crest.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
+      await expectTappable(crest, width, "the club's crest");
+      // At 320 the club's crest takes the wordmark's place (its box leaves the row); from 768 both are drawn, the wordmark wider.
+      const drawn = (h: Locator) => h.locator('img[src="/logo-wide-night.png"]').evaluate((img) => img.getBoundingClientRect().width);
+      const crestWidth = await crest.evaluate((img) => img.getBoundingClientRect().width);
+      if (width === 320) expect(await drawn(header), "320: the wordmark gives its place to the crest").toBeLessThanOrEqual(1);
+      else expect(await drawn(header), `${width}: the wordmark beside the crest`).toBeGreaterThan(crestWidth);
+      await header.screenshot({ path: navShotPath(`nav-logo-${width}`), animations: "disabled" });
+
+      const bar = await witnessBar(longOrg!, width);
+      expect(await drawn(bar), `${width}: an org without a logo keeps its wordmark - the bar's only mark`).toBeGreaterThan(crestWidth);
+      const chip = bar.locator('[data-tour="org-chip"]');
+      // The org chip is the name's place from `sm` (640); at 320 the bar carries no name. From 640 the chip gives up width
+      // before anything else (nav.tsx `shrink-[999]`: "a clipped club name costs nothing"), so its TEXT is the witness.
+      if (width === 320) await expect(chip, "320: no org chip").toBeHidden();
+      else await expect(chip.locator("span.truncate"), "witness: the long name, in its chip").toHaveText(LONG_ORG);
+      await bar.screenshot({ path: navShotPath(`nav-name43-${width}`), animations: "disabled" });
+    });
+  }
+
+  test("the top bar @1280: Settings hovered, its tooltip text", async () => {
+    const header = await witnessBar(longOrg!, 1280);
+    const settings = header.getByTestId("nav-settings");
+    await settings.hover();
+    await expect(settings, "the tooltip's text is the browser's own title").toHaveAttribute("title", word("nav.settings"));
+    await expect(settings, "and the same name for a screen reader").toHaveAttribute("aria-label", word("nav.settings"));
+    await header.screenshot({ path: navShotPath("nav-settings-tooltip-1280"), animations: "disabled" });
+  });
+});
+
 test("anti-vacuity: every state at every width exists, is a PNG, and no two are identical", () => {
-  const files = WIDTHS.flatMap((w) => STATES.map((s) => shotPath(s, w)));
+  const files = [...WIDTHS.flatMap((w) => STATES.map((s) => shotPath(s, w))), ...NAV_SHOTS.map(navShotPath)];
   const missing = files.filter((f) => !existsSync(f));
   expect(missing, "every capture was written").toEqual([]);
   const digests = new Map<string, string>();
@@ -236,6 +355,6 @@ test("anti-vacuity: every state at every width exists, is a PNG, and no two are 
     expect(digests.get(digest), `${f} is byte-identical to ${digests.get(digest)}`).toBeUndefined();
     digests.set(digest, f);
   }
-  console.log(`sponsor captures checked: ${files.length} (${STATES.length} states × ${WIDTHS.length} widths)`);
-  expect(digests.size).toBe(STATES.length * WIDTHS.length);
+  console.log(`sponsor captures checked: ${files.length} (${STATES.length} states × ${WIDTHS.length} widths + ${NAV_SHOTS.length} top-bar shots)`);
+  expect(digests.size).toBe(STATES.length * WIDTHS.length + 2 * WIDTHS.length + 1);
 });

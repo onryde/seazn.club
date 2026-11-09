@@ -22,6 +22,7 @@
 //   an end before its start (no writer makes one) ...... "an inverted row"
 //   a deleted sponsor .................................. "Review Focus 4"
 //   one competition ................................... "competition"
+//   the fixture deleted (FMT5's set null), then read ... "item 4"
 //   empty org, sponsors with no airings, a second call .. "empty"
 //   another org, another org's competition ............. "tenancy"
 //   a viewer (R19: the Overview is read-only for viewers, not refused) ... "R19"
@@ -37,6 +38,8 @@
 //   K5  clamp         drop `greatest(…, 0)`                                 -> "an inverted row"
 //   K6  org check     drop `if (auth.orgId !== orgId)`                     -> "tenancy: another org's auth"
 //   K15 time period also filtered to a fixture (`and ${fixture} is not null`) -> "fix round 1 (m5)..."
+//   K16 competition read through the fixture again (`${competition} = …` -> the old `a.fixture_id in (select … fixtures …)`)
+//                                                                             -> "item 4: ...after its fixture is deleted"
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql, type Tx } from "@/lib/db";
@@ -337,6 +340,45 @@ describe.skipIf(!HAS_DB)("S13: the Overview's numbers", () => {
     const rowsB = await sponsorOverview(auth, auth.orgId, { kind: "competition", competitionId: b.competitionId }, NOW);
     expect(numbersOf(byId(rowsB, wide))).toEqual({ timesShown: 1, onScreenMs: 15_000, linkClicks: 1 });
     expect(rowsB.map((r) => r.sponsorId).sort()).toEqual([wide, ownB].sort());
+  });
+
+  // Final review 2, item 4 (owner "4 Ok"): a format change (FMT5) deletes a division's fixtures, and V492 sets the
+  // airings' and clicks' fixture_id null (R16). The competition period reads the row's competition SNAPSHOT, so it still
+  // counts them; read through the fixture, they dropped out of it for good.
+  it("item 4: a competition period still counts an airing and a click after its fixture is deleted (FMT5's set null); the org-wide periods read the same rows the same", async () => {
+    const auth = await org();
+    const a = await competitionWithFixture(auth);
+    const b = await competitionWithFixture(auth);
+    const wide = await sponsorRow(auth.orgId, "Org Wide Ltd");
+    const airings: SeededAiring[] = [
+      { sponsorId: wide, name: "Org Wide Ltd", fixtureId: a.fixtureId, start: at("2026-06-01T10:00:00.000Z"), end: at("2026-06-01T10:00:12.000Z") },
+      { sponsorId: wide, name: "Org Wide Ltd", fixtureId: b.fixtureId, start: at("2026-06-02T10:00:00.000Z"), end: at("2026-06-02T10:00:20.000Z") },
+    ];
+    const clicks: SeededClick[] = [
+      { sponsorId: wide, fixtureId: a.fixtureId, source: "stream", at: at("2026-06-01T10:00:05.000Z") },
+      { sponsorId: wide, fixtureId: b.fixtureId, source: "match", at: at("2026-06-02T10:00:05.000Z") },
+    ];
+    for (const x of airings) await airing(auth.orgId, x);
+    for (const c of clicks) await click(auth.orgId, c);
+    const inA = (r: { fixtureId: string | null }) => r.fixtureId === a.fixtureId;
+    const wantA = expectedFor(airings, clicks, inA);
+    expect(wantA, "premise: competition A holds one 12 s airing and one click").toEqual({ timesShown: 1, onScreenMs: 12_000, linkClicks: 1 });
+    const read = async (p: SponsorPeriod) => numbersOf(byId(await sponsorOverview(auth, auth.orgId, p, NOW), wide));
+    const competitionA: SponsorPeriod = { kind: "competition", competitionId: a.competitionId };
+    expect(await read(competitionA), "before: the rulebook's sum").toEqual(wantA);
+    const before = { year: await read(THIS_YEAR), last30: await read(LAST_30) };
+    expect(before.year, "premise: the year holds both").toEqual(expectedFor(airings, clicks, inWindow(YEAR_FROM, YEAR_TO)));
+
+    // FMT5's clear, at the row level: the fixture goes, and V492 sets fixture_id null on both history rows.
+    await sql`delete from fixtures where id = ${a.fixtureId}`;
+    const [nulled] = await sql<{ airings: number; clicks: number }[]>`
+      select (select count(*)::int from sponsor_airings where org_id = ${auth.orgId} and fixture_id is null) as airings,
+             (select count(*)::int from sponsor_clicks where org_id = ${auth.orgId} and fixture_id is null) as clicks`;
+    expect(nulled, "premise: A's airing and click lost their fixture").toEqual({ airings: 1, clicks: 1 });
+
+    expect(await read(competitionA), "after: the same showing and the same click, still A's").toEqual(wantA);
+    expect(await read({ kind: "competition", competitionId: b.competitionId }), "B untouched").toEqual({ timesShown: 1, onScreenMs: 20_000, linkClicks: 1 });
+    expect({ year: await read(THIS_YEAR), last30: await read(LAST_30) }, "the org-wide periods read the same").toEqual(before);
   });
 
   it("fix round 1 (m5): an org-wide sponsor aired in TWO competitions and with no fixture, read for This year - every row counted exactly once", async () => {

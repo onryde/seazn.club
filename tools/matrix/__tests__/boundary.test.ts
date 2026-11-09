@@ -62,7 +62,13 @@ const OPEN_ENTRY_STAGES = "apps/web/src/lib/open-entry-stages.ts";
 // names its codes (`SwissRefusalCode`, lib/scenarios/common.ts) so a judged refusal is one the product can send, never a typed
 // copy. TYPE-ONLY from shipped modules (pinned below): the table itself imports `@/lib/messages`, which plain node cannot resolve.
 const SWISS_REFUSALS = "apps/web/src/lib/swiss-refusals.ts";
-const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL, STAGE_DECIDER_OFF, CHESS_INDIVIDUAL_ONLY_RULE, OPEN_ENTRY_STAGES, SWISS_REFUSALS]);
+// 2026-11-07 (CI run 42418390209, swiss F1): swiss-shell.ts holds the PRODUCT's `isUnseatedSwissByeShell`, the predicate the
+// run sheet skips a row by (run-sheet-groups.ts buildRunSheet); stage-rail.ts's newestCreatedFixtureNo reads it so the
+// generate wait names a row the sheet draws, never a second copy of the rule. Client-safe by its own header: its one value
+// import is ./fixture-bye.ts, whose one import is a TYPE from @seazn/engine/core (pinned below), so plain node loads both.
+const SWISS_SHELL = "apps/web/src/lib/swiss-shell.ts";
+const FIXTURE_BYE = "apps/web/src/lib/fixture-bye.ts";
+const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL, STAGE_DECIDER_OFF, CHESS_INDIVIDUAL_ONLY_RULE, OPEN_ENTRY_STAGES, SWISS_REFUSALS, SWISS_SHELL]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
 // The bench is also the @seazn/bench workspace (2026-10-04). A bare
@@ -198,6 +204,18 @@ describe("tools/matrix import boundary", () => {
       .filter((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === SWISS_REFUSALS)
       .map((i) => [relative(MATRIX, m), i.typeOnly, i.dynamic]));
     expect(edges).toEqual([["lib/scenarios/common.ts", true, false]]);
+  });
+
+  it("the product's Swiss shell predicates are a file plain node can load: its one value import is ./fixture-bye.ts, which imports only a TYPE from the engine's core, neither reaches an `@/` alias, and only stage-rail.ts names it", () => {
+    for (const f of [SWISS_SHELL, FIXTURE_BYE]) expect(existsSync(join(REPO, f)), f).toBe(true);
+    const shell = importsOf(join(REPO, SWISS_SHELL));
+    expect(shell.map((i) => [i.spec, i.typeOnly, i.dynamic]), `${SWISS_SHELL} must value-import only ./fixture-bye.ts`).toEqual([["./fixture-bye.ts", false, false]]);
+    expect(relative(REPO, resolve(dirname(join(REPO, SWISS_SHELL)), shell[0]!.spec))).toBe(FIXTURE_BYE);
+    expect(importsOf(join(REPO, FIXTURE_BYE)).map((i) => [i.spec, i.typeOnly, i.dynamic]), `${FIXTURE_BYE} must import only a type from @seazn/engine/core`).toEqual([["@seazn/engine/core", true, false]]);
+    // The file's whole load closure is these two product files (nothing server-side, no alias).
+    expect([...closure([join(REPO, SWISS_SHELL)])].map((f) => relative(REPO, f)).sort()).toEqual([FIXTURE_BYE, SWISS_SHELL].sort());
+    const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === SWISS_SHELL)).map((m) => relative(MATRIX, m));
+    expect(naming).toEqual(["lib/browser/pages/stage-rail.ts"]);
   });
 
   it("the product's cascade-only forfeit reasons are a file plain node can load: it exists, imports only the engine's core barrel (a package the matrix depends on), and only the browser driver names it", () => {
