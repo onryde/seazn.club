@@ -1,5 +1,5 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
-import { type Session, appendScoreEvent, check, counts, newSession, signIn, tag, v1, v1data } from "../harness.ts";
+import { type Session, appendScoreEvent, check, counts, newSession, setPlan, signIn, tag, v1, v1data } from "../harness.ts";
 import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swiss-draw.ts";
 import { w4KnockoutAB5PagePlayoffWalkover, w4KnockoutAB5StandaloneRefusal } from "./w4KnockoutA-b5.ts";
 import { w4KnockoutAB6aSuite } from "./w4KnockoutA-b6a.ts";
@@ -99,6 +99,11 @@ export async function w4KnockoutASuite(): Promise<void> {
   const owner = newSession();
   const who = await signIn(owner, `delivered+w4a_${tag}@resend.dev`);
   const orgId = who.org_id;
+  // Pro, as the registration loop's owner is: this suite seats eight divisions on its first competition and runs five
+  // competitions (its two, B5's three), past Community's 4 divisions per competition and 3 active competitions — the
+  // fifth division answered 402 and every check after it read `undefined` (first local run, merge 2, 2026-11-09).
+  // Nothing checked here is plan-gated.
+  await setPlan(orgId, "pro", owner);
   const venueId = v1data<{ id: string } | undefined>(
     await v1(owner, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `W4a Venue ${tag}` }),
   )?.id;
