@@ -70,6 +70,7 @@ const render = (o: {
   divisionStatus?: string;
   waiting?: KnockoutWaitingEntrant[];
   fixtures?: ReturnType<typeof fixture>[];
+  drawSeeds?: Record<string, number>;
 }) =>
   renderToStaticMarkup(
     <StagesPanel
@@ -79,6 +80,7 @@ const render = (o: {
       canEdit={o.canEdit ?? true}
       divisionStatus={o.divisionStatus ?? "active"}
       knockoutWaiting={o.waiting}
+      drawSeeds={o.drawSeeds}
     />,
   );
 const cardOf = (html: string, stageId: string): string => {
@@ -151,5 +153,56 @@ describe("X-LE-10 the waiting strip reaches the card the player waits on", () =>
     const html = render({ stages: [stage("k1", 1), stage("k2", 2)], waiting: [waiter("e5", "k2")] });
     expect(html).toMatch(/data-testid="knockout-waiting"[^>]*data-stage-id="k2"|data-stage-id="k2"[^>]*data-testid="knockout-waiting"/);
     expect(cardOf(html, "k1")).not.toContain('data-testid="knockout-waiting"');
+  });
+});
+
+// X-SD-7 (W4 T20, K5 "shown"; R24 pick 3A): the stage's draw seed, a muted line under the card's header. The seed is what the
+// stage's newest Generate drew with (`listStageDrawSeeds`); the line reads it off the card's own stage id. Numbers here are
+// typed out (a seed is any 32-bit integer: 4040404040 is none the panel could have invented), and every assertion on the
+// markup anchors on `="`, since React serialises an omitted prop as `"$undefined"`.
+describe("X-SD-7 the stage card shows its draw seed", () => {
+  const SEED = 4040404040;
+  const lineOf = (html: string) => /data-testid="stage-draw-seed"[^>]*data-draw-seed="(\d+)"[^>]*>([^<]*)</.exec(html);
+
+  it("a drawn knockout shows 'Draw #<seed>' under its header, for an organiser and a viewer alike", () => {
+    for (const canEdit of [true, false]) {
+      const html = cardOf(render({ stages: [stage("k1", 1)], drawSeeds: { k1: SEED }, canEdit }), "k1");
+      const m = lineOf(html);
+      expect(m, `canEdit=${canEdit}: the line rendered`).not.toBeNull();
+      expect(m![1]).toBe(String(SEED));
+      expect(m![2]).toBe(`Draw #${SEED}`);
+      // under the header, above the card's body
+      expect(html.indexOf('data-testid="stage-draw-seed"')).toBeLessThan(html.indexOf('id="stage-body-k1"'));
+    }
+  });
+
+  it("the empty case first: no seed supplied, none for this stage, or a seed for another card: no line", () => {
+    const stages = [stage("k1", 1), stage("k2", 2)];
+    expect(render({ stages })).not.toContain('data-testid="stage-draw-seed"');
+    expect(render({ stages, drawSeeds: {} })).not.toContain('data-testid="stage-draw-seed"');
+    const html = render({ stages, drawSeeds: { k2: SEED } });
+    expect(cardOf(html, "k1")).not.toContain('data-testid="stage-draw-seed"');
+    expect(cardOf(html, "k2")).toContain('data-draw-seed="4040404040"');
+  });
+
+  it("each card names ITS stage's seed, never a neighbour's", () => {
+    const html = render({ stages: [stage("k1", 1), stage("k2", 2)], drawSeeds: { k1: 11, k2: 22 } });
+    expect(lineOf(cardOf(html, "k1"))![1]).toBe("11");
+    expect(lineOf(cardOf(html, "k2"))![1]).toBe("22");
+  });
+
+  it("only a knockout-family stage shows one: a Swiss or group stage with a seed on the ledger shows none", () => {
+    const swiss = stage("s1", 1, { kind: "swiss", config: { rounds: 3 } });
+    const group = stage("g1", 2, { kind: "group" });
+    const html = render({ stages: [swiss, group], drawSeeds: { s1: SEED, g1: SEED } });
+    expect(html).not.toContain('data-testid="stage-draw-seed"');
+    // positive pair: the same seed on a knockout stage DOES show
+    expect(render({ stages: [stage("k1", 1)], drawSeeds: { k1: SEED } })).toContain('data-testid="stage-draw-seed"');
+  });
+
+  it("seed 0 is a seed: it shows 'Draw #0', not nothing (a falsy value is not an absent one)", () => {
+    const m = lineOf(cardOf(render({ stages: [stage("k1", 1)], drawSeeds: { k1: 0 } }), "k1"));
+    expect(m, "the line rendered").not.toBeNull();
+    expect([m![1], m![2]]).toEqual(["0", "Draw #0"]);
   });
 });

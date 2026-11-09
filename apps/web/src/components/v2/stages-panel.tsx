@@ -135,7 +135,7 @@ import {
 } from "@/lib/swiss-pairing";
 import { swissPairingMenuFor, swissUnpairChangeHint, type EntrantSwissFirstRounds } from "@/lib/swiss-pairing-menu";
 import { swissDoorRefusalText } from "@/lib/swiss-door-refusal";
-import { isRunningRootSwiss } from "@/lib/open-entry-stages";
+import { ROOT_KNOCKOUT_KINDS, isRunningRootSwiss } from "@/lib/open-entry-stages";
 // Competition Desk W2 (Task 4) — the run sheet's grouping builder + the
 // component that renders it. `isBye` (and, inside `buildRunSheet` itself,
 // `BRACKET_STAGE_KINDS`) are the SINGLE authorities now (R2a/R10,
@@ -499,6 +499,9 @@ interface Props {
    *  division page for an organiser on this tab): each stage card lists its own in a "Waiting to join the bracket" strip with
    *  one "Add to bracket" tap. Optional: absent ⇒ no strip (a viewer; the pre-existing panel tests). */
   knockoutWaiting?: readonly KnockoutWaitingEntrant[];
+  /** W4 T20 (K5 "shown"; R24 pick 3A): each stage's draw seed, stage id -> the seed its newest Generate drew with
+   *  (`listStageDrawSeeds`). A stage that drew nothing is absent; only a knockout-family card shows one. */
+  drawSeeds?: Readonly<Record<string, number>>;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -616,7 +619,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, knockoutWaiting = [] }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, knockoutWaiting = [], drawSeeds = {} }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1556,6 +1559,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         const knockoutDrift = knockoutCutDriftOf(stage, canEdit, knockoutCutDrift);
         // W4 T19: this card's waiting players (`listKnockoutWaiting` already leaves out a finished stage and a departed player).
         const waitingHere = knockoutWaiting.filter((w) => w.stageId === stage.id);
+        // W4 T20: a drawn knockout's seed, by the card's own stage id (`0` is a seed: an absent one is `undefined`).
+        const drawSeed = ROOT_KNOCKOUT_KINDS.includes(stage.kind) ? drawSeeds[stage.id] : undefined;
         // F3 Task 5 (5a) — only ever non-empty for the one stage
         // getStageRosterDrift finds eligible (usecases/stages.ts); every
         // other stage's entry is absent or both arrays empty, so this is a
@@ -1802,6 +1807,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       {lateEntryNoticeText(line, { t: msg, plural: msgPlural })}
                     </p>
                   ))}
+                  {/* W4 T20 (K5 "shown"; R24 pick 3A): the draw's seed, one muted line under the header like the legend - the number
+                      that replays this bracket (RB4-D4), so an organiser can say which draw they are looking at. Information, not an
+                      action: both viewers see it. Only a knockout that DREW at random has one (a seeded or fed bracket has none). */}
+                  {!folded && drawSeed !== undefined && (
+                    <p data-testid="stage-draw-seed" data-draw-seed={drawSeed} className="w-full min-w-0 text-xs text-slate-500">
+                      {msg("knockout.drawSeed", { seed: drawSeed })}
+                    </p>
+                  )}
                 </header>
 
                 {/* Match Day PB1: the card's body, one element so the toggle has something to control. `hidden` (not unmounted) while the

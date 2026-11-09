@@ -2,6 +2,7 @@ import { test, expect, type APIRequestContext, type Page } from "@playwright/tes
 import { TAG, apiJson, competitionPath, divisionPath, withDb } from "./helpers";
 import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { swissDrawSeed } from "../src/lib/swiss-draw";
 
 // W4 knockout app-A, lane B6a (Tasks 19 + 20; spec 2026-11-04-format-matrix-w4-knockout-design.md; R24 owner picks 1A/2B/3A):
 // the DESK half of late entry and the stage's draw seed. One describe per rule, driven through the real product: the public
@@ -400,5 +401,55 @@ test.describe("X-LL-1 the desk names the lucky loser who took the seat", () => {
     // Withdrawing someone no lucky loser replaces says nothing about one: the notice region renders no line.
     await page.goto(await divisionPath(request, divisionId, "?tab=entrants"));
     await expect(page.getByTestId("entrants-departure-line"), "a fresh page carries no stale sentence").toHaveCount(0);
+  });
+});
+
+// X-SD-7 (W4 T20, K5 "shown"; R24 pick 3A): the stage's draw seed is said on its card — "Draw #<seed>", a muted line under the
+// header — so an organiser can tell which draw they are looking at (RB4-D4: the same field and seed draw the same bracket). The
+// seed is the stage's own (`swissDrawSeed(stage id)`, the draw's declared function — `lib/swiss-draw.ts`), recorded on the
+// Generate's ledger row; a Rebuild reuses it, so the line does not move. A wholly SEEDED bracket draws nothing, so shows none.
+test.describe("X-SD-7 the stage shows its draw seed", () => {
+  test("six unseeded players: the card says Draw #<the stage's seed>, and a Rebuild keeps it; a seeded bracket says nothing", async ({ page, request }) => {
+    test.setTimeout(150_000);
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Seed cup ${TAG}`, visibility: "private" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Open", sport_key: "badminton", variant_key: "bwf", config: {} });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const added = await apiJson<{ id: string }[]>(
+      request,
+      `/api/v1/divisions/${divisionId}/entrants`,
+      "POST",
+      ["Ana", "Ben", "Cas", "Dee", "Eli", "Fay"].map((n) => ({ kind: "individual", display_name: `Seed ${n} ${TAG}` })),
+    );
+    expect(added.status, JSON.stringify(added.error)).toBe(201);
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "knockout", name: "Cup", config: {} });
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    const stageId = stage.data!.id;
+    const seedLine = page.getByTestId("stage-draw-seed");
+
+    // Nothing drawn yet: no line.
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await expect(page.getByTestId("stage-more").or(page.locator(`[data-stage-id="${stageId}"]`)).first()).toBeVisible({ timeout: 30_000 });
+    await expect(seedLine, "nothing generated yet").toHaveCount(0);
+
+    expect((await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST")).status).toBe(200);
+    const want = swissDrawSeed(stageId);
+    await page.reload();
+    await expect(seedLine).toHaveCount(1, { timeout: 30_000 });
+    await expect(seedLine).toHaveText(`Draw #${want}`);
+    await expect(seedLine, "the attribute carries the bare number").toHaveAttribute("data-draw-seed", String(want));
+
+    // A Rebuild reuses the stage's seed (RB4-D5): the same line.
+    const rebuilt = await apiJson(request, `/api/v1/stages/${stageId}/rebuild`, "POST");
+    expect(rebuilt.status, JSON.stringify(rebuilt.error)).toBe(200);
+    await page.reload();
+    await expect(seedLine).toHaveText(`Draw #${want}`, { timeout: 30_000 });
+
+    // A wholly seeded bracket draws nothing: its card has no line (the positive pair above proves the line renders at all).
+    const seeded = await startedKnockout(request, "Seeded cup", ["Ana", "Ben", "Cas", "Dee"].map((n) => `Seeded ${n} ${TAG}`));
+    await page.goto(await divisionPath(request, seeded.divisionId, "?tab=fixtures"));
+    await expect(page.locator(`[data-stage-id="${seeded.stageId}"]`).first()).toBeVisible({ timeout: 30_000 });
+    await expect(seedLine, "a seeded field is not drawn").toHaveCount(0);
   });
 });
