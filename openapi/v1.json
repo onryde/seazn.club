@@ -75016,7 +75016,7 @@
     },
     "/api/v1/orgs/{id}/sponsors/{sponsorId}/deals": {
       "post": {
-        "summary": "Add a deal to a sponsor: a package (its name, tier, stream tick and price are copied onto the deal), a scope inside the package's, how it is paid (`online` · `offline` · `complimentary`) and when it goes live (`on_payment` · `immediate` · `on_approval`; complimentary cannot go live on payment, 422 `on_payment_needs_payment`). A deal added beside a live one queues behind it, unless `end_current` ends the live one first. `ends_on` is a day in the organisation's timezone, today or later (422 `ends_on_in_past`). Answers `{ deal, checkout_url }`; the url is null for an offline or complimentary deal. A tier above partner or a competition scope is `sponsors.tiers` (402), selling online is `sponsors.monetize` (402) and needs Stripe connected (409 `connect_required`) and the sponsor's billing email (422 `sponsor_email_required`). Editors only (owner / admin); never key-accessible",
+        "summary": "Add a deal to a sponsor: a package (its name, tier, stream tick and price are copied onto the deal), a scope inside the package's, how it is paid (`online` · `offline` · `complimentary`) and when it goes live (`on_payment` · `immediate` · `on_approval`; complimentary cannot go live on payment, 422 `on_payment_needs_payment`). A deal added beside a live one queues behind it, unless `end_current` ends the live one first. `ends_on` is a day in the organisation's timezone, today or later (422 `ends_on_in_past`). Answers `{ deal, checkout_url }`; the url is null for an offline or complimentary deal. An online deal sends its invoice to the sponsor's billing email at once and answers its Checkout url; when Stripe cannot mint the link the deal stays as created and the answer is 502 `stripe_unavailable` (Send invoice retries it). A tier above partner or a competition scope is `sponsors.tiers` (402), selling online is `sponsors.monetize` (402) and needs Stripe connected (409 `connect_required`) and the sponsor's billing email (422 `sponsor_email_required`). Editors only (owner / admin); never key-accessible",
         "tags": [
           "sponsors"
         ],
@@ -75727,6 +75727,50 @@
           },
           "422": {
             "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -78529,7 +78573,7 @@
     },
     "/api/v1/orgs/{id}/sponsor-deals/{dealId}/refund": {
       "post": {
-        "summary": "Refund a paid deal, once: the deal ends as refunded and its sponsor leaves the public pages. An offline deal's refund is recorded only (no money moves, nothing is emailed). 409 `deal_not_refundable` on an unpaid or already refunded deal. Editors only; never key-accessible",
+        "summary": "Refund a paid deal, once, and its sponsor leaves the public pages. A deal paid by card is refunded through Stripe in full (the transfer reversed, the platform fee returned; 502 when Stripe cannot); an offline deal, or an online one marked paid by hand, is recorded only (no money moves, nothing is emailed). 409 `deal_not_refundable` on an unpaid or already refunded deal, `deal_disputed` while a dispute is open. Editors only; never key-accessible",
         "tags": [
           "sponsors"
         ],
@@ -79081,6 +79125,50 @@
                 }
               }
             }
+          },
+          "502": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -79093,9 +79181,9 @@
         ]
       }
     },
-    "/api/v1/orgs/{id}/sponsor-orders": {
-      "get": {
-        "summary": "List sponsor orders (payment audit trail)",
+    "/api/v1/orgs/{id}/sponsor-deals/{dealId}/send-invoice": {
+      "post": {
+        "summary": "Send, or resend, an online deal's invoice to the sponsor's billing email: answers `{ deal, checkout_url }`. The deal's payment link is reused while more than 10 minutes are left of it; otherwise the old link is closed first and a new one made. A draft moves to awaiting payment. 409 `deal_not_invoiceable` when the deal is offline, paid or ended, `deal_paid_online` when the sponsor has just paid, `connect_required` without Stripe connected; 402 when the plan no longer sells online; 502 `stripe_unavailable` when Stripe cannot (nothing changes). Editors only; never key-accessible",
         "tags": [
           "sponsors"
         ],
@@ -79103,6 +79191,15 @@
         "parameters": [
           {
             "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "dealId",
             "in": "path",
             "required": true,
             "schema": {
@@ -79128,374 +79225,80 @@
                       "const": true
                     },
                     "data": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string"
-                          },
-                          "package_id": {
-                            "type": "string"
-                          },
-                          "sponsor_name": {
-                            "type": "string"
-                          },
-                          "sponsor_email": {
-                            "type": "string"
-                          },
-                          "payment_intent_id": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "amount_cents": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "currency": {
-                            "type": "string"
-                          },
-                          "status": {
-                            "type": "string",
-                            "enum": [
-                              "pending",
-                              "paid",
-                              "failed",
-                              "refunded"
-                            ]
-                          },
-                          "sponsor_id": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "created_at": {
-                            "type": "string"
-                          },
-                          "paid_at": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "disputed_at": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "dispute_id": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "required": [
-                          "id",
-                          "package_id",
-                          "sponsor_name",
-                          "sponsor_email",
-                          "payment_intent_id",
-                          "amount_cents",
-                          "currency",
-                          "status",
-                          "sponsor_id",
-                          "created_at",
-                          "paid_at",
-                          "disputed_at",
-                          "dispute_id"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "requestId": {
-                      "type": "string",
-                      "format": "uuid"
-                    }
-                  }
-                },
-                "example": {
-                  "ok": true,
-                  "data": [
-                    {
-                      "id": "example",
-                      "package_id": "example",
-                      "sponsor_name": "example",
-                      "sponsor_email": "example",
-                      "payment_intent_id": "example",
-                      "amount_cents": -9007199254740991,
-                      "currency": "example",
-                      "status": "pending",
-                      "sponsor_id": "example",
-                      "created_at": "example",
-                      "paid_at": "example",
-                      "disputed_at": "example",
-                      "dispute_id": "example"
-                    }
-                  ],
-                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Validation error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "ok",
-                    "error",
-                    "requestId"
-                  ],
-                  "properties": {
-                    "ok": {
-                      "const": false
-                    },
-                    "error": {
-                      "type": "object",
-                      "required": [
-                        "code",
-                        "message"
-                      ],
-                      "properties": {
-                        "code": {
-                          "type": "string"
-                        },
-                        "message": {
-                          "type": "string"
-                        },
-                        "current_seq": {
-                          "type": "integer",
-                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
-                        }
-                      },
-                      "additionalProperties": true
-                    },
-                    "requestId": {
-                      "type": "string",
-                      "format": "uuid"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Not authenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "ok",
-                    "error",
-                    "requestId"
-                  ],
-                  "properties": {
-                    "ok": {
-                      "const": false
-                    },
-                    "error": {
-                      "type": "object",
-                      "required": [
-                        "code",
-                        "message"
-                      ],
-                      "properties": {
-                        "code": {
-                          "type": "string"
-                        },
-                        "message": {
-                          "type": "string"
-                        },
-                        "current_seq": {
-                          "type": "integer",
-                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
-                        }
-                      },
-                      "additionalProperties": true
-                    },
-                    "requestId": {
-                      "type": "string",
-                      "format": "uuid"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "ok",
-                    "error",
-                    "requestId"
-                  ],
-                  "properties": {
-                    "ok": {
-                      "const": false
-                    },
-                    "error": {
-                      "type": "object",
-                      "required": [
-                        "code",
-                        "message"
-                      ],
-                      "properties": {
-                        "code": {
-                          "type": "string"
-                        },
-                        "message": {
-                          "type": "string"
-                        },
-                        "current_seq": {
-                          "type": "integer",
-                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
-                        }
-                      },
-                      "additionalProperties": true
-                    },
-                    "requestId": {
-                      "type": "string",
-                      "format": "uuid"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "sessionCookie": []
-          },
-          {
-            "apiKey": []
-          }
-        ]
-      },
-      "post": {
-        "summary": "Start a package checkout — pending order + Connect destination-charge session + invoice email; 409 when the org isn't Connect-onboarded",
-        "tags": [
-          "sponsors"
-        ],
-        "x-required-scope": "none",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "package_id": {
-                    "type": "string",
-                    "format": "uuid",
-                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                  },
-                  "sponsor_name": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 80
-                  },
-                  "sponsor_email": {
-                    "type": "string",
-                    "maxLength": 320,
-                    "format": "email",
-                    "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
-                  }
-                },
-                "required": [
-                  "package_id",
-                  "sponsor_name",
-                  "sponsor_email"
-                ],
-                "additionalProperties": false
-              },
-              "example": {
-                "package_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                "sponsor_name": "example",
-                "sponsor_email": "user@example.com"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "ok",
-                    "data",
-                    "requestId"
-                  ],
-                  "properties": {
-                    "ok": {
-                      "const": true
-                    },
-                    "data": {
                       "type": "object",
                       "properties": {
-                        "order": {
+                        "deal": {
                           "type": "object",
                           "properties": {
                             "id": {
                               "type": "string"
                             },
+                            "sponsor_id": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "package_id": {
                               "type": "string"
                             },
-                            "sponsor_name": {
+                            "deal_status": {
+                              "type": "string",
+                              "enum": [
+                                "draft",
+                                "awaiting_payment",
+                                "awaiting_approval",
+                                "scheduled",
+                                "live",
+                                "ended"
+                              ]
+                            },
+                            "payment_status": {
+                              "type": "string",
+                              "enum": [
+                                "pending",
+                                "paid",
+                                "failed",
+                                "refunded",
+                                "none"
+                              ]
+                            },
+                            "payment_method": {
+                              "type": "string",
+                              "enum": [
+                                "online",
+                                "offline",
+                                "complimentary"
+                              ]
+                            },
+                            "go_live": {
+                              "type": "string",
+                              "enum": [
+                                "on_payment",
+                                "immediate",
+                                "on_approval"
+                              ]
+                            },
+                            "package_name": {
                               "type": "string"
                             },
-                            "sponsor_email": {
-                              "type": "string"
+                            "tier": {
+                              "type": "string",
+                              "enum": [
+                                "title",
+                                "gold",
+                                "silver",
+                                "partner"
+                              ]
                             },
-                            "payment_intent_id": {
+                            "includes_on_stream": {
+                              "type": "boolean"
+                            },
+                            "competition_id": {
                               "anyOf": [
                                 {
                                   "type": "string"
@@ -79513,16 +79316,20 @@
                             "currency": {
                               "type": "string"
                             },
-                            "status": {
-                              "type": "string",
-                              "enum": [
-                                "pending",
-                                "paid",
-                                "failed",
-                                "refunded"
+                            "sponsor_name": {
+                              "type": "string"
+                            },
+                            "sponsor_email": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
-                            "sponsor_id": {
+                            "ends_at": {
                               "anyOf": [
                                 {
                                   "type": "string"
@@ -79535,7 +79342,106 @@
                             "created_at": {
                               "type": "string"
                             },
+                            "created_by": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "invoice_sent_at": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "paid_at": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "marked_paid_by": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "approved_at": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "approved_by": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "live_at": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "ended_at": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "ended_reason": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "refunded",
+                                    "dispute_lost",
+                                    "ended_now",
+                                    "expired",
+                                    "competition_finished",
+                                    "legacy",
+                                    "duplicate_payment"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "parked_at": {
                               "anyOf": [
                                 {
                                   "type": "string"
@@ -79564,22 +79470,51 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "invoice_number": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
                             "id",
+                            "sponsor_id",
                             "package_id",
-                            "sponsor_name",
-                            "sponsor_email",
-                            "payment_intent_id",
+                            "deal_status",
+                            "payment_status",
+                            "payment_method",
+                            "go_live",
+                            "package_name",
+                            "tier",
+                            "includes_on_stream",
+                            "competition_id",
                             "amount_cents",
                             "currency",
-                            "status",
-                            "sponsor_id",
+                            "sponsor_name",
+                            "sponsor_email",
+                            "ends_at",
                             "created_at",
+                            "created_by",
+                            "invoice_sent_at",
                             "paid_at",
+                            "marked_paid_by",
+                            "approved_at",
+                            "approved_by",
+                            "live_at",
+                            "ended_at",
+                            "ended_reason",
+                            "parked_at",
                             "disputed_at",
-                            "dispute_id"
+                            "dispute_id",
+                            "invoice_number"
                           ],
                           "additionalProperties": false
                         },
@@ -79588,7 +79523,7 @@
                         }
                       },
                       "required": [
-                        "order",
+                        "deal",
                         "checkout_url"
                       ],
                       "additionalProperties": false
@@ -79602,20 +79537,37 @@
                 "example": {
                   "ok": true,
                   "data": {
-                    "order": {
+                    "deal": {
                       "id": "example",
+                      "sponsor_id": "example",
                       "package_id": "example",
-                      "sponsor_name": "example",
-                      "sponsor_email": "example",
-                      "payment_intent_id": "example",
+                      "deal_status": "draft",
+                      "payment_status": "pending",
+                      "payment_method": "online",
+                      "go_live": "on_payment",
+                      "package_name": "example",
+                      "tier": "title",
+                      "includes_on_stream": true,
+                      "competition_id": "example",
                       "amount_cents": -9007199254740991,
                       "currency": "example",
-                      "status": "pending",
-                      "sponsor_id": "example",
+                      "sponsor_name": "example",
+                      "sponsor_email": "example",
+                      "ends_at": "example",
                       "created_at": "example",
+                      "created_by": "example",
+                      "invoice_sent_at": "example",
                       "paid_at": "example",
+                      "marked_paid_by": "example",
+                      "approved_at": "example",
+                      "approved_by": "example",
+                      "live_at": "example",
+                      "ended_at": "example",
+                      "ended_reason": "refunded",
+                      "parked_at": "example",
                       "disputed_at": "example",
-                      "dispute_id": "example"
+                      "dispute_id": "example",
+                      "invoice_number": -9007199254740991
                     },
                     "checkout_url": "example"
                   },
@@ -79757,7 +79709,7 @@
             }
           },
           "404": {
-            "description": "Not found",
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -79844,8 +79796,8 @@
               }
             }
           },
-          "422": {
-            "description": "Rejected by the engine",
+          "502": {
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -79899,370 +79851,9 @@
         ]
       }
     },
-    "/api/v1/orgs/{id}/sponsor-orders/{orderId}/refund": {
-      "post": {
-        "summary": "Full refund of a paid order — transfer reversed, platform fee returned, placement deactivated",
-        "tags": [
-          "sponsors"
-        ],
-        "x-required-scope": "none",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "orderId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "ok",
-                    "data",
-                    "requestId"
-                  ],
-                  "properties": {
-                    "ok": {
-                      "const": true
-                    },
-                    "data": {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "type": "string"
-                        },
-                        "package_id": {
-                          "type": "string"
-                        },
-                        "sponsor_name": {
-                          "type": "string"
-                        },
-                        "sponsor_email": {
-                          "type": "string"
-                        },
-                        "payment_intent_id": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "amount_cents": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
-                        },
-                        "currency": {
-                          "type": "string"
-                        },
-                        "status": {
-                          "type": "string",
-                          "enum": [
-                            "pending",
-                            "paid",
-                            "failed",
-                            "refunded"
-                          ]
-                        },
-                        "sponsor_id": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "created_at": {
-                          "type": "string"
-                        },
-                        "paid_at": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "disputed_at": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "dispute_id": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "package_id",
-                        "sponsor_name",
-                        "sponsor_email",
-                        "payment_intent_id",
-                        "amount_cents",
-                        "currency",
-                        "status",
-                        "sponsor_id",
-                        "created_at",
-                        "paid_at",
-                        "disputed_at",
-                        "dispute_id"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "requestId": {
-                      "type": "string",
-                      "format": "uuid"
-                    }
-                  }
-                },
-                "example": {
-                  "ok": true,
-                  "data": {
-                    "id": "example",
-                    "package_id": "example",
-                    "sponsor_name": "example",
-                    "sponsor_email": "example",
-                    "payment_intent_id": "example",
-                    "amount_cents": -9007199254740991,
-                    "currency": "example",
-                    "status": "pending",
-                    "sponsor_id": "example",
-                    "created_at": "example",
-                    "paid_at": "example",
-                    "disputed_at": "example",
-                    "dispute_id": "example"
-                  },
-                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Validation error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "ok",
-                    "error",
-                    "requestId"
-                  ],
-                  "properties": {
-                    "ok": {
-                      "const": false
-                    },
-                    "error": {
-                      "type": "object",
-                      "required": [
-                        "code",
-                        "message"
-                      ],
-                      "properties": {
-                        "code": {
-                          "type": "string"
-                        },
-                        "message": {
-                          "type": "string"
-                        },
-                        "current_seq": {
-                          "type": "integer",
-                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
-                        }
-                      },
-                      "additionalProperties": true
-                    },
-                    "requestId": {
-                      "type": "string",
-                      "format": "uuid"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Not authenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "ok",
-                    "error",
-                    "requestId"
-                  ],
-                  "properties": {
-                    "ok": {
-                      "const": false
-                    },
-                    "error": {
-                      "type": "object",
-                      "required": [
-                        "code",
-                        "message"
-                      ],
-                      "properties": {
-                        "code": {
-                          "type": "string"
-                        },
-                        "message": {
-                          "type": "string"
-                        },
-                        "current_seq": {
-                          "type": "integer",
-                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
-                        }
-                      },
-                      "additionalProperties": true
-                    },
-                    "requestId": {
-                      "type": "string",
-                      "format": "uuid"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "ok",
-                    "error",
-                    "requestId"
-                  ],
-                  "properties": {
-                    "ok": {
-                      "const": false
-                    },
-                    "error": {
-                      "type": "object",
-                      "required": [
-                        "code",
-                        "message"
-                      ],
-                      "properties": {
-                        "code": {
-                          "type": "string"
-                        },
-                        "message": {
-                          "type": "string"
-                        },
-                        "current_seq": {
-                          "type": "integer",
-                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
-                        }
-                      },
-                      "additionalProperties": true
-                    },
-                    "requestId": {
-                      "type": "string",
-                      "format": "uuid"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Rejected by the engine",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "ok",
-                    "error",
-                    "requestId"
-                  ],
-                  "properties": {
-                    "ok": {
-                      "const": false
-                    },
-                    "error": {
-                      "type": "object",
-                      "required": [
-                        "code",
-                        "message"
-                      ],
-                      "properties": {
-                        "code": {
-                          "type": "string"
-                        },
-                        "message": {
-                          "type": "string"
-                        },
-                        "current_seq": {
-                          "type": "integer",
-                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
-                        }
-                      },
-                      "additionalProperties": true
-                    },
-                    "requestId": {
-                      "type": "string",
-                      "format": "uuid"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "sessionCookie": []
-          },
-          {
-            "apiKey": []
-          }
-        ]
-      }
-    },
-    "/api/v1/orgs/{id}/sponsor-orders/{orderId}/evidence": {
+    "/api/v1/orgs/{id}/sponsor-deals/{dealId}/evidence": {
       "get": {
-        "summary": "Dispute evidence pack as a printable HTML attachment — order record, receipt reconstruction, placement delivery proof, activity log (session console, not key-accessible)",
+        "summary": "Dispute evidence pack for a deal as a printable HTML attachment — the deal record, receipt reconstruction, placement delivery proof, activity log. Editors only; never key-accessible",
         "tags": [
           "sponsors"
         ],
@@ -80278,7 +79869,7 @@
             }
           },
           {
-            "name": "orderId",
+            "name": "dealId",
             "in": "path",
             "required": true,
             "schema": {

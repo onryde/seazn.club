@@ -354,9 +354,6 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "GET /orgs/:id/sponsor-packages",
   "POST /orgs/:id/sponsor-packages",
   "DELETE /orgs/:id/sponsor-packages/:packageId",
-  "GET /orgs/:id/sponsor-orders",
-  "POST /orgs/:id/sponsor-orders",
-  "POST /orgs/:id/sponsor-orders/:orderId/refund",
   // Sponsor deals (2026-11-07): every deal write is money or a placement, console-only; the reads carry billing emails.
   "POST /orgs/:id/sponsors/:sponsorId/deals",
   "GET /orgs/:id/sponsor-deals",
@@ -365,6 +362,7 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /orgs/:id/sponsor-deals/:dealId/approve",
   "POST /orgs/:id/sponsor-deals/:dealId/end",
   "POST /orgs/:id/sponsor-deals/:dealId/refund",
+  "POST /orgs/:id/sponsor-deals/:dealId/send-invoice",
   "POST /fixtures/:id/device-links",
   "GET /fixtures/:id/device-links",
   "DELETE /fixtures/:id/device-links/:linkId",
@@ -449,7 +447,7 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   // Dispute evidence packs: console-only downloads; keys must not exfiltrate
   // registrant/sponsor PII bundles.
   "GET /registrations/:id/evidence",
-  "GET /orgs/:id/sponsor-orders/:orderId/evidence",
+  "GET /orgs/:id/sponsor-deals/:dealId/evidence",
   // Browser-upload handshake (v8): signed URLs are a console UX, not an API
   // surface — a leaked key must not mint writable storage URLs.
   "POST /divisions/:id/logo-upload-url",

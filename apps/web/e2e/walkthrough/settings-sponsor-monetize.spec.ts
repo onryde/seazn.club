@@ -245,15 +245,18 @@ interface PackageRow {
   tier: string;
   active: boolean;
 }
+/** A sponsor deal as `GET /sponsor-deals` answers it (sponsor deals Task 7, F8: the order IS the deal; `/sponsor-orders` is
+ *  retired). Task 12 moves this spec's UI path onto the deal screens; until then only these API reads changed. */
 interface OrderRow {
   id: string;
   package_id: string;
   sponsor_name: string;
-  sponsor_email: string;
-  payment_intent_id: string | null;
+  sponsor_email: string | null;
   amount_cents: number;
   currency: string;
-  status: "pending" | "paid" | "failed" | "refunded";
+  payment_status: "pending" | "paid" | "failed" | "refunded" | "none";
+  deal_status: string;
+  paid_at: string | null;
   sponsor_id: string | null;
 }
 interface SponsorRow {
@@ -559,8 +562,8 @@ test("invoice: Send invoice mints a REAL Stripe Checkout Session on the connecte
     body.data!.checkout_url,
   );
 
-  const orders = await apiJson<OrderRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsor-orders`);
-  expect(orders.status, "GET /sponsor-orders").toBe(200);
+  const orders = await apiJson<OrderRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsor-deals`);
+  expect(orders.status, "GET /sponsor-deals").toBe(200);
   const order = orders.data?.find((o) => o.sponsor_email === SPONSOR_EMAIL);
   expect(order, `no order for ${SPONSOR_EMAIL} came back from the API`).toBeDefined();
   expect(order!.package_id, "the order must hang off the package that was invoiced").toBe(packageId);
@@ -569,8 +572,8 @@ test("invoice: Send invoice mints a REAL Stripe Checkout Session on the connecte
     PRICE_CENTS,
   );
   expect(order!.currency).toBe(packageCurrency);
-  expect(order!.status, "an unpaid invoice is pending").toBe("pending");
-  expect(order!.sponsor_id, "no placement exists until the money lands").toBeNull();
+  expect(order!.payment_status, "an unpaid invoice is pending").toBe("pending");
+  expect(order!.deal_status, "a sent online deal awaits its payment").toBe("awaiting_payment");
   orderId = order!.id;
 
   // The invoice email went through the outbox: ONE row for the order, and the
@@ -703,11 +706,11 @@ test("paid: a real destination charge, delivered as a signed event, activates th
     `POST /api/webhooks/stripe answered ${delivered.status()}: ${await delivered.text()}`,
   ).toBe(200);
 
-  const orders = await apiJson<OrderRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsor-orders`);
+  const orders = await apiJson<OrderRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsor-deals`);
   const order = orders.data?.find((o) => o.id === orderId);
   expect(order, "the order must still be readable").toBeDefined();
-  expect(order!.status, "the activation event must mark the order paid").toBe("paid");
-  expect(order!.payment_intent_id, "the order must record the intent that paid it").toBe(intent.id);
+  expect(order!.payment_status, "the activation event must mark the order paid").toBe("paid");
+  expect(order!.paid_at, "the activation event must stamp when it was paid").not.toBeNull();
   expect(order!.sponsor_id, "a paid order must have minted its placement").not.toBeNull();
 
   // The receipt is queued in the activation's own transaction, one per
@@ -785,9 +788,9 @@ test("refund: the console reverses the charge, and the placement comes off the p
     `POST /sponsor-orders/{id}/refund answered ${refunded.status()}: ${await refunded.text()}`,
   ).toBe(200);
 
-  const orders = await apiJson<OrderRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsor-orders`);
+  const orders = await apiJson<OrderRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsor-deals`);
   const order = orders.data?.find((o) => o.id === orderId);
-  expect(order!.status, "the refunded order must read back refunded").toBe("refunded");
+  expect(order!.payment_status, "the refunded order must read back refunded").toBe("refunded");
 
   // The refund notice is queued in the refund's own transaction, and the
   // console request makes its first attempt once the response is out: ONE row

@@ -1,5 +1,7 @@
-// Phase 2 pass-scoping sweep — the WRITE half of `sponsors.tiers` and
-// `sponsors.monetize`.
+// Phase 2 pass-scoping sweep — the WRITE half of `sponsors.tiers` (a tiered or
+// competition-scoped sponsor, and since sponsor deals Task 4 a tiered package:
+// the one placement gate) and `sponsors.monetize` (since sponsor deals Task 7,
+// asked only when an ONLINE DEAL is made — a package no longer reads it).
 //
 // Coverage the plan asked for and nobody wrote. What exists today for these two
 // keys is:
@@ -10,8 +12,8 @@
 //     renders the AFFORDANCE (the hub's tabs ask `hasFeatureOnAnyPass`, an
 //     org-wide question) and then checks `hasFeature(...)` — the resolver again.
 //
-// Neither runs `createSponsor` or `createSponsorPackage`, and those are the two
-// functions that decide whether a pass holder can actually sell anything. That
+// Neither runs `createSponsor`, `createSponsorPackage` or `createDeal`, and those
+// are the functions that decide whether a pass holder can actually sell anything. That
 // gap matters more here than for the other pass keys, because the Sponsors hub
 // deliberately shows these controls to a pass holder ORG-WIDE while enforcement
 // stays per-competition: the widened affordance is only honest if the write path
@@ -31,6 +33,7 @@ import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createSponsor, createSponsorPackage, patchSponsor } from "../sponsors";
+import { createDeal } from "../sponsor-deals";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
@@ -168,6 +171,31 @@ describe.skipIf(!HAS_DB)("sponsor writes resolve their pass keys against the com
         includes_on_stream: false,
         competition_id: rig.plainId,
       }),
-    ).rejects.toMatchObject({ status: 402 });
+    ).rejects.toMatchObject({ status: 402, featureKey: "sponsors.tiers" });
+  });
+
+  it("sells online (sponsors.monetize) on the passed competition, and 402s sponsors.monetize org-wide", async () => {
+    const rig = await seedOrgWithOnePass();
+    const pkg = await createSponsorPackage(rig.auth, {
+      name: "Partner package",
+      price_cents: 5_000,
+      currency: "gbp",
+      tier: "partner",
+      includes_on_stream: false,
+    });
+    const seller = await createSponsor(rig.auth, { name: "Seller", tier: "partner", status: "active" });
+    const online = (competition_id: string | null) =>
+      createDeal(
+        rig.auth,
+        seller.id,
+        { package_id: pkg.id, competition_id, payment_method: "online", go_live: "on_payment", sponsor_email: "s@pass.test", ends_on: null },
+        "https://app.test",
+      );
+    // On the passed competition both plan gates pass; this org has no Connect account, so the next refusal is Connect's.
+    await expect(online(rig.passedId)).rejects.toMatchObject({ status: 409, code: "connect_required" });
+    // Org-wide is community's answer. If `sponsors.monetize` ever resolved org-wide from the pass, this would be the 409.
+    await expect(online(null)).rejects.toMatchObject({ status: 402, featureKey: "sponsors.monetize" });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from sponsor_orders where org_id = ${rig.orgId}`;
+    expect(n, "neither wrote a deal").toBe(0);
   });
 });

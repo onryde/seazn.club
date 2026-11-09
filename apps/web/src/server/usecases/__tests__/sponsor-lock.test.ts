@@ -5,8 +5,10 @@
 // patchSponsor's own unconditional sponsor row lock (F16), so a deal going live in another transaction is seen.
 //
 // And the delete guard (product ruling 2026-11-09): a sponsor holding a deal with money or document history (money paid or
-// refunded, a stored Checkout session, a legacy order) answers 409 `sponsor_has_deal_history`, never a 23503. Every other
-// deal (draft, complimentary, failed, unpaid with no session, live or ended) is deleted with it, in the same transaction.
+// refunded, a legacy order) answers 409 `sponsor_has_deal_history`, never a 23503. Every other deal (draft, complimentary,
+// failed, unpaid, live or ended) is deleted with it, in the same transaction. A deal holding a stored Checkout session is
+// deleted once Task 7's session rule has retired the session (409 `sponsor_has_open_checkout` while it cannot): Stripe is
+// mocked for that, so it is pinned in sponsor-deals-online.test.ts, not here.
 //
 // A Pro org throughout (F16): on community the plan gate answers a tier PATCH with 402 before the transaction, and one case
 // pins exactly that order. Real Postgres.
@@ -293,7 +295,6 @@ const HISTORY: [string, Deal][] = [
   // Money that is not history (pending, never paid), so the legacy clause ALONE holds it; a paid legacy row would also be
   // held by the money clause and witness nothing about this one.
   ["a legacy order with no money history (F16: the RESTRICT key covers it)", { ...LEGACY, status: "pending", paid_at: null }],
-  ["an online deal holding a Checkout session (F3, until Task 7 expires it)", { checkout_session_id: `cs_test_${uniq()}`, checkout_url: "https://checkout.stripe.test/x" }],
 ];
 
 describe.skipIf(!HAS_DB)("deleting a sponsor: money or document history holds it (409); every other deal goes with it", () => {
@@ -337,7 +338,7 @@ describe.skipIf(!HAS_DB)("deleting a sponsor: money or document history holds it
     expect(await dealCount(id)).toBe(0);
   });
 
-  it("money or document history answers 409 sponsor_has_deal_history — paid, refunded, legacy, a stored session — never a 23503, and deletes nothing (count reported)", async () => {
+  it("money or document history answers 409 sponsor_has_deal_history — paid, refunded, legacy — never a 23503, and deletes nothing (count reported)", async () => {
     const o = await org();
     let checked = 0;
     for (const [label, over] of HISTORY) {
@@ -349,7 +350,7 @@ describe.skipIf(!HAS_DB)("deleting a sponsor: money or document history holds it
       checked++;
     }
     expect(checked, "history kinds checked").toBe(HISTORY.length);
-    expect(checked).toBe(4);
+    expect(checked).toBe(3);
   });
 
   it("one deal of history holds the sponsor even beside deletable ones, and they all stay", async () => {

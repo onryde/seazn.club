@@ -2,17 +2,27 @@
 // checkout as a destination charge on the entry-fee rail, and replay-safe
 // webhook activation. Stripe is stubbed at the getStripe() seam
 // (registrations.test.ts pattern); real Postgres required.
+//
+// Sponsor deals Task 7: the checkout is an ONLINE DEAL on an existing sponsor
+// (`createDeal`, which sends its invoice); the order IS the deal. The webhook
+// legs read the DEAL's sponsor (`sponsor_orders.sponsor_id` after the event),
+// so they hold whether the webhook inserts a sponsor (today) or moves the
+// deal's own (Task 8, D7).
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const stripeMock = vi.hoisted(() => {
   const checkoutCreate = vi.fn();
   const refundCreate = vi.fn();
+  const retrieve = vi.fn();
+  const expire = vi.fn();
   return {
     checkoutCreate,
     refundCreate,
+    retrieve,
+    expire,
     stripe: {
-      checkout: { sessions: { create: checkoutCreate } },
+      checkout: { sessions: { create: checkoutCreate, retrieve, expire } },
       refunds: { create: refundCreate },
     },
   };
@@ -38,9 +48,8 @@ import {
   handleSponsorPaymentFailed,
   handleSponsorPaymentSucceeded,
   listSponsorRows,
-  refundSponsorOrder,
-  startSponsorCheckout,
 } from "../sponsors";
+import { createDeal, refundDeal, sendDealInvoice } from "../sponsor-deals";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -68,6 +77,35 @@ async function seedOrg(
   };
 }
 
+/** A Checkout session as Stripe answers `create`, alive for a day. */
+const session = (id: string, url: string) => ({ id, url, expires_at: Math.floor(Date.now() / 1000) + 86_400 });
+
+/** A sponsor added by hand (the row an online deal is sold on). */
+async function addSponsor(orgId: string, name: string): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    insert into sponsors (org_id, name, tier, status) values (${orgId}, ${name}, 'partner', 'active') returning id`;
+  return row!.id;
+}
+
+/** Sell `packageId` online to a new sponsor `name` billed at `email`: the deal and its first invoice. */
+async function sellOnline(auth: AuthCtx, packageId: string, name: string, email: string) {
+  const sponsorId = await addSponsor(auth.orgId, name);
+  const out = await createDeal(
+    auth,
+    sponsorId,
+    { package_id: packageId, competition_id: null, payment_method: "online", go_live: "on_payment", sponsor_email: email, ends_on: null },
+    "https://app.test",
+  );
+  return { sponsorId, deal: out.deal, checkout_url: out.checkout_url };
+}
+
+/** The sponsor a deal names now, and its status and tier. */
+async function dealSponsor(dealId: string) {
+  const [row] = await sql<{ id: string; status: string; tier: string }[]>`
+    select s.id, s.status, s.tier from sponsors s join sponsor_orders d on d.sponsor_id = s.id where d.id = ${dealId}`;
+  return row;
+}
+
 function fakeIntent(orderId: string, packageId = "", orgId = ""): Stripe.PaymentIntent {
   return {
     id: `pi_${randomUUID().slice(0, 8)}`,
@@ -85,6 +123,8 @@ beforeEach(() => {
   deliverMock.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_${randomUUID()}` }));
   stripeMock.checkoutCreate.mockReset();
   stripeMock.refundCreate.mockReset().mockResolvedValue({ id: "re_test" });
+  stripeMock.retrieve.mockReset().mockImplementation(async (id: string) => ({ id, status: "open" }));
+  stripeMock.expire.mockReset().mockImplementation(async (id: string) => ({ id, status: "expired" }));
 });
 
 describe.skipIf(!HAS_DB)("sponsor monetization", () => {
@@ -123,17 +163,7 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       tier: "silver",
       includes_on_stream: false,
     });
-    await expect(
-      startSponsorCheckout(
-        auth,
-        {
-          package_id: pkg.id,
-          sponsor_name: "Acme",
-          sponsor_email: "a@acme.test",
-        },
-        "https://app.test",
-      ),
-    ).rejects.toMatchObject({ status: 409 });
+    await expect(sellOnline(auth, pkg.id, "Acme", "a@acme.test")).rejects.toMatchObject({ status: 409, code: "connect_required" });
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
     // No half-started rail: the refusal happens before the order row exists.
     const orders = await sql<{ id: string }[]>`
@@ -145,8 +175,11 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
    * W8 Task 9's mutation sweep, finding F21 — the fifth gate, and the only one
    * of the five on a live money path.
    *
-   * `startSponsorCheckout` gates `sponsors.monetize` (`sponsors.ts:465`) before
-   * it mints a real Stripe Checkout Session on the org's connected account.
+   * The checkout gated `sponsors.monetize` before it minted a real Stripe
+   * Checkout Session on the org's connected account. Since sponsor deals Task 7
+   * that checkout is an online deal: `createDeal` asks the gate before any row
+   * (`assertOnlineAllowed`), and `sendDealInvoice` asks it again before every
+   * mint, so a resend on an org that lost the key mints nothing either.
    * Mutating that call to `.catch(() => undefined)` left all 13 tests across
    * this file, `sponsors.test.ts` and `pass-scope-sponsors-write.test.ts` green
    * — nothing in the repo reddened. Every checkout case here seeds a `pro` org
@@ -188,22 +221,12 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
     // the test fails, but for the wrong reason and with a message that does not
     // say "the guard did not fire". Armed, the mutant produces a real session
     // and the assertions below name exactly that.
-    stripeMock.checkoutCreate.mockResolvedValue({
-      id: "cs_must_not_be_minted",
-      url: "https://stripe.test/must-not-be-minted",
-    });
+    stripeMock.checkoutCreate.mockResolvedValue(session("cs_must_not_be_minted", "https://stripe.test/must-not-be-minted"));
 
-    await expect(
-      startSponsorCheckout(
-        auth,
-        {
-          package_id: pkg.id,
-          sponsor_name: "Acme",
-          sponsor_email: "a@acme.test",
-        },
-        "https://app.test",
-      ),
-    ).rejects.toMatchObject({ status: 402, featureKey: "sponsors.monetize" });
+    await expect(sellOnline(auth, pkg.id, "Acme", "a@acme.test")).rejects.toMatchObject({
+      status: 402,
+      featureKey: "sponsors.monetize",
+    });
     // The ENTITLEMENT answered, not the Connect gate below it — this org has a
     // connected account, so a 409 here would mean the gate under test is gone.
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
@@ -219,21 +242,25 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       delete from org_entitlement_overrides
        where org_id = ${orgId} and feature_key = 'sponsors.monetize'`;
     await invalidateOrgEntitlements(orgId);
-    stripeMock.checkoutCreate.mockResolvedValue({
-      id: "cs_regranted",
-      url: "https://stripe.test/regranted",
-    });
-    const { order, checkout_url } = await startSponsorCheckout(
-      auth,
-      {
-        package_id: pkg.id,
-        sponsor_name: "Acme",
-        sponsor_email: "a@acme.test",
-      },
-      "https://app.test",
-    );
+    stripeMock.checkoutCreate.mockResolvedValue(session("cs_regranted", "https://stripe.test/regranted"));
+    const { deal, checkout_url } = await sellOnline(auth, pkg.id, "Acme", "a@acme.test");
     expect(checkout_url).toBe("https://stripe.test/regranted");
-    expect(order.status).toBe("pending");
+    expect(deal.payment_status).toBe("pending");
+
+    // A RESEND is the same gate: an org that loses the key after selling cannot mint a fresh session for the deal it holds.
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+      values (${orgId}, 'sponsors.monetize', false, 'test: W8 F21 gate coverage (resend)')
+      on conflict (org_id, feature_key) do update set bool_value = false`;
+    await invalidateOrgEntitlements(orgId);
+    await sql`update sponsor_orders set checkout_expires_at = now() + interval '1 minute' where id = ${deal.id}`;
+    stripeMock.checkoutCreate.mockClear();
+    await expect(sendDealInvoice(auth, deal.id, "https://app.test")).rejects.toMatchObject({
+      status: 402,
+      featureKey: "sponsors.monetize",
+    });
+    expect(stripeMock.checkoutCreate, "no fresh session for a denied org").not.toHaveBeenCalled();
+    expect(stripeMock.expire, "nor is the open one retired").not.toHaveBeenCalled();
   });
 
   it("checkout: pending order first, destination charge with fee + metadata + idempotency", async () => {
@@ -252,25 +279,17 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
         const rows = await sql<{ status: string }[]>`
           select status from sponsor_orders where id = ${params.metadata.order_id}`;
         orderExistedAtCreate = rows[0]?.status === "pending";
-        return { id: "cs_test", url: "https://stripe.test/session" };
+        return session("cs_test", "https://stripe.test/session");
       },
     );
 
-    const { order, checkout_url } = await startSponsorCheckout(
-      auth,
-      {
-        package_id: pkg.id,
-        sponsor_name: "Acme Corp",
-        sponsor_email: "pay@acme.test",
-      },
-      "https://app.test",
-    );
+    const { deal: order, checkout_url } = await sellOnline(auth, pkg.id, "Acme Corp", "pay@acme.test");
     expect(checkout_url).toBe("https://stripe.test/session");
-    expect(order.status).toBe("pending");
+    expect(order.payment_status).toBe("pending");
     expect(orderExistedAtCreate).toBe(true); // row inserted BEFORE the Stripe call
 
     const [params, opts] = stripeMock.checkoutCreate.mock.calls[0]!;
-    expect(opts).toEqual({ idempotencyKey: `sponsor-order-${order.id}` });
+    expect(opts).toEqual({ idempotencyKey: `sponsor-deal-${order.id}-1` });
     expect(params.metadata).toMatchObject({
       kind: "sponsor",
       order_id: order.id,
@@ -314,10 +333,7 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
 
   it("webhook: paid activates exactly once under replay; failed flips pending only", async () => {
     const { auth, orgId } = await seedOrg("pro");
-    stripeMock.checkoutCreate.mockResolvedValue({
-      id: "cs_x",
-      url: "https://stripe.test/s",
-    });
+    stripeMock.checkoutCreate.mockResolvedValue(session("cs_x", "https://stripe.test/s"));
     const pkg = await createSponsorPackage(auth, {
       name: "Gold package",
       price_cents: 20_000,
@@ -325,24 +341,18 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       tier: "gold",
       includes_on_stream: false,
     });
-    const { order } = await startSponsorCheckout(
-      auth,
-      {
-        package_id: pkg.id,
-        sponsor_name: "Bolt Ltd",
-        sponsor_email: "b@bolt.test",
-      },
-      "https://app.test",
-    );
+    const { deal: order } = await sellOnline(auth, pkg.id, "Bolt Ltd", "b@bolt.test");
+    const count = async () => (await sql<{ n: number }[]>`select count(*)::int as n from sponsors where org_id = ${orgId}`)[0]!.n;
 
     const intent = fakeIntent(order.id, pkg.id, orgId);
     await handleSponsorPaymentSucceeded(intent);
+    const afterFirst = await count();
     await handleSponsorPaymentSucceeded(intent); // /admin/billing-events replay
+    expect(await count(), "the replay activates nothing more").toBe(afterFirst);
 
-    const sponsors = await sql<{ id: string; tier: string; status: string }[]>`
-      select id, tier, status from sponsors where org_id = ${orgId} and name = 'Bolt Ltd'`;
-    expect(sponsors).toHaveLength(1); // no double activation
-    expect(sponsors[0]).toMatchObject({ tier: "gold", status: "active" });
+    const placed = await dealSponsor(order.id);
+    expect(placed).toMatchObject({ tier: "gold", status: "active" });
+    const sponsors = [placed!];
 
     const [paid] = await sql<
       { status: string; sponsor_id: string | null; payment_intent_id: string }[]
@@ -378,7 +388,7 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
 
     // The manager list ties the bought placement back to its order.
     const listed = await listSponsorRows(orgId);
-    expect(listed.find((s) => s.name === "Bolt Ltd")?.paid_order_id).toBe(order.id);
+    expect(listed.find((s) => s.id === placed!.id)?.paid_order_id).toBe(order.id);
 
     // charge.refunded (dashboard refund): order → refunded, placement off
     // the public pages; a replay is a no-op.
@@ -408,10 +418,7 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
 
   it("console refund: entry-fee shape, order → refunded, placement deactivated", async () => {
     const { auth, orgId } = await seedOrg("pro");
-    stripeMock.checkoutCreate.mockResolvedValue({
-      id: "cs_r",
-      url: "https://stripe.test/s",
-    });
+    stripeMock.checkoutCreate.mockResolvedValue(session("cs_r", "https://stripe.test/s"));
     const pkg = await createSponsorPackage(auth, {
       name: "Silver package",
       price_cents: 8_000,
@@ -419,24 +426,17 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       tier: "silver",
       includes_on_stream: false,
     });
-    const { order } = await startSponsorCheckout(
-      auth,
-      {
-        package_id: pkg.id,
-        sponsor_name: "Refundable Ltd",
-        sponsor_email: "r@ref.test",
-      },
-      "https://app.test",
-    );
-    // Refunding an unpaid order is refused before Stripe is touched.
-    await expect(refundSponsorOrder(auth, order.id)).rejects.toMatchObject({
-      status: 422,
+    const { deal: order } = await sellOnline(auth, pkg.id, "Refundable Ltd", "r@ref.test");
+    // Refunding an unpaid deal is refused before Stripe is touched (the deal does not offer it: F12).
+    await expect(refundDeal(auth, order.id)).rejects.toMatchObject({
+      status: 409,
+      code: "deal_not_refundable",
     });
     expect(stripeMock.refundCreate).not.toHaveBeenCalled();
 
     await handleSponsorPaymentSucceeded(fakeIntent(order.id, pkg.id, orgId));
-    const refunded = await refundSponsorOrder(auth, order.id);
-    expect(refunded.status).toBe("refunded");
+    const refunded = await refundDeal(auth, order.id);
+    expect(refunded.payment_status).toBe("refunded");
 
     const [params, opts] = stripeMock.refundCreate.mock.calls[0]!;
     expect(params).toMatchObject({
@@ -446,9 +446,8 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
     expect(params.payment_intent).toMatch(/^pi_/);
     expect(opts).toEqual({ idempotencyKey: `sponsor-refund-${order.id}` });
 
-    const [sponsor] = await sql<{ status: string }[]>`
-      select status from sponsors where org_id = ${orgId} and name = 'Refundable Ltd'`;
-    expect(sponsor.status).toBe("inactive");
+    const sponsor = await dealSponsor(order.id);
+    expect(sponsor?.status).toBe("inactive");
 
     // The sponsor hears about it — once (the later Stripe event replay
     // finds the order already refunded and stays silent): one outbox row,
@@ -478,10 +477,7 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
 
   it("webhook: pending order fails on payment_failed; stray intents are ignored", async () => {
     const { auth, orgId } = await seedOrg("pro");
-    stripeMock.checkoutCreate.mockResolvedValue({
-      id: "cs_y",
-      url: "https://stripe.test/s",
-    });
+    stripeMock.checkoutCreate.mockResolvedValue(session("cs_y", "https://stripe.test/s"));
     const pkg = await createSponsorPackage(auth, {
       name: "Partner package",
       price_cents: 3_000,
@@ -489,15 +485,7 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       tier: "partner",
       includes_on_stream: false,
     });
-    const { order } = await startSponsorCheckout(
-      auth,
-      {
-        package_id: pkg.id,
-        sponsor_name: "Slow Pay",
-        sponsor_email: "s@slow.test",
-      },
-      "https://app.test",
-    );
+    const { deal: order, sponsorId } = await sellOnline(auth, pkg.id, "Slow Pay", "s@slow.test");
 
     await handleSponsorPaymentFailed(fakeIntent(order.id));
     const [failed] = await sql<{ status: string }[]>`
@@ -513,7 +501,7 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
     await expect(handleSponsorPaymentFailed(stray)).resolves.toBeUndefined();
     const sponsors = await sql<{ id: string }[]>`
       select id from sponsors where org_id = ${orgId}`;
-    expect(sponsors).toHaveLength(0);
+    expect(sponsors.map((r) => r.id), "only the sponsor the deal was sold on").toEqual([sponsorId]);
     const receipts = await sql<{ id: string }[]>`
       select id from email_outbox where kind = 'sponsor_receipt' and org_id = ${orgId}`;
     expect(receipts).toHaveLength(0);
@@ -523,5 +511,6 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
 afterAll(async () => {
   if (!HAS_DB) return;
   await sql`delete from email_outbox where org_id = any(${madeOrgIds}::uuid[])`;
+  await sql`delete from sponsor_orders where org_id = any(${madeOrgIds}::uuid[])`;
   await sql.end();
 });

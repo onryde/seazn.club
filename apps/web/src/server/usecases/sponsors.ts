@@ -25,7 +25,6 @@ import {
 } from "@/lib/email";
 import { deferred } from "@/lib/deferred";
 import {
-  assertOutboxCanQueue,
   dispatchNow,
   enqueueEmailOnce,
   expiryWithin,
@@ -43,11 +42,12 @@ import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import { placementNeedsTiers } from "@/lib/sponsor-deal-policy";
 import { assertPlacementAllowed } from "@/server/sponsors/deal-gates";
 import { ensureOrgStreamSettings } from "@/server/sponsors/stream-settings";
-import type { PaymentStatus } from "@/lib/sponsor-deals";
+import type { PaymentStatus, SponsorDeal } from "@/lib/sponsor-deals";
 import {
   assertSponsorPatchAllowed,
   isLegacyDeal,
   lockSponsorAndDeals,
+  readDeals,
   readOrgDeals,
   sponsorDealSummary,
   type ServerDeal,
@@ -315,36 +315,68 @@ export async function patchSponsor(
 /** Money a deal holds as history: once paid (and so once refundable or refunded), its record is the audit trail. */
 const MONEY_HISTORY: ReadonlySet<PaymentStatus> = new Set<PaymentStatus>(["paid", "refunded"]);
 
-/** A deal that holds its sponsor (product ruling 2026-11-09, sponsor deals Task 5): it carries money or document history —
- *  money paid or refunded, a stored Checkout session (still a payable link, F3), or a pre-deals legacy order (F16: the
- *  RESTRICT key covers it). Every other deal (a draft, an unpaid or failed one, a complimentary one, live or ended) goes
- *  with its sponsor. The tenant's prune policy (V300's fence, widened by the sponsor-deals delta) admits exactly those
- *  others, so this 409 is the answer for the rest, never a 23503. */
+/** A deal that holds its sponsor (product ruling 2026-11-09, sponsor deals Task 5): it carries money history — money paid or
+ *  refunded — or it is a pre-deals legacy order (F16: the RESTRICT key covers it). Every other deal (a draft, an unpaid or
+ *  failed one, a complimentary one, live or ended) goes with its sponsor. A stored Checkout session no longer holds it
+ *  (Task 7, F3): `deleteSponsor` retires the session first, and refuses only when it cannot. The tenant's prune policy (V300's
+ *  fence, widened by the sponsor-deals delta) admits exactly the others once their session is cleared, so each refusal here is
+ *  a 409, never a 23503. */
 function dealHoldsHistory(d: ServerDeal): boolean {
   // TODO(Task 20, F10): `|| d.invoice_number !== null` once deals are numbered (a numbered invoice is a document); the
   // prune policy gains `and invoice_number is null` in the same task.
-  return (
-    MONEY_HISTORY.has(d.payment_status) ||
-    isLegacyDeal(d) ||
-    // TODO(Task 7, F3): expire the open session (outside any transaction), then delete; 409 only when it cannot be expired.
-    d.checkout_session_id !== null
-  );
+  return MONEY_HISTORY.has(d.payment_status) || isLegacyDeal(d);
 }
 
+const holdsHistory = () =>
+  new HttpError(
+    409,
+    "this sponsor has deal history (money paid or refunded, or a pre-deals order) — end its deals instead",
+    "sponsor_has_deal_history",
+  );
+const holdsOpenCheckout = () =>
+  new HttpError(
+    409,
+    "this sponsor has a deal whose payment link could not be closed, or was just paid — try again in a moment, or end the deal instead",
+    "sponsor_has_open_checkout",
+  );
+
+/**
+ * Delete a sponsor with its deals. Refused (409 `sponsor_has_deal_history`) while a deal holds money history — read FIRST, so a
+ * delete that will be refused never closes a payment link. Then the session rule (F3), outside any transaction: every stored
+ * Checkout session is retired; a completed one (money in flight) or an open one that cannot be expired refuses the delete (409
+ * `sponsor_has_open_checkout`), because a later payment on a deleted deal would take money and record nothing. Then ONE
+ * transaction in the one lock order (F2) re-checks both, clears the retired sessions and deletes.
+ */
 export async function deleteSponsor(auth: AuthCtx, id: string): Promise<void> {
+  const before = await withTenant(auth.orgId, (tx) => readDeals(tx, { sponsorId: id }));
+  if (before.some(dealHoldsHistory)) throw holdsHistory();
+  const retired = new Set<string>();
+  for (const d of before) {
+    if (d.checkout_session_id === null) continue;
+    let outcome: Awaited<ReturnType<typeof retireDealSession>>;
+    try {
+      outcome = await retireDealSession(d);
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 502) throw holdsOpenCheckout();
+      throw err;
+    }
+    if (outcome === "complete") throw holdsOpenCheckout();
+    retired.add(d.checkout_session_id);
+  }
   return withTenant(auth.orgId, async (tx) => {
     // The one lock order (F2): the sponsor, then its deals — legacy rows included, since the RESTRICT key covers them.
     const locked = await lockSponsorAndDeals(tx, id);
     if (!locked) throw new HttpError(404, "sponsor not found");
-    if (locked.deals.some(dealHoldsHistory)) {
-      throw new HttpError(
-        409,
-        "this sponsor has deal history (money paid or refunded, an open payment link, or a pre-deals order) — end its deals instead",
-        "sponsor_has_deal_history",
-      );
+    if (locked.deals.some(dealHoldsHistory)) throw holdsHistory();
+    // A session minted since the read above was never retired: it is still payable.
+    if (locked.deals.some((d) => d.checkout_session_id !== null && !retired.has(d.checkout_session_id))) throw holdsOpenCheckout();
+    if (locked.deals.length > 0) {
+      // Every stored session is retired: clear it, so the prune policy admits the row.
+      await tx`
+        update sponsor_orders set checkout_session_id = null, checkout_url = null, checkout_expires_at = null
+         where sponsor_id = ${id} and checkout_session_id is not null`;
+      await tx`delete from sponsor_orders where sponsor_id = ${id}`;
     }
-    // Every other deal goes with its sponsor, in this transaction.
-    if (locked.deals.length > 0) await tx`delete from sponsor_orders where sponsor_id = ${id}`;
     await tx`delete from sponsors where id = ${id}`;
   }).then(() => expirePublicSponsors(auth.orgId, "sponsor.delete"));
 }
@@ -477,13 +509,6 @@ export const CreateSponsorPackageInput = z.object({
 });
 export type CreateSponsorPackageInput = z.infer<typeof CreateSponsorPackageInput>;
 
-export const StartSponsorCheckoutInput = z.object({
-  package_id: z.string().uuid(),
-  sponsor_name: z.string().min(1).max(80),
-  sponsor_email: z.string().email().max(320),
-});
-export type StartSponsorCheckoutInput = z.infer<typeof StartSponsorCheckoutInput>;
-
 /** A package is a placement, so every plan may create one (spec §8) and it passes the ONE placement gate (D17, F14):
  *  a tier other than partner, or a competition, needs `sponsors.tiers`. Selling it online is `sponsors.monetize`'s,
  *  asked when an online deal is made, never here. */
@@ -550,144 +575,181 @@ const ORDER_COLS = [
   "disputed_at", "dispute_id",
 ] as const;
 
-export async function listSponsorOrders(auth: AuthCtx): Promise<SponsorOrderRow[]> {
-  return withTenant(auth.orgId, (tx) => tx<SponsorOrderRow[]>`
-    select ${tx(ORDER_COLS)} from sponsor_orders
-    order by created_at desc, id`);
+// ---------------------------------------------------------------------------
+// An online deal's Checkout session (sponsor deals Task 7, D14, F3, F32, F37)
+// ---------------------------------------------------------------------------
+
+/** The deal fields a Checkout session and its invoice are built from (the deal's snapshot, D4). */
+type SponsorDealView = Pick<
+  SponsorDeal,
+  "id" | "package_id" | "package_name" | "sponsor_name" | "sponsor_email" | "amount_cents" | "currency" | "competition_id"
+>;
+
+/** The org fields a deal's Checkout session needs. */
+export interface DealCheckoutOrg {
+  id: string;
+  slug: string;
+  stripe_account_id: string;
+}
+
+/** A Checkout session as a deal stores it: id, pay link, and its expiry in Unix seconds (Stripe's own unit). */
+export interface DealSession {
+  id: string;
+  url: string;
+  expires_at: number;
+}
+
+/** A stored session is reused while more than this is left of it (F32): a link mailed with minutes to live is no link. */
+const SESSION_REUSE_MARGIN_MS = 10 * 60_000;
+
+/** Stripe could not do what the deal needs; the deal is left exactly as it was. */
+function stripeUnavailable(what: string, err: unknown, deal: { id: string }): HttpError {
+  log.error({ err, dealId: deal.id }, `sponsors: Stripe could not ${what}`);
+  return new HttpError(502, `Stripe could not ${what}, so nothing was changed; try again`, "stripe_unavailable");
 }
 
 /**
- * Start a package checkout: order row FIRST (pending), then the Stripe
- * Checkout Session as a destination charge on the org's connected account —
- * amount to the org, platform keeps the entry-fee application fee, exactly
- * like registrations. Stripe is called OUTSIDE any sql transaction; the
- * idempotency key `sponsor-order-<id>` pins retries to one session. The
- * sponsor contact gets a pay-now invoice email.
- *
- * The invoice goes through the email outbox (kind `sponsor_invoice`, ref
- * `sponsor_order/<order id>`, once-key the order id), in the org's language,
- * and this request makes its first attempt after it returns. The box is asked
- * whether it can queue email BEFORE the order exists (P-W2-1): the session
- * minted below is real, so a key fault must refuse the checkout before it
- * starts. Once the session exists the order stands: an invoice that still
- * cannot be queued is logged and the checkout answers as usual, since the
- * organiser is shown the same payment link to share.
+ * Mint a deal's Checkout session: a destination charge on the org's connected account (the amount to the org, the platform's
+ * entry-fee application fee kept), exactly like a registration's. Outside any transaction (house rule). `attempt` is the send
+ * number, so the Stripe idempotency key `sponsor-deal-<id>-<attempt>` pins a retried send to ONE session and a later send to a
+ * new one. Success and cancel return to the org's public hub, `routes.publicHub(slug)` (`/live/<slug>`, F25). Any Stripe
+ * failure is a 502 (`stripe_unavailable`).
  */
-export async function startSponsorCheckout(
-  auth: AuthCtx,
-  input: StartSponsorCheckoutInput,
+export async function mintDealCheckout(
+  deal: SponsorDealView,
+  org: DealCheckoutOrg,
   origin: string,
-): Promise<{ order: SponsorOrderRow; checkout_url: string }> {
-  const pkg = await withTenant(auth.orgId, async (tx) => {
-    const [row] = await tx<Omit<SponsorPackageRow, "used_by">[]>`
-      select ${tx(PKG_COLS)} from sponsor_packages where id = ${input.package_id}`;
-    if (!row) throw new HttpError(404, "package not found");
-    if (!row.active) throw new HttpError(422, "This package is no longer on sale");
-    return row;
-  });
-  await requireFeature(auth.orgId, "sponsors.monetize", pkg.competition_id ?? undefined);
-
-  // Connect gate (v9 ordering): the org must be onboarded — same refusal as
-  // entry fees — before any order exists. The ToS chargeback clause was
-  // accepted when the connected account was created (createConnectOnboardingLink).
-  const [org] = await sql<
-    {
-      slug: string;
-      name: string;
-      default_locale: string;
-      stripe_account_id: string | null;
-      stripe_charges_enabled: boolean;
-    }[]
-  >`
-    select slug, name, default_locale, stripe_account_id, stripe_charges_enabled
-    from organizations where id = ${auth.orgId}`;
-  if (!org?.stripe_account_id || !org.stripe_charges_enabled) {
-    throw new HttpError(409, "Connect Stripe (Get paid) before selling sponsorship packages");
-  }
-  // P-W2-1: refuse now, before the order and the Checkout session, if this box
-  // cannot queue the invoice.
-  assertOutboxCanQueue();
-
-  const order = await withTenant(auth.orgId, async (tx) => {
-    const [row] = await tx<SponsorOrderRow[]>`
-      insert into sponsor_orders (org_id, package_id, sponsor_name, sponsor_email,
-                                  amount_cents, currency)
-      values (${auth.orgId}, ${pkg.id}, ${input.sponsor_name}, ${input.sponsor_email},
-              ${pkg.price_cents}, ${pkg.currency})
-      returning ${tx(ORDER_COLS)}`;
-    return row!;
-  });
-
+  attempt: number,
+): Promise<DealSession> {
   const returnBase = `${origin}${routes.publicHub(org.slug)}`;
-  const session = await getStripe().checkout.sessions.create(
-    {
-      mode: "payment",
-      customer_email: input.sponsor_email,
-      metadata: { kind: "sponsor", order_id: order.id, org_id: auth.orgId },
-      line_items: [
-        {
-          quantity: 1,
-          price_data: {
-            currency: pkg.currency,
-            unit_amount: pkg.price_cents,
-            product_data: { name: `${pkg.name} — sponsorship (${input.sponsor_name})` },
-          },
-        },
-      ],
-      payment_intent_data: {
-        application_fee_amount: applicationFeeCents(
-          pkg.price_cents,
-          await feePercentFor(auth.orgId, pkg.competition_id ?? undefined),
-        ),
-        transfer_data: { destination: org.stripe_account_id },
-        metadata: {
-          kind: "sponsor",
-          order_id: order.id,
-          package_id: pkg.id,
-          org_id: auth.orgId,
-        },
-      },
-      success_url: `${returnBase}?sponsorship=success`,
-      cancel_url: `${returnBase}?sponsorship=cancelled`,
-    },
-    { idempotencyKey: `sponsor-order-${order.id}` },
-  );
-  if (!session.url) throw new HttpError(502, "Stripe did not return a checkout URL");
-
-  // The render is inside the same try as the enqueue: the session is minted,
-  // so nothing about the invoice may turn this checkout into an error.
-  let invoiceId: string | null = null;
+  const fee = applicationFeeCents(deal.amount_cents, await feePercentFor(org.id, deal.competition_id ?? undefined));
+  let session: Stripe.Checkout.Session;
   try {
-    const locale = await recipientLocale(sql, { pick: null, userId: null, orgDefault: org.default_locale });
-    const content = await sponsorInvoiceEmail(
+    session = await getStripe().checkout.sessions.create(
       {
-        orgName: org.name,
-        packageName: pkg.name,
-        sponsorName: input.sponsor_name,
-        amountCents: pkg.price_cents,
-        currency: pkg.currency,
-        checkoutUrl: session.url,
+        mode: "payment",
+        customer_email: deal.sponsor_email ?? undefined,
+        metadata: { kind: "sponsor", order_id: deal.id, org_id: org.id },
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: deal.currency,
+              unit_amount: deal.amount_cents,
+              product_data: { name: `${deal.package_name} — sponsorship (${deal.sponsor_name})` },
+            },
+          },
+        ],
+        payment_intent_data: {
+          application_fee_amount: fee,
+          transfer_data: { destination: org.stripe_account_id },
+          metadata: { kind: "sponsor", order_id: deal.id, package_id: deal.package_id, org_id: org.id },
+        },
+        success_url: `${returnBase}?sponsorship=success`,
+        cancel_url: `${returnBase}?sponsorship=cancelled`,
       },
-      locale,
+      { idempotencyKey: `sponsor-deal-${deal.id}-${attempt}` },
     );
-    invoiceId = await enqueueEmailOnce(sql, {
-      kind: "sponsor_invoice",
-      refType: "sponsor_order",
-      refId: order.id,
-      dedupeKey: onceKey("sponsor_invoice", "sponsor_order", order.id),
-      orgId: auth.orgId,
-      to: input.sponsor_email,
-      transactional: false,
-      expiresAt: expiryWithin(null),
-      ...content,
-    });
   } catch (err) {
-    log.error({ err, orderId: order.id }, "sponsors: invoice email could not be queued");
+    throw stripeUnavailable("create the payment link", err, deal);
   }
-  const queued = invoiceId;
-  if (queued) deferred(() => dispatchNow([queued]));
+  if (!session.url) throw stripeUnavailable("return a payment link", new Error("no checkout url"), deal);
+  return { id: session.id, url: session.url, expires_at: session.expires_at };
+}
 
-  return { order, checkout_url: session.url };
+/**
+ * The session rule (D14, F3, F37): two payable sessions for one deal must never coexist, so every path that replaces, abandons
+ * or deletes a stored session retires it first. Outside any transaction. Decided ONLY on the status `retrieve` reports (an
+ * `expire` error is never parsed): `open` is expired, then `retired`; `expired` is `retired` with no call; `complete` is money
+ * in flight, answered as `complete` for the caller to refuse or carry on. No stored session is `none`. A session that cannot be
+ * read, or that is open and cannot be expired, is a 502 (`stripe_unavailable`) and nothing else happens: carrying on would leave
+ * two payable sessions. (registrations.ts expires a stale session the same way, but best-effort; here a failed expire stops.)
+ */
+export async function retireDealSession(deal: { id: string; checkout_session_id: string | null }): Promise<"none" | "retired" | "complete"> {
+  const sessionId = deal.checkout_session_id;
+  if (sessionId === null) return "none";
+  let status: Stripe.Checkout.Session["status"];
+  try {
+    status = (await getStripe().checkout.sessions.retrieve(sessionId)).status;
+  } catch (err) {
+    throw stripeUnavailable("read this deal's payment link", err, deal);
+  }
+  if (status === "complete") return "complete";
+  if (status === "expired") return "retired";
+  if (status !== "open") throw stripeUnavailable(`read this deal's payment link (status ${String(status)})`, null, deal);
+  try {
+    await getStripe().checkout.sessions.expire(sessionId);
+  } catch (err) {
+    throw stripeUnavailable("close this deal's open payment link", err, deal);
+  }
+  return "retired";
+}
+
+/** A completed session: the sponsor has paid at Stripe and the webhook is on its way (F37). */
+export function paidOnline(): HttpError {
+  return new HttpError(
+    409,
+    "The sponsor has already paid this deal online; the payment is being recorded. Refresh in a moment.",
+    "deal_paid_online",
+  );
+}
+
+/**
+ * The ONE reuse-or-retire-and-mint rule (F32; Task 22's `payInvoice` calls it too): the stored session while more than 10
+ * minutes are left of it, else the stored one retired by the session rule and a new one minted with attempt
+ * `invoice_send_count + 1`. A completed stored session is 409 `deal_paid_online`: no re-mint. Outside any transaction.
+ */
+export async function ensureDealCheckout(
+  deal: ServerDeal,
+  org: DealCheckoutOrg,
+  origin: string,
+): Promise<DealSession & { minted: boolean }> {
+  const expiresMs = deal.checkout_expires_at === null ? null : Date.parse(deal.checkout_expires_at);
+  if (deal.checkout_session_id && deal.checkout_url && expiresMs !== null && expiresMs > Date.now() + SESSION_REUSE_MARGIN_MS) {
+    return { id: deal.checkout_session_id, url: deal.checkout_url, expires_at: Math.floor(expiresMs / 1000), minted: false };
+  }
+  if ((await retireDealSession(deal)) === "complete") throw paidOnline();
+  return { ...(await mintDealCheckout(deal, org, origin, deal.invoice_send_count + 1)), minted: true };
+}
+
+/**
+ * Queue a deal's invoice on the email outbox, on `tx` (the transaction that records the send): kind `sponsor_invoice`, ref
+ * `sponsor_order/<deal id>`, once-key `<deal id>:<sendNo>` — so a resend is a new invoice and a retried send (the same count)
+ * is not. To the deal's billing email, a literal address, in the org's language. Returns the outbox id, or `null` when this
+ * send already has its invoice. No catch: a refused enqueue rolls the send back (its session is pinned by its Stripe key, so a
+ * retry gets the same one). The caller asked `assertOutboxCanQueue` before it minted (P-W2-1).
+ */
+export async function queueSponsorInvoice(
+  tx: Tx,
+  a: { deal: SponsorDealView & { org_id: string }; checkoutUrl: string; sendNo: number },
+): Promise<string | null> {
+  const { deal, checkoutUrl, sendNo } = a;
+  if (!deal.sponsor_email) throw new Error(`sponsors: online deal ${deal.id} has no billing email (online_has_email)`);
+  const [org] = await tx<{ name: string; default_locale: string }[]>`
+    select name, default_locale from organizations where id = ${deal.org_id}`;
+  const locale = await recipientLocale(tx, { pick: null, userId: null, orgDefault: org?.default_locale ?? null });
+  const content = await sponsorInvoiceEmail(
+    {
+      orgName: org?.name ?? "the organiser",
+      packageName: deal.package_name,
+      sponsorName: deal.sponsor_name,
+      amountCents: deal.amount_cents,
+      currency: deal.currency,
+      checkoutUrl,
+    },
+    locale,
+  );
+  return enqueueEmailOnce(tx, {
+    kind: "sponsor_invoice",
+    refType: "sponsor_order",
+    refId: deal.id,
+    dedupeKey: onceKey("sponsor_invoice", "sponsor_order", deal.id, String(sendNo)),
+    orgId: deal.org_id,
+    to: deal.sponsor_email,
+    transactional: false,
+    expiresAt: expiryWithin(null),
+    ...content,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1298,8 +1360,9 @@ export async function buildSponsorDisputeEvidence(
   origin: string,
 ): Promise<{ ref: string; html: string }> {
   const order = await withTenant(auth.orgId, async (tx) => {
+    // Any deal, not only one paid online: an offline or complimentary deal has no billing email and pays `none` (V493).
     const [row] = await tx<
-      (SponsorOrderRow & { dispute_id: string | null })[]
+      (Omit<SponsorOrderRow, "sponsor_email" | "status"> & { sponsor_email: string | null; status: string; dispute_id: string | null })[]
     >`select ${tx(ORDER_COLS)}, dispute_id from sponsor_orders where id = ${orderId}`;
     if (!row) throw new HttpError(404, "order not found");
     return row;
@@ -1364,7 +1427,7 @@ export async function buildSponsorDisputeEvidence(
   <table style="font-size:14px;border-collapse:collapse">
     ${evRow("Order", orderId)}
     ${evRow("Sponsor", order.sponsor_name)}
-    ${evRow("Customer email", order.sponsor_email)}
+    ${evRow("Customer email", order.sponsor_email ?? "—")}
     ${evRow("Package", `${pkg?.name ?? "—"} (${pkg?.tier ?? "—"})`)}
     ${evRow("Scope", comp ? comp.name : "whole organisation")}
     ${evRow("Amount", `${(order.amount_cents / 100).toFixed(2)} ${order.currency.toUpperCase()}`)}
@@ -1376,7 +1439,7 @@ export async function buildSponsorDisputeEvidence(
   </table>
 
   <h2 style="font-size:15px;margin:24px 0 6px">Receipt email (customer communication)</h2>
-  <p style="margin:0 0 6px;color:#6b7280;font-size:12px">Reconstruction of the transactional receipt sent to ${escHtml(order.sponsor_email)} on payment.</p>
+  <p style="margin:0 0 6px;color:#6b7280;font-size:12px">${order.sponsor_email ? `Reconstruction of the transactional receipt sent to ${escHtml(order.sponsor_email)} on payment.` : "This deal has no billing email: no receipt was mailed. Reconstruction of the receipt it would have carried."}</p>
   <pre style="background:#f6f5f8;border-radius:8px;padding:14px;font-size:12px;white-space:pre-wrap">${escHtml(emailText)}</pre>
 
   <h2 style="font-size:15px;margin:24px 0 6px">Placement delivered (service provided)</h2>

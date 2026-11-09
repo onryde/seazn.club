@@ -5284,6 +5284,12 @@ export const SponsorDealCreated = z.object({
   checkout_url: z.string().nullable(),
 });
 
+/** Send invoice (Task 7): the deal after the send and the Checkout url the invoice carries (beside the deal, never on it). */
+export const SponsorDealInvoiceSent = z.object({
+  deal: SponsorDeal,
+  checkout_url: z.string(),
+});
+
 export const Sponsor = z.object({
   id: z.string(),
   competition_id: z.string().nullable(),
@@ -5386,33 +5392,6 @@ export const CreateSponsorPackage = z.object({
   tier: SponsorTier.default("partner"),
   competition_id: Uuid.nullish(),
   includes_on_stream: z.boolean().default(false),
-});
-
-export const SponsorOrder = z.object({
-  id: z.string(),
-  package_id: z.string(),
-  sponsor_name: z.string(),
-  sponsor_email: z.string(),
-  payment_intent_id: z.string().nullable(),
-  amount_cents: z.number().int(),
-  currency: z.string(),
-  status: z.enum(["pending", "paid", "failed", "refunded"]),
-  sponsor_id: z.string().nullable(),
-  created_at: z.string(),
-  paid_at: z.string().nullable(),
-  disputed_at: z.string().nullable(),
-  dispute_id: z.string().nullable(),
-});
-
-export const StartSponsorCheckout = z.object({
-  package_id: Uuid,
-  sponsor_name: z.string().min(1).max(80),
-  sponsor_email: z.string().email().max(320),
-});
-
-export const SponsorCheckoutStarted = z.object({
-  order: SponsorOrder,
-  checkout_url: z.string(),
 });
 
 // ---------------------------------------------------------------------------

@@ -309,7 +309,7 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   // rows on purpose: those count gold's clicks and airings, and every row below adds to them.
   await sponsorStreamRows(admin, proOrgId, comp.id, goldId);
 
-  // --- Monetization: package + order-first Connect checkout.
+  // --- Monetization: package + deal-first Connect checkout (an online deal).
   const pkgRes = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-packages`, "POST", {
     name: `Gold Package ${tag}`,
     price_cents: 25_000,
@@ -319,50 +319,63 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   check("sp pro creates a package", pkgRes.status === 201);
   const pkg = v1data<{ id: string }>(pkgRes);
 
-  // Connect gate: same refusal as entry fees, before any order row exists.
+  // Sponsor deals Task 7 (F8): the checkout is an ONLINE DEAL on a sponsor (`POST /sponsors/{id}/deals`), and the create answers
+  // `checkout_url` itself (F11). Every row creates its OWN sponsor (F33): a deal on the gold sponsor above would hide it (D8).
+  const ownSponsor = async (name: string) =>
+    v1data<{ id: string }>(await v1(admin, `/api/v1/orgs/${proOrgId}/sponsors`, "POST", { name, tier: "partner" })).id;
+  const onlineDeal = (sponsorId: string, email: string) =>
+    v1(admin, `/api/v1/orgs/${proOrgId}/sponsors/${sponsorId}/deals`, "POST", {
+      package_id: pkg.id,
+      competition_id: null,
+      payment_method: "online",
+      go_live: "on_payment",
+      sponsor_email: email,
+    });
+
+  // Connect gate: same refusal as entry fees, before any deal row exists.
   await setConnect(proOrgId, false);
-  const gated = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-orders`, "POST", {
-    package_id: pkg.id,
-    sponsor_name: "Gate Probe",
-    sponsor_email: `delivered+gate_${tag}@resend.dev`,
-  });
-  check("sp checkout refused without Connect (409)", gated.status === 409);
+  const gateSponsor = await ownSponsor(`Gate Probe ${tag}`);
+  const gated = await onlineDeal(gateSponsor, `delivered+gate_${tag}@resend.dev`);
+  const gateDeals = v1data<unknown[]>(await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-deals?sponsor_id=${gateSponsor}`));
+  check(
+    "sp online deal refused without Connect (409)",
+    gated.status === 409 && (gated.json.error as { code?: string } | undefined)?.code === "connect_required" &&
+      Array.isArray(gateDeals) && gateDeals.length === 0,
+  );
   // The one org in the run that gets a REAL connected account, when supplied —
   // stripe_account_id is UNIQUE, so it can only ever be handed to one.
   await setConnect(proOrgId, true, CONNECT_TEST_ACCOUNT);
 
-  const started = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-orders`, "POST", {
-    package_id: pkg.id,
-    sponsor_name: `Acme ${tag}`,
-    sponsor_email: `delivered+acme_${tag}@resend.dev`,
-  });
+  const acmeSponsor = await ownSponsor(`Acme ${tag}`);
+  const started = await onlineDeal(acmeSponsor, `delivered+acme_${tag}@resend.dev`);
   if (!process.env.STRIPE_SECRET_KEY) {
-    // Keyless: the Stripe mint fails AFTER the pending order landed — the
-    // order-before-intent rail is still observable below.
-    check("sp checkout keyless fails after the order insert", started.status >= 500);
+    // Keyless: the Stripe mint fails AFTER the deal committed (a draft), and the create answers 502 — the
+    // deal-before-intent rail is still observable below, and Send invoice would retry it.
+    check("sp online deal keyless: 502 after the draft landed", started.status === 502);
   } else if (!CONNECT_TEST_ACCOUNT) {
     // Keyed but destination-less. A secret key is NOT a proxy for "Connect is
-    // usable": the checkout sends setConnect's fabricated acct_smoke_* as
+    // usable": the session sends setConnect's fabricated acct_smoke_* as
     // transfer_data.destination, which Stripe rejects with resource_missing,
     // so 201 is unreachable no matter how valid the key is. Skip (counting the
     // check, same convention as paymentMethodSuite) rather than assert a
     // failure the fixture — not the app — causes.
     check(
-      "sp checkout: skipped (no STRIPE_CONNECT_TEST_ACCOUNT — destination charge needs a real connected account)",
+      "sp online deal: skipped (no STRIPE_CONNECT_TEST_ACCOUNT — destination charge needs a real connected account)",
       true,
     );
   } else {
+    const made = started.status === 201 ? v1data<{ deal: { deal_status: string }; checkout_url: string | null }>(started) : null;
     check(
-      "sp checkout starts (order + session url)",
-      started.status === 201 && !!v1data<{ checkout_url: string }>(started).checkout_url,
+      "sp online deal starts (draft→awaiting_payment, checkout url)",
+      made !== null && !!made.checkout_url && made.deal.deal_status === "awaiting_payment",
     );
   }
-  const orders = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-orders`);
+  const deals = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-deals?sponsor_id=${acmeSponsor}`);
   check(
-    "sp order row landed pending (order-before-intent)",
-    orders.status === 200 &&
-      v1data<{ status: string; sponsor_name: string }[]>(orders).some(
-        (o) => o.status === "pending" && o.sponsor_name === `Acme ${tag}`,
+    "sp deal row landed (deal-before-intent)",
+    deals.status === 200 &&
+      v1data<{ payment_status: string; sponsor_name: string; payment_method: string }[]>(deals).some(
+        (d) => d.payment_status === "pending" && d.payment_method === "online" && d.sponsor_name === `Acme ${tag}`,
       ),
   );
 

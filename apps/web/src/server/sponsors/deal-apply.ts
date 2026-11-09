@@ -27,6 +27,11 @@ export interface ServerDeal extends SponsorDeal {
   payment_intent_id: string | null;
   /** A stored Checkout session (Task 7 writes it). While one is open, the deal still has a payable link. */
   checkout_session_id: string | null;
+  /** The stored session's pay link and its expiry (D14): reused while more than 10 minutes remain (F32). */
+  checkout_url: string | null;
+  checkout_expires_at: string | null;
+  /** Invoices sent so far: the next send is `invoice_send_count + 1`, its Stripe key and its once-key. */
+  invoice_send_count: number;
 }
 
 /** The sponsor row as `lockSponsorAndDeals` holds it. */
@@ -45,6 +50,7 @@ const DEAL_ROW_COLS = [
   "includes_on_stream", "competition_id", "amount_cents", "currency", "sponsor_name", "sponsor_email", "ends_at",
   "created_at", "created_by", "invoice_sent_at", "paid_at", "marked_paid_by", "approved_at", "approved_by", "live_at",
   "ended_at", "ended_reason", "parked_at", "disputed_at", "dispute_id", "payment_intent_id", "checkout_session_id",
+  "checkout_url", "checkout_expires_at", "invoice_send_count",
 ] as const;
 
 type Stamp = Date | string | null;
@@ -53,7 +59,7 @@ type DealRow = Omit<ServerDeal, "payment_status" | "invoice_number" | TimeKey> &
 } & Record<TimeKey, Stamp>;
 type TimeKey =
   | "ends_at" | "created_at" | "invoice_sent_at" | "paid_at" | "approved_at" | "live_at" | "ended_at" | "parked_at"
-  | "disputed_at";
+  | "disputed_at" | "checkout_expires_at";
 
 const iso = (t: Stamp): string | null => (t === null ? null : new Date(t).toISOString());
 
@@ -92,6 +98,9 @@ function toServerDeal(r: DealRow): ServerDeal {
     invoice_number: null,
     payment_intent_id: r.payment_intent_id,
     checkout_session_id: r.checkout_session_id,
+    checkout_url: r.checkout_url,
+    checkout_expires_at: iso(r.checkout_expires_at),
+    invoice_send_count: r.invoice_send_count,
   };
 }
 
@@ -179,9 +188,17 @@ export function sponsorDealSummary(deals: readonly ServerDeal[]): SponsorDealSum
   };
 }
 
-/** A ServerDeal without its money handles: the shape the console and the API carry. */
+/** A ServerDeal without its money handles: the shape the console and the API carry. The pay link is never on the deal
+ *  (F11): it is answered once, by the call that minted or reused it. */
 export function clientDeal(d: ServerDeal): SponsorDeal {
-  const { payment_intent_id: _intent, checkout_session_id: _session, ...deal } = d;
+  const {
+    payment_intent_id: _intent,
+    checkout_session_id: _session,
+    checkout_url: _url,
+    checkout_expires_at: _expires,
+    invoice_send_count: _sends,
+    ...deal
+  } = d;
   return deal;
 }
 

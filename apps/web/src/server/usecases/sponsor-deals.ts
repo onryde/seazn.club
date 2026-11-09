@@ -1,6 +1,6 @@
 import "server-only";
-// Sponsor deals — the console's deal usecases (plan 2026-11-07-sponsor-deals, Task 6; spec §5.2, §5.3, §8, §8a): create a
-// deal on a sponsor, Mark as paid, Approve, End now, refund (offline here), list and get.
+// Sponsor deals — the console's deal usecases (plan 2026-11-07-sponsor-deals, Tasks 6 and 7; spec §5.2, §5.3, §8, §8a): create
+// a deal on a sponsor, send its invoice (online), Mark as paid, Approve, End now, refund, list and get.
 //
 // The rules are lib/sponsor-deals.ts's (which status a deal starts in and moves to, which actions it offers); what a deal does
 // to its sponsor is `applyDealsToSponsor`'s. This module only sequences them, and holds the four contracts every action keeps:
@@ -12,6 +12,9 @@ import "server-only";
 //   - F1: after its commit, every action AWAITS `expirePublicSponsors` (the organiser reads the public page next), never
 //     `deferred`;
 //   - every write ends with `applyDealsToSponsor` in the same transaction (D7).
+// An online deal adds the session rule (D14, F3, F37; sponsors.ts `retireDealSession`): every path that replaces, abandons or
+// deletes its stored Checkout session retires it first, outside any transaction, so two payable sessions never coexist.
+import { deferred } from "@/lib/deferred";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import {
@@ -20,6 +23,7 @@ import {
   initialPaymentStatus,
   initialStatus,
   statusAfterApproved,
+  statusAfterInvoiceSent,
   statusAfterPaid,
   type DealAction,
   type DealStatus,
@@ -38,7 +42,16 @@ import {
   type ServerDeal,
 } from "@/server/sponsors/deal-apply";
 import { assertOnlineAllowed, assertPlacementAllowed } from "@/server/sponsors/deal-gates";
-import { expirePublicSponsors } from "./sponsors";
+import { assertOutboxCanQueue, dispatchNow } from "@/server/email-outbox";
+import {
+  ensureDealCheckout,
+  expirePublicSponsors,
+  paidOnline,
+  queueSponsorInvoice,
+  refundSponsorOrder,
+  retireDealSession,
+  type DealCheckoutOrg,
+} from "./sponsors";
 
 /** The Add deal body (strict): the API schema itself, so the documented body and the enforced one cannot drift. */
 export const CreateDealInput = CreateSponsorDeal;
@@ -97,6 +110,54 @@ function notOffered(d: ServerDeal, action: DealAction): HttpError {
 /** Another live deal of the same sponsor, beside `d` (legacy rows never count). */
 const otherLive = (deals: readonly ServerDeal[], d: Pick<ServerDeal, "id">): boolean =>
   deals.some((x) => x.id !== d.id && !isLegacyDeal(x) && x.deal_status === "live");
+
+/** A deal read without a lock, refused (404, or 409 when it offers none of `accept`) BEFORE Stripe or any write (F12). The
+ *  locked write asks again. */
+async function preflight(auth: AuthCtx, dealId: string, accept: readonly DealAction[]): Promise<ServerDeal> {
+  const deal = await withTenant(auth.orgId, (tx) => readDeal(tx, dealId));
+  if (!deal) throw new HttpError(404, "deal not found");
+  const offered = allowedActions(deal);
+  if (!accept.some((a) => offered.includes(a))) throw notOffered(deal, accept[0]!);
+  return deal;
+}
+
+/** The deal moved on between its unlocked read and its lock (a concurrent send minted another session, or a payment landed):
+ *  the action is refused rather than leave a session it never retired. */
+const dealChanged = () => new HttpError(409, "this deal changed while it was being updated; reload it and try again", "deal_changed");
+
+/**
+ * The session rule before a write that abandons a deal's stored session (F3, F37), outside any transaction: an open session is
+ * expired, an expired one passes, and a completed one (money in flight) is refused (`refuse`: Mark as paid) or left as it is
+ * (`carry_on`: End now, Review Focus 1 — the late payment lands on an ended deal and is refundable). Answers the session id it
+ * retired, which the write then clears, or null.
+ */
+async function retireBefore(deal: ServerDeal, onComplete: "refuse" | "carry_on"): Promise<string | null> {
+  const outcome = await retireDealSession(deal);
+  if (outcome === "complete") {
+    if (onComplete === "refuse") throw paidOnline();
+    return null;
+  }
+  return outcome === "retired" ? deal.checkout_session_id : null;
+}
+
+/** Clear a retired session off its deal (only while it is still the stored one): the dead link is never offered again, and
+ *  the prune policy refuses a row that holds one. */
+async function clearSession(tx: Tx, dealId: string, retired: string | null): Promise<void> {
+  if (retired === null) return;
+  await tx`
+    update sponsor_orders set checkout_session_id = null, checkout_url = null, checkout_expires_at = null
+     where id = ${dealId} and checkout_session_id = ${retired}`;
+}
+
+/** The org a deal's Checkout session is minted on: Connect must take charges (409 `connect_required`). */
+async function checkoutOrg(orgId: string): Promise<DealCheckoutOrg> {
+  const [org] = await sql<{ slug: string; stripe_account_id: string | null; stripe_charges_enabled: boolean }[]>`
+    select slug, stripe_account_id, stripe_charges_enabled from organizations where id = ${orgId}`;
+  if (!org?.stripe_account_id || !org.stripe_charges_enabled) {
+    throw new HttpError(409, "Connect Stripe (Get paid) before selling sponsorship packages", "connect_required");
+  }
+  return { id: orgId, slug: org.slug, stripe_account_id: org.stripe_account_id };
+}
 
 interface Locked {
   deal: ServerDeal;
@@ -171,7 +232,6 @@ export async function createDeal(
   input: CreateDealInput,
   origin: string,
 ): Promise<{ deal: SponsorDeal; checkout_url: string | null }> {
-  void origin; // Task 7: the invoice's Checkout returns to the org's public hub on this origin.
   return atBoundary(async () => {
     const method = input.payment_method;
     const rule = input.go_live;
@@ -208,6 +268,8 @@ export async function createDeal(
       if (!input.sponsor_email) {
         throw new HttpError(422, "an online deal needs the sponsor's billing email: its invoice goes there", "sponsor_email_required");
       }
+      // P-W2-1: refuse now, before the deal and its Checkout session, if this box cannot queue the invoice.
+      assertOutboxCanQueue();
     }
     // ends_on: a day in the org's timezone (V305; NULL is UTC), today or later there, stored as the start of the NEXT day.
     let endsAt: Date | null = null;
@@ -220,6 +282,14 @@ export async function createDeal(
       endsAt = end.ends_at;
     }
 
+    // end_current abandons the live deal's stored session: the session rule first (F3), outside any transaction.
+    let seen: { dealId: string; session: string | null; retired: string | null } | null = null;
+    if (input.end_current) {
+      const current = await withTenant(auth.orgId, (tx) => readDeals(tx, { sponsorId }));
+      const live = current.find((d) => !isLegacyDeal(d) && d.deal_status === "live");
+      if (live) seen = { dealId: live.id, session: live.checkout_session_id, retired: await retireBefore(live, "carry_on") };
+    }
+
     const deal = await withTenant(auth.orgId, async (tx) => {
       const locked = await lockSponsorAndDeals(tx, sponsorId);
       if (!locked) throw new HttpError(404, "sponsor not found");
@@ -227,7 +297,13 @@ export async function createDeal(
       let endedDealId: string | null = null;
       const live = locked.deals.find((d) => !isLegacyDeal(d) && d.deal_status === "live") ?? null;
       if (input.end_current && live) {
+        // A session on the live deal is the one the rule above saw (and retired, or found completed): a session minted since
+        // was never retired, so the create is refused rather than leave it payable on an ended deal.
+        if (live.checkout_session_id !== null && (seen?.dealId !== live.id || live.checkout_session_id !== seen.session)) {
+          throw dealChanged();
+        }
         await tx`update sponsor_orders set deal_status = 'ended', ended_at = ${now}, ended_reason = 'ended_now' where id = ${live.id}`;
+        await clearSession(tx, live.id, seen?.dealId === live.id ? seen.retired : null);
         endedDealId = live.id;
       }
       const status: DealStatus = initialStatus(method, rule, live !== null && endedDealId === null);
@@ -249,14 +325,74 @@ export async function createDeal(
       return reread(tx, row.id);
     });
     await expirePublicSponsors(auth.orgId, "sponsor.deal.create");
+    // F11: an online deal sends its invoice now and answers the link. A Stripe failure is a 502 that leaves the deal as it
+    // committed (a draft; or an immediate deal live with its payment pending): Send invoice retries it.
+    if (method === "online") return sendDealInvoice(auth, deal.id, origin);
     return { deal, checkout_url: null };
+  });
+}
+
+/**
+ * Send (or resend) an online deal's invoice (spec §5.2; D14, F32, F3): online only, for a draft, or an unpaid deal awaiting
+ * payment, live or scheduled — else 409 `deal_not_invoiceable` before Stripe (F12). The plan is asked again
+ * (`sponsors.monetize`: an org that lost it mints nothing), Connect must take charges, and the outbox must be able to queue
+ * (P-W2-1) — all before Stripe. Then `ensureDealCheckout` (outside any transaction) reuses the stored session while more than
+ * 10 minutes are left of it, else retires it and mints `sponsor-deal-<id>-<count + 1>`. ONE transaction in the lock order
+ * (F2) stores the session, counts the send, moves a draft to awaiting payment and queues the invoice with once-key
+ * `<id>:<count + 1>`. After commit, the request makes the invoice's first attempt and awaits the public expiry (F1).
+ */
+export async function sendDealInvoice(
+  auth: AuthCtx,
+  dealId: string,
+  origin: string,
+): Promise<{ deal: SponsorDeal; checkout_url: string }> {
+  return atBoundary(async () => {
+    const pre = await preflight(auth, dealId, ["send_invoice", "resend_invoice"]);
+    if (pre.sponsor_id === null) throw notOffered(pre, "send_invoice"); // a legacy row is never invoiceable
+    await assertOnlineAllowed(auth.orgId, pre.competition_id);
+    const org = await checkoutOrg(auth.orgId);
+    assertOutboxCanQueue();
+    const session = await ensureDealCheckout(pre, org, origin);
+
+    let queued: string | null = null;
+    const deal = await withTenant(auth.orgId, async (tx) => {
+      const locked = await lockSponsorAndDeals(tx, pre.sponsor_id!);
+      const current = locked?.deals.find((d) => d.id === dealId);
+      if (!locked || !current) throw new HttpError(404, "deal not found");
+      const offered = allowedActions(current);
+      if (!offered.includes("send_invoice") && !offered.includes("resend_invoice")) throw notOffered(current, "send_invoice");
+      if (current.checkout_session_id !== pre.checkout_session_id || current.invoice_send_count !== pre.invoice_send_count) {
+        throw dealChanged();
+      }
+      const sendNo = current.invoice_send_count + 1;
+      const now = new Date();
+      await tx`
+        update sponsor_orders
+           set checkout_session_id = ${session.id}, checkout_url = ${session.url},
+               checkout_expires_at = to_timestamp(${session.expires_at}),
+               invoice_send_count = ${sendNo}, invoice_sent_at = ${now}, deal_status = ${statusAfterInvoiceSent(current)}
+         where id = ${dealId}`;
+      queued = await queueSponsorInvoice(tx, { deal: { ...current, org_id: auth.orgId }, checkoutUrl: session.url, sendNo });
+      await applyDealsToSponsor(tx, pre.sponsor_id!, auth.userId, { now });
+      return reread(tx, dealId);
+    });
+    const first = queued as string | null;
+    if (first) deferred(() => dispatchNow([first]));
+    await expirePublicSponsors(auth.orgId, "sponsor.deal.send_invoice");
+    return { deal, checkout_url: session.url };
   });
 }
 
 /** Mark as paid (offline). Only an unpaid deal (`pending`, or `failed`: F15) the deal offers it on; on a When-paid rule it
  *  goes live (or queues), on After-I-approve it waits for the club (anti-goal 2), and a live or scheduled one stays put. */
 export async function markDealPaid(auth: AuthCtx, dealId: string): Promise<SponsorDeal> {
+  // An online deal's session rule first (F37): a completed session is the sponsor's own payment in flight — 409, nothing
+  // changes; an open one is expired, so the sponsor cannot pay twice.
+  const pre = await atBoundary(() => preflight(auth, dealId, ["mark_paid"]));
+  const retired = await retireBefore(pre, "refuse");
   return runAction(auth, dealId, "mark_paid", "sponsor.deal.mark_paid", async (tx, { deal, deals }, now) => {
+    if (deal.checkout_session_id !== pre.checkout_session_id) throw dealChanged();
+    await clearSession(tx, deal.id, retired);
     const next = statusAfterPaid(deal, otherLive(deals, deal));
     await tx`
       update sponsor_orders
@@ -282,20 +418,30 @@ export async function approveDeal(auth: AuthCtx, dealId: string): Promise<Sponso
 
 /** End now: any deal that has not ended. Apply then promotes the next scheduled deal, or resets the sponsor (D8). */
 export async function endDealNow(auth: AuthCtx, dealId: string): Promise<SponsorDeal> {
+  // The session rule first (F3): an ended deal leaves no payable session behind. A completed one ends anyway (Review Focus 1).
+  const pre = await atBoundary(() => preflight(auth, dealId, ["end_now"]));
+  const retired = await retireBefore(pre, "carry_on");
   return runAction(auth, dealId, "end_now", "sponsor.deal.end", async (tx, { deal }, now) => {
+    if (deal.checkout_session_id !== pre.checkout_session_id) throw dealChanged();
+    await clearSession(tx, deal.id, retired);
     await tx`update sponsor_orders set deal_status = 'ended', ended_at = ${now}, ended_reason = 'ended_now' where id = ${deal.id}`;
     return deal.id;
   });
 }
 
-/** Refund a paid deal. Recorded only when no charge moved it (an offline deal, §5.2: no money moves and nothing is mailed):
- *  money `refunded`, the deal ended as refunded. */
+/** Refund a paid deal, once. A deal a charge paid refunds through Stripe: `refundSponsorOrder` keeps its call (transfer
+ *  reversed, fee returned, keyed per deal), its disputed refusal and its awaited expiry (F1); Task 8 makes that refund end the
+ *  deal. A deal no charge paid (offline, or online marked paid by hand: T2-I1) is recorded only — no money moves and nothing
+ *  is mailed (§5.2): money `refunded`, the deal ended as refunded. */
 export async function refundDeal(auth: AuthCtx, dealId: string): Promise<SponsorDeal> {
+  const pre = await atBoundary(() => preflight(auth, dealId, ["refund"]));
+  if (pre.payment_intent_id !== null) {
+    await refundSponsorOrder(auth, dealId);
+    return getDeal(auth, dealId);
+  }
   return runAction(auth, dealId, "refund", "sponsor.deal.refund", async (tx, { deal }, now) => {
-    if (deal.payment_intent_id !== null) {
-      // A charge moved this money: its refund goes through Stripe (Task 7). Never recorded without the money moving back.
-      throw new HttpError(409, "this deal was paid online: refund it through Stripe", "deal_refund_online");
-    }
+    // A charge recorded since the read above is refunded through Stripe, never written down by hand.
+    if (deal.payment_intent_id !== null) throw dealChanged();
     const wasOpen = deal.deal_status !== "ended";
     await tx`
       update sponsor_orders

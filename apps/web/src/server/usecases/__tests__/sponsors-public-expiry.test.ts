@@ -27,9 +27,12 @@ vi.mock("next/cache", async (orig) => ({
   },
 }));
 // The console refund's two network seams (sponsor-checkout.test.ts's): Stripe at getStripe(), mail at the outbox transport.
-const stripeMock = vi.hoisted(() => ({ checkoutCreate: vi.fn(), refundCreate: vi.fn() }));
+const stripeMock = vi.hoisted(() => ({ checkoutCreate: vi.fn(), refundCreate: vi.fn(), retrieve: vi.fn(), expire: vi.fn() }));
 vi.mock("@/lib/stripe", () => ({
-  getStripe: () => ({ checkout: { sessions: { create: stripeMock.checkoutCreate } }, refunds: { create: stripeMock.refundCreate } }),
+  getStripe: () => ({
+    checkout: { sessions: { create: stripeMock.checkoutCreate, retrieve: stripeMock.retrieve, expire: stripeMock.expire } },
+    refunds: { create: stripeMock.refundCreate },
+  }),
 }));
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: vi.fn(async () => ({ ok: true, providerId: "re_test" })) }));
 
@@ -46,11 +49,9 @@ import {
   deleteSponsor,
   handleSponsorPaymentSucceeded,
   patchSponsor,
-  refundSponsorOrder,
   reorderSponsors,
-  startSponsorCheckout,
 } from "../sponsors";
-import { approveDeal, createDeal, endDealNow, markDealPaid, refundDeal } from "../sponsor-deals";
+import { approveDeal, createDeal, endDealNow, markDealPaid, refundDeal, sendDealInvoice } from "../sponsor-deals";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -93,9 +94,12 @@ describe.skipIf(!HAS_DB)("an organiser's sponsor write expires the public pages 
     expect(checked, "anti-vacuity: every organiser write was checked").toBe(4);
   });
 
+  // Sponsor deals Task 7 (F8): the checkout is an online deal on an existing sponsor, refunded through refundDeal (a charge
+  // moved the money, so the refund goes through Stripe). Its webhook leg is Task 8's to change: the premise reads the DEAL's
+  // sponsor, so it holds whether the webhook inserts a sponsor (today) or moves the deal's own (Task 8).
   it("a console refund has fired the org tag ({ expire: 0 }) by the time it resolves: the refunded placement leaves the public page at once", async () => {
     stubOutboxEnv();
-    stripeMock.checkoutCreate.mockReset().mockResolvedValue({ id: "cs_x", url: "https://stripe.test/s" });
+    stripeMock.checkoutCreate.mockReset().mockResolvedValue({ id: "cs_x", url: "https://stripe.test/s", expires_at: Math.floor(Date.now() / 1000) + 86_400 });
     stripeMock.refundCreate.mockReset().mockResolvedValue({ id: "re_test" });
     const suffix = randomUUID().slice(0, 8);
     const proSlug = `spr-${suffix}`;
@@ -107,17 +111,25 @@ describe.skipIf(!HAS_DB)("an organiser's sponsor write expires the public pages 
     await invalidateOrgEntitlements(orgId);
     const pro: AuthCtx = { orgId, via: "session", userId: null, role: "owner", keyId: null };
     const pkg = await createSponsorPackage(pro, { name: "Silver package", price_cents: 8_000, currency: "gbp", tier: "silver", includes_on_stream: false });
-    const { order } = await startSponsorCheckout(pro, { package_id: pkg.id, sponsor_name: "Refundable Ltd", sponsor_email: "r@ref.test" }, "https://app.test");
+    const sponsorId = (await createSponsor(pro, { name: "Refundable Ltd", tier: "partner", status: "active" })).id;
+    const { deal } = await createDeal(
+      pro,
+      sponsorId,
+      { package_id: pkg.id, competition_id: null, payment_method: "online", go_live: "on_payment", sponsor_email: "r@ref.test", ends_on: null },
+      "https://app.test",
+    );
     await handleSponsorPaymentSucceeded({
       id: `pi_${suffix}`,
-      metadata: { kind: "sponsor", order_id: order.id, package_id: pkg.id, org_id: orgId },
+      metadata: { kind: "sponsor", order_id: deal.id, package_id: pkg.id, org_id: orgId },
     } as unknown as Stripe.PaymentIntent);
-    const [live] = await sql<{ status: string }[]>`select status from sponsors where org_id = ${orgId} and name = 'Refundable Ltd'`;
+    const [live] = await sql<{ status: string }[]>`
+      select s.status from sponsors s join sponsor_orders d on d.sponsor_id = s.id where d.id = ${deal.id}`;
     expect(live?.status, "premise: the paid placement is live before the refund").toBe("active");
 
     h.tags.length = 0;
-    const refunded = await refundSponsorOrder(pro, order.id);
-    expect(refunded.status, "premise: the order is refunded").toBe("refunded");
+    const refunded = await refundDeal(pro, deal.id);
+    expect(refunded.payment_status, "premise: the deal's money is refunded").toBe("refunded");
+    expect(stripeMock.refundCreate, "premise: a charge moved this money, so Stripe refunded it").toHaveBeenCalledTimes(1);
     expect(h.tags, "refund: the org's public tag expired before the refund resolved, not left to after()").toContainEqual({
       tag: orgTag(proSlug),
       profile: { expire: 0 },
@@ -136,6 +148,7 @@ describe.skipIf(!HAS_DB)("an organiser's sponsor write expires the public pages 
 // reads back on the public page, so each one expires the org tag in the request, and leaves no bust to after().
 describe.skipIf(!HAS_DB)("a console deal action expires the public pages before it resolves (F1)", () => {
   let dealOrgId = "";
+  let sendOrgId = "";
 
   beforeEach(() => {
     h.tails.length = 0;
@@ -179,10 +192,40 @@ describe.skipIf(!HAS_DB)("a console deal action expires the public pages before 
     expect(checked, "anti-vacuity: every console deal action was checked").toBe(5);
   });
 
+  it("send invoice (Task 7) - on a Pro org, a resend has fired the org tag by the time it resolves, and left nothing to after()", async () => {
+    stubOutboxEnv();
+    stripeMock.checkoutCreate.mockReset().mockResolvedValue({ id: "cs_send", url: "https://stripe.test/send", expires_at: Math.floor(Date.now() / 1000) + 86_400 });
+    const s = `spi-${randomUUID().slice(0, 8)}`;
+    const [{ id: orgId }] = await sql<{ id: string }[]>`
+      insert into organizations (name, slug, stripe_account_id, stripe_charges_enabled) values (${`Spi ${s}`}, ${s}, ${`acct_${s}`}, true) returning id`;
+    sendOrgId = orgId;
+    await setOrgPlan(orgId, "pro");
+    await invalidateOrgEntitlements(orgId);
+    const auth: AuthCtx = { orgId, via: "session", userId: null, role: "owner", keyId: null };
+    const pkgId = (await createSponsorPackage(auth, { name: "Partner", price_cents: 5_000, currency: "gbp", tier: "partner", includes_on_stream: false })).id;
+    const sponsorId = (await createSponsor(auth, { name: "Invoice Co", tier: "partner", status: "active" })).id;
+    const { deal } = await createDeal(
+      auth,
+      sponsorId,
+      { package_id: pkgId, competition_id: null, payment_method: "online", go_live: "on_payment", sponsor_email: "i@inv.test", ends_on: null },
+      "https://app.test",
+    );
+    h.tags.length = 0;
+    h.tails.length = 0;
+    const sent = await sendDealInvoice(auth, deal.id, "https://app.test");
+    expect(sent.checkout_url, "premise: the resend reused the session").toBe("https://stripe.test/send");
+    expect(h.tags).toContainEqual({ tag: orgTag(s), profile: { expire: 0 } });
+    // The invoice's first attempt is the one task a send leaves to after() (the request makes it once it has answered); a bust
+    // left there too would make two.
+    expect(h.tails, "only the invoice's first attempt is left to after(), no sponsor bust").toHaveLength(1);
+  });
+
   afterAll(async () => {
-    if (!dealOrgId) return;
-    await sql`delete from sponsor_orders where org_id = ${dealOrgId}`;
-    await sql`delete from organizations where id = ${dealOrgId}`;
+    for (const id of [dealOrgId, sendOrgId].filter(Boolean)) {
+      await sql`delete from email_outbox where org_id = ${id}`;
+      await sql`delete from sponsor_orders where org_id = ${id}`;
+      await sql`delete from organizations where id = ${id}`;
+    }
   });
 });
 
