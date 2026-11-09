@@ -332,7 +332,7 @@
   "progression.rosterDrift.rebuiltSlots": "{kept} slot(s) kept, {freed} freed, {unscheduled} unscheduled.",
   "progression.rosterDrift.blockedNotice": "Can't rebuild — this stage already has recorded results. Complete it as it stands, or use Generate to add missing entrants instead.",
   "progression.rosterDrift.confirmTitle": "Rebuild this stage's fixtures?",
-  "progression.rosterDrift.confirmBody": "Every fixture in this stage is deleted and regenerated from the current roster. This can't be undone.",
+  "progression.rosterDrift.confirmBody": "Every fixture in this stage is deleted and regenerated from the current roster. Times and courts stay with each match's place in the draw. This can't be undone.",
   "progression.rosterDrift.confirmLabel": "Rebuild",
   "progression.rosterDrift.alsoCleared": "It also clears {items} on those fixtures — you'll need to set those up again.",
   "progression.rosterDrift.alsoOfficials": "{count} official assignment(s)",

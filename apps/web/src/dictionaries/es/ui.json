@@ -332,7 +332,7 @@
   "progression.rosterDrift.rebuiltSlots": "{kept} franja(s) conservada(s), {freed} liberada(s), {unscheduled} sin programar.",
   "progression.rosterDrift.blockedNotice": "No se puede reconstruir — esta fase ya tiene resultados registrados. Complétala tal como está, o usa Generar para añadir los participantes que faltan.",
   "progression.rosterDrift.confirmTitle": "¿Reconstruir los enfrentamientos de esta fase?",
-  "progression.rosterDrift.confirmBody": "Se elimina y vuelve a generar cada enfrentamiento de esta fase a partir de la lista actual de inscritos. Esto no se puede deshacer.",
+  "progression.rosterDrift.confirmBody": "Se elimina y vuelve a generar cada enfrentamiento de esta fase a partir de la lista actual de inscritos. Los horarios y las pistas se quedan con la posición de cada enfrentamiento en la fase. Esto no se puede deshacer.",
   "progression.rosterDrift.confirmLabel": "Reconstruir",
   "progression.rosterDrift.alsoCleared": "También borra {items} de esos enfrentamientos; tendrás que configurarlos de nuevo.",
   "progression.rosterDrift.alsoOfficials": "{count} designación(es) de árbitro",
