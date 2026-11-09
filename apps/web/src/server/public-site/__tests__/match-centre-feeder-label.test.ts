@@ -37,6 +37,7 @@ import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 import type { MatchCentreDocT } from "../match-centre-schema";
 import type { MessageKey } from "@/lib/messages";
 import { loadCompetitionHub } from "../competition-hub";
+import { createStagesWithLegacy } from "@/server/usecases/__tests__/_legacy-standalone-stage";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -193,7 +194,7 @@ describe.skipIf(!HAS_DB)("a generated page playoff names its rounds by the playo
       division.id,
       ["P1", "P2", "P3", "P4"].map((name, i) => ({ kind: "individual" as const, display_name: name, seed: i + 1, members: [] })),
     );
-    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "page_playoff", name: "Playoffs", config: {} });
+    const [stage] = await createStagesWithLegacy(auth, division.id, { seq: 1, kind: "page_playoff", name: "Playoffs", config: {} });
     await generateStageFixtures(auth, stage!.id);
 
     const rows = await sql<(StageRow & { ext_key: string | null })[]>`

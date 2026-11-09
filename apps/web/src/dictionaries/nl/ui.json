@@ -2428,6 +2428,8 @@
   "knockout.lateWaiting.other": "{count} late spelers wachten — toevoegen aan schema",
   "knockout.lateWaiting.sub": "{division} · {stage}: ingeschreven na de loting, nog niet in het schema.",
   "knockout.lateWaiting.action": "Schema openen",
+  "knockout.refusal.STEPLADDER_NEEDS_TABLE_SOURCE": "Stepladder-finales hebben een stand nodig om uit te plaatsen. Voeg eerst een competitie of groepen toe.",
+  "knockout.refusal.PAGE_PLAYOFF_NEEDS_TABLE_SOURCE": "Play-offs (IPL-stijl) hebben een stand nodig om uit te plaatsen. Voeg eerst een competitie, groepen of een Zwitserse fase toe.",
   "stage.err.swissRoundsRequired": "Een Zwitserse fase heeft een aantal rondes nodig voordat die kan worden opgeslagen. Zet Rondes op 1 of meer en pas het opnieuw toe.",
   "swiss.refusal.SWISS_ADHOC_REFUSED": "Zwitserse rondes worden door het systeem gekoppeld. Voeg vriendschappelijke wedstrijden toe in een andere fase.",
   "swiss.refusal.SWISS_BYE_NOT_PLACEABLE": "Een bye wordt niet gespeeld, dus neemt geen veld of tijd in.",

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
 import { newSession, call, check, signIn, tag, html, v1, v1data, setPlan } from "../harness.ts";
+import { insertLegacyStandaloneStage } from "../legacy-standalone-stage.ts";
 
 /** payments-hardening Task 16 — the 4-plan user matrix. Four fresh owners, one
  *  per plan, created through the same HTTP surface the rest of smoke uses; each
@@ -133,12 +134,9 @@ export async function boardRoundCodesSuite(): Promise<void> {
       seed: i + 1,
     })),
   );
-  const ppStage = await v1(owner, `/api/v1/divisions/${ppRow.id}/stages`, "POST", {
-    seq: 1,
-    kind: "page_playoff",
-    name: "Playoffs",
-  });
-  const ppGenerated = await v1(owner, `/api/v1/stages/${v1data<{ id: string }>(ppStage).id}/generate`, "POST");
+  // W4 T16 (C5): the API refuses a standalone page playoff since X-SP-6; the board still draws the legacy rows that stand.
+  const ppStageId = await insertLegacyStandaloneStage(ppRow.id, { seq: 1, kind: "page_playoff", name: "Playoffs" });
+  const ppGenerated = await v1(owner, `/api/v1/stages/${ppStageId}/generate`, "POST");
   const ppPage = await html(owner, `/o/${orgSlug}/c/${compRow.slug}/d/${ppRow.slug}/schedule?tab=board`);
   const ppChips = (code: string, name: string) =>
     ppPage.body.match(
@@ -156,7 +154,6 @@ export async function boardRoundCodesSuite(): Promise<void> {
   check(
     `board round codes: a generated page playoff's division board renders one each of ${en["bracket.roundShort.qualifier1"]}, ${en["bracket.roundShort.eliminator"]}, ${en["bracket.roundShort.qualifier2"]} and ${en["bracket.roundShort.final"]}, and no plain R{n} chip (got ${ppCounts.join("/")})`,
     ppDiv.status === 201 &&
-      ppStage.status < 300 &&
       ppGenerated.status < 300 &&
       ppPage.status === 200 &&
       ppCounts.every((n) => n === 1) &&

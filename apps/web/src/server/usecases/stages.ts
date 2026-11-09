@@ -26,6 +26,7 @@ import { stageGraphSizeGate } from "@/lib/format-size-gates";
 import { knockoutRefusal } from "./knockout-refusal";
 import { judgeSwissRounds, swissRoundsGuidance, swissRoundsNoticeOf, type SwissRoundsJudgement, type SwissRoundsNotice, type SwissRoundsShrunk } from "@/lib/swiss-rounds";
 import { isRootSwissStage } from "@/lib/open-entry-stages";
+import { standaloneStageRefusal } from "@/lib/stage-standalone";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
   generateRoundRobin,
@@ -539,6 +540,15 @@ export async function assertStageBatchGates(
   // orgs are kept out before either is called, by the route's `requireResourceAuth(req, "division", id, "write")`.
   // A division that does not exist reads undefined and refuses nothing here; the insert transaction answers it 404.
   if (divComp !== undefined) assertStageKindsAllowed(divComp.sport_key, inputs.map((s) => s.kind));
+  // W4 T16 (X-SP-6 / RB4-S6, ruling 269): a stepladder or page playoff that names no progression has no table to seed
+  // from — refused by name, the whole batch, before any plan gate (a format the product refuses is never an upgrade
+  // prompt). Both writers ask it here: the create, and the Format dialog's replace, the one write that can take a stage's
+  // progression away (pre-flight D11). A stage that already stands without one (stg held 11) keeps playing: only a new
+  // write is refused. Fed from a league or Swiss (RB4-S7), neither kind is refused.
+  for (const s of inputs) {
+    const refusal = standaloneStageRefusal({ kind: s.kind, progression: s.progression ?? null });
+    if (refusal !== null) throw knockoutRefusal(refusal, { seq: s.seq, kind: s.kind });
+  }
   // Doc 10 §1: `formats.double_elim` is Pro — gate before any insert.
   if (inputs.some((s) => stageNeedsDoubleElimGate(s.kind))) {
     await requireFeature(auth.orgId, "formats.double_elim", divComp?.competition_id);

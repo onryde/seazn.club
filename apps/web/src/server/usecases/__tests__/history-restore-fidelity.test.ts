@@ -68,6 +68,7 @@ import { v1 } from "@/server/api-v1/http";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -178,7 +179,7 @@ async function seedGeneratedStage(
   config: Record<string, unknown>,
 ) {
   const { auth, divisionId } = await seedDivision(n);
-  const [main] = await createStages(auth, divisionId, { seq: 1, kind, name: kind, config });
+  const [main] = await createStagesWithLegacy(auth, divisionId, { seq: 1, kind, name: kind, config });
   const [later] = await createStages(auth, divisionId, { seq: 2, kind: "league", name: "Later", config: {} });
   await generateStageFixtures(auth, main!.id);
   return { auth, divisionId, mainId: main!.id, laterId: later!.id };

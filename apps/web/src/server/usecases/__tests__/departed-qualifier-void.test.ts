@@ -29,9 +29,10 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { BRACKET_WALKOVER_KINDS, createStages, generateStageFixtures } from "../stages";
+import { BRACKET_WALKOVER_KINDS, generateStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -106,7 +107,7 @@ async function seedQualifiedStage(field: number, kind: string): Promise<Rig> {
       members: [],
     })),
   );
-  const [stage] = await createStages(auth, division.id, [
+  const [stage] = await createStagesWithLegacy(auth, division.id, [
     { seq: 1, kind: kind as "knockout", name: "Finals", config: {} },
   ]);
   const qualified = entrants.map((e) => e.id);

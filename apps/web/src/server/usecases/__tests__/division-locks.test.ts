@@ -35,6 +35,7 @@ import { startDivision } from "../schedule";
 import { addFixture, createStages, generateStageFixtures } from "../stages";
 import { putStageRules } from "../stage-rules";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 afterAll(async () => { await (globalThis as { _sql?: { end(): Promise<void> } })._sql?.end(); });
@@ -606,7 +607,7 @@ async function startedStageOfKind(sport: string, variant: string, kind: StageKin
   const auth = await seedOrg();
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Dl " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
   const d = await createDivision(auth, comp.id, { name: "Open", slug: "o-" + randomUUID().slice(0, 6), sport_key: sport, variant_key: variant, config: {} });
-  const [stage] = await createStages(auth, d.id, { seq: 1, kind, name: `K-${kind}`, config: kind === "swiss" ? { rounds: 3 } : {}, progression: null });
+  const [stage] = await createStagesWithLegacy(auth, d.id, { seq: 1, kind, name: `K-${kind}`, config: kind === "swiss" ? { rounds: 3 } : {}, progression: null });
   await sql`insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, fixture_no, config_snapshot)
             values (${stage!.id}, ${d.id}, ${auth.orgId}, 1, 1, 1, ${sql.json({} as never)})`;
   return { divisionId: d.id, stage: stage! };

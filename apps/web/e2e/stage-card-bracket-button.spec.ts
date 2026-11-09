@@ -17,6 +17,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from "@
 import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, openStagePanel, stageCardOf } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { uiEn } from "./match-room-kit";
+import { insertLegacyStandaloneStage } from "./legacy-standalone-stage";
 
 const NAV_MS = 20_000;
 const SEED_MS = 45_000;
@@ -43,6 +44,11 @@ async function seed(request: Req, label: string, entrants: number, specs: StageS
   await addEntrantsViaApi(request, div.data!.id, Array.from({ length: entrants }, (_, i) => `B${i + 1} ${TAG}`));
   const stageIds: string[] = [];
   for (const [i, spec] of specs.entries()) {
+    if ((spec.kind === "stepladder" || spec.kind === "page_playoff") && spec.progression === undefined) {
+      // W4 T16 (C5): the API refuses a standalone one since X-SP-6; its card still renders the legacy rows that stand.
+      stageIds.push(await insertLegacyStandaloneStage(div.data!.id, { seq: i + 1, kind: spec.kind, name: spec.name }));
+      continue;
+    }
     const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", {
       seq: i + 1,
       kind: spec.kind,

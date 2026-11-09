@@ -2428,6 +2428,8 @@
   "knockout.lateWaiting.other": "{count} late players waiting — add to bracket",
   "knockout.lateWaiting.sub": "{division} · {stage}: joined after the draw, not in the bracket yet.",
   "knockout.lateWaiting.action": "Open bracket",
+  "knockout.refusal.STEPLADDER_NEEDS_TABLE_SOURCE": "A stepladder needs a table to seed from. Add a league or groups first.",
+  "knockout.refusal.PAGE_PLAYOFF_NEEDS_TABLE_SOURCE": "A page playoff needs a table to seed from. Add a league, groups or a Swiss stage first.",
   "stage.err.swissRoundsRequired": "A Swiss stage needs a number of rounds before it can be saved. Set Rounds to 1 or more and apply again.",
   "swiss.refusal.SWISS_ADHOC_REFUSED": "Swiss rounds are paired by the system. Add friendlies in another stage.",
   "swiss.refusal.SWISS_BYE_NOT_PLACEABLE": "A bye is not played, so it takes no court or time.",

@@ -15,7 +15,8 @@ import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createPerson } from "@/server/usecases/persons";
 import { startDivision } from "@/server/usecases/schedule";
-import { createStages, generateStageFixtures, issueChallenge } from "@/server/usecases/stages";
+import { generateStageFixtures, issueChallenge } from "@/server/usecases/stages";
+import { createStagesWithLegacy } from "@/server/usecases/__tests__/_legacy-standalone-stage";
 
 /** Preflight C14: a variant key the sport DECLARES in `module.variants` (an engine declaration), never a guessed
  *  literal — "fide"/"fifa" are not declared keys; boardgame declares classical/rapid/blitz, football "11-a-side",
@@ -141,7 +142,9 @@ export async function seedBracket(opts: {
       })),
     ),
   );
-  const [stage] = await createStages(auth, division.id, { seq: 1, kind: opts.stageKind, name: "S1", config: opts.stageConfig ?? {}, progression: null });
+  // W4 T16 (C5): a standalone stepladder or page playoff is refused by the API since X-SP-6; the rig seeds it as the
+  // legacy row such stages stand as (`_legacy-standalone-stage.ts`). Every other kind goes through `createStages`.
+  const [stage] = await createStagesWithLegacy(auth, division.id, { seq: 1, kind: opts.stageKind, name: "S1", config: opts.stageConfig ?? {}, progression: null });
   if (opts.stageRules !== undefined) {
     const n =
       opts.stageRules === "division" || Object.keys(opts.stageRules).length === 0

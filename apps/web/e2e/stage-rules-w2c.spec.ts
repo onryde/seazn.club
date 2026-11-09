@@ -28,6 +28,7 @@ import {
   stageCardOf,
 } from "./helpers";
 import { withDb } from "./rs007-money-kit";
+import { standaloneStageRefusal } from "../src/lib/stage-standalone";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { SPORT_RULES, type RuleField } from "../src/lib/match-rules";
 import { stageFieldsFor } from "../src/lib/rule-scope";
@@ -82,10 +83,19 @@ async function seedStage(
     ...(opts.config === undefined ? {} : { config: opts.config }),
   });
   expect(div.status, `division ${sport}/${variant}: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  // W4 T16 (X-SP-6/7): a stepladder or page playoff is offered as a FINAL stage only — after a league, seeded from its top 4.
+  const tableOnly = standaloneStageRefusal({ kind: opts.kind ?? "knockout", progression: null }) !== null;
+  if (tableOnly) {
+    const league = await apiJson(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+    expect(league.status, `league ${sport}: ${JSON.stringify(league.error)}`).toBeLessThan(300);
+  }
   const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", {
-    seq: 1,
+    seq: tableOnly ? 2 : 1,
     kind: opts.kind ?? "knockout",
     name: opts.kind === "league" ? "League" : "Knockout",
+    ...(tableOnly
+      ? { progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }], placement: "rank_order", timing: "setup" } }
+      : {}),
   });
   expect(stage.status, `stage ${sport}: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
   return { divisionId: div.data!.id, stageId: stage.data!.id, variant };

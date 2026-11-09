@@ -45,11 +45,12 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { listDivisionFixtures, listDivisionFixturesForBoard } from "../fixtures";
-import { createStages, generateStageFixtures, listStages } from "../stages";
+import { generateStageFixtures, listStages } from "../stages";
 import { ensureStreamCode } from "../stream-codes";
 import type { SessionDeps } from "../stream-sessions";
 import { captureRig, override, phoneId } from "./_capture-rig";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -480,7 +481,7 @@ async function family(kind: Kind, n: number, config: Record<string, unknown>, op
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: `Capture stage ${kind}`, visibility: "private", branding: {} });
   const division = await createDivision(auth, comp.id, { name: opts.divisionName ?? "Open", slug: "open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
   await createEntrants(auth, division.id, Array.from({ length: n }, (_, i) => ({ kind: "individual" as const, display_name: `Entrant ${i + 1}`, seed: i + 1, members: [] })));
-  const [stage] = await createStages(auth, division.id, { seq: 1, kind, name: kind, config });
+  const [stage] = await createStagesWithLegacy(auth, division.id, { seq: 1, kind, name: kind, config });
   for (let i = 0; i < (opts.generate ?? 1); i++) await generateStageFixtures(auth, stage!.id);
   const { want, full, codes } = await expectedFor(auth, division.id, locale);
   const got = new Map<string, CaptureStage>();

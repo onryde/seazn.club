@@ -26,9 +26,9 @@ import { undoDivision } from "../history";
 import { callFixtureToCourt } from "../match-day-call";
 import { moveFixture, startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { createStages } from "../stages";
 import { createCourt, createVenue } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -125,7 +125,9 @@ async function rig(opts: { n: number; sport?: SportPick; seeds?: (number | null)
     division.id,
     Array.from({ length: opts.n }, (_, i) => player(`P${i + 1}`, opts.seeds ? opts.seeds[i]! : i + 1)),
   );
-  const [stage] = await createStages(auth, division.id, { seq: 1, kind: opts.kind ?? "knockout", name: "KO", config: {}, progression: null });
+  // A knockout goes through the real createStages whole; a standalone stepladder is refused there since X-SP-6 (Task 16),
+  // so it is written as the legacy row it now only can be (X-LE-8).
+  const [stage] = await createStagesWithLegacy(auth, division.id, { seq: 1, kind: opts.kind ?? "knockout", name: "KO", config: {}, progression: null });
   if (opts.start !== false) await startDivision(auth, division.id);
   return { auth, divisionId: division.id, stageId: stage!.id, sport: s, ids: made.map((e) => e.id) };
 }
@@ -363,8 +365,8 @@ describe.skipIf(!HAS_DB)("W4 T10: Add late player on a drawn knockout", () => {
   });
 
   it("X-LE-8 a legacy standalone stepladder takes case (2) only", async () => {
-    // A standalone stepladder (no qualifying stage) is what the API made before X-SP-6's refusal (Task 16); created
-    // here through the same createStages the API used. Its first rung is the two lowest seeds; the top seeds wait on
+    // A standalone stepladder (no qualifying stage) is what the API made before X-SP-6's refusal (Task 16); seeded here
+    // as that legacy row (`createStagesWithLegacy`), the stages that stand on prod. Its first rung is the two lowest seeds; the top seeds wait on
     // later rungs — never a bye a late player could take.
     const r = await rig({ n: 4, kind: "stepladder" });
     const rows = await rowsOf(r.stageId);

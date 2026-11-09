@@ -47,7 +47,12 @@ export type KnockoutRefusalCode =
   | "QUALIFYING_MAIN_TOO_FEW"
   // T15 (X-QM-2): a rank cut from a knockout source that is no whole round: the ranks inside a round are not played off, so a
   // cut through one is decided by seed. Refused at create and patch only: a stored one keeps running.
-  | "KO_CUT_NOT_WHOLE_ROUND";
+  | "KO_CUT_NOT_WHOLE_ROUND"
+  // T16 (SP-UI; RB4-S6 / X-SP-6, ruling 269): a stepladder or a page playoff with no progression has no table to seed
+  // from, so the stage writers refuse it (`lib/stage-standalone.ts` names the kind -> code). One code per kind (pre-flight
+  // D13): each locale names the format in its own words, never a raw kind token.
+  | "STEPLADDER_NEEDS_TABLE_SOURCE"
+  | "PAGE_PLAYOFF_NEEDS_TABLE_SOURCE";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -133,6 +138,16 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 422,
     en: "From a knockout, qualify a whole round: 1, 2, 4, 8 …",
     key: "knockout.refusal.KO_CUT_NOT_WHOLE_ROUND",
+  },
+  STEPLADDER_NEEDS_TABLE_SOURCE: {
+    status: 422,
+    en: "A stepladder needs a table to seed from. Add a league or groups first.",
+    key: "knockout.refusal.STEPLADDER_NEEDS_TABLE_SOURCE",
+  },
+  PAGE_PLAYOFF_NEEDS_TABLE_SOURCE: {
+    status: 422,
+    en: "A page playoff needs a table to seed from. Add a league, groups or a Swiss stage first.",
+    key: "knockout.refusal.PAGE_PLAYOFF_NEEDS_TABLE_SOURCE",
   },
 };
 
