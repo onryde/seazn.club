@@ -109,6 +109,9 @@ export const isLegacyDeal = (d: Pick<SponsorDeal, "ended_reason">): boolean => d
 const isLive = (d: Pick<SponsorDeal, "deal_status">): boolean => d.deal_status === "live";
 /** Waiting to go live: neither live nor ended (draft, awaiting payment or approval, scheduled). */
 const isOpen = (d: Pick<SponsorDeal, "deal_status">): boolean => d.deal_status !== "live" && d.deal_status !== "ended";
+/** The end date has been reached (`<=`: `ends_at = now` is over). No end date is never past. */
+export const isPastEnd = (endsAt: Date | string | null, now: Date): boolean =>
+  endsAt !== null && new Date(endsAt).getTime() <= now.getTime();
 
 /**
  * F2's lock, the one order every deal writer takes: the sponsor `for update`, then ALL its deals `for update` in
@@ -272,7 +275,8 @@ async function writeSponsor(tx: Tx, sponsorId: string, w: SponsorWrite): Promise
  * and the order's guarantee for any that did not — and refuses a sponsor that is not there.
  *
  *  1. Legacy rows are ignored (D6). No other deal: `no_deals`, nothing written (manual control, §8a "1 Ok").
- *  2. No live deal: the earliest `scheduled` one (created_at, id) goes live, `live_at = now` (§8a queue, Review Focus 5).
+ *  2. No live deal: the earliest `scheduled` one (created_at, id) whose own `ends_at` has not passed goes live, `live_at = now`
+ *     (§8a queue, Review Focus 5; F19: a past-end one is left for the sweep to end, whoever ended the live deal).
  *  3. A live deal: the sponsor takes its snapshot (tier, scope, stream) and `active`, or `pending` while a dispute parks it.
  *     An on-stream deal turns the org's rotation on the way the first tick does (R12).
  *  4. Else, a deal waiting to go live: `inactive`, and nothing else (hidden until live).
@@ -310,8 +314,10 @@ export async function applyDealsToSponsor(
   let live = deals.find(isLive) ?? null;
   let promotedDealId: string | null = null;
   if (live === null) {
-    // `deals` is in (created_at, id) order, so the first scheduled deal is the head of the queue.
-    const next = deals.find((d) => d.deal_status === "scheduled");
+    // `deals` is in (created_at, id) order, so the first scheduled deal is the head of the queue. A scheduled deal whose own
+    // end has already passed is never promoted (F19): it would go live for the hour until the sweep ends it. It stays
+    // scheduled (the sponsor stays hidden behind it, below) for that sweep to end `expired`.
+    const next = deals.find((d) => d.deal_status === "scheduled" && !isPastEnd(d.ends_at, now));
     if (next) {
       await tx`update sponsor_orders set deal_status = 'live', live_at = ${now} where id = ${next.id}`;
       live = { ...next, deal_status: "live", live_at: now.toISOString() };

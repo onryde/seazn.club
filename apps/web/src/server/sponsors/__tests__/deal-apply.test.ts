@@ -312,6 +312,44 @@ describe.skipIf(!HAS_DB)("applyDealsToSponsor — the one owner of a deal's effe
     expect(await listed(w.orgId, w.otherCompId), "B is org-wide: every competition lists it now").toContain(id);
   });
 
+  it("F19: the queue skips a scheduled deal whose own ends_at has passed and promotes the next eligible one (whoever ended the live deal)", async () => {
+    const w = await world();
+    const id = await sponsor(w, { status: "inactive" });
+    const a = await insertDeal(deal(w, id, { ...LIVE, tier: "gold", competition_id: w.compId }));
+    // B heads the queue (created first) but its end date (T1) is behind the apply's clock (T2): it must be passed over.
+    const b = await insertDeal(deal(w, id, { ...SCHEDULED, tier: "silver", competition_id: null, created_at: T0, ends_at: T1 }));
+    const c = await insertDeal(deal(w, id, { ...SCHEDULED, tier: "title", competition_id: w.otherCompId, created_at: T1, ends_at: new Date(T2.getTime() + 86_400_000) }));
+    await applyAsConsole(w, id);
+
+    await expect(applyAsConsole(w, id, { before: (tx) => endDeal(tx, a), endedDealId: a, now: T2 }))
+      .resolves.toEqual({ outcome: "live", promotedDealId: c });
+    expect(await dealState(b), "B is passed over, never live").toEqual({ deal_status: "scheduled", live_at: null });
+    expect((await dealState(c)).deal_status).toBe("live");
+    expect(await fields(id), "the sponsor takes C's snapshot").toEqual({ tier: "title", competition_id: w.otherCompId, status: "active", on_stream: false });
+  });
+
+  it("F19: when every scheduled deal is past its end nothing is promoted: the sponsor is hidden (open deals wait), not reset; the boundary ends_at = now counts as past", async () => {
+    const w = await world();
+    const id = await sponsor(w, { status: "inactive" });
+    const a = await insertDeal(deal(w, id, { ...LIVE, tier: "gold", competition_id: w.compId }));
+    const b = await insertDeal(deal(w, id, { ...SCHEDULED, tier: "silver", competition_id: null, created_at: T1, ends_at: T2 })); // ends exactly at now
+    await applyAsConsole(w, id);
+
+    await expect(applyAsConsole(w, id, { before: (tx) => endDeal(tx, a), endedDealId: a, now: T2 }))
+      .resolves.toEqual({ outcome: "hidden_open", promotedDealId: null });
+    expect(await dealState(b)).toEqual({ deal_status: "scheduled", live_at: null });
+    expect(await fields(id), "hidden behind the open deal; the reset waits for the LAST open deal to end").toMatchObject({ status: "inactive", tier: "gold" });
+
+    // The same deal one millisecond before its end is eligible: the boundary is `<=`, and the skip is not blanket.
+    const w2 = await world();
+    const id2 = await sponsor(w2, { status: "inactive" });
+    const a2 = await insertDeal(deal(w2, id2, { ...LIVE, tier: "gold", competition_id: w2.compId }));
+    const b2 = await insertDeal(deal(w2, id2, { ...SCHEDULED, tier: "silver", competition_id: null, created_at: T1, ends_at: new Date(T2.getTime() + 1) }));
+    await applyAsConsole(w2, id2);
+    await expect(applyAsConsole(w2, id2, { before: (tx) => endDeal(tx, a2), endedDealId: a2, now: T2 }))
+      .resolves.toEqual({ outcome: "live", promotedDealId: b2 });
+  });
+
   // ---- a second call -------------------------------------------------------------------------------------------------
   it("second call: apply twice gives the identical row, and never rewrites live_at (nor promotes again)", async () => {
     const w = await world();

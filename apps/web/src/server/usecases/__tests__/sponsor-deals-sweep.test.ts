@@ -1,13 +1,15 @@
 // Sponsor deals, Task 9 (plan 2026-11-07-sponsor-deals D5, D20, F1, F2, F3, F7, F19; spec §5.2, §5.3, §8a): the hourly sweep
-// that ends a deal whose `ends_at` has passed (live OR open), ends a live deal scoped to a finished competition, and promotes
-// the sponsor's next scheduled deal — over real Postgres, driven through the REAL producers (`createDeal`, `markDealPaid`,
+// that ends a deal whose `ends_at` has passed (live OR open), ends a deal (live OR open: §8a says "a deal") scoped to a
+// finished competition, and promotes the sponsor's next scheduled deal — over real Postgres, driven through the REAL producers (`createDeal`, `markDealPaid`,
 // `sendDealInvoice`) and read back through the REAL consumer (`resolveSponsors`, the public strip).
 //
 // What is under test, and where each expected value comes from:
 //   - the spec's rules, typed BELOW from §5.2 / §8a / F19 (never read back from the sweep): `ends_at` reached → ended
 //     `expired`; a competition-scoped deal with NO `ends_at` ends when the competition's derived phase is `finished`
-//     (`competition_finished`), by phase and never by the competition's stored date; an open deal (draft, awaiting payment or
-//     approval, scheduled) past its `ends_at` is ended too; a scheduled deal past its own `ends_at` is NEVER promoted;
+//     (`competition_finished`), by phase and never by the competition's stored date, whether it is live or still waiting to go
+//     live (I1, controller ruling: an open deal's pay link must not outlive its competition); an open deal (draft, awaiting
+//     payment or approval, scheduled) past its `ends_at` is ended too; a scheduled deal past its own `ends_at` is NEVER
+//     promoted, by the sweep or by any other writer that ends the live deal (m1);
 //   - the tier a promoted deal puts on its sponsor comes from the PACKAGE the test chose (partner then silver), not from a
 //     constant in the sweep;
 //   - Stripe is stubbed (`retrieve`, `expire`): the session rule is D14 / F3 / F37 — retrieve, expire only when open, a
@@ -547,7 +549,7 @@ describe.skipIf(!HAS_DB)("sweepSponsorDeals: promotion, and a scheduled deal pas
     expect(await sponsorOf(s)).toMatchObject({ status: "active" });
   });
 
-  it("a past-end scheduled deal that cannot be closed blocks the live deal's end rather than being promoted; both end once Stripe is back", async () => {
+  it("a past-end scheduled deal whose session cannot be read does not hold the live deal up: the live deal ends, nothing is promoted, the next run ends the other", async () => {
     const o = await org();
     const s = await sponsor(o);
     const p = await pkg(o);
@@ -562,15 +564,58 @@ describe.skipIf(!HAS_DB)("sweepSponsorDeals: promotion, and a scheduled deal pas
       throw new Error("stripe is down");
     });
 
-    expect(await sweep(o), "B cannot be read; A cannot end without promoting B").toEqual({ ...NOTHING, checked: 2, failed: 2 });
-    expect((await row(a)).deal_status).toBe("live");
-    expect(await row(b)).toMatchObject({ deal_status: "scheduled", live_at: null });
-    expect(await sponsorOf(s)).toMatchObject({ status: "active" });
+    expect(await sweep(o), "B cannot be read (failed); A ends and apply does not promote B").toEqual({ ...NOTHING, checked: 2, expired: 1, failed: 1 });
+    expect(await row(a)).toMatchObject({ deal_status: "ended", ended_reason: "expired" });
+    expect(await row(b), "B is left exactly as it was, never live").toMatchObject({ deal_status: "scheduled", live_at: null });
+    expect(await sponsorOf(s), "hidden behind the open deal, not left showing A").toMatchObject({ status: "inactive" });
+    expect(await listed(o, s)).toBe(false);
 
     stripe.retrieve.mockReset().mockImplementation(async (id: string) => ({ id, status: "open" }));
-    expect(await sweep(o)).toEqual({ ...NOTHING, checked: 2, expired: 2 });
+    expect(await sweep(o)).toEqual({ ...NOTHING, checked: 1, expired: 1 });
     expect(await row(b)).toMatchObject({ deal_status: "ended", ended_reason: "expired", live_at: null });
-    expect((await row(a)).deal_status).toBe("ended");
+    expect(await sponsorOf(s), "the last open deal ended: the sponsor is reset").toMatchObject({ status: "inactive", tier: "partner", competition_id: null });
+  });
+
+  it("m1: End now on the live deal skips a scheduled deal already past its own end and promotes the next one; the next sweep ends the skipped one", async () => {
+    const o = await org();
+    const s = await sponsor(o);
+    const a = await deal(o, s, await pkg(o, "partner"));
+    const b = await deal(o, s, await pkg(o, "partner")); // head of the queue, about to be past its end
+    const c = await deal(o, s, await pkg(o, "silver")); // behind it, a day from its end
+    expect([(await row(b)).deal_status, (await row(c)).deal_status], "premise: both queue behind A").toEqual(["scheduled", "scheduled"]);
+    await endsAt(b, new Date(Date.now() - MINUTE));
+    await endsAt(c, new Date(Date.now() + DAY));
+
+    await endDealNow(o.auth, a);
+
+    expect(await row(a)).toMatchObject({ deal_status: "ended", ended_reason: "ended_now" });
+    expect(await row(b), "the past-end deal at the head is passed over").toMatchObject({ deal_status: "scheduled", live_at: null });
+    const promoted = await row(c);
+    expect(promoted.deal_status, "the next one goes live").toBe("live");
+    expect(promoted.live_at).not.toBeNull();
+    expect(await sponsorOf(s), "the sponsor takes C's tier, not B's").toMatchObject({ status: "active", tier: "silver" });
+
+    expect(await sweep(o), "B (open) and C (live): only B is due").toEqual({ ...NOTHING, checked: 2, expired: 1 });
+    expect(await row(b)).toMatchObject({ deal_status: "ended", ended_reason: "expired", live_at: null });
+    expect((await row(c)).deal_status, "C stays live").toBe("live");
+    expect(await sponsorOf(s)).toMatchObject({ status: "active", tier: "silver" });
+  });
+
+  it("m1: End now with ONLY a past-end scheduled deal behind it promotes nothing: the sponsor is hidden until the sweep ends it", async () => {
+    const o = await org();
+    const s = await sponsor(o);
+    const p = await pkg(o);
+    const a = await deal(o, s, p);
+    const b = await deal(o, s, p);
+    await endsAt(b, new Date(Date.now() - MINUTE));
+
+    await endDealNow(o.auth, a);
+
+    expect(await row(b)).toMatchObject({ deal_status: "scheduled", live_at: null });
+    expect(await sponsorOf(s), "an open deal waits: inactive, not reset").toMatchObject({ status: "inactive" });
+    expect(await listed(o, s)).toBe(false);
+    expect(await sweep(o)).toEqual({ ...NOTHING, checked: 1, expired: 1 });
+    expect(await row(b)).toMatchObject({ deal_status: "ended", ended_reason: "expired", live_at: null });
   });
 
   it("F2: the sweep and a console End now on the sponsor's other deal at the same moment both commit (no deadlock), and nothing is left live", async () => {
@@ -661,21 +706,148 @@ describe.skipIf(!HAS_DB)("sweepSponsorDeals: a finished competition (spec §8a: 
     expect((await row(id)).ended_reason, "ended by its date, so `expired`, not `competition_finished`").toBe("expired");
   });
 
-  it("a deal the sweep promotes onto a finished competition is ended by the NEXT run, not the same one", async () => {
+  it("I1 (spec §8a, \"a deal\"): an awaiting-payment online deal on a finished competition is ended `competition_finished` and its Checkout session is expired", async () => {
+    const o = await org();
+    const comp = await competition(o, "finished");
+    const s = await sponsor(o);
+    const id = await onlineDeal(o, s, await pkg(o), { competition_id: comp });
+    const session = (await sessionOf(id))!;
+    expect((await row(id)).deal_status, "premise: still waiting for its payment").toBe("awaiting_payment");
+    expect(session, "premise: it holds a payable Checkout session").toMatch(/^cs_/);
+    stripe.retrieve.mockClear();
+
+    expect(await sweep(o)).toEqual({ ...NOTHING, checked: 1, finished: 1 });
+
+    expect(await row(id)).toMatchObject({ deal_status: "ended", ended_reason: "competition_finished", live_at: null, checkout_session_id: null });
+    expect(stripe.retrieve.mock.calls.map((c) => c[0]), "the stored session is read once").toEqual([session]);
+    expect(stripe.expire, "and closed, so the pay link can no longer take money").toHaveBeenCalledTimes(1);
+    expect(stripe.expire.mock.calls[0]![0]).toBe(session);
+    expect(stripe.expire.mock.calls[0]![2]).toEqual({ idempotencyKey: `sponsor-session-expire-${session}` });
+    expect(await sponsorOf(s), "the last open deal ended: the sponsor is reset").toMatchObject({ status: "inactive", tier: "partner", competition_id: null });
+    expect(await sweep(o), "the second call finds nothing left").toEqual(NOTHING);
+  });
+
+  it("I1: an awaiting-approval deal and a session-less awaiting-payment deal on a finished competition end too, with no Stripe call", async () => {
+    const o = await org();
+    const comp = await competition(o, "finished");
+    const p = await pkg(o);
+    const offline = await deal(o, await sponsor(o), p, { competition_id: comp, payment_method: "offline", go_live: "on_payment" });
+    const approval = await deal(o, await sponsor(o), p, { competition_id: comp, payment_method: "offline", go_live: "on_approval" });
+    await markDealPaid(o.auth, approval);
+    expect([(await row(offline)).deal_status, (await row(approval)).deal_status], "premise: both wait").toEqual(["awaiting_payment", "awaiting_approval"]);
+    stripe.retrieve.mockClear();
+
+    expect(await sweep(o)).toEqual({ ...NOTHING, checked: 2, finished: 2 });
+
+    for (const id of [offline, approval]) expect(await row(id)).toMatchObject({ deal_status: "ended", ended_reason: "competition_finished", live_at: null });
+    expect(stripe.retrieve, "neither holds a session").not.toHaveBeenCalled();
+    expect(stripe.expire).not.toHaveBeenCalled();
+    expect((await row(approval)).payment_status, "money is not rewritten by the sweep").toBe("paid");
+  });
+
+  it("I1's negative pair: the same open online deal on a competition still in play, or with no divisions at all, is left alone and its session untouched", async () => {
+    const o = await org();
+    const p = await pkg(o);
+    const inPlay = await onlineDeal(o, await sponsor(o), p, { competition_id: await competition(o, "in_progress") });
+    const empty = await onlineDeal(o, await sponsor(o), p, { competition_id: await competition(o, "no_divisions") });
+    const orgWide = await onlineDeal(o, await sponsor(o), p); // no competition at all: nothing to finish
+    stripe.retrieve.mockClear();
+
+    expect(await sweep(o)).toEqual({ ...NOTHING, checked: 3 });
+
+    for (const id of [inPlay, empty, orgWide]) expect((await row(id)).deal_status, "still waiting for its payment").toBe("awaiting_payment");
+    expect(stripe.retrieve).not.toHaveBeenCalled();
+    expect(stripe.expire).not.toHaveBeenCalled();
+    expect(await sessionOf(inPlay)).toMatch(/^cs_/);
+  });
+
+  it("I1: an open deal with an end date follows that date, not the finished competition's phase (the desk is not read for it)", async () => {
+    const o = await org();
+    const id = await onlineDeal(o, await sponsor(o), await pkg(o), { competition_id: await competition(o, "finished") });
+    await endsAt(id, new Date(Date.now() + DAY));
+    h.deskFault = true;
+    expect(await sweep(o)).toEqual({ ...NOTHING, checked: 1 });
+    expect((await row(id)).deal_status).toBe("awaiting_payment");
+  });
+
+  it("I1: a competition whose desk cannot be read fails its OPEN deal too: left as it was, its session untouched", async () => {
+    const o = await org();
+    const id = await onlineDeal(o, await sponsor(o), await pkg(o), { competition_id: await competition(o, "finished") });
+    stripe.retrieve.mockClear();
+    h.deskFault = true;
+    expect(await sweep(o)).toEqual({ ...NOTHING, checked: 1, failed: 1 });
+    h.deskFault = false;
+    expect((await row(id)).deal_status, "an unreadable phase is not 'finished'").toBe("awaiting_payment");
+    expect(stripe.retrieve).not.toHaveBeenCalled();
+  });
+
+  it("I1: a session Stripe already completed is carried on over: the open deal ends `competition_finished`, the late payment lands on the ended deal", async () => {
+    const o = await org();
+    const id = await onlineDeal(o, await sponsor(o), await pkg(o), { competition_id: await competition(o, "finished") });
+    const session = (await sessionOf(id))!;
+    stripe.retrieve.mockImplementation(async (sid: string) => ({ id: sid, status: "complete" }));
+    expect(await sweep(o)).toEqual({ ...NOTHING, checked: 1, finished: 1 });
+    expect(stripe.expire, "money in flight is not closed").not.toHaveBeenCalled();
+    expect(await row(id)).toMatchObject({ deal_status: "ended", ended_reason: "competition_finished", checkout_session_id: session });
+  });
+
+  it("I1: a session that cannot be closed leaves the open deal for the next run (`failed`); the next run ends it", async () => {
+    const o = await org();
+    const id = await onlineDeal(o, await sponsor(o), await pkg(o), { competition_id: await competition(o, "finished") });
+    stripe.expire.mockImplementation(async () => {
+      throw new Error("stripe is down");
+    });
+    expect(await sweep(o)).toEqual({ ...NOTHING, checked: 1, failed: 1 });
+    expect((await row(id)).deal_status, "a payable link is never left on an ended deal").toBe("awaiting_payment");
+    stripe.expire.mockReset().mockImplementation(async (sid: string) => ({ id: sid, status: "expired" }));
+    expect(await sweep(o)).toEqual({ ...NOTHING, checked: 1, finished: 1 });
+    expect(await row(id)).toMatchObject({ deal_status: "ended", ended_reason: "competition_finished", checkout_session_id: null });
+  });
+
+  it("I1: a scheduled deal behind a live org-wide deal that expires, on a finished competition, ends `competition_finished` and is never promoted", async () => {
     const o = await org();
     const comp = await competition(o, "finished");
     const s = await sponsor(o);
     const p = await pkg(o);
     const a = await deal(o, s, p); // org-wide, live
     const b = await deal(o, s, p, { competition_id: comp }); // scheduled behind it
+    expect((await row(b)).deal_status, "premise").toBe("scheduled");
     await endsAt(a, new Date(Date.now() - MINUTE));
 
-    h.deskFault = true; // B is scheduled, not live: the desk is not read for it, so a broken desk costs nothing yet
+    expect(await sweep(o), "A expires, B finishes; promoted stays 0").toEqual({ ...NOTHING, checked: 2, expired: 1, finished: 1 });
+
+    expect(await row(a)).toMatchObject({ deal_status: "ended", ended_reason: "expired" });
+    expect(await row(b), "B was never live").toMatchObject({ deal_status: "ended", ended_reason: "competition_finished", live_at: null });
+    expect(await sponsorOf(s)).toMatchObject({ status: "inactive", tier: "partner", competition_id: null });
+    expect(await listed(o, s, comp)).toBe(false);
+  });
+
+  it("I1: a live and a scheduled deal both on the finished competition end in one run, the scheduled one never promoted on the way", async () => {
+    const o = await org();
+    const comp = await competition(o, "finished");
+    const s = await sponsor(o);
+    const p = await pkg(o);
+    const a = await deal(o, s, p, { competition_id: comp }); // live
+    const b = await deal(o, s, p, { competition_id: comp }); // scheduled behind it
+    expect([(await row(a)).deal_status, (await row(b)).deal_status], "premise").toEqual(["live", "scheduled"]);
+
+    expect(await sweep(o)).toEqual({ ...NOTHING, checked: 2, finished: 2 });
+
+    expect(await row(a)).toMatchObject({ deal_status: "ended", ended_reason: "competition_finished" });
+    expect((await row(b)).live_at, "B was never live").toBeNull();
+    expect(await row(b)).toMatchObject({ deal_status: "ended", ended_reason: "competition_finished" });
+  });
+
+  it("I1: a scheduled deal on an unfinished competition is promoted when the live one ends, as before (its positive pair)", async () => {
+    const o = await org();
+    const comp = await competition(o, "in_progress");
+    const s = await sponsor(o);
+    const p = await pkg(o);
+    const a = await deal(o, s, p);
+    const b = await deal(o, s, p, { competition_id: comp });
+    await endsAt(a, new Date(Date.now() - MINUTE));
     expect(await sweep(o)).toEqual({ ...NOTHING, checked: 2, expired: 1, promoted: 1 });
-    h.deskFault = false;
-    expect((await row(b)).deal_status, "promoted live").toBe("live");
-    expect(await sweep(o)).toEqual({ ...NOTHING, checked: 1, finished: 1 });
-    expect((await row(b)).ended_reason).toBe("competition_finished");
+    expect((await row(b)).deal_status).toBe("live");
   });
 
   it("a competition whose desk cannot be read fails its deal (left live) and the sweep goes on; the next run ends it", async () => {
