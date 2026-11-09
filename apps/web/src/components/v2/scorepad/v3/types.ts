@@ -1590,13 +1590,15 @@ export interface SkinDefV3<View = unknown> {
  * `resolvePeople(state, overrides)` is the one place this happens, reused
  * by every builder that needs striker/nonStriker/bowler. CALLER OBLIGATION
  * (pad-host.tsx, nothing else enforces this): an override lives only until
- * the fold itself advances — the WHOLE map resets, unconditionally, the
- * moment `pipeline.state` moves to a new object (a render-phase reset keyed
- * on state identity, `contextOverridesStale` in pad-host.tsx), never
- * per-slot and never left to outlive the ball it was captured for. Without
- * this, a stale override could contradict the engine's own fold after a
- * strike rotation (an odd run swaps striker/non-striker) or a new batter
- * arriving after a wicket.
+ * the fold itself advances — the WHOLE map resets when `pipeline.state` moves
+ * to a new object (a render-phase reset keyed on state identity,
+ * `contextOverridesDropped` in pad-host.tsx), never per-slot and never left to
+ * outlive the ball it was captured for. The one exception is a skin's own
+ * `SkinDefV3.contextOverridesSurvive`, which keeps the map across a new object
+ * that brought no ball (S2-4: cricket, for a bowler change, a review or a late
+ * ack). Without this, a stale override could contradict the engine's own fold
+ * after a strike rotation (an odd run swaps striker/non-striker) or a new
+ * batter arriving after a wicket.
  */
 export interface PadHostView {
   readonly cfg: unknown;

@@ -986,7 +986,10 @@ export function resolvePadPhase(
  * contextOverrides` — a pending context-strip pick lives only until the
  * fold itself advances. `true` means "the fold has moved on since
  * `overridesFor` was captured, so every override is stale and must be
- * dropped", checked by REFERENCE: every module's own fold is an immutable
+ * dropped, unless the skin says otherwise" (`contextOverridesDropped`, below,
+ * and a skin's `contextOverridesSurvive`, S2-4: without the hook this is the
+ * whole rule, and the rest of this comment is that rule), checked by
+ * REFERENCE: every module's own fold is an immutable
  * update (a new object every time, never a mutated one in place — same
  * assumption `squadStateOf`/every `useMemo` dependency in this file already
  * makes), so `prevState !== nextState` is exactly "at least one new
@@ -2035,7 +2038,8 @@ export function PadHostV3(props: PadHostV3Props) {
   // state object the current `contextOverrides` were captured against;
   // once `pipeline.state` moves to a new object (a ball/event just landed),
   // the whole map resets to `{}` in the SAME render that notices it, never
-  // a stale value bleeding into this render's own `view`.
+  // a stale value bleeding into this render's own `view`, unless the skin
+  // keeps the picks across that change (`contextOverridesDropped`).
   const [contextOverrides, setContextOverrides] = useState<Record<string, string>>({});
   const [overridesFor, setOverridesFor] = useState<unknown>(pipeline.state);
   if (contextOverridesStale(overridesFor, pipeline.state)) {

@@ -2434,8 +2434,9 @@ export async function seedRosteredFixture(
  * (the context strip, `context-strip.tsx`) and taps the person by NAME, the name the picker renders, then waits for the
  * chip to read it back (`chipLabel`: `` `${label}: ${name}` ``).
  *
- * Picks are pending until the next ball (`PadHostView.contextOverrides`, cleared whenever the fold moves), so call it
- * right before the tap, after the last event has landed, and again after a reload. The chip labels are the English
+ * Picks are pending until the next ball (`PadHostView.contextOverrides`: a ball clears them, and a change that is not a
+ * ball, such as a bowler change, keeps them; `cricketPicksSurvive`), so call it after the last ball has landed, and again
+ * after a reload, which clears them too. The chip labels are the English
  * dictionary's ("Striker", "Non-striker", "Bowler"); the anchored `^label(:|$)` match keeps "Striker" from matching
  * "Non-striker: …". A chip that is not a button (a batter who has faced, the bowler mid-over) cannot be picked, and the
  * click then fails loudly rather than skip.
