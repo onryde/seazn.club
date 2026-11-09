@@ -159,7 +159,7 @@ describe.skipIf(!HAS_DB)("T19 listKnockoutWaiting: the stage card's waiting play
     expect(await listKnockoutWaiting(r.auth, r.divisionId)).toEqual([]);
   });
 
-  it("a free arrival and a paid one wait in arrival order, the paid one marked paid with its registration; a tap takes the placed one off", async () => {
+  it("a free arrival and a paid one wait in arrival order, the paid one marked paid; a tap takes the placed one off", async () => {
     const r = await rig({ n: 6 });
     // Free first: the paid arrival switches the division's registration to card payment.
     const free = await freeArrival(r, "Nora Free");
@@ -167,8 +167,8 @@ describe.skipIf(!HAS_DB)("T19 listKnockoutWaiting: the stage card's waiting play
     const waiting = await listKnockoutWaiting(r.auth, r.divisionId);
     expect(waiting.length, "two arrivals, two waiting").toBe(2);
     expect(waiting).toEqual([
-      { entrantId: free, stageId: r.stageId, name: "Nora Free", paid: false, registrationId: expect.any(String) },
-      { entrantId: paid.entrantId, stageId: r.stageId, name: "Oliver Paid", paid: true, registrationId: paid.registrationId },
+      { entrantId: free, stageId: r.stageId, name: "Nora Free", paid: false },
+      { entrantId: paid.entrantId, stageId: r.stageId, name: "Oliver Paid", paid: true },
     ]);
     // Second call, after the tap placed the paid player in a bye: only the free one is left.
     const placed = await placeWaitingKnockoutEntrant(r.auth, r.stageId, paid.entrantId);

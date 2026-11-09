@@ -164,6 +164,32 @@ describe("an add into a started knockout says what it did (X-LE-3), and refusals
     expect(french.error()).not.toBe("Round 1 complete; no slot left.");
   });
 
+  // B6a fix round 1 (review #2; RB4-L6, owner ruling): with no slot and nothing started the server KEEPS the player and answers 201
+  // `rebuild_offered` (it used to refuse 409 with details.can_rebuild, which this panel ignored). The panel says it as the amber
+  // late-entry line - no red error, the player is on the list - pointing at the button the waiting strip wears.
+  it("no slot, nothing started (201 rebuild_offered): an amber line names Rebuild fixtures - in English and in French - and no error", async () => {
+    const en = mount();
+    await en.add(created(koResult({ case: "rebuild_offered", reason: "KO_LATE_ENTRY_NO_SLOT" })));
+    expect(en.lines("entrants-late-entry-line")).toEqual([
+      { tone: "todo", text: "No slot is left, but nothing has started: use Rebuild fixtures to add Zoe." },
+    ]);
+    expect(en.error(), "an offer is no refusal").toBeNull();
+    active.locale = "fr";
+    const french = mount();
+    await french.add(created(koResult({ case: "rebuild_offered", reason: "KO_LATE_ENTRY_NO_SLOT" })));
+    expect(french.lines("entrants-late-entry-line")).toEqual([
+      { tone: "todo", text: "Il ne reste aucune place, mais rien n'a commencé : utilisez Reconstruire les matchs pour ajouter Zoe." },
+    ]);
+  });
+
+  it("the offer, then a bye on the next add: the second answer replaces the first (the sequence)", async () => {
+    const p = mount();
+    await p.add(created(koResult({ case: "rebuild_offered", reason: "KO_LATE_ENTRY_NO_SLOT" })));
+    expect(p.lines("entrants-late-entry-line"), "premise: the offer is showing").toHaveLength(1);
+    await p.add(created(koResult({ case: "bye", fixture_id: "f1", opponent_id: "e3", scheduled: true })));
+    expect(p.lines("entrants-late-entry-line")).toEqual([{ tone: "done", text: "Zoe plays Cy, who had a bye." }]);
+  });
+
   it("a fed knockout (422 KO_LATE_ENTRY_FED_STAGE) names the stage the player belongs in", async () => {
     const p = mount();
     await p.add(() => {

@@ -20,19 +20,16 @@ export interface KnockoutWaitingEntrant {
   name: string;
   /** The entry was paid online and not fully refunded: a refused tap's exit names a refund (B3 review #5). */
   paid: boolean;
-  /** The registration the entrant came from, if any (the Registrations hub filters to it). */
-  registrationId: string | null;
 }
 
 /** The division's waiting players, in arrival order (`created_at`, then id). */
 export async function listKnockoutWaiting(auth: AuthCtx, divisionId: string): Promise<KnockoutWaitingEntrant[]> {
   return withTenant(auth.orgId, async (tx) => {
-    const rows = await tx<{ id: string; stage_id: string; display_name: string; paid: boolean; registration_id: string | null }[]>`
+    const rows = await tx<{ id: string; stage_id: string; display_name: string; paid: boolean }[]>`
       select e.id, e.knockout_waiting_stage_id as stage_id, e.display_name,
              exists (select 1 from registrations r join registration_groups g on g.id = r.group_id
                       where r.entrant_id = e.id and g.payment_intent_id is not null
-                        and r.amount_cents > r.refunded_cents) as paid,
-             (select r.id from registrations r where r.entrant_id = e.id order by r.created_at desc, r.id limit 1) as registration_id
+                        and r.amount_cents > r.refunded_cents) as paid
         from entrants e
         join stages s on s.id = e.knockout_waiting_stage_id
        where e.division_id = ${divisionId}
@@ -44,7 +41,6 @@ export async function listKnockoutWaiting(auth: AuthCtx, divisionId: string): Pr
       stageId: r.stage_id,
       name: r.display_name,
       paid: r.paid,
-      registrationId: r.registration_id,
     }));
   });
 }

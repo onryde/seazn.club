@@ -79,7 +79,8 @@ async function registerLate(request: APIRequestContext, competitionId: string, d
   return entrant!.id;
 }
 
-/** The registration was paid by card (the webhook writes this; a test has no Stripe): the strip then says "Paid online". */
+/** The registration is MARKED paid by card: the webhook's rows, written by SQL (a test has no Stripe) - the strip then says
+ *  "Paid online". It proves the wording and the refund pointer the rows drive, never a real charge. */
 async function markPaidOnline(entrantId: string): Promise<void> {
   await withDb(async (sql) => {
     const rows = await sql<{ id: string; group_id: string }[]>`select id, group_id from registrations where entrant_id = ${entrantId}`;
@@ -158,7 +159,7 @@ test.describe("X-LE-10 the card lists a late registrant and one tap places them"
   // B3 review #5: a tap that cannot place is never a stuck amber row. A full bracket of four has no free place. Nothing has
   // started, so the answer is `rebuild_offered`: the player still waits, the sentence says why, and the row gains the exits —
   // Rebuild fixtures (draw the field again with them in it), Withdraw (they are not in the bracket, so no match is touched)
-  // and, for an entry paid by card, a pointer to the refund. The Rebuild is the panel's own, confirmed, and it sweeps them in.
+  // and, for an entry marked paid by card (SQL-faked), a pointer to the refund. The Rebuild is the panel's own, confirmed, and it sweeps them in.
   test("a full bracket, nothing started: the tap offers Rebuild by name and keeps the player; Rebuild draws the field again with them in it", async ({ page, request }) => {
     test.setTimeout(150_000);
     const ko = await startedKnockout(request, "Rebuild cup", ["Ana", "Ben", "Cas", "Dee"].map((n) => `Reb ${n} ${TAG}`));
@@ -174,7 +175,7 @@ test.describe("X-LE-10 the card lists a late registrant and one tap places them"
     await page.goto(await divisionPath(request, ko.divisionId, "?tab=fixtures"));
     const row = strip(page).getByTestId("knockout-waiting-row");
     await expect(row).toHaveCount(1, { timeout: 20_000 });
-    await expect(row, "paid by card: the sub-line says so").toContainText("Paid online after the draw. Not in the bracket yet.");
+    await expect(row, "marked paid (SQL-faked): the sub-line says so").toContainText("Paid online after the draw. Not in the bracket yet.");
     await expect(row.getByTestId("knockout-waiting-outcome"), "no answer before a tap").toHaveCount(0);
 
     const answered = page.waitForResponse((r) => r.url().endsWith(`/late-entrants/${lateId}/place`) && r.request().method() === "POST");
@@ -182,7 +183,7 @@ test.describe("X-LE-10 the card lists a late registrant and one tap places them"
     expect(((await (await answered).json()) as { data: { case: string } }).data.case).toBe("rebuild_offered");
 
     const outcome = row.getByTestId("knockout-waiting-outcome");
-    await expect(outcome).toContainText(`No slot is left, but nothing has started: Rebuild the bracket to add ${late}.`, { timeout: 20_000 });
+    await expect(outcome).toContainText(`No slot is left, but nothing has started: use Rebuild fixtures to add ${late}.`, { timeout: 20_000 });
     await expect(row.getByTestId("knockout-waiting-place"), "the row keeps its tap").toBeEnabled();
     await expect(row.getByTestId("knockout-waiting-rebuild")).toHaveText("Rebuild fixtures");
     await expect(row.getByTestId("knockout-waiting-withdraw")).toHaveText("Withdraw");
@@ -270,9 +271,11 @@ async function addToBracketFromRail(page: Page, request: APIRequestContext, divi
 
 // X-LE-3 (W4 T19, K7, ruling 263): "Add late player" on a Started knockout is "Add to bracket" — the SAME name on the rail, the
 // card's strip and the Generate refusal's sentence. One notice per case (R24 pick 2B), in the Swiss late-entry block's lines:
-// a bye is taken (green sentence with both names), and a full round 1 is refused by name, in the form, writing nothing.
+// a bye is taken (green sentence with both names); a full round 1 with nothing started KEEPS the player and offers Rebuild
+// (RB4-L6, B6a fix round 1: 201 rebuild_offered, an amber line, the player waits on the card); once a match has started the add
+// is refused by name in the form, writing nothing.
 test.describe("X-LE-3 Add to bracket from the stage rail", () => {
-  test("six in a bracket of eight: two adds take the two byes, each said once with both names; the third is refused by name and writes nothing", async ({
+  test("six in a bracket of eight: two adds take the two byes, each said once with both names; the third is KEPT and offered Rebuild, writing no line", async ({
     page,
     request,
   }) => {
@@ -298,11 +301,27 @@ test.describe("X-LE-3 Add to bracket from the stage rail", () => {
 
     const count = async () => (await apiJson<unknown[]>(request, `/api/v1/divisions/${ko.divisionId}/entrants`)).data!.length;
     const n = await count();
+    const linesBefore = JSON.stringify(await ko.rows());
     const third = await addToBracketFromRail(page, request, ko.divisionId, `Rail Late Ivy ${TAG}`);
-    expect([third.status, third.body.error?.code]).toEqual([409, "KO_LATE_ENTRY_NO_SLOT"]);
-    await expect(page.getByTestId("entrants-error")).toHaveText("Round 1 complete; no slot left.");
-    await expect(lines, "no sentence for a refused add").toHaveCount(0);
-    expect(await count(), "nothing written").toBe(n);
+    // RB4-L6: no slot, nothing started — the player is kept (201), the answer is the Rebuild offer, never an error.
+    expect(third.status, JSON.stringify(third.body.error)).toBe(201);
+    expect(third.body.data).toMatchObject({ late_entry: { format: "knockout", case: "rebuild_offered", reason: "KO_LATE_ENTRY_NO_SLOT" } });
+    await expect(lines, "one amber line, naming the button the card wears").toHaveCount(1, { timeout: 20_000 });
+    await expect(lines.nth(0)).toHaveText(`No slot is left, but nothing has started: use Rebuild fixtures to add Rail Late Ivy ${TAG}.`);
+    await expect(lines.nth(0)).toHaveAttribute("data-tone", "todo");
+    await expect(page.getByTestId("entrants-error"), "an offer is no refusal").toHaveCount(0);
+    expect(await count(), "the player is kept").toBe(n + 1);
+    expect(JSON.stringify(await ko.rows()), "no line moved").toBe(linesBefore);
+
+    // The way in the line names: the card lists them under "Waiting to join the bracket", with Rebuild fixtures a tap away.
+    await page.goto(await divisionPath(request, ko.divisionId, "?tab=fixtures"));
+    const row = strip(page).getByTestId("knockout-waiting-row");
+    await expect(row).toHaveCount(1, { timeout: 20_000 });
+    await expect(row).toContainText(`Rail Late Ivy ${TAG}`);
+    const answered = page.waitForResponse((r) => r.url().includes("/late-entrants/") && r.request().method() === "POST");
+    await row.getByTestId("knockout-waiting-place").click();
+    expect(((await (await answered).json()) as { data: { case: string } }).data.case).toBe("rebuild_offered");
+    await expect(row.getByTestId("knockout-waiting-rebuild")).toHaveText("Rebuild fixtures");
   });
 });
 

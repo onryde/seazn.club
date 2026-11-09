@@ -47,7 +47,6 @@ const waiter = (entrantId: string, stageId: string, o: Partial<KnockoutWaitingEn
   stageId,
   name: names[entrantId]!,
   paid: false,
-  registrationId: null,
   ...o,
 });
 

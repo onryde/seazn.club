@@ -3680,6 +3680,8 @@ export type DictionaryKey =
   | "knockout.view.draw"
   | "knockout.view.label"
   | "knockout.view.rounds"
+  | "knockout.waiting.failed"
+  | "knockout.waiting.placed"
   | "knockout.waiting.refund"
   | "knockout.waiting.sub"
   | "knockout.waiting.subPaid"

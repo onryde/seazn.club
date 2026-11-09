@@ -810,8 +810,9 @@ export type SwissLateEntryResult = z.infer<typeof SwissLateEntryResult>;
  *  `opponent_id` on `fixture_id`; `withdrawn_slot` — the newcomer took a withdrawn entrant's round-1 seat (its walkover
  *  reversed) against `opponent_id`; `waiting` — an automatic arrival (registration, import, Reinstate) is held for one
  *  organiser tap (ruling 271); `refused` / `rebuild_offered` — round 1 has no slot left (`reason`), and when nothing has
- *  started a Rebuild is offered. `scheduled`: the new match found a free slot (else it is unscheduled and flagged,
- *  X-LE-12). */
+ *  started a Rebuild is offered (`rebuild_offered`: on an organiser's add the player is KEPT and waits, RB4-L6; `refused`
+ *  is only ever the answer to a tap, an add refused once a match has started is 409 instead). `scheduled`: the new match
+ *  found a free slot (else it is unscheduled and flagged, X-LE-12). */
 export const KnockoutLateEntryResult = z.object({
   format: z.literal("knockout"),
   entrant_id: Uuid,

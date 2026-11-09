@@ -33,8 +33,9 @@ export type KnockoutRefusalCode =
   // T9 (X-LE-2): a late player asked into a knockout an earlier stage fills (`{stage}`: that stage's name) — a fed
   // bracket never takes one; its field is the source's.
   | "KO_LATE_ENTRY_FED_STAGE"
-  // T10 (X-LE-6): round 1 holds no bye and no withdrawn seat a late player could take (`details.can_rebuild`: nothing in the
-  // stage has started, so Rebuild fixtures would draw the field again with them in it).
+  // T10 (X-LE-6): round 1 holds no bye and no withdrawn seat a late player could take. With nothing in the stage started an
+  // organiser's add no longer meets this (B6a fix round 1, RB4-L6: it keeps the player and answers 201 `rebuild_offered`);
+  // the 409 is the add once a match has started (`details.can_rebuild: false`: Rebuild would clear played work).
   | "KO_LATE_ENTRY_NO_SLOT"
   // T10 (X-LE-13): an Undo, Redo or Restore that would step across a knockout late entry (history.ts `UNDO_BARRIER_TYPES`).
   | "KO_LATE_ENTRY_NOT_UNDOABLE"

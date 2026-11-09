@@ -23,6 +23,7 @@ import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { KO_LATE_ENTRY_PLAYED_ON } from "@/lib/knockout-late-entry";
 import { knockoutRefusalText } from "@/lib/knockout-refusals";
 import { lateEntryNotice, lateEntryNoticeText } from "@/lib/swiss-late-entry-notice";
 import type { KnockoutLateEntryResult } from "@/server/api-v1/schemas";
@@ -44,7 +45,8 @@ export interface KnockoutWaitingStripProps {
   registrationsHref: string;
   /** The panel's own Rebuild for this stage (it confirms what it clears first). */
   onRebuild: () => void;
-  /** A tap that seated the player: the sentence(s) it earned, for the panel's notice lines (they outlive this strip). */
+  /** A tap that SETTLED the player - seated them, or answered `KO_LATE_ENTRY_PLAYED_ON` (a seat holder whose place was played on; the
+   *  server cleared their flag): the sentence(s) it earned, for the panel's notice lines (they outlive this strip). */
   onPlaced: (said: PlacedSaid) => void;
 }
 
@@ -93,8 +95,26 @@ export function KnockoutWaitingStrip({ stageId, waiting, names, registrationsHre
         method: "POST",
         json: {},
       });
-      const lines = said(result);
-      if (result.case === "refused" || result.case === "rebuild_offered") {
+      let lines: { text: string; tone: "done" | "todo" }[];
+      try {
+        lines = said(result);
+      } catch {
+        // The server answered, but its reply cannot be said (the notice builder refuses a case missing a field its sentence
+        // names). Never its internal English: a placed player is told so in the organiser's language and the page is
+        // re-read (they are in the bracket); anything else is the generic line, with the exits.
+        if (result.case === "bye" || result.case === "withdrawn_slot") {
+          onPlaced({ done: [msg("knockout.waiting.placed", { name: w.name })], todo: [] });
+          router.refresh();
+        } else {
+          setOutcome(w.entrantId, { lines: [msg("knockout.waiting.failed")], exits: true, rebuild: false });
+        }
+        return;
+      }
+      // `refused` with KO_LATE_ENTRY_PLAYED_ON is the one refusal that is a landing: the server cleared the flag (a seat holder
+      // whose place was played on is no late player), so the sentence goes to the panel's amber line and the page is re-read,
+      // which takes them off the card. Every other refusal leaves the player waiting.
+      const stays = result.case === "rebuild_offered" || (result.case === "refused" && result.reason !== KO_LATE_ENTRY_PLAYED_ON);
+      if (stays) {
         // 200, but nothing was placed: the marker stays (the player still waits), and the row says why and offers the exits.
         setOutcome(w.entrantId, { lines: lines.map((l) => l.text), exits: true, rebuild: result.case === "rebuild_offered" });
         return;
@@ -102,9 +122,10 @@ export function KnockoutWaitingStrip({ stageId, waiting, names, registrationsHre
       onPlaced({ done: lines.filter((l) => l.tone === "done").map((l) => l.text), todo: lines.filter((l) => l.tone === "todo").map((l) => l.text) });
       router.refresh();
     } catch (err) {
-      // A knockout refusal (the player no longer waits here; the stage is a fed one) in the reader's language; anything else as it came.
+      // A knockout refusal (the player no longer waits here; the stage is a fed one) in the reader's language; anything else the
+      // localized generic line - the wire's own text is English and an internal string, never the organiser's.
       const text = err instanceof ApiV1Error ? knockoutRefusalText(err.code, err.extra, msg) : null;
-      setOutcome(w.entrantId, { lines: [text ?? (err instanceof Error ? err.message : String(err))], exits: false, rebuild: false });
+      setOutcome(w.entrantId, { lines: [text ?? msg("knockout.waiting.failed")], exits: false, rebuild: false });
       // A server answer means the desk's last read is stale (the player was placed or withdrawn meanwhile): re-read it.
       if (err instanceof ApiV1Error) router.refresh();
     } finally {
@@ -128,7 +149,9 @@ export function KnockoutWaitingStrip({ stageId, waiting, names, registrationsHre
       await apiV1(`/api/v1/entrants/${w.entrantId}/withdraw`, { method: "POST", json: {} });
       router.refresh();
     } catch (err) {
-      setOutcome(w.entrantId, { lines: [err instanceof Error ? err.message : String(err)], exits: true, rebuild: false });
+      // Said by its code like the tap's refusals, else the generic line; the row keeps the exits (and the Rebuild offer it had).
+      const text = err instanceof ApiV1Error ? knockoutRefusalText(err.code, err.extra, msg) : null;
+      setOutcome(w.entrantId, { lines: [text ?? msg("knockout.waiting.failed")], exits: true, rebuild: outcomes[w.entrantId]?.rebuild ?? false });
     } finally {
       inFlight.current = false;
       setBusy(null);

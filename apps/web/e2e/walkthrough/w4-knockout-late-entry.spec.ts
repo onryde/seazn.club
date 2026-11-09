@@ -1,5 +1,6 @@
 // ONE organiser late-enters two players into brackets that are already drawn and Started — a doubles PAIR through the Entrants
-// tab's form, then a single who registered online and paid — driven on the organiser's own screens.
+// tab's form, then a single who registered online and is MARKED PAID (the payment is faked in SQL: a test has no Stripe, so the
+// walkthrough proves the card's "paid" wording and refund pointer, never a real charge) — driven on the organiser's own screens.
 //
 // THE RULES (W4 T19; spec 2026-11-04-format-matrix-w4-knockout-design.md; R24 owner picks 1A/2B/3A; rulings 263 and 271):
 //   - "Add late player" on a Started knockout is named "Add to bracket" — the rail's More item, the Needs-you row's target,
@@ -60,8 +61,8 @@ async function startedBracket(request: APIRequestContext, competitionId: string,
   return { divisionId, stageId: stage.data!.id, nameOf, holder, rows };
 }
 
-test.describe("W4 late entry: an organiser adds a pair, then taps in a paid single", () => {
-  test("rail → Add to bracket → a doubles pair built in the form takes a bye; a paid registrant waits on the card and one tap seats them", async ({ page, request }, testInfo) => {
+test.describe("W4 late entry: an organiser adds a pair, then taps in a single marked paid", () => {
+  test("rail → Add to bracket → a doubles pair built in the form takes a bye; a registrant marked paid (SQL-faked) waits on the card and one tap seats them", async ({ page, request }, testInfo) => {
     test.setTimeout(300_000);
     const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Late entry ${TAG}`, visibility: "public" });
     expect(comp.status, JSON.stringify(comp.error)).toBe(201);
@@ -116,7 +117,7 @@ test.describe("W4 late entry: an organiser adds a pair, then taps in a paid sing
     expect(seatedPair, "the bracket seats the pair once").toBeDefined();
     expect([seatedPair!.home_entrant_id, seatedPair!.away_entrant_id].sort()).toEqual([added.data!.id, doubles.holder].sort());
 
-    // ── 2. A paid single arrives; the card lists them; one tap, on a phone ─────────────────────────────────────────────────
+    // ── 2. A single marked paid arrives; the card lists them; one tap, on a phone ─────────────────────────────────────────────────
     const settings = await apiJson(request, `/api/v1/divisions/${singles.divisionId}/registration-settings`, "PUT", {
       enabled: true,
       entrant_kind: "individual",
@@ -135,7 +136,7 @@ test.describe("W4 late entry: an organiser adds a pair, then taps in a paid sing
     });
     expect(sent.status, JSON.stringify(sent.error)).toBe(201);
     const lateId = (await apiJson<{ id: string; display_name: string }[]>(request, `/api/v1/divisions/${singles.divisionId}/entrants`)).data!.find((e) => e.display_name === late)!.id;
-    // The card said "paid": the webhook writes this; a test has no Stripe.
+    // Marked paid: the card's "paid" wording reads the webhook's rows, and a test has no Stripe, so they are written here.
     await withDb(async (sql) => {
       const [reg] = await sql<{ id: string; group_id: string }[]>`select id, group_id from registrations where entrant_id = ${lateId}`;
       await sql`update registration_groups set payment_intent_id = ${`pi_walk_${reg!.id.slice(0, 8)}`} where id = ${reg!.group_id}`;

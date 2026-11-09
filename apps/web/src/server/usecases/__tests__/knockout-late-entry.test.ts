@@ -22,11 +22,13 @@ import { ByeLineSurgeryError, reverseWithdrawnWalkover } from "../bracket-lines"
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
+import { listKnockoutWaiting } from "../knockout-desk";
+import { placeWaitingKnockoutEntrant } from "../knockout-late-entry";
 import { undoDivision } from "../history";
 import { callFixtureToCourt } from "../match-day-call";
 import { moveFixture, startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { createStages } from "../stages";
+import { createStages, rebuildStageFixtures } from "../stages";
 import { createCourt, createVenue } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
@@ -159,6 +161,26 @@ const shapeOf = (r: Row) =>
 async function addLate(r: Rig, name = "Late") {
   const [late] = await createEntrants(r.auth, r.divisionId, [player(name, null)]);
   return late!;
+}
+
+/** The stage `entrantId` waits on (`entrants.knockout_waiting_stage_id`, the marker every automatic door writes), else null. */
+async function waitingOn(entrantId: string): Promise<string | null> {
+  const [e] = await sql<{ w: string | null }[]>`select knockout_waiting_stage_id as w from entrants where id = ${entrantId}`;
+  return e!.w;
+}
+
+/** The stages any fixture seats `entrantId` in. */
+async function seatedIn(entrantId: string): Promise<string[]> {
+  const rows = await sql<{ stage_id: string }[]>`
+    select distinct stage_id from fixtures where ${entrantId} in (home_entrant_id, away_entrant_id)`;
+  return rows.map((x) => x.stage_id);
+}
+
+/** The division's `knockout_late_entry` ledger rows (an undo barrier each): a placement writes one, an offer writes none. */
+async function barrierRows(divisionId: string): Promise<number> {
+  const [{ n }] = await sql<{ n: number }[]>`
+    select count(*)::int as n from division_events where division_id = ${divisionId} and type = 'knockout_late_entry'`;
+  return n;
 }
 
 async function refusal(p: Promise<unknown>): Promise<HttpError> {
@@ -308,13 +330,42 @@ describe.skipIf(!HAS_DB)("W4 T10: Add late player on a drawn knockout", () => {
     expect(await entrantCount(r.divisionId), "the refused add wrote nothing").toBe(count);
   });
 
-  it("X-LE-6 round 1 complete, nothing started: refused, the entrant not created, Rebuild offered", async () => {
+  it("X-LE-6 / RB4-L6 round 1 complete, nothing started: the entrant is KEPT and waits; the answer is 201 rebuild_offered, nothing moves", async () => {
+    // B6a fix round 1 (review #2): the organiser's own add was the one door that dropped the player (409, rolled back) while
+    // every automatic door kept them. RB4-L6: "the refusal offers Rebuild" - the player stays, flagged exactly as an automatic
+    // arrival, and Rebuild fixtures is the way in.
     const r = await rig({ n: 8 });
+    const before = (await rowsOf(r.stageId)).map(shapeOf);
     const count = await entrantCount(r.divisionId);
-    const err = await refusal(addLate(r));
-    expect(err).toMatchObject({ status: 409, code: "KO_LATE_ENTRY_NO_SLOT", message: NO_SLOT });
-    expect(err.extra).toMatchObject({ can_rebuild: true, stage_id: r.stageId });
-    expect(await entrantCount(r.divisionId)).toBe(count);
+    const barriers = await barrierRows(r.divisionId);
+    const late = await addLate(r);
+    expect(late.late_entry).toEqual({
+      format: "knockout",
+      entrant_id: late.id,
+      stage_id: r.stageId,
+      case: "rebuild_offered",
+      reason: "KO_LATE_ENTRY_NO_SLOT",
+    });
+    expect(await entrantCount(r.divisionId), "the player is kept").toBe(count + 1);
+    expect(await waitingOn(late.id), "flagged as every automatic door flags").toBe(r.stageId);
+    expect((await rowsOf(r.stageId)).map(shapeOf), "no line moved").toEqual(before);
+    expect(await seatedIn(late.id), "seated nowhere").toEqual([]);
+    expect(await barrierRows(r.divisionId), "an offer places nobody: no undo barrier").toBe(barriers);
+    expect((await listKnockoutWaiting(r.auth, r.divisionId)).map((w) => w.entrantId), "the desk's strip lists them").toEqual([late.id]);
+
+    // The way in the offer names, through its real consumer: the tap offers it again, and Rebuild fixtures seats them.
+    expect(await placeWaitingKnockoutEntrant(r.auth, r.stageId, late.id)).toMatchObject({ case: "rebuild_offered", reason: "KO_LATE_ENTRY_NO_SLOT" });
+    await rebuildStageFixtures(r.auth, r.stageId);
+    expect(await seatedIn(late.id), "Rebuild fixtures drew the field again with them in it").toEqual([r.stageId]);
+    expect(await waitingOn(late.id), "the marker clears").toBeNull();
+  });
+
+  it("RB4-L6 the offer is made once per newcomer: a second add into the same full bracket is offered too, and both wait in arrival order", async () => {
+    const r = await rig({ n: 8 });
+    const a = await addLate(r, "Late A");
+    const b = await addLate(r, "Late B");
+    expect([a.late_entry, b.late_entry].map((x) => x?.format === "knockout" && x.case)).toEqual(["rebuild_offered", "rebuild_offered"]);
+    expect((await listKnockoutWaiting(r.auth, r.divisionId)).map((w) => w.entrantId)).toEqual([a.id, b.id]);
   });
 
   it("X-LE-6/X-LE-9 with only a called match, the refusal offers no Rebuild", async () => {
@@ -322,21 +373,24 @@ describe.skipIf(!HAS_DB)("W4 T10: Add late player on a drawn knockout", () => {
     const { courts } = await placeRoundOne(r, 4, 4);
     const l1 = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && x.seq_in_round === 1)!;
     await callFixtureToCourt(r.auth, l1.id, courts[0]!);
+    const count = await entrantCount(r.divisionId);
     const err = await refusal(addLate(r));
     expect(err).toMatchObject({ status: 409, code: "KO_LATE_ENTRY_NO_SLOT" });
     expect(err.extra).toMatchObject({ can_rebuild: false });
+    expect(await entrantCount(r.divisionId), "once a match has started the add is still refused and rolled back").toBe(count);
   });
 
-  it("X-LE-7 a withdrawn bye holder's line is never case (2): the add is refused, nobody seated", async () => {
+  it("X-LE-7 a withdrawn bye holder's line is never case (2): nobody is seated (nothing started, so the offer is Rebuild)", async () => {
     // Seven in eight: seed 1 holds the one bye, and is carried into round 2. Seed 1 withdraws.
     const r = await rig({ n: 7 });
     const stored = storedByeLines(await rowsOf(r.stageId));
     expect(stored.length, "premise: one bye").toBe(1);
     await withdrawEntrantCascade(r.auth, stored[0]!.holderId);
-    const count = await entrantCount(r.divisionId);
-    const err = await refusal(addLate(r));
-    expect(err).toMatchObject({ status: 409, code: "KO_LATE_ENTRY_NO_SLOT" });
-    expect(await entrantCount(r.divisionId)).toBe(count);
+    const lines = (await rowsOf(r.stageId)).map(shapeOf);
+    const late = await addLate(r);
+    expect(late.late_entry).toMatchObject({ case: "rebuild_offered", reason: "KO_LATE_ENTRY_NO_SLOT" });
+    expect(await seatedIn(late.id), "never seated on the dead bye").toEqual([]);
+    expect((await rowsOf(r.stageId)).map(shapeOf), "no line moved").toEqual(lines);
   });
 
   it("X-LE-9 a called round-2 match closes its bye to case (1)", async () => {
@@ -370,12 +424,14 @@ describe.skipIf(!HAS_DB)("W4 T10: Add late player on a drawn knockout", () => {
     const rows = await rowsOf(r.stageId);
     const first = rows.filter((x) => x.round_no === 1);
     expect(first.length, "premise: one first rung").toBe(1);
-    const err = await refusal(addLate(r, "Late 1"));
-    expect(err).toMatchObject({ status: 409, code: "KO_LATE_ENTRY_NO_SLOT" });
+    const none = await addLate(r, "Late 1");
+    expect(none.late_entry, "no bye to take (X-LE-8): the offer is Rebuild").toMatchObject({ case: "rebuild_offered", reason: "KO_LATE_ENTRY_NO_SLOT" });
+    expect(await seatedIn(none.id)).toEqual([]);
     await withdrawEntrantCascade(r.auth, first[0]!.home_entrant_id!);
     const late = await addLate(r, "Late 2");
     expect(late.late_entry).toMatchObject({ format: "knockout", case: "withdrawn_slot", fixture_id: first[0]!.id });
     expect(await roundOneOnly(r.stageId, late.id)).toBe(1);
+    expect(await waitingOn(none.id), "the earlier newcomer still waits").toBe(r.stageId);
   });
 
   it("X-LE-12 the placed match takes round 1's next free slot", async () => {
@@ -484,13 +540,26 @@ describe.skipIf(!HAS_DB)("W4 T10: Add late player on a drawn knockout", () => {
     expect(seatHolds(await rowById(line.winner_to_fixture!), bye!.holderId), "the holder is back in round 2").toBe(true);
   });
 
-  it("sequence: a second late player after the first took the only bye — refused (nothing started: Rebuild offered)", async () => {
+  it("sequence: a second late player after the first took the only bye - offered Rebuild (nothing started), kept waiting", async () => {
     const r = await rig({ n: 7 });
     const first = await addLate(r, "Late 1");
     expect(first.late_entry).toMatchObject({ case: "bye" });
-    const err = await refusal(addLate(r, "Late 2"));
-    expect(err).toMatchObject({ status: 409, code: "KO_LATE_ENTRY_NO_SLOT" });
-    expect(err.extra).toMatchObject({ can_rebuild: true });
+    const second = await addLate(r, "Late 2");
+    expect(second.late_entry).toMatchObject({ case: "rebuild_offered", reason: "KO_LATE_ENTRY_NO_SLOT" });
+    expect(await waitingOn(second.id)).toBe(r.stageId);
+    expect(await waitingOn(first.id), "the one who was seated waits for nothing").toBeNull();
+  });
+
+  it("sequence: the offered newcomer's seat opens (a withdrawal) - the organiser's one tap seats them and the marker clears", async () => {
+    const r = await rig({ n: 8 });
+    const late = await addLate(r);
+    expect(late.late_entry).toMatchObject({ case: "rebuild_offered" });
+    const line = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && x.seq_in_round === 2)!;
+    await withdrawEntrantCascade(r.auth, line.home_entrant_id!);
+    const placed = await placeWaitingKnockoutEntrant(r.auth, r.stageId, late.id);
+    expect(placed).toMatchObject({ case: "withdrawn_slot", fixture_id: line.id, entrant_id: late.id });
+    expect(await seatedIn(late.id)).toEqual([r.stageId]);
+    expect(await waitingOn(late.id)).toBeNull();
   });
 
   it("sequence: a second late player after a withdrawal takes the withdrawn slot once the bye is gone", async () => {

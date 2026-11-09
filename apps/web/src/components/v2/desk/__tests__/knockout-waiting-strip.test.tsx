@@ -46,8 +46,8 @@ import type { KnockoutLateEntryResult } from "@/server/api-v1/schemas";
 import { KnockoutWaitingStrip } from "../knockout-waiting-strip";
 
 const STAGE = "stage-1";
-const OLIVER = { entrantId: "e-oliver", stageId: STAGE, name: "Oliver Grant", paid: false, registrationId: null };
-const NORA = { entrantId: "e-nora", stageId: STAGE, name: "Nora Lind", paid: true, registrationId: "r-nora" };
+const OLIVER = { entrantId: "e-oliver", stageId: STAGE, name: "Oliver Grant", paid: false };
+const NORA = { entrantId: "e-nora", stageId: STAGE, name: "Nora Lind", paid: true };
 const NAMES = { "e-oliver": "Oliver Grant", "e-nora": "Nora Lind", "e-arjun": "Arjun Menon", "e-rasmus": "Rasmus Holm", "e-farhan": "Farhan Iqbal" };
 const REGISTRATIONS = "/o/club/c/open/registration?tab=registrants&division_id=d1";
 
@@ -166,7 +166,7 @@ describe("X-LE-10 the waiting strip", () => {
     net.answers.push(() => result({ case: "rebuild_offered", reason: "KO_LATE_ENTRY_NO_SLOT" }));
     const { island, calls } = mount([OLIVER]);
     await tapOf(island)();
-    expect(island.text()).toContain("No slot is left, but nothing has started: Rebuild the bracket to add Oliver Grant.");
+    expect(island.text()).toContain("No slot is left, but nothing has started: use Rebuild fixtures to add Oliver Grant.");
     const rebuild = byTestId(island.tree(), "knockout-waiting-rebuild");
     expect(rebuild).toHaveLength(1);
     expect(textOf(rebuild[0]!)).toBe("Rebuild fixtures");
@@ -228,15 +228,90 @@ describe("X-LE-10 the waiting strip", () => {
     expect(island.text()).toContain("This knockout is filled from Group stage. Add the player there.");
   });
 
-  it("a failure that is not a knockout refusal says what it says and never lands", async () => {
+  // B6a fix round 1 (review #5): a failure that is not a knockout refusal is never shown as it came (an English network or
+  // server string); it is a localized generic line, and the wire's own text appears nowhere.
+  it("a failure that is not a knockout refusal is a localized generic line - never the raw error text - and never lands", async () => {
     net.answers.push(() => {
       throw new Error("Network down");
     });
     const { island, calls } = mount([OLIVER]);
     await tapOf(island)();
-    expect(island.text()).toContain("Network down");
+    expect(island.text()).toContain("Something went wrong. Try again.");
+    expect(island.text()).not.toContain("Network down");
     expect(calls.placed).toEqual([]);
     expect(router.refreshCount).toBe(0);
+    // an unmapped server answer is the same line (its English message is not the organiser's language)
+    net.answers.push(() => {
+      throw new ApiV1Error("Internal Server Error: pq: deadlock detected", 500, "INTERNAL", {});
+    });
+    await tapOf(island)();
+    expect(island.text()).toContain("Something went wrong. Try again.");
+    expect(island.text()).not.toContain("deadlock");
+  });
+
+  it("Withdraw failing is said by its code like the other refusals, else the generic line - never err.message - and the exits stay", async () => {
+    net.answers.push(() => result({ case: "refused", reason: "KO_LATE_ENTRY_NO_SLOT" }));
+    const { island } = mount([OLIVER]);
+    await tapOf(island)();
+    const withdraw = () => propsOf(byTestId(island.tree(), "knockout-waiting-withdraw")[0]!).onClick as () => Promise<void>;
+    net.answers.push(() => {
+      throw new ApiV1Error("The server's English", 409, "KO_LATE_ENTRY_NOT_WAITING", {});
+    });
+    await withdraw()();
+    expect(island.text()).toContain("This player isn't waiting to join this bracket.");
+    expect(island.text()).not.toContain("The server's English");
+    net.answers.push(() => {
+      throw new Error("fetch failed: ECONNRESET");
+    });
+    await withdraw()();
+    expect(island.text()).toContain("Something went wrong. Try again.");
+    expect(island.text()).not.toContain("ECONNRESET");
+    expect(byTestId(island.tree(), "knockout-waiting-withdraw"), "the exit stays for another try").toHaveLength(1);
+    expect(router.refreshCount).toBe(0);
+  });
+
+  // The 200 that PLACED the player but whose sentence cannot be built (a reply missing a field its sentence names): the player
+  // is in the bracket, so the page is re-read and the organiser told - in a localized generic line - that they are in. Main
+  // showed the notice builder's internal English error, left the strip stale and the player listed as waiting.
+  it("a placing 200 whose sentence cannot be built still refreshes and says a localized generic success - never the internal error", async () => {
+    let checked = 0;
+    for (const partial of [result({ case: "bye", fixture_id: "f1" }), result({ case: "withdrawn_slot", fixture_id: "f1", opponent_id: "e-arjun" })]) {
+      net.calls = [];
+      router.refreshCount = 0;
+      net.answers.push(() => partial);
+      const { island, calls } = mount([OLIVER]);
+      await tapOf(island)();
+      expect(calls.placed, partial.case).toEqual([{ done: ["Oliver Grant was added to the bracket."], todo: [] }]);
+      expect(router.refreshCount, `${partial.case}: the page is re-read`).toBe(1);
+      expect(island.text(), partial.case).not.toContain("knockout late entry");
+      expect(byTestId(island.tree(), "knockout-waiting-outcome"), `${partial.case}: no error row`).toHaveLength(0);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a refusal whose sentence cannot be built is the generic line with the exits (nothing was placed, so nothing refreshes)", async () => {
+    net.answers.push(() => result({ case: "refused", reason: "SOMETHING_ELSE" }));
+    const { island, calls } = mount([OLIVER]);
+    await tapOf(island)();
+    expect(island.text()).toContain("Something went wrong. Try again.");
+    expect(island.text()).not.toContain("knockout late entry");
+    expect(calls.placed).toEqual([]);
+    expect(router.refreshCount).toBe(0);
+    expect(byTestId(island.tree(), "knockout-waiting-withdraw"), "the exits stay").toHaveLength(1);
+  });
+
+  // B6a fix round 1 (review #3): a seat holder whose place was played on is answered `refused` / KO_LATE_ENTRY_PLAYED_ON and the
+  // server CLEARS their flag - so the answer is a landing, not a stuck row: the sentence goes to the panel's amber line (it
+  // outlives the strip) and the page is re-read, which takes them off the card.
+  it("'played on' (a seat holder whose place is gone): said in the panel's amber line, the page re-read - no stuck row, no exits", async () => {
+    net.answers.push(() => result({ case: "refused", reason: "KO_LATE_ENTRY_PLAYED_ON" }));
+    const { island, calls } = mount([OLIVER]);
+    await tapOf(island)();
+    expect(calls.placed).toEqual([{ done: [], todo: ["Oliver Grant is back on the list, but their place in the bracket has been played on."] }]);
+    expect(router.refreshCount).toBe(1);
+    expect(byTestId(island.tree(), "knockout-waiting-outcome")).toHaveLength(0);
+    expect(byTestId(island.tree(), "knockout-waiting-withdraw")).toHaveLength(0);
   });
 
   it("a tap while one is in flight is ignored (one place per press)", async () => {
@@ -255,5 +330,29 @@ describe("X-LE-10 the waiting strip", () => {
     await Promise.all([first, second]);
     expect(net.calls.map((c) => c.url)).toEqual([`/api/v1/stages/${STAGE}/late-entrants/e-oliver/place`]);
     expect(calls.placed).toHaveLength(1);
+  });
+});
+
+// The strip's two new lines (B6a fix round 1) exist in every language, translated, with the placeholder the English one has.
+describe("the strip's failure and generic-success lines are in all four dictionaries", () => {
+  it("each locale has both keys, translated, with the English placeholders", async () => {
+    const dicts = {
+      en: (await import("@/dictionaries/en/ui.json")).default,
+      es: (await import("@/dictionaries/es/ui.json")).default,
+      fr: (await import("@/dictionaries/fr/ui.json")).default,
+      nl: (await import("@/dictionaries/nl/ui.json")).default,
+    } as unknown as Record<string, Record<string, string>>;
+    const placeholders = (v: string) => [...v.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+    let checked = 0;
+    for (const key of ["knockout.waiting.failed", "knockout.waiting.placed"]) {
+      expect(placeholders(dicts.en![key]!), `premise: en ${key}`).toEqual(key.endsWith("placed") ? ["name"] : []);
+      for (const [locale, dict] of Object.entries(dicts)) {
+        expect(typeof dict[key] === "string" && dict[key]!.trim() !== "", `${locale}/${key}`).toBe(true);
+        expect(placeholders(dict[key]!), `${locale}/${key} placeholders`).toEqual(placeholders(dicts.en![key]!));
+        if (locale !== "en") expect(dict[key], `${locale}/${key} is translated`).not.toBe(dicts.en![key]);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: two keys x four locales").toBe(8);
   });
 });

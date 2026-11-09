@@ -115,7 +115,7 @@ describe("X-LE-10 knockout late-entry notice: one notice per case (R24 pick 2B)"
     {
       name: "rebuild_offered: no slot, nothing started — Rebuild draws them in",
       results: [ko({ case: "rebuild_offered", reason: "KO_LATE_ENTRY_NO_SLOT" })],
-      expected: [{ text: "No slot is left, but nothing has started: Rebuild the bracket to add Oliver Grant.", tone: "todo" }],
+      expected: [{ text: "No slot is left, but nothing has started: use Rebuild fixtures to add Oliver Grant.", tone: "todo" }],
     },
   ];
 
@@ -183,6 +183,27 @@ describe("X-LE-10 knockout late-entry notice: one notice per case (R24 pick 2B)"
     }
     // 7 knockout message keys (the five cases' lines, the played-on one, the lucky loser's) + 1 plural base (two forms) × 4 locales.
     expect(checked).toBe((7 + 2) * 4);
+  });
+});
+
+// B6a fix round 1 (review #6): the offer names the control by the name it wears. The waiting strip's button is
+// `progression.rosterDrift.rebuildCta` ("Rebuild fixtures"); the sentence that points at it carries that label VERBATIM in every
+// language - "Rebuild the bracket" named a button that does not exist. Expected: the button's own label, read per locale off
+// the dictionary that renders the button (not off the notice).
+describe("the Rebuild offer names the button it points at (one-name rule)", () => {
+  it("the sentence carries the button's label in all four languages, and says it in English as typed", () => {
+    const dicts = { en, es, fr, nl } as Record<string, Record<string, string>>;
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(dicts)) {
+      const label = dict["progression.rosterDrift.rebuildCta"];
+      const sentence = dict["knockout.lateEntry.rebuildOffered"];
+      expect(label && label.trim() !== "", `${locale}: the button has a label`).toBeTruthy();
+      expect(sentence, `${locale}: the sentence names the button "${label}"`).toContain(label);
+      expect(sentence, `${locale}: the name's placeholder`).toContain("{name}");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: four locales").toBe(4);
+    expect(en["progression.rosterDrift.rebuildCta"], "premise: the button reads Rebuild fixtures").toBe("Rebuild fixtures");
   });
 });
 
