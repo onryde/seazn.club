@@ -6,12 +6,15 @@ import {
   aiConsoleReducer,
   aiErrorKey,
   aiUndoErrorKey,
+  aiUndoErrorText,
   applyErrorKey,
   initialAiConsoleState,
   type AiConsoleState,
 } from "../ai-console-state";
 import type { ApplyOutcome } from "../ai-apply";
 import { SWISS_REFUSALS, swissRefusalKey, type SwissRefusalCode } from "@/lib/swiss-refusals";
+import { msg } from "@/lib/messages";
+import enUi from "@/dictionaries/en/ui.json";
 
 // Minimal valid plans — the reducer never inspects their internals, only moves
 // them between slots, so empty arrays are enough.
@@ -325,6 +328,42 @@ describe("aiUndoErrorKey (a refused one-tap AI Undo → localized copy key)", ()
     ] as const) {
       expect(aiUndoErrorKey(status, code), `${status} ${code}`).toBe(aiErrorKey(status, code));
     }
+  });
+});
+
+describe("aiUndoErrorText (a refused one-tap AI Undo → the sentence, its fields filled)", () => {
+  const EN = enUi as unknown as Record<string, string>;
+  // W4 T12 follow-up: the key alone prints a literal `{min}` for QUALIFYING_MAIN_TOO_FEW, a knockout code whose sentence names the
+  // bound; the server sends it beside the code (`knockoutRefusal(code, { min })` → the envelope's fields).
+  it("fills a knockout refusal's fields: QUALIFYING_MAIN_TOO_FEW says its {min}, never a literal hole", () => {
+    expect(msg("knockout.refusal.QUALIFYING_MAIN_TOO_FEW"), "premise: the key alone prints the hole").toContain("{min}");
+    const text = aiUndoErrorText(422, "QUALIFYING_MAIN_TOO_FEW", { min: 4 }, msg);
+    expect(text).toBe("Qualifying + Main draw needs at least 4 entrants.");
+    expect(text).not.toContain("{");
+  });
+  it("says every Swiss refusal and the confirmed-draw barrier as the dictionary does, at their own status", () => {
+    const codes = Object.keys(SWISS_REFUSALS) as SwissRefusalCode[];
+    let checked = 0;
+    for (const code of codes) {
+      expect(aiUndoErrorText(SWISS_REFUSALS[code].status, code, {}, msg), code).toBe(EN[swissRefusalKey(code)]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every Swiss code checked").toBe(codes.length);
+    expect(checked).toBeGreaterThan(0);
+    expect(aiUndoErrorText(409, "SEED_CONFIRM_NOT_UNDOABLE", undefined, msg)).toBe(EN["knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE"]);
+  });
+  it("leaves every other refusal to aiErrorKey's sentence (positive pair)", () => {
+    let checked = 0;
+    for (const [status, code] of [
+      [422, "SCHEDULE_LOCKED"],
+      [409, "SEQ_CONFLICT"],
+      [402, "ai.credits"],
+      [500, undefined],
+    ] as const) {
+      expect(aiUndoErrorText(status, code, { min: 4 }, msg), `${status} ${code}`).toBe(msg(aiErrorKey(status, code)));
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });
 

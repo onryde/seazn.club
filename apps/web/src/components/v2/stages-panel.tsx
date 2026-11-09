@@ -26,7 +26,7 @@ import { ABANDONED_MATCHES_REASON, heldMatchesOf } from "@/lib/abandoned-matches
 import { rulesWriteErrorText } from "@/lib/config-issue-copy";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
-import { isUndoRefusalCode, undoRefusalKey } from "@/lib/undo-refusals";
+import { isUndoRefusalCode, undoRefusalText } from "@/lib/undo-refusals";
 import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
 import { knockoutUpdateDrawOffered } from "@/lib/bracket-reconcile";
 import { swissRoundsWarnNotice, type SwissRoundsNotice } from "@/lib/swiss-rounds";
@@ -2633,7 +2633,7 @@ export function undoRefusalMessage(err: unknown, msg: Msg): string {
   if (err instanceof ApiV1Error && err.code === PLAYED_REFUSAL_CODE) return msg("history.error.played");
   // W3 T5 (X-SW-28): Undo of Pair next over a started round, or across an undo barrier — a Swiss one, or since W4 T5
   // (K1) a confirmed draw (SEED_CONFIRM_NOT_UNDOABLE), each through its own family's key.
-  if (err instanceof ApiV1Error && isUndoRefusalCode(err.code)) return msg(undoRefusalKey(err.code));
+  if (err instanceof ApiV1Error && isUndoRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg);
   return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.undoFailed"));
 }
 

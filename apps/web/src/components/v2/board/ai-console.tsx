@@ -57,6 +57,7 @@ import {
   aiConsoleReducer,
   aiErrorKey,
   aiUndoErrorKey,
+  aiUndoErrorText,
   applyErrorKey,
   canRun,
   initialAiConsoleState,
@@ -919,8 +920,11 @@ export function AiConsole({
       onApplied?.();
     } catch (err) {
       const status = err instanceof ApiV1Error ? err.status : 0;
-      const key = aiUndoErrorKey(status, aiErrorCodeOf(err));
-      dispatch({ type: "APPLY_ERROR", error: { status, message: msg(key), key } });
+      const code = aiErrorCodeOf(err);
+      const key = aiUndoErrorKey(status, code);
+      // The sentence, not `msg(key)`: a knockout refusal's fields (`{min}`) ride on the envelope beside the code.
+      const message = aiUndoErrorText(status, code, err instanceof ApiV1Error ? err.extra : undefined, msg);
+      dispatch({ type: "APPLY_ERROR", error: { status, message, key } });
     } finally {
       setUndoing(false);
     }

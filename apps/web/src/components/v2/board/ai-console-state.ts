@@ -13,7 +13,7 @@ import type {
 } from "@/server/api-v1/schemas";
 import { COMMUNITY_GRANTED_FEATURES } from "@/lib/feature-copy";
 import type { MessageKey } from "@/lib/messages";
-import { isUndoRefusalCode, undoRefusalKey } from "@/lib/undo-refusals";
+import { isUndoRefusalCode, undoRefusalKey, undoRefusalText } from "@/lib/undo-refusals";
 import type { ApplyOutcome } from "./ai-apply";
 
 export type AiStep = "brief" | "schedule" | "officials" | "apply";
@@ -500,6 +500,20 @@ export function aiErrorKey(status: number, code?: string): AiErrorKey {
  */
 export function aiUndoErrorKey(status: number, code?: string): MessageKey {
   return isUndoRefusalCode(code) ? undoRefusalKey(code) : aiErrorKey(status, code);
+}
+
+/**
+ * The same refusal as a SENTENCE, its fields filled: a knockout sentence can name something (QUALIFYING_MAIN_TOO_FEW's
+ * `{min}`), which the server sends beside the code (the envelope's `extra`), and the key alone prints the hole. The console
+ * keeps `aiUndoErrorKey` for the state's `key` (it branches on a few keys) and renders this as the message.
+ */
+export function aiUndoErrorText(
+  status: number,
+  code: string | undefined,
+  extra: Readonly<Record<string, unknown>> | undefined,
+  msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): string {
+  return isUndoRefusalCode(code) ? undoRefusalText(code, extra, msg) : msg(aiUndoErrorKey(status, code));
 }
 
 /**

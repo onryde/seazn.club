@@ -14,7 +14,7 @@ export const PLATE_MIN = 4;
  *
  *  A PINNED FACT for the builder's template pin and the tests, NOT what enforcement reads: `stageGraphSizeGate` takes its bound from
  *  the stored cut's own `rule.to`, so a q of 2 runs on 2 and a q of 8 is refused below 8 whatever this says. It equals `rule.to` at
- *  the builder's q (4) and is pinned against it, which is the only way the two can drift apart unseen. */
+ *  the builder's q (4) and is pinned against it: that pin is what keeps the two from drifting apart unseen. */
 export const QUALIFYING_MAIN_MIN = 4;
 
 export interface StageGraphStage {
