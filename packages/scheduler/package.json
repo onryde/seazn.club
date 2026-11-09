@@ -17,7 +17,7 @@
   "dependencies": {
     "@bufbuild/protobuf": "^2.13.0",
     "@grpc/grpc-js": "^1.14.4",
-    "@seazn/engine": "npm:@onryde/seazn-engine@^3.0.2",
+    "@seazn/engine": "npm:@onryde/seazn-engine@^4.0.0",
     "pino": "^10.3.1"
   },
   "devDependencies": {
