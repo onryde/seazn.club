@@ -19,6 +19,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { engineFixtureStatus } from "../../../apps/web/src/lib/fixture-engine-status.ts";
 import { KNOCKOUT_REFUSALS } from "../../../apps/web/src/lib/knockout-refusals.ts";
+import { ROOT_KNOCKOUT_KINDS } from "../../../apps/web/src/lib/open-entry-stages.ts";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import { BUILDER_DEFAULT_KNOBS, ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey, type StagePostBody } from "../lib/catalogue.ts";
 import { RefusedCall, RequestTimedOut, nextMatchFixtureId, type EntrantInput, type EntrantRow, type FixtureRow, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
@@ -30,7 +31,7 @@ import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-f
 import {
   LINEUP_LOCKED_FINDING, LINEUP_SIDE_SIZE_FINDING, LINEUP_WARNED_CHECK, LINEUPS_CHECK, MODEL_FAMILY_ROUTE, ModelUnsupported,
   NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, NEXT_MATCH_UNHELD_FINDING, ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, REFUSAL_NAMED, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, VOID_STATUSES,
-  absorbFixtures, ensureModelLineups, fedCandidates, fedMatchStarted, informativeSteps, modelRowRefusal, orientationBound, rosterLocked, type FixtureModel,
+  absorbFixtures, ensureModelLineups, fedCandidates, fedMatchStarted, informativeSteps, modelHoldsRootKnockout, modelRowRefusal, orientationBound, rosterLocked, type FixtureModel,
 } from "../lib/model/state.ts";
 import { PENDING_STATUSES, TERMINAL_STATUSES, isNamedRefusal, sameOutcome, toObservedOutcome } from "../lib/observed.ts";
 import { NotAWave } from "../lib/routing.ts";
@@ -224,6 +225,9 @@ describe("the roster lock after Start (entrants.ts) — an EXPECTED refusal, nev
     expect(lock.statuses).toEqual(["active", "completed"]);
     expect([...ROSTER_LOCK.openKinds]).toEqual(lock.openKinds);
     expect(ROSTER_LOCK.rootSwiss, "W3 ruling 250: a root Swiss exempts the division (hasRootSwissStage)").toBe(lock.rootSwiss);
+    expect(ROSTER_LOCK.rootKnockout, "W4 T9 (X-LE-1): a root knockout exempts the division (hasRootKnockoutStage)").toBe(lock.rootKnockout);
+    // Anti-vacuity: the text really carries both exemptions, so the two equalities above are not null == null.
+    expect([lock.rootSwiss, lock.rootKnockout]).toEqual([true, true]);
     expect(ROSTER_LOCK.status).toBe(lock.status);
     expect(lock.openKinds.length).toBeGreaterThan(0);
     // RR-2 tripwire: without it, a product fix silently moves the finding count to 0 and the register never hears.
@@ -313,6 +317,48 @@ describe("the roster lock after Start (entrants.ts) — an EXPECTED refusal, nev
     expect(at({ stageKind: "swiss", stageConfig: { rounds: 3 }, completed: true }), "a complete Swiss").toBe(true);
     expect(at({ stageKind: "swiss", stageConfig: { rounds: 3, qualified: [] } }), "a Swiss seeded by a cut is not a root Swiss").toBe(true);
     expect(at({ stageKind: "swiss", stageConfig: { rounds: 3 }, started: false }), "before Start nothing is locked").toBe(false);
+  });
+  it("W4 T9: a started ROOT knockout is not roster-locked (the product's late-entry door answers) and the model does not offer the add there; every other closed kind still is", async () => {
+    // single-sport: the lock reads stage kinds and the stage's state, not a sport.
+    const { m, d } = await fresh();
+    await play(m, d, [["Start", 0]]);
+    const at = (over: Partial<ModelState>) => ({ ...m, ...over });
+    // The product's own list of root-knockout kinds, not a copy of it: the sweep is over what open-entry-stages.ts declares.
+    expect(ROOT_KNOCKOUT_KINDS.length, "anti-vacuity: the product declares root knockout kinds").toBeGreaterThan(0);
+    let checked = 0;
+    for (const kind of ROOT_KNOCKOUT_KINDS) {
+      const s = at({ stageKind: kind });
+      expect(modelHoldsRootKnockout(s), kind).toBe(true);
+      expect(rosterLocked(s), `${kind}: a started root knockout is not roster-locked`).toBe(false);
+      expect(commandOf("AddEntrant", 0, 0, true).check(s), `${kind}: the model does not offer the add (late-entry outcomes are not modelled)`).toBe(false);
+      expect(rosterLocked(at({ stageKind: kind, started: false })), `${kind}: before Start nothing is locked`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(ROOT_KNOCKOUT_KINDS.length);
+    // A knockout fed by a cut is X-LE-2's: not a root, locked and offered-to-be-refused like any closed format.
+    const fed = at({ stageKind: "knockout", stageConfig: { qualified: [] } });
+    expect(modelHoldsRootKnockout(fed)).toBe(false);
+    expect(rosterLocked(fed)).toBe(true);
+    expect(commandOf("AddEntrant", 0, 0, true).check(fed)).toBe(true);
+    // A league, a double elimination and a complete Swiss stay locked, and the add stays offered (to be refused).
+    for (const kind of ["league", "double_elim"]) {
+      expect(ROOT_KNOCKOUT_KINDS, `premise: ${kind} is no root knockout kind`).not.toContain(kind);
+      const s = at({ stageKind: kind });
+      expect(modelHoldsRootKnockout(s), kind).toBe(false);
+      expect(rosterLocked(s), kind).toBe(true);
+      expect(commandOf("AddEntrant", 0, 0, true).check(s), kind).toBe(true);
+    }
+  });
+  it("W4 T9: the model's fake refuses loudly, not with a seatless entrant, if a test posts a late add into a started root knockout", async () => {
+    // single-sport: the lock reads the stage kind, not a sport.
+    const { m, d } = await fresh();
+    await play(m, d, [["Start", 0]]);
+    if (d.stage === null) throw new Error("test: no stage");
+    d.stage.kind = "knockout";
+    const before = (await d.listEntrants()).length;
+    await expect(d.addEntrants(m.divisionId, [{ displayName: "Late Player", seed: 99, kind: "individual" }])).rejects.toThrow(/late-entry door/);
+    expect((await d.listEntrants()).length, "the refused add changed nothing").toBe(before);
+    expect(before).toBeGreaterThan(0);
   });
 });
 

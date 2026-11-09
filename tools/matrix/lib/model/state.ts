@@ -19,7 +19,7 @@
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { EngineError, forbidsLevelResult, isLevelOutcome, playRecorded, type StageKind } from "@seazn/engine/core";
 import { nextMatchFixtureId, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow, type FixtureStateOut, type OrganiserDriver, type RefusedCall } from "../driver/types.ts";
-import { isRunningRootSwiss } from "../../../../apps/web/src/lib/open-entry-stages.ts";
+import { isRootKnockoutStage, isRunningRootSwiss } from "../../../../apps/web/src/lib/open-entry-stages.ts";
 import { stagesForRow, type RowKey, type StagePostBody } from "../catalogue.ts";
 import { unplayedBoard } from "../fold.ts";
 import { evaluateStepInvariants } from "../invariants.ts";
@@ -205,13 +205,31 @@ export const LINEUP_LOCKED_FINDING = "model-lineup-past-scheduled";
  *  stage is an open-window format (`openKinds`) or — W3 ruling 250, T9 — the
  *  division holds a root Swiss (`rootSwiss`: `hasRootSwissStage`), which
  *  swiss-late-entry.ts admits a late player into while it RUNS and refuses by
- *  name (SWISS_OVER) once it is complete. Pinned against entrants.ts's text by
- *  model-core.test.ts, so a product change turns the pin red. */
-export const ROSTER_LOCK: { readonly status: number; readonly openKinds: readonly string[]; readonly rootSwiss: boolean } = Object.freeze({
+ *  name (SWISS_OVER) once it is complete, or — W4 T9 (X-LE-1, ruling 263) — a
+ *  root knockout (`rootKnockout`: `hasRootKnockoutStage`), whose late player
+ *  knockout-late-entry.ts places, parks or refuses by name. Pinned against
+ *  entrants.ts's text by model-core.test.ts, so a product change turns the pin
+ *  red. */
+export const ROSTER_LOCK: { readonly status: number; readonly openKinds: readonly string[]; readonly rootSwiss: boolean; readonly rootKnockout: boolean } = Object.freeze({
   status: 422,
   openKinds: Object.freeze(["ladder", "americano"]),
   rootSwiss: true,
+  rootKnockout: true,
 });
+
+/** The model's one stage as the product's predicates read a stage row: no progression source, the config the model
+ *  posted, `complete` once Complete answered completed. */
+function modelStage(m: ModelState) {
+  return { kind: m.stageKind, progression: null, config: m.stageConfig, status: m.completed ? "complete" : "active" };
+}
+
+/** W4 T9: the model's stage is the division's ONLY stage, so a knockout (or legacy stepladder / page playoff) here is a
+ *  ROOT knockout in the product's own sense (open-entry-stages.ts `isRootKnockoutStage` over the one-stage division) —
+ *  the roster lock does not apply to it, at any status, as `hasRootKnockoutStage` reads no status. */
+export function modelHoldsRootKnockout(m: ModelState): boolean {
+  const stage = modelStage(m);
+  return ROSTER_LOCK.rootKnockout && isRootKnockoutStage(stage, [stage]);
+}
 
 /** The product refuses an entrant here. The model's single stage is the
  *  division's only stage, and Start is what moves the division to `active`.
@@ -219,11 +237,12 @@ export const ROSTER_LOCK: { readonly status: number; readonly openKinds: readonl
  *  predicate (open-entry-stages.ts `isRunningRootSwiss`, T10 I1) over the
  *  model's one stage: no progression (modelRowRefusal admits single-stage rows
  *  only), the config the model posted, and `complete` once Complete answered
- *  completed. A complete Swiss and every other kind stay locked. */
+ *  completed. A root knockout keeps it open too (W4 T9, `modelHoldsRootKnockout`).
+ *  A complete Swiss and every other kind stay locked. */
 export function rosterLocked(m: ModelState): boolean {
   if (!m.started || ROSTER_LOCK.openKinds.includes(m.stageKind)) return false;
-  const stage = { kind: m.stageKind, progression: null, config: m.stageConfig, status: m.completed ? "complete" : "active" };
-  return !(ROSTER_LOCK.rootSwiss && isRunningRootSwiss(stage));
+  if (modelHoldsRootKnockout(m)) return false;
+  return !(ROSTER_LOCK.rootSwiss && isRunningRootSwiss(modelStage(m)));
 }
 
 /** A take-back refused under NEXT_MATCH_LOCK that still moved the product's tip. */

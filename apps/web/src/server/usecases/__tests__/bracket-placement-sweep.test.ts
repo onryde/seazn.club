@@ -135,7 +135,7 @@ const STANDALONE_SIZES = Array.from({ length: 32 }, (_, i) => i + 2);
  *  never a typed 4. Every other template keeps the two fields it always had (5 and 8). */
 const WIDE_FROM: Readonly<Record<string, number>> = { ko_plate: PLATE_MIN, qualifying_main: QUALIFYING_MAIN_MIN };
 /** The fields a wide template is seeded at: its bound..19 (bracket sizes 4, 8, 16 and every bye count between) then 33..35 (the same
- *  three byte counts again on a bracket of 64, past the point a round crosses). */
+ *  three bye counts again on a bracket of 64, past the point a round crosses). */
 const wideFields = (from: number): number[] => [...Array.from({ length: 19 - from + 1 }, (_, i) => from + i), 33, 34, 35];
 /** The fields the owner and the brief name: one real round-1 match (5), two (6), three (7) in a bracket of 8, and the same on 16 (9) and 32 (17). */
 const NAMED_FIELDS = [5, 6, 7, 9, 17];

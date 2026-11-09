@@ -13,7 +13,7 @@
 //   R6   RB4-V2 / V5 / X-LL-1: a qualifier who has left before the main draw is seated is replaced by the best loser below the cut
 //        - the latest round lost, then the better seed - a walkover loser never drawing, and nobody is walked over in her place.
 // The seeds a rule names are looked up from the setup (idOfSeed), the field sizes are the scripts' own (entrantCount).
-import { DriverMisuse, RefusedCall, type LateEntryWire, type ReinstateOut } from "../driver/types.ts";
+import { DriverMisuse, RefusedCall, type LateEntryWire, type OrganiserDriver, type ReinstateOut } from "../driver/types.ts";
 import type { FixtureRow } from "../driver/types.ts";
 import { PENDING_STATUSES, toObservedOutcome, winnerOf, type ObservedOutcome } from "../observed.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
@@ -209,7 +209,7 @@ export function qualifiersOf(lines: readonly Line[]): ReadonlySet<string> | null
   const semis = semifinalsOf(lines);
   if (final === undefined || final.home === null || final.away === null || final.outcome === null || semis.length !== 2) return null;
   const losers = semis.map(lineLoser);
-  return losers.every((x): x is string => x !== null) ? new Set([final.home, final.away, ...(losers as string[])]) : null;
+  return losers.every((x): x is string => x !== null) ? new Set([final.home, final.away, ...losers]) : null;
 }
 
 /** RB4-V2 / V4 / V5: the best loser below the cut - the latest round lost, then the better seed, never a walkover loser and never
@@ -317,6 +317,12 @@ const r2: Scenario = {
   },
 };
 
+/** The two optional acts the late-entry scripts need: the HTTP driver has them, a layer that does not drive the path does not.
+ *  A guard, not a cast: the narrowed `const` keeps its type inside the `attempt` closures, and the calls stay METHOD calls. */
+function drivesLateEntry(d: OrganiserDriver): d is OrganiserDriver & Required<Pick<OrganiserDriver, "reinstate" | "placeLateEntrant">> {
+  return d.reinstate !== undefined && d.placeLateEntrant !== undefined;
+}
+
 /** R10: seed 3 withdraws from a full bracket, is reinstated (an automatic arrival), and the organiser taps her back in. */
 const r10: Scenario = {
   key: "W4A_R10",
@@ -325,8 +331,8 @@ const r10: Scenario = {
   async run(ctx) {
     const rec = new Recorder();
     const setup = await setUpDivision(ctx, rec, FULL_FIELD);
-    const { reinstate, placeLateEntrant } = ctx.driver;
-    if (reinstate === undefined || placeLateEntrant === undefined) throw new DriverMisuse("driver: W4A_R10 needs reinstate and placeLateEntrant - the HTTP driver has them, a layer that does not drive the path says so");
+    const d = ctx.driver;
+    if (!drivesLateEntry(d)) throw new DriverMisuse("driver: W4A_R10 needs reinstate and placeLateEntrant - the HTTP driver has them, a layer that does not drive the path says so");
     const target = setup.idOfSeed(3);
     const first = (await rootLines(ctx, setup, setup.stage.id)).find((l) => l.round === 1 && holds(l, target));
     if (first === undefined) throw new Error(`scenario: seed 3 (${target}) holds no round-1 line of the started bracket`);
@@ -335,9 +341,9 @@ const r10: Scenario = {
     const w = await ctx.driver.withdraw(target);
     rec.notes.push(`withdrawal of seed 3: policy ${w.policy}`);
     const afterWithdraw = await rootLines(ctx, setup, setup.stage.id);
-    const back = await attempt(rec, "the Reinstate", () => reinstate.call(ctx.driver, target));
+    const back = await attempt(rec, "the Reinstate", () => d.reinstate(target));
     const afterReinstate = await rootLines(ctx, setup, setup.stage.id);
-    const tap = await attempt(rec, "the tap", () => placeLateEntrant.call(ctx.driver, setup.stage.id, target));
+    const tap = await attempt(rec, "the tap", () => d.placeLateEntrant(setup.stage.id, target));
     const afterTap = await rootLines(ctx, setup, setup.stage.id);
     const ledgerAfterTap = (await ctx.driver.fixtureState(first.id)).last_seq;
     const own = assertion("w4a-r10-arrival-waits-then-taps", reinstateItems({

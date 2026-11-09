@@ -805,12 +805,20 @@ describe("I4 nothing-ends-stuck", () => {
     codes: [...src.matchAll(/errorResponse\(\s*requestId,\s*\d{3},\s*"([A-Z_]+)"/g)].map((m) => m[1]!),
     literalCalls: (src.match(/errorResponse\(\s*requestId,\s*[^,()]+,\s*"/g) ?? []).length,
   });
-  /** W3 T18 (RB3-7(c), X-SW-18): http.ts's ZodError branch answers a requested bye with `errorResponse(requestId, row.status,
-   *  "SWISS_REQUESTED_BYES_DEFERRED", …)`, the status read off its SWISS_REFUSALS row — which `directCodes`' three-digit status
-   *  cannot read. That code is a NAMED refusal (the point of the row is that it is not the generic "Invalid input"), so it is
-   *  deliberately NOT a generic code: it is declared here, read from http.ts, and held to be named. */
+  /** http.ts's ZodError branch answers two refused keys by NAME, each `errorResponse(requestId, row.status, "<CODE>", …)` with
+   *  the status read off a refusal-table row - which `directCodes`' three-digit status cannot read:
+   *  W3 T18 (RB3-7(c), X-SW-18) SWISS_REQUESTED_BYES_DEFERRED (SWISS_REFUSALS) and W4 T7 (RB4-D9, X-SD-10)
+   *  COUNTRY_SEPARATION_NOT_OFFERED (KNOCKOUT_REFUSALS). Each is a NAMED refusal (the point of the row is that it is not the
+   *  generic "Invalid input"), so it is deliberately NOT a generic code: declared here, read from http.ts, and held to be
+   *  named. Both are refused at the BODY door, 400 like every body validation. */
   const tableStatusCodes = (src: string) => [...src.matchAll(/errorResponse\(\s*requestId,\s*\w+\.status,\s*"([A-Z_]+)"/g)].map((m) => m[1]!);
-  const NAMED_DIRECT_CODES = ["SWISS_REQUESTED_BYES_DEFERRED"];
+  const NAMED_DIRECT_CODES = ["SWISS_REQUESTED_BYES_DEFERRED", "COUNTRY_SEPARATION_NOT_OFFERED"];
+  /** The file (under apps/web/src/lib) of the refusal table a NAMED direct code's row lives in, read off http.ts itself: the
+   *  `const row = <TABLE>.<CODE>;` that feeds the call, and the `import { <TABLE> } from "@/lib/<file>"` of that table. */
+  const tableFileOf = (src: string, code: string): string | null => {
+    const table = new RegExp(`const row = (\\w+)\\.${code};`).exec(src)?.[1];
+    return table === undefined ? null : new RegExp(`import \\{[^}]*\\b${table}\\b[^}]*\\} from "@/lib/([a-z-]+)"`).exec(src)?.[1] ?? null;
+  };
   it("GENERIC_ERROR_CODES also covers every code http.ts emits DIRECTLY — the pin is statusCode() ∪ those literals", () => {
     const src = readFileSync(resolve(REPO, "apps/web/src/server/api-v1/http.ts"), "utf8");
     const direct = directCodes(src);
@@ -830,14 +838,17 @@ describe("I4 nothing-ends-stuck", () => {
     const src = readFileSync(resolve(REPO, "apps/web/src/server/api-v1/http.ts"), "utf8");
     const named = tableStatusCodes(src);
     expect(named, "anti-vacuity: the reader found the row-status call").not.toEqual([]);
-    expect(named).toEqual(NAMED_DIRECT_CODES);
-    const table = readFileSync(resolve(REPO, "apps/web/src/lib/swiss-refusals.ts"), "utf8");
+    expect([...named].sort()).toEqual([...NAMED_DIRECT_CODES].sort());
     let checked = 0;
     for (const code of named) {
       expect(GENERIC_ERROR_CODES, `${code} is a domain refusal, not a statusCode() stamp`).not.toContain(code);
       expect(isNamedRefusal(400, code), code).toBe(true);
-      // The table row's status is the ruled one (T18: refused at the body door, 400 like every body validation).
-      expect(new RegExp(`\\n  ${code}: \\{\\s*status: (\\d{3}),`).exec(table)?.[1], `${code}'s SWISS_REFUSALS row`).toBe("400");
+      // The table row's status is the ruled one (refused at the body door, 400 like every body validation), in the table
+      // http.ts reads the row from.
+      const file = tableFileOf(src, code);
+      expect(file, `${code}: http.ts reads its row from a table imported from @/lib/<file>`).not.toBeNull();
+      const table = readFileSync(resolve(REPO, `apps/web/src/lib/${file}.ts`), "utf8");
+      expect(new RegExp(`\\n  ${code}: \\{\\s*status: (\\d{3}),`).exec(table)?.[1], `${code}'s row in ${file}.ts`).toBe("400");
       checked++;
     }
     expect(checked).toBe(NAMED_DIRECT_CODES.length);

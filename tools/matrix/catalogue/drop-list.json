@@ -3022,7 +3022,7 @@
     {
       "scenario": "M6",
       "kind": "inapplicable",
-      "reason": "the sport declares no tie decider (DECIDERS: it never finishes level, or — boardgame — KO ties resolve at the fixture layer, false premise 9, W4), or none is switched on under this config — no committed variant enables it",
+      "reason": "the sport declares no tie decider (DECIDERS: it never finishes level, or — boardgame — a KO tie is closed by the fixture's tie-break rung, BG-KO-1, unit-proven in apps/web settle-seating.test.ts and tools/matrix w2a-scenarios.test.ts; boardgame's M6 case is not driven end to end because that run ends in the public standings API, which next dev cannot serve — owed: W4 app PR B, a prod-build e2e), or none is switched on under this config — no committed variant enables it",
       "count": 112,
       "cells": {
         "league": [
