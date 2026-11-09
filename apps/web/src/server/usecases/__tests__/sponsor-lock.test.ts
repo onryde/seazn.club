@@ -268,7 +268,32 @@ describe.skipIf(!HAS_DB)("the console row carries its deal summary (pickRowDeal,
   });
 });
 
-describe.skipIf(!HAS_DB)("deleting a sponsor: its deal history holds it (409), a deal that never got past waiting goes with it", () => {
+/** Product ruling (controller, 2026-11-09, on Task 5's concern 2): a deal holds its sponsor ONLY when it carries money or
+ *  document history — money paid or refunded, an invoice number (Task 20, F10: no deal has one yet), a stored Checkout
+ *  session (F3: still a payable link until Task 7 expires it), or a pre-deals legacy order (F16: the RESTRICT key covers
+ *  it). Every other deal goes with its sponsor, in the same transaction. Typed here from the ruling, never read from the
+ *  code under test. */
+const COMPLIMENTARY: Deal = { payment_method: "complimentary", status: "none", go_live: "immediate" };
+const DELETABLE: [string, Deal][] = [
+  ["a draft", { deal_status: "draft" }],
+  ["an offline deal awaiting payment", { deal_status: "awaiting_payment", payment_method: "offline" }],
+  ["an online deal awaiting payment, no session stored", {}],
+  ["an online deal whose payment failed", { status: "failed", payment_intent_id: `pi_failed_${uniq()}` }],
+  ["a live complimentary deal (money none)", { ...COMPLIMENTARY, deal_status: "live", live_at: T0 }],
+  ["an ended complimentary deal", { ...COMPLIMENTARY, ...ENDED }],
+  ["a complimentary deal awaiting approval", { ...COMPLIMENTARY, go_live: "on_approval", deal_status: "awaiting_approval" }],
+  ["a live deal still unpaid (offline, immediate)", { deal_status: "live", live_at: T0, payment_method: "offline", go_live: "immediate" }],
+  ["a scheduled unpaid deal", { deal_status: "scheduled", payment_method: "offline", go_live: "immediate" }],
+  ["an ended deal that never took money", ENDED],
+];
+const HISTORY: [string, Deal][] = [
+  ["a paid deal", LIVE],
+  ["a refunded deal", { ...ENDED, ended_reason: "refunded", status: "refunded", paid_at: T0, payment_intent_id: `pi_refunded_${uniq()}` }],
+  ["a legacy order (F16: the RESTRICT key covers it)", LEGACY],
+  ["an online deal holding a Checkout session (F3, until Task 7 expires it)", { checkout_session_id: `cs_test_${uniq()}`, checkout_url: "https://checkout.stripe.test/x" }],
+];
+
+describe.skipIf(!HAS_DB)("deleting a sponsor: money or document history holds it (409); every other deal goes with it", () => {
   it("no deals: deleted", async () => {
     const o = await org();
     const id = await sponsor(o);
@@ -276,33 +301,41 @@ describe.skipIf(!HAS_DB)("deleting a sponsor: its deal history holds it (409), a
     expect(await rowBytes(id)).toBeNull();
   });
 
-  it("deals that never got past waiting (a draft; an offline deal awaiting payment): deleted with them (count reported)", async () => {
+  it("RULING: a sponsor whose only deal is an ended complimentary one is deleted, and its deal is gone", async () => {
     const o = await org();
-    let checked = 0;
-    for (const over of [{ deal_status: "draft" }, { deal_status: "awaiting_payment", payment_method: "offline" }] as Deal[]) {
-      const id = await sponsor(o, "inactive");
-      await insertDeal(deal(o, id, over));
-      await expect(deleteSponsor(o.auth, id), String(over.deal_status)).resolves.toBeUndefined();
-      expect(await rowBytes(id), String(over.deal_status)).toBeNull();
-      expect(await dealCount(id), `${over.deal_status}: its deal went with it`).toBe(0);
-      checked++;
-    }
-    expect(checked, "deletable deals checked").toBe(2);
+    const id = await sponsor(o, "inactive");
+    await insertDeal(deal(o, id, { ...COMPLIMENTARY, ...ENDED }));
+    await expect(deleteSponsor(o.auth, id)).resolves.toBeUndefined();
+    expect(await rowBytes(id)).toBeNull();
+    expect(await dealCount(id)).toBe(0);
   });
 
-  it("every kind of deal history answers 409 sponsor_has_deal_history — never a 23503 — and deletes nothing (count reported)", async () => {
+  it("every deal without money or document history goes with its sponsor: drafts, unpaid, failed, complimentary, live or ended (count reported)", async () => {
     const o = await org();
-    const HISTORY: [string, Deal][] = [
-      ["a paid live deal", LIVE],
-      ["a payment intent on a deal still awaiting payment", { payment_intent_id: `pi_${uniq()}` }],
-      ["a dispute on a deal still awaiting payment", { disputed_at: T0 }],
-      ["a live deal still unpaid (offline, immediate)", { deal_status: "live", live_at: T0, payment_method: "offline", go_live: "immediate" }],
-      ["a scheduled deal", { deal_status: "scheduled", payment_method: "offline", go_live: "immediate" }],
-      ["an ended deal that never took money", ENDED],
-      ["a complimentary deal (no payment states)", { payment_method: "complimentary", status: "none", go_live: "on_approval", deal_status: "awaiting_approval" }],
-      ["a legacy order only (F16: the RESTRICT key covers it)", LEGACY],
-      ["an online deal holding a Checkout session (F3, until Task 7 expires it)", { checkout_session_id: `cs_test_${uniq()}`, checkout_url: "https://checkout.stripe.test/x" }],
-    ];
+    let checked = 0;
+    for (const [label, over] of DELETABLE) {
+      const id = await sponsor(o, "inactive");
+      await insertDeal(deal(o, id, over));
+      expect(await refusal(() => deleteSponsor(o.auth, id)), label).toEqual({ status: undefined, code: "no_refusal" });
+      expect(await rowBytes(id), `${label}: the sponsor is gone`).toBeNull();
+      expect(await dealCount(id), `${label}: and its deal with it`).toBe(0);
+      checked++;
+    }
+    expect(checked, "deletable kinds checked").toBe(DELETABLE.length);
+    expect(checked).toBe(10);
+  });
+
+  it("several deletable deals on one sponsor all go with it, in one transaction", async () => {
+    const o = await org();
+    const id = await sponsor(o);
+    for (const [, over] of DELETABLE.slice(0, 6)) await insertDeal(deal(o, id, over));
+    expect(await dealCount(id), "premise").toBe(6);
+    await expect(deleteSponsor(o.auth, id)).resolves.toBeUndefined();
+    expect(await dealCount(id)).toBe(0);
+  });
+
+  it("money or document history answers 409 sponsor_has_deal_history — paid, refunded, legacy, a stored session — never a 23503, and deletes nothing (count reported)", async () => {
+    const o = await org();
     let checked = 0;
     for (const [label, over] of HISTORY) {
       const id = await sponsor(o, "inactive");
@@ -313,16 +346,17 @@ describe.skipIf(!HAS_DB)("deleting a sponsor: its deal history holds it (409), a
       checked++;
     }
     expect(checked, "history kinds checked").toBe(HISTORY.length);
-    expect(checked).toBe(9);
+    expect(checked).toBe(4);
   });
 
-  it("one deal of history holds the sponsor even beside a deletable draft, and the draft stays too", async () => {
+  it("one deal of history holds the sponsor even beside deletable ones, and they all stay", async () => {
     const o = await org();
     const id = await sponsor(o);
     await insertDeal(deal(o, id, { deal_status: "draft" }));
+    await insertDeal(deal(o, id, { ...COMPLIMENTARY, ...ENDED }));
     await insertDeal(deal(o, id, LIVE));
     expect(await refusal(() => deleteSponsor(o.auth, id))).toEqual({ status: 409, code: "sponsor_has_deal_history" });
-    expect(await dealCount(id)).toBe(2);
+    expect(await dealCount(id)).toBe(3);
   });
 
   it("another org's sponsor (RLS) and a missing one are 404", async () => {

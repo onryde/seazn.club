@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { SPONSOR_TIERS } from "@/lib/sponsor-tiers";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -439,6 +439,38 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
     await expect(sql`delete from sponsors where id = ${withDeal}`).rejects.toMatchObject(refusedBy("23503", "sponsor_orders_sponsor_id_fkey"));
     const bare = await sponsor(w);
     await expect(sql`delete from sponsors where id = ${bare} returning id`).resolves.toHaveLength(1);
+  });
+
+  // Product ruling (controller, 2026-11-09, Task 5): a deal holds its sponsor only when it carries money or document
+  // history. The tenant's prune policy (V300's fence, widened by this delta) admits exactly the other deals, so a sponsor
+  // delete takes them with it; deleteSponsor's 409 is the app's answer for the rest, and this policy is the fence under it.
+  it("the tenant's prune policy admits exactly the deals without money or document history: never paid or refunded money, a stored Checkout session or a legacy order (count reported)", async () => {
+    const w = await world();
+    const COMP: Deal = { payment_method: "complimentary", status: "none", go_live: "immediate" };
+    const KINDS: [string, Deal, "deleted" | "fenced"][] = [
+      ["a draft", { deal_status: "draft" }, "deleted"],
+      ["awaiting payment (open: ended_reason null)", {}, "deleted"],
+      ["a failed payment, with its intent", { status: "failed", payment_intent_id: `pi_${uniq()}` }, "deleted"],
+      ["a live complimentary deal", { ...COMP, deal_status: "live", live_at: new Date() }, "deleted"],
+      ["an ended complimentary deal", { ...COMP, ...ended("ended_now") }, "deleted"],
+      ["an unpaid deal that ended", ended("expired"), "deleted"],
+      ["paid money", { ...LIVE, payment_intent_id: `pi_${uniq()}` }, "fenced"],
+      ["refunded money", { ...ended("refunded"), status: "refunded", paid_at: new Date() }, "fenced"],
+      ["a legacy order", ended("legacy"), "fenced"],
+      ["a stored Checkout session", { checkout_session_id: `cs_test_${uniq()}`, checkout_url: "https://checkout.stripe.test/x" }, "fenced"],
+    ];
+    let checked = 0;
+    for (const [label, over, expected] of KINDS) {
+      const id = await insertDeal(deal(w, await sponsor(w), over));
+      const gone = await withTenant(w.orgId, (tx) => tx`delete from sponsor_orders where id = ${id} returning id`);
+      expect(gone.length === 1 ? "deleted" : "fenced", label).toBe(expected);
+      checked++;
+    }
+    expect(checked, "deal kinds checked").toBe(10);
+    // The tenant fence never crosses orgs, whatever the deal.
+    const elsewhere = await world();
+    const theirs = await insertDeal(deal(elsewhere, await sponsor(elsewhere), { deal_status: "draft" }));
+    await expect(withTenant(w.orgId, (tx) => tx`delete from sponsor_orders where id = ${theirs} returning id`)).resolves.toHaveLength(0);
   });
 
   it("deleting a competition a deal is scoped to is refused by name (23503); deleting one with no deal is accepted", async () => {
