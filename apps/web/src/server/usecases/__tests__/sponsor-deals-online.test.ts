@@ -508,6 +508,40 @@ describe.skipIf(!HAS_DB)("Mark as paid, End now, refund and delete apply the ses
     expect(await dealBytes(d.id)).toBe(before);
   });
 
+  it("a stored session nobody can read decides nothing: retrieve throws, or answers a status that is not open, complete or expired → send, Mark as paid and End now are 502 stripe_unavailable, delete is 409 sponsor_has_open_checkout; no expire, no mint, the deal byte-equal (2 answers × 4 actions)", async () => {
+    // Batch C review: the session rule acts on `retrieve`'s status alone (D14, F3), so an unreadable session must stop every action
+    // that would replace, abandon or delete it — never read as `expired` (a re-mint beside a live link) or as `open`.
+    const unreadable: [string, () => Promise<unknown>][] = [
+      ["retrieve throws", async () => {
+        throw new Error("stripe: connection reset");
+      }],
+      ["unknown status", async () => ({ id: "cs_x", status: "processing" })],
+    ];
+    let checked = 0;
+    for (const [answer, retrieve] of unreadable) {
+      const actions: [string, (d: Awaited<ReturnType<typeof onlineDeal>>) => Promise<unknown>, { status: number; code: string }][] = [
+        ["send", (d) => sendDealInvoice(d.o.auth, d.id, ORIGIN), { status: 502, code: "stripe_unavailable" }],
+        ["mark paid", (d) => markDealPaid(d.o.auth, d.id), { status: 502, code: "stripe_unavailable" }],
+        ["end now", (d) => endDealNow(d.o.auth, d.id), { status: 502, code: "stripe_unavailable" }],
+        ["delete", (d) => deleteSponsor(d.o.auth, d.sponsorId), { status: 409, code: "sponsor_has_open_checkout" }],
+      ];
+      for (const [what, act, want] of actions) {
+        const d = await onlineDeal();
+        stripe.retrieve.mockImplementation(retrieve);
+        stripe.create.mockClear();
+        stripe.expire.mockClear();
+        const before = await dealBytes(d.id);
+        expect(await refusal(() => act(d)), `${answer} / ${what}`).toEqual({ http: true, ...want });
+        expect(stripe.retrieve, `${answer} / ${what}: Stripe was asked`).toHaveBeenCalled();
+        expect(stripe.expire, `${answer} / ${what}: nothing expired`).not.toHaveBeenCalled();
+        expect(stripe.create, `${answer} / ${what}: nothing minted`).not.toHaveBeenCalled();
+        expect(await dealBytes(d.id), `${answer} / ${what}: the deal byte-equal`).toBe(before);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: every action under every unreadable answer").toBe(8);
+  });
+
   it("the send asks again under the lock: a payment recorded while the link is minted is 409 deal_not_invoiceable, and a concurrent send that moved the count first is 409 deal_changed; neither queues an invoice", async () => {
     // Under 10 minutes left forces a re-mint, so Stripe's create runs between the unlocked read and the lock: the hook.
     const paidMeanwhile = await onlineDeal();

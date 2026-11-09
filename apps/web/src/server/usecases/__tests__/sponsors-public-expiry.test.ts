@@ -94,9 +94,9 @@ describe.skipIf(!HAS_DB)("an organiser's sponsor write expires the public pages 
     expect(checked, "anti-vacuity: every organiser write was checked").toBe(4);
   });
 
-  // Sponsor deals Task 7 (F8): the checkout is an online deal on an existing sponsor, refunded through refundDeal (a charge
-  // moved the money, so the refund goes through Stripe). Its webhook leg is Task 8's to change: the premise reads the DEAL's
-  // sponsor, so it holds whether the webhook inserts a sponsor (today) or moves the deal's own (Task 8).
+  // Sponsor deals Task 7/8 (F8): the checkout is an online deal on an existing sponsor, refunded through refundDeal (a charge
+  // moved the money, so the refund goes through Stripe). Its webhook leg moves the deal, and the deal puts its OWN sponsor live
+  // (Task 8: the webhook never inserts one); nobody reads a webhook's result back at once, so its bust stays `deferred` (F1).
   it("a console refund has fired the org tag ({ expire: 0 }) by the time it resolves: the refunded placement leaves the public page at once", async () => {
     stubOutboxEnv();
     stripeMock.checkoutCreate.mockReset().mockResolvedValue({ id: "cs_x", url: "https://stripe.test/s", expires_at: Math.floor(Date.now() / 1000) + 86_400 });
@@ -118,13 +118,21 @@ describe.skipIf(!HAS_DB)("an organiser's sponsor write expires the public pages 
       { package_id: pkg.id, competition_id: null, payment_method: "online", go_live: "on_payment", sponsor_email: "r@ref.test", ends_on: null },
       "https://app.test",
     );
+    h.tags.length = 0;
+    h.tails.length = 0;
     await handleSponsorPaymentSucceeded({
       id: `pi_${suffix}`,
       metadata: { kind: "sponsor", order_id: deal.id, package_id: pkg.id, org_id: orgId },
     } as unknown as Stripe.PaymentIntent);
-    const [live] = await sql<{ status: string }[]>`
-      select s.status from sponsors s join sponsor_orders d on d.sponsor_id = s.id where d.id = ${deal.id}`;
+    const [live] = await sql<{ id: string; status: string }[]>`
+      select s.id, s.status from sponsors s join sponsor_orders d on d.sponsor_id = s.id where d.id = ${deal.id}`;
+    expect(live?.id, "the deal's EXISTING sponsor, not a new row").toBe(sponsorId);
     expect(live?.status, "premise: the paid placement is live before the refund").toBe("active");
+    // The webhook's bust is tail work (F1): nothing fired in the request, one task left to after(), and running it fires the tag.
+    expect(h.tags.filter((t) => t.tag === orgTag(proSlug)), "the webhook fires no tag in the request").toEqual([]);
+    expect(h.tails, "the webhook leaves its bust to after()").toHaveLength(1);
+    await (h.tails[0] as () => Promise<void>)();
+    expect(h.tags.map((t) => t.tag), "the deferred bust expires the org's tag").toContain(orgTag(proSlug));
 
     h.tags.length = 0;
     const refunded = await refundDeal(pro, deal.id);
