@@ -70,7 +70,7 @@ import { tableOrderOf } from "@/server/engine-db/table-rules";
 import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { effectiveEntrantModel, type TableStageKind, type TiebreakerKey } from "@seazn/engine/sport";
 import type { ProgressionSpec } from "@seazn/engine/competition";
-import { seedingSourceReady } from "@/lib/seeding-source-ready";
+import { confirmedDrawReopens as confirmedDrawReopensFor, seedingSourceReady } from "@/lib/seeding-source-ready";
 import { sql, withTenant } from "@/lib/db";
 import { DivisionDangerZone } from "@/components/v2/division-danger-zone";
 import { EmbedSnippet } from "@/components/v2/embed-snippet";
@@ -324,6 +324,12 @@ export default async function DivisionPage({
       s,
       s.progression as unknown as Pick<ProgressionSpec, "sources">,
     ),
+  );
+  // W4 B6a fix round 1 (review #1): the Confirm warning promises "you can recompute it" only where the server reopens a
+  // confirmed draw - every source a knockout stage (lib/seeding-source-ready.ts `confirmedDrawReopens`, the same source
+  // resolution as the readiness above). A table source's confirmed draw is refused for good.
+  const confirmedDrawReopens = seedingStages.map((s) =>
+    confirmedDrawReopensFor(stages, s, s.progression as unknown as Pick<ProgressionSpec, "sources">),
   );
   // F3 Task 5c (ruling 14 — seeding stays propose-and-confirm, no
   // auto-confirm). Fetched on EVERY tab, not just fixtures: ruling 14's whole
@@ -1002,6 +1008,7 @@ export default async function DivisionPage({
                 entrantNames={entrantNames}
                 stageNames={stageNames}
                 departedEntrantIds={departedEntrantIds}
+                confirmedDrawReopens={confirmedDrawReopens[i] ?? false}
                 locale={locale}
                 canEdit={editable}
               />

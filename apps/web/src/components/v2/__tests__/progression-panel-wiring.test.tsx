@@ -53,6 +53,7 @@ function baseProps(overrides: Partial<ProgressionPanelProps> = {}): ProgressionP
     entrantNames: ENTRANT_NAMES,
     stageNames: STAGE_NAMES,
     departedEntrantIds: [],
+    confirmedDrawReopens: false,
     locale: "en",
     canEdit: true,
     ...overrides,

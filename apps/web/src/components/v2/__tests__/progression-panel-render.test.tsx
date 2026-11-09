@@ -36,6 +36,7 @@ function baseProps(overrides: Partial<ProgressionPanelProps> = {}): ProgressionP
     entrantNames: ENTRANT_NAMES,
     stageNames: STAGE_NAMES,
     departedEntrantIds: [],
+    confirmedDrawReopens: false,
     locale: "en",
     canEdit: true,
     ...overrides,
@@ -206,17 +207,23 @@ describe("ProgressionPanel — draft table structure", () => {
   });
 });
 
-// W4 B1b review M11 (controller ruling, fix round 1): since W4 T5 a confirmed draw is an undo barrier — Undo, Redo and
+// W4 B1b review M11 (controller ruling, fix round 1): since W4 T5 a confirmed draw is an undo barrier - Undo, Redo and
 // Restore refuse to cross it (SEED_CONFIRM_NOT_UNDOABLE) and Recompute is refused for good. The organiser is told so
 // BEFORE pressing Confirm, as the Swiss rounds dialog says its own barrier before Save (swiss-rounds-dialog.tsx), so the
-// lock is never a surprise. The sentence is typed here (the ruling's), never read back from the panel.
-describe("ProgressionPanel — Confirm warns that a confirmed draw can't be undone (M11)", () => {
+// lock is never a surprise. The sentences are typed here (the ruling's), never read back from the panel.
+//
+// W4 B6a fix round 1 (review #1): the second sentence - "If a result it was drawn from is corrected before play starts, you
+// can recompute it" - is true only where the SERVER reopens a confirmed draw: a correction inside a completed KNOCKOUT
+// source (scoring.ts, W4 T14). A table source (groups, league, Swiss ...) is refused SEEDING_ALREADY_CONFIRMED for good, so
+// there the panel says the first sentence alone. The panel's `confirmedDrawReopens` prop carries the page's verdict.
+describe("ProgressionPanel - Confirm warns that a confirmed draw can't be undone (M11), and promises a recompute only where one exists", () => {
   const KEY = "progression.confirmFinal";
-  // W4 T19 (T13-14 review m3, b6a carry): the first wording promised a draw "can't be undone" — true of Undo (it stops at a
-  // confirm) but not of the draw: a result it was drawn from, corrected before play starts, makes a confirmed draw stale and
-  // it can be recomputed (T13). Typed here, the truthful sentence; never read back from the panel.
-  const SENTENCE = "Once confirmed, Undo can't take this draw back. If a result it was drawn from is corrected before play starts, you can recompute it.";
+  const RECOMPUTE_KEY = "progression.confirmFinalRecompute";
+  const UNDO = "Once confirmed, Undo can't take this draw back.";
+  const RECOMPUTE = "If a result it was drawn from is corrected before play starts, you can recompute it.";
   const noTies: SeedProposal = { ...DRAFT, computed: { ...DRAFT.computed, ties: [] } };
+  const WARN = /<p[^>]*data-testid="progression-confirm-final"[^>]*>([^<]*)<\/p>/;
+  const said = (html: string) => html.match(WARN)?.[1]?.replaceAll("&#x27;", "'");
 
   it("the empty cases first: no proposal, a draft with nobody in it, a stale one and a confirmed one carry no warning (none has Confirm)", () => {
     const states: [string, SeedProposal | null][] = [
@@ -227,21 +234,23 @@ describe("ProgressionPanel — Confirm warns that a confirmed draw can't be undo
     ];
     let checked = 0;
     for (const [what, proposal] of states) {
-      const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ proposal })} />);
-      expect(html, `${what}: premise, the card rendered`).not.toBe("");
-      expect(html, `${what}: no Confirm`).not.toContain("Confirm proposal");
-      expect(html, `${what}: no warning`).not.toContain('data-testid="progression-confirm-final"');
-      checked++;
+      for (const confirmedDrawReopens of [false, true]) {
+        const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ proposal, confirmedDrawReopens })} />);
+        expect(html, `${what}: premise, the card rendered`).not.toBe("");
+        expect(html, `${what}: no Confirm`).not.toContain("Confirm proposal");
+        expect(html, `${what}: no warning`).not.toContain('data-testid="progression-confirm-final"');
+        checked++;
+      }
     }
-    expect(checked, "anti-vacuity: every Confirm-less state").toBe(4);
+    expect(checked, "anti-vacuity: every Confirm-less state, both verdicts").toBe(8);
   });
 
-  it("a draft says it beside Confirm, before the button, whether Confirm is live or waiting on a tie", () => {
+  it("a table source (the draw can never be reopened): the first sentence ALONE - no recompute promise, whether Confirm is live or waiting on a tie", () => {
     let checked = 0;
     for (const proposal of [noTies, DRAFT]) {
-      const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ proposal })} />);
-      const warn = html.match(/<p[^>]*data-testid="progression-confirm-final"[^>]*>([^<]*)<\/p>/);
-      expect(warn?.[1], "the warning is the ruling's sentence").toBe(SENTENCE.replaceAll("'", "&#x27;"));
+      const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ proposal, confirmedDrawReopens: false })} />);
+      expect(said(html), "the warning is the first sentence alone").toBe(UNDO);
+      expect(html).not.toContain("recompute");
       expect(html.indexOf('data-testid="progression-confirm-final"'), "said before the Confirm button").toBeLessThan(
         html.search(/<button[^>]*>\s*Confirm proposal\s*<\/button>/),
       );
@@ -250,7 +259,20 @@ describe("ProgressionPanel — Confirm warns that a confirmed draw can't be undo
     expect(checked).toBe(2);
   });
 
-  it("is said in the reader's language: all four dictionaries carry it, translated, and the panel renders each", async () => {
+  it("a knockout source (a corrected result reopens the draw before play): both sentences, in order, in the one warning", () => {
+    let checked = 0;
+    for (const proposal of [noTies, DRAFT]) {
+      const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ proposal, confirmedDrawReopens: true })} />);
+      expect(said(html), "the warning is both sentences").toBe(`${UNDO} ${RECOMPUTE}`);
+      expect(html.indexOf('data-testid="progression-confirm-final"'), "said before the Confirm button").toBeLessThan(
+        html.search(/<button[^>]*>\s*Confirm proposal\s*<\/button>/),
+      );
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("is said in the reader's language: all four dictionaries carry both sentences, translated, and the panel renders each branch", async () => {
     const { DictProvider } = await import("@/components/i18n/dict-provider");
     const dicts = {
       en: (await import("@/dictionaries/en/ui.json")).default,
@@ -258,21 +280,26 @@ describe("ProgressionPanel — Confirm warns that a confirmed draw can't be undo
       fr: (await import("@/dictionaries/fr/ui.json")).default,
       nl: (await import("@/dictionaries/nl/ui.json")).default,
     } as unknown as Record<"en" | "es" | "fr" | "nl", Record<string, string>>;
-    expect(dicts.en[KEY], "en is the ruling's sentence").toBe(SENTENCE);
+    expect(dicts.en[KEY], "en is the ruling's first sentence").toBe(UNDO);
+    expect(dicts.en[RECOMPUTE_KEY], "en is the ruling's second sentence").toBe(RECOMPUTE);
     let checked = 0;
     for (const [locale, dict] of Object.entries(dicts) as ["en" | "es" | "fr" | "nl", Record<string, string>][]) {
-      const value = dict[KEY];
-      expect(typeof value === "string" && value.trim() !== "", `${locale}/${KEY} is missing`).toBe(true);
-      if (locale !== "en") expect(value, `${locale}/${KEY} copies the English`).not.toBe(SENTENCE);
-      const html = renderToStaticMarkup(
-        <DictProvider dict={dict as never} locale={locale}>
-          <ProgressionPanel {...baseProps({ proposal: noTies, locale })} />
-        </DictProvider>,
-      );
-      const warn = html.match(/<p[^>]*data-testid="progression-confirm-final"[^>]*>([^<]*)<\/p>/);
-      expect(warn?.[1]?.replaceAll("&#x27;", "'"), `${locale}: the panel renders its own dictionary's sentence`).toBe(value);
-      checked++;
+      for (const [key, english] of [[KEY, UNDO], [RECOMPUTE_KEY, RECOMPUTE]] as const) {
+        const value = dict[key];
+        expect(typeof value === "string" && value.trim() !== "", `${locale}/${key} is missing`).toBe(true);
+        if (locale !== "en") expect(value, `${locale}/${key} copies the English`).not.toBe(english);
+      }
+      for (const reopens of [false, true]) {
+        const html = renderToStaticMarkup(
+          <DictProvider dict={dict as never} locale={locale}>
+            <ProgressionPanel {...baseProps({ proposal: noTies, locale, confirmedDrawReopens: reopens })} />
+          </DictProvider>,
+        );
+        const want = reopens ? `${dict[KEY]} ${dict[RECOMPUTE_KEY]}` : dict[KEY];
+        expect(said(html), `${locale}, reopens=${reopens}: the panel renders its own dictionary's sentence(s)`).toBe(want);
+        checked++;
+      }
     }
-    expect(checked, "anti-vacuity: four locales").toBe(4);
+    expect(checked, "anti-vacuity: four locales, both branches").toBe(8);
   });
 });

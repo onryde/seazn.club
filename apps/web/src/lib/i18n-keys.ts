@@ -5752,6 +5752,7 @@ export type DictionaryKey =
   | "progression.computeCta"
   | "progression.confirmCta"
   | "progression.confirmFinal"
+  | "progression.confirmFinalRecompute"
   | "progression.confirmedNotice.one"
   | "progression.confirmedNotice.other"
   | "progression.confirming"
