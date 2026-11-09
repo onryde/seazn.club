@@ -24,7 +24,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { listKnockoutWaiting } from "../knockout-desk";
 import { placeWaitingKnockoutEntrant } from "../knockout-late-entry";
-import { undoDivision } from "../history";
+import { setDivisionLocks, undoDivision } from "../history";
 import { callFixtureToCourt } from "../match-day-call";
 import { moveFixture, startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
@@ -361,6 +361,67 @@ describe.skipIf(!HAS_DB)("W4 T10: Add late player on a drawn knockout", () => {
     await rebuildStageFixtures(r.auth, r.stageId);
     expect(await seatedIn(late.id), "Rebuild fixtures drew the field again with them in it").toEqual([r.stageId]);
     expect(await waitingOn(late.id), "the marker clears").toBeNull();
+  });
+
+  it("m1 round 1 complete, nothing started, the schedule FROZEN: no Rebuild offered (Rebuild refuses it) - kept, waiting, told to unfreeze first; unfrozen, the offer returns", async () => {
+    // Final review m1 (owner ruling 2026-11-09): the offer pointed at a Rebuild that answers 422 SCHEDULE_LOCKED while the
+    // division's schedule is frozen. Frozen, the answer is `refused` with KO_LATE_ENTRY_SCHEDULE_FROZEN (the notice says
+    // unfreeze first); the player is kept and waits exactly as on the offer, so unfreezing brings the offer back.
+    const r = await rig({ n: 8 });
+    await setDivisionLocks(r.auth, r.divisionId, { schedule_locked: true }); // the Schedule page's freeze
+    // The premise the ruling rests on, through its real door: Rebuild refuses a frozen schedule.
+    await expect(rebuildStageFixtures(r.auth, r.stageId), "premise: Rebuild refuses while frozen").rejects.toMatchObject({
+      status: 422,
+      code: "SCHEDULE_LOCKED",
+    });
+    const before = (await rowsOf(r.stageId)).map(shapeOf);
+    const count = await entrantCount(r.divisionId);
+    const barriers = await barrierRows(r.divisionId);
+    const late = await addLate(r);
+    expect(late.late_entry, "the add: no Rebuild offered, unfreeze first").toEqual({
+      format: "knockout",
+      entrant_id: late.id,
+      stage_id: r.stageId,
+      case: "refused",
+      reason: "KO_LATE_ENTRY_SCHEDULE_FROZEN",
+    });
+    expect(await entrantCount(r.divisionId), "the player is kept").toBe(count + 1);
+    expect(await waitingOn(late.id), "flagged, as on the offer").toBe(r.stageId);
+    expect((await rowsOf(r.stageId)).map(shapeOf), "no line moved").toEqual(before);
+    expect(await seatedIn(late.id), "seated nowhere").toEqual([]);
+    expect(await barrierRows(r.divisionId), "nothing placed: no undo barrier").toBe(barriers);
+    // A second call (the strip's tap) reads the freeze too, under the same lock.
+    expect(await placeWaitingKnockoutEntrant(r.auth, r.stageId, late.id), "the tap, frozen").toEqual({
+      format: "knockout",
+      entrant_id: late.id,
+      stage_id: r.stageId,
+      case: "refused",
+      reason: "KO_LATE_ENTRY_SCHEDULE_FROZEN",
+    });
+    expect(await waitingOn(late.id), "still waiting after the tap").toBe(r.stageId);
+
+    // Unfrozen: the answer is the offer again, and Rebuild (now allowed) seats them.
+    await setDivisionLocks(r.auth, r.divisionId, { schedule_locked: false });
+    expect(await placeWaitingKnockoutEntrant(r.auth, r.stageId, late.id), "the tap, unfrozen").toMatchObject({
+      case: "rebuild_offered",
+      reason: "KO_LATE_ENTRY_NO_SLOT",
+    });
+    await rebuildStageFixtures(r.auth, r.stageId);
+    expect(await seatedIn(late.id), "Rebuild fixtures drew the field again with them in it").toEqual([r.stageId]);
+    expect(await waitingOn(late.id), "the marker clears").toBeNull();
+  });
+
+  it("m1 frozen AND a match started: the add keeps its named refusal (no Rebuild, nothing to unfreeze for) and rolls back", async () => {
+    const r = await rig({ n: 8 });
+    const { courts } = await placeRoundOne(r, 4, 4);
+    const l1 = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && x.seq_in_round === 1)!;
+    await callFixtureToCourt(r.auth, l1.id, courts[0]!);
+    await setDivisionLocks(r.auth, r.divisionId, { schedule_locked: true }); // the Schedule page's freeze
+    const count = await entrantCount(r.divisionId);
+    const err = await refusal(addLate(r));
+    expect(err).toMatchObject({ status: 409, code: "KO_LATE_ENTRY_NO_SLOT", message: NO_SLOT });
+    expect(err.extra).toMatchObject({ can_rebuild: false });
+    expect(await entrantCount(r.divisionId), "rolled back").toBe(count);
   });
 
   it("RB4-L6 the offer is made once per newcomer: a second add into the same full bracket is offered too, and both wait in arrival order", async () => {

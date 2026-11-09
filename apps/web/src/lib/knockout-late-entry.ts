@@ -8,7 +8,10 @@
 //       page playoff, whose "byes" are rungs (X-LE-8, `caseTwoOnly`);
 //   (2) a WITHDRAWN entrant's round-1 seat, its line not played, whose walkover winner has not started round 2 — the
 //       walkover is then reversed (X-LE-5). The earliest such line in draw order (`seq`) when there are several;
-//   (3) refused: "Round 1 complete; no slot left", with Rebuild offered when nothing in the stage has started (X-LE-6).
+//   (3) refused: "Round 1 complete; no slot left", with Rebuild offered when nothing in the stage has started (X-LE-6) —
+//       unless the division's schedule is FROZEN: Rebuild refuses a frozen schedule (422 SCHEDULE_LOCKED,
+//       usecases/stages.ts `regenerateStageInTx`), so it is not offered and the refusal says unfreeze first (final review
+//       m1, owner ruling 2026-11-09).
 // Never round 2 or later (X-LE-7): only round-1 lines are read, and a withdrawn BYE HOLDER's line is never case (2) — its
 // bye already carried the holder into round 2, so taking that seat would seat the newcomer there.
 //
@@ -20,6 +23,11 @@ import { chooseByeLine, type ByeLineCandidate } from "@/lib/bracket-reconcile";
  *  so they are back on the entrant list and never back in the bracket. Not a refusal of the request (the reinstatement
  *  lands): the reply says it, and the desk's notice says it in the organiser's language. */
 export const KO_LATE_ENTRY_PLAYED_ON = "KO_LATE_ENTRY_PLAYED_ON";
+
+/** Final review m1 (owner ruling 2026-11-09): the reason a full bracket's refusal answers `refused` instead of
+ *  `rebuild_offered` when nothing has started but the division's schedule is frozen — Rebuild would refuse it, so the
+ *  answer says unfreeze the schedule first. The player keeps waiting, as on the offer. */
+export const KO_LATE_ENTRY_SCHEDULE_FROZEN = "KO_LATE_ENTRY_SCHEDULE_FROZEN";
 
 /** One round-1 line, as the decision reads it. */
 export interface LateLine {
@@ -54,7 +62,9 @@ export interface LateLine {
 export type KnockoutLateDecision =
   | { case: "bye"; lineId: string }
   | { case: "withdrawn_slot"; lineId: string; seat: "home" | "away"; reverse: boolean }
-  | { case: "refused"; canRebuild: boolean };
+  /** `unfreezeFirst`: nothing has started, so Rebuild WOULD be the way in, but the schedule is frozen and Rebuild refuses a
+   *  frozen schedule — so it is not offered (`canRebuild` false) and the answer says unfreeze first. */
+  | { case: "refused"; canRebuild: boolean; unfreezeFirst?: true };
 
 export interface KnockoutLateInput {
   lines: readonly LateLine[];
@@ -62,6 +72,16 @@ export interface KnockoutLateInput {
   stageStarted: boolean;
   /** A stepladder or a page playoff: case (2) only (X-LE-8). */
   caseTwoOnly: boolean;
+  /** The division's schedule is frozen (`divisionLockState(...).frozen`, read under the caller's `division:` lock, as
+   *  Rebuild reads it): Rebuild refuses, so it is never offered. Required, so no caller can forget to ask. */
+  scheduleFrozen: boolean;
+}
+
+/** Case (3): no slot. Rebuild is offered only when nothing in the stage has started AND the schedule is not frozen. */
+function noSlot(input: KnockoutLateInput): KnockoutLateDecision {
+  if (input.stageStarted) return { case: "refused", canRebuild: false };
+  if (input.scheduleFrozen) return { case: "refused", canRebuild: false, unfreezeFirst: true };
+  return { case: "refused", canRebuild: true };
 }
 
 /** A bye line's holder: its one seated side. */
@@ -105,7 +125,7 @@ export function decideKnockoutLateEntry(input: KnockoutLateInput): KnockoutLateD
   }
   const slot = withdrawnSlot(input.lines);
   if (slot !== null) return { case: "withdrawn_slot", lineId: slot.line.id, seat: slot.seat, reverse: slot.reverse };
-  return { case: "refused", canRebuild: !input.stageStarted };
+  return noSlot(input);
 }
 
 /**
@@ -122,5 +142,5 @@ export function decideWaitingEntrant(input: KnockoutLateInput & { entrantId: str
   if (own !== undefined && own.reason === "withdrew" && own.walkoverLoser === input.entrantId && !own.played && !own.nextStarted) {
     return { case: "withdrawn_slot", lineId: own.id, seat: own.home === input.entrantId ? "home" : "away", reverse: true };
   }
-  return { case: "refused", canRebuild: !input.stageStarted };
+  return noSlot(input);
 }

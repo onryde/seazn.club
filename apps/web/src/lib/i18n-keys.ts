@@ -3680,6 +3680,7 @@ export type DictionaryKey =
   | "knockout.lateEntry.rebuildOffered"
   | "knockout.lateEntry.tookBye"
   | "knockout.lateEntry.tookWithdrawnSlot"
+  | "knockout.lateEntry.unfreezeFirst"
   | "knockout.lateWaiting.action"
   | "knockout.lateWaiting.one"
   | "knockout.lateWaiting.other"

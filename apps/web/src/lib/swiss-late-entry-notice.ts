@@ -23,7 +23,7 @@
 // place has been played on, K13) and the Rebuild offer when nothing has started.
 import type { KnockoutLateEntryResult, LateEntryResult, SwissLateEntryResult } from "@/server/api-v1/schemas";
 import type { MessageKey } from "@/lib/messages";
-import { KO_LATE_ENTRY_PLAYED_ON } from "@/lib/knockout-late-entry";
+import { KO_LATE_ENTRY_PLAYED_ON, KO_LATE_ENTRY_SCHEDULE_FROZEN } from "@/lib/knockout-late-entry";
 import { swissFirstRoundIn } from "@/lib/swiss-late-entry";
 import { nextUnseatedSwissRound } from "@/lib/swiss-shell";
 
@@ -44,6 +44,8 @@ export const LATE_ENTRY_MESSAGE_KEYS = [
   "knockout.lateEntry.playedOn",
   "knockout.lateEntry.luckyLoser",
   "knockout.refusal.KO_LATE_ENTRY_NO_SLOT",
+  // Final review m1 (owner ruling 2026-11-09): no slot, nothing started, but the schedule is frozen — unfreeze first.
+  "knockout.lateEntry.unfreezeFirst",
 ] as const satisfies readonly MessageKey[];
 export type LateEntryMessageKey = (typeof LATE_ENTRY_MESSAGE_KEYS)[number];
 
@@ -183,6 +185,8 @@ function knockoutLines(r: KnockoutLateEntryResult, nameOf: (id: string) => strin
     case "refused":
       if (r.reason === KO_LATE_ENTRY_PLAYED_ON) return [{ key: "knockout.lateEntry.playedOn", params: { name }, tone: "todo" }];
       if (r.reason === "KO_LATE_ENTRY_NO_SLOT") return [{ key: "knockout.refusal.KO_LATE_ENTRY_NO_SLOT", params: {}, tone: "todo" }];
+      // m1: nothing started, so Rebuild would be the way in — but the schedule is frozen and Rebuild refuses it.
+      if (r.reason === KO_LATE_ENTRY_SCHEDULE_FROZEN) return [{ key: "knockout.lateEntry.unfreezeFirst", params: { name }, tone: "todo" }];
       throw refuse(`with ${r.reason === undefined ? "no reason" : `an unknown reason ${r.reason}`}`);
     case "rebuild_offered":
       return [{ key: "knockout.lateEntry.rebuildOffered", params: { name }, tone: "todo" }];

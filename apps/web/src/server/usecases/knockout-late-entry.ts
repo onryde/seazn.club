@@ -17,6 +17,7 @@ import type { KnockoutLateEntryResult } from "@/server/api-v1/schemas";
 import { isByeLine, type ByeLineRow } from "@/lib/bye-line";
 import {
   KO_LATE_ENTRY_PLAYED_ON,
+  KO_LATE_ENTRY_SCHEDULE_FROZEN,
   decideKnockoutLateEntry,
   decideWaitingEntrant,
   type KnockoutLateDecision,
@@ -29,7 +30,7 @@ import { knockoutLineDrawPosition, reopenByeLine, reverseWithdrawnWalkover } fro
 import { DEPARTED_STATUSES } from "./entrants";
 import { fixtureStartedSql, stageHasStarted } from "./fixture-started-sql";
 import { knockoutRefusal } from "./knockout-refusal";
-import { OCCUPYING, afterScheduleWrite } from "./schedule";
+import { OCCUPYING, afterScheduleWrite, divisionLockState } from "./schedule";
 import { divisionHasStarted, lockSwissBoardAppends } from "./stages";
 import { appendUndoBarrierRow, nextFreeRoundSlot, placeBoard, type LateEntrySource } from "./swiss-late-entry";
 
@@ -166,12 +167,19 @@ async function holdsSeatIn(tx: Tx, stageId: string, entrantId: string): Promise<
   return seat !== undefined;
 }
 
+/** Final review m1: the division's schedule is frozen — read under the caller's `division:` lock, the predicate Rebuild
+ *  refuses on (`regenerateStageInTx`, the same lock), so the offer and the Rebuild it points at cannot disagree. */
+async function scheduleFrozen(tx: Tx, divisionId: string): Promise<boolean> {
+  return (await divisionLockState(tx, divisionId)).frozen;
+}
+
 /** The decision for `stage` as it stands (under the caller's `division:` lock). */
-export async function decideForStage(tx: Tx, stage: KnockoutEntryStage): Promise<KnockoutLateDecision> {
+export async function decideForStage(tx: Tx, stage: KnockoutEntryStage, divisionId: string): Promise<KnockoutLateDecision> {
   return decideKnockoutLateEntry({
     lines: await roundOneLines(tx, stage),
     stageStarted: await stageHasStarted(tx, stage.id),
     caseTwoOnly: CASE_TWO_ONLY_KINDS.includes(stage.kind),
+    scheduleFrozen: await scheduleFrozen(tx, divisionId),
   });
 }
 
@@ -289,6 +297,7 @@ async function markWaiting(tx: Tx, stage: KnockoutEntryStage, entrantId: string)
       lines: await roundOneLines(tx, stage),
       stageStarted: true, // read by a refusal's Rebuild offer only, and a refusal marks nothing
       caseTwoOnly: CASE_TWO_ONLY_KINDS.includes(stage.kind),
+      scheduleFrozen: false, // the same: read by the Rebuild offer only
       entrantId,
       holdsSeat: true,
     });
@@ -322,15 +331,20 @@ export async function admitKnockoutLateEntrant(
   if (source !== "organiser") return markWaiting(tx, stage, entrantId);
   const [{ org_id: orgId }] = await tx<{ org_id: string }[]>`select org_id from divisions where id = ${divisionId}`;
   await lockRoundOneAppends(tx, stage);
-  const decision = await decideForStage(tx, stage);
+  const decision = await decideForStage(tx, stage, divisionId);
   // B6a fix round 1 (review #2; RB4-L6, owner ruling): no slot, and nothing in the stage has started - the refusal OFFERS
   // Rebuild. The organiser's own add keeps the player, as every automatic door does (`markWaiting`): they wait under the
   // same marker (the desk's strip lists them, the tap offers Rebuild again, a Rebuild seats them) and the answer is 201
   // `rebuild_offered`. Nothing was placed, so there is no undo barrier. Once a match has started a Rebuild would clear
   // played work: the add keeps its named refusal and rolls the player back (`applyKnockoutLateDecision`).
-  if (decision.case === "refused" && decision.canRebuild) {
+  // Final review m1 (owner ruling 2026-11-09): nothing started but the schedule FROZEN - Rebuild would refuse, so it is not
+  // offered. The player is kept and waits exactly as on the offer (unfreezing brings it back on the next tap), and the answer
+  // says unfreeze first (`refused`, KO_LATE_ENTRY_SCHEDULE_FROZEN).
+  if (decision.case === "refused" && (decision.canRebuild || decision.unfreezeFirst === true)) {
     await tx`update entrants set knockout_waiting_stage_id = ${stage.id} where id = ${entrantId}`;
-    return { format: "knockout", entrant_id: entrantId, stage_id: stage.id, case: "rebuild_offered", reason: "KO_LATE_ENTRY_NO_SLOT" };
+    return decision.canRebuild
+      ? { format: "knockout", entrant_id: entrantId, stage_id: stage.id, case: "rebuild_offered", reason: "KO_LATE_ENTRY_NO_SLOT" }
+      : { format: "knockout", entrant_id: entrantId, stage_id: stage.id, case: "refused", reason: KO_LATE_ENTRY_SCHEDULE_FROZEN };
   }
   return applyKnockoutLateDecision(tx, { orgId, divisionId, actorId: auth?.userId ?? null, source }, stage, entrantId, decision);
 }
@@ -388,6 +402,7 @@ export async function placeWaitingKnockoutEntrant(auth: AuthCtx, stageId: string
       lines: await roundOneLines(tx, root),
       stageStarted: await stageHasStarted(tx, root.id),
       caseTwoOnly: CASE_TWO_ONLY_KINDS.includes(root.kind),
+      scheduleFrozen: await scheduleFrozen(tx, st.division_id),
       entrantId,
       holdsSeat,
     });
@@ -415,7 +430,8 @@ export async function placeWaitingKnockoutEntrant(auth: AuthCtx, stageId: string
         entrant_id: entrantId,
         stage_id: stageId,
         case: decision.canRebuild ? "rebuild_offered" : "refused",
-        reason: "KO_LATE_ENTRY_NO_SLOT",
+        // m1: frozen, nothing started - the refusal says unfreeze first instead of offering a Rebuild that would refuse.
+        reason: decision.unfreezeFirst === true ? KO_LATE_ENTRY_SCHEDULE_FROZEN : "KO_LATE_ENTRY_NO_SLOT",
       };
       return { result: refused, ...base };
     }

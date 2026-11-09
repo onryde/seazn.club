@@ -2572,6 +2572,7 @@
   "knockout.lateEntry.tookWithdrawnSlot": "{name} prend la place de {withdrawn} face à {opponent}.",
   "knockout.lateEntry.backInPlace": "{name} retrouve sa place face à {opponent}.",
   "knockout.lateEntry.rebuildOffered": "Il ne reste aucune place, mais rien n'a commencé : utilisez Reconstruire les matchs pour ajouter {name}.",
+  "knockout.lateEntry.unfreezeFirst": "Il ne reste aucune place et le calendrier est verrouillé : déverrouillez-le sur la page Calendrier, puis utilisez Reconstruire les matchs pour ajouter {name}.",
   "knockout.lateEntry.playedOn": "{name} est de retour sur la liste, mais sa place dans le tableau a déjà été jouée.",
   "knockout.waiting.title": "En attente d'entrer dans le tableau",
   "knockout.waiting.sub": "Inscription après le tirage. Pas encore dans le tableau.",

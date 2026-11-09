@@ -2572,6 +2572,7 @@
   "knockout.lateEntry.tookWithdrawnSlot": "{name} ocupa el puesto de {withdrawn} contra {opponent}.",
   "knockout.lateEntry.backInPlace": "{name} vuelve a su puesto contra {opponent}.",
   "knockout.lateEntry.rebuildOffered": "No queda ningún hueco, pero nada ha empezado: usa Reconstruir enfrentamientos para añadir a {name}.",
+  "knockout.lateEntry.unfreezeFirst": "No queda ningún hueco y el calendario está congelado: descongélalo en la página Calendario y luego usa Reconstruir enfrentamientos para añadir a {name}.",
   "knockout.lateEntry.playedOn": "{name} vuelve a la lista, pero su puesto en el cuadro ya se ha jugado.",
   "knockout.waiting.title": "En espera de entrar en el cuadro",
   "knockout.waiting.sub": "Inscripción después del sorteo. Todavía fuera del cuadro.",

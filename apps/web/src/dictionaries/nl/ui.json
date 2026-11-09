@@ -2572,6 +2572,7 @@
   "knockout.lateEntry.tookWithdrawnSlot": "{name} neemt de plek van {withdrawn} in tegen {opponent}.",
   "knockout.lateEntry.backInPlace": "{name} is terug op de eigen plek tegen {opponent}.",
   "knockout.lateEntry.rebuildOffered": "Er is geen plek meer, maar er is nog niets begonnen: gebruik Wedstrijden herbouwen om {name} toe te voegen.",
+  "knockout.lateEntry.unfreezeFirst": "Er is geen plek meer en het schema is vergrendeld: ontgrendel het op de pagina Schema en gebruik daarna Wedstrijden herbouwen om {name} toe te voegen.",
   "knockout.lateEntry.playedOn": "{name} staat weer op de lijst, maar de plek in het schema is al gespeeld.",
   "knockout.waiting.title": "Wacht op een plek in het schema",
   "knockout.waiting.sub": "Ingeschreven na de loting. Nog niet in het schema.",

@@ -175,6 +175,21 @@ describe("X-LE-10 the waiting strip", () => {
     expect(net.calls).toHaveLength(1); // the strip itself posted nothing for Rebuild: the panel's own confirm owns it
   });
 
+  it("m1 the schedule frozen (nothing started): the unfreeze-first sentence, the player still waiting, and NO Rebuild exit", async () => {
+    // Final review m1 (owner ruling 2026-11-09): Rebuild refuses a frozen schedule, so the strip offers no Rebuild button.
+    net.answers.push(() => result({ case: "refused", reason: "KO_LATE_ENTRY_SCHEDULE_FROZEN" }));
+    const { island, calls } = mount([OLIVER]);
+    await tapOf(island)();
+    expect(calls.placed).toEqual([]);
+    expect(router.refreshCount).toBe(0);
+    expect(island.text()).toContain(
+      "No slot is left, and the schedule is frozen: unfreeze it on the Schedule page, then use Rebuild fixtures to add Oliver Grant.",
+    );
+    expect(byTestId(island.tree(), "knockout-waiting-rebuild"), "no Rebuild while frozen").toHaveLength(0);
+    expect(byTestId(island.tree(), "knockout-waiting-place"), "still waiting: the tap stays").toHaveLength(1);
+    expect(byTestId(island.tree(), "knockout-waiting-withdraw"), "the other exits stay").toHaveLength(1);
+  });
+
   it("Withdraw: declined posts nothing; confirmed posts the withdraw route and refreshes (sequence: after a refusal)", async () => {
     net.answers.push(() => result({ case: "refused", reason: "KO_LATE_ENTRY_NO_SLOT" }));
     const { island } = mount([OLIVER]);

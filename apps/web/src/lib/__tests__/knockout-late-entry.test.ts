@@ -5,6 +5,9 @@
 // test.
 //
 // Sport-free by nature: the decision reads seats, seeds, statuses and three booleans, no sport field.
+//
+// Final review m1 (owner ruling 2026-11-09): Rebuild refuses a frozen schedule (422 SCHEDULE_LOCKED, stages.ts
+// `regenerateStageInTx`), so a frozen division is never OFFERED it — the refusal says unfreeze first (`unfreezeFirst`).
 import { describe, expect, it } from "vitest";
 import { decideKnockoutLateEntry, decideWaitingEntrant, type KnockoutLateDecision, type LateLine } from "@/lib/knockout-late-entry";
 import { engineLineDrawPosition, rb4L4ExpectedLine } from "@/lib/__tests__/rb4-l4-oracle";
@@ -51,6 +54,7 @@ describe("decideKnockoutLateEntry (X-LE-3…X-LE-8)", () => {
     lines: LateLine[];
     stageStarted?: boolean;
     caseTwoOnly?: boolean;
+    scheduleFrozen?: boolean;
     expected: KnockoutLateDecision;
   }[] = [
     // The empty case first: no round-1 line at all answers "no slot", and offers Rebuild only when nothing started.
@@ -65,6 +69,27 @@ describe("decideKnockoutLateEntry (X-LE-3…X-LE-8)", () => {
       name: "X-LE-6 round 1 full of matches, one started: refused, no Rebuild",
       lines: [line(4, 1), line(4, 2)],
       stageStarted: true,
+      expected: { case: "refused", canRebuild: false },
+    },
+    // m1: the schedule frozen. Nothing started, so Rebuild would be the way in — but Rebuild refuses a frozen schedule, so
+    // it is not offered: the refusal says unfreeze first. Started, there is no Rebuild to unfreeze for.
+    {
+      name: "m1 round 1 full, nothing started, the schedule FROZEN: refused, no Rebuild offered, unfreeze first",
+      lines: [line(4, 1), line(4, 2)],
+      scheduleFrozen: true,
+      expected: { case: "refused", canRebuild: false, unfreezeFirst: true },
+    },
+    {
+      name: "m1 no round-1 lines, nothing started, frozen: the empty case says unfreeze first too",
+      lines: [],
+      scheduleFrozen: true,
+      expected: { case: "refused", canRebuild: false, unfreezeFirst: true },
+    },
+    {
+      name: "m1 round 1 full, one started, frozen: refused, no Rebuild — and nothing to unfreeze for",
+      lines: [line(4, 1), line(4, 2)],
+      stageStarted: true,
+      scheduleFrozen: true,
       expected: { case: "refused", canRebuild: false },
     },
     {
@@ -173,7 +198,12 @@ describe("decideKnockoutLateEntry (X-LE-3…X-LE-8)", () => {
   it("answers every row its rulebook case", () => {
     let checked = 0;
     for (const r of ROWS) {
-      const got = decideKnockoutLateEntry({ lines: r.lines, stageStarted: r.stageStarted ?? false, caseTwoOnly: r.caseTwoOnly ?? false });
+      const got = decideKnockoutLateEntry({
+        lines: r.lines,
+        stageStarted: r.stageStarted ?? false,
+        caseTwoOnly: r.caseTwoOnly ?? false,
+        scheduleFrozen: r.scheduleFrozen ?? false,
+      });
       expect(got, r.name).toEqual(r.expected);
       checked++;
     }
@@ -195,7 +225,7 @@ describe("decideKnockoutLateEntry (X-LE-3…X-LE-8)", () => {
     const want = oracle(lines, 4);
     expect(want, "the oracle names seed 2's bye").toBe(`L${s2}`);
     expect(Math.min(s1, s2), "premise: a differential case — the first bye is seed 1's, not the answer").toBe(s1);
-    expect(decideKnockoutLateEntry({ lines, stageStarted: true, caseTwoOnly: false })).toEqual({ case: "bye", lineId: want });
+    expect(decideKnockoutLateEntry({ lines, stageStarted: true, caseTwoOnly: false, scheduleFrozen: false })).toEqual({ case: "bye", lineId: want });
   });
 
   it("X-LE-4 tied holders (both unseeded): the LATER draw position, per the oracle", () => {
@@ -207,7 +237,7 @@ describe("decideKnockoutLateEntry (X-LE-3…X-LE-8)", () => {
         if (a >= b) continue;
         const lines = [1, 2, 3, 4].map((q) => (q === a || q === b ? bye(size, q, `U${q}`, null) : line(size, q)));
         const want = oracle(lines, 4);
-        expect(decideKnockoutLateEntry({ lines, stageStarted: true, caseTwoOnly: false }), `byes on ${a},${b}`).toEqual({ case: "bye", lineId: want });
+        expect(decideKnockoutLateEntry({ lines, stageStarted: true, caseTwoOnly: false, scheduleFrozen: false }), `byes on ${a},${b}`).toEqual({ case: "bye", lineId: want });
         checked++;
       }
     }
@@ -218,14 +248,19 @@ describe("decideKnockoutLateEntry (X-LE-3…X-LE-8)", () => {
     const size = 8;
     const lines = [bye(size, 1, "Seed1", 1), line(size, 2), bye(size, 3, "Unseeded", null), line(size, 4)];
     expect(oracle(lines, 4)).toBe("L3");
-    expect(decideKnockoutLateEntry({ lines, stageStarted: false, caseTwoOnly: false })).toEqual({ case: "bye", lineId: "L3" });
+    expect(decideKnockoutLateEntry({ lines, stageStarted: false, caseTwoOnly: false, scheduleFrozen: false })).toEqual({ case: "bye", lineId: "L3" });
   });
 
   it("X-LE-7 a decision only ever names a round-1 line it was given", () => {
     // Every decision's line is one of the input lines (the server reads round 1 only) — over every row of the table.
     let checked = 0;
     for (const r of ROWS) {
-      const got = decideKnockoutLateEntry({ lines: r.lines, stageStarted: r.stageStarted ?? false, caseTwoOnly: r.caseTwoOnly ?? false });
+      const got = decideKnockoutLateEntry({
+        lines: r.lines,
+        stageStarted: r.stageStarted ?? false,
+        caseTwoOnly: r.caseTwoOnly ?? false,
+        scheduleFrozen: r.scheduleFrozen ?? false,
+      });
       if (got.case !== "refused") {
         expect(r.lines.map((l) => l.id), r.name).toContain(got.lineId);
         checked++;
@@ -241,7 +276,14 @@ describe("decideKnockoutLateEntry (X-LE-3…X-LE-8)", () => {
 describe("decideWaitingEntrant (X-LE-10, K13)", () => {
   /** A reinstated `me` on line 2's home seat, walked over by their own withdrawal (no longer departed: reinstated). */
   const mine = (o: Partial<LateLine> = {}) => walkover(4, 2, { home: "me", withdrawnSeat: null, walkoverLoser: "me", ...o });
-  const ROWS: { name: string; lines: LateLine[]; holdsSeat: boolean; stageStarted?: boolean; expected: KnockoutLateDecision }[] = [
+  const ROWS: {
+    name: string;
+    lines: LateLine[];
+    holdsSeat: boolean;
+    stageStarted?: boolean;
+    scheduleFrozen?: boolean;
+    expected: KnockoutLateDecision;
+  }[] = [
     // The empty case first: no lines and no seat is the newcomer's answer to an empty round 1.
     { name: "no round-1 lines, no seat: refused, Rebuild offered", lines: [], holdsSeat: false, expected: { case: "refused", canRebuild: true } },
     {
@@ -298,6 +340,29 @@ describe("decideWaitingEntrant (X-LE-10, K13)", () => {
       holdsSeat: true,
       expected: { case: "refused", canRebuild: true },
     },
+    // m1: the tap's refusal reads the freeze as the add's does.
+    {
+      name: "m1 a newcomer, round 1 full, nothing started, the schedule FROZEN: no Rebuild offered, unfreeze first",
+      lines: [line(4, 1), line(4, 2)],
+      holdsSeat: false,
+      scheduleFrozen: true,
+      expected: { case: "refused", canRebuild: false, unfreezeFirst: true },
+    },
+    {
+      name: "m1 a seat only beyond round 1, nothing started, frozen: unfreeze first",
+      lines: [line(4, 1), line(4, 2)],
+      holdsSeat: true,
+      scheduleFrozen: true,
+      expected: { case: "refused", canRebuild: false, unfreezeFirst: true },
+    },
+    {
+      name: "m1 frozen, one started: refused, nothing to unfreeze for",
+      lines: [line(4, 1), line(4, 2)],
+      holdsSeat: false,
+      stageStarted: true,
+      scheduleFrozen: true,
+      expected: { case: "refused", canRebuild: false },
+    },
   ];
 
   it("answers every row its case", () => {
@@ -307,6 +372,7 @@ describe("decideWaitingEntrant (X-LE-10, K13)", () => {
         lines: r.lines,
         stageStarted: r.stageStarted ?? false,
         caseTwoOnly: false,
+        scheduleFrozen: r.scheduleFrozen ?? false,
         entrantId: "me",
         holdsSeat: r.holdsSeat,
       });

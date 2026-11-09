@@ -827,8 +827,10 @@ export const KnockoutLateEntryResult = z.object({
    *  own walkover was reversed. The desk's notice names them ("… takes {withdrawn}'s place against {opponent}"). */
   withdrawn_id: Uuid.optional(),
   scheduled: z.boolean().optional(),
-  /** `refused` / `rebuild_offered`: why — KO_LATE_ENTRY_NO_SLOT (round 1 has no slot left), or KO_LATE_ENTRY_PLAYED_ON (a
-   *  reinstated player whose place in the bracket has been played on: back on the list, never back in the bracket). */
+  /** `refused` / `rebuild_offered`: why — KO_LATE_ENTRY_NO_SLOT (round 1 has no slot left), KO_LATE_ENTRY_SCHEDULE_FROZEN (no
+   *  slot, nothing started, but the division's schedule is frozen: Rebuild refuses a frozen schedule, so none is offered and
+   *  the player waits until it is unfrozen — final review m1), or KO_LATE_ENTRY_PLAYED_ON (a reinstated player whose place in
+   *  the bracket has been played on: back on the list, never back in the bracket). */
   reason: z.string().optional(),
 });
 export type KnockoutLateEntryResult = z.infer<typeof KnockoutLateEntryResult>;

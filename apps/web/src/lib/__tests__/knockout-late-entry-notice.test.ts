@@ -117,6 +117,17 @@ describe("X-LE-10 knockout late-entry notice: one notice per case (R24 pick 2B)"
       results: [ko({ case: "rebuild_offered", reason: "KO_LATE_ENTRY_NO_SLOT" })],
       expected: [{ text: "No slot is left, but nothing has started: use Rebuild fixtures to add Oliver Grant.", tone: "todo" }],
     },
+    {
+      // Final review m1 (owner ruling 2026-11-09): Rebuild refuses a frozen schedule, so it is not offered — unfreeze first.
+      name: "refused, the schedule frozen (m1): no Rebuild offered, unfreeze first",
+      results: [ko({ case: "refused", reason: "KO_LATE_ENTRY_SCHEDULE_FROZEN" })],
+      expected: [
+        {
+          text: "No slot is left, and the schedule is frozen: unfreeze it on the Schedule page, then use Rebuild fixtures to add Oliver Grant.",
+          tone: "todo",
+        },
+      ],
+    },
   ];
 
   it("every case, line by line, with its tone", () => {
@@ -181,8 +192,9 @@ describe("X-LE-10 knockout late-entry notice: one notice per case (R24 pick 2B)"
         checked++;
       }
     }
-    // 7 knockout message keys (the five cases' lines, the played-on one, the lucky loser's) + 1 plural base (two forms) × 4 locales.
-    expect(checked).toBe((7 + 2) * 4);
+    // 8 knockout message keys (the five cases' lines, the played-on one, the lucky loser's, m1's unfreeze-first) + 1 plural
+    // base (two forms) × 4 locales.
+    expect(checked).toBe((8 + 2) * 4);
   });
 });
 
@@ -194,15 +206,18 @@ describe("the Rebuild offer names the button it points at (one-name rule)", () =
   it("the sentence carries the button's label in all four languages, and says it in English as typed", () => {
     const dicts = { en, es, fr, nl } as Record<string, Record<string, string>>;
     let checked = 0;
-    for (const [locale, dict] of Object.entries(dicts)) {
-      const label = dict["progression.rosterDrift.rebuildCta"];
-      const sentence = dict["knockout.lateEntry.rebuildOffered"];
-      expect(label && label.trim() !== "", `${locale}: the button has a label`).toBeTruthy();
-      expect(sentence, `${locale}: the sentence names the button "${label}"`).toContain(label);
-      expect(sentence, `${locale}: the name's placeholder`).toContain("{name}");
-      checked++;
+    // m1: the unfreeze-first sentence points at the same button (after the unfreeze), so it carries the same label.
+    for (const key of ["knockout.lateEntry.rebuildOffered", "knockout.lateEntry.unfreezeFirst"]) {
+      for (const [locale, dict] of Object.entries(dicts)) {
+        const label = dict["progression.rosterDrift.rebuildCta"];
+        const sentence = dict[key];
+        expect(label && label.trim() !== "", `${locale}: the button has a label`).toBeTruthy();
+        expect(sentence, `${locale} ${key}: the sentence names the button "${label}"`).toContain(label);
+        expect(sentence, `${locale} ${key}: the name's placeholder`).toContain("{name}");
+        checked++;
+      }
     }
-    expect(checked, "anti-vacuity: four locales").toBe(4);
+    expect(checked, "anti-vacuity: two sentences × four locales").toBe(8);
     expect(en["progression.rosterDrift.rebuildCta"], "premise: the button reads Rebuild fixtures").toBe("Rebuild fixtures");
   });
 });
