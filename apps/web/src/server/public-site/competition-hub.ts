@@ -501,6 +501,7 @@ export function hubHeader(
     // there is no honest value here. Null is the schema's own "no rate line",
     // not a placeholder for something this builder could compute and does not.
     rateLine: null,
+    superOverLine: null,
     // Both gated on live for the reason `live-score.tsx:122` gates
     // `matchStrength`: the engine leaves each stale in `detail` after the
     // final whistle, so a finished match would keep announcing a power play.

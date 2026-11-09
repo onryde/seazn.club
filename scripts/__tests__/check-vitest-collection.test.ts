@@ -190,6 +190,9 @@ const REST = [
   "src/server/public-site/__tests__/standings-swiss-cut1.test.ts",
   "src/server/public-site/__tests__/standings-view-swiss-display.test.ts",
   "src/server/public-site/__tests__/swiss-row-facts.test.ts",
+  // Cricket's deciding super over under the match-centre scores (#1151). Begins with "m", so it belongs here
+  // rather than in C_GLOBBED; this gate reddened on it in the PR's own CI.
+  "src/server/public-site/__tests__/match-centre-super-over.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 

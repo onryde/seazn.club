@@ -3959,6 +3959,8 @@ export type DictionaryKey =
   | "matchCentre.status.timeTbd"
   | "matchCentre.status.walkover"
   | "matchCentre.superOver"
+  | "matchCentre.superOverLine"
+  | "matchCentre.superOverLineN"
   | "matchCentre.tab.commentary"
   | "matchCentre.tab.info"
   | "matchCentre.tab.scorecard"

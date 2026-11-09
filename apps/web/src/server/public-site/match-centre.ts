@@ -102,6 +102,7 @@ import { forfeitLedgerOf, forfeitSentence, forfeitTag, type ForfeitEntrantStatus
 import type { PublicFixture } from "./data";
 import type { PublicPerson } from "./public-lineups";
 import { buildSets, buildTimeline } from "./timeline";
+import { inningsScore, lastSuperOver } from "@/lib/cricket-super-over";
 import type {
   CricketViewT,
   InfoViewT,
@@ -321,6 +322,22 @@ function toLineupPair(lineups: Record<string, PublicPerson[]>, sides: readonly [
 
 function sideByEntrantId(entrantId: string, sides: readonly [SideT, SideT]): SideT {
   return sides.find((s) => s.entrantId === entrantId) ?? sides[0];
+}
+
+/** The header's super-over line: the LAST super over's scores in its batting order, "HOM 36/0 · AWA 32/0". Never a sum
+ *  across super overs (a repeated tie would add scores nobody made). Null before a super over has started. */
+export function superOverLineOf(card: CricketScorecard | null, sides: readonly [SideT, SideT]): MsgT | null {
+  if (card === null) return null;
+  const last = lastSuperOver(
+    card.innings
+      .filter((innings) => innings.isSuperOver)
+      .map((innings) => ({ side: innings.side, runs: innings.total.runs, wickets: innings.total.wickets })),
+  );
+  if (last === null) return null;
+  const scores = last.innings.map((i) => `${sideByEntrantId(i.side, sides).short} ${inningsScore(i)}`).join(" · ");
+  return last.count > 1
+    ? { key: "matchCentre.superOverLineN", params: { n: last.number, scores } }
+    : { key: "matchCentre.superOverLine", params: { scores } };
 }
 
 function sideNameOf(sides: readonly [SideT, SideT], entrantId: string): string {
@@ -1179,6 +1196,7 @@ function buildHeader(
     battingIndex,
     statusLine,
     rateLine,
+    superOverLine: superOverLineOf(card, sides),
     phase,
     strength,
     pillNote,

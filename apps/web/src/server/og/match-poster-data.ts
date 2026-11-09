@@ -106,6 +106,7 @@ export async function loadMatchPosterModel(
     copy: {
       statusLine: say(header.statusLine),
       pillNote: say(header.pillNote),
+      superOverLine: say(header.superOverLine ?? null),
       live: t(pub, "matchCentre.status.live"),
       result: t(pub, "news.kind.result"),
       vs: t(ui, "schedule.vs"),

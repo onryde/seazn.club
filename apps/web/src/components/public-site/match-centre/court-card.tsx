@@ -290,6 +290,11 @@ export function CourtCard({ header, dict, replay }: CourtCardProps) {
             ) : null}
           </div>
         ) : null}
+        {header.superOverLine ? (
+          <p data-testid="mc-super-over-line" className="mt-2 text-sm font-semibold tabular-nums text-court-ink">
+            {t(dict, header.superOverLine.key, header.superOverLine.params)}
+          </p>
+        ) : null}
         {replay ?? null}
         {inPlay ? (
           <p
