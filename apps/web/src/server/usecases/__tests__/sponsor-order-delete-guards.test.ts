@@ -138,6 +138,27 @@ describe.skipIf(!HAS_DB)("sponsor order delete protection (V299)", () => {
     expect(order).toBeUndefined();
   });
 
+  // Sponsor deals review I1 (2026-11-09): the deals delta made every pre-deals order an ended LEGACY deal and re-created the
+  // tenant's prune policy. A pre-deals abandoned checkout (pending, no intent, undisputed, no sponsor, exactly as the deals
+  // migration leaves one) must still be swept here, or the package delete below it fails its RESTRICT key.
+  it("deleteCompetition still sweeps a legacy abandoned checkout along with its packages", async () => {
+    const { auth, orgId, compId } = await seedOrgWithComp();
+    const pkg = await seedPackage(orgId, compId);
+    const [{ id: orderId }] = await sql<{ id: string }[]>`
+      insert into sponsor_orders (org_id, package_id, sponsor_name, sponsor_email, amount_cents, currency, status,
+                                  payment_intent_id, disputed_at, sponsor_id,
+                                  deal_status, payment_method, go_live, ended_at, ended_reason,
+                                  tier, includes_on_stream, package_name, competition_id)
+      values (${orgId}, ${pkg}, 'S', 's@x.test', 25000, 'gbp', 'pending', null, null, null,
+              'ended', 'online', 'on_payment', now(), 'legacy', 'gold', false, 'Gold', ${compId})
+      returning id`;
+    await expect(deleteCompetition(auth, compId)).resolves.toBeUndefined();
+    const [comp] = await sql`select 1 from competitions where id = ${compId}`;
+    expect(comp).toBeUndefined();
+    const [order] = await sql`select 1 from sponsor_orders where id = ${orderId}`;
+    expect(order).toBeUndefined();
+  });
+
   it("deleteCompetition 409s while a refunded order holds payment history", async () => {
     const { auth, orgId, compId } = await seedOrgWithComp();
     const pkg = await seedPackage(orgId, compId);

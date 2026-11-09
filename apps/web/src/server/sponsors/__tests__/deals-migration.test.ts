@@ -444,7 +444,9 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
   // Product ruling (controller, 2026-11-09, Task 5): a deal holds its sponsor only when it carries money or document
   // history. The tenant's prune policy (V300's fence, widened by this delta) admits exactly the other deals, so a sponsor
   // delete takes them with it; deleteSponsor's 409 is the app's answer for the rest, and this policy is the fence under it.
-  it("the tenant's prune policy admits exactly the deals without money or document history: never paid or refunded money, a stored Checkout session or a legacy order (count reported)", async () => {
+  // A legacy row passes only as V300 admitted it, an abandoned checkout (pending, no intent, undisputed, and so no sponsor:
+  // before deals an order got its sponsor only when paid), because deleteCompetition sweeps those (review I1, 2026-11-09).
+  it("the tenant's prune policy admits exactly the deals without money or document history: never paid or refunded money, a stored Checkout session or a legacy order beyond V300's abandoned checkout (count reported)", async () => {
     const w = await world();
     const COMP: Deal = { payment_method: "complimentary", status: "none", go_live: "immediate" };
     const KINDS: [string, Deal, "deleted" | "fenced"][] = [
@@ -456,7 +458,12 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
       ["an unpaid deal that ended", ended("expired"), "deleted"],
       ["paid money", { ...LIVE, payment_intent_id: `pi_${uniq()}` }, "fenced"],
       ["refunded money", { ...ended("refunded"), status: "refunded", paid_at: new Date() }, "fenced"],
-      ["a legacy order", ended("legacy"), "fenced"],
+      ["a legacy abandoned checkout (pending, no intent, undisputed, no sponsor: V300's admission)",
+        { ...ended("legacy"), sponsor_id: null }, "deleted"],
+      ["a legacy paid order", { ...ended("legacy"), status: "paid", paid_at: new Date(), payment_intent_id: `pi_${uniq()}` }, "fenced"],
+      ["a legacy pending order that reached Stripe (an intent)", { ...ended("legacy"), sponsor_id: null, payment_intent_id: `pi_${uniq()}` }, "fenced"],
+      ["a legacy pending order once disputed", { ...ended("legacy"), sponsor_id: null, disputed_at: new Date() }, "fenced"],
+      ["a legacy failed payment (V300 admitted only pending)", { ...ended("legacy"), sponsor_id: null, status: "failed" }, "fenced"],
       ["a stored Checkout session", { checkout_session_id: `cs_test_${uniq()}`, checkout_url: "https://checkout.stripe.test/x" }, "fenced"],
     ];
     let checked = 0;
@@ -466,7 +473,8 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
       expect(gone.length === 1 ? "deleted" : "fenced", label).toBe(expected);
       checked++;
     }
-    expect(checked, "deal kinds checked").toBe(10);
+    expect(checked, "deal kinds checked").toBe(KINDS.length);
+    expect(checked).toBe(14);
     // The tenant fence never crosses orgs, whatever the deal.
     const elsewhere = await world();
     const theirs = await insertDeal(deal(elsewhere, await sponsor(elsewhere), { deal_status: "draft" }));

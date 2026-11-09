@@ -4,8 +4,9 @@
 // Name, link and logo stay editable, and once every deal has ended the sponsor is back under manual control. The lock is
 // patchSponsor's own unconditional sponsor row lock (F16), so a deal going live in another transaction is seen.
 //
-// And the delete guard: a sponsor whose deals hold any history (money, a dispute, a deal that went live or ended, a legacy
-// order) answers 409 `sponsor_has_deal_history`, never a 23503; one whose deals never got past waiting is deleted with them.
+// And the delete guard (product ruling 2026-11-09): a sponsor holding a deal with money or document history (money paid or
+// refunded, a stored Checkout session, a legacy order) answers 409 `sponsor_has_deal_history`, never a 23503. Every other
+// deal (draft, complimentary, failed, unpaid with no session, live or ended) is deleted with it, in the same transaction.
 //
 // A Pro org throughout (F16): on community the plan gate answers a tier PATCH with 402 before the transaction, and one case
 // pins exactly that order. Real Postgres.
@@ -289,7 +290,9 @@ const DELETABLE: [string, Deal][] = [
 const HISTORY: [string, Deal][] = [
   ["a paid deal", LIVE],
   ["a refunded deal", { ...ENDED, ended_reason: "refunded", status: "refunded", paid_at: T0, payment_intent_id: `pi_refunded_${uniq()}` }],
-  ["a legacy order (F16: the RESTRICT key covers it)", LEGACY],
+  // Money that is not history (pending, never paid), so the legacy clause ALONE holds it; a paid legacy row would also be
+  // held by the money clause and witness nothing about this one.
+  ["a legacy order with no money history (F16: the RESTRICT key covers it)", { ...LEGACY, status: "pending", paid_at: null }],
   ["an online deal holding a Checkout session (F3, until Task 7 expires it)", { checkout_session_id: `cs_test_${uniq()}`, checkout_url: "https://checkout.stripe.test/x" }],
 ];
 
