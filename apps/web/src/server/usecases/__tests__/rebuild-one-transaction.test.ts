@@ -541,7 +541,7 @@ describe.skipIf(!HAS_DB)("X-RB-1 knockout Rebuild carries by bracket role (W4 T4
     expect(out.slots, "five kept, none freed, the two former byes unscheduled").toEqual({ kept: 5, freed: 0, unscheduled: 2 });
   });
 
-  it("X-RB-1 a double-elimination Rebuild still carries by position (only a knockout reads roles)", async () => {
+  it("X-RB-1 a double-elimination Rebuild still carries by position (knockout, stepladder and page playoff read roles; double elimination does not)", async () => {
     // 4 → 5 changes the lanes' depth, so position and role disagree here: a role carry would move every lower-bracket
     // and grand-final slot. Expected = the rule as it stood (position), with a bye line holding nothing (X-SD-5).
     // KNOWN DEFECT PINNED (B1a review #6, parked): this freezes today's position carry for double elimination, which is
