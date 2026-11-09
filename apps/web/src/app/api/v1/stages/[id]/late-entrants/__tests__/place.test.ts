@@ -14,7 +14,7 @@ import type { placeWaitingKnockoutEntrant as PlaceFn } from "@/server/usecases/k
 
 const AUTH: AuthCtx = { orgId: "org1", via: "session", userId: "user1", role: "owner", keyId: null };
 const placeMock = vi.hoisted(() => vi.fn<typeof PlaceFn>());
-const authMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => AUTH));
+const authMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<AuthCtx>>(async () => AUTH));
 vi.mock("@/server/usecases/knockout-late-entry", () => ({ placeWaitingKnockoutEntrant: placeMock }));
 vi.mock("@/server/api-v1/auth", () => ({ requireResourceAuth: authMock }));
 

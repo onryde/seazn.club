@@ -30,7 +30,7 @@ import { withdrawEntrantCascade } from "../withdrawal";
 import { BracketReconcileNoLinesError, reconcileRootBracket } from "../bracket-reconcile";
 import { ByeLineSurgeryError, reopenByeLine, vacateLineToBye } from "../bracket-lines";
 import { seedOrg } from "./_seed";
-import { ATTACHMENT_OF, STAGE_SETUP_KINDS, attachStageSetup, type StageSetupKind } from "./_stage-setup-rig";
+import { STAGE_SETUP_KINDS, attachStageSetup, type StageSetupKind } from "./_stage-setup-rig";
 import { knockoutUpdateDrawOffered } from "@/lib/bracket-reconcile";
 import { rosterDriftShown } from "@/lib/roster-drift-eligibility";
 
@@ -838,7 +838,7 @@ describe.skipIf(!HAS_DB)("B2 regression: a reconciled Generate still wires cross
       select loser_to_fixture, loser_to_slot from fixtures where id = ${id}`)[0]!;
 
   for (const c of [
-    { name: "a named no-op (nothing changed)", kind: "noop", change: async (_r: Rig) => {} },
+    { name: "a named no-op (nothing changed)", kind: "noop", change: async () => {} },
     { name: "a change in place (a newcomer takes a bye)", kind: "in_place", change: async (r: Rig) => void (await r.add("P7")) },
   ] as const) {
     it(`B2 regression: ${c.name} wires the declared cross-stage edge`, async () => {

@@ -13,7 +13,7 @@
 // columns; no sport field.
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { sql } from "@/lib/db";
@@ -699,10 +699,10 @@ describe.skipIf(!HAS_DB)("W4 B1b Q1/Q2: the final-round shapes — the round bar
   /** The bar's words as a person reads them, from the real `RunSheet` the stage card mounts. */
   function barWords(blocks: readonly RunSheetBlock[], stageId: string): string[] {
     const html = renderToStaticMarkup(
-      createElement(DictProvider, {
-        dict: enUi as never,
-        locale: "en",
-        children: createElement(RunSheet, {
+      createElement(
+        DictProvider,
+        { dict: enUi as unknown as ComponentProps<typeof DictProvider>["dict"], locale: "en" } as ComponentProps<typeof DictProvider>,
+        createElement(RunSheet, {
           blocks: [...blocks],
           stages: [{ id: stageId, kind: "knockout", name: "Cup" }],
           tz: "UTC",
@@ -717,7 +717,7 @@ describe.skipIf(!HAS_DB)("W4 B1b Q1/Q2: the final-round shapes — the round bar
           stageId,
           embedded: true,
         }),
-      }),
+      ),
     );
     return [...html.matchAll(/<header[^>]*data-testid="run-sheet-round-bar"[^>]*>([\s\S]*?)<\/header>/g)].map((m) =>
       m[1]!.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().replace(/\s+·/g, " ·"),

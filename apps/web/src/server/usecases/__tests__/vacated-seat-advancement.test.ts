@@ -37,7 +37,6 @@ import {
   generateStageFixtures,
   getSeedProposal,
 } from "../stages";
-import { withdrawEntrantCascade } from "../withdrawal";
 import { departIntoShortfall } from "./_table-shortfall";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 

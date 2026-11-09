@@ -20,7 +20,7 @@
 // presses, and every claim about what it did, is the test. The product's own words come from the dictionaries it renders.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 import { TAG, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, withDb } from "../helpers";
 import { showAllFixtures, stageFixtures, type Fx } from "../support/swiss-app-a-kit";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
