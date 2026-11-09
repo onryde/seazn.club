@@ -303,6 +303,10 @@ or `fixture-console.tsx` at a phone width. Not derivable from the code:
 
 ## Standing project rules
 
+- **Touching `apps/web/src/server`, or any file over ~1500 lines?** Read
+  `apps/web/src/server/MODULARIZATION.md` first. Splits are verbatim moves
+  behind an identical barrel; no behaviour change rides along.
+
 - **Reach for the standard design pattern when a real, present need matches
   one** (not a hypothetical future one) — e.g. a strategy/lookup table over a
   growing if/else chain of sport rules, a builder where a constructor already
