@@ -22,7 +22,7 @@ import type { Dict } from "@/lib/i18n-constants";
 import { MatchCentreDoc, type MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { LiveFixtureData } from "../../live-score-data";
 import { CommentaryTab } from "../commentary-tab";
-import { AWAY, HOME, makeDoc, over } from "./fixtures";
+import { AWAY, HOME, makeDoc, over, person } from "./fixtures";
 
 const dict = en as Dict;
 const data = {} as LiveFixtureData;
@@ -34,6 +34,13 @@ const THREE = makeDoc({ overs: [1, 2, 3].map((n) => over(n, ["1", "·"], `Bowler
 const NO_OVERS = makeDoc({ overs: [] });
 const NO_CRICKET = makeDoc();
 const NO_BOWLER = makeDoc({ overs: [over(1, ["1", "6"], null)] });
+// S2-4 Task 9 (CK-BC-1, MCC Law 17.8): over 2 was split by a mid-over change, so it lists both bowlers in order.
+const SPLIT = makeDoc({
+  overs: [
+    over(1, ["1", "·"], "Bowler1"),
+    { ...over(2, ["1", "4", "·", "2", "W", "·"], "Starc"), bowlers: [person("p-Starc", "Starc"), person("p-Hazlewood", "Hazlewood")] },
+  ],
+});
 
 // TWO innings whose over numbers COLLIDE — 1..3 in each. This is the shape
 // that made `mc-over-3` name two different overs.
@@ -46,7 +53,7 @@ const render = (d: MatchCentreDocT): string =>
   renderToStaticMarkup(<CommentaryTab doc={d} dict={dict} data={data} />);
 
 beforeAll(() => {
-  for (const d of [SEVEN, THREE, NO_OVERS, NO_CRICKET, NO_BOWLER, TWO_INNINGS]) {
+  for (const d of [SEVEN, THREE, NO_OVERS, NO_CRICKET, NO_BOWLER, TWO_INNINGS, SPLIT]) {
     expect(MatchCentreDoc.safeParse(d).success).toBe(true);
   }
 });
@@ -127,6 +134,14 @@ describe("CommentaryTab", () => {
     // and no literal placeholder.
     expect(without).not.toContain("{bowler}");
     expect(without).not.toContain("· ·");
+  });
+
+  it("S2-4 Task 9: a split over's header lists every bowler, in order; a whole over names its one", () => {
+    const html = render(SPLIT);
+    expect(html).toContain("Over 2 · 6 runs · 20/1 · Starc / Hazlewood</");
+    // The negative pair: the first bowler alone is never the header's bowler for a split over.
+    expect(html).not.toContain("Over 2 · 6 runs · 20/1 · Starc</");
+    expect(html).toContain("Over 1 · 2 runs · 10/1 · Bowler1</");
   });
 
   it("over and ball testids are scoped by INNINGS — over numbers restart", () => {

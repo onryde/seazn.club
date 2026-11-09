@@ -3,7 +3,9 @@
 // templates in offered-matrix order, then the 5 API-only shapes. One template
 // row, triple_rr, is no longer OFFERED by the builder (owner ruling 2026-11-01:
 // STAGE_TEMPLATES marks it `retired`), but it stays a row: the API still takes
-// it and stored divisions still play it. Columns are
+// it and stored divisions still play it. So its cells are no-organiser-path
+// cells (noOrganiserPathCell below): every browser case on them is 🚫, since
+// the builder's picker has no radio to tick, and its HTTP cases run. Columns are
 // the engine's own registry order (builtinModules), which is the order the
 // offered matrix was written in.
 //
@@ -235,18 +237,51 @@ export const NO_ORGANISER_PATH_ROUTE: Route = routeTo(
   "no organiser path: the division builder does not offer americano or mexicano to a sport whose engine entrant model holds no individuals (Match Day C9 review I5, option 2; round 3's shared rule). Owed: the stage create refuses it for team-only sports, the cells become refused, and the evidence is re-recorded on CI",
 );
 
+/** Where a RETIRED template row's browser cases are routed, row by row. The Triple round robin is offered to no sport
+ *  (owner ruling 2026-11-01), and the programme index already gives the triple_rr question to the round-robin wave. */
+export const RETIRED_ROW_ROUTES: Readonly<Partial<Record<TemplateRowKey, Route>>> = Object.freeze({
+  triple_rr: routeTo(
+    "W5",
+    "no organiser path: the division builder offers the Triple round robin to no sport (STAGE_TEMPLATES marks it retired; owner ruling 2026-11-01, Match Day D1 legs Option A), so its picker has no such format to tick. The stage create still takes three legs and a stored division still plays it, so its HTTP cases run. Owed: the round-robin wave's triple_rr question, whether the row stays as an API-only shape or leaves the catalogue",
+  ),
+});
+
+/** A template the product marks `retired` that RETIRED_ROW_ROUTES does not route: no wave would own its 🚫 cells. */
+export class RetiredRowUnrouted extends Error {
+  readonly row: string;
+  constructor(row: string) {
+    super(`catalogue: template row '${row}' is retired (STAGE_TEMPLATES) but RETIRED_ROW_ROUTES names no wave for it — say which wave owns its browser cases before they are planned 🚫`);
+    this.name = "RetiredRowUnrouted";
+    this.row = row;
+  }
+}
+
+/** The route of a template row the builder offers to NO sport because the product marks it `retired` (format-templates
+ *  templatesForSport leaves it out), or null when it is not retired. `templates` is the product's STAGE_TEMPLATES; a
+ *  test hands another list to reach the refusal. */
+export function retiredRowRoute(row: string, templates: readonly { readonly key: string; readonly retired?: true }[] = STAGE_TEMPLATES): Route | null {
+  if (templates.find((t) => t.key === row)?.retired !== true) return null;
+  // Own keys only: under strip-types an inherited key would otherwise read as a route.
+  const route = Object.prototype.hasOwnProperty.call(RETIRED_ROW_ROUTES, row) ? RETIRED_ROW_ROUTES[row as TemplateRowKey] : undefined;
+  if (route === undefined) throw new RetiredRowUnrouted(row);
+  return route;
+}
+
 const noPathMemo = new Map<string, Route | null>();
 /** The route of a cell the builder does not OFFER although the product does not refuse it, or null when the builder
- *  offers it (or the product refuses it: refusedCell). A stage of the row's own bodies is a pair-minting kind the
- *  sport's ENGINE entrant model cannot play (entrantKindsRefuseStageKind - the predicate templatesForSport reads).
- *  The cell stays OFFERED: the stage create still takes it, so its HTTP cases plan as before, while every browser case
- *  on it is 🚫 (layers.ts planL1Grid, planL2) - no screen reaches it. */
+ *  offers it (or the product refuses it: refusedCell). Two reasons, the two templatesForSport applies: the row is a
+ *  retired template, offered to no sport (retiredRowRoute); or a stage of the row's own bodies is a pair-minting kind the
+ *  sport's ENGINE entrant model cannot play (entrantKindsRefuseStageKind). The cell stays OFFERED: the stage create
+ *  still takes it, so its HTTP cases plan as before, while every browser case on it is 🚫 (layers.ts planL1Grid,
+ *  planL2) - no screen reaches it. */
 export function noOrganiserPathCell(row: RowKey, sport: string): Route | null {
   const id = cellId(row, sport);
   let out = noPathMemo.get(id);
   if (out === undefined) {
     const kinds = sportEntrantKinds(sport);
-    out = refusedCell(row, sport) === null && stagesForRow(row).some((s) => entrantKindsRefuseStageKind(kinds, s.kind)) ? NO_ORGANISER_PATH_ROUTE : null;
+    out = refusedCell(row, sport) !== null
+      ? null
+      : retiredRowRoute(row) ?? (stagesForRow(row).some((s) => entrantKindsRefuseStageKind(kinds, s.kind)) ? NO_ORGANISER_PATH_ROUTE : null);
     noPathMemo.set(id, out);
   }
   return out;

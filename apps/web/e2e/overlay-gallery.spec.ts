@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { signInStaff } from "./overlay-kit";
+import { sponsorLinkHost } from "../src/lib/sponsor-clicks";
 
 // THE STAFF OVERLAY GALLERY (R2007; spec 2026-10-15 §4.5 and §4.8). Every template × sport × scene × state, every
 // moment sample and every Result-card variant, drawn through the shared preview render — and this spec reads the
@@ -30,6 +31,11 @@ import { signInStaff } from "./overlay-kit";
 //                           and the widest four-letter codes the ladder mints (WOME, TOWN; WWWW, MMMM, ÆÆÆÆ, ØØØØ)
 //                           fit the bug's code column, the bar's tightest rung and the tiles, at 1920, 844 and 390
 //                           (#987 confirm pass N2 / M6)
+//   9. sponsor slots        R4 S7 (spec 2026-10-27 §3.5): every template × sport × slot the template declares draws the
+//                           real planner's card in that declared slot — clear of the scorebug's declared box, ≥ 150 px
+//                           off the floor, every text ≥ 30 px, nothing overflowing the card, the 43-character name
+//                           ellipsised (lower third) or clamped at two lines (banner) inside it; and the scene
+//                           carousel's card sits in the banner slot, clear of the scene's match card
 // The cells are `galleryCells(OVERLAY_TEMPLATES, …)` — the gallery's one cell source — so a template or scene added to
 // the registry is swept here with no edit. Every check prints its count, and zero checked fails it. The per-check
 // verdicts are `expect.soft`, so one run reports EVERY check that fails rather than stopping at the first.
@@ -501,6 +507,176 @@ test.describe("the staff overlay gallery (R2007)", () => {
     console.log(`[5] moment cells checked: ${momentCells.length}`);
     expect(momentCells.length, "anti-vacuity: no moment cell").toBeGreaterThan(0);
     expect.soft(misplaced, "slabs not where the template's registry entry puts them").toEqual([]);
+  });
+
+  // 9 — R4 S7. Measured off the SLOT (placed by the declaration, never transformed) and the card's own layout box, not
+  // the card's painted box: a carousel card that rotates mid-probe is sliding in, and its transform would read as a
+  // card out of its slot for 250 ms. The slot clips (`overflow: hidden`), so nothing of the card paints outside it.
+  test("check 9 (sponsor slots): every template × sport × slot and the scene carousel — the declared slot, clear of the scorebug and the match card, the floors held, the 43-character name whole or cleanly cut, the longest name cut inside its card", async ({ page }) => {
+    test.setTimeout(240_000);
+    await signInStaff(page);
+    await openGallery(page);
+    await page.evaluate(() => document.fonts.ready);
+    const slotOwed = await page.locator('[data-gallery-cell]:not([data-sponsor-slot=""])').count();
+    const carouselOwed = await page.locator('[data-gallery-cell][data-sponsor-carousel="1"]').count();
+    expect(slotOwed, "anti-vacuity: the page declares sponsor slot cells").toBeGreaterThan(0);
+    expect(carouselOwed, "anti-vacuity: the page declares carousel cells").toBeGreaterThan(0);
+    // The carousel starts its first showing in an effect, after the markup.
+    await expect
+      .poll(() => page.locator('[data-gallery-cell][data-sponsor-carousel="1"] [data-testid="ovl-sponsor-card"]').count(), { timeout: 30_000 })
+      .toBe(carouselOwed);
+    await page.waitForTimeout(500);
+
+    const probes = await page.evaluate(
+      ({ canvasW, floor }) =>
+        [...document.querySelectorAll<HTMLElement>("[data-gallery-cell]")]
+          .filter((cell) => (cell.dataset.sponsorSlot ?? "") !== "" || cell.dataset.sponsorCarousel === "1")
+          .map((cell) => {
+            const root = cell.querySelector<HTMLElement>('[data-testid="ovl-root"]')!;
+            const canvas = root.getBoundingClientRect();
+            const scale = canvas.width / canvasW;
+            const toCanvas = (r: DOMRect) => ({
+              x: (r.left - canvas.left) / scale,
+              y: (r.top - canvas.top) / scale,
+              width: r.width / scale,
+              height: r.height / scale,
+            });
+            const carousel = cell.dataset.sponsorCarousel === "1";
+            const slotName = carousel ? "banner" : (cell.dataset.sponsorSlot ?? "");
+            const cards = [...root.querySelectorAll<HTMLElement>('[data-testid="ovl-sponsor-card"]')];
+            const card = cards[0];
+            const slot = card?.closest<HTMLElement>('[data-testid="ovl-sponsor-slot"]') ?? null;
+            const match = root.querySelector<HTMLElement>('[data-testid="ovl-slate-card"]');
+            const brand = root.querySelector<HTMLElement>(".ovl-slate-brand");
+            const base = {
+              key: cell.dataset.galleryCell ?? "",
+              template: cell.dataset.template ?? "",
+              face: cell.dataset.sponsorFace ?? "",
+              logo: root.querySelector('[data-testid="ovl-sponsor-card"] .ovl-sponsor-logo') !== null,
+              mono: root.querySelector('[data-testid="ovl-sponsor-card"] .ovl-sponsor-mono') !== null,
+              slot: slotName,
+              carousel,
+              declared: (JSON.parse(cell.dataset.sponsorSlots ?? "{}") as Record<string, { x: number; y: number; width: number; height: number }>)[slotName] ?? null,
+              safeArea: JSON.parse(cell.dataset.safeArea ?? "null") as { x: number; y: number; width: number; height: number },
+              cards: cards.length,
+              slotData: slot?.dataset.slot ?? null,
+              matchBox: match ? toCanvas(match.getBoundingClientRect()) : null,
+              brandBox: brand ? toCanvas(brand.getBoundingClientRect()) : null,
+            };
+            if (!card || !slot) {
+              return { ...base, slotBox: null, fills: false, textChecked: 0, below: [] as string[], overflow: [] as string[], nameCut: false, nameCutOk: true, link: null as string | null };
+            }
+            const slotBox = toCanvas(slot.getBoundingClientRect());
+            // The card's own layout box (offset*, transform-free) fills the slot's.
+            const fills = Math.abs(card.offsetWidth - slot.clientWidth) <= 1 && Math.abs(card.offsetHeight - slot.clientHeight) <= 1;
+            let textChecked = 0;
+            const below: string[] = [];
+            for (const el of card.querySelectorAll<HTMLElement>("*")) {
+              const ownText = [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").trim() !== "");
+              if (!ownText) continue;
+              textChecked++;
+              const size = parseFloat(getComputedStyle(el).fontSize);
+              if (!(size >= floor)) below.push(`${el.className} ${size}px`);
+            }
+            // Nothing escapes the card: the name chain's `min-width: 0` holds, or the text column widens the row.
+            const overflow: string[] = [];
+            if (card.scrollWidth > card.clientWidth + 1) overflow.push(`card content ${card.scrollWidth}px in ${card.clientWidth}px`);
+            if (card.scrollHeight > card.clientHeight + 1) overflow.push(`card content ${card.scrollHeight}px tall in ${card.clientHeight}px`);
+            const name = card.querySelector<HTMLElement>(".ovl-sponsor-name")!;
+            const nameRect = name.getBoundingClientRect();
+            const cardRect = card.getBoundingClientRect();
+            if (nameRect.left < cardRect.left - 1 || nameRect.right > cardRect.right + 1) overflow.push("name paints past the card");
+            const cs = getComputedStyle(name);
+            const cutX = name.scrollWidth > name.clientWidth + 1;
+            const cutY = name.scrollHeight > name.clientHeight + 1;
+            const clamp = cs.getPropertyValue("-webkit-line-clamp").trim();
+            const nameCut = cutX || cutY;
+            // A cut name must say so: an ellipsis on the lower third's one line, the two-line clamp on the banner.
+            const nameCutOk = !nameCut || (slotName === "banner" ? clamp === "2" : cs.textOverflow === "ellipsis" && !cutY);
+            const link = card.querySelector('[data-testid="ovl-sponsor-link"]')?.textContent ?? null;
+            return { ...base, slotBox, fills, textChecked, below, overflow, nameCut, nameCutOk, link };
+          }),
+      { canvasW: CANVAS_W, floor: TEXT_FLOOR_PX },
+    );
+
+    const slotCells = probes.filter((p) => !p.carousel);
+    const carouselCells = probes.filter((p) => p.carousel);
+    console.log(`[9] sponsor slot cells: ${slotCells.length} of ${slotOwed}, carousel cells: ${carouselCells.length} of ${carouselOwed}`);
+    expect(slotCells.length).toBe(slotOwed);
+    expect(carouselCells.length).toBe(carouselOwed);
+    // Every template the gallery draws shows both of its declared slots.
+    const templates = [...new Set(slotCells.map((p) => p.template))];
+    for (const template of templates) {
+      expect(new Set(slotCells.filter((p) => p.template === template).map((p) => p.slot)), template).toEqual(new Set(["lower_third", "banner"]));
+    }
+    expect(templates.length, "anti-vacuity: templates with sponsor cells").toBeGreaterThan(0);
+
+    const cardless = probes.filter((p) => p.cards !== 1 || p.slotBox === null).map((p) => `${p.key}: ${p.cards} cards`);
+    const wrongSlot = probes.filter((p) => p.slotBox !== null && p.slotData !== p.slot).map((p) => `${p.key}: drawn in ${p.slotData}`);
+    const undeclared = probes
+      .filter((p) => p.slotBox !== null && (p.declared === null || !inside(p.slotBox, p.declared) || !inside(p.declared, p.slotBox)))
+      .map((p) => `${p.key}: slot ${fmt(p.slotBox)} vs declared ${fmt(p.declared)}`);
+    const notFilling = probes.filter((p) => p.slotBox !== null && !p.fills).map((p) => p.key);
+    const overScorebug = probes.filter((p) => p.slotBox !== null && intersects(p.slotBox, p.safeArea)).map((p) => `${p.key}: ${fmt(p.slotBox)} meets ${fmt(p.safeArea)}`);
+    const lift = (p: (typeof probes)[number]) => 1080 - (p.slotBox!.y + p.slotBox!.height);
+    const low = probes.filter((p) => p.slotBox !== null && lift(p) < BAR_BOTTOM_MIN_PX - TOL).map((p) => `${p.key}: ${lift(p).toFixed(1)}px off the floor`);
+    const textChecked = probes.reduce((n, p) => n + p.textChecked, 0);
+    const below = probes.flatMap((p) => p.below.map((b) => `${p.key}: ${b}`));
+    const overflowing = probes.flatMap((p) => p.overflow.map((o) => `${p.key}: ${o}`));
+    const badCut = probes.filter((p) => !p.nameCutOk).map((p) => p.key);
+    const lowerCut = slotCells.filter((p) => p.slot === "lower_third" && p.nameCut).length;
+    const lowerThirds = slotCells.filter((p) => p.slot === "lower_third").length;
+    // The face each cell pins (`data-sponsor-face`): full = a logo and `<host>/s/<code>` (R7; the host is `sponsorLinkHost()`,
+    // the app's public base url - re-review N2); plain = the
+    // monogram and nothing link-like (fix round 1, m3); witness = a full face whose name is the longest a sponsor can
+    // have (80 characters) — too wide for any slot by the font's own metrics (sponsor-card.test.tsx), so it is the
+    // ellipsis's and the clamp's witness (fix round 2). The 43-character name FITS every slot whole (758 px in an
+    // 816 px lower-third column; two lines in the banner), so on its own it witnesses neither.
+    const fullFaces = slotCells.filter((p) => p.face === "full");
+    const plainFaces = slotCells.filter((p) => p.face === "plain");
+    const witnessFaces = slotCells.filter((p) => p.face === "witness");
+    const linked = [...fullFaces, ...witnessFaces];
+    const shortLink = new RegExp(`^${sponsorLinkHost().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/s/[A-Z0-9]+$`);
+    const linkless = linked.filter((p) => !shortLink.test(p.link ?? "") || !p.logo || p.mono).map((p) => `${p.key}: ${p.link}`);
+    const plainWrong = plainFaces.filter((p) => p.link !== null || p.logo || !p.mono).map((p) => `${p.key}: link ${p.link}, logo ${p.logo}`);
+    expect(fullFaces.length + plainFaces.length + witnessFaces.length, "every sponsor-slot cell names its face").toBe(slotCells.length);
+    expect(plainFaces.length, "anti-vacuity: the plain face is drawn").toBeGreaterThan(0);
+    // The witness is drawn on EVERY template's every slot, and it is cut on each one (cleanly: `badCut` below).
+    const witnessSlots = new Set(witnessFaces.map((p) => `${p.template}|${p.slot}`));
+    const everySlot = new Set(templates.flatMap((t) => ["lower_third", "banner"].map((slot) => `${t}|${slot}`)));
+    expect([...witnessSlots].sort(), "the witness reaches every template's every slot").toEqual([...everySlot].sort());
+    const witnessWhole = witnessFaces.filter((p) => !p.nameCut).map((p) => p.key);
+    // The scene's match card and its brand mark, where the scene draws them (Starting soon always does).
+    const besideMatch = carouselCells.filter((p) => p.slotBox !== null && p.matchBox !== null);
+    const overMatch = carouselCells
+      .filter(
+        (p) =>
+          p.slotBox !== null &&
+          ((p.matchBox !== null && intersects(p.slotBox, p.matchBox)) || (p.brandBox !== null && intersects(p.slotBox, p.brandBox))),
+      )
+      .map((p) => `${p.key}: carousel ${fmt(p.slotBox)} vs match card ${fmt(p.matchBox)}, brand ${fmt(p.brandBox)}`);
+    console.log(
+      `[9] cards checked: ${probes.length - cardless.length}, text elements: ${textChecked}, below ${TEXT_FLOOR_PX}px: ${below.length}, ` +
+        `lowest lift: ${Math.min(...probes.filter((p) => p.slotBox).map(lift)).toFixed(1)}px, lower-third names cut: ${lowerCut} of ${lowerThirds}, ` +
+        `faces: ${fullFaces.length} full, ${plainFaces.length} plain, ${witnessFaces.length} witness (cut: ${witnessFaces.length - witnessWhole.length}), ` +
+        `carousel cards measured against a match card: ${besideMatch.length} of ${carouselCells.length}, over it: ${overMatch.length}`,
+    );
+    expect(besideMatch.length, "anti-vacuity: a carousel shares the canvas with a match card (Starting soon)").toBeGreaterThan(0);
+    expect(textChecked, "anti-vacuity: no sponsor text read").toBeGreaterThan(0);
+    expect(lowerCut, "anti-vacuity: a name is cut on at least one lower third (the witness)").toBeGreaterThan(0);
+    expect(witnessWhole, "anti-vacuity: the longest name allowed is cut on every lower third and banner").toEqual([]);
+    expect.soft(cardless, "a sponsor cell without exactly one card").toEqual([]);
+    expect.soft(wrongSlot, "a card drawn in another look's slot").toEqual([]);
+    expect.soft(undeclared, "a slot off its declared box").toEqual([]);
+    expect.soft(notFilling, "a card that does not fill its slot").toEqual([]);
+    expect.soft(overScorebug, "a sponsor slot over the template's declared box").toEqual([]);
+    expect.soft(low, `a sponsor card under ${BAR_BOTTOM_MIN_PX} canvas px off the floor`).toEqual([]);
+    expect.soft(below, `sponsor text below the ${TEXT_FLOOR_PX}px floor`).toEqual([]);
+    expect.soft(overflowing, "sponsor content escaping its card").toEqual([]);
+    expect.soft(badCut, "a cut name with no ellipsis or clamp").toEqual([]);
+    expect.soft(linkless, "R7: the full face's logo and short link").toEqual([]);
+    expect.soft(plainWrong, "the plain face: the monogram, no logo, nothing link-like").toEqual([]);
+    expect.soft(overMatch, "a carousel card over the scene's match card").toEqual([]);
   });
 
   // 8 — review a (PR #974): at the 30 px floor a crease line ran out of band and its ellipsis landed on the BOWLER'S

@@ -17,7 +17,7 @@ export const END_OF_OVER_HOLD_MS = 3_000;
 export function isFullEndOfOver(closed: OverlayClosedOver): boolean {
   if (closed.glyphs.length === 0) return false;
   const namedBatter = closed.batters.some((b) => Boolean(b.name));
-  const namedBowler = Boolean(closed.bowler?.name);
+  const namedBowler = Boolean(closed.bowler?.name) || (closed.bowlers ?? []).some((b) => Boolean(b.name));
   return namedBatter || namedBowler;
 }
 

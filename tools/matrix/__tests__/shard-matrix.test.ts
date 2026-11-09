@@ -501,13 +501,15 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
     expect(runs.get("L2")![0].plan).toBe("--layer L2 --scope grid");
     expect(runs.get("L3")![0].plan).toBe("--set w1-driving");
     expect(runs.get("L1")![0].scope).toBe("L1 (grid)");
-    // Non-vacuity: the stripes differ in how much they drove (the L2 grid's 51 driven items do not split evenly across any 8).
+    // Non-vacuity: the stripes differ in how much they drove (the L2 grid's 48 driven items do not split evenly across any 8).
     // Match Day C9 review I5, option 2: the ten cells the builder does not offer are 🚫 (L1 176 -> 166 driven, L2 62 -> 56;
-    // layers-grid.test.ts).
+    // layers-grid.test.ts), and so are the retired Triple round robin's (owner ruling 2026-11-01: L1 166 -> 155, L2 56 -> 53).
     const l1 = runs.get("L1")!.map((r) => r.cases.filter((c) => c.planned !== true).length);
-    expect(l1.reduce((a, b) => a + b, 0)).toBe(166);
+    expect(l1.reduce((a, b) => a + b, 0)).toBe(155);
     expect(new Set(l1).size).toBeGreaterThan(1);
-    expect(runs.get("L2")!.map((r) => r.cases.filter((c) => c.planned !== true).length).reduce((a, b) => a + b, 0)).toBe(51);
+    // W4 T16 on top: the 22 refused standalone cells leave the L2 grid with 5 driven runs of their own (L2 53 -> 48;
+    // layers-grid.test.ts). L1's driven count is untouched: those API-only cells were 🚫 there, never driven.
+    expect(runs.get("L2")!.map((r) => r.cases.filter((c) => c.planned !== true).length).reduce((a, b) => a + b, 0)).toBe(48);
   });
 
   it("the full scope's shards of each layer merge into the layer's plan: right count, right order, identity clean against the planner (the judge's own check)", { timeout: 300_000 }, async () => {
@@ -585,7 +587,7 @@ describe("shard-matrix.ts the CLI: matrix=<json> for $GITHUB_OUTPUT (exit 0), or
     expect(m.include.map((j) => j.id)).toEqual(["l1-s1", "l1-s2", "l1-s3", "l1-s4", "l1-s5", "l1-s6", "l1-s7", "l1-s8", "l2-s1", "l2-s2", "l3-s1", "l3-s2"]);
     expect(m.include.every((j) => Object.keys(j).sort().join() === "args,id,k,layer,of,timeout")).toBe(true);
     expect(m.include.every((j) => j.timeout <= 300)).toBe(true);
-    expect(io.err).toMatch(/L1.*207.*166/);
+    expect(io.err).toMatch(/L1.*207.*155/);
   });
 
   it("--scope smoke is 6 jobs; --scope pr-sample --rows <r> is one; and --rows beside full or smoke is ignored", () => {
@@ -688,13 +690,18 @@ describe("shard-matrix.ts the CLI: matrix=<json> for $GITHUB_OUTPUT (exit 0), or
   });
 
   it("a plan that would time out past the cap is a refusal at plan time, named (ShardTimeoutTooLong), never at minute 360", () => {
-    const c = JSON.parse(shardsText) as { layers: Record<string, { full: { shards: number } }> };
-    c.layers.L1.full.shards = 2; // 166 driven over two stripes of one browser worker at 210 s
+    const c = JSON.parse(shardsText) as { maxTimeoutMinutes: number; layers: Record<string, { full: { shards: number } }> };
+    // Two stripes of one browser worker for L1's 155 driven cases (78 in stripe 1). Against the real 300-minute cap that
+    // now FITS - the retired Triple round robin's 🚫 took stripe 1 from 83 to 78 - so the cap is lowered to 200 minutes,
+    // which 78 cases at L1's committed ceiling (setup and slack aside) outrun whatever that ceiling rounds to above 150 s.
+    c.layers.L1.full.shards = 2;
+    c.maxTimeoutMinutes = 200;
     const f = join(dir, "two.json");
     writeFileSync(f, JSON.stringify(c));
     expect(main(["--scope", "full", "--shards-file", f])).toBe(2);
     expect(io.err).toMatch(/ShardTimeoutTooLong/);
     expect(io.err).toMatch(/L1 shard 1\/2/);
+    expect(io.err).toMatch(/exceeds maxTimeoutMinutes 200/);
     expect(io.out).toBe("");
   });
 

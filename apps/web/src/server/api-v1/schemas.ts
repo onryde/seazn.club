@@ -28,6 +28,8 @@ import { PointsRule } from "@seazn/engine/competition";
 // resolution, so a `@/...` import throws ERR_MODULE_NOT_FOUND there even
 // though it resolves fine under tsc/Next.js/vitest.
 import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../lib/registration-rules.ts";
+import { isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "../../lib/sponsor-clicks.ts";
+import { SPONSOR_FREQUENCIES } from "../../lib/sponsor-frequencies.ts";
 import { FIXTURE_STATUSES } from "../../lib/fixture-status.ts";
 // W3 T18 (RB3-7(c)): the sentence a requested half/zero bye is refused with — the table's own constant (client-safe and
 // strip-types-safe: its only import is `import type`), so this schema, `http.ts`'s reader and the table row say one thing.
@@ -2554,6 +2556,21 @@ export const YoutubeDisconnected = z.object({
 });
 export type YoutubeDisconnected = z.infer<typeof YoutubeDisconnected>;
 
+/** R4 sponsors on stream, S8 (spec 2026-10-27 §3.6; plan P6): one proof-of-play item on the beat — the overlay page's
+ *  `seazn:sponsor:start|end` console line (lib/overlay-compositor.ts `sponsorLine`, at most 512 bytes), tagged by the
+ *  compositor with `kind` from the line's name. STRICT per item: a key the page never writes is refused, and since the
+ *  beat is strict too that refuses the whole beat — so the compositor (SC1) validates each line before buffering it.
+ *  `source` is the page's word: `scene` for a carousel showing, `rotation` for every break card (ruling R5: the server
+ *  takes rotation vs operator from `sponsor_assignments`). `at` is UTC `Z`, as the page's `toISOString()` writes it. */
+export const RelayAiring = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("start"), momentId: z.string().max(80), cardId: z.string().max(80), style: z.enum(["lower_third", "banner"]),
+    source: z.enum(["rotation", "scene", "operator"]), breakKind: z.string().max(40).nullable(), at: z.string().datetime(),
+  }).strict(),
+  z.object({ kind: z.literal("end"), momentId: z.string().max(80), at: z.string().datetime(), cutShort: z.boolean() }).strict(),
+]);
+export type RelayAiring = z.infer<typeof RelayAiring>;
+
 /** The Machine's beat (§6.3) — the control channel; the reply carries desired_state. */
 export const RelayHeartbeat = z
   .object({
@@ -2598,6 +2615,12 @@ export const RelayHeartbeat = z
     // units; the contract publishes maxLength 100 (code points), the bound under which any text fits (review M1).
     exitReason: z.enum(["ended", "deadline", "signalled", "session_gone", "refused", "fatal", "restart"]).nullish(),
     exitDetail: z.string().max(200).nullish(),
+    // R4 S8 (sponsors on stream spec 2026-10-27 §3.6.2): the page's proof-of-play items since the last 2xx (the compositor
+    // buffers at most 64, dropping the oldest), and how many it has dropped. Additive and nullish like every R2 field: a
+    // compositor built before S8 sends neither. `airings` is RECORDED (server/sponsors/airings.ts) and stripped before
+    // either beat store (ruling R14); `airingsDropped` is stored as sent.
+    airings: z.array(RelayAiring).max(64).nullish(),
+    airingsDropped: z.number().int().min(0).nullish(),
   })
   .strict()
   // Review M6: the exit fields ride only on the FINAL beat. null is no report (the fields are nullish), so only a
@@ -5189,6 +5212,8 @@ export const Sponsor = z.object({
   status: SponsorStatus,
   click_count: z.number().int(),
   created_at: z.string(),
+  /** R4 sponsors on stream (V492): ticked onto the stream's rotation. Written only through PATCH; a new sponsor starts false. */
+  on_stream: z.boolean(),
   /** Set on list reads when a paid package order activated this placement. */
   paid_order_id: z.string().nullable().optional(),
   /** List reads: true while a payment dispute has the placement parked — that
@@ -5203,14 +5228,44 @@ export const Sponsor = z.object({
 
 export const CreateSponsor = z.object({
   name: z.string().min(1).max(80),
-  url: z.string().url().max(500).nullish(),
+  // http(s) only (R4 S10 fix round 1, m1): zod's `.url()` alone accepts `javascript:` and `data:`.
+  url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   logo_path: z.string().max(500).nullish(),
   tier: SponsorTier.default("partner"),
   competition_id: Uuid.nullish(),
   status: SponsorStatus.default("active"),
 });
 
-export const PatchSponsor = CreateSponsor.partial();
+// `patchOf`, not `.partial()`: a partial still fills `tier` and `status` from their defaults, rewriting both on a PATCH that
+// never named them (R4 S12; final review 2, m5). `on_stream` is PATCH-ONLY (R4 S12, row 30): a created sponsor starts off the
+// stream, and the first tick is what turns the org's rotation on (ruling R12). It is declared HERE, beside the patch, and
+// never on `CreateSponsor`.
+export const PatchSponsor = patchOf(CreateSponsor).extend({ on_stream: z.boolean().optional() });
+
+/** R4 sponsors on stream, S12: one scope's dial (spec §3.2, §5.1). `competitionId: null` is the org row. */
+export const SponsorStreamFrequency = z.enum(SPONSOR_FREQUENCIES);
+export const PutSponsorStreamSettings = z.object({
+  competitionId: Uuid.nullable(),
+  enabled: z.boolean(),
+  frequency: SponsorStreamFrequency,
+});
+export const SponsorStreamSettings = PutSponsorStreamSettings;
+
+/** R4 sponsors on stream, S13 (spec §4, §5.2): a shareable report link for one sponsor over inclusive DATES (V492 from_date /
+ *  to_date), optionally one competition. The usecase re-checks the dates (server/sponsors/report.ts), so a caller that skips
+ *  this schema is refused the same way. */
+export const CreateSponsorReportLink = z
+  .object({
+    competitionId: Uuid.nullable(),
+    from: z.iso.date(),
+    to: z.iso.date(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.to < v.from) ctx.addIssue({ code: "custom", path: ["to"], message: ENDS_BEFORE_STARTS });
+  });
+/** The url is root-relative (`/r/sponsor/<token>`) and answered ONCE: only the token's hash is kept. */
+export const CreatedSponsorReportLink = z.object({ id: z.string(), url: z.string() });
+export const RevokedSponsorReportLink = z.object({ revoked: z.literal(true) });
 
 export const ReorderSponsors = z.object({ ids: z.array(Uuid).min(1).max(200) });
 

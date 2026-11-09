@@ -5,6 +5,7 @@ import { handler } from "@/lib/http";
 import { consumeLoginLink } from "@/lib/login-link";
 import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
 import { headers } from "next/headers";
+import { clientIp } from "@/lib/client-ip";
 
 // `next` is the post-login redirect carried by the emailed link (invite
 // pages); postAuthLanding re-validates it via safeNextPath.
@@ -18,7 +19,7 @@ const schema = z
 /** Consume a passwordless sign-in token and start a session. */
 export async function POST(req: Request) {
   return handler(async () => {
-    const ip = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+    const ip = clientIp(await headers());
     await rateLimit(`magic-link-consume:${ip}`, AUTH_LIMIT);
 
     const body = schema.parse(await req.json());

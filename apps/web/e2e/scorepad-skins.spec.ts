@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import { apiJson, fixturePath, seedRosteredFixture, expectNoHorizontalScroll, TAG } from "./helpers";
+import { apiJson, fixturePath, pickCricketPeople, seedRosteredFixture, expectNoHorizontalScroll, TAG } from "./helpers";
 import {
   HIT_TARGET_FLOOR_PX,
   floorViolationLines,
@@ -214,15 +214,18 @@ test("cricket skin: real roster, a couple of balls scored", async ({ page, reque
   const bowler = fx.personIds[`Skins Bowler ${TAG}`]!;
 
   // R2's v2→v3 cutover for cricket (V3_SKINS) replaces the three "This over"
-  // selects with the context strip (D-14) — no picker tap is needed here at
-  // all: with exactly one home pair and one away player, the strip's own
-  // fold-derived defaults (`resolvePeople`, v3/skins/cricket.tsx —
-  // `battingOrder[0]/[1]`, `bowlingOrder[0]`) are already this fixture's only
-  // possible assignment, so a run tile can be tapped directly. The picker
-  // ITSELF (tap a chip, tap a candidate BY NAME, and the pick survives into
-  // the next dispatched payload) has its own dedicated proof in
-  // scorepad-v3-cricket.spec.ts — this file stays the "one quick real-roster
-  // tour per skin" it was before.
+  // selects with the context strip (D-14). S2-4 Task 3: the strip picks
+  // nobody for the scorer, even when, as here, one home pair and one away
+  // player are the only possible assignment, so the openers and the opening
+  // bowler are picked before ball 1 (the tiles wait for them). The picker's
+  // own proof (the tiles disabled until the picks, the strip saying why, and
+  // the picks surviving into the payload) is in scorepad-v3-cricket.spec.ts —
+  // this file stays the "one quick real-roster tour per skin" it was before.
+  await pickCricketPeople(page, {
+    striker: `Skins Striker ${TAG}`,
+    nonStriker: `Skins NonStriker ${TAG}`,
+    bowler: `Skins Bowler ${TAG}`,
+  });
   await pad(page).getByRole("button", { name: "4", exact: true }).click();
   await expect
     .poll(

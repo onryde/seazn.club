@@ -37,6 +37,9 @@
 //     are chosen — and the send carries `expected_seq` from
 //     the page's last load — a stale console is refused (SEQ_CONFLICT,
 //     fixture-console.tsx:456-469) and writes nothing. Finalize likewise.
+//   - PR #1133: the Forfeit sits in a Match actions panel that is CLOSED at
+//     ≥768 behind its toggle (open, toggle hidden, below), and every load closes
+//     it again; Finalize is a banner outside it.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -45,7 +48,7 @@ import * as webConsent from "../../../../apps/web/src/lib/consent.ts";
 import type { LedgerTransport } from "../ledger.ts";
 import { newSession } from "../http.ts";
 import { genericAdapter } from "../drivers/adapters/generic.ts";
-import { ORGANISER_VIEWPORT } from "../drivers/scorer.ts";
+import { MATCH_ACTIONS_CLOSED_SELECTOR, MATCH_ACTIONS_OPEN_SELECTOR, ORGANISER_VIEWPORT } from "../drivers/scorer.ts";
 import {
   CONSENT_CHOICE,
   CONSENT_KEY,
@@ -141,6 +144,8 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
     gotos: [] as string[],
     reloads: 0,
     handoverClicks: 0,
+    /** Taps on the closed Match actions toggle (PR #1133). */
+    actionsToggles: 0,
     mints: 0,
     contexts: [] as {
       viewport: { width: number; height: number };
@@ -235,6 +240,8 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
     let snapshotStatus = "scheduled";
     let snapshotSeq = 0;
     let handoverOpen = false;
+    /** PR #1133: the Match actions panel (Forfeit's home) — React state, so every load closes it again. */
+    let actionsOpen = false;
     let padLive = false;
     let started = false;
     let bannerShown = true;
@@ -281,6 +288,10 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
     };
 
     const onConsole = (): boolean => ctx.signedIn && url === `${ORIGIN}${CONSOLE_PATH}`;
+    /** The console offers a match action (the Forfeit) while the match it last loaded is not decided. */
+    const actionsOffered = (): boolean => onConsole() && !["decided", "forfeited", "finalized"].includes(snapshotStatus);
+    /** At ≥768 the panel is closed behind its toggle until tapped; below, it is open and the toggle is hidden. */
+    const toggleShown = (): boolean => actionsOffered() && viewport.width >= MD_BREAKPOINT_PX;
     const surface = (): string => (onConsole() ? "console" : padLive ? "pad" : "blank");
     const chipOf = (sel: string): string | undefined => /^\[data-testid="pad-dock-chip-(.+)"\]$/.exec(sel)?.[1];
 
@@ -292,8 +303,13 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
           return onConsole() && handoverOpen;
         case '[data-testid="score-finalize"]':
           return onConsole() && (snapshotStatus === "decided" || snapshotStatus === "forfeited");
+        // This fake's "attached" is also "visible": a Forfeit inside the closed panel is not there to wait on or tap.
         case '[data-testid="score-forfeit"]':
-          return onConsole() && !["decided", "forfeited", "finalized"].includes(snapshotStatus);
+          return actionsOffered() && (actionsOpen || !toggleShown());
+        case MATCH_ACTIONS_CLOSED_SELECTOR:
+          return toggleShown() && !actionsOpen;
+        case MATCH_ACTIONS_OPEN_SELECTOR:
+          return toggleShown() && actionsOpen;
         case '[data-testid="forfeit-who-home"]':
         case '[data-testid="forfeit-who-away"]':
         case '[data-testid="forfeit-who-both"]':
@@ -360,6 +376,10 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
           return;
         case '[data-testid="score-forfeit"]':
           dialog = {};
+          return;
+        case MATCH_ACTIONS_CLOSED_SELECTOR:
+          record.actionsToggles += 1;
+          actionsOpen = true;
           return;
         case '[data-testid="forfeit-who-home"]':
         case '[data-testid="forfeit-who-away"]':
@@ -438,12 +458,14 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
         });
         bannerShown = withLocalStorage(storage, () => webConsent.needsConsentPrompt());
         if (target === LOGIN_URL) ctx.signedIn = true;
+        actionsOpen = false;
         if (onConsole()) refreshConsole();
         padLive = secrets.length > 0 && target === `${ORIGIN}/score/${secrets[secrets.length - 1]}`;
         return null;
       },
       async reload() {
         record.reloads += 1;
+        actionsOpen = false;
         if (onConsole()) refreshConsole();
         return null;
       },
@@ -1026,6 +1048,12 @@ describe("R59 — the three d-tiny routes, played through the real driver (fix r
       'console [data-testid="forfeit-why-retired"]',
       'console [data-testid="forfeit-confirm"]',
     ]);
+    // PR #1133: at the organiser's 1280 the Forfeit sits in the CLOSED Match actions panel. Its toggle is tapped once,
+    // after the console's reload (which closes the panel again) and right before the Forfeit.
+    expect(world.record.actionsToggles).toBe(1);
+    const toggleAt = world.record.clicks.indexOf(`console ${MATCH_ACTIONS_CLOSED_SELECTOR}`);
+    expect(toggleAt, "the toggle was tapped").toBeGreaterThanOrEqual(0);
+    expect(world.record.clicks[toggleAt + 1]).toBe('console [data-testid="score-forfeit"]');
     // Once before the forfeit (the console was loaded before play), once before finalize.
     expect(world.record.reloads).toBeGreaterThanOrEqual(2);
   });

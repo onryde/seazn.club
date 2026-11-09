@@ -143,7 +143,7 @@ async function teardownStreams(): Promise<void> {
         })
         .toBe(0)
         .catch(() =>
-          withDb((sql) => sql`update fixture_stream_sessions set state = 'failed', fail_reason = 'unknown', ended_at = now()
+          withDb((sql) => sql`update fixture_stream_sessions set state = 'failed', fail_reason = 'unknown', end_reason = null, ended_at = now()
                                where org_id = ${orgId} and state not in ('completed', 'failed')`),
         );
     }

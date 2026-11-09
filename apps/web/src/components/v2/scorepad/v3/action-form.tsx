@@ -603,6 +603,10 @@ export interface ActionFormListProps {
   squads: SquadState;
   lineups: LineupPair;
   personNames: Readonly<Record<string, string>>;
+  /** S2-4 (cricket) Task 8 — `SkinDefV3.moreSheet`: asked first when an entry is tapped. `true` means the host opened
+   *  the skin's own sheet for this type, so the row neither submits nor expands its generic form. Optional because
+   *  only the pad host has a skin to ask; absent, every entry behaves exactly as before. */
+  onOpenSheet?: (type: string) => boolean;
 }
 
 /**
@@ -618,7 +622,7 @@ export interface ActionFormListProps {
  * its OWN expand/values independently — collapsing one action never
  * discards another's in-progress entry.
  */
-export function ActionFormList({ actions, t, submittingType, onSubmit, squads, lineups, personNames }: ActionFormListProps) {
+export function ActionFormList({ actions, t, submittingType, onSubmit, squads, lineups, personNames, onOpenSheet }: ActionFormListProps) {
   const [expandedTypes, setExpandedTypes] = useState<ReadonlySet<string>>(() => new Set());
   const [valuesByType, setValuesByType] = useState<Readonly<Record<string, ActionFormValues>>>({});
 
@@ -657,6 +661,7 @@ export function ActionFormList({ actions, t, submittingType, onSubmit, squads, l
           personNames,
           onTap: () => {
             if (submittingType === action.type) return;
+            if (onOpenSheet?.(action.type) === true) return;
             // Fast path only when NEITHER fields NOR attribution need input.
             if (action.fields.length === 0 && action.attribution.length === 0) {
               onSubmit(action.type, buildActionPayload(action, valuesFor(action)));

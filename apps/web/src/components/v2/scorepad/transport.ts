@@ -26,6 +26,7 @@ import type { AppendSuccess, LedgerSlotEvent } from "./types";
 import { NEXT_MATCH_STARTED_CODE, nextMatchRefOf } from "../../../lib/next-match-started";
 import { isLevelResultReason } from "../../../lib/level-result-reason";
 import { isSettleRefusalReason } from "../../../lib/settle-refusal-reason";
+import { isDivisionGateReason } from "../../../lib/division-phase";
 
 // Review finding 1: listEventsSince previously cast the ledger JSON straight
 // to LedgerSlotEvent[] with no runtime validation, so an OMITTED
@@ -461,7 +462,10 @@ function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTranspor
         return { kind: "throttled", message, retryAfterMs: retryAfterMsOf(res) };
       }
       if (isPermanentRefusal(res.status)) {
-        return { kind: "rejected", code: envelope.error?.code ?? "UNKNOWN", message };
+        // S2-4 Task 2: a WRONG_PHASE from the division gate (422) names why, so the pad can say the division hasn't started.
+        const reason = envelope.error?.reason;
+        const named = envelope.error?.code === "WRONG_PHASE" && isDivisionGateReason(reason) ? { reason } : {};
+        return { kind: "rejected", code: envelope.error?.code ?? "UNKNOWN", message, ...named };
       }
       return { kind: "network-error", message };
     },

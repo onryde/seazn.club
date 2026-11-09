@@ -205,6 +205,13 @@ export interface ScorebugSpec {
   phase: PadPhase;
   halves: [ScorebugHalf, ScorebugHalf];
   strip: StripItem[];
+  /**
+   * S2-4 Task 10 (CI run 42456030519): the room the strip band holds at `md` and up, where its row wraps
+   * (`flex-wrap`, scorebug.tsx). Absent is the chassis as it was: the band is as tall as its lines. `2` holds two lines
+   * whether the row fills them or not, for a skin whose strip changes width with play: a line that wraps then moves
+   * nothing under it. Below `md` the row is one scrolling line and this does nothing.
+   */
+  stripLines?: 2;
 }
 
 export type TileKind = "primary" | "standard" | "destructive" | "minor";
@@ -593,8 +600,59 @@ export interface ContextSlot {
    * why the TILES are blocked; this says why a CANDIDATE is.
    */
   blocked?: Blocked;
+  /**
+   * S2-4 (cricket) Task 7 — per-candidate decoration for this slot's picker, the same `CandidateMeta` the swap and
+   * guided sheets already render (`renderCandidateRow`). First use: cricket's striker chip, whose one candidate after
+   * a ball is the non-striker, tagged "Swap ends" so the pick reads as the hand strike swap it is. Absent keeps every
+   * row exactly as it renders without it.
+   */
+  candidateMeta?: Readonly<Record<string, CandidateMeta>>;
+  /**
+   * S2-4 (cricket) Task 10, gap 8 — HEIGHT RESERVATION for this slot's message line, the strip's twin of
+   * `StripItem.reserve`. Every message the line can take next, pre-localised like `message`, laid out INVISIBLY in one
+   * cell with the visible message, so the line is as tall as the tallest of them whether a message shows or not. The
+   * strip then keeps its height when the message comes and goes (cricket's "Pick the bowler for over N" at each over's
+   * end), and nothing under it moves.
+   *
+   * Never read, never announced (`aria-hidden`), never a `data-role`: a locator on `context-slot-message` still counts
+   * zero while no message shows. Absent (every slot before this) renders exactly as before. Ignored on a `kind: "mode"`
+   * slot, whose room `ContextStripSpec.modeReserve` holds.
+   */
+  messageReserve?: readonly string[];
+  /**
+   * S2-4 (cricket) Task 10, gap 8 — WIDTH RESERVATION for this slot's chip: every person it may name (ids, worded like
+   * `personId`). At a desktop width the chip is laid out as wide as the widest of "Label: name" over them, and as the
+   * bare unset "Label" — and its unset dot always takes its room — so the chip is one width whoever it names, or nobody.
+   * The chip row is a wrapping flex row there, so a chip that narrowed when the bowler emptied at an over's end could
+   * pull a wrapped chip up a row and make the whole strip shorter; this holds the row's shape.
+   *
+   * Phones are unchanged: a chip is the full width of the strip there already, so the twins are `max-md:hidden`. The
+   * twins are `aria-hidden` and invisible: the chip's accessible name is its visible label alone. Absent (every slot
+   * before this) renders exactly as before.
+   */
+  chipReserve?: readonly string[];
 }
-export interface ContextStripSpec { slots: ContextSlot[] }
+
+/** S2-4 (cricket) Task 10 — one mode statement a strip may show, for `ContextStripSpec.modeReserve`. `label` is an i18n
+ *  KEY, like `ContextSlot.label`; `message` is pre-localised, like `ContextSlot.message`. */
+export interface ContextModeReserve {
+  label: string;
+  message?: string;
+}
+
+export interface ContextStripSpec {
+  slots: ContextSlot[];
+  /**
+   * S2-4 (cricket) Task 10, gap 8 — the room the strip's mode statements take, held whether a mode shows or not. Every
+   * statement the strip can show here, laid out INVISIBLY in one cell with the visible `kind: "mode"` slots, so the
+   * cell is as tall as the tallest of them. First use: cricket, whose innings states its lane only once its first ball
+   * or over summary has locked it; before that the strip shows no mode (nothing has locked in), and holds its room.
+   *
+   * Never read, never announced, no `data-role`: `context-mode` still counts zero while no mode shows. Absent (every
+   * sport before this) renders exactly as before.
+   */
+  modeReserve?: readonly ContextModeReserve[];
+}
 
 /**
  * R2/task C (G2 — controller ruling 2026-08-16, binding, `docs/superpowers/
@@ -1439,6 +1497,18 @@ export interface SkinDefV3<View = unknown> {
    */
   refusedEventTypes?(view: View): readonly string[];
   /**
+   * S2-4 (cricket) Task 8 — a More entry the skin answers with its OWN guided sheet instead of the generic form.
+   *
+   * The More sheet (`ActionFormList`) renders every listed `padSpec` action as a generic form whose person picker
+   * offers both whole sides (`candidatesForPerson`). For an action whose legal people the skin can narrow from the
+   * fold, that is an offer of names the engine refuses. Returning a sheet here makes tapping the entry open that sheet
+   * (the same `GuidedSheet` a tile's `{sheet}` opens) and nothing else changes: the entry is still listed by
+   * `moreActions` (the sheet is NOT one of `sheets()`, so `dedicatedEventTypes` does not claim its type), and still
+   * withheld by `refusedEventTypes`. `null` keeps the generic form. First use: cricket's mid-over bowler change, whose
+   * candidates are the engine's `eligibleChangeBowlers` (ruling 84: the change lives in More, not on a tile).
+   */
+  moreSheet?(eventType: string, view: View): GuidedSheetSpec | null;
+  /**
    * R6/task A (owner ruling R6-4) — THE PAD'S CLOCK, opted into one sport at a
    * time exactly like `phase`/`context`/`swap` above.
    *
@@ -1469,6 +1539,15 @@ export interface SkinDefV3<View = unknown> {
    * same one every render costs nothing and is the normal case.
    */
   clock?(view: View): PadClockSpec | null;
+  /**
+   * S2-4 final fix wave I3 (controller ruling): whether the pending context-strip picks (`PadHostView.contextOverrides`)
+   * SURVIVE a change of the fold from `prev` to `next` (two `pipeline.state` objects). Absent, or `false`, is the chassis
+   * rule as it always was: any new fold object drops every pick (`contextOverridesStale`, pad-host.tsx). A skin answers
+   * `true` only for a change that leaves its picks meaning what they meant (cricket: no delivery folded and the crease is
+   * unchanged, so a hand strike swap survives a bowler change, a review or a late ack and is cleared by the next ball).
+   * It reads two raw states the way every other method reads `view.state`, and is called only when they differ.
+   */
+  contextOverridesSurvive?(prev: unknown, next: unknown): boolean;
 }
 
 /**
@@ -1511,13 +1590,15 @@ export interface SkinDefV3<View = unknown> {
  * `resolvePeople(state, overrides)` is the one place this happens, reused
  * by every builder that needs striker/nonStriker/bowler. CALLER OBLIGATION
  * (pad-host.tsx, nothing else enforces this): an override lives only until
- * the fold itself advances — the WHOLE map resets, unconditionally, the
- * moment `pipeline.state` moves to a new object (a render-phase reset keyed
- * on state identity, `contextOverridesStale` in pad-host.tsx), never
- * per-slot and never left to outlive the ball it was captured for. Without
- * this, a stale override could contradict the engine's own fold after a
- * strike rotation (an odd run swaps striker/non-striker) or a new batter
- * arriving after a wicket.
+ * the fold itself advances — the WHOLE map resets when `pipeline.state` moves
+ * to a new object (a render-phase reset keyed on state identity,
+ * `contextOverridesDropped` in pad-host.tsx), never per-slot and never left to
+ * outlive the ball it was captured for. The one exception is a skin's own
+ * `SkinDefV3.contextOverridesSurvive`, which keeps the map across a new object
+ * that brought no ball (S2-4: cricket, for a bowler change, a review or a late
+ * ack). Without this, a stale override could contradict the engine's own fold
+ * after a strike rotation (an odd run swaps striker/non-striker) or a new
+ * batter arriving after a wicket.
  */
 export interface PadHostView {
   readonly cfg: unknown;
@@ -1591,6 +1672,13 @@ export interface PadHostView {
    * between events.
    */
   readonly clockAt?: GameTimeStamp;
+  /**
+   * S2-4 Batch B fix round 1 (controller ruling, review I2): true while a guided sheet is open over the tiles. A guided
+   * sheet is not modal, so a skin whose sheets record a ball (cricket's extras and wicket) disables the tiles that would
+   * record a second, unmeant one; the sheet on screen is the explanation. Optional and additive: a skin that never reads
+   * it is unchanged.
+   */
+  readonly sheetOpen?: boolean;
 }
 
 export function assertScorebugSpec(spec: ScorebugSpec): string[] {

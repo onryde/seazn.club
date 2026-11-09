@@ -1,5 +1,6 @@
 import { v1, parseBody, reply } from "@/server/api-v1/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/client-ip";
 import { HttpError } from "@/lib/errors";
 import { PublicRegisterGroupRequest } from "@/server/api-v1/schemas";
 import { submitRegistrationGroup } from "@/server/usecases/registration-submit";
@@ -29,10 +30,7 @@ type Ctx = { params: Promise<{ orgSlug: string; slug: string }> };
  */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
-    const ip =
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-      req.headers.get("x-real-ip") ??
-      "unknown";
+    const ip = clientIp(req.headers);
     await rateLimit(`regsubmit:${ip}`, { max: 10, windowSeconds: 60 });
     const { orgSlug, slug } = await params;
     const input = await parseBody(req, PublicRegisterGroupRequest);

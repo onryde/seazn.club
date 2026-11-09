@@ -116,6 +116,46 @@ describe.skipIf(!HAS_DB)("PATCH /api/orgs/[id] default_payment_method gate", () 
   });
 });
 
+// R4 fix batch 3 (m9, PO ruling 2026-11-08): sponsors live in the `sponsors` table only. The `sponsors` arm of this PATCH
+// was the last writer of the legacy `branding.sponsors` blob (no UI called it), so it is GONE, and V492 strips the blob.
+// A body naming `sponsors` is now refused exactly as this route refuses ANY key it does not know: every union arm is
+// `.strict()`, so the parse throws and `handler` answers 400 "Invalid input" - and nothing is written.
+describe.skipIf(!HAS_DB)("PATCH /api/orgs/[id] refuses the removed `sponsors` arm like any unknown key", () => {
+  const branding = async (id: string) =>
+    (await sql<{ branding: Record<string, unknown> }[]>`select branding from organizations where id = ${id}`)[0]!.branding;
+  const COLOR = { primary: "#112233" };
+
+  it("a body carrying `sponsors` is a 400 'Invalid input' and stores nothing - a full list, an empty one, one riding a brand colour (count reported)", async () => {
+    const org = await seedOrg();
+    await sql`update organizations set branding = ${sql.json({ colors: COLOR } as never)} where id = ${org.id}`;
+    const refused: unknown[] = [
+      { sponsors: [{ name: "Acme", url: "https://acme.example/" }, { name: "Bare" }] },
+      { sponsors: [] },
+      { branding: { colors: { primary: "#445566" } }, sponsors: [{ name: "Acme" }] },
+      { branding: { colors: { primary: "#445566" }, sponsors: [{ name: "Acme" }] } },
+    ];
+    let checked = 0;
+    for (const body of refused) {
+      const res = await PATCH(patchReq(body), { params: Promise.resolve({ id: org.id }) });
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(((await res.json()) as { error?: string }).error, JSON.stringify(body)).toBe("Invalid input");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every refused body was sent").toBe(4);
+    expect(await branding(org.id), "nothing stored: no sponsors key, the colour untouched").toEqual({ colors: COLOR });
+  });
+
+  it("positive pair: the route's rule is the unknown-key rule (`bogus` is refused the same way), and the brand colour arm still saves", async () => {
+    const org = await seedOrg();
+    const bogus = await PATCH(patchReq({ bogus: 1 }), { params: Promise.resolve({ id: org.id }) });
+    expect(bogus.status).toBe(400);
+    expect(((await bogus.json()) as { error?: string }).error).toBe("Invalid input");
+    const color = await PATCH(patchReq({ branding: { colors: COLOR } }), { params: Promise.resolve({ id: org.id }) });
+    expect(color.status).toBe(200);
+    expect(await branding(org.id)).toEqual({ colors: COLOR });
+  });
+});
+
 afterAll(async () => {
   if (!HAS_DB) return; // DB-less unit job: connecting just to disconnect throws
   await sql.end();

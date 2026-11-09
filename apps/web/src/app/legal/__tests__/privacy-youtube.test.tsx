@@ -257,11 +257,53 @@ describe("privacy — what the YouTube section says about the other halves of th
     expect(composed.length, "anti-vacuity: the composed branch was found").toBeGreaterThan(500);
     expect(composed, "the composed branch reads no destination").not.toMatch(/readSessionDestination|destinationRowOf/);
     expect(composed, "its target is the programme input's RTMPS credential").toContain("target: { url: programme.rtmps.url, streamKey: programme.rtmps.streamKey }");
-    //  (3) and what the runner puts on the Machine is four named values - no key, no target, no destination.
+    //  (3) and what the runner puts on the Machine is five named values - no key, no target, no destination. Four identify the
+    //  job; the fifth, RELAY_AIRINGS (R4), is an on/off switch whose value is the constant "1", copied only when web's own is "1".
+    //  The literal is read BRACE-BALANCED: that switch is a conditional spread holding its own `{ }`, so a `[^}]*` match stopped
+    //  inside it and any value written after the spread went unchecked.
     const fly = src("../../../server/relay/runner-fly.ts");
-    const env = fly.match(/\benv: \{([^}]*)\}/)?.[1] ?? "";
+    const open = fly.indexOf("{", fly.search(/\benv: \{/));
+    let close = -1;
+    for (let i = open, depth = 0; open > -1 && i < fly.length; i++) {
+      if (fly[i] === "{") depth++;
+      else if (fly[i] === "}" && --depth === 0) {
+        close = i;
+        break;
+      }
+    }
+    const env = close > open ? fly.slice(open + 1, close) : "";
     expect(env.length, "anti-vacuity: the Machine env literal was found").toBeGreaterThan(40);
-    expect([...env.matchAll(/(\w+):/g)].map((m) => m[1])).toEqual(["SESSION_ID", "JOB_TOKEN", "APP_URL", "RELAY_DEADLINE_AT"]);
+    expect([...env.matchAll(/(\w+):/g)].map((m) => m[1])).toEqual(["SESSION_ID", "JOB_TOKEN", "APP_URL", "RELAY_DEADLINE_AT", "RELAY_AIRINGS"]);
+    expect(env, "RELAY_AIRINGS carries a constant, never a value read from anywhere else").toContain('...(process.env.RELAY_AIRINGS === "1" ? { RELAY_AIRINGS: "1" } : {}),');
+    // A spread names no key, so the name list above cannot see one: `...process.env` would put every secret on the Machine
+    // and still read five names. Exactly one spread, the switch pinned above (ci-fix review m4).
+    expect((env.match(/\.\.\./g) ?? []).length, "one spread in the Machine env, the RELAY_AIRINGS switch").toBe(1);
+    // Nor can it see a SHORTHAND key (final review 2, item 6): `{ ..., DATABASE_URL }` names no `NAME:` and still ships the
+    // value of whatever is in scope under that name. So every top-level entry - split on the literal's own commas, at depth
+    // 0 of its brackets and outside its strings - is either the one spread or `NAME: value`; anything else is named here.
+    // Whole-line comments are dropped first, so a note above an entry is not read as part of it.
+    const bare = env.replace(/^\s*\/\/.*$/gm, "");
+    const entries: string[] = [];
+    let depth = 0;
+    let quote: string | null = null;
+    let start = 0;
+    for (let i = 0; i <= bare.length; i++) {
+      const ch = bare[i];
+      if (quote !== null) {
+        if (ch === "\\") i++;
+        else if (ch === quote) quote = null;
+      } else if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+      else if (ch === "{" || ch === "(" || ch === "[") depth++;
+      else if (ch === "}" || ch === ")" || ch === "]") depth--;
+      else if (i === bare.length || (ch === "," && depth === 0)) {
+        const entry = bare.slice(start, i).trim();
+        if (entry !== "") entries.push(entry);
+        start = i + 1;
+      }
+    }
+    const unnamed = entries.filter((e) => !e.startsWith("...") && !/^\w+\s*:/.test(e));
+    expect(unnamed, "every entry is `NAME: value` or the one spread - never a shorthand or computed key").toEqual([]);
+    expect(entries.length, "anti-vacuity: the Machine env's entries, the four named values and the switch").toBe(5);
   });
 
   it("R9 (B7 re-review m3): the sub-processors list says what Fly.io runs for us - the hosting AND the machine that adds the score overlay - in the privacy page's own words", () => {

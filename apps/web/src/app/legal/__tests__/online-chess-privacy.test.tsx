@@ -47,8 +47,8 @@ describe("privacy — the online-chess camera and the Lichess account link (I-4)
     expect(section).not.toBe("");
   });
 
-  it("is dated 29 October 2026: the YouTube API Services section (T19) was added that day (the sign-in wording changed 19 October; the camera sentence, D16, last changed 15 October)", () => {
-    expect(privacy).toContain("Last updated: 29 October 2026");
+  it("is dated 8 November 2026: the sponsor stills and short-link entries (R4, final review 2 m10) were added that day (the YouTube API Services section, T19, 29 October; the sign-in wording 19 October; the camera sentence, D16, 15 October)", () => {
+    expect(privacy).toContain("Last updated: 8 November 2026");
   });
 
   it("says what is processed: camera video during a match, the Lichess username and the OAuth token", () => {

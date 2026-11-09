@@ -2365,7 +2365,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(checked).toBe(rows.length);
   });
 
-  it("--layer L1 --scope grid, through the real planner and runner: the 207 offered cells (231 less chess americano/mexicano and the 22 refused standalone cells) at 1280, the 41 with no organiser path (31 API-only, 10 the builder does not offer: C9 review I5) recorded 🚫 and never driven, every sport's variant order read once", async () => {
+  it("--layer L1 --scope grid, through the real planner and runner: the 207 offered cells (231 less chess americano/mexicano and the 22 refused standalone cells) at 1280, the 52 with no organiser path (31 API-only, 21 the builder does not offer: C9 review I5's ten and the retired Triple round robin's eleven) recorded 🚫 and never driven, every sport's variant order read once", async () => {
     capture();
     const dir = dirFor();
     const { d, reads, opened } = gridDeps();
@@ -2379,7 +2379,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(r.cases.map((c) => `${c.row}|${c.sport}`)).toEqual(offeredCells(ROW_KEYS, SPORT_KEYS));
     const planned = r.cases.filter((c) => c.planned === true);
     // 31 API-only cells no builder control builds (53 less the 22 the product refuses, W4 T16), plus the cells the builder does not
-    // offer (C9 review I5, option 2).
+    // offer (C9 review I5, option 2; the retired Triple round robin on every sport, owner ruling 2026-11-01).
     const noPathPlanned = 31 + NO_ORGANISER_PATH_CELLS.length;
     expect(planned).toHaveLength(noPathPlanned);
     expect(planned.every((c) => c.state === "no_path" && ((API_ONLY_ROWS as readonly string[]).includes(c.row) || isNoOrganiserPathCell(`${c.row}|${c.sport}`)))).toBe(true);
@@ -2392,7 +2392,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(opened()).toBe(1);
   }, 120_000);
 
-  it("--layer L2 --scope grid, through the real planner and runner: 1,589 runs at their own widths — 51 driven, 222 🚫, 1,271 ░, 28 ⛔, 17 ⏳ — each recording the pair-run it is", async () => {
+  it("--layer L2 --scope grid, through the real planner and runner: 1,589 runs at their own widths — 48 driven, 294 🚫, 1,204 ░, 27 ⛔, 16 ⏳ — each recording the pair-run it is", async () => {
     capture();
     const dir = dirFor();
     const { d, reads } = gridDeps();
@@ -2403,15 +2403,18 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(new Set(r.cases.map((c) => c.l2!.n)).size).toBe(RAW_RUNS.length);
     // X-DR-1 (W2a): 1,731 -> 1,729 runs; driven 62 and 🚫 164 unchanged, ░ 1,503. W2e Task 32: 19 M12b runs have a screen
     // path (🚫 164 -> 145, ░ 1,503 -> 1,522; layers-grid.test.ts). Match Day C9 review I5, option 2: every run on the ten
-    // no-organiser-path cells is 🚫 (driven 62 -> 56, 🚫 145 -> 279, ░ 1,522 -> 1,394; layers-grid.test.ts).
-    // W4 T16 + T24: the 22 refused standalone cells leave (driven 56 -> 51, 🚫 279 -> 222, ░ 1,394 -> 1,271) and the settled atoms
-    // Q4b, D4b (⛔ 11 + 17) and D4a (⏳ 17) leave 🚫 - recorded as planned, never driven.
-    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(51);
-    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(222);
-    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1271);
-    expect(r.cases.filter((c) => c.state === "refused" && c.planned === true)).toHaveLength(28);
-    expect(r.cases.filter((c) => c.state === "later" && c.planned === true)).toHaveLength(17);
-    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(222 + 1271 + 28 + 17);
+    // no-organiser-path cells is 🚫 (driven 62 -> 56, 🚫 145 -> 279, ░ 1,522 -> 1,394; layers-grid.test.ts). The retired
+    // Triple round robin's 77 runs are 🚫 too (driven 56 -> 53, 🚫 279 -> 349, ░ 1,394 -> 1,327; layers-grid.test.ts).
+    // W4 T16 + T24 (on the pre-triple_rr figures): the 22 refused standalone cells leave (driven 56 -> 51, 🚫 279 -> 222,
+    // ░ 1,394 -> 1,271) and the settled atoms Q4b, D4b (⛔ 11 + 17) and D4a (⏳ 17) leave 🚫 - recorded as planned, never driven.
+    // Both together: triple_rr's 77 runs go 🚫 on top of W4's figures, 2 of them W4's settled D4a/D4b on triple_rr|cricket
+    // (a no-organiser-path cell keeps them 🚫): driven 48, 🚫 294, ░ 1,204, ⛔ 27 (11 + 16), ⏳ 16 (layers-grid.test.ts).
+    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(48);
+    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(294);
+    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1204);
+    expect(r.cases.filter((c) => c.state === "refused" && c.planned === true)).toHaveLength(27);
+    expect(r.cases.filter((c) => c.state === "later" && c.planned === true)).toHaveLength(16);
+    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(294 + 1204 + 27 + 16);
     expect(r.cases.filter((c) => c.state === "refused").every((c) => ["Q4b", "D4b"].includes(c.scenario))).toBe(true);
     expect(r.cases.filter((c) => c.state === "later").every((c) => c.scenario === "D4a")).toBe(true);
     expect(r.cases.filter((c) => isNoOrganiserPathCell(`${c.row}|${c.sport}`)).every((c) => c.state === "no_path")).toBe(true);

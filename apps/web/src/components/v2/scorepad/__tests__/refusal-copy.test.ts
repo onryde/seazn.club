@@ -55,6 +55,24 @@ describe("refusalText", () => {
     );
   });
 
+  it("refusal copy reads the not-started sentence for that reason and the generic one without it", () => {
+    expect(refusalText({ code: "WRONG_PHASE", message: "raw", reason: "division_not_started" }, identityMsg)).toBe(
+      "engineErrorReason.WRONG_PHASE.division_not_started",
+    );
+    expect(refusalText({ code: "WRONG_PHASE", message: "raw" }, identityMsg)).toBe("engineError.WRONG_PHASE");
+    expect(refusalText({ code: "WRONG_PHASE", message: "raw", reason: "made_up" }, identityMsg)).toBe("engineError.WRONG_PHASE");
+    // The reason is WRONG_PHASE's: another code naming it keeps that code's own copy.
+    expect(refusalText({ code: "INVALID_EVENT", message: "raw", reason: "division_not_started" }, identityMsg)).toBe(
+      "engineError.INVALID_EVENT",
+    );
+    // The sentence itself, in the shipped dictionary: ruling (a)'s words, the same for every sport (the gate is
+    // sport-agnostic, so it names no toss).
+    expect(dict["engineErrorReason.WRONG_PHASE.division_not_started"]).toBe(
+      "This division hasn't started yet. The organiser starts it.",
+    );
+    expect(dict["engineErrorReason.WRONG_PHASE.division_not_started"]).not.toBe(dict["engineError.WRONG_PHASE"]);
+  });
+
   it("gives a known wire code the pad's own words", () => {
     expect(refusalText({ code: "PAYMENT_REQUIRED", message: "Plan upgrade required: x" }, identityMsg)).toBe(
       "scorepad.refusal.planLocked",

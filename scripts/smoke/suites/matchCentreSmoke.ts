@@ -1,6 +1,6 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
 import {
-  BASE, newSession, cookieHeader, call, check, signIn, tag, ledger, timedFixture, html, v1, v1data,
+  BASE, newSession, cookieHeader, call, check, signIn, tag, ledger, timedFixture, html, v1, v1data, type Session,
 } from "../harness.ts";
 
 /**
@@ -115,5 +115,54 @@ export async function matchCentreSmoke(): Promise<void> {
   check(
     "match centre smoke: fixture OG card decodes to 1200×630 (OG_SIZE)",
     ogDims.width === 1200 && ogDims.height === 630,
+  );
+
+  await splitOverSmoke(owner, anon, comp.id);
+}
+
+/**
+ * S2-4 Task 9 (CK-BC-1, MCC Law 17.8): a mid-over bowler change splits an over, and the public match-centre document
+ * (`match_centre.cricket.innings[].overs[].bowlers`, served by `GET /api/v1/public/fixtures/{id}`) names both bowlers
+ * in the order they bowled. Its own fixture in the same public competition, with a two-a-side line-up (even runs only,
+ * so the crease never turns and no wicket falls).
+ */
+async function splitOverSmoke(owner: Session, anon: Session, compId: string): Promise<void> {
+  const names = ["Bat1", "Bat2", "Bowl1", "Bowl2"].map((n) => `Split ${n} ${tag}`);
+  const ids: string[] = [];
+  for (const full_name of names) ids.push(v1data<{ id: string }>(await v1(owner, "/api/v1/persons", "POST", { full_name })).id);
+  const [bat1, bat2, bowl1, bowl2] = ids as [string, string, string, string];
+  const fx = await timedFixture(owner, compId, {
+    name: "Split over",
+    sport_key: "cricket",
+    variant_key: "t20",
+    entrants: [
+      { kind: "team", display_name: `Split Home ${tag}`, seed: 1, members: [bat1, bat2].map((person_id) => ({ person_id })) },
+      { kind: "team", display_name: `Split Away ${tag}`, seed: 2, members: [bowl1, bowl2].map((person_id) => ({ person_id })) },
+    ],
+  });
+  for (const [entrant, order] of [[fx.entrantIds[0], [bat1, bat2]], [fx.entrantIds[1], [bowl1, bowl2]]] as const) {
+    await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/lineups/${entrant}`, "PUT", {
+      slots: order.map((person_id, i) => ({ person_id, order_no: i + 1 })),
+    });
+  }
+  const fxLedger = ledger(owner, fx.fixtureId);
+  const sent = [
+    await fxLedger.send("cricket.toss", { wonBy: fx.entrantIds[0], elected: "bat" }),
+    await fxLedger.send("core.start", {}),
+  ];
+  const ball = (ballInOver: number, bowler: string, bat: number) =>
+    fxLedger.send("cricket.ball", { over: 0, ballInOver, striker: bat1, nonStriker: bat2, bowler, runs: { bat } });
+  sent.push(await ball(1, bowl1, 2), await ball(2, bowl1, 0), await ball(3, bowl1, 4));
+  sent.push(await fxLedger.send("cricket.bowler.change", { bowler: bowl2, reason: "incapacitated" }));
+  sent.push(await ball(4, bowl2, 0), await ball(5, bowl2, 2), await ball(6, bowl2, 0));
+  check("match centre smoke: a split over is recorded (toss, start, 3 balls, a bowler change, 3 balls)", sent.every((r) => r.status < 300));
+
+  type Over = { bowler?: { personId: string } | null; bowlers?: { personId: string }[] };
+  const pub = await v1(anon, `/api/v1/public/fixtures/${fx.fixtureId}`);
+  const doc = v1data<{ match_centre?: { cricket?: { innings?: { overs?: Over[] }[] } } }>(pub).match_centre;
+  const over = doc?.cricket?.innings?.[0]?.overs?.[0];
+  check(
+    "match centre smoke: the split over's match_centre names both bowlers in order, ANONYMOUSLY",
+    JSON.stringify(over?.bowlers?.map((b) => b.personId)) === JSON.stringify([bowl1, bowl2]) && over?.bowler?.personId === bowl1,
   );
 }

@@ -2610,3 +2610,64 @@ describe.skipIf(!HAS_DB)("Owed 37: a late beat never overwrites the final stoppe
     expect((await row(s.sessionId)).runner_state, "and it drives callback_playing, as today").toBe("playing");
   });
 });
+
+// Final review 2, m8: the heartbeat route VERIFIES the token before it reads the body (`verifyRelayToken` is DB-free, so the
+// order costs nothing), as the frame route does. A refused credential is the one 401 whatever it posted - never a 400 that
+// parses, and so describes, a body its sender was never allowed to send - and not one byte of a streamed body is pulled.
+// Before m8 only a MISSING bearer was refused first (`bearerOf`); a present-but-refused token reached `parseBody`.
+describe.skipIf(!HAS_DB)("m8: the heartbeat verifies the token before it reads the body", () => {
+  /** A JSON body that counts what is pulled from it (highWaterMark 0: nothing is pulled until a reader asks). */
+  function countedBody(text: string) {
+    const seen = { pulled: 0 };
+    let sent = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (sent) { c.close(); return; }
+        const bytes = new TextEncoder().encode(text);
+        seen.pulled += bytes.byteLength;
+        sent = true;
+        c.enqueue(bytes);
+      },
+    }, { highWaterMark: 0 });
+    return { stream, seen };
+  }
+  const postStreamed = (sid: string, token: string, body: ReadableStream<Uint8Array>) =>
+    beat(new Request(url(sid, "/heartbeat"), {
+      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body, duplex: "half",
+    } as RequestInit), ctx(sid));
+
+  it("a refused token with a malformed, a non-JSON or a valid body is the one 401 and pulls no byte; the job token's malformed body is the 400 (count reported)", async () => {
+    const sid = randomUUID();
+    const refused: [string, string][] = [
+      ["a malformed token", "not-a-relay-token"],
+      ["an expired job token", await mintRelayToken({ sid, scope: "relay-job", expiresAt: new Date(Date.now() - 1000) })],
+      ["another session's job token", await mintRelayToken({ sid: randomUUID(), scope: "relay-job", expiresAt: new Date(Date.now() + 60_000) })],
+      ["this session's PAGE token", await mintRelayToken({ sid, scope: "relay-page", expiresAt: new Date(Date.now() + 60_000) })],
+    ];
+    const bodies: [string, string][] = [
+      ["an out-of-enum state", JSON.stringify({ state: "dancing" })],
+      ["not JSON", "not json"],
+      ["a good beat", JSON.stringify({ state: "playing", fps: 30 })],
+    ];
+    const answers = new Set<string>();
+    let checked = 0;
+    for (const [who, token] of refused) {
+      for (const [what, text] of bodies) {
+        const body = countedBody(text);
+        const res = await postStreamed(sid, token, body.stream);
+        expect(res.status, `${who}, ${what}`).toBe(401);
+        answers.add(JSON.stringify(await json(res)));
+        expect(body.seen.pulled, `${who}, ${what}: bytes read before the refusal`).toBe(0);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: every refused token, every body").toBe(refused.length * bodies.length);
+    expect([...answers], "ONE refusal").toHaveLength(1);
+    expect(JSON.parse([...answers][0]!), "the verifier's own").toMatchObject({ ok: false, code: "RELAY_TOKEN_INVALID" });
+    // The positive pair: this session's job token passes the gate, so its body is read and parsed - a malformed one is the 400.
+    const admitted = countedBody(JSON.stringify({ state: "dancing" }));
+    const res = await postStreamed(sid, await mintRelayToken({ sid, scope: "relay-job", expiresAt: new Date(Date.now() + 60_000) }), admitted.stream);
+    expect(res.status, "the job token's malformed beat").toBe(400);
+    expect(admitted.seen.pulled, "the admitted token's body is read").toBeGreaterThan(0);
+  });
+});

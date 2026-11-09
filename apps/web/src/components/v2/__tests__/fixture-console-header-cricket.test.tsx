@@ -77,6 +77,21 @@ describe("fixture-console header — cricket pre-innings noise (R7 follow-ups it
     const html = consoleHtml([["core.start", {}], BALL]);
     expect(html, "an innings exists, so the header still earns its place").not.toContain("— — —");
     expect(html).toMatch(/font-mono text-2xl/);
+    expect(html, "the headline shows, so nothing is held in its place").not.toContain("console-headline-reserve");
+  });
+
+  // S2-4 Task 10 fix round 1 (gap 8): the suppressed line still holds its room, so the first ball does not grow the
+  // header and push the pad down (40px at md+, the steady-layout probe's red run).
+  it("holds the suppressed headline's line before a ball: the same type, invisible, aria-hidden, no text but a space", () => {
+    const html = consoleHtml([["core.start", {}]]);
+    const reserve = /<p([^>]*data-role="console-headline-reserve"[^>]*)>([^<]*)<\/p>/.exec(html);
+    expect(reserve, "the reserved line is there").not.toBeNull();
+    const attrs = reserve![1]!;
+    expect(attrs).toContain('aria-hidden="true"');
+    for (const cls of ["invisible", "mt-2", "font-mono", "text-2xl", "max-md:mt-0", "max-md:text-lg"]) {
+      expect(attrs.split(/[\s"]/), cls).toContain(cls);
+    }
+    expect(reserve![2], "a no-break space keeps the line box; nothing a reader can meet").toBe(" ");
   });
 
   it("never suppresses a non-cricket sport's header, even with no events yet", () => {

@@ -4,6 +4,7 @@ import { claimEmailInvite, inviteLanding } from "@/lib/invites";
 import { stampTermsAcceptance } from "@/lib/legal";
 import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
 import { headers } from "next/headers";
+import { clientIp } from "@/lib/client-ip";
 
 /**
  * One-click accept for an email invite by someone who is NOT signed in. For a
@@ -21,7 +22,7 @@ export async function POST(
   { params }: { params: Promise<{ token: string }> },
 ) {
   return handler(async () => {
-    const ip = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+    const ip = clientIp(await headers());
     await rateLimit(`invite-claim:${ip}`, AUTH_LIMIT);
 
     const { token } = await params;

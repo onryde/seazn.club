@@ -102,15 +102,6 @@ const NAMED: Swept[] = [
  *  A scan that matches fewer has lost what routes actually parse with — lower this only by removing one on purpose. */
 const USECASE_INPUTS_FLOOR = 5;
 
-/** Fixed on ANOTHER branch, and so deliberately left alone here. Each entry must still fill: one that no longer does
- *  is a stale entry and reds, so it is deleted the moment the fix lands on this tree (whichever merges second does it);
- *  the last entry goes together with this map and the it() that reads it. */
-const FIXED_ELSEWHERE: Readonly<Record<string, string>> = {
-  "PATCH /orgs/{id}/sponsors/{sponsorId}":
-    "feat/r4-sponsors 2cebfffccb splits SponsorWriteFields; the sponsor schemas are that branch's to change",
-  "usecases/sponsors PatchSponsorInput": "feat/r4-sponsors 2cebfffccb, as above",
-};
-
 describe("PATCH bodies: an omitted field stays omitted", async () => {
   const usecase = await usecaseInputs();
   const swept = [...registry, ...usecase, ...NAMED];
@@ -128,21 +119,13 @@ describe("PATCH bodies: an omitted field stays omitted", async () => {
     expect(new Set(swept.map((s) => s.name)).size).toBe(swept.length);
   });
 
-  for (const p of probes.filter((x) => !(x.name in FIXED_ELSEWHERE))) {
+  for (const p of probes) {
     it(`${p.name}: no omitted field is filled`, () => {
       expect(p.filled).toEqual({});
       const whole = p.schema.safeParse({});
       if (whole.success) expect(whole.data).toEqual({});
     });
   }
-
-  it(`the fixed-elsewhere entries are swept and still fill (${Object.keys(FIXED_ELSEWHERE).length} entries)`, () => {
-    for (const name of Object.keys(FIXED_ELSEWHERE)) {
-      const p = probes.find((x) => x.name === name);
-      expect(p, `${name} is not swept: a stale or misspelt entry`).toBeDefined();
-      expect(Object.keys(p!.filled), `${name} no longer fills: delete its FIXED_ELSEWHERE entry (the last one goes with the map and this whole it())`).not.toEqual([]);
-    }
-  });
 
   // The probe's positive pair: the exact form this file exists to catch is caught, field by field, with the values
   // CreateCourt itself declares (read from the create schema, never typed here).

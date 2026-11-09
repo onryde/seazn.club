@@ -65,7 +65,7 @@ export default async function CompetitionSlideshowPage({
         chrome.branding,
       )}
       logo={chrome.logo}
-      // v10: resolver rows (competition scope first), blob shim fallback.
+      // v10: the resolver's table rows (competition scope first).
       sponsors={await resolveSponsors(auth.orgId, id)}
       // R10e u1 moved the board's strings into `labels`; the organiser board
       // keeps the English it always showed (which locale it should speak is

@@ -1300,7 +1300,18 @@ export function FixtureConsole({
           )}
         </div>
         <div className="max-md:mt-1 max-md:flex max-md:items-center max-md:justify-between max-md:gap-2">
-          {!suppressHeadline && (
+          {/* S2-4 Task 10 fix round 1 (gap 8): a suppressed headline still holds its line, empty and unseen, so the
+              header does not grow by a line under the scorer's thumb when the first ball opens the innings (the pad
+              below it moved 40px at md+, the probe's red run). No dashes, no text a reader or a locator can meet. */}
+          {suppressHeadline ? (
+            <p
+              aria-hidden="true"
+              data-role="console-headline-reserve"
+              className="invisible mt-2 font-mono text-2xl max-md:mt-0 max-md:min-w-0 max-md:text-lg"
+            >
+              {"\u00a0"}
+            </p>
+          ) : (
             <p className="mt-2 font-mono text-2xl text-slate-800 max-md:mt-0 max-md:min-w-0 max-md:text-lg">
               {summary?.headline ?? "—"}
             </p>

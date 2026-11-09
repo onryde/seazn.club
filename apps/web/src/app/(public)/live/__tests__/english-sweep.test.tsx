@@ -64,6 +64,7 @@ const stub = vi.hoisted(() => ({
   publicSuspensions: vi.fn(),
   embedDivisionData: vi.fn(),
   readRoom: vi.fn(),
+  sponsorReport: vi.fn(),
 }));
 /** Every element a share image handed to satori, in draw order. */
 const images = vi.hoisted(() => ({ drawn: [] as unknown[] }));
@@ -156,6 +157,18 @@ vi.mock("@/server/embed-data", () => ({ embedDivisionData: stub.embedDivisionDat
 // The match room's first snapshot (T14): its usecase reads the database and a
 // personal link; the snapshot is data, handed in here.
 vi.mock("@/server/usecases/external-play/room", () => ({ readRoom: stub.readRoom, roomGrantDowngraded: async () => false }));
+// The sponsor report (R4 S14) is drawn in the VISITOR's locale (`resolveLocale`, the reader's cookie and Accept-Language),
+// so here the visitor reads in the scene's locale; its rate limit reads the request's headers. No other swept page imports
+// either module (the register flow and `../r/[ref]` do, and are excluded below). The report itself is data, handed in.
+vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => state.locale }));
+vi.mock("next/headers", () => ({
+  headers: async () => new Headers({ "x-forwarded-for": "203.0.113.9" }),
+  cookies: async () => ({ get: () => undefined, getAll: () => [], has: () => false }),
+}));
+vi.mock("@/server/sponsors/report", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/sponsors/report")>()),
+  sponsorReport: stub.sponsorReport,
+}));
 // A share image is satori pixels, which no sweep can read — but the ELEMENT
 // handed to satori is markup. Captured here and rendered like a page, so every
 // word the image would draw is classified. The body is never painted.
@@ -196,6 +209,11 @@ import KioskOrgLayout from "../(kiosk)/[orgSlug]/layout";
 import * as PresentCompetition from "../(kiosk)/[orgSlug]/[competitionSlug]/present/page";
 import * as PresentDivision from "../(kiosk)/[orgSlug]/[competitionSlug]/[divisionSlug]/present/page";
 import * as MatchRoom from "../(kiosk)/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/play/page";
+import * as SponsorReportPage from "../../r/sponsor/[token]/page";
+import SponsorReportNotFound from "../../r/sponsor/[token]/not-found";
+import * as SponsorReportNotFoundModule from "../../r/sponsor/[token]/not-found";
+import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
+import { fmtOnScreen, type SponsorReport, type SponsorReportShowing } from "@/lib/sponsor-report";
 import type { RoomSnapshot } from "@/components/public-site/match-room/room-snapshot";
 import FixtureCard from "../[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/opengraph-image";
 import { GET as fixturePoster } from "../[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/poster.png/route";
@@ -1136,6 +1154,78 @@ async function renderMatchRooms(): Promise<Segment[]> {
   return out;
 }
 
+/** A showing of the sponsor report, closed and fully known; each scene's report overrides what it is there to draw. */
+const sponsorShowing = (n: number, over: Partial<SponsorReportShowing>): SponsorReportShowing => ({
+  airingId: `00000000-0000-4000-8000-00000000050${n}`,
+  startedAt: `2026-09-0${n}T10:00:00.000Z`,
+  onScreenMs: 95_000,
+  match: { home: "9zqhome 8zqclub", away: "9zqaway 8zqclub" },
+  breakKind: "half_time",
+  source: "rotation",
+  frameUrl: `https://storage.test/signed/9zqframe${n}`,
+  viewers: null,
+  watchUrl: null,
+  ...over,
+});
+
+/** The public sponsor report (R4 S14), every answer it gives: a competition's report whose showings draw every label - a break
+ *  with its own name, the scene carousel's, the unnamed-break fallback, an open showing, a missing frame, an empty seat, a
+ *  deleted match, and "the latest N of M" - then an all-matches report with no showings (its scope and empty line), then the
+ *  throttled screen (the limiter's counter past the public read budget), and the served metadata. Each is witnessed by its
+ *  testid, so a render that fell through to another answer cannot pass on the others' words. */
+async function renderSponsorReports(): Promise<Segment[]> {
+  const p = params({ token: "9zqtoken" });
+  const page = async () => renderToStaticMarkup((await SponsorReportPage.default(p)) as ReactElement);
+  const reports: SponsorReport[] = [
+    {
+      sponsor: { name: "9zqharbour 8zqtimber", logoUrl: null },
+      orgName: org().name,
+      period: { from: "2026-09-01", to: "2026-09-30" },
+      competition: "9zqcomp 8zqcup",
+      asOf: ISO,
+      timesShown: 12,
+      onScreenMs: 3_725_000,
+      viewerImpressions: null,
+      streamVisits: 7,
+      showings: [
+        sponsorShowing(1, {}),
+        sponsorShowing(2, { source: "scene", breakKind: null, onScreenMs: null, frameUrl: null, match: { home: "9zqhome 8zqclub", away: null } }),
+        sponsorShowing(3, { source: "operator", breakKind: "9zqunknown", match: null }),
+      ],
+    },
+    {
+      sponsor: { name: "9zqharbour 8zqtimber", logoUrl: "https://logo.test/9zqlogo.png" },
+      orgName: org().name,
+      period: { from: "2026-01-01", to: "2026-12-31" },
+      competition: null,
+      asOf: ISO,
+      timesShown: 0,
+      onScreenMs: 0,
+      viewerImpressions: null,
+      streamVisits: 1,
+      showings: [],
+    },
+  ];
+  const out: Segment[] = [];
+  for (const report of reports) {
+    stub.sponsorReport.mockResolvedValueOnce(report);
+    const markup = await page();
+    expect(markup, "the report drew").toContain('data-testid="sponsor-report"');
+    out.push(...extractSegments(markup));
+  }
+  const looked = stub.sponsorReport.mock.calls.length;
+  __setRateLimitCounterForTests(async () => ({ count: 61, ttlMs: 30_000 }));
+  try {
+    const markup = await page();
+    expect(markup, "the throttled screen drew").toContain('data-testid="sponsor-report-throttled"');
+    expect(stub.sponsorReport.mock.calls.length, "the throttled screen looks nothing up").toBe(looked);
+    out.push(...extractSegments(markup));
+  } finally {
+    __setRateLimitCounterForTests(null);
+  }
+  return [...out, ...(await served(SponsorReportPage, p))];
+}
+
 // ------------------------------------------------------------- the scenes
 
 type Params<T> = { params: Promise<T> };
@@ -1325,6 +1415,25 @@ const SCENES: Scene[] = [
     minDictValues: 20,
     render: renderMatchRooms,
   },
+  {
+    name: "sponsor report (a competition's showings, an all-matches report with none, the throttled screen)",
+    files: ["../r/sponsor/[token]/page.tsx"],
+    minDictValues: 20,
+    render: renderSponsorReports,
+  },
+  {
+    // The ONE answer for a token that opens nothing (unknown, revoked, malformed): it takes no props and reads no token.
+    // Its head too: on notFound() Next skips the PAGE's generateMetadata and reads the not-found module's (next 16.3.6
+    // resolve-metadata.js, the error convention), so without its own the 404 serves the root layout's English head.
+    name: "sponsor report not-found (body and head)",
+    files: ["../r/sponsor/[token]/not-found.tsx"],
+    minDictValues: 4,
+    render: async () => {
+      const markup = renderToStaticMarkup(await SponsorReportNotFound());
+      expect(markup, "the 404 drew").toContain('data-testid="sponsor-report-not-found"');
+      return [...extractSegments(markup), ...(await served(SponsorReportNotFoundModule, undefined))];
+    },
+  },
 ];
 
 /** Pages and layouts under /live this sweep does not render, and why. */
@@ -1481,6 +1590,13 @@ describe("the sweep's classifier, on markup whose answer is known", () => {
     const enDate = new Intl.DateTimeFormat("en-GB", { dateStyle: "full", timeZone: "UTC" }).format(new Date(ISO));
     expect(findingsIn(extractSegments(`<p>9zqblue 8zqred</p><p>3–1</p><p>${esDate}</p>`), es)).toEqual([]);
     expect(findingsIn(extractSegments(`<p>${enDate}</p>`), es).map((f) => f.kind)).toEqual(["hardcoded"]);
+  });
+
+  it("a duration in the locale's own units is accounted for; one in English units is not (the sponsor report's time on screen)", () => {
+    const nl: Locale = "nl";
+    // Written by the report's own formatter, never typed: nl's "1 uur 2 min 5 sec", English's "1 hr 2 min 5 sec".
+    expect(explained(fmtOnScreen("nl", 3_725_000), nl, [])).toBe(true);
+    expect(explained(fmtOnScreen("en", 3_725_000), nl, [])).toBe(false);
   });
 
   it("a template is explained only when what fills its placeholders is: data yes, English no", () => {

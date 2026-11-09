@@ -8,7 +8,7 @@ Sponsor logos appear on your public competition pages, the registration page and
 
 ## Add sponsors
 
-Open **Settings → Organization → Sponsors**. Add a name, an optional link and a logo (PNG/JPG/WebP up to 2 MB). Use the arrows to set the display order — that order is what the public sees.
+Open **Sponsors** in the top bar or on your Dashboard, then the **Sponsors** tab. The hub's other tabs, including sponsors on your streams and the reports you can send a sponsor, are covered in [The Sponsors hub](/help/sharing/sponsors-hub). Add a name, an optional link and a logo (PNG/JPG/WebP up to 2 MB). Use the arrows to set the display order — that order is what the public sees.
 
 ## Tiers (Pro or Event Pass)
 
@@ -24,7 +24,7 @@ Public sponsor logos link through a tracked redirect, so the click count in the 
 
 ## Selling packages (Pro or Event Pass)
 
-A **sponsorship package** is a priced offer (name, tier, price). Selling one works like entry fees:
+A **sponsorship package** is a priced offer (name, tier, price). You sell packages from **Sponsors → Packages and orders**, in your organization's Sponsors page. Selling one works like entry fees:
 
 1. You need **Get paid (Stripe Connect)** set up — the same onboarding used for card entry fees.
 2. Create a package, then start an order with the sponsor's name and email.

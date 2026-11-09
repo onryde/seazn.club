@@ -4,9 +4,11 @@
 // replaced the score with `undefined`).
 import { api } from "@/lib/client";
 import { OVERLAY_KEY_PARAM, OVERLAY_REALTIME_PURPOSE, REALTIME_PURPOSE_PARAM, type RealtimePurpose } from "@/lib/realtime-purpose";
+import { OVERLAY_PREVIEW_PARAM, OVERLAY_PREVIEW_VALUE } from "@/lib/overlay-preview";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
 import type { ProgrammePhaseWire } from "@/lib/relay-phase";
+import type { SponsorPlan } from "@/lib/sponsor-plan";
 import type { OverlayCarromToss } from "@/lib/overlay-toss";
 import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss, OverlayHighlights } from "@/lib/overlay-cricket";
 
@@ -114,6 +116,11 @@ export interface OverlayLiveData extends LiveFixtureData {
    *  heartbeat. Present ONLY on an answer to a verified composed relay page (`sid` + `st`), and only when that beat
    *  carried one — an absent key is absent, never defaulted. Every public answer omits it. */
   programmePhase?: ProgrammePhaseWire;
+  /** R4 sponsors on stream (spec 2026-10-27 §3.2): the planner's plan for this fixture — `planSponsors(...).plan`, the
+   *  break cards in the recent window and the cards they name. ABSENT or null: no card (rotation off, none ticked).
+   *  S5 is the producer (the overlay read path); S7's stage turns `airings` into sponsor moments and puts the ticked
+   *  cards (`onStream`) on the scene carousel. */
+  sponsorPlan?: SponsorPlan;
 }
 
 export interface PublicRealtimeToken {
@@ -131,16 +138,21 @@ export async function fetchLiveFixture(fixtureId: string): Promise<LiveFixtureDa
 /** The overlay poll. R2005: a relay page passes its `sid` + `st` (the page's own, already verified server-side), so the
  *  route answers through the same check — `programmePhase` for fallback B, and a fixture that is not public. Without
  *  them the request is byte-for-byte today's. */
-export async function fetchOverlayFixture(fixtureId: string, relay?: { sid: string; st: string }): Promise<OverlayLiveData> {
-  return api<OverlayLiveData>(overlayPollPath(fixtureId, relay), {
+export async function fetchOverlayFixture(
+  fixtureId: string,
+  relay?: { sid: string; st: string },
+  opts: { preview?: boolean } = {},
+): Promise<OverlayLiveData> {
+  return api<OverlayLiveData>(overlayPollPath(fixtureId, relay, opts), {
     cache: "no-store",
   });
 }
 
 /** The overlay poll's path. Exported for the telemetry scrub's test (`st` is a credential on every poll). */
-export function overlayPollPath(fixtureId: string, relay?: { sid: string; st: string }): string {
+export function overlayPollPath(fixtureId: string, relay?: { sid: string; st: string }, opts: { preview?: boolean } = {}): string {
   const path = `/api/v1/public/fixtures/${fixtureId}/overlay`;
-  return relay ? `${path}?${new URLSearchParams({ sid: relay.sid, st: relay.st }).toString()}` : path;
+  if (relay) return `${path}?${new URLSearchParams({ sid: relay.sid, st: relay.st }).toString()}`;
+  return opts.preview === true ? `${path}?${new URLSearchParams({ [OVERLAY_PREVIEW_PARAM]: OVERLAY_PREVIEW_VALUE }).toString()}` : path;
 }
 
 export { OVERLAY_REALTIME_PURPOSE, type RealtimePurpose };

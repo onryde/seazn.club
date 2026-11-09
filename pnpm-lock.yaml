@@ -24,8 +24,8 @@ importers:
         specifier: ^1.14.4
         version: 1.14.4
       '@seazn/engine':
-        specifier: npm:@onryde/seazn-engine@^3.0.2
-        version: '@onryde/seazn-engine@3.0.2(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
+        specifier: npm:@onryde/seazn-engine@^4.0.0
+        version: '@onryde/seazn-engine@4.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
       pino:
         specifier: ^10.3.1
         version: 10.3.1
@@ -109,8 +109,8 @@ importers:
         specifier: ^0.9.54
         version: 0.9.54(qrcode@1.5.4)(react@19.2.4)(tailwindcss@4.3.1)(typescript@6.0.3)(zod@4.4.3)
       '@seazn/engine':
-        specifier: npm:@onryde/seazn-engine@^3.0.2
-        version: '@onryde/seazn-engine@3.0.2(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
+        specifier: npm:@onryde/seazn-engine@^4.0.0
+        version: '@onryde/seazn-engine@4.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
       '@seazn/scheduler':
         specifier: workspace:*
         version: link:../../packages/scheduler
@@ -267,7 +267,7 @@ importers:
         version: 9.39.4(jiti@2.7.0)
       eslint-config-next:
         specifier: ^16.3.6
-        version: 16.3.6(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3)
+        version: 16.3.6(@typescript-eslint/parser@8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3))(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3)
       fast-check:
         specifier: ^3
         version: 3.23.2
@@ -293,8 +293,8 @@ importers:
         specifier: ^9
         version: 9.39.4
       '@seazn/engine':
-        specifier: npm:@onryde/seazn-engine@^3.0.2
-        version: '@onryde/seazn-engine@3.0.2(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
+        specifier: npm:@onryde/seazn-engine@^4.0.0
+        version: '@onryde/seazn-engine@4.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
       '@types/node':
         specifier: ^26
         version: 26.1.2
@@ -326,8 +326,8 @@ importers:
         specifier: ^1.14.4
         version: 1.14.4
       '@seazn/engine':
-        specifier: npm:@onryde/seazn-engine@^3.0.2
-        version: '@onryde/seazn-engine@3.0.2(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
+        specifier: npm:@onryde/seazn-engine@^4.0.0
+        version: '@onryde/seazn-engine@4.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
       pino:
         specifier: ^10.3.1
         version: 10.3.1
@@ -366,8 +366,8 @@ importers:
         specifier: ^1.14.4
         version: 1.14.4
       '@seazn/engine':
-        specifier: npm:@onryde/seazn-engine@^3.0.2
-        version: '@onryde/seazn-engine@3.0.2(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
+        specifier: npm:@onryde/seazn-engine@^4.0.0
+        version: '@onryde/seazn-engine@4.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
       pino:
         specifier: ^10.3.1
         version: 10.3.1
@@ -384,8 +384,8 @@ importers:
   tools/matrix:
     dependencies:
       '@seazn/engine':
-        specifier: npm:@onryde/seazn-engine@^3.0.2
-        version: '@onryde/seazn-engine@3.0.2(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
+        specifier: npm:@onryde/seazn-engine@^4.0.0
+        version: '@onryde/seazn-engine@4.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
       '@seazn/reference':
         specifier: workspace:*
         version: link:../../packages/reference
@@ -1233,8 +1233,8 @@ packages:
     resolution: {integrity: sha512-nn5ozdjYQpUCZlWGuxcJY/KpxkWQs4DcbMCmKojjyrYDEAGy4Ce19NN4v5MduafTwJlbKc99UA8YhSVqq9yPZA==}
     engines: {node: '>=12.4.0'}
 
-  '@onryde/seazn-engine@3.0.2':
-    resolution: {integrity: sha512-b96X2YJ9w5dAuH/ym8v4X0Ip9rlYeMSsT5GoDlAubWL49DUOg/zgQOuF/60nRI26YqOE/InWSNeHlI16Y/hlKQ==, tarball: https://npm.pkg.github.com/download/@onryde/seazn-engine/3.0.2/ca6bedeeed1dcff8cdd6c00027c190e28d2fad23}
+  '@onryde/seazn-engine@4.0.0':
+    resolution: {integrity: sha512-qlhx6HE1YSVcDUwz9QiuVpYtr4Qs4TZ0Qhq2Vuj3E72hlPSG83L+cozs9M8PTmbRpVs5zmVhEVCcUxXO6fqIqw==, tarball: https://npm.pkg.github.com/download/@onryde/seazn-engine/4.0.0/a651134ff48d608ae9ee550b4466401a7a765454}
     peerDependencies:
       fast-check: ^3
       vitest: ^4.1.11
@@ -6761,7 +6761,7 @@ snapshots:
 
   '@nolyfill/is-core-module@1.0.39': {}
 
-  '@onryde/seazn-engine@3.0.2(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)':
+  '@onryde/seazn-engine@4.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)':
     dependencies:
       fast-check: 3.23.2
       vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.1.2)(@vitest/coverage-v8@4.1.11)(vite@8.1.1(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.0))
@@ -8208,7 +8208,7 @@ snapshots:
       obug: 2.1.3
       std-env: 4.1.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(@vitest/coverage-v8@4.1.11)(vite@8.1.1(@types/node@26.6.2)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.0))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.1.2)(@vitest/coverage-v8@4.1.11)(vite@8.1.1(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.0))
 
   '@vitest/expect@4.1.11':
     dependencies:
@@ -9104,13 +9104,13 @@ snapshots:
 
   escape-string-regexp@5.0.0: {}
 
-  eslint-config-next@16.3.6(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3):
+  eslint-config-next@16.3.6(@typescript-eslint/parser@8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3))(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3):
     dependencies:
       '@next/eslint-plugin-next': 16.3.6(eslint@9.39.4(jiti@2.7.0))
       eslint: 9.39.4(jiti@2.7.0)
       eslint-import-resolver-node: 0.3.10
-      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
-      eslint-plugin-import: 2.32.0(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
+      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
+      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
       eslint-plugin-jsx-a11y: 6.10.2(eslint@9.39.4(jiti@2.7.0))
       eslint-plugin-react: 7.37.5(eslint@9.39.4(jiti@2.7.0))
       eslint-plugin-react-hooks: 7.1.1(eslint@9.39.4(jiti@2.7.0))
@@ -9132,7 +9132,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)):
+  eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)):
     dependencies:
       '@nolyfill/is-core-module': 1.0.39
       debug: 4.4.3
@@ -9143,21 +9143,22 @@ snapshots:
       tinyglobby: 0.2.17
       unrs-resolver: 1.12.2
     optionalDependencies:
-      eslint-plugin-import: 2.32.0(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
+      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
     transitivePeerDependencies:
       - supports-color
 
-  eslint-module-utils@2.13.0(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)):
+  eslint-module-utils@2.13.0(@typescript-eslint/parser@8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)):
     dependencies:
       debug: 3.2.7
     optionalDependencies:
+      '@typescript-eslint/parser': 8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3)
       eslint: 9.39.4(jiti@2.7.0)
       eslint-import-resolver-node: 0.3.10
-      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
+      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
     transitivePeerDependencies:
       - supports-color
 
-  eslint-plugin-import@2.32.0(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)):
+  eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)):
     dependencies:
       '@rtsao/scc': 1.1.0
       array-includes: 3.1.9
@@ -9168,7 +9169,7 @@ snapshots:
       doctrine: 2.1.0
       eslint: 9.39.4(jiti@2.7.0)
       eslint-import-resolver-node: 0.3.10
-      eslint-module-utils: 2.13.0(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
+      eslint-module-utils: 2.13.0(@typescript-eslint/parser@8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
       hasown: 2.0.4
       is-core-module: 2.16.2
       is-glob: 4.0.3
@@ -9179,6 +9180,8 @@ snapshots:
       semver: 6.3.1
       string.prototype.trimend: 1.0.10
       tsconfig-paths: 3.15.0
+    optionalDependencies:
+      '@typescript-eslint/parser': 8.62.1(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3)
     transitivePeerDependencies:
       - eslint-import-resolver-typescript
       - eslint-import-resolver-webpack

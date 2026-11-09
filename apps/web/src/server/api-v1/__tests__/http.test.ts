@@ -7,6 +7,7 @@ import uiEn from "@/dictionaries/en/ui.json";
 import { interpolate } from "@/lib/i18n-runtime";
 import { scoringErrorText } from "@/lib/scoring-vocab";
 import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
+import { DIVISION_GATE_REASON } from "@/lib/division-phase";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
 import { ApiV1Error } from "@/lib/client-v1";
@@ -475,6 +476,31 @@ describe("v1 envelope", () => {
       checked++;
     }
     expect(checked).toBe(3);
+  });
+
+  // S2-4 Task 2: the scoring door's division gate (usecases/scoring.ts) refuses WRONG_PHASE with reason
+  // division_not_started, and that reason reaches the wire so the pad can say the division hasn't started. Every other
+  // WRONG_PHASE (the engine's own phase guards, the unassigned-entrant refusal) keeps forwarding code + message only.
+  it("http forwards WRONG_PHASE's division reason and no other", async () => {
+    const res = await v1(async () => {
+      throw new EngineError("WRONG_PHASE", "m", { divisionStatus: "setup", reason: DIVISION_GATE_REASON.notStarted });
+    });
+    expect(res.status).toBe(422);
+    expect((await body(res)).error).toEqual({ code: "WRONG_PHASE", message: "m", reason: "division_not_started" });
+    let checked = 0;
+    for (const data of [{ divisionStatus: "setup" }, { fixtureId: "f1", reason: "made_up" }, { reason: "previous_stage_incomplete" }, undefined]) {
+      const r = await v1(async () => {
+        throw new EngineError("WRONG_PHASE", "m", data);
+      });
+      expect((await body(r)).error, JSON.stringify(data)).toEqual({ code: "WRONG_PHASE", message: "m" });
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // And the reason is WRONG_PHASE's alone: another code carrying it forwards nothing.
+    const other = await v1(async () => {
+      throw new EngineError("INVALID_EVENT", "m", { reason: DIVISION_GATE_REASON.notStarted });
+    });
+    expect((await body(other)).error).toEqual({ code: "INVALID_EVENT", message: "m" });
   });
 
   // The empty case of the block above: every OTHER STAGE_NOT_READY (Swiss

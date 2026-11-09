@@ -54,6 +54,10 @@ const cricket = cricketModule;
 // thing and uses this exact pattern for the same reason).
 const padSpecFor = cricketModule.padSpec;
 const ALL_EVENT_TYPES = new Set(Object.keys(cricketModule.eventSchemas));
+/** S2-4 Task 1 named `cricket.bowler.change` (engine ruling 278, CK-BC-1) here while it had no pad surface. Task 8 gave it
+ *  one, the More sheet while an over is in progress (`liveState` below has one), so the list is empty and the change must
+ *  be reached like every other type. Kept, empty, so a future declared-but-unsurfaced type is named, never skipped. */
+const NOT_YET_SURFACED: readonly string[] = [];
 
 // ---------------------------------------------------------------------------
 // cfg construction — mirrors __tests__/cricket-skin.test.ts's own cfgFor,
@@ -271,8 +275,8 @@ function sweep(): SweepResult {
 }
 
 describe("cricket dispatch-guard totality (R2/task E headline)", () => {
-  it("the engine declares exactly 15 cricket.* event types (pins today's known-good shape)", () => {
-    expect(ALL_EVENT_TYPES.size).toBe(15);
+  it("the engine declares exactly 16 cricket.* event types (pins today's known-good shape; S2-4 added cricket.bowler.change)", () => {
+    expect(ALL_EVENT_TYPES.size).toBe(16);
   });
 
   it("every cricket.* event type is reachable via tiles, guided sheets, or the More sheet — swept across every cfg variant that gates it", () => {
@@ -286,8 +290,13 @@ describe("cricket dispatch-guard totality (R2/task E headline)", () => {
     expect([...viaMore].sort(), "the More sheet reached nothing").not.toEqual([]);
 
     const union = new Set([...viaTiles, ...viaSheets, ...viaMore]);
-    const missing = [...ALL_EVENT_TYPES].filter((t) => !union.has(t)).sort();
+    const missing = [...ALL_EVENT_TYPES].filter((t) => !union.has(t) && !NOT_YET_SURFACED.includes(t)).sort();
     expect(missing, `unreachable cricket.* event types: ${missing.join(", ")}`).toEqual([]);
+    // The named exception holds both ways: each is a type the engine declares, and no surface reaches it yet.
+    for (const type of NOT_YET_SURFACED) expect(ALL_EVENT_TYPES.has(type), `${type} is declared`).toBe(true);
+    expect(NOT_YET_SURFACED.filter((t) => union.has(t)), "a not-yet-surfaced type reached a surface").toEqual([]);
+    // S2-4 Task 8: the mid-over bowler change is reached through More (ruling 84: no tile, no dedicated sheet).
+    expect(viaMore.has("cricket.bowler.change"), "the bowler change is in More while an over is in progress").toBe(true);
 
     // The dispatch guard's other half, read statically: nothing reachable
     // here invents a type the engine does not declare. createSkinDispatch

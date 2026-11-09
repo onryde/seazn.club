@@ -182,6 +182,128 @@ call that needs the value (a composed start's Machine, the daily sweep), not at 
 deploy missing one starts and serves until then. The relay block of the root
 [`.env.example`](.env.example) documents each one.
 
+**Deploy step — sponsors on stream (R4).** Sponsor airings and proof frames stay off until
+web's `RELAY_AIRINGS=1`, which web copies into every composed Machine's env
+(`server/relay/runner-fly.ts`). Set it as a Fly secret on the **web** app only after, in this
+order:
+
+1. R4 PR A (web) is deployed.
+2. The **private** Supabase Storage bucket `sponsor-frames` exists.
+3. The compositor carrying R4 PR C is deployed and named by `RELAY_IMAGE`.
+4. **Prod only:** the frame grab's CPU cost has been measured on stg, where `RELAY_AIRINGS=1`
+   is already set: the composed Machine's CPU p95 on a stream with a ticked sponsor, against
+   the same stream without one. Any measurable p95 rise goes to the owner before prod is set
+   (spec §3.6.3).
+5. **Prod only:** the frame path has been proven on stg, on a real composed stream with a
+   ticked sponsor, after `RELAY_AIRINGS=1` is set there (not before: without it no frame is
+   grabbed, so there is nothing to check):
+   - an object lands in the private `sponsor-frames` bucket for the airing;
+   - `/r/sponsor/<token>` (a report link made in the Sponsors hub) renders it through a
+     signed URL, and the bare object URL is refused;
+   - the daily sweep's `relay sweep` log line carries `framesBucketPublic: false`;
+   - an orphan purge removes an object: delete that airing row (stg data is test data), wait
+     until its session ended more than 24 h ago (`ORPHAN_FRAME_GRACE_MS`), and the next sweep's
+     line shows `framesPurged` of at least 1 and the object is gone from the bucket.
+
+Before that, leave it unset — a Machine without it sends no airings and grabs no frames, so the
+report's "Times shown" stays 0. Streams already running keep the env they booted with.
+
+**Rollback step.** Before rolling web back past R4 PR A, unset `RELAY_AIRINGS` on web and let the composed streams
+running with it end. An older web refuses a beat that carries airings. The compositor turns airings off after one refused
+count-only beat, but when airing lines arrive first it takes the second refused beat: about 10 s at the 5 s cadence,
+close to web's 15 s composed stale window.
+
+**Deploy step — client IP behind Cloudflare (`CF_ORIGIN_SECRET`).** Every per-IP rate limit keys on
+[`apps/web/src/lib/client-ip.ts`](apps/web/src/lib/client-ip.ts), which believes Cloudflare's `CF-Connecting-IP` only
+when Fly's peer is a Cloudflare edge. Anyone with a Cloudflare zone of their own can still reach the `*.fly.dev` origin
+through Cloudflare's network and set that header to anything. The close is an origin stamp: our zone writes a secret
+header, `x-seazn-origin-secret`, and web believes `CF-Connecting-IP` only on a request that carries it. **The order
+matters:**
+
+0. **The web release that carries the Sentry scrub must be live on that app first.** From the moment the rule exists,
+   every request carries the secret, and an earlier web release does not redact it from the events it sends to Sentry.
+1. In Cloudflare, add a **Rules → Transform Rules → Modify Request Header** rule: *Set static*, header
+   `x-seazn-origin-secret`, value a fresh random secret of 32+ bytes (`openssl rand -hex 32`), with a **different value
+   per environment**. `stg.seazn.club` sits under the `seazn.club` zone unless stg has a zone of its own, so this is one
+   rule per Fly app. Its filter is an **exact** host list of the hostnames that app serves (`fly certs list -a
+   seazn-club-prod` and `-a seazn-club-stg` list them, `games.` hosts included), with PostHog's proxy path left out:
+
+   ```
+   (http.host in {"seazn.club" "www.seazn.club" "games.seazn.club"})
+     and not (lower(http.request.uri.path) eq "/ingest" or starts_with(lower(http.request.uri.path), "/ingest/"))
+   ```
+
+   (Use the hosts `fly certs list` prints, not the three above.) **Never `ends_with` or `contains` on the host.** The
+   stamp goes to whatever origin serves a matched host. `ends_with(http.host, "seazn.club")` also matches
+   `stg.seazn.club`, so prod's secret would be stamped onto stg's requests, and stg would mismatch on every one of
+   them. `contains` would also match any future host in the zone that points at another vendor, and would hand that
+   vendor the secret. **`/ingest/*` is excluded** because `apps/web/next.config.js` rewrites `/ingest/:path*` to
+   PostHog's ingest and asset hosts. A rewrite to an external host forwards the request's headers, so a stamped
+   `/ingest` request would carry the secret to PostHog. The path is compared lower-cased, so `/INGEST/x` is excluded
+   too. Those paths never reach a rate limiter, so an unstamped one costs nothing. Before going on, confirm with
+   Cloudflare Trace that the rule matches each host and skips `/ingest/x` and `/Ingest/x`.
+2. Only **then** set the matching value on that web app: `fly secrets set CF_ORIGIN_SECRET=<value> -a seazn-club-stg`
+   (stg first), then `-a seazn-club-prod`. If the secret is set before the rule exists, its value differs from the
+   rule's, or a host is missing from the filter, those requests carry no matching stamp. They fall back to
+   `Fly-Client-IP`, which is a Cloudflare edge, so every visitor behind that edge shares one rate-limit bucket.
+   **Sign-in is the first casualty:** `magic-link` (5 per 5 minutes) and `magic-link-consume`, `verify-email`,
+   `claim-signin`, `invite-claim` and `funnel-claim` (10 a minute each) are then counted per Cloudflare colo, not per
+   visitor.
+   Nothing is ever refused for a missing stamp; requests only lose their per-visitor bucket. A mismatch is not silent:
+   for each kind of mismatch (`absent` and `wrong`, kept apart), web logs a warning with the reason
+   `origin_stamp_mismatch` at most once a minute per machine, and sends one `origin_stamp_mismatch` warning to Sentry
+   per process. Each names `stamp` (`absent` or `wrong`) and the request's `host` (lower-cased; `none` or `invalid` when
+   there is no usable one), and never carries the stamp's value or the secret.
+3. **After setting it, check it.** Sign in from two different networks (say, office wifi and a phone on mobile data).
+   Both must succeed. Then read `origin_stamp_mismatch` in `fly logs -a <app>` and in Sentry for that environment:
+   - **`stamp: wrong`** can mean our rule sends another value: a misconfiguration.
+   - **`stamp: absent` on one of OUR hosts** (one `fly certs list` prints) can mean the rule does not reach that host
+     or path: a misconfiguration too.
+   - **A few `stamp: absent` events from a host that is not ours** (another zone's name, a `*.fly.dev` name, `none`,
+     `invalid`) are someone sending `CF-Connecting-IP` through their own Cloudflare zone - a forgery attempt the stamp
+     is refusing. They are not a misconfiguration; leave the secret set.
+
+   **Both of the first two can be faked.** The sender controls `Host`, and can send our header name with any value,
+   so a forger can produce `absent` or `wrong` on our own host name. **Never unset the secret on a few events alone.**
+   Unset it (rollback, below) and then fix the rule only once one of these holds:
+   - Cloudflare Trace (or the rule's match preview) shows that our rule misses that host or path, or that the value
+     it sends is not the one just set.
+   - The warnings repeat steadily, in step with real traffic: one a minute per machine, every minute, while people
+     are using the site.
+
+   Sentry holds each process's first `absent` and its first `wrong` separately, so a flood of forged `absent` cannot
+   hide a `wrong`; read `fly logs` for the hosts of later ones.
+   **Also check the header NAME** on the rule: it must be exactly `x-seazn-origin-secret`. A different name leaves
+   every request unstamped (`absent` on our hosts), and its value may already have reached Sentry or a log in clear -
+   the scrub only redacts names starting with `x-seazn-origin` (`_` or `-`), and the SDK only masks names carrying
+   `secret`. If the name was wrong, remove the rule and **rotate** the secret (below) with the correct name.
+
+**Rotation:** (1) `fly secrets unset CF_ORIGIN_SECRET -a <app>`; (2) change the rule's value in Cloudflare to the new
+secret and confirm with Trace; (3) `fly secrets set CF_ORIGIN_SECRET=<new value> -a <app>`; (4) repeat the step 3 check.
+**Between (1) and (3), web runs on range trust alone**, as it did before the stamp existed. During that window, a
+`CF-Connecting-IP` forged through another Cloudflare zone is believed again. Keep it short, and do not rotate while
+someone is working that gap. Never change the rule first: from then until the secret is set, every request mismatches.
+
+**Rollback:** unset the Fly secret first (`fly secrets unset CF_ORIGIN_SECRET -a <app>`), then remove the rule. Rolling
+web back **past the release that carries the scrub** additionally requires the rule to be removed first, for the same
+reason step 0 exists.
+
+Unset, web behaves exactly as it did before the stamp existed, and no mismatch is reported. The value is never logged
+or echoed. It stays out of Sentry in two ways, and both are needed:
+
+- **The SDK masks it.** `@sentry/nextjs` copies every incoming header onto the root span as an
+  `http.request.header.<name>` attribute. The header's name carries `secret`, which is on the SDK's own deny list, so
+  that attribute reads `[Filtered]`. The earlier name, `x-seazn-origin`, was not on that list, and its value reached
+  Sentry in clear in the trace data.
+- **Our scrub redacts it.** `lib/scrub-score-url.ts` rewrites every header whose name starts with `x-seazn-origin`
+  (any case, `_` or `-`, so a mistyped rule name too) to `[redacted]` in `request.headers`, in the trace context's
+  data and in every span's data, on errors and transactions alike.
+
+Do not rename the header without keeping both. An alternative is Cloudflare's **Authenticated Origin Pulls** (mTLS from
+Cloudflare to the origin). The zone-level variant presents Cloudflare's shared certificate, which proves "Cloudflare"
+rather than "our zone", so only a certificate of our own would do. Fly's proxy terminates TLS before web sees the
+request, so that option was not evaluated here.
+
 Two facts worth knowing before reading the design:
 
 - `stream.liveInputs.create()` returns `{ uid, rtmps, srt, webRTC }` from a single call,

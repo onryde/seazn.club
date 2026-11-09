@@ -1,5 +1,5 @@
 import Link from "@/components/ui/console-link";
-import { CircleUserRound, LayoutDashboard, Radio, Settings, Users } from "lucide-react";
+import { CircleUserRound, Handshake, LayoutDashboard, Radio, Settings, Users } from "lucide-react";
 import { HelpMenu } from "@/components/help-menu";
 import { getActiveOrgId, getCurrentUser, getUserOrgs } from "@/lib/auth";
 import { pickActiveOrg } from "@/lib/active-org";
@@ -115,8 +115,61 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
   // in en/es/fr/nl (72px visible at the tightest, fr 768, and 114px in en). Nothing else moves: labels, type, link height, the display
   // name and Sign out are as they were. The dual-role nav is icon-only until `lg`, has the room, and keeps its 12px - a 4px pad on a
   // bare 16px icon would be a 24px target.
+  //
+  // R4 sponsors-on-stream added a Sponsors link to the bar. OWNER RULING 2026-11-01 ("instead of putting sponsor icon, can we put
+  // setting as a icon all time"; it replaces the 2026-10-31 "a" build, whose sixth labelled link cost the org chip its club name
+  // at 1280): Settings is its icon alone at EVERY width - named by aria-label, with a title tooltip - and Sponsors is an ordinary
+  // labelled link. The labelled links are therefore main's set with Settings' word swapped for Sponsors', so main's rung holds
+  // unchanged (`isPlayer` alone: the org nav's labels at md, the dual-role nav's at lg - the 10-28 "tighten" ruling above, tablets
+  // keep their labels). Settings sits LAST in the bar, beside the other controls that are icons (help and Sign out),
+  // so the labels read as one run.
+  //
+  // That is still one link more than main, and the org chip's club name - the row's only flexible item - pays for every px of it.
+  // So where the bar has an org, from md the links hand the room back in their own spacing: they touch (`md:gap-0`, not sm's 2px),
+  // Settings takes the phone icon's 6px a side from its labels' rung, and the org nav's labelled links take a 4px icon-to-word gap
+  // in the md band (B3's 4px padding stays). A SECOND owner ruling the same day made Sign out its icon alone at every width too
+  // (LogoutButton `iconOnly`; aria-label and title keep its translated name), and the words it no longer paints from lg pay for
+  // main's 12px labelled-link padding there. Measured in a browser with the 38-character club name (the R4 nav-E report): the
+  // name shows whole at 1280 in en/es/fr/nl, and at 768 the chip keeps more than the 8 characters it exists to show (93px en,
+  // where main had 114). Nothing else moves: labels, type and the display name are as they were.
+  //
+  // Phones are icon-only either way: Sign out's right edge is at 28N + 204 for N icon links (the 4-link nav's 4px at 320 and the
+  // 5-link nav's 6px at 350, as measured above). Sponsors is `hidden min-[350px]:flex` (the Player-home precedent; the org's
+  // Competitions home carries a Sponsors entry at every width), and the worst case - Streaming + a claimed player - needs 372px for six
+  // links, so Player home folds first: for a streaming org it is `hidden min-[390px]:flex` (five of six links shown 350-389, all
+  // six from 390), and it keeps the 350 precedent for an org without Streaming, whose five links already fit. 320 shows four
+  // whatever the org. An org LOGO puts 38px more in the row (the 28px logo and its 10px gap; measured, five links then fit from
+  // 382 and six from 410), so each fold moves up one step - Sponsors from 390, Player home from 430 with Streaming and 390 without -
+  // and no folding link is ever shown where the bar does not fit it. With a logo the four links that never fold overran 320-353 as
+  // well, as on main: CI e2e 42438561906 measured the bar's content 354px wide at 320 (28 x 4 + 204 + 38), Sign out wholly past the
+  // viewport and cut off by html's `overflow-x: clip` - no scroll, no way to sign out. So below 360 (the 354 it needs, with the 360
+  // matrix width's 6px to spare) a logo org's wordmark gives its place to the club's crest: `max-[360px]:sr-only`, out of the row
+  // but still the home link's name, which hands back its 80px and the crest's 10px gap (Sign out at 264px at worst). The crest
+  // stays - on a phone it is the only sign of which club this is, the chip being hidden below sm - and an org without a logo keeps
+  // its wordmark, its only mark, at every width. That is the whole fold order: nothing else moves, and nothing from 360 up.
   const navLabelClass = isPlayer ? "hidden lg:inline" : "hidden md:inline";
-  const navLinkClass = `flex items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3${isPlayer ? "" : " md:px-1 lg:px-3"}`;
+  // The look every gantry link shares - `min-h-8`, one 32px box whether the words are painted or not, so an icon-only link sits
+  // level with its labelled neighbours in this `items-center` row (CI e2e 41298006103 read the 2px drop as a wrap) - then each
+  // bar's spacing from md (the R4 paragraphs above). Only a bar WITH an org has a club name to make room for: there the org
+  // nav's labelled links take B3's 4px in the md band with a 4px icon-to-word gap, and main's 12px and 6px gap from lg. A bar
+  // without an org keeps main's look exactly (B3's `md:px-1 lg:px-3` for the non-player bar, nothing for the player bar).
+  const hasOrg = !!activeOrg;
+  const navLinkBase = "min-h-8 items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3";
+  const navLinkLook = `${navLinkBase}${isPlayer ? "" : hasOrg ? " md:gap-1 md:px-1 lg:gap-1.5 lg:px-3" : " md:px-1 lg:px-3"}`;
+  const navLinkClass = `flex ${navLinkLook}`;
+  // The phone folds (the paragraph above). `hidden` + a min-width `flex` breakpoint and never a bare `flex` beside them: two display utilities
+  // fight by CSS order. Literal strings, every one: Tailwind only builds the classes it can read in the source.
+  const hasLogo = !!logoUrl;
+  const sponsorsLinkClass = `${hasLogo ? "hidden min-[390px]:flex" : "hidden min-[350px]:flex"} ${navLinkLook}`;
+  const playerHomeFold = streamingOffered
+    ? hasLogo ? "hidden min-[430px]:flex" : "hidden min-[390px]:flex"
+    : hasLogo ? "hidden min-[390px]:flex" : "hidden min-[350px]:flex";
+  const playerHomeLinkClass = `${playerHomeFold} ${navLinkLook}`;
+  // Settings, an icon at every width: 6px a side on phones (28px, the phone icon's own size) and sm's 12px above them, like every
+  // bare icon in the bar. On a bar with an org it goes back to 6px where that bar's labels come on - md for the org nav, lg for the
+  // dual-role nav, whose icons are 40px through the md band and Settings with them - never the labelled links' 4px, as a 4px pad
+  // on a bare 16px icon is a 24px target (B3, above). Without an org there is no chip to make room for: sm's 12px throughout.
+  const settingsLinkClass = `flex ${navLinkBase}${!hasOrg ? "" : isPlayer ? " lg:px-1.5" : " md:px-1.5"}`;
   // Tour targets editor flows (rename org, create competition) — viewers skip it.
   const canTour =
     !!user && !!activeOrg && (EDITOR_ROLES as readonly string[]).includes(activeOrg.role);
@@ -152,8 +205,10 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
             // eslint-disable-next-line @next/next/no-img-element
             <img src={logoUrl} alt={t(dict, "nav.orgLogoAlt")} className="h-7 w-7 rounded-md object-cover ring-1 ring-cream/20" />
           )}
+          {/* Below 360 an org with a logo shows its crest alone: the wordmark leaves the row (`sr-only`, never `hidden`, so the
+              home link is still named "Seazn Club") - the fold paragraph above `navLabelClass`. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo-wide-night.png" alt="Seazn Club" className="h-7 w-auto" />
+          <img src="/logo-wide-night.png" alt="Seazn Club" className={hasLogo ? "h-7 w-auto max-[360px]:sr-only" : "h-7 w-auto"} />
         </Link>
         {user && activeOrg && (
           // `min-w-0 shrink` rather than `shrink-0`: this chip's width WAS the
@@ -222,7 +277,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 joueur" / "Inicio del jugador" — multi-word labels with real
                 wrap points that would hit the exact "Sign out" failure fix
                 round 1 found, invisibly to every automated check here. */}
-            <nav className="flex shrink-0 items-center gap-0 sm:gap-0.5">
+            <nav className={`flex shrink-0 items-center gap-0 sm:gap-0.5${hasOrg ? " md:gap-0" : ""}`}>
               {/* Labels collapse to icons under `md` (navLabelClass: `lg` for
                   the 4-link dual-role case, #516 above; `md` rather than the
                   original `sm` since W3 measured the 640-767 band no width
@@ -255,14 +310,20 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                   <span className={navLabelClass}>{t(dict, "nav.streaming")}</span>
                 </Link>
               )}
-              <Link
-                href={activeOrg ? routes.orgSettings(activeOrg.slug) : "/orgs/new"}
-                aria-label={t(dict, "nav.settings")}
-                className={navLinkClass}
-              >
-                <Settings className="h-4 w-4" strokeWidth={1.75} />
-                <span className={navLabelClass}>{t(dict, "nav.settings")}</span>
-              </Link>
+              {/* Sponsors (R4, owner ruling 2026-11-01): the top-level hub, a labelled link like its siblings, hidden entirely under
+                  350 (390 for an org with a logo) - the org's Competitions home carries a Sponsors entry at every width. See the budget note above `navLabelClass`. Shown
+                  to every role: the hub itself decides what a non-editor sees (read-only Overview and Sponsors, as Settings gave). */}
+              {activeOrg && (
+                <Link
+                  href={routes.orgSponsors(activeOrg.slug)}
+                  aria-label={t(dict, "nav.sponsors")}
+                  data-testid="nav-sponsors"
+                  className={sponsorsLinkClass}
+                >
+                  <Handshake className="h-4 w-4" strokeWidth={1.75} />
+                  <span className={navLabelClass}>{t(dict, "nav.sponsors")}</span>
+                </Link>
+              )}
               {/* Dual-role seam (PROMPT-53): an organiser who is ALSO a
                   claimed player keeps a door to their own player home.
                   #516: a 4th icon is ~32px more than Dashboard/Directory/
@@ -273,17 +334,28 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                   either side). `hidden min-[350px]:flex` is scoped to THIS
                   link only — Dashboard/Directory/Settings are unaffected at
                   every width, and this link still degrades icons-only up to
-                  `lg` same as the rest (navLabelClass above). */}
+                  its label rung same as the rest (navLabelClass above). */}
               {isPlayer && (
                 <Link
                   href={routes.me()}
                   aria-label={t(dict, "nav.playerHome")}
-                  className="hidden min-[350px]:flex items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
+                  className={playerHomeLinkClass}
                 >
                   <CircleUserRound className="h-4 w-4" strokeWidth={1.75} />
                   <span className={navLabelClass}>{t(dict, "nav.playerHome")}</span>
                 </Link>
               )}
+              {/* Settings: its icon alone at every width (owner ruling 2026-11-01), last in the bar beside the other icon
+                  controls. aria-label names it for screen readers; title gives a mouse user the same word as a tooltip. */}
+              <Link
+                href={activeOrg ? routes.orgSettings(activeOrg.slug) : "/orgs/new"}
+                aria-label={t(dict, "nav.settings")}
+                title={t(dict, "nav.settings")}
+                data-testid="nav-settings"
+                className={settingsLinkClass}
+              >
+                <Settings className="h-4 w-4" strokeWidth={1.75} />
+              </Link>
             </nav>
             {/* The console "?" menu (v3/06 §3): closes on outside click/Esc. */}
             <HelpMenu
@@ -340,7 +412,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
             <span className="mx-1 hidden min-w-0 truncate text-sm font-medium text-cream/85 lg:block">
               {user.display_name}
             </span>
-            <LogoutButton label={t(dict, "nav.signOut")} labelFrom="lg" />
+            <LogoutButton label={t(dict, "nav.signOut")} iconOnly />
           </div>
         ) : (
           <Link

@@ -2306,6 +2306,9 @@ export async function seedRosteredFixture(
      *  precondition of tennis's own `rosterlessServerSide` fallback. Nothing
      *  else in the seeded fixture changes. */
     skipLineups?: boolean;
+    /** Leave the division in setup (Draft): scoring is closed until it starts (S2-4 Task 2, the division gate's refusal).
+     *  Default true. `emitCoreStart` is refused in a Draft division, so the two are not combined. */
+    startDivision?: boolean;
   },
 ): Promise<RosteredFixture> {
   const kind = spec.entrantKind ?? "team";
@@ -2384,7 +2387,7 @@ export async function seedRosteredFixture(
 
   const { fixtureIds } = await createStageAndGenerate(request, divisionId);
   const fixtureId = fixtureIds[0]!;
-  await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+  if (spec.startDivision !== false) await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
 
   for (const [entrantId, roster] of spec.skipLineups
     ? []
@@ -2422,6 +2425,68 @@ export async function seedRosteredFixture(
   }
 
   return { competitionId, divisionId, fixtureId, homeEntrantId, awayEntrantId, personIds };
+}
+
+/**
+ * S2-4 Task 3 (gaps 1, 2): the cricket pad picks nobody for the scorer. Before ball 1 of an innings the two openers and
+ * the bowler are asked, and at every over boundary the next bowler is; until they are picked every ball tile is disabled
+ * and the strip says what it is waiting for. This makes those picks as a scorer does: it opens each named chip's picker
+ * (the context strip, `context-strip.tsx`) and taps the person by NAME, the name the picker renders, then waits for the
+ * chip to read it back (`chipLabel`: `` `${label}: ${name}` ``).
+ *
+ * Picks are pending until the next ball (`PadHostView.contextOverrides`: a ball clears them, and a change that is not a
+ * ball, such as a bowler change, keeps them; `cricketPicksSurvive`), so call it after the last ball has landed, and again
+ * after a reload, which clears them too. The chip labels are the English
+ * dictionary's ("Striker", "Non-striker", "Bowler"); the anchored `^label(:|$)` match keeps "Striker" from matching
+ * "Non-striker: …". A chip that is not a button (a batter who has faced, the bowler mid-over) cannot be picked, and the
+ * click then fails loudly rather than skip.
+ *
+ * `root` is the pad to pick on, the console's `[data-testid="score-pad"]` by default. The device link route
+ * (`/score/[token]`) has no such testid and mounts the pad's own `[data-role="pad-v3"]` root, so a spec there passes it.
+ */
+export async function pickCricketPeople(
+  page: Page,
+  picks: { striker?: string; nonStriker?: string; bowler?: string },
+  root: Locator = page.locator('[data-testid="score-pad"]'),
+): Promise<void> {
+  const strip = root.locator('[data-role="context-strip"]');
+  const order: Array<[label: string, name: string | undefined]> = [
+    ["Striker", picks.striker],
+    ["Non-striker", picks.nonStriker],
+    ["Bowler", picks.bowler],
+  ];
+  for (const [label, name] of order) {
+    if (name === undefined) continue;
+    const chip = strip.getByRole("button", { name: new RegExp(`^${label}(:|$)`) });
+    await chip.click();
+    const candidate = strip.getByRole("button", { name, exact: true });
+    await expect(candidate, `pickCricketPeople: the ${label} picker offers "${name}"`).toBeEnabled({ timeout: 10_000 });
+    await candidate.click();
+    await expect(
+      strip.getByRole("button", { name: `${label}: ${name}`, exact: true }),
+      `pickCricketPeople: the ${label} chip reads the pick`,
+    ).toBeVisible({ timeout: 10_000 });
+  }
+}
+
+/**
+ * S2-4 Task 4 (gaps 3, 4): Wide, No-ball, Bye and Leg-bye each open a sheet that asks the runs, and the answer records
+ * the ball at once (no dock, no soft-commit hold). This taps the extra's tile, waits for its sheet, and taps the answer
+ * by its option id (`[data-choice-option-id]`, locale-free): the wide `"0"`-`"4"` runs run, the no-ball `"bat:0"`-`"bat:6"`
+ * off the bat or `"ran:1"`-`"ran:4"`, the bye and leg bye `"1"`-`"4"`. `tileId` is the tile's `data-tile-id`
+ * (`wide`, `extra-noball`, `extra-bye`, `extra-legbye`). The caller polls the ledger for the ball.
+ */
+export async function tapCricketExtra(
+  page: Page,
+  tileId: "wide" | "extra-noball" | "extra-bye" | "extra-legbye",
+  optionId: string,
+): Promise<void> {
+  const pad = page.locator('[data-testid="score-pad"]');
+  await pad.locator(`[data-tile-id="${tileId}"]`).click();
+  const sheet = pad.locator('[data-role="v3-sheet"]');
+  const option = sheet.locator(`[data-choice-option-id="${optionId}"]`);
+  await expect(option, `tapCricketExtra: the ${tileId} sheet offers "${optionId}"`).toBeVisible({ timeout: 10_000 });
+  await option.click();
 }
 
 /** Record a generic.result for one fixture (reads last_seq for optimistic concurrency). */

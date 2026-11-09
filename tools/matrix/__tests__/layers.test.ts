@@ -21,7 +21,7 @@ import { decideState } from "../lib/results.ts";
 import { ATOMIC, HARNESS_SCENARIO, l2NoPathFor } from "../lib/scenario-catalogue.ts";
 import { SLICE_ROWS, SLICE_SPORTS, UnknownFilter } from "../lib/slice.ts";
 import { BROWSER_WIDTHS, L2_WIDTHS, type BrowserWidth } from "../lib/widths.ts";
-import { STANDALONE_REFUSED_CELLS, isNoOrganiserPathCell } from "./refused-cells.ts";
+import { STANDALONE_REFUSED_CELLS, isNoOrganiserPathCell, noPathWaveOf } from "./refused-cells.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 /** The committed file, read as plain JSON: never through layers.ts or pairs.ts. */
@@ -163,7 +163,9 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
   // Review I-1: the slice holds knownNoPath atoms only, so the classifier's
   // `?? atom.l2NoPath` arm and its reason are reached from the cells outside it.
   it("the l2NoPath arm: every committed run whose atom has l2NoPath (and no knownNoPath) is planned 🚫 naming that wave, with the route-exists reason", () => {
-    const isL2Gap = (r: L2Run) => { const a = ATOM.get(r.scenario)!; return a.knownNoPath === null && l2NoPathFor(a, r.sport) !== null && !Object.hasOwn(HARNESS_SCENARIO, r.scenario); };
+    // A run on a cell the builder does not offer is the CELL arm (layers.ts: the cell's route outranks the atom's;
+    // layers-grid.test.ts proves every such run): the retired Triple round robin's M12b runs route to its wave, not W2.
+    const isL2Gap = (r: L2Run) => { const a = ATOM.get(r.scenario)!; return a.knownNoPath === null && l2NoPathFor(a, r.sport) !== null && !Object.hasOwn(HARNESS_SCENARIO, r.scenario) && !isNoOrganiserPathCell(cellId(r.row, r.sport)); };
     const gapRuns = RAW.runs.filter(isL2Gap);
     const cells = new Set(gapRuns.map((r) => cellId(r.row, r.sport)));
     expect(gapRuns.length).toBeGreaterThan(0);
@@ -185,7 +187,8 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
   // W2e Task 32 (B2-3): the committed M12b runs, planned per sport. The four sports whose pad gained the control are no
   // longer 🚫 ("no screen sends it" is false for them); they are ░ until a scenario script drives the control. Cricket and
   // generic keep 🚫 W2 (dispositions CK-DV-3, GN-DV-1). Match Day C9 review I5, option 2: a run on a cell the builder does
-  // not offer (americano/mexicano on those sports) is 🚫 W7 whatever its atom - the cell has no organiser path at all.
+  // not offer (americano/mexicano on those sports: W7; the retired Triple round robin on every sport, owner ruling
+  // 2026-11-01: W5) is 🚫 whatever its atom - the cell has no organiser path at all.
   it("W2e T32: M12b is ░ in football, volleyball, hockey and ice hockey and still 🚫 W2 in every other sport, run by committed run", () => {
     const m12b = RAW.runs.filter((r) => r.scenario === "M12b");
     const cells = new Set(m12b.map((r) => cellId(r.row, r.sport)));
@@ -196,7 +199,7 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
       const c = byN.get(r.n)!;
       expect(c, `n ${r.n}`).toBeDefined();
       if (isNoOrganiserPathCell(cellId(r.row, r.sport))) {
-        expect(c.noPath, `n ${r.n} ${r.row}|${r.sport}: the builder does not offer the cell`).toMatchObject({ wave: "W7" });
+        expect(c.noPath, `n ${r.n} ${r.row}|${r.sport}: the builder does not offer the cell`).toMatchObject({ wave: noPathWaveOf(cellId(r.row, r.sport)) });
         expect(c.notRun).toBeNull();
         seen.noPathCell += 1;
       } else if (built.has(r.sport)) {

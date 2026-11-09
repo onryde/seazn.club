@@ -52,6 +52,9 @@ export function OverlayEndOfOverCard(props: {
   }
 
   const namedBatters = closed.batters.filter((b) => Boolean(b.name));
+  // A split over (S2-4, CK-BC-1) lists every bowler, in order, a nameless one as his figures alone (S2-4 Batch D: never
+  // dropped, or the over reads as the others'); a whole over has its one, named.
+  const bowlers = closed.bowlers ?? (closed.bowler?.name ? [closed.bowler] : []);
 
   return (
     <div
@@ -67,9 +70,12 @@ export function OverlayEndOfOverCard(props: {
             {batterLine(b, mark)}
           </span>
         ))}
-        {closed.bowler?.name ? (
-          <span className="ovl-end-of-over-bowler">{bowlerLine(closed.bowler)}</span>
-        ) : null}
+        {bowlers.map((b, i) => (
+          // By position: a split over's two lines may share a name and figures, or both have no name.
+          <span key={`bowler-${i}`} className="ovl-end-of-over-bowler">
+            {bowlerLine(b)}
+          </span>
+        ))}
       </div>
       <div className="ovl-end-of-over-side">
         <span className="ovl-end-of-over-side-label">{props.msg("overlay.cricket.thisOver")}</span>

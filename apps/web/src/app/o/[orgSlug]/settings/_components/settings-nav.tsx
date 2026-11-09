@@ -1,7 +1,7 @@
 import Link from "@/components/ui/console-link";
 import {
   Building2, Users, CreditCard, UserCircle, KeyRound, Banknote,
-  Handshake, Newspaper, Sparkles, PackagePlus, SlidersHorizontal,
+  Newspaper, Sparkles, PackagePlus, SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
 import { routes } from "@/lib/routes";
@@ -15,15 +15,16 @@ import { balance, walletIdFor } from "@/lib/credits";
 export type SettingsTab =
   | "organization"
   | "news"
-  | "sponsors"
   | "team"
   | "api"
   | "preferences"
   | "account";
 
 export const SETTINGS_TABS: readonly SettingsTab[] = [
-  "organization", "news", "sponsors", "team", "api", "preferences", "account",
+  "organization", "news", "team", "api", "preferences", "account",
 ] as const;
+// "sponsors" is deliberately NOT here: it left Settings for the top-level Sponsors hub (R4 sponsors-on-stream S11,
+// /o/<slug>/sponsors). `settings?tab=sponsors` redirects there (page.tsx), so the old URL keeps working.
 
 /**
  * Everything the sidebar can mark active. The four route-owning pages
@@ -35,7 +36,7 @@ export const SETTINGS_TABS: readonly SettingsTab[] = [
 export type SettingsNavKey = SettingsTab | "connect" | "billing" | "credits" | "add-ons";
 
 /**
- * Eleven items is past the point where a flat list is scanned rather than
+ * Ten items is past the point where a flat list is scanned rather than
  * read. The groups are by STAKE, not by implementation: what the club is and
  * publishes, what it is charged and charges, and what belongs to the person
  * signed in. Nothing moves route — this is purely how the rail reads.
@@ -63,7 +64,6 @@ const GROUPS: readonly { group: Group; labelKey: string }[] = [
 const ITEMS: readonly Item[] = [
   { key: "organization", labelKey: "settings.nav.organization", icon: Building2,        group: "organisation", href: (o) => routes.orgSettings(o, "organization") },
   { key: "news",         labelKey: "news.tab",                  icon: Newspaper,        group: "organisation", href: (o) => routes.orgSettings(o, "news") },
-  { key: "sponsors",     labelKey: "sponsors.title",            icon: Handshake,        group: "organisation", href: (o) => routes.orgSettings(o, "sponsors") },
   { key: "team",         labelKey: "settings.nav.team",         icon: Users,            group: "organisation", href: (o) => routes.orgSettings(o, "team") },
   { key: "api",          labelKey: "settings.nav.api",          icon: KeyRound,         group: "organisation", href: (o) => routes.orgSettings(o, "api") },
   { key: "preferences",  labelKey: "settings.nav.preferences",  icon: SlidersHorizontal, group: "you", href: (o) => routes.orgSettings(o, "preferences") },
@@ -82,7 +82,7 @@ const ITEMS: readonly Item[] = [
  * the gantry header (which is also sticky at top:0 — pinning both to 0 makes
  * them compete and this row loses, scrolling out of view entirely).
  *
- * `ScrollActiveTabIntoView` is not decoration: eleven items never fit a 320px
+ * `ScrollActiveTabIntoView` is not decoration: ten items never fit a 320px
  * strip, so without it you land on Billing and cannot see which item is
  * selected. A no-horizontal-scroll gate cannot catch that — the strip is meant
  * to scroll. `className="contents"` keeps its wrapper out of the box tree, so
@@ -126,10 +126,10 @@ function NavLink({
  * The Settings sidebar — one component for the tabbed index AND the four
  * route-owning pages, so the menu is present on every Settings surface.
  *
- * TWO renderings of the same eleven links, because the two form factors want
+ * TWO renderings of the same ten links, because the two form factors want
  * genuinely different things and faking one from the other reads badly at both:
  *
- *   desktop  a vertical rail, grouped under three headers (eleven flat rows is
+ *   desktop  a vertical rail, grouped under three headers (ten flat rows is
  *            a list you scan, not one you read), plus the org's plan and credit
  *            balance at the top so an owner sees them from every Settings page
  *            rather than only from Billing and Credits.
@@ -138,7 +138,7 @@ function NavLink({
  *            this row loses, scrolling out of view entirely). Headers have
  *            nowhere to go in a single row, so the strip stays flat.
  *
- * `ScrollActiveTabIntoView` is not decoration: eleven items never fit a 320px
+ * `ScrollActiveTabIntoView` is not decoration: ten items never fit a 320px
  * strip, so without it you land on Billing and cannot see which item is
  * selected. A no-horizontal-scroll gate cannot catch that — the strip is meant
  * to scroll. `className="contents"` keeps its wrapper out of the box tree, so
@@ -263,7 +263,7 @@ export function SettingsShell({
    * `false` for a PAYER who is not a member of this org (v17 gap #333).
    * Billing, Credits and Add-ons are reachable through the bill; every link in
    * this sidebar points at a member-gated route, so showing it to a payer
-   * would be a menu of eleven 404s. They fall back to the standalone column
+   * would be a menu of ten 404s. They fall back to the standalone column
    * these pages have always used.
    */
   showNav?: boolean;

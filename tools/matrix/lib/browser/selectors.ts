@@ -118,13 +118,15 @@ export const TESTID = testids({
 });
 
 /** Needles the bench's own pins never check (`score-start-match`,
- *  `pad-send-now`, `score-finalize`, `data-tile-id`, `pad-sheet-number`,
+ *  `pad-send-now`, `score-finalize`, `match-actions-toggle`, `data-tile-id`, `pad-sheet-number`,
  *  `pad-sheet-confirm` are unpinned bench-side). Each maps a bench constant, or
  *  a `selectorForTapStep` output, to the product file it must appear in, so a
  *  product rename reds HERE and not as a timeout mid-run. */
 export const PAD_PINS: readonly Readonly<{ name: string } & Pin>[] = Object.freeze([
   { name: "START_MATCH_TESTID", needle: "score-start-match", file: `${V2}/fixture-console.tsx` },
   { name: "FINALIZE_TESTID", needle: "score-finalize", file: `${V2}/fixture-console.tsx` },
+  // PR #1133: the toggle of the Match actions panel Forfeit and Abandon sit in (bench openMatchActions taps it).
+  { name: "MATCH_ACTIONS_TOGGLE_TESTID", needle: "match-actions-toggle", file: `${V2}/fixture-console.tsx` },
   { name: "SEND_NOW_TESTID", needle: "pad-send-now", file: `${V2}/scorepad/v3/detail-dock.tsx` },
   { name: "tile", needle: "data-tile-id", file: `${V2}/scorepad/v3/tile-grid.tsx` },
   { name: "number", needle: "pad-sheet-number", file: `${V2}/scorepad/v3/guided-sheet.tsx` },

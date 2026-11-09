@@ -203,6 +203,79 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
   });
 });
 
+// S2-4 Task 9 (CK-BC-1, MCC Law 17.8): after a mid-over change the live bowler is the one now bowling, with his own
+// analysis — never the outgoing bowler's, and never the over's totals.
+describe("liveFromScorecard after a mid-over bowler change (S2-4 Task 9)", () => {
+  const ball = (seq: number, ballInOver: number, bowler: string, bat: number) =>
+    makeEnvelope(seq, {
+      type: "cricket.ball",
+      payload: { ...base, ballInOver, bowler, runs: { bat }, ...(bat === 4 ? { boundary: 4 } : {}) },
+    } as never);
+  // The striker and non-striker cross on an odd run; every run here is even, so the crease never moves.
+  const SPLIT = [
+    makeEnvelope(1, { type: "cricket.toss", payload: { wonBy: "H", elected: "bat" } } as never),
+    makeEnvelope(2, { type: "core.start", payload: {} } as never),
+    ball(3, 1, "A-p11", 2),
+    ball(4, 2, "A-p11", 6),
+    ball(5, 3, "A-p11", 0),
+    makeEnvelope(6, { type: "cricket.bowler.change", payload: { bowler: "A-p10", reason: "incapacitated" } } as never),
+    ball(7, 4, "A-p10", 4),
+    ball(8, 5, "A-p10", 0),
+  ];
+  const names = (id: string) => ({ ...NAMES, "A-p10": "Siraj" })[id];
+
+  it("after a change the overlay's bowler is the new bowler with his own figures", () => {
+    const live = liveFromScorecard(scorecardOf(SPLIT), names);
+    // Two balls since the change, 4 runs off them: the outgoing bowler's 8 off 3 are his, not the new bowler's.
+    expect(live?.bowler).toEqual({ name: "Siraj", overs: "0.2", maidens: 0, runs: 4, wickets: 0 });
+    // The over itself is still one over: all five balls, both bowlers'.
+    expect(live?.thisOver).toHaveLength(5);
+  });
+
+  // Fix round 1 (controller ruling): the closed-over card names every bowler of a split over, in order, each with
+  // his own figures (A-p11 2+6+0 off 3, A-p10 4+0+0 off 3), never the first alone.
+  const CLOSED = [...SPLIT, ball(9, 6, "A-p10", 0)];
+  it("a closed split over lists both bowlers in order, each with his own figures", () => {
+    const closed = lastClosedOverFromScorecard(scorecardOf(CLOSED), names);
+    expect(closed?.over, "premise: over 1 has closed").toBe(1);
+    expect(closed?.bowlers).toEqual([
+      { name: "Bumrah", overs: "0.3", maidens: 0, runs: 8, wickets: 0 },
+      { name: "Siraj", overs: "0.3", maidens: 0, runs: 4, wickets: 0 },
+    ]);
+    expect(closed?.bowler?.name, "`bowler` stays the first, for older readers").toBe("Bumrah");
+  });
+
+  // S2-4 Batch D: a bowler the resolver cannot name keeps his figures, nameless — dropping him made the over read as
+  // the other's alone.
+  it("a second bowler the resolver cannot name keeps his figures, with no name; the other stays", () => {
+    const closed = lastClosedOverFromScorecard(scorecardOf(CLOSED), nameOf); // NAMES has no A-p10
+    expect(closed?.bowlers).toEqual([
+      { name: "Bumrah", overs: "0.3", maidens: 0, runs: 8, wickets: 0 },
+      { overs: "0.3", maidens: 0, runs: 4, wickets: 0 },
+    ]);
+    expect(Object.keys(closed!.bowlers![1]!), "no name key at all, not `name: undefined`").not.toContain("name");
+  });
+
+  it("a FIRST bowler the resolver cannot name keeps his place and figures; `bowler` (the first, named) is absent", () => {
+    const closed = lastClosedOverFromScorecard(scorecardOf(CLOSED), (id) => (id === "A-p10" ? "Siraj" : undefined));
+    expect(closed?.bowlers).toEqual([
+      { overs: "0.3", maidens: 0, runs: 8, wickets: 0 },
+      { name: "Siraj", overs: "0.3", maidens: 0, runs: 4, wickets: 0 },
+    ]);
+    expect(closed?.bowler).toBeUndefined();
+  });
+
+  it("regression pin: a whole over carries no `bowlers`, only its one bowler", () => {
+    const whole = [
+      ...SPLIT.slice(0, 2),
+      ...[1, 2, 3, 4, 5, 6].map((n) => ball(2 + n, n, "A-p11", 0)),
+    ];
+    const closed = lastClosedOverFromScorecard(scorecardOf(whole), names);
+    expect(closed?.bowlers).toBeUndefined();
+    expect(closed?.bowler).toEqual({ name: "Bumrah", overs: "1.0", maidens: 1, runs: 0, wickets: 0 });
+  });
+});
+
 describe("tossFromScorecard / lastClosedOverFromScorecard / scoringStartedFromScorecard", () => {
   const sides: [string, string] = [lineups.home.entrantId, lineups.away.entrantId];
 

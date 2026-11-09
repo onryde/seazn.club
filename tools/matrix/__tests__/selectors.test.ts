@@ -7,7 +7,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { FINALIZE_TESTID, SEND_NOW_TESTID, START_MATCH_TESTID, selectorForTapStep, type TapStep } from "../../bench/lib/drivers/scorer.ts";
+import { FINALIZE_TESTID, MATCH_ACTIONS_TOGGLE_TESTID, SEND_NOW_TESTID, START_MATCH_TESTID, selectorForTapStep, type TapStep } from "../../bench/lib/drivers/scorer.ts";
 import { MissingLabel, DATA, NAME, PAD_PINS, TEMPLATE_CARD, TESTID, UnreadableLiteral, UnrenderableName, hardcoded, literalText, markText, renderedName, templateCardTestid, templateLabel } from "../lib/browser/selectors.ts";
 import { UnknownTemplate } from "../lib/templates.ts";
 import { TEMPLATE_ROW_KEYS, type TemplateRowKey } from "../lib/catalogue.ts";
@@ -66,17 +66,17 @@ describe("selectors are pinned to the product's text", () => {
   });
 
   it("every PAD_PINS needle is the bench's own value and appears in its product file", () => {
-    const bench: Record<string, string> = { START_MATCH_TESTID, FINALIZE_TESTID, SEND_NOW_TESTID };
+    const bench: Record<string, string> = { START_MATCH_TESTID, FINALIZE_TESTID, SEND_NOW_TESTID, MATCH_ACTIONS_TOGGLE_TESTID };
     let checked = 0;
     for (const p of PAD_PINS) if (p.name in bench) { expect(bench[p.name], p.name).toBe(p.needle); checked++; }
-    expect(checked).toBe(3);
+    expect(checked).toBe(4);
     for (const kind of ["tile", "number", "confirm", "choice"] as const) {
       const pin = PAD_PINS.find((p) => p.name === kind)!;
       const step = kind === "tile" ? { kind, tileId: "x" } : kind === "choice" ? { kind, optionId: "x" } : kind === "number" ? { kind, value: 1 } : { kind };
       expect(selectorForTapStep(step as TapStep), kind).toContain(pin.needle);
     }
     const missing = PAD_PINS.filter((p) => !src(p.file).includes(p.needle)).map((p) => `${p.name}: ${p.needle} not in ${p.file}`);
-    expect(PAD_PINS.length).toBe(8);
+    expect(PAD_PINS.length).toBe(9);
     expect(missing).toEqual([]);
   });
 

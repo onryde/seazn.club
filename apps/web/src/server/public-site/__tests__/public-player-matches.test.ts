@@ -128,6 +128,8 @@ import {
   benchRowIsAppearance,
   composePlayerMatchLines,
   cricketLineFor,
+  figuresByPerson,
+  figuresFor,
   playerMatchResult,
   readPlayerMatchLines,
   readPlayerMatchSeeds,
@@ -136,7 +138,7 @@ import {
   type PlayerMatchLine,
   type PlayerMatchSeed,
 } from "../public-player-matches";
-import { AWAY, HOME, SUPER_OVER_SCRIPT, scriptLedger, type Delivery, type Script } from "./cricket-ledger";
+import { AWAY, HOME, SPLIT_OVER_SCRIPT, SUPER_OVER_SCRIPT, scriptLedger, type Delivery, type Script } from "./cricket-ledger";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -1642,6 +1644,21 @@ describe("benchRowIsAppearance — the one bench policy (owner ruling 2026-09-16
   it("any other sport: a bench row is never an appearance, whatever it carries", () => {
     expect(benchRowIsAppearance("football", figures)).toBe(false);
     expect(benchRowIsAppearance("generic", undefined)).toBe(false);
+  });
+});
+
+// S2-4 Task 9 (CK-BC-1, MCC Law 17.8): a8 bowled no over of his own, only the end of a7's. He bowled, so he has
+// figures, and a bench row for him is an appearance (the owner's bench rule, 2026-09-16).
+describe("figuresByPerson — a bowler who only completed another's over (S2-4 Task 9)", () => {
+  it("a bowler who only completed another's over is credited figures and an appearance", async () => {
+    const card = cardOf(SPLIT_OVER_SCRIPT);
+    expect(card.innings[0]?.overs[0]?.bowlers, "premise: the first over is split").toEqual(["a7", "a8"]);
+    const figures = figuresByPerson(card);
+    expect(figures["a8"]?.bowling).toEqual({ wickets: 1, runs: 2 });
+    expect(figures["a7"]?.bowling, "the outgoing bowler keeps his own").toEqual({ wickets: 0, runs: 5 });
+    expect(benchRowIsAppearance("cricket", figuresFor(figures, ["a8"]))).toBe(true);
+    const dict = await getDictionary("en", "public");
+    expect(cricketLineFor(card, "a8", dict)).toBe("1/2");
   });
 });
 

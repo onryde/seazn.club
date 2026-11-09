@@ -787,6 +787,12 @@ describe.skipIf(!HAS_DB)("FMT5 — every table that points at a fixture, a stage
     "online_chess_audit(fixture_id)->fixtures": { action: "c", handling: "cascade (a live game refuses first)" },
     "pools(stage_id)->stages": { action: "c", handling: "cascade with its stage" },
     "score_events(fixture_id)->fixtures": { action: "c", handling: "an event no void took back is a result: FORMAT_LOCKED; a ledger voided whole cascades (ruling I2)" },
+    // R4 sponsors on stream (V492). The two HISTORY tables keep their rows: a card that aired and a visit that happened are
+    // facts about the sponsor, not about the fixture, and they feed the sponsor report and the hub's Overview.
+    "sponsor_airings(fixture_id)->fixtures": { action: "n", handling: "set null: the showing stays in the sponsor's report and Overview (its match reads as removed), and its competition_id snapshot (V492, taken at insert) keeps it in a competition-scoped period or link" },
+    "sponsor_assignments(fixture_id)->fixtures": { action: "c", handling: "cascade: the card a break of THIS fixture was handed is plan state, and the break never comes; what aired is in sponsor_airings, with the sponsor's name snapshotted" },
+    "sponsor_clicks(fixture_id)->fixtures": { action: "n", handling: "set null: the visit stays in the Overview and the report's stream visits, and its competition_id snapshot (V492, taken at insert) keeps it in a competition-scoped period or link" },
+    "sponsor_short_codes(fixture_id)->fixtures": { action: "n", handling: "set null: a code already printed on a stream keeps resolving to its sponsor" },
     "stage_lots_draws(stage_id,org_id)->stages": { action: "c", handling: "cascade with its stage" },
     "stage_round_court_tags(stage_id,org_id)->stages": { action: "c", handling: "cascade with its stage" },
     "stage_round_opens(stage_id,org_id)->stages": { action: "c", handling: "cascade with its stage" },

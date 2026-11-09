@@ -201,7 +201,7 @@ function summarySteps(event: StreamEvent, ctx: TapAdapterContext, tapped: Map<st
 const fixtureOf = (ctx: TapAdapterContext) => `${ctx.entrants.home}|${ctx.entrants.away}`;
 
 /** Fix round 1 (I-1): each over row is the open innings' running total
- *  (cricket.tsx:2633), so the innings' LAST over row, less `partial`, is the
+ *  (cricket.tsx:2918), so the innings' LAST over row, less `partial`, is the
  *  generated summary: every key it carries stored and equal, and `partial`
  *  the only other key, as true. A declared innings ends in the declare tile's
  *  own row (W1d item 16): an empty-payload `cricket.innings.declare`, and the
@@ -273,7 +273,7 @@ export function makeCricketPad(): MatrixPadAdapter {
       {
         eventType: CRICKET_SUMMARY,
         writes: [CRICKET_SUMMARY, CRICKET_DECLARE],
-        why: "cricket.tsx:2633 — the pad authors an innings only as cumulative over summaries (partial: true, one row per over; Step 0 2026-09-30), and the innings ends itself, so its judge holds the innings' last over row, less `partial`, to the summary; a declared innings is those rows and then the declare tile's own cricket.innings.declare row (cricket.tsx:1523)",
+        why: "cricket.tsx:2918 — the pad authors an innings only as cumulative over summaries (partial: true, one row per over; Step 0 2026-09-30), and the innings ends itself, so its judge holds the innings' last over row, less `partial`, to the summary; a declared innings is those rows and then the declare tile's own cricket.innings.declare row (cricket.tsx:1523)",
         rowsFor: (event, ctx) => {
           const p = (event.payload ?? {}) as { legalBalls: number; declared?: unknown };
           return Math.ceil(p.legalBalls / cfgOf(ctx.cfg).ballsPerOver) + (p.declared === true ? 1 : 0);

@@ -426,8 +426,16 @@ export const BALL_LINE_KEYS: readonly string[] = BALL_GLYPH_KINDS.flatMap((kind)
     : [`matchCentre.ballLine.${kind}`],
 );
 
+/** Who bowled the over, as its ball lines name them. A split over (S2-4 Task 9; CK-BC-1) names every bowler joined
+ *  with " / ": the engine's `OverLog` records who bowled the over but not which ball each bowled, so naming the first
+ *  alone would credit him balls he did not bowl (the plan's recorded spec gap). */
+function overBowlerName(over: OverLog, personOf: PersonOf): string {
+  if (over.bowlers !== undefined && over.bowlers.length > 1) return over.bowlers.map((id) => personOf(id).name).join(" / ");
+  return over.bowler === null ? "" : personOf(over.bowler).name;
+}
+
 function ballLines(over: OverLog, personOf: PersonOf, locale: string): MsgT[] {
-  const bowlerName = over.bowler === null ? "" : personOf(over.bowler).name;
+  const bowlerName = overBowlerName(over, personOf);
   let legalCount = 0;
   return over.balls.map((ball) => {
     const notation = `${over.number - 1}.${legalCount + 1}`;
@@ -496,6 +504,7 @@ function buildOverLogView(over: OverLog, personOf: PersonOf, locale: string): Cr
   return {
     number: over.number,
     bowler: over.bowler === null ? null : personOf(over.bowler),
+    ...(over.bowlers === undefined ? {} : { bowlers: over.bowlers.map(personOf) }),
     glyphs: over.balls.map(ballGlyphString),
     runs: over.runs,
     wickets: over.wickets,

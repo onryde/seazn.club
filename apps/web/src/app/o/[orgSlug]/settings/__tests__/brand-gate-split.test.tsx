@@ -43,9 +43,10 @@ vi.mock("@/lib/db", () => ({
   sql: vi.fn(async () => [{ about: null }]),
 }));
 // The whole module is replaced, so every binding page.tsx imports has to be
-// listed. `hasFeatureOnAnyPass` (the sponsors tab's org-level affordance) is
-// only reached with `?tab=sponsors`, which these cases never pass — but an
-// unmocked export is `undefined`, so the day someone adds a sponsors case it
+// listed. `hasFeatureOnAnyPass` (the news tab's org-level `news.auto`
+// affordance; the Sponsors tab that used to share it moved to the hub, R4 S11)
+// is only reached with `?tab=news`, which these cases never pass — but an
+// unmocked export is `undefined`, so the day someone adds a news case it
 // would fail as "hasFeatureOnAnyPass is not a function" instead of on the
 // assertion. Default it to a deny so the omission is never load-bearing.
 vi.mock("@/lib/entitlements", () => ({ hasFeature, hasFeatureOnAnyPass }));
