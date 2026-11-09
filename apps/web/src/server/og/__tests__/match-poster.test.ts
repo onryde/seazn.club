@@ -147,6 +147,17 @@ describe("matchPosterModel — the three states the board's one layout carries",
     expect(m.footNote).toBe("8-over match · Round 1 · Garon Park");
   });
 
+  it("a result won on the super over carries the deciding super over's line in the foot, over the meta line", () => {
+    const m = matchPosterModel(
+      input({
+        header: header({ statusLine: { key: "x" } }),
+        copy: { ...copy, statusLine: "Home won on the super over", superOverLine: "Super over 3: HOM 36/0 · AWA 32/0" },
+      }),
+    );
+    expect(m.hero).toBe("Home won on the super over");
+    expect(m.footNote).toBe("Super over 3: HOM 36/0 · AWA 32/0");
+  });
+
   it("an in-play fixture is the LIVE variant: the live chip, the chase line, and the rate line in the foot", () => {
     const m = matchPosterModel(
       input({

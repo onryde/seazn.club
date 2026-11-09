@@ -219,6 +219,8 @@ export interface MatchPosterInput {
   copy: {
     statusLine: string | null;
     pillNote: string | null;
+    /** "Super over 3: HOM 36/0 · AWA 32/0" — the header's own Msg through `t()`, or null. */
+    superOverLine?: string | null;
     live: string;
     result: string;
     vs: string;
@@ -376,10 +378,10 @@ export function matchPosterModel(input: MatchPosterInput): MatchPosterModel {
   // the set-by-set score is the fact a spectator actually wants there.
   const footNote =
     variant === "live"
-      ? (header.rateLine ?? input.setLine ?? header.metaLine)
+      ? (copy.superOverLine ?? header.rateLine ?? input.setLine ?? header.metaLine)
       : variant === "upcoming"
         ? (copy.statusLine ?? header.metaLine)
-        : (input.setLine ?? header.metaLine);
+        : (copy.superOverLine ?? input.setLine ?? header.metaLine);
 
   return {
     theme: ogTheme(...input.branding),
