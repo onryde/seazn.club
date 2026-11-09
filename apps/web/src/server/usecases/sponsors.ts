@@ -40,6 +40,7 @@ import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./disput
 import { orgOwnerRecipient } from "./org-owner";
 import { routes } from "@/lib/routes";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
+import { placementNeedsTiers } from "@/lib/sponsor-deal-policy";
 import { ensureOrgStreamSettings } from "@/server/sponsors/stream-settings";
 
 // The tier list lives in the client-safe lib (R4 F10: this module imports the email outbox, so the planner and the
@@ -119,13 +120,17 @@ export type ReorderSponsorsInput = z.infer<typeof ReorderSponsorsInput>;
  *  holders entirely. It now offers it (page.tsx asks `hasFeatureOnAnyPass`, an
  *  affordance question), so a pass holder CAN save an unscoped tiered sponsor
  *  and be refused. That surfaces as an error toast, not a silent no-op, so the
- *  failure is legible — pick the competition and it saves. */
+ *  failure is legible — pick the competition and it saves.
+ *
+ *  WHICH placements need the key is `placementNeedsTiers`'s answer (sponsor deals D17, F14; spec §10 Q1), the one
+ *  predicate sponsors, packages and deals share — never re-decided here. A patch that names neither field judges what
+ *  it introduces: an absent tier reads as partner and an absent scope as the whole org. */
 async function assertTierAllowed(
   orgId: string,
   tier: SponsorTier | undefined,
   competitionId: string | null | undefined,
 ): Promise<void> {
-  if ((tier && tier !== "partner") || competitionId != null) {
+  if (placementNeedsTiers(tier ?? "partner", competitionId ?? null)) {
     await requireFeature(orgId, "sponsors.tiers", competitionId ?? undefined);
   }
 }
