@@ -273,10 +273,17 @@ async function seedPaidSponsorOrder(orgId: string, competitionId: string): Promi
     const [pkg] = await sql<{ id: string }[]>`
       insert into sponsor_packages (org_id, competition_id, name, price_cents, currency, tier)
       values (${orgId}, ${competitionId}, 'Gold', 25000, 'gbp', 'gold') returning id`;
+    // Deal-shaped (sponsor deals F4/F5): a deal always has its sponsor (sponsor_orders_sponsor_or_legacy), here a live,
+    // online, on-payment deal with paid money, snapshotting its package, every deal column explicit.
+    const [sp] = await sql<{ id: string }[]>`
+      insert into sponsors (org_id, competition_id, name, tier, status)
+      values (${orgId}, ${competitionId}, 'Smoke Sponsor', 'gold', 'active') returning id`;
     await sql`
       insert into sponsor_orders
-        (org_id, package_id, sponsor_name, sponsor_email, amount_cents, currency, status, paid_at)
-      values (${orgId}, ${pkg.id}, 'Smoke Sponsor', 'sponsor@x.test', 25000, 'gbp', 'paid', now())`;
+        (org_id, package_id, sponsor_name, sponsor_email, amount_cents, currency, status, paid_at, sponsor_id,
+         deal_status, payment_method, go_live, live_at, tier, includes_on_stream, package_name, competition_id)
+      values (${orgId}, ${pkg.id}, 'Smoke Sponsor', 'sponsor@x.test', 25000, 'gbp', 'paid', now(), ${sp.id},
+              'live', 'online', 'on_payment', now(), 'gold', false, 'Gold', ${competitionId})`;
   } finally {
     await sql.end();
   }

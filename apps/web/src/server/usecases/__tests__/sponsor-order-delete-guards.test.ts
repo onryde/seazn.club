@@ -59,19 +59,40 @@ async function seedPackage(orgId: string, compId: string | null): Promise<string
 }
 
 type OrderSeed = {
-  status?: string;
+  status?: "paid" | "pending" | "refunded";
   intent?: string | null;
   disputedAt?: Date | null;
+  /** The deal's sponsor; a fresh one in the package's scope when omitted. */
+  sponsorId?: string;
 };
 
+/** A deal-shaped order (sponsor deals F4/F5): every deal column explicit, an online on-payment deal snapshotting its package, and
+ *  always a sponsor (sponsor_orders_sponsor_or_legacy). The money status picks the lifecycle: `paid` is a LIVE deal (parked when
+ *  disputed, its sponsor `pending`), `pending` one AWAITING PAYMENT (its sponsor hidden until live), `refunded` an ENDED one (a lost
+ *  dispute when disputed). */
 async function seedOrder(orgId: string, packageId: string, o: OrderSeed = {}): Promise<string> {
+  const status = o.status ?? "paid";
+  const disputedAt = o.disputedAt ?? null;
+  const [pkg] = await sql<{ competition_id: string | null; tier: string; name: string }[]>`
+    select competition_id, tier, name from sponsor_packages where id = ${packageId}`;
+  const sponsorStatus = status === "paid" ? (disputedAt ? "pending" : "active") : "inactive";
+  const sponsorId = o.sponsorId ?? (await sql<{ id: string }[]>`
+    insert into sponsors (org_id, competition_id, name, tier, status)
+    values (${orgId}, ${pkg!.competition_id}, ${`S ${uniq()}`}, ${pkg!.tier}, ${sponsorStatus}) returning id`)[0]!.id;
+  const deal = status === "paid" ? "live" : status === "pending" ? "awaiting_payment" : "ended";
+  const now = new Date();
   const [{ id }] = await sql<{ id: string }[]>`
     insert into sponsor_orders (org_id, package_id, sponsor_name, sponsor_email,
                                 amount_cents, currency, status, payment_intent_id,
-                                paid_at, disputed_at)
+                                paid_at, disputed_at, sponsor_id,
+                                deal_status, payment_method, go_live, live_at, parked_at, ended_at, ended_reason,
+                                tier, includes_on_stream, package_name, competition_id)
     values (${orgId}, ${packageId}, 'S', 's@x.test', 25000, 'gbp',
-            ${o.status ?? "paid"}, ${o.intent === undefined ? "pi_" + uniq() : o.intent},
-            ${o.intent === null ? null : new Date()}, ${o.disputedAt ?? null})
+            ${status}, ${o.intent === undefined ? "pi_" + uniq() : o.intent},
+            ${o.intent === null ? null : now}, ${disputedAt}, ${sponsorId},
+            ${deal}, 'online', 'on_payment', ${deal === "live" ? now : null}, ${deal === "live" ? disputedAt : null},
+            ${deal === "ended" ? now : null}, ${deal === "ended" ? (disputedAt ? "dispute_lost" : "refunded") : null},
+            ${pkg!.tier}, false, ${pkg!.name}, ${pkg!.competition_id})
     returning id`;
   return id;
 }
@@ -141,8 +162,7 @@ describe.skipIf(!HAS_DB)("sponsor order delete protection (V299)", () => {
     const [{ id: sponsorId }] = await sql<{ id: string }[]>`
       insert into sponsors (org_id, competition_id, name, tier, status)
       values (${orgId}, ${compId}, 'Parked Co', 'gold', 'pending') returning id`;
-    await sql`update sponsor_orders set sponsor_id = ${sponsorId}
-              where id = ${await seedOrder(orgId, pkg, { disputedAt: new Date() })}`;
+    await seedOrder(orgId, pkg, { disputedAt: new Date(), sponsorId });
     const rows = await listSponsorRows(orgId);
     expect(rows.find((r) => r.id === sponsorId)).toMatchObject({
       dispute_parked: true,
@@ -166,9 +186,9 @@ describe.skipIf(!HAS_DB)("sponsor order delete protection (V299)", () => {
     const orderId = await seedOrder(orgId, pkg, {
       status: "refunded",
       disputedAt: new Date(),
+      sponsorId,
     });
-    await sql`update sponsor_orders set sponsor_id = ${sponsorId}, dispute_id = 'dp_lost_test'
-              where id = ${orderId}`;
+    await sql`update sponsor_orders set dispute_id = 'dp_lost_test' where id = ${orderId}`;
     const rows = await listSponsorRows(orgId);
     expect(rows.find((r) => r.id === sponsorId)).toMatchObject({
       dispute_lost: true,
@@ -182,10 +202,8 @@ describe.skipIf(!HAS_DB)("sponsor order delete protection (V299)", () => {
     const [{ id: sponsorId }] = await sql<{ id: string }[]>`
       insert into sponsors (org_id, competition_id, name, tier, status, click_count)
       values (${orgId}, ${compId}, 'Evidence Co', 'gold', 'pending', 7) returning id`;
-    const orderId = await seedOrder(orgId, pkg, { disputedAt: new Date() });
-    await sql`update sponsor_orders
-              set sponsor_id = ${sponsorId}, dispute_id = 'dp_ev_test'
-              where id = ${orderId}`;
+    const orderId = await seedOrder(orgId, pkg, { disputedAt: new Date(), sponsorId });
+    await sql`update sponsor_orders set dispute_id = 'dp_ev_test' where id = ${orderId}`;
     const pack = await buildSponsorDisputeEvidence(auth, orderId, "https://ev.test");
     expect(pack.html).toContain("Gold"); // package
     expect(pack.html).toContain("s@x.test"); // customer email

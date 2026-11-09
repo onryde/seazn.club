@@ -370,7 +370,9 @@ async function grantPass(
   });
 }
 
-/** A paid sponsor package order with an ACTIVE placement, matched by intent. */
+/** A paid sponsor package order with an ACTIVE placement, matched by intent. Deal-shaped (sponsor deals F4/F5): a LIVE,
+ *  online, on-payment deal with paid money, snapshotting its package, with every deal column explicit (they carry no
+ *  default). */
 async function seedSponsorRig(
   orgId: string,
   compId: string | null,
@@ -390,9 +392,11 @@ async function seedSponsorRig(
     const [{ id: orderId }] = await sql<{ id: string }[]>`
       insert into sponsor_orders
         (org_id, package_id, sponsor_name, sponsor_email, amount_cents, currency,
-         status, paid_at, payment_intent_id, sponsor_id)
+         status, paid_at, payment_intent_id, sponsor_id,
+         deal_status, payment_method, go_live, live_at, tier, includes_on_stream, package_name, competition_id)
       values (${orgId}, ${packageId}, ${sponsorName}, ${`s-${tag}@x.test`}, 25000, 'gbp',
-              'paid', now(), ${intent}, ${sponsorId})
+              'paid', now(), ${intent}, ${sponsorId},
+              'live', 'online', 'on_payment', now(), 'gold', false, ${"Gold " + tag}, ${compId})
       returning id`;
     return { sponsorId, orderId, sponsorName };
   });

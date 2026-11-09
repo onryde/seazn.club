@@ -344,13 +344,17 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
       .rejects.toMatchObject(refusedBy("23514", "sponsor_orders_online_has_email"));
   });
 
-  it("sponsor_or_legacy: only a legacy row may lack a sponsor — never a live, open, or otherwise-ended deal (MUTATE: drop `ended_reason = 'legacy'`)", async () => {
+  it("sponsor_or_legacy: only an ENDED legacy row may lack a sponsor — never a live, open, or otherwise-ended deal (MUTATE: drop `ended_reason = 'legacy'`)", async () => {
     const w = await world();
     await expect(insertDeal(deal(w, null, ended("legacy")))).resolves.toBeTruthy();
     await expect(insertDeal(deal(w, await sponsor(w), ended("legacy")))).resolves.toBeTruthy();
+    // ended_reason is NULL on these two: a CHECK passes on NULL, so `or ended_reason = 'legacy'` alone would let them in.
     await expect(insertDeal(deal(w, null, LIVE))).rejects.toMatchObject(refusedBy("23514", "sponsor_orders_sponsor_or_legacy"));
     await expect(insertDeal(deal(w, null))).rejects.toMatchObject(refusedBy("23514", "sponsor_orders_sponsor_or_legacy"));
     await expect(insertDeal(deal(w, null, ended("refunded")))).rejects.toMatchObject(refusedBy("23514", "sponsor_orders_sponsor_or_legacy"));
+    // A legacy REASON on a deal that has not ended is no excuse (ended_shape lets a reason without a stamp through).
+    await expect(insertDeal(deal(w, null, { ...LIVE, ended_reason: "legacy" })))
+      .rejects.toMatchObject(refusedBy("23514", "sponsor_orders_sponsor_or_legacy"));
   });
 
   it("ended_shape: an ended deal has both its stamp and its reason; a deal that has not ended has neither stamp", async () => {
@@ -448,8 +452,11 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
   });
 
   // D6: the legacy block is the file's own text between its markers, run as the migration runs it, in a transaction that
-  // is rolled back. It runs BEFORE the NOT NULLs, so the test lifts them first and plants a pre-migration row (no deal
-  // columns, no sponsor: V283's set null took it). One row per case, so "touched exactly 1" is the planted row and not 0.
+  // is rolled back. In the migration it runs BEFORE the NOT NULLs and before every CHECK on the table, so the test lifts
+  // them (each CHECK's catalog definition is kept), plants a pre-migration row (no deal columns, no sponsor: V283's set
+  // null took it), runs the block, then imposes the NOT NULLs and re-adds every CHECK from its kept definition, which
+  // validates the rewritten row exactly as the migration does. One row per case, so "touched exactly 1" is the planted
+  // row and not 0.
   const LEGACY_CASES: readonly { label: string; paid: boolean }[] = [
     { label: "a paid, disputed order whose placement was deleted (ended_at = paid_at)", paid: true },
     { label: "an abandoned checkout that never paid (ended_at = created_at)", paid: false },
@@ -469,10 +476,15 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
       let after: Money = {};
       let got: Record<string, unknown> = {};
       let touched = -1;
+      let reimposed = 0;
       await expect(sql.begin(async (tx) => {
         await tx`set local lock_timeout = '5s'`;
         // The stamps are compared as text, so read them in one zone whatever the session's.
         await tx`set local timezone = 'UTC'`;
+        const checks = await tx<{ name: string; def: string }[]>`
+          select conname as name, pg_get_constraintdef(oid) as def from pg_constraint
+           where conrelid = 'sponsor_orders'::regclass and contype = 'c'`;
+        for (const k of checks) await tx.unsafe(`alter table sponsor_orders drop constraint ${k.name}`);
         await tx`alter table sponsor_orders
                    alter column deal_status drop not null, alter column payment_method drop not null,
                    alter column go_live drop not null, alter column tier drop not null,
@@ -482,7 +494,9 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
                                       status, sponsor_id, created_at, paid_at, disputed_at, dispute_id)
           values (${w.orgId}, ${pkg}, 'Old Sponsor', 'old@acme.test', ${c.paid ? `pi_legacy_${uniq()}` : null}, 12345, 'eur',
                   ${c.paid ? "paid" : "pending"}, ${null}, '2026-03-01 10:00:00.123456+00',
-                  ${c.paid ? "2026-03-02 11:00:00.654321+00" : null}, ${c.paid ? "2026-03-09 12:00:00.5+00" : null},
+                  -- Sent as TEXT: a timestamptz parameter goes through a JS Date and loses its microseconds.
+                  ${c.paid ? "2026-03-02 11:00:00.654321+00" : null}::text::timestamptz,
+                  ${c.paid ? "2026-03-09 12:00:00.5+00" : null}::text::timestamptz,
                   ${c.paid ? `dp_legacy_${uniq()}` : null})
           returning id`;
         const money = (t: typeof tx) => t<Money[]>`
@@ -496,9 +510,20 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
           select deal_status, ended_reason, ended_at::text, payment_method, go_live, tier, package_name, competition_id,
                  includes_on_stream, sponsor_id
             from sponsor_orders where id = ${id}`)[0]!;
+        // What the migration does next: the NOT NULLs, then every CHECK. A row the block left short fails here.
+        await tx`alter table sponsor_orders
+                   alter column deal_status set not null, alter column payment_method set not null,
+                   alter column go_live set not null, alter column tier set not null,
+                   alter column includes_on_stream set not null, alter column package_name set not null`;
+        for (const k of checks) {
+          await tx.unsafe(`alter table sponsor_orders add constraint ${k.name} ${k.def}`);
+          reimposed++;
+        }
         throw ROLLBACK;
       })).rejects.toBe(ROLLBACK);
       expect(touched, "rows the legacy block touched").toBe(1);
+      // The brief's ten named CHECKs plus the money status one; zero would mean nothing was validated.
+      expect(reimposed, "CHECKs re-imposed on the rewritten row").toBe(11);
       expect(got).toEqual({
         deal_status: "ended",
         ended_reason: "legacy",
