@@ -10,7 +10,11 @@ export const PLATE_MIN = 4;
 /** X-QM-5: the smallest field from which qualifying_main completes at the q the builder sends (4, format-choice.ts), named by the
  *  driving sweep (qualifying-main-sizes.test.ts): 2 and 3 play the whole qualifying stage and then fail at Complete, "the previous
  *  stage takes rank 4, but only 3 entrants are available"; every n from 4 to 17 completes. In general a cut needs a field that fills
- *  it, and the graph's own read below says so for an API-built q. */
+ *  it, and the graph's own read below says so for an API-built q.
+ *
+ *  A PINNED FACT for the builder's template pin and the tests, NOT what enforcement reads: `stageGraphSizeGate` takes its bound from
+ *  the stored cut's own `rule.to`, so a q of 2 runs on 2 and a q of 8 is refused below 8 whatever this says. It equals `rule.to` at
+ *  the builder's q (4) and is pinned against it, which is the only way the two can drift apart unseen. */
 export const QUALIFYING_MAIN_MIN = 4;
 
 export interface StageGraphStage {
@@ -70,8 +74,17 @@ export function stageGraphSizeRefusal(stages: readonly StageGraphStage[], n: num
   return stageGraphSizeGate(stages, n)?.code ?? null;
 }
 
-/** X-QM-2: a cut from a knockout is a whole round, 1, 2, 4, 8 …: the ranks inside a round are not played off, so a cut through one
- *  would be decided by seed. */
-export function isWholeRoundCut(width: number): boolean {
-  return Number.isInteger(width) && width >= 1 && (width & (width - 1)) === 0;
+/** X-QM-2 (RB4-Q2, ruling 273): a rank cut from a knockout covers WHOLE finishing bands. The places a bracket decides are 1st, 2nd,
+ *  3rd-4th (the two semi-final losers share 3rd), 5th-8th, 9th-16th ...; the ranks inside a band are not played off, so a cut that
+ *  starts or ends inside one would be decided by seed. A rank rule `from`..`to` is whole when `from` is the first place of a band
+ *  (1, 2, 3, 5, 9, 17 ...) and `to` the last of one (1, 2, 4, 8, 16 ...); bands may join (1-4, 2-4, 3-8 are whole, 2-3 and 4-5 are
+ *  not). A bracket that plays a third-place match ranks 3rd and 4th apart, so there 3 and 4 are bands of their own: 3-3, 4-4, 1-3
+ *  and 2-3 are whole. Each rank rule is judged ALONE: 1-1 beside 3-3 is refused at 3-3. */
+export function isWholeRoundCut(from: number, to: number, thirdPlaceMatch = false): boolean {
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from) return false;
+  const startsABand = from <= 2 || isPowerOfTwo(from - 1) || (thirdPlaceMatch && from === 4);
+  const endsABand = isPowerOfTwo(to) || (thirdPlaceMatch && to === 3);
+  return startsABand && endsABand;
 }
+
+const isPowerOfTwo = (n: number): boolean => n >= 1 && (n & (n - 1)) === 0;

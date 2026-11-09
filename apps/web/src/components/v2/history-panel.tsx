@@ -17,7 +17,7 @@ import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode } from "@/lib/swiss-refusals";
-import { isKnockoutRefusalCode, knockoutRefusalKey } from "@/lib/knockout-refusals";
+import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
 import type { MessageKey } from "@/lib/messages";
 
@@ -196,8 +196,9 @@ export function HistoryPanel({
         setError(swissRefusalText(err.code, err.extra, msg, plural));
       } else if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) {
         // W4 T5 (K1): an Undo, Redo or Restore across a confirmed draw (SEED_CONFIRM_NOT_UNDOABLE), said off the code
-        // like the Swiss barriers above — never the server's English sentence.
-        setError(msg(knockoutRefusalKey(err.code)));
+        // like the Swiss barriers above — never the server's English sentence. Through `knockoutRefusalText` so a sentence that
+        // names something ({min}, {stage}) takes it from the envelope (T15 review), never a bare hole.
+        setError(knockoutRefusalText(err.code, err.extra, msg));
       } else {
         // Deliberately NOT blanket-suppressed. Every refusal this client can
         // recognise now has its own sentence; what is left is the unanticipated

@@ -9,8 +9,8 @@ const ENTRIES: { date: string; title: string; lines: string[] }[] = [
     date: "2026-11-09",
     title: "A knockout format the field cannot play is refused up front",
     lines: [
-      "A root knockout that feeds a plate needs at least 4 active entrants, and one that feeds a main draw needs enough to fill the cut. Below that, POST /divisions/{id}/start, POST /stages/{id}/generate and POST /stages/{id}/rebuild answer 422 KO_PLATE_TOO_FEW or QUALIFYING_MAIN_TOO_FEW with the bound in `min`. A bracket already drawn and started is left alone.",
-      "A rank cut from a knockout must be a whole round (1, 2, 4, 8 ...): writing stages with any other width answers 422 KO_CUT_NOT_WHOLE_ROUND with the cut in `width`. Rank rules from one source add up to one cut. Stages stored before this rule keep running.",
+      "A root knockout that feeds a plate needs at least 4 active entrants, and one that feeds a main draw needs enough to fill the cut. Below that, POST /divisions/{id}/start, POST /stages/{id}/generate and POST /stages/{id}/rebuild answer 422 KO_PLATE_TOO_FEW or QUALIFYING_MAIN_TOO_FEW with the bound in `min`. A bracket already drawn and started is left alone by start and generate; rebuild below the minimum is still refused after start.",
+      "A rank cut from a knockout must cover whole finishing bands: each rank rule starts on 1st, 2nd, 3rd, 5th, 9th ... and ends on 1st, 2nd, 4th, 8th, 16th ... (1-2, 1-4, 3-8 and 5-8 are whole; 2-3, 4-5 and 1-3 are not). Where the source plays a third-place match (`thirdPlace: true`) 3rd and 4th are places of their own, so 1-3, 3-3 and 4-4 are whole there. Writing stages with any other rule answers 422 KO_CUT_NOT_WHOLE_ROUND with that rule in `from`, `to` and `width`; each rank rule is judged alone. Stages stored before this rule keep running.",
     ],
   },
   {

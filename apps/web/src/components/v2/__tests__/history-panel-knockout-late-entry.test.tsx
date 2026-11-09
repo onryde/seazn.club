@@ -135,3 +135,38 @@ describe("HistoryPanel — KO_LATE_ENTRY_NOT_UNDOABLE on Undo, Redo or Restore i
     expect(checked, "anti-vacuity: the three step doors").toBe(3);
   });
 });
+
+describe("HistoryPanel — a knockout refusal that names a number is said with the number filled in (T15 review: no literal {min})", () => {
+  // QUALIFYING_MAIN_TOO_FEW's sentence has a {min} hole, filled from the envelope's fields (`err.extra`). The panel's knockout
+  // branch used to say the bare dictionary key, so a person read "needs at least {min} entrants".
+  const MIN_CODE = "QUALIFYING_MAIN_TOO_FEW";
+  async function refuseWith(control: "history-undo" | "history-redo" | "checkpoint-restore", extra: Record<string, unknown>) {
+    const ctx = await mount([{ seq: 1, type: "fixtures_generated", undoable: true, undone: false, created_at: "2026-11-07T10:00:00.000Z" }]);
+    apiV1.mockImplementation(async (path: string) => {
+      if (/\/(undo|redo|restore)$/.test(path)) throw new ApiV1Error("server says QUALIFYING_MAIN_TOO_FEW in English", 422, MIN_CODE, extra);
+      return path.endsWith("/history") ? { watermark: null, seq: 2, events: [] } : CHECKPOINTS;
+    });
+    const button = ctx.byTestid(control)[0];
+    expect(button, `${control} is on the panel`).toBeDefined();
+    await (propsOf(button!).onClick as () => unknown)();
+    await ctx.settle();
+    const banner = ctx.byTestid("history-error");
+    return banner.length === 0 ? null : String(propsOf(banner[0]!).children);
+  }
+
+  it("each of the three step doors paints the sentence with the bound the server sent, and no hole left in it", async () => {
+    // The hole is in the dictionary's sentence, typed here as the premise; the expected text is that sentence with the bound
+    // written in by hand.
+    expect(EN["knockout.refusal.QUALIFYING_MAIN_TOO_FEW"]).toBe("Qualifying + Main draw needs at least {min} entrants.");
+    let checked = 0;
+    for (const control of ["history-undo", "history-redo", "checkpoint-restore"] as const) {
+      for (const [min, sentence] of [[4, "Qualifying + Main draw needs at least 4 entrants."], [8, "Qualifying + Main draw needs at least 8 entrants."]] as const) {
+        const shown = await refuseWith(control, { min });
+        expect(shown, `${control} at ${min}`).toBe(sentence);
+        expect(shown).not.toContain("{");
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: three doors, two bounds").toBe(6);
+  });
+});

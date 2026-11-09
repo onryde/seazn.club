@@ -141,9 +141,9 @@ const KNOWN_REFUSALS: Array<{ re: RegExp; expected: number; why: string }> = [
     why: "X-PL-1: Knockout + Plate is refused below 4; the sweep's one field under the bound is 2, with and without third place",
   },
   {
-    re: /^qualifying_main n=\d+ q=[356]( pools=\d+)? third=(true|false): createStages refused \(From a knockout, qualify a whole round: 1, 2, 4, 8 …\)$/,
-    expected: 23,
-    why: "X-QM-2: a cut of 3, 5 or 6 from a knockout is no whole round. Day one 20 (n=4 at q=3; n=9, 17 and 33 at q=3, 5 and 6; each with and without third place) and seeded 3",
+    re: /^qualifying_main n=\d+ q=(3( pools=\d+)? third=false|[56]( pools=\d+)? third=(true|false)): createStages refused \(From a knockout, qualify a whole round: 1, 2, 4, 8 …\)$/,
+    expected: 18,
+    why: "X-QM-2 (RB4-Q2): a cut of 1-5 or 1-6 from a knockout ends inside a finishing band, and so does 1-3 unless the source plays a third-place match. Day one 16 (n=4 at q=3; n=9, 17 and 33 at q=3 and, with and without third place, q=5 and 6) and seeded 2",
   },
 ];
 
@@ -330,11 +330,12 @@ describe("the sweep's refusal audit (no database)", () => {
   const SMALL_PLATE = (third: boolean) => `ko_plate n=2 q=2 pools=2 third=${third}: generate knockout refused (Knockout + Plate needs at least 4 entrants.)`;
   const CUT = (n: number, q: number, third: boolean, pools = " pools=2") => `qualifying_main n=${n} q=${q}${pools} third=${third}: createStages refused (From a knockout, qualify a whole round: 1, 2, 4, 8 …)`;
   const THIRDS = [false, true];
+  // A cut of 1-3 is no whole band unless the source plays a third-place match (then it is), so q=3 refuses without one only.
   const CUTS = [
-    ...THIRDS.map((t) => CUT(4, 3, t)),
-    ...[9, 17, 33].flatMap((n) => [3, 5, 6].flatMap((q) => THIRDS.map((t) => CUT(n, q, t)))),
+    CUT(4, 3, false),
+    ...[9, 17, 33].flatMap((n) => [CUT(n, 3, false), ...[5, 6].flatMap((q) => THIRDS.map((t) => CUT(n, q, t)))]),
     CUT(5, 3, false, ""),
-    ...THIRDS.map((t) => CUT(8, 3, t, "")),
+    CUT(8, 3, false, ""),
   ];
   const today = (): string[] => [
     ...STANDALONE_SIZES.filter((n) => n !== 4).map(PP),
@@ -347,8 +348,8 @@ describe("the sweep's refusal audit (no database)", () => {
     ...CUTS,
   ];
 
-  it("accepts exactly what the sweep meets today (61 refusals: 31 + 3 + 2 + 2 + 23)", () => {
-    expect(today().length).toBe(61);
+  it("accepts exactly what the sweep meets today (56 refusals: 31 + 3 + 2 + 2 + 18)", () => {
+    expect(today().length).toBe(56);
     expect(auditRefusals(today()).problems).toEqual([]);
   });
 
@@ -366,6 +367,7 @@ describe("the sweep's refusal audit (no database)", () => {
       ["the plate refused at a field the bound allows", [...today(), SMALL_PLATE(false).replace("n=2", "n=4")]],
       ["one small plate no longer refused", today().filter((r) => r !== SMALL_PLATE(true))],
       ["a whole-round cut refused (q=4 is one)", [...today().filter((r) => r !== CUT(9, 3, false)), CUT(9, 4, false)]],
+      ["a cut of 1-3 refused where the source plays a third-place match (it is whole there)", [...today().filter((r) => r !== CUT(9, 3, false)), CUT(9, 3, true)]],
       ["another template refused for its cut", [...today(), CUT(9, 3, false).replace("qualifying_main", "ko_plate")]],
     ];
     let rejected = 0;

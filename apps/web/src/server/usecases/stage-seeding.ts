@@ -269,6 +269,13 @@ export async function sourceShapeOf(
   return { poolKeys: POOL_KEYS.slice(0, count).split("") };
 }
 
+/** A stage's stored config, for the one setting a cut is judged by (`thirdPlace`). {} when the row is gone: resolveProgressionSource
+ *  has just found it, so that is a stage deleted under us, and a cut judged without the playoff is the stricter reading. */
+async function sourceConfigOf(tx: Tx, source: { id: string }): Promise<Record<string, unknown>> {
+  const [row] = await tx<{ config: Record<string, unknown> | null }[]>`select config from stages where id = ${source.id}`;
+  return row?.config ?? {};
+}
+
 /** Validate a progression rule at SAVE time (createStages/replaceStages,
  *  templates.ts's instantiateTemplate) — a bad `seeded_map` reference, an
  *  illegal snake-into-a-bracket-target combo (F3 round-3 review, Task 1,
@@ -297,11 +304,16 @@ export async function validateStageProgression(
 ): Promise<void> {
   const shapes: SourceShape[] = [];
   const sourceKinds: string[] = [];
+  const thirdPlaceMatches: boolean[] = [];
   for (let i = 0; i < progression.sources.length; i++) {
     const preset = presetSources?.[i];
     const source = preset ?? (await resolveProgressionSource(tx, target, progression.sources[i]!.stage));
     shapes.push(await sourceShapeOf(tx, source));
     sourceKinds.push(source.kind);
+    // Only a knockout source's cut is judged by bands, so only its setting is read (a preset already carries its config).
+    thirdPlaceMatches.push(
+      source.kind === "knockout" && ((preset?.config ?? (await sourceConfigOf(tx, source as { id: string }))).thirdPlace === true),
+    );
   }
   try {
     validateProgressionAgainstShapes(shapes, progression, target.kind);
@@ -309,12 +321,15 @@ export async function validateStageProgression(
     if (EngineError.is(err)) throw new HttpError(422, err.message, err.code, err.data as never);
     throw err;
   }
-  // W4 T15 (X-QM-2): a rank cut from a knockout is a whole round. Asked here, at save time, and nowhere at run time: a stored cut
-  // that predates the rule keeps running. A source's rank rules together are its one cut (1-2 and 3-3 is three).
+  // W4 T15 (X-QM-2, RB4-Q2): a rank cut from a knockout covers whole finishing bands (isWholeRoundCut). Asked here, at save time,
+  // and nowhere at run time: a stored cut that predates the rule keeps running. Each rank rule is judged alone, against whether
+  // the SOURCE plays a third-place match (its `config.thirdPlace`), which ranks 3rd and 4th apart.
   progression.sources.forEach((source, i) => {
     if (sourceKinds[i] !== "knockout") return;
-    const width = source.take.reduce((sum, t) => (t.kind === "rankRange" ? sum + t.to - t.from + 1 : sum), 0);
-    if (width > 0 && !isWholeRoundCut(width)) throw knockoutRefusal("KO_CUT_NOT_WHOLE_ROUND", { width });
+    for (const rule of source.take) {
+      if (rule.kind !== "rankRange" || isWholeRoundCut(rule.from, rule.to, thirdPlaceMatches[i] === true)) continue;
+      throw knockoutRefusal("KO_CUT_NOT_WHOLE_ROUND", { from: rule.from, to: rule.to, width: rule.to - rule.from + 1 });
+    }
   });
 }
 

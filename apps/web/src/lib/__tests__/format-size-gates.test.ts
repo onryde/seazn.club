@@ -110,11 +110,59 @@ describe("X-QM-1 qualifying_main is two knockout stages joined by rankRange", ()
   });
 });
 
-describe("X-QM-2 isWholeRoundCut", () => {
-  it("a power of two from 1: a table of widths", () => {
-    const table: [number, boolean][] = [[1, true], [2, true], [4, true], [8, true], [16, true], [64, true], [0, false], [-2, false], [3, false], [5, false], [6, false], [7, false], [12, false], [2.5, false], [Number.NaN, false]];
-    for (const [width, whole] of table) expect(isWholeRoundCut(width), `width ${width}`).toBe(whole);
-    expect(table.length).toBe(15);
+describe("X-QM-2 isWholeRoundCut: a cut starts on a finishing band's first place and ends on a band's last (RB4-Q2, ruling 273)", () => {
+  // The finishing bands of a knockout, written out and not computed: 1st, 2nd, 3rd-4th (the two semi-final losers share 3rd
+  // unless a third-place match is played), 5th-8th (the quarter-final losers), 9th-16th ... A cut that starts or ends inside a
+  // band would be decided by seed, which is what the rule is for.
+  const BANDS: readonly (readonly [number, number])[] = [[1, 1], [2, 2], [3, 4], [5, 8], [9, 16], [17, 32], [33, 64]];
+  // With a third-place match 3rd and 4th are two places.
+  const BANDS_WITH_PLAYOFF: readonly (readonly [number, number])[] = [[1, 1], [2, 2], [3, 3], [4, 4], [5, 8], [9, 16], [17, 32], [33, 64]];
+
+  it("a table of cuts, expected values from the bands above, by hand", () => {
+    // [from, to, third-place match played, whole]
+    const table: [number, number, boolean, boolean][] = [
+      [1, 1, false, true], [1, 2, false, true], [1, 4, false, true], [2, 2, false, true], [2, 3, false, false], [2, 4, false, true],
+      [3, 4, false, true], [3, 8, false, true], [4, 5, false, false], [3, 3, false, false], [5, 8, false, true], [5, 6, false, false],
+      [4, 4, false, false], [1, 3, false, false], [1, 8, false, true], [1, 16, false, true], [9, 16, false, true], [9, 12, false, false],
+      [6, 8, false, false], [4, 8, false, false], [2, 8, false, true], [1, 5, false, false], [1, 6, false, false], [1, 7, false, false],
+      [3, 5, false, false], [3, 16, false, true], [17, 32, false, true], [1, 64, false, true],
+      // a third-place match splits 3rd-4th: 3 and 4 become places of their own
+      [3, 3, true, true], [4, 4, true, true], [1, 3, true, true], [2, 3, true, true], [4, 8, true, true], [3, 4, true, true], [2, 4, true, true],
+      // and nothing else moves
+      [4, 5, true, false], [5, 6, true, false], [1, 5, true, false], [4, 6, true, false], [6, 8, true, false], [1, 1, true, true], [5, 8, true, true],
+    ];
+    for (const [from, to, playoff, whole] of table) expect(isWholeRoundCut(from, to, playoff), `${from}-${to}${playoff ? " with a third-place match" : ""}`).toBe(whole);
+    expect(table.length, "anti-vacuity: the table was read").toBe(42);
+    expect(table.filter((r) => r[3]).length, "and it holds both verdicts: 24 whole, 18 not").toBe(24);
+  });
+
+  it("every cut 1 <= from <= to <= 40, against the bands: exactly the cuts that start on a band's first place and end on its last", () => {
+    for (const [bands, playoff, expectedWhole] of [[BANDS, false, 21], [BANDS_WITH_PLAYOFF, true, 28]] as const) {
+      const starts = bands.map(([first]) => first);
+      const ends = bands.map(([, last]) => last);
+      let checked = 0;
+      let whole = 0;
+      for (let from = 1; from <= 40; from++) {
+        for (let to = from; to <= 40; to++) {
+          const expected = starts.includes(from) && ends.includes(to);
+          expect(isWholeRoundCut(from, to, playoff), `${from}-${to} (third-place match: ${playoff})`).toBe(expected);
+          checked++;
+          if (expected) whole++;
+        }
+      }
+      expect(checked, "anti-vacuity: every pair was asked").toBe(820);
+      // Counted by hand from the starts and ends above: the pairs with from <= to <= 40.
+      expect(whole, `the cuts that are whole (third-place match: ${playoff})`).toBe(expectedWhole);
+    }
+  });
+
+  it("a cut that runs backwards, starts below 1 or is no integer is never whole", () => {
+    const bad: [number, number][] = [[4, 3], [2, 1], [0, 1], [-1, 2], [1, 0], [1.5, 2], [1, 2.5], [Number.NaN, 1], [1, Number.NaN], [1, Number.POSITIVE_INFINITY]];
+    for (const [from, to] of bad) {
+      expect(isWholeRoundCut(from, to, false), `${from}-${to}`).toBe(false);
+      expect(isWholeRoundCut(from, to, true), `${from}-${to} with a third-place match`).toBe(false);
+    }
+    expect(bad.length).toBe(10);
   });
 });
 

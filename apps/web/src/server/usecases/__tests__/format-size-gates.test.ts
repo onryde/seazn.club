@@ -19,6 +19,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
+import { validateStageProgression } from "../stage-seeding";
 import { scoreEvent } from "../scoring";
 import {
   completeStage,
@@ -131,6 +132,19 @@ describe.runIf(HAS_DB)("W4 T15 format gates (FX-G14 gate half, QM-2)", () => {
       expect(out.started).toBe(true);
       expect(await statusOf(r.divisionId)).toBe("active");
       expect(await lineCount(r.stageIds[0]!), "three lines of a four-player bracket").toBe(3);
+    }, 120_000);
+
+    it("X-PL-1 Knockout + Plate counts a CONFIRMED entrant: a field of 4, all confirmed, starts (the count is registered and confirmed alike)", async () => {
+      const r = await rig("ko_plate", 4);
+      await sql`update entrants set status = 'confirmed' where division_id = ${r.divisionId}`;
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${r.divisionId} and status = 'confirmed'`;
+      expect(n, "premise: all four are confirmed and none registered").toBe(4);
+      expect((await startDivision(r.auth, r.divisionId)).started).toBe(true);
+      expect(await statusOf(r.divisionId)).toBe("active");
+      // The mixed field is the same field: two registered and two confirmed is four.
+      const mixed = await rig("ko_plate", 4);
+      await sql`update entrants set status = 'confirmed' where division_id = ${mixed.divisionId} and seed in (1, 2)`;
+      expect((await startDivision(mixed.auth, mixed.divisionId)).started).toBe(true);
     }, 120_000);
 
     it("the plate's own Generate is not gated: its source is what is sized, and day-one TBD lines cost nothing", async () => {
@@ -248,7 +262,7 @@ describe.runIf(HAS_DB)("W4 T15 format gates (FX-G14 gate half, QM-2)", () => {
     }, 120_000);
   });
 
-  describe("X-QM-2 a knockout source's cut must be a whole round", () => {
+  describe("X-QM-2 a knockout source's cut must cover whole finishing bands (RB4-Q2)", () => {
     const cutFrom = (to: number) => ({ sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to }] }], placement: "rank_order", timing: "setup" });
     const SENTENCE = "From a knockout, qualify a whole round: 1, 2, 4, 8 …";
 
@@ -302,23 +316,93 @@ describe.runIf(HAS_DB)("W4 T15 format gates (FX-G14 gate half, QM-2)", () => {
       expect(made.length).toBe(1);
     }, 60_000);
 
-    it("two rank rules from one source are one cut: 1-2 and 3-3 is three", async () => {
+    // The finishing bands, written out (rulebook RB4-Q2, ruling 273): 1st, 2nd, 3rd-4th (shared), 5th-8th, 9th-16th ...; with a
+    // third-place match 3rd and 4th are places of their own. Every case here is the hand-read verdict, never the predicate's.
+    type Take = { from: number; to: number };
+    const rules = (takes: Take[]) => ({ sources: [{ stage: "previous", take: takes.map((t) => ({ kind: "rankRange", ...t })) }], placement: "rank_order", timing: "setup" });
+    async function createCut(takes: Take[], sourceConfig: Record<string, unknown> = {}) {
+      const { auth, divisionId } = await division(16);
+      await createStages(auth, divisionId, [{ seq: 1, kind: "knockout", name: "Source", config: sourceConfig }]);
+      const made = await createStages(auth, divisionId, CreateStage.parse({ seq: 2, kind: "knockout", name: "Main", config: {}, progression: rules(takes) })).then(
+        (rows) => ({ rows }),
+        (e: unknown) => ({ err: e }),
+      );
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from stages where division_id = ${divisionId}`;
+      return { made, stages: n };
+    }
+    // [label, takes, source plays a third-place match, whole]. One rank rule takes at least two (the engine's own floor, a lone
+    // winner is SEEDING_RULES_MISSING), so a single place rides beside another rule.
+    const CUTS: [string, Take[], boolean, boolean][] = [
+      ["1-2", [{ from: 1, to: 2 }], false, true],
+      ["1-4", [{ from: 1, to: 4 }], false, true],
+      ["2-4", [{ from: 2, to: 4 }], false, true],
+      ["3-4", [{ from: 3, to: 4 }], false, true],
+      ["3-8", [{ from: 3, to: 8 }], false, true],
+      ["5-8", [{ from: 5, to: 8 }], false, true],
+      ["1-2 + 3-4: two bands that join", [{ from: 1, to: 2 }, { from: 3, to: 4 }], false, true],
+      ["2-3: starts on 2nd, ends inside the shared 3rd-4th", [{ from: 2, to: 3 }], false, false],
+      ["4-5: starts inside 3rd-4th, ends inside 5th-8th", [{ from: 4, to: 5 }], false, false],
+      ["1-3", [{ from: 1, to: 3 }], false, false],
+      ["5-6", [{ from: 5, to: 6 }], false, false],
+      ["1-1 + 3-3: 3-3 is half of a shared place, judged alone", [{ from: 1, to: 1 }, { from: 3, to: 3 }], false, false],
+      ["1-1 + 4-4", [{ from: 1, to: 1 }, { from: 4, to: 4 }], false, false],
+      ["1-3 with a third-place match", [{ from: 1, to: 3 }], true, true],
+      ["2-3 with a third-place match", [{ from: 2, to: 3 }], true, true],
+      ["1-1 + 3-3 with a third-place match", [{ from: 1, to: 1 }, { from: 3, to: 3 }], true, true],
+      ["1-1 + 4-4 with a third-place match", [{ from: 1, to: 1 }, { from: 4, to: 4 }], true, true],
+      ["4-8 with a third-place match", [{ from: 4, to: 8 }], true, true],
+      ["4-5 with a third-place match", [{ from: 4, to: 5 }], true, false],
+      ["5-6 with a third-place match", [{ from: 5, to: 6 }], true, false],
+      ["1-5 with a third-place match", [{ from: 1, to: 5 }], true, false],
+    ];
+
+    it("X-QM-2 the cut must start on a finishing band's first place and end on a band's last: a table through createStages, by the source's third-place setting", async () => {
+      let whole = 0;
+      let refused = 0;
+      for (const [label, takes, playoff, expected] of CUTS) {
+        const { made, stages } = await createCut(takes, playoff ? { thirdPlace: true } : {});
+        if (expected) {
+          expect("rows" in made, `${label}: accepted`).toBe(true);
+          expect(stages, `${label}: the stage is there`).toBe(2);
+          whole++;
+        } else {
+          const err = "err" in made ? made.err : null;
+          expect(err, `${label}: refused`).toBeInstanceOf(HttpError);
+          expect((err as HttpError).code, label).toBe("KO_CUT_NOT_WHOLE_ROUND");
+          expect((err as HttpError).status).toBe(422);
+          expect((err as HttpError).message).toBe(SENTENCE);
+          expect(stages, `${label}: and stores nothing`).toBe(1);
+          refused++;
+        }
+      }
+      expect(whole + refused, "anti-vacuity: every case ran").toBe(21);
+      expect(refused, "and both verdicts were met: 12 whole, 9 not").toBe(9);
+    }, 300_000);
+
+    it("the refusal names the rule it stopped at: the cut's own from, to and width", async () => {
+      const { made } = await createCut([{ from: 1, to: 2 }, { from: 4, to: 5 }]);
+      const err = "err" in made ? (made.err as HttpError) : null;
+      expect(err?.code).toBe("KO_CUT_NOT_WHOLE_ROUND");
+      expect(err?.extra).toMatchObject({ from: 4, to: 5, width: 2 });
+    }, 60_000);
+
+    it("the third-place setting is read off the source STAGE, not the stage being saved: a playoff on the new stage does not unlock 1-3", async () => {
       const { auth, divisionId } = await division(16);
       await createStages(auth, divisionId, [{ seq: 1, kind: "knockout", name: "Source", config: {} }]);
-      const err = await refusal(
-        createStages(
-          auth,
-          divisionId,
-          CreateStage.parse({
-            seq: 2,
-            kind: "knockout",
-            name: "Main",
-            config: {},
-            progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }, { kind: "rankRange", from: 3, to: 3 }] }], placement: "rank_order", timing: "setup" },
-          }),
-        ),
-      );
+      const err = await refusal(createStages(auth, divisionId, CreateStage.parse({ seq: 2, kind: "knockout", name: "Main", config: { thirdPlace: true }, progression: cutFrom(3) })));
       expect(err.code).toBe("KO_CUT_NOT_WHOLE_ROUND");
+    }, 60_000);
+
+    it("the third-place setting is read off a PRESET source too (instantiateTemplate hands the sibling row's {kind, config} over, no stage id)", async () => {
+      // No catalog template sets a playoff today, so this is the one place the preset branch is reached with the setting on. A
+      // preset source needs no read, so the transaction is never touched.
+      const spec = { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 3 }] }], placement: "rank_order", timing: "setup" } as never;
+      const target = { division_id: randomUUID(), seq: 2, kind: "knockout" };
+      const tx = {} as never;
+      await expect(validateStageProgression(tx, target, spec, [{ kind: "knockout", config: { thirdPlace: true } }])).resolves.toBeUndefined();
+      const err = await refusal(validateStageProgression(tx, target, spec, [{ kind: "knockout", config: {} }]));
+      expect(err.code).toBe("KO_CUT_NOT_WHOLE_ROUND");
+      expect((await refusal(validateStageProgression(tx, target, spec, [{ kind: "knockout", config: { thirdPlace: false } }]))).code, "false is no playoff").toBe("KO_CUT_NOT_WHOLE_ROUND");
     }, 60_000);
 
     it("a table source still takes 3: a table ranks everyone", async () => {
@@ -350,7 +434,7 @@ describe.runIf(HAS_DB)("W4 T15 format gates (FX-G14 gate half, QM-2)", () => {
       expect(await sql`select id, kind from stages where division_id = ${divisionId} order by seq`).toEqual(before);
     }, 60_000);
 
-    it("a stored cut that predates the rule keeps running: Start, Generate and a proposal do not re-judge it", async () => {
+    it("a stored cut that predates the rule keeps running: Start and Generate do not re-judge it (save time only)", async () => {
       const r = await rig("qualifying_main", 8, 4);
       await sql`update stages set progression = ${sql.json(cutFrom(3) as never)} where id = ${r.stageIds[1]!}`;
       expect((await startDivision(r.auth, r.divisionId)).started).toBe(true);
