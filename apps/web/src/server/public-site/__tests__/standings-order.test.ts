@@ -76,6 +76,7 @@ interface Scene {
 let scene: Scene;
 
 async function division(auth: AuthCtx, compId: string, slug: string) {
+  // single-sport: the read under test orders STORED snapshots (written directly below) by stage seq and pool key; no sport field reaches it.
   return createDivision(auth, compId, { name: slug, slug, sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
 }
 

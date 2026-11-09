@@ -76,7 +76,11 @@ vi.mock("@/server/usecases/competition-desk", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/usecases/competition-desk")>()),
   listFixturesAwaitingSettle: deskSpies.listFixturesAwaitingSettle,
 }));
-vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => []) }));
+// The real module under the one stub: the page reads `DEPARTED_STATUSES` from it (the knockout desk's waiting list).
+vi.mock("@/server/usecases/entrants", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/usecases/entrants")>()),
+  listEntrants: vi.fn(async () => []),
+}));
 // W2d final review I1: the card's pins come from one loader; a spy here, the real meta reader kept (importOriginal).
 const qualSpies = vi.hoisted(() => ({
   listPinnedStagePoints: vi.fn<(auth: unknown, stageIds: readonly string[]) => Promise<Record<string, unknown>>>(async () => ({})),

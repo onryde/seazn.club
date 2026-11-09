@@ -773,6 +773,7 @@ describe.skipIf(!HAS_DB)("D4a/P5 — bye-award bulk UPDATE guards against strand
   });
 
   it("a root bracket's own labels pass that guard: a bye's and a feeder's, on a second Generate that changes nothing", async () => {
+    // single-sport: the reconcile's label guard (ROOT_BRACKET_LABEL_KEYS) reads slot-label keys only; no sport field reaches it.
     const { auth } = await seedOrg("pro");
     const comp = await createCompetition(auth, {
       ends_on: "2030-12-31",
