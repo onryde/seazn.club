@@ -142,6 +142,18 @@ export function undoBarrierRefusal(ledger: readonly LedgerEvent[], targetSeq: nu
   return newest === undefined ? null : UNDO_BARRIER_TYPES[newest.type];
 }
 
+/** The barrier the step the engine REFUSED (a result in its footprint) would have crossed: the same step read with no
+ *  fixture counted as played, so its target is known. Null when the step crosses none, or the engine has no step to take
+ *  (the caller then answers with the engine's own refusal). */
+function barrierOfRefusedStep(direction: "undo" | "redo", ledger: readonly LedgerEvent[], watermark: number | null): UndoRefusalCode | null {
+  try {
+    const probe = direction === "undo" ? engineUndo(ledger, watermark, new Set()) : engineRedo(ledger, watermark, new Set());
+    return undoBarrierRefusal(ledger, invertedStepSeq(direction, probe.event.payload));
+  } catch {
+    return null;
+  }
+}
+
 /** The ledger row a step inverts (Undo, `__undo_of`) or copies (Redo, `__redo_of`): the engine stamps every one
  *  (`undo`/`redo`, @seazn/engine/history). A step with no stamp is a broken contract, and refused by name — a barrier
  *  check skipped on an absence would let the step cross one. */
@@ -765,6 +777,14 @@ async function stepWrite(
           ? engineUndo(ledger, meta.edit_watermark, played)
           : engineRedo(ledger, meta.edit_watermark, played);
     } catch (err) {
+      // W4 T12 (RB4-L13): a step the engine refuses for a result in its footprint still answers BY NAME when it crosses an
+      // undo barrier. A late player placed in a case (2) seat leaves the withdrawal's voided walkover on the line, which
+      // the results guard counts: the generic "a match this change touches has started or finished" answered first, and
+      // never pointed to Withdraw.
+      if (err instanceof HistoryError && err.code === "UNDO_BLOCKED_HAS_RESULTS") {
+        const barrier = barrierOfRefusedStep(direction, ledger, meta.edit_watermark);
+        if (barrier !== null) throw undoRefusal(barrier);
+      }
       toEngineError(err);
     }
     // W3 T5 (design §10.8, X-SW-28). The undo barriers first, before any read or write: an organiser's late entry, a

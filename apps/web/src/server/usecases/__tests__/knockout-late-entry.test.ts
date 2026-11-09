@@ -473,6 +473,22 @@ describe.skipIf(!HAS_DB)("W4 T10: Add late player on a drawn knockout", () => {
     expect(row).toMatchObject({ type: "knockout_late_entry", payload: { case: "bye", source: "organiser" } });
   });
 
+  it("X-LE-13 Undo after a case (2) add refuses by name too: the withdrawal's voided walkover leaves a result on the line", async () => {
+    // Plain knockout: the newest step an Undo would invert is Start's generation, whose footprint holds the withdrawn line
+    // — it still carries the walkover's events (voided). The engine refuses a step that touches such a line before the
+    // barrier is read, so the answer was the generic "a match this change touches has started or finished" — not the
+    // sentence that points to Withdraw (RB4-L13). Found by the T12 matrix (knockout × withdrawn_slot).
+    const r = await rig({ n: 8 });
+    const line0 = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && x.seq_in_round === 2)!;
+    await withdrawEntrantCascade(r.auth, line0.home_entrant_id!);
+    const late = await addLate(r);
+    expect(late.late_entry, "premise: the walkover was reversed").toMatchObject({ case: "withdrawn_slot", fixture_id: line0.id });
+    const before = (await rowsOf(r.stageId)).map(shapeOf);
+    const err = await refusal(undoDivision(r.auth, r.divisionId));
+    expect(err).toMatchObject({ status: 409, code: "KO_LATE_ENTRY_NOT_UNDOABLE", message: NOT_UNDOABLE });
+    expect((await rowsOf(r.stageId)).map(shapeOf), "the refused Undo moved nothing").toEqual(before);
+  });
+
   it("X-LE-3 sequence: the late entrant withdraws — the line walks over to the former holder, back in round 2", async () => {
     const r = await rig({ n: 7 });
     const [bye] = storedByeLines(await rowsOf(r.stageId));

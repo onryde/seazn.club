@@ -72,11 +72,13 @@ afterAll(async () => {
 });
 
 /** The plan's interface table (Task 5 "Produces"), typed here as the oracle — never read back from history.ts. W4 app-A
- *  Task 5 (K1) adds the seed confirm's barrier, a knockout code (its own driving tests: seed-confirm-undo.test.ts). */
+ *  Task 5 (K1) adds the seed confirm's barrier, a knockout code (its own driving tests: seed-confirm-undo.test.ts), and
+ *  Task 10 (X-LE-13) the knockout late entry's (knockout-late-entry.test.ts). */
 const PLAN_BARRIERS = {
   swiss_late_entry: "SWISS_LATE_ENTRY_NOT_UNDOABLE",
   swiss_rounds_changed: "SWISS_ROUNDS_CHANGE_NOT_UNDOABLE",
   seed_confirmed: "SEED_CONFIRM_NOT_UNDOABLE",
+  knockout_late_entry: "KO_LATE_ENTRY_NOT_UNDOABLE",
 } as const;
 
 /** The refusal a test expects, with the status the refusal table declares for it. */
