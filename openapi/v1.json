@@ -72644,7 +72644,7 @@
         ]
       },
       "delete": {
-        "summary": "Delete a sponsor, with its deals. A sponsor holding a deal with money or document history (money paid or refunded, a pre-deals order) is 409 `sponsor_has_deal_history`. A deal's open Checkout link is closed at Stripe first; while one has been paid at Stripe, or cannot be read or closed, the delete is 409 `sponsor_has_open_checkout` and no link is closed",
+        "summary": "Delete a sponsor, with its deals. A sponsor holding a deal with money or document history (money paid or refunded, a pre-deals order) is 409 `sponsor_has_deal_history`. Every deal's Checkout link is read at Stripe before any is closed: while one has been paid there, or cannot be read, the delete is 409 `sponsor_has_open_checkout` and no link is closed. Then each open link is closed; when one cannot be, the delete is 409 `sponsor_has_open_checkout`, the sponsor and its deals stay, and the links already closed stay closed (none is left stored)",
         "tags": [
           "sponsors"
         ],
@@ -76875,7 +76875,7 @@
     },
     "/api/v1/orgs/{id}/sponsor-deals/{dealId}/mark-paid": {
       "post": {
-        "summary": "Mark a deal as paid (the club took the money itself). A when-paid deal goes live, or queues behind the sponsor's live deal; an after-I-approve deal waits for Approve. 409 when the deal has no payment to mark (`deal_already_paid`, `deal_not_payable`, `deal_ended`). On an online deal its open payment link is closed at Stripe first: 409 `deal_paid_online` when the sponsor has just paid it there, 502 `stripe_unavailable` when Stripe cannot be asked or the link closed (nothing changes), 409 `deal_changed` when the deal moved meanwhile. Editors only; never key-accessible",
+        "summary": "Mark a deal as paid (the club took the money itself). A when-paid deal goes live, or queues behind the sponsor's live deal; an after-I-approve deal waits for Approve. 409 when the deal has no payment to mark (`deal_already_paid`, `deal_not_payable`, `deal_ended`). On an online deal its open payment link is closed at Stripe first: 409 `deal_paid_online` when the sponsor has just paid it there, 502 `stripe_unavailable` when Stripe cannot be asked or the link closed (the deal is not marked paid; its link may already be closed, and Send invoice makes a new one), 409 `deal_changed` when the deal moved meanwhile. Editors only; never key-accessible",
         "tags": [
           "sponsors"
         ],
@@ -78051,7 +78051,7 @@
     },
     "/api/v1/orgs/{id}/sponsor-deals/{dealId}/end": {
       "post": {
-        "summary": "End a deal now. The sponsor's next queued deal goes live; when none is left, the sponsor goes back to how it was before its deals. 409 `deal_ended` on an ended deal. An online deal's open payment link is closed at Stripe first (one already paid there ends anyway); 502 `stripe_unavailable` when Stripe cannot (nothing changes), 409 `deal_changed` when the deal moved meanwhile. Editors only; never key-accessible",
+        "summary": "End a deal now. The sponsor's next queued deal goes live; when none is left, the sponsor goes back to how it was before its deals. 409 `deal_ended` on an ended deal. An online deal's open payment link is closed at Stripe first (one already paid there ends anyway); 502 `stripe_unavailable` when Stripe cannot (the deal is not ended; its link may already be closed), 409 `deal_changed` when the deal moved meanwhile. Editors only; never key-accessible",
         "tags": [
           "sponsors"
         ],
@@ -78661,7 +78661,7 @@
     },
     "/api/v1/orgs/{id}/sponsor-deals/{dealId}/refund": {
       "post": {
-        "summary": "Refund a paid deal, once, and its sponsor leaves the public pages. A deal paid by card is refunded through Stripe in full (the transfer reversed, the platform fee returned; 502 when Stripe cannot); an offline deal, or an online one marked paid by hand, is recorded only (no money moves, nothing is emailed). 409 `deal_not_refundable` on an unpaid or already refunded deal, `deal_disputed` while a dispute is open, `deal_changed` when a charge was recorded on it meanwhile; 502 `stripe_unavailable` when Stripe cannot refund (nothing is recorded). Editors only; never key-accessible",
+        "summary": "Refund a paid deal, once: the deal ends as refunded, and the sponsor's next queued deal goes live, or, when none is left, the sponsor leaves the public pages. A deal paid by card is refunded through Stripe in full (the transfer reversed, the platform fee returned; 502 when Stripe cannot); an offline deal, or an online one marked paid by hand, is recorded only (no money moves, nothing is emailed). 409 `deal_not_refundable` on an unpaid or already refunded deal, `deal_disputed` while a dispute is open, `deal_changed` when a charge was recorded on it meanwhile; 502 `stripe_unavailable` when Stripe cannot refund (nothing is recorded). Editors only; never key-accessible",
         "tags": [
           "sponsors"
         ],
@@ -79271,7 +79271,7 @@
     },
     "/api/v1/orgs/{id}/sponsor-deals/{dealId}/send-invoice": {
       "post": {
-        "summary": "Send, or resend, an online deal's invoice to the sponsor's billing email: answers `{ deal, checkout_url }`. The deal's payment link is reused while more than 10 minutes are left of it; otherwise the old link is closed first and a new one made. A draft moves to awaiting payment. 409 `deal_not_invoiceable` when the deal is offline, paid or ended, `deal_paid_online` when the sponsor has just paid, `connect_required` without Stripe connected, `deal_changed` when the deal moved meanwhile; 402 when the plan no longer sells online; 502 `stripe_unavailable` when Stripe cannot (nothing changes). Editors only; never key-accessible",
+        "summary": "Send, or resend, an online deal's invoice to the sponsor's billing email: answers `{ deal, checkout_url }`. The deal's payment link is reused while more than 10 minutes are left of it; otherwise the old link is closed first and a new one made. A draft moves to awaiting payment. 409 `deal_not_invoiceable` when the deal is offline, paid or ended, `deal_paid_online` when the sponsor has just paid, `connect_required` without Stripe connected, `deal_changed` when the deal moved meanwhile; 402 when the plan no longer sells online; 502 `stripe_unavailable` when Stripe cannot (the deal is not moved and nothing is sent; its old link may already be closed, and sending again makes a new one). Editors only; never key-accessible",
         "tags": [
           "sponsors"
         ],

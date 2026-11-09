@@ -682,6 +682,37 @@ describe.skipIf(!HAS_DB)("F18: a legacy order's refund and dispute flip its mone
     expect(await dealShape(keptId)).toEqual(keptShape);
     expect(await sponsorBytes(legacySponsor), "the legacy-activated sponsor is untouched").toBe(before);
   });
+
+  it("payments on legacy rows: a pre-deals order still unpaid is paid (money only, ended stays, the owner alerted); a second payment on a sponsor-less one cannot carry a row and alerts — every event answered", async () => {
+    const o = await org();
+    const p = await pkg(o);
+    const count = await sponsorCount(o.orgId);
+    // A pre-deals checkout still open when V493 ran: the legacy rewrite kept its money pending, and it has no sponsor (the old
+    // webhook made one on payment).
+    const [{ id: unpaid }] = await sql<{ id: string }[]>`
+      insert into sponsor_orders (org_id, package_id, sponsor_id, sponsor_name, sponsor_email, amount_cents, currency, status,
+                                  deal_status, ended_reason, ended_at, payment_method, go_live, tier, includes_on_stream, package_name)
+      values (${o.orgId}, ${p}, ${null}, 'Old Co', 'old@test.local', 25000, 'gbp', 'pending',
+              'ended', 'legacy', now() - interval '1 day', 'online', 'on_payment', 'partner', false, 'Old package')
+      returning id`;
+    const shape = await dealShape(unpaid!);
+
+    const intent = newIntent();
+    await expect(runEvent(succeeded(o, unpaid!, intent)), "answered, never a throw").resolves.toBe(true);
+    expect(await dealRow(unpaid!)).toMatchObject({ status: "paid", payment_intent_id: intent });
+    expect(await dealShape(unpaid!), "its deal columns unchanged (F18)").toEqual(shape);
+    expect(await sponsorCount(o.orgId), "and no sponsor made (anti-goal 1)").toBe(count);
+    expect(alerts("deal_ended"), "the owner is alerted").toHaveLength(1);
+
+    // A second, different payment on it: a sponsor-less row cannot carry a duplicate_payment row (sponsor_or_legacy), so the
+    // alert alone carries the money.
+    const second = newIntent();
+    await expect(runEvent(succeeded(o, unpaid!, second, 9_900)), "answered, never a throw").resolves.toBe(true);
+    expect(await sql`select 1 from sponsor_orders where payment_intent_id = ${second}`, "no row").toHaveLength(0);
+    expect(alerts("duplicate_payment"), "the owner is alerted").toHaveLength(1);
+    expect((alerts("duplicate_payment")[0]![1] as { extra: { recordedOn: unknown } }).extra.recordedOn, "recorded nowhere").toBeNull();
+    expect(await dealShape(unpaid!)).toEqual(shape);
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------

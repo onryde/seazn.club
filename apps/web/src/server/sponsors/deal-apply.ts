@@ -132,6 +132,36 @@ export async function lockSponsorAndDeals(
   return { sponsor, deals: rows.map(toServerDeal) };
 }
 
+/** A deal held under F2's lock, found from the deal. */
+export interface LockedDeal {
+  deal: ServerDeal;
+  /** Every deal of its sponsor, locked, in (created_at, id) order; just the deal itself on a sponsor-less legacy row. */
+  deals: ServerDeal[];
+  /** Null on a legacy row (D6) with no sponsor: nothing to lock or apply, so the deal row itself is locked. */
+  sponsorId: string | null;
+  orgId: string;
+}
+
+/**
+ * F2's lock for a writer that starts from a deal (the console's deal actions, the payment, refund and dispute webhooks): the
+ * deal's sponsor_id read WITHOUT a lock, then `lockSponsorAndDeals`, then the deal found among the locked rows. Null when the
+ * deal is gone, or moved to another sponsor, in between (the re-check). A sponsor-less legacy row (D6) locks only itself.
+ * Never a deal before its sponsor.
+ */
+export async function lockDealAndSponsor(tx: Tx, dealId: string): Promise<LockedDeal | null> {
+  const [ref] = await tx<{ sponsor_id: string | null; org_id: string }[]>`
+    select sponsor_id, org_id from sponsor_orders where id = ${dealId}`;
+  if (!ref) return null;
+  if (ref.sponsor_id === null) {
+    await tx`select 1 from sponsor_orders where id = ${dealId} for update`;
+    const deal = await readDeal(tx, dealId);
+    return deal && deal.sponsor_id === null ? { deal, deals: [deal], sponsorId: null, orgId: ref.org_id } : null;
+  }
+  const held = await lockSponsorAndDeals(tx, ref.sponsor_id);
+  const deal = held?.deals.find((d) => d.id === dealId);
+  return held && deal ? { deal, deals: held.deals, sponsorId: ref.sponsor_id, orgId: ref.org_id } : null;
+}
+
 /** Every deal of an org's sponsors (legacy rows included), unlocked, oldest first: the console list's read. */
 export async function readOrgDeals(tx: Tx, orgId: string): Promise<ServerDeal[]> {
   const rows = await tx<DealRow[]>`

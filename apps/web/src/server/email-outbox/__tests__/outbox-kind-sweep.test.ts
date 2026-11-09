@@ -25,7 +25,7 @@
 //     the Stripe mock's): the invoice is queued to the sponsor's billing email once the session is minted, and the request that did it
 //     makes the first attempt.
 //   - sponsor_receipt: the real `handleSponsorPaymentSucceeded` on a pending order in an `nl` org: the receipt is queued to the sponsor
-//     contact in the transaction that activates the placement, and the worker makes the first attempt.
+//     contact in the transaction that pays the deal (and applies it to its sponsor), and the worker makes the first attempt.
 //   - sponsor_refund: the real `refundSponsorOrder` of a paid order in an `es` org (Stripe's refund is mocked): the notice is queued in
 //     the transaction that records the refund, at its own savepoint, and the request that did it makes the first attempt.
 //   - sponsor_dispute_alert: the real `handleSponsorDispute` (`created`) on a paid sponsor order whose org owner's account is `fr`: the
@@ -962,7 +962,7 @@ async function sponsorInvoiceScenario(): Promise<KindScenario> {
 }
 
 /** The real payment webhook on a pending order in an `nl` org: the receipt is queued to the sponsor contact in the transaction that
- *  activates the placement, and the first attempt is the worker's. The fixture's addresses start with RUN, so they are found. */
+ *  pays the deal (and applies it to its sponsor), and the first attempt is the worker's. The fixture's addresses start with RUN, so they are found. */
 async function sponsorReceiptScenario(): Promise<KindScenario> {
   const o = await seedSponsorOrder({ status: "pending", defaultLocale: "nl", prefix: RUN });
   made.orgIds.push(o.orgId);

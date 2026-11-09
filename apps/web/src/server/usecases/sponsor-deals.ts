@@ -36,9 +36,11 @@ import {
   applyDealsToSponsor,
   clientDeal,
   isLegacyDeal,
+  lockDealAndSponsor,
   lockSponsorAndDeals,
   readDeal,
   readDeals,
+  type LockedDeal,
   type ServerDeal,
 } from "@/server/sponsors/deal-apply";
 import { assertOnlineAllowed, assertPlacementAllowed } from "@/server/sponsors/deal-gates";
@@ -152,12 +154,8 @@ async function checkoutOrg(orgId: string): Promise<DealCheckoutOrg> {
   return { id: orgId, slug: org.slug, stripe_account_id: org.stripe_account_id };
 }
 
-interface Locked {
-  deal: ServerDeal;
-  deals: ServerDeal[];
-  /** Null on a legacy row (D6): no sponsor to lock or apply, so the deal row itself is locked. */
-  sponsorId: string | null;
-}
+/** A deal under the one lock order (F2); a legacy row (D6) with no sponsor locks only itself. */
+type Locked = LockedDeal;
 
 /**
  * Run one console action on a deal, in the one lock order (F2), refusing what `allowedActions` does not offer (F12) before
@@ -173,21 +171,10 @@ async function runAction(
 ): Promise<SponsorDeal> {
   return atBoundary(async () => {
     const out = await withTenant(auth.orgId, async (tx) => {
-      // Unlocked: only the sponsor to lock first. A deal is never locked before its sponsor (F2).
-      const [ref] = await tx<{ sponsor_id: string | null }[]>`select sponsor_id from sponsor_orders where id = ${dealId}`;
-      if (!ref) throw new HttpError(404, "deal not found");
-      let locked: Locked | null;
-      if (ref.sponsor_id === null) {
-        // A legacy row (D6) has no sponsor: lock the row itself. Only a refund can be offered on one.
-        await tx`select 1 from sponsor_orders where id = ${dealId} for update`;
-        const deal = await readDeal(tx, dealId);
-        locked = deal && deal.sponsor_id === null ? { deal, deals: [deal], sponsorId: null } : null;
-      } else {
-        const held = await lockSponsorAndDeals(tx, ref.sponsor_id);
-        const deal = held?.deals.find((d) => d.id === dealId);
-        locked = held && deal ? { deal, deals: held.deals, sponsorId: ref.sponsor_id } : null;
-      }
-      // Re-checked under the lock: a deal gone, or moved to another sponsor, in between is not this one.
+      // The sponsor, then its deals; never the deal first (F2). A legacy row (D6) with no sponsor locks only itself: only a
+      // refund can be offered on one. Re-checked under the lock: a deal gone, or moved to another sponsor, in between is not
+      // this one.
+      const locked = await lockDealAndSponsor(tx, dealId);
       if (!locked) throw new HttpError(404, "deal not found");
       if (!allowedActions(locked.deal).includes(action)) throw notOffered(locked.deal, action);
       const now = new Date();
@@ -332,7 +319,8 @@ export async function createDeal(
  * payment, live or scheduled — else 409 `deal_not_invoiceable` before Stripe (F12). The plan is asked again
  * (`sponsors.monetize`: an org that lost it mints nothing), Connect must take charges, and the outbox must be able to queue
  * (P-W2-1) — all before Stripe. Then `ensureDealCheckout` (outside any transaction) reuses the stored session while more than
- * 10 minutes are left of it, else retires it and mints `sponsor-deal-<id>-<count + 1>`. ONE transaction in the lock order
+ * 10 minutes are left of it AND Stripe still calls it open, else retires it (a session Stripe cannot read is a 502 and
+ * nothing is minted) and mints `sponsor-deal-<id>-<count + 1>`. ONE transaction in the lock order
  * (F2) stores the session, counts the send, moves a draft to awaiting payment and queues the invoice with once-key
  * `<id>:<count + 1>`. After commit, the request makes the invoice's first attempt and awaits the public expiry (F1).
  */
@@ -425,8 +413,8 @@ export async function endDealNow(auth: AuthCtx, dealId: string): Promise<Sponsor
 }
 
 /** Refund a paid deal, once. A deal a charge paid refunds through Stripe: `refundSponsorOrder` keeps its call (transfer
- *  reversed, fee returned, keyed per deal), its disputed refusal and its awaited expiry (F1); Task 8 makes that refund end the
- *  deal. A deal no charge paid (offline, or online marked paid by hand: T2-I1) is recorded only — no money moves and nothing
+ *  reversed, fee returned, keyed per deal), its disputed refusal and its awaited expiry (F1), and its charge.refunded path
+ *  ends the deal as refunded and applies it to the sponsor (Task 8). A deal no charge paid (offline, or online marked paid by hand: T2-I1) is recorded only — no money moves and nothing
  *  is mailed (§5.2): money `refunded`, the deal ended as refunded. */
 export async function refundDeal(auth: AuthCtx, dealId: string): Promise<SponsorDeal> {
   const pre = await atBoundary(() => preflight(auth, dealId, ["refund"]));
