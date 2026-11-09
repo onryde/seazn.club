@@ -2276,6 +2276,57 @@ test("S2-4 T7: a swap of ends from the striker chip, and the next ball folds", a
   await expect(pad(page).locator('[data-role="v3-scorebug"]'), "one run").toContainText("1/0");
 });
 
+// S2-4 final review I3 (controller ruling): a pending swap survives a fold change that is not a ball. It was wiped by any
+// new fold, so a swap then a Change bowler left the tiles live and the next ball credited the fold's own pair, which the
+// engine accepts. The unit tests pin the rule (cricket.test.ts); this one runs it through the real host and the server.
+test("S2-4 T7: a swap, then a Change bowler, then a dot: the ball carries the reversed pair and the new bowler", async ({ page }) => {
+  test.setTimeout(90_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket SwapChange ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 SC Striker ${TAG}` }, { fullName: `V3 SC NonStriker ${TAG}` }],
+    away: [{ fullName: `V3 SC BowlerA ${TAG}` }, { fullName: `V3 SC BowlerB ${TAG}` }],
+    emitCoreStart: true,
+  });
+  const id = (name: string) => fx.personIds[`V3 SC ${name} ${TAG}`]!;
+  await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+    over: 0,
+    ballInOver: 1,
+    striker: id("Striker"),
+    nonStriker: id("NonStriker"),
+    bowler: id("BowlerA"),
+    runs: { bat: 0 },
+  });
+  await openConsoleAlreadyLive(page, fx);
+  const events = async () => await ledger(page.request, fx.fixtureId);
+  const balls = async () => (await events()).filter((e) => e.type === "cricket.ball");
+
+  const strip = await openContextPicker(page, "Striker");
+  await strip.locator(`[data-candidate-id="${id("NonStriker")}"]`).click();
+  const swappedChip = strip.getByRole("button", { name: `Striker: V3 SC NonStriker ${TAG}`, exact: true });
+  await expect(swappedChip, "the swap is pending").toBeVisible({ timeout: 10_000 });
+
+  await pad(page).locator('[data-tile-id="more"]').click();
+  const sheet = sheetRoot(page);
+  await sheet.getByRole("button", { name: "Change bowler", exact: true }).click();
+  await sheet.locator(`[data-candidate-id="${id("BowlerB")}"]`).click();
+  await sheet.locator('[data-choice-option-id="incapacitated"]').click();
+  await expect
+    .poll(async () => (await events()).filter((e) => e.type === "cricket.bowler.change").length, { timeout: 20_000 })
+    .toBe(1);
+  await expect(strip.getByText(`Bowler: V3 SC BowlerB ${TAG}`, { exact: true }), "the change folded").toBeVisible({ timeout: 10_000 });
+  await expect(swappedChip, "the change kept the swap").toBeVisible();
+
+  await pad(page).locator('[data-tile-id="run0"]').click();
+  await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(2);
+  const ball = (await balls())[1]!;
+  expect(
+    [ball.payload.striker, ball.payload.nonStriker, ball.payload.bowler],
+    "the reversed pair and the new bowler",
+  ).toEqual([id("NonStriker"), id("Striker"), id("BowlerB")]);
+});
+
 // S2-4 Task 8 (CK-BC-1, ruling 75; MCC Law 17.8; preflight W4): the mid-over bowler change lives in More (ruling 84: no
 // tile). More's "Change bowler" opens the skin's own sheet, which offers only who may complete the over (never the bowler
 // bowling it, never a batter); the change is recorded, the over's next balls name the new bowler, and at the over's end
