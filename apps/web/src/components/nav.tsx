@@ -157,7 +157,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
   const navLinkBase = "min-h-8 items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3";
   const navLinkLook = `${navLinkBase}${isPlayer ? "" : hasOrg ? " md:gap-1 md:px-1 lg:gap-1.5 lg:px-3" : " md:px-1 lg:px-3"}`;
   const navLinkClass = `flex ${navLinkLook}`;
-  // The phone folds (the paragraph above). `hidden` + `min-[Npx]:flex` and never a bare `flex` beside them: two display utilities
+  // The phone folds (the paragraph above). `hidden` + a min-width `flex` breakpoint and never a bare `flex` beside them: two display utilities
   // fight by CSS order. Literal strings, every one: Tailwind only builds the classes it can read in the source.
   const hasLogo = !!logoUrl;
   const sponsorsLinkClass = `${hasLogo ? "hidden min-[390px]:flex" : "hidden min-[350px]:flex"} ${navLinkLook}`;
