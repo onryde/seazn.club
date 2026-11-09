@@ -524,7 +524,7 @@ describe("Nav > Player home folds first (OWNER RULING 6.1), and only where the b
   /** The class of the gantry's <img> with this src, or undefined when the bar has none. */
   const imgClass = (html: string, src: string): string | undefined =>
     html.match(new RegExp(`<img\\b[^>]*\\bsrc="${escapeRe(src)}"[^>]*>`))?.[0].match(/\bclass="([^"]*)"/)?.[1];
-  /** The width the wordmark is out of the row BELOW (`max-[Npx]:sr-only`), or null where it never folds. */
+  /** The width the wordmark is out of the row BELOW (its max-width `sr-only` breakpoint), or null where it never folds. */
   const wordmarkFoldBelow = (cls: string | undefined): number | null => {
     const at = tokens(cls).map((t) => t.match(/^max-\[(\d+)px\]:sr-only$/)?.[1]).find((x) => x !== undefined);
     return at === undefined ? null : Number(at);
