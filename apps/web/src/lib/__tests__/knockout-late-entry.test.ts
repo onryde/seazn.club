@@ -348,13 +348,10 @@ describe("decideWaitingEntrant (X-LE-10, K13)", () => {
       scheduleFrozen: true,
       expected: { case: "refused", canRebuild: false, unfreezeFirst: true },
     },
-    {
-      name: "m1 a seat only beyond round 1, nothing started, frozen: unfreeze first",
-      lines: [line(4, 1), line(4, 2)],
-      holdsSeat: true,
-      scheduleFrozen: true,
-      expected: { case: "refused", canRebuild: false, unfreezeFirst: true },
-    },
+    // No row for a frozen SEAT HOLDER (T26c item C): the tap answers any seat holder's refusal "played on"
+    // (KO_LATE_ENTRY_PLAYED_ON) before it reads this decision's `unfreezeFirst` (server/usecases/knockout-late-entry.ts,
+    // `placeWaitingKnockoutEntrant`), so what this function says for one reaches nobody. The usecase pins the answer a
+    // frozen seat holder gets: knockout-late-arrival.test.ts, "K13 race with the schedule FROZEN before the tap".
     {
       name: "m1 frozen, one started: refused, nothing to unfreeze for",
       lines: [line(4, 1), line(4, 2)],

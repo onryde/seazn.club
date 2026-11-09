@@ -41,6 +41,7 @@ import {
   promoteOldestWaitlisted,
   putRegistrationSettings,
 } from "../registrations";
+import { setDivisionLocks } from "../history";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { createStages, rebuildStageFixtures } from "../stages";
@@ -330,6 +331,30 @@ describe.skipIf(!HAS_DB)("W4 T11: automatic arrivals into a drawn knockout wait 
     expect(await lateRows(r.divisionId), "and writes no undo barrier").toEqual([]);
     // The second call: they wait no more, so a second tap is refused by name (never a second PLAYED_ON answer).
     expect(await refusal(placeWaitingKnockoutEntrant(r.auth, r.stageId, gone))).toMatchObject({ status: 409, code: "KO_LATE_ENTRY_NOT_WAITING" });
+  });
+
+  // T26c item C (controller ruling 2026-11-09, re-review): a frozen schedule never turns a SEAT HOLDER's refused tap into
+  // "unfreeze first". The tap answers any seat holder's refusal "played on" before it reads the freeze (`placeWaitingKnockoutEntrant`,
+  // the B6a seat-holder arm), so a freeze set between the reinstatement and the tap changes nothing: the same answer as the
+  // race above, the flag cleared. The lib row that answered a frozen seat holder "unfreeze first" reached nobody and is gone
+  // (lib/__tests__/knockout-late-entry.test.ts).
+  it("K13 race with the schedule FROZEN before the tap: still 'played on', never 'unfreeze first', the flag cleared", async () => {
+    const r = await rig({ n: 8 });
+    const rows = await rowsOf(r.stageId);
+    const l1 = rows.find((x) => x.round_no === 1 && x.seq_in_round === 1)!;
+    const l2 = rows.find((x) => x.round_no === 1 && x.seq_in_round === 2)!;
+    const gone = l1.home_entrant_id!;
+    await walkoverWinnerStartsRoundTwo(r, gone, l1, l2, async () => {
+      await patchEntrant(r.auth, gone, { status: "registered" });
+      expect(await waitingOn(gone), "premise: flagged while the walkover was reversible").toBe(r.stageId);
+    });
+    expect(await setDivisionLocks(r.auth, r.divisionId, { schedule_locked: true }), "premise: the schedule is frozen").toMatchObject({ schedule_locked: true });
+    const shapeBefore = await rowsOf(r.stageId);
+    const answer = await placeWaitingKnockoutEntrant(r.auth, r.stageId, gone);
+    expect(answer).toEqual({ format: "knockout", entrant_id: gone, stage_id: r.stageId, case: "refused", reason: KO_LATE_ENTRY_PLAYED_ON });
+    expect(await waitingOn(gone), "the flag clears").toBeNull();
+    expect(await deskLate(r), "the desk row goes").toEqual([]);
+    expect(await rowsOf(r.stageId), "a refusal moves no line").toEqual(shapeBefore);
   });
 
   it("K13 plain order: reinstated while the walkover is reversible, then the tap - their seat back, the flag cleared (the other side of the race)", async () => {
