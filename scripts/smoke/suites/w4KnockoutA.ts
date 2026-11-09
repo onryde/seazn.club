@@ -1,6 +1,9 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
-import { type Session, appendScoreEvent, check, newSession, signIn, tag, v1, v1data } from "../harness.ts";
+import { type Session, appendScoreEvent, check, counts, newSession, signIn, tag, v1, v1data } from "../harness.ts";
 import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swiss-draw.ts";
+import { w4KnockoutAB5PagePlayoffWalkover, w4KnockoutAB5StandaloneRefusal } from "./w4KnockoutA-b5.ts";
+import { w4aDeskK12Check, w4aDeskXch8Check } from "./w4KnockoutA-desk-checks.ts";
+import { w4KnockoutAPublicStandingsOrderSmoke } from "./w4KnockoutA-public-checks.ts";
 
 /**
  * Format matrix W4 knockout app-A (spec 2026-11-04-format-matrix-w4-knockout-design.md) — the app PR's smoke proof, over real
@@ -55,8 +58,15 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * T15 (X-PL-1, X-QM-2; FX-G14's gate, QM-2): Knockout + Plate on a field of 3 is refused by name at Generate and at Start, and a
  * fourth entrant lets it through. A rank cut of 3 from a knockout is refused at the write and leaves no stage; the cut of 4 is taken.
  *
- * Own fresh owner; keyless; every read and write is a v1 route. Every check is counted, and a run that checked nothing fails.
- * SMOKE_ONLY=w4KnockoutA runs it alone (SELECTABLE_SUITES).
+ * The lanes folded at the lane merge (merge-lanes-1, 2026-11-09) keep their checks in their own files and are counted
+ * here by the harness checks each one made (`laneChecks`): B-desk's T18 (K12: a disqualification walkover says so, 6)
+ * and T21 (X-CH-8: a decided final asks to complete its stage, completing the competition warns, 6), B6b's T23 (ST-G26:
+ * /present reads a group's pools in order, 4), and B5's T16 (X-SP-6: a standalone stepladder or page playoff is refused
+ * by name, 2) and T17 (X-SP-5: a page-playoff withdrawal walks over, never voids, 1).
+ *
+ * Own fresh owner; keyless; every read and write is a v1 route (B5's T17 reads the feed edges from the table, which no
+ * route publishes; B-desk's and B6b's sign in their own organisers and read pages). Every check is counted, and a run
+ * that checked nothing fails. SMOKE_ONLY=w4KnockoutA runs it alone (SELECTABLE_SUITES).
  */
 export async function w4KnockoutASuite(): Promise<void> {
   // T2: 1 (a called final survives a void of its feeder). T3: 1 (an awarded bye holds no court). T4: 1 (the final keeps
@@ -65,12 +75,21 @@ export async function w4KnockoutASuite(): Promise<void> {
   // once). T10: 2 (a late player takes the lowest-seeded holder's bye and Undo refuses; no slot is refused, then a
   // withdrawn seat is taken). T11: 1 (a reinstated player waits, and one tap gives their seat back). T13: 1 (a departed
   // qualifier's seat takes the best loser below the cut). T14: 1 (a correction empties a confirmed draw's seats and re-proposes).
-  // T15: 2 (a plate on 3 is refused, then starts on 4; a cut of 3 from a knockout leaves no stage).
-  const EXPECTED_CHECKS = 15;
+  // T15: 2 (a plate on 3 is refused, then starts on 4; a cut of 3 from a knockout leaves no stage). The lanes folded at
+  // merge-lanes-1, counted by `laneChecks`: T18 6, T21 6, T23 4, T16 2, T17 1 — 19.
+  const EXPECTED_CHECKS = 15 + 19;
   let checked = 0;
   const w4Check = (label: string, cond: boolean) => {
     checked++;
     check(label, cond);
+  };
+  /** A lane's exported checks, counted by what they did: every harness `check` the export made (pass or fail) is one of
+   *  this suite's. An export that stops early (a premise it could not build) counts fewer, and the total below fails. */
+  const laneChecks = async (run: () => Promise<unknown>) => {
+    const before = counts();
+    await run();
+    const after = counts();
+    checked += after.pass + after.fail - (before.pass + before.fail);
   };
 
   const owner = newSession();
@@ -816,6 +835,13 @@ export async function w4KnockoutASuite(): Promise<void> {
       cutOk,
     );
   }
+
+  // The lanes folded at merge-lanes-1 (see the header): each export builds its own competition.
+  await laneChecks(() => w4aDeskK12Check()); // T18 (K12): 6
+  await laneChecks(() => w4aDeskXch8Check()); // T21 (AN-1, X-CH-8): 6
+  await laneChecks(() => w4KnockoutAPublicStandingsOrderSmoke()); // T23 (ST-G26): 4
+  await laneChecks(() => w4KnockoutAB5StandaloneRefusal(owner)); // T16 (X-SP-6): 2
+  await laneChecks(() => w4KnockoutAB5PagePlayoffWalkover(owner)); // T17 (X-SP-5): 1
 
   check(`w4a: the W4 knockout app-A suite ran its ${EXPECTED_CHECKS} checks (ran ${checked})`, checked > 0 && checked === EXPECTED_CHECKS);
 }

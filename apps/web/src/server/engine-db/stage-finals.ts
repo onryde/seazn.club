@@ -11,7 +11,7 @@ import "server-only";
 // With every row settled the deciding game is settled too, which is all `isBracketStageComplete` asks of a bracket — so
 // that engine call is not repeated here (under this gate it could only ever answer yes).
 import { SETTLED_FIXTURE_STATUSES } from "@seazn/engine/competition";
-import { isUnseatedSwissByeShell } from "@/lib/swiss-shell";
+import { isWaitingByeLine } from "@/lib/bye-line";
 import type { OpenStageState } from "@/lib/open-stages";
 import { BRACKET_KINDS, parseExtKey } from "./competition";
 import { completionEngineStatus, rowAwaitsSettle } from "./recorded-abandon";
@@ -45,12 +45,14 @@ export function bracketAwaitsCompletion(stageKind: string, rows: readonly StageF
 }
 
 /** The row an open stage's warning line reads: the finals columns, what tells a bracket's final (`ext_key`,
- *  `winner_to_fixture`), and what tells an unseated Swiss bye shell. */
+ *  `winner_to_fixture`), and what tells a bye line that waits (`isWaitingByeLine`: the seats and their slot labels). */
 export type OpenStageFixtureRow = StageFinalsRow & {
   ext_key: string | null;
   winner_to_fixture: string | null;
   home_entrant_id: string | null;
   away_entrant_id: string | null;
+  home_slot_label: unknown;
+  away_slot_label: unknown;
 };
 
 /** A bracket's deciding game, by the rule `completeStageIfReady` applies (competition.ts): not a third-place playoff,
@@ -63,13 +65,14 @@ function isFinalRow(r: OpenStageFixtureRow): boolean {
  *  matches are left. Empty case first: a stage with no matches says so. A bracket is worded by its final: every match
  *  settled is the desk's `final_decided` (`bracketAwaitsCompletion`); the final settled with others still owed (AN-2's
  *  bronze) is its matches left; the final held for a decision is `final_held`; otherwise the final is still to play.
- *  Any other stage by its matches left. An unseated Swiss bye shell is never a match (`isUnseatedSwissByeShell`: a bye
- *  takes no court and no time; the desk counts it as nothing owed). */
+ *  Any other stage by its matches left. A bye line nobody has settled yet is never a match (`isWaitingByeLine`, the
+ *  desk's own reading since B1a: a Swiss bye shell seated or not, a bracket's pre-award line; a bye is not played, so
+ *  the desk counts it as nothing owed). Once awarded it is an ordinary settled row. */
 export function openStageState(
   stageKind: string,
   rows: readonly OpenStageFixtureRow[],
 ): { state: OpenStageState; matchesLeft: number } {
-  const matches = rows.filter((r) => !isUnseatedSwissByeShell(r));
+  const matches = rows.filter((r) => !isWaitingByeLine(r));
   const matchesLeft = unsettledCount(stageKind, matches);
   if (matches.length === 0) return { state: "no_matches", matchesLeft };
   if (isBracketStageKind(stageKind)) {

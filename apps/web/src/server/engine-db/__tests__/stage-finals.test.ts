@@ -8,6 +8,7 @@ import {
   bracketAwaitsCompletion, openStageState, unsettledCount, type OpenStageFixtureRow, type StageFinalsRow,
 } from "@/server/engine-db/stage-finals";
 import { OPEN_STAGE_STATES } from "@/lib/open-stages";
+import { BYE_LINE_SHAPES, rowOf } from "@/lib/__tests__/bye-line-shapes";
 
 const row = (o: Partial<StageFinalsRow> = {}): StageFinalsRow => ({
   status: "scheduled", outcome: null, has_active_abandon: false, expunged: false, no_result: false, ...o,
@@ -81,7 +82,7 @@ describe("unsettledCount (W4 T21)", () => {
 
 describe("openStageState (W4 T21) — what the Complete-competition warning says of an open stage", () => {
   const fx = (o: Partial<OpenStageFixtureRow> = {}): OpenStageFixtureRow => ({
-    ...row(), ext_key: null, winner_to_fixture: null, home_entrant_id: "h", away_entrant_id: "a", ...o,
+    ...row(), ext_key: null, winner_to_fixture: null, home_entrant_id: "h", away_entrant_id: "a", home_slot_label: null, away_slot_label: null, ...o,
   });
   const wonFx = (o: Partial<OpenStageFixtureRow> = {}) => fx({ status: "decided", outcome: { kind: "win", winner: "h", loser: "a" }, ...o });
   /** A knockout of four as the generator writes it: two semis feeding the final (`winner_to_fixture`), and — with a
@@ -144,8 +145,44 @@ describe("openStageState (W4 T21) — what the Complete-competition warning says
     // Round 2 paired and played, its bye seated and awarded: every match settled.
     const r2 = [wonFx({ ext_key: "sw-r2-b1" }), wonFx({ ext_key: "sw-r2-b2" }), fx({ ext_key: "sw-r2-bye", ...award })];
     expect(openStageState("swiss", [...r1, ...r2])).toEqual({ state: "all_played", matchesLeft: 0 });
-    // The positive pair: a seated bye not yet awarded is a row like any other — still owed.
-    expect(openStageState("swiss", [...r1, fx({ ext_key: "sw-r2-bye", away_entrant_id: null })])).toEqual({ state: "matches_left", matchesLeft: 1 });
+    // A seated bye not yet awarded is still a bye line that waits — the desk counts it as nothing owed
+    // (`isWaitingByeLine`, lib/bye-line.ts), so the warning does too (merge-lanes-1, B-desk review merge note).
+    expect(openStageState("swiss", [...r1, fx({ ext_key: "sw-r2-bye", away_entrant_id: null })])).toEqual({ state: "all_played", matchesLeft: 0 });
+    // The positive pair: a seated BOARD still to play is owed.
+    expect(openStageState("swiss", [...r1, fx({ ext_key: "sw-r2-b1" })])).toEqual({ state: "matches_left", matchesLeft: 1 });
+  });
+
+  it("a knockout's pre-award bye line is no match left either — the desk's reading, not the Swiss shell's alone", () => {
+    // A `timing: "setup"` bracket of three drawn on day one: seed 1's line against the bye (the away side the phantom,
+    // carrying the bye slot label), the real first-round line, and the final it all feeds. Two matches are owed.
+    const BYE = { key: "bracket.slot.bye", params: {} };
+    const preAward = fx({ home_entrant_id: null, away_entrant_id: null, home_slot_label: { key: "bracket.slot.seed", params: { seed: 1 } }, away_slot_label: BYE, winner_to_fixture: "fin" });
+    const realLine = fx({ home_entrant_id: null, away_entrant_id: null, winner_to_fixture: "fin" });
+    const final = fx({ home_entrant_id: null, away_entrant_id: null });
+    expect(openStageState("knockout", [preAward, realLine, final])).toEqual({ state: "final_pending", matchesLeft: 2 });
+    // The positive pair: the bye label over a SEATED side is no phantom — a real match, owed.
+    expect(openStageState("knockout", [fx({ away_slot_label: BYE, winner_to_fixture: "fin" }), realLine, final]))
+      .toEqual({ state: "final_pending", matchesLeft: 3 });
+  });
+
+  it("SWEEP: every bye-line shape the rules table declares — a waiting bye line is no match left, any other row counts as the engine settles it (count reported; zero fails)", () => {
+    // Which shapes are bye lines comes from the shared rules table (lib/__tests__/bye-line-shapes.ts), never from the
+    // predicate under test: one that IS a bye line and is still `scheduled` waits, and a bye is not played (X-SD-5,
+    // X-SW-29). Every other row is owed exactly when the engine's settled reading says so (`unsettledCount`).
+    let checked = 0;
+    let waiting = 0;
+    for (const s of BYE_LINE_SHAPES) {
+      const shape: OpenStageFixtureRow = { ...fx(), ...rowOf(s, { H: "h", A: "a" }) };
+      const waits = s.expected && s.status === "scheduled";
+      const owed = waits ? 0 : unsettledCount("league", [shape]);
+      expect(openStageState("league", [wonFx(), shape]).matchesLeft, s.name).toBe(owed);
+      if (waits) waiting++;
+      checked++;
+    }
+    console.info(`[stage-finals] bye-line shapes checked: ${checked} (waiting bye lines: ${waiting})`);
+    expect(checked).toBe(BYE_LINE_SHAPES.length);
+    expect(waiting, "the table reaches a waiting bye line").toBeGreaterThan(0);
+    expect(checked - waiting, "and a row that is not one").toBeGreaterThan(0);
   });
 
   it("SWEEP: the cases above reach every state the warning declares (count reported; zero fails)", () => {

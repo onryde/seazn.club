@@ -6,7 +6,12 @@
 //
 // The row is the one `createStages` wrote before the refusal: the same columns, and the same config — the body's config
 // validated and laid over the kind's preset match rules (`validatedStageConfig`, the door `createStages` uses for a new
-// slot with no carry). Only the refusal is skipped.
+// slot with no carry). The row is all it shares with that door (B5 review M3): `insertLegacyStandaloneStage` skips every
+// other gate and side effect `createStages` runs — the batch gates (`assertStageBatchGates`: the sport's refused kinds,
+// the entitlements, the feed graph, the seq named twice), and `insertStageBatch`'s division lock, its rules/points
+// refusals (`refuseNewStageTable`), the frozen competition, the stage cap, the duplicate-seq 409, the progression check
+// and the reopen of a completed division. Seed it into a fresh division, before anything that reads those, and never
+// use it to prove one of them.
 import { sql } from "@/lib/db";
 import { standaloneStageRefusal } from "@/lib/stage-standalone";
 import type { AuthCtx } from "@/server/api-v1/auth";

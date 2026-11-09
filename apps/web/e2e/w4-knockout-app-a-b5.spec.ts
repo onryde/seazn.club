@@ -1,7 +1,8 @@
 // W4 app PR A, lane B5 (Tasks 16 and 17): the standalone stepladder / page playoff refusal (X-SP-6, owner ruling 269)
 // and a withdrawal inside a FINAL-stage page playoff (X-SP-5), driven over the real HTTP API a signed-in organiser's
-// session reaches. The rules come from the W4 rulebook (RB4-S2, RB4-S6, RB4-S7); every refusal sentence is read from the
-// English dictionary on disk (e2e cannot import the JSON-backed src modules), so a copy change moves this file with it.
+// session reaches. The rules come from the W4 rulebook (RB4-S2, RB4-S6, RB4-S7). The refusals are pinned by their CODE;
+// of the copy, this spec only checks that each code has an English key in the dictionary on disk (e2e cannot import the
+// JSON-backed src modules) — the sentences themselves are pinned in lib/__tests__/knockout-refusals.test.ts (B5 review M2).
 // Seating only (pre-flight ruling C6): where a withdrawn entrant RANKS is the engine bump's (PR B, carry-notes C19).
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { readFileSync } from "node:fs";

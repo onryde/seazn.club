@@ -2,8 +2,8 @@
 //
 // W4 app A Task 23 (ST-G26) — the public standings order, over HTTP against a real server.
 //
-// UNWIRED on purpose (controller ruling, batch B6b): the smoke harness, index and main are another lane's files, so this
-// check is exported here and wired in by the batch that owns them. Call it with no arguments; it signs in its own owner.
+// Written in its own file by lane B6b (the harness, index and main were another lane's) and run by `w4KnockoutASuite`
+// since the lane merge (merge-lanes-1), which counts its checks. Call it with no arguments; it signs in its own owner.
 import { newSession, call, check, signIn, tag, html, v1, v1data } from "../harness.ts";
 
 /**

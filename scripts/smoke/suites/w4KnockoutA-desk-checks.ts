@@ -4,8 +4,8 @@ import { newSession, call, check, signIn, tag, html, v1, v1data, type Session } 
 
 /**
  * Format matrix W4 app PR A, lane B-desk (Tasks 18 + 21): the smoke checks this lane owes, written as exported functions
- * and deliberately NOT wired into a suite here — the lane that owns `scripts/smoke/index.ts` / the W4 suite calls them
- * (controller ruling: lane B-desk never touches the harness, index or main). Each function signs in its own organiser,
+ * in their own file (the lane never touched the harness, index or main) and run by `w4KnockoutASuite` since the lane
+ * merge (merge-lanes-1), which counts every `check` each one makes. Each function signs in its own organiser,
  * builds its own competition, and moves the shared pass/fail counters only through `check`. Every list read states its
  * count, and a zero count fails.
  */

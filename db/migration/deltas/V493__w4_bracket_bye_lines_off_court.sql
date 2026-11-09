@@ -1,6 +1,7 @@
--- V492 — W4 (format matrix: knockout) app-A Task 3 (gap K2; engine row X-SD-5 "never a fixture on a court"): a bracket
+-- V493 — W4 (format matrix: knockout) app-A Task 3 (gap K2; engine row X-SD-5 "never a fixture on a court"): a bracket
 -- bye line never holds a slot. Spec docs/superpowers/specs/2026-11-04-format-matrix-w4-knockout-design.md. Its test reads
--- this file by glob (apps/web/src/server/__tests__/w4-migration.test.ts).
+-- this file by glob (apps/web/src/server/__tests__/w4-migration.test.ts). Written as V492; renumbered V493 at the lane
+-- merge (2026-11-09) because R4's V492__sponsor_rotation.sql reached main first (commit messages before it say V492).
 --
 -- DATA CHANGE (LOUD). A `timing: "setup"` progression draws its bracket before anyone qualifies, so its bye line sits
 -- `scheduled` with no outcome and the bye slot label on its phantom side until the seed confirm awards it

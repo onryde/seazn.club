@@ -54,7 +54,7 @@
 //     shell, the system bye and the pre-award bye line): `movableFixtureSql` and
 //     the quick Start's rolling times (schedule.ts), history.ts's placement
 //     replays (`slotTaker`), the board read's `bye_line` flag (fixtures.ts,
-//     B1a review #1), and V492's shape
+//     B1a review #1), and V493's shape
 //   NEITHER, a status list only
 //     - stages.ts: `deleteStage` refuses `in_play`/`decided`/`finalized` and
 //       deletes every other row with its evidence, an abandoned match or a

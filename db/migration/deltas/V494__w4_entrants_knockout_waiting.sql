@@ -1,9 +1,10 @@
--- V493 — W4 (format matrix: knockout) app-A Task 11 (gaps K7, K13; rule X-LE-10; owner ruling 271): an entrant that ARRIVED
+-- V494 — W4 (format matrix: knockout) app-A Task 11 (gaps K7, K13; rule X-LE-10; owner ruling 271): an entrant that ARRIVED
 -- AUTOMATICALLY in a division whose root knockout has started — a confirmed or paid registration, a waitlist promotion,
 -- an import, a Reinstate — is never placed in the bracket by the app. It waits, and the desk says so ("1 late player
 -- waiting — add to bracket"); one organiser tap (`POST /stages/{id}/late-entrants/{entrantId}/place`) then runs the same
 -- cases an organiser's "Add late player" runs. Spec docs/superpowers/specs/2026-11-04-format-matrix-w4-knockout-design.md
--- §4.1. Its test reads this file by glob, never by number (apps/web/src/server/__tests__/w4-migration.test.ts).
+-- §4.1. Its test reads this file by glob, never by number (apps/web/src/server/__tests__/w4-migration.test.ts). Written as
+-- V493; renumbered V494 at the lane merge (2026-11-09) because R4's V492__sponsor_rotation.sql reached main first.
 --
 -- `knockout_waiting_stage_id` names the root knockout the entrant waits to join. Written by the automatic admission
 -- (`admitKnockoutLateEntrant`, apps/web/src/server/usecases/knockout-late-entry.ts), cleared by the tap that places them

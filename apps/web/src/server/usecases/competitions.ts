@@ -497,6 +497,7 @@ export async function openStagesOf(auth: AuthCtx, competitionId: string): Promis
     if (stages.length === 0) return [];
     const rows = await tx<(OpenStageFixtureRow & { stage_id: string })[]>`
       select f.stage_id, f.status, f.outcome, f.ext_key, f.winner_to_fixture, f.home_entrant_id, f.away_entrant_id,
+             f.home_slot_label, f.away_slot_label,
              ${hasActiveAbandonSql(tx)} as has_active_abandon,
              ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
              ${hasActiveAbandonSql(tx, "f", { noResult: true })} as no_result

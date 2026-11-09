@@ -3,8 +3,8 @@ import { type Session, appendScoreEvent, check, smokeDb, tag, v1, v1data } from 
 
 /**
  * Format matrix W4 knockout app-A, lane B5 (Tasks 16 and 17) — smoke checks over real HTTP against a live server, as
- * UNWIRED exports: the controller folds them into `w4KnockoutASuite` (and its EXPECTED_CHECKS) at the lane merge. Each
- * returns the number of checks it counted, so the caller can pin its total.
+ * exports `w4KnockoutASuite` runs (wired at the lane merge, merge-lanes-1) and counts by the harness checks each made.
+ * Each also returns the number of checks it counted.
  *
  * T16 (X-SP-6, owner ruling 269; RB4-S6/S7): a stepladder or page playoff with nothing to seed from is refused 422 by name
  * (STEPLADDER_NEEDS_TABLE_SOURCE / PAGE_PLAYOFF_NEEDS_TABLE_SOURCE) and writes nothing; after a league, it is taken.

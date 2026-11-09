@@ -6,9 +6,11 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
+import { buildTemplateStages } from "@/lib/format-templates";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { CreateStage } from "@/server/api-v1/schemas";
 import { createCompetition, openStagesOf, patchCompetition } from "../competitions";
 import { archiveDivision, createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -142,6 +144,28 @@ describe.skipIf(!HAS_DB)("openStagesOf — what the Complete-competition warning
     expect((await openStagesOf(auth, comp.id)).map((r) => [r.state, r.matchesLeft])).toEqual([["matches_left", 1]]);
     await play(auth, ko.stageId, 1); // the bronze
     expect((await openStagesOf(auth, comp.id)).map((r) => [r.state, r.matchesLeft])).toEqual([["final_decided", 0]]);
+  });
+
+  it("a knockout drawn on day one: its pre-award bye line is no match left — the desk's own reading (isWaitingByeLine)", async () => {
+    // league_ko, Top 3, drawn before the league is played (`timing: "setup"`): seed 1's line against the bye (the phantom
+    // side carries the bye slot label, read off the row), the real first-round line and the final. Two matches owed.
+    const { auth, suffix } = await org();
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "OS bye " + suffix, visibility: "private", branding: {} });
+    const d = await createDivision(auth, comp.id, { name: "League KO", slug: "lk-" + randomUUID().slice(0, 6), sport_key: "generic", variant_key: "score", config: CONFIG });
+    await createEntrants(auth, d.id, ["A", "B", "C", "D"].map((n, i) => ({ kind: "individual", display_name: `LK ${n}`, seed: i + 1, members: [] })));
+    const ids: string[] = [];
+    for (const [i, t] of buildTemplateStages("league_ko", { swissRounds: 5, poolCount: 2, legs: 1, qualified: 3 }).entries()) {
+      const [st] = await createStages(auth, d.id, CreateStage.parse({ seq: i + 1, kind: t.kind, name: t.name, config: t.config, progression: t.progression }));
+      ids.push(st!.id);
+    }
+    await startDivision(auth, d.id);
+    await generateStageFixtures(auth, ids[1]!);
+    const ko = await sql<{ status: string; home_slot_label: { key?: string } | null; away_slot_label: { key?: string } | null }[]>`
+      select status, home_slot_label, away_slot_label from fixtures where stage_id = ${ids[1]!}`;
+    const byeLines = ko.filter((f) => f.status === "scheduled" && [f.home_slot_label?.key, f.away_slot_label?.key].includes("bracket.slot.bye"));
+    expect([ko.length, byeLines.length], "premise: three lines, one of them the pre-award bye").toEqual([3, 1]);
+    const row = (await openStagesOf(auth, comp.id)).find((r) => r.stageId === ids[1]);
+    expect(row && [row.state, row.matchesLeft]).toEqual(["final_pending", 2]);
   });
 
   it("tenancy: another organisation reads nothing of this competition", async () => {
